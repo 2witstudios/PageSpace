@@ -1,9 +1,11 @@
+import { isPrincipalDriveOwnerOrAdmin } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+
 import { fetchAndComputeRestoreDiff } from '@/services/api/restore-diff-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
@@ -18,9 +20,9 @@ export async function GET(
   }
 
   try {
-    const isAdmin = await isDriveOwnerOrAdmin(auth.userId, driveId);
+    const isAdmin = await isPrincipalDriveOwnerOrAdmin(auth, driveId);
     if (!isAdmin) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
     }
 
     const result = await fetchAndComputeRestoreDiff(backupId, driveId, db);

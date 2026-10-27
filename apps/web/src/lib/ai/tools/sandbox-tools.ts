@@ -60,6 +60,8 @@ import {
 import { DEFAULT_READ_LINES } from '@pagespace/lib/services/sandbox/execution-policy';
 import type { SandboxToolGateResult } from '@pagespace/lib/services/sandbox/tool-gate';
 import type { ToolExecutionContext } from '../core/types';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
+import { toolActor } from './tool-actor';
 
 export const MAX_PATH_LENGTH = 1024;
 
@@ -156,7 +158,8 @@ export type ResolveSandboxContext = (
  * on the kill-switch, `canRunCode` (app admin + CODE_EXECUTION), and the
  * concurrency preflight — the derived sandbox capability, no stored toggle.
  */
-export type SandboxGate = (ctx: SandboxActorContext) => Promise<SandboxToolGateResult>;
+/** `actor`: who drives the call (the tool context's actor) — code execution in a drive is asked of their credential. */
+export type SandboxGate = (ctx: SandboxActorContext, actor: AccessActor) => Promise<SandboxToolGateResult>;
 
 /**
  * The persistent environments this actor may reach — already filtered by the
@@ -165,6 +168,7 @@ export type SandboxGate = (ctx: SandboxActorContext) => Promise<SandboxToolGateR
  */
 export type ListReachableEnvironments = (
   ctx: SandboxActorContext,
+  actor: AccessActor,
 ) => Promise<readonly { id: string; label: string; substrate: 'sprite' | 'local'; driveId: string }[]>;
 
 /**
@@ -178,6 +182,8 @@ export type ListReachableEnvironments = (
  */
 export type ResolveEnvironmentTarget = (input: {
   ctx: SandboxActorContext;
+  /** Who drives the call; reaching a cloud env is asked of their credential. */
+  actor: AccessActor;
   environmentId: string;
 }) => Promise<{ ok: true; target: SandboxEnvironmentTarget; payer: SandboxPayerCoordinates } | { ok: false; error: string }>;
 
@@ -224,7 +230,8 @@ export interface SandboxPayerCoordinates {
 }
 
 export interface SandboxToolsDeps {
-  runDeps: SandboxRunDeps;
+  /** The run deps, bound to the actor the gate authorized (provisioning re-checks code execution as them). */
+  runDeps: (actor: AccessActor) => SandboxRunDeps;
   resolveContext: ResolveSandboxContext;
   gate: SandboxGate;
   listEnvironments: ListReachableEnvironments;
@@ -304,12 +311,14 @@ export function createSandboxTools({ runDeps, resolveContext, gate, gateDiscover
   const resolveActor = async (
     options: unknown,
   ): Promise<
-    | { ok: true; ctx: SandboxActorContext }
+    | { ok: true; ctx: SandboxActorContext; actor: AccessActor }
     | { ok: false; error: { success: false; error: string; retryAfter?: number } }
   > => {
-    const ctx = await resolveContext(readContext(options));
+    const rawContext = readContext(options);
+    const ctx = await resolveContext(rawContext);
     if ('error' in ctx) return { ok: false, error: { success: false, error: ctx.error } };
-    return { ok: true, ctx };
+    if (!rawContext) return { ok: false, error: { success: false, error: 'User authentication required' } };
+    return { ok: true, ctx, actor: toolActor(rawContext) };
   };
 
   // DISCOVERY's open: the actor, then the discovery gate — which asks whether
@@ -318,14 +327,14 @@ export function createSandboxTools({ runDeps, resolveContext, gate, gateDiscover
   const openForDiscovery = async (
     options: unknown,
   ): Promise<
-    | { ok: true; ctx: SandboxActorContext }
+    | { ok: true; ctx: SandboxActorContext; actor: AccessActor }
     | { ok: false; error: { success: false; error: string; retryAfter?: number } }
   > => {
     const actor = await resolveActor(options);
     if (!actor.ok) return actor;
-    const decision = await gateDiscovery(actor.ctx);
+    const decision = await gateDiscovery(actor.ctx, actor.actor);
     if (!decision.ok) return { ok: false, error: gateDenial(decision) };
-    return { ok: true, ctx: actor.ctx };
+    return { ok: true, ctx: actor.ctx, actor: actor.actor };
   };
 
   // The addressed form: everything `open` does, and then the mandatory
@@ -337,12 +346,12 @@ export function createSandboxTools({ runDeps, resolveContext, gate, gateDiscover
     environmentId: string,
     options: unknown,
   ): Promise<
-    | { ok: true; ctx: SandboxActorContext }
+    | { ok: true; ctx: SandboxActorContext; actor: AccessActor }
     | { ok: false; error: { success: false; error: string; retryAfter?: number } }
   > => {
     const actor = await resolveActor(options);
     if (!actor.ok) return actor;
-    const resolved = await resolveEnvironment({ ctx: actor.ctx, environmentId });
+    const resolved = await resolveEnvironment({ ctx: actor.ctx, actor: actor.actor, environmentId });
     if (!resolved.ok) return { ok: false, error: { success: false, error: resolved.error } };
     // The gate runs on the TARGET's payer coordinates, not the conversation's.
     // A free-tier person's dashboard conversation acting in a Pro drive's
@@ -362,13 +371,13 @@ export function createSandboxTools({ runDeps, resolveContext, gate, gateDiscover
     // except a LOCAL environment — where the entitlement is machine ownership
     // and the drive-role leg does not apply. `ctx.driveId` keeps the billing
     // coordinate either way. See `SandboxPayerCoordinates.gateDriveId`.
-    const decision = await gate({ ...ctx, driveId: gateDriveId });
+    const decision = await gate({ ...ctx, driveId: gateDriveId }, actor.actor);
     // A refusal names the environment that refused (leaf E), so a wrong target
     // reads as a wrong target rather than as a broken tool. Only AFTER
     // resolution: a refusal that never resolved an environment has none to
     // name, and naming one would be inventing it.
     if (!decision.ok) return { ok: false, error: nameEnvironmentOnResult(resolved.target, gateDenial(decision)) };
-    return { ok: true, ctx };
+    return { ok: true, ctx, actor: actor.actor };
   };
 
   // Every result — a run's and a refusal's alike — says where it happened,
@@ -389,7 +398,7 @@ export function createSandboxTools({ runDeps, resolveContext, gate, gateDiscover
       execute: async (_input, options): Promise<EnvironmentDirectory | { success: false; error: string; retryAfter?: number }> => {
         const opened = await openForDiscovery(options);
         if (!opened.ok) return opened.error;
-        const environments = await listEnvironments(opened.ctx);
+        const environments = await listEnvironments(opened.ctx, opened.actor);
         // The conversation's own sandbox is addressed by the conversation's own
         // id — the address the runtime already resolves a session through.
         return buildEnvironmentDirectory({
@@ -408,7 +417,7 @@ export function createSandboxTools({ runDeps, resolveContext, gate, gateDiscover
       execute: async ({ environmentId, command, cwd, timeoutMs }, options) => {
         const opened = await openAt(environmentId, options);
         if (!opened.ok) return opened.error;
-        return named(opened.ctx, await runBashInSandbox({ command, cwd, timeoutMs, ctx: opened.ctx, deps: runDeps }));
+        return named(opened.ctx, await runBashInSandbox({ command, cwd, timeoutMs, ctx: opened.ctx, deps: runDeps(opened.actor) }));
       },
     }),
 
@@ -420,7 +429,7 @@ export function createSandboxTools({ runDeps, resolveContext, gate, gateDiscover
       execute: async ({ environmentId, path, content }, options) => {
         const opened = await openAt(environmentId, options);
         if (!opened.ok) return opened.error;
-        return named(opened.ctx, await writeSandboxFile({ path, content, ctx: opened.ctx, deps: runDeps }));
+        return named(opened.ctx, await writeSandboxFile({ path, content, ctx: opened.ctx, deps: runDeps(opened.actor) }));
       },
     }),
 
@@ -435,7 +444,7 @@ export function createSandboxTools({ runDeps, resolveContext, gate, gateDiscover
       execute: async ({ environmentId, path, offset, limit }, options) => {
         const opened = await openAt(environmentId, options);
         if (!opened.ok) return opened.error;
-        return named(opened.ctx, await readSandboxFile({ path, offset, limit, ctx: opened.ctx, deps: runDeps }));
+        return named(opened.ctx, await readSandboxFile({ path, offset, limit, ctx: opened.ctx, deps: runDeps(opened.actor) }));
       },
     }),
 
@@ -447,7 +456,7 @@ export function createSandboxTools({ runDeps, resolveContext, gate, gateDiscover
       execute: async ({ environmentId, path, oldString, newString, replaceAll }, options) => {
         const opened = await openAt(environmentId, options);
         if (!opened.ok) return opened.error;
-        return named(opened.ctx, await editSandboxFile({ path, oldString, newString, replaceAll, ctx: opened.ctx, deps: runDeps }));
+        return named(opened.ctx, await editSandboxFile({ path, oldString, newString, replaceAll, ctx: opened.ctx, deps: runDeps(opened.actor) }));
       },
     }),
   };

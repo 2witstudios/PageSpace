@@ -11,7 +11,7 @@
  * the result into a ZIP via `archiver`.
  */
 
-import type { AllUserData } from './gdpr-export';
+import type { AllUserData, ExportWithheld, ExportWithheldCategory } from './gdpr-export';
 
 /**
  * Bump when the export bundle's structure/inventory changes.
@@ -21,8 +21,17 @@ import type { AllUserData } from './gdpr-export';
  * consumer written against 1.0.0 keeps working — but one keyed on the version
  * can now tell a bundle that carries the subject's tags from one predating the
  * category, which is the whole point of the field being in the manifest.
+ *
+ * 1.2.0 adds `organizations.json`, `org-membership.json` and `wallet.json`
+ * (and the matching portable properties). Spec X-2: orgs the subject owns,
+ * their org membership/seat/departures/requests, and their own wallet — their
+ * personal root balance and the funding legs they gave. Additive like 1.1.0.
+ *
+ * 1.3.0 adds `pulse-summaries.json` (and the matching portable property) and the manifest's `withheld` list: what the
+ * bundle left out because an org's sign-in policy refuses the credential that requested it (SEC-2/3, D-OW-62), with
+ * the code that unlocks it. Additive like 1.1.0.
  */
-export const EXPORT_SCHEMA_VERSION = '1.1.0';
+export const EXPORT_SCHEMA_VERSION = '1.3.0';
 
 export type ExportFormat = 'native' | 'portable';
 
@@ -40,12 +49,40 @@ export interface ExportManifestFileEntry {
   recordCount: number;
 }
 
+/** One kind of content the bundle left out under an org sign-in policy, and how to get it (SEC-2/3). */
+export interface ExportManifestWithheldEntry extends ExportWithheld {
+  /** Plain-language account of what was left out and what to do. */
+  note: string;
+}
+
 export interface ExportManifest {
   schemaVersion: string;
   generator: string;
   exportedAt: string;
   format: ExportFormat;
   files: ExportManifestFileEntry[];
+  /** Empty when nothing was left out. */
+  withheld: ExportManifestWithheldEntry[];
+}
+
+const WITHHELD_WHAT: Record<ExportWithheldCategory, (count: number) => string> = {
+  orgDriveContent: (n) => `The pages, sheets and tags of ${n} organization drive${n === 1 ? '' : 's'}`,
+  orgDriveMessages: (n) => `${n} message${n === 1 ? '' : 's'} you wrote in organization drives`,
+  orgDriveFiles: (n) => `${n} file${n === 1 ? '' : 's'} you uploaded to organization drives`,
+  orgDriveTasks: (n) => `${n} task list${n === 1 ? '' : 's'} in organization drives`,
+  orgDriveActivity: (n) => `${n} activity entr${n === 1 ? 'y' : 'ies'} in organization drives`,
+  memoryPages: (n) => `${n} memory page${n === 1 ? '' : 's'} restating what the AI learned from organization content`,
+  pulseSummaries: (n) => `${n} Pulse summar${n === 1 ? 'y' : 'ies'} drawn from organization content`,
+  personalization: () => 'The AI memory in personalization.json (About You, Communication, Rules), drawn from organization content',
+  personalizationCandidates: (n) => `${n} AI inference${n === 1 ? '' : 's'} drawn from organization content`,
+};
+
+/** The note for one withheld entry: what was left out, why, and the sign-in that brings it back. */
+export function withheldNote(entry: ExportWithheld): string {
+  const action = entry.code === 'org_strong_sign_in_required'
+    ? 'Sign in with a passkey and export again to include it.'
+    : 'Sign in again and export again to include it.';
+  return `${WITHHELD_WHAT[entry.category](entry.count)} ${entry.count === 1 && entry.category !== 'orgDriveContent' ? 'was' : 'were'} left out because an organization's sign-in policy (${entry.code}) does not accept the sign-in this export was requested with. ${action}`;
 }
 
 /**
@@ -87,6 +124,7 @@ export function buildNativeExportFiles(data: AllUserData): ExportFile[] {
     // checkpointed `parts` are content nothing else in this bundle carries.
     { name: 'sheets.json', description: 'Your spreadsheets — every tab, with each cell as you wrote it and as it evaluated', recordCount: data.sheets.length, data: data.sheets },
     { name: 'agent-workspaces.json', description: 'Agent workspaces (working contexts) and the shells you opened in them', recordCount: data.agentWorkspaces.length, data: data.agentWorkspaces },
+    { name: 'agent-accounts.json', description: 'Agent accounts you own (names, sites, status — never the keys themselves) and the approvals, bindings and delegations you gave', recordCount: data.agentAccounts.accounts.length, data: data.agentAccounts },
     { name: 'local-environments.json', description: 'Machines you enrolled as local environments: their labels, public keys and fingerprints, and when they connected', recordCount: data.localEnvironments.length, data: data.localEnvironments },
     { name: 'local-environment-activity.json', description: 'What your agent asked local machines to run: each request, whether PageSpace signed it and how the machine answered, and when', recordCount: data.localEnvironmentActivity.length, data: data.localEnvironmentActivity },
     { name: 'local-environment-approvals.json', description: 'Approvals you gave in the chat for local machines to run without asking, and approvals standing on machines you own — including revoked and expired ones', recordCount: data.localEnvironmentApprovals.length, data: data.localEnvironmentApprovals },
@@ -96,11 +134,23 @@ export function buildNativeExportFiles(data: AllUserData): ExportFile[] {
     // (unlike personalization.json below) so an empty file reads as "nothing
     // was inferred about you" rather than leaving the subject unable to tell
     // the difference between that and the category not being carried.
+    // Digests the AI wrote for the subject from their workspace activity (Pulse).
+    { name: 'pulse-summaries.json', description: 'Pulse summaries the AI wrote for you from your workspace activity', recordCount: data.pulseSummaries.length, data: data.pulseSummaries },
     { name: 'personalization-candidates.json', description: 'Inferences the AI drew about you from your conversations, including ones that were rejected or are still pending, with the quotes they were drawn from', recordCount: data.personalizationCandidates.length, data: data.personalizationCandidates },
     // The subject's own acts of classification. For an anchored tag the row
     // carries the quoted text they selected, which nothing else in the bundle
     // holds.
     { name: 'content-tags.json', description: 'Tags you applied to pages, passages, sheet cells and messages, with the text each one was anchored to', recordCount: data.contentTags.length, data: data.contentTags },
+    // Spec X-2: the subject's org life and their own money. The org categories
+    // carry the subject's OWN rows only — their memberships, their seat
+    // allowance, their departures and requests, the orgs they own; the org's
+    // roster, pool balance and ledger are the org's data and are carried in
+    // nobody's personal export. The wallet category carries their personal
+    // root balance and the funding legs THEY funded — never another person's
+    // spend (SPEND-9/D18).
+    { name: 'organizations.json', description: 'Organizations you own', recordCount: data.organizations.length, data: data.organizations },
+    { name: 'org-membership.json', description: 'Your organization memberships and seat allowances, the organizations you have left, your requests to join restricted drives, and any guest access an organization policy parked', recordCount: data.orgMembership.memberships.length + data.orgMembership.departures.length + data.orgMembership.joinRequests.length + data.orgMembership.guestHolds.length, data: data.orgMembership },
+    { name: 'wallet.json', description: 'Your personal wallet balance, every funding leg you paid into any wallet (including donations), and your per-drive spending switches', recordCount: data.wallet.fundingLegs.length + data.wallet.spendOverrides.length + (data.wallet.wallet ? 1 : 0), data: data.wallet },
   ];
   if (data.personalization) {
     files.push({ name: 'personalization.json', description: 'Personalization settings', recordCount: 1, data: data.personalization });
@@ -115,7 +165,7 @@ export function buildNativeExportFiles(data: AllUserData): ExportFile[] {
  */
 export function buildExportManifest(
   files: ExportFile[],
-  opts: { exportedAt: Date; format: ExportFormat },
+  opts: { exportedAt: Date; format: ExportFormat; withheld: readonly ExportWithheld[] },
 ): ExportManifest {
   return {
     schemaVersion: EXPORT_SCHEMA_VERSION,
@@ -123,6 +173,7 @@ export function buildExportManifest(
     exportedAt: opts.exportedAt.toISOString(),
     format: opts.format,
     files: files.map((f) => ({ name: f.name, description: f.description, recordCount: f.recordCount })),
+    withheld: opts.withheld.map((entry) => ({ ...entry, note: withheldNote(entry) })),
   };
 }
 
@@ -211,13 +262,18 @@ export function toPortableExport(data: AllUserData): Record<string, unknown> {
       { '@type': 'PropertyValue', name: 'settings', value: data.settings },
       { '@type': 'PropertyValue', name: 'personalization', value: data.personalization },
       { '@type': 'PropertyValue', name: 'personalizationCandidates', value: data.personalizationCandidates },
+      { '@type': 'PropertyValue', name: 'pulseSummaries', value: data.pulseSummaries },
       { '@type': 'PropertyValue', name: 'sheets', value: data.sheets },
       { '@type': 'PropertyValue', name: 'agentWorkspaces', value: data.agentWorkspaces },
+      { '@type': 'PropertyValue', name: 'agentAccounts', value: data.agentAccounts },
       { '@type': 'PropertyValue', name: 'streamState', value: data.streamState },
       { '@type': 'PropertyValue', name: 'contentTags', value: data.contentTags },
       { '@type': 'PropertyValue', name: 'localEnvironments', value: data.localEnvironments },
       { '@type': 'PropertyValue', name: 'localEnvironmentActivity', value: data.localEnvironmentActivity },
       { '@type': 'PropertyValue', name: 'localEnvironmentApprovals', value: data.localEnvironmentApprovals },
+      { '@type': 'PropertyValue', name: 'organizations', value: data.organizations },
+      { '@type': 'PropertyValue', name: 'orgMembership', value: data.orgMembership },
+      { '@type': 'PropertyValue', name: 'wallet', value: data.wallet },
     ],
   };
 }

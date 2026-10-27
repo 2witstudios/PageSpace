@@ -163,6 +163,8 @@ vi.mock('drizzle-orm', () => ({
   and: (...conditions: unknown[]) => ({ _op: 'and', conditions }),
   ne: (col: unknown, val: unknown) => ({ _op: 'ne', col, val }),
   isNull: (col: unknown) => ({ _op: 'isNull', col }),
+  gt: (col: unknown, val: unknown) => ({ _op: 'gt', col, val }),
+  asc: (col: unknown) => ({ _op: 'asc', col }),
 }));
 
 import {
@@ -183,12 +185,20 @@ import {
   collectUserPersonalization,
   collectAllUserData,
 } from './gdpr-export';
+import type { ExportSignInGate } from './export-sign-in-gate';
 import { getClickHouseGdprClient } from '../../observability/clickhouse-client';
 import {
   collectChUserSystemLogs,
   collectChUserApiMetrics,
   collectChUserErrorLogs,
 } from '../../observability/analytics-gdpr';
+
+/** A gate that withholds nothing (the sign-in gate itself is proven in export-sign-in-gate.integration.test.ts). */
+const ADMIT_ALL: ExportSignInGate = {
+  derivedContent: async () => ({ allowed: true }),
+  refusedDrives: async () => new Map(),
+  refusedDerivedPages: async () => new Map(),
+};
 
 /** Creates a chain-mock db that resolves .where() calls with queued results */
 function createChainDb(whereResults: unknown[][]) {
@@ -917,7 +927,7 @@ describe('collectAllUserData', () => {
   it('given_userDoesNotExist_returnsNull', async () => {
     const db = createLimitDb([]);
 
-    const result = await collectAllUserData(db as never, 'nonexistent');
+    const result = await collectAllUserData(db as never, 'nonexistent', ADMIT_ALL);
 
     expect(result).toBeNull();
   });
@@ -931,7 +941,11 @@ describe('collectAllUserData', () => {
     // Returns an empty array that also has a .limit() method so both
     // callers that chain .limit() (profile, personalization) and callers
     // that use the array directly (drives, messages, etc.) both work.
-    const emptyWithLimit = () => Object.assign([], { limit: vi.fn().mockReturnValue([]) });
+    // The funding-leg collector also chains .orderBy() before .limit() (HIST-02).
+    const emptyWithLimit = () => Object.assign([], {
+      orderBy: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnValue([]),
+    });
 
     let callCount = 0;
     const db = {
@@ -948,7 +962,7 @@ describe('collectAllUserData', () => {
       leftJoin: vi.fn().mockReturnThis(),
     };
 
-    const result = await collectAllUserData(db as never, 'user-1');
+    const result = await collectAllUserData(db as never, 'user-1', ADMIT_ALL);
 
     expect(result).not.toBeNull();
     expect(result!.profile.id).toBe('user-1');
@@ -970,6 +984,7 @@ describe('collectAllUserData', () => {
     // as every other one: a collector nobody calls from `collectAllUserData`
     // reaches nobody's export.
     expect(Array.isArray(result!.agentWorkspaces)).toBe(true);
+    expect(Array.isArray(result!.agentAccounts.accounts)).toBe(true);
     expect(Array.isArray(result!.streamState)).toBe(true);
     // Same rule again for the content-tags category: a collector that
     // `collectAllUserData` never calls reaches nobody's export.

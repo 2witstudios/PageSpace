@@ -1,10 +1,13 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log'
-import { checkDriveAccessForRoles, getRoleById, roleNotFoundMessage, updateDriveRole, deleteDriveRole, validateRolePermissions, validateRolePermissionsPatch } from '@pagespace/lib/services/drive-role-service';
+import { checkDriveAccessForRoles, getRoleById, roleNotFoundMessage, updateDriveRole, deleteDriveRole, validateRolePermissions, validateRolePermissionsPatch, OpenRoleFloorError } from '@pagespace/lib/services/drive-role-service';
 import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
+import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -33,7 +36,6 @@ export async function GET(
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
-    const userId = auth.userId;
 
     const { driveId, roleId } = await context.params;
 
@@ -41,14 +43,14 @@ export async function GET(
     if (scopeError) return scopeError;
 
     // Check if user has access to this drive
-    const access = await checkDriveAccessForRoles(driveId, userId);
+    const access = await checkDriveAccessForRoles(driveId, actorFromAuth(auth));
 
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
 
     if (!access.isOwner && !access.isMember) {
-      return NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 }));
     }
 
     const role = await getRoleById(driveId, roleId);
@@ -84,14 +86,14 @@ export async function PATCH(
     if (scopeError) return scopeError;
 
     // Check if user is owner or admin
-    const access = await checkDriveAccessForRoles(driveId, userId);
+    const access = await checkDriveAccessForRoles(driveId, actorFromAuth(auth));
 
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
 
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Only owners and admins can update roles' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only owners and admins can update roles' }, { status: 403 }));
     }
 
     // Check role exists
@@ -170,6 +172,11 @@ export async function PATCH(
     return NextResponse.json({ role: updatedRole });
   } catch (error) {
     console.error('Error updating role:', error);
+    // [D-OW-33] the write would give a role's holders more while the drive's org is lapsed.
+    if (isOrgLapsedError(error)) return orgLapsedResponse();
+    if (error instanceof OpenRoleFloorError) {
+      return NextResponse.json({ error: error.message, code: error.code, policy: error.policy }, { status: error.status });
+    }
     if (error instanceof Error && error.message.includes('unique')) {
       return NextResponse.json({ error: 'A role with this name already exists' }, { status: 409 });
     }
@@ -193,14 +200,14 @@ export async function DELETE(
     if (scopeError) return scopeError;
 
     // Check if user is owner or admin
-    const access = await checkDriveAccessForRoles(driveId, userId);
+    const access = await checkDriveAccessForRoles(driveId, actorFromAuth(auth));
 
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
 
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Only owners and admins can delete roles' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only owners and admins can delete roles' }, { status: 403 }));
     }
 
     // Check role exists
@@ -234,6 +241,11 @@ export async function DELETE(
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error deleting role:', error);
+    // [D-OW-33] the write would give a role's holders more while the drive's org is lapsed.
+    if (isOrgLapsedError(error)) return orgLapsedResponse();
+    if (error instanceof OpenRoleFloorError) {
+      return NextResponse.json({ error: error.message, code: error.code, policy: error.policy }, { status: error.status });
+    }
     return NextResponse.json({ error: 'Failed to delete role' }, { status: 500 });
   }
 }

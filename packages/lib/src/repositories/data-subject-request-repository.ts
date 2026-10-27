@@ -16,6 +16,8 @@ import {
   type DataSubjectRequestType,
   type DataSubjectRequesterType,
 } from '@pagespace/db/schema/data-subject-requests';
+import { activeErasureForUser, lockOwnershipSubject } from '../organizations/owner-candidate';
+import { accountRepository } from './account-repository';
 import { computeSlaDeadline } from '../compliance/dsr/sla';
 
 export interface CreateDsrInput {
@@ -40,23 +42,39 @@ export interface UpdateStatusPatch {
 
 export const dataSubjectRequestRepository = {
   create: async (input: CreateDsrInput): Promise<DataSubjectRequest> => {
-    const [row] = await db
-      .insert(dataSubjectRequests)
-      .values({
-        userId: input.userId,
-        subjectEmail: input.subjectEmail,
-        requestType: input.requestType ?? 'erasure',
-        forceDelete: input.forceDelete ?? false,
-        requestedByUserId: input.requestedByUserId ?? input.userId,
-        requestedByType: input.requestedByType ?? 'self',
-        legalBasis: input.legalBasis ?? null,
-        receivedAt: input.receivedAt,
-        slaDeadline: computeSlaDeadline(input.receivedAt),
-        status: 'pending',
-      })
-      .returning();
-    return row;
+    return db.transaction(async (tx) => {
+      if ((input.requestType ?? 'erasure') === 'erasure') {
+        await lockOwnershipSubject(tx, input.userId);
+        await accountRepository.assertMayLodgeErasure(input.userId, tx);
+      }
+      const [row] = await tx
+        .insert(dataSubjectRequests)
+        .values({
+          userId: input.userId,
+          subjectEmail: input.subjectEmail,
+          requestType: input.requestType ?? 'erasure',
+          forceDelete: input.forceDelete ?? false,
+          requestedByUserId: input.requestedByUserId ?? input.userId,
+          requestedByType: input.requestedByType ?? 'self',
+          legalBasis: input.legalBasis ?? null,
+          receivedAt: input.receivedAt,
+          slaDeadline: computeSlaDeadline(input.receivedAt),
+          status: 'pending',
+        })
+        .returning();
+      return row;
+    });
   },
+
+  /** Install durable retirement exclusion under the owner writers' user-row lock before any purge. */
+  claimErasure: async (requestId: string, userId: string): Promise<boolean> => db.transaction(async (tx) => {
+    await lockOwnershipSubject(tx, userId);
+    const [request] = await tx.select({ status: dataSubjectRequests.status }).from(dataSubjectRequests)
+      .where(and(eq(dataSubjectRequests.id, requestId), eq(dataSubjectRequests.userId, userId), eq(dataSubjectRequests.requestType, 'erasure'))).for('update');
+    if (!request || request.status === 'completed' || request.status === 'cancelled') return false;
+    await tx.update(dataSubjectRequests).set({ status: 'in_progress', startedAt: new Date(), updatedAt: new Date() }).where(eq(dataSubjectRequests.id, requestId));
+    return true;
+  }),
 
   findById: async (id: string): Promise<DataSubjectRequest | null> => {
     const row = await db.query.dataSubjectRequests.findFirst({
@@ -65,15 +83,10 @@ export const dataSubjectRequestRepository = {
     return row ?? null;
   },
 
-  /** An in-flight (non-terminal) erasure request for a user, if any. */
+  /** An active erasure, including a started worker waiting for retry, if any. */
   findActiveErasureForUser: async (userId: string): Promise<DataSubjectRequest | null> => {
     const row = await db.query.dataSubjectRequests.findFirst({
-      where: (t, { and, eq: eqOp, inArray: inArrayOp }) =>
-        and(
-          eqOp(t.userId, userId),
-          eqOp(t.requestType, 'erasure'),
-          inArrayOp(t.status, ['pending', 'queued', 'in_progress', 'blocked'])
-        ),
+      where: activeErasureForUser(userId),
     });
     return row ?? null;
   },
@@ -111,7 +124,7 @@ export const dataSubjectRequestRepository = {
     return rows.length;
   },
 
-  /** Mark a request failed (e.g. enqueue threw) so it is no longer "active". */
+  /** Failed enqueue before starting is inactive; a started worker failure remains protected for retry. */
   markFailed: async (id: string, error: string): Promise<void> => {
     await db
       .update(dataSubjectRequests)

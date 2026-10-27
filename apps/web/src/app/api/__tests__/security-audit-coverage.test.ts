@@ -21,10 +21,12 @@ const API_DIR = join(__dirname, '..');
  * adapter, logSecurityEvent adapter, withAdminAuth wrapper, and the
  * `agent-workspaces/[workspaceId]` family's shared not-found/denied helpers
  * (`workspace-unavailable-response.ts`, review #2261/5) — both call
- * `auditRequest` internally, one hop removed from the route file.
+ * `auditRequest` internally, one hop removed from the route file. And the org audit outbox (AUD-1): a route that
+ * publishes the org events its change staged, drains them into the chain, or builds the event its admission stages
+ * inside its own transaction (a guest approval).
  */
 const AUDIT_CALL_PATTERN =
-  /securityAudit\.|logAuditEvent\(|logAuthEvent\(|logSecurityEvent\(|withAdminAuth[<(]|audit\(|auditRequest\(|auditSessionAccessDenial\(|workspaceNotFoundOrDenied\(/;
+  /securityAudit\.|logAuditEvent\(|logAuthEvent\(|logSecurityEvent\(|withAdminAuth[<(]|audit\(|auditRequest\(|auditSessionAccessDenial\(|workspaceNotFoundOrDenied\(|publishOrgAuditEvents\(|drainOrgAuditOutbox\(|guestDecisionAuditEvent\(/;
 
 /**
  * Routes explicitly exempt from audit coverage.
@@ -40,6 +42,9 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['compiled-css', 'Static CSS compilation, no user context'],
   ['contact', 'Public contact form, no authenticated user'],
   ['avatar/[userId]/[filename]', 'Public asset serving, no auth required'],
+  ['orgs/[orgId]/avatar/[filename]', 'ORG-1 member-only avatar image bytes: the org gate (authorizeOrgRequest) audits every refusal as authz.access.denied; a data.read row per rendered avatar would swamp the log, as for user avatars above'],
+  ['drives/[driveId]/avatar/[filename]', 'Drive avatar image bytes for whoever can reach the drive: the route audits every refusal as authz.access.denied; a data.read row per rendered drive tile would swamp the log, as for org and user avatars above'],
+  ['orgs/invitations/accept', 'ORG-3: audited in acceptOrgInviteForUser (lib/orgs/accept-org-invite.ts), the one shell this route and the sign-in/sign-up invite door share, so both write the same authz.role.assigned / authz.access.denied rows'],
   ['track', 'Analytics fire-and-forget, no data read/write'],
   ['public/forms/[token]/submit', 'Public Canvas-form submission, no authenticated user — every accepted row-append is audit-logged via applyPageMutation activity logging inside appendFormSubmission (changeGroupType: automation), not SecurityAuditService directly'],
 
@@ -71,6 +76,7 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
 
   // --- External webhooks (no user session, verified by external party) ---
   ['stripe/webhook', 'Stripe-initiated webhook, verified by Stripe signature'],
+  ['iap/apple/notifications', 'Apple-initiated App Store Server Notification, verified by its JWS signature against Apple Root CA G3'],
   ['integrations/google-calendar/webhook', 'Google-initiated webhook, no user session'],
   ['integrations/zoom/webhook', 'Zoom-initiated webhook, no user session, verified by HMAC signature'],
   ['webhooks/[token]', 'Signature-verified inbound page-webhook intake — no user session, authenticated by per-webhook HMAC secret; minting/managing the webhook is audited in the /api/pages/[pageId]/webhooks routes'],
@@ -305,6 +311,7 @@ describe('Security Audit Route Coverage', () => {
   const AI_ROUTES_REQUIRING_DENIAL_AUDIT: string[] = [
     // Chat subset
     'ai/abort',
+    'ai/btw',
     'ai/chat',
     'ai/chat/messages',
     'ai/chat/messages/[messageId]',

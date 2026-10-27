@@ -242,7 +242,7 @@ export const agentWorkspaces = pgTable('agent_workspaces', {
   /**
    * **`agent_workspaces_env_needs_drive_check` WAS HERE AND IS DELIBERATELY
    * GONE** (phase "a global assistant reaches any environment it may see",
-   * leaf D; migration 0296). It read `envId IS NULL OR driveId IS NOT NULL`.
+   * leaf D; migration 0382). It read `envId IS NULL OR driveId IS NOT NULL`.
    *
    * It was right about the case it was written for and wrong about the one the
    * founder actually asked for. Its argument was that `decideAgentSessionAccess`

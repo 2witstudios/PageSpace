@@ -68,7 +68,12 @@ export type AgentSessionDenialReason =
   | 'drive_access_denied'
   | 'global_assistant_not_owner'
   | 'code_execution_denied'
-  | 'delete_authority_required';
+  | 'delete_authority_required'
+  // Reached only by the RENAME decision: the requester may see this session but
+  // it is not theirs to relabel. Safe to add — every consumer treats a reason
+  // as an opaque audit string; none switches on it, so there is no default
+  // branch for a new member to fall through into.
+  | 'not_owner';
 
 export type AgentSessionAccessDecision =
   | { allowed: true }
@@ -136,6 +141,43 @@ export interface DecideAgentSessionEndAccessInput extends DecideAgentSessionAcce
  * someone ELSE's session is therefore owner-of-drive/admin territory, and
  * still capability-gated on top.
  */
+/**
+ * MAY THIS REQUESTER RELABEL THIS SESSION? Owner-only, and deliberately its own
+ * decision rather than a reuse of either neighbour.
+ *
+ * Not {@link decideAgentSessionAccess}: that admits any member of the session's
+ * drive, and a name is the OWNER's word for their own working context —
+ * `listSessions` filters on `ownerId`, so a member could otherwise relabel a
+ * workspace they are never even shown in a listing.
+ *
+ * Not {@link decideAgentSessionEndAccess} either: that is the
+ * release-of-compute gate and carries the real `canRunCode` capability.
+ * Renaming destroys nothing and costs nothing, so gating a text label on a
+ * COMPUTE capability would be a category error.
+ *
+ * It lives here, beside them, because both rename surfaces (the PATCH route and
+ * the agent's `rename_workspace` tool) were each comparing `ownerId` inline —
+ * one rule, two implementations, exactly the drift this module exists to
+ * prevent (review — CodeRabbit, "centralize the agent-session rename
+ * authorization").
+ *
+ * Ownership is the WHOLE decision here, but it is not the whole gate: both
+ * callers still run the session-access check first (so a revoked owner is
+ * refused) and the tool additionally applies its credential ceiling. This
+ * answers only "is it theirs to name".
+ */
+export function decideAgentSessionRenameAccess(input: {
+  requesterId: string;
+  session: { ownerId: string };
+}): AgentSessionAccessDecision {
+  // The empty-id guard mirrors the end decision's: an unresolved requester must
+  // never match an unresolved owner into a grant.
+  if (input.requesterId.length > 0 && input.requesterId === input.session.ownerId) {
+    return { allowed: true };
+  }
+  return { allowed: false, reason: 'not_owner' };
+}
+
 export function decideAgentSessionEndAccess(
   input: DecideAgentSessionEndAccessInput,
 ): AgentSessionAccessDecision {
@@ -151,4 +193,39 @@ export function decideAgentSessionEndAccess(
     return { allowed: false, reason: 'code_execution_denied' };
   }
   return { allowed: true };
+}
+
+/** The facts about a session's drive that decide whether it may host another drive's agent. */
+export interface SessionDriveFacts {
+  kind: string;
+  ownerId: string;
+}
+
+/**
+ * May this session host an agent that lives in a DIFFERENT drive?
+ *
+ * A drive-scoped session may not: its tenant, payer and access all derive from
+ * ITS drive, so another drive's agent would run and bill inside a drive that
+ * never admitted it (`AgentNotInSessionDriveError`, the claim's
+ * `cross_drive_denied`). A global-assistant session may: tenant and payer are
+ * its owner whichever agent runs, and only its owner can open it — so it hosts
+ * any agent the owner can view (page permissions are checked separately).
+ *
+ * Global-assistant sessions are now created in their owner's Home drive
+ * (IMG-5.1), so "global" is decided by OWNERSHIP rather than `driveId === null`:
+ * a session in a HOME drive owned by the session's own owner has exactly the
+ * properties above (Home is owner-only by the drive guards, and its owner is
+ * the session owner, so tenant and payer resolve to them). A session in a Home
+ * drive someone ELSE owns — or in any team drive — stays drive-strict.
+ * `drive` is null when the session has no drive, or its drive is gone.
+ */
+export function sessionHostsAgentsFromAnyDrive({
+  session,
+  drive,
+}: {
+  session: { driveId: string | null; ownerId: string };
+  drive: SessionDriveFacts | null;
+}): boolean {
+  if (session.driveId === null) return true;
+  return drive !== null && drive.kind === 'HOME' && drive.ownerId === session.ownerId;
 }

@@ -19,7 +19,8 @@ export interface WorkflowLastRun {
 export interface Workflow {
   id: string;
   driveId: string;
-  createdBy: string;
+  /** Null once the creator's account is deleted ([D-OW-36]: the workflow is then owner-left). */
+  createdBy: string | null;
   name: string;
   /** Null for step-based workflows whose ai steps carry their own agent. */
   agentPageId: string | null;
@@ -31,6 +32,8 @@ export interface Workflow {
   cronExpression: string | null;
   timezone: string;
   isEnabled: boolean;
+  /** [D-OW-36] Set when the creator left the org or deleted their account: disabled until an Owner or Admin reassigns or deletes it. */
+  ownerLeftAt: string | null;
   nextRunAt: string | null;
   lastRun: WorkflowLastRun | null;
   createdAt: string;

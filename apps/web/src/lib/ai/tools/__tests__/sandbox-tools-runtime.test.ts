@@ -12,6 +12,7 @@ const {
   mockCheckSessionRuntimeGuardrail,
   mockRecordSessionActivity,
   mockEnsureGlobalSandboxSession,
+  mockEnsureDriveSessionForConversation,
   mockGetConversation,
   mockIsLocalEnvsEnabled,
   mockFindEnvById,
@@ -21,6 +22,7 @@ const {
   mockResolveSandboxHostForSandboxId,
   mockCanRunCode,
   mockListGlobalAssistantEnvironments,
+  mockFindOwnImagoHomeDriveId,
 } = vi.hoisted(() => ({
   mockIsLocalEnvsEnabled: vi.fn(() => true),
   mockResolveDriveEnvPayer: vi.fn(),
@@ -36,10 +38,14 @@ const {
   mockCheckSessionRuntimeGuardrail: vi.fn(),
   mockRecordSessionActivity: vi.fn(),
   mockEnsureGlobalSandboxSession: vi.fn(),
+  mockEnsureDriveSessionForConversation: vi.fn(),
   mockGetConversation: vi.fn(),
+  mockFindOwnImagoHomeDriveId: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/db', () => ({ db: {} }));
+// SEAT-9: the org's billing status is read for an org drive's tier; paid here (review #2761).
+vi.mock('@pagespace/lib/organizations/status', () => ({ isOrgLapsedForDrive: vi.fn(async () => false) }));
 vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   findSessionForConversation: mockFindSessionForConversation,
   provisionSessionSandbox: mockProvisionSessionSandbox,
@@ -50,6 +56,10 @@ vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   // or fail a tool call.
   measureWarmSessionStorage: mockMeasureWarmSessionStorage,
   ensureGlobalSandboxSession: mockEnsureGlobalSandboxSession,
+  ensureDriveSessionForConversation: mockEnsureDriveSessionForConversation,
+}));
+vi.mock('@/lib/ai/core/imago-agent-context', () => ({
+  findOwnImagoHomeDriveId: mockFindOwnImagoHomeDriveId,
 }));
 vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: { getConversation: mockGetConversation },
@@ -75,7 +85,7 @@ vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({
 }));
 vi.mock('@pagespace/lib/services/sandbox/sandbox-billing', () => ({
   defaultSandboxBillingDeps: {
-    resolvePayerId: vi.fn(),
+    resolveCharge: vi.fn(),
     gate: vi.fn(),
     trackUsage: vi.fn(),
     releaseHold: vi.fn(),
@@ -94,11 +104,13 @@ import { ENV_UNREACHABLE_MESSAGE } from '@pagespace/lib/env-bridge/decide-env-re
 import type { ToolExecutionContext } from '../../core/types';
 import type { AcquireSandboxRequest } from '@pagespace/lib/services/sandbox/tool-runners';
 import type { AgentSessionRecord } from '@pagespace/lib/services/agent-workspaces/agent-workspaces-store';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 function makeDeps(overrides: Partial<ResolveSandboxActorContextDeps> = {}): ResolveSandboxActorContextDeps {
   return {
-    findDrive: async () => ({ ownerId: 'tenant-1' }),
+    findDrive: async () => ({ ownerId: 'tenant-1', orgId: null }),
     findPageDriveId: async () => undefined,
+    findOwnImagoHomeDriveId: async () => null,
     findUser: async () => ({ subscriptionTier: 'pro' }),
     getActorInfo: async () => ({ actorEmail: 'u1@example.com', actorDisplayName: 'User One' }),
     findSessionForConversation: async () => null,
@@ -107,13 +119,13 @@ function makeDeps(overrides: Partial<ResolveSandboxActorContextDeps> = {}): Reso
 }
 
 const baseGlobalContext: ToolExecutionContext = {
-  userId: 'u1',
+  userId: 'u1', accessActor: credentialActor('u1', null),
   conversationId: 'conv-1',
   chatSource: { type: 'global' },
 };
 
 const basePageContext: ToolExecutionContext = {
-  userId: 'u1',
+  userId: 'u1', accessActor: credentialActor('u1', null),
   conversationId: 'conv-1',
   chatSource: { type: 'page', agentPageId: 'page-agent-1' },
 };
@@ -131,7 +143,7 @@ describe('resolveSandboxActorContext', () => {
 
   describe('given userId present but no conversationId', () => {
     it('should return a conversation error', async () => {
-      const context: ToolExecutionContext = { userId: 'u1', chatSource: { type: 'global' } };
+      const context: ToolExecutionContext = { userId: 'u1', accessActor: credentialActor('u1', null), chatSource: { type: 'global' } };
       const resolve = createResolveSandboxActorContext(makeDeps());
       const result = await resolve(context);
       expect('error' in result).toBe(true);
@@ -147,13 +159,31 @@ describe('resolveSandboxActorContext', () => {
         locationContext: { currentDrive: { id: 'd1', name: 'Drive 1', slug: 'drive-1' } },
       };
       const resolve = createResolveSandboxActorContext(
-        makeDeps({ findDrive: async () => ({ ownerId: 'owner-1' }) }),
+        makeDeps({ findDrive: async () => ({ ownerId: 'owner-1', orgId: null }) }),
       );
       const result = await resolve(context);
       expect('error' in result).toBe(false);
       if ('error' in result) return;
       expect(result.driveId).toBe('d1');
       expect(result.tenantId).toBe('owner-1');
+    });
+
+    it("WAL-9 (partial) an ORG drive's quota tier is the org's, not the free-tier lead's own plan", async () => {
+      const context: ToolExecutionContext = {
+        ...basePageContext,
+        locationContext: { currentDrive: { id: 'd1', name: 'Drive 1', slug: 'drive-1' } },
+      };
+      const resolve = createResolveSandboxActorContext(
+        makeDeps({
+          findDrive: async () => ({ ownerId: 'free-lead', orgId: 'org-northwind' }),
+          findUser: async () => ({ subscriptionTier: 'free' }),
+        }),
+      );
+      const result = await resolve(context);
+      if ('error' in result) throw new Error(result.error);
+      expect(result.tier).toBe('business');
+      // The Sprite tenant stays the lead: tenancy is isolation, not billing.
+      expect(result.tenantId).toBe('free-lead');
     });
 
     it("should resolve the quota tier from the PAYER (drive owner), not the actor (review #2326)", async () => {
@@ -168,7 +198,7 @@ describe('resolveSandboxActorContext', () => {
       const tierLookups: string[] = [];
       const resolve = createResolveSandboxActorContext(
         makeDeps({
-          findDrive: async () => ({ ownerId: 'owner-1' }),
+          findDrive: async () => ({ ownerId: 'owner-1', orgId: null }),
           findUser: async (userId) => {
             tierLookups.push(userId);
             return userId === 'owner-1'
@@ -232,7 +262,7 @@ describe('resolveSandboxActorContext', () => {
           findPageDriveId: async (pageId) => pageId === 'page-agent-1' ? 'drive-from-page' : undefined,
           findDrive: async (driveId) => {
             seenDriveIds.push(driveId);
-            return { ownerId: 'tenant-from-page-drive' };
+            return { ownerId: 'tenant-from-page-drive', orgId: null };
           },
         }),
       );
@@ -244,6 +274,46 @@ describe('resolveSandboxActorContext', () => {
       expect(result.driveId).toBe('drive-from-page');
       expect(result.tenantId).toBe('tenant-from-page-drive');
       expect(seenDriveIds).toEqual(['drive-from-page']);
+    });
+  });
+
+  describe("given the owner's own Imago conversation, unbound, with another drive in view (IMG-10.10)", () => {
+    it('should pay from the Home drive provisioning will mint its session in, never the location drive', async () => {
+      const context: ToolExecutionContext = {
+        ...basePageContext,
+        locationContext: { currentDrive: { id: 'd-other', name: 'Other', slug: 'other' } },
+      };
+      const seenDriveIds: string[] = [];
+      const resolve = createResolveSandboxActorContext(
+        makeDeps({
+          findOwnImagoHomeDriveId: async (userId, pageId) => (userId === 'u1' && pageId === 'page-agent-1' ? 'home-u1' : null),
+          findDrive: async (driveId) => {
+            seenDriveIds.push(driveId);
+            return { ownerId: 'u1', orgId: null };
+          },
+        }),
+      );
+
+      const result = await resolve(context);
+
+      expect('error' in result).toBe(false);
+      if ('error' in result) return;
+      expect(result).toMatchObject({ driveId: 'home-u1', tenantId: 'u1', ownerId: 'u1' });
+      expect(seenDriveIds).toEqual(['home-u1']);
+    });
+
+    it("given someone else's agent page (no Imago of this user), should keep the location drive as before", async () => {
+      const context: ToolExecutionContext = {
+        ...basePageContext,
+        locationContext: { currentDrive: { id: 'd-other', name: 'Other', slug: 'other' } },
+      };
+      const resolve = createResolveSandboxActorContext(makeDeps({ findDrive: async () => ({ ownerId: 'tenant-other', orgId: null }) }));
+
+      const result = await resolve(context);
+
+      expect('error' in result).toBe(false);
+      if ('error' in result) return;
+      expect(result).toMatchObject({ driveId: 'd-other', tenantId: 'tenant-other' });
     });
   });
 
@@ -323,7 +393,7 @@ describe('resolveSandboxActorContext', () => {
           findSessionForConversation: async () => ({ driveId: 'd-session', ownerId: 'session-owner' }),
           findDrive: async (driveId) => {
             consultedDrives.push(driveId);
-            return { ownerId: 'session-drive-owner' };
+            return { ownerId: 'session-drive-owner', orgId: null };
           },
         }),
       );
@@ -343,7 +413,7 @@ describe('resolveSandboxActorContext', () => {
     // in-place via stamping — reusing it here would leak a turnId across
     // tests and defeat the very thing being asserted).
     function freshGlobalContext(): ToolExecutionContext {
-      return { userId: 'u1', conversationId: 'conv-1', chatSource: { type: 'global' } };
+      return { userId: 'u1', accessActor: credentialActor('u1', null), conversationId: 'conv-1', chatSource: { type: 'global' } };
     }
 
     it('stamps a turnId onto the resolved ctx when the raw context has none yet', async () => {
@@ -452,7 +522,7 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     // Asserting presence rather than behaviour is the point: the behaviour is
     // covered in `tool-runners`, and the only thing that was ever missing was
     // the connection between the two.
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
     expect(typeof deps.notifyShellActivity).toBe('function');
   });
 
@@ -464,7 +534,7 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     // at persist time would then name generation B while `du` walked A's disk,
     // and the CAS would "succeed" against B with A's bytes: the exact write the
     // CAS exists to reject, waved through by its own guard.
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
     expect(typeof deps.measureStorage).toBe('function');
 
     const sandbox = {
@@ -482,7 +552,7 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
   });
 
   it('given no conversationId, should fail as provision_failed/missing_conversation_id without touching the session runtime', async () => {
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
     const result = await deps.acquireSandbox(baseInput({ conversationId: undefined }));
     expect(result).toEqual({ ok: false, reason: 'provision_failed', cause: 'missing_conversation_id' });
     expect(mockFindSessionForConversation).not.toHaveBeenCalled();
@@ -492,7 +562,7 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
 
   it('given the runtime guardrail denies, should short-circuit BEFORE provisioning — keyed by the SESSION id', async () => {
     mockCheckSessionRuntimeGuardrail.mockReturnValue({ allowed: false, reason: 'session_runtime_exceeded' });
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
     const result = await deps.acquireSandbox(baseInput());
     expect(result).toEqual({ ok: false, reason: 'session_runtime_exceeded' });
     // One runtime budget per WORKSPACE, however many threads work in it.
@@ -510,12 +580,38 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     // never auto-provision — only the global-assistant case below does.
     mockFindSessionForConversation.mockResolvedValue(null);
     mockGetConversation.mockResolvedValue({ type: 'page' });
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
     const result = await deps.acquireSandbox(baseInput());
     expect(result).toEqual({ ok: false, reason: 'no_session' });
     expect(mockEnsureGlobalSandboxSession).not.toHaveBeenCalled();
     expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
     expect(mockRecordSessionActivity).not.toHaveBeenCalled();
+  });
+
+  it("given the owner's own Imago conversation with NO session, should auto-provision one in its Home drive, as the global assistant's is (IMG-10.10)", async () => {
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'page', contextId: 'imago-page', userId: 'u1' });
+    mockFindOwnImagoHomeDriveId.mockResolvedValue('home-u1');
+    mockEnsureDriveSessionForConversation.mockResolvedValue({ ok: true, session: sessionRecord });
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
+    const result = await deps.acquireSandbox(baseInput({ agentPageId: 'imago-page' }));
+    expect(mockFindOwnImagoHomeDriveId).toHaveBeenCalledWith('u1', 'imago-page');
+    expect(mockEnsureDriveSessionForConversation).toHaveBeenCalledWith('conv-1', credentialActor('u1', null), 'home-u1', 'Imago');
+    expect(mockProvisionSessionSandbox).toHaveBeenCalledWith(sessionRecord, credentialActor('u1', null));
+    expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-1' });
+  });
+
+  it("given a page conversation on someone else's Imago, or another user's conversation, should DENY like any page agent", async () => {
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockFindOwnImagoHomeDriveId.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'page', contextId: 'imago-page', userId: 'u1' });
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
+    expect(await deps.acquireSandbox(baseInput())).toEqual({ ok: false, reason: 'no_session' });
+
+    mockFindOwnImagoHomeDriveId.mockResolvedValue('home-u2');
+    mockGetConversation.mockResolvedValue({ type: 'page', contextId: 'imago-page', userId: 'u2' });
+    expect(await deps.acquireSandbox(baseInput())).toEqual({ ok: false, reason: 'no_session' });
+    expect(mockEnsureDriveSessionForConversation).not.toHaveBeenCalled();
   });
 
   it('given a GLOBAL conversation with NO session, should auto-provision one and proceed to provision its sandbox', async () => {
@@ -527,10 +623,10 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     mockFindSessionForConversation.mockResolvedValue(null);
     mockGetConversation.mockResolvedValue({ type: 'global' });
     mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: true, session: sessionRecord });
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
     const result = await deps.acquireSandbox(baseInput({ agentPageId: undefined }));
-    expect(mockEnsureGlobalSandboxSession).toHaveBeenCalledWith('conv-1', 'u1');
-    expect(mockProvisionSessionSandbox).toHaveBeenCalledWith(sessionRecord, 'u1');
+    expect(mockEnsureGlobalSandboxSession).toHaveBeenCalledWith('conv-1', expect.objectContaining({ userId: 'u1' }));
+    expect(mockProvisionSessionSandbox).toHaveBeenCalledWith(sessionRecord, expect.objectContaining({ userId: 'u1' }));
     expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-1' });
   });
 
@@ -541,7 +637,7 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     mockFindSessionForConversation.mockResolvedValue(null);
     mockGetConversation.mockResolvedValue({ type: 'global' });
     mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'spawn_failed' });
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
     const result = await deps.acquireSandbox(baseInput({ agentPageId: undefined }));
     expect(result).toEqual({ ok: false, reason: 'provision_failed', cause: 'spawn_failed' });
     expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
@@ -555,7 +651,7 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     mockFindSessionForConversation.mockResolvedValue(null);
     mockGetConversation.mockResolvedValue({ type: 'global' });
     mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'session_limit_reached' });
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
     const result = await deps.acquireSandbox(baseInput({ agentPageId: undefined }));
     expect(result).toEqual({ ok: false, reason: 'provision_failed', cause: 'session_limit_reached' });
     expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
@@ -567,7 +663,7 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     // threads resolve one session row, and provisioning folds ITS id — so both
     // acquisitions name one sandboxId with no shared id threaded anywhere.
     mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sbx-shared', resumed: true, workspaceId: 'ws-1' });
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
 
     const a = await deps.acquireSandbox(baseInput({ conversationId: 'conv-a' }));
     const b = await deps.acquireSandbox(baseInput({ conversationId: 'conv-b' }));
@@ -576,13 +672,13 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     expect(b).toMatchObject({ ok: true, sandboxId: 'sbx-shared' });
     expect(mockFindSessionForConversation.mock.calls).toEqual([['conv-a'], ['conv-b']]);
     // Both provisions received the SAME session row — the structural share.
-    expect(mockProvisionSessionSandbox).toHaveBeenNthCalledWith(1, sessionRecord, 'u1');
-    expect(mockProvisionSessionSandbox).toHaveBeenNthCalledWith(2, sessionRecord, 'u1');
+    expect(mockProvisionSessionSandbox).toHaveBeenNthCalledWith(1, sessionRecord, expect.objectContaining({ userId: 'u1' }));
+    expect(mockProvisionSessionSandbox).toHaveBeenNthCalledWith(2, sessionRecord, expect.objectContaining({ userId: 'u1' }));
   });
 
   it('given provisioning is denied as not_authorized, should map to the runners\' no_drive_access vocabulary', async () => {
     mockProvisionSessionSandbox.mockResolvedValue({ ok: false, reason: 'denied', denial: 'not_authorized' });
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
     const result = await deps.acquireSandbox(baseInput());
     expect(result).toEqual({ ok: false, reason: 'no_drive_access' });
     expect(mockRecordSessionActivity).not.toHaveBeenCalled();
@@ -590,32 +686,32 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
 
   it('given provisioning is denied for any other reason, should map to provision_failed with the denial as the cause', async () => {
     mockProvisionSessionSandbox.mockResolvedValue({ ok: false, reason: 'denied', denial: 'session_torn_down' });
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
     const result = await deps.acquireSandbox(baseInput());
     expect(result).toEqual({ ok: false, reason: 'provision_failed', cause: 'session_torn_down' });
   });
 
   it('given a non-denial provisioning failure, should map to provision_failed preferring the detail as the cause', async () => {
     mockProvisionSessionSandbox.mockResolvedValue({ ok: false, reason: 'race_lost', detail: 'cas beaten' });
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
     const result = await deps.acquireSandbox(baseInput());
     expect(result).toEqual({ ok: false, reason: 'provision_failed', cause: 'cas beaten' });
   });
 
   it('given a non-denial provisioning failure without detail, should fall back to the reason as the cause', async () => {
     mockProvisionSessionSandbox.mockResolvedValue({ ok: false, reason: 'egress_denied' });
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
     const result = await deps.acquireSandbox(baseInput());
     expect(result).toEqual({ ok: false, reason: 'provision_failed', cause: 'egress_denied' });
   });
 
   it('given a successful provision, should return the sandbox with pageId = the agent page and record activity keyed by the session id', async () => {
     mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sbx-1', resumed: true, workspaceId: 'ws-1' });
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
     const result = await deps.acquireSandbox(baseInput());
     expect(result).toEqual({ ok: true, sandboxId: 'sbx-1', resumed: true, workspaceId: 'ses-1', pageId: 'agent-1' });
     expect(mockFindSessionForConversation).toHaveBeenCalledWith('conv-1');
-    expect(mockProvisionSessionSandbox).toHaveBeenCalledWith(sessionRecord, 'u1');
+    expect(mockProvisionSessionSandbox).toHaveBeenCalledWith(sessionRecord, expect.objectContaining({ userId: 'u1' }));
     expect(mockRecordSessionActivity).toHaveBeenCalledWith({
       workspaceId: 'ses-1',
       now: expect.any(Number),
@@ -623,7 +719,7 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
   });
 
   it('given no agentPageId (a global-assistant conversation), should return no pageId', async () => {
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
     const result = await deps.acquireSandbox(baseInput({ agentPageId: undefined, driveId: undefined }));
     expect(result).toEqual({ ok: true, sandboxId: 'sbx-1', resumed: false, workspaceId: 'ses-1', pageId: undefined });
     expect(mockFindSessionForConversation).toHaveBeenCalledWith('conv-1');
@@ -669,7 +765,7 @@ describe('buildRealSandboxRunDeps.resolveBillingSession', () => {
     mockFindSessionForConversation.mockResolvedValue(
       makeSessionRecord({ id: 'shared-session-1', driveId: 'session-own-drive', ownerId: 'session-own-owner' }),
     );
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
 
     const result = await deps.resolveBillingSession?.({
       userId: 'u1',
@@ -686,7 +782,7 @@ describe('buildRealSandboxRunDeps.resolveBillingSession', () => {
 
   it('given a global-assistant session (null driveId), resolves driveId null and the session ownerId', async () => {
     mockFindSessionForConversation.mockResolvedValue(makeSessionRecord({ driveId: null, ownerId: 'global-owner-1' }));
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
 
     const result = await deps.resolveBillingSession?.({
       userId: 'u1',
@@ -700,7 +796,7 @@ describe('buildRealSandboxRunDeps.resolveBillingSession', () => {
   });
 
   it('given no conversationId, resolves null WITHOUT touching the session runtime', async () => {
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
 
     const result = await deps.resolveBillingSession?.({
       userId: 'u1',
@@ -717,7 +813,7 @@ describe('buildRealSandboxRunDeps.resolveBillingSession', () => {
   it('given a PAGE conversation with no session yet, resolves null (page agents never auto-provision)', async () => {
     mockFindSessionForConversation.mockResolvedValue(null);
     mockGetConversation.mockResolvedValue({ type: 'page' });
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
 
     const result = await deps.resolveBillingSession?.({
       userId: 'u1',
@@ -742,7 +838,7 @@ describe('buildRealSandboxRunDeps.resolveBillingSession', () => {
     mockGetConversation.mockResolvedValue({ type: 'global' });
     const provisioned = makeSessionRecord({ id: 'auto-ses-1', driveId: null, ownerId: 'u1' });
     mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: true, session: provisioned });
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
 
     const result = await deps.resolveBillingSession?.({
       userId: 'u1',
@@ -753,14 +849,14 @@ describe('buildRealSandboxRunDeps.resolveBillingSession', () => {
     });
 
     expect(result).toEqual({ workspaceId: 'auto-ses-1', driveId: null, ownerId: 'u1' });
-    expect(mockEnsureGlobalSandboxSession).toHaveBeenCalledWith('conv-fresh-global', 'u1');
+    expect(mockEnsureGlobalSandboxSession).toHaveBeenCalledWith('conv-fresh-global', expect.objectContaining({ userId: 'u1' }));
   });
 
   it('given a GLOBAL conversation whose auto-provisioning hits the session cap, fails CLOSED with { deny } rather than resolving null — a concurrent sibling\'s claim could still let acquireSandbox succeed moments later, executing unmetered (review finding — P1, PR #2314, second pass)', async () => {
     mockFindSessionForConversation.mockResolvedValue(null);
     mockGetConversation.mockResolvedValue({ type: 'global' });
     mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'session_limit_reached' });
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
 
     const result = await deps.resolveBillingSession?.({
       userId: 'u1',
@@ -777,7 +873,7 @@ describe('buildRealSandboxRunDeps.resolveBillingSession', () => {
     mockFindSessionForConversation.mockResolvedValue(null);
     mockGetConversation.mockResolvedValue({ type: 'global' });
     mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'spawn_failed' });
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
 
     const result = await deps.resolveBillingSession?.({
       userId: 'u1',
@@ -794,7 +890,7 @@ describe('buildRealSandboxRunDeps.resolveBillingSession', () => {
     mockFindSessionForConversation.mockResolvedValue(null);
     mockGetConversation.mockResolvedValue({ type: 'global' });
     mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'no_session' });
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
 
     const result = await deps.resolveBillingSession?.({
       userId: 'u1',
@@ -805,6 +901,65 @@ describe('buildRealSandboxRunDeps.resolveBillingSession', () => {
     });
 
     expect(result).toEqual({ deny: 'provision_failed' });
+  });
+});
+
+describe('buildRealSandboxRunDeps({ actor, resolveSession }) — a caller that already holds the session (workspace exec)', () => {
+  const now = new Date('2026-06-01T00:00:00Z');
+  const heldSession: AgentSessionRecord = {
+    id: 'ws-held',
+    ownerId: 'held-owner',
+    driveId: 'held-drive',
+    name: null,
+    envId: null,
+    spriteKey: null,
+    sandboxId: null,
+    spriteInstanceId: null,
+    egressPolicyToken: null,
+    teardownRequestedAt: null,
+    spriteTornDownAt: null,
+    storageLastBilledAt: now,
+    storageMeasuredBytes: null,
+    storageMeasuredAt: null,
+    lastActiveAt: null,
+    endedAt: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+  const resolveSession = vi.fn(async () => ({ ok: true as const, session: heldSession }));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCheckSessionRuntimeGuardrail.mockReturnValue({ allowed: true });
+    mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sbx-held', resumed: true });
+  });
+
+  it('should BILL the injected session — an exec scope key resolves no conversation, and falling back to one would run unmetered', async () => {
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('caller', null), resolveSession });
+    const result = await deps.resolveBillingSession?.({
+      userId: 'caller',
+      tenantId: 'held-owner',
+      conversationId: 'workspace-exec:ws-held',
+      actorEmail: 'caller@example.com',
+      tier: 'pro',
+    });
+    expect(result).toEqual({ workspaceId: 'ws-held', driveId: 'held-drive', ownerId: 'held-owner' });
+    expect(resolveSession).toHaveBeenCalledWith('workspace-exec:ws-held', expect.objectContaining({ userId: 'caller' }));
+    expect(mockFindSessionForConversation).not.toHaveBeenCalled();
+  });
+
+  it('should ACQUIRE the injected session\'s sandbox through the shared guardrail + provision path', async () => {
+    const deps = buildRealSandboxRunDeps({ actor: credentialActor('caller', null), resolveSession });
+    const result = await deps.acquireSandbox({
+      tenantId: 'held-owner',
+      driveId: 'held-drive',
+      userId: 'caller',
+      conversationId: 'workspace-exec:ws-held',
+    });
+    expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-held', workspaceId: 'ws-held' });
+    expect(mockProvisionSessionSandbox).toHaveBeenCalledWith(heldSession, expect.objectContaining({ userId: 'caller' }));
+    expect(mockCheckSessionRuntimeGuardrail).toHaveBeenCalledWith({ workspaceId: 'ws-held', now: expect.any(Number) });
+    expect(mockFindSessionForConversation).not.toHaveBeenCalled();
   });
 });
 

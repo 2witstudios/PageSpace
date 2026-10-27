@@ -10,6 +10,7 @@ vi.mock('@pagespace/lib/repositories/account-repository', () => ({
   accountRepository: {
     findById: vi.fn(),
     getOwnedDrives: vi.fn(),
+    getOwnedOrganizationNames: vi.fn(),
     getDriveMemberCount: vi.fn(),
   },
 }));
@@ -34,6 +35,7 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   logUserActivity: vi.fn(),
 }));
 
+import { LeaveOrganizationRefusedError } from '@pagespace/lib/organizations/leave';
 import { DELETE } from '../route';
 import { accountRepository } from '@pagespace/lib/repositories/account-repository';
 import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
@@ -75,13 +77,69 @@ describe('DELETE /api/account (async erasure)', () => {
       email: mockUserEmail,
       image: null,
       stripeCustomerId: null,
+      appleId: null,
     });
     mockAccountRepo.getOwnedDrives.mockResolvedValue([]);
+    mockAccountRepo.getOwnedOrganizationNames.mockResolvedValue([]);
     mockDsrRepo.findActiveErasureForUser.mockResolvedValue(null);
     vi.mocked(lodgeAndEnqueueErasure).mockResolvedValue({
       requestId: 'dsr_1',
       jobId: 'job_1',
       slaDeadline: new Date('2026-03-01T00:00:00.000Z'),
+      appleSignIn: 'none',
+    });
+  });
+
+  describe('Sign in with Apple (Guideline 5.1.1(v))', () => {
+    it('given a user who signed in with Apple, should tell the erasure so and return its Apple outcome', async () => {
+      mockAccountRepo.findById.mockResolvedValue({
+        id: mockUserId,
+        email: mockUserEmail,
+        image: null,
+        stripeCustomerId: null,
+        appleId: 'apple-sub-1',
+      });
+      vi.mocked(lodgeAndEnqueueErasure).mockResolvedValue({
+        requestId: 'dsr_1',
+        jobId: 'job_1',
+        slaDeadline: new Date('2026-03-01T00:00:00.000Z'),
+        appleSignIn: 'manual',
+      });
+
+      const res = await DELETE(deleteReq(mockUserEmail));
+      const body = await res.json();
+
+      expect(res.status).toBe(202);
+      expect(lodgeAndEnqueueErasure).toHaveBeenCalledWith(expect.objectContaining({ subjectAppleLinked: true }));
+      expect(body.appleSignIn).toBe('manual');
+    });
+
+    it('given a retry while the erasure is already in flight, should still tell an Apple user the manual steps', async () => {
+      mockAccountRepo.findById.mockResolvedValue({
+        id: mockUserId,
+        email: mockUserEmail,
+        image: null,
+        stripeCustomerId: null,
+        appleId: 'apple-sub-1',
+      });
+      mockDsrRepo.findActiveErasureForUser.mockResolvedValue({
+        id: 'dsr_existing',
+        status: 'queued',
+        slaDeadline: new Date('2026-03-01T00:00:00.000Z'),
+      } as never);
+
+      const body = await (await DELETE(deleteReq(mockUserEmail))).json();
+
+      expect(body.requestId).toBe('dsr_existing');
+      expect(body.appleSignIn).toBe('manual');
+    });
+
+    it('given a user who never used Sign in with Apple, should report none', async () => {
+      const res = await DELETE(deleteReq(mockUserEmail));
+      const body = await res.json();
+
+      expect(lodgeAndEnqueueErasure).toHaveBeenCalledWith(expect.objectContaining({ subjectAppleLinked: false }));
+      expect(body.appleSignIn).toBe('none');
     });
   });
 
@@ -121,7 +179,7 @@ describe('DELETE /api/account (async erasure)', () => {
       expect(lodgeAndEnqueueErasure).toHaveBeenCalledWith(
         expect.objectContaining({
           subjectUserId: mockUserId,
-          callerUserId: mockUserId,
+          caller: expect.objectContaining({ userId: mockUserId }),
           requestedByType: 'self',
           forceDelete: false,
         })
@@ -144,6 +202,24 @@ describe('DELETE /api/account (async erasure)', () => {
       expect(res.status).toBe(400);
       expect(body.multiMemberDrives).toContain('Team Drive');
       expect(lodgeAndEnqueueErasure).not.toHaveBeenCalled();
+    });
+
+    it('ORG-6 an Owner cannot delete their account while owning an org', async () => {
+      mockAccountRepo.getOwnedOrganizationNames.mockResolvedValue(['Northwind Labs']);
+      const res = await DELETE(deleteReq(mockUserEmail));
+      const body = await res.json();
+      expect(res.status).toBe(400);
+      expect(body.error).toBe('Transfer ownership of your organizations or delete them before deleting your account');
+      expect(body.ownedOrganizations).toEqual(['Northwind Labs']);
+      expect(lodgeAndEnqueueErasure).not.toHaveBeenCalled();
+    });
+
+    it('ORG-6 (partial) an ownership race refused by atomic lodge returns the ownership refusal instead of 500', async () => {
+      mockAccountRepo.getOwnedOrganizationNames.mockResolvedValueOnce([]).mockResolvedValueOnce(['Northwind Labs']);
+      vi.mocked(lodgeAndEnqueueErasure).mockRejectedValueOnce(new LeaveOrganizationRefusedError('org-raced', 'OWNER_MUST_TRANSFER'));
+      const response = await DELETE(deleteReq(mockUserEmail));
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: expect.stringMatching(/Transfer ownership/), ownedOrganizations: ['Northwind Labs'] });
     });
 
     it('given an in-flight erasure, should be idempotent and return the existing request', async () => {

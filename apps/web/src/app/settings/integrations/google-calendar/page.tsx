@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { fetchWithAuth } from "@/lib/auth/auth-fetch";
 import { toast } from "sonner";
+import { startThirdPartyOAuth } from "@/lib/navigation/oauth-redirect";
 
 interface ConnectionStatus {
   connected: boolean;
@@ -223,7 +224,7 @@ export default function GoogleCalendarSettingsPage() {
       }
 
       const { url } = await response.json();
-      window.location.href = url;
+      await startThirdPartyOAuth(url);
     } catch (err) {
       console.error("Failed to connect:", err);
       toast.error("Failed to initiate connection");

@@ -8,6 +8,13 @@ const MIN_OFFSET = 0;
 
 export interface TaskQuerySpec {
   status?: string;
+  /** Done-group filter resolved against the list's status configs — the Active / Completed tabs. */
+  statusGroup?: 'active' | 'completed';
+  /**
+   * Kanban paging: `limit`/`offset` count rows within each status instead of across the
+   * whole list, so a column whose cards all sit late in the list still fills its page.
+   */
+  perStatus: boolean;
   assigneeId?: string;
   search?: string;
   sortOrder: 'asc' | 'desc';
@@ -22,6 +29,8 @@ export interface TaskQuerySpec {
 export function parseTaskQuerySpec(params: URLSearchParams): TaskQuerySpec {
   const status = params.get('status');
   const assigneeId = params.get('assigneeId');
+  const statusGroupParam = params.get('statusGroup');
+  const statusGroup = statusGroupParam === 'active' || statusGroupParam === 'completed' ? statusGroupParam : undefined;
   const search = params.get('search');
   const sortOrder = params.get('sortOrder') === 'desc' ? 'desc' : 'asc';
 
@@ -37,6 +46,8 @@ export function parseTaskQuerySpec(params: URLSearchParams): TaskQuerySpec {
 
   return {
     status: status || undefined,
+    statusGroup,
+    perStatus: params.get('perStatus') === 'true',
     assigneeId: assigneeId || undefined,
     search: search || undefined,
     sortOrder,

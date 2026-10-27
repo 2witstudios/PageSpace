@@ -26,6 +26,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Tool } from 'ai';
 import { createSessionTools, type PaneGridListing, type SessionToolsDeps } from '../session-tools';
 import type { ToolExecutionContext } from '../../core/types';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 /** Alice's workspace. Mallory's worker conversation is bound into it. */
 const ALICE_WORKSPACE = 'ws-alice';
@@ -42,10 +43,11 @@ const LAYOUT: PaneGridListing = {
 function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
   return {
     // The binding survives revocation — that is the whole point.
-    findOwnWorkspace: vi.fn(async () => ({ workspaceId: ALICE_WORKSPACE, driveId: null })),
+    findOwnWorkspace: vi.fn(async () => ({ workspaceId: ALICE_WORKSPACE, driveId: null, name: 'Workspace' })),
     // Mallory is no longer a member of the drive Alice's workspace lives in.
     checkWorkspaceAccess: vi.fn(async () => ({ allowed: false, reason: 'not_a_member' })),
     checkWorkspaceEndAccess: vi.fn(async () => ({ allowed: true })),
+    renameWorkspace: vi.fn(async ({ name }: { name: string }) => ({ ok: true as const, name })),
     listWorkspaceWorkers: vi.fn(async () => ({ sandbox: 'running' as const, workers: [], shells: [] })),
     listOwnWorkspaces: vi.fn(async () => []),
     listSharedWorkspaces: vi.fn(async () => []),
@@ -73,7 +75,7 @@ function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
   };
 }
 
-const options = { experimental_context: { userId: MALLORY, conversationId: MALLORY_WORKER_CONVERSATION } as ToolExecutionContext, toolCallId: 'call-1' };
+const options = { experimental_context: { userId: MALLORY, accessActor: credentialActor(MALLORY, null), conversationId: MALLORY_WORKER_CONVERSATION } as ToolExecutionContext, toolCallId: 'call-1' };
 
 async function run(toolDef: Tool, input: unknown): Promise<Record<string, unknown>> {
   const execute = toolDef.execute as (input: unknown, options: unknown) => Promise<Record<string, unknown>>;
@@ -114,7 +116,7 @@ describe('a revoked member whose worker is still bound into the victim\'s worksp
   it('asks the ONE session-access decision, for the caller and the bound workspace', async () => {
     const tools = createSessionTools(deps);
     await run(tools.list_panes as Tool, {});
-    expect(deps.checkWorkspaceAccess).toHaveBeenCalledWith(MALLORY, ALICE_WORKSPACE);
+    expect(deps.checkWorkspaceAccess).toHaveBeenCalledWith(expect.objectContaining({ userId: MALLORY }), ALICE_WORKSPACE);
   });
 });
 
@@ -130,7 +132,7 @@ describe('a caller who still has session access', () => {
     expect(result.nodes).toEqual(LAYOUT.nodes);
     // The label join is per-viewer (review HIGH 1) — the tool must say who is
     // reading, not just which workspace.
-    expect(deps.readPaneGrid).toHaveBeenCalledWith(ALICE_WORKSPACE, MALLORY);
+    expect(deps.readPaneGrid).toHaveBeenCalledWith(ALICE_WORKSPACE, expect.objectContaining({ userId: MALLORY }));
   });
 
   it('a rearrange reaches the single writer', async () => {
@@ -140,7 +142,7 @@ describe('a caller who still has session access', () => {
     // And it carries the ACTING USER through, whose authority the write's
     // binding gate spends — never the model's word for who is asking.
     expect(deps.applyLayoutCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceId: ALICE_WORKSPACE, actingUserId: MALLORY }),
+      expect.objectContaining({ workspaceId: ALICE_WORKSPACE, actor: expect.objectContaining({ userId: MALLORY }) }),
     );
   });
 });
@@ -182,7 +184,7 @@ describe('a revoked member reaching the session and shell verbs', () => {
     const tools = createSessionTools(deps);
     const result = await run(tools.list_sessions as Tool, {});
 
-    expect(deps.checkWorkspaceAccess).toHaveBeenCalledWith(MALLORY, ALICE_WORKSPACE);
+    expect(deps.checkWorkspaceAccess).toHaveBeenCalledWith(expect.objectContaining({ userId: MALLORY }), ALICE_WORKSPACE);
     // The expensive detail read never happens...
     expect(deps.listWorkspaceWorkers).not.toHaveBeenCalled();
     // ...and the answer collapses to the same shape as a conversation that
@@ -240,11 +242,11 @@ describe('a revoked member reaching the session and shell verbs', () => {
     // The exclusion is keyed on the BINDING, which survives the denial —
     // not on `workspace`, which the denial nulls.
     expect(deps.listOwnWorkspaces).toHaveBeenCalledWith({
-      userId: MALLORY,
+      actor: expect.objectContaining({ userId: MALLORY }),
       excludeWorkspaceId: ALICE_WORKSPACE,
     });
     expect(deps.listSharedWorkspaces).toHaveBeenCalledWith({
-      userId: MALLORY,
+      actor: expect.objectContaining({ userId: MALLORY }),
       excludeWorkspaceId: ALICE_WORKSPACE,
     });
     // And the payload is clean of everything that listing carries.

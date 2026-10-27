@@ -28,7 +28,13 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 // --- Permissions ---------------------------------------------------------------
+// The drive's members, from the one org-aware enumeration (the lead included).
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+  getDriveRecipientUserIds: vi.fn(async () => ['owner-1']),
+}));
+
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn().mockResolvedValue(true),
   canUserEditPage: vi.fn().mockResolvedValue(true),
   // Inbox fan-out asks the centralized helper which candidates can view the
@@ -47,6 +53,7 @@ const mockInsertChannelThreadReply = vi.fn();
 const mockUpsertChannelReadStatus = vi.fn();
 const mockLoadChannelMessageWithRelations = vi.fn();
 const mockListChannelThreadFollowers = vi.fn();
+const mockFindChannelLastReadAt = vi.fn();
 vi.mock('@pagespace/lib/services/channel-message-repository', () => ({
   channelMessageRepository: {
     listChannelMessages: (...args: unknown[]) => mockListChannelMessages(...args),
@@ -57,6 +64,7 @@ vi.mock('@pagespace/lib/services/channel-message-repository', () => ({
     upsertChannelReadStatus: (...args: unknown[]) => mockUpsertChannelReadStatus(...args),
     loadChannelMessageWithRelations: (...args: unknown[]) => mockLoadChannelMessageWithRelations(...args),
     listChannelThreadFollowers: (...args: unknown[]) => mockListChannelThreadFollowers(...args),
+    findChannelLastReadAt: (...args: unknown[]) => mockFindChannelLastReadAt(...args),
   },
 }));
 
@@ -129,7 +137,7 @@ vi.mock('@/lib/channels/notify-mentioned-users', () => ({
 
 // --- Imports under test --------------------------------------------------------
 import { GET, POST } from '../route';
-import { authenticateRequestWithOptions } from '@/lib/auth';
+import { authenticateRequestWithOptions, canPrincipalViewPage } from '@/lib/auth';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 // --- Fixtures ------------------------------------------------------------------
@@ -273,6 +281,35 @@ describe('GET /api/channels/[pageId]/messages', () => {
       expect.objectContaining({ pageId: PAGE_ID })
     );
     expect(mockListChannelThreadReplies).not.toHaveBeenCalled();
+  });
+
+  it('top-level GET returns the requesting user\'s read watermark as lastReadAt', async () => {
+    mockListChannelMessages.mockResolvedValueOnce([]);
+    mockFindChannelLastReadAt.mockResolvedValueOnce(new Date('2026-10-05T09:30:00.000Z'));
+
+    const res = await callGet();
+    const body = await res.json();
+
+    expect(mockFindChannelLastReadAt).toHaveBeenCalledWith({ userId: USER_ID, channelId: PAGE_ID });
+    expect(body).toEqual({ messages: [], nextCursor: null, hasMore: false, lastReadAt: '2026-10-05T09:30:00.000Z' });
+  });
+
+  it('top-level GET returns lastReadAt null when the user has never read the channel', async () => {
+    mockListChannelMessages.mockResolvedValueOnce([]);
+    mockFindChannelLastReadAt.mockResolvedValueOnce(null);
+
+    const body = await (await callGet()).json();
+
+    expect(body.lastReadAt).toBeNull();
+  });
+
+  it('top-level GET denied by view permission never reads the watermark', async () => {
+    vi.mocked(canPrincipalViewPage).mockResolvedValueOnce(false);
+
+    const res = await callGet();
+
+    expect(res.status).toBe(403);
+    expect(mockFindChannelLastReadAt).not.toHaveBeenCalled();
   });
 });
 
@@ -647,9 +684,9 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
       title: 'General',
       drive: { ownerId: 'owner-1', name: 'Workspace', slug: 'workspace' },
     });
-    // Sender (USER_ID) passes; the mentioned outsider does not.
-    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
-    vi.mocked(canUserViewPage).mockImplementation(async (uid) => uid === USER_ID);
+    // Sender (USER_ID) can view; the mentioned outsider cannot (a third-party audience question).
+    const { getUsersWhoCanViewPage } = await import('@pagespace/lib/permissions/permissions');
+    vi.mocked(getUsersWhoCanViewPage).mockImplementationOnce(async (_pageId, ids) => new Set(ids.filter((id) => id === USER_ID)));
 
     await callPost({
       content: 'hey @[Stranger](user-outsider:user)',

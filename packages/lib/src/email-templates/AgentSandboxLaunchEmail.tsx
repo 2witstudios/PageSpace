@@ -201,7 +201,7 @@ export function AgentSandboxLaunchEmail({
             </Section>
 
             <Text style={emailStyles.hint}>
-              If you&apos;re already on Pro, Founder, or Business: nothing
+              If you&apos;re already on Pro or Business: nothing
               to do. Go start a session.
             </Text>
             <Text style={emailStyles.hint}>

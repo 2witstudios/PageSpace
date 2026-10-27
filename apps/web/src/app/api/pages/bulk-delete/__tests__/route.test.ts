@@ -24,7 +24,7 @@ vi.mock('@/lib/auth', () => ({
   isMCPAuthResult: vi.fn(() => false),
   canPrincipalDeletePage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserDeletePage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserDeletePage(auth.userId, pageId);
+    return canUserDeletePage(credentialActor(auth.userId, null), pageId);
   }),
 }));
 
@@ -46,6 +46,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserDeletePage: vi.fn().mockResolvedValue(true),
 }));
 
@@ -117,6 +118,7 @@ import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 // @ts-expect-error - accessing test-only export
 import { db, __test__ as dbTest } from '@pagespace/db/db';
 import { findProtectedMemoryPages, MEMORY_PAGE_DELETE_ERROR } from '@pagespace/lib/memory/memory-pages';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const { txUpdate, txUpdateSet, txUpdateWhere, txQueryPagesFindMany, txSelect, txSelectFrom, txSelectWhere, transaction: mockTransaction } = dbTest as {
   txUpdate: ReturnType<typeof vi.fn>;

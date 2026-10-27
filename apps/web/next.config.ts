@@ -14,7 +14,7 @@ import { WELL_KNOWN_REWRITES } from "./src/lib/well-known/rewrites";
 //
 // One list drives the dist check, the transpilePackages fallback and the
 // externals predicate below, so a new workspace package is one edit here.
-const WORKSPACE_PACKAGES = ["db", "lib", "editor"] as const;
+const WORKSPACE_PACKAGES = ["db", "lib", "editor", "browser-worker"] as const;
 const workspaceDistReady =
   process.env.NODE_ENV === "production" &&
   WORKSPACE_PACKAGES.every((pkg) =>
@@ -79,6 +79,39 @@ const edgeNodeOnlyGuard: ExternalsFn = ({ request, contextInfo }, callback) => {
   callback();
 };
 
+// Node-only modules that client bundles reach through dead server code
+// (pg via @pagespace/db, the ClickHouse writers via @pagespace/lib's logging)
+// and resolve to an empty module there. Shared by webpack's resolve.fallback
+// and Turbopack's browser-conditioned resolveAlias below.
+const CLIENT_EMPTY_NODE_MODULES = ["fs", "fs/promises", "dns", "net", "tls", "pg-native", "process", "os"];
+
+// Monaco's AMD loader and pdf.js's worker are served as files, not bundled.
+// webpack() copies them with CopyPlugin; Turbopack never runs webpack(), so a
+// `next dev --turbopack` session copies them as the config loads instead.
+const staticAssetCopies = (outputPath: string) => [
+  {
+    from: path.dirname(require.resolve("monaco-editor/min/vs/loader.js")),
+    to: path.join(outputPath, "static", "monaco", "vs"),
+  },
+  {
+    from: require.resolve("pdfjs-dist/build/pdf.worker.min.mjs"),
+    to: path.join(__dirname, "public", "pdf.worker.min.mjs"),
+  },
+];
+
+// Always a full copy (13 MB of Monaco, well under 0.2 s): a freshness check on
+// the directory would miss a file changed inside it.
+function copyStaticAssets(outputPath: string): void {
+  for (const { from, to } of staticAssetCopies(outputPath)) {
+    fs.cpSync(from, to, { recursive: true, force: true });
+  }
+}
+
+// Set by `next dev --turbopack` before this file is evaluated.
+if (process.env.TURBOPACK) {
+  copyStaticAssets(path.join(__dirname, ".next"));
+}
+
 // Named export so tests can assert on rewrites()/redirects() without going
 // through withSentryConfig's wrapping.
 export const nextConfig: NextConfig = {
@@ -96,20 +129,22 @@ export const nextConfig: NextConfig = {
   // Next.js emit require() at runtime, which fails for ESM-only packages. Instead
   // it is a direct dependency of apps/web so webpack bundles it as a server chunk.
   serverExternalPackages: ["pg"],
+  // `next dev --turbopack` reads this instead of webpack(). Builds stay on
+  // webpack, so the edge Node-only guard and the dist externals still run
+  // there; a Turbopack dev session compiles workspace packages from source.
+  turbopack: {
+    resolveAlias: Object.fromEntries(
+      [...CLIENT_EMPTY_NODE_MODULES, "@clickhouse/client"].map((name) => [
+        name,
+        { browser: "./src/lib/empty-module.cjs" },
+      ])
+    ),
+  },
   webpack: (config, { isServer, nextRuntime }) => {
-    // @pagespace/editor is an ESM package (its dist is loaded natively by
-    // Node, so its relative imports carry the mandatory `.js` extension).
-    // When webpack compiles it from SOURCE via the tsconfig `paths` alias
-    // (dev, and any build where workspaceDistReady is false) those `.js`
-    // specifiers must resolve to the sibling `.ts` file — the standard
-    // webpack setting for TypeScript ESM. `.js` stays first so the common
-    // case (a real `.js` file under node_modules) resolves on the first try;
-    // editor's src has no `.js` siblings (outDir is dist), so it falls
-    // through to `.ts` there and nowhere else.
-    config.resolve.extensionAlias = {
-      ...(config.resolve.extensionAlias ?? {}),
-      '.js': ['.js', '.ts', '.tsx'],
-    };
+    // No extensionAlias: the ESM workspace packages (@pagespace/editor,
+    // @pagespace/browser-worker) import siblings as `./x.ts`, which both
+    // webpack and Turbopack resolve as written, and tsc's
+    // rewriteRelativeImportExtensions emits as `./x.js` for Node's dist.
 
     // Externalization emits `require()` calls, which only the Node.js runtime
     // can execute. The edge compile (middleware) has no require(): it must
@@ -145,13 +180,7 @@ export const nextConfig: NextConfig = {
     if (!isServer) {
       config.resolve.fallback = {
         ...config.resolve.fallback,
-        fs: false,
-        dns: false,
-        net: false,
-        tls: false,
-        'pg-native': false,
-        process: false,
-        os: false,
+        ...Object.fromEntries(CLIENT_EMPTY_NODE_MODULES.map((name) => [name, false])),
       };
       // The ClickHouse analytics client (#890 Phase 3) is server-only and
       // imports node:os/node:http at module scope, which resolve.fallback
@@ -164,20 +193,7 @@ export const nextConfig: NextConfig = {
       };
       const outputPath = config.output.path ?? path.join(__dirname, ".next");
 
-      config.plugins.push(
-        new CopyPlugin({
-          patterns: [
-            {
-              from: path.dirname(require.resolve("monaco-editor/min/vs/loader.js")),
-              to: path.join(outputPath, "static", "monaco", "vs"),
-            },
-            {
-              from: require.resolve("pdfjs-dist/build/pdf.worker.min.mjs"),
-              to: path.join(__dirname, "public", "pdf.worker.min.mjs"),
-            },
-          ],
-        })
-      );
+      config.plugins.push(new CopyPlugin({ patterns: staticAssetCopies(outputPath) }));
 
     }
 

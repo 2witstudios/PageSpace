@@ -9,9 +9,13 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isMCPAu
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 import { pageService } from '@/services/api';
 import { db } from '@pagespace/db/db';
-import { and, eq, isNotNull, ne, not, exists, or, isNull, gt, inArray, sql } from '@pagespace/db/operators';
-import { pages, drives } from '@pagespace/db/schema/core';
-import { driveMembers, pagePermissions, driveRoles } from '@pagespace/db/schema/members';
+import { eq } from '@pagespace/db/operators';
+import { pages } from '@pagespace/db/schema/core';
+import { getUsersWhoCanViewPage } from '@pagespace/lib/permissions/permissions';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -31,12 +35,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
   try {
     // Scoped MCP tokens authorize with their OWN drive-membership role.
-    const result = await pageService.getPage(pageId, userId, {
+    const result = await pageService.getPage(pageId, actorFromAuth(auth), {
       authorizeView: (id) => canPrincipalViewPage(auth, id),
     });
 
     if (!result.success) {
-      return NextResponse.json({ error: result.error }, { status: result.status });
+      const refused = NextResponse.json({ error: result.error }, { status: result.status });
+      return result.status === 403 ? deniedResponse(actorFromAuth(auth), pageId, refused) : refused;
     }
 
     auditRequest(req, { eventType: 'data.read', userId, resourceType: 'page', resourceId: pageId, details: { operation: 'read' } });
@@ -84,7 +89,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
     if (isPrivateUpdate !== undefined) {
       const canShare = await canPrincipalSharePage(auth, pageId);
       if (!canShare) {
-        return NextResponse.json({ error: 'Only page owners and drive admins can change page visibility' }, { status: 403 });
+        return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'Only page owners and drive admins can change page visibility' }, { status: 403 }));
       }
     }
 
@@ -109,7 +114,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
       ? { ...contentUpdates, isPrivate: isPrivateUpdate }
       : contentUpdates;
 
-    const result = await pageService.updatePage(pageId, userId, updates, {
+    const result = await pageService.updatePage(pageId, actorFromAuth(auth), updates, {
       expectedRevision,
       context,
       skipPermissionCheck: isPrivateUpdate !== undefined && Object.keys(contentUpdates).length === 0,
@@ -118,7 +123,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
     });
 
     if (!result.success) {
-      return NextResponse.json(
+      const refused = NextResponse.json(
         {
           error: result.error,
           currentRevision: result.currentRevision,
@@ -126,6 +131,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
         },
         { status: result.status }
       );
+      return result.status === 403 ? deniedResponse(actorFromAuth(auth), pageId, refused) : refused;
     }
 
     // Side effects: broadcast
@@ -145,7 +151,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
     }
 
     // Broadcast content update (for document synchronization)
-    if (safeBody.content) {
+    // `!== undefined`, not truthiness: deleting all text saves '' and must still broadcast.
+    if (safeBody.content !== undefined) {
       await broadcastPageEvent(
         createPageEventPayload(driveId, pageId, 'content-updated', {
           title: result.page.title ?? undefined,
@@ -155,48 +162,18 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
       );
     }
 
-    // Instant revocation: kick members who lose implicit access when page becomes private
+    // Instant revocation: kick the drive's members (the org-aware enumeration) whom the canonical
+    // viewer check no longer lets see the page now that it is private.
     if (isPrivateUpdate === true && previousIsPrivate === false) {
-      const drive = await db.query.drives.findFirst({
-        where: eq(drives.id, result.driveId),
-        columns: { ownerId: true },
-      });
+      const members = await getDriveRecipientUserIds(result.driveId);
+      const stillViewing = await getUsersWhoCanViewPage(pageId, members);
+      const membersLosingAccess = members.filter((memberId) => !stillViewing.has(memberId));
 
-      if (drive) {
-        const membersLosingAccess: { userId: string }[] = await db
-          .select({ userId: driveMembers.userId })
-          .from(driveMembers)
-          .where(and(
-            eq(driveMembers.driveId, result.driveId),
-            isNotNull(driveMembers.acceptedAt),
-            ne(driveMembers.userId, drive.ownerId),
-            not(inArray(driveMembers.role, ['OWNER', 'ADMIN'])),
-            not(exists(
-              db.select({ id: pagePermissions.id })
-                .from(pagePermissions)
-                .where(and(
-                  eq(pagePermissions.pageId, pageId),
-                  eq(pagePermissions.userId, driveMembers.userId),
-                  eq(pagePermissions.canView, true),
-                  or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date()))
-                ))
-            )),
-            not(exists(
-              db.select({ id: driveRoles.id })
-                .from(driveRoles)
-                .where(and(
-                  eq(driveRoles.id, driveMembers.customRoleId),
-                  sql`${driveRoles.permissions} -> ${pageId} ->> 'canView' = 'true'`
-                ))
-            ))
-          ));
-
-        await Promise.all(
-          membersLosingAccess.map(({ userId: memberId }) =>
-            kickForPagePermissionRevocation({ userId: memberId, pageId, reason: 'page_private' })
-          )
-        );
-      }
+      await Promise.all(
+        membersLosingAccess.map((memberId) =>
+          kickForPagePermissionRevocation({ userId: memberId, pageId, reason: 'page_private' })
+        )
+      );
     }
 
     // Broadcast privacy change so connected clients revalidate their tree
@@ -212,7 +189,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
     // Track page update
     trackPageOperation(userId, 'update', pageId, {
       updatedFields: result.updatedFields,
-      hasContentUpdate: !!safeBody.content,
+      hasContentUpdate: safeBody.content !== undefined,
       hasTitleUpdate: !!safeBody.title
     });
 
@@ -220,6 +197,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
 
     return jsonResponse(result.page);
   } catch (error) {
+    // [D-OW-33] the page was private and its drive's org is lapsed: making it readable by the drive is refused.
+    if (isOrgLapsedError(error)) return orgLapsedResponse();
     loggers.api.error('Error updating page:', error as Error);
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: error.issues }, { status: 400 });
@@ -258,7 +237,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
     const trashChildren = parsedBody?.trash_children ?? true;
 
     const isMCP = isMCPAuthResult(auth);
-    const result = await pageService.trashPage(pageId, userId, {
+    const result = await pageService.trashPage(pageId, actorFromAuth(auth), {
       trashChildren,
       metadata: isMCP ? { source: 'mcp' } : undefined,
       // Scoped MCP tokens authorize with their OWN drive-membership role.
@@ -266,7 +245,8 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
     });
 
     if (!result.success) {
-      return NextResponse.json({ error: result.error }, { status: result.status });
+      const refused = NextResponse.json({ error: result.error }, { status: result.status });
+      return result.status === 403 ? deniedResponse(actorFromAuth(auth), pageId, refused) : refused;
     }
 
     // Side effects: broadcast

@@ -413,6 +413,12 @@ describe('createIfUnderLimit — the ceiling, for real', () => {
     }
   });
 
+  // The six transactions serialise on the payer lock, each holding a pooled
+  // connection: well under a second alone, but past vitest's 5s default on a
+  // heavily loaded host (IMG-4.2b review). The wait is the guarantee under
+  // test, so it gets an explicit budget instead of a smaller fan-out.
+  const CONCURRENT_CREATES_TIMEOUT_MS = 30_000;
+
   it('given MANY concurrent creates at the ceiling, should let exactly the remaining slots through', async () => {
     // The behavioral form of the same guarantee: `(driveId, name)` uniqueness
     // cannot serialize `env-0` against `env-1`, so the ceiling has to come from
@@ -436,7 +442,7 @@ describe('createIfUnderLimit — the ceiling, for real', () => {
     expect(attempts.filter((attempt) => attempt.ok)).toHaveLength(2);
     const rows = await db.select().from(driveEnvs).where(eq(driveEnvs.driveId, driveId));
     expect(rows).toHaveLength(4);
-  });
+  }, CONCURRENT_CREATES_TIMEOUT_MS);
 
   it('given a duplicate NAME, should answer name_taken rather than throwing — drizzle wraps the driver error', async () => {
     // The wrapped-`cause` case: `drizzle-orm@0.45.2` rethrows the driver's

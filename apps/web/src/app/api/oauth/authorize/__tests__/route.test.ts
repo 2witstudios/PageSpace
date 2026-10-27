@@ -27,6 +27,7 @@ vi.mock('@/lib/repositories/oauth-repository', () => ({
 
 vi.mock('@pagespace/lib/services/drive-service', () => ({
   getDriveAccess: vi.fn().mockResolvedValue({ isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' }),
+  getExplicitScopeAuthority: vi.fn().mockResolvedValue({ orgDrive: false }),
 }));
 
 vi.mock('@pagespace/lib/permissions/membership-queries', () => ({
@@ -54,7 +55,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { createAuthorizationCode } from '@/lib/repositories/oauth-repository';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { consumeStepUpGrant } from '@pagespace/lib/auth/step-up-service';
-import { getDriveAccess } from '@pagespace/lib/services/drive-service';
+import { getDriveAccess, getExplicitScopeAuthority } from '@pagespace/lib/services/drive-service';
 import { nextConfig } from '../../../../../../next.config';
 
 const REDIRECT_URI = 'http://127.0.0.1:51234/callback';
@@ -90,7 +91,7 @@ function getRequest(overrides: Record<string, string | undefined> = {}): Request
 beforeEach(() => {
   vi.clearAllMocks();
   checkDistributedRateLimit.mockResolvedValue(ALLOWED);
-  vi.mocked(consumeStepUpGrant).mockResolvedValue({ ok: true });
+  vi.mocked(consumeStepUpGrant).mockResolvedValue({ ok: true, authentication: { authenticatedAtMs: Date.now() - 60000, assurance: 'user_verified_passkey' } });
   // appOrigin() (issue #1908 hardening) only trusts this configured value —
   // never x-forwarded-host/x-forwarded-proto. Matches the real deployment,
   // where NEXT_PUBLIC_APP_URL is baked into the build image.
@@ -435,6 +436,8 @@ describe('POST /api/oauth/authorize — approve', () => {
   });
 
   it('issues a single-use code hashed at rest and echoes state verbatim in the redirect target', async () => {
+    const authentication = { authenticatedAtMs: Date.now() - 3600000, assurance: 'user_verified_passkey' as const };
+    vi.mocked(consumeStepUpGrant).mockResolvedValue({ ok: true, authentication });
     const res = await POST(postRequest(approvalBody) as never);
     expect(res.status).toBe(200);
     const json = await res.json();
@@ -445,7 +448,8 @@ describe('POST /api/oauth/authorize — approve', () => {
     expect(code).toBeTruthy();
 
     expect(vi.mocked(createAuthorizationCode)).toHaveBeenCalledTimes(1);
-    const call = vi.mocked(createAuthorizationCode).mock.calls[0][0] as { codeHash: string };
+    const call = vi.mocked(createAuthorizationCode).mock.calls[0][0];
+    expect(call.authentication).toEqual(authentication);
     expect(call.codeHash).not.toBe(code);
     expect(call.codeHash).toMatch(/^[0-9a-f]{64}$/); // SHA3-256 hex digest, never the plaintext code
   });
@@ -531,12 +535,25 @@ describe('POST /api/oauth/authorize — step-up gate (Phase 8: bearer-OAuth mint
     expect(consumeStepUpGrant).not.toHaveBeenCalled();
   });
 
+  it('ORG-4 (partial) refuses consent to an explicit drive:<id>:admin scope on an org drive the user reaches only through org power, issuing no code', async () => {
+    vi.mocked(getDriveAccess).mockResolvedValueOnce({ isOwner: false, isAdmin: true, isMember: true, role: 'ADMIN', customRoleId: null });
+    vi.mocked(getExplicitScopeAuthority).mockResolvedValueOnce({ orgDrive: true, row: null });
+
+    const res = await POST(postRequest({ ...approvalBody, scope: 'drive:testdrive1:admin name:ci' }) as never);
+
+    expect(res.status).toBe(200);
+    const location = new URL((await res.json()).redirectUri);
+    expect(location.searchParams.get('error')).toBe('invalid_scope');
+    expect(vi.mocked(createAuthorizationCode)).not.toHaveBeenCalled();
+    expect(getExplicitScopeAuthority).toHaveBeenCalledWith('testdrive1', expect.any(String));
+  });
+
   it('rejects a scope-cap failure before burning the step-up grant, so a corrected retry with the same token still succeeds', async () => {
     // Default drive-service mock grants OWNER on every drive; override it
     // once so this particular request has no access to the requested drive,
     // driving checkGrantAuthority's 'no_access' branch (a real scope-cap
     // rejection, not a request-syntax one — the scope itself is well-formed).
-    vi.mocked(getDriveAccess).mockResolvedValueOnce({ isOwner: false, isAdmin: false, isMember: false, role: null });
+    vi.mocked(getDriveAccess).mockResolvedValueOnce({ isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null });
 
     const overPrivilegedBody = { ...approvalBody, scope: 'drive:testdrive1 name:ci' };
     const res = await POST(postRequest(overPrivilegedBody) as never);

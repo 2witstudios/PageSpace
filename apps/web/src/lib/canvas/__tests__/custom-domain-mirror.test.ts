@@ -270,6 +270,8 @@ describe('mirror404ToHosts', () => {
   const driveCtx = {
     homePageId: null,
     publishFaviconUrl: null,
+    avatarUrl: null,
+    color: null,
     publishDefaultOgImageUrl: null,
     ownerId: 'owner-1',
   };

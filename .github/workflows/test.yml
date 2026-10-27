@@ -16,15 +16,26 @@ name: Test Suite
 # `synchronize`. `pu/flash-sandbox` and `pu/panes-agent` carry the same
 # redundancy and are left alone: they predate this branch and are not its to
 # change.
+#
+# `pu/**` (base-branch filter) replaced `pu/imago`: PRs into any integration
+# branch get the full suite, and nothing goes dead when pu/imago merges and is
+# deleted. pu/imago's own pushes were redundant with its master PR's
+# `synchronize` runs, for the reason above.
 on:
   push:
     branches: [main, master, develop, pu/flash-sandbox, pu/panes-agent]
   pull_request:
-    # BASE branches. `pu/local-env-ga` is the Local Environments GA stack:
-    # its wave PRs target it, not master, and without this entry they get no
-    # CI at all (PR #2582 opened to a silent, check-less rollup).
-    branches: [main, master, develop, pu/flash-sandbox, pu/panes-agent, pu/local-env-ga]
+    branches: [main, master, develop, pu/flash-sandbox, pu/panes-agent, 'pu/**']
   workflow_dispatch:
+
+# A newer push to the same PR makes the older run irrelevant, so cancel it:
+# superseded runs queued behind each other and held CI for ~40 minutes.
+# Only pull_request runs share a group (keyed on the PR number). Every push and
+# manual run gets its own group (run_id), so a master run is never cancelled or
+# replaced by a later one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   ci:

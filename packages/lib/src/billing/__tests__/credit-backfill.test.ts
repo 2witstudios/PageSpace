@@ -7,16 +7,15 @@ const mockIsBillingEnabled = vi.hoisted(() => vi.fn(() => true));
 const mockConsumeCredits = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockSettlePending = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockDb = vi.hoisted(() => ({ select: vi.fn(), transaction: vi.fn(), delete: vi.fn() }));
-const mockAiLogger = vi.hoisted(() => ({ debug: vi.fn(), error: vi.fn() }));
+const mockAiLogger = vi.hoisted(() => ({ debug: vi.fn(), error: vi.fn(), warn: vi.fn() }));
 
 vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
 vi.mock('@pagespace/db/schema/credits', () => ({
-  creditBalances: { userId: 'cb.userId' },
   creditLedger: { id: 'cl.id', aiUsageLogId: 'cl.aiUsageLogId', consumeStatus: 'cl.consumeStatus', createdAt: 'cl.createdAt' },
-  creditHolds: { id: 'ch.id', expiresAt: 'ch.expiresAt' },
+  creditHolds: { id: 'ch.id', expiresAt: 'ch.expiresAt', userId: 'ch.userId' },
 }));
 vi.mock('@pagespace/db/schema/monitoring', () => ({
-  aiUsageLogs: { id: 'aul.id', userId: 'aul.userId', cost: 'aul.cost', success: 'aul.success', timestamp: 'aul.timestamp', source: 'aul.source' },
+  aiUsageLogs: { id: 'aul.id', userId: 'aul.userId', cost: 'aul.cost', success: 'aul.success', timestamp: 'aul.timestamp', source: 'aul.source', walletId: 'aul.walletId', metadata: 'aul.metadata' },
 }));
 const mockEq = vi.hoisted(() => vi.fn((a, b) => ({ op: 'eq', a, b })));
 const mockGt = vi.hoisted(() => vi.fn((a, b) => ({ op: 'gt', a, b })));
@@ -27,17 +26,21 @@ vi.mock('@pagespace/db/operators', () => ({
   gt: mockGt,
   isNull: vi.fn((a) => ({ op: 'isNull', a })),
   notInArray: vi.fn((a, b) => ({ op: 'notInArray', a, b })),
+  inArray: vi.fn((a, b) => ({ op: 'inArray', a, b })),
+  sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ op: 'sql', strings, values })),
 }));
 vi.mock('../../deployment-mode', () => ({ isBillingEnabled: mockIsBillingEnabled }));
 vi.mock('../../logging/logger-config', () => ({ loggers: { ai: mockAiLogger } }));
+const mockMarkUnattributed = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('../credit-consume', () => ({
   consumeCredits: mockConsumeCredits,
   settlePendingLedgerRow: mockSettlePending,
+  markUsageUnattributed: mockMarkUnattributed,
 }));
 const mockEmitCreditsUpdated = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('../credit-emit', () => ({ emitCreditsUpdated: mockEmitCreditsUpdated }));
 
-import { backfillCredits } from '../credit-backfill';
+import { backfillCredits, sweepExpiredHolds } from '../credit-backfill';
 import { MACHINE_MARKUP_BPS } from '../credit-pricing';
 
 // Captures the WHERE clause handed to the orphan sweep so tests can assert the
@@ -89,7 +92,7 @@ describe('backfillCredits', () => {
   it('settles each pending ledger row and consumes each orphan usage row exactly once', async () => {
     mockSelects(
       [{ id: 'led_1' }, { id: 'led_2' }],
-      [{ aiUsageLogId: 'aul_9', userId: 'u9', cost: 0.5 }],
+      [{ aiUsageLogId: 'aul_9', userId: 'u9', cost: 0.5, walletId: 'w1' }],
     );
 
     const result = await backfillCredits();
@@ -98,8 +101,8 @@ describe('backfillCredits', () => {
     expect(mockSettlePending).toHaveBeenCalledWith('led_1');
     expect(mockSettlePending).toHaveBeenCalledWith('led_2');
     expect(mockConsumeCredits).toHaveBeenCalledTimes(1);
-    expect(mockConsumeCredits).toHaveBeenCalledWith({ aiUsageLogId: 'aul_9', userId: 'u9', costDollars: 0.5 });
-    expect(result).toEqual({ retried: 2, orphans: 1, expiredHolds: 0 });
+    expect(mockConsumeCredits).toHaveBeenCalledWith({ aiUsageLogId: 'aul_9', userId: 'u9', costDollars: 0.5, walletId: 'w1', spendKind: 'ai' });
+    expect(result).toEqual({ retried: 2, orphans: 1, unattributed: 0, expiredHolds: 0 });
   });
 
   it('does nothing when billing is disabled', async () => {
@@ -107,7 +110,7 @@ describe('backfillCredits', () => {
     const result = await backfillCredits();
     expect(mockDb.select).not.toHaveBeenCalled();
     expect(mockDb.delete).not.toHaveBeenCalled();
-    expect(result).toEqual({ retried: 0, orphans: 0, expiredHolds: 0 });
+    expect(result).toEqual({ retried: 0, orphans: 0, unattributed: 0, expiredHolds: 0 });
   });
 
   it('is a no-op when nothing is unsettled', async () => {
@@ -115,7 +118,7 @@ describe('backfillCredits', () => {
     const result = await backfillCredits();
     expect(mockSettlePending).not.toHaveBeenCalled();
     expect(mockConsumeCredits).not.toHaveBeenCalled();
-    expect(result).toEqual({ retried: 0, orphans: 0, expiredHolds: 0 });
+    expect(result).toEqual({ retried: 0, orphans: 0, unattributed: 0, expiredHolds: 0 });
   });
 
   it('sweeps holds past their expiresAt, reports the count, and pushes each affected user once', async () => {
@@ -150,14 +153,14 @@ describe('backfillCredits', () => {
 
     expect(mockDb.select).toHaveBeenCalledTimes(4); // 2 sweeps × 2 passes
     expect(mockSettlePending).toHaveBeenCalledTimes(BATCH + 50);
-    expect(result).toEqual({ retried: BATCH + 50, orphans: 0, expiredHolds: 0 });
+    expect(result).toEqual({ retried: BATCH + 50, orphans: 0, unattributed: 0, expiredHolds: 0 });
   });
 
   it('stops after the safety cap even if a sweep keeps returning a full batch of fresh rows', async () => {
     // Every pass returns a full BATCH of DISTINCT orphans (forward progress each
     // pass, so the no-progress break never fires). The cap must still bound it.
     for (let pass = 0; pass < 100; pass++) {
-      queuePass([], fill(BATCH, (i) => ({ aiUsageLogId: `aul_${pass}_${i}`, userId: 'u1', cost: 0.01 })));
+      queuePass([], fill(BATCH, (i) => ({ aiUsageLogId: `aul_${pass}_${i}`, userId: 'u1', cost: 0.01, walletId: 'w1' })));
     }
 
     const result = await backfillCredits();
@@ -193,12 +196,32 @@ describe('backfillCredits', () => {
   });
 
   it('bills a success:false orphan that carries real cost (errored-but-real spend)', async () => {
-    queuePass([], [{ aiUsageLogId: 'aul_err', userId: 'u7', cost: 0.25 }]);
+    queuePass([], [{ aiUsageLogId: 'aul_err', userId: 'u7', cost: 0.25, walletId: 'w1' }]);
 
     const result = await backfillCredits();
 
-    expect(mockConsumeCredits).toHaveBeenCalledWith({ aiUsageLogId: 'aul_err', userId: 'u7', costDollars: 0.25 });
+    expect(mockConsumeCredits).toHaveBeenCalledWith({ aiUsageLogId: 'aul_err', userId: 'u7', costDollars: 0.25, walletId: 'w1', spendKind: 'ai' });
     expect(result.orphans).toBe(1);
+  });
+
+  it('WAL-6 (partial) an orphan that names no wallet is charged to nobody: logged and counted for reconciliation, never consumed onto the person', async () => {
+    queuePass([], [{ aiUsageLogId: 'aul_nw', userId: 'u5', cost: 0.4, walletId: null }]);
+
+    const result = await backfillCredits();
+
+    expect(mockConsumeCredits).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ orphans: 0, unattributed: 1 });
+    // Marked terminal on first detection, so no later sweep rescans it.
+    expect(mockMarkUnattributed).toHaveBeenCalledWith('aul_nw', expect.any(Date));
+    expect(mockAiLogger.error).toHaveBeenCalledWith(expect.stringContaining('names no wallet'), expect.any(Error), expect.objectContaining({ aiUsageLogId: 'aul_nw' }));
+  });
+
+  it('WAL-6 (partial) an orphan whose call fell back re-settles with the chosen wallet it moved off', async () => {
+    queuePass([], [{ aiUsageLogId: 'aul_fb', userId: 'u5', cost: 0.4, walletId: 'w-own', metadata: { fallbackFromWalletId: 'w-drive' } }]);
+
+    await backfillCredits();
+
+    expect(mockConsumeCredits).toHaveBeenCalledWith(expect.objectContaining({ aiUsageLogId: 'aul_fb', walletId: 'w-own', fallbackFromWalletId: 'w-drive' }));
   });
 
   it('orphan sweep filters on cost > 0 and no longer excludes by success', async () => {
@@ -217,7 +240,7 @@ describe('backfillCredits', () => {
     // reached aiUsageLogs but crashed before consumeCredits claimed a ledger row
     // has no stored markup to replay — this sweep must reconstruct it from the
     // row's `source` field, not silently bill it at the general AI markup.
-    queuePass([], [{ aiUsageLogId: 'aul_term', userId: 'u_term', cost: 0.02, source: 'terminal' }]);
+    queuePass([], [{ aiUsageLogId: 'aul_term', userId: 'u_term', cost: 0.02, source: 'terminal', walletId: 'w1' }]);
 
     await backfillCredits();
 
@@ -226,11 +249,19 @@ describe('backfillCredits', () => {
       userId: 'u_term',
       costDollars: 0.02,
       markupBpsOverride: MACHINE_MARKUP_BPS,
+      walletId: 'w1',
+      spendKind: 'ai',
     });
   });
 
+  it("WAL-9 (partial) re-settles an orphaned org compute charge on its recorded wallet, as compute — never the recorded person's own wallet", async () => {
+    queuePass([], [{ aiUsageLogId: 'aul_org', userId: 'u_lead', cost: 0.02, source: 'terminal', walletId: 'pool-1', metadata: { spendKind: 'compute' } }]);
+    await backfillCredits();
+    expect(mockConsumeCredits).toHaveBeenCalledWith(expect.objectContaining({ aiUsageLogId: 'aul_org', userId: 'u_lead', walletId: 'pool-1', spendKind: 'compute' }));
+  });
+
   it('does not apply a markup override to a non-terminal orphan (unchanged behavior)', async () => {
-    queuePass([], [{ aiUsageLogId: 'aul_9', userId: 'u9', cost: 0.5, source: 'chat' }]);
+    queuePass([], [{ aiUsageLogId: 'aul_9', userId: 'u9', cost: 0.5, source: 'chat', walletId: 'w1' }]);
 
     await backfillCredits();
 
@@ -242,5 +273,73 @@ describe('backfillCredits', () => {
     const src = readFileSync(fileURLToPath(new URL('../credit-backfill.ts', import.meta.url)), 'utf8');
     expect(src).not.toMatch(/from ['"]stripe['"]/);
     expect(src).not.toMatch(/stripe\./i);
+  });
+});
+
+/** The WHERE clause each hold-sweep DELETE was given, in call order. */
+function captureHoldSweeps(swept: { id: string; userId: string }[] = []): unknown[] {
+  const wheres: unknown[] = [];
+  mockDb.delete.mockReturnValue({
+    where: (w: unknown) => {
+      wheres.push(w);
+      return { returning: () => Promise.resolve(swept) };
+    },
+  });
+  return wheres;
+}
+
+describe('sweepExpiredHolds', () => {
+  const now = new Date('2026-10-05T12:00:00Z');
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDb.select.mockReset();
+    mockIsBillingEnabled.mockReturnValue(true);
+  });
+
+  it('the cron sweep (backfillCredits) deletes every expired hold, unscoped', async () => {
+    const wheres = captureHoldSweeps();
+    mockSelects([], []);
+
+    await backfillCredits();
+
+    expect(wheres).toHaveLength(1);
+    expect(wheres[0]).toMatchObject({ op: 'lt', a: 'ch.expiresAt' });
+  });
+
+  it('scoped to some users, deletes only their expired holds and reports the count', async () => {
+    const wheres = captureHoldSweeps([{ id: 'h1', userId: 'u1' }]);
+
+    const count = await sweepExpiredHolds({ now, userIds: ['u1'] });
+
+    expect(count).toBe(1);
+    expect(wheres).toEqual([{
+      op: 'and',
+      a: [{ op: 'lt', a: 'ch.expiresAt', b: now }, { op: 'inArray', a: 'ch.userId', b: ['u1'] }],
+    }]);
+    expect(mockEmitCreditsUpdated).toHaveBeenCalledWith('u1');
+  });
+
+  it('scoped to no users, deletes nothing (an empty scope never widens to every hold)', async () => {
+    const wheres = captureHoldSweeps();
+
+    expect(await sweepExpiredHolds({ now, userIds: [] })).toBe(0);
+    expect(wheres).toEqual([]);
+    expect(mockDb.delete).not.toHaveBeenCalled();
+  });
+
+  it('deletes nothing when billing is disabled, as the cron sweep does', async () => {
+    mockIsBillingEnabled.mockReturnValue(false);
+    captureHoldSweeps();
+
+    expect(await sweepExpiredHolds({ now, userIds: ['u1'] })).toBe(0);
+    expect(mockDb.delete).not.toHaveBeenCalled();
+  });
+
+  it('a failed delete is logged and reports zero, never throws into the cron', async () => {
+    mockDb.delete.mockReturnValue({ where: () => ({ returning: () => Promise.reject(new Error('db down')) }) });
+
+    expect(await sweepExpiredHolds({ now })).toBe(0);
+    expect(mockAiLogger.warn).toHaveBeenCalledWith('credit hold expiry sweep failed', expect.anything());
   });
 });

@@ -10,6 +10,44 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import {
+  acceptOrgInvitation,
+  addOrgDomain,
+  answerDriveJoinRequest,
+  answerOrgGuestApproval,
+  changeOrgMemberRole,
+  clearOrgSuppression,
+  confirmOrgDomainEmail,
+  deleteOrgAutomation,
+  exportOrgAuditLog,
+  getAlwaysOwnCredits,
+  getOrgAuditLog,
+  getOrgDriveUsage,
+  inviteToOrganization,
+  leaveOrganization,
+  listDriveJoinRequests,
+  listOrgAutomations,
+  listOrgDomains,
+  listOrgGuestApprovals,
+  listOrgGuests,
+  listOrgInvitations,
+  listOrgMemberActivity,
+  listOrgPolicySuspensions,
+  previewOrgSignInPolicy,
+  listOrgTrashedDrives,
+  moveDriveOutOfOrg,
+  moveDriveToOrg,
+  reassignOrgAutomation,
+  removeOrgDomain,
+  removeOrgMember,
+  requestToJoinDrive,
+  resendOrgInvitation,
+  revokeOrgInvitation,
+  setDriveOrgLead,
+  setDriveOrgVisibility,
+  updateOrgPolicies,
+  updateOrganization,
+  verifyOrgDomain,
+  withdrawDriveJoinRequest,
   appendRows,
   applySheetFormat,
   askAgent,
@@ -54,6 +92,9 @@ import {
   listDriveRoles,
   listDrives,
   listModels,
+  listMyOrganizations,
+  listOrgDriveDirectory,
+  listOrgMembers,
   listPages,
   listTrash,
   listWorkflows,
@@ -90,6 +131,14 @@ import {
   updateDriveRole,
   updateTask,
   updateWorkflow,
+  execInWorkspace,
+  listWorkspaces,
+  getOrganization,
+  getOrgPolicies,
+  getConversationSpendSource,
+  getDriveSpendSource,
+  getDriveWallet,
+  listMyWallets,
   createRegistry,
   getOperation,
   listOperations,
@@ -105,11 +154,13 @@ import {
   validateToolInput,
 } from './tool-convert.js';
 import { CLI_VERSION } from '../commands/version.js';
+import type { CredentialKind } from '../auth/credential-kind.js';
 
 /**
  * Every operation the SDK exports, across every domain (drives, pages,
  * documents, roles, tasks, agents, conversations, channels, activity,
- * calendar, search, commands, workflows, members, collaborators, export).
+ * calendar, search, commands, workflows, members, collaborators, export,
+ * organizations, the org side of drives, wallet reads).
  * `buildOperationRegistry` is the ONLY place this list is assembled — the
  * MCP tool surface is derived from it mechanically (`listOperations` +
  * `operationToMcpTool`), so drift between "operations the SDK has" and
@@ -203,6 +254,61 @@ const ALL_OPERATIONS: readonly Operation[] = [
   updateDriveRole,
   updateTask,
   updateWorkflow,
+  execInWorkspace,
+  listWorkspaces,
+  // Organizations (Spec X-1, ORG-5): every org read and write the web exposes to a key, each
+  // authorized by the web's requireOrgRole. Card-checkout create, org delete (Stripe), ownership
+  // transfer, seat caps, the pool and billing need a signed-in session ([D-OW-26]): none is an
+  // SDK operation, so none can be a tool.
+  acceptOrgInvitation,
+  addOrgDomain,
+  answerOrgGuestApproval,
+  changeOrgMemberRole,
+  clearOrgSuppression,
+  confirmOrgDomainEmail,
+  deleteOrgAutomation,
+  exportOrgAuditLog,
+  getOrgAuditLog,
+  getOrgDriveUsage,
+  getOrganization,
+  getOrgPolicies,
+  inviteToOrganization,
+  leaveOrganization,
+  listMyOrganizations,
+  listOrgAutomations,
+  listOrgDomains,
+  listOrgDriveDirectory,
+  listOrgGuestApprovals,
+  listOrgGuests,
+  listOrgInvitations,
+  listOrgMemberActivity,
+  listOrgMembers,
+  listOrgPolicySuspensions,
+  previewOrgSignInPolicy,
+  listOrgTrashedDrives,
+  reassignOrgAutomation,
+  removeOrgDomain,
+  removeOrgMember,
+  resendOrgInvitation,
+  revokeOrgInvitation,
+  updateOrganization,
+  updateOrgPolicies,
+  verifyOrgDomain,
+  // Org ownership of a drive (X-1; DRV-1..DRV-4, DRV-6).
+  answerDriveJoinRequest,
+  listDriveJoinRequests,
+  moveDriveOutOfOrg,
+  moveDriveToOrg,
+  requestToJoinDrive,
+  setDriveOrgLead,
+  setDriveOrgVisibility,
+  withdrawDriveJoinRequest,
+  // Wallet READS only ([D-OW-26]): no wallet write is an SDK operation, so none can be a tool.
+  getAlwaysOwnCredits,
+  getConversationSpendSource,
+  getDriveSpendSource,
+  getDriveWallet,
+  listMyWallets,
 ];
 
 /** Pure: assembles the full operation registry. Rejects duplicate names at construction (`createRegistry`). */
@@ -225,6 +331,8 @@ export interface McpSdkClient {
 export interface CreateMcpServerOptions {
   readonly registry: OperationRegistry;
   readonly sdk: McpSdkClient;
+  /** Which class of credential the server calls with, so a sign-in denial names the right fix (a key needs a new key). */
+  readonly credentialKind?: CredentialKind;
   readonly serverInfo?: { readonly name: string; readonly version: string };
 }
 
@@ -266,7 +374,7 @@ export function createMcpServer(options: CreateMcpServerOptions): Server {
       const output = await sdk.invoke(op, validated.data);
       return formatSuccessResult(output) as CallToolResult;
     } catch (error) {
-      return formatSdkErrorResult(op, error) as CallToolResult;
+      return formatSdkErrorResult(op, error, options.credentialKind) as CallToolResult;
     }
   });
 

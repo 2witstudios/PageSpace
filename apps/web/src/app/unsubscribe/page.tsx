@@ -4,21 +4,22 @@ import { Suspense, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Loader2, MailX } from 'lucide-react';
+import { AuthLayout } from '@/components/auth/AuthLayout';
+import {
+  V3_BODY,
+  V3_ERROR_TEXT,
+  V3_HEADING,
+  V3_ICON_BOX,
+  V3_PRIMARY_BUTTON,
+  V3_SECONDARY_BUTTON,
+} from '@/components/auth/auth-v3-styles';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
+import { NOTIFICATION_TYPE_LABELS, getNotificationPreferencesHref } from '@/lib/notifications/unsubscribe-copy';
 
-const NOTIFICATION_TYPE_LABELS: Record<string, string> = {
-  PERMISSION_GRANTED: 'Collaborator Added',
-  PERMISSION_REVOKED: 'Permission Revoked',
-  PERMISSION_UPDATED: 'Permission Updated',
-  PAGE_SHARED: 'Page Shared',
-  DRIVE_INVITED: 'Workspace Additions',
-  DRIVE_JOINED: 'Drive Joined',
-  DRIVE_ROLE_CHANGED: 'Drive Role Changed',
-  CONNECTION_REQUEST: 'Connection Requests',
-  CONNECTION_ACCEPTED: 'Connection Accepted',
-  CONNECTION_REJECTED: 'Connection Rejected',
-  NEW_DIRECT_MESSAGE: 'Direct Messages',
-  PRODUCT_UPDATE: 'Product Updates',
-};
+const INVALID_LINK_MESSAGE = 'That unsubscribe link is no longer valid.';
+const GENERIC_ERROR_MESSAGE = 'Something went wrong. Please try again.';
+
+type ConfirmStatus = 'confirm' | 'invalid';
 
 /**
  * Confirmation step for an emailed unsubscribe link.
@@ -31,11 +32,14 @@ const NOTIFICATION_TYPE_LABELS: Record<string, string> = {
 function UnsubscribeConfirm() {
   const searchParams = useSearchParams();
   const router = useRouter();
+  const v3 = isV3AuthEnabled();
 
   const token = searchParams.get('token') ?? '';
   const notificationType = searchParams.get('type') ?? 'unknown';
   const label = NOTIFICATION_TYPE_LABELS[notificationType] ?? 'these notifications';
+  const preferencesHref = getNotificationPreferencesHref();
 
+  const [status, setStatus] = useState<ConfirmStatus>(token ? 'confirm' : 'invalid');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -49,18 +53,59 @@ function UnsubscribeConfirm() {
       });
 
       if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        setError(body.error ?? 'That unsubscribe link is no longer valid.');
+        // 4xx means the token itself was rejected (expired, unknown, bad type).
+        // Anything else is a server problem, so the link may still work later.
+        if (response.status >= 400 && response.status < 500) {
+          setStatus('invalid');
+        } else {
+          setError(GENERIC_ERROR_MESSAGE);
+        }
         setSubmitting(false);
         return;
       }
 
       router.push(`/unsubscribe-success?type=${encodeURIComponent(notificationType)}`);
     } catch {
-      setError('Something went wrong. Please try again.');
+      setError(GENERIC_ERROR_MESSAGE);
       setSubmitting(false);
     }
   };
+
+  const invalid = status === 'invalid';
+  const alertMessage = invalid ? INVALID_LINK_MESSAGE : error;
+
+  if (v3) {
+    return (
+      <div className="flex flex-col">
+        <span className={V3_ICON_BOX}>
+          <MailX className="size-[22px]" aria-hidden="true" />
+        </span>
+        <h1 className={V3_HEADING}>Unsubscribe?</h1>
+        <p className={V3_BODY}>
+          This will stop <strong>{label}</strong> emails from PageSpace. You can turn them back on any time in your
+          notification settings.
+        </p>
+        {alertMessage && (
+          <p role="alert" className={V3_ERROR_TEXT}>
+            {alertMessage}
+          </p>
+        )}
+        <div className="mt-6 flex flex-col gap-3">
+          <button
+            type="button"
+            onClick={confirm}
+            disabled={submitting || invalid || !token}
+            className={V3_PRIMARY_BUTTON}
+          >
+            Yes, unsubscribe me
+          </button>
+          <Link href={preferencesHref} className={`${V3_SECONDARY_BUTTON} no-underline`}>
+            Keep them, manage preferences
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col items-center text-center">
@@ -75,9 +120,9 @@ function UnsubscribeConfirm() {
         time in your notification settings.
       </p>
 
-      {error ? (
-        <div className="w-full bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
-          <p className="text-sm text-red-700">{error}</p>
+      {alertMessage ? (
+        <div role="alert" className="w-full bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
+          <p className="text-sm text-red-700">{alertMessage}</p>
         </div>
       ) : null}
 
@@ -85,7 +130,7 @@ function UnsubscribeConfirm() {
         <button
           type="button"
           onClick={confirm}
-          disabled={submitting || !token}
+          disabled={submitting || invalid || !token}
           className="w-full bg-purple-600 hover:bg-purple-700 disabled:opacity-60 text-white font-medium py-2.5 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
         >
           {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
@@ -93,7 +138,7 @@ function UnsubscribeConfirm() {
         </button>
 
         <Link
-          href="/settings/notifications"
+          href={preferencesHref}
           className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium py-2.5 px-4 rounded-lg transition-colors"
         >
           Keep them, manage preferences
@@ -105,18 +150,16 @@ function UnsubscribeConfirm() {
 
 export default function UnsubscribePage() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-purple-50 to-blue-50 p-4">
-      <div className="max-w-md w-full bg-white rounded-xl shadow-xl p-8">
-        <Suspense
-          fallback={
-            <div className="flex justify-center">
-              <Loader2 className="w-8 h-8 animate-spin text-purple-600" />
-            </div>
-          }
-        >
-          <UnsubscribeConfirm />
-        </Suspense>
-      </div>
-    </div>
+    <AuthLayout classic="bare">
+      <Suspense
+        fallback={
+          <div className="flex justify-center">
+            <Loader2 className="w-8 h-8 animate-spin text-purple-600" />
+          </div>
+        }
+      >
+        <UnsubscribeConfirm />
+      </Suspense>
+    </AuthLayout>
   );
 }

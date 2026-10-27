@@ -2,8 +2,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Table sentinels so the db mock can branch on which table `.from()` received.
 vi.mock('@pagespace/db/schema/credits', () => ({
-  creditBalances: { __t: 'balances' },
   creditHolds: { __t: 'holds' },
+}));
+// The balance row is the personal root wallet (X-5); `personalRootWalletOf` is recorded
+// so a test can pin that the read is scoped to it rather than to any wallet of the user.
+const { mockPersonalRootWalletOf } = vi.hoisted(() => ({
+  mockPersonalRootWalletOf: vi.fn((userId: string) => ({ personalRootOf: userId })),
+}));
+vi.mock('@pagespace/db/schema/wallets', () => ({
+  wallets: { __t: 'balances' },
+  personalRootWalletOf: mockPersonalRootWalletOf,
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { __t: 'users' } }));
 
@@ -333,6 +341,13 @@ describe('readSpendableCents — the routing edge lean read', () => {
     expect(await readSpendableCents('u1', 'pro')).toBe(500);
   });
 
+  it('WAL-1 (partial): both balance reads are scoped to the personal root wallet, never any wallet of the user', async () => {
+    balanceRows = funded();
+    await readSpendableCents('u1', 'pro');
+    await getCreditBalance('u1', 'pro');
+    expect(mockPersonalRootWalletOf.mock.calls).toEqual([['u1'], ['u1']]);
+  });
+
   it('agrees with the display read for a funded row', async () => {
     balanceRows = funded();
     const [lean, display] = [await readSpendableCents('u1', 'pro'), await getCreditBalance('u1', 'pro')];
@@ -369,6 +384,11 @@ describe('readSpendableCents — the routing edge lean read', () => {
 });
 
 describe('resolveTier', () => {
+  it.each(['business', 'founder', 'unknown'])('A-9 gives no personal paid entitlement to %s', async (subscriptionTier) => {
+    userRows = [{ subscriptionTier }];
+    expect(await resolveTier('u1')).toBe('free');
+  });
+
   it('returns the stored subscription tier', async () => {
     userRows = [{ subscriptionTier: 'pro' }];
     expect(await resolveTier('u1')).toBe('pro');

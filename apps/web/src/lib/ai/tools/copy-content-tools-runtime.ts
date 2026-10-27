@@ -34,6 +34,7 @@ import {
 } from './sandbox-tools-runtime';
 import { createCopyContentTools, type CopyContentDeps } from './copy-content-tools';
 import type { ToolExecutionContext } from '../core/types';
+import { toolActor } from './actor-permissions';
 
 const copyLogger = loggers.ai.child({ module: 'copy-content-tools' });
 
@@ -44,12 +45,13 @@ const copyLogger = loggers.ai.child({ module: 'copy-content-tools' });
 async function openSandbox(context: ToolExecutionContext) {
   const ctx = await resolveSandboxActorContext(context);
   if ('error' in ctx) return { ok: false as const, error: ctx.error };
-  const decision = await productionSandboxGate(ctx);
+  const actor = toolActor(context);
+  const decision = await productionSandboxGate(ctx, actor);
   if (!decision.ok) return { ok: false as const, error: decision.error };
   // `copy_content` is deliberately NOT addressed: its file arms work on the
   // conversation's own sandbox, so they name that target explicitly rather than
   // relying on a fallback — `acquireSandbox` has none (leaf C).
-  return { ok: true as const, ctx: { ...ctx, environment: ownSandboxTarget(ctx) } };
+  return { ok: true as const, ctx: { ...ctx, environment: ownSandboxTarget(ctx) }, actor };
 }
 
 /**
@@ -132,7 +134,7 @@ const productionDeps: CopyContentDeps = {
   readSandboxFile: async ({ path, context }) => {
     const opened = await openSandbox(context);
     if (!opened.ok) return { success: false, error: opened.error };
-    const result = await readSandboxFileForCopy({ path, ctx: opened.ctx, deps: buildRealSandboxRunDeps() });
+    const result = await readSandboxFileForCopy({ path, ctx: opened.ctx, deps: buildRealSandboxRunDeps({ actor: opened.actor }) });
     return result.success
       ? { success: true, content: result.content, bytes: result.bytes }
       : { success: false, error: result.error ?? DENIAL_MESSAGES[result.reason] };
@@ -141,7 +143,7 @@ const productionDeps: CopyContentDeps = {
   writeSandboxFile: async ({ path, content, context }) => {
     const opened = await openSandbox(context);
     if (!opened.ok) return { success: false, error: opened.error };
-    const result = await writeSandboxFile({ path, content, ctx: opened.ctx, deps: buildRealSandboxRunDeps() });
+    const result = await writeSandboxFile({ path, content, ctx: opened.ctx, deps: buildRealSandboxRunDeps({ actor: opened.actor }) });
     return result.success
       ? { success: true, bytesWritten: result.bytesWritten }
       : { success: false, error: result.error ?? DENIAL_MESSAGES[result.reason] };

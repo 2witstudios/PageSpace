@@ -19,6 +19,7 @@ const packages = [
   { name: 'packages/db', path: 'packages/db/coverage/coverage-summary.json' },
   { name: 'packages/lib', path: 'packages/lib/coverage/coverage-summary.json' },
   { name: 'packages/editor', path: 'packages/editor/coverage/coverage-summary.json' },
+  { name: 'packages/browser-worker', path: 'packages/browser-worker/coverage/coverage-summary.json' },
 ];
 
 const pad = (str, len) => String(str).padStart(len);

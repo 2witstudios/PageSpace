@@ -1,0 +1,624 @@
+/**
+ * provisionImagoAgents against a REAL Postgres — no fake DB, no vi.mock.
+ *
+ * What only a real database can show: that the agent pages land in the Home
+ * drive with their pointers, that a deleted page's pointer cascade leads to a
+ * recreation, and that two provisioners racing for one user produce ONE page
+ * per key. The race uses one dedicated single-connection pool per side (a
+ * shared pool with DB_POOL_MAX=1 would serialise them before Postgres ever saw
+ * them) and observes the loser blocking on the user-row lock in
+ * pg_stat_activity, so contention is proven rather than inferred from timing.
+ *
+ * Requires DATABASE_URL → a migrated Postgres. FAILS LOUDLY when none is
+ * reachable; local runs without a database opt out with ALLOW_SKIP_DB_TESTS=1.
+ */
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { Pool } from 'pg';
+import { drizzle } from 'drizzle-orm/node-postgres';
+import { db } from '@pagespace/db/db';
+import { and, eq, inArray, sql } from '@pagespace/db/operators';
+import { schema } from '@pagespace/db/schema';
+import { users } from '@pagespace/db/schema/auth';
+import { drives, pages } from '@pagespace/db/schema/core';
+import { driveAgentMembers } from '@pagespace/db/schema/members';
+import { activityLogs } from '@pagespace/db/schema/monitoring';
+import { userBuiltinAgents } from '@pagespace/db/schema/user-builtin-agents';
+import { factories } from '@pagespace/db/test/factories';
+import { requireDb } from '@pagespace/db/test/require-db';
+import { BUILTIN_AGENTS, BUILTIN_AGENT_KEYS, RETIRED_BUILTIN_AGENT_KEYS } from '../builtin-agents';
+import { ACTIVITY_CHAIN_LOCK_KEY } from '../../monitoring/activity-logger';
+import {
+  IMAGO_FOLDER_TITLE,
+  provisionImagoAgents,
+  provisionImagoAgentsInTransaction,
+} from '../provision-imago-agents';
+import { provisionHomeDriveIfNeeded } from '../../onboarding/home-drive';
+
+let dbAvailable = false;
+const pools: Pool[] = [];
+
+const CONTENTION_POLL_MAX_ATTEMPTS = 150;
+const CONTENTION_POLL_INTERVAL_MS = 20;
+
+function dedicatedClient() {
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 1 });
+  pools.push(pool);
+  return drizzle(pool, { schema });
+}
+
+async function userWithHome() {
+  const user = await factories.createUser();
+  const home = await factories.createDrive(user.id, { kind: 'HOME', name: 'Home', slug: 'home' });
+  return { user, home };
+}
+
+function folderOf(result: { folderId: string | null }): string {
+  if (!result.folderId) throw new Error('expected provisioning to report an Imago folder');
+  return result.folderId;
+}
+
+async function pointersFor(userId: string) {
+  return db.select().from(userBuiltinAgents).where(eq(userBuiltinAgents.userId, userId));
+}
+
+async function agentPagesIn(driveId: string) {
+  return db
+    .select()
+    .from(pages)
+    .where(and(eq(pages.driveId, driveId), eq(pages.type, 'AI_CHAT'), eq(pages.isTrashed, false)));
+}
+
+const CONCURRENT_SIGN_INS_TIMEOUT_MS = 30_000;
+
+// File level, not inside a describe: both suites below depend on it, and a
+// describe-scoped hook would not run when a -t filter skips that describe,
+// leaving the other suite to return early and pass vacuously.
+beforeAll(async () => {
+  try {
+    await db.select().from(pages).limit(1);
+    dbAvailable = true;
+  } catch (error) {
+    requireDb('provision-imago-agents.integration.test.ts', error);
+    dbAvailable = false;
+  }
+});
+
+afterAll(async () => {
+  await Promise.all(pools.map((p) => p.end().catch(() => undefined)));
+});
+
+describe('provisionImagoAgents (real Postgres)', () => {
+  it('given a Home drive, should create the registry agents under an Imago folder and record their pointers', async () => {
+    if (!dbAvailable) return;
+    const { user, home } = await userWithHome();
+
+    const result = await provisionImagoAgents(user.id);
+
+    expect(result.homeDriveId).toBe(home.id);
+    expect([...result.created].sort()).toEqual([...BUILTIN_AGENT_KEYS].sort());
+
+    const [folder] = await db.select().from(pages).where(eq(pages.id, folderOf(result)));
+    expect(folder).toMatchObject({
+      title: IMAGO_FOLDER_TITLE,
+      type: 'FOLDER',
+      driveId: home.id,
+      parentId: null,
+      isTrashed: false,
+      createdBy: user.id,
+    });
+
+    const pointers = await pointersFor(user.id);
+    expect(pointers.map((p) => p.key).sort()).toEqual([...BUILTIN_AGENT_KEYS].sort());
+
+    for (const definition of BUILTIN_AGENTS) {
+      const pointer = pointers.find((p) => p.key === definition.key);
+      expect(pointer?.pageId).toBe(result.agents[definition.key]);
+      const [page] = await db.select().from(pages).where(eq(pages.id, pointer?.pageId ?? ''));
+      expect(page).toMatchObject({
+        type: 'AI_CHAT',
+        title: definition.title,
+        driveId: home.id,
+        parentId: folder.id,
+        isTrashed: false,
+        systemPrompt: definition.systemPrompt,
+        agentDefinition: definition.agentDefinition,
+        enabledTools: [...definition.enabledTools],
+        includePageTree: definition.includePageTree,
+        userScopedAccess: true,
+        createdBy: user.id,
+        revision: 0,
+      });
+      expect(page.stateHash).toBeTruthy();
+      expect(page.aiProvider).toBeTruthy();
+      expect(page.aiModel).toBeTruthy();
+    }
+  });
+
+  it('given created agents, should make each a member of the Home drive and log its creation, as the page service does', async () => {
+    if (!dbAvailable) return;
+    const { user, home } = await userWithHome();
+
+    const result = await provisionImagoAgents(user.id);
+    const agentIds = Object.values(result.agents);
+
+    const memberships = await db
+      .select()
+      .from(driveAgentMembers)
+      .where(inArray(driveAgentMembers.agentPageId, agentIds));
+    expect(memberships).toHaveLength(BUILTIN_AGENT_KEYS.length);
+    for (const membership of memberships) {
+      expect(membership).toMatchObject({ driveId: home.id, role: 'MEMBER', addedBy: user.id });
+    }
+
+    const logs = await db
+      .select()
+      .from(activityLogs)
+      .where(and(eq(activityLogs.operation, 'create'), inArray(activityLogs.pageId, [...agentIds, folderOf(result)])));
+    expect(logs.map((log) => log.pageId).sort()).toEqual([...agentIds, folderOf(result)].sort());
+    for (const log of logs) {
+      // The actor is a permanent, hash-chained audit fact: it must be the user,
+      // never the 'unknown@system' fallback a failed actor lookup writes.
+      expect(log).toMatchObject({
+        userId: user.id,
+        driveId: home.id,
+        resourceType: 'page',
+        actorEmail: user.email,
+        actorDisplayName: user.name,
+      });
+    }
+  });
+
+  it('given agents already provisioned, should create nothing and keep the same pages', async () => {
+    if (!dbAvailable) return;
+    const { user, home } = await userWithHome();
+
+    const first = await provisionImagoAgents(user.id);
+    const second = await provisionImagoAgents(user.id);
+
+    expect(second.created).toEqual([]);
+    expect(second.agents).toEqual(first.agents);
+    expect(folderOf(second)).toBe(folderOf(first));
+    expect(await agentPagesIn(home.id)).toHaveLength(BUILTIN_AGENT_KEYS.length);
+    const folders = await db
+      .select()
+      .from(pages)
+      .where(and(eq(pages.driveId, home.id), eq(pages.title, IMAGO_FOLDER_TITLE), eq(pages.type, 'FOLDER')));
+    expect(folders).toHaveLength(1);
+  });
+
+  it('given a user who deleted an agent page, should recreate it on the next provision', async () => {
+    if (!dbAvailable) return;
+    const { user, home } = await userWithHome();
+    const first = await provisionImagoAgents(user.id);
+
+    // Hard delete: the pointer cascades away with the page.
+    await db.delete(pages).where(eq(pages.id, first.agents.imago));
+    expect((await pointersFor(user.id)).map((p) => p.key)).not.toContain('imago');
+
+    const second = await provisionImagoAgents(user.id);
+
+    expect(second.created).toEqual(['imago']);
+    expect(second.agents.imago).not.toBe(first.agents.imago);
+    const pointer = (await pointersFor(user.id)).find((p) => p.key === 'imago');
+    expect(pointer?.pageId).toBe(second.agents.imago);
+    const [page] = await db.select().from(pages).where(eq(pages.id, second.agents.imago));
+    expect(page).toMatchObject({ title: 'Imago', parentId: folderOf(first), driveId: home.id, isTrashed: false, userScopedAccess: true });
+  });
+
+  it('given a user who trashed an agent page, should recreate it and repoint the key', async () => {
+    if (!dbAvailable) return;
+    const { user } = await userWithHome();
+    const first = await provisionImagoAgents(user.id);
+
+    // Trash is what "delete" means in the UI; the pointer row survives it.
+    await db.update(pages).set({ isTrashed: true, trashedAt: new Date() }).where(eq(pages.id, first.agents.imago));
+
+    const second = await provisionImagoAgents(user.id);
+
+    expect(second.created).toEqual(['imago']);
+    expect(second.agents.imago).not.toBe(first.agents.imago);
+    const pointers = await pointersFor(user.id);
+    expect(pointers).toHaveLength(BUILTIN_AGENT_KEYS.length);
+    expect(pointers.find((p) => p.key === 'imago')?.pageId).toBe(second.agents.imago);
+  });
+
+  it('given a user who trashed the Imago folder, should recreate the folder and the agents inside it', async () => {
+    if (!dbAvailable) return;
+    const { user, home } = await userWithHome();
+    const first = await provisionImagoAgents(user.id);
+
+    // Trashing a folder trashes its subtree.
+    await db
+      .update(pages)
+      .set({ isTrashed: true, trashedAt: new Date() })
+      .where(inArray(pages.id, [folderOf(first), ...Object.values(first.agents)]));
+
+    const second = await provisionImagoAgents(user.id);
+
+    expect(folderOf(second)).not.toBe(folderOf(first));
+    expect([...second.created].sort()).toEqual([...BUILTIN_AGENT_KEYS].sort());
+    const live = await agentPagesIn(home.id);
+    expect(live).toHaveLength(BUILTIN_AGENT_KEYS.length);
+    for (const page of live) expect(page.parentId).toBe(folderOf(second));
+  });
+
+  it('given live agents moved out of a deleted Imago folder, should not recreate the empty folder', async () => {
+    if (!dbAvailable) return;
+    const { user, home } = await userWithHome();
+    const first = await provisionImagoAgents(user.id);
+    await db.update(pages).set({ parentId: null }).where(inArray(pages.id, Object.values(first.agents)));
+    await db.delete(pages).where(eq(pages.id, folderOf(first)));
+
+    const second = await provisionImagoAgents(user.id);
+
+    expect(second.created).toEqual([]);
+    expect(second.folderId).toBeNull();
+    expect(second.agents).toEqual(first.agents);
+    const folders = await db
+      .select()
+      .from(pages)
+      .where(and(eq(pages.driveId, home.id), eq(pages.title, IMAGO_FOLDER_TITLE), eq(pages.type, 'FOLDER')));
+    expect(folders).toHaveLength(0);
+  });
+
+  it('given a user without a Home drive, should refuse rather than invent one', async () => {
+    if (!dbAvailable) return;
+    const user = await factories.createUser();
+
+    await expect(provisionImagoAgents(user.id)).rejects.toThrow(/no Home drive/);
+    expect(await pointersFor(user.id)).toHaveLength(0);
+  });
+
+  it('given two concurrent calls for one user, should produce exactly one page per key', async () => {
+    if (!dbAvailable) return;
+    const { user, home } = await userWithHome();
+
+    const [a, b] = await Promise.all([
+      provisionImagoAgents(user.id, dedicatedClient()),
+      provisionImagoAgents(user.id, dedicatedClient()),
+    ]);
+
+    // One side created the agents; the other found them.
+    expect([a.created.length, b.created.length].sort()).toEqual([0, BUILTIN_AGENT_KEYS.length]);
+    expect(a.agents).toEqual(b.agents);
+
+    const dupes = await db.execute(sql`
+      SELECT title, type, COUNT(*) AS n FROM ${pages}
+      WHERE ${pages.driveId} = ${home.id} AND ${pages.isTrashed} = false
+      GROUP BY title, type HAVING COUNT(*) > 1
+    `);
+    expect(dupes.rows).toHaveLength(0);
+    expect(await agentPagesIn(home.id)).toHaveLength(BUILTIN_AGENT_KEYS.length);
+    expect(await pointersFor(user.id)).toHaveLength(BUILTIN_AGENT_KEYS.length);
+  });
+
+  it('proves a concurrent provisioner blocks on the user row lock', async () => {
+    if (!dbAvailable) return;
+    const { user } = await userWithHome();
+
+    const holder = dedicatedClient();
+    let release: () => void = () => undefined;
+    let announceHeld: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const lockHeld = new Promise<void>((resolve) => {
+      announceHeld = resolve;
+    });
+
+    const holding = holder.transaction(async (tx) => {
+      await tx.execute(sql`SELECT 1 FROM ${users} WHERE ${users.id} = ${user.id} FOR UPDATE`);
+      announceHeld();
+      await held;
+    });
+
+    await lockHeld;
+    const provisioning = provisionImagoAgents(user.id, dedicatedClient());
+
+    let observedLockWait = false;
+    for (let attempt = 0; attempt < CONTENTION_POLL_MAX_ATTEMPTS; attempt++) {
+      const waiting = await db.execute(sql`
+        SELECT 1 FROM pg_stat_activity
+        WHERE wait_event_type = 'Lock' AND query ILIKE '%FOR UPDATE%'
+      `);
+      if (waiting.rows.length > 0) {
+        observedLockWait = true;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, CONTENTION_POLL_INTERVAL_MS));
+    }
+
+    release();
+    await holding;
+    const result = await provisioning;
+
+    expect(observedLockWait).toBe(true);
+    expect(result.created).toHaveLength(BUILTIN_AGENT_KEYS.length);
+  });
+
+  // The activity hash chain has ONE global advisory lock, held to commit. Taken
+  // mid-transaction it would serialise every first sign-in (and every other
+  // activity write) behind the rest of the Home provisioning work — the
+  // 16-sign-in timeouts on pu/imago CI. The caller writes the entries last.
+  it('given a caller transaction, should provision the agents without taking the global activity chain lock', async () => {
+    if (!dbAvailable) return;
+    const { user, home } = await userWithHome();
+
+    const heldChainLocks = await dedicatedClient().transaction(async (tx) => {
+      const result = await provisionImagoAgentsInTransaction(tx, user.id, home.id);
+      expect(result.created).toHaveLength(BUILTIN_AGENT_KEYS.length);
+      const backend = await tx.execute(sql`SELECT pg_backend_pid() AS pid`);
+      // Observed from another connection, as any rival activity writer would.
+      const held = await db.execute(sql`
+        SELECT 1 FROM pg_locks
+        WHERE locktype = 'advisory' AND granted AND pid = ${backend.rows[0].pid}
+          AND classid = (${ACTIVITY_CHAIN_LOCK_KEY}::bigint >> 32)::oid
+          AND objid = (${ACTIVITY_CHAIN_LOCK_KEY}::bigint & 4294967295)::oid
+      `);
+      return held.rows.length;
+    });
+
+    expect(heldChainLocks).toBe(0);
+  });
+});
+
+describe('provisionHomeDriveIfNeeded → Imago agents (real Postgres)', () => {
+  it('given a new user, should provision the Home drive with the Imago agents', async () => {
+    if (!dbAvailable) return;
+    const user = await factories.createUser();
+
+    const { driveId, created } = await provisionHomeDriveIfNeeded(user.id);
+
+    expect(created).toBe(true);
+    const pointers = await pointersFor(user.id);
+    expect(pointers.map((p) => p.key).sort()).toEqual([...BUILTIN_AGENT_KEYS].sort());
+    const agentPages = await db.select().from(pages).where(inArray(pages.id, pointers.map((p) => p.pageId)));
+    for (const page of agentPages) expect(page.driveId).toBe(driveId);
+
+    // Written by the agents' own transaction after Home commits, not dropped.
+    const logs = await db
+      .select({ pageId: activityLogs.pageId })
+      .from(activityLogs)
+      .where(and(eq(activityLogs.operation, 'create'), inArray(activityLogs.pageId, pointers.map((p) => p.pageId))));
+    expect(logs).toHaveLength(BUILTIN_AGENT_KEYS.length);
+  });
+
+  it('given a returning user whose Home drive predates the agents, should provision them on the next sign-in', async () => {
+    if (!dbAvailable) return;
+    const { user, home } = await userWithHome();
+    expect(await pointersFor(user.id)).toHaveLength(0);
+
+    const { driveId, created } = await provisionHomeDriveIfNeeded(user.id);
+
+    expect(created).toBe(false);
+    expect(driveId).toBe(home.id);
+    expect(await pointersFor(user.id)).toHaveLength(BUILTIN_AGENT_KEYS.length);
+    expect(await agentPagesIn(home.id)).toHaveLength(BUILTIN_AGENT_KEYS.length);
+
+    // Every later sign-in is a no-op for the agents.
+    await provisionHomeDriveIfNeeded(user.id);
+    expect(await agentPagesIn(home.id)).toHaveLength(BUILTIN_AGENT_KEYS.length);
+  });
+
+  // Concurrent first sign-ins of DIFFERENT users all allocate from the "home"
+  // publish-subdomain family. The loser of a candidate hits the unique index
+  // inside its Home transaction; the allocator's retry must survive that (a
+  // savepoint, not an aborted transaction) and must not keep losing to rivals
+  // for the next sequential number (it leaves the family after a conflict).
+  // 16 is above the old 5-attempt budget with room to spare, and above the
+  // default pool of 10, so transactions also queue for connections.
+  // That queueing is the cost: ~3.2s in CI's coverage pass with the user row
+  // lock fixed (IMG-4.2a), and past vitest's 5s default on a loaded runner. The
+  // work is real, not a hang, so it gets an explicit budget instead of a smaller
+  // fan-out.
+  it('given 16 concurrent first sign-ins of different users, should provision every Home drive', async () => {
+    if (!dbAvailable) return;
+    const newUsers = await factories.createUsers(16);
+
+    const results = await Promise.allSettled(newUsers.map((user) => provisionHomeDriveIfNeeded(user.id)));
+
+    expect(results.filter((result) => result.status === 'rejected')).toEqual([]);
+    const homes = await db
+      .select({ subdomain: drives.publishSubdomain })
+      .from(drives)
+      .where(and(inArray(drives.ownerId, newUsers.map((user) => user.id)), eq(drives.kind, 'HOME')));
+    expect(homes).toHaveLength(newUsers.length);
+    expect(new Set(homes.map((home) => home.subdomain)).size).toBe(newUsers.length);
+    for (const user of newUsers) expect(await pointersFor(user.id)).toHaveLength(BUILTIN_AGENT_KEYS.length);
+  }, CONCURRENT_SIGN_INS_TIMEOUT_MS);
+
+  it('given an existing user owning other drives, should create Home with the agents but no tutorial content', async () => {
+    if (!dbAvailable) return;
+    const user = await factories.createUser();
+    await factories.createDrive(user.id, { name: 'Work', slug: 'work' });
+
+    const { driveId, created } = await provisionHomeDriveIfNeeded(user.id);
+
+    expect(created).toBe(false);
+    const [home] = await db.select().from(drives).where(eq(drives.id, driveId));
+    expect(home.kind).toBe('HOME');
+    expect(await agentPagesIn(driveId)).toHaveLength(BUILTIN_AGENT_KEYS.length);
+  });
+
+  // F8 (closing review, IMG-10.7): a persistent provisioning failure must not
+  // cost the user their Home drive. The failure is real — a trigger refusing
+  // this one user's agent pointers, so every attempt fails in Postgres — and
+  // the next sign-in after it clears provisions the agents.
+  it('given Imago provisioning failing persistently for a new user, should still create Home, and a later sign-in should provision the agents', async () => {
+    if (!dbAvailable) return;
+    const user = await factories.createUser();
+    const fn = `imago_refuse_${user.id.replace(/[^a-z0-9]/gi, '_')}`;
+    await db.execute(sql.raw(`
+      CREATE FUNCTION ${fn}() RETURNS trigger AS $$
+      BEGIN
+        IF NEW."userId" = '${user.id}' THEN
+          RAISE EXCEPTION 'imago provisioning refused for this user (test)';
+        END IF;
+        RETURN NEW;
+      END $$ LANGUAGE plpgsql
+    `));
+    await db.execute(sql.raw(
+      `CREATE TRIGGER ${fn} BEFORE INSERT OR UPDATE ON user_builtin_agents FOR EACH ROW EXECUTE FUNCTION ${fn}()`,
+    ));
+    try {
+      const first = await provisionHomeDriveIfNeeded(user.id);
+      expect(first.created).toBe(true);
+      const [home] = await db.select().from(drives).where(eq(drives.id, first.driveId));
+      expect(home).toMatchObject({ kind: 'HOME', ownerId: user.id });
+      // The Home seeding committed; only the agents are missing.
+      const seeded = await db.select({ title: pages.title }).from(pages).where(eq(pages.driveId, first.driveId));
+      expect(seeded.map((page) => page.title)).toContain('Getting Started');
+      expect(await pointersFor(user.id)).toHaveLength(0);
+      const imagoTitles = [IMAGO_FOLDER_TITLE, ...BUILTIN_AGENTS.map((agent) => agent.title)];
+      expect(seeded.filter((page) => imagoTitles.includes(page.title))).toEqual([]);
+
+      // Still failing at the next sign-in: Home is kept, not recreated.
+      const second = await provisionHomeDriveIfNeeded(user.id);
+      expect(second).toEqual({ driveId: first.driveId, created: false });
+      expect(await pointersFor(user.id)).toHaveLength(0);
+    } finally {
+      await db.execute(sql.raw(`DROP TRIGGER IF EXISTS ${fn} ON user_builtin_agents`));
+      await db.execute(sql.raw(`DROP FUNCTION IF EXISTS ${fn}()`));
+    }
+
+    const third = await provisionHomeDriveIfNeeded(user.id);
+    expect(third.created).toBe(false);
+    const homes = await db
+      .select({ id: drives.id })
+      .from(drives)
+      .where(and(eq(drives.ownerId, user.id), eq(drives.kind, 'HOME')));
+    expect(homes).toEqual([{ id: third.driveId }]);
+    const pointers = await pointersFor(user.id);
+    expect(pointers.map((p) => p.key).sort()).toEqual([...BUILTIN_AGENT_KEYS].sort());
+    const agentPages = await db.select().from(pages).where(inArray(pages.id, pointers.map((p) => p.pageId)));
+    expect(agentPages).toHaveLength(BUILTIN_AGENT_KEYS.length);
+    for (const page of agentPages) expect(page).toMatchObject({ driveId: third.driveId, type: 'AI_CHAT', isTrashed: false });
+  });
+});
+
+/**
+ * A user provisioned before IMG-10.10: the Imago page acting through drive
+ * memberships (`userScopedAccess` false), the Planner and Researcher pages with
+ * their pointers (the Planner with an Agent Memory child), and MEMBER grants
+ * for all three in a drive the user owns — the earlier model's state, written
+ * as that model wrote it.
+ */
+async function seedPre1010User() {
+  const { user, home } = await userWithHome();
+  const team = await factories.createDrive(user.id, { name: 'Team', slug: `team-${user.id}` });
+  const { agents } = await provisionImagoAgents(user.id);
+  await db.update(pages).set({ userScopedAccess: false }).where(eq(pages.id, agents.imago));
+  const [folder] = await db.select({ parentId: pages.parentId }).from(pages).where(eq(pages.id, agents.imago));
+  const retired: Record<string, string> = {};
+  for (const [key, title] of [['imago-planner', 'Imago Planner'], ['imago-researcher', 'Imago Researcher']] as const) {
+    const page = await factories.createPage(home.id, { title, type: 'AI_CHAT', parentId: folder.parentId });
+    await db.insert(userBuiltinAgents).values({ userId: user.id, key, pageId: page.id });
+    await db.insert(driveAgentMembers).values({ driveId: home.id, agentPageId: page.id, role: 'MEMBER', addedBy: user.id });
+    retired[key] = page.id;
+  }
+  const memory = await factories.createPage(home.id, { title: 'Agent Memory', type: 'DOCUMENT', parentId: retired['imago-planner'] });
+  for (const agentPageId of [agents.imago, ...Object.values(retired)]) {
+    await db.insert(driveAgentMembers).values({ driveId: team.id, agentPageId, role: 'MEMBER', addedBy: user.id });
+  }
+  return { user, home, team, imagoPageId: agents.imago, retired, memoryPageId: memory.id };
+}
+
+const grantsOutsideHome = (homeId: string, pageIds: string[]) =>
+  db
+    .select({ agentPageId: driveAgentMembers.agentPageId, driveId: driveAgentMembers.driveId })
+    .from(driveAgentMembers)
+    .where(and(inArray(driveAgentMembers.agentPageId, pageIds), sql`${driveAgentMembers.driveId} <> ${homeId}`));
+
+describe('IMG-10.10: provisioning brings an existing user to one full-reach Imago (real Postgres)', () => {
+  it('given a pre-10.10 user, should switch Imago to the user\'s reach, trash the retired agents and drop their pointers and every grant', async () => {
+    if (!dbAvailable) return;
+    const world = await seedPre1010User();
+    const [before] = await db.select().from(pages).where(eq(pages.id, world.imagoPageId));
+
+    const result = await provisionImagoAgents(world.user.id);
+
+    expect(result.created).toEqual([]);
+    expect(result.agents).toEqual({ imago: world.imagoPageId });
+    expect(result.reconciledPageIds).toEqual([world.imagoPageId]);
+    expect([...result.retiredPageIds].sort()).toEqual([...Object.values(world.retired), world.memoryPageId].sort());
+    expect(result.removedGrants).toBe(3);
+
+    const [imago] = await db.select().from(pages).where(eq(pages.id, world.imagoPageId));
+    expect(imago).toMatchObject({ userScopedAccess: true, isTrashed: false, revision: before.revision + 1 });
+    expect(imago.stateHash).not.toBe(before.stateHash);
+
+    const retired = await db.select().from(pages).where(inArray(pages.id, [...Object.values(world.retired), world.memoryPageId]));
+    for (const page of retired) expect(page.isTrashed).toBe(true);
+    expect((await pointersFor(world.user.id)).map((p) => p.key)).toEqual(['imago']);
+
+    const allIds = [world.imagoPageId, ...Object.values(world.retired)];
+    expect(await grantsOutsideHome(world.home.id, allIds)).toEqual([]);
+    // The native Home membership stays.
+    const home = await db.select().from(driveAgentMembers)
+      .where(and(eq(driveAgentMembers.agentPageId, world.imagoPageId), eq(driveAgentMembers.driveId, world.home.id)));
+    expect(home).toHaveLength(1);
+
+    const logs = await db.select().from(activityLogs).where(inArray(activityLogs.pageId, [world.imagoPageId, ...Object.values(world.retired)]));
+    expect(logs.filter((log) => log.operation === 'update' && log.pageId === world.imagoPageId)).toHaveLength(1);
+    for (const id of Object.values(world.retired)) {
+      expect(logs.filter((log) => log.operation === 'trash' && log.pageId === id)).toHaveLength(1);
+    }
+  });
+
+  it('given the cleanup already done, should change nothing on the next provision (idempotent)', async () => {
+    if (!dbAvailable) return;
+    const world = await seedPre1010User();
+    await provisionImagoAgents(world.user.id);
+    const [after] = await db.select().from(pages).where(eq(pages.id, world.imagoPageId));
+
+    const again = await provisionImagoAgents(world.user.id);
+
+    expect(again).toMatchObject({ created: [], retiredPageIds: [], reconciledPageIds: [], removedGrants: 0 });
+    const [still] = await db.select().from(pages).where(eq(pages.id, world.imagoPageId));
+    expect(still.revision).toBe(after.revision);
+  });
+
+  it('given a retired agent the user had already trashed, should drop its pointer and grants without touching the trashed page', async () => {
+    if (!dbAvailable) return;
+    const world = await seedPre1010User();
+    const trashedAt = new Date('2026-01-01T00:00:00Z');
+    await db.update(pages).set({ isTrashed: true, trashedAt }).where(eq(pages.id, world.retired['imago-researcher']));
+
+    const result = await provisionImagoAgents(world.user.id);
+
+    expect(result.retiredPageIds).not.toContain(world.retired['imago-researcher']);
+    const [page] = await db.select().from(pages).where(eq(pages.id, world.retired['imago-researcher']));
+    expect(page.trashedAt?.toISOString()).toBe(trashedAt.toISOString());
+    expect((await pointersFor(world.user.id)).map((p) => p.key)).toEqual(['imago']);
+    expect(await grantsOutsideHome(world.home.id, [world.retired['imago-researcher']])).toEqual([]);
+  });
+
+  it('given a new user, should grant Imago no drive at all: it reaches drives through the user, not memberships', async () => {
+    if (!dbAvailable) return;
+    const user = await factories.createUser();
+    const owned = await factories.createDrive(user.id, { name: 'Owned', slug: `owned-${user.id}` });
+
+    const { driveId } = await provisionHomeDriveIfNeeded(user.id);
+
+    const [pointer] = await pointersFor(user.id);
+    const memberships = await db.select().from(driveAgentMembers).where(eq(driveAgentMembers.agentPageId, pointer.pageId));
+    expect(memberships.map((m) => m.driveId)).toEqual([driveId]);
+    expect(memberships.map((m) => m.driveId)).not.toContain(owned.id);
+  });
+
+  it('given two concurrent provisioners for a pre-10.10 user, should clean up exactly once', async () => {
+    if (!dbAvailable) return;
+    const world = await seedPre1010User();
+
+    const [a, b] = await Promise.all([
+      provisionImagoAgents(world.user.id, dedicatedClient()),
+      provisionImagoAgents(world.user.id, dedicatedClient()),
+    ]);
+
+    expect([a.reconciledPageIds.length, b.reconciledPageIds.length].sort()).toEqual([0, 1]);
+    expect([a.removedGrants, b.removedGrants].sort()).toEqual([0, 3]);
+    const trashLogs = await db.select().from(activityLogs)
+      .where(and(eq(activityLogs.operation, 'trash'), inArray(activityLogs.pageId, Object.values(world.retired))));
+    expect(trashLogs).toHaveLength(RETIRED_BUILTIN_AGENT_KEYS.length);
+  });
+});

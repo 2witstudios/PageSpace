@@ -5,15 +5,20 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@pagespace/db/db', () => ({
-  db: {
+vi.mock('@pagespace/db/db', () => {
+  const db: Record<string, unknown> = {
     select: vi.fn(),
     insert: vi.fn(),
     query: {
       drives: { findFirst: vi.fn() },
     },
-  },
-}));
+  };
+  // A new link is inserted in a transaction (the [D-OW-33] lapse guard reads in it): the tx is the same mock.
+  db.transaction = vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(db));
+  return { db };
+});
+// [D-OW-33] the lapse guard: these drives have no org.
+vi.mock('../org-lapse-guard', () => ({ checkDriveMayLoosen: vi.fn(async () => null) }));
 
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((col, val) => ({ op: 'eq', col, val })),
@@ -40,6 +45,9 @@ vi.mock('@pagespace/db/schema/share-links', () => ({
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: {},
 }));
+
+// POL-3: the share-link service reads the drive's org policies; these unit tests are about a drive with no org.
+vi.mock('../../organizations/policy-reader', () => ({ getDrivePolicies: vi.fn().mockResolvedValue(null) }));
 
 vi.mock('../permissions', () => ({
   isDriveOwnerOrAdmin: vi.fn().mockResolvedValue(true),

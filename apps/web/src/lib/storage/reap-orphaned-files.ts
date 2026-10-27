@@ -1,6 +1,6 @@
 import { findOrphanedFileRecords, deleteFileRecords } from '@pagespace/lib/compliance/file-cleanup/orphan-detector';
 import { createSystemFileDeleteToken } from '@pagespace/lib/services/validated-service-token';
-import { updateStorageUsage, computeStorageCreditOnUnlink } from '@pagespace/lib/services/storage-limits';
+import { updateStorageUsage, computeStorageCreditOnUnlink, findDriveBillingFactsMap } from '@pagespace/lib/services/storage-limits';
 
 type Database = typeof import('@pagespace/db/db').db;
 
@@ -128,13 +128,19 @@ export async function reapOrphanedFiles(database: Database, options?: ReapOption
 
   // Credit storage quota back for every reaped orphan whose row this call
   // actually deleted. computeStorageCreditOnUnlink (M8) centralizes the rules:
-  // attribute to the original uploader (createdBy), skip rows nulled by a user
-  // cascade, skip rows another reap already removed (race-safe), skip DB-only
-  // stubs whose bytes were never persisted — and issue exactly ONE credit per
-  // blob, symmetric with the single first-store charge.
+  // attribute to the payer the bytes billed (a personal drive's owner, a
+  // drive-less attachment's uploader), skip rows another reap already removed
+  // (race-safe), skip DB-only stubs whose bytes were never persisted — and
+  // issue exactly ONE credit per blob, symmetric with the single first-store charge.
+  // WAL-9, O-9: an org drive's bytes never charged a person, so they are never credited
+  // back to one either. Read once for every reaped orphan's drive.
+  const driveFacts = await findDriveBillingFactsMap(
+    reapedOrphans.flatMap((o) => (o.driveId && deletedIdSet.has(o.id) ? [o.driveId] : [])),
+  );
   for (const orphan of reapedOrphans) {
     const credit = computeStorageCreditOnUnlink({
       createdBy: orphan.createdBy,
+      drive: orphan.driveId ? (driveFacts.get(orphan.driveId) ?? null) : null,
       sizeBytes: orphan.sizeBytes,
       deletedByThisCall: deletedIdSet.has(orphan.id),
       hadPhysicalBlob: true,

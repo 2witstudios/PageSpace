@@ -95,6 +95,7 @@ export const handleVoiceBridgeRequest = async (
         name: request.name,
         argumentsJson: request.argumentsJson,
         userId: request.userId,
+        authentication: request.authentication,
         callId: request.callId,
         ...(request.conversationId === undefined
           ? {}
@@ -104,6 +105,7 @@ export const handleVoiceBridgeRequest = async (
           ? {}
           : { locationContext: request.locationContext }),
         ...(request.assistant === undefined ? {} : { assistant: request.assistant }),
+        ...(request.spend === undefined ? {} : { spend: request.spend }),
       },
       deps.model,
     );
@@ -119,6 +121,7 @@ export const handleVoiceBridgeRequest = async (
     const activity = await persistVoiceToolActivity(deps.transcriptDeps, {
       callId: request.callId,
       userId: request.userId,
+      authentication: request.authentication,
       conversationId: request.conversationId,
       toolCallId: request.toolCallId,
       name: request.name,
@@ -156,6 +159,7 @@ export const handleVoiceBridgeRequest = async (
   const result = await persistVoiceTranscript(deps.transcriptDeps, {
     callId: request.callId,
     userId: request.userId,
+    authentication: request.authentication,
     conversationId: request.conversationId,
     role: request.role,
     text: request.text,

@@ -8,7 +8,9 @@
  *
  * Read/write split: any drive member sees status/URL/logs; publish, stop,
  * resume and unpublish are OWNER/ADMIN only (`canManage`, the same flag that
- * already gates rename/rebuild/delete on the row above). Buying or cancelling
+ * already gates rename/rebuild/delete on the row above) — except that a PARKED
+ * app's Resume (the un-park) is also offered to the app's creator, whom the
+ * server's un-park authority admits (creator, lead, org Owner/Admin). Buying or cancelling
  * the always-on tier is stricter still — OWNER only (`isOwner`) — because that
  * spends the drive's money, not just its compute.
  *
@@ -41,6 +43,7 @@ import { useAppLogs } from '@/hooks/drive-envs/useAppLogs';
 import { useAppHostingCapability } from '@/hooks/drive-envs/useAppHostingCapability';
 import { useEditingSession } from '@/stores/useEditingSession';
 import { StripeProvider } from '@/components/billing/StripeProvider';
+import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import { PaymentElement, useElements, useStripe } from '@stripe/react-stripe-js';
 
 const STATUS_COPY: Record<PublishedAppStatus, { label: string; tone: 'default' | 'secondary' | 'destructive' | 'outline' }> = {
@@ -62,6 +65,20 @@ const STATUS_COPY: Record<PublishedAppStatus, { label: string; tone: 'default' |
  */
 export function statusCopyFor(status: PublishedAppStatus): { label: string; tone: 'default' | 'secondary' | 'destructive' | 'outline' } {
   return STATUS_COPY[status] ?? { label: status, tone: 'outline' };
+}
+
+/**
+ * Why a parked app stopped. Where billing is hidden (the iOS app, Guideline
+ * 3.1.1) it says what happened without pointing at a purchase.
+ */
+export function parkedNoticeFor(showBilling: boolean, lastError: string | null = null): string {
+  // [D-OW-28] Paused on its creator's allowance of the org's credits: nothing to buy, and it comes back by itself.
+  if (lastError === 'parked: org_member_cap_reached') {
+    return "Paused — its creator has used their allowance of the organization's credits. It returns automatically when that allowance renews; once there is room again, its creator, the drive lead or an org admin can resume it sooner.";
+  }
+  return showBilling
+    ? 'Paused — this app ran out of credits or hit its daily limit. Top up credits or switch to the always-on plan below, then resume it.'
+    : 'Paused — this app ran out of credits or hit its daily limit.';
 }
 
 function appPath(driveId: string, envId: string): string {
@@ -95,6 +112,10 @@ export function DriveEnvAppPane({
   });
 
   const path = appPath(driveId, envId);
+  // The server decides who may un-park (permissions/app-unpark-authority) and says so on the row —
+  // for owners and admins too: a drive Admin who is not the lead, an org Owner/Admin or the creator
+  // is refused, so they are not offered the button (re-review P3-1).
+  const canUnpark = app?.viewerCanUnpark === true;
 
   const publish = useCallback(async () => {
     setPublishing(true);
@@ -186,6 +207,7 @@ export function DriveEnvAppPane({
             <AppPaneBody
               app={app}
               canManage={canManage}
+              canUnpark={canUnpark}
               isOwner={isOwner}
               actioning={actioning}
               onPublishAgain={publish}
@@ -227,6 +249,7 @@ export function DriveEnvAppPane({
 function AppPaneBody({
   app,
   canManage,
+  canUnpark,
   isOwner,
   actioning,
   onPublishAgain,
@@ -240,6 +263,8 @@ function AppPaneBody({
 }: {
   app: DriveEnvAppDTO;
   canManage: boolean;
+  /** May resume a PARKED app (un-park): the server's `viewerCanUnpark`, never inferred from `canManage`. */
+  canUnpark: boolean;
   isOwner: boolean;
   actioning: boolean;
   onPublishAgain: () => void;
@@ -251,6 +276,7 @@ function AppPaneBody({
   driveId: string;
   envId: string;
 }) {
+  const { showBilling } = useBillingVisibility();
   const lines = useAppLogs(logsOpen ? envId : null, logsOpen ? app.flyAppName : null);
 
   return (
@@ -269,8 +295,7 @@ function AppPaneBody({
 
       {app.status === 'parked' && (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 p-2 text-destructive">
-          Paused — this app ran out of credits or hit its daily limit. Top up credits or switch to the
-          always-on plan below, then resume it.
+          {parkedNoticeFor(showBilling, app.lastError)}
         </div>
       )}
 
@@ -282,9 +307,17 @@ function AppPaneBody({
 
       <div className="text-muted-foreground">Tier: {app.tier === 'dedicated' ? 'Always-on' : 'Metered (pay per awake time)'}</div>
 
+      {canUnpark && !canManage && app.status === 'parked' && (
+        <div className="flex flex-wrap gap-1.5">
+          <Button size="sm" variant="outline" disabled={actioning} onClick={onResume}>
+            <Play className="mr-1 size-3" /> Resume
+          </Button>
+        </div>
+      )}
+
       {canManage && (
         <div className="flex flex-wrap gap-1.5">
-          {(app.status === 'stopped' || app.status === 'parked') && (
+          {(app.status === 'stopped' || (app.status === 'parked' && canUnpark)) && (
             <Button size="sm" variant="outline" disabled={actioning} onClick={onResume}>
               <Play className="mr-1 size-3" /> Resume
             </Button>
@@ -351,7 +384,7 @@ async function dunningFetcher(url: string): Promise<{ subscription: DunningState
  * `/dedicated` route's own owner-direct check (it deliberately does not use
  * `isPrincipalDriveOwnerOrAdmin`).
  */
-function DedicatedTierSection({
+export function DedicatedTierSection({
   app,
   isOwner,
   driveId,
@@ -362,6 +395,7 @@ function DedicatedTierSection({
   driveId: string;
   envId: string;
 }) {
+  const { showBilling } = useBillingVisibility();
   const [starting, setStarting] = useState(false);
   const [clientSecret, setClientSecret] = useState<string | null>(null);
 
@@ -369,7 +403,7 @@ function DedicatedTierSection({
   // metered case needs `purchasable` too, to decide whether the "Buy
   // always-on" button should even render.
   const { data } = useSWR<{ subscription: DunningState | null; purchasable: boolean }>(
-    isOwner ? `/api/drives/${encodeURIComponent(driveId)}/envs/${encodeURIComponent(envId)}/app/dunning` : null,
+    isOwner && showBilling ? `/api/drives/${encodeURIComponent(driveId)}/envs/${encodeURIComponent(envId)}/app/dunning` : null,
     dunningFetcher,
     { revalidateOnFocus: false, shouldRetryOnError: false },
   );
@@ -407,7 +441,8 @@ function DedicatedTierSection({
     componentName: 'DriveEnvAppPane.dedicatedCheckout',
   });
 
-  if (!isOwner) return null;
+  // The whole section is purchase and billing management — none of it in the iOS app.
+  if (!isOwner || !showBilling) return null;
   // `undefined` (still loading) renders nothing rather than a button that
   // might immediately need to disappear — same "don't flash a dead control"
   // reasoning as the pane-level capability gate.

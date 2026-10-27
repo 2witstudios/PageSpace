@@ -48,6 +48,8 @@ import { issueEnrollmentCode, verifyEnrollmentCode, type RandomBytes, type Enrol
 import { issueChallenge, verifyChallengeResponse, type ChallengeDenyReason } from '../../env-bridge/challenge';
 import { decodeBase64, type Ed25519Verify, type HashBytes } from '../../env-bridge/grant';
 import { getEnvBridgeTokenPolicy, type EnvBridgeTokenPolicy } from '../../auth/token-lifecycle-policy';
+import type { OrgPolicies } from '../../organizations/policies-core';
+import { environmentsDecision } from '../../organizations/org-action-decisions';
 
 /**
  * Row → `DriveEnvStatus`, as a pure function (the ONE place the mapping exists)
@@ -165,8 +167,17 @@ export interface CreateDriveEnvDeps {
    */
   resolvePayer: (driveId: string) => Promise<{ payerId: string; tier: SubscriptionTier } | null>;
   now: () => Date;
+  /** POL-10: the drive's org policies, read live; null when the drive has no org (unrestricted). Required, never defaulted: the org's switch must not be skippable. */
+  getDriveOrgPolicies: (driveId: string) => Promise<OrgPolicies | null>;
   /** Required only for a LOCAL create (the one-time code needs randomness and a hash). */
   identity?: Pick<LocalEnvIdentityDeps, 'random' | 'hash' | 'newEnrollmentId'>;
+  /**
+   * [D-OW-28] Whether the creating member may add a billable env: its compute counts against their
+   * per-member cap on an org drive, so a member at their cap is refused (compute-gate
+   * `admitDriveComputeCreator`). Required, never defaulted: the cap must not be skippable. Not
+   * asked for a LOCAL env (it runs on the member's own machine) or a create with no creator.
+   */
+  admitCreator: (input: { driveId: string; userId: string }) => Promise<{ allowed: true } | { allowed: false; code?: 'org_lapsed' | 'org_member_cap_reached'; message: string }>;
 }
 
 /** What a local create hands back ONCE: the code is shown to the user and never stored. */
@@ -182,8 +193,14 @@ export type CreateDriveEnvResult =
   | { ok: false; reason: 'drive_not_found' }
   /** `(driveId, name)` is taken — the database refused, which is how concurrent creates are resolved. */
   | { ok: false; reason: 'name_taken' }
+  /** POL-10: the drive's organization does not allow persistent environments. */
+  | { ok: false; reason: 'org_policy'; message: string }
   /** The payer's tier forbids environments, or they are at their ceiling. `limit` is the ceiling that applied. */
-  | { ok: false; reason: 'quota_exceeded'; denial: DriveEnvAllowanceDenialReason; limit: number };
+  | { ok: false; reason: 'quota_exceeded'; denial: DriveEnvAllowanceDenialReason; limit: number }
+  /** [D-OW-28] The creating member is at their cap of the org's credits. Nothing was created. */
+  | { ok: false; reason: 'member_cap_reached'; message: string }
+  /** SEAT-9: the drive's org is lapsed — it creates no new environment until it reactivates. */
+  | { ok: false; reason: 'org_lapsed'; message: string };
 
 /**
  * Create an environment: mint the row.
@@ -237,6 +254,16 @@ export async function createDriveEnv({
   if (local && !deps.identity) throw new Error('createDriveEnv: a local env needs identity deps (random, hash, newEnrollmentId)');
   const payer = await deps.resolvePayer(driveId);
   if (!payer) return { ok: false, reason: 'drive_not_found' };
+
+  const policy = environmentsDecision(await deps.getDriveOrgPolicies(driveId));
+  if (!policy.ok) return { ok: false, reason: 'org_policy', message: policy.message };
+
+  if (!local && createdBy) {
+    const admitted = await deps.admitCreator({ driveId, userId: createdBy });
+    if (!admitted.allowed) {
+      return { ok: false, reason: admitted.code === 'org_lapsed' ? 'org_lapsed' : 'member_cap_reached', message: admitted.message };
+    }
+  }
 
   const allowance = await checkDriveEnvAllowance({
     payerId: payer.payerId,
@@ -1313,6 +1340,11 @@ export interface RebuildDriveEnvDeps {
    */
   ensureSandbox: (row: DriveEnvRecord) => Promise<EnsureSpriteHolderSandboxResult>;
   now: () => Date;
+  /**
+   * SEAT-9 (review #2761): whether the env's drive may start compute — a lapsed org rebuilds nothing.
+   * Required, never defaulted (compute-gate `admitDriveOrgActive`).
+   */
+  admitOrgActive: (input: { driveId: string }) => Promise<{ allowed: true } | { allowed: false; code: 'org_lapsed'; message: string }>;
 }
 
 export type RebuildDriveEnvResult =
@@ -1321,6 +1353,8 @@ export type RebuildDriveEnvResult =
   /** A LOCAL env has no Sprite to replace: rebuild is a Sprite verb (C1). Nothing is torn down or provisioned. */
   | { ok: false; reason: 'substrate_unsupported' }
   | { ok: false; reason: 'teardown_failed'; detail: string }
+  /** SEAT-9: the drive's org is lapsed. Nothing is torn down or provisioned. */
+  | { ok: false; reason: 'org_lapsed'; message: string }
   /** The old Sprite is gone but the new one could not be minted. The env survives, machineless, and the next ensure retries. */
   | { ok: false; reason: 'provision_failed'; detail: string };
 
@@ -1358,6 +1392,9 @@ export async function rebuildDriveEnv({
   // C1: the user's own machine has no Sprite to destroy and re-mint. Refuse
   // BEFORE the teardown and before the provisioner is ever consulted.
   if (row.substrate === 'local') return { ok: false, reason: 'substrate_unsupported' };
+  // SEAT-9: a lapsed org starts no compute — refused before the old machine is destroyed.
+  const active = await deps.admitOrgActive({ driveId: row.driveId });
+  if (!active.allowed) return { ok: false, reason: 'org_lapsed', message: active.message };
 
   if (row.sandboxId !== null && row.spriteTornDownAt === null) {
     const teardown = await teardownEnvSprite({

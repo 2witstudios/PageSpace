@@ -142,6 +142,6 @@ describe('POST /api/pulse/generate — prepaid credit gate', () => {
     // The model isn't resolved at the gate, so Pulse passes no per-call estimate (the
     // hold uses the default) but does apply the chat in-flight cap to bound concurrent
     // overdraw.
-    expect(canConsumeAI).toHaveBeenCalledWith('user-1', 'pro', { maxInFlight: MAX_CHAT_INFLIGHT });
+    expect(canConsumeAI).toHaveBeenCalledWith('user-1', 'pro', { spend: { kind: 'personal' }, maxInFlight: MAX_CHAT_INFLIGHT });
   });
 });

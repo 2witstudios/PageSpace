@@ -5,12 +5,27 @@
  * providing a clean seam for testing at the service level rather than the ORM level.
  */
 
+import { checkActorDriveAuthentication } from '../permissions/actor-authentication';
 import { db } from '@pagespace/db/db';
 import { eq, and, asc } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { driveRoles, driveMembers } from '@pagespace/db/schema/members';
 import type { PagePerm } from '../permissions/membership-queries';
 import { computeReorderPlan, lockedBatchReorder } from './reorder';
+import { loadEffectiveDriveMembership } from '../permissions/org-drive-membership';
+import { isDriveLead } from '../permissions/drive-relationship';
+import { guardOpenRoleFloor } from '../organizations/open-role-floor';
+import { guardDriveAccess, type DriveAccessScope } from '../permissions/org-lapse-guard';
+import type { AccessActor } from '../permissions/access-actor';
+
+/**
+ * [D-OW-33] what a role write can change: who holds which role (members and agents follow a default, a deleted role
+ * leaves its holders on the plain role). Page grants are untouched by role writes.
+ */
+const ROLE_WRITE_SCOPE: DriveAccessScope = { grants: false };
+
+// POL-6: a role write that leaves an Open org drive's default below the org floor throws this.
+export { OpenRoleFloorError } from '../organizations/open-role-floor';
 
 // Re-export canonical type so callers can import from one place
 export type { PagePerm };
@@ -82,7 +97,7 @@ export interface DriveRoleAccessInfo {
  */
 export async function checkDriveAccessForRoles(
   driveId: string,
-  userId: string
+  actor: AccessActor
 ): Promise<DriveRoleAccessInfo> {
   const driveResult = await db
     .select()
@@ -100,7 +115,12 @@ export async function checkDriveAccessForRoles(
   }
 
   const drive = driveResult[0];
-  const isOwner = drive.ownerId === userId;
+  // SEC-2/3: a credential the drive's org refuses holds no role in it, lead or not.
+  if (!(await checkActorDriveAuthentication(actor, driveId)).allowed) {
+    return { isOwner: false, isAdmin: false, isMember: false, drive: { id: drive.id, name: drive.name, slug: drive.slug, ownerId: drive.ownerId } };
+  }
+  const { userId } = actor;
+  const isOwner = isDriveLead(userId, drive);
 
   if (isOwner) {
     return {
@@ -116,14 +136,12 @@ export async function checkDriveAccessForRoles(
     };
   }
 
-  // Check membership
-  const membership = await db.query.driveMembers.findFirst({
-    where: and(
-      eq(driveMembers.driveId, driveId),
-      eq(driveMembers.userId, userId)
-    ),
-  });
+  // The shared org-aware membership. It reads ACCEPTED rows only: a pending invite (acceptedAt IS
+  // NULL) grants nothing, and a pending ADMIN invitation manages no roles (#2672).
+  const membership = await loadEffectiveDriveMembership(userId, drive);
 
+  // A GUEST (redeemed page share link) is not a member and sees no roles: the effective
+  // membership reads a GUEST row as none (driveMembershipRow).
   if (!membership) {
     return {
       isOwner: false,
@@ -271,7 +289,9 @@ export async function createDriveRole(
     throw new Error('Invalid driveWidePermissions structure');
   }
 
-  return db.transaction(async (tx) => {
+  // POL-6: judged on the drive's state after the write (open-role-floor.ts). [D-OW-33] guardDriveAccess: while the
+  // drive's org is lapsed the write may not give a role's holders more (nor move them to a wider default).
+  return guardDriveAccess(db, driveId, ROLE_WRITE_SCOPE, (tx) => guardOpenRoleFloor(tx, driveId, async () => {
     // Read existing roles for the position computation; when creating as
     // default this doubles as the ordered drive-wide lock acquisition.
     const existingRoles = input.isDefault
@@ -303,7 +323,7 @@ export async function createDriveRole(
     }).returning();
 
     return newRole as DriveRole;
-  });
+  }));
 }
 
 /**
@@ -337,7 +357,9 @@ export async function updateDriveRole(
     throw new Error('Cannot specify both permissions and permissionsPatch');
   }
 
-  return db.transaction(async (tx) => {
+  // POL-6: judged on the drive's state after the write (open-role-floor.ts). [D-OW-33] guardDriveAccess: while the
+  // drive's org is lapsed the write may not give a role's holders more (nor move them to a wider default).
+  return guardDriveAccess(db, driveId, ROLE_WRITE_SCOPE, (tx) => guardOpenRoleFloor(tx, driveId, async () => {
     let existingRole: typeof driveRoles.$inferSelect | undefined;
     if (input.isDefault) {
       // Setting a default updates every role row in the drive, so acquire the
@@ -388,7 +410,7 @@ export async function updateDriveRole(
       role: updatedRole as DriveRole,
       wasDefault: existingRole.isDefault,
     };
-  });
+  }));
 }
 
 /**
@@ -410,11 +432,10 @@ export async function deleteDriveRole(
     throw new Error('Role not found');
   }
 
-  await db.delete(driveRoles)
-    .where(and(
-      eq(driveRoles.id, roleId),
-      eq(driveRoles.driveId, driveId)
-    ));
+  // POL-6: deleting an Open org drive's default leaves its members on the plain MEMBER role, which is below an
+  // edit floor; judged on the state after the delete.
+  await guardDriveAccess(db, driveId, ROLE_WRITE_SCOPE, (tx) => guardOpenRoleFloor(tx, driveId, () =>
+    tx.delete(driveRoles).where(and(eq(driveRoles.id, roleId), eq(driveRoles.driveId, driveId)))));
 }
 
 /**
@@ -433,7 +454,9 @@ export async function reorderDriveRoles(
   driveId: string,
   roleIds: string[]
 ): Promise<void> {
-  await db.transaction(async (tx) => {
+  // POL-6: through the floor guard like every role write, so its locks come in the same order and the default it
+  // leaves (the lowest-positioned one wins) is judged against the org floor.
+  await guardDriveAccess(db, driveId, ROLE_WRITE_SCOPE, (tx) => guardOpenRoleFloor(tx, driveId, async () => {
     const existingRoles = await lockDriveRolesInOrder(tx, driveId);
     const existingIds = new Set(existingRoles.map(r => r.id));
     const invalidIds = roleIds.filter(id => !existingIds.has(id));
@@ -453,7 +476,7 @@ export async function reorderDriveRoles(
         touchColumns: [driveRoles.updatedAt],
       });
     }
-  });
+  }));
 }
 
 /**

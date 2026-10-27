@@ -95,6 +95,14 @@ export function parseArgv(argv: readonly string[]): ParseResult {
 
   for (let i = 0; i < argv.length; i += 1) {
     const current = argv[i];
+
+    // `--` after a command ends option parsing: it and everything after it are
+    // handed to the command verbatim, so `workspaces exec <id> -- ls --json`
+    // runs `ls --json` instead of the CLI eating `--json` as its own flag.
+    if (current === '--' && args.length > 0) {
+      args.push(...argv.slice(i));
+      break;
+    }
     const eqIndex = current.startsWith('--') ? current.indexOf('=') : -1;
     const flagName = eqIndex === -1 ? current : current.slice(0, eqIndex);
     const inlineValue = eqIndex === -1 ? undefined : current.slice(eqIndex + 1);

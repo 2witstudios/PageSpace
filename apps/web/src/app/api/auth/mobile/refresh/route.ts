@@ -1,3 +1,4 @@
+import { parseVerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
 import { validateDeviceToken, updateDeviceTokenActivity, generateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
@@ -129,6 +130,10 @@ export async function POST(req: Request) {
 
     // Create new session token (opaque, stored in DB)
     const sessionToken = await sessionService.createSession({
+      authentication: parseVerifiedAuthentication({
+        authenticatedAtMs: deviceRecord.authenticatedAt?.getTime(),
+        assurance: deviceRecord.authenticationAssurance,
+      }, Date.now()),
       userId: user.id,
       type: 'user',
       scopes: ['*'],

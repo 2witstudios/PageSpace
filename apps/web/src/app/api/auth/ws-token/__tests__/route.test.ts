@@ -109,6 +109,7 @@ describe('/api/auth/ws-token', () => {
       // Assert — SECURITY (L5): narrow, user-scoped, short-lived token (NOT a
       // 90-day type:'service' mcp:* token the processor would also accept).
       expect(sessionService.createSession).toHaveBeenCalledWith({
+        authentication: null,
         userId: 'test-user-id',
         type: 'mcp',
         scopes: ['mcp:ws'],

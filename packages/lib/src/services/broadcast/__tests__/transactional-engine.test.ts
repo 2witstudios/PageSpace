@@ -99,7 +99,7 @@ describe('transactional engine — sendOne', () => {
   });
 
   it('given the provider throws, should propagate so the caller records a retryable failure', async () => {
-    // sendEmail's 3/hr rate limit surfaces this way, and it must never look like a send.
+    // sendEmail's 10/hr rate limit surfaces this way, and it must never look like a send.
     sendEmail.mockRejectedValue(new Error('Too many emails sent to ada@example.com'));
 
     await expect(createTransactionalEngine(config).sendOne(recipient)).rejects.toThrow(/Too many emails/);

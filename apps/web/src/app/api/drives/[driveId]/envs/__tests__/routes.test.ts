@@ -208,6 +208,27 @@ describe('POST /envs — who may CREATE one', () => {
     expect(createEnvInDrive).toHaveBeenCalledWith({ driveId: DRIVE_ID, name: 'dev', createdBy: USER_ID });
   });
 
+  it('POL-10 given an org that turned persistent environments off, should answer 403 org_policy', async () => {
+    vi.mocked(createEnvInDrive).mockResolvedValue({ ok: false, reason: 'org_policy', message: "This organization doesn't allow persistent environments." } as never);
+    const response = await createEnv(jsonReq({ name: 'dev', substrate: 'sprite' }), params);
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: 'org_policy', policy: 'persistentEnvironments' });
+  });
+
+  it('WAL-2 (partial) [D-OW-28] given a creator at their cap of the org\'s credits, should answer 402 with the cap message', async () => {
+    vi.mocked(createEnvInDrive).mockResolvedValue({ ok: false, reason: 'member_cap_reached', message: 'You have used your allowance' } as never);
+    const response = await createEnv(jsonReq({ name: 'dev', substrate: 'sprite' }), params);
+    expect(response.status).toBe(402);
+    expect(await response.json()).toEqual({ error: 'You have used your allowance', code: 'org_member_cap_reached' });
+  });
+
+  it('SEAT-9 (partial) given a lapsed org, should answer 402 with code org_lapsed, not the member-cap code', async () => {
+    vi.mocked(createEnvInDrive).mockResolvedValue({ ok: false, reason: 'org_lapsed', message: 'lapsed' } as never);
+    const response = await createEnv(jsonReq({ name: 'dev', substrate: 'sprite' }), params);
+    expect(response.status).toBe(402);
+    expect(await response.json()).toEqual({ error: 'lapsed', code: 'org_lapsed' });
+  });
+
   it('given a duplicate name, should answer 409', async () => {
     vi.mocked(createEnvInDrive).mockResolvedValue({ ok: false, reason: 'name_taken' } as never);
     const response = await createEnv(jsonReq({ name: 'staging' }), params);
@@ -568,7 +589,7 @@ describe('POST /envs/[envId]/rebuild — the only sprite-replacing verb', () => 
     vi.mocked(rebuildEnv).mockResolvedValue({ ok: true, sandboxId: 'pgs-env-abc' } as never);
     const response = await rebuildEnvRoute(rebuildReq(), envParams);
     expect(response.status).toBe(200);
-    expect(rebuildEnv).toHaveBeenCalledWith({ envId: ENV_ID, requesterId: USER_ID });
+    expect(rebuildEnv).toHaveBeenCalledWith({ envId: ENV_ID, requester: expect.objectContaining({ userId: USER_ID }) });
   });
 
   it('given a LOCAL env, should answer 409 substrate_unsupported — the user\'s own machine has no Sprite to replace (C1)', async () => {
@@ -576,6 +597,13 @@ describe('POST /envs/[envId]/rebuild — the only sprite-replacing verb', () => 
     const response = await rebuildEnvRoute(rebuildReq(), envParams);
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ reason: 'substrate_unsupported' });
+  });
+
+  it('SEAT-9 (partial) review #2761: given a lapsed org, a rebuild answers 402 org_lapsed', async () => {
+    vi.mocked(rebuildEnv).mockResolvedValue({ ok: false, reason: 'org_lapsed', message: 'lapsed' } as never);
+    const response = await rebuildEnvRoute(rebuildReq(), envParams);
+    expect(response.status).toBe(402);
+    expect(await response.json()).toEqual({ error: 'lapsed', code: 'org_lapsed' });
   });
 
   it('given the teardown failed, should answer 503 and say so', async () => {

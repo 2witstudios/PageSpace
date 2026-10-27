@@ -35,6 +35,8 @@ function harness(machineOutcome: RevokeMachineNotifyOutcome = 'sent_and_closed')
   const notifies: Array<Parameters<RevokeLocalDriveEnvDeps['notifyMachine']>[0]> = [];
   const identityDeps = {
     store: fake.store,
+    getDriveOrgPolicies: async () => null,
+    admitCreator: async () => ({ allowed: true as const }),
     resolvePayer: async () => ({ payerId: PAYER_ID, tier: 'pro' as const }),
     now: () => NOW,
     identity,

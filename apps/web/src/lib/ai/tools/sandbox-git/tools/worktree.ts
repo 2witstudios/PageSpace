@@ -49,6 +49,14 @@ export const WORKTREE_TOOL_ROWS: GitToolRow[] = [
       .refine((d) => !d.staged || !d.base, {
         message: 'staged and base are mutually exclusive — use staged for --cached or base for ref diff',
       }),
+    // base leads the `base...head` argument, so a flag-shaped base
+    // (`--output=file...HEAD`) would be parsed as a diff OPTION. "--" cannot
+    // guard a rev range (git would read it as a path), so reject at the door.
+    validate: ({ base, head }) => {
+      const baseOk = base === undefined ? { ok: true as const } : validateFlagSafe(base, 'base');
+      if (!baseOk.ok) return baseOk;
+      return head === undefined ? { ok: true as const } : validateFlagSafe(head, 'head');
+    },
     buildArgs: ({ staged, path, base, head }) => ({ args: buildDiffArgs({ staged, path, base, head }) }),
   }),
   defineRow({

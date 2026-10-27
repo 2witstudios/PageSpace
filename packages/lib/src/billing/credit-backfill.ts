@@ -10,14 +10,15 @@
 import { db } from '@pagespace/db/db';
 import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
-import { and, eq, lt, gt, isNull, notInArray } from '@pagespace/db/operators';
+import { and, eq, lt, gt, inArray, isNull, notInArray } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { computeBackfillActions } from './credit-core';
 import { MACHINE_MARKUP_BPS } from './credit-pricing';
-import { consumeCredits, settlePendingLedgerRow } from './credit-consume';
+import { consumeCredits, markUsageUnattributed, settlePendingLedgerRow } from './credit-consume';
 import { emitCreditsUpdated } from './credit-emit';
 import { loggers } from '../logging/logger-config';
 import type { AIUsageSource } from '../monitoring/usage-source';
+import { errorLogFields } from '../logging/error-cause';
 
 // Per-source markup floor for orphan recovery (see computeBackfillActions):
 // adding a second per-source floor is a one-line addition here, not a change
@@ -40,6 +41,11 @@ const MAX_PASSES = 50;
 export interface BackfillResult {
   retried: number;
   orphans: number;
+  /**
+   * Usage rows that cost money but name no wallet (WAL-6b fail closed): never charged to anyone
+   * by the sweep — they are reported here and logged for reconciliation.
+   */
+  unattributed: number;
   /** Stale holds reclaimed this run (a crashed stream's reservation never settled). */
   expiredHolds: number;
 }
@@ -62,39 +68,55 @@ async function emitBalancesBestEffort(userIds: string[]): Promise<void> {
   }
 }
 
-export async function backfillCredits(): Promise<BackfillResult> {
-  if (!isBillingEnabled()) return { retried: 0, orphans: 0, expiredHolds: 0 };
-
-  const now = new Date();
-  const cutoff = new Date(now.getTime() - GRACE_MS);
-
-  // Sweep abandoned holds FIRST: a hold from a crashed/abandoned stream that never
-  // reached consumeCredits would otherwise reserve spend (and count against the
-  // free in-flight cap) forever. Deleting them past expiresAt frees that spendable
-  // back up. A live, still-running stream's hold has a future expiresAt and is
-  // untouched. Idempotent — re-running deletes nothing new.
-  let expiredHolds = 0;
+/**
+ * Delete holds past their expiresAt and report how many went. Holds from a crashed or
+ * abandoned call that never reached consumeCredits would otherwise reserve spend (and
+ * count against the free in-flight cap) forever; deleting them frees that spendable
+ * back up. A live, still-running call's hold has a future expiresAt and is untouched.
+ * Idempotent: re-running deletes nothing new. Never throws.
+ *
+ * The cron sweeps every expired hold (via backfillCredits). `userIds` narrows the sweep
+ * to those users' holds, for a caller that must not touch anyone else's (a test on a
+ * shared database); an empty list sweeps nothing rather than widening to every hold.
+ */
+export async function sweepExpiredHolds(opts: { now?: Date; userIds?: string[] } = {}): Promise<number> {
+  if (!isBillingEnabled()) return 0;
+  if (opts.userIds && opts.userIds.length === 0) return 0;
+  const now = opts.now ?? new Date();
+  const expired = lt(creditHolds.expiresAt, now);
   try {
     const swept = await db
       .delete(creditHolds)
-      .where(lt(creditHolds.expiresAt, now))
+      .where(opts.userIds ? and(expired, inArray(creditHolds.userId, opts.userIds)) : expired)
       .returning({ id: creditHolds.id, userId: creditHolds.userId });
-    expiredHolds = swept.length;
     // Reclaiming a stale hold raises that user's spendable back up — push the fresh
     // balance so the navbar recovers without a refresh. This is the backstop for a
     // call that was interrupted before settlement: its dangling reservation finally
     // clears here. One emit per distinct user. Fire-and-forget (void) so a slow or
     // unreachable realtime server (each emit self-times-out at 5s) never serializes
-    // its delay across users and stalls the pending/orphan reconciliation below;
+    // its delay across users and stalls the pending/orphan reconciliation after it;
     // the fan-out is bounded so a large sweep doesn't open one socket per user at once.
     const affected = [...new Set(swept.map((h) => h.userId))];
     void emitBalancesBestEffort(affected);
+    return swept.length;
   } catch (error) {
-    loggers.ai.debug('credit hold expiry sweep failed', { error: (error as Error).message });
+    loggers.ai.warn('credit hold expiry sweep failed', errorLogFields(error));
+    return 0;
   }
+}
+
+export async function backfillCredits(): Promise<BackfillResult> {
+  if (!isBillingEnabled()) return { retried: 0, orphans: 0, unattributed: 0, expiredHolds: 0 };
+
+  const now = new Date();
+  const cutoff = new Date(now.getTime() - GRACE_MS);
+
+  // Sweep abandoned holds FIRST, every user's (see sweepExpiredHolds).
+  const expiredHolds = await sweepExpiredHolds({ now });
 
   let retried = 0;
   let orphanCount = 0;
+  let unattributed = 0;
 
   // Fingerprint of the rows a pass fetched. If two consecutive passes fetch the
   // exact same set, nothing settled between them and re-running can't make
@@ -128,6 +150,13 @@ export async function backfillCredits(): Promise<BackfillResult> {
         // Recover the per-source markup (e.g. terminal's own floor) that the
         // original call never got to apply — see computeBackfillActions.
         source: aiUsageLogs.source,
+        // WAL-5 / WAL-9: the wallet the call was charged to and what it was for, recorded
+        // with the usage row, so recovery settles exactly there — an org pool's compute
+        // never lands on the recorded person's own wallet, nor counts toward their seat.
+        walletId: aiUsageLogs.walletId,
+        metadata: aiUsageLogs.metadata,
+        // SPEND-10: the automation the call ran for, so the re-settled spend is still listed as it.
+        automationRef: aiUsageLogs.automationRef,
       })
       .from(aiUsageLogs)
       .leftJoin(creditLedger, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
@@ -137,6 +166,8 @@ export async function backfillCredits(): Promise<BackfillResult> {
           gt(aiUsageLogs.cost, 0),
           lt(aiUsageLogs.timestamp, cutoff),
           notInArray(aiUsageLogs.provider, METERING_EXEMPT_PROVIDERS),
+          // WAL-6b: a row already found to name no wallet is terminal — never rescanned.
+          isNull(aiUsageLogs.unattributedAt),
         ),
       )
       .limit(BATCH);
@@ -150,6 +181,9 @@ export async function backfillCredits(): Promise<BackfillResult> {
         userId: o.userId,
         costDollars: o.cost ?? 0,
         source: o.source,
+        walletId: o.walletId,
+        metadata: o.metadata,
+        automationRef: o.automationRef,
       })),
       MARKUP_BPS_OVERRIDES_BY_SOURCE,
     );
@@ -159,18 +193,33 @@ export async function backfillCredits(): Promise<BackfillResult> {
         if (action.kind === 'retry_pending') {
           await settlePendingLedgerRow(action.ledgerId);
           retried++;
-        } else {
+        } else if (action.kind === 'apply_orphan') {
           await consumeCredits({
             aiUsageLogId: action.aiUsageLogId,
             userId: action.userId,
             costDollars: action.costDollars,
             markupBpsOverride: action.markupBpsOverride,
+            walletId: action.walletId,
+            spendKind: action.spendKind,
+            ...(action.fallbackFromWalletId ? { fallbackFromWalletId: action.fallbackFromWalletId } : {}),
+            ...(action.automationRef ? { automationRef: action.automationRef } : {}),
           });
           orphanCount++;
+        } else {
+          // WAL-6b fail closed: no wallet was chosen for this usage, so the sweep charges no one —
+          // never the recorded person by default. Marked terminal (counted on the admin billing
+          // panel for reconciliation) and reported once, here.
+          loggers.ai.error('billable AI usage names no wallet — not charged, left for reconciliation', new Error('unattributed usage'), {
+            aiUsageLogId: action.aiUsageLogId,
+            userId: action.userId,
+            costDollars: action.costDollars,
+          });
+          await markUsageUnattributed(action.aiUsageLogId, now);
+          unattributed++;
         }
       } catch (error) {
-        loggers.ai.debug('credit backfill action failed', {
-          error: (error as Error).message,
+        loggers.ai.warn('credit backfill action failed', {
+          ...errorLogFields(error),
           action,
         });
       }
@@ -197,5 +246,5 @@ export async function backfillCredits(): Promise<BackfillResult> {
     });
   }
 
-  return { retried, orphans: orphanCount, expiredHolds };
+  return { retried, orphans: orphanCount, unattributed, expiredHolds };
 }

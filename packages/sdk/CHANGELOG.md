@@ -2,6 +2,58 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **`agents.ask` takes `sessionDriveId`.** When you consult an agent that lives in another drive
+  from work in drive A, pass A: the consultation spends, and its usage is recorded, in A rather
+  than in the agent's drive, under A's org model policy. You must be able to use A (403
+  otherwise). Omit it and the consultation runs in the agent's drive, as before. Needs a server
+  on API contract 1.4.0; an older server ignores the field.
+- **`wallets.getDriveWallet`, `wallets.list` and `wallets.getConversationSource` — wallet reads
+  for a key.** `getDriveWallet({ driveId })` returns a drive's wallet as a consumer sees it: status,
+  remaining credit, your own remaining daily/monthly cap (null = no cap), whether donations are on,
+  and the drive's default spend source (`wallet` is null when the drive has none). `list({})` returns
+  what you spend from and fund: your own wallet and default source, the wallets of drives you can
+  open, your org seats, the drive wallets your wallet funds and your donations.
+  `getConversationSource({ conversationId, driveId? })` returns a conversation's stored choice, the
+  wallets you may pick there, and what the next AI call would spend (`resolved`, discriminated on
+  `kind`: `spend`, `refuse` or `skip`). `list` and `getConversationSource` need a key with no drive
+  restriction. Amounts are cents of credit value — render them as credits, not money.
+- **`wallets.getDriveSource({ driveId })`** returns what a new conversation in a drive would spend
+  from: the wallets you may pick there and the gate's decision now (`resolved`), nothing reserved.
+- **Reads only, by design.** An access key never moves money or changes a spend source: creating,
+  allocating, pausing, topping up or donating to a wallet, and setting a default or a
+  conversation's source, need a signed-in session, and the server refuses a key on each by name
+  (`mcp_token_cannot_move_money`, `mcp_token_cannot_change_spend_source`). None of them is an
+  operation here.
+- **A key always reads the consumer view, and the SDK holds the server to it.** The output schemas
+  stay open-world for additive fields, but a response that shows a key more than a consumer may see
+  — a `lead`/`org_admin` viewer, an action other than `view`, the org pool, the allocation or spend
+  by member, or a non-empty `funds.pools` — is refused as a `ResponseValidationError` rather than
+  passed through.
+- Organizations and wallets are not yet enabled on pagespace.ai; until they are, these reads answer
+  not found.
+
+## [2.5.0] — 2026-09-16
+
+### Added
+
+- **`workspaces.list` and `workspaces.exec` — shell access to agent workspace sandboxes.**
+  `list({ driveId? })` returns your workspaces (a drive-scoped token only sees the ones inside its
+  drives); `exec({ workspaceId, command, cwd?, timeoutMs? })` runs a command in the workspace's
+  sandbox, starting it on first use, and returns `{ stdout, stderr, exitCode, truncated }`. A
+  non-zero `exitCode` is a normal result, not a thrown error — only a refusal throws (not found,
+  plan, quota). It goes through the same gate, command policy, billing and audit as the in-app
+  agent's `bash` tool. The operation's own timeout (260s) outlasts the server's 200s run ceiling,
+  and it is never retried automatically.
+- **A drive-scoped key is authorized as itself, not as its owner.** `exec` requires the key's own
+  drive grant to allow drive-wide edit, so an owner's key downgraded to a view-only role cannot run
+  commands (it gets the same not-found). For such a key, `list` returns only workspaces in drives
+  the key can view, with `shells`, `conversations`, `nodes` and `targets` empty — those are resolved
+  as the owning user and are only returned to a session or an unscoped key.
+
 ## [2.4.0] — 2026-09-12
 
 ### Added

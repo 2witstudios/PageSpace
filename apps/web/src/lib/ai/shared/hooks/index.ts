@@ -11,6 +11,7 @@ export { useCacheMessageActions } from './useCacheMessageActions';
 export { useProviderSettings } from './useProviderSettings';
 export { useStreamingRegistration } from './useStreamingRegistration';
 export { useSendHandoff } from './useSendHandoff';
+export { useQueuedSends } from './useQueuedSends';
 export { useResumeBootstrap } from './useResumeBootstrap';
 export { useAnswerAskUser } from './useAnswerAskUser';
 export { useChatErrorCause } from './useChatErrorCause';

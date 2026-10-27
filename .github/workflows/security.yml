@@ -11,6 +11,10 @@ on:
       - 'apps/web/src/lib/ai/tools/sandbox-tools.ts'
       - 'apps/web/src/lib/ai/tools/sandbox-tools-runtime.ts'
       - 'apps/web/src/lib/ai/core/ai-tools.ts'
+      - 'packages/lib/src/agent-accounts/**'
+      - 'packages/db/src/schema/agent-accounts.ts'
+      - 'apps/web/src/lib/agent-accounts/**'
+      - 'apps/web/src/lib/ai/tools/http-request-tools.ts'
       - 'packages/lib/src/auth/**'
       - 'packages/lib/src/permissions/**'
       - 'packages/lib/src/repositories/**'
@@ -74,6 +78,11 @@ on:
       - 'packages/lib/src/services/app-hosting/**'
       - 'packages/lib/src/services/fly/**'
       - 'packages/db/src/schema/published-apps.ts'
+      # The browser worker's egress proxy is the network boundary under an
+      # agent-driven Chromium (SSRF, rebinding, header allowlists). Without this
+      # entry a PR touching only the proxy got no Security Tests and no CodeQL
+      # (CodeQL alert 350 surfaced on master only, blocking unrelated PRs).
+      - 'packages/browser-worker/**'
   pull_request:
     # BASE branches, not head. This branch listed itself here and it bought
     # nothing: its PR targets `master`, which is already listed, so the suite
@@ -94,6 +103,10 @@ on:
       - 'apps/web/src/lib/ai/tools/sandbox-tools.ts'
       - 'apps/web/src/lib/ai/tools/sandbox-tools-runtime.ts'
       - 'apps/web/src/lib/ai/core/ai-tools.ts'
+      - 'packages/lib/src/agent-accounts/**'
+      - 'packages/db/src/schema/agent-accounts.ts'
+      - 'apps/web/src/lib/agent-accounts/**'
+      - 'apps/web/src/lib/ai/tools/http-request-tools.ts'
       - 'packages/lib/src/auth/**'
       - 'packages/lib/src/permissions/**'
       - 'packages/lib/src/repositories/**'
@@ -156,12 +169,25 @@ on:
       - 'packages/lib/src/services/app-hosting/**'
       - 'packages/lib/src/services/fly/**'
       - 'packages/db/src/schema/published-apps.ts'
+      # The browser worker's egress proxy is the network boundary under an
+      # agent-driven Chromium (SSRF, rebinding, header allowlists). Without this
+      # entry a PR touching only the proxy got no Security Tests and no CodeQL
+      # (CodeQL alert 350 surfaced on master only, blocking unrelated PRs).
+      - 'packages/browser-worker/**'
   # Allow manual trigger
   workflow_dispatch:
   # Run on schedule for continuous security monitoring
   schedule:
     # Run at 6:00 UTC every day
     - cron: '0 6 * * *'
+
+# A newer push to the same PR makes the older run irrelevant, so cancel it.
+# Only pull_request runs share a group (keyed on the PR number). Every push,
+# schedule and manual run gets its own group (run_id), so a master run is never
+# cancelled or replaced by a later one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   security-tests:
@@ -170,7 +196,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:17-alpine
+        image: mirror.gcr.io/library/postgres:17-alpine
         env:
           POSTGRES_DB: pagespace_test
           POSTGRES_USER: test
@@ -192,8 +218,11 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # Every workspace package the web app imports (db, lib, browser-worker, editor, sdk): the web auth
+      # suites below load modules that reach @pagespace/browser-worker's built exports, so building only
+      # db and lib left them failing to resolve it.
       - name: Build workspace packages
-        run: bun run --filter '@pagespace/db' build && bun run --filter '@pagespace/lib' build
+        run: bun run build --filter='web^...'
 
       - name: Run database migrations
         run: bun run db:migrate
@@ -346,6 +375,19 @@ jobs:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test
 
+      # A GUEST drive_members row (a redeemed page share link) must carry only
+      # its page grants. These suites also run in ci.yml's unit and
+      # test:integration steps; naming them here means an exclude-list edit
+      # there cannot leave the guest boundary with no runner.
+      - name: Run page-share-link GUEST boundary tests
+        run: |
+          bun run --filter '@pagespace/lib' test:db -- \
+            src/permissions/__tests__/share-link-guest.integration.test.ts \
+            src/permissions/__tests__/accessible-page-ids-agreement.integration.test.ts
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          NODE_ENV: test
+
       - name: Run auth service tests (magic link, passkey)
         run: |
           bun run --filter '@pagespace/lib' test:db -- \
@@ -431,7 +473,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Run OSV vulnerability scan
-        uses: google/osv-scanner-action/osv-scanner-action@6e4298ebc4db23e847df9b2e2de2939d6f066c67
+        uses: google/osv-scanner-action/osv-scanner-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36
         with:
           scan-args: |-
             --recursive
@@ -451,7 +493,7 @@ jobs:
           fetch-depth: 0
 
       - name: TruffleHog Secret Scan
-        uses: trufflesecurity/trufflehog@v3.97.4
+        uses: trufflesecurity/trufflehog@v3.99.2
         with:
           path: ./
           base: ${{ github.event.before }}
@@ -472,6 +514,9 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: TypeScript type checking
+        # The same heap the ci workflow gives its web jobs: the web typecheck exceeds Node's default and is OOM-killed (137).
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
         run: bun run typecheck
 
       - name: ESLint security rules
@@ -488,13 +533,13 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4.37.9
+        uses: github/codeql-action/init@v4.39.0
         with:
           languages: javascript-typescript
           queries: security-extended
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v4.37.9
+        uses: github/codeql-action/analyze@v4.39.0
         with:
           category: "/language:javascript-typescript"
 

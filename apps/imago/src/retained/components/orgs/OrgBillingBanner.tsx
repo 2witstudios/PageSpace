@@ -1,0 +1,169 @@
+'use client';
+
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTheme } from '@/retained-adapters/theme';
+import { AlertTriangle, Info, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
+import type { OrgBillingNotice } from '@pagespace/lib/organizations/status-core';
+import { Button } from '@/retained/components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/retained/components/ui/dialog';
+import { StripeProvider } from '@/retained/components/billing/StripeProvider';
+import { FeedbackDialog } from '@/retained/components/shared/FeedbackDialog';
+import { openOrgBillingPortal, startOrgSubscription } from '@/retained/lib/orgs/org-api';
+import { ORG_ERROR_COPY, orgErrorCode, orgErrorMessage } from '@/retained/lib/orgs/org-error-copy';
+import { cn } from '@/retained/lib/utils/index';
+import { documentAllowsPaymentElement, paymentRouteFor } from '@/retained/lib/orgs/payment-routes';
+import { OrgPaymentForm } from './OrgPaymentForm';
+
+/** Opens the org's Stripe billing portal (it returns to /orgs/[orgId]/settings). */
+export async function goToOrgBillingPortal(orgId: string): Promise<void> {
+  try {
+    const { url } = await openOrgBillingPortal(orgId);
+    window.location.assign(url);
+  } catch (error) {
+    toast.error(orgErrorMessage(error, 'The billing portal could not be opened. Try again.'));
+  }
+}
+
+/**
+ * The lapse banners (SEAT-9 / D-OW-33, canvas OrgLapsed) on every org surface, from GET
+ * /api/orgs/[orgId] billingNotice: reactivate for the Owner and Admins, read_only
+ * for Members. Reactivating pays what is owed with the Payment Element (POST billing/subscription).
+ * A subscription PageSpace cannot activate ([D-OW-44] `billing_requires_support`, including an
+ * active one nothing ever funded) is never reported as reactivated: the banner says so and opens
+ * the in-app support channel instead. A payment already in whose funding proof the webhook is
+ * still recording (`funding_pending`, [D-OW-30]) shows activation finishing — never success; the
+ * page's org:changed listener (useOrgRealtime) refreshes the notice away once the proof lands.
+ */
+export function OrgBillingBanner({ orgId, orgName, notice, onReactivated, className = 'mb-8' }: {
+  orgId: string;
+  orgName: string;
+  notice: OrgBillingNotice | undefined;
+  onReactivated?: () => void;
+  /** Spacing around the banner where it is placed. */
+  className?: string;
+}) {
+  const { resolvedTheme } = useTheme();
+  const [busy, setBusy] = useState(false);
+  const [clientSecret, setClientSecret] = useState<string | null>(null);
+  const [needsSupport, setNeedsSupport] = useState(false);
+  const [activationPending, setActivationPending] = useState(false);
+  const [supportOpen, setSupportOpen] = useState(false);
+  const stripeOptions = useMemo(
+    () => (clientSecret ? { clientSecret, appearance: { theme: (resolvedTheme === 'dark' ? 'night' : 'stripe') as 'night' | 'stripe' } } : undefined),
+    [clientSecret, resolvedTheme],
+  );
+
+  const autoStarted = useRef(false);
+
+  const reactivate = async () => {
+    // The Payment Element only loads on a document served without COEP (an org's Plan & seats page).
+    if (!documentAllowsPaymentElement()) {
+      window.location.assign(paymentRouteFor({ kind: 'reactivate', orgId }));
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await startOrgSubscription(orgId);
+      if (res.payment.kind === 'confirm_payment') setClientSecret(res.payment.clientSecret);
+      else {
+        // Nothing to pay. `active`: the notice was stale. `funding_pending`: the payment is in and
+        // org:changed arrives when the webhook records it. Either way one refresh, no success claim.
+        setActivationPending(res.activation === 'funding_pending');
+        onReactivated?.();
+      }
+    } catch (error) {
+      if (orgErrorCode(error) === 'billing_requires_support') setNeedsSupport(true);
+      else toast.error(orgErrorMessage(error, 'Reactivation could not start. Try again.'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Arrived from Reactivate on another org page: start paying here.
+  useEffect(() => {
+    if (autoStarted.current || notice?.kind !== 'reactivate') return;
+    if (new URLSearchParams(window.location.search).get('reactivate') !== '1') return;
+    autoStarted.current = true;
+    void reactivate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notice?.kind]);
+
+  if (!notice) return null;
+
+  const tone = notice.kind === 'reactivate' ? 'border-destructive/30 bg-destructive/5' : 'border-border bg-card';
+  const Icon = notice.kind === 'read_only' ? Info : AlertTriangle;
+
+  return (
+    <div role="status" className={cn('flex items-start gap-2.5 rounded-xl border px-3.5 py-3', className, tone)}>
+      <Icon className={cn('mt-0.5 h-4 w-4 flex-shrink-0', notice.kind === 'reactivate' ? 'text-destructive' : 'text-muted-foreground')} />
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        {notice.kind === 'reactivate' ? (
+          <>
+            <span className="text-sm font-medium">{orgName} is unpaid and read-only</span>
+            <span className="text-xs text-foreground/80">
+              Billing needs attention. Every drive stays readable. Spending credits, inviting, publishing, and loosening policies are paused until you reactivate. Restricting access still works.
+            </span>
+            {needsSupport ? (
+              <span role="alert" className="text-xs font-medium text-destructive">
+                {ORG_ERROR_COPY.billing_requires_support}
+              </span>
+            ) : null}
+            {activationPending ? (
+              <span className="flex items-center gap-1.5 text-xs font-medium text-foreground/80">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Payment received — activation is finishing; this page updates automatically.
+              </span>
+            ) : null}
+            <div className="mt-1.5 flex flex-wrap gap-2">
+              {needsSupport ? (
+                <Button size="sm" onClick={() => setSupportOpen(true)}>
+                  Contact support
+                </Button>
+              ) : activationPending ? null : (
+                <Button size="sm" onClick={() => void reactivate()} disabled={busy}>
+                  {busy ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+                  Reactivate
+                </Button>
+              )}
+              <Button size="sm" variant="ghost" onClick={() => void goToOrgBillingPortal(orgId)}>
+                Billing portal
+              </Button>
+            </div>
+          </>
+        ) : (
+          <>
+            <span className="text-sm font-medium">{orgName} is read-only</span>
+            <span className="text-xs text-foreground/80">
+              You can open and read every drive you could before. AI, invites, and publishing are paused until the Owner or an Admin reactivates the organization.
+            </span>
+          </>
+        )}
+      </div>
+      <FeedbackDialog isOpen={supportOpen} onClose={() => setSupportOpen(false)} />
+      <Dialog open={clientSecret !== null} onOpenChange={(open) => !open && setClientSecret(null)}>
+        <DialogContent className="sm:max-w-[560px]">
+          <DialogHeader>
+            <DialogTitle>Reactivate {orgName}</DialogTitle>
+            <DialogDescription>Pay what is owed to turn spending, inviting and publishing back on.</DialogDescription>
+          </DialogHeader>
+          {clientSecret ? (
+            <StripeProvider options={stripeOptions}>
+              <OrgPaymentForm
+                orgId={orgId}
+                submitLabel="Pay and reactivate"
+                backLabel="Cancel"
+                onBack={() => setClientSecret(null)}
+                onPaid={() => {
+                  setClientSecret(null);
+                  toast.success('Payment received. Reactivating…');
+                  onReactivated?.();
+                }}
+              />
+            </StripeProvider>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

@@ -29,7 +29,8 @@ vi.mock('drizzle-orm', () => ({
 
 // Mock the migration pool (db.ts's getMigrationPool) so no real PG pool is created
 const mockPoolEnd = vi.fn().mockResolvedValue(undefined);
-const mockGetMigrationPool = vi.fn(() => ({ end: mockPoolEnd }));
+const mockPoolQuery = vi.fn();
+const mockGetMigrationPool = vi.fn(() => ({ end: mockPoolEnd, query: mockPoolQuery }));
 
 vi.mock('../db', () => ({
   getMigrationPool: mockGetMigrationPool,
@@ -59,6 +60,7 @@ describe('migrate.ts', () => {
     consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
+    mockPoolQuery.mockResolvedValue({ rows: [{ present: false }] });
     // Default: no existing migrations in DB
     mockExecute.mockResolvedValue({ rows: [] });
     // Default: no pending migrations
@@ -66,6 +68,7 @@ describe('migrate.ts', () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
     vi.resetModules();
     mockExecute.mockReset();
@@ -73,6 +76,7 @@ describe('migrate.ts', () => {
     mockTxExecute.mockReset();
     mockReadMigrationFiles.mockReset();
     mockGetMigrationPool.mockClear();
+    mockPoolQuery.mockReset();
     mockPoolEnd.mockReset().mockResolvedValue(undefined);
   });
 
@@ -82,18 +86,39 @@ describe('migrate.ts', () => {
     ]);
 
     await import('../migrate');
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => expect(processExitSpy).toHaveBeenCalled());
 
     expect(mockReadMigrationFiles).toHaveBeenCalledTimes(1);
     expect(mockTransaction).toHaveBeenCalledTimes(1);
     expect(processExitSpy).toHaveBeenCalledWith(0);
   });
 
+  it('refuses a legacy billing database unless the offline cutover is explicit', async () => {
+    vi.stubEnv('BILLING_CUTOVER_OFFLINE', '');
+    mockPoolQuery.mockResolvedValue({ rows: [{ present: true }] });
+    await import('../migrate');
+    await vi.waitFor(() => expect(processExitSpy).toHaveBeenCalledWith(1));
+    expect(mockTransaction).not.toHaveBeenCalled();
+    expect(mockPoolEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('migrates a legacy billing database after the offline cutover is explicit', async () => {
+    vi.stubEnv('BILLING_CUTOVER_OFFLINE', 'true');
+    mockPoolQuery.mockResolvedValue({ rows: [{ present: true }] });
+    mockReadMigrationFiles.mockReturnValue([
+      { sql: ['ALTER TABLE test;'], folderMillis: 1000, hash: 'offline' },
+    ]);
+    await import('../migrate');
+    await vi.waitFor(() => expect(processExitSpy).toHaveBeenCalledWith(0));
+    expect(mockTransaction).toHaveBeenCalledTimes(1);
+    expect(mockPoolEnd).toHaveBeenCalledTimes(1);
+  });
+
   it('runs on the dedicated migration pool (getMigrationPool), not the app-throttled db, and ends it before exiting', async () => {
     mockReadMigrationFiles.mockReturnValue([]);
 
     await import('../migrate');
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => expect(processExitSpy).toHaveBeenCalled());
 
     expect(mockGetMigrationPool).toHaveBeenCalledTimes(1);
     expect(mockPoolEnd).toHaveBeenCalledTimes(1);
@@ -103,7 +128,7 @@ describe('migrate.ts', () => {
     mockReadMigrationFiles.mockReturnValue([]);
 
     await import('../migrate');
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => expect(processExitSpy).toHaveBeenCalled());
 
     expect(mockReadMigrationFiles).toHaveBeenCalledWith({ migrationsFolder: 'drizzle' });
   });
@@ -112,7 +137,7 @@ describe('migrate.ts', () => {
     mockReadMigrationFiles.mockReturnValue([]);
 
     await import('../migrate');
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => expect(processExitSpy).toHaveBeenCalled());
 
     expect(consoleLogSpy).toHaveBeenCalledWith(expect.stringContaining('Running migrations'));
   });
@@ -123,7 +148,7 @@ describe('migrate.ts', () => {
     delete process.env.DATABASE_URL;
 
     await import('../migrate');
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => expect(processExitSpy).toHaveBeenCalled());
 
     if (originalDatabaseUrl !== undefined) {
       process.env.DATABASE_URL = originalDatabaseUrl;
@@ -140,7 +165,7 @@ describe('migrate.ts', () => {
     mockExecute.mockRejectedValueOnce(migrationError);
 
     await import('../migrate');
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => expect(processExitSpy).toHaveBeenCalled());
 
     expect(consoleErrorSpy).toHaveBeenCalledWith(expect.any(Error));
     expect(processExitSpy).toHaveBeenCalledWith(1);
@@ -151,7 +176,7 @@ describe('migrate.ts', () => {
     mockExecute.mockRejectedValueOnce(migrationError);
 
     await import('../migrate');
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => expect(processExitSpy).toHaveBeenCalled());
 
     expect(mockPoolEnd).toHaveBeenCalledTimes(1);
   });

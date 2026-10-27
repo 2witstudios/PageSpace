@@ -57,6 +57,7 @@ import {
   type SpriteHolderProvisionIntent,
 } from '../../agent-workspaces/agent-workspace-sprite';
 import { makeSpriteHost, type FakeSpriteHost } from '../../agent-workspaces/__tests__/fakes';
+import { credentialActor } from '../../../permissions/access-actor';
 
 /** >= 32 chars — the key derivations refuse anything shorter. */
 const SECRET = 'env-session-integration-secret-key-0123456789';
@@ -64,6 +65,8 @@ const SECRET = 'env-session-integration-secret-key-0123456789';
 const payerId = createId();
 const driveId = createId();
 const otherDriveId = createId();
+/** The owner's Home drive — where `spawnAgentSession` files a driveless (global-assistant) session. */
+const homeDriveId = createId();
 /** A SECOND real user — so "not the machine's owner" is a real FK, not a string that happens to differ. */
 const otherUserId = createId();
 /** Every sandbox name this file lets reach the DB — the reclaim outbox is FK-less, so teardown sweeps it by name. */
@@ -115,7 +118,7 @@ async function ensureForSession(row: AgentSessionRecord, host: FakeSpriteHost) {
   return ensureAgentSessionSandbox({
     row: { ...row, workspaceId: row.id },
     intent: 'ensure',
-    actor: { userId: payerId, tenantId: payerId },
+    actor: { access: credentialActor(payerId, null), tenantId: payerId },
     deps: {
       store: sessionStore,
       host: host.host,
@@ -147,7 +150,7 @@ async function seedEnv(name = `env-${createId().slice(0, 8)}`, inDrive = driveId
 /** The spawn, with its result union intact — for the cases where refusal IS the assertion. */
 async function trySpawn(input: { envId: string | null; driveId?: string | null; requesterId?: string }) {
   return spawnAgentSession({
-    ownerId: input.requesterId ?? payerId,
+    owner: credentialActor(input.requesterId ?? payerId, null),
     driveId: input.driveId === undefined ? driveId : input.driveId,
     envId: input.envId,
     deps: {
@@ -160,17 +163,21 @@ async function trySpawn(input: { envId: string | null; driveId?: string | null; 
       // back from the store, rather than assuming the session's: leaf D lets a
       // local env live in a different drive from the session binding it, so
       // hardcoding one here would hide exactly the case these rows cover.
-      gateLocalEnvBind: async ({ envId, requesterId }) => {
+      gateLocalEnvBind: async ({ envId, requester }) => {
         const env = await envStore.findById(envId);
         return gateLocalEnvForRequester({
           row: { id: envId, driveId: env?.driveId ?? driveId, substrate: 'local' },
-          requesterId,
+          requester,
           deps: { store: envStore, resolvePayer: async () => ({ payerId, tier: 'pro' }), localEnvsEnabled: true },
         });
       },
       // The REAL store, so the drive-agreement check reads a real row rather
       // than a fixture that could disagree with one.
       findEnv: async (id) => envStore.findById(id),
+      // A driveless spawn is filed under the owner's Home drive. A global spawn
+      // into a SPRITE env is refused before this is ever reached; one into the
+      // owner's own LOCAL machine binds and lands here.
+      resolveHomeDriveId: async () => homeDriveId,
     },
   });
 }
@@ -205,6 +212,7 @@ beforeAll(async () => {
         ownerId: payerId,
         updatedAt: new Date(),
       },
+      { id: homeDriveId, name: 'Home', slug: `env-ses-home-${homeDriveId}`, ownerId: payerId, updatedAt: new Date() },
     ])
     .onConflictDoNothing();
 });
@@ -223,7 +231,7 @@ beforeEach(wipe);
 
 afterAll(async () => {
   await wipe();
-  await db.delete(drives).where(inArray(drives.id, [driveId, otherDriveId]));
+  await db.delete(drives).where(inArray(drives.id, [driveId, otherDriveId, homeDriveId]));
   await db.delete(users).where(inArray(users.id, [payerId, otherUserId]));
 });
 
@@ -244,7 +252,7 @@ describe('binding a session to an environment', () => {
     // this falls out of the same comparison with no branch of its own. Leaf D
     // relaxed that comparison for LOCAL envs only, where [D-6]'s owner-only
     // bind gate is the ownership check; the database CHECK that used to say
-    // the same thing is gone (0296), so this service-level refusal is now the
+    // the same thing is gone (0382), so this service-level refusal is now the
     // whole of the guarantee for this substrate.
     const envId = await seedEnv();
     expect(await trySpawn({ envId, driveId: null })).toEqual({ ok: false, reason: 'env_not_found' });
@@ -601,7 +609,7 @@ describe('the database\'s own guard', () => {
   });
 
   it('should ACCEPT an env-bound session with no drive — the CHECK is gone, and the guarantee moved to spawnAgentSession (leaf D)', async () => {
-    // `agent_workspaces_env_needs_drive_check` was dropped in 0296 so a
+    // `agent_workspaces_env_needs_drive_check` was dropped in 0382 so a
     // driveless global-assistant session can bind the user's OWN machine,
     // where [D-6]'s owner-only bind gate is the real ownership check. The
     // database no longer forbids the shape; `spawnAgentSession` is what
@@ -718,7 +726,9 @@ describe('spawnAgentSession into a LOCAL env — the bind gate, for real (C1)', 
     const result = await trySpawn({ envId, driveId: null });
     expect(result.ok, JSON.stringify(result)).toBe(true);
     if (!result.ok) return;
-    expect(result.session.driveId).toBeNull();
+    // Driveless in MEANING: the row is filed under the owner's Home drive,
+    // which is owner-only, not the env's drive.
+    expect(result.session.driveId).toBe(homeDriveId);
     expect(result.session.envId).toBe(envId);
   });
 });

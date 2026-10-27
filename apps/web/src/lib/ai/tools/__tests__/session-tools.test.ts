@@ -9,6 +9,7 @@ import {
 } from '../session-tools';
 import { MAX_AGENT_DEPTH } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 import type { ToolExecutionContext } from '../../core/types';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const USER_ID = 'user-1';
 const CALLER_CONVERSATION = 'conv-caller';
@@ -34,10 +35,11 @@ const PANES = { paneCount: 2, nodeId: 'pane-shell' };
 
 function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
   return {
-    findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID, driveId: null })),
+    findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID, driveId: null, name: 'Workspace' })),
     // The layout family's session-access gate (security review HIGH 2).
     checkWorkspaceAccess: vi.fn(async () => ({ allowed: true })),
     checkWorkspaceEndAccess: vi.fn(async () => ({ allowed: true })),
+    renameWorkspace: vi.fn(async ({ name }: { name: string }) => ({ ok: true as const, name })),
     listWorkspaceWorkers: vi.fn(async () => ({ sandbox: 'running' as const, workers: [], shells: [] })),
     listOwnWorkspaces: vi.fn(async () => []),
     listSharedWorkspaces: vi.fn(async () => []),
@@ -76,7 +78,7 @@ function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
 function contextOptions(overrides: Partial<ToolExecutionContext> = {}): { experimental_context: ToolExecutionContext } {
   return {
     experimental_context: {
-      userId: USER_ID,
+      userId: USER_ID, accessActor: credentialActor(USER_ID, null),
       conversationId: CALLER_CONVERSATION,
       chatSource: { type: 'page', agentPageId: CALLER_AGENT, agentTitle: 'Agent' },
       ...overrides,
@@ -95,8 +97,8 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe('the fourteen-tool surface', () => {
-  it('should export EXACTLY the fourteen tools of the three verb families', () => {
+describe('the fifteen-tool surface', () => {
+  it('should export EXACTLY the fifteen tools of the three verb families', () => {
     const tools = createSessionTools(makeDeps());
     // Workers + shells (frozen since Phase 1) plus the LAYOUT family that
     // issue #2208 added once the pane grid became relational entities.
@@ -116,6 +118,7 @@ describe('the fourteen-tool surface', () => {
       'move_pane',
       'read_session',
       'read_shell',
+      'rename_workspace',
       'resize_pane',
       'send_session',
       'send_shell',
@@ -141,6 +144,10 @@ describe('list_sessions', () => {
     expect(result).toEqual({
       success: true,
       workspaceId: WORKSPACE_ID,
+      // The caller's own workspace reports its label too — every other section
+      // already carried one, so an agent could read every name except the one
+      // it was standing in.
+      name: 'Workspace',
       ...listing,
       otherWorkspaces: [],
       sharedWorkspaces: [],
@@ -158,11 +165,11 @@ describe('list_sessions', () => {
     // — it is already the top-level detail view (and a caller spawned into a
     // shared workspace has a current workspace they do not own).
     expect(deps.listOwnWorkspaces).toHaveBeenCalledWith({
-      userId: USER_ID,
+      actor: expect.objectContaining({ userId: USER_ID }),
       excludeWorkspaceId: WORKSPACE_ID,
     });
     expect(deps.listSharedWorkspaces).toHaveBeenCalledWith({
-      userId: USER_ID,
+      actor: expect.objectContaining({ userId: USER_ID }),
       excludeWorkspaceId: WORKSPACE_ID,
     });
   });
@@ -216,7 +223,7 @@ describe('spawn_session', () => {
       conversationId: 'new-session-id',
       // Default placement: the worker joins its SPAWNER's workspace.
       callerConversationId: CALLER_CONVERSATION,
-      ownerId: USER_ID,
+      actor: expect.objectContaining({ userId: USER_ID }),
       agentPageId: CALLER_AGENT,
       name: 'worker',
       workspace: undefined,
@@ -453,10 +460,10 @@ describe('cross-member reach: a drive member addresses another member\'s worker'
 
     expect(sent.success).toBe(true);
     expect(deps.dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({ conversationId: 'conv-theirs', userId: USER_ID }),
+      expect.objectContaining({ conversationId: 'conv-theirs', actor: expect.objectContaining({ userId: USER_ID }) }),
     );
     expect(deps.dispatch).not.toHaveBeenCalledWith(
-      expect.objectContaining({ userId: 'other-member' }),
+      expect.objectContaining({ actor: expect.objectContaining({ userId: 'other-member' }) }),
     );
   });
 
@@ -803,7 +810,7 @@ describe('spawn_shell', () => {
     expect(order).toEqual(['ensure', 'spawn']);
     expect(deps.ensureOwnSessionSandbox).toHaveBeenCalledWith({
       conversationId: CALLER_CONVERSATION,
-      userId: USER_ID,
+      actor: expect.objectContaining({ userId: USER_ID }),
       agentPageId: CALLER_AGENT,
     });
   });
@@ -859,7 +866,7 @@ describe('send_shell / read_shell — shells target only the CALLER\'s own sessi
     const tools = createSessionTools(deps);
     const result = await run(tools.send_shell, { shellId: SHELL.shellId, keystrokes: 'ls\n' }, contextOptions());
     expect(result).toEqual(expect.objectContaining({ success: true, delivered: true }));
-    expect(deps.shellIo.send).toHaveBeenCalledWith({ shellId: SHELL.shellId, keystrokes: 'ls\n', userId: USER_ID });
+    expect(deps.shellIo.send).toHaveBeenCalledWith({ shellId: SHELL.shellId, keystrokes: 'ls\n', actor: expect.objectContaining({ userId: USER_ID }) });
   });
 
   it('should read scrollback, threading the cold-tail record through', async () => {
@@ -870,7 +877,7 @@ describe('send_shell / read_shell — shells target only the CALLER\'s own sessi
     const tools = createSessionTools(deps);
     const result = await run(tools.read_shell, { shellId: SHELL.shellId, tail: 50 }, contextOptions());
     expect(result).toEqual(expect.objectContaining({ success: true, output: 'hello' }));
-    expect(deps.shellIo.read).toHaveBeenCalledWith({ shellId: SHELL.shellId, lines: 50, userId: USER_ID, cold });
+    expect(deps.shellIo.read).toHaveBeenCalledWith({ shellId: SHELL.shellId, lines: 50, actor: expect.objectContaining({ userId: USER_ID }), cold });
   });
 });
 
@@ -882,7 +889,7 @@ describe('kill_shell', () => {
     expect(result).toEqual({ success: true, shellId: SHELL.shellId, killed: true, paneNodeId: 'pane-shell', paneCount: 2 });
     // The pane went with the process, in the kill's own write — so this is the
     // acting HUMAN's id, never the model's word for one (issue #2462).
-    expect(deps.killShell).toHaveBeenCalledWith({ shellId: SHELL.shellId, actingUserId: USER_ID });
+    expect(deps.killShell).toHaveBeenCalledWith({ shellId: SHELL.shellId, actor: expect.objectContaining({ userId: USER_ID }) });
   });
 
   it('given an already-gone shell, should SUCCEED — teardown callers retry', async () => {
@@ -1054,7 +1061,7 @@ describe('a drive-scoped credential is held to its ceiling, whoever owns the wor
     // sessionId and agent binding, every shell, live sandbox status) for a drive
     // it may not touch.
     const deps = makeDeps({
-      findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID, driveId: 'drive-out-of-scope' })),
+      findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID, driveId: 'drive-out-of-scope', name: 'Workspace' })),
       listOwnWorkspaces: vi.fn(async () => []),
       listSharedWorkspaces: vi.fn(async () => []),
     });
@@ -1091,7 +1098,7 @@ describe('a drive-scoped credential is held to its ceiling, whoever owns the wor
     // scope — with none, `ensure` mints in the agent's own drive, which the
     // page-scope check upstream already admitted.
     const deps = makeDeps({
-      findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID, driveId: 'drive-out-of-scope' })),
+      findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID, driveId: 'drive-out-of-scope', name: 'Workspace' })),
     });
 
     const result = await run(createSessionTools(deps).spawn_shell, {}, contextOptions(scoped));
@@ -1103,7 +1110,7 @@ describe('a drive-scoped credential is held to its ceiling, whoever owns the wor
 
   it('the pane grid is unreachable when the bound workspace is out of scope', async () => {
     const deps = makeDeps({
-      findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID, driveId: 'drive-out-of-scope' })),
+      findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID, driveId: 'drive-out-of-scope', name: 'Workspace' })),
     });
 
     const result = await run(createSessionTools(deps).list_panes, {}, contextOptions(scoped));
@@ -1220,6 +1227,56 @@ describe('spawn_session: honouring the agent\'s configured tool surface', () => 
     expect(deps.dispatch).toHaveBeenCalled();
   });
 
+  /**
+   * The ignored-workspaceName note must SURVIVE the tool-surface pass.
+   *
+   * Both surface branches used to ASSIGN this list, which was harmless only
+   * while they were its sole writer. Once an ignored `workspaceName` started
+   * being recorded before them, an assignment silently swallowed it — so the
+   * common page-agent path promised a note and delivered none, leaving the
+   * model free to believe the existing workspace had been renamed (review, P2).
+   */
+  it('given workspaceName on a non-new spawn AND surface notes, should report BOTH', async () => {
+    const deps = makeDeps({
+      describeAgentToolSurface: vi.fn(async () => ({
+        configured: ['read_page'],
+        granted: ['read_page'],
+        blocked: [],
+        conditional: [],
+        deferred: [],
+        notes: ['no tool named read_file'],
+      })),
+    });
+    const tools = createSessionTools(deps);
+    const result = await run(
+      tools.spawn_session,
+      { name: 'w', prompt: 'p', agent: 'scraper-runner', workspaceName: 'ignored label' },
+      contextOptions(),
+    );
+
+    const warnings = result.toolSurfaceWarnings as string[];
+    expect(warnings.some((w) => w.includes('workspaceName was ignored'))).toBe(true);
+    expect(warnings).toContain('no tool named read_file');
+  });
+
+  it('given workspaceName on a non-new spawn AND an unreadable surface, should report BOTH', async () => {
+    const deps = makeDeps({
+      describeAgentToolSurface: vi.fn(async () => {
+        throw new Error('database unavailable');
+      }),
+    });
+    const tools = createSessionTools(deps);
+    const result = await run(
+      tools.spawn_session,
+      { name: 'w', prompt: 'p', agent: 'scraper-runner', workspaceName: 'ignored label' },
+      contextOptions(),
+    );
+
+    const warnings = result.toolSurfaceWarnings as string[];
+    expect(warnings.some((w) => w.includes('workspaceName was ignored'))).toBe(true);
+    expect(warnings.some((w) => w.includes('not checked'))).toBe(true);
+  });
+
   it('given the check itself failing, should still spawn — and say the surface was NOT checked', async () => {
     const deps = makeDeps({
       describeAgentToolSurface: vi.fn(async () => {
@@ -1256,7 +1313,7 @@ describe('spawn_session: honouring the agent\'s configured tool surface', () => 
     );
     // Asked of the workspace the worker ACTUALLY landed in, not the caller's.
     expect(deps.describeWorkerComputeShortfall).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceId: WORKSPACE_ID, userId: USER_ID }),
+      expect.objectContaining({ workspaceId: WORKSPACE_ID, actor: expect.objectContaining({ userId: USER_ID }) }),
     );
   });
 

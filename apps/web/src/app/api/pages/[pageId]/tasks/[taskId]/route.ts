@@ -16,8 +16,10 @@ import { syncTaskDueDateTrigger, cancelTaskDueDateTrigger, fireCompletionTrigger
 import { checkSubTasksComplete, SUBTASKS_INCOMPLETE_STATUS } from '@/lib/tasks/completion-guard';
 import { reorderTaskPeers } from '@/lib/ai/tools/task-helpers';
 import { resolveTimezone } from '@/lib/ai/core/personalization-utils';
-import { isNaiveISODatetime, parseDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
+import { isNaiveISODatetime } from '@/lib/ai/core/timestamp-utils';
+import { parseTaskDateInput, isStartAfterDue, START_AFTER_DUE_ERROR } from '@/lib/tasks/task-dates';
 import { decryptTaskUserRelationsOne } from '@/lib/tasks/decrypt-task-relations';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -42,9 +44,9 @@ export async function PATCH(
   // Check edit permission
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({
       error: 'You need edit permission to update tasks',
-    }, { status: 403 });
+    }, { status: 403 }));
   }
 
   // Look up task list for status config validation and broadcast metadata
@@ -65,7 +67,7 @@ export async function PATCH(
   }
 
   const body = await req.json();
-  const { title, status, priority, assigneeId, assigneeAgentId, assigneeIds, dueDate, position, note, timezone, agentTrigger } = body;
+  const { title, status, priority, assigneeId, assigneeAgentId, assigneeIds, dueDate, startDate, position, note, timezone, agentTrigger } = body;
 
   // Build update object
   const updates: Partial<typeof taskItems.$inferInsert> = {};
@@ -208,19 +210,38 @@ export async function PATCH(
   // zone, and the trigger workflow below must schedule against the very same
   // instant this write stores (#2404). An absolute due date needs no zone, so
   // the profile lookup stays skipped in the common case.
-  const dueDateNeedsTimezone = typeof dueDate === 'string' && isNaiveISODatetime(dueDate);
+  const dueDateNeedsTimezone = (typeof dueDate === 'string' && isNaiveISODatetime(dueDate))
+    || (typeof startDate === 'string' && isNaiveISODatetime(startDate));
   const resolvedTimezone = (agentTrigger || dueDateNeedsTimezone)
     ? await resolveTimezone(typeof timezone === 'string' ? timezone : null, userId)
     : 'UTC';
   // Only a string can be naive. Anything else — an epoch number, say — keeps the
   // prior `new Date()` behaviour instead of being stringified into an Invalid
   // Date; this route parses an unvalidated body, so that input is reachable.
-  const parsedDueDate = dueDate
-    ? (typeof dueDate === 'string' ? parseDatetimeInTimezone(dueDate, resolvedTimezone) : new Date(dueDate))
-    : null;
+  const dueDateResult = parseTaskDateInput(dueDate, resolvedTimezone);
+  if (!dueDateResult.ok) {
+    return NextResponse.json({ error: 'Invalid due date' }, { status: 400 });
+  }
+  const parsedDueDate = dueDateResult.value;
+  const startDateResult = parseTaskDateInput(startDate, resolvedTimezone);
+  if (!startDateResult.ok) {
+    return NextResponse.json({ error: 'Invalid start date' }, { status: 400 });
+  }
+  const parsedStartDate = startDateResult.value;
+
+  // Compare the EFFECTIVE values after this patch: a field absent from the body
+  // keeps its stored value.
+  const effectiveStartDate = startDate !== undefined ? parsedStartDate : existingTask.startDate;
+  const effectiveDueDateForSpan = dueDate !== undefined ? parsedDueDate : existingTask.dueDate;
+  if (isStartAfterDue(effectiveStartDate, effectiveDueDateForSpan)) {
+    return NextResponse.json({ error: START_AFTER_DUE_ERROR }, { status: 400 });
+  }
 
   if (dueDate !== undefined) {
     updates.dueDate = parsedDueDate;
+  }
+  if (startDate !== undefined) {
+    updates.startDate = parsedStartDate;
   }
 
   // Validate agentTrigger shape up front (before any writes), mirroring the POST route.
@@ -546,9 +567,9 @@ export async function DELETE(
   // Check edit permission
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({
       error: 'You need edit permission to delete tasks',
-    }, { status: 403 });
+    }, { status: 403 }));
   }
 
   // Get task list page for driveId

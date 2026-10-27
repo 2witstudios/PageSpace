@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { FREE_STARTER_CREDITS } from "./credits";
+import { FREE_STARTER_CREDITS_DISPLAY } from "./credits";
 
 const SITE_NAME = "PageSpace";
 export const SITE_URL = process.env.NEXT_PUBLIC_MARKETING_URL || "https://pagespace.ai";
@@ -165,7 +165,7 @@ export const siteMetadata: Metadata = {
   category: "technology",
 };
 
-export const LEGAL_LAST_UPDATED = "September 9, 2026";
+export const LEGAL_LAST_UPDATED = "October 20, 2026";
 
 /**
  * Pre-defined metadata for common pages
@@ -185,7 +185,7 @@ export const pageMetadata = {
   pricing: createMetadata({
     title: "Pricing",
     description:
-      `Simple, transparent pricing for individuals, teams, and enterprises. Start free with 500MB storage and ${FREE_STARTER_CREDITS} credits to get started.`,
+      `Simple, transparent pricing for individuals, teams, and enterprises. Start free with 500MB storage and ${FREE_STARTER_CREDITS_DISPLAY} credits to get started.`,
     path: "/pricing",
     keywords: ["pricing", "plans", "free tier", "subscription"],
   }),

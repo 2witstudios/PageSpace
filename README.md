@@ -179,7 +179,7 @@ in favor of `pagespace mcp`, part of `@pagespace/cli`; see the
 ## Core Features
 
 ### AI Agent Infrastructure
-- **83 workspace tools** for AI to manipulate content directly. The same operation registry
+- **85 workspace tools** for AI to manipulate content directly. The same operation registry
   generates every `pagespace` CLI verb, SDK method, and MCP tool, so none of the three can drift
 - **Tool permissions**: Control what each AI can do in your workspace
 - **MCP protocol support**: Connect external AI tools like Claude Desktop, Cursor, and Claude Code
@@ -248,8 +248,8 @@ Each item in a drive is a typed page with a specific role:
 - **Custom integrations**: Register your own webhook-backed tool providers alongside the built-ins
 
 ### Metered AI Billing
-- **Pay for what you use**: Every plan includes a monthly credit allowance metered against real AI
-  usage, not a flat per-seat price
+- **Pay for what you use**: Every plan includes credits (a one-time starter grant on Free, a monthly
+  allowance on paid plans) metered against real AI usage, not a flat per-seat price
 - **Metered on model cost**: Credits are consumed on actual provider cost, with a live usage
   breakdown by model, feature, and cloud machine
 - **Buy more anytime**: Stripe-backed subscriptions, with credit top-ups available on any plan

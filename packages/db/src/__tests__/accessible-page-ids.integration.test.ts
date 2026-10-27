@@ -7,10 +7,11 @@
  *   bun run --filter '@pagespace/db' test -- src/__tests__/accessible-page-ids.integration.test.ts
  *
  * The function is the canonical "what pages can this user view?" primitive that
- * collapses the (owner | drive-admin | explicit-grant | accepted-member-on-a-
- * non-private-page) authorization graph into one DB-side call. Trashed pages,
- * trashed drives, and expired explicit grants are all excluded by the function
- * definition. The current rule set is `drizzle/0133_default_member_read.sql`.
+ * collapses the (owner | drive-admin | explicit-grant | custom-role | accepted-
+ * member-on-a-non-private-page) authorization graph into one DB-side call.
+ * Trashed pages, trashed drives, and expired explicit grants are all excluded by
+ * the function definition. The current rule set is
+ * `drizzle/0296_accessible_page_ids_denies_utc.sql`.
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import { factories } from '../test/factories';
@@ -18,12 +19,43 @@ import { db } from '../db';
 import { sql } from '../operators';
 import { inArray } from 'drizzle-orm';
 import { users } from '../schema/auth';
+import { driveRoles } from '../schema/members';
+import { createId } from '@paralleldrive/cuid2';
 
 async function callFunction(uid: string): Promise<string[]> {
   const result = await db.execute<{ page_id: string }>(
     sql`SELECT page_id FROM accessible_page_ids_for_user(${uid})`,
   );
   return result.rows.map((r) => r.page_id).sort();
+}
+
+/**
+ * Calls the function inside a transaction whose session TimeZone is `tz`.
+ * `expiresAt` is a timestamp WITHOUT time zone holding UTC wall time, so a
+ * comparison against bare now() is only right when the session happens to be
+ * UTC — which CI's is and a developer's usually is not. Pinning a non-UTC zone
+ * here makes the expiry cases independent of wherever the suite runs.
+ */
+async function callFunctionInTimeZone(uid: string, tz: string): Promise<string[]> {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT set_config('TimeZone', ${tz}, true)`);
+    const result = await tx.execute<{ page_id: string }>(
+      sql`SELECT page_id FROM accessible_page_ids_for_user(${uid})`,
+    );
+    return result.rows.map((r) => r.page_id).sort();
+  });
+}
+
+async function createDriveRole(
+  driveId: string,
+  permissions: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>,
+  driveWidePermissions: { canView: boolean; canEdit: boolean; canShare: boolean } | null = null,
+) {
+  const [role] = await db
+    .insert(driveRoles)
+    .values({ id: createId(), driveId, name: `role-${createId()}`, permissions, driveWidePermissions, updatedAt: new Date() })
+    .returning();
+  return role;
 }
 
 function sorted(ids: string[]): string[] {
@@ -286,5 +318,151 @@ describe('accessible_page_ids_for_user (Postgres function)', () => {
     // blockedPage lives in a drive where `second` is neither owner, admin, nor
     // member — no membership, so rule 4 cannot reach it.
     expect(accessible).not.toContain(blockedPage.id);
+  });
+
+  /**
+   * Deny paths. getUserAccessLevel resolves a non-owner, non-admin user in this
+   * order: an unexpired page_permissions row decides outright (canView=false is
+   * a DENY, even for a member of the drive); otherwise the member's custom role
+   * decides when it has an entry for the page or a drive-wide default (a
+   * drive-wide default never opens a private page); only then does rule 4 let
+   * an accepted member read a non-private page. The function used to OR rule 4
+   * in unconditionally, so every one of these denies leaked the page id.
+   */
+  describe('agrees with getUserAccessLevel on denies', () => {
+    const OFF = { canView: false, canEdit: false, canShare: false };
+    const ON = { canView: true, canEdit: false, canShare: false };
+
+    it('excludes a non-private page the custom role of a MEMBER denies per-page', async () => {
+      const owner = await seedUser();
+      const member = await seedUser();
+      const drive = await factories.createDrive(owner.id);
+      const denied = await factories.createPage(drive.id);
+      const open = await factories.createPage(drive.id);
+      const role = await createDriveRole(drive.id, { [denied.id]: OFF });
+      await factories.createDriveMember(drive.id, member.id, { customRoleId: role.id });
+
+      expect(await callFunction(member.id)).toEqual([open.id]);
+    });
+
+    it('excludes every non-private page when the custom role denies drive-wide', async () => {
+      const owner = await seedUser();
+      const member = await seedUser();
+      const drive = await factories.createDrive(owner.id);
+      const listed = await factories.createPage(drive.id);
+      await factories.createPage(drive.id);
+      const role = await createDriveRole(drive.id, { [listed.id]: ON }, OFF);
+      await factories.createDriveMember(drive.id, member.id, { customRoleId: role.id });
+
+      // The per-page entry still wins over the drive-wide default.
+      expect(await callFunction(member.id)).toEqual([listed.id]);
+    });
+
+    it('does not let a drive-wide custom-role grant open a PRIVATE page, but a per-page entry does', async () => {
+      const owner = await seedUser();
+      const member = await seedUser();
+      const drive = await factories.createDrive(owner.id);
+      const privateUnlisted = await factories.createPage(drive.id, { isPrivate: true });
+      const privateListed = await factories.createPage(drive.id, { isPrivate: true });
+      const open = await factories.createPage(drive.id);
+      const role = await createDriveRole(drive.id, { [privateListed.id]: ON }, ON);
+      await factories.createDriveMember(drive.id, member.id, { customRoleId: role.id });
+
+      const accessible = await callFunction(member.id);
+      expect(accessible).toEqual(sorted([privateListed.id, open.id]));
+      expect(accessible).not.toContain(privateUnlisted.id);
+    });
+
+    it('ignores a custom role that belongs to a different drive', async () => {
+      const owner = await seedUser();
+      const member = await seedUser();
+      const drive = await factories.createDrive(owner.id);
+      const otherDrive = await factories.createDrive(owner.id);
+      const open = await factories.createPage(drive.id);
+      const foreignRole = await createDriveRole(otherDrive.id, { [open.id]: OFF }, OFF);
+      await factories.createDriveMember(drive.id, member.id, { customRoleId: foreignRole.id });
+
+      expect(await callFunction(member.id)).toEqual([open.id]);
+    });
+
+    it('excludes a non-private page an accepted MEMBER holds an explicit canView=false row for', async () => {
+      const owner = await seedUser();
+      const member = await seedUser();
+      const drive = await factories.createDrive(owner.id);
+      const denied = await factories.createPage(drive.id);
+      const open = await factories.createPage(drive.id);
+      await factories.createDriveMember(drive.id, member.id);
+      await factories.createPagePermission(denied.id, member.id, { canView: false });
+
+      expect(await callFunction(member.id)).toEqual([open.id]);
+    });
+
+    it('lets an explicit canView=true row override a custom-role deny', async () => {
+      const owner = await seedUser();
+      const member = await seedUser();
+      const drive = await factories.createDrive(owner.id);
+      const page = await factories.createPage(drive.id);
+      const role = await createDriveRole(drive.id, {}, OFF);
+      await factories.createDriveMember(drive.id, member.id, { customRoleId: role.id });
+      await factories.createPagePermission(page.id, member.id, { canView: true });
+
+      expect(await callFunction(member.id)).toEqual([page.id]);
+    });
+
+    it('treats an EXPIRED explicit deny as absent, so rule 4 applies again', async () => {
+      const owner = await seedUser();
+      const member = await seedUser();
+      const drive = await factories.createDrive(owner.id);
+      const page = await factories.createPage(drive.id);
+      await factories.createDriveMember(drive.id, member.id);
+      await factories.createPagePermission(page.id, member.id, {
+        canView: false,
+        expiresAt: new Date(Date.now() - 60 * 60 * 1000),
+      });
+
+      expect(await callFunction(member.id)).toEqual([page.id]);
+    });
+
+    it('never applies a custom role or rule 4 to a PENDING member', async () => {
+      const owner = await seedUser();
+      const pending = await seedUser();
+      const drive = await factories.createDrive(owner.id);
+      const page = await factories.createPage(drive.id);
+      const role = await createDriveRole(drive.id, { [page.id]: ON }, ON);
+      await factories.createDriveMember(drive.id, pending.id, { customRoleId: role.id, acceptedAt: null });
+
+      expect(await callFunction(pending.id)).toEqual([]);
+    });
+  });
+
+  /**
+   * expiresAt holds UTC wall time in a timestamp WITHOUT time zone. Compared
+   * against bare now() it is reinterpreted in the SESSION's zone, so west of
+   * UTC an expired grant stays live for hours and east of UTC a live grant is
+   * already dead. getUserAccessLevel compares against a UTC Date parameter and
+   * is right in every zone; the function must be too.
+   */
+  describe('grant expiry is evaluated in UTC, whatever the session time zone', () => {
+    it.each(['America/Chicago', 'Pacific/Kiritimati', 'UTC'])(
+      'in %s: excludes a grant that expired an hour ago and includes one that expires in an hour',
+      async (tz) => {
+        const owner = await seedUser();
+        const expired = await seedUser();
+        const live = await seedUser();
+        const drive = await factories.createDrive(owner.id);
+        const page = await factories.createPage(drive.id);
+        await factories.createPagePermission(page.id, expired.id, {
+          canView: true,
+          expiresAt: new Date(Date.now() - 60 * 60 * 1000),
+        });
+        await factories.createPagePermission(page.id, live.id, {
+          canView: true,
+          expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+        });
+
+        expect(await callFunctionInTimeZone(expired.id, tz)).toEqual([]);
+        expect(await callFunctionInTimeZone(live.id, tz)).toEqual([page.id]);
+      },
+    );
   });
 });

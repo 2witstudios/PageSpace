@@ -322,4 +322,34 @@ describe('DeleteAccountDialog', () => {
     // onConfirm receives the actual value (may be trimmed by browser's email input behavior)
     expect(mockOnConfirm).toHaveBeenCalledWith(userEmail);
   });
+
+  describe('Sign in with Apple (Guideline 5.1.1(v))', () => {
+    const renderWith = (appleSignInRevocation?: 'automatic' | 'manual' | 'none') =>
+      render(
+        <DeleteAccountDialog
+          isOpen={true}
+          onClose={mockOnClose}
+          onConfirm={mockOnConfirm}
+          userEmail={userEmail}
+          isDeleting={false}
+          soloDrivesCount={0}
+          appleSignInRevocation={appleSignInRevocation}
+        />
+      );
+
+    it('given an Apple user PageSpace cannot revoke for, should show the Stop Using steps before confirmation', () => {
+      renderWith('manual');
+      expect(screen.getByText(/remove PageSpace from Sign in with Apple yourself/i)).toBeInTheDocument();
+    });
+
+    it('given an Apple user with a revocable token, should say it will be disconnected automatically', () => {
+      renderWith('automatic');
+      expect(screen.getByText(/also disconnect PageSpace from Sign in with Apple/i)).toBeInTheDocument();
+    });
+
+    it('given no Sign in with Apple status, should show no Apple notice', () => {
+      renderWith(undefined);
+      expect(screen.queryByText(/Sign in with Apple/i)).not.toBeInTheDocument();
+    });
+  });
 });

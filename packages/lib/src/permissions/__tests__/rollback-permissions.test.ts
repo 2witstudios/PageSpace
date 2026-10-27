@@ -6,6 +6,15 @@
  * - Permission logic: canUserRollback with various contexts
  */
 import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
+// The org sign-in gate (D-OW-45) reads policies through its own module; these tests are about the
+// resolvers behind it, so no org here sets a sign-in policy. Plain functions: a mock reset must not undo them.
+vi.mock('../actor-authentication', () => ({
+  checkActorDriveAuthentication: async () => ({ allowed: true }),
+  checkActorResourceAuthentication: async () => ({ allowed: true }),
+  filterDrivesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  filterResourcesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  explainOrgAuthenticationDenial: async () => null,
+}));
 import {
   canUserRollback,
   isRollbackableOperation,
@@ -22,6 +31,7 @@ vi.mock('../permissions', () => ({
 }));
 
 import { canUserEditPage, isDriveOwnerOrAdmin } from '../permissions';
+import { credentialActor } from '../access-actor';
 
 // Test fixtures
 const mockUserId = 'user_123';
@@ -209,7 +219,7 @@ describe('rollback-permissions', () => {
         async (operation) => {
           const activity = createActivity({ operation });
 
-          const result = await canUserRollback(mockUserId, activity, 'page');
+          const result = await canUserRollback(credentialActor(mockUserId, null), activity, 'page');
 
           expect(result.canRollback).toBe(false);
           expect(result.reason).toContain(`Cannot rollback '${operation}'`);
@@ -221,7 +231,7 @@ describe('rollback-permissions', () => {
       (canUserEditPage as Mock).mockResolvedValue(true);
       const activity = createActivity({ operation: 'rollback' });
 
-      const result = await canUserRollback(mockUserId, activity, 'page');
+      const result = await canUserRollback(credentialActor(mockUserId, null), activity, 'page');
 
       expect(result.canRollback).toBe(true);
     });
@@ -236,7 +246,7 @@ describe('rollback-permissions', () => {
           operation: 'update',
         });
 
-        const result = await canUserRollback(mockUserId, activity, context);
+        const result = await canUserRollback(credentialActor(mockUserId, null), activity, context);
 
         expect(result.canRollback).toBe(true);
         expect(result.reason).toBeUndefined();
@@ -249,7 +259,7 @@ describe('rollback-permissions', () => {
           operation: 'update',
         });
 
-        const result = await canUserRollback(mockUserId, activity, context);
+        const result = await canUserRollback(credentialActor(mockUserId, null), activity, context);
 
         expect(result.canRollback).toBe(false);
         expect(result.reason).toContain('only rollback your own changes');
@@ -262,7 +272,7 @@ describe('rollback-permissions', () => {
           operation: 'update',
         });
 
-        const result = await canUserRollback(mockUserId, activity, context);
+        const result = await canUserRollback(credentialActor(mockUserId, null), activity, context);
 
         expect(result.canRollback).toBe(false);
         expect(result.reason).toContain('Only AI-generated changes');
@@ -276,17 +286,17 @@ describe('rollback-permissions', () => {
         (canUserEditPage as Mock).mockResolvedValue(true);
         const activity = createActivity({ operation: 'update' });
 
-        const result = await canUserRollback(mockUserId, activity, context);
+        const result = await canUserRollback(credentialActor(mockUserId, null), activity, context);
 
         expect(result.canRollback).toBe(true);
-        expect(canUserEditPage).toHaveBeenCalledWith(mockUserId, mockPageId);
+        expect(canUserEditPage).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), mockPageId);
       });
 
       it('denies rollback when user lacks edit permission', async () => {
         (canUserEditPage as Mock).mockResolvedValue(false);
         const activity = createActivity({ operation: 'update' });
 
-        const result = await canUserRollback(mockUserId, activity, context);
+        const result = await canUserRollback(credentialActor(mockUserId, null), activity, context);
 
         expect(result.canRollback).toBe(false);
         expect(result.reason).toContain('need edit permission');
@@ -295,7 +305,7 @@ describe('rollback-permissions', () => {
       it('denies rollback when activity has no pageId', async () => {
         const activity = createActivity({ pageId: null });
 
-        const result = await canUserRollback(mockUserId, activity, context);
+        const result = await canUserRollback(credentialActor(mockUserId, null), activity, context);
 
         expect(result.canRollback).toBe(false);
         expect(result.reason).toContain('not associated with a page');
@@ -312,17 +322,17 @@ describe('rollback-permissions', () => {
           operation: 'update',
         });
 
-        const result = await canUserRollback(mockUserId, activity, context);
+        const result = await canUserRollback(credentialActor(mockUserId, null), activity, context);
 
         expect(result.canRollback).toBe(true);
-        expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(mockUserId, mockDriveId);
+        expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), mockDriveId);
       });
 
       it('denies rollback for non-admin users', async () => {
         (isDriveOwnerOrAdmin as Mock).mockResolvedValue(false);
         const activity = createActivity({ operation: 'update' });
 
-        const result = await canUserRollback(mockUserId, activity, context);
+        const result = await canUserRollback(credentialActor(mockUserId, null), activity, context);
 
         expect(result.canRollback).toBe(false);
         expect(result.reason).toContain('owners and admins');
@@ -331,7 +341,7 @@ describe('rollback-permissions', () => {
       it('denies rollback when activity has no driveId', async () => {
         const activity = createActivity({ driveId: null });
 
-        const result = await canUserRollback(mockUserId, activity, context);
+        const result = await canUserRollback(credentialActor(mockUserId, null), activity, context);
 
         expect(result.canRollback).toBe(false);
         expect(result.reason).toContain('not associated with a drive');
@@ -347,7 +357,7 @@ describe('rollback-permissions', () => {
           operation: 'update',
         });
 
-        const result = await canUserRollback(mockUserId, activity, context);
+        const result = await canUserRollback(credentialActor(mockUserId, null), activity, context);
 
         expect(result.canRollback).toBe(true);
       });
@@ -358,7 +368,7 @@ describe('rollback-permissions', () => {
           operation: 'update',
         });
 
-        const result = await canUserRollback(mockUserId, activity, context);
+        const result = await canUserRollback(credentialActor(mockUserId, null), activity, context);
 
         expect(result.canRollback).toBe(false);
         expect(result.reason).toContain('only rollback your own changes');
@@ -369,7 +379,7 @@ describe('rollback-permissions', () => {
       it('denies rollback for unknown context', async () => {
         const activity = createActivity({ operation: 'update' });
 
-        const result = await canUserRollback(mockUserId, activity, 'unknown' as RollbackContext);
+        const result = await canUserRollback(credentialActor(mockUserId, null), activity, 'unknown' as RollbackContext);
 
         expect(result.canRollback).toBe(false);
         expect(result.reason).toBe('Unknown rollback context');

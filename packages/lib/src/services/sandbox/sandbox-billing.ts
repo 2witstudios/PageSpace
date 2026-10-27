@@ -7,51 +7,37 @@
  * gate/settle/release logic and payer resolution.
  */
 
-import { eq } from '@pagespace/db/operators';
-import { db } from '@pagespace/db/db';
-import { users } from '@pagespace/db/schema/auth';
-import { canConsumeAI } from '../../billing/credit-gate';
 import { releaseHold as releaseCreditHold } from '../../billing/credit-consume';
 import {
   MACHINE_HOLD_ESTIMATE_CENTS,
   MACHINE_MAX_INFLIGHT,
   MACHINE_MARKUP_BPS,
 } from '../../billing/credit-pricing';
-import { resolveSessionPayerId, lookupDriveOwnerId } from '../../billing/sandbox-payer';
+import { resolveSessionPayer, lookupDriveBillingFacts } from '../../billing/sandbox-payer';
+import { computeChargeFor, computeSpendKind } from '../../billing/compute-charge';
+import { computeSettleWalletId, gateComputeCharge, UNSETTLED_COMPUTE } from '../../billing/compute-gate';
 import { AIMonitoring } from '../../monitoring/ai-monitoring';
 import { calculateMachineCostDollars } from '../../monitoring/machine-pricing';
-import { toSubscriptionTier, type SubscriptionTier } from '../../billing/subscription-tiers';
 import { getCodeExecutionConcurrencyLimit } from './quota';
 import type { SandboxBillingDeps } from './tool-runners';
 
-/**
- * The gate must evaluate the PAYER's own balance/tier, not the acting user's —
- * a page agent or a Terminal viewer may not be the drive owner footing the
- * bill, so the payer's subscription tier is looked up directly rather than
- * threaded through from the caller's actor context.
- */
-async function resolvePayerTier(payerId: string): Promise<SubscriptionTier> {
-  const [row] = await db
-    .select({ subscriptionTier: users.subscriptionTier })
-    .from(users)
-    .where(eq(users.id, payerId))
-    .limit(1);
-  return toSubscriptionTier(row?.subscriptionTier);
-}
-
 export const defaultSandboxBillingDeps: SandboxBillingDeps = {
   // Resolves from the ACQUIRED SESSION's own driveId/ownerId (never the
-  // caller's surface drive or agent page) — `resolveSessionPayerId` is the
-  // same drive-owner-else-session-owner rule `storageBillingTarget` applies
+  // caller's surface drive or agent page) — `resolveSessionPayer` is the
+  // same drive-payer-else-session-owner rule `storageBillingTarget` applies
   // for the storage charge stream, so both streams bill one payer for one
   // session regardless of which conversation/drive the caller happened to be
-  // in when the run started.
-  async resolvePayerId({ driveId, ownerId }) {
-    return resolveSessionPayerId({ driveId, ownerId, lookupDriveOwnerId });
+  // in when the run started. An org drive's session charges the ORG POOL (WAL-9), recorded under
+  // the ACTOR — the person who caused the run, whose per-member cap it counts toward — never the
+  // session's owner (a drive session is shared) and never anyone's own wallet.
+  // A drive session whose drive cannot be resolved has no payer (null): the run is refused,
+  // never billed to the session's owner.
+  async resolveCharge({ driveId, ownerId, actorId }) {
+    const payer = await resolveSessionPayer({ driveId, ownerId, lookupDriveBillingFacts });
+    return payer === null ? null : computeChargeFor(payer, actorId);
   },
 
-  async gate({ payerId }) {
-    const tier = await resolvePayerTier(payerId);
+  async gate({ charge }) {
     // MACHINE_MAX_INFLIGHT and quota.ts's per-tier CONCURRENCY_LIMITS are two
     // independently env-configured values that are SUPPOSED to agree (this
     // flat cap set to the top tier's ceiling), but nothing enforces that once
@@ -60,24 +46,33 @@ export const defaultSandboxBillingDeps: SandboxBillingDeps = {
     // gate silently reject runs the semaphore itself would allow. Take the
     // max of both so this floor can never undercut the resolved payer's own
     // tier ceiling, regardless of env drift.
-    const maxInFlight = Math.max(MACHINE_MAX_INFLIGHT, getCodeExecutionConcurrencyLimit(tier));
-    const result = await canConsumeAI(payerId, tier, {
+    // The tier is the CHARGE's: the org's for an org drive, the paying person's otherwise.
+    const result = await gateComputeCharge(charge, {
       estCostCents: MACHINE_HOLD_ESTIMATE_CENTS,
-      maxInFlight,
+      maxInFlight: (tier) => Math.max(MACHINE_MAX_INFLIGHT, getCodeExecutionConcurrencyLimit(tier)),
     });
-    return { allowed: result.allowed, holdId: result.holdId, reason: result.allowed ? undefined : result.reason };
+    return result.allowed
+      ? { allowed: true, holdId: result.holdId }
+      : { allowed: false, reason: result.reason, orgRefusal: result.orgRefusal };
   },
 
-  trackUsage({ payerId, holdId, activeSeconds, pageId, driveId, workspaceId }) {
+  async trackUsage({ charge, holdId, activeSeconds, pageId, driveId, workspaceId }) {
+    // Settle on the wallet the hold named: the org pool for an org charge. A pool gone since
+    // the hold does not settle (the hold is released by the caller) — never onto a person.
+    const walletId = await computeSettleWalletId(charge);
+    if (walletId === null) return UNSETTLED_COMPUTE;
     // Returned, not awaited-and-discarded: the seam's whole point is that the
     // caller learns whether the charge is durable (see `UsageTrackingOutcome`).
     return AIMonitoring.trackUsage({
-      userId: payerId,
+      userId: charge.userId,
+      walletId,
       provider: 'sprites',
       model: 'terminal-machine',
       source: 'terminal',
+      // Compute the session's person ran: on an org pool it counts toward their seat (fe9db1nm).
+      spendKind: computeSpendKind(charge),
       // The referenced agent page — purely descriptive per-agent grouping,
-      // never the payer source (resolved from the session by `resolvePayerId`
+      // never the payer source (resolved from the session by `resolveCharge`
       // above).
       pageId,
       // First-class drive/session attribution (Terminal Epic 3 usage-breakdown

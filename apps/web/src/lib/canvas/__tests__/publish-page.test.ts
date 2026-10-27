@@ -93,6 +93,12 @@ vi.mock('../custom-domain-mirror', () => ({
   getActiveDomainRecords: vi.fn().mockResolvedValue([]),
 }));
 
+// SEAT-9 and POL-4: publishing from an org drive asks the org's billing status and its publishing policy.
+const checkOrgActive = vi.hoisted(() => vi.fn());
+const getOrgPolicies = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/organizations/status', () => ({ checkOrgActive }));
+vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getOrgPolicies }));
+
 vi.mock('@pagespace/lib/services/drive-guards', () => ({
   isHomeDrive: vi.fn().mockReturnValue(false),
 }));
@@ -123,6 +129,7 @@ vi.mock('@pagespace/lib/utils/utils', () => ({
 }));
 
 import { db } from '@pagespace/db/db';
+import { DEFAULT_ORG_POLICIES } from '@pagespace/lib/organizations/policies-core';
 import { putPublishedArtifact, putPublishedSiteFile, publishedArtifactExists, deletePublishedArtifact, copyPublishedArtifact, isPublishConfigured } from '../published-storage';
 import { publishCanvasPage, publishHomePageAtRoot, clearPublishedHomeRoot, regeneratePublishedSiteFiles, syncPublishedHomeRoot, republishDriveCanonical, PublishError } from '../publish-page';
 import { allocatePublishSubdomain } from '@pagespace/lib/services/drive-service';
@@ -131,6 +138,7 @@ import { renderPublishedPage, renderPublishedDocument, renderPublishedCode, rend
 import { neutralizeDashboardLinks } from '@pagespace/lib/publish/neutralize-dashboard-links';
 import { marked } from 'marked';
 import { extractAndStripOgMeta, rewriteCanvasAssets } from '../asset-pipeline';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // The mocked `db` keeps the real relational-query return types, so partial test
 // fixtures are cast through `unknown` to the row shape (never `any`).
@@ -144,6 +152,51 @@ describe('publishCanvasPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(isPublishConfigured).mockReturnValue(true);
+    checkOrgActive.mockResolvedValue({ ok: true });
+    getOrgPolicies.mockResolvedValue({ ...DEFAULT_ORG_POLICIES });
+  });
+
+  describe('the org publishing policy', () => {
+    const orgDrive = () =>
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+        id: 'drive-1', slug: 'my-drive', publishSubdomain: 'my-drive', kind: 'STANDARD', homePageId: 'other-page', orgId: 'org-1',
+      }));
+    const canvas = () =>
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({ id: 'page-1', type: 'CANVAS', title: 'Welcome', content: '<div>hi</div>', driveId: 'drive-1' }));
+
+    it('POL-4 X-6 (partial) publishing OFF refuses a publish from an org drive with 403 and the policy message, and writes nothing', async () => {
+      canvas();
+      orgDrive();
+      vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+      getOrgPolicies.mockResolvedValue({ ...DEFAULT_ORG_POLICIES, publishWeb: false });
+
+      const attempt = publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null) });
+
+      await expect(attempt).rejects.toMatchObject({ name: 'PublishError', statusCode: 403, message: expect.stringContaining('publishing to the web') });
+      expect(getOrgPolicies).toHaveBeenCalledWith('org-1');
+      expect(putPublishedArtifact).not.toHaveBeenCalled();
+      expect(putPublishedSiteFile).not.toHaveBeenCalled();
+    });
+
+    it('POL-4 (partial) publishing ON publishes from an org drive as before', async () => {
+      canvas();
+      orgDrive();
+      vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+      expect((await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null) })).subdomain).toBe('my-drive');
+    });
+
+    it('POL-4 (partial) a lapsed org is still refused first (402), and a personal drive never reads any org policy', async () => {
+      canvas();
+      orgDrive();
+      checkOrgActive.mockResolvedValue({ ok: false, status: 402, message: 'lapsed', code: 'org_lapsed' });
+      await expect(publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null) })).rejects.toMatchObject({ statusCode: 402 });
+
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({ id: 'drive-1', slug: 'my-drive', publishSubdomain: 'my-drive', kind: 'STANDARD', homePageId: 'other-page' }));
+      vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+      getOrgPolicies.mockClear();
+      await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null) });
+      expect(getOrgPolicies).not.toHaveBeenCalled();
+    });
   });
 
   it('given a non-home canvas page with an existing subdomain, publishes at its slug only', async () => {
@@ -155,7 +208,7 @@ describe('publishCanvasPage', () => {
     }));
     vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
 
-    const result = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+    const result = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null) });
 
     expect(result.subdomain).toBe('my-drive');
     expect(result.isHomePage).toBe(false);
@@ -174,7 +227,7 @@ describe('publishCanvasPage', () => {
     }));
     vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
 
-    const result = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+    const result = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null) });
 
     expect(result.isHomePage).toBe(true);
     // Primary URL is the root; the page is also at its slug.
@@ -191,14 +244,14 @@ describe('publishCanvasPage', () => {
       id: 'page-1', type: 'CHANNEL', title: 'Chat', content: '', driveId: 'drive-1',
     }));
 
-    await expect(publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' }))
+    await expect(publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null) }))
       .rejects.toMatchObject({ statusCode: 400 });
   });
 
   it('given a page that does not exist, throws 404', async () => {
     vi.mocked(db.query.pages.findFirst).mockResolvedValue(undefined);
 
-    await expect(publishCanvasPage({ pageId: 'missing', driveId: 'drive-1', userId: 'user-1' }))
+    await expect(publishCanvasPage({ pageId: 'missing', driveId: 'drive-1', actor: credentialActor('user-1', null) }))
       .rejects.toThrow('Page not found');
   });
 
@@ -207,7 +260,7 @@ describe('publishCanvasPage', () => {
       id: 'page-1', type: 'CANVAS', title: 'X', content: '', driveId: 'other-drive',
     }));
 
-    await expect(publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' }))
+    await expect(publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null) }))
       .rejects.toMatchObject({ statusCode: 404 });
   });
 
@@ -221,7 +274,7 @@ describe('publishCanvasPage', () => {
     vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
 
     const result = await publishCanvasPage({
-      pageId: 'page-1', driveId: 'drive-1', userId: 'user-1', subdomain: 'someone-elses-site',
+      pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null), subdomain: 'someone-elses-site',
     });
 
     expect(result.subdomain).toBe('my-drive');
@@ -237,7 +290,7 @@ describe('publishCanvasPage', () => {
     vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
 
     const result = await publishCanvasPage({
-      pageId: 'page-1', driveId: 'drive-1', userId: 'user-1', subdomain: 'Chosen-Sub',
+      pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null), subdomain: 'Chosen-Sub',
     });
 
     // The caller-supplied value is only a candidate base: it is forwarded to the
@@ -257,7 +310,7 @@ describe('publishCanvasPage', () => {
     // The allocator resolves the reserved slug to a suffixed, unique subdomain.
     vi.mocked(allocatePublishSubdomain).mockResolvedValueOnce('pagespace-2');
 
-    const result = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+    const result = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null) });
 
     expect(allocatePublishSubdomain).toHaveBeenCalledWith('drive-1', 'pagespace');
     expect(result.subdomain).toBe('pagespace-2');
@@ -274,7 +327,7 @@ describe('publishCanvasPage', () => {
     vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
 
     const result = await publishCanvasPage({
-      pageId: 'page-1', driveId: 'drive-1', userId: 'user-1', path: 'Foo',
+      pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null), path: 'Foo',
     });
 
     expect(result.path).toBe('foo');
@@ -290,7 +343,7 @@ describe('publishCanvasPage', () => {
     vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
 
     const result = await publishCanvasPage({
-      pageId: 'page-1', driveId: 'drive-1', userId: 'user-1', path: 'a/../b',
+      pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null), path: 'a/../b',
     });
 
     expect(result.path).toBe('a/b');
@@ -306,7 +359,7 @@ describe('publishCanvasPage', () => {
     vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
 
     // Both '' and '!!!' canonicalize to empty — a non-home page must not claim the root.
-    const empty = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1', path: '' });
+    const empty = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null), path: '' });
     expect(empty.path).toBe('page-1');
 
     vi.clearAllMocks();
@@ -318,7 +371,7 @@ describe('publishCanvasPage', () => {
       id: 'drive-1', slug: 'my-drive', publishSubdomain: 'my-drive', kind: 'STANDARD', homePageId: null,
     }));
     vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
-    const garbage = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1', path: '!!!' });
+    const garbage = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null), path: '!!!' });
     expect(garbage.path).toBe('page-1');
   });
 
@@ -327,7 +380,7 @@ describe('publishCanvasPage', () => {
       id: 'page-1', type: 'CHANNEL', title: 'Chat', content: '', driveId: 'drive-1',
     }));
 
-    await expect(publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' }))
+    await expect(publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null) }))
       .rejects.toMatchObject({ statusCode: 400 });
     expect(PublishError).toBeDefined();
   });
@@ -344,7 +397,7 @@ describe('publishCanvasPage', () => {
       { hostname: 'www.acme.com', createdAt: new Date('2026-01-01T00:00:00.000Z') },
     ]);
 
-    const result = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+    const result = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null) });
 
     // Response URL is the branded primary host — the same canonical host baked
     // into the HTML — so the publish control shows/copies the link visitors should land on.
@@ -364,7 +417,7 @@ describe('publishCanvasPage', () => {
       { hostname: 'docs.acme.com', createdAt: new Date('2026-03-01T00:00:00.000Z'), isPrimary: true },
     ]);
 
-    const result = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+    const result = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null) });
 
     // docs is newer but flagged primary, so it wins over the earliest-created www.
     expect(result.url).toBe('https://docs.acme.com/about');
@@ -380,7 +433,7 @@ describe('publishCanvasPage', () => {
     vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
     vi.mocked(getActiveDomainRecords).mockResolvedValue([]);
 
-    const result = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+    const result = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null) });
 
     expect(result.url).toBe('https://acme.pagespace.site/about');
   });
@@ -397,7 +450,7 @@ describe('publishCanvasPage', () => {
       { hostname: 'www.acme.com', createdAt: new Date('2026-01-01T00:00:00.000Z') },
     ]);
 
-    const result = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+    const result = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null) });
 
     expect(result.isHomePage).toBe(true);
     expect(result.url).toBe('https://www.acme.com/');
@@ -420,7 +473,7 @@ describe('publishCanvasPage — per-type render branch', () => {
       id: 'page-1', type: 'DOCUMENT', title: 'My Doc', content: '<p>Hi</p>', contentMode: 'html', driveId: 'drive-1',
     }));
 
-    const result = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+    const result = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null) });
 
     expect(marked.parse).not.toHaveBeenCalled();
     expect(neutralizeDashboardLinks).toHaveBeenCalledWith('<p>Hi</p>');
@@ -437,7 +490,7 @@ describe('publishCanvasPage — per-type render branch', () => {
       id: 'page-1', type: 'DOCUMENT', title: 'My Doc', content: '# Hello', contentMode: 'markdown', driveId: 'drive-1',
     }));
 
-    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null) });
 
     expect(marked.parse).toHaveBeenCalledWith('# Hello');
     expect(neutralizeDashboardLinks).toHaveBeenCalledWith('<p># Hello</p>');
@@ -449,7 +502,7 @@ describe('publishCanvasPage — per-type render branch', () => {
       id: 'page-1', type: 'CODE', title: 'main.ts', content: 'const x = 1;', contentMode: 'html', driveId: 'drive-1',
     }));
 
-    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null) });
 
     expect(rewriteCanvasAssets).not.toHaveBeenCalled();
     expect(neutralizeDashboardLinks).not.toHaveBeenCalled();
@@ -464,7 +517,7 @@ describe('publishCanvasPage — per-type render branch', () => {
       id: 'page-1', type: 'CODE', title: 'main.ts', content: 'const x: Array<Map<string, number>> = [];', contentMode: 'html', driveId: 'drive-1',
     }));
 
-    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null) });
 
     expect(renderPublishedCode).toHaveBeenCalledWith(expect.objectContaining({ description: '' }));
   });
@@ -475,7 +528,7 @@ describe('publishCanvasPage — per-type render branch', () => {
       id: 'page-1', type: 'SHEET', title: 'My Sheet', content: serialized, contentMode: 'html', driveId: 'drive-1',
     }));
 
-    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null) });
 
     expect(rewriteCanvasAssets).not.toHaveBeenCalled();
     expect(renderPublishedSheet).toHaveBeenCalledWith(expect.objectContaining({ serializedContent: serialized, title: 'My Sheet' }));
@@ -530,7 +583,7 @@ describe('publishCanvasPage — SEO overrides', () => {
     vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
 
     await publishCanvasPage({
-      pageId: 'page-1', driveId: 'drive-1', userId: 'user-1',
+      pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null),
       title: 'Custom Title', description: 'Custom desc', ogImageUrl: 'https://img.example/og.png', noindex: true,
     });
 
@@ -551,7 +604,7 @@ describe('publishCanvasPage — SEO overrides', () => {
     vi.mocked(putPublishedArtifact).mockRejectedValueOnce(new Error('S3 down'));
 
     await expect(publishCanvasPage({
-      pageId: 'page-1', driveId: 'drive-1', userId: 'user-1', title: 'Custom Title', noindex: true,
+      pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null), title: 'Custom Title', noindex: true,
     })).rejects.toThrow('S3 down');
 
     // Upload failed before step 9, so no SEO-bearing update ran.
@@ -563,7 +616,7 @@ describe('publishCanvasPage — SEO overrides', () => {
     vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
 
     await publishCanvasPage({
-      pageId: 'page-1', driveId: 'drive-1', userId: 'user-1',
+      pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null),
       title: 'Custom Title', noindex: true,
     });
 
@@ -577,7 +630,7 @@ describe('publishCanvasPage — SEO overrides', () => {
     vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
 
     await publishCanvasPage({
-      pageId: 'page-1', driveId: 'drive-1', userId: 'user-1', themeBridgeEnabled: false,
+      pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null), themeBridgeEnabled: false,
     });
 
     expect(seoUpdate()).toMatchObject({ themeBridgeEnabled: false });
@@ -589,7 +642,7 @@ describe('publishCanvasPage — SEO overrides', () => {
     setupPage();
     vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
 
-    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null) });
 
     expect(seoUpdate()).toMatchObject({ themeBridgeEnabled: true });
     const renderInput = vi.mocked(renderPublishedPage).mock.lastCall?.[0];
@@ -607,7 +660,7 @@ describe('publishCanvasPage — SEO overrides', () => {
       themeBridgeEnabled: false,
     }));
 
-    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null) });
 
     expect(seoUpdate()).toMatchObject({ themeBridgeEnabled: false });
     const renderInput = vi.mocked(renderPublishedPage).mock.lastCall?.[0];
@@ -622,7 +675,7 @@ describe('publishCanvasPage — SEO overrides', () => {
       html: '<div>hi</div>',
     });
 
-    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null) });
 
     const renderInput = vi.mocked(renderPublishedPage).mock.lastCall?.[0];
     expect(renderInput?.title).toBe('Author OG Title');
@@ -637,7 +690,7 @@ describe('publishCanvasPage — SEO overrides', () => {
     });
 
     await publishCanvasPage({
-      pageId: 'page-1', driveId: 'drive-1', userId: 'user-1', title: 'Custom Title',
+      pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null), title: 'Custom Title',
     });
 
     const renderInput = vi.mocked(renderPublishedPage).mock.lastCall?.[0];
@@ -648,7 +701,7 @@ describe('publishCanvasPage — SEO overrides', () => {
     setupPage({ publishDefaultOgImageUrl: 'https://drive-default.example/og.png' });
     vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
 
-    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null) });
 
     const renderInput = vi.mocked(renderPublishedPage).mock.lastCall?.[0];
     expect(renderInput?.ogImageUrl).toBe('https://drive-default.example/og.png');
@@ -659,7 +712,7 @@ describe('publishCanvasPage — SEO overrides', () => {
     vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
 
     await publishCanvasPage({
-      pageId: 'page-1', driveId: 'drive-1', userId: 'user-1', ogImageUrl: 'https://override.example/og.png',
+      pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null), ogImageUrl: 'https://override.example/og.png',
     });
 
     const renderInput = vi.mocked(renderPublishedPage).mock.lastCall?.[0];
@@ -676,7 +729,7 @@ describe('publishCanvasPage — SEO overrides', () => {
       noindex: true,
     }));
 
-    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null) });
 
     expect(seoUpdate()).toMatchObject({
       publishTitle: 'Sticky Title',
@@ -699,7 +752,7 @@ describe('publishCanvasPage — SEO overrides', () => {
       noindex: false,
     }));
 
-    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1', title: '' });
+    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null), title: '' });
 
     expect(seoUpdate()).toMatchObject({ publishTitle: null });
     // Title falls back to the live page title once the override is cleared.
@@ -718,7 +771,7 @@ describe('publishHomePageAtRoot', () => {
   it('returns null when the drive has no home page', async () => {
     vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({ id: 'drive-1', homePageId: null }));
 
-    const result = await publishHomePageAtRoot('drive-1', 'user-1');
+    const result = await publishHomePageAtRoot('drive-1', credentialActor('user-1', null));
     expect(result).toBeNull();
   });
 
@@ -735,7 +788,7 @@ describe('publishHomePageAtRoot', () => {
     }));
     vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
 
-    const result = await publishHomePageAtRoot('drive-1', 'user-1');
+    const result = await publishHomePageAtRoot('drive-1', credentialActor('user-1', null));
 
     expect(result).not.toBeNull();
     expect(result!.isHomePage).toBe(true);
@@ -753,7 +806,7 @@ describe('publishHomePageAtRoot', () => {
       id: 'page-1', type: 'CHANNEL', title: 'Chat', content: '', driveId: 'drive-1',
     }));
 
-    await expect(publishHomePageAtRoot('drive-1', 'user-1')).rejects.toMatchObject({ statusCode: 400 });
+    await expect(publishHomePageAtRoot('drive-1', credentialActor('user-1', null))).rejects.toMatchObject({ statusCode: 400 });
   });
 });
 
@@ -817,7 +870,7 @@ describe('publishCanvasPage site-file regeneration', () => {
     }));
     vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
 
-    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null) });
 
     const files = vi.mocked(putPublishedSiteFile).mock.calls.map((c) => c[0].file).sort();
     expect(files).toEqual(['404.html', 'robots.txt', 'sitemap.xml']);
@@ -1243,7 +1296,7 @@ describe('republishDriveCanonical', () => {
       id: 'drive-1', slug: 'acme', publishSubdomain: 'acme', kind: 'STANDARD', homePageId: null,
     }));
 
-    const count = await republishDriveCanonical('drive-1', 'user-1');
+    const count = await republishDriveCanonical('drive-1', credentialActor('user-1', null));
 
     expect(count).toBe(2);
     // Each page is re-published at its STORED path, not re-derived from the title.
@@ -1265,14 +1318,14 @@ describe('republishDriveCanonical', () => {
       id: 'drive-1', slug: 'acme', publishSubdomain: 'acme', kind: 'STANDARD', homePageId: null,
     }));
 
-    const count = await republishDriveCanonical('drive-1', 'user-1');
+    const count = await republishDriveCanonical('drive-1', credentialActor('user-1', null));
 
     expect(count).toBe(1);
   });
 
   it('is a no-op returning 0 when publishing is not configured', async () => {
     vi.mocked(isPublishConfigured).mockReturnValue(false);
-    const count = await republishDriveCanonical('drive-1', 'user-1');
+    const count = await republishDriveCanonical('drive-1', credentialActor('user-1', null));
     expect(count).toBe(0);
     expect(db.query.publishedPages.findMany).not.toHaveBeenCalled();
   });
@@ -1299,7 +1352,7 @@ describe('publishCanvasPage — siteMode propagation', () => {
       id: 'page-1', type: 'CANVAS', title: 'Welcome', content: '<div>hi</div>', driveId: 'drive-1', siteMode: true,
     }));
 
-    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null) });
 
     expect(renderPublishedPage).toHaveBeenCalledWith(
       expect.objectContaining({ siteMode: true }),
@@ -1311,7 +1364,7 @@ describe('publishCanvasPage — siteMode propagation', () => {
       id: 'page-1', type: 'CANVAS', title: 'Welcome', content: '<div>hi</div>', driveId: 'drive-1', siteMode: false,
     }));
 
-    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', actor: credentialActor('user-1', null) });
 
     expect(renderPublishedPage).toHaveBeenCalledWith(
       expect.objectContaining({ siteMode: false }),

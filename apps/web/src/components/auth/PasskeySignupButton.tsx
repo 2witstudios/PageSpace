@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { startRegistration } from '@simplewebauthn/browser';
 import { AnimatePresence, motion } from 'motion/react';
-import Link from 'next/link';
+import { MarketingLink } from '@/components/ui/MarketingLink';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -15,6 +15,7 @@ import { persistCsrfToken } from '@/lib/utils/persist-csrf-token';
 import { useWebAuthnSupport } from '@/hooks/useWebAuthnSupport';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { getDevicePlatformFields, handleDesktopAuthResponse } from '@/lib/desktop-auth';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
 
 interface PasskeySignupButtonProps {
   csrfToken: string;
@@ -247,6 +248,11 @@ export function PasskeySignupButton({
                 onChange={(e) => setEmail(e.target.value)}
                 disabled={isRegistering || !!lockedEmail}
               />
+              {lockedEmail && isV3AuthEnabled() && (
+                <p className="text-xs text-[oklch(0.48_0.015_220)]">
+                  Locked to the address the invitation was sent to.
+                </p>
+              )}
             </div>
             <div className="flex items-start gap-2">
               <Checkbox
@@ -261,14 +267,15 @@ export function PasskeySignupButton({
                 className="text-xs font-normal leading-snug text-muted-foreground"
               >
                 I agree to PageSpace&apos;s{' '}
-                <Link href="/terms" className="underline hover:text-foreground">
+                <MarketingLink href="/terms" className="underline hover:text-foreground">
                   Terms
-                </Link>
+                </MarketingLink>
                 {' '}and{' '}
-                <Link href="/privacy" className="underline hover:text-foreground">
+                <MarketingLink href="/privacy" className="underline hover:text-foreground">
                   Privacy Policy
-                </Link>
-                , and I&apos;m at least 16 years old.
+                </MarketingLink>
+                , and I&apos;m at least 16 years old. AI features send the content you use them with to
+          OpenRouter and the model provider you choose.
               </Label>
             </div>
             <div className="flex gap-2">

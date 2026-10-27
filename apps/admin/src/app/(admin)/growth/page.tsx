@@ -28,14 +28,12 @@ import type { GrowthMetricsData } from "@/lib/monitoring";
 const TIER_COLORS: Record<string, string> = {
   free: "var(--muted-foreground)",
   pro: "var(--chart-4)",
-  founder: "var(--chart-5)",
   business: "var(--chart-3)",
 };
 
 const TIER_LABELS: Record<string, string> = {
   free: "Free",
   pro: "Pro",
-  founder: "Founder",
   business: "Business",
 };
 

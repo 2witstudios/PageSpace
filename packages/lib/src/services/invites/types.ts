@@ -45,7 +45,15 @@ export type InviteAcceptanceErrorCode =
   | 'TOKEN_CONSUMED'
   | 'EMAIL_MISMATCH'
   | 'ALREADY_MEMBER'
-  | 'ACCOUNT_SUSPENDED';
+  | 'ACCOUNT_SUSPENDED'
+  // POL-2: the org's guests policy is OFF, so an outsider cannot accept. The invitation is not consumed.
+  | 'GUEST_POLICY'
+  // POL-2: the org's guests policy is APPROVE and this invitation was not approved: the acceptance is queued for an
+  // Owner or Admin, nothing is granted, and the invitation is spent.
+  | 'GUEST_APPROVAL_PENDING'
+  // [D-OW-33] the drive's org is lapsed: accepting would loosen access. The invitation is not consumed and works
+  // again once the org pays.
+  | 'ORG_LAPSED';
 
 export type AcceptInviteResult = Result<AcceptedInviteData, InviteAcceptanceErrorCode>;
 

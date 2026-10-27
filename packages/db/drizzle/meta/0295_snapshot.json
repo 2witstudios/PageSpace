@@ -1,9 +1,96 @@
 {
-  "id": "2c4198f0-df54-42ca-8ab0-5f01024b1b31",
-  "prevId": "795618d6-6ff3-4007-8753-512e9a996dfa",
+  "id": "21c142a0-b5c6-4092-a19e-566f94c2ff50",
+  "prevId": "ff5650fa-cac0-4687-8d81-3b3b01b4dbce",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
+    "public.apple_sign_in_tokens": {
+      "name": "apple_sign_in_tokens",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "client_id": {
+          "name": "client_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "refresh_token": {
+          "name": "refresh_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "apple_sign_in_tokens_user_client_idx": {
+          "name": "apple_sign_in_tokens_user_client_idx",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "client_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "apple_sign_in_tokens_user_id_users_id_fk": {
+          "name": "apple_sign_in_tokens_user_id_users_id_fk",
+          "tableFrom": "apple_sign_in_tokens",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.device_tokens": {
       "name": "device_tokens",
       "schema": "",
@@ -23137,13 +23224,6 @@
           "notNull": true,
           "default": "'sprite'"
         },
-        "visibleToGlobalAssistant": {
-          "name": "visibleToGlobalAssistant",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
         "createdBy": {
           "name": "createdBy",
           "type": "text",
@@ -23438,18 +23518,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "daemonEpoch": {
-          "name": "daemonEpoch",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "ownerCredentials": {
-          "name": "ownerCredentials",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
         "serverPolicy": {
           "name": "serverPolicy",
           "type": "jsonb",
@@ -23478,12 +23546,6 @@
         },
         "revokedAt": {
           "name": "revokedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "pausedAt": {
-          "name": "pausedAt",
           "type": "timestamp",
           "primaryKey": false,
           "notNull": false
@@ -23571,376 +23633,7 @@
         },
         "drive_env_local_bind_policy_check": {
           "name": "drive_env_local_bind_policy_check",
-          "value": "\"drive_env_local\".\"bindPolicy\" IN ('owner')"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.drive_env_grant_audit": {
-      "name": "drive_env_grant_audit",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "envId": {
-          "name": "envId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "grantId": {
-          "name": "grantId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "userId": {
-          "name": "userId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "sessionId": {
-          "name": "sessionId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "conversationId": {
-          "name": "conversationId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "op": {
-          "name": "op",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "argsHash": {
-          "name": "argsHash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "summary": {
-          "name": "summary",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "verdict": {
-          "name": "verdict",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "exitCode": {
-          "name": "exitCode",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "challengeId": {
-          "name": "challengeId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "approvalScope": {
-          "name": "approvalScope",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "ts": {
-          "name": "ts",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "resultAt": {
-          "name": "resultAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "drive_env_grant_audit_env_ts_idx": {
-          "name": "drive_env_grant_audit_env_ts_idx",
-          "columns": [
-            {
-              "expression": "envId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "ts",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "drive_env_grant_audit_user_ts_idx": {
-          "name": "drive_env_grant_audit_user_ts_idx",
-          "columns": [
-            {
-              "expression": "userId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "ts",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "drive_env_grant_audit_grant_id_unique": {
-          "name": "drive_env_grant_audit_grant_id_unique",
-          "columns": [
-            {
-              "expression": "grantId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"drive_env_grant_audit\".\"grantId\" IS NOT NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "drive_env_grant_audit_envId_drive_envs_id_fk": {
-          "name": "drive_env_grant_audit_envId_drive_envs_id_fk",
-          "tableFrom": "drive_env_grant_audit",
-          "tableTo": "drive_envs",
-          "columnsFrom": [
-            "envId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "drive_env_grant_audit_userId_users_id_fk": {
-          "name": "drive_env_grant_audit_userId_users_id_fk",
-          "tableFrom": "drive_env_grant_audit",
-          "tableTo": "users",
-          "columnsFrom": [
-            "userId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "drive_env_grant_audit_op_check": {
-          "name": "drive_env_grant_audit_op_check",
-          "value": "\"drive_env_grant_audit\".\"op\" IN ('exec', 'fs_read', 'fs_write', 'pty_open')"
-        },
-        "drive_env_grant_audit_grant_id_refused_check": {
-          "name": "drive_env_grant_audit_grant_id_refused_check",
-          "value": "(\"drive_env_grant_audit\".\"grantId\" IS NULL) = (\"drive_env_grant_audit\".\"verdict\" LIKE 'refused:%')"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.drive_env_approvals": {
-      "name": "drive_env_approvals",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "envId": {
-          "name": "envId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "userId": {
-          "name": "userId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "op": {
-          "name": "op",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "summary": {
-          "name": "summary",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "scope": {
-          "name": "scope",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "daemonEpoch": {
-          "name": "daemonEpoch",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "createdAt": {
-          "name": "createdAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "expiresAt": {
-          "name": "expiresAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "revokedAt": {
-          "name": "revokedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "revokedBy": {
-          "name": "revokedBy",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "revokeAcknowledgedAt": {
-          "name": "revokeAcknowledgedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "revokeRemoved": {
-          "name": "revokeRemoved",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "drive_env_approvals_env_idx": {
-          "name": "drive_env_approvals_env_idx",
-          "columns": [
-            {
-              "expression": "envId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "createdAt",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "drive_env_approvals_user_idx": {
-          "name": "drive_env_approvals_user_idx",
-          "columns": [
-            {
-              "expression": "userId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "createdAt",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "drive_env_approvals_envId_drive_envs_id_fk": {
-          "name": "drive_env_approvals_envId_drive_envs_id_fk",
-          "tableFrom": "drive_env_approvals",
-          "tableTo": "drive_envs",
-          "columnsFrom": [
-            "envId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "drive_env_approvals_userId_users_id_fk": {
-          "name": "drive_env_approvals_userId_users_id_fk",
-          "tableFrom": "drive_env_approvals",
-          "tableTo": "users",
-          "columnsFrom": [
-            "userId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "drive_env_approvals_scope_check": {
-          "name": "drive_env_approvals_scope_check",
-          "value": "\"drive_env_approvals\".\"scope\" IN ('session', '30d', 'until_revoked')"
-        },
-        "drive_env_approvals_ack_needs_revoke_check": {
-          "name": "drive_env_approvals_ack_needs_revoke_check",
-          "value": "\"drive_env_approvals\".\"revokeAcknowledgedAt\" IS NULL OR \"drive_env_approvals\".\"revokedAt\" IS NOT NULL"
+          "value": "\"drive_env_local\".\"bindPolicy\" IN ('owner', 'admins', 'members')"
         }
       },
       "isRLSEnabled": false
@@ -24271,6 +23964,59 @@
           "value": "\"dev_preview_grants\".\"holderKind\" IN ('workspace', 'env')"
         }
       },
+      "isRLSEnabled": false
+    },
+    "public.agent_account_grant_nonces": {
+      "name": "agent_account_grant_nonces",
+      "schema": "",
+      "columns": {
+        "nonce": {
+          "name": "nonce",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "grantId": {
+          "name": "grantId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expiresAt": {
+          "name": "expiresAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consumedAt": {
+          "name": "consumedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "agent_account_grant_nonces_expires_at_idx": {
+          "name": "agent_account_grant_nonces_expires_at_idx",
+          "columns": [
+            {
+              "expression": "expiresAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
       "isRLSEnabled": false
     }
   },

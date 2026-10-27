@@ -17,6 +17,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 interface MockCapacitor {
   isNativePlatform: () => boolean;
   getPlatform: () => string;
+  isPluginAvailable?: (name: string) => boolean;
 }
 
 function setupCapacitorMock(
@@ -488,9 +489,9 @@ describe('capacitor-bridge', () => {
     // The capability truth table this module encodes. Each row is asserted
     // exhaustively so a wrong flag anywhere fails a named test.
     const TRUTH_TABLE = {
-      ios: { secureStore: true, nativeAuth: true, push: true, badge: true },
-      android: { secureStore: true, nativeAuth: true, push: true, badge: true },
-      web: { secureStore: false, nativeAuth: false, push: false, badge: false },
+      ios: { secureStore: true, nativeAuth: true, push: true, badge: true, storeKit: true },
+      android: { secureStore: true, nativeAuth: true, push: true, badge: true, storeKit: false },
+      web: { secureStore: false, nativeAuth: false, push: false, badge: false, storeKit: false },
     } as const;
 
     const CAPABILITIES = [
@@ -498,6 +499,7 @@ describe('capacitor-bridge', () => {
       'nativeAuth',
       'push',
       'badge',
+      'storeKit',
     ] as const;
 
     describe('on iOS', () => {
@@ -570,6 +572,45 @@ describe('capacitor-bridge', () => {
     });
   });
 
+  describe('isNativePluginAvailable', () => {
+    it('reports a plugin the native binary registered', async () => {
+      const mock = setupCapacitorMock(true, 'ios');
+      mock.isPluginAvailable = vi.fn((name: string) => name === 'PageSpaceStore');
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      expect(capacitorBridge.isNativePluginAvailable('PageSpaceStore')).toBe(true);
+      expect(capacitorBridge.isNativePluginAvailable('SomethingElse')).toBe(false);
+    });
+
+    it('reports false on an iOS binary that predates the plugin, even though the platform has storeKit', async () => {
+      const mock = setupCapacitorMock(true, 'ios');
+      mock.isPluginAvailable = vi.fn(() => false);
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      expect(capacitorBridge.hasNativeCapability('storeKit')).toBe(true);
+      expect(capacitorBridge.isNativePluginAvailable('PageSpaceStore')).toBe(false);
+    });
+
+    it('reports false when the shell has no isPluginAvailable', async () => {
+      setupCapacitorMock(true, 'ios');
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      expect(capacitorBridge.isNativePluginAvailable('PageSpaceStore')).toBe(false);
+    });
+
+    it('reports false in a browser tab, even if a Capacitor global claims the plugin', async () => {
+      const mock = setupCapacitorMock(false, 'web');
+      mock.isPluginAvailable = vi.fn(() => true);
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      expect(capacitorBridge.isNativePluginAvailable('PageSpaceStore')).toBe(false);
+    });
+  });
+
   describe('getNativeCapabilities', () => {
     it('returns the full iOS capability set', async () => {
       setupCapacitorMock(true, 'ios');
@@ -581,6 +622,7 @@ describe('capacitor-bridge', () => {
         nativeAuth: true,
         push: true,
         badge: true,
+        storeKit: true,
       });
     });
 
@@ -594,6 +636,7 @@ describe('capacitor-bridge', () => {
         nativeAuth: true,
         push: true,
         badge: true,
+        storeKit: false,
       });
     });
 
@@ -605,6 +648,7 @@ describe('capacitor-bridge', () => {
         nativeAuth: false,
         push: false,
         badge: false,
+        storeKit: false,
       });
     });
 

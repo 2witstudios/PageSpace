@@ -11,14 +11,10 @@
  * is checked first (cheap, no DB) so a disabled feature denies before any
  * database round-trip.
  *
- * No deployment-mode branch HERE, but the mode is not ignored: it is folded into
- * the tier answer one layer down. `isSandboxAvailable` resolves the payer's
- * EFFECTIVE tier for this deployment (`resolveEffectiveSandboxTier`), so a tenant
- * — whose stored tier is not a purchase record, since it has no Stripe path — is
- * eligible without this chokepoint knowing the word "tenant". On-prem is
- * deliberately NOT exempt there: its answer to code execution is a local bridge to
- * the operator's own shell, not a Sprite. Adding an `isTenantMode()` check here
- * would be a second place for the same question to be answered differently.
+ * Deployment capability is resolved once by `isSandboxAvailable`: billing-disabled
+ * tenant/on-prem installations use finite deployment limits instead of a synthetic
+ * personal paid tier. This gate also authorizes local bridge binding, so personal
+ * Free normalization must not remove self-hosted execution capability.
  *
  * Tier gate, not admin gate: the sandbox is a paid feature (Pro tier and
  * above) — session/chat/panes/GitHub-tool access is open to every
@@ -42,13 +38,20 @@
 import type { DrivePermissionLevel, PermissionLevel } from '../../permissions/permissions';
 import { resolveSandboxPayerTier, isSandboxAvailable } from '../../billing/sandbox-eligibility';
 import type { SubscriptionTier } from '../../billing/subscription-tiers';
+import type { LookupDriveBillingFacts } from '../../billing/sandbox-payer';
+import type { OrgPolicies } from '../../organizations/policies-core';
+import { sandboxDecision } from '../../organizations/org-action-decisions';
+import type { AccessActor } from '../../permissions/access-actor';
 
 export type CodeExecutionDenialReason =
   | 'kill_switch_off'
   | 'tier_ineligible'
+  /** SEAT-9: the paying org is lapsed — it starts no sandbox until it reactivates (named apart from a plan that lacks sandboxes). */
+  | 'org_lapsed'
   | 'no_drive_access'
   | 'insufficient_role'
   | 'no_agent_access'
+  | 'org_policy'
   | 'error';
 
 export type CanRunCodeResult =
@@ -61,25 +64,30 @@ export type CanRunCodeResult =
  */
 export interface CanRunCodeDeps {
   getUserDrivePermissions: (
-    userId: string,
+    actor: AccessActor,
     driveId: string,
   ) => Promise<DrivePermissionLevel | null>;
-  lookupDriveOwnerId: (driveId: string) => Promise<string | null>;
+  lookupDriveBillingFacts: LookupDriveBillingFacts;
   getUserSubscriptionTier: (userId: string) => Promise<SubscriptionTier>;
   getAgentAccessLevel: (
     agentPageId: string,
     targetPageId: string,
   ) => Promise<PermissionLevel | null>;
   isCodeExecutionEnabled: () => boolean;
+  /** POL-10: the drive's org policies, read live; null when the drive has no org (unrestricted). */
+  getDriveOrgPolicies: (driveId: string) => Promise<OrgPolicies | null>;
+  /** SEAT-9 / WAL-8: whether the paying org is lapsed (then it confers no tier, so no sandbox). Absent: read as paid. */
+  isOrgLapsed?: (orgId: string) => Promise<boolean>;
 }
 
 export interface CanRunCodeInput {
-  userId: string;
+  /** Who is asking to run code: their credential decides drive access, sign-in policy included. */
+  actor: AccessActor;
   /** Absent for global (non-drive) contexts; drive-scoped checks are skipped when
    *  driveId is not provided. */
   driveId?: string;
-  /** The session's own owner — distinct from `userId` (the actor) — used to
-   *  resolve the PAYER for the tier-eligibility gate. Falls back to `userId`
+  /** The session's own owner — distinct from the actor — used to
+   *  resolve the PAYER for the tier-eligibility gate. Falls back to the actor
    *  when a call site hasn't threaded it yet (denies more strictly, never
    *  grants incorrectly). */
   ownerId?: string;
@@ -106,14 +114,15 @@ export function isCodeExecutionEnabled(): boolean {
 // The real authz helpers pull in the database; import them lazily so callers
 // that inject fakes (and the unit tests) never load the DB module graph.
 const defaultDeps: CanRunCodeDeps = {
-  getUserDrivePermissions: (userId, driveId) =>
+  isOrgLapsed: async (orgId) => !(await import('../../organizations/status').then((m) => m.isOrgActive(orgId))),
+  getUserDrivePermissions: (actor, driveId) =>
     import('../../permissions/permissions').then((m) =>
-      m.getUserDrivePermissions(userId, driveId),
+      m.getUserDrivePermissions(actor, driveId),
     ),
-  lookupDriveOwnerId: (driveId) =>
-    import('../../billing/sandbox-payer').then((m) => m.lookupDriveOwnerId(driveId)),
+  lookupDriveBillingFacts: (driveId) =>
+    import('../../billing/sandbox-payer').then((m) => m.lookupDriveBillingFacts(driveId)),
   getUserSubscriptionTier: async (userId) => {
-    const [{ db }, { eq }, { users }, { toSubscriptionTier }] = await Promise.all([
+    const [{ db }, { eq }, { users }, { toPersonalSubscriptionTier }] = await Promise.all([
       import('@pagespace/db/db'),
       import('@pagespace/db/operators'),
       import('@pagespace/db/schema/auth'),
@@ -123,13 +132,15 @@ const defaultDeps: CanRunCodeDeps = {
       where: eq(users.id, userId),
       columns: { subscriptionTier: true },
     });
-    return toSubscriptionTier(user?.subscriptionTier);
+    return toPersonalSubscriptionTier(user?.subscriptionTier);
   },
   getAgentAccessLevel: (agentPageId, targetPageId) =>
     import('../../permissions/agent-permissions').then((m) =>
       m.getAgentAccessLevel(agentPageId, targetPageId),
     ),
   isCodeExecutionEnabled,
+  getDriveOrgPolicies: (driveId) =>
+    import('../../organizations/policy-reader').then(async (m) => (await m.getDrivePolicies(driveId))?.policies ?? null),
 };
 
 const deny = (reason: CodeExecutionDenialReason): CanRunCodeResult => ({
@@ -152,11 +163,11 @@ async function authorizeAgent(
 }
 
 async function authorizeUser(
-  userId: string,
+  actor: AccessActor,
   driveId: string,
   deps: CanRunCodeDeps,
 ): Promise<CanRunCodeResult> {
-  const perms = await deps.getUserDrivePermissions(userId, driveId);
+  const perms = await deps.getUserDrivePermissions(actor, driveId);
   if (!perms?.hasAccess) return deny('no_drive_access');
   // Edit access, not owner/admin (review #2326): the owner/admin gate was a
   // rollout-era restriction from when the whole surface was admin-only. Under
@@ -174,15 +185,32 @@ async function authorizeSandboxTierEligibility(
   ownerId: string | undefined,
   deps: CanRunCodeDeps,
 ): Promise<CanRunCodeResult> {
-  const tier = await resolveSandboxPayerTier(
+  // SEAT-9 (review #2761): a lapsed paying org is refused AS lapsed — not as a plan without sandboxes.
+  let orgLapsed = false;
+  const isOrgLapsed = deps.isOrgLapsed;
+  const payerTier = await resolveSandboxPayerTier(
     { driveId: driveId ?? null, ownerId: ownerId ?? userId },
-    { lookupDriveOwnerId: deps.lookupDriveOwnerId, getUserSubscriptionTier: deps.getUserSubscriptionTier },
+    {
+      lookupDriveBillingFacts: deps.lookupDriveBillingFacts,
+      getUserSubscriptionTier: deps.getUserSubscriptionTier,
+      ...(isOrgLapsed
+        ? {
+            isOrgLapsed: async (orgId: string) => {
+              orgLapsed = await isOrgLapsed(orgId);
+              return orgLapsed;
+            },
+          }
+        : {}),
+    },
   );
-  return isSandboxAvailable(tier) ? { ok: true } : deny('tier_ineligible');
+  if (orgLapsed) return deny('org_lapsed');
+  // WAL-9: an org drive's session runs on the org's tier and bills the org pool; whether the
+  // pool can pay is the charge site's hold, not eligibility.
+  return isSandboxAvailable(payerTier) ? { ok: true } : deny('tier_ineligible');
 }
 
 export async function canRunCode({
-  userId,
+  actor,
   driveId,
   ownerId,
   requestOrigin = 'user',
@@ -192,7 +220,7 @@ export async function canRunCode({
   try {
     if (!deps.isCodeExecutionEnabled()) return deny('kill_switch_off');
 
-    const tierResult = await authorizeSandboxTierEligibility(userId, driveId, ownerId, deps);
+    const tierResult = await authorizeSandboxTierEligibility(actor.userId, driveId, ownerId, deps);
     if (!tierResult.ok) return tierResult;
 
     // Drive-scoped checks are intentionally skipped when no driveId is present
@@ -213,8 +241,12 @@ export async function canRunCode({
     // The actor user must always clear the drive edit-access gate. For
     // agent-origin runs this is the rung that stops a view-only member
     // escalating through an agent that holds drive edit access.
-    const userResult = await authorizeUser(userId, driveId, deps);
+    const userResult = await authorizeUser(actor, driveId, deps);
     if (!userResult.ok) return userResult;
+
+    // POL-10: the org's cloud-sandbox switch, read live where the run is authorized. After the
+    // access gate so a caller with no access to the drive never learns its policy.
+    if (!sandboxDecision(await deps.getDriveOrgPolicies(driveId)).ok) return deny('org_policy');
 
     // Agent-origin runs additionally require the agent page itself to hold
     // drive edit access — both the actor and the agent must be entitled.

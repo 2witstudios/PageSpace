@@ -28,6 +28,10 @@ const VALIDATED: Array<{ key: string; pass: unknown; fail: unknown }> = [
   { key: 'git_branch', pass: { action: 'list' }, fail: { action: 'delete' } },
   { key: 'git_checkout', pass: { ref: 'main' }, fail: { ref: '--detach' } },
   { key: 'git_push', pass: { branch: 'feature' }, fail: { force: true, branch: 'main' } },
+  { key: 'git_fetch', pass: { remote: 'upstream', branch: 'main' }, fail: { branch: '--upload-pack=x' } },
+  { key: 'git_pull', pass: { remote: 'upstream', branch: 'main' }, fail: { remote: '--rebase' } },
+  { key: 'git_config', pass: { key: 'user.name', value: 'Bot' }, fail: { key: '--unset', value: 'x' } },
+  { key: 'git_diff', pass: { base: 'origin/main', head: 'HEAD' }, fail: { base: '--output=/tmp/x' } },
   { key: 'gh_pr_create', pass: { title: 't', body: 'b' }, fail: { title: '', body: 'b' } },
   { key: 'gh_pr_review_comment', pass: { number: 1, body: 'b', path: 'a.ts', commit_id: 'abc' }, fail: { number: 1, body: '' } },
   { key: 'gh_pr_comment', pass: { number: 1, body: 'b' }, fail: { number: 1, body: '' } },
@@ -123,6 +127,49 @@ describe('row validators — extra branches', () => {
   });
   test('gh_pr_review_comment empty body fails before the shape checks', () => {
     assert({ given: 'an empty body', should: 'fail on the body check', actual: rowFor('gh_pr_review_comment').validate!({ number: 1, body: '', path: 'a.ts', commit_id: 'c' }).ok, expected: false });
+  });
+  // git_push: remote and branch are bare argv positionals after `-u origin`, so a
+  // flag-shaped value (`--force`, `--mirror`) would be parsed as a push option and
+  // bypass evaluatePushGuard entirely. Both are rejected BEFORE any args are built.
+  test('git_push with a flag-shaped branch fails on flag-safety', () => {
+    assert({ given: 'git_push branch "--force"', should: 'fail validate before args are built', actual: rowFor('git_push').validate!({ branch: '--force' }).ok, expected: false });
+  });
+  test('git_push with a flag-shaped remote fails on flag-safety', () => {
+    assert({ given: 'git_push remote "--mirror"', should: 'fail validate before args are built', actual: rowFor('git_push').validate!({ remote: '--mirror', branch: 'feature' }).ok, expected: false });
+  });
+  test('git_push with a +-prefixed default branch is still refused by the push guard', () => {
+    assert({ given: 'git_push branch "+main" (per-refspec force)', should: 'fail validate on the guard (regression)', actual: rowFor('git_push').validate!({ branch: '+main' }).ok, expected: false });
+  });
+  test('git_push with a named remote and a feature branch passes', () => {
+    assert({ given: 'git_push remote "upstream", branch "feature"', should: 'pass validate', actual: rowFor('git_push').validate!({ remote: 'upstream', branch: 'feature' }).ok, expected: true });
+  });
+  test('git_push with a +-prefixed feature branch passes the guard', () => {
+    assert({ given: 'git_push branch "+feature"', should: 'pass validate (force on a feature branch is allowed)', actual: rowFor('git_push').validate!({ branch: '+feature' }).ok, expected: true });
+  });
+  // Same class as git_push: fetch/pull/config pass free strings as bare positionals.
+  test('git_fetch with a flag-shaped remote fails on flag-safety', () => {
+    assert({ given: 'git_fetch remote "--all"', should: 'fail validate', actual: rowFor('git_fetch').validate!({ remote: '--all' }).ok, expected: false });
+  });
+  test('git_fetch with no args passes', () => {
+    assert({ given: 'git_fetch with nothing', should: 'pass validate', actual: rowFor('git_fetch').validate!({}).ok, expected: true });
+  });
+  test('git_pull with a flag-shaped branch fails on flag-safety', () => {
+    assert({ given: 'git_pull branch "--no-verify"', should: 'fail validate', actual: rowFor('git_pull').validate!({ branch: '--no-verify' }).ok, expected: false });
+  });
+  test('git_pull with no args passes', () => {
+    assert({ given: 'git_pull with nothing', should: 'pass validate', actual: rowFor('git_pull').validate!({}).ok, expected: true });
+  });
+  test('git_config with a dash-leading value passes (the "--" separator covers it)', () => {
+    assert({ given: 'git_config value "-F"', should: 'pass validate — a value may legitimately start with "-"', actual: rowFor('git_config').validate!({ key: 'core.pager', value: '-F' }).ok, expected: true });
+  });
+  // git_diff interpolates base as the LEADING text of `base...head`, so only base
+  // can turn the argument into an option; "--" cannot help here because it would
+  // make git read the range as a path.
+  test('git_diff with no base passes', () => {
+    assert({ given: 'git_diff working-tree', should: 'pass validate', actual: rowFor('git_diff').validate!({}).ok, expected: true });
+  });
+  test('git_diff with a flag-shaped head fails on flag-safety', () => {
+    assert({ given: 'git_diff head "--x"', should: 'fail validate', actual: rowFor('git_diff').validate!({ base: 'main', head: '--x' }).ok, expected: false });
   });
 });
 

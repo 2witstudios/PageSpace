@@ -197,6 +197,24 @@ describe('reconcileAllStorageUsage', () => {
     ]);
     expect(result.failed).toEqual(['user-1']);
   });
+  it('reconcileAllStorageUsage_whenTheLockIsLostMidSweep_appliesNoFurtherCorrection', async () => {
+    // Once the reconcile lock is lost, a second sweep can read these same drifts and apply them;
+    // applying them here too would double-count. The next sweep re-measures whatever is left.
+    const lost = new AbortController();
+    vi.mocked(storageRepository.findStorageDriftCandidates).mockResolvedValue([
+      { userId: 'user-1', materializedBytes: 2000, derivedBytes: 1500 },
+      { userId: 'user-2', materializedBytes: 100, derivedBytes: 900 },
+    ]);
+    vi.mocked(storageRepository.updateStorageInTx).mockImplementationOnce(async () => {
+      lost.abort(new Error('Connection terminated unexpectedly'));
+      return { newUsage: 1500 };
+    });
+
+    const result = await reconcileAllStorageUsage(lost.signal);
+
+    expect(storageRepository.updateStorageInTx).toHaveBeenCalledTimes(1);
+    expect(result.corrected.map((c) => c.userId)).toEqual(['user-1']);
+  });
 });
 
 describe('reconcileAllStorageUsageSerialized (#2225 review — overlapping cron ticks must not double-apply)', () => {

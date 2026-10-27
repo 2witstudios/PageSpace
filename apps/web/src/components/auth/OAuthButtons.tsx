@@ -2,7 +2,7 @@
 
 import { motion } from 'motion/react';
 import { Loader2 } from 'lucide-react';
-import Link from 'next/link';
+import { MarketingLink } from '@/components/ui/MarketingLink';
 import { Button } from '@/components/ui/button';
 
 interface OAuthButtonsProps {
@@ -11,7 +11,12 @@ interface OAuthButtonsProps {
   disabled?: boolean;
   isGoogleLoading?: boolean;
   isAppleLoading?: boolean;
+  /** 'v3' restyles the two buttons to the Imago sign-in board; the default is unchanged. */
+  variant?: 'default' | 'v3';
 }
+
+const V3_BUTTON =
+  'h-10 w-full gap-2 rounded-[10px] border-[oklch(0.90_0.005_230)] bg-[oklch(0.995_0.002_240)] text-sm font-medium text-[oklch(0.15_0.01_220)] shadow-none hover:bg-[oklch(0.97_0.004_235)]';
 
 export function OAuthButtons({
   onGoogleClick,
@@ -19,8 +24,10 @@ export function OAuthButtons({
   disabled = false,
   isGoogleLoading = false,
   isAppleLoading = false,
+  variant = 'default',
 }: OAuthButtonsProps) {
   const isAnyLoading = isGoogleLoading || isAppleLoading;
+  const buttonClass = variant === 'v3' ? V3_BUTTON : 'w-full gap-3';
 
   return (
     <div className="flex flex-col gap-3">
@@ -34,7 +41,7 @@ export function OAuthButtons({
         <Button
           type="button"
           variant="outline"
-          className="w-full gap-3"
+          className={buttonClass}
           onClick={onGoogleClick}
           disabled={disabled || isAnyLoading}
         >
@@ -64,7 +71,7 @@ export function OAuthButtons({
         <Button
           type="button"
           variant="outline"
-          className="w-full gap-3"
+          className={buttonClass}
           onClick={onAppleClick}
           disabled={disabled || isAnyLoading}
         >
@@ -85,14 +92,15 @@ export function OAuthButtons({
           affirmative confirmation (OAuth has no form to collect a checkbox). */}
       <p className="text-center text-xs text-muted-foreground">
         By continuing with Google or Apple, you confirm you are at least 16 and agree to our{' '}
-        <Link href="/terms" className="underline hover:text-foreground">
+        <MarketingLink href="/terms" className="underline hover:text-foreground">
           Terms
-        </Link>{' '}
+        </MarketingLink>{' '}
         and{' '}
-        <Link href="/privacy" className="underline hover:text-foreground">
+        <MarketingLink href="/privacy" className="underline hover:text-foreground">
           Privacy Policy
-        </Link>
-        .
+        </MarketingLink>
+        . AI features send the content you use them with
+        to OpenRouter and the model provider you choose.
       </p>
     </div>
   );

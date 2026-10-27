@@ -8,6 +8,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getUserDrivePermissions: vi.fn(),
 }));
 
@@ -16,8 +17,8 @@ vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
 }));
 
 vi.mock('@pagespace/lib/services/storage-limits', () => ({
-  getUserStorageQuota: vi.fn(),
-  checkStorageQuota: vi.fn(),
+  resolveUploadQuotaTarget: vi.fn(),
+  checkUploadQuotaTarget: vi.fn(),
   reserveConcurrentUploadSlot: vi.fn(),
   userReferencesContentHash: vi.fn(),
 }));
@@ -44,7 +45,7 @@ vi.mock('@/lib/upload/s3-effects', () => ({
 import { POST } from '../route';
 import { authenticateRequestWithOptions, checkMCPCreateScope } from '@/lib/auth';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
-import { getUserStorageQuota, checkStorageQuota, reserveConcurrentUploadSlot, userReferencesContentHash } from '@pagespace/lib/services/storage-limits';
+import { resolveUploadQuotaTarget, checkUploadQuotaTarget, reserveConcurrentUploadSlot, userReferencesContentHash } from '@pagespace/lib/services/storage-limits';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkObjectExists, issuePresignedPutUrl } from '@/lib/upload/s3-effects';
 
@@ -58,6 +59,10 @@ function makeAuth(userId = 'user-1') {
 
 function makeQuota(tier = 'free' as const) {
   return { userId: 'user-1', tier, quotaBytes: 500 * 1024 * 1024, usedBytes: 0, availableBytes: 500 * 1024 * 1024, utilizationPercent: 0, warningLevel: 'none' as const };
+}
+
+function makeTarget(tier = 'free' as const) {
+  return { payer: { kind: 'user' as const, userId: 'user-1' }, quota: makeQuota(tier) };
 }
 
 function makeRequest(body: Record<string, unknown>) {
@@ -80,8 +85,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(makeAuth());
   vi.mocked(getUserDrivePermissions).mockResolvedValue({ hasAccess: true, isOwner: true, isAdmin: false, isMember: false, canEdit: true });
-  vi.mocked(getUserStorageQuota).mockResolvedValue(makeQuota());
-  vi.mocked(checkStorageQuota).mockResolvedValue({ allowed: true });
+  vi.mocked(resolveUploadQuotaTarget).mockResolvedValue(makeTarget());
+  vi.mocked(checkUploadQuotaTarget).mockResolvedValue({ allowed: true });
   vi.mocked(checkObjectExists).mockResolvedValue(false);
   vi.mocked(issuePresignedPutUrl).mockResolvedValue(MOCK_URL);
   vi.mocked(uploadSemaphore.acquireUploadSlot).mockResolvedValue(MOCK_SLOT);
@@ -113,10 +118,31 @@ describe('POST /api/upload/presign', () => {
 
   describe('storage quota', () => {
     it('returns 413 when the remaining storage/file-count quota is exceeded', async () => {
-      vi.mocked(checkStorageQuota).mockResolvedValue({ allowed: false, reason: 'Quota exceeded' });
+      vi.mocked(checkUploadQuotaTarget).mockResolvedValue({ allowed: false, reason: 'Quota exceeded' });
       const res = await POST(makeRequest(VALID_BODY));
       expect(res.status).toBe(413);
       expect(uploadSemaphore.acquireUploadSlot).not.toHaveBeenCalled();
+    });
+
+    it('WAL-9 (partial) checks the quota of the drive being uploaded into, so an org drive checks the org, not the uploader', async () => {
+      await POST(makeRequest(VALID_BODY));
+      expect(resolveUploadQuotaTarget).toHaveBeenCalledWith(expect.any(String), VALID_BODY.driveId);
+    });
+
+    it('WAL-9 (partial) resolves the payer and its usage once per request and checks against that same read (#2719 review P2-2)', async () => {
+      const orgTarget = {
+        payer: { kind: 'org' as const, orgId: 'org-1' },
+        quota: { orgId: 'org-1', tier: 'business' as const, quotaBytes: 50 * 1024 ** 3, usedBytes: 0, availableBytes: 50 * 1024 ** 3, utilizationPercent: 0, warningLevel: 'none' as const },
+      };
+      vi.mocked(resolveUploadQuotaTarget).mockResolvedValue(orgTarget);
+
+      const res = await POST(makeRequest(VALID_BODY));
+
+      expect(res.status).toBe(200);
+      expect(resolveUploadQuotaTarget).toHaveBeenCalledTimes(1);
+      expect(checkUploadQuotaTarget).toHaveBeenCalledTimes(1);
+      expect(checkUploadQuotaTarget).toHaveBeenCalledWith(orgTarget, VALID_BODY.fileSize);
+      expect(uploadSemaphore.acquireUploadSlot).toHaveBeenCalledWith('user-1', 'business', VALID_BODY.fileSize, expect.anything());
     });
   });
 
@@ -162,14 +188,14 @@ describe('POST /api/upload/presign', () => {
     });
 
     it('returns 413 when file size exceeds the tier limit', async () => {
-      vi.mocked(getUserStorageQuota).mockResolvedValue(makeQuota('free'));
+      vi.mocked(resolveUploadQuotaTarget).mockResolvedValue(makeTarget('free'));
       const overFreeLimit = { ...VALID_BODY, fileSize: 50 * 1024 * 1024 + 1 };
       const res = await POST(makeRequest(overFreeLimit));
       expect(res.status).toBe(413);
     });
 
-    it('returns 500 when getUserStorageQuota returns null', async () => {
-      vi.mocked(getUserStorageQuota).mockResolvedValue(null);
+    it('returns 500 when resolveUploadQuotaTarget returns null', async () => {
+      vi.mocked(resolveUploadQuotaTarget).mockResolvedValue(null);
       const res = await POST(makeRequest(VALID_BODY));
       expect(res.status).toBe(500);
     });

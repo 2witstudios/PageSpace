@@ -11,6 +11,7 @@ import {
   type DeleteDriveEnvDeps,
   type RebuildDriveEnvDeps,
 } from '../drive-envs';
+import { DEFAULT_ORG_POLICIES } from '../../../organizations/policies-core';
 import { isUniqueViolation } from '../drive-envs-store';
 import { driveEnvDtoSchema } from '../../../drive-envs/env-contract';
 import { getDriveEnvLimit } from '../../sandbox/quota';
@@ -25,8 +26,10 @@ function makeCreateDeps(
 ): CreateDriveEnvDeps {
   return {
     store: store.store,
+    getDriveOrgPolicies: async () => null,
     resolvePayer: async () => ({ payerId: PAYER_ID, tier: 'pro' }),
     now: () => NOW,
+    admitCreator: async () => ({ allowed: true }),
     ...over,
   };
 }
@@ -37,6 +40,26 @@ function makeDeleteDeps(
 ): DeleteDriveEnvDeps {
   return { store: store.store, host: host.host, now: () => NOW };
 }
+
+describe('persistent environments follow the org policy', () => {
+  const off = async () => ({ ...DEFAULT_ORG_POLICIES, persistentEnvironments: false });
+
+  it('POL-10 refuses to create an environment when the org turns them off, and writes nothing', async () => {
+    const store = makeDriveEnvStore();
+    const create = vi.spyOn(store.store, 'createIfUnderLimit');
+    const result = await createDriveEnv({ driveId: DRIVE_ID, name: 'staging', createdBy: 'u', deps: makeCreateDeps(store, { getDriveOrgPolicies: off }) });
+    expect(result).toMatchObject({ ok: false, reason: 'org_policy' });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('POL-10 creates normally when the org allows them, or the drive has no org', async () => {
+    for (const read of [async () => ({ ...DEFAULT_ORG_POLICIES, persistentEnvironments: true }), async () => null]) {
+      const store = makeDriveEnvStore();
+      const result = await createDriveEnv({ driveId: DRIVE_ID, name: 'staging', createdBy: 'u', deps: makeCreateDeps(store, { getDriveOrgPolicies: read }) });
+      expect(result.ok).toBe(true);
+    }
+  });
+});
 
 describe('createDriveEnv', () => {
   it('should mint a row WITHOUT provisioning — envs provision lazily, on the first session inside one', async () => {
@@ -51,6 +74,40 @@ describe('createDriveEnv', () => {
     expect(result.env.spriteKey).toBeNull();
   });
 
+  it('WAL-2 (partial) [D-OW-28] a creator at their cap of the org\'s credits is refused, and nothing is minted', async () => {
+    const store = makeDriveEnvStore();
+    const createIfUnderLimit = vi.spyOn(store.store, 'createIfUnderLimit');
+    const asked: Array<{ driveId: string; userId: string }> = [];
+    const result = await createDriveEnv({
+      driveId: DRIVE_ID,
+      name: 'staging',
+      createdBy: 'member-marcus',
+      deps: makeCreateDeps(store, {
+        admitCreator: async (input) => {
+          asked.push(input);
+          return { allowed: false, message: 'cap reached' };
+        },
+      }),
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'member_cap_reached', message: 'cap reached' });
+    expect(asked).toEqual([{ driveId: DRIVE_ID, userId: 'member-marcus' }]);
+    expect(createIfUnderLimit).not.toHaveBeenCalled();
+  });
+
+  it('SEAT-9 (partial) a LAPSED org refuses the create as org_lapsed, not as the member\'s cap, and nothing is minted', async () => {
+    const store = makeDriveEnvStore();
+    const createIfUnderLimit = vi.spyOn(store.store, 'createIfUnderLimit');
+    const result = await createDriveEnv({
+      driveId: DRIVE_ID,
+      name: 'staging',
+      createdBy: 'member-marcus',
+      deps: makeCreateDeps(store, { admitCreator: async () => ({ allowed: false, code: 'org_lapsed', message: 'lapsed' }) }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'org_lapsed', message: 'lapsed' });
+    expect(createIfUnderLimit).not.toHaveBeenCalled();
+  });
+
   it('given a vanished drive, should fail closed rather than meter the request against anybody else', async () => {
     const store = makeDriveEnvStore();
     const countEnvsOwnedBy = vi.spyOn(store.store, 'countEnvsOwnedBy');
@@ -58,7 +115,7 @@ describe('createDriveEnv', () => {
       driveId: DRIVE_ID,
       name: 'staging',
       createdBy: null,
-      deps: makeCreateDeps(store, { resolvePayer: async () => null }),
+      deps: makeCreateDeps(store, { getDriveOrgPolicies: async () => null, resolvePayer: async () => null }),
     });
 
     expect(result).toEqual({ ok: false, reason: 'drive_not_found' });
@@ -86,7 +143,7 @@ describe('createDriveEnv', () => {
       driveId: DRIVE_ID,
       name: 'staging',
       createdBy: null,
-      deps: makeCreateDeps(store, { resolvePayer: async () => ({ payerId: PAYER_ID, tier: 'free' }) }),
+      deps: makeCreateDeps(store, { getDriveOrgPolicies: async () => null, resolvePayer: async () => ({ payerId: PAYER_ID, tier: 'free' }) }),
     });
 
     expect(result.ok).toBe(false);
@@ -598,9 +655,26 @@ describe('rebuildDriveEnv', () => {
         return { ok: true, sandboxId: handle.sandboxId, resumed: false };
       },
       now: () => NOW,
+      admitOrgActive: async () => ({ allowed: true }),
       ...over,
     };
   }
+
+  it('SEAT-9 (partial) review #2761: a LAPSED org\'s env is not rebuilt — refused org_lapsed BEFORE any teardown or provision', async () => {
+    const store = makeDriveEnvStore([makeEnvRecord()]);
+    const host = makeSpriteHost();
+    const asked: string[] = [];
+    const deps = makeRebuildDeps(store, host, {
+      admitOrgActive: async ({ driveId }) => {
+        asked.push(driveId);
+        return { allowed: false, code: 'org_lapsed', message: 'lapsed' };
+      },
+    });
+    expect(await rebuildDriveEnv({ envId: ENV_ID, deps })).toEqual({ ok: false, reason: 'org_lapsed', message: 'lapsed' });
+    expect(asked).toEqual([DRIVE_ID]);
+    expect(host.calls.kill).toEqual([]);
+    expect(host.calls.provision).toEqual([]);
+  });
 
   it('given a LOCAL env, should refuse substrate_unsupported BEFORE any teardown or provision — the machine is the user\'s, there is no Sprite to replace (C1)', async () => {
     const store = makeDriveEnvStore([makeEnvRecord({ substrate: 'local' })]);

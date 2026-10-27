@@ -21,7 +21,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { broadcastTaskEvent } from '@/lib/websocket';
 import type { ToolExecutionContext } from '../core/types';
-import { canActorManageDrive, driveDeniedByAppToken, canActorEditPage } from './actor-permissions';
+import { canActorManageDrive, driveDeniedByAppToken, canActorEditPage, toolActor } from './actor-permissions';
 import { parseDateTime, normalizeTimezone } from '../core/timestamp-utils';
 import type { CalendarTriggerMetadata } from '@pagespace/db/schema/calendar-triggers';
 
@@ -138,7 +138,7 @@ Either way, returns the calendarEventId so you can pass it to delete_calendar_tr
       if (await driveDeniedByAppToken(ctx, driveId, 'edit')) {
         return { success: false, error: 'This token does not have access to the specified drive.' };
       }
-      if (!(await isUserDriveMember(userId, driveId))) {
+      if (!(await isUserDriveMember(toolActor(ctx), driveId))) {
         return { success: false, error: 'You do not have access to this drive.' };
       }
 

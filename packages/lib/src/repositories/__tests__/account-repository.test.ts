@@ -25,6 +25,8 @@ vi.mock('@pagespace/db/schema/members', () => ({
   driveMembers: { driveId: 'driveId' },
 }));
 vi.mock('@pagespace/db/operators', () => ({
+  and: vi.fn((..._parts) => 'and'),
+  isNull: vi.fn((_a) => 'isNull'),
   eq: vi.fn((_a, _b) => 'eq'),
   sql: Object.assign(
     vi.fn((parts: TemplateStringsArray) => ({ sql: parts.join('') })),
@@ -37,6 +39,32 @@ vi.mock('@pagespace/db/operators', () => ({
 // that cleanup selects is pinned against a real database in
 // `apps/web/src/lib/repositories/__tests__/chat-mutation-matrix.integration.test.ts`.
 // Here we only assert that it is called, and called BEFORE the drive row goes.
+// The leave cascade is proven against Postgres in
+// `organizations/__tests__/leave.integration.test.ts`; here only its place in deleteUser.
+vi.mock('../../organizations/leave', () => ({
+  leaveAllOrganizations: vi.fn().mockResolvedValue([]),
+  reassignLedOrgDrives: vi.fn().mockResolvedValue([]),
+  computeReattributionAuditEvents: vi.fn(() => []),
+}));
+// AUD-1: deleteUser's org events are staged in its own transaction; the stage is a spy.
+const stageAudit = vi.hoisted(() => vi.fn());
+vi.mock('../../audit/org-audit', async () => {
+  const { db } = await import('@pagespace/db/db');
+  return {
+    transactionWithOrgAudit: (run: (tx: unknown, audit: typeof stageAudit) => Promise<unknown>) => db.transaction((tx) => run(tx, stageAudit)),
+  };
+});
+// [D-OW-27] The suppression write is proven against Postgres in organizations/__tests__/
+// departure-suppression.integration.test.ts; here only its place in deleteUser.
+vi.mock('../../organizations/departure-suppression', () => ({
+  recordDepartureSuppressions: vi.fn().mockResolvedValue(0),
+}));
+// [D-OW-36] The automation step is proven against Postgres in organizations/__tests__/
+// automation-ownership.integration.test.ts; here only its place in deleteUser.
+vi.mock('../../organizations/automation-ownership', () => ({
+  prepareAutomationsForAccountDeletion: vi.fn().mockResolvedValue([]),
+  ownerLeftAutomationAuditEvents: vi.fn((items: Array<{ id: string }>) => items.map((i) => ({ eventType: 'org.automation.owner_left', resourceId: i.id }))),
+}));
 vi.mock('../conversation-cleanup', () => ({
   deleteConversationsForDrive: vi.fn().mockResolvedValue({ conversations: 0, messages: 0 }),
 }));
@@ -48,6 +76,9 @@ vi.mock('../conversation-cleanup', () => ({
 import { accountRepository } from '../account-repository';
 import { db } from '@pagespace/db/db';
 import { deleteConversationsForDrive } from '../conversation-cleanup';
+import { ownerLeftAutomationAuditEvents, prepareAutomationsForAccountDeletion } from '../../organizations/automation-ownership';
+import { leaveAllOrganizations, reassignLedOrgDrives } from '../../organizations/leave';
+import { recordDepartureSuppressions } from '../../organizations/departure-suppression';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -58,12 +89,6 @@ function setupSelectChain(result: unknown[]) {
   const fromFn = vi.fn().mockReturnValue({ where: whereFn });
   vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
   return { whereFn, fromFn };
-}
-
-function setupDeleteChain() {
-  const whereFn = vi.fn().mockResolvedValue(undefined);
-  vi.mocked(db.delete).mockReturnValue({ where: whereFn } as unknown as ReturnType<typeof db.delete>);
-  return { whereFn };
 }
 
 // ---------------------------------------------------------------------------
@@ -78,6 +103,16 @@ describe('accountRepository.findById', () => {
 
     const result = await accountRepository.findById('user-1');
     expect(result).toEqual(user);
+  });
+
+  it('given a lookup, should select appleId so deletion can tell a Sign in with Apple user what to do', async () => {
+    vi.mocked(db.query.users.findFirst).mockResolvedValue({ id: 'user-1', email: 'e', image: null, stripeCustomerId: null, appleId: 'apple-sub' } as never);
+
+    await accountRepository.findById('user-1');
+
+    expect(vi.mocked(db.query.users.findFirst).mock.calls[0][0]).toEqual(
+      expect.objectContaining({ columns: expect.objectContaining({ appleId: true }) }),
+    );
   });
 
   it('returns null when user not found', async () => {
@@ -186,17 +221,63 @@ describe('accountRepository.deleteDrive', () => {
 describe('accountRepository.deleteUser', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
+  function setupTxDelete(where: ReturnType<typeof vi.fn>) {
+    const tx = { delete: vi.fn().mockReturnValue({ where }) };
+    vi.mocked(db.transaction).mockImplementation(async (fn) => fn(tx as unknown as Parameters<typeof fn>[0]));
+    return tx;
+  }
+
   it('resolves without error when DB succeeds', async () => {
-    setupDeleteChain();
+    setupTxDelete(vi.fn().mockResolvedValue(undefined));
 
     await expect(accountRepository.deleteUser('user-1')).resolves.toBeUndefined();
   });
 
   it('propagates DB errors', async () => {
-    const whereFn = vi.fn().mockRejectedValue(new Error('FK constraint'));
-    vi.mocked(db.delete).mockReturnValue({ where: whereFn } as unknown as ReturnType<typeof db.delete>);
+    setupTxDelete(vi.fn().mockRejectedValue(new Error('FK constraint')));
 
     await expect(accountRepository.deleteUser('user-1')).rejects.toThrow('FK constraint');
+  });
+
+  it('O-7 leaves every org and reassigns led org drives in the same transaction, before the users row goes', async () => {
+    const where = vi.fn().mockResolvedValue(undefined);
+    const tx = setupTxDelete(where);
+
+    await accountRepository.deleteUser('user-1');
+
+    expect(leaveAllOrganizations).toHaveBeenCalledWith('user-1', tx, expect.objectContaining({ reason: 'account_deleted' }));
+    expect(reassignLedOrgDrives).toHaveBeenCalledWith('user-1', tx, expect.objectContaining({ reason: 'account_deleted' }));
+    const deleteOrder = tx.delete.mock.invocationCallOrder[0];
+    expect(vi.mocked(leaveAllOrganizations).mock.invocationCallOrder[0]).toBeLessThan(deleteOrder);
+    expect(vi.mocked(reassignLedOrgDrives).mock.invocationCallOrder[0]).toBeLessThan(deleteOrder);
+    // [D-OW-27] the suppression is written in the same transaction, after leaving, before the row goes.
+    expect(recordDepartureSuppressions).toHaveBeenCalledWith(tx, 'user-1');
+    expect(vi.mocked(leaveAllOrganizations).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(recordDepartureSuppressions).mock.invocationCallOrder[0]);
+    expect(vi.mocked(recordDepartureSuppressions).mock.invocationCallOrder[0]).toBeLessThan(deleteOrder);
+  });
+
+  it('SPEND-6 (partial) the org automations are flagged in the same transaction, after leaving and reassigning, before the users row goes; audited in that transaction ([D-OW-36], AUD-1)', async () => {
+    const tx = setupTxDelete(vi.fn().mockResolvedValue(undefined));
+    const flagged = [{ orgId: 'org-1', kind: 'workflow' as const, id: 'wf-1', driveId: 'drive-1', formerOwnerId: 'user-1', reason: 'account_deleted' as const }];
+    vi.mocked(prepareAutomationsForAccountDeletion).mockResolvedValueOnce(flagged);
+
+    await accountRepository.deleteUser('user-1');
+
+    expect(prepareAutomationsForAccountDeletion).toHaveBeenCalledWith(tx, 'user-1');
+    const prepareOrder = vi.mocked(prepareAutomationsForAccountDeletion).mock.invocationCallOrder[0];
+    expect(vi.mocked(reassignLedOrgDrives).mock.invocationCallOrder[0]).toBeLessThan(prepareOrder);
+    expect(prepareOrder).toBeLessThan(tx.delete.mock.invocationCallOrder[0]);
+    expect(ownerLeftAutomationAuditEvents).toHaveBeenCalledWith(flagged);
+    expect(stageAudit).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'org.automation.owner_left', resourceId: 'wf-1' }));
+    expect(stageAudit.mock.invocationCallOrder[0]).toBeGreaterThan(tx.delete.mock.invocationCallOrder[0]);
+  });
+
+  it('O-7 does not delete the users row when leaving an org is refused', async () => {
+    const tx = setupTxDelete(vi.fn().mockResolvedValue(undefined));
+    vi.mocked(leaveAllOrganizations).mockRejectedValueOnce(new Error('OWNER_MUST_TRANSFER'));
+
+    await expect(accountRepository.deleteUser('user-1')).rejects.toThrow('OWNER_MUST_TRANSFER');
+    expect(tx.delete).not.toHaveBeenCalled();
   });
 });
 

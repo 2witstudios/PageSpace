@@ -14,10 +14,8 @@ vi.mock('google-auth-library', () => ({
   })),
 }));
 
-vi.mock('apple-signin-auth', () => ({
-  default: {
-    verifyIdToken: vi.fn(),
-  },
+vi.mock('../apple/apple-jwt', () => ({
+  verifyAppleJwt: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/db', () => ({
@@ -54,7 +52,7 @@ vi.mock('../../logging/logger-config', () => ({
 import { verifyGoogleIdToken, verifyAppleIdToken, verifyOAuthIdToken, createOrLinkOAuthUser } from '../oauth-utils';
 import { OAuthProvider } from '../oauth-types';
 import { OAuth2Client } from 'google-auth-library';
-import appleSignIn from 'apple-signin-auth';
+import { verifyAppleJwt } from '../apple/apple-jwt';
 import { db } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 
@@ -146,53 +144,61 @@ describe('oauth-utils', () => {
       expect(result.error).toContain('not configured');
     });
 
-    it('should return error when payload missing', async () => {
-      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue(null as never);
+    it('should return error when claims are missing', async () => {
+      vi.mocked(verifyAppleJwt).mockResolvedValue({ ok: true, claims: {} });
       const result = await verifyAppleIdToken('some-token');
       expect(result.success).toBe(false);
     });
 
     it('should return user info on success', async () => {
-      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue({
-        sub: 'apple-123',
-        email: 'user@icloud.com',
-        email_verified: 'true',
-      } as never);
+      vi.mocked(verifyAppleJwt).mockResolvedValue({
+        ok: true,
+        claims: { sub: 'apple-123', email: 'user@icloud.com', email_verified: 'true' },
+      });
 
       const result = await verifyAppleIdToken('valid-token');
       expect(result.success).toBe(true);
       expect(result.userInfo?.provider).toBe(OAuthProvider.APPLE);
     });
 
+    it('given a verified token, should return the audience it was issued for so its code is exchanged with that client', async () => {
+      vi.mocked(verifyAppleJwt).mockResolvedValue({
+        ok: true,
+        claims: { sub: 'apple-123', aud: 'apple-service-id', email: 'user@icloud.com', email_verified: 'true' },
+      });
+
+      const result = await verifyAppleIdToken('valid-token');
+
+      expect(result.audience).toBe('apple-service-id');
+    });
+
     it('should handle boolean email_verified', async () => {
-      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue({
-        sub: 'apple-123',
-        email: 'user@icloud.com',
-        email_verified: true,
-      } as never);
+      vi.mocked(verifyAppleJwt).mockResolvedValue({
+        ok: true,
+        claims: { sub: 'apple-123', email: 'user@icloud.com', email_verified: true },
+      });
 
       const result = await verifyAppleIdToken('valid-token');
       expect(result.success).toBe(true);
       expect(result.userInfo?.emailVerified).toBe(true);
     });
 
-    it('should handle verification errors', async () => {
-      vi.mocked(appleSignIn.verifyIdToken).mockRejectedValue(new Error('Bad token'));
+    it('should handle verification failures', async () => {
+      vi.mocked(verifyAppleJwt).mockResolvedValue({ ok: false, reason: 'invalid_signature' });
       const result = await verifyAppleIdToken('bad-token');
       expect(result.success).toBe(false);
+      expect(result.error).toBe('invalid_signature');
     });
 
     it('should include service ID when set', async () => {
       process.env.APPLE_SERVICE_ID = 'apple-service-id';
-      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue({
-        sub: '1', email: 'u@a.com', email_verified: true,
-      } as never);
+      vi.mocked(verifyAppleJwt).mockResolvedValue({
+        ok: true,
+        claims: { sub: '1', email: 'u@a.com', email_verified: true },
+      });
 
       await verifyAppleIdToken('token');
-      expect(appleSignIn.verifyIdToken).toHaveBeenCalledWith('token', {
-        audience: ['apple-client-id', 'apple-service-id'],
-        ignoreExpiration: false,
-      });
+      expect(verifyAppleJwt).toHaveBeenCalledWith('token', { audience: ['apple-client-id', 'apple-service-id'] });
     });
   });
 
@@ -208,9 +214,10 @@ describe('oauth-utils', () => {
     });
 
     it('should route to Apple verification', async () => {
-      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue({
-        sub: '1', email: 'u@a.com', email_verified: true,
-      } as never);
+      vi.mocked(verifyAppleJwt).mockResolvedValue({
+        ok: true,
+        claims: { sub: '1', email: 'u@a.com', email_verified: true },
+      });
 
       const result = await verifyOAuthIdToken(OAuthProvider.APPLE, 'token');
       expect(result.success).toBe(true);

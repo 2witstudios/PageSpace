@@ -17,6 +17,10 @@ import {
   upsertCalendarTriggerWorkflowInTx,
   validateCalendarAgentTrigger,
 } from '@/lib/workflows/calendar-trigger-helpers';
+import { OrgLapsedError, checkCalendarVisibilityMayLoosen, isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
+import { checkActorDriveAuthentication } from '@pagespace/lib/permissions/actor-authentication';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -63,6 +67,12 @@ const updateEventSchema = z.object({
 async function canAccessEvent(auth: AuthResult, event: typeof calendarEvents.$inferSelect): Promise<boolean> {
   const userId = auth.userId;
 
+  // SEC-2/3 (D-OW-45): an event in a drive is that drive's content, so the drive's org sign-in policy is asked of the
+  // credential BEFORE any identity shortcut — its creator and attendees included.
+  if (event.driveId && !(await checkActorDriveAuthentication(actorFromAuth(auth), event.driveId)).allowed) {
+    return false;
+  }
+
   // Creator always has access (identity check) — including a scoped token
   // reading back a driveless event IT created: the token still acts on
   // behalf of its owner for a resource that belongs to that exact identity.
@@ -89,7 +99,7 @@ async function canAccessEvent(auth: AuthResult, event: typeof calendarEvents.$in
 
   // Check membership in home drive OR any shared drive for DRIVE-visible events
   if (event.visibility === 'DRIVE') {
-    return isUserMemberOfAnyEventDrive(userId, event);
+    return isUserMemberOfAnyEventDrive(actorFromAuth(auth), event);
   }
 
   return false;
@@ -163,7 +173,7 @@ export async function GET(
     // Check access
     const hasAccess = await canAccessEvent(auth, event);
     if (!hasAccess) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), event.driveId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
     }
 
     return NextResponse.json(event);
@@ -215,10 +225,10 @@ export async function PATCH(
     // Check edit permission
     const canEdit = await canEditEvent(auth, event);
     if (!canEdit) {
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), event.driveId, NextResponse.json(
         { error: 'You do not have permission to edit this event' },
         { status: 403 }
-      );
+      ));
     }
 
     const body = await request.json();
@@ -294,6 +304,11 @@ export async function PATCH(
     // write where the title moved but the trigger didn't would be confusing
     // for the user and hard to retry safely.
     const [updatedEvent] = await db.transaction(async (tx) => {
+      // [D-OW-33] ruling: an org-drive event made more visible (e.g. Private → Drive) loosens who reads it; refused
+      // while the drive's org is lapsed, judged on the event row locked in this transaction. Narrowing still applies.
+      if (data.visibility !== undefined && (await checkCalendarVisibilityMayLoosen(tx, eventId, data.visibility))) {
+        throw new OrgLapsedError();
+      }
       const result = await tx
         .update(calendarEvents)
         .set({
@@ -401,6 +416,7 @@ export async function PATCH(
 
     return NextResponse.json(completeEvent);
   } catch (error) {
+    if (isOrgLapsedError(error)) return orgLapsedResponse();
     loggers.api.error('Error updating calendar event:', error as Error);
     return NextResponse.json(
       { error: 'Failed to update calendar event' },
@@ -448,10 +464,10 @@ export async function DELETE(
     // Check edit permission
     const canEdit = await canEditEvent(auth, event);
     if (!canEdit) {
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), event.driveId, NextResponse.json(
         { error: 'You do not have permission to delete this event' },
         { status: 403 }
-      );
+      ));
     }
 
     // Get all attendee IDs and shared drive IDs before deletion for broadcasting

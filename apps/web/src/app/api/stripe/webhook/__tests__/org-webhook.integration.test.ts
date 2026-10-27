@@ -1,0 +1,1058 @@
+// @vitest-environment node
+/**
+ * The Stripe webhook's ORG branch end to end: signed events through the real POST
+ * handler, a REAL Postgres, and the in-memory Stripe (FakeOrgStripe) the org billing
+ * shell reads the subscription from (Spec SEAT-7, SEAT-9, MON-3).
+ *
+ * Proves: an org's events never reach the personal handlers and a person's never reach
+ * the org pool; a replayed event is a no-op (no Stripe read, no write); two concurrent
+ * deliveries of one event apply once; two events about one invoice grant once; an older
+ * invoice paid late never moves the pool's period back; a late event about an ended,
+ * replaced subscription never overwrites the current one; lapse is entered and left by
+ * the mirror alone and never touches a credit.
+ *
+ * Runs ARMED for the funding-legs invariant (D-OW-13), like lib's integration setup: every
+ * connection of this file's pool turns the check on and the commit-time trigger is
+ * installed, so ANY refill, mirror or fixture write that leaves a drive wallet's
+ * topupRemainingCents != SUM(legs) fails its own transaction.
+ *
+ * Requires DATABASE_URL → a migrated Postgres (requireDb). Deletes every row it creates:
+ * ledger, wallets and legs, org_subscriptions, members, orgs, then users.
+ */
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import Stripe from 'stripe';
+import { db, pool as appPool } from '@pagespace/db/db';
+import { and, eq, inArray, isNull, or, sql } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
+import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
+import { wallets, walletFundingLegs } from '@pagespace/db/schema/wallets';
+import { creditLedger } from '@pagespace/db/schema/credits';
+import { stripeEvents, subscriptions } from '@pagespace/db/schema/subscriptions';
+import { factories } from '@pagespace/db/test/factories';
+import { requireDb } from '@pagespace/db/test/require-db';
+import { createOrganization } from '@pagespace/lib/organizations/repository';
+import { checkOrgActive, getOrgStatus } from '@pagespace/lib/organizations/status';
+import { ORG_ID_METADATA_KEY, ORG_SUBSCRIPTION_KIND, type OrgBusinessPrices } from '@pagespace/lib/billing/org-subscription-core';
+import { orgPoolListPriceGrantCents, orgPoolRefillGrant } from '@pagespace/lib/billing/wallet-funding';
+import { centsFromDollars, tierListPriceCents } from '@pagespace/lib/billing/money-model';
+import { reconcileSubscriptionTiers } from '@pagespace/lib/billing/subscription-tier-reconcile';
+import { getPersonalTierFromPrice } from '@/lib/stripe/price-config';
+import { TIER_PLAN_LIMITS } from '@pagespace/lib/billing/subscription-tiers';
+import { stripeConfig } from '@/lib/stripe-config';
+import { provisionOrgSubscription, type OrgBillingDeps, type OrgBillingStripe } from '@/lib/org-billing/org-subscription';
+import { FakeOrgStripe } from '@/lib/org-billing/__tests__/fake-org-stripe';
+import { WALLET_LEG_INVARIANT_GUC, expectWalletLegInvariant, installWalletLegInvariantTrigger } from '@pagespace/lib/test/wallet-leg-invariant';
+
+// The webhook reads the subscription through stripeOrgBilling(appStripe); here it reads
+// the in-memory Stripe of the org under test instead. Everything else is the real module.
+const fakeHolder = vi.hoisted(() => ({ current: null as OrgBillingStripe | null }));
+vi.mock('@/lib/org-billing/org-subscription', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/org-billing/org-subscription')>();
+  return {
+    ...actual,
+    stripeOrgBilling: () => {
+      if (!fakeHolder.current) throw new Error('no fake Stripe installed for this test');
+      return fakeHolder.current;
+    },
+  };
+});
+
+// SEAT-7: the personal funding path, observed (the real function still runs). Its own tier
+// check grants an org-priced invoice nothing, so only this spy can see whether the org fork
+// ran BEFORE it.
+vi.mock('@pagespace/lib/billing/credit-funding', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@pagespace/lib/billing/credit-funding')>();
+  return { ...actual, applyStripeFunding: vi.fn(actual.applyStripeFunding) };
+});
+
+import { POST } from '../route';
+import { applyStripeFunding } from '@pagespace/lib/billing/credit-funding';
+import { queryOrgAuditEvents } from '@pagespace/lib/audit/org-audit-query';
+import { resetAuditDbBindingForTests } from '@pagespace/lib/audit/audit-db-binding';
+import { resetDefaultSecurityAuditForTests } from '@pagespace/lib/audit/security-audit';
+import { parseOrgAuditFilter } from '@pagespace/lib/audit/org-audit-query-core';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+
+const WEBHOOK_SECRET = 'whsec_ow_d3_local_test_secret';
+const PRICES: OrgBusinessPrices = { basePriceId: stripeConfig.orgPriceIds.businessBase, seatPriceId: stripeConfig.orgPriceIds.extraSeat };
+const BASE_CENTS = tierListPriceCents('business');
+const SEAT_CENTS = centsFromDollars(TIER_PLAN_LIMITS.business.extraSeatUsd);
+const DAY = 86_400;
+
+let dbAvailable = false;
+const env = { mode: process.env.DEPLOYMENT_MODE, secret: process.env.STRIPE_WEBHOOK_SECRET, key: process.env.STRIPE_SECRET_KEY };
+const orgIds: string[] = [];
+const userIds: string[] = [];
+const eventIds: string[] = [];
+const signer = new Stripe('sk_test_signer_only_no_network');
+
+// Arm D-OW-13 on every connection this file's pool opens, registered before its first
+// query. A connection whose SET failed is remembered and thrown in beforeAll, never
+// swallowed, so a broken harness fails loudly instead of checking nothing.
+// The sessions also run in a NON-UTC zone on purpose: the stripe_events claim lease must
+// not depend on the database session's TimeZone (review ow-irv-2739 P3-1), and the
+// concurrent-delivery test reclaims the lease early if it does.
+const SESSION_TIME_ZONE = 'America/Chicago';
+let armFailure: unknown = null;
+appPool.on('connect', (client) => {
+  client.query(`SET ${WALLET_LEG_INVARIANT_GUC} = 'on'; SET TIME ZONE '${SESSION_TIME_ZONE}'`).catch((error: unknown) => {
+    armFailure = error;
+  });
+});
+
+interface Org {
+  orgId: string;
+  ownerId: string;
+  customerId: string;
+  subscriptionId: string;
+  stripe: FakeOrgStripe;
+  deps: OrgBillingDeps;
+}
+
+/** Northwind Labs with its own customer and Business subscription awaiting its first payment (D1's path; no trial, D-OW-30). */
+async function northwind(seats = 7): Promise<Org> {
+  const owner = await factories.createUser({ email: `jono+d3${Date.now()}${Math.random().toString(36).slice(2, 8)}@northwind.test`, name: 'Jono' });
+  userIds.push(owner.id);
+  const created = await createOrganization({ name: 'Northwind Labs', slug: `northwind-${Math.random().toString(36).slice(2, 10)}`, ownerId: owner.id });
+  if (!created.ok) throw new Error(`org create failed: ${created.reason}`);
+  orgIds.push(created.organization.id);
+  const stripe = new FakeOrgStripe();
+  const deps: OrgBillingDeps = { stripe, prices: () => PRICES, countSeats: async () => seats };
+  const { result: { linkage } } = await provisionOrgSubscription(created.organization.id, deps);
+  fakeHolder.current = stripe;
+  return { orgId: created.organization.id, ownerId: owner.id, customerId: linkage.stripeCustomerId, subscriptionId: linkage.stripeSubscriptionId, stripe, deps };
+}
+
+function orgMetadata(orgId: string): Record<string, string> {
+  return { kind: ORG_SUBSCRIPTION_KIND, [ORG_ID_METADATA_KEY]: orgId };
+}
+
+let seq = 0;
+function evtId(): string {
+  const id = `evt_owd3_${Date.now().toString(36)}_${(seq += 1)}_${Math.random().toString(36).slice(2, 8)}`;
+  eventIds.push(id);
+  return id;
+}
+
+interface InvoiceSpec {
+  customer: string;
+  subscriptionId: string;
+  metadata: Record<string, string>;
+  seats: number;
+  paid: boolean;
+  billingReason: 'subscription_create' | 'subscription_cycle';
+  periodStart: number;
+  invoiceId?: string;
+}
+
+function invoiceObject(spec: InvoiceSpec) {
+  const periodEnd = spec.periodStart + 30 * DAY;
+  const lines = [
+    { amount: spec.paid ? BASE_CENTS : 0, parent: { subscription_item_details: { subscription_item: 'si_org' } }, discount_amounts: [], quantity: 1, pricing: { price_details: { price: PRICES.basePriceId } }, period: { start: spec.periodStart, end: periodEnd } },
+    { amount: spec.paid ? SEAT_CENTS * spec.seats : 0, parent: { subscription_item_details: { subscription_item: 'si_org' } }, discount_amounts: [], quantity: spec.seats, pricing: { price_details: { price: PRICES.seatPriceId } }, period: { start: spec.periodStart, end: periodEnd } },
+  ];
+  const total = lines.reduce((sum, l) => sum + l.amount, 0);
+  return {
+    id: spec.invoiceId ?? `in_owd3_${Math.random().toString(36).slice(2, 12)}`,
+    object: 'invoice',
+    currency: 'usd',
+    customer: spec.customer,
+    amount_paid: total,
+    subtotal: total,
+    billing_reason: spec.billingReason,
+    period_start: spec.periodStart - 30 * DAY,
+    period_end: spec.periodStart,
+    livemode: false,
+    parent: { type: 'subscription_details', subscription_details: { metadata: spec.metadata, subscription: spec.subscriptionId } },
+    lines: { object: 'list', has_more: false, data: lines },
+  };
+}
+
+function eventPayload(type: string, object: unknown, id = evtId()): string {
+  return JSON.stringify({ id, object: 'event', type, created: Math.floor(Date.now() / 1000), livemode: false, api_version: '2026-02-25.clover', data: { object } });
+}
+
+async function deliver(payload: string): Promise<number> {
+  const header = signer.webhooks.generateTestHeaderString({ payload, secret: WEBHOOK_SECRET });
+  const request = new Request('https://example.com/api/stripe/webhook', { method: 'POST', body: payload, headers: { 'stripe-signature': header } });
+  const response = await POST(request as unknown as import('next/server').NextRequest);
+  return response.status;
+}
+
+async function poolOf(orgId: string) {
+  const [pool] = await db
+    .select()
+    .from(wallets)
+    .where(and(eq(wallets.orgId, orgId), eq(wallets.ownerType, 'org'), isNull(wallets.subjectType), isNull(wallets.parentWalletId)));
+  return pool ?? null;
+}
+
+async function ledgerRows(walletId: string) {
+  return db.select().from(creditLedger).where(eq(creditLedger.walletId, walletId));
+}
+
+async function storedSub(orgId: string) {
+  const [row] = await db.select().from(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId));
+  return row;
+}
+
+/**
+ * An org drive wallet under the pool holding `topupCents` on one owner leg. Wallet and leg
+ * are written in ONE transaction: the armed trigger checks D-OW-13 at commit, and a wallet
+ * committed before its leg would (rightly) be refused.
+ */
+async function seedDriveWallet(orgId: string, poolId: string, topupCents: number) {
+  return db.transaction(async (tx) => {
+    const [driveWallet] = await tx
+      .insert(wallets)
+      .values({ ownerType: 'org', orgId, subjectType: 'drive', subjectId: `drv_owd3_${Math.random().toString(36).slice(2, 10)}`, parentWalletId: poolId, topupRemainingCents: topupCents, monthlyAllowanceCents: 1200, monthlyRemainingCents: 1200 })
+      .returning();
+    await tx.insert(walletFundingLegs).values({ walletId: driveWallet.id, funderKind: 'owner', funderOrgId: orgId, originalCents: topupCents, remainingCents: topupCents, nonRefundable: false });
+    return driveWallet;
+  });
+}
+
+function setStripeStatus(org: Org, status: string): void {
+  const sub = org.stripe.subscriptions.get(org.subscriptionId);
+  if (!sub) throw new Error('no fake subscription');
+  sub.status = status;
+}
+
+/**
+ * The audit binding is pinned to the MAIN database for this suite, the way the lib audit suites pin it.
+ * CI sets ADMIN_DATABASE_URL, which resolves the binding to the dedicated trust plane: writes then go to
+ * security_audit_ingest and reach the chained security_audit_log only when the processor's chainer drains
+ * them (a worker this suite does not run), so a read straight after a write would see nothing. In
+ * production the org log is therefore eventually consistent at the chainer's cadence; here it is read on
+ * the main-db chain, where the append is synchronous.
+ *
+ * Pinned FIRST in beforeAll, before anything resolves the binding: lib's dist modules required from the
+ * route under test are a separate module instance from the one this file imports, so a reset after a
+ * binding was cached could not reach them.
+ */
+const AUDIT_ENV = ['ADMIN_DATABASE_URL', 'ADMIN_DB_BREAK_GLASS', 'AUDIT_TRUST_PLANE_REQUIRED'] as const;
+function pinAuditToMainDb(): () => void {
+  const saved = new Map<string, string | undefined>(AUDIT_ENV.map((key) => [key, process.env[key]]));
+  for (const key of AUDIT_ENV) delete process.env[key];
+  resetAuditDbBindingForTests();
+  resetDefaultSecurityAuditForTests();
+  return () => {
+    for (const [key, value] of saved) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    resetAuditDbBindingForTests();
+    resetDefaultSecurityAuditForTests();
+  };
+}
+
+describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-memory Stripe)', () => {
+  let restoreAudit: () => void = () => {};
+  beforeAll(async () => {
+    restoreAudit = pinAuditToMainDb();
+    try {
+      await db.select({ id: orgSubscriptions.id }).from(orgSubscriptions).limit(1);
+      dbAvailable = true;
+    } catch (error) {
+      requireDb('org-webhook.integration.test.ts', error);
+      dbAvailable = false;
+    }
+    process.env.DEPLOYMENT_MODE = 'cloud';
+    process.env.STRIPE_WEBHOOK_SECRET = WEBHOOK_SECRET;
+    // constructEvent is a local HMAC check; the app client needs a key to exist, never a real one here.
+    if (!process.env.STRIPE_SECRET_KEY) process.env.STRIPE_SECRET_KEY = 'sk_test_signature_only';
+    if (!dbAvailable) return;
+    await installWalletLegInvariantTrigger(appPool);
+    // Prove the arming on EVERY connection the pool holds (checked out at once, so no idle
+    // one is skipped), rather than trust the hook ran.
+    const clients = await Promise.all(Array.from({ length: Math.max(appPool.totalCount, 1) }, () => appPool.connect()));
+    try {
+      const armed = await Promise.all(
+        clients.map(async (c) => (await c.query<{ armed: string | null; tz: string }>(`SELECT current_setting('${WALLET_LEG_INVARIANT_GUC}', true) AS armed, current_setting('TimeZone') AS tz`)).rows[0]),
+      );
+      if (armed.some((a) => a?.armed !== 'on')) throw new Error(`wallet-leg invariant is not armed on every connection: ${JSON.stringify(armed)}`);
+      if (armed.some((a) => a?.tz !== SESSION_TIME_ZONE)) throw new Error(`session TimeZone is not ${SESSION_TIME_ZONE} on every connection: ${JSON.stringify(armed)}`);
+    } finally {
+      for (const c of clients) c.release();
+    }
+    if (armFailure) throw armFailure;
+  });
+
+  afterEach(() => {
+    fakeHolder.current = null;
+  });
+
+  afterAll(async () => {
+    restoreAudit();
+    const restore = (k: string, v: string | undefined) => (v === undefined ? delete process.env[k] : (process.env[k] = v));
+    restore('DEPLOYMENT_MODE', env.mode);
+    restore('STRIPE_WEBHOOK_SECRET', env.secret);
+    restore('STRIPE_SECRET_KEY', env.key);
+    if (!dbAvailable) return;
+    if (eventIds.length > 0) await db.delete(stripeEvents).where(inArray(stripeEvents.id, eventIds));
+    const ownedWallets = await db
+      .select({ id: wallets.id })
+      .from(wallets)
+      .where(or(orgIds.length ? inArray(wallets.orgId, orgIds) : sql`false`, userIds.length ? inArray(wallets.userId, userIds) : sql`false`));
+    const walletIds = ownedWallets.map((w) => w.id);
+    if (walletIds.length > 0) {
+      await db.delete(creditLedger).where(inArray(creditLedger.walletId, walletIds));
+      // Funding legs cascade with their wallet (deleting a leg first would break D-OW-13's
+      // invariant under an armed harness). Children (drive wallets) before their parent pool.
+      await db.delete(wallets).where(and(inArray(wallets.id, walletIds), sql`${wallets.parentWalletId} is not null`));
+      await db.delete(wallets).where(inArray(wallets.id, walletIds));
+    }
+    if (userIds.length > 0) await db.delete(creditLedger).where(inArray(creditLedger.userId, userIds));
+    if (orgIds.length > 0) {
+      await db.delete(orgSubscriptions).where(inArray(orgSubscriptions.orgId, orgIds));
+      await db.delete(orgMembers).where(inArray(orgMembers.orgId, orgIds));
+      await db.delete(organizations).where(inArray(organizations.id, orgIds));
+    }
+    if (userIds.length > 0) await db.delete(users).where(inArray(users.id, userIds));
+  });
+
+  it.each(['unknown_base', 'extra_item', 'duplicate_base', 'missing_seat', 'truncated'])('fails closed and recovers when current org price identity changes: %s', async (change) => {
+    if (!dbAvailable) return;
+    const org = await northwind();
+    await factories.fundOrgSubscription(org.orgId);
+    setStripeStatus(org, 'active');
+    const live = org.stripe.subscriptions.get(org.subscriptionId)!;
+    const originalItems = live.items.map(item => ({ ...item }));
+    const snapshot = { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: 'active', metadata: orgMetadata(org.orgId) };
+    expect(await deliver(eventPayload('customer.subscription.updated', snapshot))).toBe(200);
+    expect((await getOrgStatus(org.orgId)).status).toBe('active');
+    if (change === 'unknown_base') live.items = live.items.map(item => item.priceId === PRICES.basePriceId ? { ...item, priceId: 'price_unknown_business' } : item);
+    if (change === 'extra_item') live.items = [...live.items, { id: 'si_extra', priceId: 'price_unknown', quantity: 1 }];
+    if (change === 'duplicate_base') live.items = [...live.items, { ...originalItems[0], id: 'si_duplicate' }];
+    if (change === 'missing_seat') live.items = live.items.filter(item => item.priceId !== PRICES.seatPriceId);
+    if (change === 'truncated') Object.assign(live, { itemsHasMore: true });
+    const invalid = eventPayload('customer.subscription.updated', snapshot);
+    expect(await deliver(invalid)).toBe(200);
+    expect((await getOrgStatus(org.orgId)).status).toBe('lapsed');
+    expect((await storedSub(org.orgId)).stripeBasePriceId).toBe('');
+    expect(await deliver(invalid)).toBe(200);
+    expect((await getOrgStatus(org.orgId)).status).toBe('lapsed');
+    live.items = originalItems;
+    Object.assign(live, { itemsHasMore: false });
+    expect(await deliver(eventPayload('customer.subscription.updated', snapshot))).toBe(200);
+    expect((await getOrgStatus(org.orgId)).status).toBe('active');
+    expect((await storedSub(org.orgId)).stripeBasePriceId).toBe(PRICES.basePriceId);
+    const auditFilter = parseOrgAuditFilter({ category: 'billing', limit: '100' });
+    if (!auditFilter.ok) throw new Error(auditFilter.error);
+    const audit = await queryOrgAuditEvents(org.orgId, auditFilter.filter);
+    expect(audit.entries.filter(entry => entry.eventType === 'org.billing.subscription_changed').map(entry => ({
+      to: entry.details.to, after: entry.details.orgStatusAfter,
+    }))).toEqual([
+      { to: 'active', after: 'active' },
+      { to: 'unverified_price', after: 'lapsed' },
+      { to: 'active', after: 'active' },
+      { to: 'incomplete', after: undefined },
+    ]);
+  });
+
+  it('D-OW-54 mirrors the current Stripe gift AND its pinned seats through signed subscription events and replay, auditing every change; a gift with no valid pin (or one above the admin bound, the 100000-seat tamper) is not a gift and is reported', async () => {
+    if (!dbAvailable) return;
+    const org = await northwind();
+    const giftAudit = async () => {
+      const parsed = parseOrgAuditFilter({ category: 'billing', limit: '100' });
+      if (!parsed.ok) throw new Error(parsed.error);
+      return (await queryOrgAuditEvents(org.orgId, parsed.filter)).entries
+        .filter((e) => e.details.change === 'gift')
+        .map((e) => [e.details.source, e.details.giftedExtraSeatsBefore, e.details.giftedExtraSeatsAfter, e.details.giftedAfter])
+        .reverse();
+    };
+    const errorLog = vi.spyOn(loggers.api, 'error');
+    expect((await storedSub(org.orgId)).gifted).toBe(false);
+    const live = org.stripe.subscriptions.get(org.subscriptionId)!;
+    live.metadata = { ...live.metadata, type: 'gift_subscription', giftedExtraSeats: '2' };
+    const snapshot = { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: 'active', metadata: orgMetadata(org.orgId) };
+    const gift = eventPayload('customer.subscription.updated', snapshot);
+    expect(await deliver(gift)).toBe(200);
+    expect(await storedSub(org.orgId)).toMatchObject({ gifted: true, giftedExtraSeats: 2 });
+    expect(await deliver(gift)).toBe(200);
+    expect(await storedSub(org.orgId)).toMatchObject({ gifted: true, giftedExtraSeats: 2 });
+    // The gift and its seats changed once; the replay changed nothing and is not audited again.
+    expect(await giftAudit()).toEqual([['stripe_webhook', null, 2, true]]);
+
+    // The tamper: someone with Stripe write access pins 100000 seats. Above the admin route's
+    // bound, so not a gift for capability or funding; reported and audited.
+    errorLog.mockClear();
+    live.metadata.giftedExtraSeats = '100000';
+    expect(await deliver(eventPayload('customer.subscription.updated', snapshot))).toBe(200);
+    expect(await storedSub(org.orgId)).toMatchObject({ gifted: false, giftedExtraSeats: null });
+    expect(errorLog).toHaveBeenCalledWith(expect.stringContaining('without a valid giftedExtraSeats'), undefined, expect.objectContaining({ orgId: org.orgId }));
+    expect(await giftAudit()).toEqual([['stripe_webhook', null, 2, true], ['stripe_webhook', 2, null, false]]);
+
+    // A pin that is not a number at all: the same.
+    live.metadata.giftedExtraSeats = '-3';
+    expect(await deliver(eventPayload('customer.subscription.updated', snapshot))).toBe(200);
+    expect(await storedSub(org.orgId)).toMatchObject({ gifted: false, giftedExtraSeats: null });
+    delete live.metadata.type;
+    delete live.metadata.giftedExtraSeats;
+    expect(await deliver(eventPayload('customer.subscription.updated', snapshot))).toBe(200);
+    expect(await storedSub(org.orgId)).toMatchObject({ gifted: false, giftedExtraSeats: null });
+    expect(await giftAudit()).toHaveLength(2);
+    errorLog.mockRestore();
+  });
+
+  it("SEAT-7 (partial) org subscription webhooks are routed to the org before the personal-tier handler and are idempotent: each event delivered twice applies once and never touches the Owner's personal plan", async () => {
+    if (!dbAvailable) return;
+    const org = await northwind(7);
+    // The Owner is also a paying personal customer: the personal handler must never see the org's events.
+    const ownerCustomer = `cus_owd3_owner_${Math.random().toString(36).slice(2, 10)}`;
+    await db.update(users).set({ stripeCustomerId: ownerCustomer, subscriptionTier: 'pro' }).where(eq(users.id, org.ownerId));
+    const personalSubsBefore = await db.select().from(subscriptions).where(eq(subscriptions.userId, org.ownerId));
+
+    // customer.subscription.updated → mirrored onto org_subscriptions (the org's handler).
+    setStripeStatus(org, 'active');
+    const updated = eventPayload('customer.subscription.updated', { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: 'active', metadata: orgMetadata(org.orgId) });
+    expect(await deliver(updated)).toBe(200);
+    expect((await storedSub(org.orgId)).status).toBe('active');
+    const readsAfterUpdate = org.stripe.reads.retrieveSubscription;
+    const rowAfterUpdate = await storedSub(org.orgId);
+    expect(await deliver(updated)).toBe(200);
+    expect(org.stripe.reads.retrieveSubscription).toBe(readsAfterUpdate);
+    expect((await storedSub(org.orgId)).updatedAt).toEqual(rowAfterUpdate.updatedAt);
+
+    // invoice.paid → the org pool (the org's handler), once.
+    const paid = eventPayload(
+      'invoice.paid',
+      invoiceObject({ customer: org.customerId, subscriptionId: org.subscriptionId, metadata: orgMetadata(org.orgId), seats: 2, paid: true, billingReason: 'subscription_cycle', periodStart: 1_800_000_000 + 30 * DAY }),
+    );
+    expect(await deliver(paid)).toBe(200);
+    expect(await deliver(paid)).toBe(200);
+    const pool = await poolOf(org.orgId);
+    expect(await ledgerRows(pool!.id)).toHaveLength(1);
+
+    // customer.subscription.deleted → the ORG lapses; the personal handler would have set the Owner to free.
+    org.stripe.endSubscription(org.subscriptionId, 'canceled');
+    const deleted = eventPayload('customer.subscription.deleted', { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: 'canceled', metadata: orgMetadata(org.orgId) });
+    expect(await deliver(deleted)).toBe(200);
+    expect(await deliver(deleted)).toBe(200);
+    expect((await getOrgStatus(org.orgId)).status).toBe('lapsed');
+
+    // The personal-tier handler never ran: the Owner's tier, personal subscriptions and personal ledger are untouched.
+    const [owner] = await db.select({ tier: users.subscriptionTier, customer: users.stripeCustomerId }).from(users).where(eq(users.id, org.ownerId));
+    expect(owner).toEqual({ tier: 'pro', customer: ownerCustomer });
+    expect(await db.select().from(subscriptions).where(eq(subscriptions.userId, org.ownerId))).toEqual(personalSubsBefore);
+    expect(await db.select().from(creditLedger).where(and(eq(creditLedger.userId, org.ownerId), sql`${creditLedger.walletId} <> ${pool!.id}`))).toHaveLength(0);
+  });
+
+  it('AUD-1 (partial) billing events reach the org audit log once per real change: provisioning, each status change, the pool refill; a redelivery writes nothing', async () => {
+    if (!dbAvailable) return;
+    const org = await northwind(7);
+    const billingTypes = async () => {
+      const parsed = parseOrgAuditFilter({ category: 'billing', limit: '100' });
+      if (!parsed.ok) throw new Error(parsed.error);
+      return (await queryOrgAuditEvents(org.orgId, parsed.filter)).entries.map((e) => [e.eventType, e.details.to ?? null]);
+    };
+    // Provisioning wrote the subscription's start.
+    expect(await billingTypes()).toEqual([['org.billing.subscription_changed', 'incomplete']]);
+
+    setStripeStatus(org, 'active');
+    const updated = eventPayload('customer.subscription.updated', { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: 'active', metadata: orgMetadata(org.orgId) });
+    expect(await deliver(updated)).toBe(200);
+    expect(await deliver(updated)).toBe(200);
+    const paid = eventPayload(
+      'invoice.paid',
+      invoiceObject({ customer: org.customerId, subscriptionId: org.subscriptionId, metadata: orgMetadata(org.orgId), seats: 2, paid: true, billingReason: 'subscription_cycle', periodStart: 1_800_000_000 + 30 * DAY }),
+    );
+    expect(await deliver(paid)).toBe(200);
+    expect(await deliver(paid)).toBe(200);
+    org.stripe.endSubscription(org.subscriptionId, 'canceled');
+    const deleted = eventPayload('customer.subscription.deleted', { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: 'canceled', metadata: orgMetadata(org.orgId) });
+    expect(await deliver(deleted)).toBe(200);
+
+    expect(await billingTypes()).toEqual([
+      ['org.billing.subscription_changed', 'canceled'],
+      ['org.billing.pool_refilled', null],
+      ['org.billing.subscription_changed', null], // first verified funding
+      ['org.billing.subscription_changed', 'active'],
+      ['org.billing.subscription_changed', 'incomplete'],
+    ]);
+  });
+
+  it('MON-3 (partial) SEAT-8 (partial) D-OW-30 creating N orgs grants NOTHING until each has paid: a $0 first invoice funds no pool; each first real payment funds its pool from exactly what it paid', async () => {
+    if (!dbAvailable) return;
+    const orgs = [await northwind(5), await northwind(6), await northwind(7)];
+    // A farmer's $0 first invoices (what a trial used to send) are delivered for every org.
+    for (const org of orgs) {
+      fakeHolder.current = org.stripe; // each org has its own in-memory Stripe
+      setStripeStatus(org, 'active'); // A zero-dollar invoice can be active in Stripe without paid entitlement.
+      const free = invoiceObject({ customer: org.customerId, subscriptionId: org.subscriptionId, metadata: orgMetadata(org.orgId), seats: 0, paid: false, billingReason: 'subscription_create', periodStart: 1_800_000_000 });
+      expect(await deliver(eventPayload('invoice.paid', free))).toBe(200);
+    }
+    for (const org of orgs) {
+      const pool = await poolOf(org.orgId);
+      expect(pool === null ? 0 : pool.monthlyRemainingCents + pool.topupRemainingCents).toBe(0);
+      if (pool) expect(await ledgerRows(pool.id)).toHaveLength(0);
+      expect(await getOrgStatus(org.orgId)).toEqual({ status: 'lapsed', reason: 'never_funded' });
+    }
+    // Each org's first REAL payment: base + its extra seats, paid in full.
+    for (const [i, org] of orgs.entries()) {
+      const seats = i; // 5, 6, 7 seats → 0, 1, 2 extra
+      const firstPaid = invoiceObject({ customer: org.customerId, subscriptionId: org.subscriptionId, metadata: orgMetadata(org.orgId), seats, paid: true, billingReason: 'subscription_create', periodStart: 1_800_000_000 + DAY });
+      setStripeStatus(org, 'active');
+      fakeHolder.current = org.stripe;
+      expect(await deliver(eventPayload('invoice.paid', firstPaid))).toBe(200);
+      const expected = orgPoolRefillGrant({ lines: firstPaid.lines.data, amountPaidCents: firstPaid.amount_paid, hasSubscriptionParent: true, billingReason: 'subscription_create', subtotalCents: firstPaid.subtotal }).allowanceCents;
+      expect(expected).toBeGreaterThan(0);
+      const pool = await poolOf(org.orgId);
+      expect(pool?.monthlyRemainingCents).toBe(expected);
+      expect(await ledgerRows(pool!.id)).toHaveLength(1);
+      expect((await storedSub(org.orgId)).status).toBe('active');
+    }
+  });
+
+  it('SEAT-7 (partial) review 3+4 P2-8: a seat quantity changed in Stripe outside the app (stored 2, Stripe 3) is mirrored by the next subscription event, with a new seat revision; a replay changes nothing more', async () => {
+    if (!dbAvailable) return;
+    const org = await northwind(7);
+    const before = await storedSub(org.orgId);
+    expect(before.extraSeatQuantity).toBe(2);
+    // A support edit in the Stripe dashboard: the seat item goes to 3.
+    const sub = org.stripe.subscriptions.get(org.subscriptionId);
+    if (!sub) throw new Error('no fake subscription');
+    sub.items = sub.items.map((i) => (i.priceId === PRICES.seatPriceId ? { ...i, quantity: 3 } : i));
+    const updated = eventPayload('customer.subscription.updated', { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: sub.status, metadata: orgMetadata(org.orgId) });
+    expect(await deliver(updated)).toBe(200);
+    const after = await storedSub(org.orgId);
+    expect(after).toMatchObject({ extraSeatQuantity: 3, seatRevision: before.seatRevision + 1, stripeSeatItemId: before.stripeSeatItemId, stripeBaseItemId: before.stripeBaseItemId });
+    expect(await deliver(updated)).toBe(200);
+    expect(await storedSub(org.orgId)).toMatchObject({ extraSeatQuantity: 3, seatRevision: before.seatRevision + 1 });
+  });
+
+  it('AUD-1 (partial) a seat count changed on Stripe\'s side writes one org seat event naming both quantities, committed with the mirror; a replay writes none', async () => {
+    if (!dbAvailable) return;
+    const org = await northwind(7);
+    const sub = org.stripe.subscriptions.get(org.subscriptionId);
+    if (!sub) throw new Error('no fake subscription');
+    // The customer portal (or a support edit) lowers the seat item from 2 to 1.
+    sub.items = sub.items.map((i) => (i.priceId === PRICES.seatPriceId ? { ...i, quantity: 1 } : i));
+    const updated = eventPayload('customer.subscription.updated', { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: sub.status, metadata: orgMetadata(org.orgId) });
+    expect(await deliver(updated)).toBe(200);
+    expect(await deliver(updated)).toBe(200);
+    const seatsFilter = parseOrgAuditFilter({ category: 'seats', limit: '100' });
+    if (!seatsFilter.ok) throw new Error(seatsFilter.error);
+    const seats = await queryOrgAuditEvents(org.orgId, seatsFilter.filter);
+    expect(seats.entries.filter((e) => e.eventType === 'org.seat.quantity_changed' && e.details.source === 'stripe_webhook').map((e) => ({ from: e.details.from, to: e.details.to, reason: e.details.reason }))).toEqual([
+      { from: 2, to: 1, reason: 'stripe_side_change' },
+    ]);
+  });
+
+  it('D-OW-23 review #2761 P2-4: a GIFT funds the pool at list × ratio only on the org\'s OWN subscription; a gift on a separately created subscription (never mirrored, so the org stays lapsed) funds nothing', async () => {
+    if (!dbAvailable) return;
+    const giftMeta = (orgId: string) => ({ ...orgMetadata(orgId), type: 'gift_subscription' });
+
+    // An operator's separate gift subscription on the org's customer: refused, nothing lands.
+    const stray = await northwind(7);
+    const strayGift = invoiceObject({ customer: stray.customerId, subscriptionId: 'sub_owd3_separate_gift', metadata: giftMeta(stray.orgId), seats: 2, paid: false, billingReason: 'subscription_cycle', periodStart: 1_800_000_000 });
+    expect(await deliver(eventPayload('invoice.paid', strayGift))).toBe(200);
+    const strayPool = await poolOf(stray.orgId);
+    expect(strayPool === null ? 0 : strayPool.monthlyRemainingCents).toBe(0);
+    if (strayPool) expect(await ledgerRows(strayPool.id)).toHaveLength(0);
+
+    // An admin gift on the org's OWN subscription, pinned at 2 extra seats (the admin route
+    // writes the pin; D-OW-54): funded at list × ratio for exactly those seats.
+    const own = await northwind(7);
+    fakeHolder.current = own.stripe;
+    setStripeStatus(own, 'active');
+    await db.update(orgSubscriptions).set({ giftedExtraSeats: 2 }).where(eq(orgSubscriptions.orgId, own.orgId));
+    const ownGift = invoiceObject({ customer: own.customerId, subscriptionId: own.subscriptionId, metadata: giftMeta(own.orgId), seats: 2, paid: false, billingReason: 'subscription_cycle', periodStart: 1_800_000_000 });
+    expect(await deliver(eventPayload('invoice.paid', ownGift))).toBe(200);
+    expect((await getOrgStatus(own.orgId)).status).toBe('active');
+    const ownPool = await poolOf(own.orgId);
+    expect(ownPool?.monthlyRemainingCents).toBe(orgPoolListPriceGrantCents(2));
+    expect(ownPool?.monthlyRemainingCents).toBeGreaterThan(0);
+    expect(await ledgerRows(ownPool!.id)).toHaveLength(1);
+  });
+
+  it('SEAT-7 (partial) MON-3 (partial) replaying the same org invoice.paid event is a no-op: one grant, no second Stripe read, no second write', async () => {
+    if (!dbAvailable) return;
+    const org = await northwind(7);
+    const invoice = invoiceObject({
+      customer: org.customerId,
+      subscriptionId: org.subscriptionId,
+      metadata: orgMetadata(org.orgId),
+      seats: 2,
+      paid: true,
+      billingReason: 'subscription_create',
+      periodStart: 1_800_000_000,
+    });
+    const payload = eventPayload('invoice.paid', invoice);
+    // The grant the one funding path makes for this invoice: the first real payment, what it paid × ratio ([D-OW-30]).
+    const expected = orgPoolRefillGrant({
+      lines: invoice.lines.data,
+      amountPaidCents: invoice.amount_paid,
+      hasSubscriptionParent: true,
+      billingReason: 'subscription_create',
+      subtotalCents: invoice.subtotal,
+    }).allowanceCents;
+    expect(expected).toBeGreaterThan(0);
+
+    expect(await deliver(payload)).toBe(200);
+    const pool = await poolOf(org.orgId);
+    expect(pool?.monthlyRemainingCents).toBe(expected);
+    expect(await ledgerRows(pool!.id)).toHaveLength(1);
+    // A funded drive wallet under the pool, so the replay has a non-root wallet to keep whole.
+    const driveWallet = await seedDriveWallet(org.orgId, pool!.id, 300);
+    const readsAfterFirst = org.stripe.reads.retrieveSubscription;
+    const rowAfterFirst = await storedSub(org.orgId);
+
+    expect(await deliver(payload)).toBe(200);
+    expect((await poolOf(org.orgId))?.monthlyRemainingCents).toBe(expected);
+    expect(await ledgerRows(pool!.id)).toHaveLength(1);
+    expect(org.stripe.reads.retrieveSubscription).toBe(readsAfterFirst);
+    expect((await storedSub(org.orgId)).updatedAt).toEqual(rowAfterFirst.updatedAt);
+    await expectWalletLegInvariant([driveWallet.id]);
+  });
+
+  it('SEAT-7 (partial) two CONCURRENT deliveries of the same event cannot both apply: one runs, the other is told to retry, and the retry is acked', async () => {
+    if (!dbAvailable) return;
+    const org = await northwind(7);
+    // Widen the window: the first delivery holds its claim while it reads Stripe.
+    const slow = org.stripe.retrieveSubscription.bind(org.stripe);
+    org.stripe.retrieveSubscription = async (id: string) => {
+      await new Promise((r) => setTimeout(r, 300));
+      return slow(id);
+    };
+    const invoice = invoiceObject({
+      customer: org.customerId,
+      subscriptionId: org.subscriptionId,
+      metadata: orgMetadata(org.orgId),
+      seats: 2,
+      paid: true,
+      billingReason: 'subscription_cycle',
+      periodStart: 1_800_000_000 + 30 * DAY,
+    });
+    const payload = eventPayload('invoice.paid', invoice);
+
+    const statuses = await Promise.all([deliver(payload), deliver(payload)]);
+    expect([...statuses].sort()).toEqual([200, 500]);
+    const pool = await poolOf(org.orgId);
+    expect(await ledgerRows(pool!.id)).toHaveLength(1);
+    expect(org.stripe.reads.retrieveSubscription).toBe(1);
+
+    // Stripe redelivers the one that was told to retry: acked, nothing applied twice.
+    expect(await deliver(payload)).toBe(200);
+    expect(await ledgerRows(pool!.id)).toHaveLength(1);
+    expect(org.stripe.reads.retrieveSubscription).toBe(1);
+  });
+
+  it('SEAT-7 (partial) MON-3 (partial) two DIFFERENT events about one invoice, delivered concurrently, grant it once', async () => {
+    if (!dbAvailable) return;
+    const org = await northwind(7);
+    const invoice = invoiceObject({
+      customer: org.customerId,
+      subscriptionId: org.subscriptionId,
+      metadata: orgMetadata(org.orgId),
+      seats: 2,
+      paid: true,
+      billingReason: 'subscription_cycle',
+      periodStart: 1_800_000_000 + 30 * DAY,
+    });
+    const statuses = await Promise.all([deliver(eventPayload('invoice.paid', invoice)), deliver(eventPayload('invoice.paid', invoice))]);
+    expect(statuses).toEqual([200, 200]);
+    const pool = await poolOf(org.orgId);
+    const rows = await ledgerRows(pool!.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].stripeRef).toBe(invoice.id);
+    expect(pool?.monthlyRemainingCents).toBe(rows[0].amountCents);
+  });
+
+  it('SEAT-7 (partial) an OLDER invoice paid after a newer one is funded once but never moves the pool period back (#2718 P2-2)', async () => {
+    if (!dbAvailable) return;
+    const org = await northwind(7);
+    const october = 1_800_000_000 + 30 * DAY;
+    const november = october + 30 * DAY;
+    const base = { customer: org.customerId, subscriptionId: org.subscriptionId, metadata: orgMetadata(org.orgId), seats: 2, paid: true, billingReason: 'subscription_cycle' as const };
+    expect(await deliver(eventPayload('invoice.paid', invoiceObject({ ...base, periodStart: november })))).toBe(200);
+    const afterNewer = await poolOf(org.orgId);
+    expect(afterNewer?.monthlyPeriodStart?.getTime()).toBe(november * 1000);
+
+    expect(await deliver(eventPayload('invoice.paid', invoiceObject({ ...base, periodStart: october })))).toBe(200);
+    const afterOlder = await poolOf(org.orgId);
+    expect(afterOlder?.monthlyPeriodStart?.getTime()).toBe(november * 1000);
+    expect(afterOlder?.monthlyPeriodEnd?.getTime()).toBe((november + 30 * DAY) * 1000);
+    // Both were paid, so both fund — additively, never by overwriting the newer grant.
+    const rows = await ledgerRows(afterOlder!.id);
+    expect(rows).toHaveLength(2);
+    expect(afterOlder?.monthlyRemainingCents).toBe(rows[0].amountCents + rows[1].amountCents);
+  });
+
+  it('MON-3 (partial) an OLDER invoice for fewer seats paid late adds its credits once but never steps the current allowance back (ow-irv-2739 P3-2)', async () => {
+    if (!dbAvailable) return;
+    const org = await northwind(7);
+    const october = 1_800_000_000 + 30 * DAY;
+    const november = october + 30 * DAY;
+    const base = { customer: org.customerId, subscriptionId: org.subscriptionId, metadata: orgMetadata(org.orgId), paid: true, billingReason: 'subscription_cycle' as const };
+    // Seats grew between the periods: October billed 1 extra seat, November 4.
+    expect(await deliver(eventPayload('invoice.paid', invoiceObject({ ...base, seats: 4, periodStart: november })))).toBe(200);
+    const afterNewer = (await poolOf(org.orgId))!;
+    expect(await deliver(eventPayload('invoice.paid', invoiceObject({ ...base, seats: 1, periodStart: october })))).toBe(200);
+    const afterOlder = (await poolOf(org.orgId))!;
+
+    const rows = await ledgerRows(afterOlder.id);
+    expect(rows).toHaveLength(2);
+    const [novemberGrant, octoberGrant] = [rows.find((r) => r.amountCents === afterNewer.monthlyAllowanceCents), rows.find((r) => r.amountCents !== afterNewer.monthlyAllowanceCents)];
+    // Non-vacuity: the two periods really grant different amounts.
+    expect(novemberGrant).toBeDefined();
+    expect(octoberGrant).toBeDefined();
+    expect(octoberGrant!.amountCents).toBeLessThan(novemberGrant!.amountCents);
+    // The current (November) allowance stands; October's credits are added, once.
+    expect(afterOlder.monthlyAllowanceCents).toBe(afterNewer.monthlyAllowanceCents);
+    expect(afterOlder.monthlyRemainingCents).toBe(novemberGrant!.amountCents + octoberGrant!.amountCents);
+    expect(afterOlder.monthlyPeriodStart?.getTime()).toBe(november * 1000);
+  });
+
+  it("SEAT-7 (partial) a person's invoice never funds an org pool, and an org-tagged invoice on a person's customer funds nobody", async () => {
+    if (!dbAvailable) return;
+    const org = await northwind(7);
+    const person = await factories.createUser({ email: `marcus+d3${Date.now()}@northwind.test`, name: 'Marcus Oyelaran', stripeCustomerId: `cus_owd3_person_${Math.random().toString(36).slice(2, 10)}` });
+    userIds.push(person.id);
+
+    // Tagged as Northwind's, but on Marcus's customer: applied nowhere.
+    const tagged = invoiceObject({
+      customer: person.stripeCustomerId!,
+      subscriptionId: 'sub_owd3_foreign',
+      metadata: orgMetadata(org.orgId),
+      seats: 2,
+      paid: true,
+      billingReason: 'subscription_cycle',
+      periodStart: 1_800_000_000,
+    });
+    expect(await deliver(eventPayload('invoice.paid', tagged))).toBe(200);
+    expect(await poolOf(org.orgId)).toBeNull();
+    expect(await db.select().from(creditLedger).where(eq(creditLedger.userId, person.id))).toHaveLength(0);
+
+    // Marcus's own Pro invoice ($15, the personal Pro price; unit_amount_decimal is CENTS):
+    // the personal path funds HIS wallet, and never Northwind's pool.
+    const proCents = tierListPriceCents('pro');
+    const personal = {
+      id: `in_owd3_${Math.random().toString(36).slice(2, 12)}`,
+      object: 'invoice',
+      currency: 'usd',
+      customer: person.stripeCustomerId!,
+      amount_paid: proCents,
+      subtotal: proCents,
+      billing_reason: 'subscription_cycle',
+      period_start: 1_800_000_000 - 30 * DAY,
+      period_end: 1_800_000_000,
+      livemode: false,
+      parent: { type: 'subscription_details', subscription_details: { metadata: {}, subscription: 'sub_owd3_personal' } },
+      lines: {
+        object: 'list',
+        data: [
+          {
+            amount: proCents,
+            discount_amounts: [],
+            quantity: 1,
+            parent: { subscription_item_details: { subscription_item: 'si_owd3_personal' } },
+            pricing: { price_details: { price: stripeConfig.priceIds.pro }, unit_amount_decimal: String(proCents) },
+            period: { start: 1_800_000_000, end: 1_800_000_000 + 30 * DAY },
+          },
+        ],
+      },
+    };
+    const adHoc = {
+      ...personal,
+      id: `${personal.id}_adhoc`,
+      lines: { ...personal.lines, data: personal.lines.data.map((line) => ({ ...line, parent: undefined })) },
+    };
+    expect(await deliver(eventPayload('invoice.paid', adHoc))).toBe(200);
+    const adHocRows = await db.select().from(creditLedger).where(eq(creditLedger.stripeRef, adHoc.id));
+    expect(adHocRows.reduce((sum, row) => sum + row.amountCents, 0)).toBe(0);
+
+    expect(await deliver(eventPayload('invoice.paid', personal))).toBe(200);
+    expect(await poolOf(org.orgId)).toBeNull();
+    const personalRows = await db.select().from(creditLedger).where(eq(creditLedger.stripeRef, personal.id));
+    expect(personalRows.length).toBeGreaterThan(0);
+    const [marcusRoot] = await db.select({ id: wallets.id }).from(wallets).where(and(eq(wallets.userId, person.id), isNull(wallets.subjectType), isNull(wallets.parentWalletId)));
+    for (const row of personalRows) {
+      expect(row.userId).toBe(person.id);
+      expect(row.walletId).toBe(marcusRoot.id);
+    }
+    expect(personalRows.reduce((sum, r) => sum + r.amountCents, 0)).toBeGreaterThan(0);
+
+    // An org's invoice tagged for ANOTHER org: refused, the customer's org is not funded either.
+    const mismatch = invoiceObject({
+      customer: org.customerId,
+      subscriptionId: org.subscriptionId,
+      metadata: orgMetadata('org_someone_else'),
+      seats: 2,
+      paid: true,
+      billingReason: 'subscription_cycle',
+      periodStart: 1_800_000_000,
+    });
+    expect(mismatch.amount_paid).toBeGreaterThan(0);
+    expect(await deliver(eventPayload('invoice.paid', mismatch))).toBe(200);
+    expect(await poolOf(org.orgId)).toBeNull();
+  });
+
+  it('SEAT-7 (partial) an event for a customer that is nobody we know changes nothing and is acked', async () => {
+    if (!dbAvailable) return;
+    const unknown = invoiceObject({
+      customer: `cus_owd3_nobody_${Math.random().toString(36).slice(2, 10)}`,
+      subscriptionId: 'sub_owd3_nobody',
+      metadata: {},
+      seats: 0,
+      paid: true,
+      billingReason: 'subscription_cycle',
+      periodStart: 1_800_000_000,
+    });
+    const before = await db.select({ n: sql<number>`count(*)::int` }).from(creditLedger).where(eq(creditLedger.stripeRef, unknown.id));
+    expect(await deliver(eventPayload('invoice.paid', unknown))).toBe(200);
+    const after = await db.select({ n: sql<number>`count(*)::int` }).from(creditLedger).where(eq(creditLedger.stripeRef, unknown.id));
+    expect(after[0].n).toBe(before[0].n);
+  });
+
+  it('SEAT-9 (partial) SEAT-7 (partial) a subscription event mirrors what Stripe says NOW, so an out-of-order snapshot cannot roll the org back', async () => {
+    if (!dbAvailable) return;
+    const org = await northwind(7);
+    await factories.fundOrgSubscription(org.orgId);
+    setStripeStatus(org, 'active');
+    // An older event whose snapshot still says past_due arrives after Stripe moved on.
+    const staleSnapshot = { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: 'past_due', metadata: orgMetadata(org.orgId) };
+    expect(await deliver(eventPayload('customer.subscription.updated', staleSnapshot))).toBe(200);
+    expect((await storedSub(org.orgId)).status).toBe('active');
+    expect((await getOrgStatus(org.orgId)).status).toBe('active');
+  });
+
+  it('SEAT-9 (partial) D-OW-44: an active subscription switched to send_invoice lapses the org through the webhook, and switching back restores it', async () => {
+    if (!dbAvailable) return;
+    const org = await northwind(7);
+    const snapshot = { id: org.subscriptionId, object: 'subscription', customer: org.customerId, metadata: orgMetadata(org.orgId), status: 'active' };
+    setStripeStatus(org, 'active');
+    await factories.fundOrgSubscription(org.orgId);
+    expect(await deliver(eventPayload('customer.subscription.updated', snapshot))).toBe(200);
+    expect((await getOrgStatus(org.orgId)).status).toBe('active');
+
+    org.stripe.subscriptions.get(org.subscriptionId)!.collectionMethod = 'send_invoice';
+    expect(await deliver(eventPayload('customer.subscription.updated', snapshot))).toBe(200);
+    expect((await storedSub(org.orgId)).collectionMethod).toBe('send_invoice');
+    expect(await getOrgStatus(org.orgId)).toEqual({ status: 'lapsed', reason: 'manual_collection' });
+    expect(await checkOrgActive(org.orgId)).toMatchObject({ ok: false, code: 'org_lapsed' });
+
+    org.stripe.subscriptions.get(org.subscriptionId)!.collectionMethod = 'charge_automatically';
+    expect(await deliver(eventPayload('customer.subscription.updated', snapshot))).toBe(200);
+    expect((await getOrgStatus(org.orgId)).status).toBe('active');
+  });
+
+  it('SEAT-9 (partial) entering and leaving lapse is explicit and reversible, and never touches a credit already granted', async () => {
+    if (!dbAvailable) return;
+    const org = await northwind(7);
+    const snapshot = { id: org.subscriptionId, object: 'subscription', customer: org.customerId, metadata: orgMetadata(org.orgId) };
+    // Fund the pool and give a drive wallet a funding leg, so there are credits to protect.
+    expect(
+      await deliver(
+        eventPayload(
+          'invoice.paid',
+          invoiceObject({ customer: org.customerId, subscriptionId: org.subscriptionId, metadata: orgMetadata(org.orgId), seats: 2, paid: true, billingReason: 'subscription_cycle', periodStart: 1_800_000_000 + 30 * DAY }),
+        ),
+      ),
+    ).toBe(200);
+    const pool = (await poolOf(org.orgId))!;
+    const driveWallet = await seedDriveWallet(org.orgId, pool.id, 500);
+    const snapshotOf = async () =>
+      (await db.select().from(wallets).where(eq(wallets.orgId, org.orgId))).map((w) => ({ id: w.id, m: w.monthlyRemainingCents, t: w.topupRemainingCents, d: w.debtCents, s: w.status })).sort((a, b) => a.id.localeCompare(b.id));
+    const legsOf = async () => (await db.select().from(walletFundingLegs).where(eq(walletFundingLegs.walletId, driveWallet.id))).map((l) => l.remainingCents);
+    const walletsBefore = await snapshotOf();
+    const legsBefore = await legsOf();
+
+    setStripeStatus(org, 'active');
+    expect(await deliver(eventPayload('customer.subscription.updated', { ...snapshot, status: 'active' }))).toBe(200);
+    expect((await getOrgStatus(org.orgId)).status).toBe('active');
+
+    // A failed payment lapses immediately, while Stripe retries.
+    setStripeStatus(org, 'past_due');
+    expect(await deliver(eventPayload('invoice.payment_failed', invoiceObject({ customer: org.customerId, subscriptionId: org.subscriptionId, metadata: orgMetadata(org.orgId), seats: 2, paid: false, billingReason: 'subscription_cycle', periodStart: 1_800_000_000 + 60 * DAY })))).toBe(200);
+    expect(await getOrgStatus(org.orgId)).toEqual({ status: 'lapsed', reason: 'payment_failed' });
+    expect(await snapshotOf()).toEqual(walletsBefore);
+    expect(await legsOf()).toEqual(legsBefore);
+
+    // Dunning gives up: unpaid → lapsed.
+    setStripeStatus(org, 'unpaid');
+    expect(await deliver(eventPayload('customer.subscription.updated', { ...snapshot, status: 'unpaid' }))).toBe(200);
+    expect(await getOrgStatus(org.orgId)).toEqual({ status: 'lapsed', reason: 'unpaid' });
+    expect(await snapshotOf()).toEqual(walletsBefore);
+    expect(await legsOf()).toEqual(legsBefore);
+    await expectWalletLegInvariant([driveWallet.id]);
+
+    // The card works again: the paid invoice lifts the lapse, and the credits are exactly where they were plus the new grant.
+    setStripeStatus(org, 'active');
+    const recovery = invoiceObject({ customer: org.customerId, subscriptionId: org.subscriptionId, metadata: orgMetadata(org.orgId), seats: 2, paid: true, billingReason: 'subscription_cycle', periodStart: 1_800_000_000 + 60 * DAY });
+    expect(await deliver(eventPayload('invoice.paid', recovery))).toBe(200);
+    expect((await getOrgStatus(org.orgId)).status).toBe('active');
+    const [driveAfter] = await db.select().from(wallets).where(eq(wallets.id, driveWallet.id));
+    expect(driveAfter.topupRemainingCents).toBe(500);
+    expect(driveAfter.monthlyRemainingCents).toBe(1200);
+    expect(await legsOf()).toEqual(legsBefore);
+    await expectWalletLegInvariant([driveWallet.id]);
+  });
+
+  it('SEAT-9 (partial) a canceled subscription lapses the org; a late event about that ENDED subscription never lapses its replacement', async () => {
+    if (!dbAvailable) return;
+    const org = await northwind(7);
+    const oldId = org.subscriptionId;
+    org.stripe.endSubscription(oldId, 'canceled');
+    const deleted = { id: oldId, object: 'subscription', customer: org.customerId, status: 'canceled', metadata: orgMetadata(org.orgId) };
+    expect(await deliver(eventPayload('customer.subscription.deleted', deleted))).toBe(200);
+    expect((await getOrgStatus(org.orgId)).status).toBe('lapsed');
+
+    // Reactivate: D1's path creates the replacement (awaiting its payment) and stores it.
+    const { result: { linkage } } = await provisionOrgSubscription(org.orgId, org.deps);
+    expect(linkage.stripeSubscriptionId).not.toBe(oldId);
+    const replacement = org.stripe.subscriptions.get(linkage.stripeSubscriptionId)!;
+    replacement.status = 'active';
+    await factories.fundOrgSubscription(org.orgId);
+    expect(await deliver(eventPayload('customer.subscription.updated', { id: replacement.id, object: 'subscription', customer: org.customerId, status: 'active', metadata: orgMetadata(org.orgId) }))).toBe(200);
+    expect((await getOrgStatus(org.orgId)).status).toBe('active');
+
+    // Stripe redelivers the old deletion late (a different event id): it must not touch the new row.
+    expect(await deliver(eventPayload('customer.subscription.deleted', deleted))).toBe(200);
+    expect((await storedSub(org.orgId)).stripeSubscriptionId).toBe(replacement.id);
+    expect((await getOrgStatus(org.orgId)).status).toBe('active');
+  });
+
+  it("SEAT-7 (partial) an org's subscription events never write a person's tier, even when the Owner has a personal customer", async () => {
+    if (!dbAvailable) return;
+    const org = await northwind(7);
+    await db.update(users).set({ stripeCustomerId: `cus_owd3_owner_${Math.random().toString(36).slice(2, 10)}`, subscriptionTier: 'pro' }).where(eq(users.id, org.ownerId));
+    org.stripe.endSubscription(org.subscriptionId, 'canceled');
+    expect(await deliver(eventPayload('customer.subscription.deleted', { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: 'canceled', metadata: orgMetadata(org.orgId) }))).toBe(200);
+    const [owner] = await db.select({ tier: users.subscriptionTier }).from(users).where(eq(users.id, org.ownerId));
+    expect(owner.tier).toBe('pro');
+  });
+
+  it('SEAT-2 (partial) a subscription webhook waits for the user lock before locking its mirror', async () => {
+    const person = await factories.createUser({ stripeCustomerId: `cus_lock_${Date.now()}` });
+    userIds.push(person.id);
+    const subscription = {
+      id: `sub_lock_${Date.now()}`, customer: person.stripeCustomerId, status: 'active',
+      metadata: {}, schedule: null, cancel_at_period_end: false,
+      items: { data: [{ id: 'si_lock', price: { id: stripeConfig.priceIds.pro }, current_period_start: 1_800_000_000, current_period_end: 1_802_592_000 }] },
+    };
+    expect(await deliver(eventPayload('customer.subscription.created', subscription))).toBe(200);
+    let delivery: Promise<number> | undefined;
+    try {
+      await db.transaction(async (tx) => {
+        await tx.select({ id: users.id }).from(users).where(eq(users.id, person.id)).for('update');
+        const backend = await tx.execute(sql`select pg_backend_pid() as pid`);
+        const pid = Number(backend.rows[0].pid);
+        subscription.items.data[0].price.id = 'price_unknown_replacement';
+        delivery = deliver(eventPayload('customer.subscription.updated', subscription));
+        await vi.waitFor(async () => {
+          const blocked = await db.execute(sql`select count(*)::int as n from pg_stat_activity where ${pid} = any(pg_blocking_pids(pid))`);
+          expect(Number(blocked.rows[0].n)).toBeGreaterThan(0);
+        });
+        // This would fail with 55P03 if the webhook took the mirror first. No
+        // sleep or deadlock timeout is needed to prove the ordering.
+        await tx.execute(sql`select id from subscriptions where "stripeSubscriptionId" = ${subscription.id} for update nowait`);
+      });
+    } finally {
+      if (delivery) expect(await delivery).toBe(200);
+    }
+    const [after] = await db.select().from(users).where(eq(users.id, person.id));
+    expect(after.subscriptionTier).toBe('free');
+  });
+
+  it.each([false, true])('SEAT-2 (partial) a replaced or extra price item cannot restore previous entitlement (%s)', async (extraItem) => {
+    const person = await factories.createUser({ stripeCustomerId: `cus_identity_${Date.now()}` });
+    userIds.push(person.id);
+    const subscription = {
+      id: `sub_identity_${Date.now()}`, customer: person.stripeCustomerId, status: 'active',
+      metadata: {}, schedule: null, cancel_at_period_end: false,
+      items: { data: [{
+        id: 'si_identity', price: { id: stripeConfig.priceIds.pro },
+        current_period_start: 1_800_000_000, current_period_end: 1_802_592_000,
+      }] },
+    };
+    expect(await deliver(eventPayload('customer.subscription.created', subscription))).toBe(200);
+    if (extraItem) subscription.items.data.push({ ...subscription.items.data[0], id: 'si_extra', price: { id: 'price_unknown_replacement' } });
+    else subscription.items.data[0].price.id = 'price_unknown_replacement';
+    expect(await deliver(eventPayload('customer.subscription.updated', subscription))).toBe(200);
+    const [mirror] = await db.select().from(subscriptions).where(eq(subscriptions.stripeSubscriptionId, subscription.id));
+    expect(mirror.stripePriceId).toBe(extraItem ? '' : 'price_unknown_replacement');
+    await reconcileSubscriptionTiers({ priceTier: getPersonalTierFromPrice, userIds: userIds });
+    const [after] = await db.select().from(users).where(eq(users.id, person.id));
+    expect(after.subscriptionTier).toBe('free');
+  });
+
+  it("SEAT-7 org subscription and invoice events are routed to the org BEFORE the personal-tier handler and are idempotent: with the Owner's users.stripeCustomerId equal to the ORG's customer, created/updated/deleted and invoice.paid each delivered twice and concurrently mirror and fund the org once and never change the Owner's tier, personal subscriptions or personal wallet", async () => {
+    if (!dbAvailable) return;
+    const org = await northwind(7);
+    // The hard case (review ow-irv-2739 P1-1): the personal handlers look a person up by
+    // users.stripeCustomerId, and here that IS the org's customer. Only the org fork running
+    // FIRST keeps these events away from the Owner's personal plan; moving it after
+    // handleSubscriptionChange / handleSubscriptionDeleted / handleInvoicePaid turns this red.
+    await db.update(users).set({ stripeCustomerId: org.customerId, subscriptionTier: 'pro' }).where(eq(users.id, org.ownerId));
+    const ownerBefore = (await db.select().from(users).where(eq(users.id, org.ownerId)))[0];
+    const personalSubsBefore = await db.select().from(subscriptions).where(eq(subscriptions.userId, org.ownerId));
+    const personalWalletsBefore = await db.select().from(wallets).where(eq(wallets.userId, org.ownerId));
+
+    const periodStart = 1_800_000_000;
+    // A full subscription object, so a personal handler that ran would act on it (not crash on it).
+    const snapshot = (type: string, status: string) => eventPayload(type, {
+      id: org.subscriptionId, object: 'subscription', customer: org.customerId, status, metadata: orgMetadata(org.orgId),
+      schedule: null, cancel_at_period_end: false,
+      items: { data: [{ id: 'si_org_base', price: { id: PRICES.basePriceId }, quantity: 1, current_period_start: periodStart, current_period_end: periodStart + 30 * DAY }] },
+    });
+    /** One event delivered twice in a row, then a second event id delivered twice at once; a retry told to come back is redelivered. */
+    const deliverTwiceAndConcurrently = async (make: () => string) => {
+      const first = make();
+      expect(await deliver(first)).toBe(200);
+      expect(await deliver(first)).toBe(200);
+      const racing = make();
+      const statuses = await Promise.all([deliver(racing), deliver(racing)]);
+      expect(statuses).toContain(200);
+      for (const status of statuses) expect([200, 500]).toContain(status);
+      expect(await deliver(racing)).toBe(200);
+    };
+
+    // created → mirrored once; a fresh event about the same state re-reads Stripe and changes nothing.
+    await deliverTwiceAndConcurrently(() => snapshot('customer.subscription.created', 'incomplete'));
+    const afterCreated = await storedSub(org.orgId);
+    expect(afterCreated.stripeSubscriptionId).toBe(org.subscriptionId);
+    const readsAfterCreated = org.stripe.reads.retrieveSubscription;
+    expect(await deliver(snapshot('customer.subscription.created', 'incomplete'))).toBe(200);
+    expect((await storedSub(org.orgId)).seatRevision).toBe(afterCreated.seatRevision);
+    expect(org.stripe.reads.retrieveSubscription).toBeGreaterThan(readsAfterCreated);
+
+    // updated (active) → mirrored; the replayed event is acked without a Stripe read.
+    setStripeStatus(org, 'active');
+    const updated = snapshot('customer.subscription.updated', 'active');
+    expect(await deliver(updated)).toBe(200);
+    const readsAfterUpdate = org.stripe.reads.retrieveSubscription;
+    const rowAfterUpdate = await storedSub(org.orgId);
+    expect(rowAfterUpdate.status).toBe('active');
+    expect(await deliver(updated)).toBe(200);
+    expect(org.stripe.reads.retrieveSubscription).toBe(readsAfterUpdate);
+    expect((await storedSub(org.orgId)).updatedAt).toEqual(rowAfterUpdate.updatedAt);
+    await deliverTwiceAndConcurrently(() => snapshot('customer.subscription.updated', 'active'));
+    expect((await storedSub(org.orgId)).status).toBe('active');
+
+    // invoice.paid → the ORG pool, funded exactly once across five deliveries of two event ids.
+    const invoice = invoiceObject({ customer: org.customerId, subscriptionId: org.subscriptionId, metadata: orgMetadata(org.orgId), seats: 2, paid: true, billingReason: 'subscription_cycle', periodStart: periodStart + 30 * DAY });
+    await deliverTwiceAndConcurrently(() => eventPayload('invoice.paid', invoice));
+    // The personal funding path never saw it.
+    expect(vi.mocked(applyStripeFunding).mock.calls.filter(([event]) => (event.data.object as { id?: string }).id === invoice.id)).toHaveLength(0);
+    const pool = await poolOf(org.orgId);
+    const grants = await ledgerRows(pool!.id);
+    expect(grants).toHaveLength(1);
+    expect(grants[0].stripeRef).toBe(invoice.id);
+    expect((await getOrgStatus(org.orgId)).status).toBe('active');
+
+    // deleted → the ORG lapses; the personal handler would have set the Owner to free.
+    org.stripe.endSubscription(org.subscriptionId, 'canceled');
+    await deliverTwiceAndConcurrently(() => snapshot('customer.subscription.deleted', 'canceled'));
+    expect((await getOrgStatus(org.orgId)).status).toBe('lapsed');
+    expect(await ledgerRows(pool!.id)).toHaveLength(1);
+
+    // The personal-tier path never ran: the Owner row, personal subscriptions and personal wallets are exactly as before.
+    const ownerAfter = (await db.select().from(users).where(eq(users.id, org.ownerId)))[0];
+    expect({ tier: ownerAfter.subscriptionTier, customer: ownerAfter.stripeCustomerId, updatedAt: ownerAfter.updatedAt })
+      .toEqual({ tier: 'pro', customer: org.customerId, updatedAt: ownerBefore.updatedAt });
+    expect(await db.select().from(subscriptions).where(eq(subscriptions.userId, org.ownerId))).toEqual(personalSubsBefore);
+    expect(await db.select().from(wallets).where(eq(wallets.userId, org.ownerId))).toEqual(personalWalletsBefore);
+    expect(await db.select().from(creditLedger).where(and(eq(creditLedger.userId, org.ownerId), sql`${creditLedger.walletId} <> ${pool!.id}`))).toHaveLength(0);
+  });
+});

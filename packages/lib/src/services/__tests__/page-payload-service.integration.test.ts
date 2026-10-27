@@ -18,6 +18,7 @@ import { connections } from '@pagespace/db/schema/social';
 import { loadPagePayload } from '../page-payload-service';
 import { setCells } from '../../sheets/store';
 import { PageType } from '../../utils/enums';
+import { credentialActor } from '../../permissions/access-actor';
 
 describe('loadPagePayload (integration)', () => {
   beforeEach(async () => {
@@ -41,7 +42,7 @@ describe('loadPagePayload (integration)', () => {
       position: 1,
     });
 
-    const payload = await loadPagePayload(owner.id, doc.id);
+    const payload = await loadPagePayload(credentialActor(owner.id, null), doc.id);
 
     expect(payload.page.id).toBe(doc.id);
     expect(payload.page.title).toBe('Doc');
@@ -62,7 +63,7 @@ describe('loadPagePayload (integration)', () => {
       { content: 'second', pageId: channel.id, userId: owner.id, createdAt: later },
     ]);
 
-    const payload = await loadPagePayload(owner.id, channel.id);
+    const payload = await loadPagePayload(credentialActor(owner.id, null), channel.id);
 
     expect(payload.context.channelMessages?.map((m) => m.content)).toEqual(['first', 'second']);
   });
@@ -75,7 +76,7 @@ describe('loadPagePayload (integration)', () => {
     await factories.createChatMessage(chat.id, { content: 'kept', isActive: true });
     await factories.createChatMessage(chat.id, { content: 'dropped', isActive: false });
 
-    const payload = await loadPagePayload(owner.id, chat.id);
+    const payload = await loadPagePayload(credentialActor(owner.id, null), chat.id);
 
     expect(payload.context.chatMessages?.map((m) => m.content)).toEqual(['kept']);
     expect(payload.context.chatMessages?.[0].role).toBeDefined();
@@ -98,7 +99,7 @@ describe('loadPagePayload (integration)', () => {
     await factories.createChatMessage(chat.id, { content: 'tombstoned', userId: owner.id, isActive: false, createdAt: new Date('2026-01-01T12:00:00Z') });
     await factories.createChatMessage(chat.id, { content: '', userId: owner.id, status: 'streaming', createdAt: new Date('2026-01-01T13:00:00Z') });
 
-    const payload = await loadPagePayload(owner.id, chat.id);
+    const payload = await loadPagePayload(credentialActor(owner.id, null), chat.id);
 
     // The tombstone and the mid-flight placeholder are excluded; what remains
     // is oldest-first.
@@ -119,7 +120,7 @@ describe('loadPagePayload (integration)', () => {
       originalFileName: 'cat.png',
     });
 
-    const payload = await loadPagePayload(owner.id, file.id);
+    const payload = await loadPagePayload(credentialActor(owner.id, null), file.id);
 
     expect(payload.context.file?.fileSize).toBe(1234);
     expect(payload.context.file?.mimeType).toBe('image/png');
@@ -132,7 +133,7 @@ describe('loadPagePayload (integration)', () => {
     const drive = await factories.createDrive(owner.id);
     const page = await factories.createPage(drive.id);
 
-    await expect(loadPagePayload(stranger.id, page.id)).rejects.toThrow(/not accessible/);
+    await expect(loadPagePayload(credentialActor(stranger.id, null), page.id)).rejects.toThrow(/not accessible/);
   });
 
   it('respects expired explicit grants (denies access)', async () => {
@@ -145,7 +146,7 @@ describe('loadPagePayload (integration)', () => {
       expiresAt: new Date(Date.now() - 60_000),
     });
 
-    await expect(loadPagePayload(grantee.id, page.id)).rejects.toThrow(/not accessible/);
+    await expect(loadPagePayload(credentialActor(grantee.id, null), page.id)).rejects.toThrow(/not accessible/);
   });
 
   it('redacts title and type for breadcrumb ancestors the caller cannot view', async () => {
@@ -172,7 +173,7 @@ describe('loadPagePayload (integration)', () => {
       canDelete: false,
     });
 
-    const payload = await loadPagePayload(grantee.id, grantedDoc.id);
+    const payload = await loadPagePayload(credentialActor(grantee.id, null), grantedDoc.id);
 
     expect(payload.breadcrumb.map((b) => b.id)).toEqual([secretFolder.id, grantedDoc.id]);
     const ancestor = payload.breadcrumb[0];
@@ -196,7 +197,7 @@ describe('loadPagePayload (integration)', () => {
     // runs until Postgres' internal recursion safeguards trip, which is far
     // slower than a bounded walk.
     const payload = await Promise.race([
-      loadPagePayload(owner.id, a.id),
+      loadPagePayload(credentialActor(owner.id, null), a.id),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('breadcrumb timed out')), 5_000),
       ),
@@ -220,7 +221,7 @@ describe('loadPagePayload (integration)', () => {
           '#%PAGESPACE_SHEETDOC v1\npage_id = "x"\n\n[[sheets]]\nname = "Sheet1"\norder = 0\n\n[sheets.meta]\nrowCount = 5\ncolumnCount = 3\n\n[sheets.cells.A1]\nvalue = "from document"\n',
       });
 
-      const payload = await loadPagePayload(owner.id, sheet.id);
+      const payload = await loadPagePayload(credentialActor(owner.id, null), sheet.id);
       expect(payload.page.content).toContain('from document');
     });
 
@@ -241,7 +242,7 @@ describe('loadPagePayload (integration)', () => {
         userId: owner.id,
       });
 
-      const payload = await loadPagePayload(owner.id, sheet.id);
+      const payload = await loadPagePayload(credentialActor(owner.id, null), sheet.id);
       expect(payload.page.content).toContain('submitted');
 
       // And the column itself is not what answered.
@@ -264,7 +265,7 @@ describe('loadPagePayload (integration)', () => {
       expiresAt: new Date(Date.now() + 60_000),
     });
 
-    const payload = await loadPagePayload(grantee.id, page.id);
+    const payload = await loadPagePayload(credentialActor(grantee.id, null), page.id);
     expect(payload.page.id).toBe(page.id);
     expect(payload.page.type).toBe(PageType.DOCUMENT);
   });

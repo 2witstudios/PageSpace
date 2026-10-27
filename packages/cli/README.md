@@ -141,12 +141,20 @@ command makes), and `--yes` (skip confirmations).
 
 ```text
 drives    list [--all]                # --all includes trashed drives
-          create <name>
+          create <name> [--org <orgId> [--visibility OPEN|RESTRICTED|PRIVATE]]   # --org: org-owned from creation
           rename <driveId> <name>
           update-context <driveId> <drivePrompt>   # sets the drive's AI context prompt (max 10000 chars)
           set-home-page <driveId> <pageId|--clear>
           trash <driveId> [--yes]     # asks you to type the drive name unless --yes
           restore <driveId>
+          move-to-org <driveId> <orgId> [--visibility OPEN|RESTRICTED|PRIVATE]   # a personal drive you own
+          move-out-of-org <driveId> <keep|remove> [--yes]   # org Owner/Admin; keep|remove org members' access
+          set-visibility <driveId> <OPEN|RESTRICTED|PRIVATE>   # the lead or an org Owner/Admin
+          set-lead <driveId> <userId>                  # hand an org drive to another org member
+          join-requests <driveId>                      # pending requests on a Restricted drive (lead/Owner/Admin)
+          request-join <driveId> [--message <text>]    # ask to join a Restricted org drive
+          answer-join <driveId> <requestId> <approve|deny> [--yes]   # deny asks first
+          withdraw-join <driveId> <requestId>
 
 roles     list <driveId>
           get <driveId> <roleId>
@@ -210,6 +218,62 @@ models    list
 activity  <driveId>
 
 channels  send <channelId> <message>
+
+workspaces list [--drive <driveId>]                # your agent workspaces; each has one sandbox
+           exec <workspaceId> [--cwd <dir>] [--timeout-ms <ms>] -- <command…>   # exits with the command's own status
+                # one argument runs as a shell command line (-- 'ls | wc -l');
+                # several are separate words, quoting preserved (-- sh -c 'echo hi; exit 3')
+
+orgs      list                                     # the organizations you belong to, with your role
+          get <orgId>                              # one organization: identity, owner, your role
+          update <orgId> [--name <name>] [--slug <slug>]   # Owner/Admin (the avatar is uploaded in the web app)
+          members <orgId>                          # the member roster with roles
+          activity <orgId>                         # each member's drive count and last activity (Owner/Admin)
+          set-role <orgId> <userId> <ADMIN|MEMBER> [--yes]   # Owner/Admin; MEMBER (a possible demotion) asks first
+          remove-member <orgId> <userId> [--yes]   # Owner/Admin
+          leave <orgId> [--yes]
+          invitations <orgId>                      # open invitations (Owner/Admin)
+          invite <orgId> <email> [--role ADMIN|MEMBER]
+          resend-invite <orgId> <invitationId>
+          revoke-invite <orgId> <invitationId> [--yes]
+          accept-invite <token>                    # the token from the invitation email's link
+          drives <orgId>                           # the org drive directory, incl. Restricted
+                                                   # (a drive-scoped key sees only its own drives)
+          trashed-drives <orgId>                   # Owner/Admin
+          drive-usage <orgId>                      # people, guests and storage per org drive (Owner/Admin)
+          policies <orgId>                         # the org's policies (Owner/Admin)
+          set-policies <orgId> <key>=<value> … [--yes]   # e.g. guests=approve requireStrongSignIn=on
+                                                   # maximumSessionAgeMinutes=480|none modelAllowlist=a,b|none
+                                                   # a change that may tighten anything asks first; the money
+                                                   # policies (seat allowance, wallet fallback) need a signed-in session
+          suspended <orgId>                        # what the policies hold suspended (Owner/Admin)
+          sign-in-preview <orgId> [--strong true|false] [--max-age <minutes>]   # members/credentials a sign-in policy would refuse now
+          audit <orgId> [--category <c>] [--type <t>] [--drive <id>] [--from <iso>] [--to <iso>] [--limit N] [--before <cursor>]
+          audit-export <orgId> [same filters, no paging] > audit.csv
+          automations <orgId>                      # automations whose creator left (Owner/Admin)
+          delete-automation <orgId> <workflow|page_webhook> <id> [--yes]
+          reassign-automation <orgId> <workflow|page_webhook> <id> <newOwnerId>
+          guests <orgId>                           # Owner/Admin
+          guest-approvals <orgId>                  # guests waiting under the "approve" policy (Owner/Admin)
+          answer-guest <orgId> <holdId> <approve|decline> [--yes]   # decline asks first
+          domains <orgId>                          # domain claims and their TXT records (Owner/Admin)
+          add-domain <orgId> <domain>
+          remove-domain <orgId> <domainId> [--yes]
+          verify-domain <orgId> <domainId> dns | email <admin|administrator|hostmaster|postmaster|webmaster>
+          confirm-domain <token>                   # the token from a mailed domain verification link
+          clear-suppression <orgId> <email>        # let a departed member's address auto-join again
+                # every org verb needs a key with no drive restriction (except `drives`), and the
+                # org's sign-in policy (strong sign-in, maximum session age) applies to the key.
+                # Session only, in the web app: creating or deleting an organization,
+                # transferring ownership, seat caps, the org pool and billing.
+
+wallets   drive <driveId>                          # a drive's remaining credits and your own cap
+          list                                     # what you spend from and fund (key with no drive restriction)
+          source <conversationId> [--drive <driveId>]   # which wallet a conversation spends from
+          drive-source <driveId>                   # which wallet a new conversation in a drive would spend
+          always-own-credits [--drive <driveId>]   # your "Always my own credits" switches
+                # read-only: a key can never create, fund, donate to or change a wallet or a
+                # spend source — sign in to the web app for that
 
 keys      (no args: guided wizard) · create · use · list · describe · revoke
 

@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, integer, bigint, index, uniqueIndex, pgEnum, real, boolean } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, integer, bigint, index, uniqueIndex, pgEnum, real, boolean, check } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 
@@ -66,7 +66,8 @@ export const users = pgTable('users', {
   // @pagespace/lib/billing/subscription-tiers (TIERS). This is a denormalized
   // CACHE of the subscriptions table — see subscription-tier-sync.ts for the
   // single write-through derivation and subscription-tier-reconcile.ts for the
-  // periodic drift repair. Read call sites must coerce with toSubscriptionTier().
+  // periodic drift repair. Personal rows support only Free/Pro; org entitlements
+  // come from org_subscriptions, never this column.
   subscriptionTier: text('subscriptionTier').default('free').notNull(),
   tosAcceptedAt: timestamp('tosAcceptedAt', { mode: 'date' }),
   // Account lockout fields
@@ -103,12 +104,15 @@ export const users = pgTable('users', {
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
 }, (table) => ({
+  personalTier: check('users_personal_subscription_tier', sql`${table.subscriptionTier} IN ('free', 'pro')`),
   // Unique blind-index lookup for email (preserves the email uniqueness
   // guarantee once the raw-email unique constraint is retired post-backfill).
   emailBidxIdx: uniqueIndex('users_email_bidx_idx').on(table.emailBidx),
 }));
 
 export const deviceTokens = pgTable('device_tokens', {
+  authenticatedAt: timestamp('authenticatedAt', { mode: 'date' }),
+  authenticationAssurance: text('authenticationAssurance', { enum: ['single_factor', 'user_verified_passkey'] }),
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
 
@@ -154,6 +158,8 @@ export const deviceTokens = pgTable('device_tokens', {
 });
 
 export const mcpTokens = pgTable('mcp_tokens', {
+  authenticatedAt: timestamp('authenticatedAt', { mode: 'date' }),
+  authenticationAssurance: text('authenticationAssurance', { enum: ['single_factor', 'user_verified_passkey'] }),
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
 
@@ -276,6 +282,30 @@ export const passkeys = pgTable('passkeys', {
 export const passkeysRelations = relations(passkeys, ({ one }) => ({
   user: one(users, {
     fields: [passkeys.userId],
+    references: [users.id],
+  }),
+}));
+
+// Sign in with Apple refresh tokens (App Store Guideline 5.1.1(v), Apple TN3194).
+// Kept only so account deletion can revoke the user's Apple authorization via
+// /auth/revoke. One row per (user, client): the native app (bundle id) and the
+// web flow (Services ID) are distinct Apple clients, and a token can only be
+// revoked by the client it was issued to. `refreshToken` is AES-256-GCM
+// ciphertext (field-crypto); the plaintext never touches the database.
+export const appleSignInTokens = pgTable('apple_sign_in_tokens', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  clientId: text('client_id').notNull(),
+  refreshToken: text('refresh_token').notNull(),
+  createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+  userClientIdx: uniqueIndex('apple_sign_in_tokens_user_client_idx').on(table.userId, table.clientId),
+}));
+
+export const appleSignInTokensRelations = relations(appleSignInTokens, ({ one }) => ({
+  user: one(users, {
+    fields: [appleSignInTokens.userId],
     references: [users.id],
   }),
 }));

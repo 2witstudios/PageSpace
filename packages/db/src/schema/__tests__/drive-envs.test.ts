@@ -227,7 +227,7 @@ describe('drive_envs schema — the CHECKs on the session side', () => {
   });
 
   it('should carry NO env-needs-drive CHECK — a driveless global-assistant session may bind the user\'s own machine (leaf D)', () => {
-    // `agent_workspaces_env_needs_drive_check` is deliberately GONE (0296).
+    // `agent_workspaces_env_needs_drive_check` is deliberately GONE (0382).
     // It was right about a SPRITE env — drive-owned, drive-paid, with no owner
     // of its own — and wrong about a LOCAL one, where [D-6] already makes
     // binding structurally owner-only. Both halves now live in

@@ -19,13 +19,14 @@
 
 import { canRunCodeForSession } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
 import { anyReachableEnvironmentPayerAllows } from './reachable-environment-payers';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /** `driveId`: the agent page's own drive (null for the global assistant). */
 export async function resolveSandboxToolEligibility(
   driveId: string | null,
-  userId: string,
+  actor: AccessActor,
 ): Promise<boolean> {
-  return canRunCodeForSession({ userId, driveId, ownerId: userId });
+  return canRunCodeForSession({ actor, driveId, ownerId: actor.userId });
 }
 
 /**
@@ -34,7 +35,7 @@ export async function resolveSandboxToolEligibility(
  * to (its drive's owner, else the session's own owner), and a conversation
  * can be hosted in a session whose payer differs from the calling surface —
  * a page agent consulted inside a driveless Global session, or a Global
- * Assistant merely visiting a drive. The requester (`userId`) is always the
+ * Assistant merely visiting a drive. The requester (`actor`) is always the
  * ACTOR the capability check authorizes.
  *
  * An UNBOUND conversation splits by surface, mirroring the acquire path
@@ -42,6 +43,10 @@ export async function resolveSandboxToolEligibility(
  *
  *  - `'global'`: the first compute call auto-provisions a DRIVELESS session
  *    the requester pays for, so eligibility is the driveless coordinates.
+ *  - `{ imagoHomeDriveId }`: the owner's own Imago conversation, which
+ *    replaces the Global Assistant (IMG-10.10): the first compute call
+ *    auto-provisions a session in its Home drive the owner pays for, so
+ *    eligibility is those coordinates.
  *  - `'page'`: acquire answers `no_session` — page conversations are never
  *    lazily minted into a session (that per-conversation minting is the
  *    conflation the session model removed), so compute tools could only
@@ -50,16 +55,19 @@ export async function resolveSandboxToolEligibility(
  */
 export async function resolveSandboxToolEligibilityForConversation(
   conversationId: string | undefined,
-  surface: 'page' | 'global',
-  userId: string,
+  surface: 'page' | 'global' | { imagoHomeDriveId: string },
+  actor: AccessActor,
 ): Promise<boolean> {
   const { findSessionForConversation } = await import('@/lib/agent-workspaces/agent-workspaces-runtime');
   const session = conversationId ? await findSessionForConversation(conversationId) : null;
   if (session) {
-    return canRunCodeForSession({ userId, driveId: session.driveId, ownerId: session.ownerId });
+    return canRunCodeForSession({ actor, driveId: session.driveId, ownerId: session.ownerId });
   }
   if (surface === 'page') return false;
-  if (await canRunCodeForSession({ userId, driveId: null, ownerId: userId })) return true;
+  if (typeof surface === 'object') {
+    return canRunCodeForSession({ actor, driveId: surface.imagoHomeDriveId, ownerId: actor.userId });
+  }
+  if (await canRunCodeForSession({ actor, driveId: null, ownerId: actor.userId })) return true;
   // Last: a GLOBAL conversation whose own coordinates are ineligible may still
   // be able to run in an environment it can reach — a free-tier person who owns
   // a visible machine in a Pro-owned drive is eligible THERE, because the tier
@@ -67,7 +75,7 @@ export async function resolveSandboxToolEligibilityForConversation(
   // Without this the compute family is stripped from the request before
   // `list_environments` can be called at all, so fixing the tool's own gate
   // alone would change nothing (Codex P1, #2616).
-  return hasEligibleReachableEnvironment(userId);
+  return hasEligibleReachableEnvironment(actor);
 }
 
 /**
@@ -87,9 +95,9 @@ export async function resolveSandboxToolEligibilityForConversation(
  * authorizes on machine ownership (which the listing has already established
  * for every row it returns).
  */
-function hasEligibleReachableEnvironment(userId: string): Promise<boolean> {
+function hasEligibleReachableEnvironment(actor: AccessActor): Promise<boolean> {
   return anyReachableEnvironmentPayerAllows({
-    userId,
-    authorize: (payer) => canRunCodeForSession({ userId, driveId: null, ownerId: payer.payerId }),
+    actor,
+    authorize: (payer) => canRunCodeForSession({ actor, driveId: null, ownerId: payer.payerId }),
   });
 }

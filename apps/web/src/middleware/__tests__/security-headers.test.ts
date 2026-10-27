@@ -686,6 +686,15 @@ describe('Security Headers', () => {
       expect(shouldDisableCOEP('/auth-callback')).toBe(false);
     });
 
+    it('UI-6 (partial): only the routes that mount the Stripe Payment Element skip COEP, path-exact', () => {
+      // /settings mounts the create-organization dialog's payment step; an org's Plan & seats page mounts Reactivate.
+      expect(shouldDisableCOEP('/settings')).toBe(true);
+      expect(shouldDisableCOEP('/orgs/org_1/settings/billing')).toBe(true);
+      for (const path of ['/settings/account', '/settings/', '/orgs/org_1/settings', '/orgs/org_1/settings/members', '/orgs/org_1/settings/billing/x', '/organizations']) {
+        expect(shouldDisableCOEP(path), path).toBe(false);
+      }
+    });
+
     it('isPublishedSiteHost identifies *.pagespace.site published hosts', () => {
       // Published-page hosts: must be treated as public (caller returns 404, never auth)
       expect(isPublishedSiteHost('getting-started.pagespace.site')).toBe(true);
@@ -765,6 +774,13 @@ describe('Security Headers', () => {
       const exposed = response.headers.get('Access-Control-Expose-Headers');
       expect(exposed).toContain('X-PageSpace-API-Version');
       expect(exposed).toContain('Retry-After');
+    });
+
+    it('SPEND-4 (partial) exposes the spend-fallback headers, so a browser caller of v1 can read a fallback', () => {
+      const response = NextResponse.next();
+      applyApiCorsHeaders(response);
+      const exposed = response.headers.get('Access-Control-Expose-Headers') ?? '';
+      for (const header of ['X-Spend-Fallback-From', 'X-Spend-Fallback-To', 'X-Spend-Fallback-Wallet']) expect(exposed).toContain(header);
     });
 
     it('allows Authorization in preflight — the one header a Bearer-token caller must send', () => {

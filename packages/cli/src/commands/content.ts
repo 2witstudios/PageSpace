@@ -147,7 +147,7 @@ export const pagesReadHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () =>
+  const result = await callSdk(ctx, () =>
     ctx.sdk.pages.read({ operation: 'read', pageId, startLine: range.startLine, endLine: range.endLine }),
   );
   if (!result.ok) return EXIT_RUNTIME_ERROR;
@@ -216,7 +216,7 @@ export function createPagesReplaceLinesHandler(deps: ContentSourceDeps): Command
       return EXIT_RUNTIME_ERROR;
     }
 
-    const result = await callSdk(ctx.stderr, () =>
+    const result = await callSdk(ctx, () =>
       ctx.sdk.pages.replaceLines({
         operation: 'replace',
         pageId,

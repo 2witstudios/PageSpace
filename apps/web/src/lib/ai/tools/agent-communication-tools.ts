@@ -9,12 +9,15 @@ import { pages, drives } from '@pagespace/db/schema/core';
 import { conversations as conversationsTable, messages as unifiedMessages } from '@pagespace/db/schema/conversations';
 import { users } from '@pagespace/db/schema/auth';
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
+import { PERSONAL_SPEND, spendDriveId, spendFallbackFromWalletId, type SpendTarget } from '@pagespace/lib/billing/spend-target';
+import { MODEL_ENTITLEMENT_MESSAGES, modelEntitlement } from '@/lib/ai/core/model-entitlement';
 import { runCompaction } from '@/lib/ai/core/compaction/compaction-service';
-import { canActorViewPage, canActorAccessDrive, filterDriveIdsByAppTokenScope, filterDriveIdsByMcpScope, isMcpScoped, resolveActingAgentId } from './actor-permissions';
+import { canActorViewPage, canActorAccessDrive, canActorConsultAgent, filterAgentDriveIdsByActorReach, filterDriveIdsByAppTokenScope, filterDriveIdsByMcpScope, isMcpScoped, resolveActingAgentId, toolActor } from './actor-permissions';
 import { listAgentDrives, getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 import { filterToolsForMcpScope, filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
+import { toolModelContext } from '@/lib/ai/core/tool-model-context';
 import { sanitizeMessagesForModel, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
@@ -33,6 +36,11 @@ import { taskManagementTools } from './task-management-tools';
 import { agentTools } from './agent-tools';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { callAdmission } from '@pagespace/lib/billing/call-admission';
+import { releaseHold } from '@pagespace/lib/billing/credit-consume';
+import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
+import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
+import { gateUserCall } from '@/lib/ai/core/user-credit-hold';
 import { capStepToolPayloads } from '@/lib/ai/core/cap-step-tool-payloads';
 
 // Nesting cap. Intent is 3+ for richer agent-to-agent composition, but held at 2
@@ -44,7 +52,7 @@ const MAX_AGENT_DEPTH = 2;
  * Get configured AI model for agent using the centralized provider factory
  * Handles provider-specific setup and fallbacks
  */
-async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: string | null; aiModel?: string | null }) {
+async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: string | null; aiModel?: string | null; driveId: string }, spend: SpendTarget) {
   const { aiProvider, aiModel } = agentConfig;
 
   // Use default provider/model if agent doesn't have specific configuration
@@ -56,10 +64,19 @@ async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: st
     selectedModel,
   };
 
-  const providerResult = await createAIProvider(userId, providerRequest);
+  // POL-8: the org of the drive this call runs in (its spend drive; none for personal spend) AND the org of the
+  // consulted agent's own drive, whose content (its prompt, its pages) reaches the model whoever calls.
+  const providerResult = await createAIProvider(userId, providerRequest, { driveId: spendDriveId(spend), contentDriveIds: [agentConfig.driveId] });
 
   if (isProviderError(providerResult)) {
     throw new Error(providerResult.error);
+  }
+
+  // The pro-model gate, for the tier of whoever funds this consult (WAL-8, POL-8): the drive wallet's root owner for a
+  // mention reply or an in-drive consult, the caller's own on their own credits. Keyed on the model that will run.
+  const entitlement = await modelEntitlement({ userId, provider: providerResult.provider, model: providerResult.modelName, spend });
+  if (!entitlement.allowed) {
+    throw new Error(MODEL_ENTITLEMENT_MESSAGES[entitlement.reason]);
   }
 
   return providerResult;
@@ -296,7 +313,7 @@ export const agentCommunicationTools = {
         if (agentPageId) {
           const allAgentDrives = await listAgentDrives(agentPageId);
           const scopedIds = new Set(
-            await filterDriveIdsByAppTokenScope(executionContext, allAgentDrives.map((d) => d.driveId)),
+            await filterAgentDriveIdsByActorReach(executionContext, allAgentDrives.map((d) => d.driveId)),
           );
           userDrives = allAgentDrives
             .filter((d) => scopedIds.has(d.driveId))
@@ -304,7 +321,7 @@ export const agentCommunicationTools = {
         } else {
           // Full user-scoped reach: owned + member + page-permission drives
           // (matches list_drives' user path), not just owned drives.
-          const allUserDrives = await listAccessibleDrives(userId);
+          const allUserDrives = await listAccessibleDrives(toolActor(executionContext));
 
           // Ceiling a scoped MCP token to its allowed drives (no-op otherwise).
           const allowedIds = new Set(
@@ -510,9 +527,13 @@ export async function executeAskAgent(
           throw new Error(`AI agent with ID "${agentId}" not found or is not an AI chat agent`);
         }
         
-        // 2. Check actor permissions
-        const canView = await canActorViewPage(executionContext, agentId);
-        if (!canView) {
+        // 2. Check actor permissions — the shared consult rule (view the agent
+        // page, OR the agent is a member of the drive the actor is operating in
+        // and the actor can access that drive), so a guest agent @-mentioned
+        // in a channel of a drive it belongs to is not refused here after the
+        // responder already admitted it.
+        const canConsult = await canActorConsultAgent(executionContext, agentId);
+        if (!canConsult) {
           await logAgentInteraction({
             requestingUserId: userId,
             requestingAgent: executionContext?.locationContext?.currentPage?.id,
@@ -696,12 +717,13 @@ export async function executeAskAgent(
         systemPrompt += `\n\nYou are being consulted by another agent or user${executionContext?.locationContext?.currentPage?.title ? ` (${executionContext.locationContext.currentPage.title})` : ''}. This is a persistent conversation - you have access to the full conversation history. Respond helpfully based on your expertise and the conversation context.`;
         
         // 8. Get configured model for agent
-        const { model, provider: resolvedProvider, modelName: resolvedModelName } =
-          await getConfiguredModel(userId, {
-            aiProvider: targetAgent.aiProvider,
-            aiModel: targetAgent.aiModel
-          });
-        
+        const providerResult = await getConfiguredModel(userId, {
+          aiProvider: targetAgent.aiProvider,
+          aiModel: targetAgent.aiModel,
+          driveId: targetAgent.driveId,
+        }, executionContext?.creditSpend?.spend ?? PERSONAL_SPEND);
+        const { model, provider: resolvedProvider, modelName: resolvedModelName } = providerResult;
+
         // 9. Filter tools for agent. Nested calls inherit the top-level caller's MCP
         // drive scope via nestedContext below, so a scoped token must not be able to
         // reach create_drive (or other account-level-only tools) through a consulted
@@ -732,9 +754,11 @@ export async function executeAskAgent(
           const { resolvePageAgentIntegrationTools } = await import('@/lib/ai/core/integration-tool-resolver');
           integrationTools = await resolvePageAgentIntegrationTools({
             agentId,
-            userId,
+            actor: toolActor(executionContext),
             driveId: targetAgent.driveId,
             currentTools: agentTools,
+            contextDriveId: executionContext.locationContext?.currentDrive?.id ?? null,
+            allowedDriveIds: executionContext.mcpAllowedDriveIds ?? [],
           });
         } catch (error) {
           loggers.ai.error('ask_agent: failed to resolve integration tools, falling back to built-in tools only', error as Error);
@@ -761,6 +785,12 @@ export async function executeAskAgent(
         // Include chain tracking for activity logging (Tier 1)
         const nestedContext = {
           ...executionContext,
+          // POL-8: the consulted agent's tools run under the model IT resolved, never the caller's.
+          ...toolModelContext(providerResult),
+          // A caller's reserved hold is this call's alone: nothing nested inside it may reuse it.
+          ...(executionContext?.creditSpend
+            ? { creditSpend: { ...executionContext.creditSpend, reservedHoldId: undefined } }
+            : {}),
           agentCallDepth: callDepth + 1,
           currentAgentId: agentId,
           locationContext: executionContext?.locationContext, // Explicitly preserve location context
@@ -811,58 +841,103 @@ export async function executeAskAgent(
           systemPrompt,
           tools: executionTools,
           user: { id: userId, role: callerUserRole },
+          // A compaction of this conversation spends where the call that runs this agent
+          // spends (SPEND-7): its gate reserves on the caller's target, a mention's drive
+          // wallet or nothing (SPEND-6). With no gated caller it is personal (SPEND-8).
+          spend: executionContext?.creditSpend?.spend ?? PERSONAL_SPEND,
         });
         const { modelMessages: agentModelMessages } = await finishModelRequest({ prepared, tools: executionTools as ToolSet });
 
+        // 10c. Reserve BEFORE the sub-agent runs (WAL-6a, SPEND-1): its tool loop is a model call of
+        // its own, up to 20 steps, so it holds an estimate against the wallet the caller's turn
+        // resolved (a follow-on target: that source or a refusal by name, never a fallback of its own;
+        // a mention's drive wallet; personal with no gated caller) and settles that hold. A wallet
+        // that cannot cover it refuses the consultation and charges nothing.
+        const billedUserId = executionContext?.creditSpend?.userId ?? userId;
+        const askSpend = executionContext?.creditSpend?.spend ?? PERSONAL_SPEND;
+        const admission = callAdmission({
+          meteringExempt: isMeteringExempt(resolvedProvider),
+          spend: askSpend,
+          estCostCents: estimateChatHoldCentsForModel(resolvedModelName),
+        });
+        // The channel mention responder already reserved this reply (one hold per reply): settle on it.
+        const reservedHoldId = executionContext?.creditSpend?.reservedHoldId;
+        let holdId: string | undefined = reservedHoldId;
+        let settleWalletId: string | undefined = reservedHoldId ? executionContext?.creditSpend?.walletId : undefined;
+        if (admission.gate && !reservedHoldId) {
+          const gate = await gateUserCall(billedUserId, { spend: admission.spend, estCostCents: admission.estCostCents });
+          if (!gate.allowed) {
+            loggers.ai.info('ask_agent refused by the credit gate', { agentId, userId: billedUserId, reason: gate.reason, refusal: gate.refusal?.reason });
+            return {
+              success: false,
+              agent: agentPath,
+              error: `Not enough credits to consult this agent (${gate.refusal?.reason ?? gate.reason})`,
+              refusal: gate.refusal ?? null,
+              question,
+              context,
+              metadata: { processingTime: Date.now() - startTime, callDepth: callDepth + 1 },
+            };
+          }
+          holdId = gate.holdId;
+          settleWalletId = gate.walletId;
+        }
+
         // 11. Process with target agent's configuration (ephemeral - no persistence)
-        const response = Object.keys(allAgentTools).length > 0
-          ? await generateText({
-              model,
-              system: systemPrompt,
-              messages: agentModelMessages,
-              tools: { ...allAgentTools, ...finishTool } as Parameters<typeof generateText>[0]['tools'],
-              experimental_context: nestedContext,
-              stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(20)],
-              // Per-step cap: history is prepared once, but this loop runs many model
-              // calls, so one run's oversized tool payloads would otherwise accumulate
-              // for its whole duration (#2461 — see cap-step-tool-payloads.ts).
-              prepareStep: ({ messages: stepMessages }) => ({ messages: capStepToolPayloads(stepMessages) }),
-              maxRetries: 3,
-              onStepFinish: ({ toolCalls }) => {
-                if (toolCalls?.length > 0) {
-                  loggers.ai.debug('Sub-agent tool execution:', {
-                    agentId,
-                    toolCalls: toolCalls.map(tc => tc.toolName),
-                  });
-                }
-              },
-            })
-          : await generateText({
-              model,
-              system: systemPrompt,
-              messages: agentModelMessages,
-              experimental_context: nestedContext,
-              maxRetries: 3,
-            });
+        let response: Awaited<ReturnType<typeof generateText>>;
+        try {
+          response = Object.keys(allAgentTools).length > 0
+            ? await generateText({
+                model,
+                system: systemPrompt,
+                messages: agentModelMessages,
+                tools: { ...allAgentTools, ...finishTool } as Parameters<typeof generateText>[0]['tools'],
+                experimental_context: nestedContext,
+                stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(20)],
+                // Per-step cap: history is prepared once, but this loop runs many model
+                // calls, so one run's oversized tool payloads would otherwise accumulate
+                // for its whole duration (#2461 — see cap-step-tool-payloads.ts).
+                prepareStep: ({ messages: stepMessages }) => ({ messages: capStepToolPayloads(stepMessages) }),
+                maxRetries: 3,
+                onStepFinish: ({ toolCalls }) => {
+                  if (toolCalls?.length > 0) {
+                    loggers.ai.debug('Sub-agent tool execution:', {
+                      agentId,
+                      toolCalls: toolCalls.map(tc => tc.toolName),
+                    });
+                  }
+                },
+              })
+            : await generateText({
+                model,
+                system: systemPrompt,
+                messages: agentModelMessages,
+                experimental_context: nestedContext,
+                maxRetries: 3,
+              });
+        } catch (error) {
+          // Nothing reached the settle: free the reservation now rather than at its TTL.
+          if (holdId) await releaseHold(holdId);
+          throw error;
+        }
 
         // Fire-and-forget compaction: after() is unavailable inside tool execution,
         // so we launch directly — the parent stream is still open but this is safe
         // as a detached promise (no response coupling).
+        // runCompaction gates and reserves on the caller's spend target before its own model
+        // call, and skips (persisting nothing) when that source cannot cover it.
         if (prepared.pendingCompaction) {
-          void runCompaction(prepared.pendingCompaction);
+          void runCompaction({ ...prepared.pendingCompaction, billedUserId: executionContext?.creditSpend?.userId, automationRef: executionContext?.creditSpend?.automationRef });
         }
 
-        // Bill the requesting user for the sub-agent run. Use totalUsage so all
-        // tool-loop round-trips (up to stepCountIs(20)) are metered, not just the
-        // final step. Tracked against the resolved model name so the cost is real.
-        // Awaited (not fire-and-forget): trackAIUsage persists the usage log and
-        // debits the balance inside the returned promise, so awaiting here keeps the
-        // sub-agent charge durable if the tool returns into a serverless freeze.
-        // No holdId: this nested call runs inside an already-gated parent request;
-        // the parent's hold covers its own settle, and these sub-agent decrements
-        // draw the balance directly (no separate reservation to release).
+        // Settle the sub-agent run on its own hold. totalUsage meters every tool-loop round-trip
+        // (up to stepCountIs(20)), against the resolved model name so the cost is real. Awaited
+        // so the charge is durable if the tool returns into a serverless freeze. The hold names
+        // the wallet the CALLER's turn resolved (SPEND-7: an agent's spend belongs to the session
+        // it runs in, not the drive the agent lives in); a flat-rate provider takes no hold and
+        // settles nothing.
         await AIMonitoring.trackUsage({
-          userId,
+          // The consumer the turn's gate bound (a manual Run's presser), else the caller (review #2817 P2-3).
+          userId: billedUserId,
           provider: resolvedProvider,
           model: resolvedModelName,
           source: 'page_agent',
@@ -871,7 +946,15 @@ export async function executeAskAgent(
           totalTokens: response.totalUsage?.totalTokens,
           conversationId: activeConversationId,
           pageId: agentId,
-          driveId: targetAgent.driveId,
+          // SPEND-7: attributed to the drive of the session the call runs in (its spend target's),
+          // not the drive the agent page lives in; a call with no drive session names none.
+          driveId: spendDriveId(askSpend) ?? undefined,
+          holdId,
+          walletId: settleWalletId,
+          // WAL-6b: the hold records the turn's fallback origin; carried too for a hold-less settle.
+          fallbackFromWalletId: spendFallbackFromWalletId(askSpend),
+          // SPEND-10: a consultation inside an automation run is that automation's spend.
+          automationRef: executionContext?.creditSpend?.automationRef,
           success: true,
           metadata: { feature: 'ask_agent', agentCallDepth: callDepth + 1 },
         });

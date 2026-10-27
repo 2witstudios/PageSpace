@@ -52,6 +52,7 @@ import {
   readWorkspaceNodeSnapshot,
   writeWorkspaceNodes,
 } from '@pagespace/lib/services/agent-workspaces/workspace-node-store';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // The realtime hop is not what this file is about, and a successful write here
 // must not depend on a socket server being up.
@@ -255,7 +256,7 @@ describe('a conversation already shown by a node in ANOTHER workspace', () => {
       baseRev: before.rev,
       put: [chatPane('pane-stolen', 0, conversationId)],
       drop: [],
-      viewerId: ownerIds[0],
+      viewer: credentialActor(ownerIds[0], null),
     });
 
     expect(result.status).toBe('conflict');
@@ -289,7 +290,7 @@ describe('a conversation already shown by a node in ANOTHER workspace', () => {
       baseRev: before.rev,
       put: [chatPane('pane-ok', 0, conversationId)],
       drop: [],
-      viewerId: ownerIds[0],
+      viewer: credentialActor(ownerIds[0], null),
     });
 
     expect(result.status).toBe('ok');
@@ -359,7 +360,7 @@ describe('a conversation already shown by a node in ANOTHER workspace', () => {
         { nodeType: 'pane', id: 'holder', parentId: 'root', position: 0, target: null },
       ],
       drop: [],
-      viewerId: ownerIds[0],
+      viewer: credentialActor(ownerIds[0], null),
     });
 
     expect(result.status).toBe('ok');
@@ -511,7 +512,7 @@ describe('the liveness backstop — a write that introduces a DELETED thread', (
         },
       ],
       drop: [],
-      viewerId: ownerIds[0],
+      viewer: credentialActor(ownerIds[0], null),
     });
 
     expect(result.status).toBe('refused');
@@ -541,7 +542,7 @@ describe('the liveness backstop — a write that introduces a DELETED thread', (
         },
       ],
       drop: [],
-      viewerId: ownerIds[0],
+      viewer: credentialActor(ownerIds[0], null),
     });
 
     expect(result.status).toBe('ok');
@@ -565,7 +566,7 @@ describe('the liveness backstop — a write that introduces a DELETED thread', (
       // first half of a close.
       put: [chatPane('n1', 0, conversationId)],
       drop: [],
-      viewerId: ownerIds[0],
+      viewer: credentialActor(ownerIds[0], null),
     });
 
     expect(result.status).toBe('ok');
@@ -599,7 +600,7 @@ describe('ending a session that a concurrent admission REOPENED', () => {
 
     const result = await destroyWorkspaceTree({
       workspaceId,
-      actingUserId: ownerIds[0],
+      actor: credentialActor(ownerIds[0], null),
       requireEnded: true,
     });
 
@@ -619,7 +620,7 @@ describe('ending a session that a concurrent admission REOPENED', () => {
 
     const result = await destroyWorkspaceTree({
       workspaceId,
-      actingUserId: ownerIds[0],
+      actor: credentialActor(ownerIds[0], null),
       requireEnded: true,
     });
 
@@ -633,7 +634,7 @@ describe('ending a session that a concurrent admission REOPENED', () => {
     const conversationId = await createConversation();
     await seedTree(workspaceId, [root, chatPane('n1', 0, conversationId)]);
 
-    const result = await destroyWorkspaceTree({ workspaceId, actingUserId: ownerIds[0] });
+    const result = await destroyWorkspaceTree({ workspaceId, actor: credentialActor(ownerIds[0], null) });
 
     expect(result.status).toBe('ok');
   });
@@ -654,7 +655,7 @@ describe('ports pane targets', () => {
       baseRev: before.rev,
       put: [{ nodeType: 'pane', id: 'pane-ports', parentId: 'root', position: 0, target: { kind: 'ports', id: workspaceId } }],
       drop: [],
-      viewerId: ownerIds[0],
+      viewer: credentialActor(ownerIds[0], null),
     });
     expect(result.status).toBe('ok');
     if (result.status !== 'ok') return;
@@ -671,7 +672,7 @@ describe('ports pane targets', () => {
       baseRev: before.rev,
       put: [{ nodeType: 'pane', id: 'pane-ports', parentId: 'root', position: 0, target: { kind: 'ports', id: workspaceB } }],
       drop: [],
-      viewerId: ownerIds[0],
+      viewer: credentialActor(ownerIds[0], null),
     });
     expect(result.status).not.toBe('ok');
   });

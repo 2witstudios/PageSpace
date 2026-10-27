@@ -31,6 +31,8 @@ import {
   type CommandExecutionPlan,
 } from '../core/command-processor';
 import type { ToolExecutionContext } from '../core/types';
+import { commandsForModel } from '../core/command-model-policy';
+import { driveDeniedForActor, pageDeniedForActor, toolActor } from './actor-permissions';
 
 const skillLogger = loggers.ai.child({ module: 'skill-tools' });
 
@@ -74,11 +76,13 @@ export const skillTools = {
         // chip resolver — loadAvailableCommands requires a verified id).
         const requestedDriveId = ctx?.locationContext?.currentDrive?.id ?? null;
         const driveId =
-          requestedDriveId && (await isUserDriveMember(userId, requestedDriveId))
+          requestedDriveId &&
+          !(ctx && await driveDeniedForActor(ctx, requestedDriveId)) &&
+          (await isUserDriveMember(toolActor(ctx!), requestedDriveId))
             ? requestedDriveId
             : null;
 
-        const { winners } = await loadAvailableCommands(userId, driveId);
+        const { winners } = await loadAvailableCommands(toolActor(ctx!), driveId);
         const winner = winners.find((command) => command.trigger === name);
         if (!winner) return unavailable(name);
 
@@ -94,12 +98,18 @@ export const skillTools = {
           // would contradict prompt pointers that survive tool filtering
           // (same model as Claude Code's name-only skills and pi's
           // read-any-skill-file loading).
-          const plan = await resolveBuiltinInjection(name, userId, { driveId });
+          const plan = await resolveBuiltinInjection(name, toolActor(ctx!), { driveId });
           return planToResult(plan, name);
         }
 
-        const plan = await resolveCommandInjectionById(winner.id, userId, name);
-        return planToResult(plan, name);
+        // A personal command's entry page can sit in a drive the user keeps
+        // their Imago agent out of: the actor check, not only the user's.
+        if (ctx && winner.entryPageId && await pageDeniedForActor(ctx, winner.entryPageId)) return unavailable(name);
+
+        const plan = await resolveCommandInjectionById(winner.id, toolActor(ctx!), name);
+        // POL-8: the command's pages reach this run's model only when their org allows it.
+        const [judged] = (await commandsForModel([plan], ctx ?? {})).plans;
+        return planToResult(judged, name);
       } catch (error) {
         skillLogger.error('load_skill failed; returning soft error', error as Error, {
           skill: name,

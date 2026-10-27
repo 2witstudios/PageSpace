@@ -9,11 +9,12 @@ import {
   canClaimExistingObject,
 } from '@pagespace/lib/services/upload-validation';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
-import { checkStorageQuota, reserveConcurrentUploadSlot, getUserStorageQuota, userReferencesContentHash } from '@pagespace/lib/services/storage-limits';
+import { resolveUploadQuotaTarget, checkUploadQuotaTarget, reserveConcurrentUploadSlot, userReferencesContentHash } from '@pagespace/lib/services/storage-limits';
 import { releasePendingUpload } from '@pagespace/lib/services/pending-uploads';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkObjectExists, issuePresignedPutUrl } from '@/lib/upload/s3-effects';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 const PRESIGN_TTL = 900;
@@ -52,17 +53,17 @@ export async function POST(request: Request) {
   // A scoped MCP token is its own drive member — uploads require the TOKEN's
   // role to grant edit, not the owning user's.
   if (isScopedMCPAuth(auth)) {
-    const level = await getAppDriveAccessLevel(auth.tokenId, driveId);
+    const level = await getAppDriveAccessLevel(actorFromAuth(auth), auth.tokenId, driveId);
     if (!level?.canEdit) {
       return NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 });
     }
   } else {
-    const drivePerms = await getUserDrivePermissions(userId, driveId);
+    const drivePerms = await getUserDrivePermissions(actorFromAuth(auth), driveId);
     if (!drivePerms) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
     if (!drivePerms.canEdit) {
-      return NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 }));
     }
   }
 
@@ -78,10 +79,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: mimeResult.error.message }, { status: 400 });
   }
 
-  const quota = await getUserStorageQuota(userId);
-  if (!quota) {
+  // WAL-9, O-9: an upload into an org drive is checked against the org's quota (Business),
+  // never the uploader's personal one. Resolved once: the org's usage is a SUM over its files,
+  // and the size and quota checks below both decide against this one read (#2719 review P2-2).
+  const quotaTarget = await resolveUploadQuotaTarget(userId, driveId);
+  if (!quotaTarget) {
     return NextResponse.json({ error: 'Could not retrieve storage quota' }, { status: 500 });
   }
+  const { quota } = quotaTarget;
 
   const sizeResult = validateFileSize(fileSize, quota.tier);
   if (!sizeResult.ok) {
@@ -89,7 +94,7 @@ export async function POST(request: Request) {
   }
 
   // Enforce remaining storage + file-count limits, not just per-file size.
-  const quotaCheck = await checkStorageQuota(userId, fileSize);
+  const quotaCheck = await checkUploadQuotaTarget(quotaTarget, fileSize);
   if (!quotaCheck.allowed) {
     return NextResponse.json({ error: quotaCheck.reason, storageInfo: quotaCheck.quota }, { status: 413 });
   }

@@ -1,0 +1,136 @@
+import { describe, it, expect } from 'vitest';
+import { toErrorCause } from '../toErrorCause';
+import { creditGateErrorResponse } from '../../../../../../../web/src/lib/subscription/credit-gate-response';
+
+describe('toErrorCause', () => {
+  it('given the out_of_credits code (402), should classify as out_of_credits, non-retryable', () => {
+    const cause = toErrorCause(402, { error: 'out_of_credits', message: 'balance too low' });
+    expect(cause).toEqual({ code: 'out_of_credits', httpStatus: 402, message: 'balance too low', retryable: false });
+  });
+
+  it('given the too_many_in_flight code (429), should classify as too_many_in_flight, retryable', () => {
+    const cause = toErrorCause(429, { error: 'too_many_in_flight', message: 'wait for one to finish' });
+    expect(cause).toEqual({ code: 'too_many_in_flight', httpStatus: 429, message: 'wait for one to finish', retryable: true });
+  });
+
+  it('given the daily_cap_exceeded code (429), should classify as daily_cap_exceeded, non-retryable', () => {
+    const cause = toErrorCause(429, { error: 'daily_cap_exceeded', message: 'try again tomorrow' });
+    expect(cause).toEqual({ code: 'daily_cap_exceeded', httpStatus: 429, message: 'try again tomorrow', retryable: false });
+  });
+
+  it('given a known code, should use the SERVER message when present', () => {
+    const cause = toErrorCause(402, { error: 'out_of_credits', message: 'custom server copy' });
+    expect(cause.message).toBe('custom server copy');
+  });
+
+  it('given a known code with NO server message, should fall back to friendly default copy', () => {
+    const cause = toErrorCause(402, { error: 'out_of_credits' });
+    expect(cause.message).toMatch(/credits/i);
+  });
+
+  it('given httpStatus 401 with an unrecognized/absent code, should classify as auth', () => {
+    const cause = toErrorCause(401, {});
+    expect(cause).toMatchObject({ code: 'auth', httpStatus: 401, retryable: false });
+  });
+
+  it('given httpStatus 429 with an unrecognized code, should classify as rate_limit', () => {
+    const cause = toErrorCause(429, { error: 'something_else' });
+    expect(cause).toMatchObject({ code: 'rate_limit', httpStatus: 429, retryable: true });
+  });
+
+  it('given a 5xx status with no recognizable code, should classify as unknown and retryable', () => {
+    const cause = toErrorCause(503, {});
+    expect(cause).toMatchObject({ code: 'unknown', httpStatus: 503, retryable: true });
+  });
+
+  it('given an unrecognized 4xx status with no code, should classify as unknown and non-retryable', () => {
+    const cause = toErrorCause(418, {});
+    expect(cause).toMatchObject({ code: 'unknown', httpStatus: 418, retryable: false });
+  });
+
+  it('given a malformed body (not an object), should classify as unknown, never crash', () => {
+    expect(() => toErrorCause(500, 'not json')).not.toThrow();
+    expect(toErrorCause(500, 'not json')).toMatchObject({ code: 'unknown', httpStatus: 500 });
+  });
+
+  it('given a null body, should classify as unknown, never crash', () => {
+    expect(() => toErrorCause(500, null)).not.toThrow();
+    expect(toErrorCause(500, null).code).toBe('unknown');
+  });
+
+  it('given an undefined body, should classify as unknown, never crash', () => {
+    expect(toErrorCause(500, undefined).code).toBe('unknown');
+  });
+
+  it('given a body whose "error" field is not a string, should ignore it and fall through to status-based classification', () => {
+    const cause = toErrorCause(401, { error: 123 });
+    expect(cause.code).toBe('auth');
+  });
+
+  it('given a body whose "message" field is not a string, should ignore it and use default copy', () => {
+    const cause = toErrorCause(402, { error: 'out_of_credits', message: 123 });
+    expect(cause.message).toMatch(/credits/i);
+  });
+
+  it('should never let raw JSON reach the message (always a friendly string)', () => {
+    const cause = toErrorCause(402, { error: 'out_of_credits' });
+    expect(cause.message).not.toMatch(/[{}]/);
+  });
+
+  // PR 6 review (CodeRabbit, security): body.message is only trusted for KNOWN_CODES —
+  // that shape comes exclusively from our own credit-gate-response.ts. Every
+  // status-classified fallback branch (401/429-generic/5xx/default) can be fed by an
+  // arbitrary upstream provider error, so it must never surface body.message verbatim.
+  it('given a 5xx status with an unrecognized code, should ignore an arbitrary server message and use the local default', () => {
+    const cause = toErrorCause(503, { error: 'upstream_boom', message: '<script>internal stack trace leaked here</script>' });
+    expect(cause.message).not.toContain('internal stack trace');
+    expect(cause.message).toMatch(/wrong/i);
+  });
+
+  it('given a 401 with an arbitrary server message, should ignore it and use the local auth default', () => {
+    const cause = toErrorCause(401, { message: 'some provider-specific internal detail' });
+    expect(cause.message).not.toBe('some provider-specific internal detail');
+  });
+
+  it('given a 429 with an unrecognized code and an arbitrary server message, should ignore it and use the local rate_limit default', () => {
+    const cause = toErrorCause(429, { error: 'unrecognized', message: 'raw upstream body' });
+    expect(cause.message).not.toBe('raw upstream body');
+  });
+  it('SPEND-4 (partial) given the spend_source_refused code (402), should classify it and KEEP the refused source, why, and the options offered', () => {
+    const cause = toErrorCause(402, {
+      error: 'spend_source_refused',
+      message: 'The credit source for this request cannot cover it. Choose another source to continue.',
+      source: 'drive_wallet',
+      refusalReason: 'source_empty',
+      options: ['seat_allowance', 'own_credits'],
+    });
+    expect(cause).toEqual({
+      code: 'spend_source_refused',
+      httpStatus: 402,
+      message: 'The credit source for this request cannot cover it. Choose another source to continue.',
+      retryable: false,
+      refusal: { source: 'drive_wallet', reason: 'source_empty', options: ['seat_allowance', 'own_credits'] },
+    });
+  });
+
+  it('SPEND-4 (partial) given spend_source_refused with no source named (none chosen among several), should keep a null source', () => {
+    const cause = toErrorCause(402, { error: 'spend_source_refused', source: null, refusalReason: 'no_source_chosen', options: ['drive_wallet', 'own_credits'] });
+    expect(cause.refusal).toEqual({ source: null, reason: 'no_source_chosen', options: ['drive_wallet', 'own_credits'] });
+  });
+
+  it('given spend_source_refused with a malformed refusal payload, should still classify it and drop only the malformed payload, never crash', () => {
+    const cause = toErrorCause(402, { error: 'spend_source_refused', source: 'drive_wallet', refusalReason: 'source_empty', options: 'own_credits' });
+    expect(cause).toMatchObject({ code: 'spend_source_refused', httpStatus: 402, retryable: false });
+    expect(cause.refusal).toBeUndefined();
+  });
+
+  it('SPEND-4 (partial) WAL-2 (partial) a seat refused by its cap survives the whole trip — the 402 the route sends, read back by the client, names the source and why, never "Something went wrong"', async () => {
+    const response = creditGateErrorResponse('source_refused', { source: 'seat_allowance', reason: 'source_cap_reached', options: ['drive_wallet', 'own_credits'] });
+
+    const cause = toErrorCause(response.status, await response.json());
+
+    expect(cause.code).toBe('spend_source_refused');
+    expect(cause.httpStatus).toBe(402);
+    expect(cause.refusal).toEqual({ source: 'seat_allowance', reason: 'source_cap_reached', options: ['drive_wallet', 'own_credits'] });
+  });
+});

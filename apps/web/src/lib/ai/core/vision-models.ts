@@ -5,6 +5,16 @@
  */
 
 const VISION_CAPABLE_MODELS: Record<string, boolean> = {
+  // OpenAI GPT-6 Models
+  'gpt-6-luna': true,
+  'gpt-6-luna-pro': true,
+  'gpt-6-sol': true,
+  'gpt-6-sol-pro': true,
+  'gpt-6.1-sol': true,
+  'gpt-6.1-sol-pro': true,
+  'gpt-6-astra': true,
+  'gpt-6-astra-pro': true,
+
   // OpenAI GPT-5.6 Models
   'gpt-5.6-sol-pro': true,
   'gpt-5.6-sol': true,
@@ -100,6 +110,7 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'gemini-3.5-flash': true,
 
   // xAI Grok Vision models
+  'grok-4.7': true,
   'grok-4.5': true,
   'grok-4.3': true,
   'grok-4.20': true,
@@ -115,6 +126,7 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'grok-vision-beta': true,
 
   // Qwen3.5 Vision-Language Models
+  'qwen3.8-omni-flash': true,
   'qwen3.7-plus': true,
   'qwen3.6-plus': true,
   'qwen3.6-flash': true,
@@ -137,6 +149,8 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'kimi-k3': true,
   'kimi-k2.7-code': true,
   'kimi-k2.6': true,
+  'muse-spark-1.3': true,
+  'muse-spark-1.3-contributor': true,
   'muse-spark-1.1': true,
   'llama-4-maverick': true,
   'llama-4-scout': true,

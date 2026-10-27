@@ -1,0 +1,38 @@
+'use client';
+
+import type { AnchorHTMLAttributes, MouseEvent, ReactNode } from 'react';
+import { isCapacitorApp } from '@/lib/capacitor-bridge';
+import { openExternalUrl } from '@/lib/navigation/app-navigation';
+
+interface MarketingLinkProps extends Omit<AnchorHTMLAttributes<HTMLAnchorElement>, 'href'> {
+  /** A same-host path served by the marketing site, e.g. `/terms`, or an absolute URL (Apple's EULA). */
+  href: string;
+  children: ReactNode;
+}
+
+/**
+ * Link to a page the marketing site serves on our own host (Terms, Privacy, …), or to an
+ * absolute URL such as Apple's standard EULA.
+ *
+ * `AppLink` treats same-host paths as internal, which in the native app loads the
+ * whole marketing site — Pricing nav included — inside the web view. Here the
+ * native app opens the page in the system browser sheet instead, with `?embed=1`
+ * so the marketing site serves the same page without its navigation and footer
+ * (Guideline 3.1.1: no route from the app to web prices). The web navigates normally.
+ */
+export function MarketingLink({ href, children, onClick, ...props }: MarketingLinkProps) {
+  const handleClick = (e: MouseEvent<HTMLAnchorElement>) => {
+    onClick?.(e);
+    if (!isCapacitorApp()) return;
+    e.preventDefault();
+    const url = new URL(href, window.location.origin);
+    if (url.origin === window.location.origin) url.searchParams.set('embed', '1');
+    void openExternalUrl(url.toString());
+  };
+
+  return (
+    <a href={href} onClick={handleClick} {...props}>
+      {children}
+    </a>
+  );
+}

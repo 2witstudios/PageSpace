@@ -32,11 +32,13 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: mockCanUserViewPage,
 }));
 
 // Import AFTER mocks are registered
 import { getAgentMemoryContext, buildAgentMemorySection } from '../agent-memory';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -45,6 +47,9 @@ function setMemoryPage(page: { id: string; content: string } | null) {
 }
 
 // ─── getAgentMemoryContext ────────────────────────────────────────────────────
+
+/** The caller's credential (D-OW-45). */
+const USER_1 = credentialActor('user-1', null);
 
 describe('getAgentMemoryContext', () => {
   beforeEach(() => {
@@ -56,7 +61,7 @@ describe('getAgentMemoryContext', () => {
     it('returns the page content', async () => {
       setMemoryPage({ id: 'mem-page-1', content: 'My decisions here.' });
 
-      const result = await getAgentMemoryContext('agent-page-1', 'user-1');
+      const result = await getAgentMemoryContext('agent-page-1', USER_1);
 
       expect(result).toBe('My decisions here.');
     });
@@ -65,9 +70,9 @@ describe('getAgentMemoryContext', () => {
       setMemoryPage({ id: 'mem-page-1', content: 'secret notes' });
       mockCanUserViewPage.mockResolvedValue(true);
 
-      const result = await getAgentMemoryContext('agent-page-1', 'user-1');
+      const result = await getAgentMemoryContext('agent-page-1', USER_1);
 
-      expect(mockCanUserViewPage).toHaveBeenCalledWith('user-1', 'mem-page-1');
+      expect(mockCanUserViewPage).toHaveBeenCalledWith(USER_1, 'mem-page-1');
       expect(result).toBe('secret notes');
     });
   });
@@ -76,7 +81,7 @@ describe('getAgentMemoryContext', () => {
     it('returns empty string', async () => {
       setMemoryPage(null);
 
-      const result = await getAgentMemoryContext('agent-page-1', 'user-1');
+      const result = await getAgentMemoryContext('agent-page-1', USER_1);
 
       expect(result).toBe('');
     });
@@ -87,7 +92,7 @@ describe('getAgentMemoryContext', () => {
       setMemoryPage({ id: 'mem-page-1', content: 'private notes' });
       mockCanUserViewPage.mockResolvedValue(false);
 
-      const result = await getAgentMemoryContext('agent-page-1', 'user-1');
+      const result = await getAgentMemoryContext('agent-page-1', USER_1);
 
       expect(result).toBe('');
     });
@@ -97,7 +102,7 @@ describe('getAgentMemoryContext', () => {
     it('returns empty string for empty content', async () => {
       setMemoryPage({ id: 'mem-page-1', content: '' });
 
-      const result = await getAgentMemoryContext('agent-page-1', 'user-1');
+      const result = await getAgentMemoryContext('agent-page-1', USER_1);
 
       expect(result).toBe('');
     });
@@ -105,7 +110,7 @@ describe('getAgentMemoryContext', () => {
     it('returns empty string for whitespace-only content', async () => {
       setMemoryPage({ id: 'mem-page-1', content: '   \n\n   ' });
 
-      const result = await getAgentMemoryContext('agent-page-1', 'user-1');
+      const result = await getAgentMemoryContext('agent-page-1', USER_1);
 
       expect(result).toBe('');
     });
@@ -117,7 +122,7 @@ describe('getAgentMemoryContext', () => {
       const longContent = 'A'.repeat(9000);
       setMemoryPage({ id: 'mem-page-1', content: longContent });
 
-      const result = await getAgentMemoryContext('agent-page-1', 'user-1');
+      const result = await getAgentMemoryContext('agent-page-1', USER_1);
 
       expect(result.length).toBeLessThan(longContent.length);
       expect(result).toContain('[Agent Memory truncated');
@@ -130,7 +135,7 @@ describe('getAgentMemoryContext', () => {
       const shortContent = 'B'.repeat(2000);
       setMemoryPage({ id: 'mem-page-1', content: shortContent });
 
-      const result = await getAgentMemoryContext('agent-page-1', 'user-1');
+      const result = await getAgentMemoryContext('agent-page-1', USER_1);
 
       expect(result).toBe(shortContent);
       expect(result).not.toContain('[Agent Memory truncated');
@@ -141,7 +146,7 @@ describe('getAgentMemoryContext', () => {
     it('returns empty string (never throws)', async () => {
       mockLimit.mockRejectedValue(new Error('DB connection failed'));
 
-      const result = await getAgentMemoryContext('agent-page-1', 'user-1');
+      const result = await getAgentMemoryContext('agent-page-1', USER_1);
 
       expect(result).toBe('');
     });
@@ -152,7 +157,7 @@ describe('getAgentMemoryContext', () => {
       setMemoryPage({ id: 'mem-page-1', content: 'content' });
       mockCanUserViewPage.mockRejectedValue(new Error('Permission service down'));
 
-      const result = await getAgentMemoryContext('agent-page-1', 'user-1');
+      const result = await getAgentMemoryContext('agent-page-1', USER_1);
 
       expect(result).toBe('');
     });

@@ -20,7 +20,7 @@ export type StepUpAttempt = { status: 'ready'; stepUpToken: string } | { status:
 
 const isNoPasskeyError = (error: unknown): boolean => error instanceof Error && error.message === 'no_passkey';
 
-async function runWebauthnStepUp(actionBinding: Record<string, string>): Promise<string> {
+export async function runWebauthnStepUp(actionBinding: Record<string, string>): Promise<string> {
   const { options } = await post<{ options: { challenge: string }; challengeId: string }>(
     '/api/auth/step-up/webauthn/options',
     { actionBinding },

@@ -2,13 +2,13 @@
 
 import { useState } from 'react';
 import useSWR from 'swr';
-import Link from 'next/link';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Sparkles, Lock } from 'lucide-react';
 import { fetchWithAuth, patch } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
+import { UpgradeLink } from './UpgradeLink';
 
 interface AutomationView {
   pulse: { enabled: boolean };
@@ -107,9 +107,13 @@ export function AutomationsCard() {
                   </div>
                   <p className="text-sm text-muted-foreground">
                     Learns your preferences from conversations.{' '}
-                    <Link href="/settings/plan" className="underline underline-offset-2">
+                    <UpgradeLink
+                      href="/settings/plan"
+                      className="underline underline-offset-2"
+                      fallback="Available on paid plans"
+                    >
                       Upgrade to enable
-                    </Link>
+                    </UpgradeLink>
                     .
                   </p>
                 </div>

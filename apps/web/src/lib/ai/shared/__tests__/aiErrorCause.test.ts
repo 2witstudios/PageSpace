@@ -48,4 +48,17 @@ describe('isAIErrorCause', () => {
     const { code: _code, ...withoutCode } = valid;
     expect(isAIErrorCause(withoutCode)).toBe(false);
   });
+  it('given a spend_source_refused cause carrying its refusal, should return true', () => {
+    expect(isAIErrorCause({
+      code: 'spend_source_refused',
+      httpStatus: 402,
+      message: 'choose another source',
+      retryable: false,
+      refusal: { source: 'drive_wallet', reason: 'source_paused', options: ['own_credits'] },
+    })).toBe(true);
+  });
+
+  it('given a refusal whose options are not all strings, should return false', () => {
+    expect(isAIErrorCause({ ...valid, refusal: { source: 'drive_wallet', reason: 'source_paused', options: [1] } })).toBe(false);
+  });
 });

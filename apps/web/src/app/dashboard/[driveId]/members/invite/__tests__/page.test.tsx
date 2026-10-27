@@ -16,7 +16,9 @@ vi.mock('sonner', () => ({
 
 const mockPost = vi.fn();
 const mockFetchWithAuth = vi.fn();
-vi.mock('@/lib/auth/auth-fetch', () => ({
+vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => ({
+  // ApiRequestError is the real class: the org error-copy table narrows refusals with it.
+  ApiRequestError: (await importOriginal<typeof import('@/lib/auth/auth-fetch')>()).ApiRequestError,
   post: (...a: unknown[]) => mockPost(...a),
   fetchWithAuth: (...a: unknown[]) => mockFetchWithAuth(...a),
 }));

@@ -55,7 +55,7 @@ describe('SessionService', () => {
       });
       vi.mocked(sessionRepository.insertSession).mockResolvedValue(undefined);
 
-      const token = await service.createSession({
+      const token = await service.createSession({ authentication: null,
         userId: 'user-1',
         type: 'user',
         scopes: ['read', 'write'],
@@ -80,7 +80,7 @@ describe('SessionService', () => {
       vi.mocked(sessionRepository.findUserById).mockResolvedValue(undefined);
 
       await expect(
-        service.createSession({
+        service.createSession({ authentication: null,
           userId: 'nonexistent',
           type: 'user',
           scopes: [],
@@ -96,7 +96,7 @@ describe('SessionService', () => {
       });
       vi.mocked(sessionRepository.insertSession).mockResolvedValue(undefined);
 
-      await service.createSession({
+      await service.createSession({ authentication: null,
         userId: 'user-1', type: 'service', scopes: ['read'], expiresInMs: 60000,
       });
 
@@ -109,7 +109,7 @@ describe('SessionService', () => {
       });
       vi.mocked(sessionRepository.insertSession).mockResolvedValue(undefined);
 
-      await service.createSession({
+      await service.createSession({ authentication: null,
         userId: 'user-1', type: 'mcp', scopes: ['read'], expiresInMs: 60000,
       });
 
@@ -122,7 +122,7 @@ describe('SessionService', () => {
       });
       vi.mocked(sessionRepository.insertSession).mockResolvedValue(undefined);
 
-      await service.createSession({
+      await service.createSession({ authentication: null,
         userId: 'user-1', type: 'device', scopes: ['read'], expiresInMs: 60000,
       });
 
@@ -135,7 +135,7 @@ describe('SessionService', () => {
       });
       vi.mocked(sessionRepository.insertSession).mockResolvedValue(undefined);
 
-      await service.createSession({
+      await service.createSession({ authentication: null,
         userId: 'user-1', type: 'socket', scopes: [], expiresInMs: 60000,
       });
 
@@ -228,6 +228,7 @@ describe('SessionService', () => {
         adminRoleVersion: 0, type: 'user', scopes: ['read', 'write'],
         expiresAt, lastUsedAt: null, createdAt: new Date(),
         resourceType: null, resourceId: null, driveId: null,
+        authenticatedAt: null, authenticationAssurance: null,
         user: { id: 'user-1', tokenVersion: 1, role: 'admin', adminRoleVersion: 0, suspendedAt: null },
       });
 
@@ -245,6 +246,7 @@ describe('SessionService', () => {
         resourceType: undefined,
         resourceId: undefined,
         driveId: undefined,
+        authentication: null,
       });
       expect(sessionRepository.touchSession).toHaveBeenCalledWith('hashed_ps_sess_valid');
     });
@@ -364,7 +366,7 @@ describe('SessionService', () => {
       });
       vi.mocked(sessionRepository.insertSession).mockResolvedValue(undefined);
 
-      await service.createSession({
+      await service.createSession({ authentication: null,
         userId: 'user-1',
         type: 'user',
         scopes: ['*'],

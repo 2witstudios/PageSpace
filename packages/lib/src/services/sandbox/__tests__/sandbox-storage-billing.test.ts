@@ -20,7 +20,7 @@ vi.mock('@pagespace/db/operators', () => ({
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'pages.id', driveId: 'pages.driveId' },
-  drives: { id: 'drives.id', ownerId: 'drives.ownerId' },
+  drives: { id: 'drives.id', ownerId: 'drives.ownerId', orgId: 'drives.orgId' },
 }));
 vi.mock('@pagespace/db/schema/agent-workspaces', () => ({
   agentWorkspaces: {
@@ -51,6 +51,12 @@ vi.mock('@pagespace/db/schema/drive-envs', () => ({
 
 const mockTrackUsage = vi.hoisted(() => vi.fn());
 vi.mock('../../../monitoring/ai-monitoring', () => ({ AIMonitoring: { trackUsage: mockTrackUsage } }));
+const mockSettleWalletId = vi.hoisted(() => vi.fn(async (charge: { kind: string }): Promise<string | null | undefined> => (charge.kind === 'org' ? 'pool-1' : undefined)));
+vi.mock('../../../billing/compute-gate', () => ({
+  computeSettleWalletId: mockSettleWalletId,
+  UNSETTLED_COMPUTE: { persisted: false, creditsSettled: false },
+}));
+vi.mock('../../../billing/org-compute-epoch', () => ({ stampOrgComputeBillingEpoch: vi.fn() }));
 
 import {
   defaultReconcileSandboxStorageDeps,
@@ -133,16 +139,16 @@ describe('defaultReconcileSandboxStorageDeps.listAgentSessionSprites', () => {
   });
 });
 
-describe('defaultReconcileSandboxStorageDeps.lookupDriveOwnerId', () => {
+describe('defaultReconcileSandboxStorageDeps.lookupDriveBillingFacts', () => {
   it('is the shared sandbox-payer.ts lookup (a direct drives read — no page join exists any more)', async () => {
     mockDb.select.mockReturnValue({
       from: () => ({
         where: () => ({
-          limit: async () => [{ ownerId: 'owner-1' }],
+          limit: async () => [{ ownerId: 'owner-1', orgId: null }],
         }),
       }),
     });
-    await expect(defaultReconcileSandboxStorageDeps.lookupDriveOwnerId('drive-1')).resolves.toBe('owner-1');
+    await expect(defaultReconcileSandboxStorageDeps.lookupDriveBillingFacts('drive-1')).resolves.toEqual({ ownerId: 'owner-1', orgId: null });
   });
 });
 
@@ -153,7 +159,7 @@ describe('defaultReconcileSandboxStorageDeps.chargeStorage', () => {
     // be), the reconcile would be back to advancing watermarks over lost charges.
     const charge = () =>
       defaultReconcileSandboxStorageDeps.chargeStorage({
-        payerId: 'owner-1',
+        charge: { kind: 'user', userId: 'owner-1' },
         driveId: 'drive-1',
         subjectKind: 'session',
         subjectId: 'ws-1',
@@ -172,7 +178,7 @@ describe('defaultReconcileSandboxStorageDeps.chargeStorage', () => {
     mockTrackUsage.mockResolvedValue(undefined);
 
     await defaultReconcileSandboxStorageDeps.chargeStorage({
-      payerId: 'owner-1',
+      charge: { kind: 'user', userId: 'owner-1' },
       driveId: 'drive-1',
       subjectKind: 'session',
       subjectId: 'session-1',
@@ -205,7 +211,7 @@ describe('defaultReconcileSandboxStorageDeps.chargeStorage', () => {
     mockTrackUsage.mockResolvedValue(undefined);
 
     await defaultReconcileSandboxStorageDeps.chargeStorage({
-      payerId: 'owner-1',
+      charge: { kind: 'user', userId: 'owner-1' },
       driveId: 'drive-1',
       subjectKind: 'session',
       subjectId: 'session-1',
@@ -220,7 +226,7 @@ describe('defaultReconcileSandboxStorageDeps.chargeStorage', () => {
     mockTrackUsage.mockResolvedValue(undefined);
 
     await defaultReconcileSandboxStorageDeps.chargeStorage({
-      payerId: 'owner-1',
+      charge: { kind: 'user', userId: 'owner-1' },
       driveId: 'drive-1',
       subjectKind: 'session',
       subjectId: 'session-1',
@@ -237,7 +243,7 @@ describe('defaultReconcileSandboxStorageDeps.chargeStorage', () => {
     mockTrackUsage.mockResolvedValue(undefined);
 
     await defaultReconcileSandboxStorageDeps.chargeStorage({
-      payerId: 'owner-1',
+      charge: { kind: 'user', userId: 'owner-1' },
       driveId: undefined,
       subjectKind: 'session',
       subjectId: 'session-1',
@@ -317,7 +323,7 @@ describe('defaultReconcileSandboxStorageDeps.listDriveEnvSprites', () => {
     // No `ownerId`: `drive_envs` has none, and `createdBy` is audit-only —
     // selecting it would be the first step toward billing the creator.
     expect(Object.keys(selectedShape ?? {}).sort()).toEqual(
-      ['driveId', 'envId', 'lastActiveAt', 'measuredAt', 'measuredBytes', 'storageLastBilledAt'].sort(),
+      ['costOwnerId', 'driveId', 'envId', 'lastActiveAt', 'measuredAt', 'measuredBytes', 'storageLastBilledAt'].sort(),
     );
     assert({
       given: "the env row source's predicate",
@@ -355,12 +361,54 @@ describe('defaultReconcileSandboxStorageDeps.listDriveEnvSprites', () => {
   });
 });
 
+describe('defaultReconcileSandboxStorageDeps.chargeStorage — org charge', () => {
+  it('WAL-9 (partial) WAL-2 (partial) a SESSION\'s storage is its person\'s compute; an ENV\'s is a drive accrual that never counts toward the lead\'s seat', async () => {
+    mockTrackUsage.mockResolvedValue({ persisted: true, creditsSettled: true });
+    await defaultReconcileSandboxStorageDeps.chargeStorage({
+      charge: { kind: 'org', orgId: 'org-1', userId: 'owner-1' },
+      driveId: 'drive-1',
+      subjectKind: 'session',
+      subjectId: 'ws-1',
+      costDollars: 0.05,
+      gbMonths: 0.2,
+    });
+    expect(mockTrackUsage.mock.calls[0][0]).toMatchObject({ userId: 'owner-1', walletId: 'pool-1', spendKind: 'compute' });
+  });
+
+  it('WAL-9 (partial) charges an org-drive subject to the ORG POOL wallet, recorded under the person the charge names, marked a drive accrual', async () => {
+    mockTrackUsage.mockResolvedValue({ persisted: true, creditsSettled: true });
+    await defaultReconcileSandboxStorageDeps.chargeStorage({
+      charge: { kind: 'org', orgId: 'org-1', userId: 'lead-1', accrual: true },
+      driveId: 'drive-1',
+      subjectKind: 'env',
+      subjectId: 'env-1',
+      costDollars: 0.05,
+      gbMonths: 0.2,
+    });
+    expect(mockTrackUsage.mock.calls[0][0]).toMatchObject({ userId: 'lead-1', walletId: 'pool-1', spendKind: 'drive_compute' });
+  });
+
+  it('WAL-9 (partial) an org pool that no longer exists charges nothing — the window stays open, never the person', async () => {
+    mockSettleWalletId.mockResolvedValueOnce(null);
+    const outcome = await defaultReconcileSandboxStorageDeps.chargeStorage({
+      charge: { kind: 'org', orgId: 'org-1', userId: 'lead-1' },
+      driveId: 'drive-1',
+      subjectKind: 'env',
+      subjectId: 'env-1',
+      costDollars: 0.05,
+      gbMonths: 0.2,
+    });
+    expect(outcome).toEqual({ persisted: false, creditsSettled: false });
+    expect(mockTrackUsage).not.toHaveBeenCalled();
+  });
+});
+
 describe('defaultReconcileSandboxStorageDeps.chargeStorage — env subjects', () => {
   it('bills an env on the SAME meter, labelled as an environment and attributed to its drive', async () => {
     mockTrackUsage.mockResolvedValue(undefined);
 
     await defaultReconcileSandboxStorageDeps.chargeStorage({
-      payerId: 'drive-owner-1',
+      charge: { kind: 'user', userId: 'drive-owner-1' },
       driveId: 'drive-1',
       subjectKind: 'env',
       subjectId: 'env-1',
@@ -467,12 +515,15 @@ describe('reconcileSandboxStorageSerialized', () => {
       listAgentSessionSprites: vi.fn(async () => []),
       listDriveEnvSprites: vi.fn(async () => []),
       listPublishedAppRootfs: vi.fn(async () => []),
-      lookupDriveOwnerId: vi.fn(async () => null),
+      lookupDriveBillingFacts: vi.fn(async () => null),
       chargeStorage: vi.fn(async () => ({ persisted: true, creditsSettled: true })),
       advanceAgentSessionWatermark: vi.fn(async () => 'advanced' as const),
       advanceDriveEnvWatermark: vi.fn(async () => 'advanced' as const),
       advancePublishedAppWatermark: vi.fn(async () => 'advanced' as const),
       now: () => new Date('2026-07-13T00:00:00.000Z'),
+      orgComputeBillingEpoch: vi.fn(async (tickStart: Date) => tickStart),
+      reserveOrgAccrual: vi.fn(async ({ chargeMillicents }) => ({ kind: 'held' as const, holdId: 'hold-pool', walletId: 'pool', chargeMillicents })),
+      releaseAccrualHold: vi.fn(async () => {}),
       ...overrides,
     };
   }

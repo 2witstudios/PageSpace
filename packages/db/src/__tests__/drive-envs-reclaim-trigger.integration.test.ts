@@ -105,7 +105,7 @@ describe('drive_envs sprite reclaim trigger — live', () => {
         ORDER BY conname`,
     );
     const validated = new Map(rows.map((r) => [r.conname, r.convalidated]));
-    // `agent_workspaces_env_needs_drive_check` was DROPPED in migration 0296 so
+    // `agent_workspaces_env_needs_drive_check` was DROPPED in migration 0382 so
     // a driveless global-assistant session can bind the user's OWN machine,
     // where [D-6]'s owner-only bind gate is the real ownership check. Asserted
     // as an ABSENCE against the live catalogue, because that is the only place
@@ -406,7 +406,7 @@ describe('drive_envs CHECK constraints — live', () => {
       // That CHECK was right about a SPRITE env — drive-owned, drive-paid, with
       // no owner of its own — and wrong about a LOCAL one, where [D-6] already
       // makes binding structurally owner-only, and it could not tell them
-      // apart. Dropped in 0296; the database no longer forbids the SHAPE.
+      // apart. Dropped in 0382; the database no longer forbids the SHAPE.
       //
       // The guarantee lives in `spawnAgentSession` now, as two branches: a
       // local env goes through the owner-only `gateLocalEnvBind`, and every

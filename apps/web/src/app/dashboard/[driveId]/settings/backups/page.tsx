@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -21,6 +20,7 @@ import { ChevronLeft, Shield, Plus, Loader2, Lock } from 'lucide-react';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth, post, patch } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
+import { UpgradeLink } from '@/components/billing/UpgradeLink';
 import useSWR from 'swr';
 import { format, formatDistanceToNow } from 'date-fns';
 
@@ -144,9 +144,13 @@ function AutomaticBackups({ driveId }: { driveId: string }) {
           </div>
           {!available && (
             <CardDescription className="mt-1">
-              <Link href="/settings/plan" className="underline hover:text-foreground">
+              <UpgradeLink
+                href="/settings/plan"
+                className="underline hover:text-foreground"
+                fallback="Available on paid plans:"
+              >
                 Upgrade to enable
-              </Link>{' '}
+              </UpgradeLink>{' '}
               daily, weekly, or monthly snapshots.
             </CardDescription>
           )}

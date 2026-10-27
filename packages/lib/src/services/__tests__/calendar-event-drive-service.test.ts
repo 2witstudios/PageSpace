@@ -1,12 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+// The org sign-in gate (D-OW-45) reads policies through its own module; these tests are about the
+// resolvers behind it, so no org here sets a sign-in policy. Plain functions: a mock reset must not undo them.
+vi.mock('../../permissions/actor-authentication', () => ({
+  checkActorDriveAuthentication: async () => ({ allowed: true }),
+  checkActorResourceAuthentication: async () => ({ allowed: true }),
+  filterDrivesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  filterResourcesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  explainOrgAuthenticationDenial: async () => null,
+}));
 
 // ---------------------------------------------------------------------------
 // Mocks — declared before any imports from the module under test
 // ---------------------------------------------------------------------------
 
-vi.mock('@pagespace/db/db', () => ({
-  db: { select: vi.fn(), insert: vi.fn(), delete: vi.fn() },
-}));
+vi.mock('@pagespace/db/db', () => {
+  const db: Record<string, unknown> = { select: vi.fn(), insert: vi.fn(), delete: vi.fn() };
+  // A share is inserted in a transaction (the [D-OW-33] lapse guard reads in it): the tx is the same mock.
+  db.transaction = vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(db));
+  return { db };
+});
+// [D-OW-33] the lapse guard: these drives have no org (null) unless a test lapses one.
+const checkDriveMayLoosen = vi.hoisted(() => vi.fn(async (_tx?: unknown, _driveId?: unknown, _loosens?: unknown): Promise<unknown> => null));
+vi.mock('../../permissions/org-lapse-guard', () => ({ checkDriveMayLoosen }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((_a: unknown, _b: unknown) => 'eq'),
   and: vi.fn((...args: unknown[]) => ({ and: args })),
@@ -27,8 +42,9 @@ vi.mock('../../permissions/permissions', () => ({
   isDriveOwnerOrAdmin: vi.fn(),
   isUserDriveMember: vi.fn(),
 }));
-vi.mock('../../services/drive-member-service', () => ({
-  getDriveRecipientUserIds: vi.fn(),
+// The one org-aware membership enumeration (decision tested in drive-audience-decision.test.ts).
+vi.mock('../../permissions/drive-audience', () => ({
+  listDriveAudiences: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------
@@ -48,7 +64,8 @@ import {
 } from '../calendar-event-drive-service';
 import { db } from '@pagespace/db/db';
 import { isDriveOwnerOrAdmin, isUserDriveMember } from '../../permissions/permissions';
-import { getDriveRecipientUserIds } from '../../services/drive-member-service';
+import { listDriveAudiences } from '../../permissions/drive-audience';
+import { credentialActor } from '../../permissions/access-actor';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -275,6 +292,10 @@ describe('isUserInAnyDriveSet (pure)', () => {
 describe('shareEventWithDrive', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    // resetAllMocks drops implementations: the share runs in a transaction over the same mock, and no drive is lapsed.
+    const mockDb = db as unknown as MockDb & { transaction: ReturnType<typeof vi.fn> };
+    mockDb.transaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => fn(mockDb));
+    checkDriveMayLoosen.mockResolvedValue(null);
   });
 
   it('returns 201 with row when caller is creator + target drive member', async () => {
@@ -289,7 +310,7 @@ describe('shareEventWithDrive', () => {
       }),
     });
 
-    const result = await shareEventWithDrive({ actingUserId: USER_ID, eventId: EVENT_ID, driveId: SHARED_DRIVE });
+    const result = await shareEventWithDrive({ actor: credentialActor(USER_ID, null), eventId: EVENT_ID, driveId: SHARED_DRIVE });
     expect(result).toMatchObject({ ok: true, status: 201 });
   });
 
@@ -299,7 +320,7 @@ describe('shareEventWithDrive', () => {
     vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(false);
     vi.mocked(isUserDriveMember).mockResolvedValue(true);
 
-    const result = await shareEventWithDrive({ actingUserId: USER_ID, eventId: EVENT_ID, driveId: HOME_DRIVE });
+    const result = await shareEventWithDrive({ actor: credentialActor(USER_ID, null), eventId: EVENT_ID, driveId: HOME_DRIVE });
     expect(result).toMatchObject({ ok: false, status: 400 });
     expect((result as { error: string }).error).toMatch(/home drive/i);
   });
@@ -310,7 +331,7 @@ describe('shareEventWithDrive', () => {
     vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(false);
     vi.mocked(isUserDriveMember).mockResolvedValue(true);
 
-    const result = await shareEventWithDrive({ actingUserId: USER_ID, eventId: EVENT_ID, driveId: SHARED_DRIVE });
+    const result = await shareEventWithDrive({ actor: credentialActor(USER_ID, null), eventId: EVENT_ID, driveId: SHARED_DRIVE });
     expect(result).toMatchObject({ ok: false, status: 400 });
     expect((result as { error: string }).error).toMatch(/personal/i);
   });
@@ -319,7 +340,7 @@ describe('shareEventWithDrive', () => {
     const mockDb = db as unknown as MockDb;
     mockDb.select.mockReturnValueOnce(stubSelect([]));
 
-    const result = await shareEventWithDrive({ actingUserId: USER_ID, eventId: EVENT_ID, driveId: SHARED_DRIVE });
+    const result = await shareEventWithDrive({ actor: credentialActor(USER_ID, null), eventId: EVENT_ID, driveId: SHARED_DRIVE });
     expect(result).toMatchObject({ ok: false, status: 404 });
   });
 
@@ -329,7 +350,7 @@ describe('shareEventWithDrive', () => {
     vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(false);
     vi.mocked(isUserDriveMember).mockResolvedValue(true);
 
-    const result = await shareEventWithDrive({ actingUserId: OTHER_USER, eventId: EVENT_ID, driveId: SHARED_DRIVE });
+    const result = await shareEventWithDrive({ actor: credentialActor(OTHER_USER, null), eventId: EVENT_ID, driveId: SHARED_DRIVE });
     expect(result).toMatchObject({ ok: false, status: 403 });
   });
 
@@ -339,7 +360,7 @@ describe('shareEventWithDrive', () => {
     vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(false);
     vi.mocked(isUserDriveMember).mockResolvedValue(false);
 
-    const result = await shareEventWithDrive({ actingUserId: USER_ID, eventId: EVENT_ID, driveId: SHARED_DRIVE });
+    const result = await shareEventWithDrive({ actor: credentialActor(USER_ID, null), eventId: EVENT_ID, driveId: SHARED_DRIVE });
     expect(result).toMatchObject({ ok: false, status: 400 });
     expect((result as { error: string }).error).toMatch(/not a member/i);
   });
@@ -356,7 +377,7 @@ describe('shareEventWithDrive', () => {
       }),
     });
 
-    const result = await shareEventWithDrive({ actingUserId: USER_ID, eventId: EVENT_ID, driveId: SHARED_DRIVE });
+    const result = await shareEventWithDrive({ actor: credentialActor(USER_ID, null), eventId: EVENT_ID, driveId: SHARED_DRIVE });
     expect(result).toMatchObject({ ok: false, status: 409 });
     expect((result as { error: string }).error).toMatch(/already shared/i);
   });
@@ -377,7 +398,7 @@ describe('unshareEventFromDrive', () => {
     vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(false);
     mockDb.delete.mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
 
-    const result = await unshareEventFromDrive({ actingUserId: USER_ID, eventId: EVENT_ID, driveId: SHARED_DRIVE });
+    const result = await unshareEventFromDrive({ actor: credentialActor(USER_ID, null), eventId: EVENT_ID, driveId: SHARED_DRIVE });
     expect(result).toEqual({ ok: true, status: 200 });
   });
 
@@ -386,7 +407,7 @@ describe('unshareEventFromDrive', () => {
     mockDb.select.mockReturnValueOnce(stubSelect([BASE_EVENT]));
     vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
 
-    const result = await unshareEventFromDrive({ actingUserId: USER_ID, eventId: EVENT_ID, driveId: HOME_DRIVE });
+    const result = await unshareEventFromDrive({ actor: credentialActor(USER_ID, null), eventId: EVENT_ID, driveId: HOME_DRIVE });
     expect(result).toMatchObject({ ok: false, status: 400 });
     expect((result as { error: string }).error).toMatch(/home drive/i);
   });
@@ -398,7 +419,7 @@ describe('unshareEventFromDrive', () => {
       .mockReturnValueOnce(stubSelect([])); // no junction row
     vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(false);
 
-    const result = await unshareEventFromDrive({ actingUserId: USER_ID, eventId: EVENT_ID, driveId: SHARED_DRIVE });
+    const result = await unshareEventFromDrive({ actor: credentialActor(USER_ID, null), eventId: EVENT_ID, driveId: SHARED_DRIVE });
     expect(result).toMatchObject({ ok: false, status: 404 });
   });
 
@@ -409,7 +430,7 @@ describe('unshareEventFromDrive', () => {
       .mockReturnValueOnce(stubSelect([{ id: 'ced1' }]));
     vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(false);
 
-    const result = await unshareEventFromDrive({ actingUserId: OTHER_USER, eventId: EVENT_ID, driveId: SHARED_DRIVE });
+    const result = await unshareEventFromDrive({ actor: credentialActor(OTHER_USER, null), eventId: EVENT_ID, driveId: SHARED_DRIVE });
     expect(result).toMatchObject({ ok: false, status: 403 });
   });
 
@@ -417,7 +438,7 @@ describe('unshareEventFromDrive', () => {
     const mockDb = db as unknown as MockDb;
     mockDb.select.mockReturnValueOnce(stubSelect([]));
 
-    const result = await unshareEventFromDrive({ actingUserId: USER_ID, eventId: EVENT_ID, driveId: SHARED_DRIVE });
+    const result = await unshareEventFromDrive({ actor: credentialActor(USER_ID, null), eventId: EVENT_ID, driveId: SHARED_DRIVE });
     expect(result).toMatchObject({ ok: false, status: 404 });
   });
 });
@@ -472,58 +493,47 @@ describe('listEventDrives', () => {
 describe('isUserMemberOfAnyEventDrive', () => {
   beforeEach(() => { vi.resetAllMocks(); });
 
-  it('returns true without querying junction when user is home-drive recipient', async () => {
-    vi.mocked(getDriveRecipientUserIds).mockResolvedValue([USER_ID]);
+  it('returns true without querying the junction when the user is a member of the home drive', async () => {
+    vi.mocked(isUserDriveMember).mockResolvedValueOnce(true);
     const mockDb = db as unknown as MockDb;
     const selectSpy = vi.fn();
     mockDb.select.mockImplementation(selectSpy);
 
-    const result = await isUserMemberOfAnyEventDrive(USER_ID, BASE_EVENT);
-    expect(result).toBe(true);
-    // junction table should NOT have been queried (fast-path)
+    expect(await isUserMemberOfAnyEventDrive(credentialActor(USER_ID, null), BASE_EVENT)).toBe(true);
+    expect(isUserDriveMember).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), HOME_DRIVE);
     expect(selectSpy).not.toHaveBeenCalled();
   });
 
-  it('returns true when user is an accepted member of a shared drive', async () => {
-    vi.mocked(getDriveRecipientUserIds).mockResolvedValue([OTHER_USER]);
+  it('returns true when the user is a member (or the lead) of a shared drive', async () => {
+    vi.mocked(isUserDriveMember).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     const mockDb = db as unknown as MockDb;
-    mockDb.select
-      .mockReturnValueOnce(stubSelectMany([{ driveId: SHARED_DRIVE }]))  // junction rows
-      .mockReturnValueOnce(stubSelectMany([{ userId: USER_ID }]))        // sharedMembers
-      .mockReturnValueOnce(stubSelectMany([]));                          // sharedOwners
+    mockDb.select.mockReturnValueOnce(stubSelectMany([{ driveId: SHARED_DRIVE }]));
 
-    const result = await isUserMemberOfAnyEventDrive(USER_ID, BASE_EVENT);
-    expect(result).toBe(true);
+    expect(await isUserMemberOfAnyEventDrive(credentialActor(USER_ID, null), BASE_EVENT)).toBe(true);
+    expect(isUserDriveMember).toHaveBeenLastCalledWith(expect.objectContaining({ userId: USER_ID }), SHARED_DRIVE);
   });
 
-  it('returns true when user is the owner of a shared drive', async () => {
-    vi.mocked(getDriveRecipientUserIds).mockResolvedValue([OTHER_USER]);
+  it('returns false when the user is in neither home nor any shared drive', async () => {
+    vi.mocked(isUserDriveMember).mockResolvedValue(false);
     const mockDb = db as unknown as MockDb;
-    mockDb.select
-      .mockReturnValueOnce(stubSelectMany([{ driveId: SHARED_DRIVE }]))  // junction rows
-      .mockReturnValueOnce(stubSelectMany([]))                           // sharedMembers
-      .mockReturnValueOnce(stubSelectMany([{ ownerId: USER_ID }]));     // sharedOwners
+    mockDb.select.mockReturnValueOnce(stubSelectMany([{ driveId: SHARED_DRIVE }]));
 
-    const result = await isUserMemberOfAnyEventDrive(USER_ID, BASE_EVENT);
-    expect(result).toBe(true);
+    expect(await isUserMemberOfAnyEventDrive(credentialActor(USER_ID, null), BASE_EVENT)).toBe(false);
   });
 
-  it('returns false when user is in neither home nor any shared drive', async () => {
-    vi.mocked(getDriveRecipientUserIds).mockResolvedValue([OTHER_USER]);
+  it('X-6 (partial) decides with the org-aware isUserDriveMember (a stale org row counts only as the resolver says), never a drive_members read of its own', async () => {
+    vi.mocked(isUserDriveMember).mockResolvedValue(false);
     const mockDb = db as unknown as MockDb;
-    mockDb.select
-      .mockReturnValueOnce(stubSelectMany([{ driveId: SHARED_DRIVE }]))   // junction rows
-      .mockReturnValueOnce(stubSelectMany([{ userId: OTHER_USER }]))      // sharedMembers
-      .mockReturnValueOnce(stubSelectMany([{ ownerId: OTHER_USER }]));    // sharedOwners
+    const tables: unknown[] = [];
+    mockDb.select.mockImplementation(() => ({ from: (t: unknown) => { tables.push(t); return { where: async () => [] }; } }) as never);
 
-    const result = await isUserMemberOfAnyEventDrive(USER_ID, BASE_EVENT);
-    expect(result).toBe(false);
+    expect(await isUserMemberOfAnyEventDrive(credentialActor(USER_ID, null), BASE_EVENT)).toBe(false);
+    expect(tables).toHaveLength(1); // the junction only
   });
 
   it('returns false immediately for personal events without any DB calls', async () => {
-    const result = await isUserMemberOfAnyEventDrive(USER_ID, { ...BASE_EVENT, driveId: null as unknown as string });
-    expect(result).toBe(false);
-    expect(getDriveRecipientUserIds).not.toHaveBeenCalled();
+    expect(await isUserMemberOfAnyEventDrive(credentialActor(USER_ID, null), { ...BASE_EVENT, driveId: null as unknown as string })).toBe(false);
+    expect(isUserDriveMember).not.toHaveBeenCalled();
   });
 });
 
@@ -534,72 +544,37 @@ describe('isUserMemberOfAnyEventDrive', () => {
 describe('getAllMemberUserIdsForEvent', () => {
   beforeEach(() => { vi.resetAllMocks(); });
 
-  it('returns Set of home-drive recipients when no shared drives', async () => {
-    vi.mocked(getDriveRecipientUserIds).mockResolvedValue([USER_ID]);
+  const member = (userId: string, isOwner = false) => ({ userId, isOwner, role: (isOwner ? 'OWNER' : 'MEMBER') as 'OWNER' | 'MEMBER', customRoleId: null });
+
+  it('returns the home drive\'s members when there are no shared drives', async () => {
     const mockDb = db as unknown as MockDb;
-    mockDb.select.mockReturnValueOnce(stubSelectMany([])); // no junction rows
+    mockDb.select.mockReturnValueOnce(stubSelectMany([]));
+    vi.mocked(listDriveAudiences).mockResolvedValueOnce(new Map([[HOME_DRIVE, [member(USER_ID)]]]));
 
     const result = await getAllMemberUserIdsForEvent(EVENT_ID, HOME_DRIVE);
     expect(result).toBeInstanceOf(Set);
-    expect(result.has(USER_ID)).toBe(true);
+    expect([...result]).toEqual([USER_ID]);
+    expect(listDriveAudiences).toHaveBeenCalledWith([HOME_DRIVE]);
   });
 
-  it('returns union Set including accepted shared-drive members', async () => {
-    vi.mocked(getDriveRecipientUserIds).mockResolvedValue([USER_ID]);
-    const mockDb = db as unknown as MockDb;
-    mockDb.select
-      .mockReturnValueOnce(stubSelectMany([{ driveId: SHARED_DRIVE }]))          // junction rows
-      .mockReturnValueOnce(stubSelectMany([{ userId: OTHER_USER }]))              // sharedMembers
-      .mockReturnValueOnce(stubSelectMany([]));                                   // sharedOwners
-
-    const result = await getAllMemberUserIdsForEvent(EVENT_ID, HOME_DRIVE);
-    expect(result.has(USER_ID)).toBe(true);
-    expect(result.has(OTHER_USER)).toBe(true);
-  });
-
-  it('includes shared-drive owners even without a member row', async () => {
+  it('ORG-4 (partial) DRV-5 (partial) X-6 (partial) unions the members of the home and every shared drive, from one org-aware enumeration, deduplicated', async () => {
     const DRIVE_OWNER = 'usr_owner_aaaaaaaaaaaaaaaaaaaa';
-    vi.mocked(getDriveRecipientUserIds).mockResolvedValue([USER_ID]);
     const mockDb = db as unknown as MockDb;
-    mockDb.select
-      .mockReturnValueOnce(stubSelectMany([{ driveId: SHARED_DRIVE }]))         // junction rows
-      .mockReturnValueOnce(stubSelectMany([]))                                   // sharedMembers (empty)
-      .mockReturnValueOnce(stubSelectMany([{ ownerId: DRIVE_OWNER }]));         // sharedOwners
+    mockDb.select.mockReturnValueOnce(stubSelectMany([{ driveId: SHARED_DRIVE }]));
+    vi.mocked(listDriveAudiences).mockResolvedValueOnce(new Map([
+      [HOME_DRIVE, [member(USER_ID)]],
+      [SHARED_DRIVE, [member(DRIVE_OWNER, true), member(OTHER_USER), member(USER_ID)]],
+    ]));
 
     const result = await getAllMemberUserIdsForEvent(EVENT_ID, HOME_DRIVE);
-    expect(result.has(DRIVE_OWNER)).toBe(true);
-  });
-
-  it('excludes pending (non-accepted) shared-drive invitees', async () => {
-    vi.mocked(getDriveRecipientUserIds).mockResolvedValue([USER_ID]);
-    const mockDb = db as unknown as MockDb;
-    mockDb.select
-      .mockReturnValueOnce(stubSelectMany([{ driveId: SHARED_DRIVE }]))         // junction rows
-      .mockReturnValueOnce(stubSelectMany([]))                                   // sharedMembers filtered by acceptedAt
-      .mockReturnValueOnce(stubSelectMany([]));                                  // sharedOwners
-
-    const result = await getAllMemberUserIdsForEvent(EVENT_ID, HOME_DRIVE);
-    // Only home recipient; pending invitees filtered out in the sharedMembers query
-    expect(result.has(USER_ID)).toBe(true);
-    expect(result.size).toBe(1);
-  });
-
-  it('deduplicates members who appear in both home and shared drives', async () => {
-    vi.mocked(getDriveRecipientUserIds).mockResolvedValue([USER_ID]);
-    const mockDb = db as unknown as MockDb;
-    mockDb.select
-      .mockReturnValueOnce(stubSelectMany([{ driveId: SHARED_DRIVE }]))         // junction rows
-      .mockReturnValueOnce(stubSelectMany([{ userId: USER_ID }]))               // USER_ID in shared too
-      .mockReturnValueOnce(stubSelectMany([]));                                  // sharedOwners
-
-    const result = await getAllMemberUserIdsForEvent(EVENT_ID, HOME_DRIVE);
-    expect(result.size).toBe(1);
+    expect([...result].sort()).toEqual([DRIVE_OWNER, OTHER_USER, USER_ID].sort());
+    expect(listDriveAudiences).toHaveBeenCalledWith([HOME_DRIVE, SHARED_DRIVE]);
   });
 
   it('returns empty Set for personal events', async () => {
     const result = await getAllMemberUserIdsForEvent(EVENT_ID, null as unknown as string);
     expect(result.size).toBe(0);
-    expect(getDriveRecipientUserIds).not.toHaveBeenCalled();
+    expect(listDriveAudiences).not.toHaveBeenCalled();
   });
 });
 

@@ -9,7 +9,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { auth: { info: vi.fn(), error: vi.fn() } },
 }));
 vi.mock('@pagespace/lib/repositories/account-repository', () => ({
-  accountRepository: { findById: vi.fn() },
+  accountRepository: { findById: vi.fn(), getOwnedOrganizationNames: vi.fn() },
 }));
 vi.mock('@pagespace/lib/repositories/data-subject-request-repository', () => ({
   dataSubjectRequestRepository: {
@@ -33,6 +33,7 @@ vi.mock('@pagespace/lib/monitoring/hash-chain-verifier', () => ({ verifyHashChai
 vi.mock('@pagespace/lib/audit/security-audit-chain-verifier', () => ({ verifySecurityAuditChain: vi.fn() }));
 vi.mock('@pagespace/lib/audit/security-audit', () => ({ securityAudit: { logEvent: vi.fn() } }));
 
+import { LeaveOrganizationRefusedError } from '@pagespace/lib/organizations/leave';
 import { POST as erasurePost } from '../erasure/route';
 import { POST as pseudoPost } from '../pseudonymize/route';
 import { accountRepository } from '@pagespace/lib/repositories/account-repository';
@@ -53,12 +54,38 @@ beforeEach(() => vi.clearAllMocks());
 describe('POST /api/admin/gdpr/erasure (force-delete escalation)', () => {
   beforeEach(() => {
     vi.mocked(accountRepository.findById).mockResolvedValue({
-      id: 'u1', email: 'a@b.com', image: null, stripeCustomerId: null,
+      id: 'u1', email: 'a@b.com', image: null, stripeCustomerId: null, appleId: 'apple-sub-1',
     });
+    vi.mocked(accountRepository.getOwnedOrganizationNames).mockResolvedValue([]);
     vi.mocked(dataSubjectRequestRepository.findActiveErasureForUser).mockResolvedValue(null);
     vi.mocked(lodgeAndEnqueueErasure).mockResolvedValue({
-      requestId: 'dsr_1', jobId: 'job_1', slaDeadline: new Date('2026-03-01T00:00:00Z'),
+      requestId: 'dsr_1', jobId: 'job_1', slaDeadline: new Date('2026-03-01T00:00:00Z'), appleSignIn: 'revoked',
     });
+  });
+
+  it('ORG-6 (partial) given the subject owns an organization, should refuse with 400 and queue nothing, even with force', async () => {
+    vi.mocked(accountRepository.getOwnedOrganizationNames).mockResolvedValue(['Northwind Labs']);
+    const res = await post(erasurePost, { userId: 'u1', confirmation: 'ERASE u1' });
+    const body = await res.json();
+    expect(res.status).toBe(400);
+    expect(body.ownedOrganizations).toEqual(['Northwind Labs']);
+    expect(lodgeAndEnqueueErasure).not.toHaveBeenCalled();
+    expect(enqueueAccountErasure).not.toHaveBeenCalled();
+  });
+
+  it('ORG-6 (partial) atomic lodge refuses an ownership race with 400 even for force erasure', async () => {
+    vi.mocked(accountRepository.getOwnedOrganizationNames).mockResolvedValueOnce([]).mockResolvedValueOnce(['Northwind Labs']);
+    vi.mocked(lodgeAndEnqueueErasure).mockRejectedValueOnce(new LeaveOrganizationRefusedError('raced-org', 'OWNER_MUST_TRANSFER'));
+    const response = await post(erasurePost, { userId: 'u1', confirmation: 'ERASE u1', forceDelete: true });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: expect.stringMatching(/Transfer ownership/), ownedOrganizations: ['Northwind Labs'] });
+    expect(enqueueAccountErasure).not.toHaveBeenCalled();
+  });
+
+  it('given a subject who signed in with Apple, should have the erasure revoke their Apple tokens', async () => {
+    const res = await post(erasurePost, { userId: 'u1', confirmation: 'ERASE u1' });
+    expect(res.status).toBe(202);
+    expect(lodgeAndEnqueueErasure).toHaveBeenCalledWith(expect.objectContaining({ subjectAppleLinked: true }));
   });
 
   it('given the wrong confirmation phrase, should refuse with 400', async () => {
@@ -71,7 +98,7 @@ describe('POST /api/admin/gdpr/erasure (force-delete escalation)', () => {
     const res = await post(erasurePost, { userId: 'u1', confirmation: 'ERASE u1' });
     expect(res.status).toBe(202);
     expect(lodgeAndEnqueueErasure).toHaveBeenCalledWith(
-      expect.objectContaining({ requestedByType: 'admin', forceDelete: true, callerUserId: 'admin_1' })
+      expect.objectContaining({ requestedByType: 'admin', forceDelete: true, caller: expect.objectContaining({ userId: 'admin_1' }) })
     );
   });
 
@@ -95,7 +122,7 @@ describe('POST /api/admin/gdpr/erasure (force-delete escalation)', () => {
     expect(body.requestId).toBe('dsr_blocked');
     expect(dataSubjectRequestRepository.setForceDelete).toHaveBeenCalledWith('dsr_blocked');
     expect(enqueueAccountErasure).toHaveBeenCalledWith(
-      expect.objectContaining({ requestId: 'dsr_blocked', userId: 'u1', callerUserId: 'admin_1' })
+      expect.objectContaining({ requestId: 'dsr_blocked', userId: 'u1', caller: expect.objectContaining({ userId: 'admin_1' }) })
     );
     expect(dataSubjectRequestRepository.markQueued).toHaveBeenCalledWith('dsr_blocked', 'job_2');
     // Must NOT create a brand-new request for the blocked one.

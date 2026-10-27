@@ -1,11 +1,11 @@
 /**
  * Default AI provider/model, shared across apps so seed data (admin onboarding)
  * and the web model catalog never drift. Every cloud model is OpenRouter-backed;
- * the default is Z.ai's GLM-5.3 Flash (a member of the free-tier allowlist, and
- * the cheapest/largest-context option among the free-tier models).
+ * the default is OpenAI's GPT-6 Luna (a member of the free-tier allowlist, cheap,
+ * with a 1M+ context window, and not a Chinese-hosted model).
  */
-export const DEFAULT_AI_PROVIDER = 'zai';
-export const DEFAULT_AI_MODEL = 'z-ai/glm-5.3-flash';
+export const DEFAULT_AI_PROVIDER = 'openai';
+export const DEFAULT_AI_MODEL = 'openai/gpt-6-luna';
 
 /**
  * Providers whose usage is logged for observability but never billed against the

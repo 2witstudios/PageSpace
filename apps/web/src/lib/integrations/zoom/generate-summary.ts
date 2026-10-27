@@ -8,10 +8,16 @@ const SYSTEM_PROMPT =
 
 export async function generateTranscriptSummary(
   userId: string,
-  transcriptPlainText: string
+  transcriptPlainText: string,
+  /**
+   * The destination drive the meeting page lands in (its org's model allowlists govern the call, POL-8), who the
+   * usage is recorded against and the wallet the enrichment's credit hold reserved (process-webhook's payer seam on
+   * that drive, SPEND-6).
+   */
+  billing: { driveId: string; userId: string; walletId?: string; automationRef?: string },
 ): Promise<string> {
   try {
-    const provider = await createAIProvider(userId, {});
+    const provider = await createAIProvider(userId, {}, { driveId: billing.driveId });
     if (isProviderError(provider)) {
       loggers.api.warn('Zoom summary: AI provider unavailable', { userId, error: provider.error });
       return '';
@@ -25,7 +31,7 @@ export async function generateTranscriptSummary(
     });
 
     discardUsageOutcome(AIMonitoring.trackUsage({
-      userId,
+      userId: billing.userId,
       provider: provider.provider,
       model: provider.modelName,
       source: 'integration',
@@ -35,6 +41,8 @@ export async function generateTranscriptSummary(
         ? (result.usage.inputTokens ?? 0) + (result.usage.outputTokens ?? 0)
         : undefined,
       success: true,
+      walletId: billing.walletId,
+      automationRef: billing.automationRef,
       metadata: { feature: 'zoom_summary' },
     }));
 

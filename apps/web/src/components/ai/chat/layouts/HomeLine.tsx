@@ -15,6 +15,8 @@ import {
 import Link from "next/link";
 import type { ComposedLine, SignalIconName } from "@pagespace/lib/home-signals/composer";
 import { cn } from "@/lib/utils";
+import { OrgContentWithheldNotice } from "@/components/auth/OrgContentWithheldNotice";
+import type { OrgContentSignInRequired } from "@/lib/auth/org-sign-in-denial";
 
 // Keyed by SignalIconName (not a bare string) so a new icon NAME introduced
 // in composer.ts's SIGNAL_ICON — the actual value domain ComposedLine.icon
@@ -33,6 +35,8 @@ const ICONS: Record<SignalIconName, LucideIcon> = {
 
 export interface HomeLineProps {
   line: ComposedLine;
+  /** An org's sign-in policy withholds the Pulse summary from this sign-in (D-OW-62): say so, and offer the prompt. */
+  signInRequired?: OrgContentSignInRequired | null;
   className?: string;
 }
 
@@ -43,7 +47,7 @@ export interface HomeLineProps {
  * on a quiet day). This replaces the generic WelcomeContent title/subtitle
  * in global-assistant mode only.
  */
-export function HomeLine({ line, className }: HomeLineProps) {
+export function HomeLine({ line, signInRequired = null, className }: HomeLineProps) {
   const shouldReduceMotion = useReducedMotion();
   const Icon = line.icon ? ICONS[line.icon] : null;
 
@@ -79,6 +83,9 @@ export function HomeLine({ line, className }: HomeLineProps) {
           ))}
         </span>
       </p>
+      {signInRequired ? (
+        <OrgContentWithheldNotice subject="Your Pulse summary" signInRequired={signInRequired} className="max-w-md" />
+      ) : null}
     </motion.div>
   );
 }

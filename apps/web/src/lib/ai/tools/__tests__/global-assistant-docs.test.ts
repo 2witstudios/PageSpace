@@ -76,7 +76,7 @@ describe('the posture document', () => {
     // read THIS document, not the schema file — so it may not be silent here.
     expect(posture).toMatch(/### The database CHECK that was dropped, and why/);
     expect(posture).toMatch(/agent_workspaces_env_needs_drive_check/);
-    expect(posture).toMatch(/0296/);
+    expect(posture).toMatch(/0382/);
     // Right about one substrate, wrong about the other — both said.
     expect(posture).toMatch(/right about a Sprite env and wrong about a local one/);
     expect(posture).toMatch(/that arm is still enforced/);

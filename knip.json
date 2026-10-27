@@ -67,6 +67,47 @@
         "src/components/ui/**"
       ]
     },
+    "apps/imago": {
+      "ignoreDependencies": [
+        "eslint-config-next",
+        "eslint",
+        "@next/eslint-plugin-next",
+        "eslint-plugin-react-hooks",
+        "eslint-plugin-better-tailwindcss",
+        "tailwindcss",
+        "@ai-sdk/react",
+        "ai",
+        "@dnd-kit/core",
+        "@dnd-kit/sortable",
+        "@dnd-kit/utilities",
+        "@pagespace/db",
+        "@pagespace/editor",
+        "@pagespace/lib",
+        "@tiptap/core",
+        "@tiptap/extension-highlight",
+        "@tiptap/extension-list",
+        "@tiptap/extension-table",
+        "@tiptap/extension-text-align",
+        "@tiptap/extension-text-style",
+        "@tiptap/extensions",
+        "@tiptap/pm",
+        "@tiptap/react",
+        "@tiptap/starter-kit",
+        "lucide-react",
+        "socket.io-client",
+        "streamdown",
+        "swr"
+      ],
+      "entry": [
+        "src/app/**/{page,layout,route}.tsx",
+        "scripts/*.{ts,mjs}",
+        "src/retained-adapters/retained.source.css",
+        "src/retained/styles/tiptap.css"
+      ],
+      "ignore": [
+        "public/pdf.worker.min.mjs"
+      ]
+    },
     "apps/realtime": {
       "entry": [
         "src/index.ts"
@@ -110,6 +151,8 @@
         "src/operators.ts",
         "src/provision-admin-users.ts",
         "src/schema.ts",
+        "src/schema/agent-accounts.ts",
+        "src/schema/agent-account-grant-nonces.ts",
         "src/schema/ai-compaction.ts",
         "src/schema/ai-streams.ts",
         "src/schema/auth-handoff-tokens.ts",
@@ -162,13 +205,15 @@
         "src/schema/tasks.ts",
         "src/schema/toast-notification-preferences.ts",
         "src/schema/versioning.ts",
+        "src/schema/wallets.ts",
         "src/schema/webhook-triggers.ts",
         "src/schema/workflow-runs.ts",
         "src/schema/workflows.ts",
         "src/schema/zoom.ts",
         "src/test/factories.ts",
         "src/test/require-db.ts",
-        "src/transactions/auth-transactions.ts"
+        "src/transactions/auth-transactions.ts",
+        "src/wallet-backfill.ts"
       ],
       "project": [
         "src/**/*.ts"
@@ -177,6 +222,57 @@
     },
     "packages/lib": {
       "entry": [
+        "src/env-bridge/index.ts",
+        "src/agent-accounts/grant.ts",
+        "src/agent-accounts/executor/plane-main.ts",
+        "src/agent-accounts/account-authority-executor.ts",
+        "src/agent-accounts/account-facts-repository.ts",
+        "src/agent-accounts/agent-account-repository.ts",
+        "src/agent-accounts/plane-client.ts",
+        "src/agent-accounts/to-safe-account.ts",
+        "src/agent-accounts/decide-account-creation.ts",
+        "src/agent-accounts/decide-acknowledgment.ts",
+        "src/agent-accounts/to-http-request-tool-result.ts",
+        "src/agent-accounts/canonical-request.ts",
+        "src/agent-accounts/approval.ts",
+        "src/agent-accounts/audit.ts",
+        "src/agent-accounts/store/store-adapter.ts",
+        "src/agent-accounts/canonical-json.ts",
+        "src/agent-accounts/canonicalize-request.ts",
+        "src/agent-accounts/digest-request.ts",
+        "src/agent-accounts/render-approval-subject.ts",
+        "src/agent-accounts/decide-replay.ts",
+        "src/agent-accounts/decide-retry.ts",
+        "src/agent-accounts/replay-store-repository.ts",
+        "src/agent-accounts/grant-constants.ts",
+        "src/agent-accounts/decode-base64.ts",
+        "src/agent-accounts/encode-grant.ts",
+        "src/agent-accounts/parse-grant.ts",
+        "src/agent-accounts/verify-grant.ts",
+        "src/agent-accounts/decide-sandbox-binding.ts",
+        "src/agent-accounts/collapse-verdict.ts",
+        "src/agent-accounts/grant-gate-executor.ts",
+        "src/agent-accounts/always-allowed-by-class.ts",
+        "src/agent-accounts/decide-approval.ts",
+        "src/agent-accounts/bind-approval.ts",
+        "src/agent-accounts/build-audit-record.ts",
+        "src/agent-accounts/decide-audit-gate.ts",
+        "src/agent-accounts/redact-known-values.ts",
+        "src/agent-accounts/audit-repository.ts",
+        "src/agent-accounts/audit-gate-executor.ts",
+        "src/agent-accounts/denial-audit-record.ts",
+        "src/agent-accounts/lookup-operation.ts",
+        "src/agent-accounts/find-operation-registry-conflicts.ts",
+        "src/agent-accounts/find-duplicate-resource-slots.ts",
+        "src/agent-accounts/build-denial-record.ts",
+        "src/agent-accounts/account-authority-key.ts",
+        "src/agent-accounts/sign-grant.ts",
+        "src/agent-accounts/refresh/decide-refresh.ts",
+        "src/agent-accounts/refresh/classify-refresh-failure.ts",
+        "src/agent-accounts/migration/plan-migration-step.ts",
+        "src/agent-accounts/guard/decide-decrypt-call-site.ts",
+        "src/agent-accounts/guard/decrypt-guard-policy.ts",
+        "src/auth/account-authority-signing-key.ts",
         "src/agent-workspaces/session-contract.ts",
         "src/agent-workspaces/workspace-fractions.ts",
         "src/agent-workspaces/shells-contract.ts",
@@ -255,12 +351,17 @@
         "src/billing/credit-backfill.ts",
         "src/billing/credit-balance.ts",
         "src/billing/credit-consume.ts",
+        "src/billing/credit-copy.ts",
         "src/billing/credit-core.ts",
         "src/billing/credit-emit.ts",
         "src/billing/credit-funding.ts",
         "src/billing/credit-gate.ts",
         "src/billing/credit-pricing.ts",
+        "src/billing/invoice-grant.ts",
+        "src/billing/missed-grant-reconcile.ts",
+        "src/billing/money-model.ts",
         "src/billing/sandbox-payer.ts",
+        "src/billing/wallet-core.ts",
         "src/canvas/cert-action.ts",
         "src/canvas/csp.ts",
         "src/canvas/custom-domain-mirror.ts",
@@ -308,6 +409,9 @@
         "src/content/version-resolver.ts",
         "src/deployment-mode.ts",
         "src/drive-envs/env-sprite-key.ts",
+        "src/drive-envs/env-contract.ts",
+        "src/env-bridge/index.ts",
+        "src/env-bridge/machine-signatures.ts",
         "src/email-templates/BroadcastEmail.tsx",
         "src/email-templates/FeedbackNotificationEmail.tsx",
         "src/email-templates/MagicLinkEmail.tsx",
@@ -377,6 +481,8 @@
         "src/observability/error-resolutions.ts",
         "src/onprem-defaults.ts",
         "src/pages/circular-reference-guard.ts",
+        "src/permissions/account-permissions.ts",
+        "src/permissions/decide-account-access.ts",
         "src/permissions/accessible-page-ids.ts",
         "src/permissions/agent-permissions.ts",
         "src/permissions/app-permissions.ts",
@@ -551,6 +657,17 @@
         "@types/xlsx"
       ]
     },
+    "packages/browser-worker": {
+      "entry": [
+        "src/*.ts"
+      ],
+      "project": [
+        "src/**/*.ts"
+      ],
+      "ignore": [
+        "src/**/__tests__/**"
+      ]
+    },
     "packages/editor": {
       "entry": [
         "src/*.ts"
@@ -628,5 +745,15 @@
     "**/drizzle.config.ts"
   ],
   "ignoreExportsUsedInFile": true,
-  "includeEntryExports": false
+  "includeEntryExports": false,
+  "ignoreIssues": {
+    "apps/imago/src/retained/**": [
+      "exports",
+      "types"
+    ],
+    "apps/imago/src/retained-adapters/{ui-contracts,tool-metadata}.ts": [
+      "exports",
+      "types"
+    ]
+  }
 }

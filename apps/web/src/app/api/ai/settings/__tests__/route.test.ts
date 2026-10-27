@@ -17,9 +17,20 @@ vi.mock('@/lib/repositories/ai-settings-repository', () => ({
   },
 }));
 
+// No org sign-in policy holds the caller back here: a refusal stays the route's own (D-OW-45 is proven elsewhere).
+vi.mock('@pagespace/lib/permissions/permissions', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/permissions/permissions')>()),
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
+}));
+
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  getPrincipalDriveAccess: vi.fn(async () => true),
+}));
+
+vi.mock('@/lib/ai/core/org-model-policy', () => ({
+  offeredModels: vi.fn(async () => null),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => {
@@ -55,7 +66,8 @@ vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
 
 import { GET, POST, PATCH, DELETE } from '../route';
 import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, getPrincipalDriveAccess, isAuthError } from '@/lib/auth';
+import { offeredModels } from '@/lib/ai/core/org-model-policy';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { requiresProSubscription, createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
 
@@ -110,6 +122,31 @@ describe('AI settings route', () => {
   });
 
   describe('GET', () => {
+    it('POL-8 (partial) with a driveId the caller can reach, returns the models that drive\'s org allows, as the server computed them', async () => {
+      vi.mocked(offeredModels).mockResolvedValueOnce({ openai: ['openai/gpt-5.4-nano'] });
+      const response = await GET(new Request('http://localhost:3000/api/ai/settings?driveId=drive-org'));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(getPrincipalDriveAccess).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), 'drive-org');
+      expect(offeredModels).toHaveBeenCalledWith('drive-org');
+      expect(body.allowedModels).toEqual({ openai: ['openai/gpt-5.4-nano'] });
+    });
+
+    it('POL-8 (partial) a drive the caller cannot reach is not found, and its policy is never read', async () => {
+      vi.mocked(getPrincipalDriveAccess).mockResolvedValueOnce(false);
+      const response = await GET(new Request('http://localhost:3000/api/ai/settings?driveId=drive-other'));
+
+      expect(response.status).toBe(404);
+      expect(offeredModels).not.toHaveBeenCalled();
+    });
+
+    it('POL-8 (partial) without a driveId nothing is restricted (allowedModels null)', async () => {
+      const body = await (await GET(makeRequest('GET'))).json();
+      expect(offeredModels).toHaveBeenCalledWith(null);
+      expect(body.allowedModels).toBeNull();
+    });
+
     it('reports providers as unavailable when no env keys are set', async () => {
       const response = await GET(makeRequest('GET'));
       const body = await response.json();
@@ -231,7 +268,7 @@ describe('AI settings route', () => {
       expect(body.providers.ollama.isAvailable).toBe(true);
     });
 
-    it('returns the user current selection and tier', async () => {
+    it('returns the selection and refuses a retired personal Business tier', async () => {
       vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue({
         id: mockUserId,
         currentAiProvider: 'anthropic',
@@ -245,7 +282,7 @@ describe('AI settings route', () => {
 
       expect(body.currentProvider).toBe('anthropic');
       expect(body.currentModel).toBe('anthropic/claude-sonnet-4.6');
-      expect(body.userSubscriptionTier).toBe('business');
+      expect(body.userSubscriptionTier).toBe('free');
     });
 
     it('falls back to the default provider/model when the user has no selection', async () => {
@@ -260,8 +297,8 @@ describe('AI settings route', () => {
       const response = await GET(makeRequest('GET'));
       const body = await response.json();
 
-      expect(body.currentProvider).toBe('zai');
-      expect(body.currentModel).toBe('z-ai/glm-5.3-flash');
+      expect(body.currentProvider).toBe('openai');
+      expect(body.currentModel).toBe('openai/gpt-6-luna');
       expect(body.userSubscriptionTier).toBe('free');
     });
 
@@ -280,8 +317,8 @@ describe('AI settings route', () => {
       const response = await GET(makeRequest('GET'));
       const body = await response.json();
 
-      expect(body.currentProvider).toBe('zai');
-      expect(body.currentModel).toBe('z-ai/glm-5.3-flash');
+      expect(body.currentProvider).toBe('openai');
+      expect(body.currentModel).toBe('openai/gpt-6-luna');
     });
 
     it('leaves a runtime-discovered local model untouched', async () => {
@@ -471,7 +508,7 @@ describe('AI settings route', () => {
 
       const response = await PATCH(makeRequest('PATCH', {
         provider: 'glm',
-        model: 'glm-4.5-air',
+        model: 'glm-5.3-flash',
       }));
       const body = await response.json();
 
@@ -487,13 +524,13 @@ describe('AI settings route', () => {
 
       const response = await PATCH(makeRequest('PATCH', {
         provider: 'glm',
-        model: 'glm-4.5-air',
+        model: 'glm-5.3-flash',
       }));
 
       expect(response.status).toBe(200);
       expect(aiSettingsRepository.updateProviderSettings).toHaveBeenCalledWith(mockUserId, {
         provider: 'glm',
-        model: 'glm-4.5-air',
+        model: 'glm-5.3-flash',
       });
     });
   });

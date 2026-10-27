@@ -20,9 +20,10 @@ import {
   ownSandboxTarget,
 } from './sandbox-tools-runtime';
 import { createSandboxGitTools } from './sandbox-git-tools';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
-function buildGitSandboxRunDeps(): GitSandboxRunDeps {
-  const base: SandboxRunDeps = buildRealSandboxRunDeps();
+function buildGitSandboxRunDeps(actor: AccessActor): GitSandboxRunDeps {
+  const base: SandboxRunDeps = buildRealSandboxRunDeps({ actor });
   return {
     ...base,
     buildEnv: defaultBuildEnv,
@@ -33,7 +34,7 @@ function buildGitSandboxRunDeps(): GitSandboxRunDeps {
 
 export function buildGitSandboxTools(): Record<string, Tool> {
   return createSandboxGitTools({
-    gitRunDeps: buildGitSandboxRunDeps(),
+    gitRunDeps: buildGitSandboxRunDeps,
     // The git toolkit is deliberately NOT addressed: it works on the
     // conversation's own sandbox, so it says that explicitly rather than
     // relying on a fallback — `acquireSandbox` has none (leaf C).

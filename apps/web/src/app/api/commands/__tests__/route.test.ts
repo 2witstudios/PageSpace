@@ -20,6 +20,7 @@ vi.mock('@pagespace/db/operators', () => ({
   or: vi.fn((...args: unknown[]) => ({ or: args })),
   inArray: vi.fn((field: unknown, values: unknown) => ({ field, values })),
   isNotNull: vi.fn((field: unknown) => ({ isNotNull: field })),
+  ne: vi.fn((a: unknown, b: unknown) => ({ _ne: true, a, b })),
 }));
 vi.mock('@pagespace/db/schema/commands', () => ({
   commands: { id: 'id', userId: 'userId', driveId: 'driveId', trigger: 'trigger', enabled: 'enabled' },
@@ -29,7 +30,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', driveId: 'driveId', isTrashed: 'isTrashed' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
-  driveMembers: { driveId: 'driveId', userId: 'userId', acceptedAt: 'acceptedAt' },
+  driveMembers: { driveId: 'driveId', userId: 'userId', acceptedAt: 'acceptedAt', role: 'role' },
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id', name: 'name' },
@@ -44,10 +45,16 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn(),
   isDriveOwnerOrAdmin: vi.fn(),
   isUserDriveMember: vi.fn(),
 }));
+// The one member-drive set (org-aware).
+vi.mock('@pagespace/lib/permissions/member-drives', () => ({
+  getMemberDriveIds: vi.fn(),
+}));
+
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(
@@ -71,11 +78,13 @@ vi.mock('@pagespace/lib/auth/user-repository', async (importOriginal) => {
 });
 
 import { GET, POST } from '../route';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import { db } from '@pagespace/db/db';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions, canPrincipalViewPage, filterDrivesByMCPScope, checkMCPDriveScope } from '@/lib/auth';
 import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockedAuth = vi.mocked(authenticateRequestWithOptions);
 const mockedDb = vi.mocked(db, true);
@@ -95,14 +104,6 @@ const webAuth = (userId = USER_ID): SessionAuthResult => ({
 
 const authError = (): AuthError => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
-});
-
-// Supports both .from().where() and .from().innerJoin().where()
-const selectChain = (rows: unknown[]) => ({
-  from: vi.fn(() => ({
-    where: vi.fn().mockResolvedValue(rows),
-    innerJoin: vi.fn(() => ({ where: vi.fn().mockResolvedValue(rows) })),
-  })),
 });
 
 const insertChain = (row: unknown) => ({
@@ -156,12 +157,25 @@ beforeEach(() => {
   mockedCanView.mockResolvedValue(true);
   mockedIsOwnerOrAdmin.mockResolvedValue(true);
   mockedDb.insert.mockReturnValue(insertChain(storedCommand) as never);
-  mockedDb.select
-    .mockReturnValueOnce(selectChain([]) as never)
-    .mockReturnValueOnce(selectChain([]) as never);
+  vi.mocked(getMemberDriveIds).mockResolvedValue([]);
 });
 
 describe('GET /api/commands', () => {
+  it('DRV-5 (partial) X-6 (partial) scopes drive commands to the org-aware member-drive set (non-trashed), never a drive_members read of its own', async () => {
+    // An implicit Open member's drive is in the set with no row; a stale org row's drive is not.
+    vi.mocked(getMemberDriveIds).mockResolvedValue(['drive_open_org']);
+    mockedDb.query.commands.findMany.mockResolvedValue([
+      { ...storedCommand, id: 'cmd_org', userId: null, driveId: 'drive_open_org', trigger: 'org-faq' },
+    ] as never);
+
+    const response = await GET(getRequest());
+
+    expect(response.status).toBe(200);
+    expect(getMemberDriveIds).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), { includeTrashed: false });
+    expect(mockedDb.select).not.toHaveBeenCalled();
+    expect((await response.json()).commands[0]).toMatchObject({ scope: 'drive', driveId: 'drive_open_org' });
+  });
+
   it('returns 401 when authentication fails', async () => {
     mockedAuth.mockResolvedValue(authError() as never);
     const response = await GET(getRequest());
@@ -169,10 +183,7 @@ describe('GET /api/commands', () => {
   });
 
   it('lists personal commands plus commands of drives the user belongs to', async () => {
-    mockedDb.select.mockReset();
-    mockedDb.select
-      .mockReturnValueOnce(selectChain([{ id: 'drive_owned' }]) as never)
-      .mockReturnValueOnce(selectChain([{ driveId: 'drive_member' }]) as never);
+    vi.mocked(getMemberDriveIds).mockResolvedValue(['drive_owned', 'drive_member']);
     mockedDb.query.commands.findMany.mockResolvedValue([
       storedCommand,
       { ...storedCommand, id: 'cmd_2', userId: null, driveId: 'drive_member', trigger: 'team-faq' },
@@ -184,13 +195,14 @@ describe('GET /api/commands', () => {
     expect(json.commands).toHaveLength(2);
     expect(json.commands[0].scope).toBe('user');
     expect(json.commands[1]).toMatchObject({ scope: 'drive', driveId: 'drive_member' });
+    // A GUEST row (redeemed page share link) does not make a drive's commands the caller's:
+    // the drive set is getMemberDriveIds, which reads a GUEST row as no membership
+    // (member-drives.integration.test.ts proves it on real Postgres).
+    expect(getMemberDriveIds).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), { includeTrashed: false });
   });
 
   it('enriches each command with entry page title, availability, and author name', async () => {
-    mockedDb.select.mockReset();
-    mockedDb.select
-      .mockReturnValueOnce(selectChain([{ id: 'drive_member' }]) as never)
-      .mockReturnValueOnce(selectChain([]) as never);
+    vi.mocked(getMemberDriveIds).mockResolvedValue(['drive_member']);
     mockedDb.query.commands.findMany.mockResolvedValue([
       storedCommand,
       {
@@ -230,10 +242,7 @@ describe('GET /api/commands', () => {
 
   it('decrypts ciphertext author names before responding', async () => {
     const encryptedName = await encryptField('Real Author');
-    mockedDb.select.mockReset();
-    mockedDb.select
-      .mockReturnValueOnce(selectChain([]) as never)
-      .mockReturnValueOnce(selectChain([]) as never);
+    vi.mocked(getMemberDriveIds).mockResolvedValue([]);
     mockedDb.query.commands.findMany.mockResolvedValue([storedCommand] as never);
     mockedDb.query.users.findMany.mockResolvedValue([
       { id: USER_ID, name: encryptedName },
@@ -246,10 +255,7 @@ describe('GET /api/commands', () => {
 
   it('decrypts one author shared across many commands only once (dedup)', async () => {
     const encryptedName = await encryptField('Shared Author');
-    mockedDb.select.mockReset();
-    mockedDb.select
-      .mockReturnValueOnce(selectChain([]) as never)
-      .mockReturnValueOnce(selectChain([]) as never);
+    vi.mocked(getMemberDriveIds).mockResolvedValue([]);
     const manyCommands = Array.from({ length: 20 }, (_, i) => ({
       ...storedCommand,
       id: `cmd_${i}`,
@@ -272,10 +278,7 @@ describe('GET /api/commands', () => {
   });
 
   it('marks the entry page unavailable when it no longer exists', async () => {
-    mockedDb.select.mockReset();
-    mockedDb.select
-      .mockReturnValueOnce(selectChain([]) as never)
-      .mockReturnValueOnce(selectChain([]) as never);
+    vi.mocked(getMemberDriveIds).mockResolvedValue([]);
     mockedDb.query.commands.findMany.mockResolvedValue([storedCommand] as never);
     mockedDb.query.pages.findMany.mockResolvedValue([] as never);
 
@@ -288,10 +291,7 @@ describe('GET /api/commands', () => {
   });
 
   it('checks per-page permission for every entry page (membership does not imply access)', async () => {
-    mockedDb.select.mockReset();
-    mockedDb.select
-      .mockReturnValueOnce(selectChain([{ id: 'drive_member' }]) as never)
-      .mockReturnValueOnce(selectChain([]) as never);
+    vi.mocked(getMemberDriveIds).mockResolvedValue(['drive_member']);
     mockedDb.query.commands.findMany.mockResolvedValue([storedCommand] as never);
     mockedDb.query.pages.findMany.mockResolvedValue([
       { id: 'page_1', title: 'Secret Page', driveId: 'drive_member', isTrashed: false },
@@ -305,10 +305,7 @@ describe('GET /api/commands', () => {
   });
 
   it('suppresses entry-page metadata the caller cannot view (no private-title leak)', async () => {
-    mockedDb.select.mockReset();
-    mockedDb.select
-      .mockReturnValueOnce(selectChain([{ id: 'drive_member' }]) as never)
-      .mockReturnValueOnce(selectChain([]) as never);
+    vi.mocked(getMemberDriveIds).mockResolvedValue(['drive_member']);
     mockedDb.query.commands.findMany.mockResolvedValue([
       { ...storedCommand, userId: null, driveId: 'drive_member' },
     ] as never);
@@ -459,7 +456,7 @@ describe('POST /api/commands', () => {
     expect(response.status).toBe(201);
     const json = await response.json();
     expect(json.command.scope).toBe('drive');
-    expect(mockedIsOwnerOrAdmin).toHaveBeenCalledWith(USER_ID, 'drive_1');
+    expect(mockedIsOwnerOrAdmin).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), 'drive_1');
   });
 
   it('stamps createdById with the caller on create', async () => {
@@ -483,4 +480,15 @@ describe('POST /api/commands', () => {
     const response = await POST(postRequest([1, 2, 3]));
     expect(response.status).toBe(400);
   });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(credentialActor(auth.userId, null), resourceId),
+    isPrincipalDriveMember: (auth: { userId: string }, resourceId: string) => permissions.isUserDriveMember(credentialActor(auth.userId, null), resourceId),
+    isPrincipalDriveOwnerOrAdmin: (auth: { userId: string }, resourceId: string) => permissions.isDriveOwnerOrAdmin(credentialActor(auth.userId, null), resourceId),
+  };
 });

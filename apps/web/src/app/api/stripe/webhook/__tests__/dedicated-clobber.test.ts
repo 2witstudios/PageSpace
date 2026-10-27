@@ -6,7 +6,7 @@
  * handler assumes every one of them IS that customer's plan. If a hosting
  * subscription ever reaches `handleSubscriptionChange`, it derives an account tier
  * from a price the tier map does not know — `free` — and writes that over a paying
- * Pro / Founder / Business customer's `users.subscriptionTier`. The reconcile cron
+ * Pro / Business customer's `users.subscriptionTier`. The reconcile cron
  * then reads their entitled-but-unmapped row as `indeterminate` and deliberately
  * refuses to auto-repair it, so the demotion is permanent AND invisible to the
  * machinery built for exactly that failure. The same fork protects the credit
@@ -29,7 +29,7 @@ const { mockConstructEvent, StripeError } = vi.hoisted(() => ({
 vi.mock('@/lib/stripe', () => ({
   stripe: { webhooks: { constructEvent: mockConstructEvent } },
   Stripe: { errors: { StripeError } },
-  getTierFromPrice: vi.fn(() => 'free'),
+  getPersonalTierFromPrice: vi.fn(() => 'free'),
 }));
 
 /**
@@ -67,6 +67,7 @@ const mockDb = vi.hoisted(() => {
     }),
     transaction: async (cb: (tx: unknown) => Promise<void>) => {
       await cb({
+        select: () => ({ from: () => ({ where: () => ({ for: async () => state.userRows }) }) }),
         insert: () => ({ values: () => ({ onConflictDoUpdate: async () => undefined }) }),
         update: recordUpdate,
       });
@@ -93,6 +94,15 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 const mockApplyStripeFunding = vi.hoisted(() => vi.fn());
 vi.mock('@pagespace/lib/billing/credit-funding', () => ({ applyStripeFunding: mockApplyStripeFunding }));
+// No App Store plan here: the merged tier is the Stripe one.
+vi.mock('@pagespace/lib/billing/apple/apple-entitlement', () => ({ appleEntitledTier: vi.fn(async () => 'free') }));
+// Every customer here is a person's: the org fork (org-handlers) declines every event.
+vi.mock('../org-handlers', () => ({
+  routeOrgSubscriptionEvent: vi.fn().mockResolvedValue(false),
+  routeOrgInvoicePaid: vi.fn().mockResolvedValue(false),
+  routeOrgInvoicePaymentFailed: vi.fn().mockResolvedValue(false),
+  orgForStripeCustomer: vi.fn().mockResolvedValue(null),
+}));
 vi.mock('@/lib/billing/send-payment-receipt-email', () => ({
   sendSubscriptionReceiptEmail: vi.fn(),
   sendTopupReceiptEmail: vi.fn(),
@@ -139,6 +149,9 @@ vi.mock('@pagespace/lib/services/app-hosting/dedicated-tier-service', () => ({
   recordDedicatedSubscription: mockRecordSubscription,
   syncAppTierToSubscription: mockSyncTier,
   findDedicatedSubscriptionByStripeId: mockFindByStripeId,
+  // The payer from stored rows (D-OW-64): the mirror's when it exists, else the app's personal drive owner.
+  resolveDedicatedPayer: async ({ mirror }: { mirror: { userId: string | null; orgId: string | null } | null }) =>
+    mirror ? { userId: mirror.userId, orgId: mirror.orgId } : { userId: 'user_1', orgId: null },
 }));
 
 import { POST } from '../route';

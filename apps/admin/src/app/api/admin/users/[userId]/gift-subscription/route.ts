@@ -13,11 +13,19 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { decryptUserRow } from '@pagespace/lib/auth/user-repository';
+import { personalTiers } from '@pagespace/lib/billing/subscription-tiers';
+import { GIFT_SUBSCRIPTION_METADATA_TYPE } from '@pagespace/lib/billing/wallet-funding';
+
+// SEAT-2 P2: an ordinary user gift can only ever be a PERSONAL tier — Business
+// is the organization plan, gifted ON the org's own subscription through
+// POST /api/admin/orgs/[orgId]/gift-subscription (SEAT-8), never to a person.
+// This is the schema that actually validates the request.
+const GIFTABLE_TIERS = personalTiers().filter((tier) => tier !== 'free');
 
 type RouteContext = { params: Promise<{ userId: string }> };
 
 const giftSchema = z.object({
-  tier: z.enum(['pro', 'founder', 'business']),
+  tier: z.enum(GIFTABLE_TIERS),
   reason: z.string().trim().min(1).max(500).default('Admin gift'),
 });
 
@@ -50,7 +58,7 @@ export const POST = withAdminAuth<RouteContext>(async (adminUser, request, conte
     const parsed = giftSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
       return NextResponse.json(
-        { error: 'Invalid request. Tier must be "pro", "founder", or "business" and reason must be non-empty.', details: parsed.error.flatten().fieldErrors },
+        { error: 'Invalid request. Tier must be "pro" and reason must be non-empty.', details: parsed.error.flatten().fieldErrors },
         { status: 400 }
       );
     }
@@ -133,7 +141,7 @@ export const POST = withAdminAuth<RouteContext>(async (adminUser, request, conte
         userId: targetUser.id,
         giftedBy: adminUserId,
         reason,
-        type: 'gift_subscription',
+        type: GIFT_SUBSCRIPTION_METADATA_TYPE,
       },
     });
 

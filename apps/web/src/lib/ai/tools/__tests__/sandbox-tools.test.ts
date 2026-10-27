@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest';
 import { createSandboxTools, type ResolveEnvironmentTarget, type ResolveSandboxContext, type SandboxGate } from '../sandbox-tools';
 import type { SandboxRunDeps, SandboxActorContext } from '@pagespace/lib/services/sandbox/tool-runners';
 import { ENV_UNREACHABLE_MESSAGE } from '@pagespace/lib/env-bridge/decide-env-reach';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const ctx: SandboxActorContext = {
   userId: 'u1',
@@ -60,14 +61,17 @@ const ownSandbox: ResolveEnvironmentTarget = async ({ ctx, environmentId }) => (
 /** No persistent environments reachable — the default for every case that is not about discovery. */
 const noEnvironments = async () => [];
 
-function exec(tool: { execute?: unknown }, args: unknown, context: unknown) {
+/** The tool context every call carries: its user and that user's actor (D-OW-45). */
+const ACTOR = credentialActor('u1', null);
+
+function exec(tool: { execute?: unknown }, args: unknown, context: Record<string, unknown>) {
   const fn = tool.execute as (a: unknown, o: unknown) => Promise<unknown>;
-  return fn(args, { experimental_context: context });
+  return fn(args, { experimental_context: { userId: 'u1', accessActor: ACTOR, ...context } });
 }
 
 describe('createSandboxTools', () => {
   it('bash: given a resolvable context, should delegate to the runner and return its result', async () => {
-    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: () => fakeRunDeps(), resolveContext: okResolve, gate: okGate });
     const result = await exec(tools.bash, { environmentId: CONVERSATION_ID, command: 'echo hi' }, {});
     expect(result).toMatchObject({ success: true, stdout: 'hi', exitCode: 0 });
   });
@@ -86,7 +90,7 @@ describe('createSandboxTools', () => {
       readFileToBuffer: async () => Buffer.from('data'),
       createCheckpoint: async () => {},
     });
-    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps, resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: () => runDeps, resolveContext: okResolve, gate: okGate });
     const result = await exec(tools.bash, { environmentId: CONVERSATION_ID, command: 'echo hi', cwd: '/workspace/repo', timeoutMs: 5000 }, {});
     expect(result).toMatchObject({ success: true });
     expect(seenRuns).toEqual([
@@ -113,7 +117,7 @@ describe('createSandboxTools', () => {
       readFileToBuffer: async () => Buffer.from('data'),
       createCheckpoint: async () => {},
     });
-    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps, resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: () => runDeps, resolveContext: okResolve, gate: okGate });
     const result = await exec(tools.bash, { environmentId: CONVERSATION_ID, command: 'echo hi' }, { userId: 'u1' });
     expect(result).toMatchObject({ success: true });
     expect(seenCwds).toEqual(['/workspace']);
@@ -126,7 +130,7 @@ describe('createSandboxTools', () => {
       acquired = true;
       return { ok: true, sandboxId: 'sbx', resumed: false, workspaceId: 'ws-1' };
     };
-    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps,
+    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: () => runDeps,
       resolveContext: async () => ({ error: 'no drive' }),
       gate: okGate,
     });
@@ -142,7 +146,7 @@ describe('createSandboxTools', () => {
       acquired = true;
       return { ok: true, sandboxId: 'sbx', resumed: false, workspaceId: 'ws-1' };
     };
-    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps,
+    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: () => runDeps,
       resolveContext: okResolve,
       gate: async () => ({ ok: false, reason: 'concurrency_limit', error: 'too many runs', retryAfter: 30 }),
     });
@@ -152,7 +156,7 @@ describe('createSandboxTools', () => {
   });
 
   it('bash: given the gate denies without a retry hint, should not fabricate a retryAfter field', async () => {
-    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: fakeRunDeps(),
+    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: () => fakeRunDeps(),
       resolveContext: okResolve,
       gate: async () => ({ ok: false, reason: 'kill_switch_off', error: 'disabled' }),
     });
@@ -174,7 +178,7 @@ describe('createSandboxTools', () => {
       readFileToBuffer: async () => Buffer.from(''),
       createCheckpoint: async () => {},
     });
-    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps,
+    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: () => runDeps,
       resolveContext: okResolve,
       gate: async () => ({ ok: false, reason: 'kill_switch_off', error: 'disabled' }),
     });
@@ -197,7 +201,7 @@ describe('createSandboxTools', () => {
       readFileToBuffer: async () => Buffer.from('data'),
       createCheckpoint: async () => {},
     });
-    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps, resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: () => runDeps, resolveContext: okResolve, gate: okGate });
     const result = await exec(tools.writeFile, { environmentId: CONVERSATION_ID, path: 'a.txt', content: 'hello' }, {});
     expect(result).toMatchObject({ success: true, path: 'a.txt', bytesWritten: 5 });
     // The runner anchors the relative path at the sandbox root — no node/binding cwd.
@@ -218,7 +222,7 @@ describe('createSandboxTools', () => {
       },
       createCheckpoint: async () => {},
     });
-    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps, resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: () => runDeps, resolveContext: okResolve, gate: okGate });
     const result = await exec(tools.readFile, { environmentId: CONVERSATION_ID, path: 'a.txt' }, {});
     expect(result).toMatchObject({ success: true, path: 'a.txt', content: 'data' });
     expect(seenReads).toEqual([{ path: '/workspace/a.txt' }]);
@@ -238,7 +242,7 @@ describe('createSandboxTools', () => {
       },
       createCheckpoint: async () => {},
     });
-    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps,
+    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: () => runDeps,
       resolveContext: okResolve,
       gate: async () => ({ ok: false, reason: 'kill_switch_off', error: 'disabled' }),
     });
@@ -261,7 +265,7 @@ describe('createSandboxTools', () => {
       readFileToBuffer: async () => Buffer.from('data'),
       createCheckpoint: async () => {},
     });
-    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps, resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: () => runDeps, resolveContext: okResolve, gate: okGate });
     const result = await exec(tools.editFile, { environmentId: CONVERSATION_ID, path: 'a.txt', oldString: 'data', newString: 'X' }, {});
     expect(result).toMatchObject({ success: true, path: 'a.txt', replacements: 1 });
     expect(seenWrites).toEqual([[{ path: '/workspace/a.txt', content: 'X' }]]);
@@ -280,7 +284,7 @@ describe('createSandboxTools', () => {
       readFileToBuffer: async () => Buffer.from('data data'),
       createCheckpoint: async () => {},
     });
-    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps, resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: () => runDeps, resolveContext: okResolve, gate: okGate });
     const result = await exec(
       tools.editFile,
       { path: 'a.txt', oldString: 'data', newString: 'X', replaceAll: true },
@@ -303,7 +307,7 @@ describe('createSandboxTools', () => {
       readFileToBuffer: async () => Buffer.from('data'),
       createCheckpoint: async () => {},
     });
-    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps,
+    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: () => runDeps,
       resolveContext: okResolve,
       gate: async () => ({ ok: false, reason: 'kill_switch_off', error: 'disabled' }),
     });
@@ -314,14 +318,14 @@ describe('createSandboxTools', () => {
   });
 
   it('bash inputSchema: should reject an empty command', () => {
-    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: () => fakeRunDeps(), resolveContext: okResolve, gate: okGate });
     const schema = tools.bash.inputSchema as { safeParse: (v: unknown) => { success: boolean } };
     expect(schema.safeParse({ environmentId: CONVERSATION_ID, command: '' }).success).toBe(false);
     expect(schema.safeParse({ environmentId: CONVERSATION_ID, command: 'ls' }).success).toBe(true);
   });
 
   it('bash inputSchema: should accept cwd and a positive integer timeoutMs, rejecting invalid ones', () => {
-    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: () => fakeRunDeps(), resolveContext: okResolve, gate: okGate });
     const schema = tools.bash.inputSchema as { safeParse: (v: unknown) => { success: boolean } };
     expect(schema.safeParse({ environmentId: CONVERSATION_ID, command: 'ls', cwd: '/workspace/repo' }).success).toBe(true);
     expect(schema.safeParse({ environmentId: CONVERSATION_ID, command: 'ls', timeoutMs: 5000 }).success).toBe(true);
@@ -335,14 +339,14 @@ describe('createSandboxTools', () => {
     }
 
     it('writeFile inputSchema: given an unrecognized field, should reject instead of silently dropping it', () => {
-      const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+      const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: () => fakeRunDeps(), resolveContext: okResolve, gate: okGate });
       const schema = schemaOf(tools, 'writeFile');
       expect(schema.safeParse({ environmentId: CONVERSATION_ID, path: 'a.txt', content: 'x', cwd: 'PageSpace' }).success).toBe(false);
       expect(schema.safeParse({ environmentId: CONVERSATION_ID, path: 'a.txt', content: 'x' }).success).toBe(true);
     });
 
     it('readFile inputSchema: given an unrecognized field, should reject instead of silently dropping it', () => {
-      const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+      const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: () => fakeRunDeps(), resolveContext: okResolve, gate: okGate });
       const schema = schemaOf(tools, 'readFile');
       expect(schema.safeParse({ environmentId: CONVERSATION_ID, path: 'a.txt', cwd: 'PageSpace' }).success).toBe(false);
       expect(schema.safeParse({ environmentId: CONVERSATION_ID, path: 'a.txt' }).success).toBe(true);
@@ -352,7 +356,7 @@ describe('createSandboxTools', () => {
       // The runner clamps a 0-or-negative offset to line 1 (selectLineWindow),
       // so a schema that refuses those values gives a model a zod error instead
       // of the documented clamp behaviour.
-      const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+      const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: () => fakeRunDeps(), resolveContext: okResolve, gate: okGate });
       const schema = schemaOf(tools, 'readFile');
       expect(schema.safeParse({ environmentId: CONVERSATION_ID, path: 'a.txt', offset: 0 }).success).toBe(true);
       expect(schema.safeParse({ environmentId: CONVERSATION_ID, path: 'a.txt', offset: -5 }).success).toBe(true);
@@ -361,14 +365,14 @@ describe('createSandboxTools', () => {
     });
 
     it('editFile inputSchema: given an unrecognized field, should reject instead of silently dropping it', () => {
-      const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+      const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: () => fakeRunDeps(), resolveContext: okResolve, gate: okGate });
       const schema = schemaOf(tools, 'editFile');
       expect(schema.safeParse({ environmentId: CONVERSATION_ID, path: 'a.txt', oldString: 'x', newString: 'y', cwd: 'PageSpace' }).success).toBe(false);
       expect(schema.safeParse({ environmentId: CONVERSATION_ID, path: 'a.txt', oldString: 'x', newString: 'y' }).success).toBe(true);
     });
 
     it('bash inputSchema: given a legitimate extra-looking but unknown field, should reject it', () => {
-      const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+      const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: () => fakeRunDeps(), resolveContext: okResolve, gate: okGate });
       const schema = schemaOf(tools, 'bash');
       expect(schema.safeParse({ environmentId: CONVERSATION_ID, command: 'ls', bogus: true }).success).toBe(false);
       expect(schema.safeParse({ environmentId: CONVERSATION_ID, command: 'ls', cwd: 'PageSpace' }).success).toBe(true);
@@ -376,7 +380,7 @@ describe('createSandboxTools', () => {
   });
 
   it('editFile inputSchema: should require path/oldString/newString and accept replaceAll', () => {
-    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: () => fakeRunDeps(), resolveContext: okResolve, gate: okGate });
     const schema = tools.editFile.inputSchema as { safeParse: (v: unknown) => { success: boolean } };
     expect(schema.safeParse({ environmentId: CONVERSATION_ID, path: 'a', oldString: 'x', newString: 'y' }).success).toBe(true);
     expect(schema.safeParse({ environmentId: CONVERSATION_ID, path: 'a', oldString: 'x', newString: 'y', replaceAll: true }).success).toBe(true);
@@ -384,7 +388,7 @@ describe('createSandboxTools', () => {
   });
 
   it('should expose exactly five tools: the four execution tools plus the ONE discovery tool they take their id from — no mutable machine directory remains', () => {
-    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: () => fakeRunDeps(), resolveContext: okResolve, gate: okGate });
     expect(Object.keys(tools).sort()).toEqual(['bash', 'editFile', 'list_environments', 'readFile', 'writeFile']);
     // The deleted apparatus stays deleted: there is no switch_machine, no
     // list_machines, and no way to CHANGE where later calls go.
@@ -396,7 +400,7 @@ describe('createSandboxTools', () => {
 describe('list_environments — the ONLY place an environment id comes from (leaf B)', () => {
   it('given the caller, should list the conversation\'s own sandbox plus the environments the store handed back', async () => {
     const rows = [{ id: 'env_dw9jthqyaza6ga3b6m5n', label: 'jono-macstudio', substrate: 'local' as const, driveId: 'drive_1' }];
-    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: async () => rows, runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: async () => rows, runDeps: () => fakeRunDeps(), resolveContext: okResolve, gate: okGate });
     const result = (await exec(tools.list_environments, {}, {})) as { environments: { id: string; label: string; substrate: string; driveId: string | null; kind: string }[]; notice: string };
     expect(result.environments).toEqual([
       { id: CONVERSATION_ID, label: expect.any(String), substrate: 'sprite', driveId: 'd1', kind: 'conversation' },
@@ -414,7 +418,7 @@ describe('list_environments — the ONLY place an environment id comes from (lea
         seen.push(actor.userId);
         return [];
       },
-      runDeps: fakeRunDeps(),
+      runDeps: () => fakeRunDeps(),
       resolveContext: okResolve,
       gate: okGate,
     });
@@ -431,7 +435,7 @@ describe('list_environments — the ONLY place an environment id comes from (lea
       listEnvironments: async () => {
         throw new Error('the store must never be reached on a denied gate');
       },
-      runDeps: fakeRunDeps(),
+      runDeps: () => fakeRunDeps(),
       resolveContext: okResolve,
       gate: okGate,
       // Discovery has its OWN gate (Codex P1, #2616): it asks whether the actor
@@ -449,7 +453,7 @@ describe('list_environments — the ONLY place an environment id comes from (lea
       listEnvironments: async () => {
         throw new Error('the store must never be reached without an actor');
       },
-      runDeps: fakeRunDeps(),
+      runDeps: () => fakeRunDeps(),
       resolveContext: async () => ({ error: 'Code execution requires a conversation.' }),
       gate: okGate,
     });
@@ -457,7 +461,7 @@ describe('list_environments — the ONLY place an environment id comes from (lea
   });
 
   it('the description tells the model to copy an id from this list and never to construct one — July\'s post-mortem makes the wording part of the fix', () => {
-    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: () => fakeRunDeps(), resolveContext: okResolve, gate: okGate });
     const description = (tools.list_environments as { description?: string }).description ?? '';
     expect(description).toMatch(/copy an id from the output exactly/i);
     expect(description).toMatch(/never construct, guess, shorten or infer/i);
@@ -467,7 +471,7 @@ describe('list_environments — the ONLY place an environment id comes from (lea
 
 describe('the MANDATORY, OPAQUE environmentId (leaf C)', () => {
   const tools = () =>
-    createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+    createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: () => fakeRunDeps(), resolveContext: okResolve, gate: okGate });
   const schemas = () => {
     const t = tools();
     return [
@@ -501,7 +505,7 @@ describe('the MANDATORY, OPAQUE environmentId (leaf C)', () => {
       gateDiscovery: okGate,
       resolveEnvironment: async () => ({ ok: false, error: ENV_UNREACHABLE_MESSAGE }),
       listEnvironments: noEnvironments,
-      runDeps: fakeRunDeps(),
+      runDeps: () => fakeRunDeps(),
       resolveContext: okResolve,
       gate: okGate,
     });
@@ -528,7 +532,7 @@ describe('the MANDATORY, OPAQUE environmentId (leaf C)', () => {
       gateDiscovery: okGate,
       resolveEnvironment: async () => ({ ok: false, error: ENV_UNREACHABLE_MESSAGE }),
       listEnvironments: noEnvironments,
-      runDeps,
+      runDeps: () => runDeps,
       resolveContext: okResolve,
       gate: okGate,
     });
@@ -550,7 +554,7 @@ describe('the MANDATORY, OPAQUE environmentId (leaf C)', () => {
       seen.push(input.environment);
       return { ok: true, sandboxId: 'sbx', resumed: false, workspaceId: 'ws-1' };
     };
-    const t = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps, resolveContext: okResolve, gate: okGate });
+    const t = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: () => runDeps, resolveContext: okResolve, gate: okGate });
     await exec(t.bash, { environmentId: CONVERSATION_ID, command: 'ls' }, {});
     expect(seen).toEqual([{ id: CONVERSATION_ID, kind: 'conversation', label: "This conversation's own sandbox", driveId: 'd1' }]);
   });
@@ -568,7 +572,7 @@ describe('the MANDATORY, OPAQUE environmentId (leaf C)', () => {
         };
       },
       listEnvironments: noEnvironments,
-      runDeps: fakeRunDeps(),
+      runDeps: () => fakeRunDeps(),
       resolveContext: okResolve,
       gate: okGate,
     });
@@ -598,7 +602,7 @@ describe('every result names the environment it ran in (leaf E)', () => {
   });
 
   it('given any code-execution result, should state the environment LABEL it actually ran in', async () => {
-    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: macResolver, listEnvironments: noEnvironments, runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: macResolver, listEnvironments: noEnvironments, runDeps: () => fakeRunDeps(), resolveContext: okResolve, gate: okGate });
     for (const call of [
       () => exec(tools.bash, { environmentId: OTHER_ID, command: 'ls' }, {}),
       () => exec(tools.writeFile, { environmentId: OTHER_ID, path: 'a.txt', content: 'x' }, {}),
@@ -612,7 +616,7 @@ describe('every result names the environment it ran in (leaf E)', () => {
   });
 
   it('the label is resolved from the SERVER\'s record and never echoed from the model\'s input', async () => {
-    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: macResolver, listEnvironments: noEnvironments, runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: macResolver, listEnvironments: noEnvironments, runDeps: () => fakeRunDeps(), resolveContext: okResolve, gate: okGate });
     // The model named a DIFFERENT id; the result names the row the server
     // resolved, which is the whole point — a mis-addressed call must not have
     // its own belief read back to it.
@@ -626,7 +630,7 @@ describe('every result names the environment it ran in (leaf E)', () => {
       gateDiscovery: okGate,
       resolveEnvironment: macResolver,
       listEnvironments: noEnvironments,
-      runDeps: fakeRunDeps(),
+      runDeps: () => fakeRunDeps(),
       resolveContext: okResolve,
       gate: async () => ({ ok: false, reason: 'tier_ineligible', error: 'Running code requires a Pro plan or above.' }),
     });
@@ -638,7 +642,7 @@ describe('every result names the environment it ran in (leaf E)', () => {
   it('given a RUNNER refusal, should name the environment too', async () => {
     const runDeps = fakeRunDeps();
     runDeps.acquireSandbox = async () => ({ ok: false, reason: 'local_not_connected' });
-    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: macResolver, listEnvironments: noEnvironments, runDeps, resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: macResolver, listEnvironments: noEnvironments, runDeps: () => runDeps, resolveContext: okResolve, gate: okGate });
     const result = (await exec(tools.bash, { environmentId: OTHER_ID, command: 'ls' }, {})) as { success: boolean; environment?: { label: string } };
     expect(result.success).toBe(false);
     expect(result.environment).toEqual({ id: ENV_ID, label: 'jono-macstudio' });
@@ -649,7 +653,7 @@ describe('every result names the environment it ran in (leaf E)', () => {
       gateDiscovery: okGate,
       resolveEnvironment: async () => ({ ok: false, error: ENV_UNREACHABLE_MESSAGE }),
       listEnvironments: noEnvironments,
-      runDeps: fakeRunDeps(),
+      runDeps: () => fakeRunDeps(),
       resolveContext: okResolve,
       gate: okGate,
     });
@@ -659,7 +663,7 @@ describe('every result names the environment it ran in (leaf E)', () => {
   });
 
   it("the conversation's OWN sandbox is named too — there is no unnamed place to run", async () => {
-    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: () => fakeRunDeps(), resolveContext: okResolve, gate: okGate });
     const result = (await exec(tools.bash, { environmentId: CONVERSATION_ID, command: 'ls' }, {})) as { environment: { id: string; label: string } };
     expect(result.environment).toEqual({ id: CONVERSATION_ID, label: "This conversation's own sandbox" });
   });
@@ -670,7 +674,7 @@ describe('every result names the environment it ran in (leaf E)', () => {
     runDeps.audit = async (input) => {
       audits.push(input as { envId?: string });
     };
-    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: macResolver, listEnvironments: noEnvironments, runDeps, resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: macResolver, listEnvironments: noEnvironments, runDeps: () => runDeps, resolveContext: okResolve, gate: okGate });
     const result = (await exec(tools.bash, { environmentId: OTHER_ID, command: 'ls' }, {})) as { environment: { id: string } };
     // The id the result names IS the environment id — the same value
     // `drive_env_grant_audit.envId` carries for this grant.
@@ -698,7 +702,7 @@ describe("a LOCAL environment authorizes on machine ownership, not drive members
       gateDiscovery: okGate,
       resolveEnvironment: departedOwner,
       listEnvironments: noEnvironments,
-      runDeps: fakeRunDeps(),
+      runDeps: () => fakeRunDeps(),
       resolveContext: okResolve,
       gate: async (ctx) => {
         seen.push(ctx.driveId);
@@ -719,7 +723,7 @@ describe("a LOCAL environment authorizes on machine ownership, not drive members
       billed.push(input.driveId);
       return { ok: true, sandboxId: 'sbx', resumed: false, workspaceId: 'ws-1' };
     };
-    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: departedOwner, listEnvironments: noEnvironments, runDeps, resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ gateDiscovery: okGate, resolveEnvironment: departedOwner, listEnvironments: noEnvironments, runDeps: () => runDeps, resolveContext: okResolve, gate: okGate });
     await exec(tools.bash, { environmentId: ENV_ID, command: 'ls' }, {});
     expect(billed).toEqual(['drive-they-left']);
   });
@@ -729,7 +733,7 @@ describe("a LOCAL environment authorizes on machine ownership, not drive members
       gateDiscovery: okGate,
       resolveEnvironment: departedOwner,
       listEnvironments: noEnvironments,
-      runDeps: fakeRunDeps(),
+      runDeps: () => fakeRunDeps(),
       resolveContext: okResolve,
       gate: async () => ({ ok: false, reason: 'kill_switch_off', error: 'Code execution is disabled.' }),
     });
@@ -743,7 +747,7 @@ describe("a LOCAL environment authorizes on machine ownership, not drive members
       gateDiscovery: okGate,
       resolveEnvironment: departedOwner,
       listEnvironments: noEnvironments,
-      runDeps: fakeRunDeps(),
+      runDeps: () => fakeRunDeps(),
       resolveContext: okResolve,
       gate: async (ctx) => {
         payers.push(ctx.ownerId);
@@ -766,7 +770,7 @@ describe("a LOCAL environment authorizes on machine ownership, not drive members
       gateDiscovery: okGate,
       resolveEnvironment: spriteEnv,
       listEnvironments: noEnvironments,
-      runDeps: fakeRunDeps(),
+      runDeps: () => fakeRunDeps(),
       resolveContext: okResolve,
       gate: async (ctx) => {
         seen.push(ctx.driveId);
@@ -790,7 +794,7 @@ describe('DISCOVERY gates on where you can run, not on this conversation\'s paye
       gateDiscovery: async () => ({ ok: true }),
       resolveEnvironment: ownSandbox,
       listEnvironments: async () => rows,
-      runDeps: fakeRunDeps(),
+      runDeps: () => fakeRunDeps(),
       resolveContext: okResolve,
     });
     const result = (await exec(tools.list_environments, {}, {})) as { environments: { id: string }[] };
@@ -810,7 +814,7 @@ describe('DISCOVERY gates on where you can run, not on this conversation\'s paye
       },
       resolveEnvironment: ownSandbox,
       listEnvironments: async () => rows,
-      runDeps: fakeRunDeps(),
+      runDeps: () => fakeRunDeps(),
       resolveContext: okResolve,
     });
     await exec(tools.list_environments, {}, {});
@@ -828,7 +832,7 @@ describe('DISCOVERY gates on where you can run, not on this conversation\'s paye
       listEnvironments: async () => {
         throw new Error('the store must never be reached on a denied discovery gate');
       },
-      runDeps: fakeRunDeps(),
+      runDeps: () => fakeRunDeps(),
       resolveContext: okResolve,
     });
     expect(await exec(tools.list_environments, {}, {})).toEqual({ success: false, error: 'Code execution is disabled.' });

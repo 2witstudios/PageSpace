@@ -73,6 +73,8 @@ function harness(now: Date = NOW) {
   const deps = {
     store: fake.store,
     resolvePayer,
+    getDriveOrgPolicies: async () => null,
+    admitCreator: async () => ({ allowed: true as const }),
     now: () => now,
     identity,
     ownerCredentials: ownerCredentialSource,

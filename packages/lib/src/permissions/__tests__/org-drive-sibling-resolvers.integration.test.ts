@@ -1,0 +1,392 @@
+/**
+ * B7b: every human drive resolver answers with the one org-aware membership model, against real
+ * Postgres. The consistency matrix runs every resolver for every (person, drive, page) of the
+ * Northwind fixture and requires each answer to follow from the canonical one (getDriveAccess for
+ * the drive, getUserAccessLevel for the page). Any sibling that reads drive_members on its own
+ * disagrees on some row: an org Admin with no row, an implicit Open member, a stale source='org'
+ * row, a former lead's OWNER row, a guest, a pending invitation, or a non-member.
+ *
+ * Requires a running Postgres database with the latest migrations applied.
+ * Run via:
+ *   bun run --filter '@pagespace/lib' test:integration -- src/permissions/__tests__/org-drive-sibling-resolvers.integration.test.ts
+ */
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import { createId } from '@paralleldrive/cuid2';
+import { factories } from '@pagespace/db/test/factories';
+import { db, pool } from '@pagespace/db/db';
+import { and, eq, gt, inArray, isNull, or } from '@pagespace/db/operators';
+import { mcpTokens } from '@pagespace/db/schema/auth';
+import { pages } from '@pagespace/db/schema/core';
+import { driveAgentMembers, driveRoles, mcpTokenDrives, pagePermissions } from '@pagespace/db/schema/members';
+import { orgMembers } from '@pagespace/db/schema/organizations';
+import type { SessionClaims } from '../../auth/session-service';
+import { resetAuditDbBindingForTests } from '../../audit/audit-db-binding';
+import { resetDefaultSecurityAuditForTests } from '../../audit/security-audit';
+import {
+  getBatchPagePermissions,
+  getDriveIdsForUser,
+  getUserAccessLevel,
+  getUserAccessiblePagesInDrive,
+  getUserAccessiblePagesInDriveWithDetails,
+  getUserDriveAccess,
+  getUserDrivePermissions,
+  getUsersWhoCanViewPage,
+  isDriveOwnerOrAdmin,
+  isUserDriveMember,
+  type PermissionLevel,
+} from '../permissions';
+import { getAgentAccessLevel, hasAgentDriveMembership } from '../agent-permissions';
+import { getAppAccessLevel, hasAppDriveMembership, hasScopedDriveMembership } from '../app-permissions';
+import { getMemberCustomRoleId } from '../membership-queries';
+import { accessiblePageIds } from '../accessible-page-ids';
+import { EnforcedAuthContext } from '../enforced-context';
+import { revokePagePermission } from '../permission-mutations';
+import { getDriveAccess, listAccessibleDrives } from '../../services/drive-service';
+import { checkDriveAccess } from '../../services/drive-member-service';
+import { checkDriveAccessForRoles } from '../../services/drive-role-service';
+import { addAgentToDrive } from '../../services/drive-agent-service';
+import { isUserMemberOfAnyEventDrive } from '../../services/calendar-event-drive-service';
+import { resolveDriveMembership } from '../../services/agent-workspaces/agent-workspace-tenant';
+import { cleanupNorthwind, createUser, northwind } from './fixtures/northwind-org-drives';
+import { credentialActor } from '../access-actor';
+import { tokenOwnerActor } from './fixtures/token-owner-actor';
+
+// Revocation kicks call the realtime service; nothing here is revoked, but keep the gate probe offline.
+vi.mock('../revocation-kick', () => ({ kickForPagePermissionRevocation: vi.fn(async () => undefined) }));
+
+const DENY: PermissionLevel = { canView: false, canEdit: false, canShare: false, canDelete: false };
+
+/**
+ * Northwind plus the shapes only the siblings need: Tomás holds PENDING invitations (acceptedAt
+ * null), as ADMIN on Finance and as MEMBER on Marcus's personal drive; Zed is a stranger used as the
+ * revoke target; every person holds an inheriting MCP key scoped to every drive. Gus redeemed page
+ * links (D-OW-24): a GUEST row plus a page grant on Marcus's personal drive and on Product (Open),
+ * and a bare GUEST row on Research (Restricted) — no membership anywhere, only his grants.
+ */
+async function matrixFixture() {
+  const f = await northwind();
+  // Northwind is paid ([D-OW-30]: an org with no subscription is lapsed), so writes that loosen access go through
+  // ([D-OW-33]); this suite is about resolver parity, not the lapse.
+  await factories.createOrgSubscription(f.org.id, { status: 'active' });
+  const tomas = await createUser('Tomás Alvarez');
+  const zed = await createUser('Zed Stranger');
+  await db.insert(orgMembers).values({ orgId: f.org.id, userId: tomas.id, role: 'MEMBER' });
+  await factories.createDriveMember(f.drives.finance.id, tomas.id, { source: 'invite', role: 'ADMIN', acceptedAt: null });
+  await factories.createDriveMember(f.drives.personal.id, tomas.id, { source: 'invite', acceptedAt: null });
+  // Lu's only link to Marcus's personal drive is a page share that has EXPIRED: it opens nothing and lists nothing.
+  await factories.createPagePermission(f.pages.personalPage.id, f.people.lu.id, { expiresAt: new Date(Date.now() - 60_000) });
+
+  const gus = await createUser('Gus Guest');
+  await factories.createDriveMember(f.drives.personal.id, gus.id, { source: 'invite', role: 'GUEST' });
+  await factories.createPagePermission(f.pages.personalPage.id, gus.id);
+  await factories.createDriveMember(f.drives.product.id, gus.id, { source: 'invite', role: 'GUEST' });
+  await factories.createPagePermission(f.pages.productPage.id, gus.id);
+  await factories.createDriveMember(f.drives.research.id, gus.id, { source: 'invite', role: 'GUEST' });
+
+  const people = { ...f.people, tomas, gus };
+  const tokens = new Map<string, string>();
+  for (const person of Object.values(people)) {
+    const [token] = await db.insert(mcpTokens).values({
+      userId: person.id,
+      tokenHash: `hash-${createId()}`,
+      tokenPrefix: 'mcp_test',
+      name: `${person.name} inherit`,
+      isScoped: true,
+    }).returning();
+    await db.insert(mcpTokenDrives).values(Object.values(f.drives).map((d) => ({ tokenId: token.id, driveId: d.id, role: null })));
+    tokens.set(person.id, token.id);
+  }
+
+  // Product's default role hides the Board deck page while still setting canEdit on it: a role entry
+  // that denies view grants nothing, whatever else it sets (#2672). Every implicit Open member, and
+  // Marcus's synced row, reaches it through that role.
+  const boardDeck = await factories.createPage(f.drives.product.id, { title: 'Board deck' });
+  const [productDefaultRole] = await db
+    .update(driveRoles)
+    .set({ permissions: { [boardDeck.id]: { canView: false, canEdit: true, canShare: false } } })
+    .where(and(eq(driveRoles.driveId, f.drives.product.id), eq(driveRoles.isDefault, true)))
+    .returning({ id: driveRoles.id });
+
+  return { ...f, people, zed, tokens, boardDeck, productDefaultRoleId: productDefaultRole.id };
+}
+
+type Matrix = Awaited<ReturnType<typeof matrixFixture>>;
+
+const ctxFor = (userId: string) => EnforcedAuthContext.fromSession({
+  sessionId: `session-${userId}`,
+  userId,
+  userRole: 'user',
+  tokenVersion: 0,
+  adminRoleVersion: 0,
+  type: 'user',
+  scopes: ['*'],
+  expiresAt: new Date(Date.now() + 60_000),
+} satisfies SessionClaims);
+
+async function pagesOf(driveId: string) {
+  return db.select({ id: pages.id }).from(pages).where(and(eq(pages.driveId, driveId), eq(pages.isTrashed, false)));
+}
+
+async function hasPageShareIn(userId: string, driveId: string) {
+  const rows = await db
+    .select({ id: pagePermissions.id })
+    .from(pagePermissions)
+    .innerJoin(pages, eq(pages.id, pagePermissions.pageId))
+    .where(and(
+      eq(pagePermissions.userId, userId),
+      eq(pages.driveId, driveId),
+      eq(pagePermissions.canView, true),
+      or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date())),
+    ));
+  return rows.length > 0;
+}
+
+/**
+ * Every resolver's answer for one person and one drive, next to the canonical answer. Returns the
+ * disagreements as readable lines, so a red matrix names the resolver, the person and the drive.
+ */
+async function disagreementsFor(m: Matrix, personName: string, userId: string, drive: { id: string; name: string; ownerId: string }) {
+  const out: string[] = [];
+  const where = `${personName} on ${drive.name}`;
+  const check = (resolver: string, actual: unknown, expected: unknown) => {
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+      out.push(`${resolver}: ${where} answered ${JSON.stringify(actual)}, canonical ${JSON.stringify(expected)}`);
+    }
+  };
+
+  const owner = drive.ownerId === userId;
+  const access = await getDriveAccess(drive.id, credentialActor(userId, null));
+  const member = owner || access.isMember;
+  const admin = owner || access.isAdmin;
+  const role = access.role;
+
+  check('isUserDriveMember', await isUserDriveMember(credentialActor(userId, null), drive.id), member);
+  check('isDriveOwnerOrAdmin', await isDriveOwnerOrAdmin(credentialActor(userId, null), drive.id), admin);
+  check('getUserDriveAccess', await getUserDriveAccess(credentialActor(userId, null), drive.id), member || await hasPageShareIn(userId, drive.id));
+  const drivePerms = await getUserDrivePermissions(credentialActor(userId, null), drive.id);
+  check('getUserDrivePermissions', drivePerms && { hasAccess: drivePerms.hasAccess, isOwner: drivePerms.isOwner, isAdmin: drivePerms.isAdmin, isMember: drivePerms.isMember },
+    owner ? { hasAccess: true, isOwner: true, isAdmin: false, isMember: false }
+      : member ? { hasAccess: true, isOwner: false, isAdmin: admin, isMember: true } : null);
+  const memberAccess = await checkDriveAccess(drive.id, credentialActor(userId, null));
+  check('checkDriveAccess', [memberAccess.isOwner, memberAccess.isAdmin, memberAccess.isMember], [owner, admin, member]);
+  const roleAccess = await checkDriveAccessForRoles(drive.id, credentialActor(userId, null));
+  check('checkDriveAccessForRoles', [roleAccess.isOwner, roleAccess.isAdmin, roleAccess.isMember], [owner, admin, member]);
+  check('resolveDriveMembership', await resolveDriveMembership({ actor: credentialActor(userId, null), driveId: drive.id }),
+    owner ? 'owner' : admin ? 'admin' : member ? 'member' : 'none');
+  check('isUserMemberOfAnyEventDrive', await isUserMemberOfAnyEventDrive(credentialActor(userId, null), { id: createId(), driveId: drive.id }), member);
+  check('hasAppDriveMembership (inheriting key)', await hasAppDriveMembership(await tokenOwnerActor(m.tokens.get(userId) as string), m.tokens.get(userId) as string, drive.id), member);
+  check('hasScopedDriveMembership (inheriting scope)',
+    await hasScopedDriveMembership([{ driveId: drive.id, role: null, customRoleId: null }], credentialActor(userId, null), drive.id), member);
+
+  const root = await getUserAccessLevel(credentialActor(userId, null), drive.id);
+  check('getUserAccessLevel (drive root)', root && { canView: root.canView, canShare: root.canShare },
+    member ? { canView: true, canShare: admin } : null);
+  check('getDriveAccess role', role, owner ? 'OWNER' : admin ? 'ADMIN' : member ? 'MEMBER' : null);
+
+  const drivePages = await pagesOf(drive.id);
+  const pageIds = drivePages.map((p) => p.id);
+  const batch = await getBatchPagePermissions(credentialActor(userId, null), pageIds);
+  const tree = new Set(await getUserAccessiblePagesInDrive(credentialActor(userId, null), drive.id));
+  const treeWithDetails = new Map((await getUserAccessiblePagesInDriveWithDetails(credentialActor(userId, null), drive.id)).map((p) => [p.id, p.permissions]));
+  const sqlVisible = new Set(await accessiblePageIds(credentialActor(userId, null)));
+  for (const pageId of pageIds) {
+    const canonical = (await getUserAccessLevel(credentialActor(userId, null), pageId)) ?? DENY;
+    const page = `${where} page ${pageId}`;
+    const checkPage = (resolver: string, actual: unknown, expected: unknown) => {
+      if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+        out.push(`${resolver}: ${page} answered ${JSON.stringify(actual)}, canonical ${JSON.stringify(expected)}`);
+      }
+    };
+    const flags4 = (p: PermissionLevel | undefined) => p && [p.canView, p.canEdit, p.canShare, p.canDelete];
+    checkPage('getBatchPagePermissions [view, edit, share, delete]', flags4(batch.get(pageId)), flags4(canonical));
+    checkPage('getUsersWhoCanViewPage', (await getUsersWhoCanViewPage(pageId, [userId])).has(userId), canonical.canView);
+    checkPage('getUserAccessiblePagesInDrive', tree.has(pageId), canonical.canView);
+    checkPage('getUserAccessiblePagesInDriveWithDetails', treeWithDetails.get(pageId)?.canView ?? false, canonical.canView);
+    checkPage('accessiblePageIds (SQL twin)', sqlVisible.has(pageId), canonical.canView);
+    const revoke = await revokePagePermission(ctxFor(userId), { pageId, targetUserId: m.zed.id });
+    checkPage('getPageIfCanShare (revokePagePermission gate)', revoke.ok, canonical.canShare);
+  }
+
+  return out;
+}
+
+async function matrixDisagreements(m: Matrix) {
+  const out: string[] = [];
+  for (const [name, person] of Object.entries(m.people)) {
+    for (const drive of Object.values(m.drives)) {
+      out.push(...await disagreementsFor(m, name, person.id, drive));
+    }
+    const listed = (await listAccessibleDrives(credentialActor(person.id, null), { includeTrash: true })).map((d) => d.id).sort();
+    const ids = (await getDriveIdsForUser(credentialActor(person.id, null))).sort();
+    if (JSON.stringify(ids) !== JSON.stringify(listed)) {
+      out.push(`getDriveIdsForUser: ${name} answered ${JSON.stringify(ids)}, listAccessibleDrives ${JSON.stringify(listed)}`);
+    }
+  }
+  return out;
+}
+
+describe('B7b: every human drive resolver answers with one org-aware membership (integration)', () => {
+  const AUDIT_ENV = ['ADMIN_DATABASE_URL', 'ADMIN_DB_BREAK_GLASS', 'AUDIT_TRUST_PLANE_REQUIRED'] as const;
+  const savedAuditEnv = new Map<string, string | undefined>();
+  const resetAuditBinding = () => {
+    resetAuditDbBindingForTests();
+    resetDefaultSecurityAuditForTests();
+  };
+
+  beforeAll(() => {
+    for (const key of AUDIT_ENV) {
+      savedAuditEnv.set(key, process.env[key]);
+      delete process.env[key];
+    }
+    resetAuditBinding();
+  });
+
+  afterEach(async () => {
+    await cleanupNorthwind();
+  }, 120_000);
+
+  afterAll(async () => {
+    for (const [key, value] of savedAuditEnv) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    resetAuditBinding();
+    await pool.end();
+  });
+
+  it('ORG-4 (partial) DRV-5 (partial) DRV-6 (partial) X-6 (partial) POL-6 (partial) the consistency matrix: for every person and drive, every sibling resolver agrees with getDriveAccess and getUserAccessLevel', async () => {
+    const m = await matrixFixture();
+
+    expect(await matrixDisagreements(m)).toEqual([]);
+
+    // Not vacuous: the canonical answers cover every shape the matrix is meant to tell apart.
+    const { priya, nina, marcus, dana, fred, kai, chris, tomas, jono } = m.people;
+    expect(await getDriveAccess(m.drives.finance.id, credentialActor(priya.id, null))).toMatchObject({ isAdmin: true });
+    expect(await getDriveAccess(m.drives.finance.id, credentialActor(jono.id, null))).toMatchObject({ isAdmin: true });
+    expect(await getDriveAccess(m.drives.product.id, credentialActor(nina.id, null))).toMatchObject({ isMember: true, isAdmin: false });
+    expect(await getDriveAccess(m.drives.research.id, credentialActor(marcus.id, null))).toMatchObject({ isMember: false });
+    expect(await getDriveAccess(m.drives.product.id, credentialActor(dana.id, null))).toMatchObject({ isMember: false });
+    expect(await getDriveAccess(m.drives.research.id, credentialActor(fred.id, null))).toMatchObject({ isMember: false });
+    expect(await getDriveAccess(m.drives.product.id, credentialActor(kai.id, null))).toMatchObject({ isMember: true });
+    expect(await getDriveAccess(m.drives.product.id, credentialActor(chris.id, null))).toMatchObject({ isMember: true });
+    expect(await getDriveAccess(m.drives.finance.id, credentialActor(tomas.id, null))).toMatchObject({ isMember: false });
+    expect(await getUserAccessLevel(credentialActor(m.people.lu.id, null), m.pages.personalPage.id)).toBeNull();
+    // The Board deck's role entry sets canEdit without canView: every implicit Open member (Nina, Kai)
+    // and Marcus's synced row resolve it through the default role. The entry itself grants nothing (#2672):
+    // its canEdit never leaks. What they hold there is Northwind's Open-drive floor (POL-6, the default view):
+    // a default role hiding a page is below that floor, so the resolver reads the floor and they view it.
+    const [role] = await db.select({ permissions: driveRoles.permissions }).from(driveRoles).where(eq(driveRoles.id, m.productDefaultRoleId));
+    expect(role.permissions[m.boardDeck.id]).toEqual({ canView: false, canEdit: true, canShare: false });
+    const viewFloor = { canView: true, canEdit: false, canShare: false, canDelete: false };
+    for (const person of [nina, kai, marcus]) {
+      expect(await getMemberCustomRoleId(m.drives.product.id, person.id), person.name).toBe(m.productDefaultRoleId);
+      expect(await getUserAccessLevel(credentialActor(person.id, null), m.boardDeck.id), person.name).toEqual(viewFloor);
+      expect((await getBatchPagePermissions(credentialActor(person.id, null), [m.boardDeck.id])).get(m.boardDeck.id), person.name).toEqual(viewFloor);
+    }
+  }, 180_000);
+
+  it('an expired page share lists no drive: listAccessibleDrives and getDriveIdsForUser agree', async () => {
+    const m = await matrixFixture();
+    const { lu } = m.people;
+    for (const options of [{}, { includeTrash: true }]) {
+      expect((await listAccessibleDrives(credentialActor(lu.id, null), options)).map((d) => d.id)).not.toContain(m.drives.personal.id);
+    }
+    expect(await getDriveIdsForUser(credentialActor(lu.id, null))).not.toContain(m.drives.personal.id);
+    expect(await getUserDriveAccess(credentialActor(lu.id, null), m.drives.personal.id)).toBe(false);
+  });
+
+  it('DRV-5 (partial) an implicit Open member holds the drive default role in every custom-role reader, and an org Admin holds none', async () => {
+    const m = await matrixFixture();
+    const { nina, kai, marcus, priya, chris } = m.people;
+
+    expect(await getMemberCustomRoleId(m.drives.product.id, nina.id)).toBe(m.productDefaultRoleId);
+    expect(await getMemberCustomRoleId(m.drives.product.id, kai.id)).toBe(m.productDefaultRoleId);
+    expect(await getMemberCustomRoleId(m.drives.product.id, marcus.id)).toBe(m.productDefaultRoleId);
+    expect(await getMemberCustomRoleId(m.drives.finance.id, priya.id)).toBeNull();
+    expect(await getMemberCustomRoleId(m.drives.product.id, chris.id)).toBeNull();
+    // The default role's drive-wide edit reaches the drive-wide permission reader too.
+    expect(await getUserDrivePermissions(credentialActor(nina.id, null), m.drives.product.id)).toEqual({ hasAccess: true, isOwner: false, isAdmin: false, isMember: true, canEdit: true });
+  });
+
+  it('a pending invitation counts for nothing in any routed resolver', async () => {
+    const m = await matrixFixture();
+    const { tomas } = m.people;
+
+    for (const drive of [m.drives.finance, m.drives.personal]) {
+      const at = drive.name;
+      expect(await isUserDriveMember(credentialActor(tomas.id, null), drive.id), at).toBe(false);
+      expect(await isDriveOwnerOrAdmin(credentialActor(tomas.id, null), drive.id), at).toBe(false);
+      expect(await getUserDriveAccess(credentialActor(tomas.id, null), drive.id), at).toBe(false);
+      expect(await getUserDrivePermissions(credentialActor(tomas.id, null), drive.id), at).toBeNull();
+      expect(await getUserAccessiblePagesInDrive(credentialActor(tomas.id, null), drive.id), at).toEqual([]);
+      expect(await getUserAccessiblePagesInDriveWithDetails(credentialActor(tomas.id, null), drive.id), at).toEqual([]);
+      const pageIds = (await pagesOf(drive.id)).map((p) => p.id);
+      expect([...(await getBatchPagePermissions(credentialActor(tomas.id, null), pageIds)).values()], at).toEqual(pageIds.map(() => DENY));
+      for (const pageId of pageIds) {
+        expect((await getUsersWhoCanViewPage(pageId, [tomas.id])).size, at).toBe(0);
+        expect(await revokePagePermission(ctxFor(tomas.id), { pageId, targetUserId: m.zed.id }), at)
+          .toEqual({ ok: false, error: { code: 'PAGE_NOT_ACCESSIBLE', pageId } });
+      }
+      expect(await getDriveIdsForUser(credentialActor(tomas.id, null)), at).not.toContain(drive.id);
+      expect(await checkDriveAccess(drive.id, credentialActor(tomas.id, null)), at).toMatchObject({ isOwner: false, isAdmin: false, isMember: false });
+      // checkDriveAccessForRoles read pending rows before B7b: a pending ADMIN managed roles.
+      expect(await checkDriveAccessForRoles(drive.id, credentialActor(tomas.id, null)), at).toMatchObject({ isOwner: false, isAdmin: false, isMember: false });
+      expect(await getMemberCustomRoleId(drive.id, tomas.id), at).toBeNull();
+      expect(await resolveDriveMembership({ actor: credentialActor(tomas.id, null), driveId: drive.id }), at).toBe('none');
+      expect(await isUserMemberOfAnyEventDrive(credentialActor(tomas.id, null), { id: createId(), driveId: drive.id }), at).toBe(false);
+      expect(await hasAppDriveMembership(await tokenOwnerActor(m.tokens.get(tomas.id) as string), m.tokens.get(tomas.id) as string, drive.id), at).toBe(false);
+    }
+  });
+
+  it('ORG-4 (partial) agent and app identities never gain org-derived access: an agent holds only its own memberships, an explicit key role only its role, while an inheriting key follows its person', async () => {
+    const m = await matrixFixture();
+    const { priya } = m.people;
+    const full = { canView: true, canEdit: true, canShare: true, canDelete: true };
+
+    // Priya (org Admin, no Finance row) reaches the Salaries page through org power.
+    expect(await getUserAccessLevel(credentialActor(priya.id, null), m.pages.financePrivatePage.id)).toEqual(full);
+
+    // Her agent, living in her own drive, gains nothing in Finance from her org role.
+    const priyaNotes = await factories.createDrive(priya.id, { name: 'Priya Notes', slug: `priya-${createId()}` });
+    const agent = await factories.createPage(priyaNotes.id, { title: 'Analyst', type: 'AI_CHAT' });
+    expect(await hasAgentDriveMembership(agent.id, m.drives.finance.id)).toBe(false);
+    expect(await getAgentAccessLevel(agent.id, m.pages.financePage.id)).toBeNull();
+    // Granted as MEMBER through her org power, it reads what a MEMBER reads: never the private page.
+    const granted = await addAgentToDrive({ actor: credentialActor(priya.id, null), agentPageId: agent.id, driveId: m.drives.finance.id, requestedRole: 'MEMBER' });
+    expect(granted.ok).toBe(true);
+    expect(await getAgentAccessLevel(agent.id, m.pages.financePrivatePage.id)).toBeNull();
+
+    // An explicit MEMBER key scope means MEMBER, whatever its owner's org role.
+    const [explicitKey] = await db.insert(mcpTokens).values({ userId: priya.id, tokenHash: `hash-${createId()}`, tokenPrefix: 'mcp_test', name: 'explicit', isScoped: true }).returning();
+    await db.insert(mcpTokenDrives).values({ tokenId: explicitKey.id, driveId: m.drives.finance.id, role: 'MEMBER' });
+    expect(await getAppAccessLevel(await tokenOwnerActor(explicitKey.id), explicitKey.id, m.pages.financePrivatePage.id)).toBeNull();
+    // The inheriting key is Priya, only there.
+    expect(await getAppAccessLevel(await tokenOwnerActor(m.tokens.get(priya.id) as string), m.tokens.get(priya.id) as string, m.pages.financePrivatePage.id)).toEqual(full);
+
+    await db.delete(driveAgentMembers).where(inArray(driveAgentMembers.agentPageId, [agent.id]));
+  });
+
+  it('DRV-7 (partial) resolveGranterAccess follows the shared membership: org power grants an agent up to ADMIN, a row-less member of a PRIVATE drive grants nothing, a pending invitation grants nothing', async () => {
+    const m = await matrixFixture();
+    const { priya, nina, tomas } = m.people;
+
+    const agentFor = async (userId: string, name: string) => {
+      const home = await factories.createDrive(userId, { name: `${name} home`, slug: `home-${createId()}` });
+      return factories.createPage(home.id, { title: `${name} agent`, type: 'AI_CHAT' });
+    };
+    const priyaAgent = await agentFor(priya.id, 'Priya');
+    const ninaAgent = await agentFor(nina.id, 'Nina');
+    const tomasAgent = await agentFor(tomas.id, 'Tomas');
+
+    const inherited = await addAgentToDrive({ actor: credentialActor(priya.id, null), agentPageId: priyaAgent.id, driveId: m.drives.finance.id });
+    expect(inherited).toMatchObject({ ok: true, member: { role: 'ADMIN' } });
+    expect(await addAgentToDrive({ actor: credentialActor(nina.id, null), agentPageId: ninaAgent.id, driveId: m.drives.finance.id }))
+      .toEqual({ ok: false, status: 403, error: 'You do not have access to this drive' });
+    expect(await addAgentToDrive({ actor: credentialActor(tomas.id, null), agentPageId: tomasAgent.id, driveId: m.drives.finance.id }))
+      .toEqual({ ok: false, status: 403, error: 'You do not have access to this drive' });
+    // An implicit Open member is capped to MEMBER and carries the drive's default role.
+    expect(await addAgentToDrive({ actor: credentialActor(nina.id, null), agentPageId: ninaAgent.id, driveId: m.drives.product.id }))
+      .toMatchObject({ ok: true, member: { role: 'MEMBER', customRoleId: m.productDefaultRoleId } });
+  });
+});
+

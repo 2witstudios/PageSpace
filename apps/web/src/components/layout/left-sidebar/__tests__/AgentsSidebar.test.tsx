@@ -1186,7 +1186,47 @@ describe('AgentsSidebar', () => {
       expect(await screen.findByRole('alertdialog')).toBeDefined();
     });
 
-    test('the 3-dots dropdown opens the same single item, driving the same handler', async () => {
+    /**
+     * Until this landed a session's name was written once at spawn and never
+     * again — and a session an AGENT minted passed no name at all, so it sat
+     * here as the literal fallback "Session" with no way to fix it.
+     */
+    test('"Rename" PATCHes the session and closes the dialog', async () => {
+      const user = userEvent.setup();
+      mockPatch.mockResolvedValue({});
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      await user.click(screen.getByLabelText('Session actions'));
+      await user.click(await screen.findByText('Rename'));
+
+      const dialog = await screen.findByRole('dialog');
+      const input = within(dialog).getByLabelText('Name');
+      await user.clear(input);
+      await user.type(input, 'Deploy work');
+      await user.click(within(dialog).getByRole('button', { name: 'Rename' }));
+
+      expect(mockPatch).toHaveBeenCalledWith('/api/agent-workspaces/ses-1', { name: 'Deploy work' });
+    });
+
+    test('"Rename" does not call the API when the name is unchanged', async () => {
+      // Our own guard, not the server's: a no-op rename should not spend a
+      // round trip, and a blank one would be a 400.
+      const user = userEvent.setup();
+      mockPatch.mockResolvedValue({});
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      await user.click(screen.getByLabelText('Session actions'));
+      await user.click(await screen.findByText('Rename'));
+
+      const dialog = await screen.findByRole('dialog');
+      await user.click(within(dialog).getByRole('button', { name: 'Rename' }));
+
+      expect(mockPatch).not.toHaveBeenCalled();
+    });
+
+    test('the 3-dots dropdown opens the End-session item, driving the same handler', async () => {
       const user = userEvent.setup();
       renderSidebar();
 
@@ -1529,7 +1569,11 @@ describe('AgentsSidebar', () => {
       expect(screen.queryByText('Alpha')).toBeNull();
       expect(screen.queryByText('Global Assistant')).toBeNull();
       expect(screen.queryByRole('button', { name: /^New session/i })).toBeNull();
-      expect(mockFetchWithAuth).not.toHaveBeenCalled();
+      // The roster/palette fetch (the one that would populate a dead spawn chooser) never
+      // fires for a signed-out visitor; the shell's refused prefetches (orgs, favorites)
+      // may still run — they answer 401 and surface the refusal notice above.
+      const called = mockFetchWithAuth.mock.calls.map(([url]) => String(url));
+      expect(called.some((url) => url.includes('page-agents'))).toBe(false);
     });
 
     test('spawning from a roster drive with zero sessions posts its driveId + the chosen agent + the typed name', async () => {

@@ -49,6 +49,8 @@ export interface ToolsPopoverProps {
   showMcp?: boolean;
   /** Disable all toggles */
   disabled?: boolean;
+  /** Show only the icon (and active-count badge) — for narrow toolbars */
+  iconOnly?: boolean;
   /** Additional class names */
   className?: string;
 }
@@ -81,6 +83,7 @@ export function ToolsPopover({
   onMcpServerToggle,
   showMcp = false,
   disabled = false,
+  iconOnly = false,
   className,
 }: ToolsPopoverProps) {
   // Track whether MCP servers section is expanded
@@ -110,7 +113,7 @@ export function ToolsPopover({
           )}
         >
           <Wrench className="h-4 w-4" />
-          <span className="text-xs">Tools</span>
+          {iconOnly ? <span className="sr-only">Tools</span> : <span className="text-xs">Tools</span>}
           {activeCount > 0 && (
             <Badge
               variant="secondary"

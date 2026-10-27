@@ -16,7 +16,12 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   workers: 1,
-  reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',
+  // The 'json' reporter is read back by scripts/check-spec-coverage.ts (via the
+  // spec-coverage CI job) to derive requirement-ID coverage from what actually PASSED, rather
+  // than from a static read of test source — see that script's module comment for why.
+  reporter: process.env.CI
+    ? [['list'], ['html', { open: 'never' }], ['json', { outputFile: 'test-results/playwright-results.json' }]]
+    : 'list',
   use: {
     baseURL,
     trace: 'on-first-retry',
@@ -27,8 +32,12 @@ export default defineConfig({
   //   OPENROUTER_BASE_URL=http://127.0.0.1:4998/api/v1
   //   CRON_SECRET / STRIPE_WEBHOOK_SECRET / CSRF_SECRET shared with this process's env
   // See apps/e2e/README.metering.md.
+  // The mock runs on Node (24 strips its types), not Bun: Bun 1.3.12, the repo's pinned runtime,
+  // gives a node:http server no sign at all that a client aborted a streamed POST (no 'close' on
+  // the response or the socket, writes keep succeeding), so a held stream web hung up on would
+  // count as open forever and no spec could see Stop end a generation at the model.
   webServer: {
-    command: 'bun run support/mock-server-main.ts',
+    command: 'node support/mock-server-main.ts',
     url: `http://127.0.0.1:${mockPort}/__health`,
     reuseExistingServer: !process.env.CI,
     timeout: 30_000,

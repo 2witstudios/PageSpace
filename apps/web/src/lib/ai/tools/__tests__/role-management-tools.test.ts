@@ -37,6 +37,7 @@ vi.mock('@pagespace/lib/services/drive-member-service', () => ({
 }));
 
 vi.mock('../actor-permissions', () => ({
+  toolActor: (ctx: { userId: string; accessActor?: unknown }) => ctx.accessActor ?? { via: 'credential', userId: ctx.userId, authentication: null },
   driveDeniedByAppToken: vi.fn(),
 }));
 

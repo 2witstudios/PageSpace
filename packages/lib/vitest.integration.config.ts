@@ -9,9 +9,9 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['src/**/*.integration.test.{js,ts}'],
-    // `setup.integration.ts` = `setup.ts` + an afterAll that ends the pg pool this
-    // file's module copy of @pagespace/db/db opened (see that file for the 53300).
-    setupFiles: ['./src/test/setup.integration.ts'],
+    // integration-db-teardown ends each file's @pagespace/db pool; without it the
+    // isolated files' idle connections exhaust Postgres (53300 too many clients).
+    setupFiles: ['./src/test/setup.ts', './src/test/integration-db-teardown.ts', './src/test/integration-wallet-arming.ts'],
     fileParallelism: false,
     pool: 'forks',
     poolOptions: {

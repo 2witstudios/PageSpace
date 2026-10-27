@@ -21,7 +21,7 @@ import {
   bigserial,
   type ExtraConfigColumn,
 } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
 
@@ -83,7 +83,74 @@ export type SecurityEventType =
   | 'security.brute.force.detected'
   | 'security.suspicious.activity'
   // Personal-data breach / security incident recorded (#979, Art 33/34).
-  | 'security.incident.created';
+  | 'security.incident.created'
+  // Agent-account credential brokering (L1·G1b, ADR 0004 §5). The `allowed`
+  // row is written and durably accepted BEFORE the operation runs, and the
+  // outcome row is keyed by the same grant id, so the chain carries both
+  // halves of every credentialed action. One type per AuditOutcome kind so a
+  // forensic query can separate "authorized" from "actually happened" —
+  // recording one type for both would let this log assert an execution that
+  // never occurred. `unknown` is a post-send timeout: upstream may have acted.
+  | 'credential.grant.allowed'
+  | 'credential.grant.denied'
+  | 'credential.operation.executed'
+  | 'credential.operation.failed'
+  | 'credential.operation.unknown'
+  // Org-scoped events (Spec AUD-1). details.orgId is the org dimension every query filters on; the
+  // family is defined in lib audit/org-audit.ts and catalogued by category in audit/org-audit-query-core.ts.
+  | 'org.created'
+  | 'org.updated'
+  | 'org.deleted'
+  | 'org.ownership.transferred'
+  | 'org.member.joined'
+  | 'org.member.role_changed'
+  | 'org.member.removed'
+  | 'org.member.left'
+  | 'org.invite.created'
+  | 'org.invite.resent'
+  | 'org.invite.revoked'
+  | 'org.seat.auto_add_changed'
+  | 'org.seat.quantity_changed'
+  | 'org.seat.refused'
+  | 'org.drive.created'
+  | 'org.drive.moved_in'
+  | 'org.drive.moved_out'
+  | 'org.drive.lead_changed'
+  | 'org.drive.visibility_changed'
+  | 'org.drive.join_requested'
+  | 'org.drive.join_approved'
+  | 'org.drive.join_declined'
+  | 'org.drive.join_withdrawn'
+  | 'org.wallet.allocation_changed'
+  | 'org.wallet.topped_up'
+  | 'org.wallet.donated'
+  | 'org.billing.subscription_changed'
+  | 'org.billing.pool_refilled'
+  | 'org.policy.changed'
+  | 'org.policy.suspended'
+  | 'org.policy.restored'
+  // POL-1: what a change newly forbids that is blocked where it is used rather than suspended (apps, envs,
+  // cross-drive agents, autonomous runs, models), listed so an Owner or Admin sees what the change reached.
+  | 'org.policy.blocked'
+  | 'org.guest.requested'
+  | 'org.guest.approved'
+  | 'org.guest.declined'
+  // [D-OW-28] A departing member's environment or published app handed to the drive lead's cap.
+  | 'org.compute.reattributed'
+  // A parked published app taken back to `stopped` by its creator, the drive lead or an org Owner/Admin.
+  | 'org.app.unparked'
+  // [D-OW-36] An org drive's automation disabled because its creator left; reassigned or deleted by an Owner/Admin.
+  | 'org.automation.owner_left'
+  | 'org.automation.reassigned'
+  | 'org.automation.deleted'
+  // Verified email domains and auto-join (SEC-1).
+  | 'org.domain.added'
+  | 'org.domain.verification_sent'
+  | 'org.domain.verified'
+  | 'org.domain.removed'
+  | 'org.member.auto_joined'
+  | 'org.member.auto_join_refused'
+  | 'org.member.suppression_cleared';
 
 /**
  * Single source of truth for the security_audit_log table shape (#890 Phase 1).
@@ -157,7 +224,8 @@ type SecurityAuditLogIndexColumns = Record<
   | 'eventHash'
   | 'chainSeq'
   | 'riskScore'
-  | 'sessionId',
+  | 'sessionId'
+  | 'details',
   Partial<ExtraConfigColumn>
 >;
 
@@ -182,6 +250,20 @@ const securityAuditLogIndexes = (table: SecurityAuditLogIndexColumns) => ({
   riskScoreIdx: index('idx_security_audit_risk_score').on(table.riskScore),
   // Session tracking
   sessionIdx: index('idx_security_audit_session').on(table.sessionId, table.timestamp),
+  // The org audit log (AUD-3): one org's rows, newest first by chain_seq (the keyset the log and its
+  // CSV export page by). Partial: only rows that carry an org dimension, a small slice of the log.
+  orgChainSeqIdx: index('idx_security_audit_org_chain_seq')
+    .on(sql`(${table.details} ->> 'orgId')`, table.chainSeq)
+    .where(sql`(${table.details} ->> 'orgId') IS NOT NULL`),
+  // The org audit log's time filter (AUD-1/AUD-3): an outbox-delivered event is dated by details.occurredAt, an ISO
+  // string (lexically ordered), so one org's rows in a time window are an index range.
+  orgOccurredAtIdx: index('idx_security_audit_org_occurred_at')
+    .on(sql`(${table.details} ->> 'orgId')`, sql`(${table.details} ->> 'occurredAt')`)
+    .where(sql`(${table.details} ->> 'orgId') IS NOT NULL`),
+  // At-least-once outbox delivery: the org log shows each outboxId once, looking up earlier copies by it.
+  outboxIdIdx: index('idx_security_audit_outbox_id')
+    .on(sql`(${table.details} ->> 'outboxId')`, table.chainSeq)
+    .where(sql`(${table.details} ->> 'outboxId') IS NOT NULL`),
 });
 
 export const defineSecurityAuditLogTable = (opts: { crossPlaneUserFk: boolean }) =>

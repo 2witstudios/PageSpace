@@ -10,6 +10,7 @@
  */
 
 import { accountRepository } from '@pagespace/lib/repositories/account-repository';
+import { LeaveOrganizationRefusedError } from '@pagespace/lib/organizations/leave';
 import { activityLogRepository } from '@pagespace/lib/repositories/activity-log-repository';
 import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
 import { planDriveDisposition } from '@pagespace/lib/compliance/erasure/drive-disposition';
@@ -37,12 +38,16 @@ import { isClickHouseAnalyticsInPlay } from '@pagespace/lib/observability/clickh
 import { isOnPrem, isTenantMode } from '@pagespace/lib/deployment-mode';
 import type { AccountErasureJobData } from '../types';
 import { deleteUserAvatars } from '../api/avatar';
+import { deleteSubjectAvatars } from '../api/subject-avatar';
 
 function resolveDeploymentMode(): DeploymentMode {
   if (isOnPrem()) return 'onprem';
   if (isTenantMode()) return 'tenant';
   return 'cloud';
 }
+
+/** Steps the web app runs and records at lodge time. */
+const WEB_RECORDED_STEPS: ReadonlySet<ErasureStepId> = new Set(['stripe-customer', 'revoke-apple-tokens']);
 
 const ok = (detail?: string) => ({ status: 'ok' as const, detail });
 const skipped = (detail?: string) => ({ status: 'skipped' as const, detail });
@@ -77,12 +82,21 @@ export async function runAccountErasureJob(data: AccountErasureJobData): Promise
     return;
   }
 
+  const claimed = await dataSubjectRequestRepository.claimErasure(requestId, userId);
+  if (!claimed) return;
+
   const mode = resolveDeploymentMode();
   const forceDelete = request.forceDelete;
 
   // Concrete step implementations keyed by the plan's step ids.
   const impls: Partial<Record<ErasureStepId, () => Promise<{ status: 'ok' | 'skipped'; detail?: string }>>> = {
     'drive-disposition': async () => {
+      // First destructive step: an org Owner cannot be erased (ORG-6), even by force. Refuse here,
+      // not at delete-user, or everything before it is already gone.
+      const ownedOrganizations = await accountRepository.getOwnedOrganizationNames(userId);
+      if (ownedOrganizations.length > 0) {
+        throw new Error(`${ERASURE_BLOCKED_PREFIX}: owns organizations ${ownedOrganizations.join(', ')}`);
+      }
       const owned = await accountRepository.getOwnedDrives(userId);
       const withCounts = await Promise.all(
         owned.map(async (d) => ({
@@ -96,6 +110,9 @@ export async function runAccountErasureJob(data: AccountErasureJobData): Promise
         throw new Error(`${ERASURE_BLOCKED_PREFIX}: ${plan.multiMemberDriveNames.join(', ')}`);
       }
       for (const driveId of plan.drivesToDelete) {
+        // The drive's image folder first: storage is not in the cascade, and a storage failure then
+        // fails the step while the drive still exists for the retry to find.
+        await deleteSubjectAvatars('drive', driveId);
         await accountRepository.deleteDrive(driveId);
       }
       return ok(
@@ -189,13 +206,24 @@ export async function runAccountErasureJob(data: AccountErasureJobData): Promise
     },
 
     'delete-user': async () => {
-      await accountRepository.deleteUser(userId);
+      try {
+        await accountRepository.deleteUser(userId);
+      } catch (error) {
+        // Defense against legacy/direct database writes bypassing retirement admission.
+        if (error instanceof LeaveOrganizationRefusedError) {
+          throw new Error(`${ERASURE_BLOCKED_PREFIX}: ${error.message}`);
+        }
+        throw error;
+      }
       return ok();
     },
   };
 
   // Stripe lives in the web app (its SDK isn't bundled here); the web records
   // that step on the DSR row at enqueue time, so the durable job skips it.
+  // revoke-apple-tokens is the same: this process holds no ENCRYPTION_KEY to
+  // decrypt the stored Apple token, so the web revokes before enqueueing and the
+  // users cascade on delete-user removes any row left behind.
   const steps: RunnableStep[] = buildErasurePlan({
     deploymentMode: mode,
     // With CH configured at all (flag-independent), purge-monitoring becomes
@@ -203,7 +231,7 @@ export async function runAccountErasureJob(data: AccountErasureJobData): Promise
     // with the subject's error rows retained forever (error_logs has no TTL).
     clickHouseInPlay: isClickHouseAnalyticsInPlay(),
   })
-    .filter((step) => step.id !== 'stripe-customer')
+    .filter((step) => !WEB_RECORDED_STEPS.has(step.id))
     .map((step) => ({
       id: step.id,
       fatal: step.fatal,

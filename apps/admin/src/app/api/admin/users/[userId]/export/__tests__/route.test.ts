@@ -29,6 +29,8 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
+import { OPERATOR_EXPORT_GATE } from '@pagespace/lib/compliance/export/export-sign-in-gate';
+
 const mockCollectAllUserData = vi.fn();
 vi.mock('@pagespace/lib/compliance/export/gdpr-export', () => ({
   collectAllUserData: (...args: unknown[]) => mockCollectAllUserData(...args),
@@ -101,6 +103,8 @@ describe('/api/admin/users/[userId]/export', () => {
     expect(body.tasks).toEqual([]);
     expect(body.exportedAt).toBeDefined();
     expect(body.exportedBy).toBe('admin-123');
+    // The operator presents no subject credential: the complete bundle, nothing withheld (SEC-2/3).
+    expect(mockCollectAllUserData).toHaveBeenCalledWith(expect.anything(), 'user-1', OPERATOR_EXPORT_GATE);
   });
 
   it('GET_withNonexistentUser_returns404', async () => {

@@ -1,6 +1,8 @@
-import { describe, it, vi } from 'vitest';
+import { describe, it, vi, expect } from 'vitest';
 import { assert } from '@/stores/__tests__/riteway';
 
+const mockOrgLapsed = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/organizations/status', () => ({ isOrgLapsedForDrive: mockOrgLapsed }));
 vi.mock('@pagespace/db/db', () => ({ db: {} }));
 vi.mock('@pagespace/db/schema/monitoring', () => ({ activityLogs: { id: 'id', pageId: 'pageId', driveId: 'driveId', timestamp: 'timestamp', userId: 'userId', operation: 'operation', isAiGenerated: 'isAiGenerated', resourceType: 'resourceType' } }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'id', subscriptionTier: 'subscriptionTier' } }));
@@ -71,5 +73,18 @@ describe('getPageVersionHistory (DI shell)', () => {
   it('returns an empty history on a DB error rather than throwing', async () => {
     const result = await getPageVersionHistory(depsWith(throwingDb), 'page_1', 'u');
     assert({ given: 'a failing database', should: 'return an empty history', actual: result, expected: { activities: [], total: 0 } });
+  });
+});
+
+
+describe('organization history retention', () => {
+  it.each([false, true])('WAL-9 (partial) resolves org history independently of the viewer plan (lapsed=%s)', async (lapsed) => {
+    mockOrgLapsed.mockResolvedValue(lapsed);
+    const db = {
+      query: { drives: { findFirst: vi.fn().mockResolvedValue({ orgId: 'org' }) }, pages: { findFirst: vi.fn().mockResolvedValue({ driveId: 'drive' }) } },
+      select: () => ({ from: () => ({ where: () => ({ limit: () => Promise.resolve([{ subscriptionTier: 'pro' }]) }) }) }),
+    };
+    expect(await getUserRetentionDays(depsWith(db), 'viewer', { driveId: 'drive' })).toBe(lapsed ? 7 : -1);
+    expect(await getUserRetentionDays(depsWith(db), 'viewer', { pageId: 'page' })).toBe(lapsed ? 7 : -1);
   });
 });

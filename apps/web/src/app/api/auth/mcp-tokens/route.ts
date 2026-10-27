@@ -8,6 +8,7 @@ import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activi
 import { generateToken } from '@pagespace/lib/auth/token-utils';
 import { validateDriveScopeAccess } from '@pagespace/lib/services/drive-service';
 import { rejectScopedOAuth } from './scope-guard';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 // 'oauth' lets the pagespace CLI (which never holds a session cookie —
 // `pagespace keys list` authenticates with an OAuth access token from
@@ -51,12 +52,18 @@ export async function POST(req: NextRequest) {
     const uniqueDriveScopes = [...new Map(driveScopes.map(d => [d.id, d])).values()];
 
     if (uniqueDriveScopes.length > 0) {
-      const { invalidDriveIds, unauthorizedRoles, invalidCustomRoles, unauthorizedCustomRoles } =
-        await validateDriveScopeAccess(uniqueDriveScopes, userId);
+      const { invalidDriveIds, unauthorizedRoles, invalidCustomRoles, unauthorizedCustomRoles, explicitRoleWithoutMembership } =
+        await validateDriveScopeAccess(uniqueDriveScopes, actorFromAuth(auth));
 
       if (invalidDriveIds.length > 0) {
         return NextResponse.json(
           { error: 'You do not have access to these drives: ' + invalidDriveIds.join(', ') },
+          { status: 403 }
+        );
+      }
+      if (explicitRoleWithoutMembership.length > 0) {
+        return NextResponse.json(
+          { error: 'You reach these organization drives through your organization role, so a key can only inherit your access there (leave the role unset): ' + explicitRoleWithoutMembership.join(', ') },
           { status: 403 }
         );
       }
@@ -87,6 +94,8 @@ export async function POST(req: NextRequest) {
 
     // Use transaction to ensure token and drive scopes are created atomically
     const newToken = await sessionRepository.createMcpTokenWithDriveScopes({
+      authenticatedAt: auth.authentication ? new Date(auth.authentication.authenticatedAtMs) : null,
+      authenticationAssurance: auth.authentication?.assurance ?? null,
       userId,
       tokenHash,
       tokenPrefix,

@@ -24,6 +24,8 @@ dist/
 **/dist/
 .turbo/
 **/.turbo/
+# Marketing hero variants: the image build encodes its own, never a local copy
+apps/marketing/public/_marketing/hero/
 
 # Internal package builds are needed by some Docker builds (e.g. Next.js subpath exports)
 !packages/**/dist/

@@ -22,7 +22,7 @@ import {
 } from '../router-core';
 import { assert } from '../../../__tests__/riteway';
 
-const APEX = 'pagespace.app';
+const APEX = 'pagespace.io';
 
 /** A servable, solvent, metered app — the baseline every case perturbs. */
 function app(overrides: Partial<RoutableApp> = {}): RoutableApp {
@@ -78,6 +78,13 @@ describe('decideAppRoute — the balance gate is the wake gate', () => {
 
 describe('decideAppRoute — status precedes the live balance read', () => {
   assert({
+    given: '[D-OW-28] an app parked because its publisher used their allowance of the org\'s credits',
+    should: 'say so (member_cap), not that a balance ran out — the pool is funded',
+    actual: route(app({ status: 'parked', parkedForMemberCap: true }), true),
+    expected: { kind: 'parked', reason: 'member_cap', driveId: 'drive1', envId: 'env1' },
+  });
+
+  assert({
     given: 'a parked app whose payer has since topped up',
     should: 'stay parked — un-parking belongs to the cron, not to a router that never writes',
     actual: route(app({ status: 'parked' }), true),
@@ -124,29 +131,29 @@ describe('parseAppHost — only a single label under the apex is an app', () => 
   assert({
     given: 'a single label under the apex',
     should: 'resolve to that subdomain',
-    actual: parseAppHost('acme.pagespace.app', APEX),
+    actual: parseAppHost('acme.pagespace.io', APEX),
     expected: { kind: 'subdomain', subdomain: 'acme' },
   });
 
   assert({
     given: 'a NESTED label under the apex',
     should: 'refuse — the wildcard cert covers one level, and evil.acme.* must not present as an app',
-    actual: parseAppHost('evil.acme.pagespace.app', APEX),
-    expected: { kind: 'foreign', hostname: 'evil.acme.pagespace.app' },
+    actual: parseAppHost('evil.acme.pagespace.io', APEX),
+    expected: { kind: 'foreign', hostname: 'evil.acme.pagespace.io' },
   });
 
   assert({
     given: 'the apex itself',
     should: 'be its own outcome, not an app named ""',
-    actual: parseAppHost('pagespace.app', APEX),
+    actual: parseAppHost('pagespace.io', APEX),
     expected: { kind: 'apex' },
   });
 
   assert({
     given: 'a hostname that merely ENDS with the apex text but is not under it',
-    should: 'be foreign — notpagespace.app is a different registrable domain',
-    actual: parseAppHost('notpagespace.app', APEX),
-    expected: { kind: 'foreign', hostname: 'notpagespace.app' },
+    should: 'be foreign — notpagespace.io is a different registrable domain',
+    actual: parseAppHost('notpagespace.io', APEX),
+    expected: { kind: 'foreign', hostname: 'notpagespace.io' },
   });
 
   assert({
@@ -159,25 +166,25 @@ describe('parseAppHost — only a single label under the apex is an app', () => 
   assert({
     given: 'an EMPTY apex (misconfiguration)',
     should: 'treat the host as foreign rather than making every hostname an app',
-    actual: parseAppHost('acme.pagespace.app', '').kind,
+    actual: parseAppHost('acme.pagespace.io', '').kind,
     expected: 'foreign',
   });
 
   assert({
     given: 'a label at the 63-character DNS limit',
     should: 'be accepted',
-    actual: parseAppHost(`${'a'.repeat(63)}.pagespace.app`, APEX).kind,
+    actual: parseAppHost(`${'a'.repeat(63)}.pagespace.io`, APEX).kind,
     expected: 'subdomain',
   });
 
   assert({
     given: 'a label one character past the DNS limit',
     should: 'be refused',
-    actual: parseAppHost(`${'a'.repeat(64)}.pagespace.app`, APEX).kind,
+    actual: parseAppHost(`${'a'.repeat(64)}.pagespace.io`, APEX).kind,
     expected: 'foreign',
   });
 
-  it.each(['-lead.pagespace.app', 'trail-.pagespace.app', 'under_score.pagespace.app'])(
+  it.each(['-lead.pagespace.io', 'trail-.pagespace.io', 'under_score.pagespace.io'])(
     'given the invalid label %s, should be foreign',
     (host) => {
       expect(parseAppHost(host, APEX).kind).toBe('foreign');
@@ -187,14 +194,14 @@ describe('parseAppHost — only a single label under the apex is an app', () => 
   assert({
     given: 'an uppercased host with a port and a trailing dot',
     should: 'normalize to the same subdomain',
-    actual: parseAppHost('ACME.PageSpace.app.:8080', APEX),
+    actual: parseAppHost('ACME.PageSpace.io.:8080', APEX),
     expected: { kind: 'subdomain', subdomain: 'acme' },
   });
 
   assert({
     given: 'an apex configured with a leading wildcard and trailing dot',
     should: 'still match, since resolvePublishedAppsApex normalizes both',
-    actual: parseAppHost('acme.pagespace.app', 'PageSpace.app'),
+    actual: parseAppHost('acme.pagespace.io', 'PageSpace.io'),
     expected: { kind: 'subdomain', subdomain: 'acme' },
   });
 });

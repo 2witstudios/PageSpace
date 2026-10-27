@@ -13,6 +13,7 @@ import { taskManagementTools } from '../tools/task-management-tools';
 import { agentTools } from '../tools/agent-tools';
 import { agentCommunicationTools } from '../tools/agent-communication-tools';
 import { webSearchTools } from '../tools/web-search-tools';
+import { httpRequestTools } from '../tools/http-request-tools';
 import { activityTools } from '../tools/activity-tools';
 import { calendarReadTools } from '../tools/calendar-read-tools';
 import { calendarWriteTools } from '../tools/calendar-write-tools';
@@ -29,6 +30,7 @@ import { planTools } from '../tools/plan-tools';
 import { buildSandboxTools } from '../tools/sandbox-tools-runtime';
 import { buildGitSandboxTools } from '../tools/sandbox-git-tools-runtime';
 import { buildSessionTools } from '../tools/session-tools-runtime';
+import { buildBrowserTools } from '../tools/browser-tools-runtime';
 import { SANDBOX_COMPUTE_TOOL_NAMES } from './tool-filtering';
 import { CORE_TOOL_NAMES } from './stub-tools';
 
@@ -62,6 +64,8 @@ const TOOL_MODULES = {
   agents: agentTools,
   agentCommunication: agentCommunicationTools,
   web: webSearchTools,
+  // Agent accounts (G2): filtered out at request time unless the credential plane is configured.
+  accounts: httpRequestTools,
   activity: activityTools,
   calendarRead: calendarReadTools,
   calendarWrite: calendarWriteTools,
@@ -138,11 +142,18 @@ export function buildPageSpaceTools({
   sandboxToolsFactory = buildSandboxTools,
   sandboxGitToolsFactory = buildGitSandboxTools,
   sessionToolsFactory = buildSessionTools,
+  browserToolsFactory = buildBrowserTools,
 }: {
   codeExecutionEnabled?: boolean;
   sandboxToolsFactory?: () => Record<string, Tool>;
   sandboxGitToolsFactory?: () => Record<string, Tool>;
   sessionToolsFactory?: () => Record<string, Tool>;
+  /**
+   * The browser tools (G6a) — a browser session is a billable machine, so they
+   * ride the same kill switch as the sandbox, and the factory returns none
+   * unless a browser substrate and control key are configured.
+   */
+  browserToolsFactory?: () => Record<string, Tool>;
 } = {}) {
   const sessionTools = sessionToolsFactory();
   if (!codeExecutionEnabled) {
@@ -151,7 +162,7 @@ export function buildPageSpaceTools({
     );
     return { ...baseTools, ...chatOnlySessionTools };
   }
-  return { ...baseTools, ...sandboxToolsFactory(), ...sandboxGitToolsFactory(), ...sessionTools };
+  return { ...baseTools, ...sandboxToolsFactory(), ...sandboxGitToolsFactory(), ...browserToolsFactory(), ...sessionTools };
 }
 
 export const pageSpaceTools = buildPageSpaceTools();

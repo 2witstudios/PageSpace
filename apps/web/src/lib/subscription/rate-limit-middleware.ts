@@ -3,7 +3,7 @@ import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import { isModelAllowedForTier } from '@/lib/ai/core/ai-providers-config';
 
 /** Subscription tiers that have access to paid features (voice mode, etc.). */
-export const PAID_TIERS = new Set(['pro', 'founder', 'business']);
+export const PAID_TIERS = new Set(['pro', 'business']);
 
 /**
  * Whether the user's subscription tier is barred from the requested model.
@@ -27,7 +27,7 @@ export function createSubscriptionRequiredResponse(): NextResponse {
   return NextResponse.json(
     {
       error: 'Subscription required',
-      message: 'This model is available on paid plans. Upgrade to access the full model catalog.',
+      message: 'This model is available on paid plans.',
       upgradeUrl: '/settings/plan',
     },
     { status: 403 }

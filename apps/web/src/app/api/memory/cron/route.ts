@@ -26,7 +26,14 @@
  *       verbatim evidence of ones settled 90+ days ago. Runs on EVERY exit
  *       path, including the failure ones.
  *
- * Paying users only — gated on MEMORY_PAYING_TIERS, the same constant the
+ * Credits: every discovery, evaluation and compaction model call reserves the
+ * user's own credits BEFORE it runs (see @/lib/memory/memory-credit), and
+ * settles that one hold once through AIMonitoring.trackUsage. A refused step
+ * runs no model, charges nothing and writes nothing; the user's pass carries on
+ * without it (candidates stay pending, pages stay as they are) and the refusal
+ * is reported in `creditSkipped`. One user's refusal never touches another's.
+ *
+ * Paying personal users only — gated on the canonical personal tiers the
  * settings UI uses, so the two cannot disagree about who gets Memory.
  *
  * Security: HMAC-signed cron requests via cron-curl (X-Cron-Timestamp/Nonce/Signature)
@@ -41,7 +48,9 @@ import { sessions } from '@pagespace/db/schema/sessions';
 import { userPersonalization } from '@pagespace/db/schema/personalization';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
-import { MEMORY_PAYING_TIERS } from '@pagespace/lib/billing/automation-preferences';
+import { personalTiers } from '@pagespace/lib/billing/subscription-tiers';
+import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
+import { isMemoryAvailable } from '@pagespace/lib/billing/automation-preferences';
 import { runDiscoveryPasses } from '@/lib/memory/discovery-service';
 import {
   getCurrentPersonalizationPages,
@@ -49,15 +58,18 @@ import {
   applyIntegrationDecisions,
 } from '@/lib/memory/integration-service';
 import { checkAndCompactIfNeeded } from '@/lib/memory/compaction-service';
+import type { MemoryGateRefusal } from '@/lib/memory/memory-credit';
 import {
   upsertCandidates,
   findPromotableCandidates,
   markCandidatesPromoted,
+  recordMemoryOrgIds,
   markCandidatesRejected,
   pruneStaleCandidates,
   redactSettledEvidence,
   type MemoryField,
 } from '@/lib/memory/candidate-service';
+import { errorLogFields } from '@pagespace/lib/logging/error-cause';
 
 /**
  * Reuses the constant the settings UI gates on rather than restating it.
@@ -67,7 +79,7 @@ import {
  * have anything learned, or the reverse — learning for users the product says
  * cannot have it. Neither failure is visible from either side alone.
  */
-const PAYING_TIERS = [...MEMORY_PAYING_TIERS];
+const memoryEligiblePersonalTiers = () => personalTiers().filter((tier) => isMemoryAvailable(resolvePersonalCapabilityTier(tier)));
 
 const DELAY_BETWEEN_USERS_MS = 1000;
 
@@ -93,7 +105,7 @@ export async function POST(request: Request) {
           eq(sessions.type, 'user'),
           isNull(sessions.revokedAt),
           gte(sessions.lastUsedAt, sevenDaysAgo),
-          inArray(users.subscriptionTier, PAYING_TIERS)
+          inArray(users.subscriptionTier, memoryEligiblePersonalTiers())
         )
       )
       .groupBy(sessions.userId, users.subscriptionTier);
@@ -141,6 +153,7 @@ export async function POST(request: Request) {
       compacted: 0,
       pruned: 0,
       errors: [] as string[],
+      creditSkipped: [] as string[],
     };
 
     for (const userId of usersToProcess) {
@@ -153,15 +166,17 @@ export async function POST(request: Request) {
         if (userResult.updated) results.updated++;
         if (userResult.compacted) results.compacted++;
         results.pruned += userResult.pruned;
+        results.creditSkipped.push(
+          ...userResult.creditRefusals.map((r) => `${userId}: ${r.step}: ${r.reason}`)
+        );
 
         if (usersToProcess.indexOf(userId) < usersToProcess.length - 1) {
           await new Promise((resolve) => setTimeout(resolve, DELAY_BETWEEN_USERS_MS));
         }
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
-        loggers.api.error(`Memory cron: Error processing user ${userId}`, {
-          error: errorMsg,
-        });
+        // The cause chain too: Drizzle wraps the driver error (e.g. a Postgres FATAL) on .cause.
+        loggers.api.error(`Memory cron: Error processing user ${userId}`, errorLogFields(error));
         results.errors.push(`${userId}: ${errorMsg}`);
       }
     }
@@ -174,12 +189,14 @@ export async function POST(request: Request) {
       compacted: results.compacted,
       pruned: results.pruned,
       errors: results.errors.length,
+      creditSkipped: results.creditSkipped.length,
     });
 
     return NextResponse.json({
       message: 'Memory processing complete',
       ...results,
       errors: results.errors.length > 0 ? results.errors : undefined,
+      creditSkipped: results.creditSkipped.length > 0 ? results.creditSkipped : undefined,
     });
   } catch (error) {
     loggers.api.error('Memory cron: Fatal error', { error });
@@ -206,6 +223,9 @@ async function runRetention(userId: string): Promise<number> {
   return pruned;
 }
 
+/** A memory step the credit gate refused, and why. */
+type CreditRefusal = { step: 'discovery' | 'evaluation' | 'compaction'; reason: MemoryGateRefusal };
+
 async function processUserMemory(
   userId: string
 ): Promise<{
@@ -214,9 +234,16 @@ async function processUserMemory(
   updated: boolean;
   compacted: boolean;
   pruned: number;
+  creditRefusals: CreditRefusal[];
 }> {
-  // Step 1: Run discovery passes
+  const creditRefusals: CreditRefusal[] = [];
+
+  // Step 1: Run discovery passes. A refused pass returns no claims, so it
+  // stages nothing; every later model call reserves for itself and refuses too.
   const discoveryResult = await runDiscoveryPasses(userId);
+  if (discoveryResult.creditRefusal) {
+    creditRefusals.push({ step: 'discovery', reason: discoveryResult.creditRefusal });
+  }
   const discovered = discoveryResult.claims.length;
 
   // Step 2: Stage what was discovered. An empty discovery is NOT a reason to
@@ -224,7 +251,7 @@ async function processUserMemory(
   // outage are already corroborated and still deserve evaluation, and a quiet
   // week would otherwise strand them indefinitely.
   if (discovered > 0) {
-    await upsertCandidates(userId, discoveryResult.claims);
+    await upsertCandidates(userId, discoveryResult.claims, discoveryResult.orgIds);
   }
 
   // Step 3: Find candidates that have cleared the corroboration bar
@@ -239,6 +266,7 @@ async function processUserMemory(
       updated: false,
       compacted: false,
       pruned,
+      creditRefusals,
     };
   }
 
@@ -252,6 +280,9 @@ async function processUserMemory(
   // unparseable response). Leave every candidate pending — settling them here
   // would permanently retire a user's whole ready set over a transient outage.
   if (!evaluation.ok) {
+    if (evaluation.creditRefusal) {
+      creditRefusals.push({ step: 'evaluation', reason: evaluation.creditRefusal });
+    }
     loggers.api.warn('Memory cron: evaluation failed, candidates left pending', {
       userId,
       reason: evaluation.reason,
@@ -264,7 +295,15 @@ async function processUserMemory(
       updated: false,
       compacted: false,
       pruned,
+      creditRefusals,
     };
+  }
+
+  // SEC-2/3 (D-OW-62): the evaluator saw every ready candidate, so any page it rewrites may restate any of them. The
+  // memory takes on all their orgs BEFORE a page is written, so no reader is ever served restated content its org
+  // has not yet been recorded against (a write that then fails only over-attributes, which withholds, never leaks).
+  if (Object.keys(evaluation.updates).length > 0) {
+    await recordMemoryOrgIds(userId, promotable.flatMap((candidate) => candidate.orgIds));
   }
 
   // Step 6: Apply updates with guards
@@ -318,6 +357,9 @@ async function processUserMemory(
   if (applyResult.updated) {
     const compactionResult = await checkAndCompactIfNeeded(userId);
     compacted = compactionResult.compacted;
+    if (compactionResult.creditRefusal) {
+      creditRefusals.push({ step: 'compaction', reason: compactionResult.creditRefusal });
+    }
   }
 
   // Step 8: Prune stale candidates
@@ -346,6 +388,7 @@ async function processUserMemory(
     updated: applyResult.updated,
     compacted,
     pruned,
+    creditRefusals,
   };
 }
 

@@ -6,6 +6,7 @@ import { GoogleOneTap } from "@/components/GoogleOneTap";
 import { SearchDialog } from "@/components/SearchDialog";
 import { siteMetadata } from "@/lib/metadata";
 import { JsonLd, organizationSchema, websiteSchema } from "@/lib/schema";
+import { THEME_COLORS } from "@/lib/theme-color";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -32,9 +33,12 @@ export const metadata = siteMetadata;
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  // Dark is the default theme regardless of OS preference, so one value
-  // matching the dark canvas (oklch 0.11 0 0).
-  themeColor: "#040404",
+  // The theme follows the OS by default, so the chrome colour does too. A theme
+  // picked with the toggle is synced over these tags by ThemeColorSync.
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: THEME_COLORS.light },
+    { media: "(prefers-color-scheme: dark)", color: THEME_COLORS.dark },
+  ],
 };
 
 export default function RootLayout({
@@ -52,7 +56,7 @@ export default function RootLayout({
       >
         <ThemeProvider
           attribute="class"
-          defaultTheme="dark"
+          defaultTheme="system"
           enableSystem
           disableTransitionOnChange
         >

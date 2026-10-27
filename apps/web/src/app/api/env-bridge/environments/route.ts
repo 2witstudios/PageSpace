@@ -22,6 +22,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isLocalEnvsEnabled } from '@pagespace/lib/services/drive-envs/local-envs-enabled';
 import { listGlobalAssistantEnvironments } from '@/lib/drive-envs/drive-envs-runtime';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 
@@ -31,7 +32,7 @@ export async function GET(request: Request) {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
 
-    const environments = await listGlobalAssistantEnvironments(auth.userId);
+    const environments = await listGlobalAssistantEnvironments(actorFromAuth(auth));
     auditRequest(request, { eventType: 'data.read', userId: auth.userId, resourceType: 'drive_env', resourceId: auth.userId, details: { route: 'env-bridge/environments', operation: 'list', rows: environments.length } });
     return NextResponse.json({ environments });
   } catch (error) {

@@ -4,11 +4,14 @@ The dev-server preview ships **dark**. Every layer fails closed on a missing
 variable, so a half-configured deployment shows nothing rather than something
 wrong. This is the list of what has to be true, in order.
 
-Preview apex: **`pagespace.io`** — registered, on our own DNS, and chosen
-because it shares no registrable domain with `pagespace.ai`. A dev server's
-own JavaScript running on `preview.pagespace.ai` could set `Domain=.pagespace.ai` cookies and toss
-cookies at the dashboard; a separate registrable domain makes that
-impossible rather than merely discouraged.
+Preview apex: **`pagespace.live`** — registered, on our own DNS, and chosen
+because it shares no registrable domain with `pagespace.ai` (the dashboard) or
+`pagespace.io` (published apps). A dev server's own JavaScript on
+`preview.pagespace.ai` could set `Domain=.pagespace.ai` cookies and toss cookies
+at the dashboard; a published app on `acme.pagespace.io` could toss
+`Domain=.pagespace.io` cookies at every preview origin. Separate registrable
+domains make both impossible without relying on the Public Suffix List.
+(Previews ran on `pagespace.io` until 2026-09-14, when app hosting claimed it.)
 
 ## 1. The edge
 
@@ -26,7 +29,7 @@ headers — `X-Frame-Options: DENY` would break the pane, and the preview
 response carries its own `frame-ancestors`.
 
 Verified with a real Caddy binary, not by reading: `caddy validate` passes,
-and `caddy adapt` resolves the matcher to `*.preview.pagespace.io` when the
+and `caddy adapt` resolves the matcher to `*.preview.pagespace.live` when the
 apex is set and to the unmatchable `*.preview.` when it is not. Both preview
 routes land ahead of every host-less catch-all, and every block that sets
 `X-Frame-Options: DENY` is host-matched to `pagespace.ai`, so a preview
@@ -53,7 +56,7 @@ apps as of `PageSpace-Deploy` #27:
 ```toml
 # fly/fly.proxy.toml, fly/fly.web.toml, fly/fly.realtime.toml
 [env]
-  DEV_PREVIEW_APEX = "pagespace.io"
+  DEV_PREVIEW_APEX = "pagespace.live"
   # DEV_PREVIEW_ENABLED = "true"   # web + realtime only; uncomment to go live
 ```
 
@@ -95,9 +98,9 @@ live preview cookie at once (which self-heals through the re-mint path).
 
 ```
 # wildcard A/AAAA (or CNAME) record
-*.preview.pagespace.io  →  the proxy app
+*.preview.pagespace.live  →  the proxy app
 
-fly certs add "*.preview.pagespace.io" -a pagespace-proxy
+fly certs add "*.preview.pagespace.live" -a pagespace-proxy
 ```
 
 A wildcard certificate is DNS-01 only, so delegate `_acme-challenge` per Fly's
@@ -207,7 +210,7 @@ ground:
 
 1. Open an agent session; start a real Vite dev server on 5173.
 2. The affordance appears **on its own** naming `:5173` — no page action.
-3. Preview → the app renders through `https://ws-<id>.preview.pagespace.io/`.
+3. Preview → the app renders through `https://ws-<id>.preview.pagespace.live/`.
 4. Edit a source file → the frame hot-updates **without a reload**.
 5. Confirm the `allowedHosts` failure first, then that `server.allowedHosts`
    fixes it — so we know what a user hits, not just that it can work.

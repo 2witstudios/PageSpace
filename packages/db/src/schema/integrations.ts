@@ -21,6 +21,7 @@ import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
 import { drives, pages } from './core';
+import type { SuspensionKind } from './organizations';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ENUMS
@@ -134,6 +135,9 @@ export const integrationConnections = pgTable(
     // OAuth state for CSRF protection during auth flow
     oauthState: text('oauth_state'),
 
+    // Set by the org's integrations allowlist (POL-1) on a drive connection; the row stays and is not used while set.
+    suspendedByPolicy: text('suspended_by_policy').$type<SuspensionKind>(),
+
     // Who connected
     connectedBy: text('connected_by').references(() => users.id, { onDelete: 'set null' }),
     connectedAt: timestamp('connected_at', { mode: 'date' }),
@@ -152,6 +156,7 @@ export const integrationConnections = pgTable(
     providerIdx: index('integration_connections_provider_id_idx').on(table.providerId),
     userIdx: index('integration_connections_user_id_idx').on(table.userId),
     driveIdx: index('integration_connections_drive_id_idx').on(table.driveId),
+    suspendedIdx: index('integration_connections_suspended_by_policy_idx').on(table.driveId).where(sql`${table.suspendedByPolicy} IS NOT NULL`),
     userProviderUnique: unique('integration_connections_user_provider').on(
       table.userId,
       table.providerId

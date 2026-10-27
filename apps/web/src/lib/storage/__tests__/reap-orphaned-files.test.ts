@@ -5,7 +5,9 @@ const {
   mockDeleteRecords,
   mockCreateSystemFileDeleteToken,
   mockUpdateStorageUsage,
+  mockFindDriveBillingFactsMap,
 } = vi.hoisted(() => ({
+  mockFindDriveBillingFactsMap: vi.fn(),
   mockFindOrphans: vi.fn(),
   mockDeleteRecords: vi.fn(),
   mockCreateSystemFileDeleteToken: vi.fn(),
@@ -23,17 +25,22 @@ vi.mock('@pagespace/lib/services/validated-service-token', () => ({
 
 vi.mock('@pagespace/lib/services/storage-limits', () => ({
   updateStorageUsage: mockUpdateStorageUsage,
-  // Real (pure) impl so the reaper's credit rules are exercised, not stubbed.
+  findDriveBillingFactsMap: mockFindDriveBillingFactsMap,
+  // Mirrors the pure impl so the reaper's credit rules are exercised, not stubbed.
   computeStorageCreditOnUnlink: (input: {
     createdBy: string | null;
+    drive: { ownerId: string; orgId: string | null } | null;
     sizeBytes: number | string | null;
     deletedByThisCall: boolean;
     hadPhysicalBlob: boolean;
   }) => {
-    if (!input.deletedByThisCall || !input.hadPhysicalBlob || !input.createdBy) return null;
+    if (!input.deletedByThisCall || !input.hadPhysicalBlob) return null;
+    if (input.drive?.orgId) return null;
+    const payer = input.drive ? input.drive.ownerId : input.createdBy;
+    if (!payer) return null;
     const n = typeof input.sizeBytes === 'string' ? Number(input.sizeBytes) : (input.sizeBytes ?? 0);
     if (!Number.isFinite(n) || n <= 0) return null;
-    return { userId: input.createdBy, deltaBytes: -Math.floor(n) };
+    return { userId: payer, deltaBytes: -Math.floor(n) };
   },
 }));
 
@@ -56,6 +63,7 @@ describe('reapOrphanedFiles', () => {
     mockDeleteRecords.mockResolvedValue([]);
     mockCreateSystemFileDeleteToken.mockResolvedValue({ token: 'sys-tok' });
     mockUpdateStorageUsage.mockResolvedValue(undefined);
+    mockFindDriveBillingFactsMap.mockResolvedValue(new Map([['d1', { ownerId: 'u1', orgId: null }]]));
   });
 
   it('forwards an explicit fileIds list to findOrphanedFileRecords (scoped reap)', async () => {
@@ -91,6 +99,21 @@ describe('reapOrphanedFiles', () => {
 
     expect(mockUpdateStorageUsage).toHaveBeenCalledWith('u1', -2048, expect.objectContaining({ eventType: 'delete' }));
     expect(result.physicalFilesDeleted).toBe(1);
+    expect(result.dbRecordsDeleted).toBe(1);
+
+    vi.unstubAllGlobals();
+  });
+
+  it('WAL-9 (partial) does NOT credit the uploader for a reaped file in an org drive: the org was billed, not them', async () => {
+    mockFindOrphans.mockResolvedValue([orphan({ id: 'f1', driveId: 'org-drive', sizeBytes: 2048, createdBy: 'u1' })]);
+    mockDeleteRecords.mockResolvedValue(['f1']);
+    mockFindDriveBillingFactsMap.mockResolvedValue(new Map([['org-drive', { ownerId: 'lead-1', orgId: 'org-northwind' }]]));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 200 })));
+
+    const result = await reapOrphanedFiles(db, { fileIds: ['f1'] });
+
+    expect(mockFindDriveBillingFactsMap).toHaveBeenCalledWith(['org-drive']);
+    expect(mockUpdateStorageUsage).not.toHaveBeenCalled();
     expect(result.dbRecordsDeleted).toBe(1);
 
     vi.unstubAllGlobals();

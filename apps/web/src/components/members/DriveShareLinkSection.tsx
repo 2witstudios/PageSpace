@@ -43,7 +43,8 @@ function linkLabel(link: DriveLink): { text: string; classes: string } {
   };
 }
 
-export function DriveShareLinkSection({ driveId }: { driveId: string }) {
+/** `lapsed` ([D-OW-33]): the drive's org is unpaid, so no new link; existing links can still be revoked. */
+export function DriveShareLinkSection({ driveId, lapsed = false }: { driveId: string; lapsed?: boolean }) {
   const {
     links,
     customRoles,
@@ -176,7 +177,7 @@ export function DriveShareLinkSection({ driveId }: { driveId: string }) {
               variant="outline"
               size="sm"
               onClick={handleGenerate}
-              disabled={isGenerating}
+              disabled={isGenerating || lapsed}
               className="flex-1"
             >
               <Link2 className="mr-1.5 h-3.5 w-3.5" />

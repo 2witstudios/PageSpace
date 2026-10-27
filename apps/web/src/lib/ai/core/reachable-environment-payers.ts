@@ -35,6 +35,7 @@
  */
 
 import type { SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /** What this needs from the world, injected so it is testable without a database. */
 /**
@@ -45,17 +46,17 @@ import type { SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers
  */
 interface ReachableEnvironmentPayerDeps {
 
-  /** The environments this user may reach — already filtered for access AND visibility. */
-  listEnvironments: (userId: string) => Promise<readonly { driveId: string }[]>;
+  /** The environments this actor may reach — already filtered for access AND visibility. */
+  listEnvironments: (actor: AccessActor) => Promise<readonly { driveId: string }[]>;
   /** A drive's payer and their tier; `null` when the drive has vanished. */
   resolvePayer: (driveId: string) => Promise<{ payerId: string; tier: SubscriptionTier } | null>;
 }
 
 /** The production wiring, imported lazily so the chat pipeline loads neither store at module load. */
 const defaultReachableEnvironmentPayerDeps: ReachableEnvironmentPayerDeps = {
-  listEnvironments: async (userId) => {
+  listEnvironments: async (actor) => {
     const { listGlobalAssistantEnvironments } = await import('@/lib/drive-envs/drive-envs-runtime');
-    return listGlobalAssistantEnvironments(userId);
+    return listGlobalAssistantEnvironments(actor);
   },
   resolvePayer: async (driveId) => {
     const { resolveDriveEnvPayer } = await import('@/lib/drive-envs/drive-envs-runtime');
@@ -71,13 +72,13 @@ const defaultReachableEnvironmentPayerDeps: ReachableEnvironmentPayerDeps = {
  *          uncertainty at all.
  */
 export async function anyReachableEnvironmentPayerAllows(input: {
-  userId: string;
+  actor: AccessActor;
   authorize: (payer: { payerId: string; tier: SubscriptionTier }) => Promise<boolean>;
   deps?: ReachableEnvironmentPayerDeps;
 }): Promise<boolean> {
   const deps = input.deps ?? defaultReachableEnvironmentPayerDeps;
   try {
-    const environments = await deps.listEnvironments(input.userId);
+    const environments = await deps.listEnvironments(input.actor);
     for (const driveId of new Set(environments.map((env) => env.driveId))) {
       const payer = await deps.resolvePayer(driveId);
       // A vanished drive is skipped, never an answer about the others.

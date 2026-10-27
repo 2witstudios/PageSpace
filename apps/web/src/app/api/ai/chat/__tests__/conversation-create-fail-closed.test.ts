@@ -44,15 +44,16 @@ vi.mock('@/lib/auth', () => ({
   ),
   canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserViewPage(auth.userId, pageId);
+    return canUserViewPage(credentialActor(auth.userId, null), pageId);
   }),
   canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserEditPage(auth.userId, pageId);
+    return canUserEditPage(credentialActor(auth.userId, null), pageId);
   }),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn().mockResolvedValue(true),
   canUserEditPage: vi.fn().mockResolvedValue(true),
 }));
@@ -170,6 +171,12 @@ vi.mock('@/lib/ai/core/tool-filtering', () => ({
   filterToolsForMcpScope: vi.fn().mockReturnValue({}),
   buildPageAITools: vi.fn().mockReturnValue({}),
 }));
+// Not a built-in Imago agent: the route's Imago context load fails the turn
+// closed if it throws, so it must not reach this file's partial db mock.
+vi.mock('@/lib/ai/core/imago-agent-context', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/ai/core/imago-agent-context')>()),
+  loadImagoAgentContext: vi.fn().mockResolvedValue(null),
+}));
 vi.mock('@/lib/ai/core/page-tree-context', () => ({
   getPageTreeContext: vi.fn(),
 }));
@@ -242,6 +249,7 @@ import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { streamText } from 'ai';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockUserId = 'user_123';
 
@@ -330,4 +338,14 @@ describe('POST /api/ai/chat - conversation creation is fail-closed', () => {
 
     expect(body.error).not.toContain('Failed to start conversation');
   });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(credentialActor(auth.userId, null), resourceId),
+    canPrincipalEditPage: (auth: { userId: string }, resourceId: string) => permissions.canUserEditPage(credentialActor(auth.userId, null), resourceId),
+  };
 });

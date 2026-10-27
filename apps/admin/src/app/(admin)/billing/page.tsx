@@ -32,6 +32,7 @@ import { useAdminQuery } from '@/hooks/use-admin-query';
 import { useUrlTab } from '@/hooks/use-url-tab';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { usd, pct, num } from '@/lib/format';
+import { dollarsFromCents, formatCreditCount } from '@pagespace/lib/billing/money-model';
 
 type Range = '24h' | '7d' | '30d' | 'all';
 type Granularity = 'day' | 'month';
@@ -111,11 +112,15 @@ interface DebtRow {
 }
 
 interface BalanceDriftRow {
-  userId: string;
+  walletId: string;
+  walletKind: 'personal_root' | 'org_pool' | 'drive_wallet';
+  userId: string | null;
   userName: string | null;
   userEmail: string | null;
-  expectedSpendableCents: number;
-  materializedSpendableCents: number;
+  orgId: string | null;
+  subjectId: string | null;
+  expectedNetCents: number;
+  materializedNetCents: number;
   driftCents: number;
   debtCents: number;
 }
@@ -147,6 +152,9 @@ interface SubscriptionTierRow { tier: string; count: number; }
 interface Enforcement {
   enabled: boolean;
   markupBps: number;
+  /** Credits per dollar of credit value (the money model's display and purchase rate). */
+  creditsPerDollar?: number;
+  /** Included credit value per tier, whole cents, derived from the list price. */
   tierAllowanceCents: Record<string, number>;
   /** Whether the tier's allowance is re-granted each renewal; false = one-time starter grant. */
   tierAllowanceRefills?: Record<string, boolean>;
@@ -163,11 +171,19 @@ interface BillingResponse {
   providerCost: ProviderCostRow[];
   topSpenders: SpenderRow[];
   debtByUser: DebtRow[];
-  revenue: { topupCents: number; topupCount: number; monthlyGrantCents: number; monthlyGrantCount: number };
+  revenue: { topupCents: number; topupCount: number; monthlyGrantCents: number; monthlyGrantCount: number; includedCreditLiabilityCents: number };
   subscriptionsByTier: SubscriptionTierRow[];
-  liability: { monthlyRemainingCents: number; topupRemainingCents: number; totalLiabilityCents: number; userCount: number };
+  liability: {
+    monthlyRemainingCents: number;
+    orgPoolMonthlyRemainingCents: number;
+    starterGrantRemainingCents: number;
+    topupRemainingCents: number;
+    totalLiabilityCents: number;
+    userCount: number;
+    orgPoolCount: number;
+  };
   holds: { holdCount: number; heldCents: number };
-  alerts: { balanceDrift: BalanceDriftRow[]; negativeMargin: NegativeMarginRow[] };
+  alerts: { balanceDrift: BalanceDriftRow[]; negativeMargin: NegativeMarginRow[]; unattributedUsage: { count: number; realCostCents: number } };
   tokens: { summary: TokenTotals; byModel: TokenModelRow[]; byPeriod: TokenPeriodRow[]; byUser: TokenUserRow[] };
 }
 
@@ -178,6 +194,13 @@ function marginClass(value: number | null): string {
 
 function userLabel(row: { userName: string | null; userEmail: string | null; userId: string }): string {
   return row.userEmail ?? row.userName ?? row.userId;
+}
+
+/** WAL-5: a drifted wallet by what it is — a person's credits, an org's pool, or a drive's wallet. */
+function walletLabel(row: BalanceDriftRow): string {
+  if (row.walletKind === 'org_pool') return `Org pool · ${row.orgId ?? row.walletId}`;
+  if (row.walletKind === 'drive_wallet') return `Drive wallet · ${row.subjectId ?? row.walletId}`;
+  return row.userId ? userLabel({ userName: row.userName, userEmail: row.userEmail, userId: row.userId }) : row.walletId;
 }
 
 function formatPeriodLabel(period: string, granularity: Granularity): string {
@@ -196,6 +219,7 @@ function OverviewTab({ data }: { data: BillingResponse }) {
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         <StatCard label="Top-up revenue" value={usd(revenue.topupCents)} icon={Banknote} hint={`${num(revenue.topupCount)} purchases — real cash from Stripe top-ups in range`} />
         <StatCard label="Allowance grants" value={usd(revenue.monthlyGrantCents)} icon={HandCoins} hint={`${num(revenue.monthlyGrantCount)} grants in range — not cash revenue`} />
+        <StatCard label="Included credit liability" value={usd(revenue.includedCreditLiabilityCents)} icon={Scale} hint={`Outstanding grants on personal wallets and org pools — credit value still owed, not cash. Org pools ${usd(liability.orgPoolMonthlyRemainingCents)} · free starter grants ${usd(liability.starterGrantRemainingCents)}. Point-in-time`} />
         <StatCard label="Provider cost (what we paid)" value={usd(summary.realCostCents)} icon={Coins} />
         <StatCard label="Charged to users (credits)" value={usd(summary.chargedCents)} hint={`Credits applied: ${usd(summary.appliedCents)}`} />
         <StatCard
@@ -208,7 +232,7 @@ function OverviewTab({ data }: { data: BillingResponse }) {
           label="Outstanding liability"
           value={usd(liability.totalLiabilityCents)}
           icon={Scale}
-          hint={`Monthly ${usd(liability.monthlyRemainingCents)} · Top-up ${usd(liability.topupRemainingCents)} · ${num(liability.userCount)} users`}
+          hint={`Grants ${usd(liability.monthlyRemainingCents)} · Top-up and drive-wallet funds ${usd(liability.topupRemainingCents)} · ${num(liability.userCount)} users · ${num(liability.orgPoolCount)} org pools`}
         />
         <StatCard label="Live holds" value={usd(holds.heldCents)} hint={`${num(holds.holdCount)} open holds`} />
         <StatCard
@@ -273,9 +297,9 @@ function MarginsTab({ data }: { data: BillingResponse }) {
                     .sort((a, b) => (String(a.period) < String(b.period) ? -1 : 1))
                     .map((r) => ({
                       period: String(r.period).slice(0, granularity === 'month' ? 7 : 10),
-                      realCost: +(r.realCostCents / 100).toFixed(2),
-                      charged: +(r.chargedCents / 100).toFixed(2),
-                      margin: +(r.marginCents / 100).toFixed(2),
+                      realCost: +dollarsFromCents(r.realCostCents).toFixed(2),
+                      charged: +dollarsFromCents(r.chargedCents).toFixed(2),
+                      margin: +dollarsFromCents(r.marginCents).toFixed(2),
                     }))}
                   margin={{ top: 4, right: 16, left: 0, bottom: 4 }}
                 >
@@ -620,13 +644,16 @@ function UsersTab({ data }: { data: BillingResponse }) {
       <Card>
         <CardHeader>
           <CardTitle>Balance drift ({alerts.balanceDrift.length})</CardTitle>
-          <CardDescription>Accounts where the materialized balance disagrees with the ledger.</CardDescription>
+          <CardDescription>Wallets (personal credits, org pools, drive wallets) whose balance disagrees with their own ledger rows.</CardDescription>
+          <CardDescription data-testid="unattributed-usage">
+            Unattributed usage: {alerts.unattributedUsage.count} {alerts.unattributedUsage.count === 1 ? 'call' : 'calls'} ({usd(alerts.unattributedUsage.realCostCents)} provider cost) named no wallet and were not charged — reconcile by hand.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>User</TableHead>
+                <TableHead>Wallet</TableHead>
                 <TableHead className="text-right">Expected</TableHead>
                 <TableHead className="text-right">Materialized</TableHead>
                 <TableHead className="text-right">Drift</TableHead>
@@ -636,10 +663,10 @@ function UsersTab({ data }: { data: BillingResponse }) {
             <TableBody>
               {alerts.balanceDrift.length > 0 ? (
                 alerts.balanceDrift.map((row) => (
-                  <TableRow key={row.userId}>
-                    <TableCell className="max-w-[260px] truncate">{userLabel(row)}</TableCell>
-                    <TableCell className="text-right">{usd(row.expectedSpendableCents)}</TableCell>
-                    <TableCell className="text-right">{usd(row.materializedSpendableCents)}</TableCell>
+                  <TableRow key={row.walletId}>
+                    <TableCell className="max-w-[260px] truncate">{walletLabel(row)}</TableCell>
+                    <TableCell className="text-right">{usd(row.expectedNetCents)}</TableCell>
+                    <TableCell className="text-right">{usd(row.materializedNetCents)}</TableCell>
                     <TableCell className="text-right font-medium text-destructive">{usd(row.driftCents)}</TableCell>
                     <TableCell className="text-right">{usd(row.debtCents)}</TableCell>
                   </TableRow>
@@ -741,20 +768,20 @@ function EnforcementTab({ data }: { data: BillingResponse }) {
 
       <Card>
         <CardHeader>
-          <CardTitle>Credit allowance by tier</CardTitle>
-          <CardDescription>Paid tiers are re-granted on each renewal; the free tier is a one-time starter grant.</CardDescription>
+          <CardTitle>Included credits by tier</CardTitle>
+          <CardDescription>Derived from each tier&apos;s list price; a renewal grant is sized from the invoice actually paid. Paid tiers are re-granted on each renewal; the free tier is a one-time starter grant.</CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
             <TableHeader>
-              <TableRow><TableHead>Tier</TableHead><TableHead>Cadence</TableHead><TableHead className="text-right">Allowance</TableHead></TableRow>
+              <TableRow><TableHead>Tier</TableHead><TableHead>Cadence</TableHead><TableHead className="text-right">Included credits</TableHead></TableRow>
             </TableHeader>
             <TableBody>
               {Object.entries(enforcement.tierAllowanceCents).map(([tier, cents]) => (
                 <TableRow key={tier}>
                   <TableCell className="capitalize">{tier}</TableCell>
                   <TableCell>{enforcement.tierAllowanceRefills?.[tier] === false ? 'One-time' : 'Monthly'}</TableCell>
-                  <TableCell className="text-right">{usd(cents)}</TableCell>
+                  <TableCell className="text-right">{formatCreditCount(cents)} credits</TableCell>
                 </TableRow>
               ))}
             </TableBody>

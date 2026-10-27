@@ -75,6 +75,10 @@ vi.mock('@/lib/auth', () => ({
   // Session auth = unscoped, which is all this route accepts. Stubbed because
   // the route passes the scope ceiling into the Home-drive hint.
   getAllowedDriveIds: vi.fn(() => []),
+  authSessionIdOf: vi.fn<typeof import('@/lib/auth').authSessionIdOf>((result) => (result.tokenType === 'session' ? result.sessionId : undefined)),
+  // The turn's tool selection reads this; a session principal is never
+  // drive-scoped, so the account-level tools stay advertised.
+  isDriveScopedPrincipal: vi.fn(() => false),
 }));
 
 vi.mock('@/lib/ai/core/stream-takeover', () => ({
@@ -210,6 +214,15 @@ vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
   createSubscriptionRequiredResponse: vi.fn(),
 }));
 
+// The server-side contextRef resolution (permission-checked). Only reached when the body
+// carries a contextRef; it resolves to a DIFFERENT drive than any the client claims, so a
+// test can tell a server-resolved drive from a client-supplied one.
+vi.mock('@/lib/ai/core/resolve-request-context', () => ({
+  resolveRequestContext: vi.fn().mockResolvedValue({
+    currentDrive: { id: 'drive-server-resolved', name: 'Resolved', slug: 'resolved' },
+  }),
+}));
+
 // The credit gate under test. Default: allowed. Individual tests override.
 vi.mock('@pagespace/lib/billing/credit-gate', () => ({
   canConsumeAI: vi.fn().mockResolvedValue({ allowed: true, reason: 'unlimited' }),
@@ -251,6 +264,8 @@ vi.mock('@/lib/ai/core/tool-filtering', () => ({
   filterToolsForSandboxEnablement: vi.fn((tools: unknown) => tools),
   filterToolsForSandboxTier: vi.fn((tools: unknown) => tools),
   filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
+  filterToolsForAgentAccounts: vi.fn((tools: unknown) => tools),
+  filterToolsForMcpScope: vi.fn((tools: unknown) => tools),
   filterToolsForReadOnly: vi.fn().mockReturnValue({}),
   filterToolsForWebSearch: vi.fn().mockReturnValue({}),
   filterToolsForImageGen: vi.fn((t) => t),
@@ -358,6 +373,8 @@ import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import type { SessionAuthResult } from '@/lib/auth';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { PERSONAL_SPEND, conversationSpend } from '@pagespace/lib/billing/spend-target';
+import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { streamText } from 'ai';
 import { resolveOrCreateConversation, ConversationOwnershipError } from '@/lib/repositories/resolve-or-create-conversation';
@@ -397,7 +414,7 @@ const makeFakeChannel = () => {
 };
 
 
-const makeRequest = () =>
+const makeRequest = (extraBody: Record<string, unknown> = {}) =>
   new Request('https://example.com/api/ai/global/conv-1/messages', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'content-length': '200', 'X-Browser-Session-Id': 'session-1' },
@@ -405,8 +422,12 @@ const makeRequest = () =>
       messages: [{ id: 'msg_1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] }],
       selectedProvider: 'openai',
       selectedModel: 'openai/gpt-5.4-nano',
+      ...extraBody,
     }),
   });
+
+/** A drive only the CLIENT claims, in the removed client-computed locationContext body field. */
+const CLIENT_CLAIMED_DRIVE = { currentDrive: { id: 'drive-client-claimed', name: 'Not mine', slug: 'not-mine' } };
 
 const makeContext = () => ({ params: Promise.resolve({ id: 'conv-1' }) });
 
@@ -482,6 +503,39 @@ describe('POST /api/ai/global/[id]/messages — prepaid credit gate', () => {
 
     expect(response.status).toBe(402);
     expect(resolveOrCreateConversation).not.toHaveBeenCalled();
+  });
+
+  it('POL-8 (partial) the provider factory is named the SERVER-resolved drive with a contextRef, and no drive at all without one', async () => {
+    const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    await POST(makeRequest({ contextRef: { routeType: 'drive', driveId: 'drive-client-claimed' } }), makeContext());
+    expect(vi.mocked(createAIProvider).mock.calls.at(-1)?.[2]).toEqual({ driveId: 'drive-server-resolved' });
+
+    await POST(makeRequest(), makeContext());
+    expect(vi.mocked(createAIProvider).mock.calls.at(-1)?.[2]).toEqual({ driveId: null });
+  });
+
+  it('SPEND-8 (partial) a request carrying the removed client-computed locationContext is refused (400) before any gate or spend: it never runs on personal credits inside a drive the server did not resolve', async () => {
+    for (const extra of [{ locationContext: CLIENT_CLAIMED_DRIVE }, { contextRef: { routeType: 'drive', driveId: 'drive-client-claimed' }, locationContext: CLIENT_CLAIMED_DRIVE }]) {
+      const response = await POST(makeRequest(extra), makeContext());
+      expect(response.status).toBe(400);
+    }
+    expect(canConsumeAI).not.toHaveBeenCalled();
+    expect(streamText).not.toHaveBeenCalled();
+  });
+
+  it('SPEND-8 (partial) a global-assistant turn with no drive (no contextRef) spends personal credits', async () => {
+    await POST(makeRequest(), makeContext());
+
+    expect(resolveRequestContext).not.toHaveBeenCalled();
+    expect(canConsumeAI).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(canConsumeAI).mock.calls[0][2].spend).toEqual(PERSONAL_SPEND);
+  });
+
+  it('SPEND-7 (partial) SPEND-3 (partial) with a contextRef the spend drive is the server-resolved drive, never the one the client claims, and the turn names its conversation', async () => {
+    await POST(makeRequest({ contextRef: { routeType: 'drive', driveId: 'drive-client-claimed' } }), makeContext());
+
+    expect(resolveRequestContext).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(canConsumeAI).mock.calls[0][2].spend).toEqual(conversationSpend('drive-server-resolved', 'conv-1'));
   });
 
 });
@@ -572,6 +626,33 @@ describe('POST /api/ai/global/[id]/messages — usage logging durability (R4)', 
     expect(AIMonitoring.trackUsage).toHaveBeenCalledTimes(1);
     const call = vi.mocked(AIMonitoring.trackUsage).mock.calls[0][0];
     expect(call.model).toBe('openai/gpt-5.4-nano');
+  });
+
+  it('WAL-5 (partial) the settle names the wallet the gate reserved on, with its hold', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValue({
+      allowed: true,
+      reason: 'ok',
+      holdId: 'hold-drive',
+      walletId: 'wallet-drive',
+      spendSource: 'drive_wallet',
+    });
+    captured.totalUsage = { inputTokens: 4, outputTokens: 6, totalTokens: 10 };
+    // Node 20's AbortSignal.any is missing under jsdom; a gated turn (a hold) combines the
+    // user's Stop with the credit ceiling through it.
+    const signalAny = (AbortSignal as { any?: unknown }).any;
+    (AbortSignal as unknown as { any: (signals: AbortSignal[]) => AbortSignal }).any = (signals) =>
+      signals.find((s) => s.aborted) ?? signals[0];
+    try {
+      await POST(makeRequest(), makeContext());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+    } finally {
+      (AbortSignal as { any?: unknown }).any = signalAny;
+    }
+
+    expect(AIMonitoring.trackUsage).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(AIMonitoring.trackUsage).mock.calls[0][0];
+    expect({ holdId: call.holdId, walletId: call.walletId }).toEqual({ holdId: 'hold-drive', walletId: 'wallet-drive' });
   });
 
   it('settles the hold (trackUsage) even when persisting the assistant message throws', async () => {
