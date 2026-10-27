@@ -21,6 +21,56 @@ export function formatDate(dateString: string): string {
 }
 
 export const blogPosts: Record<string, BlogPost> = {
+  "invite-collaborators-anywhere": {
+    slug: "invite-collaborators-anywhere",
+    title: "Invite Collaborators Anywhere (Even If They're Not on PageSpace Yet)",
+    description:
+      "You can now invite people by email from the three places you actually need them: the Share dialog on any page, your drive's member list, and your Connections. If they don't have an account yet, the invite carries the access with it — they sign up and land right where you meant them to.",
+    image: "/blog/invite-collaborators-anywhere.png",
+    content: `
+## The dead end
+
+Here's a moment that used to end in a shrug. You're on a page you want someone to see. You open Share, type their email, and PageSpace tells you there's no one by that name. They're not on PageSpace yet.
+
+So you leave. You send them a link to sign up, wait for them to do it, remember to come back, search for them again, and finally grant the access you wanted in the first place. Half the time the second step never happens.
+
+That dead end is gone. Wherever you'd add someone, you can now invite them by email — and the invite carries the access with it.
+
+## Three places, one idea
+
+### Share a single page
+
+Open **Share** on any page and type an email. If that person already has an account, you grant access the way you always have. If they don't, the button changes to **Invite them to PageSpace and share this page**.
+
+You still pick exactly what they get — View, Edit, or Share — and you choose how long the invite stays open: one day, seven days, thirty days, or no expiry at all. They get an email about that specific page, sign up, and land on it with the permissions you chose.
+
+One deliberate limit: Delete can't be granted to someone who isn't on PageSpace yet. Destructive access goes to people with an account you can see, not to an inbox.
+
+### Add someone to a drive
+
+When you're inviting a teammate into a whole drive, search for them on the drive's **Members → Invite** screen. No match? You'll see **Invite them to PageSpace** right there. Pick their role — Admin or one of your custom roles — and when they join, they join the drive with it.
+
+### Connect with a person
+
+Connections are how you message people and collaborate with them directly, outside any one drive. On the **Connections** page, enter an email and send a request. If they're already on PageSpace, it shows up as a request they can accept. If they're not, they get an email saying you'd like to connect, and when they sign up, your request is waiting for them. Connection invites stay open for 48 hours.
+
+## What doesn't change
+
+Inviting someone new doesn't loosen anything. The same permission checks run whether the person has an account or not: you can only share a page you're allowed to share, and you can only invite into a drive you manage.
+
+A few guardrails come along too. You need a verified email address to send invites, and sending them is rate-limited. If your drive belongs to an organization that doesn't allow outside guests, sharing with someone outside it is refused rather than quietly let through.
+
+## Why it matters
+
+Collaboration fails at the edges: the first time you try to bring someone in. Every extra step between "I want them to see this" and "they can see this" is a step where the handoff dies.
+
+Now it's one step. Type the email, choose what they get, send. The next time you're about to paste a link into a chat and say "sign up and then tell me so I can add you," just invite them instead.
+    `,
+    author: "Jono",
+    date: "2026-10-27",
+    readTime: "4 min read",
+    category: "Product",
+  },
   "browser-style-tabs": {
     slug: "browser-style-tabs",
     title: "Tabs That Work Like Your Browser (Because They Should)",
