@@ -1,5 +1,6 @@
 import { chatPlugin } from '../chat/chat-plugin';
 import { filesPlugin } from '../files/files-plugin/files-plugin';
+import { messagesPlugin } from '../messages/messages-plugin/messages-plugin';
 import { stagePlugin } from '../frame/stage/stage-plugin';
 import { palettePlugin } from '../palette/palette-plugin';
 import { tasksPlugin } from '../tasks/tasks-plugin';
@@ -11,4 +12,4 @@ import { tabsPlugin } from '../frame/tabs/tabs-plugin';
  * compose the shell from this list and refuse a resource key or transaction
  * name two slices share.
  */
-export const uiSlices = [stagePlugin, tabsPlugin, tasksPlugin, filesPlugin, chatPlugin, palettePlugin] as const;
+export const uiSlices = [stagePlugin, tabsPlugin, tasksPlugin, filesPlugin, chatPlugin, palettePlugin, messagesPlugin] as const;

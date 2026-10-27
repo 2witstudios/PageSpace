@@ -1,13 +1,20 @@
 import Link from 'next/link';
-import { Fragment, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { renderAvatar } from '../../components/avatar/avatar.render';
 import { renderButton } from '../../components/button/button.render';
 import { iconButtonClass } from '../../components/icon-button/icon-button-class';
 import { renderIcon } from '../../components/icon/icon.render';
-import { listGroupLabelClass } from '../../components/list-group/list-group-class';
-import { renderListGroup } from '../../components/list-group/list-group.render';
+import { listGroupRowsClass } from '../../components/list-group/list-group-class';
 import { renderUnreadCount } from '../../components/unread-count/unread-count.render';
-import { messageGlyphClass, messageNameClass, messageRowClass, messagesNoteClass } from './messages-pane-class';
+import { cn } from '../../cn';
+import {
+  messageGlyphClass,
+  messageGroupChevronClass,
+  messageGroupToggleClass,
+  messageNameClass,
+  messageRowClass,
+  messagesNoteClass,
+} from './messages-pane-class';
 
 /** One channel or DM, ready to draw. */
 export type MessageRowView = {
@@ -22,45 +29,43 @@ export type MessageRowView = {
   readonly selected: boolean;
 };
 
-/** A section's rows, or why it has none. `no-drive` is the channels section on a user-level route. */
+/** A group's rows, or why it has none. */
 export type MessagesSectionView =
   | { readonly status: 'loading' }
   | { readonly status: 'error'; readonly retry: () => void }
-  | { readonly status: 'no-drive' }
   | { readonly status: 'ready'; readonly rows: readonly MessageRowView[] };
 
-export type MessagesPaneRenderProps = {
-  /** The current drive's CHANNEL pages. */
-  readonly channels: MessagesSectionView;
-  /** The viewer's DMs, the same in every drive. */
-  readonly direct: MessagesSectionView;
+/** What a group says when it has no rows. */
+export type MessagesGroupNotes = Readonly<Record<'loading' | 'error' | 'empty', string>>;
+
+/** One foldable group: a drive's channels, or the viewer's DMs. */
+export type MessagesGroupView = {
+  /** Stable across routes (message-groups.ts), so a fold follows the viewer. */
+  readonly key: string;
+  readonly label: string;
+  readonly open: boolean;
+  /** Void action: fold the group, or open it. */
+  readonly toggle: () => void;
+  readonly section: MessagesSectionView;
+  readonly notes: MessagesGroupNotes;
 };
 
-type Notes = Readonly<Record<'loading' | 'error' | 'empty' | 'no-drive', string>>;
+export type MessagesPaneRenderProps = {
+  /** The channels groups first, then Direct messages. */
+  readonly groups: readonly MessagesGroupView[];
+};
 
-const sections: readonly { readonly key: keyof MessagesPaneRenderProps; readonly label: string; readonly notes: Notes }[] = [
-  {
-    key: 'channels',
-    label: 'Channels',
-    notes: {
-      loading: 'Loading channels…',
-      error: 'Could not load channels.',
-      empty: 'No channels in this drive yet.',
-      'no-drive': 'Open a drive to see its channels.',
-    },
-  },
-  {
-    key: 'direct',
-    label: 'Direct messages',
-    notes: {
-      loading: 'Loading direct messages…',
-      error: 'Could not load direct messages.',
-      empty: 'No direct messages yet.',
-      // DMs are user-level: they never wait on a drive.
-      'no-drive': 'No direct messages yet.',
-    },
-  },
-];
+export const channelNotes: MessagesGroupNotes = {
+  loading: 'Loading channels…',
+  error: 'Could not load channels.',
+  empty: 'No channels yet.',
+};
+
+export const directNotes: MessagesGroupNotes = {
+  loading: 'Loading direct messages…',
+  error: 'Could not load direct messages.',
+  empty: 'No direct messages yet.',
+};
 
 /* The list stays calm, as the canvases draw it: a glyph, the name and an
    unread count, with no previews or times. The open thread is being read,
@@ -95,29 +100,55 @@ export function renderNewMessageLink(): ReactNode {
   );
 }
 
-/** A labelled section that has no rows, saying why; a failed one offers to ask again. */
-const renderNote = (label: string, text: string, role?: 'status' | 'alert', retry?: () => void): ReactNode => (
-  <section key={label} aria-label={label}>
-    <h2 className={listGroupLabelClass}>{label}</h2>
-    <p role={role} className={messagesNoteClass}>
-      {text}
-    </p>
-    {retry === undefined ? null : renderButton({ variant: 'ghost', onClick: retry, children: 'Try again' })}
-  </section>
-);
+/** The unread a folded group hides: every row's count but the open thread's. */
+const hiddenUnread = (section: MessagesSectionView): number =>
+  section.status === 'ready'
+    ? section.rows.reduce((total, row) => total + (row.selected ? 0 : row.unreadCount), 0)
+    : 0;
+
+const renderBody = (section: MessagesSectionView, notes: MessagesGroupNotes): ReactNode => {
+  if (section.status === 'loading') return <p role="status" className={messagesNoteClass}>{notes.loading}</p>;
+  if (section.status === 'error')
+    return (
+      <>
+        <p role="alert" className={messagesNoteClass}>{notes.error}</p>
+        {renderButton({ variant: 'ghost', onClick: section.retry, children: 'Try again' })}
+      </>
+    );
+  if (section.rows.length === 0) return <p className={messagesNoteClass}>{notes.empty}</p>;
+  return <ul className={listGroupRowsClass}>{section.rows.map(renderRow)}</ul>;
+};
+
+/** A group's label is its fold control; folded, it carries what unread the group hides. */
+const renderGroup = ({ key, label, open, toggle, section, notes }: MessagesGroupView): ReactNode => {
+  const hidden = open ? 0 : hiddenUnread(section);
+  return (
+    <section key={key} aria-label={label}>
+      <h2>
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-label={hidden > 0 ? `${label}, ${hidden} unread` : label}
+          className={messageGroupToggleClass}
+          onClick={toggle}
+        >
+          {renderIcon({ name: 'chevronRight', size: 12, className: cn(messageGroupChevronClass, open && 'rotate-90') })}
+          <span className={messageNameClass}>{label}</span>
+          {renderUnreadCount({ count: hidden })}
+        </button>
+      </h2>
+      {open ? renderBody(section, notes) : null}
+    </section>
+  );
+};
 
 /**
- * The Messages section's list: the current drive's channels, then the
- * viewer's direct messages, each under a sentence-case label (myimago ADR
- * 0029 decision 11). Both sections always show, with a note when empty.
+ * The Messages section's list, the same on every Messages route: the channels
+ * (the current drive's, or every drive's on Home and the user-level /dm
+ * routes, one group per drive), then the viewer's direct messages. Each group
+ * folds from its sentence-case label (myimago ADR 0029 decision 11), with a
+ * note when it has no rows.
  */
-export function renderMessagesPane(props: MessagesPaneRenderProps): ReactNode {
-  return sections.map(({ key, label, notes }) => {
-    const view = props[key];
-    if (view.status === 'loading') return renderNote(label, notes.loading, 'status');
-    if (view.status === 'error') return renderNote(label, notes.error, 'alert', view.retry);
-    if (view.status === 'no-drive') return renderNote(label, notes['no-drive']);
-    if (view.rows.length === 0) return renderNote(label, notes.empty);
-    return <Fragment key={label}>{renderListGroup({ label, children: view.rows.map(renderRow) })}</Fragment>;
-  });
+export function renderMessagesPane({ groups }: MessagesPaneRenderProps): ReactNode {
+  return <div className="flex flex-col gap-2">{groups.map(renderGroup)}</div>;
 }

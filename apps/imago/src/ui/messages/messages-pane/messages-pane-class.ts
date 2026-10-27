@@ -27,3 +27,10 @@ export const messageGlyphClass = 'flex-none text-ink-faint';
 
 /** Why a section has no rows: loading, failed, empty or no drive. */
 export const messagesNoteClass = 'px-2 text-sm text-ink-muted';
+
+/* A group's label is also its fold control: the list-group label's small,
+   semibold, faint sentence case, with a chevron that turns down while open. */
+export const messageGroupToggleClass =
+  'flex h-8 w-full cursor-pointer items-center gap-1 rounded-lg px-2 text-left text-2xs font-semibold tracking-wide text-ink-faint transition-colors duration-120 ease-standard hover:bg-surface-overlay hover:text-ink-muted';
+
+export const messageGroupChevronClass = 'flex-none transition-transform duration-120 ease-standard';

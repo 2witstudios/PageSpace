@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act } from 'react';
-import { afterEach, describe, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { ImagoSWRProvider } from '@/api/swr-provider';
 import { RealtimeProvider } from '@/realtime/realtime-provider';
@@ -10,18 +10,24 @@ import { fakeWeb, type FakeRoute } from '@/ui/test-support/fake-web';
 import { messagePaths } from '../messages-api/messages-api';
 import { conversation, inboxChannel } from '../message-model/fixtures';
 import type { ConversationResponse, InboxItem } from '../message-model/message';
+import { HomeDriveProvider } from '../../frame/drives/home-drive-context';
+import { DRIVES } from '../../frame/drives/drives';
+import { setUiState } from '../../store/store';
+import { createInitialState } from '../../store/state';
+import { COLLAPSED_GROUPS_KEY } from './message-groups';
 import { MessagesPane, type MessagesPaneProps } from './messages-pane';
 import { setSectionScope } from '@/ui/frame/drives/use-section-scope';
 
-
 afterEach(() => {
   unmountAll();
+  setUiState(createInitialState());
+  window.localStorage.clear();
   setSectionScope('messages', 'drive');
 });
 
 const CHANNELS = `GET ${messagePaths.driveChannels('d1')}`;
 const CONVERSATIONS = `GET ${messagePaths.conversations()}`;
-const INBOX = `GET ${messagePaths.inbox()}`;
+const ALL_CHANNELS = `GET ${messagePaths.channels()}`;
 
 const inbox =
   (items: () => readonly InboxItem[]): FakeRoute =>
@@ -35,13 +41,22 @@ const dms =
   () =>
     Response.json({ conversations: rows(), pagination: { hasMore: false, nextCursor: null, limit: 100 } });
 
-const show = (routes: Record<string, FakeRoute>, props: Partial<MessagesPaneProps> = {}) => {
-  const web = fakeWeb(routes);
+const drives = (): FakeRoute => () =>
+  Response.json([
+    { id: 'd2', name: 'Beta', kind: 'STANDARD' },
+    { id: 'd1', name: 'Alpha', kind: 'STANDARD' },
+    { id: 'home', name: 'Home', kind: 'HOME' },
+  ]);
+
+const show = (routes: Record<string, FakeRoute>, props: Partial<MessagesPaneProps> = {}, homeDriveId: string | null = 'home') => {
+  const web = fakeWeb({ [`GET ${DRIVES}`]: drives(), ...routes });
   const rt = fakeRealtime();
   const container = mount(
     <ImagoSWRProvider client={web.client}>
       <RealtimeProvider client={rt.client}>
-        <MessagesPane driveId="d1" selectedPageId={null} selectedConversationId={null} {...props} />
+        <HomeDriveProvider value={homeDriveId}>
+          <MessagesPane driveId="d1" selectedPageId={null} selectedConversationId={null} {...props} />
+        </HomeDriveProvider>
       </RealtimeProvider>
     </ImagoSWRProvider>,
   );
@@ -64,105 +79,49 @@ const sections = (container: HTMLElement) =>
     section.querySelector('p')?.textContent ?? null,
   ]);
 
-/** The unified rows as [accessible name, href], in the order drawn. */
-const rows = (container: HTMLElement) => [...container.querySelectorAll('ul a')].map((link) => [link.getAttribute('aria-label'), link.getAttribute('href')]);
-
 const rowsLoaded = (container: HTMLElement, count: number) =>
   settle(() => {
     if (container.querySelectorAll('a').length !== count) throw new Error('rows not loaded');
   });
 
-const clickShow = (container: HTMLElement, label: string) =>
+const fold = (container: HTMLElement, label: string) =>
   act(() => {
-    [...container.querySelectorAll<HTMLButtonElement>('[role="radio"]')].find((radio) => radio.textContent === label)?.click();
+    container.querySelector<HTMLButtonElement>(`section[aria-label="${label}"] button[aria-expanded]`)?.click();
   });
 
-describe('MessagesPane on the index', () => {
-  test('the unified inbox, switched to All drives', async () => {
-    setSectionScope('messages', 'all');
+describe('MessagesPane in a drive', () => {
+  test('nothing open: the compact groups, the same as with a thread open', async () => {
     const { container, web } = show({
-      [INBOX]: inbox(() => [
-        inboxChannel('c1', { name: 'launch', unreadCount: 2, lastMessageAt: '2026-10-12T09:00:00.000Z', lastMessagePreview: 'ship it', lastMessageSender: 'Sam', driveId: 'd1' }),
-        inboxChannel('c3', { name: 'other', driveId: 'd2', lastMessageAt: '2026-10-12T08:00:00.000Z', lastMessagePreview: 'hi', lastMessageSender: 'Dana' }),
-        { ...inboxChannel('c4', { name: 'empty' }), type: 'dm', lastMessageAt: null, lastMessagePreview: null, name: 'Grace' },
-      ]),
+      [CHANNELS]: channels(() => [inboxChannel('c1', { name: 'launch', unreadCount: 2 }), inboxChannel('c2', { name: 'general' })]),
+      [CONVERSATIONS]: dms(() => [conversation('m1')]),
     });
     await rowsLoaded(container, 3);
 
     assert({
-      given: 'Messages switched to All drives, with two channels in different drives and one DM with no messages',
-      should: 'merge them in the server order, each linked to its own drive, with the unread count on the row',
-      actual: [rows(container), web.count(CHANNELS), web.count(CONVERSATIONS)],
+      given: 'the Messages index of a drive, with nothing open',
+      should: 'list the drive’s channels then the DMs in the compact groups, without loading every drive’s channels',
+      actual: [sections(container), web.count(ALL_CHANNELS)],
       expected: [
         [
-          ['launch, 2 unread', '/d1/messages/c1'],
-          ['other', '/d2/messages/c3'],
-          ['Grace', '/dm/c4'],
+          [
+            'Channels',
+            [
+              ['launch', '/d1/messages/c1', '2', null],
+              ['general', '/d1/messages/c2', null, null],
+            ],
+            null,
+          ],
+          ['Direct messages', [['Grace', '/dm/m1', null, null]], null],
         ],
         0,
-        0,
       ],
-    });
-  });
-
-  test('the inbox scoped to the drive', async () => {
-    const { container } = show({
-      [INBOX]: inbox(() => [
-        inboxChannel('c1', { name: 'launch', driveId: 'd1' }),
-        inboxChannel('c3', { name: 'other', driveId: 'd2' }),
-        { ...inboxChannel('c4', { name: 'empty' }), type: 'dm', name: 'Grace' },
-      ]),
-    });
-    await rowsLoaded(container, 2);
-
-    assert({
-      given: 'Messages on its own drive, with a channel here, a channel in another drive and a DM',
-      should: 'list this drive’s channel and the DM, leaving the other drive’s channel out',
-      actual: rows(container),
-      expected: [
-        ['launch', '/d1/messages/c1'],
-        ['Grace', '/dm/c4'],
-      ],
-    });
-  });
-
-  test('the Show filter', async () => {
-    const { container } = show({
-      [INBOX]: inbox(() => [inboxChannel('c1', { name: 'launch' }), { ...inboxChannel('m1', { name: 'Grace' }), type: 'dm' }]),
-    });
-    await rowsLoaded(container, 2);
-    const names = () => rows(container).map(([, href]) => href);
-
-    clickShow(container, 'Channels');
-    const channelsOnly = names();
-    clickShow(container, 'Direct');
-    const directOnly = names();
-    clickShow(container, 'All');
-
-    assert({
-      given: 'the Show control set to Channels, then Direct, then All',
-      should: 'show only that kind, and everything again under All',
-      actual: [channelsOnly, directOnly, names(), container.querySelector('[role="radiogroup"]')?.getAttribute('aria-label')],
-      expected: [['/d1/messages/c1'], ['/dm/m1'], ['/d1/messages/c1', '/dm/m1'], 'Show'],
-    });
-  });
-
-  test('an empty filter says what is missing', async () => {
-    const { container } = show({ [INBOX]: inbox(() => [inboxChannel('c1', { name: 'launch' })]) });
-    await rowsLoaded(container, 1);
-    clickShow(container, 'Direct');
-
-    assert({
-      given: 'the Direct filter with no direct messages',
-      should: 'say there are no direct messages yet',
-      actual: container.querySelector('p')?.textContent,
-      expected: 'No direct messages yet.',
     });
   });
 
   test('a live post moves its row up and counts it', async () => {
     const { container, rt, web } = show({
-      [INBOX]: inbox(() => [inboxChannel('c1', { name: 'launch', lastMessageAt: '2026-10-12T08:00:00.000Z' }), inboxChannel('c2', { name: 'general' })]),
+      [CHANNELS]: channels(() => [inboxChannel('c1', { name: 'launch', lastMessageAt: '2026-10-12T08:00:00.000Z' }), inboxChannel('c2', { name: 'general' })]),
+      [CONVERSATIONS]: dms(() => []),
     });
     await rowsLoaded(container, 2);
 
@@ -176,45 +135,204 @@ describe('MessagesPane on the index', () => {
     });
 
     assert({
-      given: 'a post in a channel the unified inbox lists',
+      given: 'a post in a channel the drive lists',
       should: 'count it on the row, move the row to the top, and not refetch',
-      actual: [rows(container), web.count(INBOX)],
-      expected: [
-        [
-          ['general, 1 unread', '/d1/messages/c2'],
-          ['launch', '/d1/messages/c1'],
-        ],
-        1,
-      ],
+      actual: [[...container.querySelectorAll('a')].map((link) => link.getAttribute('aria-label')), web.count(CHANNELS)],
+      expected: [['general, 1 unread', 'launch'], 1],
     });
   });
 
   test('a failed load is retried', async () => {
     let calls = 0;
     const { container, web } = show({
-      [INBOX]: (request) => {
+      [CHANNELS]: (request) => {
         calls += 1;
-        return calls === 1 ? Response.json({ error: 'Failed' }, { status: 503 }) : inbox(() => [inboxChannel('c1', { name: 'launch' })])(request);
+        return calls === 1 ? Response.json({ error: 'Failed' }, { status: 503 }) : channels(() => [inboxChannel('c1', { name: 'launch' })])(request);
       },
+      [CONVERSATIONS]: dms(() => []),
     });
     await settle(() => {
       if (!container.querySelector('[role="alert"]')) throw new Error('no alert');
     });
     act(() => {
-      container.querySelector<HTMLButtonElement>('button:not([role="radio"])')?.click();
+      [...container.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Try again')?.click();
     });
     await rowsLoaded(container, 1);
 
     assert({
-      given: 'an inbox that failed, then Try again',
+      given: 'channels that failed, then Try again',
       should: 'ask the server again and list what it answers',
-      actual: [web.count(INBOX), rows(container)],
-      expected: [2, [['launch', '/d1/messages/c1']]],
+      actual: [web.count(CHANNELS), container.querySelector('a')?.getAttribute('href')],
+      expected: [2, '/d1/messages/c1'],
     });
   });
 });
 
-describe('MessagesPane with an object open or on a user-level route', () => {
+describe('MessagesPane across every drive', () => {
+  // Home's default, set here because the stored choice outlives each test.
+  beforeEach(() => setSectionScope('messages', 'all'));
+
+  const everyDrive = () =>
+    inbox(() => [
+      inboxChannel('c3', { name: 'other', driveId: 'd2', unreadCount: 1 }),
+      { ...inboxChannel('m9', { name: 'Ignored' }), type: 'dm' },
+      inboxChannel('c1', { name: 'launch', driveId: 'd1' }),
+      inboxChannel('c2', { name: 'general', driveId: 'd1' }),
+    ]);
+
+  test('Home: one group per drive, named for it, then the DMs', async () => {
+    const { container, web } = show(
+      { [ALL_CHANNELS]: everyDrive(), [CONVERSATIONS]: dms(() => [conversation('m1')]) },
+      { driveId: 'home', selectedPageId: 'c1' },
+    );
+    await settle(() => {
+      if (!container.querySelector('section[aria-label="Alpha"]')) throw new Error('drive names not loaded');
+    });
+    await rowsLoaded(container, 4);
+
+    assert({
+      given: 'the Home drive with a channel open',
+      should: 'group every drive’s channels under the drive’s name in the drives’ order, then the DMs, with the open row current',
+      actual: [sections(container), web.count(CHANNELS)],
+      expected: [
+        [
+          [
+            'Alpha',
+            [
+              ['launch', '/d1/messages/c1', null, 'page'],
+              ['general', '/d1/messages/c2', null, null],
+            ],
+            null,
+          ],
+          ['Beta', [['other', '/d2/messages/c3', '1', null]], null],
+          ['Direct messages', [['Grace', '/dm/m1', null, null]], null],
+        ],
+        0,
+      ],
+    });
+  });
+
+  test('a user-level DM route reads the same as Home', async () => {
+    const { container } = show(
+      { [ALL_CHANNELS]: everyDrive(), [CONVERSATIONS]: dms(() => [conversation('m1')]) },
+      { driveId: null, selectedConversationId: 'm1' },
+    );
+    await settle(() => {
+      if (!container.querySelector('section[aria-label="Alpha"]')) throw new Error('drive names not loaded');
+    });
+    await rowsLoaded(container, 4);
+
+    assert({
+      given: 'no drive (/dm/[conversationId]) with a conversation open',
+      should: 'list every drive’s channels and the DMs, with the open conversation current',
+      actual: sections(container).map(([label]) => label),
+      expected: ['Alpha', 'Beta', 'Direct messages'],
+    });
+  });
+
+  test('no channels anywhere', async () => {
+    const { container } = show({ [ALL_CHANNELS]: inbox(() => []), [CONVERSATIONS]: dms(() => []) }, { driveId: null });
+    await settle(() => {
+      if (!container.textContent?.includes('No channels yet.')) throw new Error('not loaded');
+    });
+
+    assert({
+      given: 'no channels in any drive',
+      should: 'keep one Channels group that says so',
+      actual: sections(container).map(([label, , note]) => [label, note]),
+      expected: [
+        ['Channels', 'No channels yet.'],
+        ['Direct messages', 'No direct messages yet.'],
+      ],
+    });
+  });
+
+  test('a drive switched to All drives', async () => {
+    const { container, web } = show(
+      { [ALL_CHANNELS]: everyDrive(), [CONVERSATIONS]: dms(() => [conversation('m1')]) },
+      { selectedPageId: 'c1' },
+    );
+    await settle(() => {
+      if (!container.querySelector('section[aria-label="Alpha"]')) throw new Error('drive names not loaded');
+    });
+    await rowsLoaded(container, 4);
+
+    assert({
+      given: 'a drive whose Messages switch says All drives, with a channel open',
+      should: 'group every drive’s channels as Home does, without loading the drive’s own channel list',
+      actual: [sections(container).map(([label]) => label), web.count(CHANNELS)],
+      expected: [['Alpha', 'Beta', 'Direct messages'], 0],
+    });
+  });
+
+  test('Home switched to its own drive', async () => {
+    setSectionScope('messages', 'drive');
+    const { container, web } = show(
+      {
+        [`GET ${messagePaths.driveChannels('home')}`]: channels(() => [inboxChannel('h1', { name: 'notes', driveId: 'home' })]),
+        [CONVERSATIONS]: dms(() => [conversation('m1')]),
+      },
+      { driveId: 'home' },
+    );
+    await rowsLoaded(container, 2);
+
+    assert({
+      given: 'the Home drive with its Messages switch set to the drive',
+      should: 'list only Home’s channels under Channels, then the DMs, without loading every drive’s channels',
+      actual: [sections(container), web.count(ALL_CHANNELS)],
+      expected: [
+        [
+          ['Channels', [['notes', '/home/messages/h1', null, null]], null],
+          ['Direct messages', [['Grace', '/dm/m1', null, null]], null],
+        ],
+        0,
+      ],
+    });
+  });
+});
+
+describe('MessagesPane folds', () => {
+  const routes = () => ({
+    [CHANNELS]: channels(() => [inboxChannel('c1', { name: 'launch', unreadCount: 2 })]),
+    [CONVERSATIONS]: dms(() => [conversation('m1')]),
+  });
+
+  test('folding a group', async () => {
+    const { container } = show(routes());
+    await rowsLoaded(container, 2);
+    fold(container, 'Channels');
+    const toggle = container.querySelector('section[aria-label="Channels"] button');
+
+    assert({
+      given: 'the Channels label clicked',
+      should: 'hide its rows, mark it collapsed with its unread on the label, keep the DMs, and save the fold',
+      actual: [
+        [...container.querySelectorAll('a')].map((link) => link.getAttribute('href')),
+        toggle?.getAttribute('aria-expanded'),
+        toggle?.getAttribute('aria-label'),
+        window.localStorage.getItem(COLLAPSED_GROUPS_KEY),
+      ],
+      expected: [['/dm/m1'], 'false', 'Channels, 2 unread', '["drive:d1"]'],
+    });
+  });
+
+  test('a saved fold', async () => {
+    window.localStorage.setItem(COLLAPSED_GROUPS_KEY, '["direct"]');
+    const { container } = show(routes());
+    await rowsLoaded(container, 1);
+    fold(container, 'Direct messages');
+    await rowsLoaded(container, 2);
+
+    assert({
+      given: 'Direct messages folded in an earlier visit, then opened again',
+      should: 'start folded, then show the DMs and save that nothing is folded',
+      actual: window.localStorage.getItem(COLLAPSED_GROUPS_KEY),
+      expected: '[]',
+    });
+  });
+});
+
+describe('MessagesPane with an object open', () => {
   test('a channel open: the compact groups, with the open one current', async () => {
     const { container, web } = show(
       {
@@ -230,7 +348,7 @@ describe('MessagesPane with an object open or on a user-level route', () => {
       should: 'list the drive’s channels and DMs in the compact groups, with only the open row current',
       actual: [
         sections(container),
-        web.count(INBOX),
+        web.count(ALL_CHANNELS),
       ],
       expected: [
         [
@@ -245,63 +363,6 @@ describe('MessagesPane with an object open or on a user-level route', () => {
           ['Direct messages', [['Grace', '/dm/m1', '1', null]], null],
         ],
         0,
-      ],
-    });
-  });
-
-  test('a channel open with Messages switched to All drives', async () => {
-    setSectionScope('messages', 'all');
-    const { container, web } = show(
-      {
-        [INBOX]: inbox(() => [inboxChannel('c1', { name: 'launch', driveId: 'd1' }), inboxChannel('c3', { name: 'other', driveId: 'd2' })]),
-        [CONVERSATIONS]: dms(() => []),
-      },
-      { selectedPageId: 'c1' },
-    );
-    await rowsLoaded(container, 2);
-
-    assert({
-      given: 'a channel open while the head’s switch says All drives',
-      should: 'list every drive’s channels from the inbox, not only this drive’s',
-      actual: [sections(container)[0], web.count(CHANNELS)],
-      expected: [
-        [
-          'Channels',
-          [
-            ['launch', '/d1/messages/c1', null, 'page'],
-            ['other', '/d2/messages/c3', null, null],
-          ],
-          null,
-        ],
-        0,
-      ],
-    });
-  });
-
-  test('a user-level DM route', async () => {
-    const { container, web } = show(
-      { [CONVERSATIONS]: dms(() => [conversation('m1'), conversation('m2', { otherUser: { ...conversation('m2').otherUser, displayName: null, name: 'Ada' } })]) },
-      { driveId: null, selectedConversationId: 'm2' },
-    );
-    await rowsLoaded(container, 2);
-
-    assert({
-      given: 'no drive (/dm/[conversationId]) with a conversation open',
-      should: 'fetch no channels, say channels belong to a drive, and list the DMs with the open one current',
-      actual: [web.count(CHANNELS), sections(container)],
-      expected: [
-        0,
-        [
-          ['Channels', [], 'Open a drive to see its channels.'],
-          [
-            'Direct messages',
-            [
-              ['Grace', '/dm/m1', null, null],
-              ['Ada', '/dm/m2', null, 'page'],
-            ],
-            null,
-          ],
-        ],
       ],
     });
   });

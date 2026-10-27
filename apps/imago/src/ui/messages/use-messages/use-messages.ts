@@ -23,7 +23,7 @@ import { useApiClient } from '@/api/swr-provider';
 import { useSocketEvent } from '@/realtime/realtime-provider';
 import type { ChannelThread, DirectThread, MessageThread, SidebarBadges } from '../message-model/message';
 import { applyInboxEvent, concerns, inboxEventOf, type ThreadScope } from '../inbox-event/inbox-event';
-import { fetchDirectThreads, fetchDriveChannels, fetchInbox, messagePaths } from '../messages-api/messages-api';
+import { fetchChannels, fetchDirectThreads, fetchDriveChannels, messagePaths } from '../messages-api/messages-api';
 
 /** How long a burst of inbox events waits before the totals are refetched (classic's useSidebarBadges). */
 export const BADGES_DEBOUNCE_MS = 250;
@@ -94,14 +94,14 @@ export const useDriveChannels = (driveId: string | null) => {
   return { channels: data, error: error as unknown, isLoading, retry };
 };
 
-/** The unified inbox (DMs and every drive's channels, newest first) with unread counts, live; nothing while disabled. */
-export const useInbox = (enabled = true) => {
+/** Every drive's CHANNEL pages the viewer can see (newest first), with unread counts, live. */
+export const useAllChannels = () => {
   const client = useApiClient();
-  const { data, error, isLoading, mutate } = useSWR(enabled ? (['imago:inbox'] as const) : null, () => fetchInbox(client));
-  useLiveThreads<MessageThread>(data, mutate, enabled ? { kind: 'all' } : null);
+  const { data, error, isLoading, mutate } = useSWR(['imago:channels'] as const, () => fetchChannels(client));
+  useLiveThreads<ChannelThread>(data, mutate, { kind: 'channel', driveId: null });
   /** Void action: asks the server again after a failure. */
   const retry = useCallback(() => void mutate(), [mutate]);
-  return { threads: data, error: error as unknown, isLoading, retry };
+  return { channels: data, error: error as unknown, isLoading, retry };
 };
 
 /** The viewer's DM conversations (user-level, not per drive), with unread counts, live. */

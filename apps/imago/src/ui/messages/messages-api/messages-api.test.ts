@@ -2,7 +2,7 @@ import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { fakeWeb } from '@/ui/test-support/fake-web';
 import { ApiError } from '@/api/errors';
-import { fetchDirectThreads, fetchDriveChannels, messagePaths } from './messages-api';
+import { fetchChannels, fetchDirectThreads, fetchDriveChannels, messagePaths } from './messages-api';
 import { conversation, inboxChannel } from '../message-model/fixtures';
 
 const caught = async (promise: Promise<unknown>): Promise<unknown> => {
@@ -22,6 +22,8 @@ describe('messagePaths', () => {
       actual: [
         messagePaths.driveChannels('d 1'),
         messagePaths.driveChannels('d1', '2026-10-05T10:00:00.000Z'),
+        messagePaths.channels(),
+        messagePaths.channels('2026-10-05T10:00:00.000Z'),
         messagePaths.conversations(),
         messagePaths.conversations('2026-10-05T10:00:00.000Z'),
         messagePaths.badges,
@@ -29,6 +31,8 @@ describe('messagePaths', () => {
       expected: [
         '/api/inbox?type=channel&driveId=d%201&limit=100',
         '/api/inbox?type=channel&driveId=d1&limit=100&cursor=2026-10-05T10%3A00%3A00.000Z',
+        '/api/inbox?type=channel&limit=100',
+        '/api/inbox?type=channel&limit=100&cursor=2026-10-05T10%3A00%3A00.000Z',
         '/api/messages/conversations?limit=100',
         '/api/messages/conversations?limit=100&cursor=2026-10-05T10%3A00%3A00.000Z',
         '/api/sidebar/badges',
@@ -111,6 +115,33 @@ describe('fetchDriveChannels()', () => {
       should: 'reject with its ApiError',
       actual: error instanceof ApiError ? [error.status, error.message] : error,
       expected: [403, 'Forbidden'],
+    });
+  });
+});
+
+describe('fetchChannels()', () => {
+  test('every drive’s channels', async () => {
+    const web = fakeWeb({
+      [`GET ${messagePaths.channels()}`]: () =>
+        Response.json({
+          items: [
+            inboxChannel('c1', { driveId: 'd1', unreadCount: 2 }),
+            { ...inboxChannel('m1'), type: 'dm' },
+            inboxChannel('c2', { driveId: 'd2' }),
+            inboxChannel('c1', { driveId: 'd1' }),
+          ],
+          pagination: { hasMore: false, nextCursor: null },
+        }),
+    });
+
+    assert({
+      given: 'channels from two drives, a stray DM and a channel repeated across pages',
+      should: 'give each channel once with its own drive, and no DM',
+      actual: (await fetchChannels(web.client)).map(({ id, driveId, unreadCount }) => ({ id, driveId, unreadCount })),
+      expected: [
+        { id: 'c1', driveId: 'd1', unreadCount: 2 },
+        { id: 'c2', driveId: 'd2', unreadCount: 0 },
+      ],
     });
   });
 });
