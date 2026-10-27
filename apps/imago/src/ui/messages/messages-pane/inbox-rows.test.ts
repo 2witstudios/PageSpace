@@ -42,6 +42,19 @@ describe('inboxKeeps()', () => {
       ],
     });
   });
+
+  test('scoped to a drive', () => {
+    assert({
+      given: 'the inbox scoped to the channel’s drive, to another drive, and to every drive',
+      should: 'drop other drives’ channels and always keep the DMs',
+      actual: (['d1', 'd2', null] as const).map((driveId) => [inboxKeeps('all', channel, driveId), inboxKeeps('all', dm, driveId)]),
+      expected: [
+        [true, true],
+        [false, true],
+        [true, true],
+      ],
+    });
+  });
 });
 
 describe('inboxWhen()', () => {

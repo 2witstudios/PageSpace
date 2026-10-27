@@ -7,7 +7,7 @@ import { cn } from '../../cn';
  * 0029); the dense one keeps a hairline from the object.
  */
 export const chatPaneClass = (density: ChatDensity): string =>
-  cn('flex h-full w-full min-w-0 flex-col', density === 'dense' ? 'border-l border-hairline bg-tint' : 'bg-tint');
+  cn('flex h-full w-full min-w-0 flex-col', density === 'dense' ? 'border-l border-hairline bg-background' : 'bg-background');
 
 const threads: Readonly<Record<ChatDensity, string>> = {
   roomy: 'mx-auto flex w-full max-w-thread flex-col gap-4 px-6 py-8',

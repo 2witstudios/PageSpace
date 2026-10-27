@@ -153,7 +153,7 @@ test.describe('imago under next dev in a browser', () => {
       expect(csp, 'the dev server serves the development CSP').toContain("'unsafe-eval'");
 
       await page.waitForURL((url) => url.pathname === `/imago/${homeDriveId}`);
-      const files = railLink(page, 'Files');
+      const files = railLink(page, 'Pages');
       await expect(files).toBeVisible();
 
       // Server-rendered markup is visible before hydration; the shell says when React has it.

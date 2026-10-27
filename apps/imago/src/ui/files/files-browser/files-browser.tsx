@@ -123,7 +123,7 @@ export function FilesBrowser({ driveId, folderIds }: FilesBrowserProps): ReactNo
   const nodes = drawn?.nodes ?? [];
   const path = drawn === undefined ? undefined : resolveFolder(drawn.nodes, folderIds);
   const folder = path?.at(-1);
-  const driveName = drivesFrom(drivesData.data, null)?.find((entry) => entry.id === driveId)?.name ?? 'Files';
+  const driveName = drivesFrom(drivesData.data, null)?.find((entry) => entry.id === driveId)?.name ?? 'Pages';
 
   const create = useCreateFile({
     driveId,
@@ -222,7 +222,7 @@ export function FilesBrowser({ driveId, folderIds }: FilesBrowserProps): ReactNo
       : renderErrorState({ title: 'Could not load these files', retry: tree.retry });
   }
   if (path === undefined) {
-    return renderNotFound({ ...PAGE_NOT_FOUND, homeHref: browseHref(driveId, []), linkLabel: 'Back to Files' });
+    return renderNotFound({ ...PAGE_NOT_FOUND, homeHref: browseHref(driveId, []), linkLabel: 'Back to Pages' });
   }
 
   const parentId = folder?.id ?? null;

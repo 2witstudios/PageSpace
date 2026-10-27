@@ -22,6 +22,15 @@ describe('favoritesOf() (IMC-1.8)', () => {
     });
   });
 
+  test("every drive's favorite pages", () => {
+    assert({
+      given: "apps/web's favorites with no drive to keep",
+      should: 'keep every drive’s pages, each with its drive, in the user’s order',
+      actual: favoritesOf(body, null).map((page) => [page.id, page.driveId]),
+      expected: [['plan', 'studio'], ['elsewhere', 'home'], ['tasks', 'studio']],
+    });
+  });
+
   test('nothing loaded', () => {
     assert({ given: 'no body', should: 'list nothing', actual: favoritesOf(undefined, 'studio'), expected: [] });
   });

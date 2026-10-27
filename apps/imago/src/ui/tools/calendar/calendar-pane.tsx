@@ -73,7 +73,7 @@ function FilterRow({ label, dotClass, on, onToggle, trailing }: {
  * not on-prem; then user events, agent events and tasks. The filters live in the shared calendar
  * filter store, so the grid follows the pane. Picking a date or Event opens the calendar's screen.
  */
-export function CalendarPane({ driveId, close, variant, allDrives = false }: ToolPaneProps & { readonly allDrives?: boolean }): ReactNode {
+export function CalendarPane({ driveId, close, variant, scope: scopeSwitch = null, allDrives = false }: ToolPaneProps & { readonly allDrives?: boolean }): ReactNode {
   const { state, update } = useCalendarState();
   const drives = useDriveStore((store) => store.drives);
   const drive = drives.find((entry) => entry.id === driveId);
@@ -123,6 +123,7 @@ export function CalendarPane({ driveId, close, variant, allDrives = false }: Too
     label: 'Calendars',
     actions: eventButton,
     close,
+    scope: scopeSwitch,
     variant,
     children: (
       <>

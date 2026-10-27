@@ -87,7 +87,7 @@ describe('PhoneDocHead (IMC-11.3)', () => {
       given: 'Q4 Launch Plan inside Launch with three open pages',
       should: 'draw the board head',
       actual: [
-        label(root, 'Back to Files')?.getAttribute('href'),
+        label(root, 'Back to Pages')?.getAttribute('href'),
         root.querySelector('header')?.textContent?.startsWith('LaunchQ4 Launch Plan'),
         root.querySelector('[title="Dana is here"]')?.textContent,
         label(root, '3 open pages')?.textContent,
@@ -105,8 +105,8 @@ describe('PhoneDocHead (IMC-11.3)', () => {
     });
     assert({
       given: 'a page opened from Messages',
-      should: 'go Back to Messages, not Files',
-      actual: [label(root, 'Back to Messages')?.getAttribute('href'), label(root, 'Back to Files')],
+      should: 'go Back to Messages, not Pages',
+      actual: [label(root, 'Back to Messages')?.getAttribute('href'), label(root, 'Back to Pages')],
       expected: ['/d1/messages', null],
     });
   });
@@ -153,7 +153,7 @@ describe('PhoneDocHead (IMC-11.3)', () => {
       given: 'Close all',
       should: 'show the empty line, count 0 and stay on the page',
       actual: [root.querySelector('[role="dialog"] p')?.textContent, label(root, '0 open pages') !== null, navigation.pushed],
-      expected: ['No open pages — pick one in Files or ask Imago.', true, []],
+      expected: ['No open pages — pick one in Pages or ask Imago.', true, []],
     });
     press(root, 'Close open pages');
     assert({ given: 'the scrim pressed', should: 'close the sheet', actual: root.querySelector('[role="dialog"]'), expected: null });
@@ -174,7 +174,7 @@ describe('PhoneDocHead (IMC-11.3)', () => {
       given: 'the only tab closed from the sheet',
       should: 'stay put and say no pages are open',
       actual: [navigation.pushed, root.querySelector('[role="dialog"] p')?.textContent],
-      expected: [[], 'No open pages — pick one in Files or ask Imago.'],
+      expected: [[], 'No open pages — pick one in Pages or ask Imago.'],
     });
   });
 

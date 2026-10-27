@@ -50,7 +50,7 @@ describe('renderRail()', () => {
       given: 'the spine for a drive',
       should: 'list Search, Chat, Files, Messages (with its count), Tasks, Calendar and Agents, More, the bell and Drive settings',
       actual: names(markup()),
-      expected: ['Search', 'Home', 'Files', 'Messages, 4 unread', 'Tasks', ...tools, 'More', 'Notifications', 'Drive settings'],
+      expected: ['Search', 'Home', 'Pages', 'Messages, 4 unread', 'Tasks', ...tools, 'More', 'Notifications', 'Drive settings'],
     });
   });
 
@@ -62,7 +62,7 @@ describe('renderRail()', () => {
       given: 'nothing active',
       should: 'draw the four sections as 48px tiles and Search, the tools and Drive settings as small ones',
       actual: [
-        ['Home', 'Files', 'Tasks'].map(classOf),
+        ['Home', 'Pages', 'Tasks'].map(classOf),
         ['Calendar', 'Console', 'Drive settings'].map(classOf),
         classOf('Search'),
       ],
@@ -169,7 +169,7 @@ describe('renderRail()', () => {
       should: 'mark only Files: as the current page, then as the current section',
       actual: [
         page.match(/aria-current="[^"]+"/g),
-        /aria-label="Files" aria-current="page"/.test(page),
+        /aria-label="Pages" aria-current="page"/.test(page),
         section.match(/aria-current="[^"]+"/g),
       ],
       expected: [['aria-current="page"'], true, ['aria-current="true"']],

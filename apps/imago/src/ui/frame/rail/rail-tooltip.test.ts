@@ -26,7 +26,7 @@ describe('attachRailTooltips()', () => {
   });
 
   test('pointer enter', () => {
-    const button = tile('Files');
+    const button = tile('Pages');
     const tip = button.querySelector<HTMLElement>('[data-rail-tooltip]')!;
     button.dispatchEvent(new Event('pointerover', { bubbles: true }));
     assert({
@@ -38,7 +38,7 @@ describe('attachRailTooltips()', () => {
   });
 
   test('focus', () => {
-    const button = tile('Files');
+    const button = tile('Pages');
     const tip = button.querySelector<HTMLElement>('[data-rail-tooltip]')!;
     button.dispatchEvent(new Event('focusin', { bubbles: true }));
     assert({
@@ -50,7 +50,7 @@ describe('attachRailTooltips()', () => {
   });
 
   test('leaving the tile, then scrolling', () => {
-    const button = tile('Files');
+    const button = tile('Pages');
     const tip = button.querySelector<HTMLElement>('[data-rail-tooltip]')!;
     button.dispatchEvent(new Event('pointerover', { bubbles: true }));
     button.getBoundingClientRect = () => ({ top: 300, height: 40, right: 60, bottom: 340, left: 20, width: 40, x: 20, y: 300, toJSON: () => ({}) });
@@ -65,7 +65,7 @@ describe('attachRailTooltips()', () => {
   });
 
   test('resize while tracked', () => {
-    const button = tile('Files');
+    const button = tile('Pages');
     const tip = button.querySelector<HTMLElement>('[data-rail-tooltip]')!;
     button.dispatchEvent(new Event('pointerover', { bubbles: true }));
     button.getBoundingClientRect = () => ({ top: 200, height: 40, right: 60, bottom: 240, left: 20, width: 40, x: 20, y: 200, toJSON: () => ({}) });
@@ -79,7 +79,7 @@ describe('attachRailTooltips()', () => {
   });
 
   test('after detaching', () => {
-    const button = tile('Files');
+    const button = tile('Pages');
     const tip = button.querySelector<HTMLElement>('[data-rail-tooltip]')!;
     detach();
     button.dispatchEvent(new Event('pointerover', { bubbles: true }));

@@ -56,6 +56,7 @@ import { useActiveStream, useConversationActiveStream } from '@/retained/hooks/u
 import { useStopStream } from '@/retained/hooks/useStopStream';
 import { useAuth } from '@/retained/hooks/useAuth';
 import { useHomeDriveId } from '@/ui/frame/drives/home-drive-context';
+import { useSectionScopes } from '@/ui/frame/drives/use-section-scope';
 import { useAssistantSettingsStore } from '@/retained/stores/useAssistantSettingsStore';
 import type { PendingStream } from '@/retained/stores/usePendingStreamsStore';
 
@@ -108,6 +109,7 @@ export function useAgentSessionChat({
   const pathname = usePathname();
   const { user } = useAuth();
   const homeDriveId = useHomeDriveId();
+  const sectionScopes = useSectionScopes();
 
   useEffect(() => {
     void loadAgentConversationMessages(agent.id, conversationId);
@@ -190,7 +192,7 @@ export function useAgentSessionChat({
         model: agent.aiModel,
         systemPrompt: agent.systemPrompt,
         enabledTools: agent.enabledTools,
-        contextRef: buildContextRef(pathname, homeDriveId),
+        contextRef: buildContextRef(pathname, homeDriveId, sectionScopes),
       }),
     [
       agent.id,
@@ -204,6 +206,7 @@ export function useAgentSessionChat({
       imageGenEnabled,
       pathname,
       homeDriveId,
+      sectionScopes,
     ],
   );
 

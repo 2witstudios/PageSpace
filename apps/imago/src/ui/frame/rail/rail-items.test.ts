@@ -23,7 +23,7 @@ describe('railItems()', () => {
       actual: railItems('drive-1').map(({ id, label, href }) => [id, label, href]),
       expected: [
         ['chat', 'Home', '/drive-1'],
-        ['files', 'Files', '/drive-1/files'],
+        ['files', 'Pages', '/drive-1/files'],
         ['messages', 'Messages', '/drive-1/messages'],
         ['tasks', 'Tasks', '/drive-1/tasks'],
       ],

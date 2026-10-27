@@ -541,7 +541,7 @@ describe('chatContextFor() with names', () => {
         chatContextFor(stageFor('/drive-1/tasks')),
       ],
       expected: [
-        { density: 'roomy', contextLabel: 'Files in context', placeholder: 'Ask across Files, or @mention a page' },
+        { density: 'roomy', contextLabel: 'Pages in context', placeholder: 'Ask across Pages, or @mention a page' },
         {
           density: 'roomy',
           contextLabel: 'Messages in context',
@@ -642,7 +642,7 @@ describe('chatChipFor() (IMC-2.1)', () => {
         chatChipFor(stageFor('/d1/files'), {}),
         chatChipFor(stageFor('/d1'), {}),
       ],
-      expected: ['Q4 Launch Plan', 'Drive settings', 'Calendar', 'Account', 'Files', null],
+      expected: ['Q4 Launch Plan', 'Drive settings', 'Calendar', 'Account', 'Pages', null],
     });
   });
 

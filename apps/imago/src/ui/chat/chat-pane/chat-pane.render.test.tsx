@@ -80,7 +80,7 @@ describe('renderChatPane()', () => {
     const view = dom({
       leading: <button type="button" aria-label="Show sidebar" />,
       trailing: <button type="button" aria-label="Collapse Imago" />,
-      chip: 'Files',
+      chip: 'Pages',
     });
     const header = view.querySelector('aside > header');
     assert({

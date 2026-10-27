@@ -15,7 +15,7 @@ import { dispatch, transactions } from '../../store/transactions';
  * here navigates away, so live shells and streaming chats survive every click. On Home, the
  * dashboard, it lists every drive's sessions, as classic's All drives focus does.
  */
-export function ConsolePane({ driveId, close, variant, allDrives = false }: ToolPaneProps & { readonly allDrives?: boolean }): ReactNode {
+export function ConsolePane({ driveId, close, variant, scope: scopeSwitch = null, allDrives = false }: ToolPaneProps & { readonly allDrives?: boolean }): ReactNode {
   // A pick here writes its URL from the store's drive scope. The route's AgentsSurface sets it
   // too, but a phone shows this pane as its screen without the route, so the pane sets it itself.
   const scope = allDrives ? null : driveId;
@@ -36,9 +36,10 @@ export function ConsolePane({ driveId, close, variant, allDrives = false }: Tool
     title: 'Console',
     label: 'Console: sessions',
     close,
+    scope: scopeSwitch,
     variant,
     children: (
-      <RetainedSurface>
+      <RetainedSurface className="bg-transparent">
         <AgentsSidebar focus={allDrives ? ALL_DRIVES : undefined} />
       </RetainedSurface>
     ),
