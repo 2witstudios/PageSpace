@@ -79,8 +79,8 @@ describe('route-level injection — the same discipline as ask_user, gated on a 
     expect(source).toMatch(/\.\.\.pauseToolNames\.map\(\(name\) => hasToolCall\(name\)\)/);
   });
 
-  it('the page turn only offers the tool with the sandbox on (the helper gets no conversation otherwise); a helper given no binding injects nothing', () => {
-    expect(read('lib/ai/chat-pipeline/page-chat-turn.ts')).toMatch(/withEnvApprovalTool\(filteredTools, sandboxEnabled \? conversationId : undefined\)/);
+  it('the page turn only offers the tool with the sandbox on, or to Imago as to the Global Assistant (the helper gets no conversation otherwise); a helper given no binding injects nothing', () => {
+    expect(read('lib/ai/chat-pipeline/page-chat-turn.ts')).toMatch(/withEnvApprovalTool\(filteredTools, imagoContext \|\| sandboxEnabled \? conversationId : undefined\)/);
   });
 
   it('the base registry builder never mentions it (no accidental catalog entry)', () => {

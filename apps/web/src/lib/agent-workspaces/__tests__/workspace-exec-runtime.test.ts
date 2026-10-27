@@ -21,6 +21,7 @@ vi.mock('@pagespace/lib/services/sandbox/tool-runners', () => ({ runBashInSandbo
 vi.mock('@/lib/ai/tools/sandbox-tools-runtime', () => ({
   buildRealSandboxRunDeps: mockBuildRunDeps,
   productionSandboxGate: mockGate,
+  ownSandboxTarget: (c: { conversationId: string; driveId?: string }) => ({ id: c.conversationId, kind: 'conversation', label: 'own', driveId: c.driveId ?? null }),
 }));
 
 import { execInWorkspace, resolveWorkspaceExecActorContext } from '../workspace-exec-runtime';
@@ -87,7 +88,8 @@ describe('execInWorkspace', () => {
   it('given an allowed call, should run through deps whose session resolver answers the ROUTE-AUTHORIZED row', async () => {
     const result = await execInWorkspace({ session: DRIVE_SESSION, ctx, actor: CALLER, command: 'ls', cwd: 'repo', timeoutMs: 9 });
     expect(result).toEqual({ success: true, stdout: 'ok', stderr: '', exitCode: 0, truncated: false });
-    expect(mockRunBash).toHaveBeenCalledWith({ command: 'ls', cwd: 'repo', timeoutMs: 9, ctx, deps: { deps: true } });
+    // The workspace's OWN sandbox is named explicitly (leaf C: acquireSandbox has no fallback target).
+    expect(mockRunBash).toHaveBeenCalledWith({ command: 'ls', cwd: 'repo', timeoutMs: 9, ctx: { ...ctx, environment: { id: ctx.conversationId, kind: 'conversation', label: 'own', driveId: ctx.driveId ?? null } }, deps: { deps: true } });
     // The gate and the provisioning re-check are both asked of the requester's credential (SEC-2/3).
     expect(mockGate).toHaveBeenCalledWith(ctx, CALLER);
     expect(mockBuildRunDeps).toHaveBeenCalledWith(expect.objectContaining({ actor: CALLER }));
