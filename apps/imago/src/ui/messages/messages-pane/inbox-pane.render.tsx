@@ -7,7 +7,7 @@ import { renderSegmentedControl } from '../../components/segmented-control/segme
 import { renderUnreadCount } from '../../components/unread-count/unread-count.render';
 import { cn } from '../../cn';
 import type { InboxFilter, InboxRowView } from './inbox-rows';
-import { messageGlyphClass, messagesNoteClass } from './messages-pane-class';
+import { messagesNoteClass } from './messages-pane-class';
 
 export type InboxPaneRenderProps = {
   /** Loading and failed carry no rows; a ready list may still be empty under its filter. */
@@ -34,8 +34,12 @@ const emptyNote: Readonly<Record<InboxFilter, string>> = {
 const rowClass = (unread: boolean): string =>
   cn(
     'flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm no-underline transition-colors duration-120 ease-standard hover:bg-surface-overlay hover:no-underline',
-    unread ? 'text-ink' : 'text-ink-muted hover:text-ink',
+    // On a phone the list is the whole screen, not a pane receding beside a thread: full ink.
+    unread ? 'text-ink' : 'text-ink-muted hover:text-ink phone:text-ink',
   );
+
+/** A channel's mark: a 36px tile, the size of a DM's face, so the two kinds of row line up. */
+const channelTileClass = 'grid size-avatar-md flex-none place-items-center rounded-lg bg-fill text-ink-muted';
 
 /** One row: the glyph or face, the name and time, then the "Sender: preview" line with its unread pill. */
 const renderRow = (row: InboxRowView): ReactNode => (
@@ -47,7 +51,7 @@ const renderRow = (row: InboxRowView): ReactNode => (
       aria-label={row.unreadCount > 0 ? `${row.name}, ${row.unreadCount} unread` : row.name}
     >
       {row.kind === 'channel'
-        ? renderIcon({ name: 'hash', className: cn(messageGlyphClass, 'size-8 justify-center') })
+        ? <span className={channelTileClass} aria-hidden="true">{renderIcon({ name: 'hash', size: 18 })}</span>
         : renderAvatar({ name: row.name, size: 'md', src: row.avatarUrl ?? undefined })}
       <span className="flex min-w-0 flex-1 flex-col gap-1">
         <span className="flex min-w-0 items-baseline gap-2">

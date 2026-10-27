@@ -1,5 +1,5 @@
 import { describe, it, beforeEach, afterEach, vi } from 'vitest';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import type { UIMessageChunk } from 'ai';
 import type { ChannelEnd } from '../stream-channel';
 import type { FrameCursorRead } from '../frame-log-cursor';

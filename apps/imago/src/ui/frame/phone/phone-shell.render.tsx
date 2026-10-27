@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import type { Stage } from '../stage/stage';
-import { phoneMainClass, phoneShellClass } from './phone-shell-class';
+import { phoneMainBarlessClass, phoneMainClass, phoneShellClass } from './phone-shell-class';
 
 export type PhoneShellRenderProps = {
   readonly stage: Stage;
@@ -27,7 +27,7 @@ export function renderPhoneShell({ stage, hydrated, screen, ask, bar, palette }:
       data-object={stage.object?.kind}
       data-hydrated={hydrated ? '' : undefined}
     >
-      <main className={phoneMainClass}>{screen}</main>
+      <main className={bar === null ? phoneMainBarlessClass : phoneMainClass}>{screen}</main>
       {ask}
       {bar}
       {palette}

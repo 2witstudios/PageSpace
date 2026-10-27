@@ -3,7 +3,7 @@ import { toDashboardTask } from '../to-dashboard-task';
 import type { TaskItem, TaskStatusConfig } from '../task-list-types';
 import { getStatusDisplay } from '@/components/tasks/task-helpers';
 import { isCompletedStatus } from '../task-list-types';
-import { assert } from '@/hooks/__tests__/riteway';
+import { assert } from '@/test/riteway';
 
 const task = (over: Partial<TaskItem> & { id: string }): TaskItem => ({
   userId: 'u1',

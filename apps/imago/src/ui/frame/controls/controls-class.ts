@@ -1,6 +1,6 @@
-/** A 28px ghost control in a 48px column head (SPEC v2/v3 "xc"). */
+/** A 28px ghost control in a 48px column head (SPEC v2/v3 "xc"); 40px in a phone head. */
 export const headControlClass =
-  'flex size-head-control flex-none cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-ink-muted no-underline hover:bg-fill hover:text-ink hover:no-underline';
+  'flex size-head-control flex-none cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-ink-muted no-underline hover:bg-fill hover:text-ink hover:no-underline phone:size-spine-tile-small phone:rounded-lg phone:text-ink';
 
 /** "Ask" in the page head while Imago is collapsed: a spine-blue pill. */
 export const askPillClass =

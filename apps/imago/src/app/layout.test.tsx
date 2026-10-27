@@ -173,3 +173,27 @@ describe('RootLayout providers', () => {
     });
   });
 });
+
+describe('RootLayout viewport', () => {
+  test('safe areas', async () => {
+    const { viewport } = await import('./layout');
+
+    assert({
+      given: 'the root viewport',
+      should: 'cover the notch and home indicator so env(safe-area-inset-*) reports them',
+      actual: [viewport.width, viewport.initialScale, viewport.viewportFit],
+      expected: ['device-width', 1, 'cover'],
+    });
+  });
+
+  test('pinch zoom', async () => {
+    const { viewport } = await import('./layout');
+
+    assert({
+      given: 'the root viewport',
+      should: 'not cap the zoom level, so users can enlarge any page',
+      actual: 'maximumScale' in viewport,
+      expected: false,
+    });
+  });
+});

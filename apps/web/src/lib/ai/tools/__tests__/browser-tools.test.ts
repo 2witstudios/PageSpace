@@ -1,5 +1,5 @@
 import { describe, it } from 'vitest';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import { createBrowserTools, toModelOutputForBrowserScreenshot, type OperateBrowser } from '../browser-tools';
 import type { BrowserControlResponse, BrowserOperation } from '@pagespace/browser-worker/browser-operation';
 import type { SandboxActorContext } from '@pagespace/lib/services/sandbox/tool-runners';

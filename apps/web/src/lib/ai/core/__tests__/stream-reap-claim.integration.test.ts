@@ -1,5 +1,5 @@
 import { describe, it, beforeAll, beforeEach, afterAll } from 'vitest';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import { db } from '@pagespace/db/db';
 import { eq, sql } from '@pagespace/db/operators';
 import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';

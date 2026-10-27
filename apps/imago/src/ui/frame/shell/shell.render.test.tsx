@@ -140,7 +140,7 @@ describe('renderShell()', () => {
     assert({
       given: 'the shell',
       should: 'fill the viewport on the spine’s blue rather than float in it',
-      actual: markup('/drive-1').includes('class="flex h-screen w-full overflow-hidden bg-spine"'),
+      actual: markup('/drive-1').includes('class="flex h-dvh w-full overflow-hidden bg-spine"'),
       expected: true,
     });
   });

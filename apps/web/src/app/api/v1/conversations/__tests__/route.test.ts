@@ -1,5 +1,5 @@
 import { describe, test, beforeEach, vi } from 'vitest';
-import { assert } from '@/lib/ai/openai-api/__tests__/riteway';
+import { assert } from '@/test/riteway';
 
 // --- module mocks (hoisted before imports) ---
 

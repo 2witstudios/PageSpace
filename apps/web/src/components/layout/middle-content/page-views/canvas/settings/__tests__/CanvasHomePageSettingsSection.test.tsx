@@ -1,7 +1,7 @@
 import { describe, it, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { assert } from '@/stores/__tests__/riteway';
+import { assert } from '@/test/riteway';
 
 // ============================================================================
 // Regression test for a Codex-flagged bug: a canvas page's published URL

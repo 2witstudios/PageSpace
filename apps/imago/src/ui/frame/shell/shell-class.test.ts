@@ -139,7 +139,7 @@ describe('shell frame classes', () => {
       given: 'the shell',
       should: 'fill the viewport as one row on the spine’s blue that never scrolls',
       actual: shellClass,
-      expected: 'flex h-screen w-full overflow-hidden bg-spine',
+      expected: 'flex h-dvh w-full overflow-hidden bg-spine',
     });
   });
 
