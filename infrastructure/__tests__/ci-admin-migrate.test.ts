@@ -4,6 +4,7 @@ import { resolve } from 'path';
 import { parse } from 'yaml';
 
 const WORKFLOW_PATH = resolve(__dirname, '../../.github/workflows/docker-images.yml');
+const RUN_FLY_MIGRATION_SCRIPT_PATH = resolve(__dirname, '../../scripts/deploy/run-fly-migration.sh');
 
 interface WorkflowStep {
   name?: string;
@@ -13,6 +14,7 @@ interface WorkflowStep {
 }
 
 interface WorkflowFile {
+  env?: Record<string, string>;
   jobs: Record<string, { steps?: WorkflowStep[] }>;
 }
 
@@ -42,19 +44,44 @@ describe('docker-images.yml admin-DB migrate step', () => {
     expect(adminStep.if).toContain('ADMIN_DB_MIGRATIONS_ENABLED');
   });
 
-  it('given the admin migrations step, should run db:migrate:admin on a one-shot machine', () => {
-    expect(adminStep.run).toContain('flyctl machine run');
+  // The one-shot-machine mechanics (flyctl machine run, polling for
+  // failed/destroyed states) live in scripts/deploy/run-fly-migration.sh —
+  // shared by the main, admin and staging migration steps, so it's tested once
+  // (statically here, end-to-end under "migration polling behavior" below)
+  // instead of duplicated inline in each step.
+  const RUN_FLY_MIGRATION_SCRIPT = readFileSync(RUN_FLY_MIGRATION_SCRIPT_PATH, 'utf-8');
+
+  it('given the admin migrations step, should run db:migrate:admin via the shared one-shot-machine script', () => {
+    expect(adminStep.run).toContain('scripts/deploy/run-fly-migration.sh');
     expect(adminStep.run).toContain('db:migrate:admin');
   });
 
-  it('given the admin migrations step, should use the same migrate image as the main step', () => {
-    expect(adminStep.run).toContain('pagespace-migrate:$RELEASE_IMAGE_TAG');
-    expect(steps[mainIdx].run).toContain('pagespace-migrate:$RELEASE_IMAGE_TAG');
+  it('given the shared one-shot-machine script, should run flyctl machine run', () => {
+    expect(RUN_FLY_MIGRATION_SCRIPT).toContain('flyctl machine run');
   });
 
-  it('given the admin migrations step, should fail on failed/destroyed machine states like the main step', () => {
-    expect(adminStep.run).toContain('failed');
-    expect(adminStep.run).toContain('destroyed');
+  it('given the admin migrations step, should use the same migrate image and release tag as the main step', () => {
+    for (const run of [adminStep.run, steps[mainIdx].run]) {
+      expect(run).toContain('ghcr.io/2witstudios/pagespace-migrate "$RELEASE_IMAGE_TAG"');
+    }
+  });
+
+  it('given the admin and main migrations steps, should never pin the mutable :latest tag', () => {
+    // Both steps pass "$RELEASE_IMAGE_TAG" (asserted above); pin what it resolves to.
+    expect(workflow.env?.RELEASE_IMAGE_TAG).toBe('sha-${{ github.sha }}');
+    for (const run of [adminStep.run, steps[mainIdx].run]) {
+      expect(run).not.toMatch(/pagespace-migrate[:\s]+["']?latest\b/);
+    }
+  });
+
+  it('given the admin migrations step, should delegate to the same script as the main step (so it fails on failed/destroyed machine states identically)', () => {
+    expect(adminStep.run).toContain('scripts/deploy/run-fly-migration.sh');
+    expect(steps[mainIdx].run).toContain('scripts/deploy/run-fly-migration.sh');
+  });
+
+  it('given the shared one-shot-machine script, should fail on failed/destroyed machine states', () => {
+    expect(RUN_FLY_MIGRATION_SCRIPT).toContain('failed');
+    expect(RUN_FLY_MIGRATION_SCRIPT).toContain('destroyed');
   });
 
   it('given the main migrations step, should NOT be conditional (main DB always migrates)', () => {
@@ -84,13 +111,18 @@ describe('docker-images.yml admin-DB migrate step', () => {
 
 describe('migration evidence and diagnostics guards', () => {
   const steps = loadWorkflow().jobs['deploy-fly'].steps ?? [];
-  it.each(['Run migrations', 'Run admin migrations'])('%s waits for evidence and preserves diagnostics', name => {
-    const run = steps.find(step => step.name === name)?.run ?? '';
-    expect(run).toContain('--arg mode failed');
-    expect(run).toContain('TIMEOUT=900');
-    expect(run).toContain('trap capture_migration_diagnostics EXIT');
-    expect(run).not.toContain('flyctl machine logs');
-    expect(run).toContain('Exit evidence pending');
+  const script = readFileSync(RUN_FLY_MIGRATION_SCRIPT_PATH, 'utf-8');
+  it.each(['Run migrations', 'Run admin migrations'])('%s delegates to the evidence-checking script with its own diagnostics dir', name => {
+    const step = steps.find(s => s.name === name);
+    expect(step?.run).toContain('scripts/deploy/run-fly-migration.sh pagespace-web');
+    expect(step?.env?.DIAGNOSTICS_DIR).toContain('${{ runner.temp }}/migration-diagnostics/');
+  });
+  it('the shared script waits for evidence and preserves diagnostics', () => {
+    expect(script).toContain('--arg mode failed');
+    expect(script).toContain('TIMEOUT=900');
+    expect(script).toContain('trap capture_migration_diagnostics EXIT');
+    expect(script).not.toContain('flyctl machine logs');
+    expect(script).toContain('Exit evidence pending');
   });
   it('uploads only the sanitized directory even after failure', () => {
     const upload = steps.find(step => step.name === 'Upload migration diagnostics');
@@ -113,16 +145,23 @@ describe('Imago release deployment', () => {
 });
 
 describe('migration polling behavior', () => {
-  it.each(['Run migrations', 'Run admin migrations'])('%s waits for delayed evidence and fails promptly on a bad exit', async name => {
+  // Runs the real scripts/deploy/run-fly-migration.sh end-to-end (the script both
+  // staging and prod migrations use), with docker/flyctl/curl/sleep/timeout stubbed
+  // as exported bash functions so no network or Fly account is touched.
+  it.each(['pagespace-web', 'pagespace-web-staging'])('%s waits for delayed evidence and fails promptly on a bad exit', async app => {
     const { spawnSync } = await import('node:child_process');
-    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { mkdtempSync, rmSync, readFileSync: read } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const dir = mkdtempSync(resolve(tmpdir(), 'fly-poll-'));
     try {
-      const run = loadWorkflow().jobs['deploy-fly'].steps?.find(step => step.name === name)?.run ?? '';
-      const polling = run.slice(run.indexOf('TIMEOUT=900'));
       for (const scenario of ['delayed', 'failed', 'missing']) {
-        const result = spawnSync('bash', ['-e', '-o', 'pipefail', '-c', `
+        const result = spawnSync('bash', ['-c', `
+          docker() { :; }
+          flyctl() {
+            echo "flyctl $*" >> "$CALLS"
+            if [ "$1 $2" = "machine run" ]; then echo "Machine ID: 0123abcd"; echo "Error: failed to reach desired start state"; fi
+          }
+          timeout() { shift; "$@"; }
           curl() {
             local output count
             while [ "$#" -gt 0 ]; do
@@ -142,8 +181,21 @@ describe('migration polling behavior', () => {
             printf 200
           }
           sleep() { :; }
-          ${polling}
-        `], { cwd: resolve(__dirname, '../..'), encoding: 'utf8', env: { ...process.env, SCENARIO: scenario, COUNTER: resolve(dir, scenario), FLY_API_TOKEN: 'fake', MACHINE_ID: 'fake' } });
+          export -f docker flyctl timeout curl sleep
+          bash "$SCRIPT" "$APP" ghcr.io/2witstudios/pagespace-migrate sha-test
+        `], {
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            SCRIPT: RUN_FLY_MIGRATION_SCRIPT_PATH,
+            APP: app,
+            SCENARIO: scenario,
+            COUNTER: resolve(dir, `${scenario}.count`),
+            CALLS: resolve(dir, `${scenario}.calls`),
+            DIAGNOSTICS_DIR: resolve(dir, `${scenario}-diagnostics`),
+            FLY_API_TOKEN: 'fake',
+          },
+        });
         expect(result.status, result.stderr).toBe(scenario === 'delayed' ? 0 : 1);
         if (scenario === 'delayed') {
           expect(result.stdout).toContain('Exit evidence pending');
@@ -154,9 +206,13 @@ describe('migration polling behavior', () => {
         } else {
           expect(result.stdout).toContain('timed out after 900s');
         }
+        // Success or failure, the EXIT trap destroys the one-shot machine in the
+        // app it ran in (never a hard-coded one).
+        expect(read(resolve(dir, `${scenario}.calls`), 'utf8')).toContain(`flyctl machine destroy 0123abcd --app ${app} --force`);
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+    // The "missing" scenario walks all 90 polls of the 900s deadline (sleep stubbed).
+  }, 120_000);
 });

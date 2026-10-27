@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Sourced by both migration steps. Never persist raw machine config or log text.
+# Sourced by scripts/deploy/run-fly-migration.sh. Never persist raw machine config or log text.
+# FLY_APP selects the app the one-shot machine runs in (default: pagespace-web).
 capture_migration_diagnostics() {
   local result=$?
   trap - EXIT
@@ -24,10 +25,10 @@ capture_migration_diagnostics() {
   if [ -n "$MACHINE_ID" ]; then
     # Logs can contain credentials unknown to this runner (inherited app secrets).
     # Keep only diagnostic vocabulary, never arbitrary message text or config.
-    timeout 30 flyctl logs --instance "$MACHINE_ID" --app pagespace-web --no-tail 2>/dev/null |
+    timeout 30 flyctl logs --instance "$MACHINE_ID" --app "${FLY_APP:-pagespace-web}" --no-tail 2>/dev/null |
       jq -Rr '[scan("(?i)\\b(migration|migrations|migrated|error|failed|failure|success|succeeded|complete|completed|timeout|panic|oom|killed)\\b")] | flatten | select(length > 0) | join(" ")' \
       > "$DIAGNOSTICS_DIR/logs.txt"
-    flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force 2>/dev/null || true
+    flyctl machine destroy "$MACHINE_ID" --app "${FLY_APP:-pagespace-web}" --force 2>/dev/null || true
   fi
   exit "$result"
 }
