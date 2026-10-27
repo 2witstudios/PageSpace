@@ -1330,11 +1330,12 @@ describe('only the GLOBAL assistant reaches a persistent environment (Codex P1, 
 describe('createResolveSandboxActorContext — the conversation kind rides the actor context', () => {
   it('marks a global chat source global, and every other surface page', async () => {
     const resolve = createResolveSandboxActorContext(makeDeps());
-    const global = await resolve({ userId: 'u1', conversationId: 'conv-1', chatSource: { type: 'global' } });
+    const global = await resolve({ userId: 'u1', accessActor: U1, conversationId: 'conv-1', chatSource: { type: 'global' } });
     expect('error' in global ? null : global.conversationKind).toBe('global');
 
     const page = await resolve({
       userId: 'u1',
+      accessActor: U1,
       conversationId: 'conv-1',
       chatSource: { type: 'page', agentPageId: 'page-agent-1' },
       locationContext: { currentDrive: { id: 'd1', name: 'D', slug: 'd' } },
@@ -1344,6 +1345,7 @@ describe('createResolveSandboxActorContext — the conversation kind rides the a
     // No chatSource at all: page, because it has not established otherwise.
     const unknown = await resolve({
       userId: 'u1',
+      accessActor: U1,
       conversationId: 'conv-1',
       locationContext: { currentDrive: { id: 'd1', name: 'D', slug: 'd' } },
     });

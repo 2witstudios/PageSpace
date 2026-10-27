@@ -11,6 +11,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { anyReachableEnvironmentPayerAllows } from '../reachable-environment-payers';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * Derived from the function's own signature rather than imported: the module
@@ -34,7 +35,7 @@ describe('anyReachableEnvironmentPayerAllows — asked once per DRIVE', () => {
   it('given TWO machines in ONE drive, should resolve that payer ONCE and still be eligible', async () => {
     const asked: string[] = [];
     const allowed = await anyReachableEnvironmentPayerAllows({
-      userId: 'u1',
+      actor: credentialActor('u1', null),
       authorize: async () => true,
       deps: deps({
         listEnvironments: async () => [{ driveId: 'drive-1' }, { driveId: 'drive-1' }],
@@ -53,7 +54,7 @@ describe('anyReachableEnvironmentPayerAllows — asked once per DRIVE', () => {
   it('given machines across TWO drives, should ask twice — the dedup collapses duplicates, never distinct drives', async () => {
     const asked: string[] = [];
     const allowed = await anyReachableEnvironmentPayerAllows({
-      userId: 'u1',
+      actor: credentialActor('u1', null),
       authorize: async () => false,
       deps: deps({
         listEnvironments: async () => [{ driveId: 'drive-1' }, { driveId: 'drive-2' }, { driveId: 'drive-1' }],
@@ -71,7 +72,7 @@ describe('anyReachableEnvironmentPayerAllows — asked once per DRIVE', () => {
     // A vanished drive is not an answer about a different one.
     const authorized: string[] = [];
     const allowed = await anyReachableEnvironmentPayerAllows({
-      userId: 'u1',
+      actor: credentialActor('u1', null),
       authorize: async (payer) => {
         authorized.push(payer.payerId);
         return true;
@@ -89,7 +90,7 @@ describe('anyReachableEnvironmentPayerAllows — asked once per DRIVE', () => {
   it('stops at the FIRST drive that allows — later drives are not asked', async () => {
     const authorized: string[] = [];
     await anyReachableEnvironmentPayerAllows({
-      userId: 'u1',
+      actor: credentialActor('u1', null),
       authorize: async (payer) => {
         authorized.push(payer.payerId);
         return true;
@@ -108,7 +109,7 @@ describe('anyReachableEnvironmentPayerAllows — asked once per DRIVE', () => {
     // again as a short-circuit made every CLOUD env unreachable in production.
 
     const listingThrew = await anyReachableEnvironmentPayerAllows({
-      userId: 'u1',
+      actor: credentialActor('u1', null),
       authorize: async () => true,
       deps: deps({
         listEnvironments: async () => {
@@ -119,7 +120,7 @@ describe('anyReachableEnvironmentPayerAllows — asked once per DRIVE', () => {
     expect(listingThrew).toBe(false);
 
     const nothingReachable = await anyReachableEnvironmentPayerAllows({
-      userId: 'u1',
+      actor: credentialActor('u1', null),
       authorize: async () => true,
       deps: deps({ listEnvironments: async () => [] }),
     });
