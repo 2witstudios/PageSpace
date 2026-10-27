@@ -58,7 +58,7 @@ Connections are how you message people and collaborate with them directly, outsi
 
 Inviting someone new doesn't loosen anything. The same permission checks run whether the person has an account or not: you can only share a page you're allowed to share, and you can only invite into a drive you manage.
 
-A few guardrails come along too. You need a verified email address to send invites, sending is rate-limited, and a connection request never tells you whether the other person already has an account. If your drive belongs to an organization that doesn't allow outside guests, sharing with someone outside it is refused rather than quietly let through.
+A few guardrails come along too. You need a verified email address to send invites, and sending them is rate-limited. If your drive belongs to an organization that doesn't allow outside guests, sharing with someone outside it is refused rather than quietly let through.
 
 ## Why it matters
 
