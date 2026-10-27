@@ -1,6 +1,6 @@
 import { describe, it, vi } from 'vitest';
 import { render } from '@testing-library/react';
-import { assert } from '@/stores/__tests__/riteway';
+import { assert } from '@/test/riteway';
 
 // ============================================================================
 // Regression test for a Codex-flagged bug: `disabled` was applied to every

@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { assert } from '@/stores/__tests__/riteway';
+import { assert } from '@/test/riteway';
 
 // ============================================================================
 // Tests for PageLinkSection — surfaces the direct page link and page ID in

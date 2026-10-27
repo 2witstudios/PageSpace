@@ -1,7 +1,7 @@
 import { describe, it, vi, beforeEach } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { assert } from '@/stores/__tests__/riteway';
+import { assert } from '@/test/riteway';
 import { usePublishStatusStore } from '@/stores/usePublishStatusStore';
 
 // ============================================================================

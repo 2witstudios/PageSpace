@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 
 // Mock cuid2 to return predictable IDs
 vi.mock('@paralleldrive/cuid2', () => ({

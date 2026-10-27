@@ -1,6 +1,6 @@
 import { describe, it } from 'vitest';
 import type { ModelMessage } from 'ai';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import {
   classifyAttempt,
   calledFinishTool,

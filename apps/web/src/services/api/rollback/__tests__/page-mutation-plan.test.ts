@@ -1,5 +1,5 @@
 import { describe, it, vi } from 'vitest';
-import { assert } from '@/stores/__tests__/riteway';
+import { assert } from '@/test/riteway';
 
 // computePageMutation calls computePageStateHash, whose module imports the db
 // connection at load time. Stub the connection so the pure hash/format helpers

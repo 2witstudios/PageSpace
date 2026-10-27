@@ -9,7 +9,7 @@
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { assert } from '@/hooks/__tests__/riteway';
+import { assert } from '@/test/riteway';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { SWRConfig } from 'swr';
 import { useTaskSubTasks, shouldFetchSubTasks, getSubTaskPageKey, getSubTasksHasMore, SUB_TASKS_CACHE_NAMESPACE } from '../useTaskSubTasks';

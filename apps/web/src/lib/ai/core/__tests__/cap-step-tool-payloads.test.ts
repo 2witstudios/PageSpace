@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { ModelMessage } from 'ai';
-import { assert } from '@/lib/ai/tools/__tests__/riteway';
+import { assert } from '@/test/riteway';
 import {
   capStepToolPayloads,
   KEEP_RECENT_RESULT_STEPS,

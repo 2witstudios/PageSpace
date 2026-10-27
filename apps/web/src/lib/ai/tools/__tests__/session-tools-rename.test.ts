@@ -28,7 +28,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Tool } from 'ai';
 import { createSessionTools, type SessionToolsDeps } from '../session-tools';
 import type { ToolExecutionContext } from '../../core/types';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const OWNER = 'user-owner';

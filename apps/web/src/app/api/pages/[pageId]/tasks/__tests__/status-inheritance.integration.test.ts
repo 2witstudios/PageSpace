@@ -23,7 +23,7 @@
  */
 import { describe, it, beforeAll, expect, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
-import { assert } from '@/hooks/__tests__/riteway';
+import { assert } from '@/test/riteway';
 import { db } from '@pagespace/db/db';
 import { eq, asc } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';

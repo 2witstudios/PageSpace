@@ -6,7 +6,7 @@
 // file under the node env keeps both on the same (undici) implementation.
 import { readSpendFallbackHeaders } from '@pagespace/lib/billing/spend-fallback';
 import { describe, test, beforeEach, vi } from 'vitest';
-import { assert } from '@/lib/ai/openai-api/__tests__/riteway';
+import { assert } from '@/test/riteway';
 
 // --- module mocks (must be hoisted before imports) ---
 

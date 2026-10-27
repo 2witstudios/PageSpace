@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { assert } from '@/lib/ai/core/__tests__/riteway';
+import { assert } from '@/test/riteway';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
 
 // --- module mocks (no real billing / OpenRouter / S3 / DB) ---
