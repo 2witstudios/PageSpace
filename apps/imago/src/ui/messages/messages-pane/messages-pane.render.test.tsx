@@ -2,9 +2,8 @@ import { createElement as h, type ReactNode } from 'react';
 import { renderToString } from 'react-dom/server';
 import { describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { listGroupLabelClass } from '../../components/list-group/list-group-class';
 import { unreadCountClass } from '../../components/unread-count/unread-count-class';
-import { messageRowClass, messagesNoteClass } from './messages-pane-class';
+import { messageGroupToggleClass, messageRowClass, messagesNoteClass } from './messages-pane-class';
 
 // next/link is the seam that prefetches: here it shows what it was handed.
 vi.mock('next/link', () => ({
@@ -12,9 +11,10 @@ vi.mock('next/link', () => ({
     h('a', { href, 'data-prefetch': String(prefetch), ...rest }, children),
 }));
 
-const { renderMessagesPane } = await import('./messages-pane.render');
-type Props = Parameters<typeof renderMessagesPane>[0];
-type Row = Extract<Props['channels'], { status: 'ready' }>['rows'][number];
+const { channelNotes, directNotes, renderMessagesPane } = await import('./messages-pane.render');
+type Section = Parameters<typeof renderMessagesPane>[0]['groups'][number]['section'];
+type Row = Extract<Section, { status: 'ready' }>['rows'][number];
+type Props = { readonly channels: Section; readonly direct: Section; readonly folded?: readonly string[] };
 
 const launch: Row = {
   id: 'c1',
@@ -36,41 +36,76 @@ const grace: Row = {
   selected: false,
 };
 
-const html = (overrides: Partial<Props> = {}): string =>
-  renderToString(
+const html = (overrides: Partial<Props> = {}): string => {
+  const { channels, direct, folded }: Props = {
+    channels: { status: 'ready', rows: [launch, general] },
+    direct: { status: 'ready', rows: [grace] },
+    ...overrides,
+  };
+  const group = (key: string, label: string, section: Section, notes: typeof channelNotes) => ({
+    key,
+    label,
+    section,
+    notes,
+    open: !(folded ?? []).includes(key),
+    toggle: () => {},
+  });
+  return renderToString(
     renderMessagesPane({
-      channels: { status: 'ready', rows: [launch, general] },
-      direct: { status: 'ready', rows: [grace] },
-      ...overrides,
+      groups: [group('drive:d1', 'Channels', channels, channelNotes), group('direct', 'Direct messages', direct, directNotes)],
     }),
   );
+};
 
 /** The opening tag of the link to `href`. */
 const linkTo = (markup: string, href: string): string => markup.match(new RegExp(`<a[^>]*href="${href}"[^>]*>`))?.[0] ?? '';
 
 describe('renderMessagesPane()', () => {
-  test('two sections', () => {
+  test('two groups', () => {
     const markup = html();
     assert({
       given: 'channels and direct messages',
-      should: 'show a Channels section, then a Direct messages section, labelled in sentence case',
+      should: 'show a Channels group, then a Direct messages group, each labelled in sentence case by an open fold control',
       actual: [
-        [...markup.matchAll(/<section aria-label="([^"]+)"><h2 class="([^"]+)">([^<]+)<\/h2>/g)].map(([, name, cls, text]) => [
-          name,
-          cls === listGroupLabelClass,
-          text,
-        ]),
+        [...markup.matchAll(/<section aria-label="([^"]+)"><h2><button type="button" aria-expanded="([^"]+)" aria-label="([^"]+)" class="([^"]+)"/g)].map(
+          ([, name, expanded, label, cls]) => [name, expanded, label, cls === messageGroupToggleClass],
+        ),
         /uppercase/.test(markup),
         markup.indexOf('launch') < markup.indexOf('Grace Hopper'),
       ],
       expected: [
         [
-          ['Channels', true, 'Channels'],
-          ['Direct messages', true, 'Direct messages'],
+          ['Channels', 'true', 'Channels', true],
+          ['Direct messages', 'true', 'Direct messages', true],
         ],
         false,
         true,
       ],
+    });
+  });
+
+  test('a folded group', () => {
+    const markup = html({ folded: ['drive:d1'] });
+    assert({
+      given: 'the Channels group folded, with two unread in it',
+      should: 'mark it collapsed, hide its rows, and carry its unread total on the label',
+      actual: [
+        markup.includes('aria-expanded="false" aria-label="Channels, 2 unread"'),
+        markup.includes('/d1/messages/c1'),
+        markup.includes(`<span class="${unreadCountClass}" aria-hidden="true">2</span>`),
+        markup.includes('/dm/m1'),
+      ],
+      expected: [true, false, true, true],
+    });
+  });
+
+  test('a folded group holding the open thread', () => {
+    const markup = html({ folded: ['drive:d1'], channels: { status: 'ready', rows: [{ ...launch, selected: true }, general] } });
+    assert({
+      given: 'the open channel’s group folded',
+      should: 'not count the open thread’s unread on the label',
+      actual: [markup.includes('aria-label="Channels"'), markup.includes(unreadCountClass)],
+      expected: [true, false],
     });
   });
 
@@ -147,14 +182,13 @@ describe('renderMessagesPane()', () => {
     const cases: Array<[string, Partial<Props>, string]> = [
       ['channels loading', { channels: { status: 'loading' } }, note('Loading channels…', 'status')],
       ['channels failing', { channels: { status: 'error', retry: () => {} } }, note('Could not load channels.', 'alert')],
-      ['no drive (a user-level DM route)', { channels: { status: 'no-drive' } }, note('Open a drive to see its channels.')],
-      ['a drive with no channels', { channels: { status: 'ready', rows: [] } }, note('No channels in this drive yet.')],
+      ['no channels', { channels: { status: 'ready', rows: [] } }, note('No channels yet.')],
       ['DMs loading', { direct: { status: 'loading' } }, note('Loading direct messages…', 'status')],
       ['DMs failing', { direct: { status: 'error', retry: () => {} } }, note('Could not load direct messages.', 'alert')],
       ['no DMs', { direct: { status: 'ready', rows: [] } }, note('No direct messages yet.')],
     ];
     assert({
-      given: 'each section loading, failing, empty or without a drive',
+      given: 'each group loading, failing or empty',
       should: 'keep the section and its label, and say why it has no rows',
       actual: cases.map(([name, overrides]) => {
         const markup = html(overrides);

@@ -5,6 +5,7 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- Imago's Messages sidebar no longer switches layouts when you open a conversation. It is always the compact list: channels first, then direct messages. Opening a thread only highlights its row. Set to a drive it lists that drive's channels; set to All drives (Home's default) and on the direct-message pages it lists every drive's channels, grouped under each drive's name. Click a group's label to collapse it, for example to see only your direct messages. A collapsed group shows its unread total and stays collapsed across pages and reloads. The All / Channels / Direct filter and the separate direct-messages sidebar with search are gone.
 - Imago on phones:
   - Headers no longer sit under the notch or status bar, and the bottom bar and Ask button sit above the home indicator. Full-screen Imago keeps its message box above the home indicator too.
   - The screen fits Safari's visible area, so the bottom bar is no longer hidden behind Safari's toolbar.

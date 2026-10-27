@@ -1,59 +1,6 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
-import type { DirectThread } from '../message-model/message';
-import { filterThreads, matchesFilter, messageablePeopleFrom, personNameOf } from './dm-index-model';
-
-const thread = (name: string, username: string | null): DirectThread => ({
-  kind: 'dm',
-  id: `m-${name}`,
-  name,
-  username,
-  avatarUrl: null,
-  otherUserId: null,
-  lastMessageAt: null,
-  lastMessagePreview: null,
-  lastReadAt: null,
-  unreadCount: 0,
-});
-
-describe('matchesFilter()', () => {
-  test('name or username, case-insensitively, ignoring surrounding space', () => {
-    const dana = thread('Dana Lee', 'dana');
-    assert({
-      given: 'a conversation with a name and a username',
-      should: 'match a query in either, regardless of case and surrounding space',
-      actual: [
-        matchesFilter(dana, ''),
-        matchesFilter(dana, '  '),
-        matchesFilter(dana, 'LEE'),
-        matchesFilter(dana, ' dan '),
-        matchesFilter(dana, 'marcus'),
-      ],
-      expected: [true, true, true, true, false],
-    });
-  });
-
-  test('a missing username', () => {
-    assert({
-      given: 'a conversation with no username',
-      should: 'match on the name only',
-      actual: [matchesFilter(thread('Sam', null), 'sam'), matchesFilter(thread('Sam', null), 'null')],
-      expected: [true, false],
-    });
-  });
-});
-
-describe('filterThreads()', () => {
-  test('narrows the rows and keeps their order', () => {
-    const rows = [thread('Dana', 'dana'), thread('Sam', 'sam'), thread('Priya', 'priya'), thread('Danielle', 'dani')];
-    assert({
-      given: 'conversations and a filter that matches two of them by name or username',
-      should: 'keep only those two, in the order they came',
-      actual: filterThreads(rows, 'da').map((row) => row.name),
-      expected: ['Dana', 'Danielle'],
-    });
-  });
-});
+import { messageablePeopleFrom, personNameOf } from './dm-index-model';
 
 describe('personNameOf() and messageablePeopleFrom()', () => {
   test('the name a person is drawn with', () => {

@@ -8,7 +8,6 @@ import type {
   ConversationsResponse,
   DirectThread,
   InboxResponse,
-  MessageThread,
 } from '../message-model/message';
 import { channelThreadsFrom, directThreadsFrom, inboxThreadsFrom } from '../message-model/from-api';
 
@@ -27,8 +26,8 @@ export const messagePaths = {
   /** A drive's CHANNEL pages with the viewer's unread counts, newest post first. */
   driveChannels: (driveId: string, cursor?: string) =>
     withCursor(`/api/inbox?type=channel&driveId=${segment(driveId)}&limit=${PAGE_SIZE}`, cursor),
-  /** The unified inbox: the viewer's DMs and the channels of every drive, newest post first. */
-  inbox: (cursor?: string) => withCursor(`/api/inbox?limit=${PAGE_SIZE}`, cursor),
+  /** The CHANNEL pages of every drive the viewer is in, newest post first. */
+  channels: (cursor?: string) => withCursor(`/api/inbox?type=channel&limit=${PAGE_SIZE}`, cursor),
   /** The viewer's DM conversations, newest message first. */
   conversations: (cursor?: string) => withCursor(`/api/messages/conversations?limit=${PAGE_SIZE}`, cursor),
   /** The viewer's unread totals across every drive. */
@@ -73,11 +72,15 @@ export const fetchDirectThreads = async (client: ApiClient): Promise<readonly Di
     ),
   );
 
-/** The unified inbox from GET /api/inbox (no drive), every page: DMs and channels, newest first. */
-export const fetchInbox = async (client: ApiClient): Promise<readonly MessageThread[]> =>
+/**
+ * Every drive's channels from GET /api/inbox (no drive), every page, newest
+ * first. Only channels are asked for, so DMs neither crowd them out of the
+ * page limit nor load twice beside the DM list.
+ */
+export const fetchChannels = async (client: ApiClient): Promise<readonly ChannelThread[]> =>
   inboxThreadsFrom(
     await allPages(
-      (cursor) => client.apiFetch<InboxResponse>(messagePaths.inbox(cursor)),
+      (cursor) => client.apiFetch<InboxResponse>(messagePaths.channels(cursor)),
       ({ items, pagination }) => ({ rows: items, next: pagination.hasMore ? pagination.nextCursor : null }),
     ),
-  );
+  ).filter((thread): thread is ChannelThread => thread.kind === 'channel');

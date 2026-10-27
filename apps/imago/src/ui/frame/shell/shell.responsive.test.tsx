@@ -59,12 +59,6 @@ vi.mock('@/ui/messages/messages-pane/messages-pane', () => ({
     }),
 }));
 
-// The DM index pane loads through SWR and realtime too; its own suite proves
-// it against the real hooks. Here it shows the open conversation it was handed.
-vi.mock('@/ui/messages/dm-index/dm-index', () => ({
-  DmIndexPane: ({ selectedConversationId }: { selectedConversationId: string | null }) =>
-    h('div', { 'data-dm-pane': '', 'data-conversation': selectedConversationId ?? '' }),
-}));
 
 // The tasks pane loads through SWR; its own suite proves it against the real
 // client. Here it only shows what the shell handed it.

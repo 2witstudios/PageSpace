@@ -1,8 +1,5 @@
-// The /dm index's view of the viewer's conversations and the people they can
-// message: pure functions over what apps/web answers, so the pane and the
-// ground draw the same rows the tests check.
-
-import type { DirectThread } from '../message-model/message';
+// The DM ground's people the viewer can message: pure functions over what
+// apps/web answers, so the ground draws the same rows the tests check.
 
 /** One person GET /api/users/messageable lists (apps/web's MessageableUser, the fields the ground draws). */
 export type MessageableUserResponse = {
@@ -33,17 +30,3 @@ export const messageablePeopleFrom = (users: readonly MessageableUserResponse[])
     username: user.username,
     avatarUrl: user.avatarUrl ?? user.image,
   }));
-
-/**
- * Whether a conversation matches the filter: the query, trimmed and case-folded,
- * is a substring of the other person's name or username. An empty query matches all.
- */
-export const matchesFilter = (thread: Pick<DirectThread, 'name' | 'username'>, query: string): boolean => {
-  const needle = query.trim().toLowerCase();
-  if (needle === '') return true;
-  return thread.name.toLowerCase().includes(needle) || (thread.username ?? '').toLowerCase().includes(needle);
-};
-
-/** The conversations that match the filter, in the order they came. */
-export const filterThreads = (threads: readonly DirectThread[], query: string): readonly DirectThread[] =>
-  threads.filter((thread) => matchesFilter(thread, query));

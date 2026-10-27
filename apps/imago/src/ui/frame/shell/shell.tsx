@@ -10,7 +10,6 @@ import { ChatPane } from '../../chat/chat-pane/chat-pane';
 import { FilesPane } from '../../files/files-pane/files-pane';
 import { MessagesPane } from '../../messages/messages-pane/messages-pane';
 import { renderNewMessageLink } from '../../messages/messages-pane/messages-pane.render';
-import { DmIndexPane } from '../../messages/dm-index/dm-index';
 import { CommandPalette } from '../../palette/palette/palette';
 import { NewTaskListAction, TasksPane } from '../../tasks/tasks-pane/tasks-pane';
 import { ToolPane } from '../tool-pane/tool-pane';
@@ -159,16 +158,6 @@ const listFor = (
   if (stage.section === 'settings') return stage.driveId === null ? null : <DriveSettingsNavPane driveId={stage.driveId} variant={layout.list} />;
   if (stage.section === 'account') return <AccountNavPane variant={layout.list} />;
   if (!isListSection(stage.section)) return null;
-  // The user-level /dm index: the Direct messages pane alone, with no drive's channels.
-  if (stage.section === 'messages' && stage.driveId === null) {
-    return (
-      <DmIndexPane
-        variant={layout.list}
-        close={<CloseSidebar section="messages" />}
-        selectedConversationId={stage.object?.kind === 'conversation' ? stage.object.conversationId : null}
-      />
-    );
-  }
   if (stage.section === 'files' && stage.driveId !== null) {
     return (
       <FilesPane
