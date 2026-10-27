@@ -1,5 +1,5 @@
 import { describe, test, beforeEach, afterEach, vi } from 'vitest';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 
 describe('getBrowserSessionId', () => {
   beforeEach(() => {

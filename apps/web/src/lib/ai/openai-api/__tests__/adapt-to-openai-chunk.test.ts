@@ -1,5 +1,5 @@
 import { describe, test } from 'vitest';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import { adaptToOpenAIChunk } from '../adapt-to-openai-chunk';
 
 const baseOpts = { id: 'cmpl-abc', model: 'ps-agent://page-123', created: 1000000000 };

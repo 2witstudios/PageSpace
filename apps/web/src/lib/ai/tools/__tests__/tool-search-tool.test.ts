@@ -1,7 +1,7 @@
 import { describe, it } from 'vitest';
 import { z } from 'zod';
 import type { Tool } from 'ai';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import { createToolSearchTool } from '../tool-search-tool';
 
 const calendarTool: Tool = {

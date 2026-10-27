@@ -1,6 +1,6 @@
 import { describe, test, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { assert } from '@/stores/__tests__/riteway';
+import { assert } from '@/test/riteway';
 import { MobileAgenda } from '../MobileAgenda';
 import type {
   CalendarEvent,

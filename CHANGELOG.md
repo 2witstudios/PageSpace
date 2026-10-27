@@ -5,6 +5,19 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- Imago on phones:
+  - Headers no longer sit under the notch or status bar, and the bottom bar and Ask button sit above the home indicator. Full-screen Imago keeps its message box above the home indicator too.
+  - The screen fits Safari's visible area, so the bottom bar is no longer hidden behind Safari's toolbar.
+  - Back on a page returns to the section you opened it from. A channel goes back to Messages and a task list to Tasks, instead of always going to Pages.
+  - Close sidebar, Close Imago and the Ask pill no longer show on phone screens, where they did nothing and could leave Imago or a sidebar hidden on desktop.
+  - The ⋯ menus on page, file and task rows, and Delete in Imago's chat history, now always show on touch screens.
+  - The open-pages sheet scrolls when you have many pages open.
+  - Every section's header is the same height, with the same larger buttons, and the list screens no longer show a stray border down the right edge.
+  - Rows in Messages, Tasks and Settings are taller and easier to read, and channels show a tile the same size as a person's avatar.
+  - The Ask button no longer covers the message box in channels and AI chats.
+  - A document's title lines up with its text.
+  - The channel toolbar only shows for people who can manage webhooks, and never on phones.
+  - You can pinch to zoom on any page, and tapping a text field on an iPhone no longer zooms the page in.
 - In Imago, the Files, Messages, Tasks, Calendar, Console and Activity sidebars have a switch beside their title: the drive you're in, or All drives. It works the same on every drive, not just Home, and each section remembers its choice on this device. Until you pick, Home's Messages, Calendar, Console and Activity show All drives. Files and Tasks always start on the drive you're in, so Home's own pages and task lists stay where they were. Other drives start on themselves. In All drives:
   - **Files** shows your favorites and recent pages from every drive, each naming its drive, plus a list of your drives in place of the page tree. Pick a drive to open its Files.
   - **Tasks** shows your views and Needs attention across every drive, plus a list of your drives in place of the task lists.

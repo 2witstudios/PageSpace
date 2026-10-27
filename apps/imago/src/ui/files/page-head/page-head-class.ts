@@ -1,6 +1,6 @@
-/** The page head: 48px, like every column head (SPEC v3.3). */
+/** The page head: 48px, like every column head (SPEC v3.3); the 52px phone head on a phone. */
 export const pageHeadClass =
-  'flex h-pane-header flex-none items-center gap-1 border-b border-hairline pr-2 pl-4 text-sm';
+  'flex h-pane-header flex-none items-center gap-1 border-b border-hairline pr-2 pl-4 text-sm phone:h-phone-head phone:pr-1 phone:pl-4 phone:text-base';
 
 export const crumbsClass = 'm-0 flex min-w-0 flex-1 list-none items-center gap-1 overflow-hidden p-0 whitespace-nowrap';
 

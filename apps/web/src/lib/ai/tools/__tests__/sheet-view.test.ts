@@ -8,7 +8,7 @@
  * data rather than as an empty spreadsheet.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import type * as SheetStore from '@pagespace/lib/sheets/store';
 
 const mockGetTab = vi.fn();

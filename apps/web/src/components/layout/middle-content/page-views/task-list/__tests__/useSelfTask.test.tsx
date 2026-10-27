@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import React from 'react';
 import { SWRConfig } from 'swr';
-import { assert } from '@/hooks/__tests__/riteway';
+import { assert } from '@/test/riteway';
 
 const fetchWithAuth = vi.fn();
 const patchMock = vi.fn();

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { assert } from '@/lib/ai/core/__tests__/riteway';
+import { assert } from '@/test/riteway';
 import {
   sha256Hex,
   buildImageFilePageValues,

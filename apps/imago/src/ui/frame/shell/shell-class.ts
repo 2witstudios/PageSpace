@@ -39,7 +39,7 @@ export const emptySlotClass = (columns: Columns): string => (columns.imago === '
 export const scrimClass = 'absolute inset-0 z-rail cursor-default border-0 bg-fill p-0';
 
 /** The frame fills the viewport on the spine's blue: the panes scroll, the page never does. */
-export const shellClass = 'flex h-screen w-full overflow-hidden bg-spine';
+export const shellClass = 'flex h-dvh w-full overflow-hidden bg-spine';
 
 /**
  * The stage sheet beside the spine (SPEC v3): rounded 22px at its top-left, set 8px down, the

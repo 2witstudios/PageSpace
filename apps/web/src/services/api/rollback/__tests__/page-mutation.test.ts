@@ -1,5 +1,5 @@
 import { describe, it, vi, expect } from 'vitest';
-import { assert } from '@/stores/__tests__/riteway';
+import { assert } from '@/test/riteway';
 
 // applyPageUpdateWithRevision pulls computePageMutation -> computePageStateHash,
 // whose module imports the db connection at load time. Stub the real connection;

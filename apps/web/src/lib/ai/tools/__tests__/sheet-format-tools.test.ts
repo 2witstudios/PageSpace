@@ -10,7 +10,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import { logSheetCellActivity } from '@/services/api/sheet-activity';
 import { broadcastPageEvent } from '@/lib/websocket';
 import type * as SheetStore from '@pagespace/lib/sheets/store';

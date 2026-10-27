@@ -1,5 +1,5 @@
 import { describe, it } from 'vitest';
-import { assert } from '@/stores/__tests__/riteway';
+import { assert } from '@/test/riteway';
 import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { eq } from '@pagespace/db/operators';
 import { mapActivityRow, buildHistoryConditions, type ActivityRow } from '../activity-mapping';

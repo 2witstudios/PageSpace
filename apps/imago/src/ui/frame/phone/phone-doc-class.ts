@@ -20,9 +20,9 @@ export const phoneDocBodyClass = 'min-h-0 flex-1 phone-doc-body';
 /** The scrim behind the open-pages sheet. */
 export const phoneSheetScrimClass = 'absolute inset-0 z-popover cursor-default border-0 bg-fill p-0';
 
-/** The open-pages bottom sheet. */
+/** The open-pages bottom sheet; past 80% of the screen its rows scroll. */
 export const phoneSheetClass =
-  'absolute right-0 bottom-0 left-0 z-popover rounded-t-xl bg-background px-3 pt-2 pb-6 shadow-sheet';
+  'absolute right-0 bottom-0 left-0 z-popover rounded-t-xl bg-background px-3 pt-2 phone-safe-sheet shadow-sheet';
 
 export const phoneSheetGripClass = 'mx-auto mb-2 block h-1 w-avatar-md rounded-sm bg-border';
 

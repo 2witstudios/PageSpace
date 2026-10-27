@@ -1,7 +1,7 @@
 import type { TouchEvent } from 'react';
 import { describe, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import { usePullToRefresh } from '../usePullToRefresh';
 
 vi.mock('@/lib/haptics', () => ({ triggerHaptic: vi.fn() }));

@@ -60,7 +60,7 @@ export const dateCellClass = 'h-10 whitespace-nowrap px-2 text-right tabular-num
 export const moreButtonClass = (open: boolean): string =>
   cn(
     'grid size-8 cursor-pointer place-items-center rounded-md border-0 bg-transparent text-ink-muted transition-opacity hover:bg-fill hover:text-ink',
-    open ? 'opacity-100' : 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100',
+    open ? 'opacity-100' : 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100',
   );
 
 export const hintClass = 'mt-4 pl-2 text-xs text-ink-faint';
