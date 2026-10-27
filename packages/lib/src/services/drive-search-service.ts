@@ -5,8 +5,15 @@
  * Route handlers should call these service functions rather than accessing the database directly.
  */
 
-import { db, pages, drives, eq, and, inArray, sql, type PageTypeEnum } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq, and, inArray, sql } from '@pagespace/db/operators';
+import { sheetCellsMatchRegex } from '../sheets/search-sql';
+import { isSheetType } from '../sheets/sheet';
+import { PageType } from '../utils/enums';
+import { readSheetDocument } from '../sheets/store';
+import { pages, drives, type PageTypeEnum } from '@pagespace/db/schema/core';
 import { getUserAccessLevel, getUserDriveAccess } from '../permissions/permissions';
+import type { AccessActor } from '../permissions/access-actor';
 
 // ============================================================================
 // Types
@@ -24,6 +31,9 @@ export interface DriveSearchInfo {
 export interface GlobSearchOptions {
   includeTypes?: PageTypeEnum[];
   maxResults?: number;
+  /** Per-result view predicate; defaults to the user-level check. Routes
+   * serving scoped MCP tokens inject the token's own page access. */
+  authorizeView?: (pageId: string) => Promise<boolean>;
 }
 
 export interface GlobSearchResult {
@@ -55,6 +65,9 @@ export interface GlobSearchResponse {
 export interface RegexSearchOptions {
   searchIn?: 'content' | 'title' | 'both';
   maxResults?: number;
+  /** Per-result view predicate; defaults to the user-level check. Routes
+   * serving scoped MCP tokens inject the token's own page access. */
+  authorizeView?: (pageId: string) => Promise<boolean>;
 }
 
 export interface RegexSearchResult {
@@ -108,10 +121,10 @@ const REGEX_META_CHARS = /[\\^$.*+?()[\]{}|]/;
  */
 export async function checkDriveAccessForSearch(
   driveId: string,
-  userId: string
+  actor: AccessActor
 ): Promise<DriveSearchInfo> {
   // Check drive access
-  const hasAccess = await getUserDriveAccess(userId, driveId);
+  const hasAccess = await getUserDriveAccess(actor, driveId);
 
   if (!hasAccess) {
     return { hasAccess: false, drive: null };
@@ -153,12 +166,15 @@ function globToRegex(glob: string): RegExp {
  */
 export async function globSearchPages(
   driveId: string,
-  userId: string,
+  actor: AccessActor,
   pattern: string,
   driveSlug: string | null,
   options: GlobSearchOptions = {}
 ): Promise<GlobSearchResponse> {
   const { includeTypes, maxResults = 100 } = options;
+  const authorizeView =
+    options.authorizeView ??
+    (async (pageId: string) => (await getUserAccessLevel(actor, pageId))?.canView ?? false);
   const effectiveMaxResults = Math.min(maxResults, 200);
 
   // Build where conditions
@@ -193,8 +209,7 @@ export async function globSearchPages(
   // Second pass: build paths and check pattern
   for (const page of allPages) {
     // Check permissions
-    const accessLevel = await getUserAccessLevel(userId, page.id);
-    if (!accessLevel?.canView) continue;
+    if (!(await authorizeView(page.id))) continue;
 
     // Build full path
     const pathParts: string[] = [];
@@ -339,12 +354,15 @@ function extractLiteralMatchingLines(
  */
 export async function regexSearchPages(
   driveId: string,
-  userId: string,
+  actor: AccessActor,
   pattern: string,
   driveSlug: string | null,
   options: RegexSearchOptions = {}
 ): Promise<RegexSearchResponse> {
   const { searchIn = 'content', maxResults = 50 } = options;
+  const authorizeView =
+    options.authorizeView ??
+    (async (pageId: string) => (await getUserAccessLevel(actor, pageId))?.canView ?? false);
   const effectiveMaxResults = Math.min(maxResults, MAX_REGEX_RESULTS);
 
   // Validate and limit pattern length to prevent ReDoS
@@ -364,12 +382,29 @@ export async function regexSearchPages(
   // Create regex for PostgreSQL - escape backslashes but preserve regex shortcuts
   const pgPattern = pattern.replace(/\\(?![dDwWsSbBntrvfAZzGQE])/g, '\\\\');
 
-  // Build where conditions based on searchIn parameter
+  // A sheet's text is in its rows, not in `pages.content`.
+  //
+  // Once a sheet is materialised its content column is empty, so a regex over
+  // that column alone silently drops every spreadsheet out of search — the
+  // pages most likely to contain the string somebody is looking for.
+  //
+  // Matched per CELL, not against `cells::text`. Running the regex over the raw
+  // JSON matched structural text (`raw`, `value`, `format`, `bold`), missed any
+  // search containing a quote or backslash because the data is JSON-escaped in
+  // there, and made anchors meaningless — `^Total` could never match, since the
+  // whole row is one string. Expanding to cell values makes the pattern mean
+  // what the person typing it expects.
+  //
+  // It remains a sequential scan; a searchable projection is the eventual fix.
+  const sheetContentMatch = sheetCellsMatchRegex(pgPattern);
+
+  const contentMatch = sql`(${pages.content} ~ ${pgPattern} OR ${sheetContentMatch})`;
+
   const regexCondition = searchIn === 'content'
-    ? sql`${pages.content} ~ ${pgPattern}`
+    ? contentMatch
     : searchIn === 'title'
       ? sql`${pages.title} ~ ${pgPattern}`
-      : sql`(${pages.content} ~ ${pgPattern} OR ${pages.title} ~ ${pgPattern})`;
+      : sql`(${contentMatch} OR ${pages.title} ~ ${pgPattern})`;
 
   const whereConditions = and(
     eq(pages.driveId, driveId),
@@ -421,8 +456,7 @@ export async function regexSearchPages(
   // Filter by permissions and build results
   const results: RegexSearchResult[] = [];
   for (const page of matchingPages) {
-    const accessLevel = await getUserAccessLevel(userId, page.id);
-    if (!accessLevel?.canView) continue;
+    if (!(await authorizeView(page.id))) continue;
 
     // Build semantic path
     const pathParts = [driveSlug || driveId];
@@ -452,9 +486,23 @@ export async function regexSearchPages(
 
     const semanticPath = `/${[...pathParts, ...parentChain, page.title].join('/')}`;
 
-    // Extract matching lines if searching content
+    // Extract matching lines if searching content.
+    //
+    // A sheet's text is in its rows, so previewing `page.content` — empty for a
+    // materialised sheet — reported "found this page, 0 matches" for exactly
+    // the pages the row-aware WHERE clause was added to surface. Project the
+    // sheet first so the preview describes what actually matched.
+    // Projected only when the preview is actually built. Computing it
+    // unconditionally streamed every row of every matching sheet and serialised
+    // a whole document that a literal-free regex search then discarded — the
+    // O(document) cost this design removes, reintroduced on a search request.
     const { matchingLines, totalMatches } = canExtractLiteralLineMatches
-      ? extractLiteralMatchingLines(page.content, pattern)
+      ? extractLiteralMatchingLines(
+          isSheetType(page.type as PageType)
+            ? (await readSheetDocument(page.id)) ?? page.content
+            : page.content,
+          pattern
+        )
       : { matchingLines: [], totalMatches: 0 };
 
     results.push({

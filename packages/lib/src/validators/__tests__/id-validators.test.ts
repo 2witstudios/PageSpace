@@ -5,6 +5,7 @@ import {
   parsePageId,
   parseDriveId,
   parseId,
+  parseIds,
   IdValidationError,
   isValidId,
 } from '../id-validators'
@@ -154,6 +155,92 @@ describe('ID validators', () => {
       expect(result.success).toBe(false)
       if (!result.success) {
         expect(result.error.field).toBe('driveId')
+      }
+    })
+  })
+
+  describe('parseIds', () => {
+    it('returns success with all valid IDs', () => {
+      const id1 = createId()
+      const id2 = createId()
+      const result = parseIds({ userId: id1, pageId: id2 })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.userId).toBe(id1)
+        expect(result.data.pageId).toBe(id2)
+      }
+    })
+
+    it('returns error for the first invalid ID encountered', () => {
+      const id1 = createId()
+      const result = parseIds({ userId: id1, pageId: 'invalid-id' })
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        expect(result.error.code).toBe('INVALID_ID_FORMAT')
+        expect(result.error.field).toBe('pageId')
+      }
+    })
+
+    it('returns error for non-string value in IDs map', () => {
+      const result = parseIds({ userId: 123 as unknown as string })
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        expect(result.error.code).toBe('INVALID_TYPE')
+        expect(result.error.field).toBe('userId')
+      }
+    })
+
+    it('returns error for empty string value', () => {
+      const result = parseIds({ driveId: '' })
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        expect(result.error.code).toBe('EMPTY_ID')
+      }
+    })
+
+    it('returns error for excessively long value', () => {
+      const result = parseIds({ id: 'a'.repeat(200) })
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        expect(result.error.code).toBe('ID_TOO_LONG')
+      }
+    })
+
+    it('returns success with empty IDs object', () => {
+      const result = parseIds({})
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data).toEqual({})
+      }
+    })
+
+    it('returns success with a single valid ID', () => {
+      const id = createId()
+      const result = parseIds({ myId: id })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.myId).toBe(id)
+      }
+    })
+
+    it('stops at first error and does not validate remaining IDs', () => {
+      // Both are invalid, but only one error should be returned
+      const result = parseIds({ a: '', b: 'invalid' })
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        // Error is for first key encountered (object iteration order)
+        expect(result.error).toBeInstanceOf(IdValidationError)
+      }
+    })
+
+    it('returns success with three valid IDs', () => {
+      const userId = createId()
+      const pageId = createId()
+      const driveId = createId()
+      const result = parseIds({ userId, pageId, driveId })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data).toEqual({ userId, pageId, driveId })
       }
     })
   })

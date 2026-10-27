@@ -3,13 +3,18 @@ import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 /**
  * Channel Tools Tests
  *
- * Tests for the send_channel_message AI tool that allows LLMs to post
- * messages in channels. Covers authentication, permission checks,
- * channel validation, and sender identity (global assistant vs page agent).
+ * Tests for the send_channel_message and delete_channel_message AI tools.
+ * Covers authentication, permission checks, channel validation, ownership
+ * enforcement, and sender identity (global assistant vs page agent).
  */
 
 // Mock database
-vi.mock('@pagespace/db', () => ({
+// The drive's members, from the one org-aware enumeration (the lead included).
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+  getDriveRecipientUserIds: vi.fn(async () => []),
+}));
+
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       channelMessages: { findFirst: vi.fn() },
@@ -23,25 +28,61 @@ vi.mock('@pagespace/db', () => ({
       }),
     }),
   },
-  channelMessages: {},
-  channelReadStatus: { userId: 'userId', channelId: 'channelId' },
-  driveMembers: { driveId: 'driveId' },
-  pages: { id: 'id', isTrashed: 'isTrashed' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
+  isNotNull: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', isTrashed: 'isTrashed' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: { driveId: 'driveId', acceptedAt: 'acceptedAt' },
+}));
+vi.mock('@pagespace/db/schema/chat', () => ({
+  channelMessages: {},
+  channelReadStatus: { userId: 'userId', channelId: 'channelId' },
 }));
 
-vi.mock('@pagespace/lib/permissions', () => ({
-  canUserEditPage: vi.fn(),
-  canUserViewPage: vi.fn(),
+vi.mock('@pagespace/lib/permissions/permissions', () => {
+  const canUserViewPage = vi.fn().mockResolvedValue(true);
+  return {
+    canUserEditPage: vi.fn(),
+    canUserViewPage,
+    // The audience question (who else can see the channel) answered through the same per-user mock.
+    getUsersWhoCanViewPage: vi.fn(async (pageId: string, ids: string[]) =>
+      new Set((await Promise.all(ids.map(async (id) => ((await canUserViewPage(id, pageId)) ? id : null)))).filter((id): id is string => id !== null))),
+  };
+});
+
+vi.mock('../actor-permissions', () => ({
+  toolActor: (ctx: { userId: string; accessActor?: unknown }) => ctx.accessActor ?? { via: 'credential', userId: ctx.userId, authentication: null },
+  canActorEditPage: vi.fn(),
+  canActorViewPage: vi.fn(),
+  canActorDeletePage: vi.fn(),
+  canActorAccessDrive: vi.fn(),
+  getActorAccessiblePagesInDrive: vi.fn(),
+  getAgentPageId: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   getActorInfo: vi.fn().mockResolvedValue({
     actorEmail: 'test@example.com',
     actorDisplayName: 'Test User',
   }),
-  loggers: {
+  logMessageActivity: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/services/channel-message-repository', () => ({
+  channelMessageRepository: {
+    findChannelMessageInPage: vi.fn(),
+    softDeleteChannelMessage: vi.fn(),
+    loadChannelMessageWithRelations: vi.fn(),
+  },
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     ai: {
       child: vi.fn(() => ({
         info: vi.fn(),
@@ -51,9 +92,10 @@ vi.mock('@pagespace/lib/server', () => ({
       })),
     },
   },
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
-vi.mock('@pagespace/lib/broadcast-auth', () => ({
+vi.mock('@pagespace/lib/auth/broadcast-auth', () => ({
   createSignedBroadcastHeaders: vi.fn(() => ({
     'Content-Type': 'application/json',
   })),
@@ -72,21 +114,30 @@ vi.mock('@/lib/logging/mask', () => ({
   maskIdentifier: vi.fn((id) => `***${id?.slice(-4) || ''}`),
 }));
 
-import { channelTools } from '../channel-tools';
-import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions';
-import { getActorInfo } from '@pagespace/lib/server';
-import { db } from '@pagespace/db';
-import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
-import type { ToolExecutionContext } from '../../core';
+const mockNotifyMentionedUsers = vi.fn();
+vi.mock('@/lib/channels/notify-mentioned-users', () => ({
+  notifyMentionedUsers: (...args: unknown[]) => mockNotifyMentionedUsers(...args),
+}));
 
-const mockCanUserEditPage = vi.mocked(canUserEditPage);
-const mockCanUserViewPage = vi.mocked(canUserViewPage);
+import { channelTools } from '../channel-tools';
+import { canActorEditPage } from '../actor-permissions';
+import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
+import { db } from '@pagespace/db/db';
+import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { channelMessageRepository, type ChannelMessageRow } from '@pagespace/lib/services/channel-message-repository';
+import type { ToolExecutionContext } from '../../core/types';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
+
+const mockCanActorEditPage = vi.mocked(canActorEditPage);
 const mockGetActorInfo = vi.mocked(getActorInfo);
 const mockBroadcastInboxEvent = vi.mocked(broadcastInboxEvent);
 const mockDbInsert = db.insert as unknown as Mock;
 const mockPagesFindFirst = db.query.pages.findFirst as unknown as Mock;
-const mockChannelMessagesFindFirst = db.query.channelMessages.findFirst as unknown as Mock;
-const mockDriveMembersFindMany = db.query.driveMembers.findMany as unknown as Mock;
+const mockDriveRecipients = vi.mocked(getDriveRecipientUserIds);
+const mockFindChannelMessageInPage = vi.mocked(channelMessageRepository.findChannelMessageInPage);
+const mockSoftDeleteChannelMessage = vi.mocked(channelMessageRepository.softDeleteChannelMessage);
+const mockLoadChannelMessageWithRelations = vi.mocked(channelMessageRepository.loadChannelMessageWithRelations);
 
 // Helper to safely extract result from tool execution (handles AsyncIterable union)
 type ToolResult = Record<string, unknown>;
@@ -96,6 +147,12 @@ const executeToolAs = async (
 ) =>
   channelTools.send_channel_message.execute!(args, context) as unknown as Promise<ToolResult>;
 
+const executeDeleteAs = async (
+  args: { channelId: string; messageId: string },
+  context: Parameters<NonNullable<typeof channelTools.delete_channel_message.execute>>[1]
+) =>
+  channelTools.delete_channel_message.execute!(args, context) as unknown as Promise<ToolResult>;
+
 describe('channel-tools', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -103,15 +160,36 @@ describe('channel-tools', () => {
       actorEmail: 'test@example.com',
       actorDisplayName: 'Test User',
     });
-    mockCanUserViewPage.mockResolvedValue(true);
-    mockChannelMessagesFindFirst.mockResolvedValue({
+    mockCanActorEditPage.mockResolvedValue(true);
+    // The AI send path now fetches the broadcast row via the repository loader
+    // (which decrypts the joined author/reactor name PII at the edge) instead of
+    // an inline db query.
+    mockLoadChannelMessageWithRelations.mockResolvedValue({
       id: 'msg-1',
       createdAt: new Date('2026-02-10T12:00:00.000Z'),
       user: { id: 'user-123', name: 'Alice', image: null },
       file: null,
       reactions: [],
-    });
-    mockDriveMembersFindMany.mockResolvedValue([]);
+    } as unknown as Awaited<ReturnType<typeof channelMessageRepository.loadChannelMessageWithRelations>>);
+    mockDriveRecipients.mockResolvedValue([]);
+    mockFindChannelMessageInPage.mockResolvedValue({
+      id: 'msg-1',
+      pageId: 'ch-1',
+      userId: 'user-123',
+      content: 'Hello',
+      isActive: true,
+      aiMeta: null,
+      createdAt: new Date('2026-02-10T12:00:00.000Z'),
+      fileId: null,
+      attachmentMeta: null,
+      editedAt: null,
+      parentId: null,
+      replyCount: 0,
+      lastReplyAt: null,
+      mirroredFromId: null,
+      quotedMessageId: null,
+    } satisfies ChannelMessageRow);
+    mockSoftDeleteChannelMessage.mockResolvedValue(1);
     mockBroadcastInboxEvent.mockResolvedValue(undefined);
   });
 
@@ -137,7 +215,7 @@ describe('channel-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -167,7 +245,7 @@ describe('channel-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await executeToolAs(
@@ -193,11 +271,11 @@ describe('channel-tools', () => {
         revision: 1,
         stateHash: null,
       });
-      mockCanUserEditPage.mockResolvedValue(false);
+      mockCanActorEditPage.mockResolvedValue(false);
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -222,7 +300,7 @@ describe('channel-tools', () => {
         revision: 1,
         stateHash: null,
       });
-      mockCanUserEditPage.mockResolvedValue(true);
+      mockCanActorEditPage.mockResolvedValue(true);
       mockGetActorInfo.mockResolvedValue({
         actorEmail: 'alice@example.com',
         actorDisplayName: 'Alice',
@@ -231,7 +309,7 @@ describe('channel-tools', () => {
       const context = {
         toolCallId: '1', messages: [],
         experimental_context: {
-          userId: 'user-123',
+          userId: 'user-123', accessActor: credentialActor('user-123', null),
           chatSource: { type: 'global' },
         } as ToolExecutionContext,
       };
@@ -261,12 +339,12 @@ describe('channel-tools', () => {
         revision: 1,
         stateHash: null,
       });
-      mockCanUserEditPage.mockResolvedValue(true);
+      mockCanActorEditPage.mockResolvedValue(true);
 
       const context = {
         toolCallId: '1', messages: [],
         experimental_context: {
-          userId: 'user-123',
+          userId: 'user-123', accessActor: credentialActor('user-123', null),
           chatSource: {
             type: 'page',
             agentPageId: 'agent-1',
@@ -293,11 +371,8 @@ describe('channel-tools', () => {
         driveId: 'drive-1',
         drive: { ownerId: 'user-456' },
       });
-      mockDriveMembersFindMany.mockResolvedValue([
-        { userId: 'user-123' },
-        { userId: 'user-456' },
-      ]);
-      mockCanUserEditPage.mockResolvedValue(true);
+      mockDriveRecipients.mockResolvedValue(['user-456', 'user-123']);
+      mockCanActorEditPage.mockResolvedValue(true);
       mockGetActorInfo.mockResolvedValue({
         actorEmail: 'alice@example.com',
         actorDisplayName: 'Alice',
@@ -306,7 +381,7 @@ describe('channel-tools', () => {
       const context = {
         toolCallId: '1', messages: [],
         experimental_context: {
-          userId: 'user-123',
+          userId: 'user-123', accessActor: credentialActor('user-123', null),
           chatSource: { type: 'global' },
         } as ToolExecutionContext,
       };
@@ -336,16 +411,13 @@ describe('channel-tools', () => {
         driveId: 'drive-1',
         drive: { ownerId: 'user-456' },
       });
-      mockDriveMembersFindMany.mockResolvedValue([
-        { userId: 'user-123' },
-        { userId: 'user-456' },
-      ]);
-      mockCanUserEditPage.mockResolvedValue(true);
+      mockDriveRecipients.mockResolvedValue(['user-456', 'user-123']);
+      mockCanActorEditPage.mockResolvedValue(true);
 
       const context = {
         toolCallId: '1', messages: [],
         experimental_context: {
-          userId: 'user-123',
+          userId: 'user-123', accessActor: credentialActor('user-123', null),
           chatSource: {
             type: 'page',
             agentPageId: 'agent-1',
@@ -368,6 +440,22 @@ describe('channel-tools', () => {
       expect(recipients).toContain('user-456');
     });
 
+    it('DRV-5 (partial) X-6 (partial) notifies the drive\'s org-aware members (from getDriveRecipientUserIds) who can view the channel, and reads no drive_members row of its own', async () => {
+      mockPagesFindFirst.mockResolvedValue({ id: 'ch-1', title: 'General', type: 'CHANNEL', driveId: 'drive-1', drive: { ownerId: 'user-456' } });
+      mockDriveRecipients.mockResolvedValue(['user-456', 'implicit-member']);
+      mockCanActorEditPage.mockResolvedValue(true);
+
+      const result = await executeToolAs(
+        { channelId: 'ch-1', content: 'Hello' },
+        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123', accessActor: credentialActor('user-123', null), chatSource: { type: 'global' } } as ToolExecutionContext },
+      );
+
+      expect(result.success).toBe(true);
+      expect(mockDriveRecipients).toHaveBeenCalledWith('drive-1');
+      expect(mockBroadcastInboxEvent.mock.calls.map(([recipient]) => recipient).sort()).toEqual(['implicit-member', 'user-456']);
+      expect(db.query.driveMembers.findMany).not.toHaveBeenCalled();
+    });
+
     it('defaults to global_assistant when chatSource is not provided', async () => {
       mockPagesFindFirst.mockResolvedValue({
         id: 'ch-1',
@@ -382,7 +470,7 @@ describe('channel-tools', () => {
         revision: 1,
         stateHash: null,
       });
-      mockCanUserEditPage.mockResolvedValue(true);
+      mockCanActorEditPage.mockResolvedValue(true);
       mockGetActorInfo.mockResolvedValue({
         actorEmail: 'bob@example.com',
         actorDisplayName: 'Bob',
@@ -391,7 +479,7 @@ describe('channel-tools', () => {
       const context = {
         toolCallId: '1', messages: [],
         experimental_context: {
-          userId: 'user-123',
+          userId: 'user-123', accessActor: credentialActor('user-123', null),
         } as ToolExecutionContext,
       };
 
@@ -408,7 +496,7 @@ describe('channel-tools', () => {
     it('rejects empty message content', async () => {
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -417,6 +505,264 @@ describe('channel-tools', () => {
           context
         )
       ).rejects.toThrow('Message content cannot be empty');
+    });
+
+    it('fires notifyMentionedUsers with senderIdentity.senderName as override', async () => {
+      mockNotifyMentionedUsers.mockResolvedValue(undefined);
+      mockPagesFindFirst.mockResolvedValue({
+        id: 'ch-1',
+        title: 'General',
+        type: 'CHANNEL',
+        driveId: 'drive-1',
+        drive: { ownerId: 'user-456' },
+      });
+      mockCanActorEditPage.mockResolvedValue(true);
+      mockDriveRecipients.mockResolvedValue([]);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: {
+          userId: 'user-123', accessActor: credentialActor('user-123', null),
+          chatSource: { type: 'page', agentPageId: 'agent-1', agentTitle: 'ResearchBot' },
+        } as ToolExecutionContext,
+      };
+
+      await executeToolAs({ channelId: 'ch-1', content: 'hello @[Bob](bob-id:user)' }, context);
+
+      // Fire-and-forget — flush microtasks
+      await vi.runAllTimersAsync().catch(() => undefined);
+      await Promise.resolve();
+
+      expect(mockNotifyMentionedUsers).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: 'hello @[Bob](bob-id:user)',
+          pageId: 'ch-1',
+          driveId: 'drive-1',
+          triggeredByUserId: 'user-123',
+          mentionerNameOverride: 'ResearchBot (Test User)',
+        })
+      );
+    });
+
+    it('send succeeds even when notifyMentionedUsers rejects', async () => {
+      mockNotifyMentionedUsers.mockRejectedValue(new Error('notify exploded'));
+      mockPagesFindFirst.mockResolvedValue({
+        id: 'ch-1',
+        title: 'General',
+        type: 'CHANNEL',
+        driveId: 'drive-1',
+        drive: { ownerId: 'user-456' },
+      });
+      mockCanActorEditPage.mockResolvedValue(true);
+      mockDriveRecipients.mockResolvedValue([]);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
+      };
+
+      await expect(
+        executeToolAs({ channelId: 'ch-1', content: 'hi' }, context)
+      ).resolves.toMatchObject({ success: true });
+    });
+  });
+
+  describe('delete_channel_message', () => {
+    const channel = {
+      id: 'ch-1',
+      title: 'General',
+      type: 'CHANNEL',
+      driveId: 'drive-1',
+    };
+
+    it('has correct tool definition', () => {
+      expect(channelTools.delete_channel_message).toBeDefined();
+      expect(channelTools.delete_channel_message.description).toContain('delete');
+    });
+
+    it('requires user authentication', async () => {
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
+
+      await expect(
+        channelTools.delete_channel_message.execute!(
+          { channelId: 'ch-1', messageId: 'msg-1' },
+          context
+        )
+      ).rejects.toThrow('User authentication required');
+    });
+
+    it('throws error when channel not found', async () => {
+      mockPagesFindFirst.mockResolvedValue(null);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
+      };
+
+      await expect(
+        channelTools.delete_channel_message.execute!(
+          { channelId: 'non-existent', messageId: 'msg-1' },
+          context
+        )
+      ).rejects.toThrow('Channel with ID "non-existent" not found');
+    });
+
+    it('returns error when page is not a CHANNEL type', async () => {
+      mockPagesFindFirst.mockResolvedValue({ ...channel, type: 'DOCUMENT' });
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
+      };
+
+      const result = await executeDeleteAs(
+        { channelId: 'ch-1', messageId: 'msg-1' },
+        context
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('Page is not a channel');
+    });
+
+    it('throws error when user lacks edit permission', async () => {
+      mockPagesFindFirst.mockResolvedValue(channel);
+      mockCanActorEditPage.mockResolvedValue(false);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
+      };
+
+      await expect(
+        channelTools.delete_channel_message.execute!(
+          { channelId: 'ch-1', messageId: 'msg-1' },
+          context
+        )
+      ).rejects.toThrow('Insufficient permissions to delete messages in this channel');
+    });
+
+    it('returns error when message not found in channel', async () => {
+      mockPagesFindFirst.mockResolvedValue(channel);
+      mockFindChannelMessageInPage.mockResolvedValue(null);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
+      };
+
+      const result = await executeDeleteAs(
+        { channelId: 'ch-1', messageId: 'missing-msg' },
+        context
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('Message not found');
+    });
+
+    it('returns permission error when message belongs to a different user', async () => {
+      mockPagesFindFirst.mockResolvedValue(channel);
+      mockFindChannelMessageInPage.mockResolvedValue({
+        id: 'msg-1',
+        pageId: 'ch-1',
+        userId: 'other-user',
+        content: 'Someone else message',
+        isActive: true,
+        aiMeta: null,
+        createdAt: new Date(),
+        fileId: null,
+        attachmentMeta: null,
+        editedAt: null,
+        parentId: null,
+        replyCount: 0,
+        lastReplyAt: null,
+        mirroredFromId: null,
+        quotedMessageId: null,
+      } satisfies ChannelMessageRow);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
+      };
+
+      const result = await executeDeleteAs(
+        { channelId: 'ch-1', messageId: 'msg-1' },
+        context
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('Permission denied');
+    });
+
+    it('returns already-deleted error when soft delete returns 0', async () => {
+      mockPagesFindFirst.mockResolvedValue(channel);
+      mockSoftDeleteChannelMessage.mockResolvedValue(0);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
+      };
+
+      const result = await executeDeleteAs(
+        { channelId: 'ch-1', messageId: 'msg-1' },
+        context
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('Message already deleted');
+    });
+
+    it('successfully deletes own message and returns confirmation', async () => {
+      mockPagesFindFirst.mockResolvedValue(channel);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
+      };
+
+      const result = await executeDeleteAs(
+        { channelId: 'ch-1', messageId: 'msg-1' },
+        context
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.messageId).toBe('msg-1');
+      expect(result.channelId).toBe('ch-1');
+      expect(result.channelTitle).toBe('General');
+      expect(mockSoftDeleteChannelMessage).toHaveBeenCalledWith('msg-1');
+    });
+
+    it('successfully deletes own AI-generated message', async () => {
+      mockPagesFindFirst.mockResolvedValue(channel);
+      mockFindChannelMessageInPage.mockResolvedValue({
+        id: 'msg-1',
+        pageId: 'ch-1',
+        userId: 'user-123',
+        content: 'AI-generated post',
+        isActive: true,
+        aiMeta: { senderType: 'global_assistant', senderName: 'Test User' },
+        createdAt: new Date(),
+        fileId: null,
+        attachmentMeta: null,
+        editedAt: null,
+        parentId: null,
+        replyCount: 0,
+        lastReplyAt: null,
+        mirroredFromId: null,
+        quotedMessageId: null,
+      } satisfies ChannelMessageRow);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
+      };
+
+      const result = await executeDeleteAs(
+        { channelId: 'ch-1', messageId: 'msg-1' },
+        context
+      );
+
+      expect(result.success).toBe(true);
+      expect(mockSoftDeleteChannelMessage).toHaveBeenCalledWith('msg-1');
     });
   });
 });

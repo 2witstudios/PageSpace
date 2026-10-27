@@ -1,11 +1,13 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { generateRegistrationOptionsForSignup } from '@pagespace/lib/auth';
-import { loggers, logSecurityEvent } from '@pagespace/lib/server';
+import { generateRegistrationOptionsForSignup } from '@pagespace/lib/auth/passkey-service';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
-} from '@pagespace/lib/security';
+} from '@pagespace/lib/security/distributed-rate-limit';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 
 const optionsSchema = z.object({
@@ -41,10 +43,10 @@ export async function POST(req: Request) {
     // Verify login CSRF token BEFORE rate limiting so stale tokens
     // don't burn rate limit attempts (cheap stateless HMAC check)
     if (!validateLoginCSRFToken(csrfToken)) {
-      logSecurityEvent('passkey_csrf_invalid', {
-        ip: clientIP,
-        email: normalizedEmail.substring(0, 3) + '***',
-        flow: 'signup_options',
+      auditRequest(req, {
+        eventType: 'security.suspicious.activity',
+        riskScore: 0.6,
+        details: { reason: 'passkey_csrf_invalid', flow: 'signup_options' },
       });
       return NextResponse.json(
         { error: 'Invalid CSRF token' },
@@ -60,9 +62,10 @@ export async function POST(req: Request) {
     );
 
     if (!ipRateLimitResult.allowed) {
-      logSecurityEvent('passkey_rate_limit_signup_ip', {
-        ip: clientIP,
-        retryAfter: ipRateLimitResult.retryAfter,
+      auditRequest(req, {
+        eventType: 'security.rate.limited',
+        riskScore: 0.5,
+        details: { reason: 'rate_limit_signup_options_ip' },
       });
       return NextResponse.json(
         { error: 'Too many requests from this IP', retryAfter: ipRateLimitResult.retryAfter },
@@ -78,9 +81,10 @@ export async function POST(req: Request) {
     );
 
     if (!emailRateLimitResult.allowed) {
-      logSecurityEvent('passkey_rate_limit_signup_email', {
-        email: normalizedEmail.substring(0, 3) + '***',
-        retryAfter: emailRateLimitResult.retryAfter,
+      auditRequest(req, {
+        eventType: 'security.rate.limited',
+        riskScore: 0.5,
+        details: { reason: 'rate_limit_signup_options_email' },
       });
       return NextResponse.json(
         { error: 'Too many signup attempts for this email', retryAfter: emailRateLimitResult.retryAfter },
@@ -95,7 +99,7 @@ export async function POST(req: Request) {
       if (result.error.code === 'EMAIL_EXISTS') {
         loggers.auth.info('Passkey signup - email already exists', {
           ip: clientIP,
-          email: normalizedEmail.substring(0, 3) + '***',
+          email: maskEmail(normalizedEmail),
         });
         return NextResponse.json(
           { error: 'An account with this email already exists', code: 'EMAIL_EXISTS' },
@@ -123,7 +127,7 @@ export async function POST(req: Request) {
 
     loggers.auth.info('Passkey signup options generated', {
       ip: clientIP,
-      email: normalizedEmail.substring(0, 3) + '***',
+      email: maskEmail(normalizedEmail),
     });
 
     return NextResponse.json({

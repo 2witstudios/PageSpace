@@ -1,0 +1,841 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+const mockIsBillingEnabled = vi.hoisted(() => vi.fn(() => true));
+const mockDb = vi.hoisted(() => ({ select: vi.fn(), insert: vi.fn(), update: vi.fn(), transaction: vi.fn() }));
+
+vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
+vi.mock('@pagespace/db/schema/credits', () => ({
+  creditHolds: { id: 'ch.id', userId: 'ch.userId', estCents: 'ch.estCents', expiresAt: 'ch.expiresAt' },
+  creditLedger: {
+    userId: 'cl.userId',
+    entryType: 'cl.entryType',
+    bucket: 'cl.bucket',
+    amountCents: 'cl.amountCents',
+    chargeMillicents: 'cl.chargeMillicents',
+    stripeRef: 'cl.stripeRef',
+    consumeStatus: 'cl.consumeStatus',
+    createdAt: 'cl.createdAt',
+  },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
+  and: vi.fn((...a) => ({ op: 'and', a })),
+  gt: vi.fn((a, b) => ({ op: 'gt', a, b })),
+  gte: vi.fn((a, b) => ({ op: 'gte', a, b })),
+  lt: vi.fn((a, b) => ({ op: 'lt', a, b })),
+  or: vi.fn((...a) => ({ op: 'or', a })),
+  isNull: vi.fn((a) => ({ op: 'isNull', a })),
+  inArray: vi.fn((a, b) => ({ op: 'inArray', a, b })),
+  sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ sql: true, strings, values })),
+}));
+vi.mock('../../deployment-mode', () => ({ isBillingEnabled: mockIsBillingEnabled }));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
+  aiUsageLogs: { userId: 'aul.userId', cost: 'aul.cost', timestamp: 'aul.timestamp' },
+}));
+const mockEmitCreditsUpdated = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('../credit-emit', () => ({ emitCreditsUpdated: mockEmitCreditsUpdated }));
+const mockEnsurePersonalRootWalletId = vi.hoisted(() => vi.fn().mockResolvedValue('w_root'));
+vi.mock('../personal-wallet', () => ({ ensurePersonalRootWalletId: mockEnsurePersonalRootWalletId }));
+
+import { canConsumeAI, addOneMonth } from '../credit-gate';
+import { PERSONAL_SPEND } from '../spend-target';
+
+// Default pricing (unmocked credit-pricing): RESERVE_FLOOR_CENTS = 25,
+// CREDIT_HOLD_ESTIMATE_CENTS = 25 (defaults to the floor), MAX_FREE_INFLIGHT = 2.
+const EST = 25;
+
+describe('addOneMonth', () => {
+  const at = (iso: string) => new Date(iso);
+
+  it('advances a mid-month date by one calendar month, preserving time-of-day', () => {
+    expect(addOneMonth(at('2026-01-15T08:30:00.000Z')).toISOString()).toBe('2026-02-15T08:30:00.000Z');
+  });
+
+  it('clamps a month-end start to the last valid day instead of overflowing', () => {
+    expect(addOneMonth(at('2026-01-31T00:00:00.000Z')).toISOString()).toBe('2026-02-28T00:00:00.000Z');
+    expect(addOneMonth(at('2026-03-31T12:00:00.000Z')).toISOString()).toBe('2026-04-30T12:00:00.000Z');
+  });
+
+  it('clamps to Feb 29 in a leap year', () => {
+    expect(addOneMonth(at('2028-01-31T00:00:00.000Z')).toISOString()).toBe('2028-02-29T00:00:00.000Z');
+  });
+
+  it('rolls over the year for a December start', () => {
+    expect(addOneMonth(at('2026-12-31T00:00:00.000Z')).toISOString()).toBe('2027-01-31T00:00:00.000Z');
+  });
+});
+
+// ── Chain builders ───────────────────────────────────────────────────────────
+function selectReturning(rows: unknown[]) {
+  return { from: () => ({ where: () => ({ limit: () => Promise.resolve(rows) }) }) };
+}
+function insertChain() {
+  return { values: () => ({ onConflictDoNothing: () => Promise.resolve(undefined) }) };
+}
+
+/**
+ * Mock the lazy-init transaction (first db.transaction call when no balance row exists).
+ * Captures the values passed to both tx.insert calls (balance and ledger).
+ * `balanceCreated` controls whether the balance insert's .returning() reports a new row
+ * (true = this call created it; false = concurrent path already created it, insert was a no-op).
+ */
+function mockLazyInitTransaction(
+  sink: { balanceValues?: Record<string, unknown>; ledgerValues?: Record<string, unknown> } = {},
+  balanceCreated = true,
+) {
+  let insertCount = 0;
+  mockDb.transaction.mockImplementationOnce(async (cb: (tx: unknown) => Promise<unknown>) => {
+    const tx = {
+      insert: vi.fn(() => {
+        insertCount++;
+        const callNum = insertCount;
+        return {
+          values: (v: Record<string, unknown>) => {
+            if (callNum === 1) sink.balanceValues = v;
+            else sink.ledgerValues = v;
+            return {
+              onConflictDoNothing: () => ({
+                returning: () => Promise.resolve(
+                  callNum === 1 && balanceCreated ? [{ id: 'w_new' }] : [],
+                ),
+              }),
+            };
+          },
+        };
+      }),
+    };
+    return cb(tx);
+  });
+}
+
+/**
+ * Mock the starter-grant transaction (free tier, existing row with no period). The
+ * ledger insert goes FIRST; `granted` controls whether `.returning()` reports a new
+ * row (false = the user-scoped key already existed, so the balance must not be
+ * touched). Captures the ledger values and the UPDATE's set payload.
+ */
+function mockStarterGrantTransaction(
+  sink: { set?: Record<string, unknown>; ledgerValues?: Record<string, unknown>; updateCalled?: boolean } = {},
+  granted = true,
+) {
+  mockDb.transaction.mockImplementationOnce(async (cb: (tx: unknown) => Promise<unknown>) => {
+    const tx = {
+      insert: vi.fn(() => ({
+        values: (v: Record<string, unknown>) => {
+          sink.ledgerValues = v;
+          return {
+            onConflictDoNothing: () => ({
+              returning: () => Promise.resolve(granted ? [{ id: 'cl_1' }] : []),
+            }),
+          };
+        },
+      })),
+      update: vi.fn(() => {
+        sink.updateCalled = true;
+        return {
+          set: (v: Record<string, unknown>) => {
+            sink.set = v;
+            return { where: () => Promise.resolve(undefined) };
+          },
+        };
+      }),
+    };
+    return cb(tx);
+  });
+}
+
+/**
+ * Wire mockDb.transaction to run its callback against a fake tx. `balRow` is the
+ * locked balance read; `holds` controls the reserved/inFlight aggregate. Captures
+ * any inserted hold values and returns a stubbed id.
+ */
+function mockTransaction(
+  balRow: Record<string, unknown> | null,
+  // `reserved` is held against the personal root wallet; `userReserved` is the caller's
+  // own holds on any wallet (the daily-cap burst term). On a personal-only account they
+  // are the same holds, so it defaults to `reserved`.
+  holds: { reserved: number; inFlight: number; userReserved?: number },
+  sink: { holdValues?: Record<string, unknown>; insertCalled?: boolean } = {},
+  holdId = 'hold_1',
+) {
+  mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => {
+    const tx = {
+      select: vi.fn()
+        // 1st select: balance row lock -> .for('update')
+        .mockReturnValueOnce({ from: () => ({ where: () => ({ for: () => Promise.resolve(balRow ? [balRow] : []) }) }) })
+        // 2nd select: hold aggregate -> resolves at .where
+        .mockReturnValueOnce({ from: () => ({ where: () => Promise.resolve([{ reserved: holds.reserved, inFlight: holds.inFlight, userReserved: holds.userReserved ?? holds.reserved }]) }) }),
+      insert: vi.fn(() => {
+        sink.insertCalled = true;
+        return {
+          values: (v: Record<string, unknown>) => {
+            sink.holdValues = v;
+            return { returning: () => Promise.resolve([{ id: holdId }]) };
+          },
+        };
+      }),
+    };
+    return cb(tx);
+  });
+}
+
+/**
+ * Like {@link mockTransaction} but wires a THIRD select — the daily-cap charged-spend
+ * aggregate (resolves at .from().where(), returning `{ chargedMc }`). Used by the
+ * exposure-cap suite where a cap is configured so the allow path runs that query.
+ */
+function mockTransactionWithDailyCharge(
+  balRow: Record<string, unknown> | null,
+  // `reserved` is held against the personal root wallet; `userReserved` is the caller's
+  // own holds on any wallet (the daily-cap burst term). On a personal-only account they
+  // are the same holds, so it defaults to `reserved`.
+  holds: { reserved: number; inFlight: number; userReserved?: number },
+  chargedMc: number,
+  sink: { holdValues?: Record<string, unknown>; insertCalled?: boolean } = {},
+  holdId = 'hold_1',
+) {
+  mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => {
+    const tx = {
+      select: vi.fn()
+        .mockReturnValueOnce({ from: () => ({ where: () => ({ for: () => Promise.resolve(balRow ? [balRow] : []) }) }) })
+        .mockReturnValueOnce({ from: () => ({ where: () => Promise.resolve([{ reserved: holds.reserved, inFlight: holds.inFlight, userReserved: holds.userReserved ?? holds.reserved }]) }) })
+        .mockReturnValueOnce({ from: () => ({ where: () => Promise.resolve([{ chargedMc }]) }) }),
+      insert: vi.fn(() => {
+        sink.insertCalled = true;
+        return {
+          values: (v: Record<string, unknown>) => {
+            sink.holdValues = v;
+            return { returning: () => Promise.resolve([{ id: holdId }]) };
+          },
+        };
+      }),
+    };
+    return cb(tx);
+  });
+}
+
+const PAST = new Date(Date.now() - 60 * 60 * 1000);
+const FUTURE = new Date(Date.now() + 60 * 60 * 1000);
+
+describe('canConsumeAI', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsBillingEnabled.mockReturnValue(true);
+    mockDb.insert.mockReturnValue(insertChain());
+  });
+
+  it('allows unconditionally when billing is disabled (tenant/onprem)', async () => {
+    mockIsBillingEnabled.mockReturnValue(false);
+    const r = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
+    expect(r).toEqual({ allowed: true, reason: 'unlimited' });
+    expect(mockDb.select).not.toHaveBeenCalled();
+    expect(mockDb.transaction).not.toHaveBeenCalled();
+  });
+
+  it('allows a user with spendable credits and returns a holdId', async () => {
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 100, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    const sink: { holdValues?: Record<string, unknown> } = {};
+    mockTransaction({ id: 'w_root', monthlyRemainingCents: 100, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 }, sink);
+
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
+
+    expect(r.allowed).toBe(true);
+    expect(r.reason).toBe('ok');
+    expect(r.holdId).toBe('hold_1');
+    // The hold reserves this call's estimate and is scoped to the user and (WAL-5) to
+    // the personal root wallet the locked balance read returned.
+    expect(sink.holdValues).toMatchObject({ userId: 'u1', walletId: 'w_root', estCents: EST });
+    expect(sink.holdValues?.expiresAt).toBeInstanceOf(Date);
+    // Placing the hold must NOT push a balance update: holds are hidden from the
+    // displayed balance, and the navbar updates only when the call settles (real
+    // cost) via consumeCredits. Emitting here would make the headline dip-then-pop.
+    expect(mockEmitCreditsUpdated).not.toHaveBeenCalled();
+  });
+
+  it('caps a PAID user via opts.maxInFlight (voice concurrency bound) even with ample credit', async () => {
+    // Paid tiers are normally uncapped on concurrency; the voice routes pass a cap to
+    // bound concurrent paid voice spend. 4 holds already in flight == the cap → deny.
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 100000, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    const sink: { insertCalled?: boolean } = {};
+    mockTransaction({ monthlyRemainingCents: 100000, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 8, inFlight: 4 }, sink);
+
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND, estCostCents: 2, maxInFlight: 4 });
+
+    expect(r).toMatchObject({ allowed: false, reason: 'too_many_in_flight' });
+    expect(sink.insertCalled).toBeFalsy();
+  });
+
+  it('reserves the estCostCents override (voice) instead of the chat default', async () => {
+    // Voice routes pass a small per-call estimate so a sub-cent STT/TTS call doesn't
+    // reserve the full 25¢ chat hold. The hold must reflect the override.
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 100, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    const sink: { holdValues?: Record<string, unknown> } = {};
+    mockTransaction({ monthlyRemainingCents: 100, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 }, sink);
+
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND, estCostCents: 2 });
+
+    expect(r.allowed).toBe(true);
+    expect(sink.holdValues).toMatchObject({ userId: 'u1', estCents: 2 });
+  });
+
+  it('denies with out_of_credits when both buckets are empty (no hold inserted)', async () => {
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    const sink: { insertCalled?: boolean } = {};
+    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 }, sink);
+
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
+
+    expect(r).toMatchObject({ allowed: false, reason: 'out_of_credits' });
+    expect(r.holdId).toBeUndefined();
+    expect(sink.insertCalled).toBeFalsy();
+    // No hold created -> nothing changed -> no push.
+    expect(mockEmitCreditsUpdated).not.toHaveBeenCalled();
+  });
+
+  it('denies when outstanding debt drags net spendable to/under the floor', async () => {
+    // monthly 100, topup 0, but 100 owed -> net 0 - est 25 < floor 25 -> out_of_credits.
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 100, topupRemainingCents: 0, debtCents: 100, monthlyPeriodEnd: FUTURE }]));
+    const sink: { insertCalled?: boolean } = {};
+    mockTransaction({ monthlyRemainingCents: 100, topupRemainingCents: 0, debtCents: 100, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 }, sink);
+
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
+
+    expect(r).toMatchObject({ allowed: false, reason: 'out_of_credits' });
+    expect(sink.insertCalled).toBeFalsy();
+  });
+
+  it('allows when the buckets still clear the floor net of a smaller debt', async () => {
+    // monthly 200, topup 0, debt 100 -> net 100 - est 25 = 75 > floor 25 -> ok.
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 200, topupRemainingCents: 0, debtCents: 100, monthlyPeriodEnd: FUTURE }]));
+    mockTransaction({ monthlyRemainingCents: 200, topupRemainingCents: 0, debtCents: 100, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
+    expect(r.allowed).toBe(true);
+    expect(r.reason).toBe('ok');
+  });
+
+  it('denies a free user who has reached the in-flight cap (too_many_in_flight), even with credit', async () => {
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    const sink: { insertCalled?: boolean } = {};
+    // 2 holds already in flight == MAX_FREE_INFLIGHT.
+    mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 50, inFlight: 2 }, sink);
+
+    const r = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
+
+    expect(r).toMatchObject({ allowed: false, reason: 'too_many_in_flight' });
+    expect(sink.insertCalled).toBeFalsy();
+  });
+
+  it('does NOT cap a paid user on concurrency (many in-flight holds still allowed)', async () => {
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 10000, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    mockTransaction({ monthlyRemainingCents: 10000, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 250, inFlight: 10 });
+
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
+    expect(r.allowed).toBe(true);
+  });
+
+  it('denies when outstanding holds reserve enough to push spendable to the floor', async () => {
+    // monthly 80, floor 25, est 25. Reserved 50 from prior holds:
+    // 80 - 50 - 25 = 5 <= 25 -> out_of_credits.
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 80, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    mockTransaction({ monthlyRemainingCents: 80, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 50, inFlight: 1 });
+
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
+    expect(r).toMatchObject({ allowed: false, reason: 'out_of_credits' });
+  });
+
+  it('lazy-inits a balance row from tier defaults on first request, then allows with a hold', async () => {
+    // 1st select: no row. After the init transaction, the auth transaction's locked read
+    // sees the persisted row.
+    mockDb.select.mockReturnValueOnce(selectReturning([]));
+    const initSink: { balanceValues?: Record<string, unknown> } = {};
+    mockLazyInitTransaction(initSink);
+    mockTransaction({ monthlyRemainingCents: 1500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
+
+    expect(initSink.balanceValues?.monthlyPeriodStart).toBeInstanceOf(Date);
+    expect(initSink.balanceValues?.monthlyPeriodEnd).toBeInstanceOf(Date);
+    expect(r.allowed).toBe(true);
+    expect(r.holdId).toBe('hold_1');
+  });
+
+  it('re-evaluates against the persisted (drained) row after a concurrent init — no false allow', async () => {
+    mockDb.select.mockReturnValueOnce(selectReturning([]));
+    mockLazyInitTransaction();
+    // The locked read inside the auth transaction sees an empty balance (a racing request drained it).
+    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
+    expect(r.allowed).toBe(false);
+    expect(r.reason).toBe('out_of_credits');
+  });
+
+  // ── Free tier: ONE-TIME grant, never refilled ─────────────────────────────
+  // TIER_ALLOWANCE_REFILLS.free === false. An expired (or never-stamped) free window
+  // must be left alone: no reset transaction, no UPDATE, no monthly_grant row.
+
+  it('never rolls an expired comped paid window — no subscription lookup, no reset, no grant; it refuses at zero until the period sweep renews it (ew9v06jeb)', async () => {
+    mockDb.select.mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: PAST }]));
+    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'business', { spend: PERSONAL_SPEND });
+
+    expect(r).toMatchObject({ allowed: false, reason: 'out_of_credits' });
+    // One unlocked read (the balance pre-read) and one transaction (the hold decision): no
+    // subscription lookup, no period update, no grant row.
+    expect(mockDb.select).toHaveBeenCalledTimes(1);
+    expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+    expect(mockDb.update).not.toHaveBeenCalled();
+    expect(mockDb.insert).not.toHaveBeenCalled();
+  });
+
+  it('never rolls a comped paid row created bare by a top-up (null period): the top-up stays spendable and nothing is granted (ew9v06jeb)', async () => {
+    mockDb.select.mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 2500, debtCents: 0, monthlyPeriodEnd: null }]));
+    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 2500, monthlyPeriodEnd: null }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
+
+    expect(r.allowed).toBe(true);
+    expect(mockDb.select).toHaveBeenCalledTimes(1);
+    expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  it('does NOT reset a free user whose window has expired — the starter grant is one-time (out_of_credits at 0)', async () => {
+    // Only ONE unlocked select (the pre-read): no subscription lookup, no post-reset re-read.
+    mockDb.select.mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]));
+    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
+
+    expect(mockDb.select).toHaveBeenCalledTimes(1);
+    expect(mockDb.update).not.toHaveBeenCalled();
+    expect(mockDb.transaction).toHaveBeenCalledTimes(1); // the hold transaction only
+    expect(r).toMatchObject({ allowed: false, reason: 'out_of_credits' });
+  });
+
+  it('keeps spending a free user\'s carried balance after the window expires — no refill, but no expiry either', async () => {
+    mockDb.select.mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 200, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]));
+    mockTransaction({ monthlyRemainingCents: 200, topupRemainingCents: 0, monthlyPeriodEnd: PAST }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
+
+    expect(mockDb.update).not.toHaveBeenCalled();
+    expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+    expect(r.allowed).toBe(true);
+    expect(r.reason).toBe('ok');
+  });
+
+  it('grants the one-time starter credits to a free user whose row was created bare by a top-up (no period) — ledger-first, once', async () => {
+    // A top-up before the first AI call creates the row with no period. Free is
+    // excluded from the reset path, so the starter grant must land HERE, keyed on the
+    // user-scoped ledger row so it can never double-fund.
+    mockDb.select
+      .mockReturnValueOnce(selectReturning([{ id: 'w_bare', monthlyRemainingCents: 0, topupRemainingCents: 2500, monthlyPeriodEnd: null }]))
+      .mockReturnValueOnce(selectReturning([{ id: 'w_bare', monthlyRemainingCents: 500, topupRemainingCents: 2500, monthlyPeriodEnd: FUTURE }]));
+    const sink: { set?: Record<string, unknown>; ledgerValues?: Record<string, unknown>; updateCalled?: boolean } = {};
+    mockStarterGrantTransaction(sink, true);
+    mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 2500, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
+
+    expect(sink.ledgerValues).toMatchObject({ userId: 'u1', walletId: 'w_bare', entryType: 'monthly_grant', bucket: 'monthly', amountCents: 500, stripeRef: 'free-init-u1', consumeStatus: 'applied' });
+    expect(sink.updateCalled).toBe(true);
+    expect(sink.set).toMatchObject({ monthlyAllowanceCents: 500 });
+    expect(sink.set?.monthlyPeriodEnd).toBeInstanceOf(Date);
+    // The remaining is a RELATIVE increment (sql fragment), not an absolute 500 — it
+    // must add on top of whatever a concurrent top-up already put in the row.
+    expect(sink.set?.monthlyRemainingCents).toMatchObject({ sql: true });
+    expect(mockDb.select).toHaveBeenCalledTimes(2); // pre-read + post-grant re-read; no subscription lookup
+    expect(r.allowed).toBe(true);
+  });
+
+  it('does NOT fund the starter grant twice: when the free-init ledger row already exists, the balance is left alone', async () => {
+    mockDb.select
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 2500, monthlyPeriodEnd: null }]))
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 2500, monthlyPeriodEnd: null }]));
+    const sink: { set?: Record<string, unknown>; ledgerValues?: Record<string, unknown>; updateCalled?: boolean } = {};
+    mockStarterGrantTransaction(sink, false /* ledger insert conflicted: already granted */);
+    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 2500, monthlyPeriodEnd: null }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
+
+    expect(sink.updateCalled).toBeFalsy();
+    expect(sink.set).toBeUndefined();
+    expect(r.allowed).toBe(true); // the top-up bucket alone is spendable
+  });
+
+  it('does NOT gate-reset a tier with no defined allowance (legacy "normal") — the roll would rewrite the account to free-tier values', async () => {
+    mockDb.select.mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]));
+    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'normal' as unknown as Parameters<typeof canConsumeAI>[1], { spend: PERSONAL_SPEND });
+    // Neither the reset transaction nor the subscription lookup ran — one select (pre-read) only.
+    expect(mockDb.select).toHaveBeenCalledTimes(1);
+    expect(r).toMatchObject({ allowed: false, reason: 'out_of_credits' });
+  });
+
+  it('does NOT look up subscriptions for a free user with an expired window — free is excluded before the lookup', async () => {
+    mockDb.select.mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 300, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]));
+    mockTransaction({ monthlyRemainingCents: 300, topupRemainingCents: 0, monthlyPeriodEnd: PAST }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
+
+    // Exactly one unlocked select — the pre-read. The gate never looks at
+    // subscriptions (no period roll lives here), so the hot path stays a single read.
+    expect(mockDb.select).toHaveBeenCalledTimes(1);
+    expect(r.allowed).toBe(true);
+  });
+
+  it('counts a paid user\'s carried monthly balance as spendable even after the window expires (rollover)', async () => {
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 300, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]));
+    mockTransaction({ monthlyRemainingCents: 300, topupRemainingCents: 0, monthlyPeriodEnd: PAST }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
+    expect(mockDb.update).not.toHaveBeenCalled();
+    expect(r.allowed).toBe(true);
+    expect(r.reason).toBe('ok');
+  });
+
+  it('still counts a paid user\'s top-up bucket when the monthly window has expired', async () => {
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 1000, monthlyPeriodEnd: PAST }]));
+    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 1000, monthlyPeriodEnd: PAST }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
+    expect(mockDb.update).not.toHaveBeenCalled();
+    expect(r.allowed).toBe(true);
+    expect(r.reason).toBe('ok');
+  });
+
+  it('does NOT reset when the period is still active', async () => {
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 800, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    mockTransaction({ monthlyRemainingCents: 800, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
+    expect(r.allowed).toBe(true);
+  });
+
+  // ── Ledger write tests ────────────────────────────────────────────────────
+
+  it('lazy-init writes a monthly_grant ledger row alongside the balance row', async () => {
+    mockDb.select.mockReturnValueOnce(selectReturning([]));
+    const sink: { balanceValues?: Record<string, unknown>; ledgerValues?: Record<string, unknown> } = {};
+    mockLazyInitTransaction(sink);
+    mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
+
+    expect(sink.ledgerValues).toMatchObject({
+      userId: 'u1',
+      // WAL-5: the grant names the wallet this transaction just created.
+      walletId: 'w_new',
+      entryType: 'monthly_grant',
+      bucket: 'monthly',
+      amountCents: 500,
+      consumeStatus: 'applied',
+    });
+  });
+
+  it('concurrent lazy-init produces exactly ONE grant row — stripeRef is user-scoped (no timestamp)', async () => {
+    // The unique index on stripeRef rejects a second insert with the same key.
+    // A timestamp-based key would let two concurrent inits produce two different
+    // stripeRefs and both insert, causing phantom grants. Verify the key is stable.
+    mockDb.select.mockReturnValueOnce(selectReturning([]));
+    const sink: { ledgerValues?: Record<string, unknown> } = {};
+    mockLazyInitTransaction(sink);
+    mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
+
+    // The key contains no timestamp — both concurrent inits produce the same
+    // stripeRef, so the unique index silently drops the second via onConflictDoNothing.
+    expect(sink.ledgerValues?.stripeRef).toBe('free-init-u1');
+  });
+
+  it('lazy-init skips ledger write when balance insert conflicts (concurrent top-up/invoice already created the row)', async () => {
+    // If a top-up or invoice.paid creates the balance between readBalance() and the lazy-init
+    // transaction, the balance INSERT conflicts and returns nothing. We must NOT write
+    // a phantom grant row — that path already wrote its own grant/purchase entry.
+    mockDb.select.mockReturnValueOnce(selectReturning([]));
+    const sink: { ledgerValues?: Record<string, unknown> } = {};
+    mockLazyInitTransaction(sink, false /* balanceCreated = false, simulates conflict */);
+    mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
+
+    expect(sink.ledgerValues).toBeUndefined();
+  });
+
+  it('never writes a free-reset ledger row: a free user with an expired window gets no grant', async () => {
+    mockDb.select.mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]));
+    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }, { reserved: 0, inFlight: 0 });
+
+    await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
+
+    expect(mockDb.insert).not.toHaveBeenCalled();
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  // ── Locked-read ordering (M7 race fix) ──────────────────────────────────────
+  // The refill MUST be computed from the balance read FOR UPDATE inside the reset
+  // transaction, never from the unlocked pre-transaction snapshot. Otherwise a
+  // mutation committed between the two reads is clobbered by the reset.
+
+});
+
+describe('canConsumeAI — per-user/day exposure cap', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsBillingEnabled.mockReturnValue(true);
+    mockDb.insert.mockReturnValue(insertChain());
+    // A user with plenty of credits so the credit gate always allows — isolating the
+    // daily-cap decision. selectReturning feeds the pre-transaction lazy-init read.
+    mockDb.select.mockReturnValue(
+      selectReturning([{ monthlyRemainingCents: 100_000, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]),
+    );
+  });
+
+  afterEach(() => {
+    delete process.env.DAILY_USER_EXPOSURE_CAP_CENTS;
+    delete process.env.DAILY_CAP_BUSINESS_CENTS;
+  });
+
+  const BAL = { monthlyRemainingCents: 100_000, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE };
+
+  it('denies (429-mapped) when the day spend + this call exceeds the cap, with enforcement ON', async () => {
+    process.env.DAILY_USER_EXPOSURE_CAP_CENTS = '500';
+    // 480¢ already charged today (480_000 millicents) + EST(25) = 505 > 500 → deny.
+    const sink: { insertCalled?: boolean } = {};
+    mockTransactionWithDailyCharge(BAL, { reserved: 0, inFlight: 0 }, 480_000, sink);
+
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
+
+    expect(r).toEqual({ allowed: false, reason: 'daily_cap_exceeded' });
+    // No hold is reserved on a cap denial.
+    expect(sink.insertCalled).toBeFalsy();
+  });
+
+  it('allows + reserves a hold when the day spend stays under the cap', async () => {
+    process.env.DAILY_USER_EXPOSURE_CAP_CENTS = '500';
+    const sink: { insertCalled?: boolean } = {};
+    mockTransactionWithDailyCharge(BAL, { reserved: 0, inFlight: 0 }, 100_000, sink); // 100¢ + 25 < 500
+
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
+
+    expect(r.allowed).toBe(true);
+    expect(r.reason).toBe('ok');
+    expect(sink.insertCalled).toBe(true);
+  });
+
+  it('counts active in-flight hold reservations toward the cap (burst cannot exceed it)', async () => {
+    process.env.DAILY_USER_EXPOSURE_CAP_CENTS = '500';
+    // Settled 100¢ today, but 450¢ of holds are still in flight (not yet in the ledger):
+    // 100 + 450 + EST(25) = 575 > 500 → deny, even though settled alone (125) is under.
+    const sink: { insertCalled?: boolean } = {};
+    mockTransactionWithDailyCharge(BAL, { reserved: 450, inFlight: 3 }, 100_000, sink);
+
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
+
+    expect(r).toEqual({ allowed: false, reason: 'daily_cap_exceeded' });
+    expect(sink.insertCalled).toBeFalsy();
+  });
+
+  it('respects a per-tier override (DAILY_CAP_BUSINESS_CENTS) above the global cap', async () => {
+    process.env.DAILY_USER_EXPOSURE_CAP_CENTS = '500';
+    process.env.DAILY_CAP_BUSINESS_CENTS = '1000';
+    // 600¢ today + 25 = 625: over the global 500 but under the business 1000 → allowed.
+    const sink: { insertCalled?: boolean } = {};
+    mockTransactionWithDailyCharge(BAL, { reserved: 0, inFlight: 0 }, 600_000, sink);
+
+    const r = await canConsumeAI('u1', 'business', { spend: PERSONAL_SPEND });
+
+    expect(r.allowed).toBe(true);
+    expect(sink.insertCalled).toBe(true);
+  });
+
+  it('counts the full intended charge (chargeMillicents, usage+adjustment) — query shape locked', async () => {
+    process.env.DAILY_USER_EXPOSURE_CAP_CENTS = '500';
+    mockTransactionWithDailyCharge(BAL, { reserved: 0, inFlight: 0 }, 100_000);
+
+    await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
+
+    const { inArray } = await import('@pagespace/db/operators');
+    // The daily-cap query scopes to usage + adjustment rows (chargeMillicents is set on
+    // those; NULL elsewhere) so an in-debt user's full charge still counts.
+    expect(inArray).toHaveBeenCalledWith('cl.entryType', ['usage', 'adjustment']);
+  });
+
+  it('bypasses the cap entirely when skipDailyCap is set (system caller)', async () => {
+    process.env.DAILY_USER_EXPOSURE_CAP_CENTS = '500';
+    // Even with a charged total that WOULD exceed the cap, skipDailyCap skips the check.
+    const sink: { insertCalled?: boolean } = {};
+    mockTransactionWithDailyCharge(BAL, { reserved: 0, inFlight: 0 }, 480_000, sink);
+
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND, skipDailyCap: true });
+
+    expect(r.allowed).toBe(true);
+    expect(r.reason).toBe('ok');
+    expect(sink.insertCalled).toBe(true);
+  });
+
+  it('no cap configured (default) → never runs the daily-cap query, allows normally', async () => {
+    // DAILY_USER_EXPOSURE_CAP_CENTS unset → cap disabled. Use the 2-select transaction;
+    // a 3rd select would throw if the cap path ran.
+    const sink: { insertCalled?: boolean } = {};
+    mockTransaction(BAL, { reserved: 0, inFlight: 0 }, sink);
+
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
+
+    expect(r.allowed).toBe(true);
+    expect(sink.insertCalled).toBe(true);
+  });
+
+  it('applies a caller-supplied dailyCapCeilingCents even when no env cap is configured', async () => {
+    // The env caps default to 0 = disabled, but a caller whose runs are forced
+    // by a bearer credential (webhook triggers) passes an explicit ceiling that
+    // must bind regardless: 480¢ today + EST(25) = 505 > 500 → deny.
+    const sink: { insertCalled?: boolean } = {};
+    mockTransactionWithDailyCharge(BAL, { reserved: 0, inFlight: 0 }, 480_000, sink);
+
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND, dailyCapCeilingCents: 500 });
+
+    expect(r).toEqual({ allowed: false, reason: 'daily_cap_exceeded' });
+    expect(sink.insertCalled).toBeFalsy();
+  });
+
+  it('effective cap is the smaller of the tier cap and the caller ceiling', async () => {
+    process.env.DAILY_USER_EXPOSURE_CAP_CENTS = '1000';
+    // 480¢ + 25 = 505: under the env cap (1000) but over the ceiling (500) → deny.
+    const sink: { insertCalled?: boolean } = {};
+    mockTransactionWithDailyCharge(BAL, { reserved: 0, inFlight: 0 }, 480_000, sink);
+
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND, dailyCapCeilingCents: 500 });
+
+    expect(r).toEqual({ allowed: false, reason: 'daily_cap_exceeded' });
+  });
+
+  it('allows + reserves a hold when the day spend stays under the caller ceiling', async () => {
+    const sink: { insertCalled?: boolean } = {};
+    mockTransactionWithDailyCharge(BAL, { reserved: 0, inFlight: 0 }, 100_000, sink); // 100¢ + 25 < 500
+
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND, dailyCapCeilingCents: 500 });
+
+    expect(r.allowed).toBe(true);
+    expect(sink.insertCalled).toBe(true);
+  });
+
+  it('ignores a zero ceiling (cap stays disabled when no env cap is set)', async () => {
+    // 2-select transaction: a 3rd select would throw if the cap path ran.
+    const sink: { insertCalled?: boolean } = {};
+    mockTransaction(BAL, { reserved: 0, inFlight: 0 }, sink);
+
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND, dailyCapCeilingCents: 0 });
+
+    expect(r.allowed).toBe(true);
+    expect(sink.insertCalled).toBe(true);
+  });
+});
+
+describe('canConsumeAI — dailyCapCeilingCents with billing disabled (tenant/onprem)', () => {
+  // The billing-off ceiling decision runs in a transaction: advisory-lock
+  // serialize per user, sum unexpired holds (in-flight runs), sum the day's
+  // aiUsageLogs cost, then reserve a hold on allow. Selects resolve in that
+  // order: [holds agg], [usage agg].
+  function mockBillingOffTransaction(
+    reserved: number,
+    costUsd: number,
+    sink: { insertCalled?: boolean; executeSql?: string; holdValues?: Record<string, unknown> } = {},
+  ) {
+    mockDb.transaction.mockImplementationOnce(async (cb: (tx: unknown) => Promise<unknown>) => {
+      let selectCount = 0;
+      const tx = {
+        execute: vi.fn((q: { strings?: readonly string[] }) => {
+          sink.executeSql = q?.strings?.join('');
+          return Promise.resolve(undefined);
+        }),
+        select: vi.fn(() => {
+          selectCount++;
+          const n = selectCount;
+          return {
+            from: () => ({
+              where: () =>
+                Promise.resolve(
+                  n === 1 ? [{ reserved, inFlight: 0 }] : [{ costUsd }],
+                ),
+            }),
+          };
+        }),
+        insert: vi.fn(() => ({
+          values: (v: Record<string, unknown>) => {
+            sink.insertCalled = true;
+            sink.holdValues = v;
+            return { returning: () => Promise.resolve([{ id: 'hold-x' }]) };
+          },
+        })),
+      };
+      return cb(tx);
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsBillingEnabled.mockReturnValue(false);
+  });
+
+  it('stays a pure fast path (no queries) when no ceiling is passed', async () => {
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
+
+    expect(r).toEqual({ allowed: true, reason: 'unlimited' });
+    expect(mockDb.select).not.toHaveBeenCalled();
+    expect(mockDb.transaction).not.toHaveBeenCalled();
+  });
+
+  it('denies when the day metered cost (aiUsageLogs) has reached the ceiling, without reserving a hold', async () => {
+    // $6 metered today ≥ the $5 ceiling → deny even though billing is off.
+    const sink: { insertCalled?: boolean } = {};
+    mockBillingOffTransaction(0, 6.0, sink);
+
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND, dailyCapCeilingCents: 500 });
+
+    expect(r).toEqual({ allowed: false, reason: 'daily_cap_exceeded' });
+    expect(sink.insertCalled).toBeFalsy();
+  });
+
+  it('counts in-flight hold reservations toward the ceiling (concurrent fan-out cannot blow past it)', async () => {
+    // Settled usage is only $0.50, but 480¢ of concurrent runs hold reservations:
+    // 50 + 480 + EST(25) = 555 > 500 → deny. Without in-flight accounting every
+    // run of a Promise.allSettled fan-out would see the same below-cap total.
+    const sink: { insertCalled?: boolean } = {};
+    mockBillingOffTransaction(480, 0.5, sink);
+
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND, dailyCapCeilingCents: 500 });
+
+    expect(r).toEqual({ allowed: false, reason: 'daily_cap_exceeded' });
+    expect(sink.insertCalled).toBeFalsy();
+  });
+
+  it('allows under the ceiling, reserves a hold, and serializes via a per-user advisory lock', async () => {
+    const sink: { insertCalled?: boolean; executeSql?: string; holdValues?: Record<string, unknown> } = {};
+    mockBillingOffTransaction(0, 1.2, sink); // 120 + 25 < 500
+
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND, dailyCapCeilingCents: 500 });
+
+    expect(r.allowed).toBe(true);
+    expect(r.holdId).toBe('hold-x');
+    expect(sink.insertCalled).toBe(true);
+    // WAL-5: holds are per wallet even with billing off; the wallet is resolved in the
+    // same transaction that places the hold.
+    expect(mockEnsurePersonalRootWalletId).toHaveBeenCalledTimes(1);
+    expect(sink.holdValues).toMatchObject({ userId: 'u1', walletId: 'w_root' });
+    expect(sink.executeSql).toContain('pg_advisory_xact_lock');
+  });
+
+  it('treats missing/null metered cost as zero spend (local models log no cost)', async () => {
+    mockBillingOffTransaction(0, 0);
+
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND, dailyCapCeilingCents: 500 });
+
+    expect(r.allowed).toBe(true);
+  });
+});

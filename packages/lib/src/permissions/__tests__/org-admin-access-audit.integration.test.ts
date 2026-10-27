@@ -1,0 +1,246 @@
+/**
+ * ORG-4 audit dedupe against real Postgres: one authz.access.granted row per (user, PRIVATE org drive)
+ * per 15-minute UTC window, however many resolver calls and whichever path makes them.
+ *
+ * Requires a running Postgres database with the latest migrations applied.
+ * Run via:
+ *   bun run --filter '@pagespace/lib' test:integration -- src/permissions/__tests__/org-admin-access-audit.integration.test.ts
+ */
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import { createId } from '@paralleldrive/cuid2';
+import { db, pool } from '@pagespace/db/db';
+import { and, eq } from '@pagespace/db/operators';
+import { rateLimitBuckets } from '@pagespace/db/schema/rate-limit-buckets';
+import { orgAuditOutbox } from '@pagespace/db/schema/organizations';
+import { drainOrgAuditOutbox } from '../../audit/org-audit';
+import { resetAuditDbBindingForTests } from '../../audit/audit-db-binding';
+import { resetDefaultSecurityAuditForTests, securityAudit } from '../../audit/security-audit';
+import { canUserViewPage, getBatchPagePermissions, getUserAccessLevel, getUserDriveAccess, getUsersWhoCanViewPage } from '../permissions';
+import {
+  ORG_ADMIN_AUDIT_LOSS_TTL_MS,
+  claimOrgAdminAuditWindow,
+  createOrgAdminAccessAuditor,
+  orgAdminAuditClaim,
+  releaseOrgAdminAuditWindow,
+} from '../org-admin-access-audit';
+import { checkDriveAccessForSearch, globSearchPages } from '../../services/drive-search-service';
+import { getDriveAccess } from '../../services/drive-service';
+import { loadPagePayload } from '../../services/page-payload-service';
+import { accessiblePageIds } from '../accessible-page-ids';
+import { cleanupNorthwind, northwind } from './fixtures/northwind-org-drives';
+import { credentialActor } from '../access-actor';
+
+
+/** Rows read through the audit service, so the query follows the same binding as the write. */
+async function accessRows(userId: string, driveId: string) {
+  const rows = await securityAudit.queryEvents({ eventType: 'authz.access.granted', resourceId: driveId });
+  return rows.filter((r) => r.userId === userId);
+}
+
+/** The staged records of `driveId` still waiting for the chain (AUD-1 outbox). */
+async function queued(driveId: string) {
+  return db.select({ id: orgAuditOutbox.id }).from(orgAuditOutbox).where(eq(orgAuditOutbox.driveId, driveId));
+}
+
+async function claimRow({ key, windowStart }: { key: string; windowStart: Date }) {
+  return db.select({ key: rateLimitBuckets.key }).from(rateLimitBuckets)
+    .where(and(eq(rateLimitBuckets.key, key), eq(rateLimitBuckets.windowStart, windowStart)));
+}
+
+/** Every audit write is fire-and-forget: let them all land before counting, then count once. */
+async function settledCount(userId: string, driveId: string, atLeast: number) {
+  await vi.waitFor(async () => {
+    expect((await accessRows(userId, driveId)).length).toBeGreaterThanOrEqual(atLeast);
+  }, { timeout: 10_000, interval: 100 });
+  await new Promise((resolve) => setTimeout(resolve, 750));
+  return (await accessRows(userId, driveId)).length;
+}
+
+describe('ORG-4 (partial) audit dedupe (integration)', () => {
+  const AUDIT_ENV = ['ADMIN_DATABASE_URL', 'ADMIN_DB_BREAK_GLASS', 'AUDIT_TRUST_PLANE_REQUIRED'] as const;
+  const savedAuditEnv = new Map<string, string | undefined>();
+  const resetAuditBinding = () => {
+    resetAuditDbBindingForTests();
+    resetDefaultSecurityAuditForTests();
+  };
+
+  beforeAll(() => {
+    for (const key of AUDIT_ENV) {
+      savedAuditEnv.set(key, process.env[key]);
+      delete process.env[key];
+    }
+    resetAuditBinding();
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    await cleanupNorthwind();
+  }, 120_000);
+
+  afterAll(async () => {
+    for (const [key, value] of savedAuditEnv) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    resetAuditBinding();
+    await pool.end();
+  });
+
+  it('ORG-4 (partial) five resolver calls in one window write one audit row, whether they come as page views, realtime re-checks, AI tool checks, search hits or batch checks; a call in the next window writes a second', async () => {
+    const f = await northwind();
+    const { priya } = f.people;
+    const finance = f.drives.finance.id;
+    const salaries = f.pages.financePrivatePage.id;
+    // Only Date is faked: Postgres sockets and the audit write's timers stay real.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2031-03-04T09:01:00.000Z'));
+
+    // Five resolver calls: a page view (getUserAccessLevel, also what realtime per-event auth
+    // re-runs for every sensitive event), an AI tool check (canUserViewPage), a drive room join
+    // (getUserDriveAccess), the drive route (getDriveAccess) and a batch check.
+    expect(await getUserAccessLevel(credentialActor(priya.id, null), salaries)).toMatchObject({ canView: true });
+    expect(await canUserViewPage(credentialActor(priya.id, null), salaries)).toBe(true);
+    expect(await getUserDriveAccess(credentialActor(priya.id, null), finance)).toBe(true);
+    expect(await getDriveAccess(finance, credentialActor(priya.id, null))).toMatchObject({ isAdmin: true });
+    expect((await getBatchPagePermissions(credentialActor(priya.id, null), [salaries, f.pages.financePage.id])).get(salaries)?.canView).toBe(true);
+    expect(await settledCount(priya.id, finance, 1)).toBe(1);
+
+    // Search: the drive gate, then one resolution per hit.
+    expect(await checkDriveAccessForSearch(finance, credentialActor(priya.id, null))).toMatchObject({ hasAccess: true });
+    const hits = await globSearchPages(finance, credentialActor(priya.id, null), '*', null);
+    expect(hits.results.map((r) => r.pageId).sort()).toEqual([f.pages.financePage.id, salaries].sort());
+    // Concurrent calls in one process race past the memo to the guarded insert; one wins.
+    await Promise.all(Array.from({ length: 5 }, () => getUserAccessLevel(credentialActor(priya.id, null), salaries)));
+    expect(await settledCount(priya.id, finance, 1)).toBe(1);
+
+    // A second process (web and realtime each hold their own memo) re-resolves in the same window:
+    // a fresh module graph has an empty memo, so only the Postgres claim stands between it and a
+    // second row.
+    vi.resetModules();
+    const secondProcess = await import('../permissions');
+    const secondPool = (await import('@pagespace/db/db')).pool;
+    try {
+      expect(await secondProcess.getUserAccessLevel(credentialActor(priya.id, null), salaries)).toMatchObject({ canView: true });
+      await Promise.all(Array.from({ length: 4 }, () => secondProcess.getUserDriveAccess(credentialActor(priya.id, null), finance)));
+      expect(await settledCount(priya.id, finance, 1)).toBe(1);
+    } finally {
+      await secondPool.end();
+    }
+
+    // 09:14:59.999 is still the 09:00 window.
+    vi.setSystemTime(new Date('2031-03-04T09:14:59.999Z'));
+    await getUserAccessLevel(credentialActor(priya.id, null), salaries);
+    expect(await settledCount(priya.id, finance, 1)).toBe(1);
+
+    // The next UTC window is a new access.
+    vi.setSystemTime(new Date('2031-03-04T09:15:00.000Z'));
+    await getUserAccessLevel(credentialActor(priya.id, null), salaries);
+    expect(await settledCount(priya.id, finance, 2)).toBe(2);
+
+    // Deciding who else can see a page (the channel fan-out) is an audience, not an access by Jono.
+    expect(await getUsersWhoCanViewPage(salaries, [f.people.jono.id])).toEqual(new Set([f.people.jono.id]));
+    await new Promise((resolve) => setTimeout(resolve, 750));
+    expect(await accessRows(f.people.jono.id, finance)).toEqual([]);
+
+    // Another admin in the same window is their own access; org power on OPEN or through a row is none.
+    await getUserAccessLevel(credentialActor(f.people.jono.id, null), salaries);
+    expect(await settledCount(f.people.jono.id, finance, 1)).toBe(1);
+    await getUserAccessLevel(credentialActor(priya.id, null), f.pages.productPrivatePage.id);
+    await getUserAccessLevel(credentialActor(f.people.omar.id, null), salaries);
+    expect(await accessRows(priya.id, f.drives.product.id)).toEqual([]);
+    expect(await accessRows(f.people.omar.id, finance)).toEqual([]);
+  }, 60_000);
+
+  it('ORG-4 (partial) the SQL twin (pulse, activity summary, page payloads) writes the same event when org power opens a PRIVATE drive, and none for a joined Admin or an OPEN drive', async () => {
+    const f = await northwind();
+    const { priya, omar, jono } = f.people;
+    const finance = f.drives.finance.id;
+    const salaries = f.pages.financePrivatePage.id;
+
+    // A page payload on its own is an access: Jono (org Owner; his leftover OWNER row on Finance counts for
+    // nothing) opens Salaries through org power, and the payload alone writes the event.
+    expect((await loadPagePayload(credentialActor(jono.id, null), salaries)).page.id).toBe(salaries);
+    expect(await settledCount(jono.id, finance, 1)).toBe(1);
+
+    // Priya (org Admin, no valid Finance row) reaches the PRIVATE Finance drive through org power in SQL too.
+    expect(await accessiblePageIds(credentialActor(priya.id, null))).toEqual(expect.arrayContaining([salaries, f.pages.financePage.id, f.pages.productPage.id]));
+    expect(await settledCount(priya.id, finance, 1)).toBe(1);
+    // A page payload in the same window is the same access: still one row.
+    expect((await loadPagePayload(credentialActor(priya.id, null), salaries)).page.id).toBe(salaries);
+    expect(await settledCount(priya.id, finance, 1)).toBe(1);
+    // Omar's own invited ADMIN row opens Finance: org power was not used, so nothing is owed; nor on OPEN Product.
+    expect(await accessiblePageIds(credentialActor(omar.id, null))).toContain(salaries);
+    await new Promise((resolve) => setTimeout(resolve, 750));
+    expect(await accessRows(omar.id, finance)).toEqual([]);
+    expect(await accessRows(priya.id, f.drives.product.id)).toEqual([]);
+  }, 60_000);
+
+  it('ORG-4 (partial) AUD-1 (partial) a refused chain append loses nothing: the record stays queued, the window stays claimed, and the drainer delivers it once', async () => {
+    const f = await northwind();
+    const { priya } = f.people;
+    const finance = f.drives.finance.id;
+    const salaries = f.pages.financePrivatePage.id;
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2031-03-05T09:01:00.000Z'));
+    const failOnce = vi.spyOn(securityAudit, 'logEvent').mockRejectedValueOnce(new Error('audit store down'));
+    try {
+      expect(await getUserAccessLevel(credentialActor(priya.id, null), salaries)).toMatchObject({ canView: true });
+      const claim = orgAdminAuditClaim({ userId: priya.id, driveId: finance, orgId: f.org.id, orgRole: 'ADMIN' }, new Date());
+      await vi.waitFor(async () => {
+        expect(failOnce).toHaveBeenCalledTimes(1);
+        expect(await queued(finance)).toHaveLength(1);
+      }, { timeout: 10_000, interval: 100 });
+      expect(await accessRows(priya.id, finance)).toEqual([]);
+      // The record is durable, so the window is not reopened: a second access writes nothing new.
+      expect(await claimRow(claim)).toHaveLength(1);
+      await getUserAccessLevel(credentialActor(priya.id, null), salaries);
+      expect(await queued(finance)).toHaveLength(1);
+
+      await drainOrgAuditOutbox({ now: new Date(Date.now() + 2 * 60 * 60_000), limit: 10_000 });
+      expect(await settledCount(priya.id, finance, 1)).toBe(1);
+      expect(await queued(finance)).toEqual([]);
+    } finally {
+      failOnce.mockRestore();
+    }
+  }, 60_000);
+
+  it('ORG-4 (partial) a process that lost the claim while the winner\'s write was in flight and then failed writes the record on a later access in the same window', async () => {
+    const access = { userId: createId(), driveId: createId(), orgId: createId(), orgRole: 'ADMIN' as const };
+    let now = new Date('2031-03-06T09:01:00.000Z');
+    const claim = orgAdminAuditClaim(access, now);
+    let failA: (error: Error) => void = () => undefined;
+    const writeA = vi.fn(() => new Promise<void>((_, reject) => { failA = reject; }));
+    const writeB = vi.fn(async () => undefined);
+    // Two processes: separate memos, one Postgres claim store.
+    const deps = { claim: claimOrgAdminAuditWindow, release: releaseOrgAdminAuditWindow, now: () => now };
+    const processA = createOrgAdminAccessAuditor({ ...deps, write: writeA });
+    const processB = createOrgAdminAccessAuditor({ ...deps, write: writeB });
+    try {
+      const recordA = processA.record(access);
+      await vi.waitFor(() => expect(writeA).toHaveBeenCalledTimes(1), { timeout: 10_000, interval: 20 });
+      await processB.record(access);
+      expect(writeB).not.toHaveBeenCalled();
+
+      failA(new Error('audit store down'));
+      await recordA;
+      expect(await claimRow(claim)).toEqual([]);
+
+      now = new Date(now.getTime() + ORG_ADMIN_AUDIT_LOSS_TTL_MS);
+      await processB.record(access);
+      expect(writeB).toHaveBeenCalledTimes(1);
+      expect(await claimRow(claim)).toEqual([{ key: claim.key }]);
+    } finally {
+      await releaseOrgAdminAuditWindow(claim);
+    }
+  });
+
+  it('ORG-4 (partial) the claim is a unique key in Postgres, not process memory: a second process loses the same window and wins the next', async () => {
+    const access = { userId: createId(), driveId: createId(), orgId: createId(), orgRole: 'ADMIN' as const };
+    const window0900 = orgAdminAuditClaim(access, new Date('2031-03-04T09:01:00.000Z'));
+
+    const racers = await Promise.all(Array.from({ length: 5 }, () => claimOrgAdminAuditWindow(window0900)));
+    expect(racers.filter(Boolean)).toHaveLength(1);
+    expect(await claimOrgAdminAuditWindow(orgAdminAuditClaim(access, new Date('2031-03-04T09:14:00.000Z')))).toBe(false);
+    expect(await claimOrgAdminAuditWindow(orgAdminAuditClaim(access, new Date('2031-03-04T09:15:00.000Z')))).toBe(true);
+  });
+});

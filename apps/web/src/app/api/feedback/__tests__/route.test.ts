@@ -25,16 +25,18 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
  */
 
 // Mock dependencies at system boundaries
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     insert: vi.fn().mockReturnValue({
       values: vi.fn().mockResolvedValue(undefined),
     }),
   },
+}));
+vi.mock('@pagespace/db/schema/feedback', () => ({
   feedbackSubmissions: {},
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: {
       info: vi.fn(),
@@ -43,6 +45,12 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -50,7 +58,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/security', () => ({
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn(),
   DISTRIBUTED_RATE_LIMITS: {
     CONTACT_FORM: { maxRequests: 5, windowMs: 3600000 },
@@ -59,12 +67,14 @@ vi.mock('@pagespace/lib/security', () => ({
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn().mockReturnValue('test-feedback-id'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
-import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { checkDistributedRateLimit } from '@pagespace/lib/security';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 
 // Test fixtures
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -153,7 +163,7 @@ describe('/api/feedback', () => {
 
       await POST(request);
 
-      expect(db.insert).toHaveBeenCalled();
+      expect(db.insert).toHaveBeenCalledTimes(1);
       const insertMock = vi.mocked(db.insert);
       const valuesMock = (insertMock.mock.results[0].value as { values: ReturnType<typeof vi.fn> }).values;
       expect(valuesMock).toHaveBeenCalledWith(
@@ -394,6 +404,28 @@ describe('/api/feedback', () => {
     });
   });
 
+  describe('security audit', () => {
+    it('POST_withValidFeedback_logsAuditEvent', async () => {
+      const request = createRequest({ message: 'Feedback message' });
+      await POST(request);
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        request,
+        { eventType: 'data.write', userId: 'user-123', resourceType: 'feedback', resourceId: 'user-123', details: { hasAttachments: false } }
+      );
+    });
+
+    it('POST_withAuthFailure_doesNotLogAuditEvent', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError());
+      vi.mocked(isAuthError).mockReturnValue(true);
+
+      const request = createRequest({ message: 'Feedback' });
+      await POST(request);
+
+      expect(auditRequest).not.toHaveBeenCalled();
+    });
+  });
+
   describe('error handling (500)', () => {
     it('POST_whenDatabaseThrows_returns500WithGenericError', async () => {
       const insertMock = vi.mocked(db.insert);
@@ -421,7 +453,7 @@ describe('/api/feedback', () => {
 
       expect(loggers.api.error).toHaveBeenCalledWith(
         'Feedback submission error',
-        expect.any(Error)
+        expect.objectContaining({ message: 'Unexpected error' })
       );
     });
   });

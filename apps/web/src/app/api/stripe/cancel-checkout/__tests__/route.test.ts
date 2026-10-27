@@ -9,7 +9,7 @@ const createMockRequest = (url: string, init?: RequestInit): NextRequest => {
 
 // Mock database
 const mockDbSelect = vi.fn();
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: () => ({
       from: () => ({
@@ -17,7 +17,11 @@ vi.mock('@pagespace/db', () => ({
       }),
     }),
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ a, b })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id' },
 }));
 
@@ -65,20 +69,23 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-// Mock loggers
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
-    api: {
-      info: vi.fn(),
-      error: vi.fn(),
-      warn: vi.fn(),
-    },
+    api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    security: { warn: vi.fn() },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 // Import after mocks
 import { POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -179,6 +186,23 @@ describe('POST /api/stripe/cancel-checkout', () => {
       expect(mockStripePaymentIntentsCancel).toHaveBeenCalledWith('pi_123');
       // Then cancel subscription
       expect(mockStripeSubscriptionsCancel).toHaveBeenCalledWith('sub_123');
+    });
+
+    it('should log audit event on successful checkout cancellation', async () => {
+      const request = createMockRequest(
+        'https://example.com/api/stripe/cancel-checkout',
+        {
+          method: 'POST',
+          body: JSON.stringify({ subscriptionId: 'sub_123' }),
+        }
+      );
+
+      await POST(request);
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ eventType: 'data.write', userId: 'user_123', resourceType: 'checkout', resourceId: 'sub_123', details: expect.objectContaining({ action: 'cancel' }) })
+      );
     });
 
     it('should handle case where payment intent is already canceled', async () => {

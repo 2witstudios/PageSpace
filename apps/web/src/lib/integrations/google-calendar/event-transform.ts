@@ -6,7 +6,7 @@
  */
 
 import type { GoogleCalendarEvent, GoogleEventDateTime } from './api-client';
-import type { NewCalendarEvent } from '@pagespace/db';
+import type { NewCalendarEvent } from '@pagespace/db/schema/calendar';
 import { createId } from '@paralleldrive/cuid2';
 
 // Map Google color IDs to PageSpace color categories

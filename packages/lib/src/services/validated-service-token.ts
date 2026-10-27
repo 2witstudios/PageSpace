@@ -7,13 +7,22 @@
  * @module @pagespace/lib/services/validated-service-token
  */
 
-import { db, pages, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { pages } from '@pagespace/db/schema/core';
+import { files } from '@pagespace/db/schema/storage';
+import { users } from '@pagespace/db/schema/auth';
 import {
   getUserAccessLevel,
   getUserDrivePermissions,
-} from '../permissions/permissions-cached';
+} from '../permissions/permissions';
+import { canUserAccessFile } from '../permissions/file-access';
+import { prepareUserWrite } from '../auth/user-repository';
 import { sessionService } from '../auth/session-service';
+import { MACHINE_CREDENTIAL_AUTHENTICATION } from '../auth/authentication-evidence';
 import { loggers } from '../logging/logger-config';
+import { requireOrgRole } from '../organizations/authorize';
+import { type AccessActor, derivedCredentialEvidence } from '../permissions/access-actor';
 
 /**
  * Service scope types - defines allowed permission scopes
@@ -29,7 +38,14 @@ export type ServiceScope =
   | 'files:write:any'
   | 'avatars:write'
   | 'avatars:write:any'
-  | 'queue:read';
+  // ORG-1: replace or remove an org's avatar; only on an org-bound token, minted for an org Owner or Admin.
+  | 'org-avatars:write'
+  // Replace or remove a drive's avatar; only on a drive-bound token, minted for a drive Owner or Admin.
+  | 'drive-avatars:write'
+  | 'queue:read'
+  | 'erasure:enqueue'
+  | 'broadcast:enqueue'
+  | 'app-hosting:publish';
 
 // Duration bounds for service tokens
 const DEFAULT_EXPIRY_MS = 5 * 60 * 1000;        // 5 minutes default
@@ -115,7 +131,7 @@ export function isPermissionDeniedError(
   );
 }
 
-export type ResourceType = 'page' | 'drive' | 'user';
+export type ResourceType = 'page' | 'drive' | 'user' | 'organization';
 
 /**
  * Permission set representing what a user can do with a resource
@@ -125,14 +141,18 @@ export interface PermissionSet {
   canEdit: boolean;
   canDelete: boolean;
   isOwner: boolean;
+  /** An org Owner or Admin, on an 'organization' resource only. */
+  isOrgAdmin?: boolean;
+  /** A drive Owner or Admin, on a 'drive' resource only. */
+  isDriveAdmin?: boolean;
 }
 
 /**
  * Options for creating a validated service token
  */
 export interface ValidatedTokenOptions {
-  /** User requesting the token */
-  userId: string;
+  /** Who is requesting the token: their access decides the scopes, and the token carries their ceremony evidence. */
+  actor: AccessActor;
   /** Type of resource being accessed */
   resourceType: ResourceType;
   /** ID of the resource (pageId, driveId, or userId for 'user' type) */
@@ -149,7 +169,7 @@ export interface ValidatedTokenOptions {
  * Result of a validated token creation
  */
 export interface ValidatedTokenResult {
-  /** The signed JWT token */
+  /** The opaque session token */
   token: string;
   /** Scopes that were actually granted (may be subset of requested) */
   grantedScopes: ServiceScope[];
@@ -171,15 +191,16 @@ export async function createValidatedServiceToken(
   options: ValidatedTokenOptions
 ): Promise<ValidatedTokenResult> {
   const {
-    userId,
+    actor,
     resourceType,
     resourceId,
     requestedScopes,
     expiresIn = '5m',
   } = options;
+  const { userId } = actor;
 
   // Get user's actual permissions for this resource
-  const permissions = await getPermissionsForResource(userId, resourceType, resourceId);
+  const permissions = await getPermissionsForResource(actor, resourceType, resourceId);
 
   if (!permissions) {
     loggers.api.warn('Service token denied: no access to resource', {
@@ -218,6 +239,8 @@ export async function createValidatedServiceToken(
   const token = await sessionService.createSession({
     userId,
     type: 'service',
+    // The processor re-checks access with this token, so it carries the minting credential's evidence (SEC-2/3).
+    authentication: derivedCredentialEvidence(actor),
     scopes: grantedScopes as string[],
     resourceType,
     resourceId,
@@ -236,14 +259,15 @@ export async function createValidatedServiceToken(
  * Get user's permissions for a specific resource
  */
 async function getPermissionsForResource(
-  userId: string,
+  actor: AccessActor,
   resourceType: ResourceType,
   resourceId: string
 ): Promise<PermissionSet | null> {
+  const { userId } = actor;
   switch (resourceType) {
     case 'page': {
       // Get full permission set for the page
-      const perms = await getUserAccessLevel(userId, resourceId);
+      const perms = await getUserAccessLevel(actor, resourceId);
       if (!perms) {
         return null;
       }
@@ -257,7 +281,7 @@ async function getPermissionsForResource(
 
     case 'drive': {
       // Get granular drive permissions (excludes page-level collaborators)
-      const drivePerms = await getUserDrivePermissions(userId, resourceId);
+      const drivePerms = await getUserDrivePermissions(actor, resourceId);
       if (!drivePerms) {
         // Page collaborators must use page-scoped tokens instead
         return null;
@@ -267,6 +291,7 @@ async function getPermissionsForResource(
         canEdit: drivePerms.canEdit, // Only owners/admins/editors
         canDelete: drivePerms.isOwner || drivePerms.isAdmin,
         isOwner: drivePerms.isOwner,
+        isDriveAdmin: drivePerms.isOwner || drivePerms.isAdmin,
       };
     }
 
@@ -281,6 +306,14 @@ async function getPermissionsForResource(
         canDelete: true,
         isOwner: true,
       };
+    }
+
+    case 'organization': {
+      // ORG-5: the one org authorization function. An org-bound token grants org-scoped writes only
+      // (org-avatars:write): no page, drive, user or wildcard power rides on it.
+      const authorization = await requireOrgRole(userId, resourceId, 'ADMIN');
+      if (!authorization.ok) return null;
+      return { canView: false, canEdit: false, canDelete: false, isOwner: false, isOrgAdmin: true };
     }
 
     default:
@@ -310,6 +343,12 @@ function filterScopesByPermissions(
       case 'avatars:write':
         return permissions.canEdit;
 
+      case 'org-avatars:write':
+        return permissions.isOrgAdmin === true;
+
+      case 'drive-avatars:write':
+        return permissions.isDriveAdmin === true;
+
       // Delete scopes require delete permission
       case 'files:delete':
         return permissions.canDelete;
@@ -318,6 +357,29 @@ function filterScopesByPermissions(
       case '*':
       case 'files:write:any':
       case 'avatars:write:any':
+        return permissions.isOwner;
+
+      // Erasure enqueue is minted against the caller's own user resource (the
+      // self-service subject, or an admin acting through an admin-gated route).
+      // The security boundary is the web route that mints it; the processor
+      // endpoint is internal-only.
+      case 'erasure:enqueue':
+        return permissions.isOwner;
+
+      // Broadcast enqueue is minted by the admin console against the admin's own
+      // user resource, same shape as erasure:enqueue: the admin-gated route that
+      // mints it is the security boundary; the processor endpoint is internal-only.
+      case 'broadcast:enqueue':
+        return permissions.isOwner;
+
+      // Publish-build enqueue is minted against the caller's own user resource,
+      // same shape as erasure:enqueue/broadcast:enqueue: the web route that
+      // mints it already verified the caller is a drive OWNER/ADMIN for the
+      // env being published (see `.../envs/[envId]/app/route.ts`'s POST); this
+      // is the security boundary, and the processor endpoint independently
+      // re-verifies `publishedAppId` exists (see `app-build.ts`'s own
+      // docblock on why authorization here is scope-only, not resource-bound).
+      case 'app-hosting:publish':
         return permissions.isOwner;
 
       default:
@@ -331,13 +393,13 @@ function filterScopesByPermissions(
  * Convenience function for creating a page-scoped service token
  */
 export async function createPageServiceToken(
-  userId: string,
+  actor: AccessActor,
   pageId: string,
   scopes: ServiceScope[],
   expiresIn?: string
 ): Promise<ValidatedTokenResult> {
   return createValidatedServiceToken({
-    userId,
+    actor,
     resourceType: 'page',
     resourceId: pageId,
     requestedScopes: scopes,
@@ -349,13 +411,13 @@ export async function createPageServiceToken(
  * Convenience function for creating a drive-scoped service token
  */
 export async function createDriveServiceToken(
-  userId: string,
+  actor: AccessActor,
   driveId: string,
   scopes: ServiceScope[],
   expiresIn?: string
 ): Promise<ValidatedTokenResult> {
   return createValidatedServiceToken({
-    userId,
+    actor,
     resourceType: 'drive',
     resourceId: driveId,
     driveId, // Pass driveId as claim for processor validation
@@ -368,28 +430,137 @@ export async function createDriveServiceToken(
  * Convenience function for creating a user-scoped service token (e.g., avatars)
  */
 export async function createUserServiceToken(
-  userId: string,
+  actor: AccessActor,
   scopes: ServiceScope[],
   expiresIn?: string
 ): Promise<ValidatedTokenResult> {
   return createValidatedServiceToken({
-    userId,
+    actor,
     resourceType: 'user',
-    resourceId: userId,
+    resourceId: actor.userId,
     requestedScopes: scopes,
     expiresIn,
   });
 }
 
-/** Scopes granted for file upload operations */
-const UPLOAD_SCOPES: ServiceScope[] = ['files:write'];
+/**
+ * Convenience function for creating an org-bound service token (the org avatar upload): granted
+ * only to the org's Owner and Admins, and bound to that org.
+ */
+export async function createOrgServiceToken(
+  actor: AccessActor,
+  orgId: string,
+  scopes: ServiceScope[],
+  expiresIn?: string
+): Promise<ValidatedTokenResult> {
+  return createValidatedServiceToken({
+    actor,
+    resourceType: 'organization',
+    resourceId: orgId,
+    requestedScopes: scopes,
+    expiresIn,
+  });
+}
+
+/**
+ * Convenience function for creating a file-scoped read token.
+ *
+ * This is used for files whose authorization is not drive-bound, such as DM
+ * attachments. The token is still bound to the exact content hash, and scope
+ * grants are filtered through canUserAccessFile before the service session is
+ * minted.
+ */
+export async function createFileServiceToken(
+  actor: AccessActor,
+  fileId: string,
+  scopes: ServiceScope[],
+  expiresIn?: string
+): Promise<ValidatedTokenResult> {
+  const { userId } = actor;
+  const file = await db.query.files.findFirst({
+    where: eq(files.id, fileId),
+    columns: { driveId: true, storagePath: true },
+  });
+
+  if (!file) {
+    loggers.api.warn('File service token denied: file not found', {
+      userId,
+      fileId,
+      requestedScopes: scopes,
+    });
+    throw new Error(`User has no access to file:${fileId}`);
+  }
+
+  const hasAccess = await canUserAccessFile(actor, fileId, file.driveId);
+  if (!hasAccess) {
+    loggers.api.warn('File service token denied: no access to file', {
+      userId,
+      fileId,
+      requestedScopes: scopes,
+    });
+    throw new Error(`User has no access to file:${fileId}`);
+  }
+
+  const permissions: PermissionSet = {
+    canView: true,
+    canEdit: false,
+    canDelete: false,
+    isOwner: false,
+  };
+  const grantedScopes = filterScopesByPermissions(scopes, permissions);
+
+  if (grantedScopes.length === 0) {
+    loggers.api.warn('File service token denied: no authorized scopes', {
+      userId,
+      fileId,
+      requestedScopes: scopes,
+    });
+    throw new Error(`User lacks permissions for requested scopes: ${scopes.join(', ')}`);
+  }
+
+  const contentHash = file.storagePath || fileId;
+
+  loggers.api.info('File service token scope grant', {
+    userId,
+    fileId,
+    contentHash,
+    requested: scopes,
+    granted: grantedScopes,
+    filtered: scopes.length !== grantedScopes.length,
+  });
+
+  const token = await sessionService.createSession({
+    userId,
+    type: 'service',
+    authentication: derivedCredentialEvidence(actor),
+    scopes: grantedScopes as string[],
+    resourceType: 'file',
+    resourceId: contentHash,
+    expiresInMs: durationToMs(expiresIn ?? '5m'),
+    createdByService: 'web',
+  });
+
+  return {
+    token,
+    grantedScopes,
+  };
+}
+
+/**
+ * Scopes granted for file upload operations.
+ *
+ * `files:ingest` is required by the processor's `/api/ingest` mount — the
+ * post-upload enqueue (`/api/upload/complete` → `/api/ingest/pull/{pageId}`)
+ * is rejected 403 without it, silently skipping thumbnails/OCR/extraction.
+ */
+const UPLOAD_SCOPES: ServiceScope[] = ['files:write', 'files:ingest'];
 
 /**
  * Options for creating an upload service token
  */
 export interface UploadTokenOptions {
-  /** User requesting the token */
-  userId: string;
+  /** Who is uploading: their access decides, and the token carries their ceremony evidence. */
+  actor: AccessActor;
   /** Drive where the file will be uploaded */
   driveId: string;
   /** New page ID being created for the upload */
@@ -398,6 +569,12 @@ export interface UploadTokenOptions {
   parentId?: string;
   /** Token expiration (default '10m') */
   expiresIn?: string;
+  /**
+   * Scopes to grant (default {@link UPLOAD_SCOPES}). All requested scopes are
+   * gated behind the same canEdit check; callers that never enqueue ingestion
+   * (e.g. channel attachments) should narrow to ['files:write'].
+   */
+  scopes?: ServiceScope[];
 }
 
 /**
@@ -413,7 +590,8 @@ export interface UploadTokenOptions {
 export async function createUploadServiceToken(
   options: UploadTokenOptions
 ): Promise<ValidatedTokenResult> {
-  const { userId, driveId, pageId, parentId, expiresIn = '10m' } = options;
+  const { actor, driveId, pageId, parentId, expiresIn = '10m', scopes = UPLOAD_SCOPES } = options;
+  const { userId } = actor;
 
   let hasPermission = false;
   let permissionSource: 'parent_page' | 'drive';
@@ -446,12 +624,12 @@ export async function createUploadServiceToken(
     }
 
     // Check parent page edit permission
-    const pagePerms = await getUserAccessLevel(userId, parentId);
+    const pagePerms = await getUserAccessLevel(actor, parentId);
     hasPermission = pagePerms?.canEdit ?? false;
     permissionSource = 'parent_page';
   } else {
     // Uploading to drive root - check drive membership
-    const drivePerms = await getUserDrivePermissions(userId, driveId);
+    const drivePerms = await getUserDrivePermissions(actor, driveId);
     hasPermission = drivePerms?.canEdit ?? false;
     permissionSource = 'drive';
   }
@@ -474,13 +652,14 @@ export async function createUploadServiceToken(
     pageId,
     parentId,
     permissionSource,
-    scopes: UPLOAD_SCOPES,
+    scopes,
   });
 
   const token = await sessionService.createSession({
     userId,
     type: 'service',
-    scopes: UPLOAD_SCOPES as string[],
+    authentication: derivedCredentialEvidence(actor),
+    scopes: scopes as string[],
     resourceType: 'page',
     resourceId: pageId,
     driveId,
@@ -490,6 +669,92 @@ export async function createUploadServiceToken(
 
   return {
     token,
-    grantedScopes: UPLOAD_SCOPES,
+    grantedScopes: scopes,
+  };
+}
+
+/** Scopes granted for system orphan-reaping operations */
+const SYSTEM_FILE_DELETE_SCOPES: ServiceScope[] = ['files:delete'];
+
+/** Identity used to mint server-only system tokens (not a real user). */
+export const SYSTEM_SERVICE_USER_ID = 'system' as const;
+
+/**
+ * Bootstrap the system principal user row that backs system-minted service
+ * tokens. The sessions table FKs userId → users.id, so the row must exist
+ * before any session is inserted. The email uses the RFC 2606 reserved
+ * `.invalid` TLD so it can never be delivered to or registered through any
+ * external auth flow. This user has no passkeys, no OAuth IDs, and no magic
+ * link path, so even though the row exists nobody can authenticate as it.
+ *
+ * Idempotent on every call (ON CONFLICT DO NOTHING is a sub-millisecond
+ * no-op when the row exists). Not cached at module scope so the bootstrap
+ * always re-runs in-process — keeps the truth source in PostgreSQL rather
+ * than in-memory state that could disagree with the DB across deploys.
+ */
+async function ensureSystemPrincipal(): Promise<void> {
+  const systemUser: typeof users.$inferInsert = {
+    id: SYSTEM_SERVICE_USER_ID,
+    name: 'System',
+    email: 'system@pagespace.invalid',
+    provider: 'email',
+    tokenVersion: 0,
+    role: 'user',
+    adminRoleVersion: 0,
+    subscriptionTier: 'free',
+  };
+  await db
+    .insert(users)
+    .values(await prepareUserWrite(systemUser))
+    .onConflictDoNothing();
+}
+
+export interface SystemFileDeleteOptions {
+  /** Content hash of the orphaned blob to reap. */
+  contentHash: string;
+  /** Token expiration (default '30s'). */
+  expiresIn?: string;
+}
+
+/**
+ * Create a system file-bound delete token for orphan reaping.
+ *
+ * This token shape exists for the cleanup-orphaned-files cron, which reclaims
+ * files with no live linkages (drive-attached, DM-only, or otherwise). The
+ * token is bound to the specific contentHash so it cannot be repurposed to
+ * delete a different file.
+ *
+ * SECURITY: The processor's delete handler enforces a defense-in-depth re-check
+ * (isFileOrphaned across all 5 linkage tables, including isActive=true on DMs)
+ * before honoring the token, so a TOCTOU race between the cron's orphan scan
+ * and the processor's delete cannot reclaim a file that was re-linked in the
+ * meantime.
+ */
+export async function createSystemFileDeleteToken(
+  options: SystemFileDeleteOptions
+): Promise<ValidatedTokenResult> {
+  const { contentHash, expiresIn = '30s' } = options;
+
+  await ensureSystemPrincipal();
+
+  loggers.api.info('System file delete token mint', {
+    contentHash,
+    scopes: SYSTEM_FILE_DELETE_SCOPES,
+  });
+
+  const token = await sessionService.createSession({
+    authentication: MACHINE_CREDENTIAL_AUTHENTICATION,
+    userId: SYSTEM_SERVICE_USER_ID,
+    type: 'service',
+    scopes: SYSTEM_FILE_DELETE_SCOPES as string[],
+    resourceType: 'file',
+    resourceId: contentHash,
+    expiresInMs: durationToMs(expiresIn),
+    createdByService: 'web',
+  });
+
+  return {
+    token,
+    grantedScopes: SYSTEM_FILE_DELETE_SCOPES,
   };
 }

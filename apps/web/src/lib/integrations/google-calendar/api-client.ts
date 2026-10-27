@@ -7,7 +7,7 @@
  * API Reference: https://developers.google.com/calendar/api/v3/reference
  */
 
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const GOOGLE_CALENDAR_API_BASE = 'https://www.googleapis.com/calendar/v3';
 

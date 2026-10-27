@@ -8,7 +8,9 @@
  */
 
 import { z } from 'zod';
-import { db, users, passkeys, verificationTokens, eq, and, isNull, sql } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq, and, isNull, lt, sql } from '@pagespace/db/operators';
+import { users, passkeys, verificationTokens } from '@pagespace/db/schema/auth';
 import { createId } from '@paralleldrive/cuid2';
 import {
   generateRegistrationOptions as simpleGenerateRegistrationOptions,
@@ -20,13 +22,15 @@ import {
   type AuthenticatorTransportFuture,
 } from '@simplewebauthn/server';
 import { hashToken, generateToken } from './token-utils';
+import { decryptUserRow, userEmailMatch, prepareUserWrite } from './user-repository';
+import { PASSKEY_CHALLENGE_EXPIRY_MINUTES } from './passkey-client-constants';
 
 // Configuration
 export const PASSKEY_CONFIG = {
   rpName: process.env.WEBAUTHN_RP_NAME || 'PageSpace',
   rpId: process.env.WEBAUTHN_RP_ID || 'localhost',
   origin: process.env.WEBAUTHN_ORIGIN || 'http://localhost:3000',
-  challengeExpiryMinutes: 5,
+  challengeExpiryMinutes: PASSKEY_CHALLENGE_EXPIRY_MINUTES,
   maxPasskeysPerUser: 10,
   timeout: 60000,
   maxNameLength: 255,
@@ -102,20 +106,30 @@ export type PasskeyError =
   | { code: 'PASSKEY_NOT_FOUND' }
   | { code: 'EMAIL_EXISTS' };
 
+export type RegistrationOptionsWithHints =
+  Awaited<ReturnType<typeof simpleGenerateRegistrationOptions>> & {
+    hints?: readonly string[];
+  };
+
 export type GenerateRegOptionsResult =
-  | { ok: true; data: { options: Awaited<ReturnType<typeof simpleGenerateRegistrationOptions>> } }
+  | { ok: true; data: { options: RegistrationOptionsWithHints } }
   | { ok: false; error: PasskeyError };
 
 export type VerifyRegistrationResult =
   | { ok: true; data: { passkeyId: string } }
   | { ok: false; error: PasskeyError };
 
+export type AuthenticationOptionsWithHints =
+  Awaited<ReturnType<typeof simpleGenerateAuthenticationOptions>> & {
+    hints?: readonly string[];
+  };
+
 export type GenerateAuthOptionsResult =
-  | { ok: true; data: { options: Awaited<ReturnType<typeof simpleGenerateAuthenticationOptions>>; challengeId: string } }
+  | { ok: true; data: { options: AuthenticationOptionsWithHints; challengeId: string } }
   | { ok: false; error: PasskeyError };
 
 export type VerifyAuthResult =
-  | { ok: true; data: { userId: string; isNewSession: boolean } }
+  | { ok: true; data: { userId: string; isNewSession: boolean; userVerified: boolean } }
   | { ok: false; error: PasskeyError };
 
 export type ListPasskeysResult =
@@ -131,11 +145,11 @@ export type UpdateNameResult =
   | { ok: false; error: PasskeyError };
 
 export type GenerateSignupRegOptionsResult =
-  | { ok: true; data: { options: Awaited<ReturnType<typeof simpleGenerateRegistrationOptions>>; challengeId: string } }
+  | { ok: true; data: { options: RegistrationOptionsWithHints; challengeId: string } }
   | { ok: false; error: PasskeyError };
 
 export type VerifySignupRegistrationResult =
-  | { ok: true; data: { userId: string; passkeyId: string } }
+  | { ok: true; data: { userId: string; passkeyId: string; userVerified: boolean } }
   | { ok: false; error: PasskeyError };
 
 export interface PasskeyInfo {
@@ -177,6 +191,8 @@ export async function generateRegistrationOptions(
     return { ok: false, error: { code: 'USER_SUSPENDED', userId } };
   }
 
+  const decryptedUser = await decryptUserRow(user);
+
   // Check passkey limit
   const existingPasskeys = await db.query.passkeys.findMany({
     where: eq(passkeys.userId, userId),
@@ -195,11 +211,11 @@ export async function generateRegistrationOptions(
   }));
 
   // Generate options with discoverable credentials (required for true passwordless)
-  const options = await simpleGenerateRegistrationOptions({
+  const rawOptions = await simpleGenerateRegistrationOptions({
     rpName: PASSKEY_CONFIG.rpName,
     rpID: PASSKEY_CONFIG.rpId,
-    userName: user.email,
-    userDisplayName: user.name,
+    userName: decryptedUser.email,
+    userDisplayName: decryptedUser.name,
     attestationType: 'none',
     excludeCredentials,
     authenticatorSelection: {
@@ -209,6 +225,16 @@ export async function generateRegistrationOptions(
     },
     timeout: PASSKEY_CONFIG.timeout,
   });
+
+  // WebAuthn Level 3: hint browser to prefer the OS platform authenticator
+  // (Touch ID / Windows Hello) while still allowing "use a different device"
+  // as a fallback. SimpleWebAuthn v13's `preferredAuthenticatorType: 'localDevice'`
+  // would also force `authenticatorAttachment: 'platform'`, which hard-excludes
+  // cross-device — so we bypass it and splice `hints` on post-call.
+  const options = {
+    ...rawOptions,
+    hints: ['client-device' as const],
+  };
 
   // Clean up old unused challenges
   await db
@@ -352,7 +378,7 @@ export async function generateAuthenticationOptions(
 
   if (email) {
     const user = await db.query.users.findFirst({
-      where: eq(users.email, email.toLowerCase().trim()),
+      where: userEmailMatch(email.toLowerCase().trim()),
       columns: { id: true },
     });
 
@@ -371,30 +397,60 @@ export async function generateAuthenticationOptions(
     }
   }
 
-  const options = await simpleGenerateAuthenticationOptions({
+  const rawOptions = await simpleGenerateAuthenticationOptions({
     rpID: PASSKEY_CONFIG.rpId,
     userVerification: 'required',
     timeout: PASSKEY_CONFIG.timeout,
     allowCredentials,
   });
 
+  // WebAuthn Level 3: hint browser to prefer platform authenticator over QR/hybrid.
+  // SimpleWebAuthn v13 doesn't accept hints in generateAuthenticationOptions,
+  // so we add it manually. Progressive enhancement — Safari ignores it.
+  const options = {
+    ...rawOptions,
+    hints: ['client-device' as const],
+  };
+
   // Store challenge - use a system user ID if no specific user
   const challengeId = createId();
   const challengeHash = hashToken(options.challenge);
   const expiresAt = new Date(Date.now() + PASSKEY_CONFIG.challengeExpiryMinutes * 60 * 1000);
 
-  // Clean up old unused auth challenges for this user (or system user)
-  // This prevents unbounded accumulation of stale challenges
-  const cleanupUserId = challengeUserId ?? PASSKEY_CONFIG.systemUserId;
-  await db
-    .delete(verificationTokens)
-    .where(
-      and(
-        eq(verificationTokens.userId, cleanupUserId),
-        eq(verificationTokens.type, 'webauthn_auth'),
-        isNull(verificationTokens.usedAt)
-      )
-    );
+  // Clean up old unused auth challenges.
+  //
+  // For a user-keyed flow (challengeUserId set) we can safely delete all
+  // unused challenges for that user because there is only one active flow
+  // per user at a time.
+  //
+  // For the shared system user (conditional UI, no email) we must only
+  // delete EXPIRED challenges. The system user is shared across every
+  // anonymous visitor, so deleting unexpired "unused" rows would clobber
+  // other concurrent sessions' in-flight challenges and cause
+  // CHALLENGE_NOT_FOUND at verify time. Expired rows are always safe to
+  // evict.
+  if (challengeUserId) {
+    await db
+      .delete(verificationTokens)
+      .where(
+        and(
+          eq(verificationTokens.userId, challengeUserId),
+          eq(verificationTokens.type, 'webauthn_auth'),
+          isNull(verificationTokens.usedAt)
+        )
+      );
+  } else {
+    await db
+      .delete(verificationTokens)
+      .where(
+        and(
+          eq(verificationTokens.userId, PASSKEY_CONFIG.systemUserId),
+          eq(verificationTokens.type, 'webauthn_auth'),
+          isNull(verificationTokens.usedAt),
+          lt(verificationTokens.expiresAt, new Date())
+        )
+      );
+  }
 
   // For authentication challenges without a specific user, we need a special approach
   // Store with a placeholder user ID or use a different table
@@ -428,6 +484,38 @@ export async function generateAuthenticationOptions(
 /**
  * Verify authentication response and return user info.
  */
+/**
+ * Resolve the owning user of a WebAuthn credential by its credential ID.
+ *
+ * Used by the authenticate route to apply per-account lockout *before* running
+ * the (more expensive) crypto verification, and to attribute failed attempts to
+ * the right account. Returns null when the credential is unknown — callers must
+ * treat that as "no account to lock/record" (an unknown credential is not a
+ * targeted attack on any real account).
+ */
+export async function findUserIdByCredentialId(credentialId: string): Promise<string | null> {
+  if (!credentialId) return null;
+  const passkey = await db.query.passkeys.findFirst({
+    where: eq(passkeys.credentialId, credentialId),
+    columns: { userId: true },
+  });
+  return passkey?.userId ?? null;
+}
+
+/**
+ * True if the user has at least one registered passkey. A light existence check
+ * (single-row lookup, no crypto) used to decide whether to funnel a freshly
+ * signed-in on-prem user into first-run passkey enrollment.
+ */
+export async function userHasPasskey(userId: string): Promise<boolean> {
+  if (!userId) return false;
+  const passkey = await db.query.passkeys.findFirst({
+    where: eq(passkeys.userId, userId),
+    columns: { id: true },
+  });
+  return passkey !== undefined;
+}
+
 export async function verifyAuthentication(input: unknown): Promise<VerifyAuthResult> {
   const parsed = verifyAuthSchema.safeParse(input);
   if (!parsed.success) {
@@ -550,7 +638,7 @@ export async function verifyAuthentication(input: unknown): Promise<VerifyAuthRe
 
   return {
     ok: true,
-    data: { userId: passkey.userId, isNewSession: true },
+    data: { userId: passkey.userId, isNewSession: true, userVerified: verification.authenticationInfo.userVerified === true },
   };
 }
 
@@ -680,7 +768,7 @@ export async function generateRegistrationOptionsForSignup(
 
   // Check if user already exists
   const existingUser = await db.query.users.findFirst({
-    where: eq(users.email, normalizedEmail),
+    where: userEmailMatch(normalizedEmail),
     columns: { id: true },
   });
 
@@ -689,7 +777,7 @@ export async function generateRegistrationOptionsForSignup(
   }
 
   // Generate options with email as userName (user doesn't exist yet)
-  const options = await simpleGenerateRegistrationOptions({
+  const rawOptions = await simpleGenerateRegistrationOptions({
     rpName: PASSKEY_CONFIG.rpName,
     rpID: PASSKEY_CONFIG.rpId,
     userName: normalizedEmail,
@@ -702,6 +790,12 @@ export async function generateRegistrationOptionsForSignup(
     },
     timeout: PASSKEY_CONFIG.timeout,
   });
+
+  // See generateRegistrationOptions for rationale on the client-device hint.
+  const options = {
+    ...rawOptions,
+    hints: ['client-device' as const],
+  };
 
   // Clean up old unused signup challenges for this email
   // We use a deterministic ID based on email hash to enable cleanup
@@ -778,7 +872,7 @@ export async function verifySignupRegistration(input: unknown): Promise<VerifySi
 
   // Double-check email doesn't exist (race condition protection)
   const existingUser = await db.query.users.findFirst({
-    where: eq(users.email, normalizedEmail),
+    where: userEmailMatch(normalizedEmail),
     columns: { id: true },
   });
 
@@ -822,7 +916,7 @@ export async function verifySignupRegistration(input: unknown): Promise<VerifySi
     return { ok: false, error: { code: 'VERIFICATION_FAILED', message: 'Verification failed' } };
   }
 
-  const { credential, credentialDeviceType, credentialBackedUp } = verification.registrationInfo;
+  const { credential, credentialDeviceType, credentialBackedUp, userVerified } = verification.registrationInfo;
 
   // Create user and passkey atomically
   const userId = createId();
@@ -830,17 +924,25 @@ export async function verifySignupRegistration(input: unknown): Promise<VerifySi
   const publicKeyBase64 = Buffer.from(credential.publicKey).toString('base64url');
 
   try {
+    // Encrypt PII + compute emailBidx OUTSIDE the tx (pure crypto, no I/O) so the
+    // transaction stays tight and transactional.
+    const userPii = await prepareUserWrite({ name, email: normalizedEmail });
     await db.transaction(async (tx) => {
       // Create user (no password - passwordless signup)
       // Provider is 'email' since passkey auth is email-based (similar to magic link)
       await tx.insert(users).values({
         id: userId,
-        name,
-        email: normalizedEmail,
+        ...userPii,
         provider: 'email',
         role: 'user',
         tokenVersion: 1,
-        emailVerified: new Date(), // Passkey signup = verified (device ownership proven)
+        subscriptionTier: 'free',
+        // Passkey registration proves control of an authenticator, NOT ownership
+        // of the typed email. Leave the address unverified; verification happens
+        // out-of-band — the signup route either marks it verified when a trusted
+        // invite token (delivered to that inbox) is consumed, or sends a
+        // verification email the user must click.
+        emailVerified: null,
         tosAcceptedAt: new Date(),
       });
 
@@ -871,5 +973,5 @@ export async function verifySignupRegistration(input: unknown): Promise<VerifySi
     throw error;
   }
 
-  return { ok: true, data: { userId, passkeyId } };
+  return { ok: true, data: { userId, passkeyId, userVerified: userVerified === true } };
 }

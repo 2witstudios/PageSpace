@@ -20,6 +20,12 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu';
 import { TableRow, TableCell } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
 import { DueDatePicker } from '@/components/layout/middle-content/page-views/task-list/DueDatePicker';
@@ -36,6 +42,8 @@ import { getStatusDisplay } from './task-helpers';
 
 export interface TaskTableRowProps {
   task: Task;
+  /** Drive to name before the list title; only in the All drives focus. */
+  driveName?: string;
   statusConfigs: TaskStatusConfig[];
   onStatusChange: (task: Task, status: string) => void;
   onPriorityChange: (task: Task, priority: string) => void;
@@ -54,6 +62,7 @@ export interface TaskTableRowProps {
 
 export function TaskTableRow({
   task,
+  driveName,
   statusConfigs,
   onStatusChange,
   onPriorityChange,
@@ -76,7 +85,9 @@ export function TaskTableRow({
   const taskStatusOrder = getStatusOrder(statusConfigs);
 
   return (
-    <TableRow className={cn('group', isCompleted && 'opacity-60')}>
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+    <TableRow className={cn(isCompleted && 'opacity-60')}>
       <TableCell>
         <Checkbox
           checked={isCompleted}
@@ -200,8 +211,11 @@ export function TaskTableRow({
         {task.taskListPageTitle && task.driveId && task.taskListPageId && (
           <Link
             href={`/dashboard/${task.driveId}/${task.taskListPageId}`}
-            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded-md bg-muted hover:bg-muted/80 transition-colors max-w-[150px]"
+            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded-md bg-muted hover:bg-muted/80 transition-colors max-w-[220px]"
+            title={driveName ? `${driveName} › ${task.taskListPageTitle}` : task.taskListPageTitle}
           >
+            {/* Across drives a list title alone is ambiguous, so the drive leads. */}
+            {driveName && <span className="truncate text-muted-foreground/70">{driveName} ›</span>}
             <span className="truncate">{task.taskListPageTitle}</span>
             <ExternalLink className="h-3 w-3 flex-shrink-0" />
           </Link>
@@ -209,32 +223,48 @@ export function TaskTableRow({
       </TableCell>
 
       <TableCell>
-        <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8">
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {task.pageId && (
-                <DropdownMenuItem onClick={() => onNavigate(task)}>
-                  <FileText className="h-4 w-4 mr-2" />
-                  Open
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuItem onClick={() => onStartEdit(task)}>
-                <Pencil className="h-4 w-4 mr-2" />
-                Rename
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" className="h-8 w-8">
+              <MoreHorizontal className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {task.pageId && (
+              <DropdownMenuItem onClick={() => onNavigate(task)}>
+                <FileText className="h-4 w-4 mr-2" />
+                Open
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => onDelete(task)} className="text-destructive">
-                <Trash2 className="h-4 w-4 mr-2" />
-                Delete
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
+            )}
+            <DropdownMenuItem onClick={() => onStartEdit(task)}>
+              <Pencil className="h-4 w-4 mr-2" />
+              Rename
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onDelete(task)} className="text-destructive">
+              <Trash2 className="h-4 w-4 mr-2" />
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </TableCell>
     </TableRow>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        {task.pageId && (
+          <ContextMenuItem onSelect={() => onNavigate(task)}>
+            <FileText className="h-4 w-4 mr-2" />
+            Open
+          </ContextMenuItem>
+        )}
+        <ContextMenuItem onSelect={() => onStartEdit(task)}>
+          <Pencil className="h-4 w-4 mr-2" />
+          Rename
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => onDelete(task)} className="text-destructive">
+          <Trash2 className="h-4 w-4 mr-2" />
+          Delete
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }

@@ -6,13 +6,28 @@
  * grantedBy is derived from ctx.userId, never accepted as parameter.
  */
 
+import { checkActorResourceAuthentication } from './actor-authentication';
 import { z } from 'zod';
-import { db, and, eq, pages, drives, driveMembers, pagePermissions, users } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { and, eq, isNotNull } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
+import { pages, drives } from '@pagespace/db/schema/core';
+import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { createId } from '@paralleldrive/cuid2';
 import { EnforcedAuthContext } from './enforced-context';
 import { GrantInputSchema, RevokeInputSchema, type PermissionFlags } from './schemas';
-import { permissionCache } from '../services/permission-cache';
 import { logPermissionActivity, getActorInfo } from '../monitoring/activity-logger';
+import { isHomeDrive, homeDriveActionError } from '../services/drive-guards';
+import { kickForPagePermissionRevocation } from './revocation-kick';
+import { loadEffectiveDriveMembership } from './org-drive-membership';
+import { decideOrgDriveAdmission } from './guest-admission';
+import { requestGuestApproval } from './guest-holds';
+import { GUESTS_HELD_MESSAGE, GUESTS_OFF_MESSAGE, pageGrantWidensAccess } from '../organizations/sharing-decisions';
+import { ORG_LAPSED_MESSAGE } from '../organizations/status-core';
+import { checkDriveMayLoosen } from './org-lapse-guard';
+import { transactionWithOrgAudit } from '../audit/org-audit';
+import { loggers } from '../logging/logger-config';
+import type { AccessActor } from './access-actor';
 
 // ============================================================================
 // Error Types
@@ -24,7 +39,14 @@ export type PermissionMutationError =
   | { code: 'PAGE_NOT_ACCESSIBLE'; pageId: string }
   | { code: 'USER_NOT_FOUND'; userId: string }
   | { code: 'INSUFFICIENT_PERMISSION'; required: 'share' | 'admin' }
-  | { code: 'SELF_PERMISSION_DENIED'; reason: string };
+  | { code: 'SELF_PERMISSION_DENIED'; reason: string }
+  | { code: 'HOME_DRIVE'; message: string }
+  // POL-2: the org's guests policy is OFF and the grant would admit an outsider. Nothing is written.
+  | { code: 'GUEST_POLICY_OFF'; message: string }
+  // POL-2: the policy is APPROVE; the grant waits for an Owner or Admin (holdId) and nothing is written yet.
+  | { code: 'GUEST_APPROVAL_PENDING'; holdId: string; message: string }
+  // [D-OW-33] the drive's org is lapsed and the grant would give someone more. Nothing is written.
+  | { code: 'ORG_LAPSED'; message: string };
 
 // ============================================================================
 // Result Types
@@ -78,6 +100,7 @@ function validateNotSelfGrant(
 interface PageForSharing {
   pageId: string;
   driveId: string;
+  driveKind: string | null;
 }
 
 /**
@@ -86,15 +109,24 @@ interface PageForSharing {
  * This prevents information leakage about page existence.
  */
 async function getPageIfCanShare(
-  userId: string,
+  actor: AccessActor,
   pageId: string
 ): Promise<{ ok: true; page: PageForSharing } | { ok: false; error: PermissionMutationError }> {
+  // SEC-2/3: a credential the page's org refuses cannot share it, exactly as if it could not see it.
+  if (!(await checkActorResourceAuthentication(actor, pageId)).allowed) {
+    return { ok: false, error: { code: 'PAGE_NOT_ACCESSIBLE', pageId } };
+  }
+  const { userId } = actor;
   // Get page with drive info
   const pageWithDrive = await db
     .select({
       id: pages.id,
       driveId: pages.driveId,
       driveOwnerId: drives.ownerId,
+      driveKind: drives.kind,
+      driveOrgId: drives.orgId,
+      driveOrgVisibility: drives.orgVisibility,
+      createdBy: pages.createdBy,
     })
     .from(pages)
     .leftJoin(drives, eq(pages.driveId, drives.id))
@@ -115,27 +147,30 @@ async function getPageIfCanShare(
   if (page.driveOwnerId === userId) {
     return {
       ok: true,
-      page: { pageId: page.id, driveId: page.driveId },
+      page: { pageId: page.id, driveId: page.driveId, driveKind: page.driveKind },
+    };
+  }
+
+  // The shared org-aware membership decides both the creator and the admin branch.
+  const membership = await loadEffectiveDriveMembership(userId, {
+    id: page.driveId,
+    orgId: page.driveOrgId,
+    orgVisibility: page.driveOrgVisibility,
+  });
+
+  // Check if user is the page creator AND still has active drive membership
+  if (page.createdBy === userId && membership !== null) {
+    return {
+      ok: true,
+      page: { pageId: page.id, driveId: page.driveId, driveKind: page.driveKind },
     };
   }
 
   // Check if user is drive admin (can share)
-  const adminMembership = await db
-    .select({ id: driveMembers.id })
-    .from(driveMembers)
-    .where(
-      and(
-        eq(driveMembers.driveId, page.driveId),
-        eq(driveMembers.userId, userId),
-        eq(driveMembers.role, 'ADMIN')
-      )
-    )
-    .limit(1);
-
-  if (adminMembership.length > 0) {
+  if (membership?.role === 'ADMIN') {
     return {
       ok: true,
-      page: { pageId: page.id, driveId: page.driveId },
+      page: { pageId: page.id, driveId: page.driveId, driveKind: page.driveKind },
     };
   }
 
@@ -154,7 +189,7 @@ async function getPageIfCanShare(
   if (sharePermission.length > 0 && sharePermission[0].canShare) {
     return {
       ok: true,
-      page: { pageId: page.id, driveId: page.driveId },
+      page: { pageId: page.id, driveId: page.driveId, driveKind: page.driveKind },
     };
   }
 
@@ -218,12 +253,24 @@ export async function grantPagePermission(
   }
 
   // 4. Authorization - can user share this page?
-  const pageResult = await getPageIfCanShare(ctx.userId, pageId);
+  const pageResult = await getPageIfCanShare(ctx.actor, pageId);
   if (!pageResult.ok) {
     return { ok: false, error: pageResult.error };
   }
 
   const { page } = pageResult;
+
+  // 4.5. Home drive guard — Home is an exfiltration boundary: no direct
+  // permission grants, mirroring the invite/share-link/publish blocks.
+  if (isHomeDrive({ kind: page.driveKind })) {
+    return {
+      ok: false,
+      error: {
+        code: 'HOME_DRIVE',
+        message: homeDriveActionError({ kind: page.driveKind }, 'share')!,
+      },
+    };
+  }
 
   // 5. Target user existence check
   const userExists = await checkUserExists(targetUserId);
@@ -235,7 +282,44 @@ export async function grantPagePermission(
   }
 
   // 6. Transaction - upsert permission (insert-first to prevent race conditions)
-  const result = await db.transaction(async (tx) => {
+  const outcome = await transactionWithOrgAudit(async (tx, audit) => {
+    // POL-2, at the moment the grant would be written: a grant that gives an outsider more than they hold admits
+    // them to the org drive's content, so the org's guests policy decides it. Off writes nothing; approve queues
+    // exactly this grant for an Owner or Admin and writes nothing. Narrowing a grant is never asked.
+    const [current] = await tx
+      .select({ canView: pagePermissions.canView, canEdit: pagePermissions.canEdit, canShare: pagePermissions.canShare, canDelete: pagePermissions.canDelete })
+      .from(pagePermissions)
+      .where(and(eq(pagePermissions.pageId, pageId), eq(pagePermissions.userId, targetUserId)))
+      .limit(1);
+    if (pageGrantWidensAccess(current ?? null, permissions)) {
+      const admission = await decideOrgDriveAdmission({ driveId: page.driveId, userId: targetUserId }, tx);
+      if (admission.decision === 'refuse' && admission.refusal === 'org_lapsed') return { kind: 'lapsed' } as const;
+      if (admission.decision === 'refuse') return { kind: 'refused' } as const;
+      if (admission.decision === 'hold' && admission.orgId) {
+        const item = await requestGuestApproval({
+          orgId: admission.orgId,
+          driveId: page.driveId,
+          userId: targetUserId,
+          origin: 'page_grant',
+          request: { permissions: [{ pageId, ...permissions }], invitedBy: ctx.userId },
+          requestedBy: ctx.userId,
+        }, tx);
+        // AUD-1: the queued grant and its event commit together.
+        await audit({
+          orgId: admission.orgId,
+          eventType: 'org.guest.requested',
+          actorId: ctx.userId,
+          resourceType: 'drive',
+          resourceId: page.driveId,
+          driveId: page.driveId,
+          details: { holdId: item.holdId, origin: 'page_grant', target: 'user' },
+        });
+        return { kind: 'held', orgId: admission.orgId, holdId: item.holdId } as const;
+      }
+      // [D-OW-33] a wider grant loosens access, for an org member too: refused while the drive's org is lapsed.
+      if (await checkDriveMayLoosen(tx, page.driveId, true)) return { kind: 'lapsed' } as const;
+    }
+
     const newId = createId();
 
     // Attempt insert first - onConflictDoNothing handles race conditions
@@ -259,7 +343,7 @@ export async function grantPagePermission(
 
     if (inserted.length > 0) {
       // Insert succeeded - new permission created
-      return { permissionId: inserted[0].id, isUpdate: false };
+      return { kind: 'granted', permissionId: inserted[0].id, isUpdate: false } as const;
     }
 
     // Conflict occurred - update existing permission
@@ -281,16 +365,17 @@ export async function grantPagePermission(
       )
       .returning({ id: pagePermissions.id });
 
-    return { permissionId: updated.id, isUpdate: true };
+    return { kind: 'granted', permissionId: updated.id, isUpdate: true } as const;
   });
 
-  // 7. Cache invalidation
-  await Promise.all([
-    permissionCache.invalidateUserCache(targetUserId),
-    permissionCache.invalidateDriveCache(page.driveId),
-  ]);
+  if (outcome.kind === 'refused') return { ok: false, error: { code: 'GUEST_POLICY_OFF', message: GUESTS_OFF_MESSAGE } };
+  if (outcome.kind === 'lapsed') return { ok: false, error: { code: 'ORG_LAPSED', message: ORG_LAPSED_MESSAGE } };
+  if (outcome.kind === 'held') {
+    return { ok: false, error: { code: 'GUEST_APPROVAL_PENDING', holdId: outcome.holdId, message: GUESTS_HELD_MESSAGE } };
+  }
+  const result = { permissionId: outcome.permissionId, isUpdate: outcome.isUpdate };
 
-  // 8. Audit log (fire-and-forget)
+  // 7. Audit log (fire-and-forget)
   getActorInfo(ctx.userId).then((actorInfo) => {
     logPermissionActivity(
       ctx.userId,
@@ -341,7 +426,7 @@ export async function revokePagePermission(
   }
 
   // 3. Authorization - can user share (and thus revoke) this page?
-  const pageResult = await getPageIfCanShare(ctx.userId, pageId);
+  const pageResult = await getPageIfCanShare(ctx.actor, pageId);
   if (!pageResult.ok) {
     return { ok: false, error: pageResult.error };
   }
@@ -379,13 +464,24 @@ export async function revokePagePermission(
     .delete(pagePermissions)
     .where(eq(pagePermissions.id, previousPermission.id));
 
-  // 6. Cache invalidation
-  await Promise.all([
-    permissionCache.invalidateUserCache(targetUserId),
-    permissionCache.invalidateDriveCache(page.driveId),
-  ]);
+  // 5.5. Revocation→kick hook (#2158): evict the target's sockets from the
+  // page rooms here — at the mutation, not in each calling route — so no
+  // revocation path can forget it. Awaited (not fire-and-forget): the prior
+  // per-route callers awaited their kicks before responding, and firing this
+  // without awaiting would let the HTTP response return, and a subsequent
+  // broadcast go out, before the kick request even starts — reopening the
+  // stale-delivery window this centralization is meant to close. Safe to
+  // await unconditionally: kickForPagePermissionRevocation is best-effort
+  // internally (room membership is a delivery optimization; the per-event
+  // recheck stays authoritative) and never throws, so this cannot fail the
+  // mutation — it only waits for the kick attempt to finish.
+  await kickForPagePermissionRevocation({
+    userId: targetUserId,
+    pageId,
+    reason: 'permission_revoked',
+  });
 
-  // 7. Audit log with previousValues (fire-and-forget)
+  // 6. Audit log with previousValues (fire-and-forget)
   getActorInfo(ctx.userId).then((actorInfo) => {
     logPermissionActivity(
       ctx.userId,

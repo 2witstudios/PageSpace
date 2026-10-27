@@ -1,8 +1,15 @@
 import { NextResponse } from 'next/server';
-import { db, eq, and } from '@pagespace/db';
-import { drives, pages, pagePermissions, driveMembers } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and } from '@pagespace/db/operators';
+import { drives, pages } from '@pagespace/db/schema/core'
+import { pagePermissions } from '@pagespace/db/schema/members';
+import { canAdministerDrive } from '@pagespace/lib/permissions/drive-relationship';
+import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
 import { verifyAuth } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { getGrantedAccessLevel } from '@pagespace/lib/permissions/permissions';
+import { actorFromVerifiedUser, deniedResponse } from '@/lib/auth/request-actor';
 
 interface PageNode {
   id: string;
@@ -16,6 +23,7 @@ interface PageNode {
     canShare: boolean;
   };
 }
+
 
 export async function GET(
   request: Request,
@@ -41,24 +49,9 @@ export async function GET(
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    const isOwner = drive[0].ownerId === user.id;
-    let isAdmin = false;
-
-    if (!isOwner) {
-      const adminMembership = await db.select()
-        .from(driveMembers)
-        .where(and(
-          eq(driveMembers.driveId, driveId),
-          eq(driveMembers.userId, user.id),
-          eq(driveMembers.role, 'ADMIN')
-        ))
-        .limit(1);
-
-      isAdmin = adminMembership.length > 0;
-    }
-
-    if (!isOwner && !isAdmin) {
-      return NextResponse.json({ error: 'Only drive owners and admins can view permission tree' }, { status: 403 });
+    // The drive's lead or an effective ADMIN (the org-aware membership).
+    if (!canAdministerDrive(await loadDriveRelationship(actorFromVerifiedUser(user), drive[0]))) {
+      return deniedResponse(actorFromVerifiedUser(user), driveId, NextResponse.json({ error: 'Only drive owners and admins can view permission tree' }, { status: 403 }));
     }
 
     // Get all pages in the drive
@@ -115,7 +108,6 @@ export async function GET(
 
     const tree = buildTree(null);
 
-    // Also return drive info
     const driveInfo = {
       id: drive[0].id,
       name: drive[0].name,
@@ -123,9 +115,38 @@ export async function GET(
       ownerId: drive[0].ownerId,
     };
 
+    // Drive-as-root-node: prepend a synthetic drive root node so the UI
+    // permission matrix can display and edit drive-level access (which gates
+    // root-level page creation) using the same code path as page nodes.
+    let driveRootPermissions: { canView: boolean; canEdit: boolean; canShare: boolean } | undefined;
+    if (targetUserId) {
+      // Explicit drive-level entry in the permissions map takes precedence
+      // (used by agent custom roles which store the driveId as a key).
+      const explicit = existingPermissions.get(driveId);
+      if (explicit) {
+        driveRootPermissions = explicit;
+      } else {
+        const access = await getGrantedAccessLevel(targetUserId, driveId);
+        driveRootPermissions = access
+          ? { canView: access.canView, canEdit: access.canEdit, canShare: access.canShare }
+          : { canView: false, canEdit: false, canShare: false };
+      }
+    }
+
+    const driveRootNode: PageNode = {
+      id: driveInfo.id,
+      title: driveInfo.name,
+      type: 'DRIVE',
+      position: -1,
+      children: [],
+      ...(driveRootPermissions !== undefined ? { currentPermissions: driveRootPermissions } : {}),
+    };
+
+    auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'drive_permissions', resourceId: driveId, details: { action: 'view_permissions_tree', pageCount: allPages.length } });
+
     return NextResponse.json({
       drive: driveInfo,
-      pages: tree,
+      pages: [driveRootNode, ...tree],
       totalPages: allPages.length,
     });
   } catch (error) {

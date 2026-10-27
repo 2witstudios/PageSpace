@@ -1,6 +1,48 @@
 import { NextResponse } from 'next/server';
+import { isPaymentElementRoute } from '@/lib/orgs/payment-routes';
+import { API_CONTRACT_VERSION } from '@pagespace/lib/api-contract-version';
+import { isDevPreviewEnabled, resolveDevPreviewApex } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
+import { previewFrameSrcEntry } from '@pagespace/lib/services/sandbox/preview/preview-host';
+import { HANDOFF_BRIDGE_ROUTE_PATHS } from '@/app/api/auth/_shared/handoffBridgeRoutes';
 
 export const NONCE_HEADER = 'x-nonce';
+
+const HSTS_VALUE = 'max-age=63072000; includeSubDomains; preload';
+
+/**
+ * Decide whether to emit HSTS (GDPR #969). Emitted for ANY HTTPS response so
+ * non-production-but-HTTPS environments (staging, tenant, preview) are not
+ * silently left without transit protection. `isProduction` is retained for
+ * back-compat — production always emits even if scheme detection is unavailable.
+ */
+export const shouldEmitHsts = ({
+  isProduction,
+  isSecure,
+}: {
+  isProduction: boolean;
+  isSecure?: boolean;
+}): boolean => isProduction || isSecure === true;
+
+/**
+ * Determine whether an inbound request arrived over HTTPS, honoring the
+ * `x-forwarded-proto` header set by upstream proxies (Caddy/Fly) ahead of the
+ * request URL's own protocol.
+ */
+export const isSecureRequest = (request: Request | undefined): boolean => {
+  if (!request) return false;
+  const forwarded = request.headers.get('x-forwarded-proto');
+  if (forwarded) {
+    return forwarded.split(',')[0].trim().toLowerCase() === 'https';
+  }
+  try {
+    return new URL(request.url).protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
+const PERMISSIONS_POLICY =
+  'geolocation=(), microphone=(self), camera=(), payment=(self "https://js.stripe.com")';
 
 // Security headers for error responses (API routes)
 const ERROR_RESPONSE_HEADERS: Record<string, string> = {
@@ -8,13 +50,15 @@ const ERROR_RESPONSE_HEADERS: Record<string, string> = {
   'X-Frame-Options': 'DENY',
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
-  'Permissions-Policy': 'geolocation=(), microphone=(), camera=()',
+  'Permissions-Policy': PERMISSIONS_POLICY,
+  'X-PageSpace-API-Version': API_CONTRACT_VERSION,
 };
 
 export const createSecureErrorResponse = (
   body: string | object,
   status: number,
-  isProduction: boolean = false
+  isProduction: boolean = false,
+  isSecure: boolean = false
 ): NextResponse => {
   const isJson = typeof body === 'object';
   const headers: Record<string, string> = {
@@ -22,9 +66,8 @@ export const createSecureErrorResponse = (
     'Content-Type': isJson ? 'application/json' : 'text/plain',
   };
 
-  if (isProduction) {
-    headers['Strict-Transport-Security'] =
-      'max-age=63072000; includeSubDomains; preload';
+  if (shouldEmitHsts({ isProduction, isSecure })) {
+    headers['Strict-Transport-Security'] = HSTS_VALUE;
   }
 
   return new NextResponse(isJson ? JSON.stringify(body) : body, {
@@ -42,7 +85,58 @@ const buildCSPString = (directives: CSPDirectives): string =>
     .map(([key, values]) => `${key} ${values.join(' ')}`)
     .join('; ');
 
-const IS_ONPREM = process.env.DEPLOYMENT_MODE === 'onprem';
+const IS_CLOUD = process.env.DEPLOYMENT_MODE !== 'onprem' && process.env.DEPLOYMENT_MODE !== 'tenant';
+
+/**
+ * Bucket-name env-var precedence, mirrored from `apps/web/src/lib/presigned-url.ts`'s
+ * `getS3Bucket()`. DUPLICATED rather than imported: that module pulls in the
+ * Node-only AWS SDK (`@aws-sdk/client-s3`), which this file cannot import —
+ * `security-headers.ts` is loaded by the Edge-runtime `middleware.ts`, and a
+ * Node-only import here would risk the exact class of outage the edge-safety
+ * remediation (leaf-module contract, build-time Node-import guard in
+ * `next.config.ts`) exists to prevent.
+ */
+const getStorageBucketName = (): string =>
+  process.env.BUCKET_NAME ?? process.env.TIGRIS_BUCKET ?? process.env.S3_BUCKET ?? 'pagespace-files';
+
+/**
+ * Allowlist the configured S3-compatible object-storage endpoint for
+ * `connect-src`, so direct-to-storage presigned uploads/downloads (browser
+ * PUT/GET straight to Tigris, or another S3-compatible host in onprem/tenant
+ * deployments) aren't blocked by the app-wide CSP.
+ *
+ * Derived from `AWS_ENDPOINT_URL_S3` at policy-build time — never hardcode a
+ * literal host (e.g. `fly.storage.tigris.dev`), since onprem/tenant
+ * deployments (`deployment-mode.ts`) may point this at a different
+ * S3-compatible endpoint entirely.
+ *
+ * Emits the literal endpoint origin PLUS this app's own bucket subdomain
+ * (`<bucket>.<host>`) — never a bare `*.<host>` wildcard. The AWS SDK v3
+ * client (`presigned-url.ts`) has no `forcePathStyle`, so it defaults to
+ * virtual-hosted-style addressing (bucket-as-subdomain), which the exact
+ * bucket entry covers; the literal origin is kept as a defensive fallback for
+ * any path-style usage. A bare `*.<host>` wildcard would additionally allow
+ * connect-src/media-src to any OTHER tenant's bucket on a shared multi-tenant
+ * host like Tigris or AWS S3 — anyone can self-serve-provision a bucket on
+ * the same provider domain, so that wildcard would hand a future XSS an
+ * attacker-controlled exfiltration target this app never intended to allow.
+ *
+ * Also reused verbatim for `media-src`: `/api/files/[id]/view` 307-redirects
+ * `<video>`/`<audio>` element requests straight to this same presigned storage
+ * URL, and CSP fetch directives are re-evaluated against the final redirected
+ * URL — so media playback needs the identical host list, not just fetch/XHR.
+ */
+const buildStorageConnectSrcEntries = (): string[] => {
+  const endpoint = process.env.AWS_ENDPOINT_URL_S3;
+  if (!endpoint) return [];
+  try {
+    const { protocol, host } = new URL(endpoint);
+    const bucket = getStorageBucketName();
+    return [`${protocol}//${host}`, `${protocol}//${bucket}.${host}`];
+  } catch {
+    return [];
+  }
+};
 
 export const buildCSPPolicy = (nonce: string): string => {
   const scriptSrc = [
@@ -50,22 +144,50 @@ export const buildCSPPolicy = (nonce: string): string => {
     `'nonce-${nonce}'`,
     "'strict-dynamic'",
     "'unsafe-inline'", // Fallback for older browsers (ignored when strict-dynamic present)
+    // React's development build rebuilds server component stacks with eval, and
+    // without it hydration fails under `next dev` (apps/imago does the same).
+    // A production build never gets it.
+    ...(process.env.NODE_ENV === 'development' ? ["'unsafe-eval'"] : []),
   ];
-  const styleSrc = ["'self'", "'unsafe-inline'"];
-  const frameSrc: string[] = [];
+  // fonts.googleapis.com: in-app canvas pages render via an iframe srcDoc, which
+  // inherits this outer CSP in addition to their own baked-in <meta> CSP
+  // (packages/lib/src/canvas/csp.ts) — so author-linked Google Fonts stylesheets
+  // need to be allowed here too, not just in the canvas baseline policy.
+  const styleSrc = ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'];
+  // `'self'` FIRST and unconditionally. The in-app canvas view frames a real
+  // same-origin URL (`/api/canvas/[pageId]/preview`) rather than inlining the
+  // document with `srcDoc`, and `frame-src` does NOT fall back to `default-src`
+  // once it is present — so the moment any external origin is appended below,
+  // an allowlist without `'self'` blocks every canvas page from rendering.
+  // That is exactly what happened in cloud, where the Google/Stripe entries are
+  // added and nothing else was: the directive existed, `'self'` was not in it.
+  // Onprem and tenant were unaffected only by accident — the list stayed empty
+  // there, the directive was omitted, and the `default-src 'self'` fallback
+  // carried it.
+  const frameSrc: string[] = ["'self'"];
+  // Dev-server preview: the dashboard frames each holder's dedicated preview
+  // origin (`<kind>-<id>.preview.<apex>`, a PageSpace-owned apex — never
+  // `*.sprites.app`). Exactly the wildcard, only when the feature is
+  // configured; a dark deployment's policy is byte-identical to before.
+  const previewApex = isDevPreviewEnabled() ? resolveDevPreviewApex() : null;
+  if (previewApex !== null) frameSrc.push(previewFrameSrcEntry(previewApex));
 
-  // On-prem: no Google or Stripe external origins needed
-  if (!IS_ONPREM) {
-    scriptSrc.push('https://accounts.google.com');
+  // Cloud-only: Google and Stripe external origins
+  if (IS_CLOUD) {
+    scriptSrc.push('https://accounts.google.com', 'https://js.stripe.com', 'https://m.stripe.network');
     styleSrc.push('https://accounts.google.com');
-    frameSrc.push('https://accounts.google.com', 'https://js.stripe.com');
+    // hooks.stripe.com hosts the 3D Secure challenge iframe; m.stripe.network is Stripe.js's
+    // fraud-detection beacon frame. Without these, confirmPayment() hangs forever on 3DS.
+    frameSrc.push('https://accounts.google.com', 'https://js.stripe.com', 'https://hooks.stripe.com', 'https://m.stripe.network');
   }
 
-  const connectSrc = ["'self'", 'ws:', 'wss:'];
+  const storageEntries = buildStorageConnectSrcEntries();
+  const connectSrc = ["'self'", 'ws:', 'wss:', ...storageEntries];
 
   // Cloud mode: allow Stripe client SDK and Google One Tap connections
-  if (!IS_ONPREM) {
-    connectSrc.push('https://accounts.google.com', 'https://*.stripe.com');
+  if (IS_CLOUD) {
+    // *.stripe.com does not match the .network TLD, so m.stripe.network needs its own entry.
+    connectSrc.push('https://accounts.google.com', 'https://*.stripe.com', 'https://m.stripe.network');
   }
 
   const directives: CSPDirectives = {
@@ -74,10 +196,14 @@ export const buildCSPPolicy = (nonce: string): string => {
     'style-src': styleSrc,
     'img-src': ["'self'", 'data:', 'blob:', 'https:'],
     'connect-src': connectSrc,
-    'font-src': ["'self'", 'data:'],
+    // <video>/<audio> loading falls back to default-src when this is absent —
+    // /api/files/[id]/view redirects media requests straight to the storage
+    // host, so it needs the same allowlist as connect-src (see comment above).
+    'media-src': ["'self'", ...storageEntries],
+    'font-src': ["'self'", 'data:', 'https://fonts.gstatic.com'],
     // Monaco and other browser tooling may initialize workers from blob URLs.
     'worker-src': ["'self'", 'blob:'],
-    ...(frameSrc.length > 0 ? { 'frame-src': frameSrc } : {}),
+    'frame-src': frameSrc,
     'frame-ancestors': ["'none'"],
     'base-uri': ["'self'"],
     'form-action': ["'self'"],
@@ -99,24 +225,35 @@ export const buildAPICSPPolicy = (): string => {
 type SecurityHeadersOptions = {
   nonce: string;
   isProduction: boolean;
+  isSecure?: boolean;
   isAPIRoute?: boolean;
   disableCOEP?: boolean;
+  skipCSP?: boolean;
+  sameOriginFrameable?: boolean;
 };
 
 export const applySecurityHeaders = (
   response: NextResponse,
-  { nonce, isProduction, isAPIRoute = false, disableCOEP = false }: SecurityHeadersOptions
+  { nonce, isProduction, isSecure = false, isAPIRoute = false, disableCOEP = false, skipCSP = false, sameOriginFrameable = false }: SecurityHeadersOptions
 ): NextResponse => {
-  const csp = isAPIRoute ? buildAPICSPPolicy() : buildCSPPolicy(nonce);
-
-  response.headers.set('Content-Security-Policy', csp);
-  response.headers.set('X-Frame-Options', 'DENY');
+  // `skipCSP` lets a route own its own Content-Security-Policy header (see
+  // isHandoffBridgeRoute). Browsers enforce the INTERSECTION of every CSP header
+  // delivered, so if middleware also set one here it would combine with — and
+  // override — the route's policy. We still emit every other security header.
+  if (!skipCSP) {
+    const csp = isAPIRoute ? buildAPICSPPolicy() : buildCSPPolicy(nonce);
+    response.headers.set('Content-Security-Policy', csp);
+  }
+  // DENY blocks framing even from the same origin, so a route the dashboard
+  // frames ITSELF (the canvas preview — see isCanvasPreviewRoute) must relax to
+  // SAMEORIGIN or render blank. This is the legacy half of the control; the
+  // route's own policy carries `frame-ancestors 'self'`, which modern browsers
+  // prefer over this header. Never widened beyond same-origin.
+  response.headers.set('X-Frame-Options', sameOriginFrameable ? 'SAMEORIGIN' : 'DENY');
   response.headers.set('X-Content-Type-Options', 'nosniff');
   response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
-  response.headers.set(
-    'Permissions-Policy',
-    'geolocation=(), microphone=(), camera=()'
-  );
+  response.headers.set('Permissions-Policy', PERMISSIONS_POLICY);
+  response.headers.set('X-PageSpace-API-Version', API_CONTRACT_VERSION);
   // COEP 'credentialless' is set for all page routes except Stripe-dependent
   // paths (/settings/plan, /settings/billing) where it blocks Stripe.js loading
   // via no-cors without Cross-Origin-Resource-Policy headers.
@@ -124,38 +261,125 @@ export const applySecurityHeaders = (
     response.headers.set('Cross-Origin-Embedder-Policy', 'credentialless');
   }
 
-  if (isProduction) {
-    response.headers.set(
-      'Strict-Transport-Security',
-      'max-age=63072000; includeSubDomains; preload'
-    );
+  if (shouldEmitHsts({ isProduction, isSecure })) {
+    response.headers.set('Strict-Transport-Security', HSTS_VALUE);
   }
 
   return response;
 };
 
+// CORS for the Bearer-authenticated API surface (`@pagespace/sdk` and any other
+// Bearer-token caller — MCP API keys, OAuth access tokens). Wildcard origin
+// mirrors the existing precedent in api/public/forms/[token]/submit/route.ts:
+// Bearer tokens require explicit JS header-setting (unlike cookies), so a
+// wildcard doesn't expose a visitor's own session to a malicious page the way
+// it would for cookie auth. `Access-Control-Expose-Headers` is required, not
+// optional — the SDK reads X-PageSpace-API-Version (version-compat check) and
+// Retry-After (429 backoff) directly off the response, and neither is in the
+// CORS default-safelisted response-header set; omitting this makes every
+// cross-origin call fail with IncompatibleServerError even though CORS itself
+// "succeeded".
+export const API_CORS_HEADERS: Record<string, string> = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, PUT, OPTIONS',
+  'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-PageSpace-API-Version',
+  // SPEND-4: a browser SDK caller must be able to read the spend-fallback notice (v1 is SSE: the headers are its only report).
+  'Access-Control-Expose-Headers': 'X-PageSpace-API-Version, Retry-After, X-Spend-Fallback-From, X-Spend-Fallback-To, X-Spend-Fallback-Wallet',
+};
+
+export const applyApiCorsHeaders = (response: NextResponse): NextResponse => {
+  for (const [key, value] of Object.entries(API_CORS_HEADERS)) {
+    response.headers.set(key, value);
+  }
+  return response;
+};
+
 export const isPublicPageRoute = (pathname: string): boolean =>
   pathname === '/auth' ||
-  pathname.startsWith('/auth/');
+  pathname.startsWith('/auth/') ||
+  pathname === '/invite' ||
+  pathname.startsWith('/invite/') ||
+  pathname.startsWith('/s/') ||
+  // Unsubscribing must never require a login. These are reached from a link in an
+  // email, where the reader is usually logged out — and an opt-out you have to
+  // sign in to perform is both a bulk-sender violation and, in practice, no
+  // opt-out at all. The one-time token in the URL is the only authorization.
+  pathname === '/unsubscribe' ||
+  pathname === '/unsubscribe-success';
 
+// Published Canvas pages live on *.pagespace.site and are served from object
+// storage, never by this app. If such a request reaches us (proxy misroute /
+// cutover), it must never be auth-gated — return 404, not a login redirect.
+// Mirrors PUBLISH_HOST in app/api/pages/[pageId]/publish/route.ts.
+export const PUBLISH_BASE_HOST = 'pagespace.site';
+
+export const isPublishedSiteHost = (host: string | null | undefined): boolean => {
+  if (!host) return false;
+  const hostname = host.split(':')[0].toLowerCase(); // strip any port
+  return hostname === PUBLISH_BASE_HOST || hostname.endsWith(`.${PUBLISH_BASE_HOST}`);
+};
+
+// OAuth callback routes that return their OWN styled HTML "handoff bridge" page
+// with a bespoke CSP allowing an inline <style> block. Middleware must NOT layer
+// its restrictive API CSP (default-src 'none', no style-src) on top — browsers
+// enforce the intersection of all delivered CSPs, which would fall style-src back
+// to 'none' and block the page's inline styles. The path list is the shared
+// HANDOFF_BRIDGE_ROUTE_PATHS constant (colocated with the CSP it protects); their
+// other returns are redirects, which need no CSP, so skipping is safe path-wide.
+export const isHandoffBridgeRoute = (pathname: string): boolean =>
+  (HANDOFF_BRIDGE_ROUTE_PATHS as readonly string[]).includes(pathname);
+
+/**
+ * The published-app serving edge. It answers a routing decision either as a
+ * bodiless `fly-replay` (no CSP needed) or as its OWN styled parked /
+ * unavailable / not-found page, which carries a bespoke CSP allowing the inline
+ * style attributes it is built from — the page must be self-contained, because
+ * fetching a stylesheet to render "this app is paused" adds a dependency to the
+ * one response that has to work when things are broken.
+ *
+ * Same reasoning as isHandoffBridgeRoute: the API CSP's `default-src 'none'`
+ * falls style-src back to 'none', and browsers enforce the intersection of every
+ * delivered CSP — so without this the customer-facing enforcement page renders
+ * as unstyled text.
+ */
+export const APP_ROUTER_ROUTE_PATH = '/api/app-hosting/router';
+
+/**
+ * Routes that deliver their own Content-Security-Policy and must not have the
+ * middleware's layered on top. One predicate so the middleware asks the question
+ * once rather than growing a chain of ORs.
+ */
+export const routeOwnsItsOwnCsp = (pathname: string): boolean =>
+  isHandoffBridgeRoute(pathname) || pathname === APP_ROUTER_ROUTE_PATH;
+
+/**
+ * Routes that skip COEP: the Stripe checkout pages (plan, billing), the org Payment Element routes
+ * (path-exact, isPaymentElementRoute: Settings for create-organization, an org's Plan & seats for
+ * Reactivate), and auth.
+ */
 export const shouldDisableCOEP = (pathname: string): boolean =>
   pathname.startsWith('/settings/plan') ||
   pathname.startsWith('/settings/billing') ||
+  isPaymentElementRoute(pathname) ||
   pathname === '/auth' ||
   pathname.startsWith('/auth/');
 
 type CreateSecureResponseOptions = {
   isAPIRoute?: boolean;
   disableCOEP?: boolean;
+  skipCSP?: boolean;
+  sameOriginFrameable?: boolean;
 };
 
-export const createSecureResponse = (
+const buildSecureResponse = (
+  make: (requestHeaders: Headers) => NextResponse,
   isProduction: boolean,
   request?: Request,
   options: CreateSecureResponseOptions = {},
 ): { response: NextResponse; nonce: string } => {
-  const { isAPIRoute = false, disableCOEP = false } = options;
+  const { isAPIRoute = false, disableCOEP = false, skipCSP = false, sameOriginFrameable = false } = options;
   const nonce = generateNonce();
+  const isSecure = isSecureRequest(request);
   const csp = isAPIRoute ? buildAPICSPPolicy() : buildCSPPolicy(nonce);
 
   // Clone request headers and add nonce + CSP
@@ -163,18 +387,44 @@ export const createSecureResponse = (
   // and automatically apply it to framework scripts (via getScriptNonceFromHeader)
   const requestHeaders = new Headers(request?.headers);
   requestHeaders.set(NONCE_HEADER, nonce);
-  if (!isAPIRoute) {
+  if (!isAPIRoute && !skipCSP) {
     requestHeaders.set('Content-Security-Policy', csp);
   }
 
-  const response = NextResponse.next({
-    request: {
-      headers: requestHeaders,
-    },
-  });
+  const response = make(requestHeaders);
 
   // Also set CSP on response headers for browser enforcement
-  applySecurityHeaders(response, { nonce, isProduction, isAPIRoute, disableCOEP });
+  applySecurityHeaders(response, { nonce, isProduction, isSecure, isAPIRoute, disableCOEP, skipCSP, sameOriginFrameable });
 
   return { response, nonce };
 };
+
+export const createSecureResponse = (
+  isProduction: boolean,
+  request?: Request,
+  options: CreateSecureResponseOptions = {},
+): { response: NextResponse; nonce: string } =>
+  buildSecureResponse(
+    (requestHeaders) => NextResponse.next({ request: { headers: requestHeaders } }),
+    isProduction,
+    request,
+    options,
+  );
+
+/**
+ * A rewrite renders a page (unlike the redirect it replaces), so it needs the
+ * same nonce + CSP treatment `createSecureResponse` gives a passthrough — the
+ * root layout reads the nonce off the request headers during SSR.
+ */
+export const createSecureRewrite = (
+  destination: URL,
+  isProduction: boolean,
+  request?: Request,
+  options: CreateSecureResponseOptions = {},
+): { response: NextResponse; nonce: string } =>
+  buildSecureResponse(
+    (requestHeaders) => NextResponse.rewrite(destination, { request: { headers: requestHeaders } }),
+    isProduction,
+    request,
+    options,
+  );

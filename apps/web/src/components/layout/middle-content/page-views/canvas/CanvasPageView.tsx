@@ -1,200 +1,204 @@
 "use client";
 
-import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { toast } from 'sonner';
-import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import React, { useEffect, useCallback, useRef, useState, useId } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { Maximize2 } from 'lucide-react';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import dynamic from 'next/dynamic';
-import { useRouter } from 'next/navigation';
-import { ShadowCanvas } from '@/components/canvas/ShadowCanvas';
+import { CanvasFrame } from '@/components/canvas/CanvasFrame';
 import { ErrorBoundary } from '@/components/ai/shared';
-import { TreePage } from '@/hooks/usePageTree';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
+import { useDocument } from '@/hooks/useDocument';
+import DocumentConflictGate from '@/components/layout/middle-content/page-views/document/DocumentConflictGate';
 import { useDocumentManagerStore } from '@/stores/useDocumentManagerStore';
 import { useEditingStore } from '@/stores/useEditingStore';
-import { useAuth } from '@/hooks/useAuth';
 import { useSocket } from '@/hooks/useSocket';
 import { PageEventPayload } from '@/lib/websocket';
-import { openExternalUrl } from '@/lib/navigation/app-navigation';
+import { useFindStore } from '@/stores/useFindStore';
+import { usePublishStatusStore } from '@/stores/usePublishStatusStore';
+import { CanvasSettingsPanel } from './settings/CanvasSettingsPanel';
 
 interface CanvasPageViewProps {
-  page: TreePage;
+  pageId: string;
 }
+
+type CanvasTab = 'view' | 'code' | 'settings';
 
 const MonacoEditor = dynamic(() => import('@/components/editors/MonacoEditor'), { ssr: false });
 
-const CanvasPageView = ({ page }: CanvasPageViewProps) => {
-  const documentState = useDocumentManagerStore((state) => state.documents.get(page.id));
-  const content = documentState?.content ?? (typeof page.content === 'string' ? page.content : '');
-  const [activeTab, setActiveTab] = useState('view');
-  const containerRef = useRef<HTMLDivElement>(null);
-  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const saveVersionRef = useRef(0);
+const CANVAS_TABS: CanvasTab[] = ['view', 'code', 'settings'];
+const isCanvasTab = (value: string | null): value is CanvasTab =>
+  value !== null && (CANVAS_TABS as string[]).includes(value);
+
+const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
   const router = useRouter();
-  const { user } = useAuth();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const rawTab = searchParams.get('tab');
+  // A stale/foreign ?tab= value (an old bookmark from before the Forms tab was
+  // removed, a manually edited URL, …) must fall back to 'view' rather than
+  // rendering none of the tab panels below.
+  const activeTab = isCanvasTab(rawTab) ? rawTab : 'view';
+  const setActiveTab = useCallback((tab: CanvasTab) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (tab === 'view') {
+      params.delete('tab');
+    } else {
+      params.set('tab', tab);
+    }
+    // Switching top-level tab always leaves any settings category behind.
+    params.delete('category');
+    const qs = params.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  }, [searchParams, pathname, router]);
+
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const closePreview = useCallback(() => setIsPreviewOpen(false), []);
+  // Bumped after a force-save so CanvasFrame re-navigates to the freshly saved
+  // document. The frame renders from the server (see the preview route) rather
+  // than from in-memory editor state, which is what gives it the same CSP the
+  // published artifact gets — so it has to be told when the server's copy moved.
+  const [previewKey, setPreviewKey] = useState(0);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const hasInitializedRef = useRef(false);
+  const isDirtyRef = useRef(false);
   const socket = useSocket();
+  // Distinguishes this mount from any other simultaneous mount of the SAME
+  // page (main center panel vs. an agent-session pane) — see DocumentView's
+  // identical fix for why the key must not be pageId alone.
+  const instanceId = useId();
 
-  const saveContent = useCallback(async (pageId: string, newValue: string, expectedRevision?: number) => {
-    try {
-      const headers: Record<string, string> = {};
-      if (socket?.id) {
-        headers['X-Socket-ID'] = socket.id;
-      }
-      const body: Record<string, unknown> = { content: newValue };
-      if (expectedRevision !== undefined) {
-        body.expectedRevision = expectedRevision;
-      }
-      const savedPage = await patch<{ revision?: number }>(`/api/pages/${pageId}`, body, { headers });
-      return savedPage;
-    } catch (error) {
-      console.error('Failed to save page content:', error);
-      toast.error('Failed to save page content.');
-      throw error;
-    }
-  }, [socket]);
-
-  // Keep refs in sync for unmount cleanup (avoids stale closures in empty-deps effects)
-  const saveContentRef = useRef(saveContent);
-  const pageIdRef = useRef(page.id);
-  useEffect(() => { saveContentRef.current = saveContent; }, [saveContent]);
-  useEffect(() => { pageIdRef.current = page.id; }, [page.id]);
-
-  const setContent = useCallback((newContent: string) => {
-    const version = ++saveVersionRef.current;
-    useDocumentManagerStore.getState().updateDocument(page.id, {
-      content: newContent,
-      isDirty: true,
-      lastUpdateTime: Date.now(),
-    });
-
-    if (saveTimeoutRef.current) {
-      clearTimeout(saveTimeoutRef.current);
-    }
-    saveTimeoutRef.current = setTimeout(async () => {
-      // Timer has fired; clear ref so clean docs can accept server updates again
-      saveTimeoutRef.current = null;
-      try {
-        const doc = useDocumentManagerStore.getState().getDocument(page.id);
-        const savedPage = await saveContent(page.id, newContent, doc?.revision);
-        // Only clear isDirty if no newer edits arrived while saving
-        if (saveVersionRef.current === version) {
-          const updates: Record<string, unknown> = {
-            isDirty: false,
-            lastSaved: Date.now(),
-          };
-          if (savedPage?.revision !== undefined) {
-            updates.revision = savedPage.revision;
-          }
-          useDocumentManagerStore.getState().updateDocument(page.id, updates);
-        } else if (savedPage?.revision !== undefined) {
-          // Newer edits pending, but still update revision to latest server value
-          useDocumentManagerStore.getState().updateDocument(page.id, {
-            revision: savedPage.revision,
-          });
-        }
-      } catch {
-        // saveContent already logged and toasted - isDirty stays true for retry/unmount-save
-      }
-    }, 1000);
-  }, [page.id, saveContent]);
-
-  const updateContentFromServer = useCallback((newContent: string, revision?: number) => {
-    const doc = useDocumentManagerStore.getState().getDocument(page.id);
-    // Don't overwrite local edits or in-flight saves
-    if (doc?.isDirty || saveTimeoutRef.current) return;
-
-    const updates: Partial<{ content: string; isDirty: boolean; lastSaved: number; lastUpdateTime: number; revision: number }> = {
-      content: newContent,
-      isDirty: false,
-      lastSaved: Date.now(),
-      lastUpdateTime: Date.now(),
-    };
-    if (revision !== undefined) {
-      updates.revision = revision;
-    }
-    useDocumentManagerStore.getState().updateDocument(page.id, updates);
-  }, [page.id]);
-
-  // Initialize or refresh document in manager store
+  // Populates usePublishStatusStore for the header's PublishControls and the
+  // Settings tab's Appearance category. The PREVIEW no longer reads
+  // themeBridgeEnabled from here — the preview route reads published_pages
+  // itself when it renders, so the frame and the published artifact resolve the
+  // setting from one place and cannot drift.
+  const fetchPublishStatus = usePublishStatusStore((s) => s.fetchStatus);
   useEffect(() => {
-    const initialText = typeof page.content === 'string' ? page.content : '';
-    const store = useDocumentManagerStore.getState();
-    const existing = store.getDocument(page.id);
-    if (!existing) {
-      store.createDocument(page.id, initialText, 'html');
-      if (page.revision !== undefined) {
-        store.updateDocument(page.id, { revision: page.revision });
-      }
-    } else if (!existing.isDirty && existing.content !== initialText) {
-      // Refresh from prop if doc exists but isn't dirty (e.g. out-of-band server update)
-      store.updateDocument(page.id, {
-        content: initialText,
-        lastUpdateTime: Date.now(),
-        ...(page.revision !== undefined ? { revision: page.revision } : {}),
-      });
+    fetchPublishStatus(pageId);
+  }, [pageId, fetchPublishStatus]);
+
+  const {
+    document: documentState,
+    isLoading,
+    initializeAndActivate,
+    updateContent,
+    updateContentFromServer,
+    saveWithDebounce,
+    forceSave,
+    conflict,
+    resolveConflict,
+    isResolvingConflict,
+  } = useDocument(pageId);
+
+  const content = documentState?.content ?? '';
+
+  // Find in page (view tab only; code tab uses Monaco's built-in find)
+  const findQuery = useFindStore((s) => s.query);
+  const isFindOpen = useFindStore((s) => s.isOpen);
+  const reportMatches = useFindStore((s) => s.reportMatches);
+
+  useEffect(() => {
+    if (!isFindOpen || !findQuery || activeTab !== 'view') {
+      reportMatches(0);
+      return;
     }
-  }, [page.id, page.content, page.revision]);
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(content, 'text/html');
+    const text = (doc.body.textContent ?? '').toLowerCase();
+    const q = findQuery.toLowerCase();
+    let count = 0;
+    let idx = text.indexOf(q);
+    while (idx !== -1) {
+      count++;
+      idx = text.indexOf(q, idx + 1);
+    }
+    reportMatches(count);
+  }, [isFindOpen, findQuery, content, activeTab, reportMatches]);
+
+  // Store forceSave in ref to prevent cleanup effects from re-running
+  const forceSaveRef = useRef(forceSave);
+  useEffect(() => {
+    forceSaveRef.current = forceSave;
+  }, [forceSave]);
+
+  // Entering the View tab flushes any pending edit, then bumps previewKey so the
+  // frame loads what was just written. The Code and View tabs are mutually
+  // exclusive, so there is no moment where the author is typing and watching at
+  // once — which is what makes server-rendering the preview free of any
+  // live-update cost.
+  useEffect(() => {
+    if (activeTab !== 'view') return;
+    let cancelled = false;
+    forceSaveRef.current()
+      .catch(console.error)
+      .finally(() => {
+        if (!cancelled) setPreviewKey((key) => key + 1);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab]);
+
+  // Initialize document when component mounts (fetches from API if not cached)
+  useEffect(() => {
+    if (!hasInitializedRef.current) {
+      hasInitializedRef.current = true;
+      initializeAndActivate();
+    }
+  }, [pageId, initializeAndActivate]);
+
+  // Reset initialization flag when pageId changes
+  useEffect(() => {
+    hasInitializedRef.current = false;
+  }, [pageId]);
 
   // Register editing state to prevent SWR revalidation during edits
   useEffect(() => {
+    const componentId = `canvas-${pageId}-${instanceId}`;
+
     if (documentState?.isDirty) {
-      useEditingStore.getState().startEditing(page.id, 'document');
+      useEditingStore.getState().startEditing(componentId, 'document', {
+        pageId,
+        componentName: 'CanvasPageView',
+      });
     } else {
-      useEditingStore.getState().endEditing(page.id);
+      useEditingStore.getState().endEditing(componentId);
     }
-    return () => useEditingStore.getState().endEditing(page.id);
-  }, [documentState?.isDirty, page.id]);
 
-  // Force-save on unmount and clean up cached document
-  // Empty deps — parent renders with key={page.id} so this only runs on TRUE unmount
-  useEffect(() => {
     return () => {
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-      }
-      const id = pageIdRef.current;
-      const store = useDocumentManagerStore.getState();
-      const doc = store.getDocument(id);
-      if (doc?.isDirty) {
-        const snapshotLastUpdateTime = doc.lastUpdateTime;
-        saveContentRef.current(id, doc.content, doc.revision)
-          .then(() => {
-            const latest = useDocumentManagerStore.getState().getDocument(id);
-            // Only clear if no remount created a newer document for this page
-            if (!latest || latest.lastUpdateTime === snapshotLastUpdateTime) {
-              useDocumentManagerStore.getState().clearDocument(id);
-            }
-          })
-          .catch(() => {
-            // Save failed — keep document in store so it can be recovered on remount
-          });
-      } else {
-        store.clearDocument(id);
-      }
-      useEditingStore.getState().endEditing(id);
+      useEditingStore.getState().endEditing(componentId);
     };
-  }, []);
+  }, [documentState?.isDirty, pageId, instanceId]);
 
-  // Listen for real-time content updates from AI tools
+  // Track isDirty in ref
+  useEffect(() => {
+    isDirtyRef.current = documentState?.isDirty || false;
+  }, [documentState?.isDirty]);
+
+  // Listen for real-time content updates from AI tools / other users
   useEffect(() => {
     if (!socket) return;
 
     const handleContentUpdate = async (eventData: PageEventPayload) => {
-      // Filter out self-triggered events
       if (eventData.socketId && eventData.socketId === socket.id) {
         return;
       }
 
-      // Only update if it's for the current page
-      if (eventData.pageId === page.id) {
-        console.log(`[Canvas] Received content update for page ${page.id}`);
-
-        // Fetch fresh content
+      if (eventData.pageId === pageId) {
         try {
-          const response = await fetchWithAuth(`/api/pages/${page.id}`);
+          const response = await fetchWithAuth(`/api/pages/${pageId}`);
           if (response.ok) {
             const updatedPage = await response.json();
-            const newContent = typeof updatedPage.content === 'string' ? updatedPage.content : '';
-            // Use updateContentFromServer to avoid triggering auto-save loop
-            updateContentFromServer(newContent, updatedPage.revision);
+            // Re-read dirty state from store at merge time (not from stale closure)
+            // to prevent overwriting edits that started while the fetch was in-flight
+            const currentDoc = useDocumentManagerStore.getState().getDocument(pageId);
+            if (!currentDoc?.isDirty) {
+              updateContentFromServer(
+                typeof updatedPage.content === 'string' ? updatedPage.content : '',
+                updatedPage.revision
+              );
+            }
           }
         } catch (error) {
           console.error('Failed to fetch updated canvas content:', error);
@@ -207,59 +211,49 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
     return () => {
       socket.off('page:content-updated', handleContentUpdate);
     };
-  }, [socket, page.id, updateContentFromServer]);
+  }, [socket, pageId, updateContentFromServer]);
 
-  const handleNavigation = useCallback(async (url: string, isExternal: boolean) => {
-    if (!url) return;
+  // Handle content changes from Monaco editor
+  const handleContentChange = useCallback((newContent: string | undefined) => {
+    const value = newContent || '';
+    updateContent(value);
+    saveWithDebounce(value);
+  }, [updateContent, saveWithDebounce]);
 
-    // Handle external URLs - uses Capacitor Browser on mobile (Safari View Controller)
-    if (isExternal) {
-      const confirmed = window.confirm(`Navigate to external site?\n\n${url}`);
-      if (confirmed) {
-        await openExternalUrl(url);
+  // Generic content read/write for the Forms settings category, which owns
+  // all the <form> tag detection/wiring/deletion logic itself
+  // (parse-form-tags.ts, @pagespace/lib/forms/form-html + embed-html) —
+  // CanvasPageView just needs to persist whatever it decides the new content
+  // should be.
+  const handleFormsTabContentChange = useCallback((value: string) => {
+    updateContent(value);
+    saveWithDebounce(value);
+  }, [updateContent, saveWithDebounce]);
+
+  // Cleanup on unmount - auto-save any unsaved changes
+  useEffect(() => {
+    return () => {
+      if (isDirtyRef.current) {
+        forceSaveRef.current().catch(console.error);
       }
-      return;
-    }
-
-
-    // Handle standard dashboard URLs
-    const dashboardMatch = url.match(/^\/dashboard\/([^\/]+)\/([^\/]+)$/);
-    if (dashboardMatch) {
-      const [, , pageId] = dashboardMatch;
-      if (user && pageId) {
-        try {
-          const response = await fetchWithAuth(`/api/pages/${pageId}/permissions/check`);
-          if (response.ok) {
-            const permissions = await response.json();
-            if (!permissions.canView) {
-              toast.error('You do not have permission to view this page');
-              return;
-            }
-          } else {
-            toast.error('Failed to verify page permissions');
-            return;
-          }
-        } catch (error) {
-          console.error('Error checking permissions:', error);
-          toast.error('Failed to verify page permissions');
-          return;
-        }
-      }
-      router.push(url);
-      return;
-    }
-
-    // Handle other internal routes
-    if (url.startsWith('/')) {
-      router.push(url);
-    } else {
-      toast.error('Invalid navigation URL');
-    }
-  }, [router, user]);
+    };
+  }, []);
 
   return (
     <div ref={containerRef} className="h-full flex flex-col relative">
-      <div className="flex border-b">
+      <DocumentConflictGate
+        conflict={conflict}
+        onResolve={resolveConflict}
+        isResolving={isResolvingConflict}
+        previewMode="plain"
+      />
+      <div className="relative flex flex-wrap items-center border-b">
+        <button
+          className={`px-4 py-2 ${activeTab === 'view' ? 'border-b-2 border-blue-500' : ''}`}
+          onClick={() => setActiveTab('view')}
+        >
+          View
+        </button>
         <button
           className={`px-4 py-2 ${activeTab === 'code' ? 'border-b-2 border-blue-500' : ''}`}
           onClick={() => setActiveTab('code')}
@@ -267,36 +261,71 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
           Code
         </button>
         <button
-          className={`px-4 py-2 ${activeTab === 'view' ? 'border-b-2 border-blue-500' : ''}`}
-          onClick={() => setActiveTab('view')}
+          className={`px-4 py-2 ${activeTab === 'settings' ? 'border-b-2 border-blue-500' : ''}`}
+          onClick={() => setActiveTab('settings')}
         >
-          View
+          Settings
         </button>
       </div>
       {activeTab === 'code' && (
         <div className="flex-1 min-h-0">
           <MonacoEditor
             value={content}
-            onChange={(newValue) => setContent(newValue || '')}
+            onChange={handleContentChange}
             language="html"
           />
         </div>
       )}
       {activeTab === 'view' && (
-        <div className="flex-1 w-full bg-background text-foreground">
+        <div className="relative flex-1 w-full bg-background text-foreground">
+          <button
+            type="button"
+            title="Fullscreen preview"
+            aria-label="Fullscreen preview"
+            onClick={() => setIsPreviewOpen(true)}
+            className="absolute top-2 right-2 z-10 rounded-md bg-background/70 p-1.5 text-muted-foreground backdrop-blur-sm hover:bg-background hover:text-foreground"
+          >
+            <Maximize2 className="h-4 w-4" />
+          </button>
+          {!isPreviewOpen && (
+            <ErrorBoundary>
+              <CanvasFrame pageId={pageId} previewKey={previewKey} />
+            </ErrorBoundary>
+          )}
+        </div>
+      )}
+      {activeTab === 'settings' && (
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          <CanvasSettingsPanel
+            pageId={pageId}
+            content={content}
+            onContentChange={handleFormsTabContentChange}
+          />
+        </div>
+      )}
+
+      <Dialog open={isPreviewOpen} onOpenChange={setIsPreviewOpen}>
+        <DialogContent
+          showCloseButton
+          className="w-screen h-screen max-w-none max-h-none p-0 gap-0 rounded-none border-0 sm:max-w-none"
+        >
+          <DialogTitle className="sr-only">Canvas preview</DialogTitle>
           <ErrorBoundary>
-            <ShadowCanvas html={content} onNavigate={handleNavigation} />
+            <CanvasFrame pageId={pageId} previewKey={previewKey} title="Canvas preview" onEscape={closePreview} />
           </ErrorBoundary>
+        </DialogContent>
+      </Dialog>
+
+      {isLoading && (
+        <div className="absolute inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center">
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+            <span className="text-sm text-muted-foreground">Loading canvas...</span>
+          </div>
         </div>
       )}
     </div>
   );
 };
 
-export default React.memo(
-  CanvasPageView,
-  (prevProps, nextProps) =>
-    prevProps.page.id === nextProps.page.id &&
-    prevProps.page.content === nextProps.page.content &&
-    prevProps.page.revision === nextProps.page.revision
-);
+export default React.memo(CanvasPageView, (prevProps, nextProps) => prevProps.pageId === nextProps.pageId);

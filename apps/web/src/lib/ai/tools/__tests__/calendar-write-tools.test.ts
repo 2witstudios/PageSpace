@@ -2,7 +2,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { assert } from '@/test/riteway';
 
 // Mock database and dependencies
-vi.mock('@pagespace/db', () => ({
+// Org sign-in policy (SEC-2/3) admits every actor here; tests that exercise a refusal override it.
+vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
+  checkActorResourceAuthentication: vi.fn(async () => ({ allowed: true })),
+  checkActorDriveAuthentication: vi.fn(async () => ({ allowed: true })),
+  filterDrivesForActor: vi.fn(async (_actor: unknown, ids: readonly string[]) => new Set(ids)),
+  filterResourcesForActor: vi.fn(async (_actor: unknown, ids: readonly string[]) => new Set(ids)),
+  explainOrgAuthenticationDenial: vi.fn(async () => null),
+}));
+vi.mock('@pagespace/db/db', () => ({
   db: {
     insert: vi.fn().mockReturnThis(),
     update: vi.fn().mockReturnThis(),
@@ -13,11 +21,39 @@ vi.mock('@pagespace/db', () => ({
     set: vi.fn().mockReturnThis(),
     values: vi.fn().mockReturnThis(),
     returning: vi.fn(),
+    transaction: vi.fn(),
     query: {
       calendarEvents: { findFirst: vi.fn() },
       eventAttendees: { findFirst: vi.fn() },
     },
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn(),
+  ne: vi.fn(),
+  inArray: vi.fn(),
+  sql: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/workflow-runs', () => ({
+  workflowRuns: {
+    id: 'id',
+    workflowId: 'workflowId',
+    sourceTable: 'sourceTable',
+    sourceId: 'sourceId',
+    status: 'status',
+  },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: {
+    id: 'id',
+    type: 'type',
+    title: 'title',
+    isTrashed: 'isTrashed',
+    driveId: 'driveId',
+  },
+}));
+vi.mock('@pagespace/db/schema/calendar', () => ({
   calendarEvents: {
     id: 'id',
     driveId: 'driveId',
@@ -34,18 +70,37 @@ vi.mock('@pagespace/db', () => ({
     status: 'status',
     isOrganizer: 'isOrganizer',
   },
-  eq: vi.fn(),
-  and: vi.fn(),
-  ne: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/calendar-triggers', () => ({
+  calendarTriggers: {
+    id: 'id',
+    calendarEventId: 'calendarEventId',
+    status: 'status',
+    triggerAt: 'triggerAt',
+  },
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  isUserDriveMember: vi.fn(),
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
+    isUserDriveMember: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  getDriveMemberUserIds: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+    getDriveRecipientUserIds: vi.fn(),
+}));
+
+// [D-OW-33] the lapse guards: no org drive is lapsed in these tests (proven against real Postgres in
+// services/api/__tests__/org-lapse-loosening.integration.test.ts).
+vi.mock('@pagespace/lib/permissions/org-lapse-guard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/permissions/org-lapse-guard')>()),
+  checkCalendarVisibilityMayLoosen: vi.fn(async () => null),
+  checkDriveMayLoosen: vi.fn(async () => null),
+}));
+vi.mock('@pagespace/lib/services/calendar-event-drive-service', () => ({
+    getAllMemberUserIdsForEvent: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     ai: {
       child: vi.fn(() => ({
         info: vi.fn(),
@@ -55,10 +110,18 @@ vi.mock('@pagespace/lib/server', () => ({
       })),
     },
   },
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('@/lib/websocket/calendar-events', () => ({
   broadcastCalendarEvent: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('@/lib/workflows/calendar-trigger-helpers', () => ({
+  createCalendarTriggerWorkflow: vi.fn().mockResolvedValue({ workflowId: 'wf-1', triggerId: 'trg-1' }),
+  upsertCalendarTriggerWorkflowInTx: vi.fn().mockResolvedValue({ workflowId: 'wf-1', triggerId: 'trg-1' }),
+  removeCalendarTrigger: vi.fn().mockResolvedValue(undefined),
+  validateCalendarAgentTrigger: vi.fn().mockResolvedValue({ agentPageId: 'agent-1' }),
 }));
 
 vi.mock('@/lib/logging/mask', () => ({
@@ -121,15 +184,19 @@ vi.mock('chrono-node', () => ({
 }));
 
 import { calendarWriteTools } from '../calendar-write-tools';
-import { db } from '@pagespace/db';
-import { isUserDriveMember } from '@pagespace/lib';
-import { getDriveMemberUserIds } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db'
+import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { getAllMemberUserIdsForEvent } from '@pagespace/lib/services/calendar-event-drive-service';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
-import type { ToolExecutionContext } from '../../core';
+import { upsertCalendarTriggerWorkflowInTx } from '@/lib/workflows/calendar-trigger-helpers';
+import type { ToolExecutionContext } from '../../core/types';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockDb = vi.mocked(db);
 const mockIsUserDriveMember = vi.mocked(isUserDriveMember);
-const mockGetDriveMemberUserIds = vi.mocked(getDriveMemberUserIds);
+const mockGetDriveRecipientUserIds = vi.mocked(getDriveRecipientUserIds);
+const mockGetAllMemberUserIdsForEvent = vi.mocked(getAllMemberUserIdsForEvent);
 const mockBroadcastCalendarEvent = vi.mocked(broadcastCalendarEvent);
 
 const createMockEvent = (overrides = {}) => ({
@@ -153,12 +220,19 @@ const createMockEvent = (overrides = {}) => ({
 const createAuthContext = (userId = 'user-123') => ({
   toolCallId: '1',
   messages: [],
-  experimental_context: { userId } as ToolExecutionContext,
+  experimental_context: { userId, accessActor: credentialActor(userId, null) } as ToolExecutionContext,
 });
 
 describe('calendar-write-tools', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default transaction: invoke the callback with `mockDb` so existing
+    // chains (insert/values/returning) keep working without per-test setup.
+    // Tests that need fine-grained tx control (e.g. agentTrigger paths)
+    // override this with their own mockImplementation.
+    (mockDb.transaction as ReturnType<typeof vi.fn>).mockImplementation(
+      async (fn: (tx: unknown) => unknown) => fn(mockDb),
+    );
   });
 
   describe('create_calendar_event', () => {
@@ -343,7 +417,7 @@ describe('calendar-write-tools', () => {
 
     it('returns error when attendees are not drive members', async () => {
       mockIsUserDriveMember.mockResolvedValue(true);
-      mockGetDriveMemberUserIds.mockResolvedValue(['user-123', 'user-456']);
+      mockGetDriveRecipientUserIds.mockResolvedValue(['user-123', 'user-456']);
 
       const input = {
         title: 'Test Event',
@@ -406,6 +480,426 @@ describe('calendar-write-tools', () => {
         expected: 'created',
       });
     });
+
+    describe('agentTrigger', () => {
+      it('passes recurrenceRule to upsertCalendarTriggerWorkflowInTx when agentTrigger + recurrence are combined', async () => {
+        mockIsUserDriveMember.mockResolvedValue(true);
+
+        // Return a valid AI_CHAT agent page for the agent-page lookup via
+        // db.select({...}).from(pages).where(...)
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValueOnce([{
+              id: 'agent-1',
+              type: 'AI_CHAT',
+              title: 'Test Agent',
+              isTrashed: false,
+              driveId: 'drive-1',
+            }]),
+          }),
+        });
+
+        const newEvent = createMockEvent({ recurrenceRule: { frequency: 'WEEKLY', interval: 1 } });
+        (mockDb.insert as ReturnType<typeof vi.fn>).mockReturnValue({
+          values: vi.fn().mockReturnValue({
+            returning: vi.fn().mockResolvedValue([newEvent]),
+          }),
+        });
+
+        const input = {
+          title: 'Recurring Agent Task',
+          startAt: '2024-06-15T10:00:00Z',
+          endAt: '2024-06-15T10:30:00Z',
+          driveId: 'drive-1',
+          recurrence: { frequency: 'WEEKLY' as const, interval: 1 },
+          agentTrigger: {
+            agentPageId: 'agent-1',
+            prompt: 'Do something',
+          },
+        };
+
+        await calendarWriteTools.create_calendar_event.execute!(input, createAuthContext());
+
+        const upsertCalls = vi.mocked(upsertCalendarTriggerWorkflowInTx).mock.calls;
+        assert({
+          given: 'agentTrigger with recurrence',
+          should: 'call upsertCalendarTriggerWorkflowInTx with the recurrence rule',
+          actual: upsertCalls.some(
+            ([, params]) => (params as { recurrenceRule?: { frequency: string } }).recurrenceRule?.frequency === 'WEEKLY',
+          ),
+          expected: true,
+        });
+      });
+
+      it('returns error when agentTrigger used without driveId', async () => {
+        const input = {
+          title: 'Scheduled Task',
+          startAt: '2024-06-15T10:00:00Z',
+          endAt: '2024-06-15T10:30:00Z',
+          agentTrigger: {
+            agentPageId: 'agent-1',
+            prompt: 'Do something',
+          },
+        };
+
+        const result = await calendarWriteTools.create_calendar_event.execute!(
+          input,
+          createAuthContext()
+        );
+
+        assert({
+          given: 'agentTrigger without driveId',
+          should: 'return error requiring drive event',
+          actual: (result as { success: boolean }).success,
+          expected: false,
+        });
+
+        assert({
+          given: 'agentTrigger without driveId',
+          should: 'mention driveId in error',
+          actual: (result as { error?: string }).error?.includes('driveId'),
+          expected: true,
+        });
+      });
+
+      it('returns error when agentTrigger lacks prompt and instructionPageId', async () => {
+        mockIsUserDriveMember.mockResolvedValue(true);
+
+        const input = {
+          title: 'Scheduled Task',
+          startAt: '2024-06-15T10:00:00Z',
+          endAt: '2024-06-15T10:30:00Z',
+          driveId: 'drive-1',
+          agentTrigger: {
+            agentPageId: 'agent-1',
+          },
+        };
+
+        const result = await calendarWriteTools.create_calendar_event.execute!(
+          input,
+          createAuthContext()
+        );
+
+        assert({
+          given: 'agentTrigger without prompt or instructionPageId',
+          should: 'return error',
+          actual: (result as { success: boolean }).success,
+          expected: false,
+        });
+
+        assert({
+          given: 'missing prompt and instructionPageId',
+          should: 'mention prompt or instructionPageId',
+          actual: (result as { error?: string }).error?.includes('prompt'),
+          expected: true,
+        });
+      });
+
+      it('returns error when agent page not found', async () => {
+        mockIsUserDriveMember.mockResolvedValue(true);
+
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([]),
+          }),
+        });
+
+        const input = {
+          title: 'Scheduled Task',
+          startAt: '2024-06-15T10:00:00Z',
+          endAt: '2024-06-15T10:30:00Z',
+          driveId: 'drive-1',
+          agentTrigger: {
+            agentPageId: 'nonexistent',
+            prompt: 'Do something',
+          },
+        };
+
+        const result = await calendarWriteTools.create_calendar_event.execute!(
+          input,
+          createAuthContext()
+        );
+
+        assert({
+          given: 'non-existent agent page',
+          should: 'return error',
+          actual: (result as { success: boolean }).success,
+          expected: false,
+        });
+
+        assert({
+          given: 'non-existent agent page',
+          should: 'suggest list_agents',
+          actual: (result as { error?: string }).error?.includes('list_agents'),
+          expected: true,
+        });
+      });
+
+      it('returns error when agent page is not AI_CHAT type', async () => {
+        mockIsUserDriveMember.mockResolvedValue(true);
+
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([{
+              id: 'page-1', type: 'DOCUMENT', title: 'My Doc', isTrashed: false, driveId: 'drive-1',
+            }]),
+          }),
+        });
+
+        const input = {
+          title: 'Scheduled Task',
+          startAt: '2024-06-15T10:00:00Z',
+          endAt: '2024-06-15T10:30:00Z',
+          driveId: 'drive-1',
+          agentTrigger: {
+            agentPageId: 'page-1',
+            prompt: 'Do something',
+          },
+        };
+
+        const result = await calendarWriteTools.create_calendar_event.execute!(
+          input,
+          createAuthContext()
+        );
+
+        assert({
+          given: 'non-AI_CHAT page',
+          should: 'return error',
+          actual: (result as { success: boolean }).success,
+          expected: false,
+        });
+
+        assert({
+          given: 'non-AI_CHAT page',
+          should: 'mention AI_CHAT in error',
+          actual: (result as { error?: string }).error?.includes('AI_CHAT'),
+          expected: true,
+        });
+      });
+
+      it('returns error when agent page is trashed', async () => {
+        mockIsUserDriveMember.mockResolvedValue(true);
+
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([{
+              id: 'agent-1', type: 'AI_CHAT', title: 'Dead Agent', isTrashed: true, driveId: 'drive-1',
+            }]),
+          }),
+        });
+
+        const input = {
+          title: 'Scheduled Task',
+          startAt: '2024-06-15T10:00:00Z',
+          endAt: '2024-06-15T10:30:00Z',
+          driveId: 'drive-1',
+          agentTrigger: {
+            agentPageId: 'agent-1',
+            prompt: 'Do something',
+          },
+        };
+
+        const result = await calendarWriteTools.create_calendar_event.execute!(
+          input,
+          createAuthContext()
+        );
+
+        assert({
+          given: 'trashed agent page',
+          should: 'return error',
+          actual: (result as { success: boolean }).success,
+          expected: false,
+        });
+
+        assert({
+          given: 'trashed agent page',
+          should: 'mention trash in error',
+          actual: (result as { error?: string }).error?.includes('trash'),
+          expected: true,
+        });
+      });
+
+      it('returns error when agent page is personal (no driveId)', async () => {
+        mockIsUserDriveMember.mockResolvedValue(true);
+
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([{
+              id: 'agent-1', type: 'AI_CHAT', title: 'My Agent', isTrashed: false, driveId: null,
+            }]),
+          }),
+        });
+
+        const input = {
+          title: 'Scheduled Task',
+          startAt: '2024-06-15T10:00:00Z',
+          endAt: '2024-06-15T10:30:00Z',
+          driveId: 'drive-1',
+          agentTrigger: {
+            agentPageId: 'agent-1',
+            prompt: 'Do something',
+          },
+        };
+
+        const result = await calendarWriteTools.create_calendar_event.execute!(
+          input,
+          createAuthContext()
+        );
+
+        assert({
+          given: 'personal agent page',
+          should: 'return error',
+          actual: (result as { success: boolean }).success,
+          expected: false,
+        });
+
+        assert({
+          given: 'personal agent page',
+          should: 'mention drive-based agent',
+          actual: (result as { error?: string }).error?.includes('drive-based'),
+          expected: true,
+        });
+      });
+
+      it('returns error when context page is from a different drive', async () => {
+        mockIsUserDriveMember.mockResolvedValue(true);
+
+        // First select: agent page validation (same drive — OK)
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([{
+              id: 'agent-1', type: 'AI_CHAT', title: 'My Agent', isTrashed: false, driveId: 'drive-1',
+            }]),
+          }),
+        });
+
+        // Second select: context page validation (different drive)
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([{
+              id: 'ctx-page-1', driveId: 'drive-other', isTrashed: false,
+            }]),
+          }),
+        });
+
+        const input = {
+          title: 'Scheduled Task',
+          startAt: '2024-06-15T10:00:00Z',
+          endAt: '2024-06-15T10:30:00Z',
+          driveId: 'drive-1',
+          agentTrigger: {
+            agentPageId: 'agent-1',
+            prompt: 'Do something',
+            contextPageIds: ['ctx-page-1'],
+          },
+        };
+
+        const result = await calendarWriteTools.create_calendar_event.execute!(
+          input,
+          createAuthContext()
+        );
+
+        assert({
+          given: 'context page from a different drive',
+          should: 'return error',
+          actual: (result as { success: boolean }).success,
+          expected: false,
+        });
+
+        assert({
+          given: 'cross-drive context page',
+          should: 'mention same drive requirement',
+          actual: (result as { error?: string }).error?.toLowerCase().includes('same drive'),
+          expected: true,
+        });
+      });
+
+      it('creates trigger and returns triggerId on success', async () => {
+        mockIsUserDriveMember.mockResolvedValue(true);
+
+        // Agent validation query
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([{
+              id: 'agent-1', type: 'AI_CHAT', title: 'My Agent', isTrashed: false, driveId: 'drive-1',
+            }]),
+          }),
+        });
+
+        // The full create flow runs inside one db.transaction now (event +
+        // attendees + helper-driven trigger pair + metadata update). Build a
+        // tx mock whose insert chain returns event-then-workflow-then-trigger
+        // returning rows in that order, and supports update().set().where().
+        const newEvent = createMockEvent({ id: 'event-new' });
+        let insertCount = 0;
+        (mockDb.transaction as ReturnType<typeof vi.fn>).mockImplementation(async (fn: (tx: unknown) => unknown) => {
+          const mockTx = {
+            insert: vi.fn().mockImplementation(() => {
+              insertCount += 1;
+              // Order:
+              //   1: calendarEvents (returning [event])
+              //   2: eventAttendees (creator) — no returning
+              //   3: eventAttendees (others) — only when otherAttendees > 0
+              //   workflows + calendar_triggers via helper, with returning
+              const isOtherAttendeesPresent = false; // this fixture has no otherAttendees
+              const valuesReturn = (() => {
+                if (insertCount === 1) return { returning: vi.fn().mockResolvedValue([newEvent]) };
+                if (insertCount === 2) return undefined; // creator attendee, no .returning
+                // From here on, helper inserts workflows then calendar_triggers, both with returning.
+                const helperStep = isOtherAttendeesPresent ? insertCount - 3 : insertCount - 2;
+                if (helperStep === 1) return { returning: vi.fn().mockResolvedValue([{ id: 'wf-1' }]) };
+                if (helperStep === 2) return { returning: vi.fn().mockResolvedValue([{ id: 'trg-1' }]) };
+                return undefined;
+              })();
+              return { values: vi.fn().mockReturnValue(valuesReturn) };
+            }),
+            update: vi.fn().mockReturnValue({
+              set: vi.fn().mockReturnValue({
+                where: vi.fn().mockResolvedValue(undefined),
+              }),
+            }),
+          };
+          return fn(mockTx);
+        });
+
+        const input = {
+          title: 'Deploy Check',
+          startAt: '2024-06-15T10:00:00Z',
+          endAt: '2024-06-15T10:15:00Z',
+          driveId: 'drive-1',
+          agentTrigger: {
+            agentPageId: 'agent-1',
+            prompt: 'Check deploy status',
+          },
+        };
+
+        const result = await calendarWriteTools.create_calendar_event.execute!(
+          input,
+          createAuthContext()
+        );
+
+        assert({
+          given: 'valid agentTrigger',
+          should: 'return success',
+          actual: (result as { success: boolean }).success,
+          expected: true,
+        });
+
+        assert({
+          given: 'successful trigger creation',
+          should: 'return triggerId in data',
+          actual: (result as { data: { triggerId?: string } }).data.triggerId,
+          expected: 'trg-1',
+        });
+
+        assert({
+          given: 'successful trigger creation',
+          should: 'mention agent in summary',
+          actual: (result as { summary?: string }).summary?.includes('My Agent'),
+          expected: true,
+        });
+      });
+    });
   });
 
   describe('update_calendar_event', () => {
@@ -447,6 +941,42 @@ describe('calendar-write-tools', () => {
         given: 'non-existent event',
         should: 'include not found error',
         actual: (result as { error?: string }).error?.toLowerCase().includes('not found'),
+        expected: true,
+      });
+    });
+
+    it('denies a drive-scoped token editing the owner\'s PERSONAL (drive-less) event — Story 6', async () => {
+      // The owner created this personal event; the key would pass the creator
+      // check, but a drive-scoped key has no identity power outside its drives.
+      const event = createMockEvent({ createdById: 'user-123', driveId: null });
+      mockDb.query.calendarEvents.findFirst = vi.fn().mockResolvedValue(event);
+
+      const scopedContext = {
+        toolCallId: '1',
+        messages: [],
+        experimental_context: {
+          userId: 'user-123', accessActor: credentialActor('user-123', null),
+          mcpAllowedDriveIds: ['drive-A'],
+          mcpTokenId: 'token-1',
+        } as ToolExecutionContext,
+      };
+
+      const result = await calendarWriteTools.update_calendar_event.execute!(
+        { eventId: 'event-1', title: 'Updated Title' },
+        scopedContext
+      );
+
+      assert({
+        given: 'a drive-scoped token and a personal event',
+        should: 'deny the edit',
+        actual: (result as { success: boolean }).success,
+        expected: false,
+      });
+
+      assert({
+        given: 'a drive-scoped token and a personal event',
+        should: 'explain the personal-event lane',
+        actual: (result as { error?: string }).error?.toLowerCase().includes('personal'),
         expected: true,
       });
     });
@@ -622,6 +1152,180 @@ describe('calendar-write-tools', () => {
         expected: true,
       });
     });
+
+    it('syncs trigger triggerAt when updating startAt on trigger-linked event', async () => {
+      const triggerMeta = { isTrigger: true, triggerType: 'agent_execution', triggerId: 'trg-1' };
+      const existingEvent = createMockEvent({
+        createdById: 'user-123',
+        metadata: triggerMeta,
+        startAt: new Date('2024-01-15T10:00:00Z'),
+        endAt: new Date('2024-01-15T12:00:00Z'),
+      });
+      mockDb.query.calendarEvents.findFirst = vi.fn().mockResolvedValue(existingEvent);
+
+      // Track update calls: first = event update, second = trigger sync
+      const triggerSyncSetSpy = vi.fn();
+      let updateIdx = 0;
+      (mockDb.update as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        updateIdx++;
+        if (updateIdx === 1) {
+          // Event update returns updated event with trigger metadata
+          return {
+            set: vi.fn().mockReturnValue({
+              where: vi.fn().mockReturnValue({
+                returning: vi.fn().mockResolvedValue([{
+                  ...existingEvent,
+                  startAt: new Date('2024-01-15T10:30:00Z'),
+                  metadata: triggerMeta,
+                }]),
+              }),
+            }),
+          };
+        }
+        // Trigger sync
+        return {
+          set: triggerSyncSetSpy.mockReturnValue({
+            where: vi.fn().mockResolvedValue(undefined),
+          }),
+        };
+      });
+
+      // Attendees for broadcast
+      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([{ userId: 'user-123' }]),
+        }),
+      });
+
+      const input = { eventId: 'event-1', startAt: '2024-01-15T10:30:00Z' };
+
+      const result = await calendarWriteTools.update_calendar_event.execute!(
+        input,
+        createAuthContext()
+      );
+
+      assert({
+        given: 'startAt change on trigger-linked event',
+        should: 'return success',
+        actual: (result as { success: boolean }).success,
+        expected: true,
+      });
+
+      // Verify trigger sync happened
+      expect(triggerSyncSetSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ triggerAt: expect.any(Date) })
+      );
+    });
+
+    describe('agentTrigger', () => {
+      it('forwards an agentTrigger object to upsertCalendarTriggerWorkflow', async () => {
+        const event = createMockEvent({ createdById: 'user-123', driveId: 'drive-1' });
+        mockDb.query.calendarEvents.findFirst = vi.fn().mockResolvedValue(event);
+        (mockDb.update as ReturnType<typeof vi.fn>).mockReturnValue({
+          set: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              returning: vi.fn().mockResolvedValue([event]),
+            }),
+          }),
+        });
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
+          from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
+        });
+
+        const { upsertCalendarTriggerWorkflowInTx } = await import('@/lib/workflows/calendar-trigger-helpers');
+        const result = await calendarWriteTools.update_calendar_event.execute!(
+          {
+            eventId: 'event-1',
+            agentTrigger: {
+              agentPageId: 'agent-1',
+              prompt: 'run prep',
+              instructionPageId: 'instr-1',
+              contextPageIds: ['ctx-a'],
+            },
+          },
+          createAuthContext(),
+        );
+
+        assert({
+          given: 'agentTrigger object on update_calendar_event',
+          should: 'return success',
+          actual: (result as { success: boolean }).success,
+          expected: true,
+        });
+
+        expect(upsertCalendarTriggerWorkflowInTx).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            calendarEventId: 'event-1',
+            agentTrigger: expect.objectContaining({
+              agentPageId: 'agent-1',
+              instructionPageId: 'instr-1',
+              contextPageIds: ['ctx-a'],
+            }),
+          }),
+        );
+      });
+
+      it('removes the trigger when agentTrigger is null', async () => {
+        const event = createMockEvent({ createdById: 'user-123', driveId: 'drive-1' });
+        mockDb.query.calendarEvents.findFirst = vi.fn().mockResolvedValue(event);
+        (mockDb.update as ReturnType<typeof vi.fn>).mockReturnValue({
+          set: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              returning: vi.fn().mockResolvedValue([event]),
+            }),
+          }),
+        });
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
+          from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
+        });
+
+        const { removeCalendarTrigger } = await import('@/lib/workflows/calendar-trigger-helpers');
+        const result = await calendarWriteTools.update_calendar_event.execute!(
+          { eventId: 'event-1', agentTrigger: null },
+          createAuthContext(),
+        );
+
+        assert({
+          given: 'agentTrigger=null on update_calendar_event',
+          should: 'return success',
+          actual: (result as { success: boolean }).success,
+          expected: true,
+        });
+
+        expect(removeCalendarTrigger).toHaveBeenCalledWith(expect.anything(), 'event-1');
+      });
+
+      it('rejects an agent-trigger upsert on a personal (no driveId) event', async () => {
+        const personalEvent = createMockEvent({ createdById: 'user-123', driveId: null });
+        mockDb.query.calendarEvents.findFirst = vi.fn().mockResolvedValue(personalEvent);
+        (mockDb.update as ReturnType<typeof vi.fn>).mockReturnValue({
+          set: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              returning: vi.fn().mockResolvedValue([personalEvent]),
+            }),
+          }),
+        });
+
+        const { upsertCalendarTriggerWorkflowInTx } = await import('@/lib/workflows/calendar-trigger-helpers');
+        const result = await calendarWriteTools.update_calendar_event.execute!(
+          {
+            eventId: 'event-1',
+            agentTrigger: { agentPageId: 'agent-1', prompt: 'p' },
+          },
+          createAuthContext(),
+        );
+
+        assert({
+          given: 'agentTrigger upsert on a personal event',
+          should: 'return error',
+          actual: (result as { success: boolean }).success,
+          expected: false,
+        });
+
+        expect(upsertCalendarTriggerWorkflowInTx).not.toHaveBeenCalled();
+      });
+    });
   });
 
   describe('delete_calendar_event', () => {
@@ -755,6 +1459,74 @@ describe('calendar-write-tools', () => {
         actual: mockBroadcastCalendarEvent.mock.calls[0][0].operation,
         expected: 'deleted',
       });
+    });
+
+    it('writes a cancelled workflow_run for each trigger when deleting a trigger-linked event', async () => {
+      const triggerMeta = { isTrigger: true, triggerType: 'agent_execution', triggerId: 'trg-1' };
+      const triggerEvent = createMockEvent({
+        createdById: 'user-123',
+        metadata: triggerMeta,
+      });
+      mockDb.query.calendarEvents.findFirst = vi.fn().mockResolvedValue(triggerEvent);
+
+      // Two select calls fire under this path, in order:
+      //   1) attendee lookup for broadcast
+      //   2) load triggers for the event so we can write cancelled runs
+      let selectCallCount = 0;
+      (mockDb.select as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        selectCallCount++;
+        if (selectCallCount === 1) {
+          return {
+            from: vi.fn().mockReturnValue({
+              where: vi.fn().mockResolvedValue([{ userId: 'user-123' }]),
+            }),
+          };
+        }
+        return {
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([
+              { id: 'trg-1', workflowId: 'wf-1', triggerAt: new Date('2026-01-01T09:00:00Z') },
+            ]),
+          }),
+        };
+      });
+
+      // Capture the cancellation insert
+      const cancelValuesSpy = vi.fn().mockResolvedValue(undefined);
+      (mockDb.insert as ReturnType<typeof vi.fn>) = vi.fn().mockReturnValue({ values: cancelValuesSpy });
+
+      // Soft-delete update path (no trigger writes anymore)
+      (mockDb.update as ReturnType<typeof vi.fn>).mockReturnValue({
+        set: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue(undefined),
+        }),
+      });
+
+      const input = { eventId: 'event-1' };
+
+      const result = await calendarWriteTools.delete_calendar_event.execute!(
+        input,
+        createAuthContext()
+      );
+
+      assert({
+        given: 'deleting a trigger-linked event',
+        should: 'return success',
+        actual: (result as { success: boolean }).success,
+        expected: true,
+      });
+
+      // Cancellation insert was called with status='cancelled' rows, one per trigger
+      expect(cancelValuesSpy).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({
+            sourceTable: 'calendarTriggers',
+            sourceId: 'trg-1',
+            workflowId: 'wf-1',
+            status: 'cancelled',
+          }),
+        ])
+      );
     });
   });
 
@@ -1008,7 +1780,7 @@ describe('calendar-write-tools', () => {
     it('returns error when attendees are not drive members', async () => {
       const event = createMockEvent({ createdById: 'user-123', driveId: 'drive-1' });
       mockDb.query.calendarEvents.findFirst = vi.fn().mockResolvedValue(event);
-      mockGetDriveMemberUserIds.mockResolvedValue(['user-123', 'user-456']);
+      mockGetAllMemberUserIdsForEvent.mockResolvedValue(new Set(['user-123', 'user-456']));
       const input = { eventId: 'event-1', userIds: ['non-member'] };
 
       const result = await calendarWriteTools.invite_calendar_attendees.execute!(

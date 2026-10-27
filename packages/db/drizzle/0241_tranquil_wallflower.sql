@@ -1,0 +1,1 @@
+ALTER TABLE "form_targets" ADD COLUMN "notification_email" text;

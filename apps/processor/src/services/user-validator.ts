@@ -12,7 +12,9 @@
  * @module apps/processor/services/user-validator
  */
 
-import { db, users, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
 
 /**
  * Reasons why a user validation might fail

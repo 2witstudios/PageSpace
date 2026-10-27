@@ -1,0 +1,264 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { NextResponse } from 'next/server';
+import { GET } from '../route';
+
+/**
+ * Security Tests for Audit Logs Search
+ *
+ * These tests verify that the search functionality properly sanitizes
+ * user input to prevent LIKE pattern injection attacks.
+ *
+ * Vulnerability: SQL LIKE pattern injection
+ * Attack Vector: User supplies LIKE wildcards (%, _) in search parameter
+ * Impact: Broader pattern matching than intended, data disclosure
+ * Fix: Escape LIKE special characters before using in queries
+ */
+
+// Create mock ilike function using vi.hoisted() to ensure it's available when vi.mock is hoisted
+const { mockIlike } = vi.hoisted(() => ({
+  mockIlike: vi.fn((column: unknown, pattern: string) => ({
+    type: 'ilike' as const,
+    column,
+    pattern,
+  })),
+}));
+
+// Create mock auth functions using vi.hoisted() to ensure they're available when vi.mock is hoisted
+const { mockVerifyAdminAuth, mockIsAdminAuthError } = vi.hoisted(() => ({
+  mockVerifyAdminAuth: vi.fn(),
+  mockIsAdminAuthError: vi.fn((result: unknown) => result instanceof NextResponse),
+}));
+
+// Mock dependencies
+vi.mock('@/lib/auth', () => ({
+  verifyAdminAuth: mockVerifyAdminAuth,
+  isAdminAuthError: mockIsAdminAuthError,
+  // withAdminAuth HOF that uses the mocked verifyAdminAuth
+  withAdminAuth: <T>(handler: (user: unknown, request: Request, context: T) => Promise<Response>) => {
+    return async (request: Request, context: T): Promise<Response> => {
+      const result = mockVerifyAdminAuth(request);
+      const resolved = await result;
+      if (mockIsAdminAuthError(resolved)) return resolved;
+      return handler(resolved, request, context);
+    };
+  },
+}));
+
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
+    api: {
+      error: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      debug: vi.fn(),
+    },
+    security: { warn: vi.fn() },
+  },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  auditRequest: vi.fn(),
+}));
+
+// Mock the database module
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+      select: () => ({
+        from: () => ({
+          where: () => Promise.resolve([{ count: 0 }]),
+          leftJoin: () => ({
+            where: () => ({
+              orderBy: () => ({
+                limit: () => ({
+                  offset: () => Promise.resolve([]),
+                }),
+              }),
+            }),
+          }),
+        }),
+      }),
+    },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((col: unknown, val: unknown) => ({ type: 'eq', col, val })),
+  and: vi.fn((...conditions: unknown[]) => ({ type: 'and', conditions })),
+  or: vi.fn((...conditions: unknown[]) => ({ type: 'or', conditions })),
+  desc: vi.fn((col: unknown) => ({ type: 'desc', col })),
+  count: vi.fn(() => ({ type: 'count' })),
+  gte: vi.fn((col: unknown, val: unknown) => ({ type: 'gte', col, val })),
+  lte: vi.fn((col: unknown, val: unknown) => ({ type: 'lte', col, val })),
+  ilike: mockIlike,
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: {
+      id: 'id',
+      name: 'name',
+      email: 'email',
+      image: 'image',
+    },
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
+  activityLogs: {
+      id: 'id',
+      timestamp: 'timestamp',
+      userId: 'userId',
+      actorEmail: 'actorEmail',
+      actorDisplayName: 'actorDisplayName',
+      isAiGenerated: 'isAiGenerated',
+      aiProvider: 'aiProvider',
+      aiModel: 'aiModel',
+      aiConversationId: 'aiConversationId',
+      operation: { enumValues: ['create', 'update', 'delete'] },
+      resourceType: { enumValues: ['page', 'drive', 'user'] },
+      resourceId: 'resourceId',
+      resourceTitle: 'resourceTitle',
+      driveId: 'driveId',
+      pageId: 'pageId',
+      updatedFields: 'updatedFields',
+      previousValues: 'previousValues',
+      newValues: 'newValues',
+      metadata: 'metadata',
+      isArchived: 'isArchived',
+      previousLogHash: 'previousLogHash',
+      logHash: 'logHash',
+      chainSeed: 'chainSeed',
+    },
+}));
+
+describe('/api/admin/audit-logs - Search Security', () => {
+  const mockAdminUser = {
+    id: 'admin-user-id',
+    role: 'admin' as const,
+    tokenVersion: 1,
+    adminRoleVersion: 1,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockVerifyAdminAuth.mockResolvedValue(mockAdminUser);
+  });
+
+  describe('LIKE pattern injection prevention', () => {
+    it('GET_withPercentWildcardInSearch_escapesWildcard', async () => {
+      // Arrange: Search contains SQL LIKE wildcard %
+      const maliciousSearch = '100%';
+      const request = new Request(
+        `http://localhost/api/admin/audit-logs?search=${encodeURIComponent(maliciousSearch)}`,
+        { method: 'GET' }
+      );
+
+      // Act
+      await GET(request);
+
+      // Assert: The % should be escaped to \%
+      expect(mockIlike).toHaveBeenCalledTimes(4);
+      // Pattern should have the % escaped, wrapped in search wildcards
+      expect(mockIlike.mock.calls[0][1]).toBe('%100\\%%');
+    });
+
+    it('GET_withUnderscoreWildcardInSearch_escapesWildcard', async () => {
+      // Arrange: Search contains SQL LIKE single-char wildcard _
+      const maliciousSearch = 'user_name';
+      const request = new Request(
+        `http://localhost/api/admin/audit-logs?search=${encodeURIComponent(maliciousSearch)}`,
+        { method: 'GET' }
+      );
+
+      // Act
+      await GET(request);
+
+      // Assert: The _ should be escaped to \_
+      expect(mockIlike).toHaveBeenCalledTimes(4);
+      expect(mockIlike.mock.calls[0][1]).toBe('%user\\_name%');
+    });
+
+    it('GET_withBackslashInSearch_escapesBackslash', async () => {
+      // Arrange: Search contains backslash (escape char in SQL LIKE)
+      const maliciousSearch = 'path\\to\\file';
+      const request = new Request(
+        `http://localhost/api/admin/audit-logs?search=${encodeURIComponent(maliciousSearch)}`,
+        { method: 'GET' }
+      );
+
+      // Act
+      await GET(request);
+
+      // Assert: Backslashes should be escaped
+      expect(mockIlike).toHaveBeenCalledTimes(4);
+      expect(mockIlike.mock.calls[0][1]).toBe('%path\\\\to\\\\file%');
+    });
+
+    it('GET_withCombinedSpecialCharsInSearch_escapesAll', async () => {
+      // Arrange: Search contains multiple LIKE special characters
+      const maliciousSearch = '50%_off\\deal';
+      const request = new Request(
+        `http://localhost/api/admin/audit-logs?search=${encodeURIComponent(maliciousSearch)}`,
+        { method: 'GET' }
+      );
+
+      // Act
+      await GET(request);
+
+      // Assert: All special characters should be escaped
+      expect(mockIlike).toHaveBeenCalledTimes(4);
+      // Order of escaping: \ first, then %, then _
+      expect(mockIlike.mock.calls[0][1]).toBe('%50\\%\\_off\\\\deal%');
+    });
+
+    it('GET_withNormalSearch_doesNotAddExtraEscapes', async () => {
+      // Arrange: Normal search term without special characters
+      const normalSearch = 'admin user';
+      const request = new Request(
+        `http://localhost/api/admin/audit-logs?search=${encodeURIComponent(normalSearch)}`,
+        { method: 'GET' }
+      );
+
+      // Act
+      await GET(request);
+
+      // Assert: Pattern should just have the search term wrapped in wildcards
+      expect(mockIlike).toHaveBeenCalledTimes(4);
+      expect(mockIlike.mock.calls[0][1]).toBe('%admin user%');
+    });
+
+    it('GET_withSearch_usesIlikeFunctionInsteadOfRawSql', async () => {
+      // Arrange
+      const request = new Request(
+        'http://localhost/api/admin/audit-logs?search=test',
+        { method: 'GET' }
+      );
+
+      // Act
+      await GET(request);
+
+      // Assert: ilike function should be called (not raw SQL template)
+      // Should search across all 4 fields
+      expect(mockIlike).toHaveBeenCalledTimes(4);
+    });
+  });
+
+  describe('authentication requirements', () => {
+    it('GET_withoutAdminAuth_returns403', async () => {
+      // Arrange: Not an admin - verifyAdminAuth returns error response
+      const errorResponse = NextResponse.json(
+        { error: 'Forbidden: Admin access required' },
+        { status: 403 }
+      );
+      mockVerifyAdminAuth.mockResolvedValue(errorResponse);
+
+      const request = new Request(
+        'http://localhost/api/admin/audit-logs?search=test',
+        { method: 'GET' }
+      );
+
+      // Act
+      const response = await GET(request);
+      const body = await response.json();
+
+      // Assert
+      expect(response.status).toBe(403);
+      expect(body.error).toBe('Forbidden: Admin access required');
+    });
+  });
+});

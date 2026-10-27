@@ -1,25 +1,31 @@
 {
   "name": "realtime",
   "version": "0.1.0",
-  "license": "CC-BY-NC-SA-4.0",
+  "license": "UNLICENSED",
   "main": "src/index.ts",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
     "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@fly/sprites": "0.0.1-rc37",
     "@pagespace/db": "workspace:*",
     "@pagespace/lib": "workspace:*",
-    "cookie": "1.0.2",
+    "@sentry/node": "^10.56.0",
     "dotenv": "^17.2.0",
+    "nats": "^2.29.3",
     "socket.io": "^4.7.5"
   },
   "devDependencies": {
+    "eslint": "^10.2.1",
     "tsx": "^4.16.2",
-    "typescript": "^5.5.2"
+    "typescript": "^5.5.2",
+    "typescript-eslint": "^8.59.0"
   }
 }

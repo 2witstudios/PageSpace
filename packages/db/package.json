@@ -1,45 +1,400 @@
 {
   "name": "@pagespace/db",
   "version": "0.1.0",
-  "license": "AGPL-3.0",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "license": "UNLICENSED",
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
+    "./db": {
+      "types": "./dist/db.d.ts",
+      "default": "./dist/db.js"
+    },
+    "./wallet-backfill": {
+      "types": "./dist/wallet-backfill.d.ts",
+      "default": "./dist/wallet-backfill.js"
+    },
+    "./advisory-lock": {
+      "types": "./dist/advisory-lock.d.ts",
+      "default": "./dist/advisory-lock.js"
+    },
+    "./admin-db": {
+      "types": "./dist/admin-db.d.ts",
+      "default": "./dist/admin-db.js"
+    },
+    "./admin-eraser-db": {
+      "types": "./dist/admin-eraser-db.d.ts",
+      "default": "./dist/admin-eraser-db.js"
+    },
+    "./admin-schema": {
+      "types": "./dist/admin-schema.d.ts",
+      "default": "./dist/admin-schema.js"
+    },
+    "./migrate-admin": {
+      "types": "./dist/migrate-admin.d.ts",
+      "default": "./dist/migrate-admin.js"
+    },
+    "./provision-admin-users": {
+      "types": "./dist/provision-admin-users.d.ts",
+      "default": "./dist/provision-admin-users.js"
+    },
+    "./operators": {
+      "types": "./dist/operators.d.ts",
+      "default": "./dist/operators.js"
+    },
+    "./read-only-session": {
+      "types": "./dist/read-only-session.d.ts",
+      "default": "./dist/read-only-session.js"
+    },
+    "./schema": {
+      "types": "./dist/schema.d.ts",
+      "default": "./dist/schema.js"
+    },
+    "./schema/ai-streams": {
+      "types": "./dist/schema/ai-streams.d.ts",
+      "default": "./dist/schema/ai-streams.js"
+    },
+    "./schema/drafts": {
+      "types": "./dist/schema/drafts.d.ts",
+      "default": "./dist/schema/drafts.js"
+    },
+    "./schema/agent-workspaces": {
+      "types": "./dist/schema/agent-workspaces.d.ts",
+      "default": "./dist/schema/agent-workspaces.js"
+    },
+    "./schema/agent-accounts": {
+      "types": "./dist/schema/agent-accounts.d.ts",
+      "default": "./dist/schema/agent-accounts.js"
+    },
+    "./schema/agent-account-grant-nonces": {
+      "types": "./dist/schema/agent-account-grant-nonces.d.ts",
+      "default": "./dist/schema/agent-account-grant-nonces.js"
+    },
+    "./schema/organizations": {
+      "types": "./dist/schema/organizations.d.ts",
+      "default": "./dist/schema/organizations.js"
+    },
+    "./schema/org-guest-holds": {
+      "types": "./dist/schema/org-guest-holds.d.ts",
+      "default": "./dist/schema/org-guest-holds.js"
+    },
+    "./schema/drive-join-requests": {
+      "types": "./dist/schema/drive-join-requests.d.ts",
+      "default": "./dist/schema/drive-join-requests.js"
+    },
+    "./schema/agent-workspace-nodes": {
+      "types": "./dist/schema/agent-workspace-nodes.d.ts",
+      "default": "./dist/schema/agent-workspace-nodes.js"
+    },
+    "./schema/share-links": {
+      "types": "./dist/schema/share-links.d.ts",
+      "default": "./dist/schema/share-links.js"
+    },
+    "./schema/published-pages": {
+      "types": "./dist/schema/published-pages.d.ts",
+      "default": "./dist/schema/published-pages.js"
+    },
+    "./schema/auth": {
+      "types": "./dist/schema/auth.d.ts",
+      "default": "./dist/schema/auth.js"
+    },
+    "./schema/auth-handoff-tokens": {
+      "types": "./dist/schema/auth-handoff-tokens.d.ts",
+      "default": "./dist/schema/auth-handoff-tokens.js"
+    },
+    "./schema/calendar": {
+      "types": "./dist/schema/calendar.d.ts",
+      "default": "./dist/schema/calendar.js"
+    },
+    "./schema/calendar-triggers": {
+      "types": "./dist/schema/calendar-triggers.d.ts",
+      "default": "./dist/schema/calendar-triggers.js"
+    },
+    "./schema/chat": {
+      "types": "./dist/schema/chat.d.ts",
+      "default": "./dist/schema/chat.js"
+    },
+    "./schema/contact": {
+      "types": "./dist/schema/contact.d.ts",
+      "default": "./dist/schema/contact.js"
+    },
+    "./schema/conversations": {
+      "types": "./dist/schema/conversations.d.ts",
+      "default": "./dist/schema/conversations.js"
+    },
+    "./schema/core": {
+      "types": "./dist/schema/core.d.ts",
+      "default": "./dist/schema/core.js"
+    },
+    "./schema/dashboard": {
+      "types": "./dist/schema/dashboard.d.ts",
+      "default": "./dist/schema/dashboard.js"
+    },
+    "./schema/display-preferences": {
+      "types": "./dist/schema/display-preferences.d.ts",
+      "default": "./dist/schema/display-preferences.js"
+    },
+    "./schema/email-notifications": {
+      "types": "./dist/schema/email-notifications.d.ts",
+      "default": "./dist/schema/email-notifications.js"
+    },
+    "./schema/toast-notification-preferences": {
+      "types": "./dist/schema/toast-notification-preferences.d.ts",
+      "default": "./dist/schema/toast-notification-preferences.js"
+    },
+    "./schema/feedback": {
+      "types": "./dist/schema/feedback.d.ts",
+      "default": "./dist/schema/feedback.js"
+    },
+    "./schema/hotkeys": {
+      "types": "./dist/schema/hotkeys.d.ts",
+      "default": "./dist/schema/hotkeys.js"
+    },
+    "./schema/integrations": {
+      "types": "./dist/schema/integrations.d.ts",
+      "default": "./dist/schema/integrations.js"
+    },
+    "./schema/members": {
+      "types": "./dist/schema/members.d.ts",
+      "default": "./dist/schema/members.js"
+    },
+    "./schema/incidents": {
+      "types": "./dist/schema/incidents.d.ts",
+      "default": "./dist/schema/incidents.js"
+    },
+    "./schema/monitoring": {
+      "types": "./dist/schema/monitoring.d.ts",
+      "default": "./dist/schema/monitoring.js"
+    },
+    "./schema/notifications": {
+      "types": "./dist/schema/notifications.d.ts",
+      "default": "./dist/schema/notifications.js"
+    },
+    "./schema/page-views": {
+      "types": "./dist/schema/page-views.d.ts",
+      "default": "./dist/schema/page-views.js"
+    },
+    "./schema/pending-invites": {
+      "types": "./dist/schema/pending-invites.d.ts",
+      "default": "./dist/schema/pending-invites.js"
+    },
+    "./schema/pending-page-invites": {
+      "types": "./dist/schema/pending-page-invites.d.ts",
+      "default": "./dist/schema/pending-page-invites.js"
+    },
+    "./schema/pending-connection-invites": {
+      "types": "./dist/schema/pending-connection-invites.d.ts",
+      "default": "./dist/schema/pending-connection-invites.js"
+    },
+    "./schema/permissions": {
+      "types": "./dist/schema/permissions.d.ts",
+      "default": "./dist/schema/permissions.js"
+    },
+    "./schema/personalization": {
+      "types": "./dist/schema/personalization.d.ts",
+      "default": "./dist/schema/personalization.js"
+    },
+    "./schema/user-builtin-agents": {
+      "types": "./dist/schema/user-builtin-agents.d.ts",
+      "default": "./dist/schema/user-builtin-agents.js"
+    },
+    "./schema/imago-drive-access": {
+      "types": "./dist/schema/imago-drive-access.d.ts",
+      "default": "./dist/schema/imago-drive-access.js"
+    },
+    "./schema/automation-preferences": {
+      "types": "./dist/schema/automation-preferences.d.ts",
+      "default": "./dist/schema/automation-preferences.js"
+    },
+    "./schema/push-notifications": {
+      "types": "./dist/schema/push-notifications.d.ts",
+      "default": "./dist/schema/push-notifications.js"
+    },
+    "./schema/rate-limit-buckets": {
+      "types": "./dist/schema/rate-limit-buckets.d.ts",
+      "default": "./dist/schema/rate-limit-buckets.js"
+    },
+    "./schema/revoked-service-tokens": {
+      "types": "./dist/schema/revoked-service-tokens.d.ts",
+      "default": "./dist/schema/revoked-service-tokens.js"
+    },
+    "./schema/security-audit": {
+      "types": "./dist/schema/security-audit.d.ts",
+      "default": "./dist/schema/security-audit.js"
+    },
+    "./schema/sessions": {
+      "types": "./dist/schema/sessions.d.ts",
+      "default": "./dist/schema/sessions.js"
+    },
+    "./schema/sheets": {
+      "types": "./dist/schema/sheets.d.ts",
+      "default": "./dist/schema/sheets.js"
+    },
+    "./schema/sheets-types": {
+      "types": "./dist/schema/sheets-types.d.ts",
+      "default": "./dist/schema/sheets-types.js"
+    },
+    "./schema/social": {
+      "types": "./dist/schema/social.d.ts",
+      "default": "./dist/schema/social.js"
+    },
+    "./schema/storage": {
+      "types": "./dist/schema/storage.d.ts",
+      "default": "./dist/schema/storage.js"
+    },
+    "./schema/app-store": {
+      "types": "./dist/schema/app-store.d.ts",
+      "default": "./dist/schema/app-store.js"
+    },
+    "./schema/subscriptions": {
+      "types": "./dist/schema/subscriptions.d.ts",
+      "default": "./dist/schema/subscriptions.js"
+    },
+    "./schema/credits": {
+      "types": "./dist/schema/credits.d.ts",
+      "default": "./dist/schema/credits.js"
+    },
+    "./schema/wallets": {
+      "types": "./dist/schema/wallets.d.ts",
+      "default": "./dist/schema/wallets.js"
+    },
+    "./schema/tasks": {
+      "types": "./dist/schema/tasks.d.ts",
+      "default": "./dist/schema/tasks.js"
+    },
+    "./schema/task-triggers": {
+      "types": "./dist/schema/task-triggers.d.ts",
+      "default": "./dist/schema/task-triggers.js"
+    },
+    "./schema/versioning": {
+      "types": "./dist/schema/versioning.d.ts",
+      "default": "./dist/schema/versioning.js"
+    },
+    "./schema/workflows": {
+      "types": "./dist/schema/workflows.d.ts",
+      "default": "./dist/schema/workflows.js"
+    },
+    "./schema/workflow-runs": {
+      "types": "./dist/schema/workflow-runs.d.ts",
+      "default": "./dist/schema/workflow-runs.js"
+    },
+    "./schema/workflow-run-steps": {
+      "types": "./dist/schema/workflow-run-steps.d.ts",
+      "default": "./dist/schema/workflow-run-steps.js"
+    },
+    "./schema/zoom": {
+      "types": "./dist/schema/zoom.d.ts",
+      "default": "./dist/schema/zoom.js"
+    },
+    "./schema/webhook-triggers": {
+      "types": "./dist/schema/webhook-triggers.d.ts",
+      "default": "./dist/schema/webhook-triggers.js"
     },
     "./test/factories": {
       "types": "./dist/test/factories.d.ts",
       "default": "./dist/test/factories.js"
     },
+    "./test/require-db": {
+      "types": "./dist/test/require-db.d.ts",
+      "default": "./dist/test/require-db.js"
+    },
     "./transactions/auth-transactions": {
       "types": "./dist/transactions/auth-transactions.d.ts",
       "default": "./dist/transactions/auth-transactions.js"
+    },
+    "./schema/commands": {
+      "types": "./dist/schema/commands.d.ts",
+      "default": "./dist/schema/commands.js"
+    },
+    "./schema/content-tags": {
+      "types": "./dist/schema/content-tags.d.ts",
+      "default": "./dist/schema/content-tags.js"
+    },
+    "./schema/ai-compaction": {
+      "types": "./dist/schema/ai-compaction.d.ts",
+      "default": "./dist/schema/ai-compaction.js"
+    },
+    "./schema/custom-domains": {
+      "types": "./dist/schema/custom-domains.d.ts",
+      "default": "./dist/schema/custom-domains.js"
+    },
+    "./schema/data-subject-requests": {
+      "types": "./dist/schema/data-subject-requests.d.ts",
+      "default": "./dist/schema/data-subject-requests.js"
+    },
+    "./schema/email-broadcasts": {
+      "types": "./dist/schema/email-broadcasts.d.ts",
+      "default": "./dist/schema/email-broadcasts.js"
+    },
+    "./schema/page-webhooks": {
+      "types": "./dist/schema/page-webhooks.d.ts",
+      "default": "./dist/schema/page-webhooks.js"
+    },
+    "./schema/oauth": {
+      "types": "./dist/schema/oauth.d.ts",
+      "default": "./dist/schema/oauth.js"
+    },
+    "./schema/form-targets": {
+      "types": "./dist/schema/form-targets.d.ts",
+      "default": "./dist/schema/form-targets.js"
+    },
+    "./schema/drive-envs": {
+      "types": "./dist/schema/drive-envs.d.ts",
+      "default": "./dist/schema/drive-envs.js"
+    },
+    "./schema/dev-preview-services": {
+      "types": "./dist/schema/dev-preview-services.d.ts",
+      "default": "./dist/schema/dev-preview-services.js"
+    },
+    "./schema/dev-preview-grants": {
+      "types": "./dist/schema/dev-preview-grants.d.ts",
+      "default": "./dist/schema/dev-preview-grants.js"
+    },
+    "./schema/drive-env-local": {
+      "types": "./dist/schema/drive-env-local.d.ts",
+      "default": "./dist/schema/drive-env-local.js"
+    },
+    "./schema/machine-sprite-reclaims": {
+      "types": "./dist/schema/machine-sprite-reclaims.d.ts",
+      "default": "./dist/schema/machine-sprite-reclaims.js"
+    },
+    "./schema/published-apps": {
+      "types": "./dist/schema/published-apps.d.ts",
+      "default": "./dist/schema/published-apps.js"
+    },
+    "./schema/published-app-subscriptions": {
+      "types": "./dist/schema/published-app-subscriptions.d.ts",
+      "default": "./dist/schema/published-app-subscriptions.js"
+    },
+    "./schema/app-hosting-stripe-reclaims": {
+      "types": "./dist/schema/app-hosting-stripe-reclaims.d.ts",
+      "default": "./dist/schema/app-hosting-stripe-reclaims.js"
     }
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:coverage": "vitest run --coverage",
     "db:migrate": "tsx src/migrate.ts",
     "db:migrate:local": "DATABASE_URL=postgresql://user:password@localhost:5432/pagespace tsx src/migrate.ts",
+    "db:generate:admin": "drizzle-kit generate --config=drizzle-admin.config.ts",
+    "db:migrate:admin": "tsx src/migrate-admin.ts",
+    "db:provision:admin-users": "tsx src/provision-admin-users.ts",
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx src/seed.ts",
-    "promote-admin": "tsx src/promote-admin.ts"
+    "lint": "eslint src",
+    "migrate-pending-invites": "tsx src/migrate-pending-invites.ts"
   },
   "dependencies": {
     "@paralleldrive/cuid2": "^2.2.2",
     "dotenv": "^17.2.0",
-    "drizzle-orm": "^0.32.2",
+    "drizzle-orm": "^0.45.2",
     "pg": "^8.16.3"
   },
   "devDependencies": {
-    "@types/bcryptjs": "^2.4.6",
     "@types/pg": "^8.15.4",
-    "bcryptjs": "^3.0.2",
-    "drizzle-kit": "^0.23.2",
-    "tsx": "^4.20.3"
+    "drizzle-kit": "^0.31.10",
+    "eslint": "^9.36.0",
+    "tsx": "^4.20.3",
+    "typescript-eslint": "^8.59.0"
   }
 }

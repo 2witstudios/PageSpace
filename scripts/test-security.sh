@@ -2,7 +2,7 @@
 # Security Test Suite Runner
 # P5-T4: Runs all security-related tests for the PageSpace codebase
 #
-# Usage: pnpm test:security
+# Usage: bun run test:security
 #
 # This script runs comprehensive security tests including:
 # - Core security modules (rate limiting, path validation, URL validation)
@@ -26,6 +26,77 @@ NC='\033[0m' # No Color
 FAILED=0
 TOTAL=0
 
+# =============================================================================
+# Test database provisioning
+#
+# Several suites below (session service, device auth, permissions, magic-link
+# and other web auth routes) are DB-backed integration tests. In CI the
+# security workflow provides a Postgres service; locally this script must be
+# just as self-sufficient — "green means green" only holds if a clean checkout
+# can run `bun run test:security` and every suite actually executes.
+#
+# Strategy: honour an explicit DATABASE_URL if the caller set one (and fail
+# fast if it is unreachable). Otherwise use the standard dockerized test DB
+# (docker-compose.test.yml, port 5433 — the same one `bun run test` uses),
+# starting it if it is not already up, and run migrations so the schema is
+# current. The container is intentionally left running afterwards: it is
+# shared across worktrees and uses tmpfs storage; stop it with
+# `docker compose -f docker-compose.test.yml down --volumes` if needed.
+# =============================================================================
+DEFAULT_TEST_DB_URL="postgresql://user:password@localhost:5433/pagespace_test"
+EXPLICIT_DB_URL="${DATABASE_URL:-}"
+export DATABASE_URL="${DATABASE_URL:-$DEFAULT_TEST_DB_URL}"
+export NODE_ENV=test
+
+db_reachable() {
+    bun -e 'const { Client } = require("pg");
+const c = new Client({ connectionString: process.env.DATABASE_URL, connectionTimeoutMillis: 3000 });
+c.connect().then(() => c.query("select 1")).then(() => c.end()).then(() => process.exit(0)).catch(() => process.exit(1));' \
+        >/dev/null 2>&1
+}
+
+if ! db_reachable; then
+    if [ -n "$EXPLICIT_DB_URL" ]; then
+        echo -e "${RED}✗ DATABASE_URL is set but not reachable: ${EXPLICIT_DB_URL}${NC}"
+        echo "  Unset DATABASE_URL to let this script manage the dockerized test DB,"
+        echo "  or point it at a reachable Postgres."
+        exit 1
+    fi
+    echo "Starting dockerized test Postgres (docker-compose.test.yml, port 5433)..."
+    # The container has a fixed name shared across worktrees. If another
+    # checkout already created it (even stopped), `docker compose up` here
+    # fails with a name conflict because compose scopes containers by project
+    # directory — start the existing container by name instead.
+    if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx 'pagespace-postgres-test'; then
+        STARTED=$(docker start pagespace-postgres-test 2>/dev/null || true)
+        if [ -z "$STARTED" ]; then
+            echo -e "${RED}✗ Could not start the existing pagespace-postgres-test container.${NC}"
+            echo "  Remove it (docker rm -f pagespace-postgres-test) and re-run, or check Docker."
+            exit 1
+        fi
+    elif ! docker compose -f docker-compose.test.yml up -d postgres-test; then
+        echo -e "${RED}✗ Could not start the test Postgres container.${NC}"
+        echo "  The DB-backed security suites need it. Is Docker running?"
+        exit 1
+    fi
+    WAITED=0
+    until db_reachable; do
+        WAITED=$((WAITED + 1))
+        if [ $WAITED -gt 60 ]; then
+            echo -e "${RED}✗ Test Postgres did not become ready within 60s.${NC}"
+            exit 1
+        fi
+        sleep 1
+    done
+fi
+
+echo "Running database migrations against ${DATABASE_URL}..."
+if ! bun run db:migrate; then
+    echo -e "${RED}✗ Database migrations failed — aborting before running suites.${NC}"
+    exit 1
+fi
+echo ""
+
 run_test_suite() {
     local name="$1"
     local filter="$2"
@@ -34,8 +105,95 @@ run_test_suite() {
     TOTAL=$((TOTAL + 1))
     echo -e "${YELLOW}▶ Running: ${name}${NC}"
 
-    # Use pnpm --filter with test script, passing the path as an argument
-    if pnpm --filter "$filter" test -- "$path" --reporter=dot 2>&1; then
+    if bun run --filter "$filter" test -- "$path" --reporter=dot 2>&1; then
+        echo -e "${GREEN}✓ ${name} passed${NC}"
+        echo ""
+    else
+        echo -e "${RED}✗ ${name} failed${NC}"
+        echo ""
+        FAILED=$((FAILED + 1))
+    fi
+}
+
+# Some DB-backed integration suites are deliberately excluded from
+# @pagespace/lib's default vitest config (packages/lib/vitest.config.ts), so
+# running them through the plain `test` script finds no files and vitest exits
+# 1 with "No test files found". They must go through the DB-aware config
+# (`test:db` → vitest.security.config.ts), exactly as the security CI workflow
+# (.github/workflows/security.yml) runs them.
+run_db_test_suite() {
+    local name="$1"
+    local filter="$2"
+    local path="$3"
+
+    TOTAL=$((TOTAL + 1))
+    echo -e "${YELLOW}▶ Running: ${name}${NC}"
+
+    if bun run --filter "$filter" test:db -- "$path" --reporter=dot 2>&1; then
+        echo -e "${GREEN}✓ ${name} passed${NC}"
+        echo ""
+    else
+        echo -e "${RED}✗ ${name} failed${NC}"
+        echo ""
+        FAILED=$((FAILED + 1))
+    fi
+}
+
+# apps/imago keeps its DB-backed suites (*.integration.test.ts) out of its
+# default vitest config; they run through its `test:integration` script, as
+# ci.yml runs them.
+run_integration_test_suite() {
+    local name="$1"
+    local filter="$2"
+    local path="$3"
+
+    TOTAL=$((TOTAL + 1))
+    echo -e "${YELLOW}▶ Running: ${name}${NC}"
+
+    if bun run --filter "$filter" test:integration -- "$path" --reporter=dot 2>&1; then
+        echo -e "${GREEN}✓ ${name} passed${NC}"
+        echo ""
+    else
+        echo -e "${RED}✗ ${name} failed${NC}"
+        echo ""
+        FAILED=$((FAILED + 1))
+    fi
+}
+
+# Some packages (@pagespace/cli, @pagespace/sdk) wire a `pretest: bun run
+# build` hook (tsc must run before vitest sees the compiled dist types).
+# `bun run --filter <pkg> test -- <args>` forwards trailing args to EVERY
+# script in that chain, including pretest — so `-- src --reporter=dot` reaches
+# `tsc` as stray positional args and it refuses to build ("Unknown compiler
+# option '--reporter=dot'"), failing the suite before vitest ever runs a
+# single test. Building explicitly first, then invoking vitest directly
+# (bypassing the `test` npm-script's arg-forwarding entirely), avoids that.
+run_full_package_suite() {
+    local name="$1"
+    local pkg_dir="$2"
+    shift 2
+    local dep_pkg
+
+    TOTAL=$((TOTAL + 1))
+
+    # Workspace deps whose *emitted types* this package compiles against. bun
+    # install does not build them, so on a clean checkout `packages/cli`'s tsc
+    # died with 40 errors — "Cannot find module '@pagespace/sdk'" and the
+    # implicit-any cascade behind it — purely because the SDK suite (whose
+    # pretest builds the SDK) happened to be listed AFTER the CLI's. This
+    # script was invoked by no workflow, so nobody ever saw it. Building the
+    # named deps here makes the result independent of suite order.
+    for dep_pkg in "$@"; do
+        if ! bun run --filter "$dep_pkg" build >/dev/null 2>&1; then
+            echo -e "${RED}✗ ${name} failed (could not build workspace dependency ${dep_pkg})${NC}"
+            echo ""
+            FAILED=$((FAILED + 1))
+            return
+        fi
+    done
+    echo -e "${YELLOW}▶ Running: ${name}${NC}"
+
+    if (cd "$pkg_dir" && bun run build && bunx vitest run src --reporter=dot) 2>&1; then
         echo -e "${GREEN}✓ ${name} passed${NC}"
         echo ""
     else
@@ -54,7 +212,7 @@ echo "------------------------"
 run_test_suite "Distributed Rate Limiting" "@pagespace/lib" "src/security/__tests__/distributed-rate-limit.test.ts"
 run_test_suite "Path Traversal Prevention" "@pagespace/lib" "src/security/__tests__/path-validator.test.ts"
 run_test_suite "SSRF URL Validation" "@pagespace/lib" "src/security/__tests__/url-validator.test.ts"
-run_test_suite "Security Redis (Unit)" "@pagespace/lib" "src/security/__tests__/security-redis.test.ts"
+run_test_suite "JTI Revocation (Integration)" "@pagespace/lib" "src/security/__tests__/jti-revocation.integration.test.ts"
 
 # =============================================================================
 # Authentication Module Tests (packages/lib/src/auth)
@@ -63,7 +221,7 @@ echo "🔐 Authentication Modules"
 echo "-------------------------"
 
 run_test_suite "Opaque Token Generation" "@pagespace/lib" "src/auth/__tests__/opaque-tokens.test.ts"
-run_test_suite "Session Service" "@pagespace/lib" "src/auth/__tests__/session-service.test.ts"
+run_db_test_suite "Session Service" "@pagespace/lib" "src/auth/__tests__/session-service.test.ts"
 run_test_suite "Exchange Codes" "@pagespace/lib" "src/auth/__tests__/exchange-codes.test.ts"
 
 # =============================================================================
@@ -78,7 +236,7 @@ run_test_suite "Token Utilities" "@pagespace/lib" "src/__tests__/token-utils.tes
 run_test_suite "Token Lookup" "@pagespace/lib" "src/__tests__/token-lookup.test.ts"
 run_test_suite "Broadcast Auth (HMAC Signatures)" "@pagespace/lib" "src/__tests__/broadcast-auth.test.ts"
 run_test_suite "Encryption Utilities" "@pagespace/lib" "src/__tests__/encryption-utils.test.ts"
-run_test_suite "Device Auth Utilities" "@pagespace/lib" "src/__tests__/device-auth-utils.test.ts"
+run_db_test_suite "Device Auth Utilities" "@pagespace/lib" "src/__tests__/device-auth-utils.test.ts"
 run_test_suite "Device Fingerprint Utilities" "@pagespace/lib" "src/__tests__/device-fingerprint-utils.test.ts"
 run_test_suite "Rate Limit Utilities" "@pagespace/lib" "src/__tests__/rate-limit-utils.test.ts"
 run_test_suite "Security Test Utilities" "@pagespace/lib" "src/__tests__/security-test-utils.test.ts"
@@ -90,9 +248,7 @@ echo "🏢 Authorization & Multi-Tenant Isolation"
 echo "------------------------------------------"
 
 run_test_suite "Multi-Tenant Isolation" "@pagespace/lib" "src/__tests__/multi-tenant-isolation.test.ts"
-run_test_suite "Permissions" "@pagespace/lib" "src/__tests__/permissions.test.ts"
-run_test_suite "Permissions (Cached)" "@pagespace/lib" "src/__tests__/permissions-cached.test.ts"
-run_test_suite "Permission Cache" "@pagespace/lib" "src/__tests__/permission-cache.test.ts"
+run_db_test_suite "Permissions" "@pagespace/lib" "src/__tests__/permissions.test.ts"
 
 # =============================================================================
 # Web App Auth Route Tests
@@ -100,14 +256,25 @@ run_test_suite "Permission Cache" "@pagespace/lib" "src/__tests__/permission-cac
 echo "🌐 Web App Auth Routes"
 echo "----------------------"
 
-run_test_suite "Login Route" "web" "src/app/api/auth/__tests__/login.test.ts"
-run_test_suite "Signup Route" "web" "src/app/api/auth/__tests__/signup.test.ts"
+# RETIRED (PR #861 removed all password-based authentication): the "Login
+# Route" (login.test.ts), "Signup Route" (signup.test.ts) and "Mobile Login"
+# (mobile-login.test.ts) suites referenced routes and tests deleted in that
+# PR — vitest exited 1 with "No test files found" on every checkout. The
+# sign-in surfaces that replaced password auth are covered by the suites
+# below: magic-link, passkey (including passkey signup), the mobile OAuth
+# exchange/refresh routes, and the Google OAuth section further down.
+# Directory-prefix filters are deliberate so new route tests under those
+# paths are picked up automatically instead of drifting like the retired
+# entries did.
+run_test_suite "Magic Link Auth Routes (send/verify/round-trip/desktop)" "web" "src/app/api/auth/magic-link"
+run_test_suite "Passkey Auth Routes (register/authenticate/manage/handoff)" "web" "src/app/api/auth/passkey"
+run_test_suite "Passkey Signup Routes" "web" "src/app/api/auth/signup-passkey"
+run_test_suite "Mobile Auth Routes (OAuth exchange + refresh)" "web" "src/app/api/auth/__tests__/mobile-"
 run_test_suite "Logout Route" "web" "src/app/api/auth/__tests__/logout.test.ts"
 run_test_suite "CSRF Protection" "web" "src/app/api/auth/__tests__/csrf.test.ts"
 run_test_suite "Device Token Refresh" "web" "src/app/api/auth/__tests__/device-refresh.test.ts"
 run_test_suite "Session Fixation Prevention" "web" "src/app/api/auth/__tests__/session-fixation.test.ts"
 run_test_suite "MCP Tokens" "web" "src/app/api/auth/__tests__/mcp-tokens.test.ts"
-run_test_suite "Mobile Login" "web" "src/app/api/auth/__tests__/mobile-login.test.ts"
 run_test_suite "Email Verification" "web" "src/app/api/auth/__tests__/verify-email.test.ts"
 
 # =============================================================================
@@ -149,12 +316,77 @@ echo "-------------------------"
 run_test_suite "MCP WebSocket Route Security" "web" "src/app/api/mcp-ws/__tests__/route.security.test.ts"
 
 # =============================================================================
+# Viewer-Scoped Read Tests
+# =============================================================================
+echo "👤 Viewer-Scoped Reads"
+echo "----------------------"
+
+run_test_suite "Built-in Agent Pointers (viewer only, no cross-user leakage)" "web" "src/app/api/user/builtin-agents"
+
+# =============================================================================
+# Imago's reach (IMG-10.10: the owner's reach, minus the drives they keep it
+# out of, never more than the owner, nothing for anyone else)
+# =============================================================================
+echo "🪪 Imago Reach"
+echo "--------------"
+
+run_test_suite "Imago Access Route (own exclusion only, any accessor, CSRF + origin, off stays off)" "web" "src/app/api/drives/[driveId]/imago-access"
+run_db_test_suite "Imago Access Service (default on, own choice only, Home refused, never a grant)" "@pagespace/lib" "src/agents/__tests__/imago-drive-access.integration.test.ts"
+run_db_test_suite "Imago Provisioning (one agent at the user's reach, retired agents and grants cleaned up)" "@pagespace/lib" "src/agents/__tests__/provision-imago-agents.integration.test.ts"
+run_test_suite "Drive Ownership Rollback/Redo (each user's Imago choice kept)" "web" "src/services/api/rollback/__tests__/drive-ownership.integration.test.ts"
+# Real POST /api/ai/chat turns, only the model mocked, driving the tool executors.
+run_test_suite "Imago Reach (owner's reach, excluded drives denied on every path, nothing for anyone else)" "web" "src/lib/ai/chat-pipeline/__tests__/imago-agent-reach.security.test.ts"
+run_test_suite "Imago = Global Assistant (same tools and context for the same user and toggles)" "web" "src/lib/ai/chat-pipeline/__tests__/imago-global-parity.integration.test.ts"
+run_test_suite "Imago Integrations (the global assistant's, none from an excluded drive, per-agent grants ignored, fail closed)" "web" "src/lib/ai/chat-pipeline/__tests__/imago-turn-integrations.integration.test.ts"
+run_test_suite "Actor Permissions (agent/user/token ceilings, Imago at its owner's reach minus exclusions, nothing for others)" "web" "src/lib/ai/tools/__tests__/actor-permissions.test.ts"
+run_test_suite "Imago Integrations outside page chat (@-mention engine, consult route, workflows)" "web" "src/lib/ai/core/__tests__/imago-integration-entrypoints.security.test.ts"
+run_test_suite "Member removal by rollback/redo/restore revokes the member's agent grants" "web" "src/services/api/rollback/__tests__/member-removal-agent-grants.integration.test.ts"
+run_test_suite "Imago Agent Context (own Imago only, its exclusions)" "web" "src/lib/ai/core/__tests__/imago-agent-context.integration.test.ts"
+run_test_suite "Agent Session Access (drive members only, unknown is never a grant)" "@pagespace/lib" "src/agent-workspaces/__tests__/decide-workspace-access.test.ts"
+run_db_test_suite "GDPR Export of Imago Drive Access (the user's own rows only)" "@pagespace/lib" "src/compliance/export/__tests__/imago-drive-access-export.integration.test.ts"
+
+# =============================================================================
+# Imago App Boundaries (apps/imago: same-origin app on classic's session)
+# =============================================================================
+echo "🖼️ Imago App"
+echo "------------"
+
+run_test_suite "Imago Middleware (flag gate, session-cookie gate, prefetch matcher, redirect origin)" "@pagespace/imago" "src/middleware.test.ts"
+run_test_suite "Imago CSP & Security Headers" "@pagespace/imago" "src/middleware/security-headers.test.ts"
+run_test_suite "Imago Sign-in URL (return-path sanitiser, configured origin)" "@pagespace/imago" "src/lib/auth/sign-in-url.test.ts"
+run_test_suite "Imago getViewer (session validation, redirect to sign-in)" "@pagespace/imago" "src/lib/auth/get-viewer.test.ts"
+run_integration_test_suite "Imago getViewer against the real session service" "@pagespace/imago" "src/lib/auth/get-viewer.integration.test.ts"
+run_test_suite "Imago API Client (CSRF token, sign-in on 401)" "@pagespace/imago" "src/api/client.test.ts"
+run_test_suite "Imago Socket Token" "@pagespace/imago" "src/realtime/socket-token.test.ts"
+run_test_suite "Classic Sign-in next= Allow-list (/imago only as a safe path)" "web" "src/lib/auth/__tests__/resolve-signin-next.test.ts"
+
+# =============================================================================
+# Realtime (Socket.IO) Security Tests
+# =============================================================================
+echo "📡 Realtime"
+echo "-----------"
+
+run_test_suite "Realtime Origin Allow-list" "realtime" "src/__tests__/origin-allowlist.test.ts"
+run_test_suite "Realtime Origin Validation" "realtime" "src/__tests__/origin-validation.test.ts"
+run_test_suite "Realtime Socket Auth" "realtime" "src/__tests__/auth.test.ts"
+run_test_suite "Realtime Per-Event Auth" "realtime" "src/__tests__/per-event-auth.test.ts"
+
+# =============================================================================
+# AI Tool Security Tests
+# =============================================================================
+echo "🤖 AI Tool Security"
+echo "-------------------"
+
+run_test_suite "web_fetch SSRF Decision (pure)" "@pagespace/lib" "src/security/__tests__/web-fetch-ssrf.test.ts"
+run_test_suite "web_fetch SSRF (redirect/rebind)" "web" "src/lib/ai/tools/__tests__/web-search-tools.test.ts"
+
+# =============================================================================
 # Processor Security Tests
 # =============================================================================
 echo "⚙️ Processor Security"
 echo "---------------------"
 
-run_test_suite "Processor Security Utils" "processor" "tests/security-utils.test.ts"
+run_test_suite "Processor Security Utils" "@pagespace/processor" "tests/security-utils.test.ts"
 
 # =============================================================================
 # Database Transaction Security Tests
@@ -163,6 +395,60 @@ echo "💾 Database Transaction Security"
 echo "---------------------------------"
 
 run_test_suite "Auth Transactions (Race Conditions)" "@pagespace/db" "src/transactions/__tests__/auth-transactions.test.ts"
+
+# =============================================================================
+# OAuth 2.1 Provider, SDK, CLI & MCP Adapter (SDK/CLI/OAuth epic — Phase 7
+# zero-trust audit). Whole-package runs for @pagespace/cli and @pagespace/sdk
+# are deliberate, not lazy: virtually every file in both packages is auth
+# surface (credential storage, token exchange/rotation, the MCP adapter's
+# error-formatting boundary) and the epic is still under active development —
+# a per-file allowlist here would silently stop covering new auth code the
+# moment a task added a file without also editing this script. Directory-glob
+# runs for the oauth pure logic and API routes make new files under those
+# directories covered automatically for the same reason.
+# =============================================================================
+echo "🔑 OAuth 2.1 Provider (packages/lib/src/auth/oauth — PKCE, scopes, code/device/refresh lifecycle, redirect_uri, clients)"
+echo "-----------------------------------------------------------------------------------------------------------------------"
+
+run_test_suite "OAuth Provider Pure Logic (PKCE/scopes/code-lifecycle/refresh-rotation/clients/user-code/authorize-request/consent/metadata)" "@pagespace/lib" "src/auth/oauth"
+
+echo "🔑 OAuth 2.1 Provider API Routes & Repository (apps/web — authorize/token/device/revoke, atomic grant persistence)"
+echo "---------------------------------------------------------------------------------------------------------------"
+
+run_test_suite "OAuth API Routes (authorize/token/device_authorization/revoke + hardening sweep)" "web" "src/app/api/oauth"
+run_test_suite "OAuth Repository (atomic code exchange/refresh rotation/device poll persistence)" "web" "src/lib/repositories/__tests__/oauth-repository"
+run_test_suite "OAuth Scope Narrowing (principal-permissions dispatch, drive-scoped MCP/OAuth token enforcement)" "web" "src/lib/auth/__tests__/principal-permissions.test.ts"
+run_test_suite "OAuth Scope Enforcement (mcp-scope-enforcement, drive-scope 403 boundary)" "web" "src/lib/auth/__tests__/mcp-scope-enforcement.test.ts"
+
+echo "🔑 pagespace CLI (packages/cli — login/device-login, credential store, auth precedence, tokens, mcp adapter)"
+echo "----------------------------------------------------------------------------------------------------------"
+
+run_full_package_suite "pagespace CLI (full package — every command authenticates through the same precedence resolver)" "packages/cli" "@pagespace/sdk"
+
+echo "🔑 pagespace SDK (packages/sdk — auth providers, error classification, operation registry)"
+echo "--------------------------------------------------------------------------------------------"
+
+run_full_package_suite "pagespace SDK (full package — StaticTokenProvider/OAuthTokenProvider, typed error hierarchy)" "packages/sdk"
+
+# =============================================================================
+# Agent Accounts & Credential Plane (L2·G2) — directory-prefix filters
+# =============================================================================
+echo "🔑 Agent Accounts"
+echo "-----------------"
+
+run_test_suite "Agent Accounts decisions + adversarial harness (pure)" "@pagespace/lib" "src/agent-accounts"
+run_test_suite "Account permissions (access, create)" "@pagespace/lib" "src/permissions/__tests__/decide-account"
+run_test_suite "Agent Account routes (create/list/revoke/approve)" "web" "src/app/api/agent-accounts"
+run_test_suite "Agent Account routes (personal)" "web" "src/app/api/user/agent-accounts"
+run_test_suite "http_request tool (caller from run context)" "web" "src/lib/ai/tools/__tests__/http-request-tools.test.ts"
+
+# =============================================================================
+# Security Audit Coverage Gate
+# =============================================================================
+echo "📋 Security Audit Coverage"
+echo "--------------------------"
+
+run_test_suite "Security Audit Route Coverage" "web" "src/app/api/__tests__/security-audit-coverage.test.ts"
 
 # =============================================================================
 # Summary

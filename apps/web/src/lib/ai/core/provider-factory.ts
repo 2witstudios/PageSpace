@@ -1,55 +1,89 @@
 /**
  * AI Provider Factory Service
- * Centralized provider/model selection logic for all AI routes
- * Eliminates code duplication and provides consistent error handling
+ * Resolves managed provider credentials from deployment env vars and
+ * instantiates the appropriate AI SDK client. No per-user keys.
+ *
+ * Every cloud vendor (OpenAI, Anthropic, Google, xAI, …) is served through
+ * OpenRouter: the model id already carries the vendor prefix and is forwarded
+ * verbatim. Local providers (Ollama, LM Studio, Azure OpenAI) keep their own
+ * clients for on-prem deployments.
  */
 
 import { NextResponse } from 'next/server';
 import { LanguageModel } from 'ai';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
-import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { createAnthropic } from '@ai-sdk/anthropic';
-import { createXai } from '@ai-sdk/xai';
 import { createOllama } from 'ollama-ai-provider-v2';
-import { db, users, eq } from '@pagespace/db';
-import {
-  getUserOpenRouterSettings,
-  createOpenRouterSettings,
-  getUserGoogleSettings,
-  createGoogleSettings,
-  getDefaultPageSpaceSettings,
-  getUserOpenAISettings,
-  createOpenAISettings,
-  getUserAnthropicSettings,
-  createAnthropicSettings,
-  getUserXAISettings,
-  createXAISettings,
-  getUserOllamaSettings,
-  createOllamaSettings,
-  getUserLMStudioSettings,
-  createLMStudioSettings,
-  getUserGLMSettings,
-  createGLMSettings,
-  getUserMiniMaxSettings,
-  createMiniMaxSettings,
-  getUserAzureOpenAISettings,
-} from './ai-utils';
-import { resolvePageSpaceModel } from './ai-providers-config';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
+import { getDrivePolicies, getOrgPolicies } from '@pagespace/lib/organizations/policy-reader';
+import { modelDecision } from '@pagespace/lib/organizations/org-action-decisions';
+import { getManagedProviderKey } from './ai-utils';
+import { AI_PROVIDERS, ONPREM_ALLOWED_PROVIDERS, resolveProviderModel } from './ai-providers-config';
+
+// The local/on-prem providers (ONPREM_ALLOWED_PROVIDERS = ollama/lmstudio/azure_openai)
+// serve runtime-discovered models that aren't in the static catalog, so catalog
+// validation is skipped for them — only their provider name is gated.
 
 export interface ProviderRequest {
   selectedProvider?: string;
   selectedModel?: string;
-  googleApiKey?: string;
-  openRouterApiKey?: string;
-  openAIApiKey?: string;
-  anthropicApiKey?: string;
-  xaiApiKey?: string;
-  ollamaBaseUrl?: string;
-  lmstudioBaseUrl?: string;
-  glmApiKey?: string;
-  minimaxApiKey?: string;
+}
+
+/** Minimal user fields consumed by the provider factory. */
+export interface UserProviderRow {
+  currentAiProvider: string;
+  currentAiModel: string;
+}
+
+export interface ProviderFactoryOptions {
+  /** Pre-loaded user row. When provided the factory skips its own DB select. */
+  user?: UserProviderRow | null;
+  /**
+   * The drive whose org governs this call (POL-8): the drive of the session it runs in, the same drive its spend
+   * is attributed to (SPEND-7). When it belongs to an org, that org's model and provider allowlists are enforced
+   * here, at the one place every provider is constructed: the call is REFUSED, never quietly swapped for a default.
+   * REQUIRED, so no caller can forget it: `null` is a deliberate statement that the call runs in no drive (the
+   * global assistant without one, a person's own background services), which no org policy restricts.
+   */
+  driveId: string | null;
+  /**
+   * Other drives whose content this call sends to the model (POL-8): content from drive X reaching a model is governed
+   * by X's org too. ask_agent names the consulted agent's drive here, so the agent's org decides as well as the
+   * caller's, whoever calls.
+   */
+  contentDriveIds?: readonly string[];
+  /** Retained provenance of derived input, including sources no longer represented by a current drive. */
+  contentOrgIds?: readonly string[];
+}
+
+/**
+ * POL-8: the first refusal among the orgs of these drives for any of these (provider, model) uses, read now. Every
+ * drive must allow every use (the intersection of their allowlists). Exported for model uses that do not go through
+ * an AI SDK provider (the realtime voice handshake).
+ */
+export async function orgModelRefusal(
+  driveIds: ReadonlyArray<string | null | undefined>,
+  uses: ReadonlyArray<{ modelId: string; provider: string }>,
+  contentOrgIds: readonly string[] = [],
+): Promise<ProviderError | null> {
+  for (const driveId of new Set(driveIds.filter((id): id is string => Boolean(id)))) {
+    const policies = (await getDrivePolicies(driveId))?.policies ?? null;
+    for (const use of uses) {
+      const decision = modelDecision(policies, use);
+      if (!decision.ok) return { error: decision.message, status: decision.status, code: decision.code, policy: decision.policy };
+    }
+  }
+  for (const orgId of new Set(contentOrgIds)) {
+    const policies = await getOrgPolicies(orgId);
+    for (const use of uses) {
+      const decision = modelDecision(policies, use);
+      if (!decision.ok) return { error: decision.message, status: decision.status, code: decision.code, policy: decision.policy };
+    }
+  }
+  return null;
 }
 
 export interface ProviderResult {
@@ -61,367 +95,186 @@ export interface ProviderResult {
 export interface ProviderError {
   error: string;
   status: number;
+  /** Set when an org policy refused the call (POL-8), with the policy's key. */
+  code?: 'org_policy';
+  policy?: string;
 }
 
-/**
- * Creates an AI provider instance with proper configuration and validation
- * Handles all provider types and their specific setup requirements
- */
+function notConfigured(provider: string): ProviderError {
+  return {
+    error: `${provider} provider is not configured on this deployment.`,
+    status: 503,
+  };
+}
+
 export async function createAIProvider(
   userId: string,
-  request: ProviderRequest
+  request: ProviderRequest,
+  options: ProviderFactoryOptions,
 ): Promise<ProviderResult | ProviderError> {
-  const {
+  const { selectedProvider, selectedModel } = request;
+
+  const user = options.user ?? (await db.select().from(users).where(eq(users.id, userId)))[0];
+
+  // Resolve (provider, model) as one atomic pair, with catalog enforcement —
+  // shared with the routes (credit gate, admin-only checks) via resolveProviderModel
+  // so every caller keys off the SAME provider that actually runs. An unknown
+  // (provider, model) is SUBSTITUTED with the default rather than forwarded — so a
+  // selection left on a removed value, or `glm` + an invalid model, degrades to the
+  // working default instead of being sent verbatim to OpenRouter. (Explicit invalid
+  // *selections* are still rejected with a 400 at the settings PATCH boundary.)
+  const resolved = resolveProviderModel(
     selectedProvider,
     selectedModel,
-    googleApiKey,
-    openRouterApiKey,
-    openAIApiKey,
-    anthropicApiKey,
-    xaiApiKey,
-    ollamaBaseUrl,
-    lmstudioBaseUrl,
-    glmApiKey,
-    minimaxApiKey,
-  } = request;
+    user?.currentAiProvider,
+    user?.currentAiModel,
+  );
+  const currentProvider = resolved.provider;
+  const currentModel = resolved.model;
 
-  // Get user's current AI provider settings
-  const [user] = await db.select().from(users).where(eq(users.id, userId));
-  const currentProvider = selectedProvider || user?.currentAiProvider || 'pagespace';
-  let currentModel = selectedModel || user?.currentAiModel || 'glm-4.7';
+  // POL-8: the org's model and provider allowlists, read now (no cache). BOTH the pair that will run and the pair
+  // that was asked for must be allowed: an allowlist that let the resolver swap a refused selection for the
+  // default would run a model the org never allowed, and call it a success.
+  // Every drive whose content the call carries is judged: the governing drive and any named content drive.
+  const asked = selectedModel || selectedProvider ? { modelId: selectedModel ?? currentModel, provider: selectedProvider ?? currentProvider } : null;
+  const refusal = await orgModelRefusal(
+    [options.driveId, ...(options.contentDriveIds ?? [])],
+    [{ modelId: currentModel, provider: currentProvider }, ...(asked ? [asked] : [])],
+    options.contentOrgIds,
+  );
+  if (refusal) return refusal;
 
-  // Resolve model aliases for PageSpace provider (e.g., 'standard' -> 'glm-4.7')
-  if (currentProvider === 'pagespace') {
-    currentModel = resolvePageSpaceModel(currentModel);
+  // Deployment policy: on-prem only permits the local/BAA-eligible providers.
+  if (
+    isOnPrem() &&
+    !ONPREM_ALLOWED_PROVIDERS.has(currentProvider)
+  ) {
+    return {
+      error: `Provider "${currentProvider}" is not available in on-premise mode.`,
+      status: 403,
+    };
   }
 
   try {
     let model;
 
-    if (currentProvider === 'pagespace') {
-      // Use default PageSpace settings (now GLM backend or Google AI fallback)
-      const pageSpaceSettings = await getDefaultPageSpaceSettings();
+    if (currentProvider === 'ollama') {
+      const managed = getManagedProviderKey('ollama');
+      if (!managed?.baseUrl) return notConfigured('Ollama');
 
-      if (!pageSpaceSettings) {
-        // Fall back to user's Google settings if no default key
-        let googleSettings = await getUserGoogleSettings(userId);
+      try { new URL(managed.baseUrl); } catch {
+        return { error: 'Ollama base URL is not a valid URL.', status: 500 };
+      }
 
-        if (!googleSettings && googleApiKey) {
-          await createGoogleSettings(userId, googleApiKey);
-          googleSettings = { apiKey: googleApiKey, isConfigured: true };
-        }
+      const { isFetchBridgeInitialized, getFetchBridge } = await import('@/lib/fetch-bridge');
+      const useBridge = isFetchBridgeInitialized() && getFetchBridge().isUserConnected(userId);
 
-        if (!googleSettings) {
-          return {
-            error: 'No default API key configured. Please provide your own Google AI API key.',
-            status: 400,
-          };
-        }
-
-        const googleProvider = createGoogleGenerativeAI({
-          apiKey: googleSettings.apiKey,
-        });
-        model = googleProvider(currentModel);
-      } else {
-        // Use the appropriate provider based on the configuration
-        if (pageSpaceSettings.provider === 'google') {
-          const googleProvider = createGoogleGenerativeAI({
-            apiKey: pageSpaceSettings.apiKey,
-          });
-          model = googleProvider(currentModel);
-        } else if (pageSpaceSettings.provider === 'glm') {
-          // Use GLM provider with OpenAI-compatible endpoint
-          const glmProvider = createOpenAICompatible({
-            name: 'glm',
-            apiKey: pageSpaceSettings.apiKey,
-            baseURL: 'https://api.z.ai/api/coding/paas/v4',
-          });
-          model = glmProvider(currentModel);
-        } else {
-          return {
-            error: `Unsupported PageSpace provider: ${pageSpaceSettings.provider}`,
-            status: 400,
-          };
+      if (!useBridge) {
+        const { validateLocalProviderURL } = await import('@pagespace/lib/security/url-validator');
+        const ok = await validateLocalProviderURL(managed.baseUrl);
+        if (!ok.valid) {
+          return { error: `Ollama base URL blocked: ${ok.error}`, status: 500 };
         }
       }
-    } else if (currentProvider === 'openrouter') {
-      let openRouterSettings = await getUserOpenRouterSettings(userId);
 
-      if (!openRouterSettings && openRouterApiKey) {
-        await createOpenRouterSettings(userId, openRouterApiKey);
-        openRouterSettings = { apiKey: openRouterApiKey, isConfigured: true };
-      }
-
-      if (!openRouterSettings) {
-        return {
-          error: 'OpenRouter API key not configured. Please provide an API key.',
-          status: 400,
-        };
-      }
-
-      const openrouter = createOpenRouter({
-        apiKey: openRouterSettings.apiKey,
-      });
-
-      model = openrouter.chat(currentModel);
-
-    } else if (currentProvider === 'openrouter_free') {
-      // Handle OpenRouter Free - uses user's OpenRouter key same as regular OpenRouter
-      let openRouterSettings = await getUserOpenRouterSettings(userId);
-
-      if (!openRouterSettings && openRouterApiKey) {
-        await createOpenRouterSettings(userId, openRouterApiKey);
-        openRouterSettings = { apiKey: openRouterApiKey, isConfigured: true };
-      }
-
-      if (!openRouterSettings) {
-        return {
-          error: 'OpenRouter API key not configured. Please provide an API key for free models.',
-          status: 400,
-        };
-      }
-
-      const openrouter = createOpenRouter({
-        apiKey: openRouterSettings.apiKey,
-      });
-
-      model = openrouter.chat(currentModel);
-
-    } else if (currentProvider === 'google') {
-      let googleSettings = await getUserGoogleSettings(userId);
-
-      if (!googleSettings && googleApiKey) {
-        await createGoogleSettings(userId, googleApiKey);
-        googleSettings = { apiKey: googleApiKey, isConfigured: true };
-      }
-
-      if (!googleSettings) {
-        return {
-          error: 'Google AI API key not configured. Please provide an API key.',
-          status: 400,
-        };
-      }
-
-      const googleProvider = createGoogleGenerativeAI({
-        apiKey: googleSettings.apiKey,
-      });
-      model = googleProvider(currentModel);
-
-    } else if (currentProvider === 'openai') {
-      // Handle OpenAI setup
-      let openAISettings = await getUserOpenAISettings(userId);
-
-      if (!openAISettings && openAIApiKey) {
-        await createOpenAISettings(userId, openAIApiKey);
-        openAISettings = { apiKey: openAIApiKey, isConfigured: true };
-      }
-
-      if (!openAISettings) {
-        return {
-          error: 'OpenAI API key not configured. Please provide an API key.',
-          status: 400,
-        };
-      }
-
-      // Create OpenAI provider instance with API key
-      const openai = createOpenAI({
-        apiKey: openAISettings.apiKey,
-      });
-      model = openai(currentModel);
-
-    } else if (currentProvider === 'anthropic') {
-      // Handle Anthropic setup
-      let anthropicSettings = await getUserAnthropicSettings(userId);
-
-      if (!anthropicSettings && anthropicApiKey) {
-        await createAnthropicSettings(userId, anthropicApiKey);
-        anthropicSettings = { apiKey: anthropicApiKey, isConfigured: true };
-      }
-
-      if (!anthropicSettings) {
-        return {
-          error: 'Anthropic API key not configured. Please provide an API key.',
-          status: 400,
-        };
-      }
-
-      // Create Anthropic provider instance with API key
-      const anthropic = createAnthropic({
-        apiKey: anthropicSettings.apiKey,
-      });
-      model = anthropic(currentModel);
-
-    } else if (currentProvider === 'xai') {
-      // Handle xAI setup
-      let xaiSettings = await getUserXAISettings(userId);
-
-      if (!xaiSettings && xaiApiKey) {
-        await createXAISettings(userId, xaiApiKey);
-        xaiSettings = { apiKey: xaiApiKey, isConfigured: true };
-      }
-
-      if (!xaiSettings) {
-        return {
-          error: 'xAI API key not configured. Please provide an API key.',
-          status: 400,
-        };
-      }
-
-      // Create xAI provider instance with API key
-      const xai = createXai({
-        apiKey: xaiSettings.apiKey,
-      });
-      model = xai(currentModel);
-
-    } else if (currentProvider === 'ollama') {
-      // Handle Ollama setup
-      let ollamaSettings = await getUserOllamaSettings(userId);
-
-      if (!ollamaSettings && ollamaBaseUrl) {
-        await createOllamaSettings(userId, ollamaBaseUrl);
-        ollamaSettings = { baseUrl: ollamaBaseUrl, isConfigured: true };
-      }
-
-      if (!ollamaSettings) {
-        return {
-          error: 'Ollama base URL not configured. Please provide a base URL for your local Ollama instance.',
-          status: 400,
-        };
-      }
-
-      // SECURITY: Validate URL before use
-      const { validateLocalProviderURL } = await import('@pagespace/lib/security');
-      const ollamaUrlValidation = await validateLocalProviderURL(ollamaSettings.baseUrl);
-      if (!ollamaUrlValidation.valid) {
-        return {
-          error: `Ollama base URL blocked: ${ollamaUrlValidation.error}`,
-          status: 400,
-        };
-      }
-
-      // Create Ollama provider instance with base URL
-      // Add /api suffix for ollama-ai-provider-v2 which expects full API endpoint
-      const ollamaApiUrl = `${ollamaSettings.baseUrl}/api`;
       const ollamaProvider = createOllama({
-        baseURL: ollamaApiUrl,
+        baseURL: `${managed.baseUrl}/api`,
+        ...(useBridge ? {
+          fetch: (await import('@/lib/fetch-bridge/ws-proxy-fetch')).createWsProxyFetch(userId, getFetchBridge()),
+        } : {}),
       });
       model = ollamaProvider(currentModel);
-
     } else if (currentProvider === 'lmstudio') {
-      // Handle LM Studio setup
-      let lmstudioSettings = await getUserLMStudioSettings(userId);
+      const managed = getManagedProviderKey('lmstudio');
+      if (!managed?.baseUrl) return notConfigured('LM Studio');
 
-      if (!lmstudioSettings && lmstudioBaseUrl) {
-        await createLMStudioSettings(userId, lmstudioBaseUrl);
-        lmstudioSettings = { baseUrl: lmstudioBaseUrl, isConfigured: true };
+      try { new URL(managed.baseUrl); } catch {
+        return { error: 'LM Studio base URL is not a valid URL.', status: 500 };
       }
 
-      if (!lmstudioSettings) {
-        return {
-          error: 'LM Studio base URL not configured. Please provide a base URL for your local LM Studio server.',
-          status: 400,
-        };
+      const { isFetchBridgeInitialized: isLmInit, getFetchBridge: getLmBridge } = await import('@/lib/fetch-bridge');
+      const useBridge = isLmInit() && getLmBridge().isUserConnected(userId);
+
+      if (!useBridge) {
+        const { validateLocalProviderURL } = await import('@pagespace/lib/security/url-validator');
+        const ok = await validateLocalProviderURL(managed.baseUrl);
+        if (!ok.valid) {
+          return { error: `LM Studio base URL blocked: ${ok.error}`, status: 500 };
+        }
       }
 
-      // SECURITY: Validate URL before use
-      const { validateLocalProviderURL } = await import('@pagespace/lib/security');
-      const lmstudioUrlValidation = await validateLocalProviderURL(lmstudioSettings.baseUrl);
-      if (!lmstudioUrlValidation.valid) {
-        return {
-          error: `LM Studio base URL blocked: ${lmstudioUrlValidation.error}`,
-          status: 400,
-        };
-      }
-
-      // Create LM Studio provider instance with base URL
-      // LM Studio uses OpenAI-compatible API - no path suffix needed as user provides full URL
       const lmstudioProvider = createOpenAICompatible({
         name: 'lmstudio',
-        baseURL: lmstudioSettings.baseUrl,
+        baseURL: managed.baseUrl,
+        ...(useBridge ? {
+          fetch: (await import('@/lib/fetch-bridge/ws-proxy-fetch')).createWsProxyFetch(userId, getLmBridge()),
+        } : {}),
       });
       model = lmstudioProvider(currentModel);
-
     } else if (currentProvider === 'azure_openai') {
-      // Handle Azure OpenAI setup - uses OpenAI-compatible API with Azure endpoint
-      const azureSettings = await getUserAzureOpenAISettings(userId);
+      const managed = getManagedProviderKey('azure_openai');
+      if (!managed?.apiKey || !managed?.baseUrl) return notConfigured('Azure OpenAI');
 
-      if (!azureSettings) {
-        return {
-          error: 'Azure OpenAI not configured. Please provide your API key and endpoint URL in Settings > AI.',
-          status: 400,
-        };
-      }
-
-      // SECURITY: Validate Azure OpenAI URL to prevent SSRF
-      const { validateLocalProviderURL } = await import('@pagespace/lib/security');
-      const azureUrlValidation = await validateLocalProviderURL(azureSettings.baseUrl);
-      if (!azureUrlValidation.valid) {
-        return {
-          error: `Azure OpenAI endpoint URL blocked: ${azureUrlValidation.error}`,
-          status: 400,
-        };
+      const { validateLocalProviderURL } = await import('@pagespace/lib/security/url-validator');
+      const ok = await validateLocalProviderURL(managed.baseUrl);
+      if (!ok.valid) {
+        return { error: `Azure OpenAI endpoint URL blocked: ${ok.error}`, status: 500 };
       }
 
       const azureProvider = createOpenAICompatible({
         name: 'azure_openai',
-        apiKey: azureSettings.apiKey,
-        baseURL: azureSettings.baseUrl,
+        apiKey: managed.apiKey,
+        baseURL: managed.baseUrl,
       });
       model = azureProvider(currentModel);
-
     } else if (currentProvider === 'glm') {
-      // Handle GLM Coder Plan setup
-      let glmSettings = await getUserGLMSettings(userId);
-
-      if (!glmSettings && glmApiKey) {
-        await createGLMSettings(userId, glmApiKey);
-        glmSettings = { apiKey: glmApiKey, isConfigured: true };
-      }
-
-      if (!glmSettings) {
-        return {
-          error: 'GLM API key not configured. Please configure your GLM Coder Plan API key in Settings > AI.',
-          status: 400,
-        };
-      }
-
-      // Create GLM provider instance using OpenAI-compatible endpoint
+      const managed = getManagedProviderKey('glm');
+      if (!managed?.apiKey) return notConfigured('GLM Coder Plan');
       const glmProvider = createOpenAICompatible({
         name: 'glm',
-        apiKey: glmSettings.apiKey,
+        apiKey: managed.apiKey,
         baseURL: 'https://api.z.ai/api/coding/paas/v4',
       });
       model = glmProvider(currentModel);
-
-    } else if (currentProvider === 'minimax') {
-      // Handle MiniMax setup - uses Anthropic-compatible API
-      let minimaxSettings = await getUserMiniMaxSettings(userId);
-
-      if (!minimaxSettings && minimaxApiKey) {
-        await createMiniMaxSettings(userId, minimaxApiKey);
-        minimaxSettings = { apiKey: minimaxApiKey, isConfigured: true };
-      }
-
-      if (!minimaxSettings) {
-        return {
-          error: 'MiniMax API key not configured. Please configure your MiniMax API key in Settings > AI.',
-          status: 400,
-        };
-      }
-
-      // Create MiniMax provider instance using Anthropic-compatible endpoint
-      // Note: @ai-sdk/anthropic appends /messages directly, so /v1 must be in baseURL
-      const minimax = createAnthropic({
-        apiKey: minimaxSettings.apiKey,
-        baseURL: 'https://api.minimax.io/anthropic/v1',
-      });
-      model = minimax(currentModel);
-
     } else {
-      return {
-        error: `Unsupported AI provider: ${currentProvider}`,
-        status: 400,
-      };
+      // Every cloud vendor is served through OpenRouter. The model id already
+      // carries its vendor prefix (openai/…, anthropic/…) and is forwarded as-is.
+      const managed = getManagedProviderKey('openrouter');
+      if (!managed?.apiKey) return notConfigured('OpenRouter');
+      // X-OpenRouter-Cache enables OpenRouter's response cache (default 300s TTL):
+      // byte-identical repeat requests are served from cache at $0 with zeroed
+      // usage. See timestamp-utils.ts — the system-prompt timestamp is bucketed
+      // to the cache window so genuine repeats (regenerate/retry) can HIT.
+      const openrouter = createOpenRouter({
+        apiKey: managed.apiKey,
+        // OPENROUTER_BASE_URL lets a non-prod environment (e.g. e2e) redirect the
+        // OpenRouter API at a deterministic stub that returns known usage.cost, so
+        // billing can be asserted end-to-end. Unset in prod → real OpenRouter.
+        ...(process.env.OPENROUTER_BASE_URL ? { baseURL: process.env.OPENROUTER_BASE_URL } : {}),
+        headers: { 'X-OpenRouter-Cache': 'true' },
+      });
+      // usage: { include: true } turns on OpenRouter usage accounting so the
+      // response carries the authoritative per-request cost under
+      // providerMetadata.openrouter.usage.cost — the basis we bill on (see
+      // extractOpenRouterCostDollars / trackAIUsage). Without it, cost is undefined.
+      //
+      // extraBody.provider is OpenRouter request-body provider routing (merged into
+      // the request body by the SDK):
+      //   require_parameters: true — only route to upstream providers that actually
+      //     honor every param we send (notably `tools`). A provider that silently
+      //     ignores tools can never call the `finish` tool, which is a root cause of
+      //     "agent runs tools then never finishes". This forces tool-capable routing.
+      //   allow_fallbacks: true — keep OpenRouter's automatic failover to the next
+      //     healthy provider when one errors, reducing mid-stream disconnects.
+      model = openrouter.chat(currentModel, {
+        usage: { include: true },
+        extraBody: {
+          provider: {
+            require_parameters: true,
+            allow_fallbacks: true,
+          },
+        },
+      });
     }
 
     return {
@@ -429,7 +282,6 @@ export async function createAIProvider(
       provider: currentProvider,
       modelName: currentModel,
     };
-
   } catch (error) {
     console.error('Error creating AI provider:', error);
     return {
@@ -440,16 +292,18 @@ export async function createAIProvider(
 }
 
 /**
- * Updates user's current provider and model settings if they've changed
+ * Updates user's current provider and model settings if they've changed.
+ * When `options.user` is provided the function skips its own DB select.
  */
 export async function updateUserProviderSettings(
   userId: string,
   selectedProvider?: string,
-  selectedModel?: string
+  selectedModel?: string,
+  options?: Pick<ProviderFactoryOptions, 'user'>,
 ): Promise<void> {
   if (!selectedProvider || !selectedModel) return;
 
-  const [user] = await db.select().from(users).where(eq(users.id, userId));
+  const user = options?.user ?? (await db.select().from(users).where(eq(users.id, userId)))[0];
 
   if (selectedProvider !== user?.currentAiProvider || selectedModel !== user?.currentAiModel) {
     await db
@@ -462,16 +316,42 @@ export async function updateUserProviderSettings(
   }
 }
 
+export type OpenRouterImageClient = ReturnType<typeof createOpenRouter>;
+
 /**
- * Helper function to create a NextResponse error from ProviderError
+ * The provider (the catalog key) an OpenRouter model id belongs to: the catalog provider listing it, else its vendor
+ * prefix (an image model is not in the chat catalog). What the provider allowlist names.
  */
+function providerOfModelId(modelId: string): string {
+  const listed = Object.entries(AI_PROVIDERS).find(([, cfg]) => modelId in cfg.models)?.[0];
+  return listed ?? modelId.split('/')[0];
+}
+
+/**
+ * The image-generation client (POL-8): built here, beside every other provider, so the drive's org model and provider
+ * allowlists judge the image model exactly as they judge a chat model. Refused, never substituted.
+ */
+export async function createImageProvider(
+  request: { model: string },
+  options: Pick<ProviderFactoryOptions, 'driveId' | 'contentDriveIds' | 'contentOrgIds'>,
+): Promise<{ client: OpenRouterImageClient; provider: string; modelName: string } | ProviderError> {
+  const provider = providerOfModelId(request.model);
+  const refusal = await orgModelRefusal([options.driveId, ...(options.contentDriveIds ?? [])], [{ modelId: request.model, provider }], options.contentOrgIds);
+  if (refusal) return refusal;
+  const managed = getManagedProviderKey('openrouter');
+  if (!managed?.apiKey) return notConfigured('OpenRouter');
+  const client = createOpenRouter({
+    apiKey: managed.apiKey,
+    ...(process.env.OPENROUTER_BASE_URL ? { baseURL: process.env.OPENROUTER_BASE_URL } : {}),
+    headers: { 'X-OpenRouter-Cache': 'true' },
+  });
+  return { client, provider, modelName: request.model };
+}
+
 export function createProviderErrorResponse(error: ProviderError): NextResponse {
   return NextResponse.json({ error: error.error }, { status: error.status });
 }
 
-/**
- * Type guard to check if result is an error
- */
-export function isProviderError(result: ProviderResult | ProviderError): result is ProviderError {
+export function isProviderError<T extends object>(result: T | ProviderError): result is ProviderError {
   return 'error' in result;
 }

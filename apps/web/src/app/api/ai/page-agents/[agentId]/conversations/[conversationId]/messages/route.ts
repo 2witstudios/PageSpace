@@ -1,10 +1,15 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { db, chatMessages, pages, eq, and, desc, sql } from '@pagespace/db';
-import { canUserViewPage } from '@pagespace/lib/server';
-import { convertDbMessageToUIMessage } from '@/lib/ai/core';
-import { loggers } from '@pagespace/lib/server';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage } from '@/lib/auth';
+import { db } from '@pagespace/db/db'
+import { eq, and, ne, desc, sql } from '@pagespace/db/operators'
+import { conversations, messages } from '@pagespace/db/schema/conversations';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import { unifiedPageScope, derivedPageId } from '@/lib/repositories/unified-message-scope';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 // Auth options: GET is read-only operation
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -16,7 +21,7 @@ const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: fal
  * Messages are returned in UIMessage format compatible with the Vercel AI SDK,
  * including tool calls and tool results if present.
  *
- * @param agentId - The unique identifier of the AI agent (AI_CHAT page ID)
+ * @param agentId - The conversation-hosting AI_CHAT agent page id
  * @param conversationId - The unique identifier of the conversation session
  *
  * Query Parameters:
@@ -56,18 +61,19 @@ export async function GET(
 ) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'page_agent_message', resourceId: 'list', details: { reason: 'auth_failed', method: 'GET', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
+      return auth.error;
+    }
 
     const { agentId, conversationId } = await context.params;
 
-    // Verify agent exists and is AI_CHAT type
-    const agent = await db.query.pages.findFirst({
-      where: and(
-        eq(pages.id, agentId),
-        eq(pages.type, 'AI_CHAT'),
-        eq(pages.isTrashed, false)
-      ),
-    });
+    // Verify the conversation-hosting agent page exists. Goes through the
+    // repository like its two sibling routes rather than repeating the query:
+    // WHICH page types may host a conversation is one decision, and an inline
+    // copy is how the last change to it (dropping MACHINE) reached two of the
+    // three routes and not the third.
+    const agent = await conversationRepository.getAiAgent(agentId);
 
     if (!agent) {
       return NextResponse.json(
@@ -78,13 +84,43 @@ export async function GET(
 
     // Check MCP page scope
     const scopeError = await checkMCPPageScope(auth, agentId);
-    if (scopeError) return scopeError;
+    if (scopeError) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_message', resourceId: conversationId, details: { reason: 'mcp_page_scope_denied', agentId, method: 'GET' }, riskScore: 0.5 });
+      return scopeError;
+    }
 
     // Check permissions
-    const canView = await canUserViewPage(auth.userId, agentId);
+    const canView = await canPrincipalViewPage(auth, agentId);
     if (!canView) {
-      return NextResponse.json(
+      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_message', resourceId: conversationId, details: { reason: 'no_view_permission', agentId, method: 'GET' }, riskScore: 0.5 });
+      return deniedResponse(actorFromAuth(auth), agentId, NextResponse.json(
         { error: 'Insufficient permissions to view this agent\'s conversations' },
+        { status: 403 }
+      ));
+    }
+
+    // Conversation access gate: private conversations are only visible to their owner.
+    //
+    // NOT `canAccessConversation`, and deliberately not — but only because the
+    // composition here already lands inside it. That predicate is
+    // `owner OR (isShared AND page access)`; this route runs page access as a
+    // hard 403 ABOVE (`canPrincipalViewPage`) and then `owner OR isShared`
+    // here, which is `page access AND (owner OR isShared)`. Strictly a subset:
+    // identical for every non-owner, and stricter for an OWNER who has lost
+    // access to the agent page — who is refused here and would be admitted by
+    // the shared predicate.
+    //
+    // So this is safe, and it is also the second spelling of a rule
+    // `conversation-access.ts` exists to keep in one place. Left as-is rather
+    // than consolidated because collapsing it would WIDEN owner access on a
+    // page-scoped route, which is a product decision and not a refactor. Said
+    // here so the next person to notice the asymmetry does not make that
+    // change believing it to be a no-op.
+    const conversationRow = await conversationRepository.getConversation(conversationId);
+    if (conversationRow && conversationRow.userId !== auth.userId && !conversationRow.isShared) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_message', resourceId: conversationId, details: { reason: 'private_conversation', agentId, method: 'GET' }, riskScore: 0.5 });
+      return NextResponse.json(
+        { error: 'Insufficient permissions to access this conversation' },
         { status: 403 }
       );
     }
@@ -101,34 +137,46 @@ export async function GET(
     const direction = (directionParam === 'before' || directionParam === 'after')
       ? directionParam
       : 'before';
+    // Stale-tab rollout protection: clients deployed before this PR never send this param, so
+    // they never see 'streaming' placeholder rows — only updated clients that know how to
+    // dedup them against a live stream bubble opt in. See Server Stream Durability epic PR 2.
+    const includeStreaming = searchParams.get('includeStreaming') === '1';
 
-    // Build query conditions
+    // Build query conditions.
+    //
+    // Reads the UNIFIED `messages` table since the message-table merge (epic
+    // "Agent-Session Single Source of Truth", Phase 4 / D6). The page
+    // predicate is `unifiedPageScope` — the join through `conversations`,
+    // which is what `chat_messages.pageId` became. `chat_messages` was DROPPED
+    // by migration 0253 — there is no dual write and no revert path.
     const conditions = [
-      eq(chatMessages.pageId, agentId),
-      eq(chatMessages.conversationId, conversationId),
-      eq(chatMessages.isActive, true)
+      unifiedPageScope(agentId),
+      eq(messages.conversationId, conversationId),
+      eq(messages.isActive, true),
+      ...(includeStreaming ? [] : [ne(messages.status, 'streaming')])
     ];
 
     // Add cursor condition if provided - use compound cursor (createdAt + id) for stable ordering
     if (cursor) {
       // First, get the timestamp and id of the cursor message
-      const cursorMessage = await db.query.chatMessages.findFirst({
-        where: eq(chatMessages.id, cursor),
-        columns: { createdAt: true, id: true }
-      });
+      const [cursorMessage] = await db
+        .select({ createdAt: messages.createdAt, id: messages.id })
+        .from(messages)
+        .where(eq(messages.id, cursor))
+        .limit(1);
 
       if (cursorMessage && cursorMessage.createdAt) {
         if (direction === 'before') {
           // Get messages created before the cursor (older messages)
           // Use compound condition: either earlier timestamp, or same timestamp but smaller id
           conditions.push(
-            sql`(${chatMessages.createdAt} < ${cursorMessage.createdAt} OR (${chatMessages.createdAt} = ${cursorMessage.createdAt} AND ${chatMessages.id} < ${cursorMessage.id}))`
+            sql`(${messages.createdAt} < ${cursorMessage.createdAt} OR (${messages.createdAt} = ${cursorMessage.createdAt} AND ${messages.id} < ${cursorMessage.id}))`
           );
         } else {
           // Get messages created after the cursor (newer messages)
           // Use compound condition: either later timestamp, or same timestamp but larger id
           conditions.push(
-            sql`(${chatMessages.createdAt} > ${cursorMessage.createdAt} OR (${chatMessages.createdAt} = ${cursorMessage.createdAt} AND ${chatMessages.id} > ${cursorMessage.id}))`
+            sql`(${messages.createdAt} > ${cursorMessage.createdAt} OR (${messages.createdAt} = ${cursorMessage.createdAt} AND ${messages.id} > ${cursorMessage.id}))`
           );
         }
       }
@@ -137,10 +185,24 @@ export async function GET(
     // Get messages with pagination
     // Order by (createdAt DESC, id DESC) for stable pagination, then reverse for chronological display
     const dbMessages = await db
-      .select()
-      .from(chatMessages)
+      .select({
+        id: messages.id,
+        pageId: derivedPageId(),
+        userId: messages.userId,
+        role: messages.role,
+        content: messages.content,
+        toolCalls: messages.toolCalls,
+        toolResults: messages.toolResults,
+        createdAt: messages.createdAt,
+        isActive: messages.isActive,
+        editedAt: messages.editedAt,
+        messageType: messages.messageType,
+        status: messages.status,
+      })
+      .from(messages)
+      .innerJoin(conversations, eq(conversations.id, messages.conversationId))
       .where(and(...conditions))
-      .orderBy(desc(chatMessages.createdAt), desc(chatMessages.id))
+      .orderBy(desc(messages.createdAt), desc(messages.id))
       .limit(limit + 1); // Get one extra to check if there are more
 
     // Check if there are more messages
@@ -151,7 +213,7 @@ export async function GET(
     const orderedMessages = messagesToReturn.reverse();
 
     // Convert to UIMessage format
-    const messages = orderedMessages.map(convertDbMessageToUIMessage);
+    const uiMessages = await Promise.all(orderedMessages.map(convertDbMessageToUIMessage));
 
     // Determine cursors for pagination
     const nextCursor = hasMore && orderedMessages.length > 0
@@ -162,17 +224,29 @@ export async function GET(
       ? orderedMessages[orderedMessages.length - 1].id // Last message (newest) for loading newer messages
       : null;
 
+    auditRequest(request, { eventType: 'data.read', userId: auth.userId, resourceType: 'page_agent_message', resourceId: conversationId, details: {
+      action: 'list_messages',
+      agentId,
+    } });
+
     return NextResponse.json({
-      messages,
+      messages: uiMessages,
       conversationId,
-      messageCount: messages.length,
+      messageCount: uiMessages.length,
       pagination: {
         hasMore,
         nextCursor,
         prevCursor,
         limit,
         direction
-      }
+      },
+      // The rev watermark this snapshot was read at (Agent-Session SSoT epic,
+      // Phase 2) — the client proves currency against every `conversation:*`
+      // event with it (`apps/web/src/lib/realtime/conversation-apply.ts`).
+      // `null` for a legacy page conversation with no `conversations` row: no
+      // row, no rev, so the subscriber has no baseline and refetches on doubt.
+      // Read from the row the access gate above already fetched.
+      rev: conversationRow?.rev ?? null,
     });
 
   } catch (error) {

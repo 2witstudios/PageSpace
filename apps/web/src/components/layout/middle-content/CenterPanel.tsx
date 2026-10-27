@@ -8,7 +8,7 @@ import { findNodeAndParent } from '@/lib/tree/tree-utils';
 import { AlertCircle, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import FolderView from './page-views/folder/FolderView';
-import AiChatView from './page-views/ai-page/AiChatView';
+import AgentPageView from '@/components/agents/AgentPageView';
 import ChannelView from './page-views/channel/ChannelView';
 import DocumentView from './page-views/document/DocumentView';
 import FileViewer from './page-views/file/FileViewer';
@@ -17,8 +17,7 @@ import TaskListView from './page-views/task-list/TaskListView';
 import CodePageView from './page-views/code/CodePageView';
 import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
-import { getPageTypeComponent } from '@pagespace/lib/client-safe';
-import AiSettingsView from './page-views/settings/ai-api/AiSettingsView';
+import { getPageTypeComponent } from '@pagespace/lib/content/page-types.config';
 import MCPSettingsView from './page-views/settings/mcp/MCPSettingsView';
 import CanvasPageView from './page-views/canvas/CanvasPageView';
 import GlobalAssistantView from './page-views/dashboard/GlobalAssistantView';
@@ -26,10 +25,21 @@ import { memo, useState, useEffect, useRef, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 import { usePageStore } from '@/hooks/usePage';
 import { useGlobalDriveSocket } from '@/hooks/useGlobalDriveSocket';
+import { useDriveHomeRedirect } from '@/hooks/useDriveHomeRedirect';
 import { usePageRefresh } from '@/hooks/usePageRefresh';
-import { post } from '@/lib/auth/auth-fetch';
+import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import useSWR from 'swr';
+import { FindBar } from '@/components/find/FindBar';
+import { useFindStore } from '@/stores/useFindStore';
+import { getEffectiveBinding, matchesKeyEvent } from '@/stores/useHotkeyStore';
 
 const LOADING_TIMEOUT_MS = 12000; // Show retry hint after 12 seconds
+
+const fetcher = (url: string) =>
+  fetchWithAuth(url).then(r => {
+    if (!r.ok) throw new Error('Failed to fetch');
+    return r.json();
+  });
 
 // Memoized page content component to prevent unnecessary re-renders
 const PageContent = memo(({ pageId }: { pageId: string | null }) => {
@@ -40,6 +50,17 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
   const [loadingTimedOut, setLoadingTimedOut] = useState(false);
   const retryCount = useRef(0);
   const [timerKey, setTimerKey] = useState(0);
+
+  // Compute tree lookup before early returns — pure recursive search, safe on empty tree.
+  const pageResult = pageId ? findNodeAndParent(tree, pageId) : null;
+
+  // If the tree has loaded but doesn't have this page yet (race condition on fresh creation
+  // or deep links), fetch it directly so rendering isn't blocked on tree revalidation.
+  const { data: fallbackPage, isLoading: fallbackLoading, error: fallbackError } = useSWR<TreePage>(
+    (!isLoading && !!pageId && !pageResult) ? `/api/pages/${pageId}` : null,
+    fetcher,
+    { errorRetryCount: 3 }
+  );
 
   const handleRetry = useCallback(() => {
     setLoadingTimedOut(false);
@@ -61,10 +82,6 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
   }, [isLoading, timerKey]);
 
   // Handle special routes
-  if (pathname.endsWith('/settings')) {
-    return <AiSettingsView />;
-  }
-
   if (pathname.endsWith('/settings/mcp')) {
     return <MCPSettingsView />;
   }
@@ -126,22 +143,25 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
     );
   }
 
-  const pageResult = findNodeAndParent(tree, pageId);
-
   if (!pageResult) {
-    return (
-      <div className="p-4 text-center text-muted-foreground">
-        Page not found in the current tree.
-      </div>
-    );
+    if (fallbackLoading) return <Skeleton className="h-full w-full" />;
+    if (fallbackError || !fallbackPage) {
+      return (
+        <div className="p-4 text-center text-muted-foreground">
+          Page not found.
+        </div>
+      );
+    }
   }
 
-  const { node: page } = pageResult;
+  const page: TreePage = pageResult
+    ? pageResult.node
+    : { ...fallbackPage!, aiChat: null };
 
   // Dynamic component selection using centralized config
   const componentMap = {
     FolderView,
-    AiChatView,
+    AgentPageView,
     ChannelView,
     DocumentView,
     CanvasPageView,
@@ -170,11 +190,15 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
     // CodePageView accepts only pageId (new pattern)
     pageComponent = <CodePageView key={`code-${page.id}`} pageId={page.id} />;
   } else if (componentName === 'CanvasPageView') {
-    // CanvasPageView should remount per page to isolate edit/undo state
-    pageComponent = <CanvasPageView key={`canvas-${page.id}`} page={page} />;
+    // CanvasPageView accepts only pageId (new pattern) — fetches content from API
+    pageComponent = <CanvasPageView key={`canvas-${page.id}`} pageId={page.id} />;
   } else if (componentName === 'SheetView') {
     // SheetView should remount per page to isolate undo/redo history
     pageComponent = <SheetView key={`sheet-${page.id}`} page={page} />;
+  } else if (componentName === 'AgentPageView') {
+    // AgentPageView should remount per page: conversation identity is scoped
+    // to a single agent page and must reset on switch.
+    pageComponent = <AgentPageView key={`ai-chat-${page.id}`} page={page} />;
   } else {
     // Other components still accept full page object
     // Type assertion: we've excluded DocumentView above, so ViewComponent here
@@ -222,15 +246,19 @@ export default function CenterPanel() {
   const pathname = usePathname();
   const activeDriveId = params.driveId as string | undefined;
   const activePageId = params.pageId as string || null;
+  const { isHomeRedirectPending } = useDriveHomeRedirect(activeDriveId, activePageId);
 
   // Determine visibility states
   const isSettingsRoute = pathname.endsWith('/settings') || pathname.endsWith('/settings/mcp');
-  const showGlobalAssistant = !activePageId && !isSettingsRoute;
+  const showGlobalAssistant = !activePageId && !isSettingsRoute && !isHomeRedirectPending;
   const showPageContent = activePageId || isSettingsRoute;
 
   const setPageId = usePageStore(state => state.setPageId);
   const { updateNode } = usePageTree(activeDriveId);
   const updateNodeRef = useRef(updateNode);
+  const openFind = useFindStore((s) => s.open);
+  const isFindOpen = useFindStore((s) => s.isOpen);
+  const resetFind = useFindStore((s) => s.reset);
 
   // Get page refresh configuration for pull-to-refresh
   const pageRefresh = usePageRefresh();
@@ -243,6 +271,31 @@ export default function CenterPanel() {
   useEffect(() => {
     setPageId(activePageId);
   }, [activePageId, setPageId]);
+
+  // Reset find state when navigating to a different page
+  useEffect(() => {
+    resetFind();
+  }, [activePageId, resetFind]);
+
+  // Global Cmd+F / Ctrl+F handler — skip when Monaco has focus (CODE pages, CANVAS code tab)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (matchesKeyEvent(getEffectiveBinding('editing.find'), e)) {
+        const monacoFocused = document.activeElement?.closest('.monaco-editor');
+        if (monacoFocused) return;
+        e.preventDefault();
+        if (isFindOpen) {
+          const findInput = document.querySelector<HTMLInputElement>('.find-bar-input');
+          findInput?.focus();
+          findInput?.select();
+        } else {
+          openFind();
+        }
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [openFind, isFindOpen]);
 
   // Track page views for recents and clear "has changes" once viewed.
   // This lives in CenterPanel because dashboard route pages intentionally return null.
@@ -305,14 +358,26 @@ export default function CenterPanel() {
       >
         <OptimizedViewHeader pageId={activePageId} />
         <div className="flex-1 min-h-0 relative overflow-hidden">
+          <FindBar />
           <PullToRefresh
             direction="top"
             onRefresh={pageRefresh.refresh}
             disabled={!pageRefresh.canRefresh}
           >
-            <CustomScrollArea className="h-full">
-              <PageContent pageId={activePageId} />
-            </CustomScrollArea>
+            {pageRefresh.managesOwnScroll ? (
+              // Chat-shaped pages (AI_CHAT, CHANNEL) own their scroll region
+              // end to end. Wrapping them in another `overflow-auto` area
+              // stacks two independent scroll containers over the same
+              // content — the outer one wins the wheel/touch gesture and the
+              // inner message list stops scrolling.
+              <div className="h-full overflow-hidden">
+                <PageContent pageId={activePageId} />
+              </div>
+            ) : (
+              <CustomScrollArea className="h-full">
+                <PageContent pageId={activePageId} />
+              </CustomScrollArea>
+            )}
           </PullToRefresh>
         </div>
       </div>

@@ -1,347 +1,361 @@
-import { describe, it, vi, beforeEach } from 'vitest';
+import { describe, it, vi, beforeAll, beforeEach, expect } from 'vitest';
 import { assert } from '@/test/riteway';
 
 /**
  * Compaction Service Tests
  *
- * The compaction service handles reorganizing and summarizing personalization
- * fields when they grow too large. It uses LLM to preserve key insights while
- * reducing size.
- *
- * Key behaviors to test:
- * 1. needsCompaction detects when content exceeds threshold
- * 2. compactField reduces content size while preserving meaning
- * 3. checkAndCompactIfNeeded processes all fields needing compaction
- * 4. Handles LLM errors gracefully (returns original content)
- * 5. Doesn't compact if result would be larger
+ * Compaction is the mechanism that stops the profile growing without bound.
+ * The budgets it enforces are the equilibrium size of each page, so these tests
+ * pin the thresholds themselves — not just that some threshold exists.
  */
 
-// Mock database
-const mockDbQuery = vi.fn();
-const mockDbInsert = vi.fn();
-vi.mock('@pagespace/db', () => ({
-  db: {
-    query: {
-      userPersonalization: {
-        findFirst: () => mockDbQuery(),
-      },
-    },
-    insert: () => mockDbInsert(),
+vi.mock('@pagespace/db/db', () => ({ db: {} }));
+vi.mock('@pagespace/db/operators', () => ({ and: vi.fn(), eq: vi.fn() }));
+vi.mock('@pagespace/db/schema/core', () => ({ pages: {} }));
+vi.mock('@pagespace/db/schema/personalization', () => ({
+  userPersonalization: {},
+  personalizationCandidates: {},
+}));
+const readMemoryPages = vi.fn(async () => ({}) as Record<string, string>);
+vi.mock('@pagespace/lib/memory/memory-pages', () => ({
+  readMemoryPages: (...a: unknown[]) => readMemoryPages(...(a as [])),
+}));
+
+// The page writer is the boundary compaction has to respect: it refuses when
+// the user edited the page mid-run, or the pointer is stale.
+const updatePersonalizationPage = vi.fn(
+  async () => ({ written: true }) as { written: boolean; reason?: string }
+);
+vi.mock('../integration-service', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    getCurrentPersonalizationPages: (...a: unknown[]) => readMemoryPages(...(a as [])),
+    updatePersonalizationPage: (...a: unknown[]) =>
+      updatePersonalizationPage(...(a as [])),
+  };
+});
+vi.mock('@/lib/ai/core/provider-factory', () => ({
+  createAIProvider: vi.fn(),
+  isProviderError: vi.fn(() => false),
+}));
+vi.mock('@/lib/ai/core/ai-providers-config', () => ({
+  BACKGROUND_HEAVY_PROVIDER: 'anthropic',
+  BACKGROUND_HEAVY_MODEL: 'anthropic/claude-sonnet-5',
+}));
+vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
+  AIMonitoring: { trackUsage: vi.fn() },
+  // These are pure-telemetry call sites: they hand the tracking promise to a NAMED
+  // discard rather than leaving it to float, so the mocked module has to provide it.
+  discardUsageOutcome: (tracking: Promise<unknown>) => {
+    void Promise.resolve(tracking).then(
+      () => undefined,
+      () => undefined,
+    );
   },
-  userPersonalization: { userId: 'userId' },
-  eq: vi.fn(),
 }));
-
-// Mock AI provider
-const mockCreateAIProvider = vi.fn();
-vi.mock('@/lib/ai/core', () => ({
-  createAIProvider: () => mockCreateAIProvider(),
-  isProviderError: (result: unknown) => result !== null && typeof result === 'object' && 'error' in result,
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: { api: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } },
 }));
+vi.mock('ai', () => ({ generateText: vi.fn() }));
 
-// Mock loggers
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
-    api: {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
-    },
-  },
-}));
+const { mockReserve, mockReleaseMemoryHold } = vi.hoisted(() => {
+  const mockReleaseMemoryHold = vi.fn();
+  return {
+    mockReleaseMemoryHold,
+    mockReserve: vi.fn(async (_userId: string, _call: { provider: string; model: string; inputChars: number }) => ({ allowed: true as const, holdId: 'hold-m', walletId: 'w-root', release: mockReleaseMemoryHold })),
+  };
+});
+vi.mock('../memory-credit', () => ({ reserveMemoryCall: mockReserve }));
 
-// Mock generateText
-const mockGenerateText = vi.fn();
-vi.mock('ai', () => ({
-  generateText: () => mockGenerateText(),
-}));
+// The service's module graph (integration-service, the page mutation path) is loaded once here, outside any one
+// test's timeout, so the first test's verdict never depends on cold-load time.
+beforeAll(async () => {
+  await import('../compaction-service');
+}, 60_000);
 
-// Helper to set up AI provider success
-function setupAIProviderSuccess(response: string) {
-  mockCreateAIProvider.mockResolvedValue({
-    model: 'test-model',
-    provider: 'test',
-    modelName: 'test',
+describe('needsCompaction', () => {
+  it('leaves a page under its budget alone', async () => {
+    const { needsCompaction } = await import('../compaction-service');
+
+    assert({
+      given: 'a bio comfortably under budget',
+      should: 'not trigger compaction',
+      actual: needsCompaction('x'.repeat(2999), 'bio'),
+      expected: false,
+    });
   });
-  mockGenerateText.mockResolvedValue({ text: response });
-}
 
-describe('compaction-service', () => {
+  it('triggers once a page passes its budget', async () => {
+    const { needsCompaction } = await import('../compaction-service');
+
+    assert({
+      given: 'a bio one character over budget',
+      should: 'trigger compaction',
+      actual: needsCompaction('x'.repeat(3001), 'bio'),
+      expected: true,
+    });
+  });
+
+  it('holds writingStyle and rules to a tighter budget than bio', async () => {
+    const { needsCompaction } = await import('../compaction-service');
+
+    // Between the 2500 behavioural budget and the 3000 bio budget.
+    const content = 'x'.repeat(2750);
+
+    assert({
+      given: 'content between the behavioural and bio budgets',
+      should: 'compact writingStyle and rules but not bio',
+      actual: {
+        bio: needsCompaction(content, 'bio'),
+        writingStyle: needsCompaction(content, 'writingStyle'),
+        rules: needsCompaction(content, 'rules'),
+      },
+      expected: { bio: false, writingStyle: true, rules: true },
+    });
+  });
+
+  it('keeps every budget far below the old 20k ceiling', async () => {
+    const { needsCompaction } = await import('../compaction-service');
+
+    // The pre-rewrite design compacted at 18000 and targeted 14000, which made
+    // ~14k the resting size of every field. Pin that this is gone.
+    const oldRestingSize = 'x'.repeat(14000);
+
+    assert({
+      given: 'a page at the size the old design settled at',
+      should: 'now be over budget for every field',
+      actual: {
+        bio: needsCompaction(oldRestingSize, 'bio'),
+        writingStyle: needsCompaction(oldRestingSize, 'writingStyle'),
+        rules: needsCompaction(oldRestingSize, 'rules'),
+      },
+      expected: { bio: true, writingStyle: true, rules: true },
+    });
+  });
+});
+
+describe('budget coherence across the three consumers', () => {
+  it('compacts to a size the write guard will actually accept', async () => {
+    // Compaction, the rewrite guard and prompt injection all act on these
+    // numbers, and only work if they agree. If compaction targeted a size at or
+    // above the guard's ceiling, every compaction result would be refused, the
+    // page would stay over budget forever, and the cron would log "compacted"
+    // each night while nothing changed. Nothing about that fails loudly.
+    const { MAX_FIELD_LENGTH, compactionTarget } = await import('../budgets');
+
+    const fields = ['bio', 'writingStyle', 'rules'] as const;
+    assert({
+      given: 'each field budget',
+      should: 'leave compaction headroom strictly below the ceiling',
+      actual: fields.every((f) => compactionTarget(f) < MAX_FIELD_LENGTH[f]),
+      expected: true,
+    });
+  });
+
+  it('keeps the total ceiling below the sum of the per-field budgets', async () => {
+    // Equal to the sum, the total check could never fire — three already
+    // truncated fields always fit — so it would read as protection while being
+    // dead code. A mutation proved exactly that earlier in this branch.
+    const { MAX_FIELD_LENGTH, MAX_TOTAL_INJECTION_LENGTH } = await import('../budgets');
+
+    const sum = MAX_FIELD_LENGTH.bio + MAX_FIELD_LENGTH.writingStyle + MAX_FIELD_LENGTH.rules;
+
+    assert({
+      given: 'the per-field budgets and the total injection ceiling',
+      should: 'make the total strictly smaller, so the total guard can fire',
+      actual: MAX_TOTAL_INJECTION_LENGTH < sum,
+      expected: true,
+    });
+  });
+});
+
+describe('checkAndCompactIfNeeded', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDbQuery.mockResolvedValue(null);
-    mockDbInsert.mockReturnValue({
-      values: vi.fn().mockReturnValue({
-        onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
-      }),
+    updatePersonalizationPage.mockResolvedValue({ written: true });
+  });
+
+  it('reports a field as compacted only when the write actually landed', async () => {
+    // The page was edited by the user while this run was compacting, so the
+    // write is refused. Reporting it as compacted would claim a page had shrunk
+    // while it is still over budget — and the next run would do the same thing
+    // again, reporting success every night while nothing changed.
+    readMemoryPages.mockResolvedValue({ bio: 'x'.repeat(3500) });
+    updatePersonalizationPage.mockResolvedValue({
+      written: false,
+      reason: 'page was edited during this run',
+    });
+
+    const { generateText } = await import('ai');
+    vi.mocked(generateText).mockResolvedValue({
+      text: 'short compacted bio',
+      usage: { inputTokens: 10, outputTokens: 5 },
+    } as never);
+    const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    vi.mocked(createAIProvider).mockResolvedValue({
+      model: {},
+      provider: 'anthropic',
+      modelName: 'm',
+    } as never);
+
+    const { checkAndCompactIfNeeded } = await import('../compaction-service');
+    const result = await checkAndCompactIfNeeded('user-1');
+
+    assert({
+      given: 'a refused write for an over-budget page',
+      should: 'report nothing as compacted',
+      actual: { compacted: result.compacted, fields: result.fields },
+      expected: { compacted: false, fields: [] },
     });
   });
 
-  describe('needsCompaction', () => {
-    it('should exist and be callable', async () => {
-      const { needsCompaction } = await import('../compaction-service');
+  it('reserves one hold per over-budget field, settles each once, then writes each compaction', async () => {
+    readMemoryPages.mockResolvedValue({ bio: 'x'.repeat(3500), rules: 'y'.repeat(3500) });
+    const { generateText } = await import('ai');
+    vi.mocked(generateText).mockResolvedValue({
+      text: 'short',
+      usage: { inputTokens: 10, outputTokens: 5 },
+    } as never);
+    const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    vi.mocked(createAIProvider).mockResolvedValue({ model: {}, provider: 'anthropic', modelName: 'm' } as never);
 
-      assert({
-        given: 'compaction-service module',
-        should: 'export needsCompaction function',
-        actual: typeof needsCompaction,
-        expected: 'function',
-      });
-    });
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
 
-    it('should return false for content below threshold', async () => {
-      const { needsCompaction } = await import('../compaction-service');
-      const shortContent = 'Short bio';
+    const { checkAndCompactIfNeeded } = await import('../compaction-service');
+    const result = await checkAndCompactIfNeeded('user-funded');
 
-      const result = needsCompaction(shortContent, 20000);
-
-      assert({
-        given: 'content below 90% of max length',
-        should: 'return false',
-        actual: result,
-        expected: false,
-      });
-    });
-
-    it('should return true for content at or above 90% threshold', async () => {
-      const { needsCompaction } = await import('../compaction-service');
-      // 90% of 1000 = 900, so 901 should trigger
-      const longContent = 'x'.repeat(901);
-
-      const result = needsCompaction(longContent, 1000);
-
-      assert({
-        given: 'content at 90.1% of max length',
-        should: 'return true',
-        actual: result,
-        expected: true,
-      });
-    });
-
-    it('should use default max length of 20000 if not specified', async () => {
-      const { needsCompaction } = await import('../compaction-service');
-      // 90% of 20000 = 18000, so 17999 should not trigger
-      const justUnderContent = 'x'.repeat(17999);
-      const justOverContent = 'x'.repeat(18001);
-
-      assert({
-        given: 'content at 17999 chars (under 90% of 20000)',
-        should: 'return false',
-        actual: needsCompaction(justUnderContent),
-        expected: false,
-      });
-
-      assert({
-        given: 'content at 18001 chars (over 90% of 20000)',
-        should: 'return true',
-        actual: needsCompaction(justOverContent),
-        expected: true,
-      });
+    assert({
+      given: 'two pages over budget and a funded user',
+      should: 'reserve once per model call, settle each hold once, and compact both',
+      actual: {
+        reservedFor: mockReserve.mock.calls.map(([userId]) => userId),
+        modelCalls: vi.mocked(generateText).mock.calls.length,
+        settledHolds: vi.mocked(AIMonitoring.trackUsage).mock.calls.map(([usage]) => usage.holdId),
+        releases: mockReleaseMemoryHold.mock.calls.length,
+        result,
+      },
+      expected: {
+        reservedFor: ['user-funded', 'user-funded'],
+        modelCalls: 2,
+        settledHolds: ['hold-m', 'hold-m'],
+        releases: 0,
+        result: { compacted: true, fields: ['bio', 'rules'] },
+      },
     });
   });
 
-  describe('compactField', () => {
-    it('should exist and be callable', async () => {
-      const { compactField } = await import('../compaction-service');
+  it('compacts nothing and writes nothing when the credit gate refuses', async () => {
+    readMemoryPages.mockResolvedValue({ bio: 'x'.repeat(3500) });
+    mockReserve.mockResolvedValueOnce({ allowed: false, reason: 'out_of_credits' } as never);
+    const { generateText } = await import('ai');
+    const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    vi.mocked(createAIProvider).mockResolvedValue({ model: {}, provider: 'anthropic', modelName: 'm' } as never);
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
 
-      assert({
-        given: 'compaction-service module',
-        should: 'export compactField function',
-        actual: typeof compactField,
-        expected: 'function',
-      });
-    });
+    const { checkAndCompactIfNeeded } = await import('../compaction-service');
+    const result = await checkAndCompactIfNeeded('user-in-debt');
 
-    it('should return compacted content from LLM', async () => {
-      setupAIProviderSuccess('Compacted bio content');
-
-      const { compactField } = await import('../compaction-service');
-      const longContent = 'Original long bio content that needs compacting';
-
-      const result = await compactField('user-123', 'bio', longContent, 1000);
-
-      assert({
-        given: 'long content and successful LLM response',
-        should: 'return compacted content',
-        actual: result,
-        expected: 'Compacted bio content',
-      });
-    });
-
-    it('should return original content when LLM returns empty', async () => {
-      setupAIProviderSuccess('');
-
-      const { compactField } = await import('../compaction-service');
-      const originalContent = 'Original content';
-
-      const result = await compactField('user-123', 'bio', originalContent, 1000);
-
-      assert({
-        given: 'LLM returns empty response',
-        should: 'return original content',
-        actual: result,
-        expected: originalContent,
-      });
-    });
-
-    it('should return original content when LLM returns longer text', async () => {
-      const originalContent = 'Short';
-      setupAIProviderSuccess('This is actually longer than the original');
-
-      const { compactField } = await import('../compaction-service');
-
-      const result = await compactField('user-123', 'bio', originalContent, 1000);
-
-      assert({
-        given: 'LLM returns longer text than original',
-        should: 'return original content',
-        actual: result,
-        expected: originalContent,
-      });
-    });
-
-    it('should return original content when AI provider fails', async () => {
-      mockCreateAIProvider.mockResolvedValue({
-        error: 'API key not configured',
-        status: 400,
-      });
-
-      const { compactField } = await import('../compaction-service');
-      const originalContent = 'Original content that needs compacting';
-
-      const result = await compactField('user-123', 'bio', originalContent, 1000);
-
-      assert({
-        given: 'AI provider error',
-        should: 'return original content without throwing',
-        actual: result,
-        expected: originalContent,
-      });
-    });
-
-    it('should call LLM with field-specific system prompt', async () => {
-      setupAIProviderSuccess('Compacted');
-
-      const { compactField } = await import('../compaction-service');
-      await compactField('user-123', 'bio', 'Long content', 1000);
-
-      assert({
-        given: 'compactField called with bio field',
-        should: 'call generateText once',
-        actual: mockGenerateText.mock.calls.length,
-        expected: 1,
-      });
+    assert({
+      given: 'an over-budget page and a user whose balance the gate refuses',
+      should: 'leave the page untouched, run no model, charge nothing, and say why',
+      actual: {
+        result,
+        writes: updatePersonalizationPage.mock.calls.length,
+        modelCalls: vi.mocked(generateText).mock.calls.length,
+        charges: vi.mocked(AIMonitoring.trackUsage).mock.calls.length,
+        releases: mockReleaseMemoryHold.mock.calls.length,
+      },
+      expected: {
+        result: { compacted: false, fields: [], creditRefusal: 'out_of_credits' },
+        writes: 0,
+        modelCalls: 0,
+        charges: 0,
+        releases: 0,
+      },
     });
   });
 
-  describe('checkAndCompactIfNeeded', () => {
-    it('should exist and be callable', async () => {
-      const { checkAndCompactIfNeeded } = await import('../compaction-service');
+  it('a refusal on a later field keeps the fields already compacted and stops the rest', async () => {
+    readMemoryPages.mockResolvedValue({ bio: 'x'.repeat(3500), rules: 'y'.repeat(3500) });
+    mockReserve
+      .mockResolvedValueOnce({ allowed: true, holdId: 'hold-m', walletId: 'w-root', release: mockReleaseMemoryHold } as never)
+      .mockResolvedValueOnce({ allowed: false, reason: 'out_of_credits' } as never);
+    const { generateText } = await import('ai');
+    vi.mocked(generateText).mockResolvedValue({ text: 'short', usage: { inputTokens: 10, outputTokens: 5 } } as never);
+    const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    vi.mocked(createAIProvider).mockResolvedValue({ model: {}, provider: 'anthropic', modelName: 'm' } as never);
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
 
-      assert({
-        given: 'compaction-service module',
-        should: 'export checkAndCompactIfNeeded function',
-        actual: typeof checkAndCompactIfNeeded,
-        expected: 'function',
-      });
+    const { checkAndCompactIfNeeded } = await import('../compaction-service');
+    const result = await checkAndCompactIfNeeded('user-running-low');
+
+    assert({
+      given: 'two pages over budget and credit for only the first',
+      should: 'write the paid-for compaction once, touch the other page not at all, and report the refusal',
+      actual: {
+        result,
+        writtenFields: updatePersonalizationPage.mock.calls.map((call: unknown[]) => call[1]),
+        modelCalls: vi.mocked(generateText).mock.calls.length,
+        charges: vi.mocked(AIMonitoring.trackUsage).mock.calls.length,
+      },
+      expected: {
+        result: { compacted: true, fields: ['bio'], creditRefusal: 'out_of_credits' },
+        writtenFields: ['bio'],
+        modelCalls: 1,
+        charges: 1,
+      },
     });
+  });
+});
 
-    it('should return compacted: false when no personalization exists', async () => {
-      mockDbQuery.mockResolvedValue(null);
+describe('compactField — the credit gate', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    vi.mocked(createAIProvider).mockResolvedValue({ model: {}, provider: 'anthropic', modelName: 'm' } as never);
+    const { generateText } = await import('ai');
+    vi.mocked(generateText).mockResolvedValue({ text: 'short', usage: { inputTokens: 10, outputTokens: 5 } } as never);
+  });
 
-      const { checkAndCompactIfNeeded } = await import('../compaction-service');
-      const result = await checkAndCompactIfNeeded('user-123');
+  it('SPEND-1 (partial) an exhausted person\'s memory compaction calls no model, charges nothing, and keeps the page as it was', async () => {
+    mockReserve.mockResolvedValueOnce({ allowed: false, reason: 'out_of_credits' } as never);
+    const { generateText } = await import('ai');
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+    const { compactField } = await import('../compaction-service');
+    const original = 'x'.repeat(3500);
 
-      assert({
-        given: 'no personalization record',
-        should: 'return compacted: false',
-        actual: result.compacted,
-        expected: false,
-      });
+    const result = await compactField('user-1', 'bio', original);
 
-      assert({
-        given: 'no personalization record',
-        should: 'return empty fields array',
-        actual: result.fields,
-        expected: [],
-      });
-    });
+    expect(result).toEqual({ creditRefusal: 'out_of_credits' });
+    expect(generateText).not.toHaveBeenCalled();
+    expect(AIMonitoring.trackUsage).not.toHaveBeenCalled();
+  });
 
-    it('should return compacted: false when all fields are under threshold', async () => {
-      mockDbQuery.mockResolvedValue({
-        bio: 'Short bio',
-        writingStyle: 'Concise',
-        rules: 'No rules',
-        enabled: true,
-      });
+  it('SPEND-8 (partial) a funded memory compaction reserves before the model and settles once on that hold and wallet', async () => {
+    const { generateText } = await import('ai');
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+    const { compactField } = await import('../compaction-service');
 
-      const { checkAndCompactIfNeeded } = await import('../compaction-service');
-      const result = await checkAndCompactIfNeeded('user-123', 20000);
+    await compactField('user-1', 'bio', 'x'.repeat(3500));
 
-      assert({
-        given: 'all fields under threshold',
-        should: 'return compacted: false',
-        actual: result.compacted,
-        expected: false,
-      });
-    });
+    expect(mockReserve).toHaveBeenCalledOnce();
+    expect(mockReserve).toHaveBeenCalledWith('user-1', expect.objectContaining({ provider: 'anthropic' }));
+    expect(mockReserve.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(generateText).mock.invocationCallOrder[0]);
+    expect(AIMonitoring.trackUsage).toHaveBeenCalledOnce();
+    expect(vi.mocked(AIMonitoring.trackUsage).mock.calls[0][0]).toMatchObject({ holdId: 'hold-m', walletId: 'w-root', source: 'memory' });
+    expect(mockReleaseMemoryHold).not.toHaveBeenCalled();
+  });
 
-    it('should compact fields exceeding threshold', async () => {
-      // Bio exceeds threshold, others don't
-      const longBio = 'x'.repeat(950);
-      mockDbQuery.mockResolvedValue({
-        bio: longBio,
-        writingStyle: 'Short',
-        rules: 'Short',
-        enabled: true,
-      });
-      setupAIProviderSuccess('Compacted bio');
+  it('a model failure after the reservation releases it and keeps the page', async () => {
+    const { generateText } = await import('ai');
+    vi.mocked(generateText).mockRejectedValueOnce(new Error('down'));
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+    const { compactField } = await import('../compaction-service');
+    const original = 'x'.repeat(3500);
 
-      const { checkAndCompactIfNeeded } = await import('../compaction-service');
-      const result = await checkAndCompactIfNeeded('user-123', 1000);
-
-      assert({
-        given: 'bio field exceeds threshold',
-        should: 'return compacted: true',
-        actual: result.compacted,
-        expected: true,
-      });
-
-      assert({
-        given: 'only bio exceeds threshold',
-        should: 'return fields array with bio',
-        actual: result.fields,
-        expected: ['bio'],
-      });
-    });
-
-    it('should compact multiple fields if multiple exceed threshold', async () => {
-      const longContent = 'x'.repeat(950);
-      mockDbQuery.mockResolvedValue({
-        bio: longContent,
-        writingStyle: longContent,
-        rules: 'Short',
-        enabled: true,
-      });
-      setupAIProviderSuccess('Compacted');
-
-      const { checkAndCompactIfNeeded } = await import('../compaction-service');
-      const result = await checkAndCompactIfNeeded('user-123', 1000);
-
-      assert({
-        given: 'bio and writingStyle exceed threshold',
-        should: 'return compacted: true',
-        actual: result.compacted,
-        expected: true,
-      });
-
-      assert({
-        given: 'bio and writingStyle exceed threshold',
-        should: 'return both fields in array',
-        actual: result.fields.sort(),
-        expected: ['bio', 'writingStyle'].sort(),
-      });
-    });
+    expect(await compactField('user-1', 'bio', original)).toEqual({ content: original });
+    expect(AIMonitoring.trackUsage).not.toHaveBeenCalled();
+    expect(mockReleaseMemoryHold).toHaveBeenCalledOnce();
   });
 });

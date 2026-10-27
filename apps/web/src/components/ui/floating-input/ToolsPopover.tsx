@@ -9,7 +9,7 @@ import {
 } from '@/components/ui/popover';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
-import { Wrench, Globe, Pencil, PencilOff, GitBranch, Server, ChevronDown, ChevronRight } from 'lucide-react';
+import { Wrench, Globe, Pencil, PencilOff, GitBranch, Server, ChevronDown, ChevronRight, Image as ImageIcon, Lock } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export interface ToolsPopoverProps {
@@ -17,6 +17,12 @@ export interface ToolsPopoverProps {
   webSearchEnabled?: boolean;
   /** Callback when web search is toggled */
   onWebSearchToggle?: (enabled: boolean) => void;
+  /** Whether image generation is enabled */
+  imageGenEnabled?: boolean;
+  /** Callback when image generation is toggled */
+  onImageGenToggle?: (enabled: boolean) => void;
+  /** Whether the user may use image generation (app admins only during rollout). When false, the row is locked. */
+  canUseImageGen?: boolean;
   /** Whether write mode is active (true = write, false = read only) */
   writeMode?: boolean;
   /** Callback when write mode is toggled */
@@ -43,6 +49,8 @@ export interface ToolsPopoverProps {
   showMcp?: boolean;
   /** Disable all toggles */
   disabled?: boolean;
+  /** Show only the icon (and active-count badge) — for narrow toolbars */
+  iconOnly?: boolean;
   /** Additional class names */
   className?: string;
 }
@@ -59,6 +67,9 @@ export interface ToolsPopoverProps {
 export function ToolsPopover({
   webSearchEnabled = false,
   onWebSearchToggle,
+  imageGenEnabled = false,
+  onImageGenToggle,
+  canUseImageGen = false,
   writeMode = true,
   onWriteModeToggle,
   showPageTree = false,
@@ -72,6 +83,7 @@ export function ToolsPopover({
   onMcpServerToggle,
   showMcp = false,
   disabled = false,
+  iconOnly = false,
   className,
 }: ToolsPopoverProps) {
   // Track whether MCP servers section is expanded
@@ -80,6 +92,7 @@ export function ToolsPopover({
   // Count active tools for badge (exclude writeMode since it's default true)
   const activeCount = [
     webSearchEnabled,
+    canUseImageGen && imageGenEnabled,
     showPageTree,
     showMcp && mcpEnabledCount > 0,
   ].filter(Boolean).length;
@@ -100,7 +113,7 @@ export function ToolsPopover({
           )}
         >
           <Wrench className="h-4 w-4" />
-          <span className="text-xs">Tools</span>
+          {iconOnly ? <span className="sr-only">Tools</span> : <span className="text-xs">Tools</span>}
           {activeCount > 0 && (
             <Badge
               variant="secondary"
@@ -134,13 +147,43 @@ export function ToolsPopover({
                 'text-sm',
                 webSearchEnabled ? 'text-foreground' : 'text-muted-foreground'
               )}>
-                Web Search
+                Web
               </span>
             </div>
             <Switch
               checked={webSearchEnabled}
               onCheckedChange={onWebSearchToggle}
               disabled={disabled}
+              className="scale-75"
+            />
+          </div>
+
+          {/* Image Generation Toggle (admin-only during rollout) */}
+          <div
+            className={cn(
+              'flex items-center justify-between w-full px-2 py-2 rounded-md transition-colors',
+              'hover:bg-accent hover:text-accent-foreground',
+              (disabled || !canUseImageGen) && 'opacity-50 cursor-not-allowed'
+            )}
+            title={canUseImageGen ? undefined : 'Image generation is restricted to app administrators'}
+          >
+            <div className="flex items-center gap-2">
+              <ImageIcon className={cn(
+                'h-4 w-4',
+                canUseImageGen && imageGenEnabled ? 'text-foreground' : 'text-muted-foreground'
+              )} />
+              <span className={cn(
+                'text-sm flex items-center gap-1',
+                canUseImageGen && imageGenEnabled ? 'text-foreground' : 'text-muted-foreground'
+              )}>
+                Image
+                {!canUseImageGen && <Lock className="h-3 w-3" />}
+              </span>
+            </div>
+            <Switch
+              checked={canUseImageGen && imageGenEnabled}
+              onCheckedChange={onImageGenToggle}
+              disabled={disabled || !canUseImageGen}
               className="scale-75"
             />
           </div>

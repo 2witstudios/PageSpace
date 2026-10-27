@@ -25,7 +25,7 @@ export default function ContactPage() {
               </h1>
               <p className="text-lg text-muted-foreground">
                 Have a question, feedback, or want to learn more about PageSpace?
-                We&apos;d love to hear from you.
+                We&#39;d love to hear from you.
               </p>
             </div>
 
@@ -52,12 +52,12 @@ export default function ContactPage() {
                 </div>
                 <h3 className="font-semibold mb-1">Community</h3>
                 <a
-                  href="https://discord.gg/kve8qgzZ8x"
+                  href="https://pagespace.ai/s/ps_share_oihl5ivoscf0tzx26g0t74degxwi028t"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-sm text-muted-foreground hover:text-primary transition-colors"
                 >
-                  Join our Discord
+                  Join our AI Agent Hub
                 </a>
               </div>
             </div>

@@ -1,0 +1,308 @@
+import { describe, it, expect } from 'vitest';
+import type { AllUserData } from './gdpr-export';
+import {
+  EXPORT_SCHEMA_VERSION,
+  parseExportFormat,
+  buildNativeExportFiles,
+  buildExportManifest,
+  buildPortableExportFiles,
+  toPortableExport,
+} from './export-format';
+
+const D1 = new Date('2024-01-02T03:04:05.000Z');
+const D2 = new Date('2024-02-03T04:05:06.000Z');
+
+function makeData(overrides: Partial<AllUserData> = {}): AllUserData {
+  return {
+    profile: {
+      id: 'u1',
+      name: 'Ada',
+      email: 'ada@example.com',
+      image: null,
+      timezone: 'UTC',
+      createdAt: D1,
+      updatedAt: D2,
+    },
+    drives: [{ id: 'd1', name: 'Drive One', slug: 'drive-one', role: 'OWNER', orgId: null, createdAt: D1 }],
+    pages: [
+      { id: 'p1', title: 'Page One', type: 'DOCUMENT', content: 'hello', driveId: 'd1', createdAt: D1, updatedAt: D2 },
+      { id: 'p2', title: 'Page Two', type: 'CANVAS', content: '{}', driveId: 'd1', createdAt: D1, updatedAt: D2 },
+    ],
+    sheets: [
+      {
+        pageId: 'p3',
+        pageTitle: 'Budget',
+        driveId: 'd1',
+        tabIndex: 0,
+        tabName: 'Sheet1',
+        rowCount: 2,
+        columnCount: 2,
+        frozenRows: 1,
+        frozenColumns: null,
+        columnFormats: null,
+        columnWidths: { A: 180 },
+        rowHeights: null,
+        ranges: null,
+        rows: [
+          { rowIndex: 0, cells: { A: { raw: '10', value: 10 }, B: { raw: '=A1*2', value: 20 } } },
+        ],
+      },
+    ],
+    messages: [{ id: 'm1', source: 'channel', content: 'hi', createdAt: D1 }],
+    files: [],
+    activity: [],
+    systemLogs: [],
+    apiMetrics: [],
+    errorLogs: [],
+    aiUsage: [],
+    tasks: [],
+    sessions: [],
+    notifications: [],
+    displayPreferences: [],
+    settings: { hotkeys: [], automation: null, toastNotifications: null, emailNotifications: [], imagoDriveAccess: [] },
+    personalization: null,
+    personalizationCandidates: [],
+    pulseSummaries: [],
+    withheld: [],
+    agentWorkspaces: [],
+    agentAccounts: { accounts: [], approvalsGiven: [], bindingsMade: [], delegationsGiven: [] },
+    streamState: [],
+    contentTags: [],
+    localEnvironments: [],
+    organizations: [],
+    orgMembership: { memberships: [], departures: [], joinRequests: [], guestHolds: [] },
+    wallet: { wallet: null, fundingLegs: [], spendOverrides: [] },
+    ...overrides,
+  };
+}
+
+describe('parseExportFormat', () => {
+  it('given_noOrUnknownOrNative_resolvesToNative', () => {
+    expect(parseExportFormat(undefined)).toBe('native');
+    expect(parseExportFormat(null)).toBe('native');
+    expect(parseExportFormat('native')).toBe('native');
+    expect(parseExportFormat('weird')).toBe('native');
+  });
+
+  it('given_portable_resolvesToPortable', () => {
+    expect(parseExportFormat('portable')).toBe('portable');
+  });
+});
+
+describe('buildNativeExportFiles', () => {
+  it('given_collections_reportsArrayLengthsAndSingularProfileAsOne', () => {
+    const files = buildNativeExportFiles(makeData());
+    const byName = Object.fromEntries(files.map((f) => [f.name, f.recordCount]));
+
+    expect(byName['profile.json']).toBe(1);
+    expect(byName['pages.json']).toBe(2);
+    expect(byName['drives.json']).toBe(1);
+    expect(byName['messages.json']).toBe(1);
+    expect(byName['files-metadata.json']).toBe(0);
+    expect(byName['system-logs.json']).toBe(0);
+    expect(byName['api-metrics.json']).toBe(0);
+    expect(byName['error-logs.json']).toBe(0);
+  });
+
+  it('given_nullPersonalization_omitsItFromInventory', () => {
+    const files = buildNativeExportFiles(makeData({ personalization: null }));
+    expect(files.some((f) => f.name === 'personalization.json')).toBe(false);
+  });
+
+  it('given_presentPersonalization_includesItWithCountOne', () => {
+    const files = buildNativeExportFiles(
+      makeData({
+        personalization: {
+          bio: 'b',
+          writingStyle: null,
+          rules: null,
+          enabled: true,
+          createdAt: D1,
+          updatedAt: D2,
+        },
+      }),
+    );
+    const entry = files.find((f) => f.name === 'personalization.json');
+    expect(entry?.recordCount).toBe(1);
+  });
+});
+
+describe('buildExportManifest', () => {
+  it('given_filesAndDate_returnsVersionedManifestWithInventory', () => {
+    const files = buildNativeExportFiles(makeData());
+    const manifest = buildExportManifest(files, { exportedAt: D1, format: 'native', withheld: [] });
+
+    expect(manifest.schemaVersion).toBe(EXPORT_SCHEMA_VERSION);
+    expect(manifest.exportedAt).toBe('2024-01-02T03:04:05.000Z');
+    expect(manifest.format).toBe('native');
+    expect(manifest.generator).toContain('PageSpace');
+    const pages = manifest.files.find((f) => f.name === 'pages.json');
+    expect(pages).toEqual({ name: 'pages.json', description: expect.any(String), recordCount: 2 });
+    // inventory does not leak the raw data payload
+    expect(JSON.stringify(manifest)).not.toContain('hello');
+  });
+  it('SEC-2 (partial) names what an org sign-in policy kept out of the bundle, with the code and the sign-in that brings it back', () => {
+    const manifest = buildExportManifest(buildNativeExportFiles(makeData()), {
+      exportedAt: D1,
+      format: 'native',
+      withheld: [
+        { category: 'pulseSummaries', count: 2, code: 'org_strong_sign_in_required', orgIds: ['org-a'] },
+        { category: 'personalization', count: 1, code: 'org_reauthentication_required', orgIds: ['org-b'] },
+      ],
+    });
+    expect(manifest.withheld).toEqual([
+      expect.objectContaining({ category: 'pulseSummaries', count: 2, code: 'org_strong_sign_in_required', orgIds: ['org-a'] }),
+      expect.objectContaining({ category: 'personalization', count: 1, code: 'org_reauthentication_required', orgIds: ['org-b'] }),
+    ]);
+    expect(manifest.withheld[0].note).toContain('2 Pulse summaries');
+    expect(manifest.withheld[0].note).toContain('org_strong_sign_in_required');
+    expect(manifest.withheld[0].note).toContain('passkey');
+    expect(manifest.withheld[1].note).toContain('Sign in again');
+  });
+
+  it('ships the Pulse summaries as their own file', () => {
+    const files = buildNativeExportFiles(makeData({
+      pulseSummaries: [{ summary: 'Board prep moved', greeting: null, type: 'scheduled', periodStart: D1, periodEnd: D2, generatedAt: D2 }],
+    }));
+    expect(files.find((f) => f.name === 'pulse-summaries.json')?.recordCount).toBe(1);
+  });
+});
+
+describe('toPortableExport', () => {
+  it('given_data_mapsProfileToPersonPagesToCreativeWorkMessagesToMessage', () => {
+    const portable = toPortableExport(makeData());
+
+    expect(portable['@context']).toBe('https://schema.org');
+    expect(portable['@type']).toBe('Person');
+    expect(portable.email).toBe('ada@example.com');
+
+    const creativeWork = portable.creativeWork as Array<Record<string, unknown>>;
+    expect(creativeWork).toHaveLength(2);
+    expect(creativeWork[0]['@type']).toBe('CreativeWork');
+    expect(creativeWork[0].name).toBe('Page One');
+
+    const messages = portable.message as Array<Record<string, unknown>>;
+    expect(messages[0]['@type']).toBe('Message');
+    expect(messages[0].text).toBe('hi');
+  });
+
+  it('given_dates_serializesAsIso8601Strings', () => {
+    const portable = toPortableExport(makeData());
+    expect(portable.dateCreated).toBe('2024-01-02T03:04:05.000Z');
+    const creativeWork = portable.creativeWork as Array<Record<string, unknown>>;
+    expect(creativeWork[0].dateModified).toBe('2024-02-03T04:05:06.000Z');
+  });
+
+  it('given_emptySections_producesEmptyArraysNotThrows', () => {
+    const portable = toPortableExport(makeData({ pages: [], messages: [], drives: [] }));
+    expect(portable.creativeWork).toEqual([]);
+    expect(portable.message).toEqual([]);
+    expect(portable.owns).toEqual([]);
+  });
+
+  it('given_files_mapsToMediaObject', () => {
+    const portable = toPortableExport(
+      makeData({
+        files: [
+          { id: 'f1', driveId: 'd1', sizeBytes: 1234, mimeType: 'image/png', storagePath: 'path/f1', createdAt: D1 },
+        ],
+      }),
+    );
+    const media = portable.subjectOf as Array<Record<string, unknown>>;
+    expect(media).toHaveLength(1);
+    expect(media[0]['@type']).toBe('MediaObject');
+    expect(media[0].encodingFormat).toBe('image/png');
+    expect(media[0].contentSize).toBe(1234);
+  });
+
+  it('is field-level lossless: native fields without a schema.org slot are preserved', () => {
+    const portable = toPortableExport(
+      makeData({
+        messages: [
+          {
+            id: 'm1',
+            source: 'direct_message',
+            content: 'hi',
+            direction: 'sent',
+            role: 'user',
+            pageId: 'pg1',
+            conversationId: 'c1',
+            isActive: true,
+            deletedAt: D2,
+            createdAt: D1,
+          },
+        ],
+      }),
+    );
+
+    // profile.timezone and drive.slug have no schema.org equivalent but must survive
+    expect(portable.timezone).toBe('UTC');
+    const owns = portable.owns as Array<Record<string, unknown>>;
+    expect(owns[0].slug).toBe('drive-one');
+
+    const msg = (portable.message as Array<Record<string, unknown>>)[0];
+    expect(msg.direction).toBe('sent');
+    expect(msg.sender).toBe('user');
+    expect(msg.pageId).toBe('pg1');
+    expect(msg.conversationId).toBe('c1');
+    expect(msg.isActive).toBe(true);
+    expect(msg.dateDeleted).toBe('2024-02-03T04:05:06.000Z');
+  });
+
+  it('is lossless: every native data category is represented (GDPR Art 20)', () => {
+    const full = makeData({
+      files: [{ id: 'f1', driveId: 'd1', sizeBytes: 1, mimeType: null, storagePath: null, createdAt: D1 }],
+      activity: [{ id: 'a1', operation: 'create', resourceType: 'page', resourceId: 'p1', timestamp: D1, metadata: null }],
+      systemLogs: [{ id: 'sl1', timestamp: D1, level: 'error', message: 'boom', category: null, endpoint: '/api/foo', method: null, duration: null }],
+      apiMetrics: [{ id: 'am1', timestamp: D1, endpoint: '/api/foo', method: 'GET', statusCode: 200, duration: 42, requestSize: null, responseSize: null }],
+      errorLogs: [{ id: 'el1', timestamp: D1, name: 'TypeError', message: 'oops', endpoint: null, method: null, file: null, line: null, column: null, resolved: null }],
+      aiUsage: [{ id: 'ai1', provider: 'openrouter', model: 'm', inputTokens: 1, outputTokens: 2, cost: 0.1, timestamp: D1 }],
+      tasks: [{ listId: 'l1', listTitle: 'L', items: [] }],
+      sessions: [{ id: 's1', type: 'session', deviceId: null, scopes: [], createdByIp: null, lastUsedAt: null, lastUsedIp: null, expiresAt: D2, revokedAt: null, revokedReason: null, createdAt: D1 }],
+      notifications: [{ id: 'n1', type: 't', title: 'T', message: 'M', metadata: null, isRead: false, createdAt: D1, readAt: null }],
+      displayPreferences: [{ preferenceType: 'theme', enabled: true, updatedAt: D2 }],
+      personalization: { bio: 'b', writingStyle: null, rules: null, enabled: true, createdAt: D1, updatedAt: D2 },
+      agentWorkspaces: [{ id: 'w1', role: 'owner', driveId: 'd1', name: 'W', lastActiveAt: D2, endedAt: null, createdAt: D1, updatedAt: D2, shells: [], nodes: [] }],
+      streamState: [{ messageId: 'sm1', conversationId: 'c1', status: 'complete', parts: [{ type: 'text', text: 'hi' }], frames: [{ type: 'text-delta', id: 't1', delta: 'hi' }], startedAt: D1, completedAt: D2 }],
+      localEnvironments: [],
+    });
+    const portable = toPortableExport(full);
+
+    // schema.org-typed categories
+    expect((portable.owns as unknown[]).length).toBe(1);
+    expect((portable.creativeWork as unknown[]).length).toBe(2);
+    expect((portable.message as unknown[]).length).toBe(1);
+    expect((portable.subjectOf as unknown[]).length).toBe(1);
+
+    // everything else carried verbatim under additionalProperty
+    const props = portable.additionalProperty as Array<{ name: string; value: unknown }>;
+    const byName = Object.fromEntries(props.map((p) => [p.name, p.value]));
+    // DERIVED from the data, never a hand-written list. A hardcoded category
+    // list is how the native bundle locked in the agent-workspace omission:
+    // the assertion agreed with whatever the code already did, so adding a
+    // category and forgetting the bundle stayed green. These are the keys the
+    // schema.org mapping consumes directly; everything ELSE must appear here.
+    const SCHEMA_ORG_MAPPED = new Set(['profile', 'drives', 'pages', 'messages', 'files']);
+    // `withheld` is not data: it is what the bundle left out, written into manifest.json (SEC-2/3).
+    const MANIFEST_ONLY = new Set(['withheld']);
+    const expectedProps = Object.keys(full).filter((key) => !SCHEMA_ORG_MAPPED.has(key) && !MANIFEST_ONLY.has(key));
+    for (const key of expectedProps) {
+      expect(byName, `${key} is an AllUserData category the portable bundle drops`).toHaveProperty(key);
+    }
+    expect((byName.activity as unknown[]).length).toBe(1);
+    expect((byName.systemLogs as unknown[]).length).toBe(1);
+    expect((byName.apiMetrics as unknown[]).length).toBe(1);
+    expect((byName.errorLogs as unknown[]).length).toBe(1);
+    expect((byName.sessions as unknown[]).length).toBe(1);
+    expect(byName.personalization).not.toBeNull();
+  });
+});
+
+describe('buildPortableExportFiles', () => {
+  it('given_data_returnsSingleSchemaOrgDataJson', () => {
+    const files = buildPortableExportFiles(makeData());
+    expect(files).toHaveLength(1);
+    expect(files[0].name).toBe('data.json');
+    expect((files[0].data as Record<string, unknown>)['@context']).toBe('https://schema.org');
+  });
+});

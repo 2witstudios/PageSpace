@@ -1,9 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { buildTree } from '@pagespace/lib/server';
-import { pages, drives, pagePermissions, driveMembers, taskItems, taskLists, db, and, eq, inArray, asc, sql, isNotNull } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
-import { jsonResponse } from '@pagespace/lib/api-utils';
+import { buildTree } from '@pagespace/lib/content/tree-utils';
+import { db } from '@pagespace/db/db'
+import { and, eq, inArray, asc, sql, isNotNull } from '@pagespace/db/operators'
+import { pages, drives } from '@pagespace/db/schema/core'
+import { explainSignInRefusal, getUserAccessiblePagesInDrive } from '@pagespace/lib/permissions/permissions';
+import { canAdministerDrive } from '@pagespace/lib/permissions/drive-relationship';
+import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
+import { taskItems } from '@pagespace/db/schema/tasks';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isScopedMCPAuth, getPrincipalAccessiblePagesInDrive } from '@/lib/auth';
+import { jsonResponse } from '@pagespace/lib/utils/api-utils';
+import { actorFromAuth, orgSignInRequiredResponse } from '@/lib/auth/request-actor';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -12,51 +21,33 @@ const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 // This prevents overwhelming users with indicators on old content they've never seen
 const UNREAD_INDICATOR_CUTOFF_DATE = new Date('2026-02-03T00:00:00.000Z');
 
-async function getPermittedPages(driveId: string, userId: string) {
-  // Check if user is a drive member - currently unused but will be needed for member-level permissions
-  // const membership = await db.query.driveMembers.findFirst({
-  //   where: and(
-  //     eq(driveMembers.driveId, driveId),
-  //     eq(driveMembers.userId, userId)
-  //   )
-  // });
-
-  // Get pages user has explicit permissions for
-  const permittedPageIdsQuery = await db.selectDistinct({ id: pages.id })
-    .from(pages)
-    .leftJoin(pagePermissions, eq(pages.id, pagePermissions.pageId))
-    .where(and(
-      eq(pages.driveId, driveId),
-      eq(pages.isTrashed, false),
-      eq(pagePermissions.userId, userId),
-      eq(pagePermissions.canView, true)
-    ));
-  const permittedPageIds = permittedPageIdsQuery.map(p => p.id);
+async function getPermittedPages(driveId: string, actor: AccessActor) {
+  // The canonical page set: the org-aware membership (with its custom or default role), private
+  // pages, and live explicit grants. Never a drive_members read of this route's own.
+  const permittedPageIds = await getUserAccessiblePagesInDrive(actor, driveId);
 
   if (permittedPageIds.length === 0) {
     return [];
   }
 
-  // If user has any permissions, also get ancestor pages for tree structure
-  let ancestorIds: string[] = [];
-  if (permittedPageIds.length > 0) {
-    const ancestorIdsQuery = await db.execute(sql`
-      WITH RECURSIVE ancestors AS (
-        SELECT id, "parentId"
-        FROM pages
-        WHERE id IN ${permittedPageIds}
-        UNION ALL
-        SELECT p.id, p."parentId"
-        FROM pages p
-        JOIN ancestors a ON p.id = a."parentId"
-      )
-      SELECT id FROM ancestors;
-    `);
-    ancestorIds = (ancestorIdsQuery.rows as { id: string }[]).map(r => r.id);
-  }
+  // Also get ancestor pages for tree structure
+  const ancestorIdsQuery = await db.execute(sql`
+    WITH RECURSIVE ancestors AS (
+      SELECT id, "parentId"
+      FROM pages
+      WHERE id IN ${permittedPageIds} AND "isTrashed" = false
+      UNION ALL
+      SELECT p.id, p."parentId"
+      FROM pages p
+      JOIN ancestors a ON p.id = a."parentId"
+    )
+    SELECT id FROM ancestors;
+  `);
+  const ancestorIds = (ancestorIdsQuery.rows as { id: string }[]).map(r => r.id);
 
   const allVisiblePageIds = [...new Set([...permittedPageIds, ...ancestorIds])];
 
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   return db.query.pages.findMany({
     where: and(
       inArray(pages.id, allVisiblePageIds),
@@ -83,6 +74,12 @@ export async function GET(
 
   const userId = auth.userId;
 
+  // ls-mode query params
+  const { searchParams } = new URL(request.url);
+  const lsMode = searchParams.get('ls') === 'true';
+  const lsParentId = searchParams.get('parentId') ?? null;
+  const lsRecursive = searchParams.get('recursive') === 'true';
+
   try {
     // Find drive by id, but don't scope to owner yet
     const drive = await db.query.drives.findFirst({
@@ -95,48 +92,145 @@ export async function GET(
 
     let pageResults;
 
-    // Check if user is owner
-    const isOwner = drive.ownerId === userId;
-
-    // Check if user is admin
-    let isAdmin = false;
-    if (!isOwner) {
-      const adminMembership = await db.select()
-        .from(driveMembers)
-        .where(and(
-          eq(driveMembers.driveId, drive.id),
-          eq(driveMembers.userId, userId),
-          eq(driveMembers.role, 'ADMIN')
-        ))
-        .limit(1);
-
-      isAdmin = adminMembership.length > 0;
-    }
-
-    // If user owns the drive or is an admin, fetch all pages
-    if (isOwner || isAdmin) {
-      pageResults = await db.query.pages.findMany({
+    if (isScopedMCPAuth(auth)) {
+      // A scoped MCP token is its own drive member — list the pages the TOKEN's
+      // role can see, not the owning user's.
+      const accessible = await getPrincipalAccessiblePagesInDrive(auth, driveId);
+      const accessibleIds = new Set(accessible.map(p => p.id));
+      // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
+      const allPages = await db.query.pages.findMany({
         where: and(
           eq(pages.driveId, drive.id),
           eq(pages.isTrashed, false)
         ),
         orderBy: [asc(pages.position)],
       });
+      pageResults = allPages.filter(p => accessibleIds.has(p.id));
     } else {
-      // If user does not own the drive and is not an admin, fetch only permitted pages and their ancestors
-      pageResults = await getPermittedPages(drive.id, userId);
+      // The drive's lead or an effective ADMIN (the org-aware membership) gets every page
+      if (canAdministerDrive(await loadDriveRelationship(actorFromAuth(auth), drive))) {
+        // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
+        pageResults = await db.query.pages.findMany({
+          where: and(
+            eq(pages.driveId, drive.id),
+            eq(pages.isTrashed, false)
+          ),
+          orderBy: [asc(pages.position)],
+        });
+      } else {
+        // If user does not own the drive and is not an admin, fetch only permitted pages and their ancestors
+        pageResults = await getPermittedPages(drive.id, actorFromAuth(auth));
+      }
     }
 
-    // Get task-linked page IDs scoped to this drive (join through taskLists → pages in drive)
+    // A drive the person holds whose org refuses this credential lists as nothing; say why instead of an empty tree,
+    // so the client can ask them to sign in again (SEC-2/3). Null for a drive they never held: the empty list stands.
+    if (pageResults.length === 0) {
+      const code = await explainSignInRefusal(actorFromAuth(auth), drive.id);
+      if (code) return orgSignInRequiredResponse(code);
+    }
+
+    // Get task-linked page IDs scoped to this drive (task pages are children of task list pages)
     const taskLinkedPageIds = await db.selectDistinct({ pageId: taskItems.pageId })
       .from(taskItems)
-      .innerJoin(taskLists, eq(taskItems.taskListId, taskLists.id))
-      .innerJoin(pages, eq(taskLists.pageId, pages.id))
+      .innerJoin(pages, eq(pages.id, taskItems.pageId))
       .where(and(
         isNotNull(taskItems.pageId),
         eq(pages.driveId, drive.id)
       ));
     const taskLinkedSet = new Set(taskLinkedPageIds.map(t => t.pageId));
+
+    // ── ls-mode: flat list of direct children (or full subtree) ──────────────
+    if (lsMode) {
+      const pageMap = new Map(pageResults.map(p => [p.id, p]));
+
+      // Use !== null so empty-string parentId (from ?parentId=) is caught, not treated as root
+      if (lsParentId !== null && !pageMap.has(lsParentId)) {
+        return NextResponse.json({ error: 'parentId not found or not accessible' }, { status: 404 });
+      }
+
+      // Walk parent chain to build breadcrumb — visited set guards against corrupt cycles
+      const buildBreadcrumb = (id: string | null): { id: string; title: string }[] => {
+        if (!id) return [];
+        const crumbs: { id: string; title: string }[] = [];
+        const visited = new Set<string>();
+        let current = pageMap.get(id);
+        while (current) {
+          if (visited.has(current.id)) break;
+          visited.add(current.id);
+          crumbs.unshift({ id: current.id, title: current.title });
+          current = current.parentId ? pageMap.get(current.parentId) : undefined;
+        }
+        return crumbs;
+      };
+
+      const buildLocation = (id: string | null, visited = new Set<string>()): string => {
+        if (!id) return `/${drive.slug}`;
+        if (visited.has(id)) return `/${drive.slug}`;
+        visited.add(id);
+        const page = pageMap.get(id);
+        if (!page) return `/${drive.slug}`;
+        return `${buildLocation(page.parentId, visited)}/${page.title}`;
+      };
+
+      interface LsPage {
+        id: string;
+        title: string;
+        type: string;
+        hasChildren: boolean;
+        isTaskLinked: boolean;
+      }
+
+      let resultPages: LsPage[];
+
+      if (!lsRecursive) {
+        const children = pageResults.filter(p => p.parentId === lsParentId);
+        resultPages = children.map(p => ({
+          id: p.id,
+          title: p.title,
+          type: p.type,
+          hasChildren: pageResults.some(c => c.parentId === p.id),
+          isTaskLinked: taskLinkedSet.has(p.id),
+        }));
+      } else {
+        const collectSubtree = (startParentId: string | null, visited = new Set<string>()): LsPage[] => {
+          const result: LsPage[] = [];
+          if (startParentId !== null) {
+            if (visited.has(startParentId)) return result;
+            visited.add(startParentId);
+          }
+          const children = pageResults.filter(p => p.parentId === startParentId);
+          for (const p of children) {
+            result.push({
+              id: p.id,
+              title: p.title,
+              type: p.type,
+              hasChildren: pageResults.some(c => c.parentId === p.id),
+              isTaskLinked: taskLinkedSet.has(p.id),
+            });
+            result.push(...collectSubtree(p.id, visited));
+          }
+          return result;
+        };
+        resultPages = collectSubtree(lsParentId);
+      }
+
+      const breadcrumb = buildBreadcrumb(lsParentId);
+      const location = lsParentId ? buildLocation(lsParentId) : `/${drive.slug}`;
+
+      auditRequest(request, { eventType: 'data.read', userId, resourceType: 'drive_page_tree', resourceId: driveId, details: { action: 'list_pages_ls', count: resultPages.length } });
+      return jsonResponse({
+        mode: 'ls',
+        driveName: drive.name,
+        driveSlug: drive.slug,
+        location,
+        breadcrumb,
+        pages: resultPages,
+        count: resultPages.length,
+        totalInDrive: pageResults.length,
+      });
+    }
+    // ─────────────────────────────────────────────────────────────────────────
 
     // Query activity logs to find pages with changes by OTHER users or AI since last view
     // This is more accurate than comparing updatedAt because:
@@ -190,6 +284,7 @@ export async function GET(
     });
 
     const pageTree = buildTree(pagesWithFlags);
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'drive_page_tree', resourceId: driveId, details: { action: 'list_pages', count: pageResults.length } });
     return jsonResponse(pageTree);
   } catch (error) {
     loggers.api.error('Error fetching pages:', error as Error);

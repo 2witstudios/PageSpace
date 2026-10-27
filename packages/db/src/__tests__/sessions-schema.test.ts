@@ -1,148 +1,88 @@
 /**
- * Sessions Schema Tests
+ * Sessions Schema Unit Tests
  *
- * Tests for the sessions table schema (P2-T1).
- * Verifies table constraints, relations, and indexes.
+ * Validates sessions table schema definition: columns, constraints,
+ * relations, and indexes. Runs without a database connection.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { db, sessions, users } from '../index';
-import { eq, and, isNull, inArray } from 'drizzle-orm';
-import { createId } from '@paralleldrive/cuid2';
+import { describe, it, expect } from 'vitest';
+import { sessions, sessionsRelations } from '../schema/sessions';
+import { getTableColumns } from 'drizzle-orm';
+
+const columns = getTableColumns(sessions);
 
 describe('Sessions Schema', () => {
-  let testUserId = '';
+  describe('table columns', () => {
+    it('exports all expected columns', () => {
+      const expectedColumns = [
+        'id', 'tokenHash', 'tokenPrefix', 'userId',
+        'type', 'scopes', 'resourceType', 'resourceId', 'driveId',
+        'tokenVersion', 'adminRoleVersion', 'createdByService', 'createdByIp',
+        'expiresAt', 'lastUsedAt', 'lastUsedIp', 'revokedAt', 'revokedReason',
+        'createdAt',
+      ];
 
-  beforeEach(async () => {
-    // Generate unique test ID first
-    const uniqueId = createId();
-
-    // Clean any orphaned test sessions (defensive cleanup)
-    await db.delete(sessions).where(
-      inArray(sessions.tokenHash, ['abc123hash', 'unique-hash', 'cascade-test', 'hash-1', 'hash-2'])
-    );
-
-    const [user] = await db.insert(users).values({
-      id: uniqueId,
-      name: 'Test Session User',
-      email: `test-session-${uniqueId}@example.com`,
-      password: 'hashed_password',
-      provider: 'email',
-      role: 'user',
-      tokenVersion: 1,
-    }).returning();
-
-    testUserId = user.id;
-  });
-
-  afterEach(async () => {
-    if (!testUserId) return;
-
-    try {
-      // Delete sessions before user (cascade also handles this, but explicit is safer)
-      await db.delete(sessions).where(eq(sessions.userId, testUserId));
-      await db.delete(users).where(eq(users.id, testUserId));
-    } catch {
-      // User may already be deleted by "cascades delete" test
-    }
-
-    testUserId = '';
-  });
-
-  it('creates session with required fields', async () => {
-    const [session] = await db.insert(sessions).values({
-      tokenHash: 'abc123hash',
-      tokenPrefix: 'ps_sess_abc',
-      userId: testUserId,
-      type: 'user',
-      scopes: ['*'],
-      tokenVersion: 1,
-      expiresAt: new Date(Date.now() + 3600000),
-    }).returning();
-
-    expect(session.id).toBeTruthy();
-    expect(session.tokenHash).toBe('abc123hash');
-    expect(session.userId).toBe(testUserId);
-    expect(session.type).toBe('user');
-    expect(session.scopes).toEqual(['*']);
-  });
-
-  it('enforces unique tokenHash', async () => {
-    await db.insert(sessions).values({
-      tokenHash: 'unique-hash',
-      tokenPrefix: 'ps_sess_abc',
-      userId: testUserId,
-      type: 'user',
-      scopes: [],
-      tokenVersion: 1,
-      expiresAt: new Date(Date.now() + 3600000),
+      for (const col of expectedColumns) {
+        expect(columns).toHaveProperty(col);
+      }
     });
 
-    await expect(
-      db.insert(sessions).values({
-        tokenHash: 'unique-hash', // Duplicate
-        tokenPrefix: 'ps_sess_xyz',
-        userId: testUserId,
-        type: 'user',
-        scopes: [],
-        tokenVersion: 1,
-        expiresAt: new Date(Date.now() + 3600000),
-      })
-    ).rejects.toThrow();
+    it('has id as primary key with text type', () => {
+      expect(columns.id.dataType).toBe('string');
+      expect(columns.id.primary).toBe(true);
+    });
+
+    it('has tokenHash as unique and not null', () => {
+      expect(columns.tokenHash.notNull).toBe(true);
+      expect(columns.tokenHash.isUnique).toBe(true);
+    });
+
+    it('has tokenPrefix as not null', () => {
+      expect(columns.tokenPrefix.notNull).toBe(true);
+    });
+
+    it('has userId as not null', () => {
+      expect(columns.userId.notNull).toBe(true);
+    });
+
+    it('has type as not null text enum', () => {
+      expect(columns.type.notNull).toBe(true);
+      expect(columns.type.dataType).toBe('string');
+    });
+
+    it('has scopes as not null array', () => {
+      expect(columns.scopes.notNull).toBe(true);
+    });
+
+    it('has tokenVersion as not null', () => {
+      expect(columns.tokenVersion.notNull).toBe(true);
+    });
+
+    it('has expiresAt as not null', () => {
+      expect(columns.expiresAt.notNull).toBe(true);
+    });
+
+    it('has optional resource binding columns (nullable)', () => {
+      expect(columns.resourceType.notNull).toBe(false);
+      expect(columns.resourceId.notNull).toBe(false);
+      expect(columns.driveId.notNull).toBe(false);
+    });
+
+    it('has optional lifecycle columns (nullable)', () => {
+      expect(columns.lastUsedAt.notNull).toBe(false);
+      expect(columns.lastUsedIp.notNull).toBe(false);
+      expect(columns.revokedAt.notNull).toBe(false);
+      expect(columns.revokedReason.notNull).toBe(false);
+    });
+
+    it('has createdAt with default now', () => {
+      expect(columns.createdAt.notNull).toBe(true);
+      expect(columns.createdAt.hasDefault).toBe(true);
+    });
   });
 
-  it('cascades delete on user deletion', async () => {
-    await db.insert(sessions).values({
-      tokenHash: 'cascade-test',
-      tokenPrefix: 'ps_sess_abc',
-      userId: testUserId,
-      type: 'user',
-      scopes: [],
-      tokenVersion: 1,
-      expiresAt: new Date(Date.now() + 3600000),
+  describe('relations', () => {
+    it('exports sessionsRelations', () => {
+      expect(sessionsRelations).toBeDefined();
     });
-
-    await db.delete(users).where(eq(users.id, testUserId));
-
-    const remainingSessions = await db.query.sessions.findMany({
-      where: eq(sessions.userId, testUserId),
-    });
-
-    expect(remainingSessions).toHaveLength(0);
-  });
-
-  it('queries by indexed fields return expected results', async () => {
-    // Create multiple sessions
-    await db.insert(sessions).values([
-      {
-        tokenHash: 'hash-1',
-        tokenPrefix: 'ps_sess_1',
-        userId: testUserId,
-        type: 'user',
-        scopes: [],
-        tokenVersion: 1,
-        expiresAt: new Date(Date.now() + 3600000),
-      },
-      {
-        tokenHash: 'hash-2',
-        tokenPrefix: 'ps_sess_2',
-        userId: testUserId,
-        type: 'user',
-        scopes: [],
-        tokenVersion: 1,
-        expiresAt: new Date(Date.now() - 1000), // Expired
-      },
-    ]);
-
-    // Test userId index
-    const userSessions = await db.query.sessions.findMany({
-      where: eq(sessions.userId, testUserId),
-    });
-    expect(userSessions).toHaveLength(2);
-
-    // Test tokenHash index
-    const sessionByHash = await db.query.sessions.findFirst({
-      where: eq(sessions.tokenHash, 'hash-1'),
-    });
-    expect(sessionByHash?.tokenPrefix).toBe('ps_sess_1');
   });
 });

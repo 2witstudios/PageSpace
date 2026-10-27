@@ -9,8 +9,8 @@
  */
 
 import { z } from 'zod/v4';
-import { trackActivity, trackFeature, trackError } from '@pagespace/lib/activity-tracker';
-import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security';
+import { trackActivity, trackFeature, trackError } from '@pagespace/lib/monitoring/activity-tracker';
+import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getClientIP } from '@/lib/auth/auth-helpers';
 
@@ -110,10 +110,11 @@ export async function POST(request: Request) {
 
     const userAgent = request.headers.get('user-agent') || 'unknown';
 
+    // ip and userAgent are passed as top-level fields to logActivity where they
+    // land in dedicated PII columns excluded from the hash chain. Keeping them
+    // out of enrichedData prevents them from entering the hashed metadata JSONB.
     const enrichedData = {
       ...data,
-      ip,
-      userAgent,
       timestamp: new Date().toISOString(),
     };
 

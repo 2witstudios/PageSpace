@@ -1,16 +1,12 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import {
-  loggers,
-  checkDriveAccess,
-  listDriveMembers,
-  isMemberOfDrive,
-  addDriveMember,
-} from '@pagespace/lib/server';
-import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { checkDriveAccess, listDriveMembers, getDriveOwnerAsMember } from '@pagespace/lib/services/drive-member-service';
+import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
+import { listDrivePageLinkGuests } from '@pagespace/lib/permissions/drive-member-labels';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
-const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
 export async function GET(
   request: Request,
@@ -19,26 +15,52 @@ export async function GET(
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
-    const userId = auth.userId;
 
     const { driveId } = await context.params;
 
+    // Scope check: scoped MCP tokens must have explicit membership in this drive
+    const scopeError = checkMCPDriveScope(auth, driveId);
+    if (scopeError) return scopeError;
+
     // Check if user has access to this drive
-    const access = await checkDriveAccess(driveId, userId);
+    const access = await checkDriveAccess(driveId, actorFromAuth(auth));
 
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
 
     if (!access.isOwner && !access.isMember) {
-      return NextResponse.json({ error: 'You must be a drive member to view members' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'You must be a drive member to view members' }, { status: 403 }));
     }
 
-    // Get all members with their profiles and permission counts
-    const members = await listDriveMembers(driveId);
+    // Get all members with their profiles and permission counts. The owner
+    // is never a drive_members row (ownership lives on drives.ownerId), so
+    // prepend it explicitly; unaccepted invitees are pending, not members.
+    const [rawMembers, ownerMember] = await Promise.all([
+      listDriveMembers(driveId),
+      getDriveOwnerAsMember(driveId),
+    ]);
+    const acceptedMembers = rawMembers.filter(
+      (m) => m.acceptedAt !== null && m.userId !== ownerMember?.userId
+    );
+    const members = ownerMember ? [ownerMember, ...acceptedMembers] : acceptedMembers;
+
+    // Pending invites are visible to OWNER/ADMIN only. The field is always an
+    // array (never undefined) so client-side SWR cache shape stays stable as
+    // a viewer's role changes — avoids "field present for some users, missing
+    // for others" type ambiguity in the UI.
+    const canSeePending = await isPrincipalDriveOwnerOrAdmin(auth, driveId);
+    const pendingInvites = canSeePending
+      ? await driveInviteRepository.findUnconsumedInvitesByDrive(driveId)
+      : [];
+    // D-OW-24 page-link guests are not members; the lead and admins see them listed apart
+    // (UI-5), by name with the pages they hold. Always an array, like pendingInvites.
+    const guests = canSeePending ? await listDrivePageLinkGuests(driveId) : [];
 
     return NextResponse.json({
       members,
+      pendingInvites,
+      guests,
       currentUserRole: access.isOwner ? 'OWNER' : (access.isAdmin ? 'ADMIN' : 'MEMBER')
     });
   } catch (error) {
@@ -50,59 +72,3 @@ export async function GET(
   }
 }
 
-export async function POST(
-  request: Request,
-  context: { params: Promise<{ driveId: string }> }
-) {
-  try {
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
-    if (isAuthError(auth)) return auth.error;
-    const userId = auth.userId;
-
-    const { driveId } = await context.params;
-
-    const body = await request.json();
-    const { userId: invitedUserId, role = 'MEMBER' } = body;
-
-    // Check if user is drive owner
-    const access = await checkDriveAccess(driveId, userId);
-
-    if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
-    }
-
-    if (!access.isOwner) {
-      return NextResponse.json({ error: 'Only drive owner can add members' }, { status: 403 });
-    }
-
-    // Check if member already exists
-    const alreadyMember = await isMemberOfDrive(driveId, invitedUserId);
-
-    if (alreadyMember) {
-      return NextResponse.json({ error: 'User is already a member' }, { status: 400 });
-    }
-
-    // Add member
-    const newMember = await addDriveMember(driveId, userId, {
-      userId: invitedUserId,
-      role: role as 'ADMIN' | 'MEMBER',
-    });
-
-    // Log activity for audit trail
-    const actorInfo = await getActorInfo(userId);
-    logMemberActivity(userId, 'member_add', {
-      driveId,
-      driveName: access.drive.name,
-      targetUserId: invitedUserId,
-      role: role as string,
-    }, actorInfo);
-
-    return NextResponse.json({ member: newMember });
-  } catch (error) {
-    loggers.api.error('Error adding drive member:', error as Error);
-    return NextResponse.json(
-      { error: 'Failed to add member' },
-      { status: 500 }
-    );
-  }
-}

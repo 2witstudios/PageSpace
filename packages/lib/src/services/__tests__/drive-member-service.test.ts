@@ -1,0 +1,510 @@
+/**
+ * @scaffold - ORM chain mocks present. Pending drive-member-repository seam
+ * extraction to replace select().from().where() chains with a mockable interface.
+ *
+ * REVIEW: updateMemberPermissions test uses mockReturnValueOnce chains that
+ * encode internal query order (pages lookup, then existing permissions).
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+// The org sign-in gate (D-OW-45) reads policies through its own module; these tests are about the
+// resolvers behind it, so no org here sets a sign-in policy. Plain functions: a mock reset must not undo them.
+vi.mock('../../permissions/actor-authentication', () => ({
+  checkActorDriveAuthentication: async () => ({ allowed: true }),
+  checkActorResourceAuthentication: async () => ({ allowed: true }),
+  filterDrivesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  filterResourcesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  explainOrgAuthenticationDenial: async () => null,
+}));
+
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    query: {
+      drives: { findFirst: vi.fn() },
+    },
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([]) })),
+        leftJoin: vi.fn().mockReturnThis(),
+        innerJoin: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockResolvedValue([]),
+      })),
+    })),
+    insert: vi.fn(() => ({
+      values: vi.fn(() => ({
+        returning: vi.fn().mockResolvedValue([{ id: 'new' }]),
+      })),
+    })),
+    update: vi.fn(() => ({
+      set: vi.fn(() => ({
+        where: vi.fn().mockResolvedValue(undefined),
+      })),
+    })),
+    delete: vi.fn(() => ({
+      where: vi.fn().mockResolvedValue(undefined),
+    })),
+    execute: vi.fn(),
+  },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'users.id', email: 'users.email', name: 'users.name' },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  drives: { id: 'drives.id', ownerId: 'drives.ownerId' },
+  pages: { id: 'pages.id', driveId: 'pages.driveId' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: { id: 'dm.id', driveId: 'dm.driveId', userId: 'dm.userId', role: 'dm.role', invitedBy: 'dm.invitedBy', invitedAt: 'dm.invitedAt', acceptedAt: 'dm.acceptedAt', lastAccessedAt: 'dm.lastAccessedAt', customRoleId: 'dm.customRoleId' },
+  userProfiles: { username: 'up.username', displayName: 'up.displayName', avatarUrl: 'up.avatarUrl', userId: 'up.userId' },
+  driveRoles: { id: 'dr.id', name: 'dr.name', color: 'dr.color' },
+  pagePermissions: { pageId: 'pp.pageId', userId: 'pp.userId', canView: 'pp.canView', canEdit: 'pp.canEdit', canShare: 'pp.canShare', grantedBy: 'pp.grantedBy', grantedAt: 'pp.grantedAt' },
+}));
+vi.mock('@pagespace/db/operators', () => {
+  const sqlFn = Object.assign(vi.fn(), { join: vi.fn(() => ({})) });
+  return {
+    eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
+    and: vi.fn((...args: unknown[]) => ({ op: 'and', args })),
+    isNotNull: vi.fn((a) => ({ op: 'isNotNull', a })),
+    sql: sqlFn,
+  };
+});
+
+// The one org-aware membership enumeration (its decision is tested in drive-audience-decision.test.ts
+// and against Postgres in drive-gate-primitives.integration.test.ts).
+vi.mock('../../permissions/drive-member-labels', () => ({
+  driveOrgIdOf: vi.fn().mockResolvedValue(null),
+  acceptedOrgMemberIds: vi.fn().mockResolvedValue(new Set()),
+  isDriveGuest: (input: { driveOrgId: string | null; isOrgMember: boolean }) => input.driveOrgId !== null && !input.isOrgMember,
+  isStaleOrgRow: () => false,
+}));
+vi.mock('../../permissions/drive-audience', () => ({
+  listDriveAudience: vi.fn(async () => []),
+}));
+
+import { db } from '@pagespace/db/db';
+import { listDriveAudience } from '../../permissions/drive-audience';
+import {
+  checkDriveAccess,
+  getDriveMemberUserIds,
+  getDriveRecipientUserIds,
+  getDriveMemberUserIdsByStandardRole,
+  getDriveMemberUserIdsByCustomRole,
+  isMemberOfDrive,
+  getDriveMemberDetails,
+  getMemberPermissions,
+  updateMemberRole,
+  updateMemberPermissions,
+  listDriveMembers,
+  getDriveOwnerAsMember,
+} from '../drive-member-service';
+import { encryptField } from '../../encryption/field-crypto';
+import * as fieldCrypto from '../../encryption/field-crypto';
+import { credentialActor } from '../../permissions/access-actor';
+
+type MockFn = ReturnType<typeof vi.fn>;
+type MockDb = {
+  query: { drives: { findFirst: MockFn } };
+  select: MockFn;
+  insert: MockFn;
+  update: MockFn;
+  delete: MockFn;
+  execute: MockFn;
+};
+const mockDb = db as unknown as MockDb;
+
+describe('drive-member-service', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    // Reset defaults
+    mockDb.select.mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
+        leftJoin: vi.fn().mockReturnThis(),
+        innerJoin: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockResolvedValue([]),
+      }),
+    });
+  });
+
+  describe('checkDriveAccess', () => {
+    it('should return all false when drive not found', async () => {
+      mockDb.query.drives.findFirst.mockResolvedValueOnce(null);
+
+      const result = await checkDriveAccess('drive-1', credentialActor('user-1', null));
+      expect(result.drive).toBeNull();
+      expect(result.isOwner).toBe(false);
+    });
+
+    it('should return owner access when user is owner', async () => {
+      mockDb.query.drives.findFirst.mockResolvedValueOnce({ id: 'drive-1', ownerId: 'user-1' });
+
+      const result = await checkDriveAccess('drive-1', credentialActor('user-1', null));
+      expect(result.isOwner).toBe(true);
+      expect(result.isAdmin).toBe(true);
+      expect(result.isMember).toBe(true);
+    });
+
+    it('should return admin access for ADMIN role', async () => {
+      mockDb.query.drives.findFirst.mockResolvedValueOnce({ id: 'drive-1', ownerId: 'other' });
+      mockDb.select.mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([{ role: 'ADMIN' }]),
+          }),
+        }),
+      });
+
+      const result = await checkDriveAccess('drive-1', credentialActor('user-1', null));
+      expect(result.isAdmin).toBe(true);
+      expect(result.isMember).toBe(true);
+      expect(result.isOwner).toBe(false);
+    });
+
+    it('should return member for MEMBER role', async () => {
+      mockDb.query.drives.findFirst.mockResolvedValueOnce({ id: 'drive-1', ownerId: 'other' });
+      mockDb.select.mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([{ role: 'MEMBER' }]),
+          }),
+        }),
+      });
+
+      const result = await checkDriveAccess('drive-1', credentialActor('user-1', null));
+      expect(result.isAdmin).toBe(false);
+      expect(result.isMember).toBe(true);
+    });
+
+    it('should return non-member when no membership found', async () => {
+      mockDb.query.drives.findFirst.mockResolvedValueOnce({ id: 'drive-1', ownerId: 'other' });
+      mockDb.select.mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([]),
+          }),
+        }),
+      });
+
+      const result = await checkDriveAccess('drive-1', credentialActor('user-1', null));
+      expect(result.isMember).toBe(false);
+      expect(result.drive).not.toBeNull();
+    });
+  });
+
+  const audience = (...members: Array<[string, 'OWNER' | 'ADMIN' | 'MEMBER', string | null, boolean?]>) =>
+    vi.mocked(listDriveAudience).mockResolvedValueOnce(
+      members.map(([userId, role, customRoleId, isOwner]) => ({ userId, role, customRoleId, isOwner: isOwner ?? false })),
+    );
+
+  describe('getDriveMemberUserIds', () => {
+    it('returns every member of the drive, the lead included', async () => {
+      audience(['owner-1', 'OWNER', null, true], ['u1', 'MEMBER', null], ['u2', 'ADMIN', null]);
+      expect(await getDriveMemberUserIds('drive-1')).toEqual(['owner-1', 'u1', 'u2']);
+      expect(listDriveAudience).toHaveBeenCalledWith('drive-1');
+    });
+  });
+
+  describe('getDriveRecipientUserIds', () => {
+    it('returns empty when the drive has no audience (not found)', async () => {
+      audience();
+      expect(await getDriveRecipientUserIds('drive-1')).toEqual([]);
+    });
+
+    it('ORG-4 (partial) DRV-5 (partial) X-6 (partial) broadcasts to the lead and every effective member (an org Admin and an implicit Open member included, a stale org row not, as listDriveAudience decides)', async () => {
+      audience(['owner-1', 'OWNER', null, true], ['org-admin', 'ADMIN', null], ['implicit', 'MEMBER', 'default-role']);
+      expect(await getDriveRecipientUserIds('drive-1')).toEqual(['owner-1', 'org-admin', 'implicit']);
+    });
+  });
+
+  describe('getDriveMemberUserIdsByStandardRole / ByCustomRole', () => {
+    it('OWNER is the lead; ADMIN and MEMBER are the effective roles of everyone else', async () => {
+      const members: Array<[string, 'OWNER' | 'ADMIN' | 'MEMBER', string | null, boolean?]> = [
+        ['owner-1', 'OWNER', null, true], ['former-owner-row', 'OWNER', null], ['a1', 'ADMIN', null], ['m1', 'MEMBER', 'r1'],
+      ];
+      audience(...members);
+      expect(await getDriveMemberUserIdsByStandardRole('drive-1', 'OWNER')).toEqual(['owner-1']);
+      audience(...members);
+      expect(await getDriveMemberUserIdsByStandardRole('drive-1', 'ADMIN')).toEqual(['a1']);
+      audience(...members);
+      expect(await getDriveMemberUserIdsByStandardRole('drive-1', 'MEMBER')).toEqual(['m1']);
+      audience(...members);
+      expect(await getDriveMemberUserIdsByCustomRole('drive-1', 'r1')).toEqual(['m1']);
+    });
+  });
+
+  describe('isMemberOfDrive', () => {
+    it('should return true when the user is in the audience', async () => {
+      audience(['owner-1', 'OWNER', null, true], ['user-1', 'MEMBER', null]);
+      expect(await isMemberOfDrive('drive-1', 'user-1')).toBe(true);
+    });
+
+    it('should return false when not a member', async () => {
+      audience(['owner-1', 'OWNER', null, true]);
+      expect(await isMemberOfDrive('drive-1', 'user-1')).toBe(false);
+    });
+  });
+
+  describe('getDriveMemberDetails', () => {
+    it('should return null when not found', async () => {
+      const chain = {
+        leftJoin: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnValue({
+          limit: vi.fn().mockResolvedValue([]),
+        }),
+      };
+      mockDb.select.mockReturnValue({
+        from: vi.fn().mockReturnValue(chain),
+      });
+
+      const result = await getDriveMemberDetails('drive-1', 'user-1');
+      expect(result).toBeNull();
+    });
+
+    it('should return member details', async () => {
+      const member = {
+        id: 'dm-1', userId: 'user-1', role: 'MEMBER', customRoleId: null,
+        invitedBy: 'owner-1', invitedAt: null, acceptedAt: new Date(), lastAccessedAt: null,
+        user: { id: 'user-1', email: 'a@b.com', name: 'Test' },
+        profile: { username: 'test', displayName: 'Test', avatarUrl: null },
+      };
+      const chain = {
+        leftJoin: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnValue({
+          limit: vi.fn().mockResolvedValue([member]),
+        }),
+      };
+      mockDb.select.mockReturnValue({
+        from: vi.fn().mockReturnValue(chain),
+      });
+
+      const result = await getDriveMemberDetails('drive-1', 'user-1');
+      expect(result).not.toBeNull();
+      expect(result!.userId).toBe('user-1');
+      expect(result!.customRole).toBeNull();
+    });
+  });
+
+  describe('getDriveOwnerAsMember', () => {
+    it('should return null when drive not found', async () => {
+      const chain = {
+        innerJoin: vi.fn().mockReturnThis(),
+        leftJoin: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
+      };
+      mockDb.select.mockReturnValue({ from: vi.fn().mockReturnValue(chain) });
+
+      const result = await getDriveOwnerAsMember('drive-1');
+      expect(result).toBeNull();
+    });
+
+    it('should decrypt the owner PII before returning', async () => {
+      const encryptedEmail = await encryptField('owner@example.com');
+      const encryptedName = await encryptField('Drive Owner');
+      const row = {
+        id: 'owner-1',
+        email: encryptedEmail,
+        name: encryptedName,
+        username: 'owner1',
+        displayName: 'Owner Display',
+        avatarUrl: null,
+      };
+      const chain = {
+        innerJoin: vi.fn().mockReturnThis(),
+        leftJoin: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([row]) }),
+      };
+      mockDb.select.mockReturnValue({ from: vi.fn().mockReturnValue(chain) });
+
+      const result = await getDriveOwnerAsMember('drive-1');
+      expect(result).not.toBeNull();
+      expect(result!.role).toBe('OWNER');
+      expect(result!.user!.email).toBe('owner@example.com');
+      expect(result!.user!.name).toBe('Drive Owner');
+    });
+
+    it('should pass through legacy plaintext PII unchanged', async () => {
+      const row = {
+        id: 'owner-1',
+        email: 'owner@example.com',
+        name: 'Drive Owner',
+        username: 'owner1',
+        displayName: 'Owner Display',
+        avatarUrl: null,
+      };
+      const chain = {
+        innerJoin: vi.fn().mockReturnThis(),
+        leftJoin: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([row]) }),
+      };
+      mockDb.select.mockReturnValue({ from: vi.fn().mockReturnValue(chain) });
+
+      const result = await getDriveOwnerAsMember('drive-1');
+      expect(result!.user!.email).toBe('owner@example.com');
+      expect(result!.user!.name).toBe('Drive Owner');
+    });
+  });
+
+  describe('getMemberPermissions', () => {
+    it('should return permissions', async () => {
+      const perms = [{ pageId: 'p-1', canView: true, canEdit: false, canShare: false }];
+      const chain = {
+        innerJoin: vi.fn().mockReturnThis(),
+        where: vi.fn().mockResolvedValue(perms),
+      };
+      mockDb.select.mockReturnValue({
+        from: vi.fn().mockReturnValue(chain),
+      });
+
+      const result = await getMemberPermissions('drive-1', 'user-1');
+      expect(result).toEqual(perms);
+    });
+  });
+
+  describe('updateMemberRole', () => {
+    it('should update and return old role', async () => {
+      // Select existing role
+      mockDb.select.mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([{ role: 'MEMBER' }]),
+          }),
+        }),
+      });
+
+      mockDb.update.mockReturnValue({
+        set: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue(undefined),
+        }),
+      });
+
+      const result = await updateMemberRole('drive-1', 'user-1', 'ADMIN');
+      expect(result.oldRole).toBe('MEMBER');
+    });
+
+    it('should default to MEMBER when no existing role', async () => {
+      mockDb.select.mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([]),
+          }),
+        }),
+      });
+
+      mockDb.update.mockReturnValue({
+        set: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue(undefined),
+        }),
+      });
+
+      const result = await updateMemberRole('drive-1', 'user-1', 'ADMIN');
+      expect(result.oldRole).toBe('MEMBER');
+    });
+  });
+
+  describe('updateMemberPermissions', () => {
+    it('should replace permissions and return count', async () => {
+      // First call: pages in drive
+      // Second call: existing permissions
+      mockDb.select
+        .mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([{ id: 'p-1' }, { id: 'p-2' }]),
+          }),
+        })
+        .mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            innerJoin: vi.fn().mockReturnThis(),
+            where: vi.fn().mockResolvedValue([{ pageId: 'p-1' }]),
+          }),
+        });
+
+      mockDb.delete.mockReturnValue({
+        where: vi.fn().mockResolvedValue(undefined),
+      });
+      mockDb.insert.mockReturnValue({
+        values: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const result = await updateMemberPermissions('drive-1', 'user-1', 'admin-1', [
+        { pageId: 'p-1', canView: true, canEdit: true, canShare: false },
+        { pageId: 'p-2', canView: true, canEdit: false, canShare: false },
+        { pageId: 'invalid', canView: true, canEdit: false, canShare: false }, // not in drive
+      ]);
+      expect(result).toBe(2);
+    });
+  });
+
+  describe('listDriveMembers', () => {
+    it('should return empty array without querying permissions when no members', async () => {
+      const chain = { leftJoin: vi.fn().mockReturnThis(), where: vi.fn().mockResolvedValue([]) };
+      mockDb.select.mockReturnValue({ from: vi.fn().mockReturnValue(chain) });
+
+      const result = await listDriveMembers('drive-1');
+      expect(result).toEqual([]);
+      expect(mockDb.execute).not.toHaveBeenCalled();
+    });
+
+    it('should return members with permission counts from batched query', async () => {
+      const members = [
+        { userId: 'u1', role: 'MEMBER', id: 'dm-1', invitedBy: null, invitedAt: null,
+          acceptedAt: null, lastAccessedAt: null,
+          user: { id: 'u1', email: 'a@b.com', name: 'A' },
+          profile: { username: 'a', displayName: 'A', avatarUrl: null },
+          customRole: { id: null, name: null, color: null } },
+      ];
+      const chain = { leftJoin: vi.fn().mockReturnThis(), where: vi.fn().mockResolvedValue(members) };
+      mockDb.select.mockReturnValue({ from: vi.fn().mockReturnValue(chain) });
+
+      mockDb.execute.mockResolvedValue({
+        rows: [{ userId: 'u1', view_count: '3', edit_count: '1', share_count: '0' }],
+      });
+
+      const result = await listDriveMembers('drive-1');
+      expect(result).toHaveLength(1);
+      expect(result[0].permissionCounts).toEqual({ view: 3, edit: 1, share: 0 });
+      expect(mockDb.execute).toHaveBeenCalledTimes(1);
+    });
+
+    it('should default permission counts to zero for members with no page permissions', async () => {
+      const members = [
+        { userId: 'u2', role: 'MEMBER', id: 'dm-2', invitedBy: null, invitedAt: null,
+          acceptedAt: null, lastAccessedAt: null,
+          user: { id: 'u2', email: 'b@b.com', name: 'B' },
+          profile: null, customRole: null },
+      ];
+      const chain = { leftJoin: vi.fn().mockReturnThis(), where: vi.fn().mockResolvedValue(members) };
+      mockDb.select.mockReturnValue({ from: vi.fn().mockReturnValue(chain) });
+
+      mockDb.execute.mockResolvedValue({ rows: [] });
+
+      const result = await listDriveMembers('drive-1');
+      expect(result[0].permissionCounts).toEqual({ view: 0, edit: 0, share: 0 });
+    });
+
+    it('decrypts a user shared across multiple member rows only once (dedup)', async () => {
+      const sharedUser = { id: 'shared', email: await encryptField('shared@x.com'), name: await encryptField('Shared') };
+      const members = [
+        { userId: 'shared', role: 'MEMBER', id: 'dm-1', invitedBy: null, invitedAt: null,
+          acceptedAt: null, lastAccessedAt: null,
+          user: sharedUser, profile: null, customRole: null },
+        { userId: 'shared', role: 'MEMBER', id: 'dm-2', invitedBy: null, invitedAt: null,
+          acceptedAt: null, lastAccessedAt: null,
+          user: sharedUser, profile: null, customRole: null },
+      ];
+      const chain = { leftJoin: vi.fn().mockReturnThis(), where: vi.fn().mockResolvedValue(members) };
+      mockDb.select.mockReturnValue({ from: vi.fn().mockReturnValue(chain) });
+      mockDb.execute.mockResolvedValue({ rows: [] });
+
+      const decryptFieldSpy = vi.spyOn(fieldCrypto, 'decryptField');
+      const result = await listDriveMembers('drive-1');
+
+      expect(result).toHaveLength(2);
+      expect(result[0].user).toEqual({ id: 'shared', email: 'shared@x.com', name: 'Shared' });
+      expect(result[1].user).toEqual({ id: 'shared', email: 'shared@x.com', name: 'Shared' });
+      // 2 fields (email, name) decrypted once each for the one unique user,
+      // not once per of the 2 member rows.
+      expect(decryptFieldSpy).toHaveBeenCalledTimes(2);
+      decryptFieldSpy.mockRestore();
+    });
+  });
+});

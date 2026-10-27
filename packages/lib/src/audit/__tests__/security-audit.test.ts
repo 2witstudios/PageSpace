@@ -2,89 +2,110 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createHash } from 'crypto';
 
 // Use vi.hoisted to create shared state that can be accessed from the hoisted mock
-const { testState } = vi.hoisted(() => {
+const { testState, createMockTxFn } = vi.hoisted(() => {
   const state = {
     capturedInserts: [] as Array<{ previousHash: string; eventHash: string }>,
+    executedSql: [] as Array<{ strings: TemplateStringsArray; values: unknown[] }>,
   };
-  return { testState: state };
-});
 
-// Mock the database module
-vi.mock('@pagespace/db', () => {
-  // Create a mock transaction context that mirrors the main db interface
   const createMockTx = () => {
-    const insertValuesMock = vi.fn().mockImplementation((value) => {
-      testState.capturedInserts.push({
-        previousHash: value.previousHash,
-        eventHash: value.eventHash,
-      });
-      return Promise.resolve(undefined);
-    });
-
-    const insertMock = vi.fn().mockReturnValue({
-      values: insertValuesMock,
-    });
-
     return {
-      execute: vi.fn().mockResolvedValue({ rows: [] }),
-      insert: insertMock,
+      execute: (sqlObj: { strings: TemplateStringsArray; values: unknown[] }) => {
+        state.executedSql.push(sqlObj);
+        return Promise.resolve({ rows: [] });
+      },
+      insert: () => ({
+        values: (value: { previousHash: string; eventHash: string }) => {
+          state.capturedInserts.push({
+            previousHash: value.previousHash,
+            eventHash: value.eventHash,
+          });
+          return Promise.resolve(undefined);
+        },
+      }),
     };
   };
 
-  return {
-    db: {
-      query: {
-        securityAuditLog: {
-          findFirst: vi.fn(),
-        },
-      },
-      insert: vi.fn().mockReturnValue({
-        values: vi.fn().mockReturnValue({
-          returning: vi.fn(),
-        }),
+  return { testState: state, createMockTxFn: createMockTx };
+});
+
+// Mock the database module
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    query: {
+      securityAuditLog: {},
+    },
+    insert: vi.fn().mockReturnValue({
+      values: vi.fn().mockReturnValue({
+        returning: vi.fn(),
       }),
-      select: vi.fn().mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            orderBy: vi.fn().mockReturnValue({
-              limit: vi.fn(),
-            }),
+    }),
+    select: vi.fn().mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          orderBy: vi.fn().mockReturnValue({
+            limit: vi.fn(),
           }),
         }),
       }),
-      transaction: vi.fn().mockImplementation(async (callback) => {
-        const tx = createMockTx();
-        return callback(tx);
-      }),
-    },
-    securityAuditLog: {},
-    desc: vi.fn(),
-    and: vi.fn(),
-    gte: vi.fn(),
-    lte: vi.fn(),
-    eq: vi.fn(),
-    sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({
-      strings,
-      values,
     }),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    transaction: vi.fn().mockImplementation(async (callback: any) => {
+      const tx = createMockTxFn();
+      return callback(tx);
+    }),
+  },
+}));
+// Phase 2 (leaf 5): default readers resolve the adminDb binding; dedicated
+// mode returns getAdminDb(), pointed at the same default-db mock above.
+vi.mock('@pagespace/db/admin-db', async () => {
+  const { db } = await import('@pagespace/db/db');
+  return {
+    getAdminDbMode: vi.fn(() => ({ mode: 'dedicated', reason: 'ADMIN_DATABASE_URL is set' })),
+    getAdminDb: vi.fn(() => db),
   };
 });
+vi.mock('@pagespace/db/schema/security-audit', () => ({
+  securityAuditLog: {},
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  desc: vi.fn(),
+  and: vi.fn(),
+  gte: vi.fn(),
+  lte: vi.fn(),
+  eq: vi.fn(),
+  sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({
+    strings,
+    values,
+  }),
+}));
 
 // Import after mocking
 import {
-  SecurityAuditService,
+  createSecurityAuditService,
+  CHAIN_LOCK_KEY,
   computeSecurityEventHash,
   type AuditEvent,
+  type SecurityAuditService,
 } from '../security-audit';
-import { db, securityAuditLog } from '@pagespace/db';
+import { createSecurityAuditRepository } from '../security-audit-repository';
+import { db } from '@pagespace/db/db';
+import { securityAuditLog } from '@pagespace/db/schema/security-audit';
 
 describe('Security Audit Service', () => {
   let service: SecurityAuditService;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    testState.capturedInserts.length = 0; // Clear captured inserts
-    service = new SecurityAuditService();
+    // Restore transaction implementation after clearAllMocks removes it
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.mocked(db.transaction).mockImplementation(async (callback: any) => {
+      const tx = createMockTxFn();
+      return callback(tx);
+    });
+    testState.capturedInserts.length = 0;
+    testState.executedSql.length = 0;
+    service = createSecurityAuditService({ repository: createSecurityAuditRepository({ db }) });
   });
 
   afterEach(() => {
@@ -161,44 +182,68 @@ describe('Security Audit Service', () => {
       expect(hash).toHaveLength(64);
       expect(typeof hash).toBe('string');
     });
+
+    it('produces the same hash regardless of key order in details (canonical JSON)', () => {
+      const timestamp = new Date('2026-01-25T10:00:00Z');
+      const base = {
+        eventType: 'auth.login.success' as const,
+        serviceId: 'web',
+        resourceType: 'page',
+        resourceId: 'page-1',
+      };
+
+      // Simulate write-time key order vs Postgres JSONB read-back with different order
+      const hashA = computeSecurityEventHash(
+        { ...base, details: { action: 'export', format: 'pdf', userId: 'u1' } },
+        'genesis',
+        timestamp
+      );
+      const hashB = computeSecurityEventHash(
+        { ...base, details: { userId: 'u1', format: 'pdf', action: 'export' } },
+        'genesis',
+        timestamp
+      );
+
+      expect(hashA).toBe(hashB);
+    });
+
+    it('produces the same hash regardless of key order in nested details objects', () => {
+      const timestamp = new Date('2026-01-25T10:00:00Z');
+      const base = { eventType: 'data.read' as const };
+
+      const hashA = computeSecurityEventHash(
+        { ...base, details: { meta: { z: 1, a: 2 }, top: 'value' } },
+        'prev',
+        timestamp
+      );
+      const hashB = computeSecurityEventHash(
+        { ...base, details: { top: 'value', meta: { a: 2, z: 1 } } },
+        'prev',
+        timestamp
+      );
+
+      expect(hashA).toBe(hashB);
+    });
   });
 
   describe('initialize', () => {
-    it('initializes with genesis hash when no previous events exist', async () => {
-      vi.mocked(db.query.securityAuditLog.findFirst).mockResolvedValue(undefined);
-
+    it('marks service as initialized', async () => {
       await service.initialize();
 
-      expect(db.query.securityAuditLog.findFirst).toHaveBeenCalled();
+      expect(service.isInitialized()).toBe(true);
     });
 
-    it('initializes with last event hash when events exist', async () => {
-      const lastEvent = {
-        id: 'evt123',
-        eventHash: 'abc123def456',
-        timestamp: new Date(),
-      };
-      vi.mocked(db.query.securityAuditLog.findFirst).mockResolvedValue(lastEvent as never);
-
-      await service.initialize();
-
-      expect(db.query.securityAuditLog.findFirst).toHaveBeenCalled();
-    });
-
-    it('only initializes once (idempotent)', async () => {
-      vi.mocked(db.query.securityAuditLog.findFirst).mockResolvedValue(undefined);
-
+    it('is idempotent when called multiple times', async () => {
       await service.initialize();
       await service.initialize();
       await service.initialize();
 
-      expect(db.query.securityAuditLog.findFirst).toHaveBeenCalledTimes(1);
+      expect(service.isInitialized()).toBe(true);
     });
   });
 
   describe('logEvent', () => {
     beforeEach(async () => {
-      vi.mocked(db.query.securityAuditLog.findFirst).mockResolvedValue(undefined);
       await service.initialize();
     });
 
@@ -235,21 +280,52 @@ describe('Security Audit Service', () => {
     });
 
     it('handles concurrent logging (all use transactions)', async () => {
-      // Simulate concurrent logging
       await Promise.all([
         service.logEvent({ eventType: 'auth.login.success', userId: 'user1' }),
         service.logEvent({ eventType: 'auth.login.success', userId: 'user2' }),
         service.logEvent({ eventType: 'auth.login.success', userId: 'user3' }),
       ]);
 
-      // All 3 events should have used transactions for serialized writes
       expect(db.transaction).toHaveBeenCalledTimes(3);
+    });
+
+    it('acquires advisory lock before reading last hash (#542)', async () => {
+      await service.logEvent({
+        eventType: 'auth.login.success',
+        userId: 'user123',
+      });
+
+      // First SQL execute call should be the advisory lock
+      expect(testState.executedSql.length).toBeGreaterThanOrEqual(2);
+      const lockSql = testState.executedSql[0];
+      expect(lockSql).toBeDefined();
+      // The template string should contain pg_advisory_xact_lock
+      const joinedSql = lockSql!.strings.join('');
+      expect(joinedSql).toContain('pg_advisory_xact_lock');
+    });
+
+    it('uses fixed lock key for all events (#542)', async () => {
+      expect(CHAIN_LOCK_KEY).toBe(8370291546);
+    });
+
+    it('reads latest hash after acquiring lock, not with FOR UPDATE (#542)', async () => {
+      await service.logEvent({
+        eventType: 'auth.login.success',
+        userId: 'user123',
+      });
+
+      // Second SQL call reads latest hash (without FOR UPDATE)
+      const selectSql = testState.executedSql[1];
+      expect(selectSql).toBeDefined();
+      const joinedSql = selectSql!.strings.join('');
+      expect(joinedSql).toContain('SELECT');
+      expect(joinedSql).toContain('event_hash');
+      expect(joinedSql).not.toContain('FOR UPDATE');
     });
   });
 
   describe('convenience methods', () => {
     beforeEach(async () => {
-      vi.mocked(db.query.securityAuditLog.findFirst).mockResolvedValue(undefined);
       await service.initialize();
     });
 
@@ -449,7 +525,6 @@ describe('Security Audit Service', () => {
 
 describe('Hash Chain Integrity', () => {
   it('manual verification: hash chain links events correctly', () => {
-    // This test manually verifies the hash chain concept
     const event1 = {
       eventType: 'auth.login.success',
       userId: 'user1',
@@ -462,28 +537,25 @@ describe('Hash Chain Integrity', () => {
       timestamp: new Date('2026-01-25T11:00:00Z'),
     };
 
-    // Compute hash for first event (uses genesis)
     const hash1 = computeSecurityEventHash(
       event1 as AuditEvent,
       'genesis',
       event1.timestamp
     );
 
-    // Compute hash for second event (uses first event's hash)
     const hash2 = computeSecurityEventHash(
       event2 as AuditEvent,
       hash1,
       event2.timestamp
     );
 
-    // Verify both hashes are valid SHA-256
     expect(hash1).toMatch(/^[a-f0-9]{64}$/);
     expect(hash2).toMatch(/^[a-f0-9]{64}$/);
 
-    // Verify changing event1 would break verification of event2
+    // Changing event type (non-PII) breaks the chain
     const modifiedEvent1 = {
       ...event1,
-      userId: 'hacker', // Modified!
+      eventType: 'auth.login.failure',
     };
 
     const badHash1 = computeSecurityEventHash(
@@ -492,8 +564,162 @@ describe('Hash Chain Integrity', () => {
       event1.timestamp
     );
 
-    // If someone tried to verify event2 with the modified event1's hash,
-    // the chain would break (hashes wouldn't match)
     expect(badHash1).not.toBe(hash1);
+  });
+});
+
+describe('GDPR-Safe Hash Chain (#541)', () => {
+  it('hash is stable after userId is anonymized (nulled)', () => {
+    const timestamp = new Date('2026-01-25T10:00:00Z');
+    const event: AuditEvent = {
+      eventType: 'auth.login.success',
+      userId: 'user123',
+      ipAddress: '192.168.1.1',
+      userAgent: 'Mozilla/5.0',
+      sessionId: 'sess-abc',
+      geoLocation: 'US-CA',
+    };
+
+    const hashBefore = computeSecurityEventHash(event, 'genesis', timestamp);
+
+    const anonymizedEvent: AuditEvent = {
+      ...event,
+      userId: undefined,
+      ipAddress: undefined,
+      userAgent: undefined,
+      sessionId: undefined,
+      geoLocation: undefined,
+    };
+
+    const hashAfter = computeSecurityEventHash(anonymizedEvent, 'genesis', timestamp);
+
+    expect(hashBefore).toBe(hashAfter);
+  });
+
+  it('hash changes when non-PII fields change', () => {
+    const timestamp = new Date('2026-01-25T10:00:00Z');
+    const event1: AuditEvent = {
+      eventType: 'auth.login.success',
+      userId: 'user123',
+      resourceType: 'page',
+      resourceId: 'page-1',
+    };
+
+    const event2: AuditEvent = {
+      ...event1,
+      resourceId: 'page-2',
+    };
+
+    const hash1 = computeSecurityEventHash(event1, 'genesis', timestamp);
+    const hash2 = computeSecurityEventHash(event2, 'genesis', timestamp);
+
+    expect(hash1).not.toBe(hash2);
+  });
+
+  it('PII fields are excluded: changing them does not change hash', () => {
+    const timestamp = new Date('2026-01-25T10:00:00Z');
+    const base: AuditEvent = {
+      eventType: 'data.read',
+      resourceType: 'page',
+      resourceId: 'page-1',
+      riskScore: 0.5,
+      details: { action: 'export' },
+    };
+
+    const withPII: AuditEvent = {
+      ...base,
+      userId: 'user-xyz',
+      ipAddress: '10.0.0.1',
+      userAgent: 'Chrome/120',
+      sessionId: 'sess-999',
+      geoLocation: 'DE-BE',
+    };
+
+    const withoutPII: AuditEvent = {
+      ...base,
+    };
+
+    const hash1 = computeSecurityEventHash(withPII, 'prev-hash', timestamp);
+    const hash2 = computeSecurityEventHash(withoutPII, 'prev-hash', timestamp);
+
+    expect(hash1).toBe(hash2);
+  });
+
+  it('non-PII fields that remain in hash: eventType, resourceType, resourceId, details, riskScore, anomalyFlags, serviceId', () => {
+    const timestamp = new Date('2026-01-25T10:00:00Z');
+
+    const event1: AuditEvent = {
+      eventType: 'auth.login.success',
+      serviceId: 'web',
+      resourceType: 'drive',
+      resourceId: 'drv-1',
+      details: { browser: 'Chrome' },
+      riskScore: 0.3,
+      anomalyFlags: ['new_device'],
+    };
+
+    const event2: AuditEvent = {
+      ...event1,
+      serviceId: 'api',
+    };
+
+    const hash1 = computeSecurityEventHash(event1, 'genesis', timestamp);
+    const hash2 = computeSecurityEventHash(event2, 'genesis', timestamp);
+
+    expect(hash1).not.toBe(hash2);
+  });
+
+  it('resourceId containing userId cannot be anonymized without breaking chain', () => {
+    const timestamp = new Date('2026-01-25T10:00:00Z');
+    const userId = 'user-abc-123';
+
+    // Simulates the bug: passing userId as resourceId
+    const eventWithUserIdInResource: AuditEvent = {
+      eventType: 'data.read',
+      userId,
+      resourceType: 'inbox',
+      resourceId: userId,
+    };
+
+    const hashBefore = computeSecurityEventHash(eventWithUserIdInResource, 'genesis', timestamp);
+
+    // After GDPR anonymization: userId column nulled, but resourceId remains
+    const anonymizedEvent: AuditEvent = {
+      ...eventWithUserIdInResource,
+      userId: undefined,
+      // resourceId still contains the userId — can't be nulled without breaking hash
+    };
+
+    const hashAfter = computeSecurityEventHash(anonymizedEvent, 'genesis', timestamp);
+
+    // Hash is stable (userId excluded) but resourceId still leaks the user ID
+    expect(hashBefore).toBe(hashAfter);
+    // The PII is permanently embedded — this is why callers must use 'self' instead
+    expect(anonymizedEvent.resourceId).toBe(userId);
+  });
+
+  it('using "self" as resourceId avoids PII in hash-protected fields', () => {
+    const timestamp = new Date('2026-01-25T10:00:00Z');
+
+    const event: AuditEvent = {
+      eventType: 'data.read',
+      userId: 'user-abc-123',
+      resourceType: 'inbox',
+      resourceId: 'self',
+    };
+
+    const hashBefore = computeSecurityEventHash(event, 'genesis', timestamp);
+
+    // After GDPR anonymization: only PII fields nulled
+    const anonymizedEvent: AuditEvent = {
+      ...event,
+      userId: undefined,
+    };
+
+    const hashAfter = computeSecurityEventHash(anonymizedEvent, 'genesis', timestamp);
+
+    // Hash stable AND no PII remains anywhere in the record
+    expect(hashBefore).toBe(hashAfter);
+    expect(anonymizedEvent.resourceId).toBe('self');
   });
 });

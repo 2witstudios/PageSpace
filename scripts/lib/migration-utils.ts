@@ -1,0 +1,337 @@
+import { createHash } from 'crypto';
+import { createReadStream } from 'fs';
+import { readFile, writeFile, stat } from 'fs/promises';
+import path from 'path';
+import { resolvePathWithin } from '@pagespace/lib/security/path-validator';
+import type { ExportManifest, FileChecksum } from './migration-types';
+
+/**
+ * Escape a SQL value for safe inclusion in INSERT statements.
+ * Returns the SQL literal representation (e.g., 'text', 42, NULL, TRUE).
+ */
+export function escapeSqlValue(value: unknown): string {
+  if (value === null || value === undefined) return 'NULL';
+  if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return 'NULL';
+    return String(value);
+  }
+  if (value instanceof Date) {
+    return `'${value.toISOString()}'`;
+  }
+  if (typeof value === 'object') {
+    // JSON columns (jsonb)
+    return `'${escapeString(JSON.stringify(value))}'::jsonb`;
+  }
+  if (typeof value === 'string') {
+    return `'${escapeString(value)}'`;
+  }
+  return 'NULL';
+}
+
+/** Escape single quotes in a string for SQL */
+function escapeString(s: string): string {
+  return s.replace(/'/g, "''");
+}
+
+/** Alphanumeric + underscore pattern for safe SQL interpolation of IDs */
+const SAFE_ID_PATTERN = /^[a-z0-9_-]+$/i;
+
+/**
+ * Validate that all IDs are safe for SQL interpolation.
+ * Throws if any ID contains unexpected characters.
+ */
+export function validateIds(ids: string[], label = 'ID'): void {
+  for (const id of ids) {
+    if (!SAFE_ID_PATTERN.test(id)) {
+      throw new Error(`Invalid ${label}: "${id}" — expected alphanumeric/underscore/hyphen characters only`);
+    }
+  }
+}
+
+/**
+ * Build a SQL IN-list from an array of string IDs, with escaping.
+ * Returns "''" (empty string literal) for empty arrays to keep SQL valid.
+ */
+export function toSqlInList(ids: string[] | Set<string> | readonly string[]): string {
+  const arr = Array.from(ids);
+  if (arr.length === 0) return "''";
+  return arr.map((id) => `'${escapeString(id)}'`).join(', ');
+}
+
+/**
+ * WHICH CONVERSATIONS A BUNDLE CARRIES — the exporter's selection rule, in one
+ * place so the validator cannot ask a narrower question than the export
+ * answered.
+ *
+ * Three arms, because the sets are gathered along different axes:
+ *  - owned by a requested user;
+ *  - `type='page'`, attached to an exported page via `contextId`;
+ *  - `type='client'` (API thread), attached via `agentPageId`.
+ *
+ * The last two are `unifiedPageScope`'s pair in SQL, and they are not optional:
+ * a page chat started by a drive member OUTSIDE `--user-ids` still belongs to
+ * an exported page, and `messages.conversationId` is NOT NULL and FK'd, so
+ * dropping it would abort the import.
+ *
+ * Extracted because `tenant-validate` open-coded only the FIRST arm when
+ * building the conversation id list it validates `messages` against. The
+ * exporter carried those extra conversations and all of their messages; the
+ * validator compared them on neither side, so `[PASS] messages` printed even
+ * if the import had dropped every one of them — a false PASS on exactly the
+ * row population the exporter's own comment says was the historical loss.
+ *
+ * Returns the WHERE predicate alone (no projection), so the exporter can
+ * `SELECT *` and the validator `SELECT id` off the identical rule.
+ */
+export function conversationSelectionWhere(userInList: string, pageInList: string): string {
+  return `"userId" IN (${userInList})`
+    + ` OR (type = 'page' AND "contextId" IN (${pageInList}))`
+    + ` OR (type = 'client' AND "agentPageId" IN (${pageInList}))`;
+}
+
+/**
+ * The workspaces a bundle carries: owned by an exported user AND holding one
+ * of the exported conversations.
+ *
+ * "Holding" is a NODE, not a column. This read `conversations."workspaceId" IS
+ * NOT NULL` until that column was dropped; a thread is in a workspace exactly
+ * when a chat-bound row of `agent_workspace_nodes` names it, and the table's
+ * global `UNIQUE (targetId) WHERE targetKind = 'chat'` means the subselect
+ * yields at most one workspace per conversation by construction.
+ *
+ * `ownerInList` must be the set of ALL exported users — the requested ones plus
+ * the conversation owners DISCOVERED by `conversationSelectionWhere`'s page
+ * arms — not just the requested ones. The validator used the requested set
+ * alone, so a workspace (and its shells, which hold `coldTail` terminal
+ * scrollback) owned by a discovered user was carried and checked on neither
+ * side.
+ */
+export function workspaceSelectionWhere(ownerInList: string, conversationInList: string): string {
+  return `"ownerId" IN (${ownerInList})`
+    + ` AND id IN (SELECT "rootId" FROM agent_workspace_nodes`
+    + ` WHERE "targetKind" = 'chat' AND "targetId" IN (${conversationInList}))`;
+}
+
+/**
+ * WHICH TAG ASSIGNMENTS A BUNDLE CARRIES — the exporter's rule, in one place so
+ * the validator cannot ask a different question than the export answered.
+ *
+ * `content_tags."pageId"` is notNull for every target kind, so the page filter
+ * alone reaches page-, text-, cell- and message-anchored rows uniformly — that
+ * is what the denormalization is for. The three extra arms exist because a
+ * message-anchored row also carries a REAL foreign key onto `channel_messages`
+ * or `messages`, and those two tables are selected by their own rules (a
+ * channel message by page, an AI message by conversation AND author). A tag
+ * whose page travels while its message does not would be a dangling FK the
+ * import aborts on, so such a row is DROPPED rather than unbound — neither
+ * reference is nullable-with-meaning here, since an `ai_message` row with a
+ * NULL `aiMessageId` violates `content_tags_target_chk`.
+ *
+ * `messageAuthorInList` is load-bearing and was the bug this helper exists to
+ * prevent. `messages.userId` was relaxed to nullable in 0249 (NULL = agent- or
+ * system-authored) and tenant-export.ts filters on
+ * `("userId" IS NULL OR "userId" IN (...))` for that reason. The validator
+ * originally restated this predicate WITHOUT that clause, making its question
+ * wider than the export's answer: a tag on a message the export deliberately
+ * left behind would be reported as a MISSING row, i.e. a validation failure
+ * describing a correct bundle. Same shape as the `workspaceSelectionWhere`
+ * scar above, and the same fix — one string, two callers.
+ *
+ * The `tagId` arm exists for the same dangling-FK reason as the message arms,
+ * and it is NOT redundant with the page filter. `tags` is carried by DRIVE, but
+ * a page that was MOVED between drives can hold an assignment whose tag still
+ * belongs to the drive it came from (the trigger closes the write path, not the
+ * move — the cross-drive scrub is Phase 3's). Exporting the destination drive
+ * would then carry the row without its tag and the import, one BEGIN/COMMIT,
+ * aborts on `content_tags_tagId_tags_id_fk`. Every other reference on this row
+ * is constrained here; this one was not, which is exactly how it would have
+ * been missed.
+ *
+ * Pass the ALL-exported user set (requested plus discovered), not the requested
+ * users alone.
+ */
+export function contentTagSelectionWhere(
+  pageInList: string,
+  driveInList: string,
+  channelMessageInList: string,
+  conversationInList: string,
+  messageAuthorInList: string,
+): string {
+  return `"pageId" IN (${pageInList})`
+    + ` AND "tagId" IN (SELECT id FROM tags WHERE "driveId" IN (${driveInList}))`
+    + ` AND ("channelMessageId" IS NULL OR "channelMessageId" IN (${channelMessageInList}))`
+    + ` AND ("aiMessageId" IS NULL OR "aiMessageId" IN (`
+    + `SELECT id FROM messages WHERE "conversationId" IN (${conversationInList})`
+    + ` AND ("userId" IS NULL OR "userId" IN (${messageAuthorInList}))))`;
+}
+
+/**
+ * Build an INSERT statement with ON CONFLICT DO NOTHING for idempotency.
+ *
+ * `conflictTarget` NARROWS which conflicts are forgiven, and the difference is
+ * the difference between a skipped row and a failed import. Untargeted,
+ * Postgres takes the do-nothing branch on ANY unique violation the row causes;
+ * with a target it arbitrates on that key alone and every OTHER unique index
+ * raises. Measured on a table shaped like `agent_workspace_nodes`:
+ *
+ *   ON CONFLICT DO NOTHING                → a row colliding on the global
+ *                                           partial chat index is SKIPPED
+ *                                           (`INSERT 0 0`, no error)
+ *   ON CONFLICT ("rootId", "id") DO NOTHING → the same row raises
+ *                                           `duplicate key … n_chat_idx`
+ *   …and re-inserting an IDENTICAL row under the second form is still a
+ *   silent no-op, because the arbiter index is consulted first and the row is
+ *   never speculatively inserted.
+ *
+ * So a table whose only forgivable conflict is "this bundle was already
+ * imported" passes its primary key here: idempotent re-import is preserved,
+ * and a collision with somebody ELSE's row aborts the transaction instead of
+ * dropping a row on the floor. Pass nothing for tables where every unique
+ * violation means the same thing.
+ */
+export function buildInsert(
+  tableName: string,
+  columns: readonly string[],
+  rows: Record<string, unknown>[],
+  conflictTarget?: readonly string[],
+): string {
+  if (rows.length === 0) return '';
+
+  const quotedCols = columns.map((c) => `"${c}"`).join(', ');
+  const valueRows = rows.map((row) => {
+    const vals = columns.map((col) => escapeSqlValue(row[col]));
+    return `  (${vals.join(', ')})`;
+  });
+  const onConflict = conflictTarget?.length
+    ? `ON CONFLICT (${conflictTarget.map((c) => `"${c}"`).join(', ')}) DO NOTHING;`
+    : 'ON CONFLICT DO NOTHING;';
+
+  return [
+    `INSERT INTO "${tableName}" (${quotedCols})`,
+    'VALUES',
+    valueRows.join(',\n'),
+    onConflict,
+    '',
+  ].join('\n');
+}
+
+/**
+ * Build `UPDATE ... SET <cols> WHERE "id" = ...` statements for columns that
+ * are carried but cannot ride in their own table's INSERT because they
+ * reference a table inserted LATER (a forward FK — `drives.homePageId` and
+ * `drives.not_found_page_id` point at `pages`, while `pages.driveId` points
+ * back at `drives`, so no insert order satisfies both).
+ *
+ * Emitted after the referenced table has landed. Rows whose deferred columns
+ * are all NULL produce no statement — there is nothing to set, and the INSERT
+ * already left them NULL. Re-running the bundle re-applies identical values,
+ * so this stays as idempotent as the `ON CONFLICT DO NOTHING` inserts around it.
+ */
+export function buildDeferredUpdate(
+  tableName: string,
+  columns: readonly string[],
+  rows: Record<string, unknown>[],
+): string {
+  if (columns.length === 0 || rows.length === 0) return '';
+
+  const statements: string[] = [];
+  for (const row of rows) {
+    if (columns.every((col) => row[col] === null || row[col] === undefined)) continue;
+    const assignments = columns
+      .map((col) => `"${col}" = ${escapeSqlValue(row[col])}`)
+      .join(', ');
+    statements.push(
+      `UPDATE "${tableName}" SET ${assignments} WHERE "id" = ${escapeSqlValue(row.id)};`,
+    );
+  }
+
+  if (statements.length === 0) return '';
+  return `${statements.join('\n')}\n`;
+}
+
+/**
+ * Compute SHA-256 checksum of a file.
+ */
+export async function fileChecksum(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash('sha256');
+    const stream = createReadStream(filePath);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('end', () => resolve(hash.digest('hex')));
+    stream.on('error', reject);
+  });
+}
+
+/**
+ * Compute checksum info for a file.
+ */
+export async function computeFileChecksum(
+  filePath: string,
+  relativePath: string,
+): Promise<FileChecksum> {
+  const [sha256, fileStat] = await Promise.all([
+    fileChecksum(filePath),
+    stat(filePath),
+  ]);
+  return {
+    path: relativePath,
+    sha256,
+    sizeBytes: fileStat.size,
+  };
+}
+
+/**
+ * Write the export manifest to disk.
+ */
+export async function writeManifest(
+  outputDir: string,
+  manifest: ExportManifest,
+): Promise<void> {
+  const manifestPath = path.join(outputDir, 'manifest.json');
+  await writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+}
+
+/**
+ * Read and parse the export manifest from a bundle.
+ */
+export async function readManifest(
+  bundleDir: string,
+): Promise<ExportManifest> {
+  const manifestPath = path.join(bundleDir, 'manifest.json');
+  const raw = await readFile(manifestPath, 'utf-8');
+  return JSON.parse(raw) as ExportManifest;
+}
+
+/**
+ * Validate file checksums in a bundle against the manifest.
+ * Returns list of mismatches.
+ */
+export async function validateChecksums(
+  bundleDir: string,
+  manifest: ExportManifest,
+): Promise<{ path: string; expected: string; actual: string }[]> {
+  const mismatches: { path: string; expected: string; actual: string }[] = [];
+
+  for (const entry of manifest.fileChecksums) {
+    const filePath = await resolvePathWithin(path.join(bundleDir, 'files'), entry.path);
+    if (!filePath) {
+      mismatches.push({ path: entry.path, expected: entry.sha256, actual: 'INVALID_PATH' });
+      continue;
+    }
+    try {
+      const actual = await fileChecksum(filePath);
+      if (actual !== entry.sha256) {
+        mismatches.push({ path: entry.path, expected: entry.sha256, actual });
+      }
+    } catch {
+      mismatches.push({
+        path: entry.path,
+        expected: entry.sha256,
+        actual: 'FILE_NOT_FOUND',
+      });
+    }
+  }
+
+  return mismatches;
+}

@@ -1,9 +1,14 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { db, activityLogs, users, eq, and, sql, inArray } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds } from '@/lib/auth';
-import { isUserDriveMember } from '@pagespace/lib';
+import { db } from '@pagespace/db/db'
+import { eq, and, sql, inArray } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { activityLogs } from '@pagespace/db/schema/monitoring';
+import { decryptUserRows } from '@pagespace/lib/auth/user-repository';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveMember, getAllowedDriveIds } from '@/lib/auth';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -27,6 +32,8 @@ export async function GET(request: Request) {
 
   const userId = auth.userId;
   const { searchParams } = new URL(request.url);
+
+  auditRequest(request, { eventType: 'data.read', userId, resourceType: 'activity_actors', resourceId: 'self' });
 
   try {
     const parseResult = querySchema.safeParse({
@@ -76,13 +83,13 @@ export async function GET(request: Request) {
         const scopeError = checkMCPDriveScope(auth, params.driveId);
         if (scopeError) return scopeError;
 
-        // Verify user can view drive
-        const canViewDrive = await isUserDriveMember(userId, params.driveId);
+        // Verify principal can view drive
+        const canViewDrive = await isPrincipalDriveMember(auth, params.driveId);
         if (!canViewDrive) {
-          return NextResponse.json(
+          return deniedResponse(actorFromAuth(auth), params.driveId, NextResponse.json(
             { error: 'Unauthorized - you do not have access to this drive' },
             { status: 403 }
-          );
+          ));
         }
 
         whereCondition = and(
@@ -118,7 +125,11 @@ export async function GET(request: Request) {
       .where(whereCondition)
       .orderBy(sortExpression);
 
-    return NextResponse.json({ actors });
+    // Decrypt PII at the edge. The COALESCE may yield ciphertext (from users) or
+    // legacy plaintext (the activity-log actor fallback); decryptField handles both.
+    const decryptedActors = await decryptUserRows(actors);
+
+    return NextResponse.json({ actors: decryptedActors });
   } catch (error) {
     loggers.api.error('Error fetching activity actors:', error as Error);
     return NextResponse.json(

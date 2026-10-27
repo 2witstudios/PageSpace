@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db, eq, users } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe } from '@/lib/stripe';
-import { loggers } from '@pagespace/lib/server';
+import { stripeConfig } from '@/lib/stripe-config';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -31,8 +35,11 @@ export async function POST(request: NextRequest) {
     // Create billing portal session
     const session = await stripe.billingPortal.sessions.create({
       customer: user.stripeCustomerId,
+      configuration: stripeConfig.portalConfigurationIds.personal,
       return_url: `${process.env.WEB_APP_URL}/settings/billing`,
     });
+
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'billing_portal', resourceId: 'portal_session', details: { hasCustomer: true } });
 
     return NextResponse.json({ url: session.url });
 

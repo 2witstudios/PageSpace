@@ -34,6 +34,8 @@
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", "tsconfig*.json"]
     },
+    "@pagespace/android#typecheck": { "dependsOn": [] },
+    "@pagespace/ios#typecheck": { "dependsOn": [] },
     "test": {
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", "vitest.config.*", "src/**/*.test.{ts,tsx}"],
@@ -42,12 +44,16 @@
     "test:coverage": {
       "dependsOn": ["^build"],
       "cache": false,
-      "outputs": ["coverage/**"]
+      "outputs": ["coverage/**", "test-results/**"]
     },
     "package": {
       "cache": false,
       "dependsOn": ["build"],
       "outputs": ["dist-electron/**"]
+    },
+    "package:coder": {
+      "cache": false,
+      "outputs": ["dist-electron-coder/**"]
     },
     "capture": {
       "cache": false,
@@ -61,9 +67,7 @@
   ],
   "globalEnv": [
     "DATABASE_URL",
-    "JWT_SECRET",
-    "JWT_ISSUER",
-    "JWT_AUDIENCE",
+    "ADMIN_DATABASE_URL",
     "CSRF_SECRET",
     "ENCRYPTION_KEY",
     "WEB_APP_URL",
@@ -74,12 +78,9 @@
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
     "GOOGLE_AI_API_KEY",
-    "OPENROUTER_API_KEY",
     "OPENROUTER_DEFAULT_API_KEY",
     "PAGESPACE_URL",
-    "NEXT_PUBLIC_*",
-    "REDIS_URL",
-    "REDIS_SESSION_URL",
-    "REDIS_RATE_LIMIT_URL"
+    "PAGESPACE_APP_VARIANT",
+    "NEXT_PUBLIC_*"
   ]
 }

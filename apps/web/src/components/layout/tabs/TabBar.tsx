@@ -19,6 +19,7 @@ import {
 } from '@dnd-kit/sortable';
 import { Plus } from 'lucide-react';
 import { useTabsStore, selectHasMultipleTabs } from '@/stores/useTabsStore';
+import { toHref } from '@/lib/tabs/tab-navigation';
 import { useBreakpoint } from '@/hooks/useBreakpoint';
 import { useIsTablet } from '@/hooks/useDeviceTier';
 import { TabItem } from './TabItem';
@@ -80,7 +81,7 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
     const tab = tabs.find(t => t.id === tabId);
     if (tab) {
       setActiveTab(tabId);
-      router.push(tab.path);
+      router.push(toHref(tab.path, tab.search));
     }
   }, [tabs, setActiveTab, router]);
 
@@ -104,7 +105,7 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
         // Prefer the tab at the same index, or the last one
         const newActiveIndex = Math.min(tabIndex, remainingTabs.length - 1);
         const newActiveTab = remainingTabs[newActiveIndex];
-        router.push(newActiveTab.path);
+        router.push(toHref(newActiveTab.path, newActiveTab.search));
       } else {
         // No tabs left, go to dashboard (closeTab creates a new dashboard tab)
         const driveId = params.driveId as string;
@@ -116,7 +117,10 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Cycle tabs
+      const target = e.target as HTMLElement;
+      const isInEditable = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+
+      // Cycle tabs - work in editable fields (Ctrl+Tab doesn't produce characters)
       if (matchesKeyEvent(getEffectiveBinding('tabs.cycle-next'), e)) {
         e.preventDefault();
         cycleTab('next');
@@ -124,7 +128,7 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
         const state = useTabsStore.getState();
         const newActiveTab = state.tabs.find(t => t.id === state.activeTabId);
         if (newActiveTab) {
-          router.push(newActiveTab.path);
+          router.push(toHref(newActiveTab.path, newActiveTab.search));
         }
         return;
       }
@@ -136,12 +140,19 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
         const state = useTabsStore.getState();
         const newActiveTab = state.tabs.find(t => t.id === state.activeTabId);
         if (newActiveTab) {
-          router.push(newActiveTab.path);
+          router.push(toHref(newActiveTab.path, newActiveTab.search));
         }
         return;
       }
 
-      // Tab number shortcuts (1-9)
+      // New tab - skip in editable fields (Alt+T produces "†" on macOS)
+      if (!isInEditable && matchesKeyEvent(getEffectiveBinding('tabs.new'), e)) {
+        e.preventDefault();
+        handleNewTab();
+        return;
+      }
+
+      // Tab number shortcuts (1-9) - Meta+1-9 don't produce characters
       for (let num = 1; num <= 9; num++) {
         if (matchesKeyEvent(getEffectiveBinding(`tabs.go-to-${num}`), e)) {
           e.preventDefault();
@@ -155,9 +166,6 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
       }
 
       // Close tab - skip in editable inputs
-      const target = e.target as HTMLElement;
-      const isInEditable = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
-
       if (!isInEditable && matchesKeyEvent(getEffectiveBinding('tabs.close'), e)) {
         if (activeTabId) {
           e.preventDefault();
@@ -169,7 +177,7 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [tabs, activeTabId, handleActivate, handleClose, cycleTab, router]);
+  }, [tabs, activeTabId, handleActivate, handleClose, handleNewTab, cycleTab, router]);
 
   // Scroll active tab into view
   useEffect(() => {
@@ -248,5 +256,3 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
     </AnimatePresence>
   );
 });
-
-export default TabBar;

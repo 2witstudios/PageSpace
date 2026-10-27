@@ -1,0 +1,1 @@
+CREATE INDEX IF NOT EXISTS "idx_siem_receipts_source_range" ON "siem_delivery_receipts" USING btree ("source","firstEntryTimestamp","lastEntryTimestamp");

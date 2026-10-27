@@ -1,5 +1,8 @@
+import { getPrincipalAccessLevel } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
-import { getUserAccessLevel, loggers } from '@pagespace/lib/server';
+
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false } as const;
@@ -17,8 +20,10 @@ export async function GET(
   }
 
   try {
-    const permissions = await getUserAccessLevel(auth.userId, pageId);
-    
+    const permissions = await getPrincipalAccessLevel(auth, pageId);
+
+    auditRequest(req, { eventType: 'data.read', userId: auth.userId, resourceType: 'page_permission', resourceId: pageId, details: { action: 'check_permissions' } });
+
     if (!permissions) {
       return NextResponse.json({
         canView: false,

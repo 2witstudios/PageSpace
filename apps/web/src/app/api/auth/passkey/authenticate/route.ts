@@ -1,25 +1,45 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
+import { verifyAuthentication, findUserIdByCredentialId } from '@pagespace/lib/auth/passkey-service';
 import {
-  verifyAuthentication,
-  sessionService,
-  generateCSRFToken,
-  SESSION_DURATION_MS,
-} from '@pagespace/lib/auth';
-import { loggers, logSecurityEvent } from '@pagespace/lib/server';
-import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+  getAccountLockoutStatus,
+  recordFailedLoginAttempt,
+  resetFailedLoginAttempts,
+} from '@pagespace/lib/auth/account-lockout';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { ceremonyAuthentication } from '@pagespace/lib/auth/authentication-evidence';
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
+import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';
+import { SESSION_DURATION_MS } from '@pagespace/lib/auth/constants';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
-} from '@pagespace/lib/security';
-import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
+} from '@pagespace/lib/security/distributed-rate-limit';
+import { validateLoginCSRFToken, getClientIP, createDeviceToken, revokeSessionsForLogin } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
+import { authRepository } from '@/lib/repositories/auth-repository';
+import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
+import {
+  consumeAnyInviteIfPresent,
+  consumeAllInvitesForEmail,
+  type NativeInviteAcceptanceResult,
+} from '@/lib/auth/native-invite-acceptance';
+import { INVITE_TOKEN_MAX_LENGTH } from '@/lib/auth/oauth-state';
 
 const verifySchema = z.object({
   response: z.any(), // WebAuthn response - validated by simplewebauthn
   expectedChallenge: z.string().min(1),
   csrfToken: z.string().min(1),
+  platform: z.enum(['web', 'desktop']).optional().default('web'),
+  deviceId: z.string().max(128).optional(),
+  deviceName: z.string().max(256).optional(),
+  desktopExchange: z.boolean().optional().default(false),
+  inviteToken: z.string().min(1).max(INVITE_TOKEN_MAX_LENGTH).optional(),
 });
 
 /**
@@ -40,9 +60,10 @@ export async function POST(req: Request) {
     );
 
     if (!rateLimitResult.allowed) {
-      logSecurityEvent('passkey_rate_limit_auth', {
-        ip: clientIP,
-        retryAfter: rateLimitResult.retryAfter,
+      auditRequest(req, {
+        eventType: 'security.rate.limited',
+        riskScore: 0.5,
+        details: { reason: 'passkey_rate_limit_auth' },
       });
       return NextResponse.json(
         { error: 'Too many requests', retryAfter: rateLimitResult.retryAfter },
@@ -61,18 +82,86 @@ export async function POST(req: Request) {
       );
     }
 
-    const { response, expectedChallenge, csrfToken } = validation.data;
+    const {
+      response,
+      expectedChallenge,
+      csrfToken,
+      platform,
+      deviceId,
+      deviceName,
+      desktopExchange,
+      inviteToken,
+    } = validation.data;
+
+    if (desktopExchange && !deviceId) {
+      return NextResponse.json(
+        { error: 'deviceId is required for desktop exchange handoff' },
+        { status: 400 }
+      );
+    }
+
+    if (desktopExchange && platform !== 'desktop') {
+      return NextResponse.json(
+        { error: 'desktopExchange requires platform: desktop' },
+        { status: 400 }
+      );
+    }
+
+    // Desktop auth must go through the external-browser exchange flow. The
+    // legacy path that returned a raw sessionToken in the response body for
+    // platform=desktop is removed — it's dead code after #1001 and leaking
+    // raw tokens in JSON is strictly worse than the opaque exchange code.
+    if (platform === 'desktop' && !desktopExchange) {
+      return NextResponse.json(
+        { error: 'platform=desktop requires desktopExchange=true' },
+        { status: 400 }
+      );
+    }
 
     // Verify login CSRF token
     if (!validateLoginCSRFToken(csrfToken)) {
-      logSecurityEvent('passkey_csrf_invalid', {
-        ip: clientIP,
-        flow: 'authenticate',
+      auditRequest(req, {
+        eventType: 'security.suspicious.activity',
+        riskScore: 0.6,
+        details: { reason: 'passkey_csrf_invalid', flow: 'authenticate' },
       });
       return NextResponse.json(
         { error: 'Invalid CSRF token' },
         { status: 403 }
       );
+    }
+
+    // Per-account lockout (complements the per-IP rate limit above; the two use
+    // independent counters so there is no double-counting). Resolve the account
+    // from the credential and, if it is locked, reject BEFORE running the crypto
+    // verification. The magic-link path is the always-open recovery channel, so
+    // a locked passkey never means a fully locked-out account.
+    const credentialId =
+      response && typeof (response as { id?: unknown }).id === 'string'
+        ? (response as { id: string }).id
+        : undefined;
+    const lockoutUserId = credentialId ? await findUserIdByCredentialId(credentialId) : null;
+
+    if (lockoutUserId) {
+      const lockout = await getAccountLockoutStatus(lockoutUserId);
+      if (lockout.isLocked) {
+        const retryAfter = lockout.lockedUntil
+          ? Math.max(0, Math.ceil((lockout.lockedUntil.getTime() - Date.now()) / 1000))
+          : undefined;
+        auditRequest(req, {
+          eventType: 'security.rate.limited',
+          riskScore: 0.5,
+          details: { reason: 'passkey_account_locked' },
+        });
+        loggers.auth.warn('Passkey authentication blocked by account lockout', {
+          userId: lockoutUserId,
+          ip: clientIP,
+        });
+        return NextResponse.json(
+          { error: 'Account temporarily locked due to repeated failed attempts. Try again later or sign in with a magic link.', retryAfter },
+          { status: 423 }
+        );
+      }
     }
 
     // Verify authentication
@@ -82,6 +171,17 @@ export async function POST(req: Request) {
     });
 
     if (!result.ok) {
+      // Count only the genuine attack signals toward lockout — a real credential
+      // presented for a real account that fails crypto verification or trips
+      // replay detection. Benign challenge/credential errors are not counted so
+      // ordinary UX hiccups never lock anyone out.
+      if (
+        lockoutUserId &&
+        (result.error.code === 'VERIFICATION_FAILED' ||
+          result.error.code === 'COUNTER_REPLAY_DETECTED')
+      ) {
+        await recordFailedLoginAttempt(lockoutUserId);
+      }
       const errorMap: Record<string, { status: number; message: string }> = {
         'CREDENTIAL_NOT_FOUND': { status: 400, message: 'Passkey not found' },
         'CHALLENGE_NOT_FOUND': { status: 400, message: 'Challenge not found or invalid' },
@@ -98,6 +198,11 @@ export async function POST(req: Request) {
         error: result.error.code,
         ip: clientIP,
       });
+      auditRequest(req, {
+        eventType: 'auth.login.failure',
+        riskScore: 0.3,
+        details: { reason: `passkey_auth_${result.error.code.toLowerCase()}` },
+      });
 
       return NextResponse.json(
         { error: errorInfo.message, code: result.error.code },
@@ -106,22 +211,27 @@ export async function POST(req: Request) {
     }
 
     const { userId } = result.data;
+    const authentication = ceremonyAuthentication({ method: 'passkey', userVerified: result.data.userVerified }, Date.now());
 
-    // SESSION FIXATION PREVENTION: Revoke all existing sessions before creating new one
-    const revokedCount = await sessionService.revokeAllUserSessions(userId, 'passkey_login');
-    if (revokedCount > 0) {
-      loggers.auth.info('Revoked existing sessions on passkey login', {
-        userId,
-        count: revokedCount,
-      });
-    }
+    // Successful passkey auth proves legitimacy — clear any accumulated failed
+    // attempts / lock for this account.
+    await resetFailedLoginAttempts(userId);
+
+    // Revoke prior sessions scoped to THIS device when the client supplies a
+    // deviceId (multi-device safe — a passkey login on one device no longer logs
+    // the user out everywhere). Old clients that send no deviceId keep the legacy
+    // all-web-session revoke via the helper's fallback. Admin-console sessions are
+    // scoped separately and always left intact.
+    await revokeSessionsForLogin(userId, deviceId, 'passkey_login', 'passkey');
 
     // Create new session
     const sessionToken = await sessionService.createSession({
       userId,
       type: 'user',
+      authentication,
       scopes: ['*'],
       expiresInMs: SESSION_DURATION_MS,
+      deviceId,
       createdByIp: clientIP !== 'unknown' ? clientIP : undefined,
     });
 
@@ -141,6 +251,71 @@ export async function POST(req: Request) {
     // Reset rate limit on successful login
     await resetDistributedRateLimit(rateLimitKey);
 
+    // Consume invite atomically with authentication. The acceptance pipe
+    // re-validates the invite (existence, expiry, consumption, email match)
+    // — passing inviteToken here is unauthenticated input, the pipe is the
+    // gate. A failed invite never blocks login. Wrapped in try/catch so a
+    // DB blip on findUserVerificationStatusById doesn't 500 the response
+    // after the session has already committed.
+    let inviteResult: NativeInviteAcceptanceResult | null = null;
+    let inviteError: string | null = null;
+    try {
+      const status = await driveInviteRepository.findUserVerificationStatusById(userId);
+      if (status) {
+        if (inviteToken) {
+          inviteResult = await consumeAnyInviteIfPresent({
+            request: req,
+            inviteToken,
+            user: { id: userId, suspendedAt: status.suspendedAt },
+            isNewUser: false,
+            email: status.email,
+          });
+          if (inviteResult.inviteError) {
+            inviteError = inviteResult.inviteError;
+            loggers.auth.info('Bound invite acceptance failed during passkey auth', {
+              userId,
+              reason: inviteResult.inviteError,
+            });
+          }
+        }
+        await consumeAllInvitesForEmail({
+          request: req,
+          email: status.email,
+          user: { id: userId, suspendedAt: status.suspendedAt },
+          now: new Date(),
+        });
+      }
+    } catch (error) {
+      loggers.auth.error('Invite consume threw during passkey auth', error as Error, {
+        userId,
+      });
+    }
+
+    // Passkey is the on-prem sign-in (no password auth, no email delivery), so
+    // like every other sign-in path it provisions the Home drive and the Imago
+    // agents, recreating any the user deleted. The session is already
+    // committed: a failure here is logged and never blocks the login.
+    try {
+      await provisionHomeDriveIfNeeded(userId);
+    } catch (error) {
+      loggers.auth.error('Failed to provision Home drive during passkey sign-in', error as Error, { userId });
+    }
+
+    const invitedDriveId = inviteResult?.invitedDriveId ?? null;
+    const successRedirect =
+      // ORG-3: the org hub once joined; the invite page (which says why) when refused.
+      inviteResult?.orgLandingPath
+        ? inviteResult.orgLandingPath
+        : inviteResult?.kind === 'connection'
+        ? '/dashboard/connections?connection_requested=1'
+        : inviteResult?.kind === 'page' && invitedDriveId && inviteResult.invitedPageId
+          ? `/dashboard/${invitedDriveId}/pages/${inviteResult.invitedPageId}?invited=1`
+          : invitedDriveId
+            ? `/dashboard/${invitedDriveId}?invited=1`
+            : inviteError
+              ? `/dashboard?inviteError=${inviteError}`
+              : '/dashboard';
+
     // Track successful passkey login
     trackAuthEvent(userId, 'passkey_login', {
       ip: clientIP,
@@ -151,6 +326,66 @@ export async function POST(req: Request) {
       userId,
       ip: clientIP,
     });
+    auditRequest(req, {
+      eventType: 'auth.login.success',
+      userId,
+      sessionId: sessionClaims.sessionId,
+      details: { method: 'passkey' },
+    });
+
+    let deviceTokenValue: string | undefined;
+    if (deviceId) {
+      try {
+        const user = await authRepository.findUserById(userId);
+        if (user) {
+          deviceTokenValue = await createDeviceToken({
+            userId, deviceId, tokenVersion: user.tokenVersion, authentication,
+            platform: platform || 'web',
+            deviceName: deviceName || req.headers.get('user-agent') || (platform === 'desktop' ? 'Desktop App' : 'Web Browser'),
+            userAgent: req.headers.get('user-agent') || undefined,
+            ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
+          });
+        }
+      } catch (error) {
+        loggers.auth.warn('Failed to create device token', {
+          userId, error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    if (desktopExchange) {
+      if (!deviceTokenValue) {
+        loggers.auth.error('Desktop exchange requested but device token missing', { userId });
+        return NextResponse.json(
+          { error: 'Failed to create device token for desktop exchange' },
+          { status: 500 }
+        );
+      }
+
+      const code = await createExchangeCode({
+        sessionToken,
+        csrfToken: newCsrfToken,
+        deviceToken: deviceTokenValue,
+        provider: 'passkey',
+        userId,
+        createdAt: Date.now(),
+      });
+
+      loggers.auth.info('Desktop passkey exchange mint', { userId, provider: 'passkey' });
+
+      return NextResponse.json(
+        {
+          success: true,
+          userId,
+          redirectUrl: successRedirect,
+          desktopExchangeCode: code,
+          ...(invitedDriveId && { invitedDriveId }),
+        },
+        {
+          headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
+        }
+      );
+    }
 
     // Build response headers with session cookie
     const headers = new Headers();
@@ -169,7 +404,10 @@ export async function POST(req: Request) {
       {
         success: true,
         userId,
-        redirectUrl: '/dashboard',
+        redirectUrl: successRedirect,
+        csrfToken: newCsrfToken,
+        ...(deviceTokenValue && { deviceToken: deviceTokenValue }),
+        ...(invitedDriveId && { invitedDriveId }),
       },
       { headers }
     );

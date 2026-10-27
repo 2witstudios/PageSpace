@@ -1,0 +1,457 @@
+# pagespace-mcp Operations Inventory (Phase 0 parity contract)
+
+**Status:** ADR / frozen ground truth · **Task:** `m2mcgumjloe1r9tr4xgxmfa4` (Phase 0, epic `ea07mt5jvw0flihsbjce1iv9`)
+**Sources of truth:**
+
+- MCP server: `/Users/jono/production/pagespace-mcp` — `package.json` version **5.2.3** (note: `src/server.js:33` still self-reports `5.1.1` in `serverInfo`; treat package.json as canonical).
+- Web routes: this monorepo, `apps/web/src/app/api/**` at branch `pu/cli-login` ancestry (master `660528a7a`).
+
+**Method:** every registered tool in `src/tools.js` (1575 lines) was mapped to its handler call site, then every endpoint the handler calls was verified against the real route file. **Routes are truth; handlers are parity intent.** Where they disagree, the row below carries an explicit `DISCREPANCY:` note with a resolution the SDK registry must adopt.
+
+**Tool count: 67 registered tools** (`src/tools.js:1–1575`), all dispatched in `src/server.js:90–327`. There are no hidden tools: the dispatch switch and the `tools` array cover exactly the same 67 names.
+
+**Schema note (verified fact):** `tools.js` declares tool inputs as **plain JSON Schema objects**, not zod. Zod validation exists only server-side in some routes. The SDK operation registry (Phase 2) introduces zod as the single input/output schema source; the "input fields" columns below are the parity contract it must encode.
+
+**Transport (to be replaced):** `src/api.js:12–133` — `PageSpaceApi.request(method, endpoint, data)` / `makeAuthenticatedRequest`. All requests send `Authorization: Bearer <token>` + `Content-Type: application/json`, 30s `AbortController` timeout (`api.js:7`), non-2xx → thrown `Error("API request failed (<status>): <text>")`, success → `response.json()` (except `requestText`, which is currently **unused** by any tool — no export tools are registered).
+
+---
+
+## 1. Authentication ground truth
+
+`apps/web/src/lib/auth/index.ts`:
+
+- `TokenType = 'mcp' | 'session'` (`index.ts:15`). MCP tokens are opaque `mcp_*`, SHA3-256 hashed at rest via `hashToken` (`index.ts:73`, `packages/lib/src/auth/token-utils.ts`). Sessions are opaque `ps_sess_*`.
+- `authenticateRequestWithOptions(request, { allow, requireCSRF })` (`index.ts:265`) is the standard route gate. Bearer `mcp_*` on a route that doesn't allow `'mcp'` → **401 `"MCP tokens are not permitted for this endpoint"`** (`index.ts:284–291`). CSRF applies only to cookie-session auth, never Bearer (`index.ts:320–333`).
+- Scoped tokens: `allowedDriveIds` non-empty ⇒ every route re-checks scope via `checkMCPDriveScope` / `checkMCPPageScope` (`index.ts:457–519`) → 403 `"This token does not have access to this drive"`. **Fail-closed:** a token flagged `isScoped` whose drive scopes were all deleted authenticates as *invalid* (`index.ts:129–135`), and suspended users get their token revoked on next use (`index.ts:107–122`).
+- Scoped tokens act as their **own drive member** (principal permissions, PR #1609/#1745) — not as the owning user — via `getPrincipalAccessLevel` etc. (`index.ts:585–598`, `packages/lib/src/permissions/principal-permissions.ts`).
+
+Every route in the inventory below accepts `allow: ['session','mcp']` **except** where a `DISCREPANCY` row says otherwise (one route is session-only; one route is public/no-auth).
+
+---
+
+## 2. Inventory
+
+Column key — **Tool**: MCP tool name (`tools.js` line of its schema). **Input**: fields as declared in the tool's JSON Schema (`*` = required). **Call**: HTTP method + path the handler sends (handler file:line). **Route**: verified route file (all under `apps/web/src/app/api/`) + exported method line. **Response (route truth)**: the JSON the route actually returns on success.
+
+### 2.1 Drives (4 tools)
+
+| Tool | Input | Call | Route | Response (route truth) |
+|---|---|---|---|---|
+| `list_drives` (tools.js:4) | — | GET `/api/drives` (drive.js:9) | `drives/route.ts:28` | Bare **array** of `DriveWithAccess` (`{...drive, isOwned, role, lastAccessedAt}`) (`drives/route.ts:74`). Extra query params the tool doesn't expose: `includeTrash`, `tokenScopable` (`drives/route.ts:38–39`). Scoped tokens get their member-drive universe with the TOKEN's role (`drives/route.ts:43–64`). |
+| `create_drive` (tools.js:13) | `name*` | POST `/api/drives` (drive.js:53) | `drives/route.ts:81` | `201` bare drive row (`drives/route.ts:131`). Reserved names → 400; scoped tokens → 403 via `checkMCPCreateScope(auth, null)` (`drives/route.ts:88`). |
+| `rename_drive` (tools.js:27) | `driveId*`, `name*` | PATCH `/api/drives/{driveId}` (drive.js:88) | `drives/[driveId]/route.ts:99` | Updated drive row (`:230`). Owner/admin only (`:137`); Home drives un-renameable → 403 (`:126`). Route also accepts `aiProvider`, `aiModel`, `drivePrompt` (≤10000), `homePageId`, `publishDefaultOgImageUrl` (`:18–28`). |
+| `update_drive_context` (tools.js:45) | `driveId*`, `drivePrompt*` | PATCH `/api/drives/{driveId}` (drive.js:121) | same route as above | Same. `drivePrompt` max 10000 chars (`drives/[driveId]/route.ts:22`). |
+
+### 2.2 Page listing & trash listing (2 tools)
+
+| Tool | Input | Call | Route | Response (route truth) |
+|---|---|---|---|---|
+| `list_pages` (tools.js:65) | `driveSlug*`, `driveId*`, `parentId?`, `recursive?` | GET `/api/drives/{driveId}/pages?ls=true[&parentId=][&recursive=true]` (page.js:16–23) | `drives/[driveId]/pages/route.ts:91` | `{mode:'ls', driveName, driveSlug, location, breadcrumb:[{id,title}], pages:[{id,title,type,hasChildren,isTaskLinked}], count, totalInDrive}` (`:263–272`). Unknown `parentId` → 404 (`:190`). Without `ls=true` the same route returns a full page **tree** (`:329`) — the SDK should expose both modes. `driveSlug` is a tool-layer nicety; the route never reads it. |
+| `list_trash` (tools.js:92) | `driveSlug*`, `driveId*` | GET `/api/drives` **then** GET `/api/drives/{driveId}/trash` (page.js:319, 329) | `drives/[driveId]/trash/route.ts:17` | Tree of trashed pages (`buildTree` output, `:87–91`). **Owner/admin only** → 403 otherwise (`:44–77`) — the tool description does not mention this restriction. The preliminary GET `/api/drives` is redundant for the SDK (drive-name lookup only). |
+
+### 2.3 Page read & metadata (2 tools)
+
+| Tool | Input | Call | Route | Response (route truth) |
+|---|---|---|---|---|
+| `read_page` (tools.js:112) | `pageId*` | POST `/api/mcp/documents` `{operation:'read', pageId}` (document.js:15) | `mcp/documents/route.ts:85` (see §3) | Non-task pages: `{pageId, pageTitle, totalLines, numberedLines, content}` (`:273–279`). TASK_LIST pages: adds `pageType:'TASK_LIST'`, `taskListId`, `tasks[]` (serialized + `hasContent`), `availableStatuses[]`, `progress{total,percentage,byGroup,bySlug}` (`:253–269`). |
+| `get_page_details` (tools.js:127) | `pageId*` | GET `/api/pages/{pageId}` (export.js:18) | `pages/[pageId]/route.ts:18` | Bare page object (`result.page` via `jsonResponse`, `:43`). |
+
+### 2.4 Page write (4 tools)
+
+| Tool | Input | Call | Route | Response (route truth) |
+|---|---|---|---|---|
+| `create_page` (tools.js:143) | `driveId*`, `title*`, `type*` (enum FOLDER,DOCUMENT,CHANNEL,AI_CHAT,CANVAS,SHEET,TASK_LIST), `parentId?`, `content?` | POST `/api/pages` (page.js:68) | `pages/route.ts:32` | `201` bare page row (`:111`). **DISCREPANCY (enum too narrow):** route accepts all non-experimental types — FOLDER, DOCUMENT, CHANNEL, AI_CHAT, CANVAS, **FILE**, SHEET, TASK_LIST, **CODE** — plus admin-only TERMINAL (`pages/route.ts:13–16,53–56`; `packages/lib/src/content/page-types.config.ts:306–308`; enum `packages/lib/src/utils/enums.ts:1–12`). Route also accepts `contentMode`, `systemPrompt`, `enabledTools`, `aiProvider`, `aiModel` (`pages/route.ts:19–30`) which the tool omits. Resolution: SDK enum = route enum; expose the agent-config fields. |
+| `rename_page` (tools.js:174) | `pageId*`, `title*` | PATCH `/api/pages/{pageId}` (page.js:106) | `pages/[pageId]/route.ts:62` | Updated page row (`:221`). Route also accepts `content`, `aiProvider`, `aiModel`, `parentId`, `isPaginated`, `isPrivate` (share-permission gated), `expectedRevision` (optimistic concurrency → 409/428), `changeGroupId` (`:50–60`). |
+| `move_page` (tools.js:192) | `pageId*`, `position*`, `newParentId?` | PATCH `/api/pages/reorder` `{pageId,newParentId,newPosition}` (page.js:287–293) | `pages/reorder/route.ts:20` | `{message:'Page reordered successfully'}` (`:85`). Scoped tokens need OWNER/ADMIN on the drive (`:37–51`). Note the field rename: tool `position` → wire `newPosition`. |
+| `replace_lines` (tools.js:214) | `pageId*`, `startLine*`, `content*`, `endLine?` | POST `/api/mcp/documents` `{operation:'replace',...}` (document.js:87) | `mcp/documents/route.ts:85` (see §3) | `{pageId, pageTitle, totalLines, numberedLines, operation:'replace', affectedLines}` (`:335–342`). Out-of-range lines → 400 (`:289`); revision conflict → 409/428 (`:564–572`). |
+
+### 2.5 Trash & restore (4 tools)
+
+| Tool | Input | Call | Route | Response (route truth) |
+|---|---|---|---|---|
+| `trash_page` (tools.js:242) | `pageId*`, `withChildren?` | DELETE `/api/pages/{pageId}` body `{trash_children}` (page.js:136–140) | `pages/[pageId]/route.ts:235` | `{message:'Page moved to trash successfully.'}` (`:289`). **Parity trap:** tool default `withChildren=false`; route default when the field is *omitted* is `trash_children ?? true` (`:258`). The handler always sends the field, so behavior matches today — the SDK must also always send it explicitly (fail-closed: never rely on the server default). |
+| `trash_drive` (tools.js:260) | `driveId*`, `confirmDriveName*` | GET `/api/drives/{driveId}` then DELETE `/api/drives/{driveId}` (page.js:177, 189) | `drives/[driveId]/route.ts:247` | `{success:true}` (`:319`). Owner/admin only (`:277`); Home drive → 403 (`:271`). **The name-confirmation guardrail is client-side only** (page.js:183–186); the route has no `confirmDriveName`. SDK must keep this guard in the client layer (pure function) — the API will happily trash on a bare DELETE. |
+| `restore_page` (tools.js:278) | `pageId*` | POST `/api/pages/{pageId}/restore` (page.js:219) | `pages/[pageId]/restore/route.ts:86` | `{message:'Page restored successfully.'}` (`:160`). Requires the same delete/manage permission as trashing (IDOR fix, `:120–123`); not-in-trash → 400 (`:108`). |
+| `restore_drive` (tools.js:292) | `driveId*` | POST `/api/drives/{driveId}/restore` then GET `/api/drives/{driveId}` (page.js:249, 257) | `drives/[driveId]/restore/route.ts:16` | `{success:true}` (`:98`). Owner-only (explicit-role scoped tokens need OWNER, ADMIN insufficient — `:34–44`); not-in-trash → 400 (`:61`). The follow-up GET is display-only. |
+
+### 2.6 Sheet editing (1 tool)
+
+| Tool | Input | Call | Route | Response (route truth) |
+|---|---|---|---|---|
+| `edit_sheet_cells` (tools.js:308) | `pageId*`, `cells*[]{address*,value*}` | POST `/api/mcp/documents` `{operation:'edit-cells', pageId, cells}` (page.js:379–385) | `mcp/documents/route.ts:85` (see §3) | `{pageId, pageTitle, cellsUpdated, operation:'edit-cells', stats{valuesSet,formulasSet,cellsCleared,sheetDimensions{rows,columns},recomputed}, updatedCells[{address,type}]}` (`:538–556`). Non-sheet page → 400 with `pageType` (`:469–473`); invalid A1 address → 400 (`:481–487`). |
+
+### 2.6b Sheet rows (6 SDK operations)
+
+Not from the original `tools.js` inventory — the tabular surface added when sheets became
+row-backed, over `POST /api/mcp/sheets` (`apps/web/src/app/api/mcp/sheets/route.ts`). SDK
+namespace `sheets.*`; CLI verbs `pagespace sheets <verb>`. Each method is the camelCase of its
+wire `operation`, so the facade name and the request body cannot drift.
+
+Filters and sorts run against the MATERIALISED cell value, so a formula column compares as its
+result rather than its source. Row indexes are 0-based everywhere, matching the store.
+
+| SDK | CLI | Input | Response (route truth) |
+|---|---|---|---|
+| `sheets.queryRows` | `sheets query` | `pageId*`, `tabIndex`, `where`, `orderBy[]`, `select[]`, `limit`, `offset` | `{pageId, pageTitle, tabIndex, rows[]{rowIndex,cells}, total, hasMore}` |
+| `sheets.getRows` | `sheets rows` | `pageId*`, `tabIndex`, `fromRow`, `limit` | `{pageId, pageTitle, tabIndex, rows[], rowCount, columnCount, nextFromRow, hasMore}` |
+| `sheets.describe` | `sheets describe` | `pageId*`, `tabIndex` | `{pageId, pageTitle, tabs[]{tabIndex,name,rowCount,columnCount,frozenRows}}` |
+| `sheets.appendRows` | `sheets append` | `pageId*`, `tabIndex`, `rows*[]` (column letter → text) | `{pageId, pageTitle, firstRowIndex, appended, rowCount}` |
+| `sheets.updateCells` | `sheets update-cells` | `pageId*`, `tabIndex`, `cells*[]{address*,value*}` | `{pageId, pageTitle, cellsUpdated, recomputed, rowCount, columnCount}` |
+| `sheets.deleteRows` | `sheets delete-rows` | `pageId*`, `tabIndex`, `fromRow*`, `count*` | `{pageId, pageTitle, deleted, rowCount}` |
+
+`sheets.updateCells` and `pages.editCells` (§2.6) overlap deliberately: `editCells` reports richer
+per-cell stats but only ever addresses tab 0, while `updateCells` takes `tabIndex` and is therefore
+the only way to write to a second tab. `deleteRows` requires both bounds — neither is defaulted,
+because a guessed `count` deletes the wrong rows irreversibly.
+
+### 2.6c Sheet formatting (2 SDK operations)
+
+The presentation half of the same endpoint, and the one that closed a real parity gap: the
+in-process AI tools (`read_sheet` with `includeFormatting`, `format_sheet`,
+`set_conditional_format`) could read and write regions, conditional rules, freezes and cell
+formats, while an SDK or CLI caller could do none of it — so a sheet built programmatically was a
+grid of bare numbers with no call available to change that.
+
+| SDK | CLI | Input | Response (route truth) |
+|---|---|---|---|
+| `sheets.readFormatting` | `sheets formatting` | `pageId*`, `tabIndex`, `ranges[]` | `{pageId, pageTitle, tabIndex, rowCount, columnCount, frozenRows, frozenColumns, columnFormats{}, columnWidths{}, rowHeights{}, conditionalFormats[], regions[], cellFormats{}}` |
+| `sheets.applyFormat` | `sheets format` | `pageId*`, `tabIndex`, `ops*[]` (`SheetFormatOp`) | `{pageId, pageTitle, tabIndex, changed, cellsFormatted, rowsTouched, tabFieldsChanged[], conditionalRules, ruleIdsAdded[], ruleIdsRemoved[], regions, regionIdsAdded[], regionIdsRemoved[], rowCount, columnCount, recomputed[]}` |
+
+`ops` is `SheetFormatOp` from `@pagespace/lib/sheets` verbatim — fifteen members: `setCellFormat`,
+`clearCellFormat`, `setColumnFormat`, `setColumnWidth`, `setRowHeight`, `setFrozen`,
+`addConditionalRule`, `updateConditionalRule`, `removeConditionalRule`, `moveConditionalRule`,
+`clearConditionalRules`, `setConditionalRules`, `setRegions`, `upsertRegion`, `removeRegion`. That
+makes these two strictly MORE capable than the AI tools they bring parity with: a model can only
+add and remove conditional rules, while a programmatic caller can patch one in place or reorder it.
+
+Ops apply **in the order given, in one transaction, all or nothing** — a `clearCellFormat` after a
+`setCellFormat` over the same cells means something different from the reverse. Every refusal comes
+from `planFormatOps` (pure, pre-lock) and names the offending op's INDEX in the list sent, as a 400;
+the route deliberately restates none of that validation as a zod union of its own.
+
+Two shape notes where these differ from the AI tools, both deliberate:
+
+- A conditional rule's `id` is **caller-supplied and required**, where `format_sheet` mints it. The
+  id is the caller's own idempotency key, so a retried `addConditionalRule` after a timeout is
+  refused as a duplicate rather than silently adding the rule a second time.
+- A `cell` rule nests `condition: {operator, value, value2}`. The AI tool flattens those onto the
+  rule because a discriminated union fans out past the schema-size ceiling a model's tool definition
+  can carry; this is the shape the sheet actually stores.
+
+`applyFormat` is **not** flagged `destructive`, though `setRegions: []` discards declared structure:
+the flag makes the CLI demand `--yes` on every call, and gating "bold the header row" behind a
+prompt only trains the habit of passing `--yes` blind. Formatting is presentation, recoverable by
+writing it again — unlike `deleteRows`, where the rows are gone.
+
+Prefer a **region** to per-cell ops for anything table-shaped. A region declares what an area IS
+(header rows, column roles, total rows, theme) and the presentation is derived at render time, so an
+open range (`"A1:F"`, no row end) covers rows that do not exist yet and costs no cell budget however
+tall the sheet is; `setCellFormat` over `A2:A5000` charges 4,999 cells against the per-call ceiling.
+
+**Schema size, measured.** `sheets.applyFormat` serialises to ~10.8k characters of JSON Schema —
+the largest of the 85 registry operations by 6.5x (next is `calendar.create` at ~1.7k), and ~25% of
+the whole MCP tool surface, which every MCP client receives per session. The cause is duplication,
+not the op count: `operationToMcpTool` calls `z.toJSONSchema` with the default `reused: 'inline'`,
+so the four-variant rule schema is inlined twice (`addConditionalRule`, `setConditionalRules`), the
+region schema twice (`upsertRegion`, `setRegions`), and the scale anchor ten times — those four
+variants alone are 75% of the union.
+
+Passing `reused: 'ref'` in `packages/cli/src/mcp/tool-convert.ts` was measured at 38% smaller for
+this operation (10.8k -> 6.7k) and 9.4% across the surface. It is deliberately NOT done here: it
+changes the emitted shape of 8 of 85 operations, 7 of them nothing to do with sheets, and `$ref`
+handling varies by provider — so it wants its own change and its own verification against real MCP
+clients rather than riding along in a sheets PR. The tool is correct and usable as it stands.
+
+The op union is hand-written in the SDK — the published package must never runtime- or type-import
+`@pagespace/lib` — and held to lib by
+`packages/sdk/src/operations/__tests__/sheets-format-drift-guard.test.ts`, which reads lib's
+`OP_FIELDS` and `FIELDS_BY_KIND` so a sixteenth op cannot join the union without failing there.
+`patch`/`format` payloads stay opaque (`z.record`) for the reason `storedCellSchema.format` already
+does: `CellFormat` exists twice with a compile-time assertion holding those two together, and a
+third copy here would be the one with nothing keeping it honest.
+
+`nextFromRow` is a POSITION, not a count. A caller advancing by `rows.length` loops forever on a
+sparse tab (rows 0-9, then 500-509); following `nextFromRow` terminates.
+
+### 2.7 Task management (6 tools)
+
+| Tool | Input | Call | Route | Response (route truth) |
+|---|---|---|---|---|
+| `create_task` (tools.js:345) | `pageId*`, `title*`, `status?`, `priority?`, `assigneeId?`, `assigneeAgentId?`, `assigneeIds?[]`, `dueDate?`, `agentTrigger?{agentPageId*, triggerType?, prompt?, instructionPageId?, contextPageIds?≤10}` | POST `/api/pages/{pageId}/tasks` (task.js:76) | `pages/[pageId]/tasks/route.ts:312` | `201` task row with relations (`assignee`, `assigneeAgent`, `user`, `page`, `assignees[]`) + `title` + `pageId` of the auto-created child TASK_LIST page (`:591–595`). Status validated against the list's status configs → 400 with valid slugs (`:416–417`). `due_date` trigger without `dueDate` → 400 (`:395–396`). |
+| `update_task` (tools.js:429) | `pageId*`, `taskId*`, `title?`, `status?`, `priority?`, `assigneeId?`, `assigneeAgentId?`, `assigneeIds?[]`, `dueDate?` | PATCH `/api/pages/{pageId}/tasks/{taskId}` (task.js:141) | `pages/[pageId]/tasks/[taskId]/route.ts:24` | Updated task with relations + `title` (`:389, :418`). Route additionally accepts `position` (`:64`) — the MCP layer deliberately routes that through `reorder_task`. Task not a direct child of `pageId` → 404 (`:59–61`). |
+| `delete_task` (tools.js:486) | `pageId*`, `taskId*` | DELETE `/api/pages/{pageId}/tasks/{taskId}` (task.js:174) | `pages/[pageId]/tasks/[taskId]/route.ts:425` | Success JSON; semantics = trash the linked page ("delete by trashing", `:421–423`). Edit permission required (`:440–445`). |
+| `reorder_task` (tools.js:504) | `pageId*`, `taskId*`, `position*` | PATCH `/api/pages/{pageId}/tasks/{taskId}` `{position}` (task.js:207) | same PATCH route (`:24`, `position` accepted at `:64`) | Updated task row. `position` is a 0-based slot, clamped to the list length. (The web UI's separate `pages/[pageId]/tasks/reorder/route.ts` exists but the MCP path uses the PATCH — both are valid; SDK should standardize on PATCH `{position}`.) Both routes write the single ordering rail, `pages.position` on the task's linked page — the same value a user drag writes (#2143). Responses report `position` from that rail, so it is a float, not a dense 0..n-1 index. |
+| `create_task_status` (tools.js:526) | `pageId*`, `name*`, `color*`, `group*` (todo/in_progress/done), `position?` | POST `/api/pages/{pageId}/tasks/statuses` (task.js:236) | `pages/[pageId]/tasks/statuses/route.ts:80` | `201` status-config row `{id, taskListId, name, slug, color, group, position}` (`:168–188`). Slug collision → 409 (`:155`). Route also exports GET/PUT/DELETE for statuses (`:27, :195, :284`) — unexposed surface for the SDK. |
+| `get_assigned_tasks` (tools.js:557) | `context?`, `driveId?`, `status?`, `priority?`, `assigneeId?`, `assigneeAgentId?`, `showAllAssignees?`, `dueDateFilter?`, `statusGroup?`, `search?`, `limit?`, `offset?` | GET `/api/tasks?…` (task.js:273–289; defaults `context` to `'drive'` iff `driveId` given) | `tasks/route.ts:64` | `{tasks:[enriched task + title, driveId, taskListPageId, taskListPageTitle, statusGroup, statusLabel, statusColor], statusConfigsByTaskList, pagination{total,limit,offset,hasMore}}` (`:457–466`). Route also accepts `startDate`/`endDate` (created-at window, `:29–30`) which the tool omits. `limit` 1–100 default 50 (`:42`). |
+
+### 2.8 Search (3 tools)
+
+| Tool | Input | Call | Route | Response (route truth) |
+|---|---|---|---|---|
+| `regex_search` (tools.js:620) | `driveId*`, `pattern*`, `searchIn?` (content/title/both), `maxResults?` | GET `/api/drives/{driveId}/search/regex?pattern&searchIn&maxResults` (search.js:15–22) | `drives/[driveId]/search/regex/route.ts:18` | `{success:true, ...searchResults}` (results/totals from `regexSearchPages`, `:126–129`). `maxResults` clamped **1–100**, default 50 (`:36–40`). Missing pattern → 400. |
+| `glob_search` (tools.js:648) | `driveId*`, `pattern*`, `includeTypes?[]` (enum incl. TASK_LIST), `maxResults?` | GET `/api/drives/{driveId}/search/glob?pattern&maxResults[&includeTypes=csv]` (search.js:74–84) | `drives/[driveId]/search/glob/route.ts:21` | `{success:true, ...searchResults}` (`:136–139`). `maxResults` clamped **1–200**, default 100 (`:39–43`). **DISCREPANCY (type filter):** route's valid set is FOLDER, DOCUMENT, AI_CHAT, CHANNEL, CANVAS, SHEET, **CODE** (`:14`) — **no TASK_LIST**. The tool offers TASK_LIST (tools.js:665) which the route silently drops; if it was the only entry the filter degrades to "all types" (`:53–57` + `:118`). Resolution: SDK enum = route enum (add CODE, drop TASK_LIST) and fail closed on unsupported types instead of silently widening. |
+| `multi_drive_search` (tools.js:679) | `searchQuery*`, `searchType?` (text/regex), `maxResultsPerDrive?` | GET `/api/search/multi-drive?searchQuery&searchType&maxResultsPerDrive` (search.js:135–142) | `search/multi-drive/route.ts:17` | `{success:true, searchQuery, searchType, results:[{driveId,driveName,driveSlug,matches[{pageId,title,type,excerpt}],count}], totalDrives, totalMatches, summary, stats, nextSteps}` (`:242–264`). `maxResultsPerDrive` clamped **1–50**, default 20 (`:26–30`). Per-page permission-filtered via batch principal permissions (`:190`). |
+
+### 2.9 AI agents & models (5 tools)
+
+| Tool | Input | Call | Route | Response (route truth) |
+|---|---|---|---|---|
+| `update_agent_config` (tools.js:706) | `agentPath*`, `agentId*`, `systemPrompt?`, `enabledTools?[]`, `aiProvider?`, `aiModel?` | PUT `/api/ai/page-agents/{agentId}/config` (agent.js:17) | `ai/page-agents/[agentId]/config/route.ts:57` | `{success:true, id, title, type:'AI_CHAT', message, summary, updatedFields[], agentConfig{...}, stats{...}, nextSteps[]}` (`:249–279`). Invalid tool names → 400 listing available tools (`:136–141`). Route also accepts `agentDefinition`, `visibleToGlobalAssistant`, `toolExposureMode` ('upfront'/'search'), `sandboxEnabled` (boolean; non-boolean → 400), `expectedRevision` (409/428) (`:70–80`). `agentConfig` now reports the EFFECTIVE surface beside the stored one (`effectiveTools`, `blockedTools[{tool,gate}]`, `toolsNeedingComposerToggle`, `toolsReachedBySearch`, `sandboxEnabled`) plus `warnings[]` — naming sandbox tools in `enabledTools` grants nothing while `sandboxEnabled` is false (issue #2460). `agentPath` is decorative (never sent). |
+| `list_agents` (tools.js:742) | `driveId*`, `driveSlug?`, `includeSystemPrompt?`, `includeTools?` | GET `/api/drives/{driveId}/agents?includeSystemPrompt&includeTools[&driveSlug]` (agent.js:74–83) | `drives/[driveId]/agents/route.ts:33` | `{success:true, driveId, driveName, driveSlug, agents:[AgentSummary], count, summary, stats, nextSteps}` (`:145–165`). `driveSlug` query param is ignored by the route. Per-agent view-permission filtering (`:100–102`). |
+| `multi_drive_list_agents` (tools.js:769) | `includeSystemPrompt?`, `includeTools?`, `groupByDrive?` | GET `/api/ai/page-agents/multi-drive?…` (agent.js:131–137) | `ai/page-agents/multi-drive/route.ts:35` | `{success:true, totalCount, driveCount, summary, stats, nextSteps}` + (`groupByDrive` ? `agentsByDrive:[{driveId,driveName,driveSlug,agentCount,agents[]}]` : `agents:[]`) (`:167–198`). |
+| `ask_agent` (tools.js:791) | `agentPath*`, `agentId*`, `question*`, `context?` | POST `/api/ai/page-agents/consult` `{agentId, question, context}` (agent.js:232) | `ai/page-agents/consult/route.ts:156` | `{success:true, agent{id,title,systemPrompt(preview),provider,model,enabledToolsCount}, question, response, context, metadata}` (`:560–572`). Credit-gated (402-class errors via `creditGateErrorResponse`) and admin-only-provider gated (`:233–246`). `agentPath` never sent. |
+| `list_models` (tools.js:1458) | `provider?`, `freeOnly?` | GET `/api/ai/models[?provider&freeOnly]` (agent.js:185–190) | `ai/models/route.ts:21` | `{providers: buildModelCatalog(), defaultProvider, defaultModel}` (`:22–27`). **DISCREPANCY (three-way):** (1) the route is **public — no auth** (`:9–10`); (2) it **ignores `provider` and `freeOnly` entirely** (its `GET()` takes no request); (3) there is **no top-level `models` array** — models are nested per provider — so the handler's `response.models || []` (agent.js:199) is always `[]` and its `count` is always 0. Resolution: SDK op = no params in, `{providers, defaultProvider, defaultModel}` out; any provider/freeOnly filtering is a pure client-side function. |
+
+### 2.10 Calendar (9 tools)
+
+| Tool | Input | Call | Route | Response (route truth) |
+|---|---|---|---|---|
+| `list_calendar_events` (tools.js:821) | `startDate*`, `endDate*`, `driveId?` | GET `/api/calendar/events?startDate&endDate[&driveId]` (calendar.js:23–28) | `calendar/events/route.ts:217` | **`{events:[…], workflowEvents:[…]}`** (`:359, :481`). **DISCREPANCY (shape):** the handler treats the response as a bare array (`events.length`, `for…of events`, calendar.js:30–38) — iterating the object **throws**, so the tool errors on every non-empty result against the current route. Route accepts `context` (`user`/`drive`), `includePersonal` too (`:225–230`). Resolution: SDK output schema `{events, workflowEvents}`. |
+| `get_calendar_event` (tools.js:843) | `eventId*` | GET `/api/calendar/events/{eventId}` (calendar.js:71) | `calendar/events/[eventId]/route.ts:111` | Bare event object (`:163`). 404 / 403 fail-closed via `canAccessEvent` (`:148–161`). |
+| `check_calendar_availability` (tools.js:857) | `startDate*`, `endDate*`, `driveId?` | GET `/api/calendar/events?…` (calendar.js:111–116) — gap computation is **client-side** (calendar.js:118–139) | same route as `list_calendar_events` | Same `{events, workflowEvents}` — same shape **DISCREPANCY** as above. Resolution: SDK models availability as a **pure function** `computeFreeSlots(events, range) → slots[]` over the list operation (testable with plain inputs). |
+| `create_calendar_event` (tools.js:879) | `title*`, `startAt*`, `endAt*`, `description?`, `location?`, `driveId?`, `allDay?`, `userIds?[]` | POST `/api/calendar/events` (calendar.js:184) | `calendar/events/route.ts:496` | `201` complete event (`:714`). **DISCREPANCY (attendees dropped):** route schema takes **`attendeeIds`**, not `userIds` (`:34–56`); the handler's `userIds` is silently stripped by zod, so invitees are never added. Route also supports `pageId`, `timezone`, `recurrenceRule{frequency,interval,byDay,byMonthDay,byMonth,count,until}`, `visibility` (DRIVE/ATTENDEES_ONLY/PRIVATE), `color`, `agentTrigger` (`:34–60`). Resolution: SDK input field is `attendeeIds`; expose the full schema. |
+| `update_calendar_event` (tools.js:922) | `eventId*`, `title?`, `startAt?`, `endAt?`, `description?`, `location?`, `allDay?` | PATCH `/api/calendar/events/{eventId}` (calendar.js:223) | `calendar/events/[eventId]/route.ts:178` | Complete updated event (`:382`). Route also accepts `timezone`, `recurrenceRule`, `visibility`, `color`, `pageId`, `agentTrigger` (`:24–48`). |
+| `delete_calendar_event` (tools.js:960) | `eventId*` | DELETE `/api/calendar/events/{eventId}` (calendar.js:253) | `calendar/events/[eventId]/route.ts:397` | `{success:true}` (`:474`). |
+| `rsvp_calendar_event` (tools.js:974) | `eventId*`, `status*` (ACCEPTED/DECLINED/TENTATIVE) | PATCH `/api/calendar/events/{eventId}/attendees` `{status}` (calendar.js:287) | `calendar/events/[eventId]/attendees/route.ts:298` | Updated attendee row (`:392`). Route enum additionally allows `PENDING` and an optional `responseNote` ≤500 (`:21–24`) — tool subset is safe; SDK should expose both. |
+| `invite_calendar_attendees` (tools.js:993) | `eventId*`, `userIds*[]` | POST `/api/calendar/events/{eventId}/attendees` `{userIds}` (calendar.js:312) | `calendar/events/[eventId]/attendees/route.ts:153` | `{attendees}` (`:283`). Route also accepts `isOptional` (`:15–18`). |
+| `remove_calendar_attendee` (tools.js:1012) | `eventId*`, `targetUserId*` | DELETE `/api/calendar/events/{eventId}/attendees` **JSON body** `{targetUserId}` (calendar.js:337–340) | `calendar/events/[eventId]/attendees/route.ts:407` | `{success:true}` (`:498`). **DISCREPANCY (wrong parameter channel — behavioral bug):** the route reads **query param `?userId=`**, defaulting to the *caller* when absent (`:419` — `searchParams.get('userId') || userId`). The handler's JSON body is ignored, so the tool **removes the caller from the event instead of the target**. Resolution: SDK op = DELETE `…/attendees?userId={targetUserId}`; Phase 6 parity fixture MUST cover this. |
+
+### 2.11 Slash commands (4 tools)
+
+| Tool | Input | Call | Route | Response (route truth) |
+|---|---|---|---|---|
+| `list_commands` (tools.js:1032) | `driveId?` | GET `/api/commands[?driveId]` (command.js:15–18) | `commands/route.ts:59` | `{commands:[{…command, entryPageTitle, entryPageDriveId, entryPageAvailable, authorName}]}` (`:113–128`). Handler unwraps `.commands` ✓. |
+| `create_command` (tools.js:1045) | `trigger*`, `description*`, `entryPageId*`, `driveId?`, `enabled?` | POST `/api/commands` (command.js:63) | `commands/route.ts:137` | `201 {command}` (`:270`). Trigger/description validated server-side (lengths, charset); drive-scoped commands require owner/admin. |
+| `update_command` (tools.js:1075) | `commandId*`, `trigger?`, `description?`, `entryPageId?`, `enabled?` | PATCH `/api/commands/{commandId}` (command.js:107) | `commands/[commandId]/route.ts:67` | `{command}` (`:210`). |
+| `delete_command` (tools.js:1105) | `commandId*` | DELETE `/api/commands/{commandId}` (command.js:137) | `commands/[commandId]/route.ts:218` | Success JSON. Auth constants shared at `commands/command-route-helpers.ts:9–10` (both allow mcp). |
+
+### 2.12 Role management (8 tools)
+
+All write paths are owner/admin-gated server-side; role permission maps are `Record<pageId, {canView,canEdit,canShare}>`.
+
+| Tool | Input | Call | Route | Response (route truth) |
+|---|---|---|---|---|
+| `list_drive_roles` (tools.js:1121) | `driveId*` | GET `/api/drives/{driveId}/roles` (role.js:26) | `drives/[driveId]/roles/route.ts:13` | `{roles}` (`:41`). Member-gated (`:35`). |
+| `get_drive_role` (tools.js:1132) | `driveId*`, `roleId*` | GET `…/roles/{roleId}` (role.js:69) | `drives/[driveId]/roles/[roleId]/route.ts:29` | `{role}` (`:60`). |
+| `create_drive_role` (tools.js:1144) | `driveId*`, `name*`, `description?`, `color?`, `driveWidePermissions?{canView,canEdit,canShare}` | POST `…/roles` `{name, permissions: {} , …}` (role.js:114–119) | `drives/[driveId]/roles/route.ts:49` | `201 {role}` (`:131`); duplicate name → 409 (`:136`). **Route requires `permissions`** ("Name and permissions are required", `:78`) — the handler supplies `{}`; the SDK must too (the tool schema doesn't expose `permissions`). |
+| `update_drive_role` (tools.js:1167) | `driveId*`, `roleId*`, `name?`, `description?`, `color?`, `driveWidePermissions?` | PATCH `…/roles/{roleId}` (role.js:162) | `drives/[driveId]/roles/[roleId]/route.ts:68` | `{role}` (`:151`); 409 on duplicate name. Route also accepts `isDefault` and a full `permissions` map (`:101`). |
+| `delete_drive_role` (tools.js:1191) | `driveId*`, `roleId*` | DELETE `…/roles/{roleId}` (role.js:190) | same route `:162` | `{success:true}` (`:215`). |
+| `set_role_page_permissions` (tools.js:1203) | `driveId*`, `roleId*`, `pageId*`, `canView?`, `canEdit?`, `canShare?` | PATCH `…/roles/{roleId}` `{permissions:{[pageId]:{canView:!!,canEdit:!!,canShare:!!}}}` (role.js:214–216) | same route | `{role}`. Server **merges** the submitted map into existing permissions (`updateDriveRole`; handler comment role.js:7–9 verified against route pass-through `:120–127`). Undefined flags coerce to `false` at the handler — fail-closed. |
+| `set_role_drive_wide_permissions` (tools.js:1219) | `driveId*`, `roleId*`, `canView?`, `canEdit?`, `canShare?` | PATCH `…/roles/{roleId}` `{driveWidePermissions:{…!!}}` (role.js:243–245) | same route | `{role}`. |
+| `remove_role_page_permissions` (tools.js:1234) | `driveId*`, `roleId*`, `pageId*` | PATCH `…/roles/{roleId}` `{permissions:{[pageId]:{false,false,false}}}` (role.js:272–274) | same route | `{role}`. "Remove" = all-false entry (falls back to drive-wide), not key deletion. |
+
+### 2.13 Agent triggers (4 tools)
+
+| Tool | Input | Call | Route | Response (route truth) |
+|---|---|---|---|---|
+| `set_calendar_trigger` (tools.js:1249) | `calendarEventId*`, `agentPageId*`, `prompt?`, `instructionPageId?`, `contextPageIds?≤10` | PUT `/api/calendar/events/{eventId}/triggers` (trigger.js:39) | `calendar/events/[eventId]/triggers/route.ts:134` | `{success:true}` (`:213`). Schema `.strict()`, requires prompt **or** instructionPageId (`:31–39`). Route also has GET → `{trigger}` (`:63`). |
+| `delete_calendar_trigger` (tools.js:1280) | `calendarEventId*` | DELETE `…/triggers` (trigger.js:66) | same route `:221` | `{success:true}` (`:261`), idempotent. |
+| `set_task_trigger` (tools.js:1294) | `taskId*`, `triggerType*` (due_date/completion), `agentPageId*`, `prompt?`, `instructionPageId?`, `contextPageIds?≤10` | PUT `/api/tasks/{taskId}/triggers` (trigger.js:115) | `tasks/[taskId]/triggers/route.ts:121` | `{trigger}` (`:227`). Schema `.strict()` (`:20–29`). Route also has GET → `{triggers}` (`:69, :117`). |
+| `delete_task_trigger` (tools.js:1330) | `taskId*`, `triggerType*` | DELETE `/api/tasks/{taskId}/triggers/{triggerType}` (trigger.js:148) | `tasks/[taskId]/triggers/[triggerType]/route.ts:19` | Success JSON. **DISCREPANCY (auth):** this route is **session-only** — `SESSION_WRITE = { allow: ['session'] }` (`:14`) — so an `mcp_*` Bearer gets 401 `"MCP tokens are not permitted for this endpoint"` (`lib/auth/index.ts:284–291`). The tool cannot work with MCP tokens today. Resolution: Phase 1 must either add `'mcp'` (and later OAuth) to this route's allow-list or the registry marks the op `sessionOnly` and the parity gate asserts the 401. |
+
+### 2.14 Scheduled workflows (4 tools)
+
+| Tool | Input | Call | Route | Response (route truth) |
+|---|---|---|---|---|
+| `list_workflows` (tools.js:1351) | `driveId*` | GET `/api/workflows?driveId` (workflow.js:22) | `workflows/route.ts:31` | Bare **array** of workflow rows (`:109`). Owner/admin-gated (`:49`). Handler handles both array and `{workflows}` ✓. |
+| `create_workflow` (tools.js:1362) | `driveId*`, `name*`, `cronExpression*`, `agentPageId*`, `timezone?`, `prompt?`, `instructionPageId?`, `contextPageIds?`, `isEnabled?` | POST `/api/workflows` (workflow.js:77) | `workflows/route.ts:113` | `201` workflow row (`:190`). **DISCREPANCY (schema drift):** route schema is `.strict()` with **`prompt` required** and **no `instructionPageId`** (`:19–28`). The tool's "prompt **or** instructionPageId" contract is false — sending `instructionPageId` → 400 `Invalid input` (unrecognized key), and omitting `prompt` → 400. Resolution: registry input = `{driveId, name, agentPageId, prompt (required), contextPageIds?, cronExpression, timezone?, isEnabled?}` until the route grows instruction-page support. |
+| `update_workflow` (tools.js:1400) | `workflowId*`, `name?`, `cronExpression?`, `timezone?`, `isEnabled?`, `agentPageId?`, `prompt?`, `instructionPageId?`, `contextPageIds?` | PATCH `/api/workflows/{workflowId}` (workflow.js:126) | `workflows/[workflowId]/route.ts:71` | Updated workflow row (`:149`). **Same DISCREPANCY:** update schema `.strict()`, no `instructionPageId` (`:18–26`) → 400 if sent. |
+| `delete_workflow` (tools.js:1423) | `workflowId*` | DELETE `/api/workflows/{workflowId}` (workflow.js:154) | `workflows/[workflowId]/route.ts:153` | `{success:true}` (`:175`). Route also has GET single (`:54, :67`) — unexposed. |
+
+### 2.15 Members & collaborators (2 tools)
+
+| Tool | Input | Call | Route | Response (route truth) |
+|---|---|---|---|---|
+| `list_drive_members` (tools.js:1436) | `driveId*` | GET `/api/drives/{driveId}/members` (member.js:22) | `drives/[driveId]/members/route.ts:9` | `{members, pendingInvites (owner/admin-only, else []), currentUserRole}` (`:47–52`). Member-gated (`:32`). |
+| `list_collaborators` (tools.js:1447) | — | GET `/api/connections` (member.js:61) | `connections/route.ts:17` | `{connections: validConnections}` (`:92`); default filter `status=ACCEPTED` (`:26` — route supports `?status=` which the tool omits). |
+
+### 2.16 Conversations, channels & activity (5 tools)
+
+| Tool | Input | Call | Route | Response (route truth) |
+|---|---|---|---|---|
+| `list_conversations` (tools.js:1477) | `agentId*` | GET `/api/ai/page-agents/{agentId}/conversations` (conversation.js:22) | `ai/page-agents/[agentId]/conversations/route.ts:23` | `{conversations, pagination{page,pageSize,totalCount,totalPages,hasMore}}` (`:115–125`). Handler unwraps `.conversations` ✓. Route also has POST (create conversation, `:141`) — unexposed. |
+| `read_conversation` (tools.js:1492) | `agentId*`, `conversationId*` | GET `…/conversations/{conversationId}/messages` (conversation.js:81) | `…/conversations/[conversationId]/messages/route.ts:56` | `{messages, conversationId, messageCount, pagination{hasMore,nextCursor,prevCursor,limit,direction}}` (`:190–201`). Cursor pagination params unexposed by the tool. |
+| `send_channel_message` (tools.js:1511) | `pageId*`, `content*` | POST `/api/channels/{pageId}/messages` `{content}` (conversation.js:140) | `channels/[pageId]/messages/route.ts:229` | `201` message row (`:671`; thread replies `:549`). Route accepts `fileId`, `attachmentMeta`, `parentId`, `alsoSendToParent`, `quotedMessageId` (`:249–256`). **Stale tool description:** the "may only support session auth" warning (tools.js:1512) is wrong — the route allows mcp (`:117–118`). Edit permission required → 403 (`:242–247`). |
+| `delete_channel_message` (tools.js:1530) | `pageId*`, `messageId*` | DELETE `/api/channels/{pageId}/messages/{messageId}` (conversation.js:195) | `channels/[pageId]/messages/[messageId]/route.ts:86` | `{success:true}` (`:142`). Author-only (`:105`) + edit permission (`:93–96`). |
+| `get_activity` (tools.js:1549) | `driveId?`, `pageId?`, `limit?`, `types?[]` | **POST** `/api/activities` JSON body (conversation.js:214–223) | `activities/route.ts:39` — **GET only** | `{activities, pagination{total,limit,offset,hasMore}}` (`:235–243`). **DISCREPANCY (method + params):** the route exports **no POST** → the tool 405s on every call. The GET contract is query params `{context ('user' default), driveId, pageId, startDate, endDate, actorId, operation, resourceType, limit, offset}` (`:53–67`); there is **no `types` filter** — nearest equivalents are `operation` + `resourceType`. Resolution: SDK op = GET with the route's real query schema; drop `types`. |
+
+### 2.17 Workspace shell (2 SDK operations — no v5.2.7 tool)
+
+New surface, not a port: the in-app `bash` AI tool had no token-reachable route.
+
+| Operation | Input | Route | Response (route truth) |
+|---|---|---|---|
+| `workspaces.list` | `driveId?` | GET `agent-workspaces/route.ts` (`allow: session, mcp`) | `{sessions: [AgentSessionDTO + shells, conversations, rev, nodes, targets]}` — owner-only, then filtered to the credential's drive scope (`credential-scope.ts`; a driveless workspace only for an unscoped credential). A drive-scoped credential additionally keeps only drives its own principal permissions can view (`getPrincipalDriveAccessLevel`) and gets the session DTOs with `shells`/`conversations`/`nodes`/`targets` empty at `rev: 0` — the child reads resolve as the owning user, so they are never run for a key. |
+| `workspaces.exec` | `workspaceId*`, `command*`, `cwd?`, `timeoutMs?` | POST `agent-workspaces/[workspaceId]/exec/route.ts` (`allow: session, mcp`) | `200 {stdout, stderr, exitCode, truncated}` for any command that ran (non-zero exit included). Body = the `bash` tool's `bashInputSchema`. Denied / not found / out of scope / ended → the same `404`; so is a drive-scoped key whose OWN grant fails the drive-wide edit bar (`principal-code-exec-access.ts`: inherit → owner's `canEdit`, OWNER/ADMIN/plain MEMBER → yes, custom role → its `driveWidePermissions.canEdit`), checked before the owning user's `canRunCode` gate. Gate/runner refusals → `{error, reason, retryAfter?}` with `DENIAL_STATUS` (403 plan/access, 402 insufficient balance, 429 quota, 400 policy, 503 provisioning). |
+
+### 2.18 Wallet reads (4 SDK operations — no v5.2.7 tool; X-1 narrowed by [D-OW-26])
+
+New surface, not a port. READS ONLY ([D-OW-26]: a token may read wallet views, consumer allowlist only, but never moves money or changes a spend source): every wallet write route (`POST/PATCH/DELETE drives/[driveId]/wallet`, `…/wallet/top-up`, `…/wallet/donate`, `PUT/DELETE …/wallet/caps/[userId]`, `PUT wallets/default`, `PUT wallets/conversations/[conversationId]`, `PUT wallets/always-own-credits`) admits an `mcp` token only to refuse it by name (`mcp_token_cannot_move_money` / `mcp_token_cannot_change_spend_source`, 403, nothing read or written), so none is an operation. Nor is `GET drives/[driveId]/wallet/caps`: it lists every person's caps (an admin money view), and a token always reads the consumer projection, so the route refuses it. The org pool, seat caps and seat-cap writes are §2.19's exclusions.
+
+| Operation | Input | Route | Response (route truth) |
+|---|---|---|---|
+| `wallets.getDriveWallet` | `driveId*` | GET `drives/[driveId]/wallet/route.ts` (`allow: session, mcp`; `checkMCPDriveScope`) | `{viewer, actions, wallet}`. A token is always the consumer projection (`viewerForCredential`): `viewer` ∈ `member`/`guest`, `actions` ⊆ `['view']`, `wallet` null or exactly `ConsumerWalletView` (`CONSUMER_WALLET_FIELDS`, `billing/wallet-views.ts`). 404 for a drive the caller cannot open. |
+| `wallets.list` | — | GET `wallets/route.ts` (`allow: session, mcp`) | `MyWallets` (`services/drive-wallet-service.ts`); `funds.pools` is always `[]` for a token. A drive-scoped token → 403 (`refuseScopedTokenForAccountRead`). |
+| `wallets.getAlwaysOwnCredits` | `driveId?` (query) | GET `wallets/always-own-credits/route.ts` (`allow: session, mcp`) | `{alwaysOwnCredits, alwaysOwnCreditsInDrive}` (SPEND-5). A drive-scoped token → 403. Setting the switches (PUT) is a spend-source change: session only. |
+| `wallets.getConversationSource` | `conversationId*`, `driveId?` (query; only read for a global conversation) | GET `wallets/conversations/[conversationId]/route.ts` (`allow: session, mcp`) | `{conversationId, driveId (nullable), chosenWalletId (nullable), options: {source, walletId}[], resolved: CallSpendDecision}` (`billing/spend-target.ts`, `kind` ∈ `spend`/`refuse`/`skip`). Caller's own conversation only (else 404). A drive-scoped token → 403. |
+
+### 2.19 Organizations and the org side of drives (43 SDK operations — no v5.2.7 tool; Spec X-1, ORG-5)
+
+New surface, not a port. Every org route the web exposes is an operation here unless it is on the exclusion list below. All go through the web's ONE org gate (`authorizeOrgRequest` → `requireOrgRole`, ORG-5; the drive-org services through `orgDriveServiceDeps.getOrgRole`/`drive-join-request-service`, the same function) Key rules, uniform: an `mcp` key is admitted (`allow: session, mcp`; CSRF applies to sessions only); a drive-scoped key is refused (403 `token_scope_refused`) everywhere but the drive directory, which a scoped key sees filtered to its own drives; and the org's sign-in policy (`requireStrongSignIn`, `maximumSessionAgeMinutes`) is enforced on the key's credential-bound sign-in evidence (403 `org_strong_sign_in_required` / `org_reauthentication_required`). Every operation declares `requiredScope: 'account'`.
+
+**Session-only — NOT operations** (the server refuses a key; an operation that can only fail has no place on the registry or the MCP surface):
+
+| Route | Why |
+|---|---|
+| POST `orgs` | Creating an org is a card checkout. |
+| DELETE `orgs/[orgId]` | Ends the org's Stripe subscription (billing). |
+| POST `orgs/[orgId]/transfer-ownership` | [D-OW-26]: hands over the org's money authority. |
+| PUT/DELETE `orgs/[orgId]/members/[userId]/seat-cap` | [D-OW-26]: allocates the org pool (audited `org.wallet.allocation_changed`). |
+| GET `orgs/[orgId]/seat-caps`, GET `orgs/[orgId]/pool` | [D-OW-26]: admin money views; a key reads only the consumer projection. |
+| `orgs/[orgId]/billing/**` | Billing (Stripe). |
+
+**Operations** (reads first, then writes; `destructive` ones need `--yes` in the CLI):
+
+| Operation | Input | Route |
+|---|---|---|
+| `organizations.update` | `orgId*`, `name?`, `slug?`, `avatarUrl?` (≥1) | PATCH `orgs/[orgId]` (ADMIN) → `{organization}` |
+| `organizations.listMemberActivity` | `orgId*` | GET `orgs/[orgId]/members/activity` (ADMIN) → `{activity: OrgMemberActivity[]}` |
+| `organizations.changeMemberRole` | `orgId*`, `userId*`, `role* ∈ ADMIN/MEMBER` | PATCH `orgs/[orgId]/members/[userId]` (ADMIN) → `{userId, role}` |
+| `organizations.removeMember` (destructive) | `orgId*`, `userId*` | DELETE `orgs/[orgId]/members/[userId]` (ADMIN) → `{removed: true}` |
+| `organizations.leave` (destructive) | `orgId*` | POST `orgs/[orgId]/leave` (MEMBER) → `{left: true}` |
+| `organizations.listInvitations` | `orgId*` | GET `orgs/[orgId]/invitations` (ADMIN) → `{invitations: PublicOrgInvitation[]}` |
+| `organizations.invite` | `orgId*`, `email*`, `role?` | POST `orgs/[orgId]/invitations` (MEMBER + POL-5) → `{invitation}`. [D-OW-26]: a key never raises the Stripe seat quantity — past the purchased seats it is refused 403 `mcp_token_cannot_move_money` and no invite is written (`decideSeatAdmission`); `resendInvitation` likewise. |
+| `organizations.resendInvitation` | `orgId*`, `invitationId*` | POST `orgs/[orgId]/invitations/[invitationId]/resend` → `{invitation}` |
+| `organizations.revokeInvitation` (destructive) | `orgId*`, `invitationId*` | DELETE `orgs/[orgId]/invitations/[invitationId]` (ADMIN) → `{revoked: true}` |
+| `organizations.acceptInvitation` | `token*` | POST `orgs/invitations/accept` (no org role yet) → `{orgId, role, joined}` |
+| `organizations.updatePolicies` | `orgId*`, any non-money policy key (`DelegatedOrgPolicies`; ≥1; `maximumSessionAgeMinutes` 15–43200 or null) | PATCH `orgs/[orgId]/policies` (ADMIN) → `{policies, changed, suspended, restored, blocked, auditRecorded, publishedVisibility?}`. [D-OW-26]: a key naming `seatAllowanceCents` → 403 `mcp_token_cannot_move_money`, `walletFallback` → 403 `mcp_token_cannot_change_spend_source` (`delegatedPolicyPatchRefusal`, classified per key in `policies-core.ts`); nothing is stored. |
+| `organizations.listSuspended` | `orgId*` | GET `orgs/[orgId]/policies/suspended` (ADMIN) → `{suspended: NamedSuspendedListing[]}` |
+| `organizations.listTrashedDrives` | `orgId*` | GET `orgs/[orgId]/drives/trashed` (ADMIN) → `{drives: OrgTrashedDrive[]}` |
+| `organizations.getDriveUsage` | `orgId*` | GET `orgs/[orgId]/drives/usage` (ADMIN) → `{usage: OrgDriveUsage[]}` |
+| `organizations.getAuditLog` | `orgId*`, `type?`, `category?`, `driveId?`, `from?`, `to?`, `limit?` (1–500), `before?` (query) | GET `orgs/[orgId]/audit` (ADMIN) → `{entries: OrgAuditEntry[], nextCursor}` |
+| `organizations.exportAuditLog` | the same filters, no paging (query) | GET `orgs/[orgId]/audit/export` (ADMIN) → CSV text (`textResponse`, `text/csv`) |
+| `organizations.listAutomations` | `orgId*` | GET `orgs/[orgId]/automations` (ADMIN) → `{automations}` |
+| `organizations.deleteAutomation` (destructive) | `orgId*`, `kind* ∈ workflow/page_webhook`, `automationId*` | DELETE `orgs/[orgId]/automations/[kind]/[automationId]` (ADMIN) → `{deleted: true}` |
+| `organizations.reassignAutomation` | `orgId*`, `kind*`, `automationId*`, `newOwnerId*` | POST `…/[automationId]/reassign` (ADMIN) → `{reassigned: true, newOwnerId}` |
+| `organizations.listGuests` | `orgId*` | GET `orgs/[orgId]/guests` (ADMIN) → `{guests: OrgGuest[]}` |
+| `organizations.listGuestApprovals` | `orgId*` | GET `orgs/[orgId]/guest-approvals` (ADMIN) → `{total, items: PendingGuestApprovalView[]}` |
+| `organizations.answerGuestApproval` | `orgId*`, `holdId*`, `decision* ∈ approve/decline` | POST `orgs/[orgId]/guest-approvals/[holdId]` (ADMIN) → `{decided, driveId?, pageIds?, result?}` |
+| `organizations.listDomains` | `orgId*` | GET `orgs/[orgId]/domains` (ADMIN) → `{domains}` (with `dnsRecord`) |
+| `organizations.addDomain` | `orgId*`, `domain*` | POST `orgs/[orgId]/domains` (ADMIN) → `{domain}` |
+| `organizations.removeDomain` (destructive) | `orgId*`, `domainId*` | DELETE `orgs/[orgId]/domains/[domainId]` (ADMIN) → `{removed: true}` |
+| `organizations.verifyDomain` | `orgId*`, `domainId*`, `method* ∈ dns/email`, `mailbox?` | POST `orgs/[orgId]/domains/[domainId]/verify` (ADMIN) → `{domain, alreadyVerified}` or `202 {sentTo, expiresAt}` |
+| `organizations.confirmDomainEmail` | `token*` | POST `orgs/domains/verify-email` (any signed-in account) → `{domain, verified: true}` |
+| `organizations.clearSuppression` | `orgId*`, `email*` | POST `orgs/[orgId]/suppressions/clear` (ADMIN) → `{cleared}` |
+| `drives.list` (§2.1) | — | now also carries `orgId` (nullable) and `orgVisibility` (tolerant: optional for older servers) |
+| `drives.create` (§2.1) | `name*`, `orgId?`, `orgVisibility?` | POST `drives/route.ts` — with `orgId`, `createOrgDrive` (DRV-3, POL-5) |
+| `drives.moveToOrg` | `driveId*`, `orgId*`, `orgVisibility?` | PUT `drives/[driveId]/org` (the drive's owner, an org member; a wallet requires a session, otherwise an unscoped key is allowed) → `{drive, storageReattribution}` |
+| `drives.moveOutOfOrg` (destructive) | `driveId*`, `implicitMembers* ∈ keep/remove` (JSON body on DELETE) | DELETE `drives/[driveId]/org` (org ADMIN; a wallet requires a session, otherwise an unscoped key is allowed) → `{drive, storageReattribution}` |
+| `drives.setOrgVisibility` | `driveId*`, `orgVisibility*` | PATCH `drives/[driveId]/org` (lead or org ADMIN) → `{drive}` |
+| `drives.setOrgLead` | `driveId*`, `userId*` | PUT `drives/[driveId]/org/lead` (lead or org ADMIN) → `{drive}` |
+| `drives.listJoinRequests` | `driveId*` | GET `drives/[driveId]/join-requests` (lead or org ADMIN) → `{requests: PendingJoinRequest[]}` |
+| `drives.requestToJoin` | `driveId*`, `message?` (≤500) | POST `drives/[driveId]/join-requests` (org member) → `{request}` (201 new, 200 existing) |
+| `drives.answerJoinRequest` | `driveId*`, `requestId*`, `decision* ∈ approve/deny` | PATCH `drives/[driveId]/join-requests/[requestId]` → `{request, admitted}` |
+| `drives.withdrawJoinRequest` | `driveId*`, `requestId*` | DELETE `drives/[driveId]/join-requests/[requestId]` (requester) → `{request}` |
+
+The five original reads:
+
+| `organizations.list` | — | GET `orgs/route.ts` (`allow: session, mcp`) | `{organizations: [{id, name, slug, avatarUrl (nullable), role ∈ OWNER/ADMIN/MEMBER, lapsed}]}` (`OrgSummaryForUser` + the route's `lapsed` flag, ORG-2 / [DOW-33]). A drive-scoped token → 403. |
+| `organizations.get` | `orgId*` | GET `orgs/[orgId]/route.ts` (MEMBER; `allow: session, mcp`) | `{organization: {id, name, slug, avatarUrl, ownerId, createdAt}, viewer: {userId, role}, billingNotice?}` — `billingNotice` is the per-role SEAT-9 banner, left shape-open in the SDK. 404 for a non-member. A drive-scoped token → 403. |
+| `organizations.listMembers` | `orgId*` | GET `orgs/[orgId]/members/route.ts` (MEMBER; `allow: session, mcp`) | `{members: [{userId, role, joinedAt (ISO), name, email, image (nullable)}]}` (`OrgMemberDetail`, ORG-2). A drive-scoped token → 403. |
+| `organizations.listDrives` | `orgId*` | GET `orgs/[orgId]/drives/route.ts` (MEMBER; `allow: session, mcp`) | `{drives: [{id, name, slug, orgVisibility ∈ OPEN/RESTRICTED/PRIVATE, joined, joinRequest ∈ 'pending'/null, canRequest, lead: {id, name, image}}]}` — the org Drives directory (DRV-6), the only place a Restricted drive is discovered before joining; Private drives appear only where the caller can already open them (D-OW-25). A drive-scoped token sees only its own drives (filtered after the member gate). |
+| `organizations.getPolicies` | `orgId*` | GET `orgs/[orgId]/policies/route.ts` (ADMIN — SEAT-6; `allow: session, mcp`) | `{policies: DelegatedOrgPolicies}` — every non-money key present, defaults filled in (POL-1, `organizations/policies-core.ts`); a key never sees `seatAllowanceCents`/`walletFallback` ([D-OW-26], `policiesForDelegatedCredential`). A plain member → 403 `insufficient_role`; a non-member → 404; a drive-scoped Admin token → 403 `token_scope_refused`. |
+
+---
+
+## 3. MCP-only routes — the SDK's content-edit surface (documented fully)
+
+### 3.1 `POST /api/mcp/documents` (`apps/web/src/app/api/mcp/documents/route.ts:85`)
+
+Auth: `authenticateMCPRequest` — **mcp tokens only** (`:86`; session cookies are NOT accepted on this route). Drive scope checked before permissions (`:110–133`); view permission via principal model (`:136–145`); mutating ops additionally require `canEdit` → 403 `{error:'Write permission required', details}` (`:148–164`).
+
+Input schema (zod, `:76–83`): `{operation: 'read'|'replace'|'insert'|'delete'|'edit-cells', pageId?, startLine?≥1, endLine?≥1, content?, cells?[{address,value}]}`. If `pageId` is omitted the server guesses the "current page" (`getCurrentPageId`, `:21–43`) — the SDK must always send `pageId` (fail-closed; the guess is owner-only and heuristic).
+
+**Five operations** (the MCP server exposes only `read`, `replace`, `edit-cells`; `insert` and `delete` are live but untooled — the SDK registry should cover all five):
+
+| Operation | Required fields | Success response | Errors |
+|---|---|---|---|
+| `read` (`:179`) | `pageId` | `{pageId,pageTitle,totalLines,numberedLines,content}`; TASK_LIST adds `pageType,taskListId,tasks,availableStatuses,progress` (`:253–279`) | 404 page; 403 scope/view |
+| `replace` (`:282`) | `startLine`, `content` (`endLine` defaults to `startLine`) | `{…, operation:'replace', affectedLines:'s-e'}` (`:335–342`) | 400 missing/out-of-range (`:283–291`); 409/428 revision mismatch (`:564–572`) |
+| `insert` (`:345`) | `startLine`, `content` (insert index clamps to EOF) | `{…, operation:'insert', insertedAt}` (`:394–401`) | 400 missing |
+| `delete` (`:404`) | `startLine` (`endLine` optional) | `{…, operation:'delete', deletedLines:'s-e'}` (`:456–463`) | 400 missing/out-of-range |
+| `edit-cells` (`:466`) | `cells[]` non-empty; page must be SHEET | `{pageId,pageTitle,cellsUpdated,operation,stats{valuesSet,formulasSet,cellsCleared,sheetDimensions,recomputed},updatedCells[]}` (`:538–556`) | 400 non-sheet (`:469`), invalid A1 address (`:481–487`) |
+
+All mutations go through `applyPageMutation` with `expectedRevision` (optimistic concurrency), emit websocket `content-updated`, and audit-log with `source:'mcp'` (`:302–342` etc.). Zod failure → 400 `{error: issues}` (`:574–576`).
+
+### 3.2 `/api/mcp/drives` (`apps/web/src/app/api/mcp/drives/route.ts`)
+
+Auth: `authenticateMCPRequest` — mcp only. **Currently unused by pagespace-mcp** (its handlers call `/api/drives`, which also accepts mcp tokens) — this is a redundant MCP twin, kept for legacy clients:
+
+- `GET` (`:95`): list accessible drives, filtered by token scope; explicit-role scoped drives included even when the owner isn't a member (`:114–139`). Returns bare array.
+- `POST` (`:22`): create drive `{name: 1–100 chars}` (`:18–20`); **scoped tokens → 403** (`:30–35`); returns `201` bare drive row (`:83`).
+
+Resolution for the SDK: standardize on `/api/drives` (richer `DriveWithAccess` shape, dual auth); mark `/api/mcp/drives` as deprecated-parity-only. Phase 6's adapter must not regress clients that still call it.
+
+---
+
+## 4. Consolidated DISCREPANCY register
+
+Every row is a RED-test candidate for Phase 6's parity gate (fixture: replay the handler's exact request against the route; assert the noted outcome).
+
+| # | Tool | Nature | Observable failure today | Registry resolution |
+|---|---|---|---|---|
+| D1 | `get_activity` | Method mismatch: handler POSTs; route is GET-only (`activities/route.ts:39`) | 405 on every call | GET + real query schema; drop `types`, add `operation`/`resourceType`/`actorId`/dates/offset |
+| D2 | `delete_task_trigger` | Route session-only (`tasks/[taskId]/triggers/[triggerType]/route.ts:14`) | 401 with mcp token | Add `'mcp'`+OAuth to allow-list in Phase 1, or mark op `sessionOnly` |
+| D3 | `list_models` | Route public, ignores `provider`/`freeOnly`, no top-level `models` (`ai/models/route.ts:21–27`) | Filters no-op; handler always reports 0 models | Param-less op; output `{providers,defaultProvider,defaultModel}`; filtering = pure client fn |
+| D4 | `list_calendar_events` / `check_calendar_availability` | Route returns `{events, workflowEvents}`, handler expects bare array (`calendar/events/route.ts:359,481` vs calendar.js:30–38) | `for…of` over object throws → tool errors on non-empty results | Output schema `{events, workflowEvents}`; availability = pure `computeFreeSlots(events, range)` |
+| D5 | `create_calendar_event` | Field name: tool sends `userIds`, route accepts `attendeeIds` (`calendar/events/route.ts:55`) | Invitees silently never added | Input field `attendeeIds`; expose recurrence/visibility/timezone |
+| D6 | `remove_calendar_attendee` | Param channel: tool sends JSON body `targetUserId`; route reads query `?userId=`, defaults to caller (`attendees/route.ts:419`) | **Removes the caller, not the target** | DELETE `…/attendees?userId={targetUserId}` |
+| D7 | `create_workflow` / `update_workflow` | Route schemas `.strict()`, `prompt` required (create), no `instructionPageId` (`workflows/route.ts:19–28`; `workflows/[workflowId]/route.ts:18–26`) | `instructionPageId` → 400; prompt-less create → 400 | `prompt` required; no `instructionPageId` until the route supports it |
+| D8 | `glob_search` | Type-filter enum drift: route set has CODE, lacks TASK_LIST (`search/glob/route.ts:14`); invalid entries silently widen the filter (`:53–57,118`) | TASK_LIST filter silently returns all types | Enum = route enum; reject unsupported types client-side (fail closed) |
+| D9 | `create_page` | Type enum too narrow: route accepts FILE + CODE (+admin TERMINAL) (`pages/route.ts:13–16,53`) | SDK parity would under-expose the API | Enum = creatable types from `page-types.config.ts:306` + admin-gated TERMINAL |
+| D10 | `trash_page` | Default divergence: tool `withChildren=false`, route omitted-field default `true` (`pages/[pageId]/route.ts:258`) | Latent only (handler always sends the field) | SDK always sends `trash_children` explicitly |
+| D11 | `trash_drive` | `confirmDriveName` guardrail is client-side only (page.js:183–186; no such field on the route) | Bare DELETE trashes without confirmation | Keep guard as pure client fn `assertDriveNameConfirmed(drive.name, confirm)`; document server gap |
+| D12 | `send_channel_message` | Stale description: "session-only, may 401" (tools.js:1512) — route allows mcp (`channels/[pageId]/messages/route.ts:117–118`) | Misleading docs only | Drop the warning; require edit permission note |
+| D13 | server metadata | `server.js:33,74` reports version `5.1.1`; package.json is `5.2.3` | Client-visible version drift | `pagespace mcp` adapter derives version from package.json |
+
+Handler-claims verified as TRUE (no discrepancy, recorded to stop re-litigation): `update_agent_config` PUT verb matches route (agent.js:15–17 comment is accurate); `reorder_task` via PATCH `{position}` is accepted (`tasks/[taskId]/route.ts:64`); role "remove" = all-false merge (role.js:259–274); RSVP uppercase enums match (`attendees/route.ts:22`); `create_drive_role` must send `permissions` (route requires it, handler defaults `{}`).
+
+---
+
+## 5. Zero-trust posture of this inventory (fail-closed statements)
+
+1. **Routes are the contract.** Where handler and route disagree, the SDK implements the route and the discrepancy register documents the old behavior. No SDK operation may encode a handler-side workaround without a `D#` reference.
+2. **Every operation must send explicit values for security-relevant fields** (`trash_children`, permission booleans coerced to `false`, `pageId` on `/api/mcp/documents`) — never rely on server defaults or server-side "current page" guessing.
+3. **Auth acceptance is per-route, not global.** The registry must carry an `auth` capability per operation (`mcp+session`, `sessionOnly` (D2), `public` (D3)); the transport must not retry a 401 with a different credential class silently.
+4. **Scoped-token semantics are part of the contract**: scoped tokens are their own drive member; several ops require OWNER/ADMIN of the token itself (`move_page`, `list_trash`, `restore_drive` OWNER-only). SDK error mapping must preserve the 401/403/404 distinctions listed above — constant-shape errors, no oracle enrichment.
+5. **Optimistic concurrency is exposed, not hidden**: `expectedRevision` → 409 (mismatch) / 428 (required) on page/content/agent-config mutations must surface as typed errors.
+
+## 6. Implied pure-function signatures (Phase 2/3 seeds)
+
+```ts
+// Registry row — the single source all surfaces derive from (Phase 2).
+type Operation<In, Out> = {
+  name: string;                       // e.g. 'pages.replaceLines'
+  mcpToolName?: string;               // e.g. 'replace_lines' (parity mapping, §2)
+  method: 'GET'|'POST'|'PUT'|'PATCH'|'DELETE';
+  path: (params: In) => string;       // pure; query-string building included
+  auth: 'mcp+session' | 'sessionOnly' | 'public';
+  input: z.ZodType<In>;               // fields from §2, route-verified
+  output: z.ZodType<Out>;             // shapes from §2/§3, route-verified
+};
+
+// Pure decision/transform functions this inventory implies:
+computeFreeSlots(events: CalendarEvent[], range: {startAt: string; endAt: string}): FreeSlot[]        // D4
+assertDriveNameConfirmed(actualName: string, confirmName: string): Result<void, ConfirmMismatch>       // D11
+filterModelCatalog(catalog: ProviderCatalog[], opts: {provider?: string; freeOnly?: boolean}): Model[] // D3
+buildActivityQuery(filters: ActivityFilters): URLSearchParams                                          // D1
+classifyApiError(status: number, body: unknown): TypedApiError  // 400/401/403/404/405/409/428/5xx, constant-shape
+```
+
+## 7. Testable assertions (RED-test seeds for downstream phases)
+
+1. The registry contains **exactly 67 MCP-parity operations** plus the two untooled `/api/mcp/documents` ops (`insert`, `delete`) and the unexposed route surfaces flagged "unexposed" in §2 — a fixture diff against `tools.js` must be empty on names.
+2. For every operation, `method+path` resolves to an existing `route.ts` exporting that method (compile-time route table test).
+3. Replaying each D1–D8 legacy request against its route yields the documented failure (405, 401, empty-filter, throw-shape, dropped field, self-removal, 400, silent-widen respectively); replaying the corrected registry op succeeds.
+4. `output` schemas parse real route fixtures: `{events,workflowEvents}` (calendar list), `{providers,defaultProvider,defaultModel}` (models), `{tasks,statusConfigsByTaskList,pagination}` (assigned tasks), `{activities,pagination}` (activity), bare arrays for `/api/drives` and `/api/workflows`.
+5. An `mcp_*` token against a `sessionOnly` op fails **before** the network layer with a typed `AuthCapabilityError` (fail closed), matching the route's 401.

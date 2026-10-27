@@ -1,17 +1,26 @@
 /**
- * Realtime Server Origin Validation Tests
+ * @scaffold - Realtime Server Origin Validation Tests
  * Tests for WebSocket connection origin validation and logging
  *
  * These tests verify the defense-in-depth origin validation that provides
  * security monitoring for WebSocket connections. While Socket.IO CORS
  * handles actual blocking, this module provides explicit logging for
  * unexpected origins.
+ *
+ * @REVIEW The functions below are LOCAL REIMPLEMENTATIONS — they characterize
+ * expected behavior but do not prove the production code works. The real ones
+ * now live in src/origin-allowlist.ts and are tested, including a real
+ * Socket.IO handshake, in origin-allowlist.test.ts.
+ *
+ * Suggested integration tests:
+ * - Socket.IO client test: connect from allowed origin, verify connection succeeds
+ * - Socket.IO client test: connect from disallowed origin, verify CORS rejection
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // Mock the logger at system boundary
-vi.mock('@pagespace/lib/logger-config', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     realtime: {
       debug: vi.fn(),
@@ -20,9 +29,11 @@ vi.mock('@pagespace/lib/logger-config', () => ({
       error: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 /**
  * Re-implement the origin validation functions from index.ts for testing.
@@ -173,6 +184,7 @@ function validateAndLogWebSocketOrigin(
   });
 }
 
+/** @scaffold */
 describe('Realtime Origin Validation', () => {
   const originalEnv = { ...process.env };
 
@@ -516,7 +528,7 @@ describe('Realtime Origin Validation', () => {
         validateAndLogWebSocketOrigin('https://app.example.com', metadata);
 
         expect(loggers.realtime.debug).toHaveBeenCalledWith(
-          expect.any(String),
+          'WebSocket origin validation: valid origin',
           expect.objectContaining({
             socketId: 'unique-socket-456',
             ip: '192.168.1.100',
@@ -535,7 +547,7 @@ describe('Realtime Origin Validation', () => {
         validateAndLogWebSocketOrigin('https://app.example.com', metadata);
 
         expect(loggers.realtime.debug).toHaveBeenCalledWith(
-          expect.any(String),
+          'WebSocket origin validation: valid origin',
           expect.objectContaining({
             socketId: 'test-socket',
             ip: undefined,

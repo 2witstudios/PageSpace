@@ -14,32 +14,40 @@ import type { IntegrationProviderConfig, ToolCallResult } from '../types';
 // ═══════════════════════════════════════════════════════════════════════════════
 
 describe('buildIntegrationToolName', () => {
-  it('should build a namespaced tool name', () => {
-    const result = buildIntegrationToolName('github', 'abc123def456', 'list_repos');
-    expect(result).toBe('int__github__abc123de__list_repos');
+  it('should build a compact namespaced tool name without a connection segment', () => {
+    const result = buildIntegrationToolName('github', 'list_repos');
+    expect(result).toBe('int__github__list_repos');
   });
 
-  it('should truncate connectionId to 8 chars', () => {
-    const result = buildIntegrationToolName('slack', 'longconnectionidhere', 'send_message');
-    expect(result).toContain('__longconn__');
+  it('should append an 8-char connection-id segment when a connectionId is given', () => {
+    const result = buildIntegrationToolName('github', 'list_repos', 'abc123def456');
+    expect(result).toBe('int__github__list_repos__abc123de');
+  });
+
+  it('should produce only provider-safe characters when disambiguating', () => {
+    const result = buildIntegrationToolName('github', 'list_repos', 'abc123def456');
+    expect(result).toMatch(/^[a-zA-Z0-9_-]+$/);
+  });
+
+  it('should truncate the disambiguator connectionId to 8 chars', () => {
+    const result = buildIntegrationToolName('slack', 'send_message', 'longconnectionidhere');
+    expect(result).toContain('__longconn');
   });
 });
 
 describe('parseIntegrationToolName', () => {
-  it('should parse a valid integration tool name', () => {
-    const result = parseIntegrationToolName('int__github__abc123de__list_repos');
+  it('should parse a compact integration tool name', () => {
+    const result = parseIntegrationToolName('int__github__list_repos');
     expect(result).toEqual({
       providerSlug: 'github',
-      connectionShortId: 'abc123de',
       toolId: 'list_repos',
     });
   });
 
   it('should handle tool IDs with double underscores', () => {
-    const result = parseIntegrationToolName('int__github__abc123de__list__all__repos');
+    const result = parseIntegrationToolName('int__github__list__all__repos');
     expect(result).toEqual({
       providerSlug: 'github',
-      connectionShortId: 'abc123de',
       toolId: 'list__all__repos',
     });
   });
@@ -57,7 +65,7 @@ describe('parseIntegrationToolName', () => {
 
 describe('isIntegrationTool', () => {
   it('should return true for integration tools', () => {
-    expect(isIntegrationTool('int__github__abc__list_repos')).toBe(true);
+    expect(isIntegrationTool('int__github__list_repos')).toBe(true);
   });
 
   it('should return false for non-integration tools', () => {
@@ -211,8 +219,57 @@ describe('convertIntegrationToolsToAISDK', () => {
     expect(Object.keys(tools)).toHaveLength(2);
 
     const toolNames = Object.keys(tools);
-    expect(toolNames[0]).toMatch(/^int__github__conn1234__list_repos$/);
-    expect(toolNames[1]).toMatch(/^int__github__conn1234__create_issue$/);
+    expect(toolNames[0]).toBe('int__github__list_repos');
+    expect(toolNames[1]).toBe('int__github__create_issue');
+  });
+
+  it('should disambiguate tool names when an agent has two connections for the same provider', () => {
+    const secondConnection: GrantWithConnectionAndProvider = {
+      ...mockGrant,
+      id: 'grant-2',
+      connectionId: 'conn99998888zzzz',
+      connection: {
+        ...mockGrant.connection!,
+        id: 'conn99998888zzzz',
+        name: 'Other GitHub',
+      },
+    };
+
+    const mockExecutor = vi.fn();
+    const tools = convertIntegrationToolsToAISDK(
+      [mockGrant, secondConnection],
+      executorContext,
+      mockExecutor
+    );
+
+    const toolNames = Object.keys(tools);
+    // Two connections × two tools, all uniquely named via the connection-id segment.
+    expect(toolNames).toHaveLength(4);
+    expect(new Set(toolNames).size).toBe(4);
+    expect(toolNames).toContain('int__github__list_repos__conn1234');
+    expect(toolNames).toContain('int__github__list_repos__conn9999');
+    // All generated names must satisfy the AI-provider tool-name charset.
+    expect(toolNames.every((n) => /^[a-zA-Z0-9_-]+$/.test(n))).toBe(true);
+  });
+
+  it('should only expose tools the grant explicitly allows', () => {
+    const restrictedGrant: GrantWithConnectionAndProvider = {
+      ...mockGrant,
+      allowedTools: ['list_repos'],
+    };
+    const tools = convertIntegrationToolsToAISDK([restrictedGrant], executorContext, vi.fn());
+    expect(Object.keys(tools)).toEqual(['int__github__list_repos']);
+  });
+
+  it('should exclude write tools when the grant is read-only', () => {
+    const readOnlyGrant: GrantWithConnectionAndProvider = {
+      ...mockGrant,
+      readOnly: true,
+    };
+    const tools = convertIntegrationToolsToAISDK([readOnlyGrant], executorContext, vi.fn());
+    const names = Object.keys(tools);
+    expect(names).toContain('int__github__list_repos');
+    expect(names).not.toContain('int__github__create_issue');
   });
 
   it('should prefix descriptions with provider name', () => {
@@ -251,7 +308,7 @@ describe('convertIntegrationToolsToAISDK', () => {
     expect(result).toEqual({ repos: [] });
   });
 
-  it('should throw on executor error', async () => {
+  it('should throw on executor error with error message from result', async () => {
     const mockExecutor = vi.fn().mockResolvedValue({
       success: false,
       error: 'Rate limit exceeded',
@@ -262,6 +319,7 @@ describe('convertIntegrationToolsToAISDK', () => {
     const firstTool = Object.values(tools)[0];
 
     await expect(firstTool.execute({})).rejects.toThrow('Rate limit exceeded');
+    expect(mockExecutor).toHaveBeenCalledTimes(1);
   });
 
   it('should skip grants with inactive connections', () => {
@@ -298,5 +356,101 @@ describe('convertIntegrationToolsToAISDK', () => {
     const tools = convertIntegrationToolsToAISDK([noProviderGrant], executorContext, mockExecutor);
 
     expect(Object.keys(tools)).toHaveLength(0);
+  });
+
+  it('should pass rateLimitOverride when grant has requestsPerMinute', async () => {
+    const grantWithOverride: GrantWithConnectionAndProvider = {
+      ...mockGrant,
+      rateLimitOverride: { requestsPerMinute: 10 },
+    };
+
+    const mockResult: ToolCallResult = { success: true, data: {} };
+    const mockExecutor = vi.fn().mockResolvedValue(mockResult);
+
+    const tools = convertIntegrationToolsToAISDK([grantWithOverride], executorContext, mockExecutor);
+    const firstTool = Object.values(tools)[0];
+
+    await firstTool.execute({});
+
+    expect(mockExecutor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        grant: expect.objectContaining({
+          rateLimitOverride: { requestsPerMinute: 10 },
+        }),
+      })
+    );
+  });
+
+  it('should throw generic error when executor returns failure without error message', async () => {
+    const mockExecutor = vi.fn().mockResolvedValue({
+      success: false,
+    });
+
+    const tools = convertIntegrationToolsToAISDK([mockGrant], executorContext, mockExecutor);
+    const firstTool = Object.values(tools)[0];
+
+    const error = await firstTool.execute({}).catch((e: Error) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe('Integration tool execution failed');
+    expect(mockExecutor).toHaveBeenCalledTimes(1);
+  });
+
+  it('should skip tools whose schema conversion throws', () => {
+    const badToolConfig: IntegrationProviderConfig = {
+      ...mockProviderConfig,
+      tools: [
+        {
+          id: 'bad_tool',
+          name: 'Bad Tool',
+          description: 'Tool with bad schema',
+          category: 'read',
+          inputSchema: null as unknown as Record<string, unknown>,
+          execution: {
+            type: 'http',
+            config: { method: 'GET', pathTemplate: '/bad' },
+          },
+        },
+        ...mockProviderConfig.tools,
+      ],
+    };
+
+    const grantWithBadTool: GrantWithConnectionAndProvider = {
+      ...mockGrant,
+      connection: {
+        ...mockGrant.connection!,
+        provider: {
+          ...mockGrant.connection!.provider!,
+          config: badToolConfig,
+        },
+      },
+    };
+
+    const mockExecutor = vi.fn();
+    const tools = convertIntegrationToolsToAISDK([grantWithBadTool], executorContext, mockExecutor);
+
+    // Bad tool should be skipped, but the two valid tools should be present
+    const toolNames = Object.keys(tools);
+    expect(toolNames).toHaveLength(2);
+    expect(toolNames.every((name) => !name.includes('bad_tool'))).toBe(true);
+    expect(toolNames.some((name) => name.includes('list_repos'))).toBe(true);
+    expect(toolNames.some((name) => name.includes('create_issue'))).toBe(true);
+  });
+});
+
+describe('convertToolSchemaToZod edge cases', () => {
+  it('should skip properties that cause conversion errors', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        good: { type: 'string' },
+        bad: null as unknown as Record<string, unknown>,
+      },
+      required: ['good'],
+    };
+
+    const zodSchema = convertToolSchemaToZod(schema);
+    const shape = zodSchema.shape;
+    expect(shape).toHaveProperty('good');
+    expect(shape).not.toHaveProperty('bad');
   });
 });

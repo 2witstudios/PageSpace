@@ -1,4 +1,5 @@
-import { randomBytes, createHmac, timingSafeEqual } from 'crypto';
+import { randomBytes, createHmac } from 'crypto';
+import { secureCompare } from './secure-compare';
 
 function getCSRFSecret(): string {
   const CSRF_SECRET = process.env.CSRF_SECRET;
@@ -68,15 +69,7 @@ export function validateCSRFToken(token: string, sessionId: string, maxAge: numb
       .update(payload)
       .digest('hex');
     
-    // Compare signatures using timing-safe comparison
-    const expectedBuffer = Buffer.from(expectedSignature, 'hex');
-    const actualBuffer = Buffer.from(signature, 'hex');
-    
-    if (expectedBuffer.length !== actualBuffer.length) {
-      return false;
-    }
-    
-    return timingSafeEqual(expectedBuffer, actualBuffer);
+    return secureCompare(String(signature), expectedSignature);
   } catch (error) {
     console.error('CSRF token validation error:', error);
     return false;

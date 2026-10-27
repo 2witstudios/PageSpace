@@ -1,21 +1,37 @@
-# PageSpace: Where AI Can Actually Work
+# PageSpace: The AI-Native Workspace for Everything You Do
 
-**[www.pagespace.ai](https://www.pagespace.ai)** • Desktop Apps • Self-Host • [Discord](https://discord.gg/yxDQkTHXT5)
+**[www.pagespace.ai](https://www.pagespace.ai)** • Desktop Apps • [CLI](https://www.npmjs.com/package/@pagespace/cli) & [SDK](https://www.npmjs.com/package/@pagespace/sdk) • [AI Agent Hub](https://pagespace.ai/s/ps_share_oihl5ivoscf0tzx26g0t74degxwi028t)
 
-> PageSpace turns your projects into intelligent workspaces where AI agents collaborate alongside your team with real tools to create, edit, and organize content.
+> PageSpace is one workspace for everything you'd otherwise scatter across a docs tool, a task
+> tracker, a calendar, a team chat app, a dev environment, and a website builder. AI agents work
+> directly inside all of it: documents, sheets, code, tasks, calendar, team channels, cloud dev
+> machines, and published sites all live as pages in the same hierarchy, editable by people and AI
+> together in real time, and scriptable from a CLI, an SDK, or any MCP client.
 
 ---
 
 ## What Makes PageSpace Different?
 
-In most tools, you chat with AI *about* your work. In PageSpace, AI works *directly in* your workspace:
+In most tools, you chat with AI *about* your work, in a window bolted onto the side. In PageSpace,
+AI works *directly in* your workspace, and so does everything else you use to get things done:
 
-- **AI with real tools**: Your AI can create documents, organize projects, edit content - not just answer questions
-- **External AI integration**: Connect Claude Desktop or Cursor to directly manipulate your workspace via MCP
-- **Team + AI collaboration**: Multiple people and AIs working on the same pages simultaneously
-- **100+ AI models**: From free (Qwen, DeepSeek) to premium (Claude Opus 4.5, GPT-5, Gemini 3) - you choose
-- **Zero-trust direction (cloud)**: Opaque tokens, per-event authorization, and tamper-evident audit trails
-- **Your workspace understands context**: AI intelligence flows through your project hierarchy
+- **AI with real tools**: Your AI can create documents, run spreadsheet formulas, manage tasks,
+  schedule calendar events, and work inside an actual dev environment, not just answer questions
+- **One hierarchy, not five apps**: Docs, sheets, code, tasks, calendar, team channels, cloud dev
+  machines, and published sites are all pages in the same drive, not separate tools you swivel-chair between
+- **Build on it, not just in it**: A CLI, a typed SDK, and an MCP server are generated from one
+  shared operation registry, so external AI (Claude Desktop, Cursor, Claude Code) and your own
+  scripts get the exact same capabilities the web app has, and can never drift out of sync
+- **Publish anything**: Turn any Document, Code, Sheet, or Canvas page into a live public site on
+  a free subdomain or your own custom domain
+- **Cloud dev machines**: Spin up a sandboxed terminal on a git branch and hand it to a coding
+  agent that can read, edit, run, commit, and open a PR without leaving PageSpace
+- **100+ AI models**: From free (Qwen, DeepSeek) to premium (Claude Opus 4.5, GPT-5, Gemini 3),
+  you choose, or bring your own API key
+- **Pay for what you actually use**: AI and cloud-machine usage are metered against real provider
+  cost, not a flat per-seat guess
+- **Zero-trust direction (cloud)**: OAuth-based auth, opaque tokens, per-event authorization, and
+  tamper-evident audit trails
 
 ## Preview
 
@@ -26,148 +42,147 @@ In most tools, you chat with AI *about* your work. In PageSpace, AI works *direc
 ## See It In Action
 
 ### One prompt creates entire projects
-```
+```text
 You: "Create a complete documentation site for our API"
 AI: *Creates 24 nested documents with actual content in your workspace*
 ```
 
 ### Your team collaborates with AI
-```
+```text
 Team Member A: "Can you analyze our Q3 metrics?"
 AI: *Reads relevant documents, creates analysis page*
 Team Member B: *Sees the conversation and analysis in real-time*
 ```
 
+### Script or terminal, same workspace
+```bash
+$ pagespace tasks create <listId> --title "Ship the Q3 report" --priority high
+$ pagespace agents ask <agentId> "Summarize what changed on the roadmap this week"
+```
+
+### An agent that can actually ship code
+```text
+You: "Spin up a machine on feature/pricing-v2 and fix the failing test"
+AI: *Opens a real terminal, reproduces the failure, edits the code, commits, opens a PR*
+```
+
 ### External AI edits your workspace
 ```bash
-# Install MCP server
-npm install -g pagespace-mcp@latest
+# Zero-install MCP — add to Claude Desktop, Claude Code, or Cursor's config
+npx -y -p @pagespace/cli pagespace-mcp
+```
 
-# In Claude Desktop
+```text
 Claude: "Update all meeting notes in my PageSpace"
 *Claude directly edits documents at www.pagespace.ai*
 ```
 
 ---
 
-## Quick Start
+## Get Started
 
-### Cloud (Recommended)
-The fastest way to get started - no setup required:
+### Cloud
+The fastest way to get started — no setup required:
+
 1. Visit **[www.pagespace.ai](https://www.pagespace.ai)**
 2. Sign up for free
 3. Start building with AI immediately
 
-**Cloud features**: Automatic updates, zero maintenance, built-in AI models, team collaboration, and built-in security controls.
+Automatic updates, zero maintenance, built-in AI models, team collaboration, and enterprise-grade security controls.
 
 ### Desktop Apps
-Native desktop apps that connect to your PageSpace cloud workspace:
+Native desktop apps that connect to your PageSpace cloud workspace.
 
 **macOS** (Signed & Notarized)
-- [Download DMG](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.dmg) - Universal (Intel & Apple Silicon)
-- [Download ZIP](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.zip) - Universal archive
+- [Download DMG](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.dmg) — Universal (Intel & Apple Silicon)
+- [Download ZIP](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.zip) — Universal archive
 
 **Windows** ⚠️ *Unsigned software - security warning expected*
-- [Download EXE](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.exe) - Current Windows release artifact
+- [Download EXE](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.exe)
 
 **Linux**
-- [Download AppImage](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.AppImage) - Universal (no installation)
-- [Download DEB](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.deb) - Debian/Ubuntu
-- [Download RPM](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.rpm) - Fedora/RHEL
+- [Download AppImage](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.AppImage) — Universal (no installation)
+- [Download DEB](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.deb) — Debian/Ubuntu
+- [Download RPM](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.rpm) — Fedora/RHEL
+
+**Mobile**
+- **iOS** — Available via [TestFlight](https://www.pagespace.ai/downloads)
+- **Android** — In progress
 
 **Features:**
 - Native desktop integration with system tray
 - Minimize to tray, deep linking support
-- Automatic updates (macOS only - signed builds)
-- Works with your cloud PageSpace instance
+- Automatic updates (macOS only — signed builds)
+- Works with your cloud PageSpace workspace
 - **Local MCP server support** (desktop-only): Run MCP servers on your own machine, using the same local trust-boundary model as Claude Desktop (Context7, Figma, Notion, etc.)
-
-**Build from source:**
-```bash
-git clone https://github.com/2witstudios/PageSpace.git
-cd PageSpace
-pnpm install
-pnpm build:desktop
-pnpm package:desktop
-```
-
-See [apps/desktop/README.md](apps/desktop/README.md) for detailed instructions.
-
-### Self-Host (Advanced)
-For complete data sovereignty and custom deployments:
-```bash
-# Clone and setup
-git clone https://github.com/2witstudios/PageSpace.git
-cd PageSpace
-pnpm install
-
-# Configure environment
-cp .env.example .env
-cp apps/web/.env.example apps/web/.env
-# Add your ENCRYPTION_KEY to .env (use: openssl rand -base64 32)
-
-# Launch database
-docker-compose up -d
-
-# Run database migrations
-pnpm db:generate
-pnpm db:migrate
-
-# Start development server
-pnpm dev
-
-# Visit http://localhost:3000
-```
-
-**When to self-host**: Air-gapped environments, compliance requirements, or when you need to run local AI models exclusively.
-
-**Cloud-first reality**: Local/self-host setup is more advanced than earlier versions because cloud integrations (for example Stripe billing and OAuth provider flows) are now first-class parts of the platform.
 
 ---
 
-## Connect External AI (Claude, Cursor)
+## Build on PageSpace
 
-PageSpace includes an MCP server that lets Claude Desktop and other AI tools directly manipulate your workspace:
+A CLI, a typed SDK, and an MCP server, all generated from **one shared operation registry**, so
+a CLI verb, an SDK method, and an MCP tool can never drift apart from each other.
 
-### Quick Setup
-1. **Install the MCP server**
-   ```bash
-   npm install -g pagespace-mcp@latest
-   ```
+### CLI
+Script your workspace from a terminal.
+```bash
+npm install -g @pagespace/cli
+pagespace login              # browser OAuth login
+pagespace keys                # mint a drive-scoped access key
+pagespace keys use <name>     # activate it for this machine
+pagespace drives list
+pagespace search text "roadmap" --all-drives
+```
 
-2. **Get your token** from [www.pagespace.ai/dashboard/settings/mcp](https://www.pagespace.ai/dashboard/settings/mcp)
+### SDK
+Build your own integrations.
+```bash
+npm install @pagespace/sdk
+```
+```ts
+import { PageSpaceClient, StaticTokenProvider } from '@pagespace/sdk';
 
-3. **Configure Claude Desktop** (add to MCP settings):
-   ```json
-   {
-     "mcpServers": {
-       "pagespace": {
-         "command": "npx",
-         "args": ["-y", "pagespace-mcp@latest"],
-         "env": {
-           "PAGESPACE_API_URL": "https://www.pagespace.ai",
-           "PAGESPACE_AUTH_TOKEN": "your-mcp-token"
-         }
-       }
-     }
-   }
-   ```
+const client = new PageSpaceClient({
+  baseUrl: 'https://pagespace.ai',
+  auth: new StaticTokenProvider(process.env.PAGESPACE_TOKEN!),
+});
 
-4. **Claude can now work in your PageSpace!**
-   - "Show me my drives and pages"
-   - "Create a new project structure"
-   - "Edit line 42 in the requirements document"
+const drives = await client.drives.list({});
+```
 
-[Full MCP documentation →](https://www.npmjs.com/package/pagespace-mcp)
+### MCP
+Connect Claude Desktop, Claude Code, or Cursor.
+```json
+{
+  "mcpServers": {
+    "pagespace": {
+      "command": "npx",
+      "args": ["-y", "-p", "@pagespace/cli", "pagespace-mcp"],
+      "env": { "PAGESPACE_KEY": "agent" }
+    }
+  }
+}
+```
+
+Auth is OAuth-based. `pagespace login` identifies *you* but grants no content access on its own;
+actual read/write access comes from a separately minted, drive-scoped key, and every grant (the
+CLI or an MCP client) is visible and revocable from Settings → Connected Apps. See
+[`packages/cli/README.md`](./packages/cli/README.md) and
+[`packages/sdk/README.md`](./packages/sdk/README.md) for the full command reference, auth model,
+and error handling, or the [PageSpace MCP docs](https://pagespace.ai/docs/integrations/mcp) for
+client-by-client setup. (Coming from the standalone `pagespace-mcp` npm package? It's deprecated
+in favor of `pagespace mcp`, part of `@pagespace/cli`; see the
+[migration guide](./packages/cli/docs/migrating-from-pagespace-mcp.md).)
 
 ---
 
 ## Core Features
 
 ### AI Agent Infrastructure
-- **33 workspace tools** for AI to manipulate content directly
+- **85 workspace tools** for AI to manipulate content directly. The same operation registry
+  generates every `pagespace` CLI verb, SDK method, and MCP tool, so none of the three can drift
 - **Tool permissions**: Control what each AI can do in your workspace
-- **MCP protocol support**: Connect external AI tools like Claude Desktop and Cursor
+- **MCP protocol support**: Connect external AI tools like Claude Desktop, Cursor, and Claude Code
 
 ### Everything Is a Drive Page
 Each item in a drive is a typed page with a specific role:
@@ -181,19 +196,42 @@ Each item in a drive is a typed page with a specific role:
 - **AI Chat**: Tool-enabled AI conversation page with persistent context
 - **File**: Uploaded file page for preview, download, and file-to-page linking
 - **Folder**: Hierarchical container page for organizing everything else
+- **Machine**: Cloud dev sandbox with a terminal, git, and agent execution
 
 - Hierarchical context flows through your workspace
 - Real-time collaboration is built into collaborative page types
+
+### Cloud Dev Machines
+- **Sandboxed terminals**: Isolated dev environments (Fly Sprites microVMs), one per branch, with
+  a working directory, file tree, diff view, and an actual shell
+- **Agent-run terminals**: Spawn a named, pluggable coding agent (Claude Code and others) into a
+  machine to work it autonomously: read, edit, run, commit, and push
+- **Scoped AI access**: Grant a specific AI page-agent access to a specific machine, no more
+- **Deep GitHub tooling**: Agents can open/merge PRs, manage issues, search code, inspect commits,
+  rerun CI, and recover from conflicted merges/rebases, with or without a full code-execution
+  sandbox
+- **Metered like everything else**: Machine/terminal time bills through the same credit system as
+  AI usage, settled in short heartbeats so a mid-session deploy can't drop your usage
+
+### Publish Anything
+- **Publish any page**: Document, Code, Sheet, and Canvas pages can all be published as live public
+  sites, not just Canvas
+- **Your domain or ours**: Serve from a free `*.pagespace.site` subdomain or connect a custom
+  domain with managed TLS
+- **SEO controls**: Per-page title, description, OG image, and robots/noindex overrides
+- **Site details**: Custom 404 page, drive-wide favicon, and pick an uploaded file as your OG
+  image instead of hosting one elsewhere
 
 ### Multi-Provider AI Support
 - **Built-in models** via PageSpace (no API key needed)
 - **Bring your own key**: OpenAI, Anthropic, Google, OpenRouter, xAI, and more
 - **100+ models** including Claude Opus 4.5, GPT-5, Gemini 3, Grok 4, and open-source alternatives
-- **Local models**: Connect Ollama or LM Studio for air-gapped deployments
+- **Local models**: Connect Ollama or LM Studio on the desktop app for local inference
 
 ### Unified Messaging & Inbox
 - **Unified inbox**: DMs and channels in one view across dashboard and drives
-- **Channel collaboration**: Agent mentions, read status tracking, unread indicators, and attachments
+- **Channel collaboration**: Agent mentions (with image-attachment context for vision-capable
+  models), read status tracking, unread indicators, and attachments
 - **Conversation controls**: Message edit/delete support with richer tool-call rendering
 
 ### Tasks & Calendar Workspace
@@ -201,6 +239,20 @@ Each item in a drive is a typed page with a specific role:
 - **Native calendar views**: Month, week, day, and agenda layouts for personal or drive contexts
 - **Google Calendar sync**: OAuth connection, two-way sync, push updates, and attendee mapping
 - **Calendar AI tools**: Create, update, RSVP, and manage events from natural-language prompts
+
+### Integrations
+- **Built-in providers**: GitHub, Slack, Notion, and generic webhooks, plus a native Google
+  Calendar sync (see Tasks & Calendar above)
+- **Two doors, one workspace**: MCP is how external AI (Claude Desktop, Cursor, Claude Code) comes
+  *into* PageSpace; the CLI, SDK, and these integrations are how PageSpace reaches *out*
+- **Custom integrations**: Register your own webhook-backed tool providers alongside the built-ins
+
+### Metered AI Billing
+- **Pay for what you use**: Every plan includes credits (a one-time starter grant on Free, a monthly
+  allowance on paid plans) metered against real AI usage, not a flat per-seat price
+- **Metered on model cost**: Credits are consumed on actual provider cost, with a live usage
+  breakdown by model, feature, and cloud machine
+- **Buy more anytime**: Stripe-backed subscriptions, with credit top-ups available on any plan
 
 ### Editing Experience
 - **Documents**: Built as rich text pages that also support markdown-based authoring
@@ -214,56 +266,23 @@ Each item in a drive is a typed page with a specific role:
 - **Vision input**: Image attachments for multimodal AI conversations
 
 ### Security Architecture
-PageSpace is actively moving toward a zero-trust architecture for cloud deployment.
-One explicit exception is desktop-local MCP server hosting, which runs inside the user's local trust boundary (same model as Claude Desktop).
-Remaining non-zero-trust hardening work is tracked in GitHub issues (for example [Zero Trust P1](https://github.com/2witstudios/PageSpace/issues/588)).
+PageSpace is built around a zero-trust model for cloud deployment. One explicit exception is desktop-local MCP server hosting, which runs inside the user's local trust boundary (same model as Claude Desktop).
 
-- **Opaque session tokens**: Server-validated tokens with SHA-256 hash-only storage - raw tokens never persisted
+- **OAuth 2.1 authorization server**: `pagespace login` and every scoped access key are minted
+  through a real browser consent flow, not handed out as a fixed, unrotatable static token. The
+  resulting key is still a bearer secret once issued, so it gets the same handling and revocation
+  expectations as any other credential — see Connected Apps below
+- **Connected Apps**: See every OAuth grant on your account, including the CLI and any MCP
+  client, from Settings, and revoke one instantly. Minting and revoking both require a fresh
+  step-up confirmation (passkey, or a confirmation email if you have no passkey)
+- **Opaque session tokens**: Server-validated tokens with SHA3-256 hash-only storage — raw tokens never persisted
 - **Per-event authorization**: Every sensitive operation re-validates permissions against the database
 - **Instant token revocation**: Token versioning enables immediate session invalidation across all devices
 - **Device fingerprinting**: Trust scoring detects token theft via IP/User-Agent anomalies
 - **Tamper-evident audit trails**: Hash-chained security logs for compliance and forensics
-- **Scoped external access**: MCP tokens enforce drive/page scope with strict auth validation
+- **Scoped external access**: Access keys enforce drive/page scope with strict auth validation
 - **Defense-in-depth**: SameSite cookies + CSRF tokens + origin validation + rate limiting
 - **Comprehensive security headers**: CSP with nonces, HSTS, X-Frame-Options, and more
-
-[Security architecture details →](./docs/3.0-guides-and-tools/cloud-security-analysis.md)
-
----
-
-## Architecture
-
-PageSpace is a cloud-native monorepo designed for scalability and security:
-
-```
-apps/
-├── web/          # Next.js 15 App Router (main application)
-├── realtime/     # Socket.IO server (real-time collaboration)
-├── processor/    # File processing service (uploads, optimization)
-├── desktop/      # Electron desktop wrapper
-├── ios/          # Capacitor iOS app
-├── android/      # Capacitor Android app
-└── marketing/    # Marketing site
-
-packages/
-├── db/           # Drizzle ORM + PostgreSQL schema
-└── lib/          # Shared auth, permissions, utilities
-```
-
-### Tech Stack
-- **Frontend**: Next.js 15, React 19, TypeScript, Tailwind CSS 4, shadcn/ui
-- **Backend**: Next.js API routes, PostgreSQL, Drizzle ORM, Redis
-- **AI**: Vercel AI SDK, 10+ provider integrations
-- **Real-time**: Socket.IO with Redis pub/sub for horizontal scaling
-- **Desktop/Mobile**: Electron + Capacitor wrappers (macOS, Windows, Linux, iOS, Android)
-- **Auth**: Opaque session tokens, OAuth (Google, Apple), MCP tokens
-- **Build**: pnpm workspaces, Turbo, Docker
-
-### Cloud Infrastructure
-- **Database**: Any PostgreSQL (Neon, Supabase, RDS, or self-hosted)
-- **Cache**: Redis for sessions, rate limiting, and distributed state
-- **Storage**: Content-addressed file storage with optimization pipeline
-- **Deployment**: Docker containers, CI/CD via GitHub Actions
 
 ---
 
@@ -303,7 +322,6 @@ PageSpace provides comprehensive data protection so you never lose work:
 - **Complete audit trail**: Every operation logged with who/what/when for compliance
 - **Retention lifecycle controls**: Automated cleanup for sessions, logs, backups, versions, and tokens
 - **GDPR support**: Self-service data export and deletion lifecycle tooling
-- **Self-host option**: Run entirely on your infrastructure for complete sovereignty
 
 ---
 
@@ -314,34 +332,30 @@ PageSpace provides comprehensive data protection so you never lose work:
 - **Unified Team Comms**: DMs + channels + AI in one inbox workflow
 - **Planning & Scheduling**: Tasks and calendars with AI-assisted event operations
 - **Project Management**: AI handles routine updates while your team focuses on decisions
+- **Agentic Development**: Hand a cloud dev machine to a coding agent and get a PR back
+- **Publish From Your Workspace**: Turn internal docs or a Canvas page into a live public site
+- **Build Your Own Tools**: Script your workspace with the CLI/SDK, or wire up your own MCP client
 - **Creative Workflows**: Brainstorm with AI that can actually implement ideas
 
 ---
 
 ## Community & Support
 
-- **[Discord](https://discord.gg/yxDQkTHXT5)**: Join our community for support and discussions
-- **[Documentation](./docs/1.0-overview/1.1-table-of-contents.md)**: Deep dive into architecture and guides
-- **[GitHub Issues](https://github.com/2witstudios/PageSpace/issues)**: Report bugs and request features
-
----
-
-## Contributing
-
-We welcome contributions! See our [Contributing Guide](./CONTRIBUTING.md) for details.
-
-PageSpace is built in public. Our roadmap, documentation, and development all happen in the open.
+- **[AI Agent Hub](https://pagespace.ai/s/ps_share_oihl5ivoscf0tzx26g0t74degxwi028t)** — community hub for AI agents and skills
+- **[GitHub Issues](https://github.com/2witstudios/PageSpace/issues)** — bug reports and feature requests
 
 ---
 
 ## License
 
-CC BY-NC-SA 4.0 (Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International) - see [LICENSE](./LICENSE) for details.
+PageSpace is proprietary software. Copyright © 2025-2026 Jonathan Woodall, d/b/a 2witstudios. All rights reserved. See [LICENSE](./LICENSE) for full terms.
 
-This means you can use, modify, and share PageSpace for non-commercial purposes.
+This repository is public for transparency and issue tracking. The source code is **not** open-source: no license is granted to copy, modify, redistribute, self-host, or otherwise use the code without the prior written permission of the copyright holder. External contributions are not currently accepted.
+
+Third-party open-source components retained in the dependency tree remain under their own licenses; see the [`LICENSES/`](./LICENSES/) directory for the full texts of those where attribution is required.
 
 ---
 
-**Built by people who believe AI should work with you, not just talk to you.**
+**Built by people who believe AI should work with you: in your documents, your tasks, your calendar, your codebase, and your published sites, not just in a chat window beside them.**
 
 [Get started at www.pagespace.ai →](https://www.pagespace.ai)

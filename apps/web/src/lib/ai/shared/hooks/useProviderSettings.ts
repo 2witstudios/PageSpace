@@ -5,7 +5,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { getBackendProvider } from '@/lib/ai/core/ai-providers-config';
+import { DEFAULT_PROVIDER } from '@/lib/ai/core/ai-providers-config';
 import type { ProviderSettings } from '../chat-types';
 
 interface UseProviderSettingsOptions {
@@ -47,7 +47,7 @@ export function useProviderSettings({
 }: UseProviderSettingsOptions = {}): UseProviderSettingsResult {
   const [isLoading, setIsLoading] = useState(true);
   const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);
-  const [selectedProvider, setSelectedProvider] = useState<string>('pagespace');
+  const [selectedProvider, setSelectedProvider] = useState<string>(DEFAULT_PROVIDER);
   const [selectedModel, setSelectedModel] = useState<string>('');
 
   // Load provider settings
@@ -77,34 +77,16 @@ export function useProviderSettings({
     loadProviderSettings();
   }, [loadProviderSettings]);
 
-  // Check if a specific provider is configured
+  // Check whether the deployment can route AI calls through the given provider.
+  // Naming retained as `isProviderConfigured` for backwards compatibility with
+  // the existing prop contract in PageAgentSettingsTab and Sidebar.
   const isProviderConfigured = useCallback(
     (provider: string): boolean => {
       if (!providerSettings) return false;
-
-      // PageSpace provider check
-      if (provider === 'pagespace') {
-        return providerSettings.providers.pagespace?.isConfigured || false;
-      }
-
-      // GLM provider check
-      if (provider === 'glm') {
-        return providerSettings.providers.glm?.isConfigured || false;
-      }
-
-      // Map UI provider to backend provider for checking configuration
-      const backendProvider = getBackendProvider(provider);
-
-      // For openrouter_free, check the openrouter configuration
-      if (backendProvider === 'openrouter') {
-        return providerSettings.providers.openrouter?.isConfigured || false;
-      }
-
-      const providerConfig =
-        providerSettings.providers[
-          backendProvider as keyof typeof providerSettings.providers
-        ];
-      return providerConfig?.isConfigured || false;
+      // The availability map is keyed by the user-facing provider name (every cloud
+      // vendor resolves to the shared OpenRouter key server-side).
+      const status = providerSettings.providers[provider as keyof typeof providerSettings.providers];
+      return status?.isAvailable ?? false;
     },
     [providerSettings]
   );

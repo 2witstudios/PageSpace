@@ -225,4 +225,37 @@ describe('PresenceTracker', () => {
       expect(tracker.getPagesForSocket('nonexistent')).toEqual([]);
     });
   });
+
+  describe('removeSocket - driveId edge cases', () => {
+    it('given removeViewer then removeSocket on same page, should preserve driveId until fully empty', () => {
+      const user1 = createUser({ userId: 'user-1', socketId: 'socket-1' });
+      const user2 = createUser({ userId: 'user-2', socketId: 'socket-2', name: 'Bob' });
+
+      tracker.addViewer('page-1', 'drive-1', user1);
+      tracker.addViewer('page-1', 'drive-1', user2);
+
+      tracker.removeViewer('socket-2', 'page-1');
+      expect(tracker.getDriveId('page-1')).toBe('drive-1');
+
+      const affected = tracker.removeSocket('socket-1');
+      expect(affected).toHaveLength(1);
+      expect(affected[0].driveId).toBe('drive-1');
+      expect(affected[0].viewers).toEqual([]);
+    });
+
+    it('given removeSocket for a user on multiple pages, should return correct driveId per page', () => {
+      const user = createUser({ userId: 'user-1', socketId: 'socket-1' });
+
+      tracker.addViewer('page-a', 'drive-alpha', user);
+      tracker.addViewer('page-b', 'drive-beta', user);
+
+      const affected = tracker.removeSocket('socket-1');
+      expect(affected).toHaveLength(2);
+
+      const pageA = affected.find(p => p.pageId === 'page-a');
+      const pageB = affected.find(p => p.pageId === 'page-b');
+      expect(pageA!.driveId).toBe('drive-alpha');
+      expect(pageB!.driveId).toBe('drive-beta');
+    });
+  });
 });

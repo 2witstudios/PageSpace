@@ -52,7 +52,7 @@ const {
   subscriptionsTable: Symbol('subscriptions'),
 }));
 
-vi.mock('@pagespace/db', () => {
+vi.mock('@pagespace/db/db', () => {
   return {
     db: {
       select: vi.fn(() => ({
@@ -75,14 +75,20 @@ vi.mock('@pagespace/db', () => {
         }),
       })),
     },
-    users: usersTable,
-    subscriptions: subscriptionsTable,
-    eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
-    and: vi.fn((...args: unknown[]) => ({ args, type: 'and' })),
-    inArray: vi.fn((field: unknown, values: unknown) => ({ field, values, type: 'inArray' })),
-    desc: vi.fn((field: unknown) => ({ field, type: 'desc' })),
   };
 });
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
+  and: vi.fn((...args: unknown[]) => ({ args, type: 'and' })),
+  inArray: vi.fn((field: unknown, values: unknown) => ({ field, values, type: 'inArray' })),
+  desc: vi.fn((field: unknown) => ({ field, type: 'desc' })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: usersTable,
+}));
+vi.mock('@pagespace/db/schema/subscriptions', () => ({
+  subscriptions: subscriptionsTable,
+}));
 
 // Mock auth
 vi.mock('@/lib/auth', () => ({
@@ -90,9 +96,23 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
+    api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    security: { warn: vi.fn() },
+  },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
+}));
+
 // Import after mocks
 import { POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -177,6 +197,20 @@ describe('POST /api/stripe/cancel-schedule', () => {
       await POST(request);
 
       expect(mockStripeSubscriptionSchedulesRelease).toHaveBeenCalledWith('sch_123');
+    });
+
+    it('should log audit event on successful schedule cancellation', async () => {
+      const request = createMockRequest('https://example.com/api/stripe/cancel-schedule', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+
+      await POST(request);
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ eventType: 'data.write', userId: mockUserId, resourceType: 'subscription_schedule', resourceId: 'sch_123', details: expect.objectContaining({ action: 'cancel' }) })
+      );
     });
 
     it('should clear schedule info in database', async () => {

@@ -3,17 +3,73 @@ import type { Router as ExpressRouter } from 'express';
 import { contentStore } from '../server';
 import { InvalidContentHashError, isValidContentHash, isValidPreset } from '../cache/content-store';
 import { authorizeFileAccess, assertFileAccess, type AuthorizationDecision } from '../services/authorization';
-import { db, files, pages, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { files } from '@pagespace/db/schema/storage';
+import { pages } from '@pagespace/db/schema/core';
 import { sanitizeFilename, isDangerousMimeType } from '../utils/security';
 import { rateLimitRead } from '../middleware/rate-limit';
 
 const router = Router();
 
+// Get file metadata (must come before generic preset route)
+router.get('/:contentHash/metadata', rateLimitRead, async (req, res) => {
+  try {
+    const { contentHash } = req.params as { contentHash: string };
+    const auth = req.auth;
+
+    if (!auth) {
+      return res.status(401).json({ error: 'Service authentication required' });
+    }
+
+    if (!isValidContentHash(contentHash)) {
+      return res.status(400).json({ error: 'Invalid content hash' });
+    }
+
+    try {
+      await assertFileAccess(auth, contentHash, 'view');
+    } catch {
+      return res.status(403).json({ error: 'Access denied for requested file' });
+    }
+
+    const metadata = await contentStore.getCacheMetadata(contentHash);
+    if (!metadata || Object.keys(metadata).length === 0) {
+      return res.status(404).json({ error: 'Metadata not found' });
+    }
+
+    const sanitized = Object.fromEntries(
+      Object.entries(metadata).map(([preset, entry]) => [
+        preset,
+        {
+          preset: entry.preset,
+          size: entry.size,
+          mimeType: entry.mimeType,
+          createdAt: entry.createdAt instanceof Date ? entry.createdAt.toISOString() : String(entry.createdAt),
+          lastAccessed:
+            entry.lastAccessed instanceof Date
+              ? entry.lastAccessed.toISOString()
+              : String(entry.lastAccessed)
+        }
+      ])
+    );
+
+    res.json({ presets: sanitized });
+
+  } catch (error) {
+    if (error instanceof InvalidContentHashError) {
+      return res.status(400).json({ error: 'Invalid content hash' });
+    }
+
+    console.error('Metadata fetch error:', error);
+    res.status(500).json({ error: 'Failed to load metadata' });
+  }
+});
+
 // Serve original files (must come before generic preset route)
 // codeql[js/missing-rate-limiting] Rate limiting is applied via rateLimitRead middleware
 router.get('/:contentHash/original', rateLimitRead, async (req, res) => {
   try {
-    const { contentHash } = req.params;
+    const { contentHash } = req.params as { contentHash: string };
     const auth = req.auth;
 
     if (!auth) {
@@ -41,7 +97,6 @@ router.get('/:contentHash/original', rateLimitRead, async (req, res) => {
     }
 
     let originalName = 'file';
-    let contentType = 'application/octet-stream';
     let contentLength = buffer.length;
 
     const fileRecord = await db.query.files.findFirst({
@@ -52,8 +107,9 @@ router.get('/:contentHash/original', rateLimitRead, async (req, res) => {
       contentLength = fileRecord.sizeBytes;
     }
 
-    if (fileRecord?.mimeType) {
-      contentType = fileRecord.mimeType;
+    let storedMime = '';
+    if (typeof fileRecord?.mimeType === 'string') {
+      storedMime = fileRecord.mimeType.trim();
     }
 
     const linkedPageId = decision?.context?.pageId;
@@ -68,14 +124,18 @@ router.get('/:contentHash/original', rateLimitRead, async (req, res) => {
         originalName = pageRecord.title;
       }
 
-      if (!fileRecord?.mimeType && pageRecord?.mimeType) {
-        contentType = pageRecord.mimeType;
+      if (storedMime === '' && typeof pageRecord?.mimeType === 'string') {
+        storedMime = pageRecord.mimeType.trim();
       }
     }
+
+    const hasStoredMime = storedMime !== '';
+    const contentType = hasStoredMime ? storedMime : 'application/octet-stream';
 
     // Sanitize filename to prevent header injection
     const sanitizedFilename = sanitizeFilename(originalName);
     const isDangerous = isDangerousMimeType(contentType);
+    const forceAttachment = isDangerous || !hasStoredMime;
 
     res.set({
       'Content-Type': contentType,
@@ -87,16 +147,17 @@ router.get('/:contentHash/original', rateLimitRead, async (req, res) => {
       'X-Frame-Options': 'DENY'
     });
 
-    // Force download for dangerous MIME types + strict CSP
-    if (isDangerous) {
+    if (forceAttachment) {
       res.set({
         'Content-Disposition': `attachment; filename="${sanitizedFilename}"`,
         'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox;"
       });
-      console.warn(
-        '[Security] Forcing download for dangerous MIME type: hash=%s type=%s filename=%s',
-        contentHash, contentType, sanitizedFilename
-      );
+      if (isDangerous) {
+        console.warn(
+          '[Security] Forcing download for dangerous MIME type: hash=%s type=%s filename=%s',
+          contentHash, contentType, sanitizedFilename
+        );
+      }
     } else {
       res.set({
         'Content-Disposition': `inline; filename="${sanitizedFilename}"`,
@@ -122,7 +183,8 @@ router.get('/:contentHash/original', rateLimitRead, async (req, res) => {
 // Serve cached files (generic route comes after specific routes)
 router.get('/:contentHash/:preset', rateLimitRead, async (req, res) => {
   try {
-    const { contentHash, preset } = req.params;
+    const contentHash = req.params.contentHash as string;
+    const preset = req.params.preset as string;
     const auth = req.auth;
 
     if (!auth) {
@@ -191,59 +253,6 @@ router.get('/:contentHash/:preset', rateLimitRead, async (req, res) => {
       error: 'Failed to serve file',
       message: error instanceof Error ? error.message : 'Unknown error'
     });
-  }
-});
-
-// Get file metadata
-router.get('/:contentHash/metadata', rateLimitRead, async (req, res) => {
-  try {
-    const { contentHash } = req.params;
-    const auth = req.auth;
-
-    if (!auth) {
-      return res.status(401).json({ error: 'Service authentication required' });
-    }
-
-    if (!isValidContentHash(contentHash)) {
-      return res.status(400).json({ error: 'Invalid content hash' });
-    }
-
-    try {
-      await assertFileAccess(auth, contentHash, 'view');
-    } catch {
-      return res.status(403).json({ error: 'Access denied for requested file' });
-    }
-
-    const metadata = await contentStore.getCacheMetadata(contentHash);
-    if (!metadata || Object.keys(metadata).length === 0) {
-      return res.status(404).json({ error: 'Metadata not found' });
-    }
-
-    const sanitized = Object.fromEntries(
-      Object.entries(metadata).map(([preset, entry]) => [
-        preset,
-        {
-          preset: entry.preset,
-          size: entry.size,
-          mimeType: entry.mimeType,
-          createdAt: entry.createdAt instanceof Date ? entry.createdAt.toISOString() : String(entry.createdAt),
-          lastAccessed:
-            entry.lastAccessed instanceof Date
-              ? entry.lastAccessed.toISOString()
-              : String(entry.lastAccessed)
-        }
-      ])
-    );
-
-    res.json({ presets: sanitized });
-
-  } catch (error) {
-    if (error instanceof InvalidContentHashError) {
-      return res.status(400).json({ error: 'Invalid content hash' });
-    }
-
-    console.error('Metadata fetch error:', error);
-    res.status(500).json({ error: 'Failed to load metadata' });
   }
 });
 

@@ -139,17 +139,16 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
     // Clear local timeout ref
     clearRefreshTimeout();
 
+    // Singleton pattern: Only allow one global schedule
+    if (isRefreshScheduled) {
+      return;
+    }
+
     // Web sessions use sliding-window cookies (7-day expiry, extended on each request).
     // Scheduled proactive refresh is only needed for desktop, which uses short-lived
     // sessions (15 min) that require device token refresh to maintain the session.
     const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
     if (!isDesktop) {
-      console.log('⏰ Skipping scheduled token refresh for web (uses sliding-window cookies)');
-      return;
-    }
-
-    // Singleton pattern: Only allow one global schedule
-    if (isRefreshScheduled) {
       return;
     }
 

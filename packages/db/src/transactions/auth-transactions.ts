@@ -11,7 +11,9 @@
  * @module @pagespace/db/transactions/auth-transactions
  */
 
-import { db, deviceTokens, users, eq, sql } from '../index';
+import { db } from '../db';
+import { deviceTokens, users } from '../schema/auth';
+import { eq, sql } from '../operators';
 import { createId } from '@paralleldrive/cuid2';
 
 /**
@@ -93,6 +95,8 @@ export async function atomicDeviceTokenRotation(
         dt."userAgent",
         dt."lastIpAddress",
         dt.location,
+        dt."authenticatedAt",
+        dt."authenticationAssurance",
         dt."expiresAt",
         dt."revokedAt",
         dt."revokedReason",
@@ -114,6 +118,8 @@ export async function atomicDeviceTokenRotation(
       userAgent: string | null;
       lastIpAddress: string | null;
       location: string | null;
+      authenticatedAt: Date | null;
+      authenticationAssurance: string | null;
       expiresAt: Date | null;
       revokedAt: Date | null;
       revokedReason: string | null;
@@ -221,6 +227,8 @@ export async function atomicDeviceTokenRotation(
         "ipAddress",
         "lastIpAddress",
         location,
+        "authenticatedAt",
+        "authenticationAssurance",
         "trustScore",
         "suspiciousActivityCount",
         "createdAt"
@@ -238,6 +246,8 @@ export async function atomicDeviceTokenRotation(
         ${metadata.ipAddress || row.lastIpAddress},
         ${metadata.ipAddress || row.lastIpAddress},
         ${row.location},
+        ${row.authenticatedAt},
+        ${row.authenticationAssurance},
         1.0,
         0,
         NOW()
@@ -277,6 +287,8 @@ export async function atomicDeviceTokenRotation(
  * @returns AtomicDeviceTokenResult with token info
  */
 export async function atomicValidateOrCreateDeviceToken(params: {
+  authenticatedAt?: Date | null;
+  authenticationAssurance?: 'single_factor' | 'user_verified_passkey' | null;
   providedDeviceToken: string | null | undefined;
   userId: string;
   deviceId: string;
@@ -306,7 +318,7 @@ export async function atomicValidateOrCreateDeviceToken(params: {
 
   return db.transaction(async (tx) => {
     // If a device token was provided, try to validate it first
-    if (providedDeviceToken) {
+    if (providedDeviceToken && !params.authenticatedAt) {
       // Validate opaque token format (ps_dev_*)
       if (validateOpaqueToken(providedDeviceToken)) {
         // Token format is valid, check DB record with lock
@@ -382,7 +394,7 @@ export async function atomicValidateOrCreateDeviceToken(params: {
       refreshedExpiresAt.setDate(refreshedExpiresAt.getDate() + 90);
 
       // Update hash, tokenVersion, and expiration
-      await tx.execute(sql`UPDATE device_tokens SET "tokenHash" = ${newTokenHash}, "tokenPrefix" = ${newTokenPrefix}, "tokenVersion" = ${tokenVersion}, "expiresAt" = ${refreshedExpiresAt}, "lastUsedAt" = NOW(), "lastIpAddress" = COALESCE(${ipAddress || null}, "lastIpAddress") WHERE id = ${existingActive.id}`);
+      await tx.execute(sql`UPDATE device_tokens SET "authenticatedAt" = ${params.authenticatedAt?.toISOString() ?? null}, "authenticationAssurance" = ${params.authenticationAssurance ?? null}, "tokenHash" = ${newTokenHash}, "tokenPrefix" = ${newTokenPrefix}, "tokenVersion" = ${tokenVersion}, "expiresAt" = ${refreshedExpiresAt}, "lastUsedAt" = NOW(), "lastIpAddress" = COALESCE(${ipAddress || null}, "lastIpAddress") WHERE id = ${existingActive.id}`);
 
       return {
         deviceToken: regeneratedToken,
@@ -426,6 +438,8 @@ export async function atomicValidateOrCreateDeviceToken(params: {
         "userAgent",
         "ipAddress",
         "lastIpAddress",
+        "authenticatedAt",
+        "authenticationAssurance",
         "trustScore",
         "suspiciousActivityCount",
         "createdAt"
@@ -442,6 +456,8 @@ export async function atomicValidateOrCreateDeviceToken(params: {
         ${userAgent || null},
         ${ipAddress || null},
         ${ipAddress || null},
+        ${params.authenticatedAt?.toISOString() ?? null},
+        ${params.authenticationAssurance ?? null},
         1.0,
         0,
         NOW()

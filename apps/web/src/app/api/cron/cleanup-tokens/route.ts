@@ -1,4 +1,6 @@
-import { cleanupExpiredDeviceTokens } from '@pagespace/lib';
+import { cleanupExpiredDeviceTokens } from '@pagespace/lib/auth/device-auth-utils';
+import { audit } from '@pagespace/lib/audit/audit-log';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { NextResponse } from 'next/server';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 
@@ -29,13 +31,15 @@ export async function GET(request: Request) {
 
     console.log(`[Cron] Cleaned up ${count} expired device tokens`);
 
+    audit({ eventType: 'data.delete', resourceType: 'cron_job', resourceId: 'cleanup_tokens', details: { cleaned: count } });
+
     return NextResponse.json({
       success: true,
       cleanedUp: count,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('[Cron] Error cleaning up expired device tokens:', error);
+    loggers.system.error('[Cron] Error cleaning up expired device tokens', error as Error);
     return NextResponse.json(
       {
         success: false,

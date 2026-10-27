@@ -6,21 +6,27 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 
 // Mock the dependencies
-vi.mock('@pagespace/lib/broadcast-auth', () => ({
+vi.mock('@pagespace/lib/auth/broadcast-auth', () => ({
   createSignedBroadcastHeaders: vi.fn((body: string) => ({
     'Content-Type': 'application/json',
     'X-Broadcast-Signature': `t=1234567890,v1=mocksignature_${body.length}`,
   })),
 }));
 
-vi.mock('@pagespace/lib/logger-browser', () => ({
+// Hoist a stable realtime logger so tests can assert on its warn/debug calls.
+const loggerSpies = vi.hoisted(() => ({
+  realtimeLogger: {
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+  },
+}));
+
+vi.mock('@pagespace/lib/logging/logger-browser', () => ({
   browserLoggers: {
     realtime: {
-      child: vi.fn(() => ({
-        warn: vi.fn(),
-        error: vi.fn(),
-        debug: vi.fn(),
-      })),
+      child: vi.fn(() => loggerSpies.realtimeLogger),
     },
   },
 }));
@@ -38,8 +44,23 @@ import {
   broadcastPageEvent,
   broadcastDriveEvent,
   broadcastDriveMemberEvent,
+  broadcastDriveMemberEventToRecipients,
   broadcastTaskEvent,
-  broadcastUsageEvent,
+  broadcastCreditsEvent,
+  broadcastAiStreamStart,
+  broadcastChatUserMessage,
+  broadcastAiMessageEdited,
+  broadcastAiMessageDeleted,
+  broadcastAiUndoApplied,
+  broadcastAiConversationAdded,
+  notifyShellAgentActivity,
+  type ShellActivityEventPayload,
+  type ChatUserMessagePayload,
+  type ChatMessageEditedPayload,
+  type ChatMessageDeletedPayload,
+  type ChatUndoAppliedPayload,
+  type ChatConversationAddedPayload,
+  broadcastAiStreamComplete,
   createPageEventPayload,
   createDriveEventPayload,
   createDriveMemberEventPayload,
@@ -47,9 +68,12 @@ import {
   type DriveEventPayload,
   type DriveMemberEventPayload,
   type TaskEventPayload,
-  type UsageEventPayload,
+  type CreditsEventPayload,
+  type AiStreamStartPayload,
+  type AiStreamCompletePayload,
 } from '../socket-utils';
-import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
+import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-workspaces/shells-contract';
+import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 
 describe('socket-utils', () => {
   const originalEnv = process.env;
@@ -57,6 +81,10 @@ describe('socket-utils', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    loggerSpies.realtimeLogger.warn.mockClear();
+    loggerSpies.realtimeLogger.error.mockClear();
+    loggerSpies.realtimeLogger.debug.mockClear();
+    loggerSpies.realtimeLogger.info.mockClear();
     global.fetch = mockFetch;
     mockFetch.mockResolvedValue({ ok: true });
 
@@ -138,6 +166,10 @@ describe('socket-utils', () => {
     });
   });
 
+  // kickUserFromRooms moved to @pagespace/lib/realtime/kick-client (#2158);
+  // its coverage now lives in
+  // packages/lib/src/realtime/__tests__/kick-client.test.ts.
+
   describe('broadcastDriveEvent', () => {
     it('given drive event with recipients, should route to each user channel', async () => {
       const payload: DriveEventPayload = {
@@ -183,6 +215,53 @@ describe('socket-utils', () => {
 
       expect(mockFetch).not.toHaveBeenCalled();
     });
+
+    it('given a recipient response with ok=false, should count it as a failure in the warn log', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true })
+        .mockResolvedValueOnce({ ok: false, status: 502, statusText: 'Bad Gateway' });
+
+      await broadcastDriveEvent(
+        { driveId: 'drive-123', operation: 'updated' },
+        ['user-1', 'user-2']
+      );
+
+      expect(loggerSpies.realtimeLogger.warn).toHaveBeenCalledWith(
+        'Some drive event broadcasts failed',
+        expect.objectContaining({ failedCount: 1, totalCount: 2 })
+      );
+    });
+
+    it('given all recipients return ok, should NOT log a warn and should log a debug success', async () => {
+      mockFetch.mockResolvedValue({ ok: true });
+
+      await broadcastDriveEvent(
+        { driveId: 'drive-123', operation: 'updated' },
+        ['user-1', 'user-2']
+      );
+
+      expect(loggerSpies.realtimeLogger.warn).not.toHaveBeenCalled();
+      expect(loggerSpies.realtimeLogger.debug).toHaveBeenCalledWith(
+        'Drive event broadcasted to users',
+        expect.objectContaining({ recipientCount: 2 })
+      );
+    });
+
+    it('given a network error on one recipient, should still count it as a failure (parity with !ok)', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true })
+        .mockRejectedValueOnce(new Error('Network down'));
+
+      await broadcastDriveEvent(
+        { driveId: 'drive-123', operation: 'updated' },
+        ['user-1', 'user-2']
+      );
+
+      expect(loggerSpies.realtimeLogger.warn).toHaveBeenCalledWith(
+        'Some drive event broadcasts failed',
+        expect.objectContaining({ failedCount: 1, totalCount: 2 })
+      );
+    });
   });
 
   describe('broadcastDriveMemberEvent', () => {
@@ -204,6 +283,114 @@ describe('socket-utils', () => {
     });
   });
 
+  describe('broadcastDriveMemberEventToRecipients', () => {
+    it('given member event with multiple recipients, fans out to each user channel with the same payload', async () => {
+      const payload: DriveMemberEventPayload = {
+        driveId: 'drive-abc',
+        userId: 'user-actor',
+        operation: 'member_added',
+        role: 'MEMBER',
+        driveName: 'Alpha',
+      };
+
+      await broadcastDriveMemberEventToRecipients(payload, ['admin-a', 'admin-b']);
+
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      const channels = mockFetch.mock.calls.map((c) => JSON.parse(c[1].body).channelId).sort();
+      expect(channels).toEqual(['user:admin-a:drives', 'user:admin-b:drives']);
+      for (const call of mockFetch.mock.calls) {
+        const body = JSON.parse(call[1].body);
+        expect(body.event).toBe('drive:member_added');
+        expect(body.payload).toEqual(payload);
+      }
+    });
+
+    it('given empty recipient list, does not call fetch', async () => {
+      const payload: DriveMemberEventPayload = {
+        driveId: 'drive-abc',
+        userId: 'user-actor',
+        operation: 'member_added',
+      };
+
+      await broadcastDriveMemberEventToRecipients(payload, []);
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('given INTERNAL_REALTIME_URL is unset, does not call fetch', async () => {
+      process.env.INTERNAL_REALTIME_URL = '';
+      const payload: DriveMemberEventPayload = {
+        driveId: 'drive-abc',
+        userId: 'user-actor',
+        operation: 'member_added',
+      };
+
+      await broadcastDriveMemberEventToRecipients(payload, ['admin-a']);
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('given fetch rejects for one recipient, does not throw (best-effort broadcast must never abort the calling operation)', async () => {
+      mockFetch.mockResolvedValueOnce(new Response()).mockRejectedValueOnce(new Error('realtime down'));
+      const payload: DriveMemberEventPayload = {
+        driveId: 'drive-abc',
+        userId: 'user-actor',
+        operation: 'member_added',
+      };
+
+      await expect(
+        broadcastDriveMemberEventToRecipients(payload, ['admin-a', 'admin-b'])
+      ).resolves.toBeUndefined();
+    });
+
+    it('given a recipient response with ok=false, should count it as a failure in the warn log', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true })
+        .mockResolvedValueOnce({ ok: false, status: 500, statusText: 'Internal Server Error' });
+
+      await broadcastDriveMemberEventToRecipients(
+        { driveId: 'drive-abc', userId: 'user-actor', operation: 'member_removed' },
+        ['admin-a', 'admin-b']
+      );
+
+      expect(loggerSpies.realtimeLogger.warn).toHaveBeenCalledWith(
+        'Some drive member event broadcasts failed',
+        expect.objectContaining({ failedCount: 1, totalCount: 2 })
+      );
+    });
+
+    it('given all recipients return ok, should NOT log a warn and should log a debug success', async () => {
+      mockFetch.mockResolvedValue({ ok: true });
+
+      await broadcastDriveMemberEventToRecipients(
+        { driveId: 'drive-abc', userId: 'user-actor', operation: 'member_added' },
+        ['admin-a', 'admin-b']
+      );
+
+      expect(loggerSpies.realtimeLogger.warn).not.toHaveBeenCalled();
+      expect(loggerSpies.realtimeLogger.debug).toHaveBeenCalledWith(
+        'Drive member event broadcasted to recipients',
+        expect.objectContaining({ recipientCount: 2 })
+      );
+    });
+
+    it('given a network error on one recipient, should still count it as a failure (parity with !ok)', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true })
+        .mockRejectedValueOnce(new Error('Network down'));
+
+      await broadcastDriveMemberEventToRecipients(
+        { driveId: 'drive-abc', userId: 'user-actor', operation: 'member_removed' },
+        ['admin-a', 'admin-b']
+      );
+
+      expect(loggerSpies.realtimeLogger.warn).toHaveBeenCalledWith(
+        'Some drive member event broadcasts failed',
+        expect.objectContaining({ failedCount: 1, totalCount: 2 })
+      );
+    });
+  });
+
   describe('broadcastTaskEvent', () => {
     it('given task event, should route to user:{userId}:tasks channel', async () => {
       const payload: TaskEventPayload = {
@@ -216,31 +403,75 @@ describe('socket-utils', () => {
 
       await broadcastTaskEvent(payload);
 
-      const fetchCall = mockFetch.mock.calls[0];
-      const requestBody = JSON.parse(fetchCall[1].body);
+      const channelIds = mockFetch.mock.calls.map((call) => JSON.parse(call[1].body).channelId);
+      expect(channelIds).toContain('user:user-789:tasks');
+      const userCallBody = JSON.parse(
+        mockFetch.mock.calls.find((call) => JSON.parse(call[1].body).channelId === 'user:user-789:tasks')![1].body
+      );
+      expect(userCallBody.event).toBe('task:task_added');
+    });
 
-      expect(requestBody.channelId).toBe('user:user-789:tasks');
-      expect(requestBody.event).toBe('task:task_added');
+    it('given payload with pageId, should fan out to BOTH user:{userId}:tasks and pageId channels', async () => {
+      const payload: TaskEventPayload = {
+        type: 'task_updated',
+        userId: 'user-789',
+        taskId: 'task-123',
+        pageId: 'page-456',
+        data: { title: 'Updated Task' },
+      };
+
+      await broadcastTaskEvent(payload);
+
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+
+      const bodies = mockFetch.mock.calls.map((call) => JSON.parse(call[1].body));
+      const channelIds = bodies.map((b) => b.channelId);
+      expect(channelIds).toContain('user:user-789:tasks');
+      expect(channelIds).toContain('page-456');
+
+      // Both fetches should carry the same event name and payload
+      for (const body of bodies) {
+        expect(body.event).toBe('task:task_updated');
+        expect(body.payload).toEqual(payload);
+      }
+    });
+
+    it('given payload without pageId, should fan out only to user:{userId}:tasks channel', async () => {
+      const payload: TaskEventPayload = {
+        type: 'task_added',
+        userId: 'user-789',
+        data: { title: 'Pageless Task' },
+      };
+
+      await broadcastTaskEvent(payload);
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.channelId).toBe('user:user-789:tasks');
+      expect(body.event).toBe('task:task_added');
     });
   });
 
-  describe('broadcastUsageEvent', () => {
-    it('given usage event, should route to notifications:{userId} channel', async () => {
-      const payload: UsageEventPayload = {
+  describe('broadcastCreditsEvent', () => {
+    it('given credits event, should route to notifications:{userId} channel', async () => {
+      const payload: CreditsEventPayload = {
         userId: 'user-123',
         operation: 'updated',
-        subscriptionTier: 'pro',
-        standard: { current: 50, limit: 100, remaining: 50 },
-        pro: { current: 200, limit: 500, remaining: 300 },
+        billingEnabled: true,
+        monthly: { remaining: 350, allowance: 500, periodEnd: null },
+        topup: { remaining: 1000 },
+        debt: 0,
+        spendable: 1350,
+        reserved: 0,
       };
 
-      await broadcastUsageEvent(payload);
+      await broadcastCreditsEvent(payload);
 
       const fetchCall = mockFetch.mock.calls[0];
       const requestBody = JSON.parse(fetchCall[1].body);
 
       expect(requestBody.channelId).toBe('notifications:user-123');
-      expect(requestBody.event).toBe('usage:updated');
+      expect(requestBody.event).toBe('credits:updated');
     });
   });
 
@@ -343,6 +574,328 @@ describe('socket-utils', () => {
     });
   });
 
+  describe('broadcastAiStreamStart', () => {
+    it('given valid payload, should route to {pageId} channel with chat:stream_start event', async () => {
+      const payload: AiStreamStartPayload = {
+        messageId: 'msg-1',
+        pageId: 'page-1',
+        conversationId: 'conv-1',
+        startedAt: '2024-01-01T00:00:00.000Z',
+        triggeredBy: { userId: 'user-1', displayName: 'Alice', browserSessionId: 'session-1' },
+      };
+
+      await broadcastAiStreamStart(payload);
+
+      const fetchCall = mockFetch.mock.calls[0];
+      const requestBody = JSON.parse(fetchCall[1].body);
+
+      expect(requestBody.channelId).toBe('page-1');
+      expect(requestBody.event).toBe('chat:stream_start');
+      expect(requestBody.payload).toEqual(payload);
+    });
+
+    it('given no INTERNAL_REALTIME_URL, should not call fetch', async () => {
+      process.env.INTERNAL_REALTIME_URL = '';
+
+      await broadcastAiStreamStart({
+        messageId: 'msg-1',
+        pageId: 'page-1',
+        conversationId: 'conv-1',
+        startedAt: '2024-01-01T00:00:00.000Z',
+        triggeredBy: { userId: 'user-1', displayName: 'Alice', browserSessionId: 'session-1' },
+      });
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('given fetch throws, should not throw', async () => {
+      mockFetch.mockRejectedValue(new Error('Network error'));
+
+      await expect(broadcastAiStreamStart({
+        messageId: 'msg-1',
+        pageId: 'page-1',
+        conversationId: 'conv-1',
+        startedAt: '2024-01-01T00:00:00.000Z',
+        triggeredBy: { userId: 'user-1', displayName: 'Alice', browserSessionId: 'session-1' },
+      })).resolves.not.toThrow();
+    });
+  });
+
+  describe('notifyShellAgentActivity', () => {
+    const payload: ShellActivityEventPayload = {
+      sessionId: 'conv-1',
+      command: 'echo hi',
+      output: 'hi',
+      exitCode: 0,
+      agentLabel: 'Agent Bob',
+    };
+
+    it('given a valid payload, should POST it to the route the realtime server serves', async () => {
+      // Pinned against the shared constant rather than a literal: this caller
+      // spent the whole rebuild posting to `/api/terminal-activity`, a route
+      // that stopped existing when the bridge was re-keyed.
+      await notifyShellAgentActivity(payload);
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const [url, init] = mockFetch.mock.calls[0];
+      expect(url).toBe(`http://localhost:3001${SHELL_BRIDGE_ROUTES.activity}`);
+      expect(SHELL_BRIDGE_ROUTES.activity).toBe('/api/shell-activity');
+      expect(JSON.parse(init.body)).toEqual(payload);
+    });
+
+    it('given no INTERNAL_REALTIME_URL, should not call fetch', async () => {
+      process.env.INTERNAL_REALTIME_URL = '';
+
+      await notifyShellAgentActivity(payload);
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('given fetch throws, should not throw (best-effort)', async () => {
+      mockFetch.mockRejectedValue(new Error('Network error'));
+
+      await expect(notifyShellAgentActivity(payload)).resolves.not.toThrow();
+    });
+  });
+
+  describe('broadcastAiStreamComplete', () => {
+    it('given completed stream, should route to {pageId} with chat:stream_complete and aborted=false', async () => {
+      const payload: AiStreamCompletePayload = {
+        messageId: 'msg-1',
+        pageId: 'page-1',
+        aborted: false,
+      };
+
+      await broadcastAiStreamComplete(payload);
+
+      const fetchCall = mockFetch.mock.calls[0];
+      const requestBody = JSON.parse(fetchCall[1].body);
+
+      expect(requestBody.channelId).toBe('page-1');
+      expect(requestBody.event).toBe('chat:stream_complete');
+      expect(requestBody.payload).toEqual(payload);
+    });
+
+    it('given aborted stream, should include aborted=true in payload', async () => {
+      const payload: AiStreamCompletePayload = {
+        messageId: 'msg-1',
+        pageId: 'page-1',
+        aborted: true,
+      };
+
+      await broadcastAiStreamComplete(payload);
+
+      const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(requestBody.payload.aborted).toBe(true);
+    });
+
+    it('given a conversationId, should include it in the broadcast payload', async () => {
+      const payload: AiStreamCompletePayload = {
+        messageId: 'msg-1',
+        pageId: 'page-1',
+        conversationId: 'conv-xyz',
+        aborted: false,
+      };
+
+      await broadcastAiStreamComplete(payload);
+
+      const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(requestBody.payload.conversationId).toBe('conv-xyz');
+    });
+
+    it('given no INTERNAL_REALTIME_URL, should not call fetch', async () => {
+      process.env.INTERNAL_REALTIME_URL = '';
+
+      await broadcastAiStreamComplete({ messageId: 'msg-1', pageId: 'page-1' });
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('given fetch throws, should not throw', async () => {
+      mockFetch.mockRejectedValue(new Error('Network error'));
+
+      await expect(
+        broadcastAiStreamComplete({ messageId: 'msg-1', pageId: 'page-1' })
+      ).resolves.not.toThrow();
+    });
+  });
+
+  describe('broadcastChatUserMessage', () => {
+    const payload: ChatUserMessagePayload = {
+      message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] },
+      pageId: 'page-1',
+      conversationId: 'conv-1',
+      triggeredBy: { userId: 'user-1', displayName: 'Alice', browserSessionId: 'session-1' },
+    };
+
+    it('given a valid payload, should route to the {pageId} channel with chat:user_message event', async () => {
+      await broadcastChatUserMessage(payload);
+
+      const fetchCall = mockFetch.mock.calls[0];
+      const requestBody = JSON.parse(fetchCall[1].body);
+
+      expect(requestBody.channelId).toBe('page-1');
+      expect(requestBody.event).toBe('chat:user_message');
+      expect(requestBody.payload).toEqual(payload);
+    });
+
+    it('given no INTERNAL_REALTIME_URL, should not call fetch', async () => {
+      process.env.INTERNAL_REALTIME_URL = '';
+
+      await broadcastChatUserMessage(payload);
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('given fetch throws, should not throw', async () => {
+      mockFetch.mockRejectedValue(new Error('Network error'));
+
+      await expect(broadcastChatUserMessage(payload)).resolves.not.toThrow();
+    });
+  });
+
+  describe('broadcastAiMessageEdited', () => {
+    const payload: ChatMessageEditedPayload = {
+      messageId: 'msg-1',
+      pageId: 'page-1',
+      conversationId: 'conv-1',
+      parts: [{ type: 'text', text: 'updated' }],
+      editedAt: '2026-05-01T00:00:00.000Z',
+      triggeredBy: { userId: 'user-1', displayName: 'Alice', browserSessionId: 'session-1' },
+    };
+
+    it('given a valid payload, should route to the {pageId} channel with chat:message_edited event', async () => {
+      await broadcastAiMessageEdited(payload);
+
+      const fetchCall = mockFetch.mock.calls[0];
+      const requestBody = JSON.parse(fetchCall[1].body);
+
+      expect(requestBody.channelId).toBe('page-1');
+      expect(requestBody.event).toBe('chat:message_edited');
+      expect(requestBody.payload).toEqual(payload);
+    });
+
+    it('given no INTERNAL_REALTIME_URL, should not call fetch', async () => {
+      process.env.INTERNAL_REALTIME_URL = '';
+
+      await broadcastAiMessageEdited(payload);
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('given fetch throws, should not throw', async () => {
+      mockFetch.mockRejectedValue(new Error('Network error'));
+
+      await expect(broadcastAiMessageEdited(payload)).resolves.not.toThrow();
+    });
+  });
+
+  describe('broadcastAiMessageDeleted', () => {
+    const payload: ChatMessageDeletedPayload = {
+      messageId: 'msg-1',
+      pageId: 'page-1',
+      conversationId: 'conv-1',
+      triggeredBy: { userId: 'user-1', displayName: 'Alice', browserSessionId: 'session-1' },
+    };
+
+    it('given a valid payload, should route to the {pageId} channel with chat:message_deleted event', async () => {
+      await broadcastAiMessageDeleted(payload);
+
+      const fetchCall = mockFetch.mock.calls[0];
+      const requestBody = JSON.parse(fetchCall[1].body);
+
+      expect(requestBody.channelId).toBe('page-1');
+      expect(requestBody.event).toBe('chat:message_deleted');
+      expect(requestBody.payload).toEqual(payload);
+    });
+
+    it('given no INTERNAL_REALTIME_URL, should not call fetch', async () => {
+      process.env.INTERNAL_REALTIME_URL = '';
+
+      await broadcastAiMessageDeleted(payload);
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('given fetch throws, should not throw', async () => {
+      mockFetch.mockRejectedValue(new Error('Network error'));
+
+      await expect(broadcastAiMessageDeleted(payload)).resolves.not.toThrow();
+    });
+  });
+
+  describe('broadcastAiUndoApplied', () => {
+    const payload: ChatUndoAppliedPayload = {
+      conversationId: 'conv-1',
+      pageId: 'page-1',
+      mode: 'messages_and_changes',
+      affectedMessageIds: ['msg-2', 'msg-3'],
+      triggeredBy: { userId: 'user-1', displayName: 'Alice', browserSessionId: 'session-1' },
+    };
+
+    it('given a valid payload, should route to the {pageId} channel with chat:undo_applied event', async () => {
+      await broadcastAiUndoApplied(payload);
+
+      const fetchCall = mockFetch.mock.calls[0];
+      const requestBody = JSON.parse(fetchCall[1].body);
+
+      expect(requestBody.channelId).toBe('page-1');
+      expect(requestBody.event).toBe('chat:undo_applied');
+      expect(requestBody.payload).toEqual(payload);
+    });
+
+    it('given no INTERNAL_REALTIME_URL, should not call fetch', async () => {
+      process.env.INTERNAL_REALTIME_URL = '';
+
+      await broadcastAiUndoApplied(payload);
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('given fetch throws, should not throw', async () => {
+      mockFetch.mockRejectedValue(new Error('Network error'));
+
+      await expect(broadcastAiUndoApplied(payload)).resolves.not.toThrow();
+    });
+  });
+
+  describe('broadcastAiConversationAdded', () => {
+    const payload: ChatConversationAddedPayload = {
+      agentId: 'agent-1',
+      conversation: {
+        id: 'conv-new',
+        title: 'New conversation',
+        createdAt: '2026-05-01T00:00:00.000Z',
+      },
+      triggeredBy: { userId: 'user-1', displayName: 'Alice', browserSessionId: 'session-1' },
+    };
+
+    it('given a valid payload, should route to the {agentId} channel with chat:conversation_added event', async () => {
+      await broadcastAiConversationAdded(payload);
+
+      const fetchCall = mockFetch.mock.calls[0];
+      const requestBody = JSON.parse(fetchCall[1].body);
+
+      expect(requestBody.channelId).toBe('agent-1');
+      expect(requestBody.event).toBe('chat:conversation_added');
+      expect(requestBody.payload).toEqual(payload);
+    });
+
+    it('given no INTERNAL_REALTIME_URL, should not call fetch', async () => {
+      process.env.INTERNAL_REALTIME_URL = '';
+
+      await broadcastAiConversationAdded(payload);
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('given fetch throws, should not throw', async () => {
+      mockFetch.mockRejectedValue(new Error('Network error'));
+
+      await expect(broadcastAiConversationAdded(payload)).resolves.not.toThrow();
+    });
+  });
+
   describe('channel routing patterns', () => {
     it('given page event, should route to drive-specific channel', async () => {
       await broadcastPageEvent({
@@ -387,13 +940,16 @@ describe('socket-utils', () => {
       expect(body.channelId).toBe('user:test-user:tasks');
     });
 
-    it('given usage event, should route to user notifications channel', async () => {
-      await broadcastUsageEvent({
+    it('given credits event, should route to user notifications channel', async () => {
+      await broadcastCreditsEvent({
         userId: 'test-user',
         operation: 'updated',
-        subscriptionTier: 'free',
-        standard: { current: 0, limit: 100, remaining: 100 },
-        pro: { current: 0, limit: 0, remaining: 0 },
+        billingEnabled: true,
+        monthly: { remaining: 500, allowance: 500, periodEnd: null },
+        topup: { remaining: 0 },
+        debt: 0,
+        spendable: 500,
+        reserved: 0,
       });
 
       const body = JSON.parse(mockFetch.mock.calls[0][1].body);

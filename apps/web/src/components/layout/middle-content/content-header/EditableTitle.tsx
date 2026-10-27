@@ -9,7 +9,6 @@ import { toast } from 'sonner';
 import { usePageTree } from '@/hooks/usePageTree';
 import { useParams } from 'next/navigation';
 import { patch } from '@/lib/auth/auth-fetch';
-import { useOpenTabsStore } from '@/stores/useOpenTabsStore';
 import { useTabsStore } from '@/stores/useTabsStore';
 
 export function EditableTitle({ pageId: propPageId }: { pageId?: string | null } = {}) {
@@ -59,8 +58,7 @@ export function EditableTitle({ pageId: propPageId }: { pageId?: string | null }
       updateNode(updatedPage.id, { title: updatedPage.title });
       mutate(`/api/pages/${page.id}/breadcrumbs`);
 
-      // Update tab titles in both tab stores (single batched update each)
-      useOpenTabsStore.getState().updateTabTitle(updatedPage.id, updatedPage.title);
+      // Update tab titles (single batched update)
       useTabsStore.getState().updateTabMetaByPageId(updatedPage.id, { title: updatedPage.title });
     } catch (error) {
       console.error(error);
@@ -89,7 +87,7 @@ export function EditableTitle({ pageId: propPageId }: { pageId?: string | null }
         onChange={handleTitleChange}
         onBlur={updateTitle}
         onKeyDown={handleKeyDown}
-        className="text-lg sm:text-2xl font-bold h-auto p-0 border-none focus-visible:ring-0"
+        className="text-lg @[400px]:text-2xl font-bold h-auto p-0 border-none focus-visible:ring-0"
       />
     );
   }
@@ -97,7 +95,7 @@ export function EditableTitle({ pageId: propPageId }: { pageId?: string | null }
   return (
     <h1
       onClick={handleTitleClick}
-      className="text-lg sm:text-2xl font-bold cursor-pointer truncate max-w-[150px] sm:max-w-[400px] md:max-w-[600px]"
+      className="text-lg @[400px]:text-2xl font-bold cursor-pointer truncate max-w-[150px] @[400px]:max-w-[400px] @[600px]:max-w-[600px]"
       title={page?.title || ''}
     >
       {page?.title}

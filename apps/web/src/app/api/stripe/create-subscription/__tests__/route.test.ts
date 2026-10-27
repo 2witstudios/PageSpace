@@ -41,19 +41,21 @@ vi.mock('@/lib/stripe-customer', () => ({
 // Mock database - using inline factory
 const mockSelectWhere = vi.fn();
 
-vi.mock('@pagespace/db', () => {
-  return {
-    db: {
+vi.mock('@pagespace/db/db', () => ({
+  db: {
       select: vi.fn(() => ({
         from: vi.fn(() => ({
           where: mockSelectWhere,
         })),
       })),
     },
-    users: {},
-    eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
-  };
-});
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: {},
+}));
 
 // Mock auth
 vi.mock('@/lib/auth', () => ({
@@ -61,9 +63,32 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
+    api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    security: { warn: vi.fn() },
+  },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
+}));
+
+// The App Store mirror (lib billing/apple): no App Store plan unless a test sets one.
+const mockAppleEntitledTier = vi.hoisted(() => vi.fn(async () => 'free'));
+const mockHasRenewableAppleSubscription = vi.hoisted(() => vi.fn(async () => false));
+vi.mock('@pagespace/lib/billing/apple/apple-entitlement', () => ({
+  appleEntitledTier: mockAppleEntitledTier,
+  hasRenewableAppleSubscription: mockHasRenewableAppleSubscription,
+}));
+
 // Import after mocks
 import { POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { stripeConfig } from '@/lib/stripe-config';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -97,7 +122,11 @@ const mockUser = (overrides: Partial<{
 
 describe('POST /api/stripe/create-subscription', () => {
   const mockUserId = 'user_123';
-  const mockPriceId = 'price_pro_monthly';
+  // SEAT-2 P1 (independent review): the allowlist guard now rejects any
+  // price id this app doesn't recognize as a personal plan's current price,
+  // so the default priceId used across these tests must be a real one —
+  // Pro's actual configured Stripe price id, not an arbitrary string.
+  const mockPriceId = stripeConfig.priceIds.pro;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -206,6 +235,40 @@ describe('POST /api/stripe/create-subscription', () => {
     expect(body.error).toBe('User not found');
   });
 
+  it('given an App Store Pro plan, refuses a Stripe checkout with 409 so one plan is never billed twice', async () => {
+    mockAppleEntitledTier.mockResolvedValueOnce('pro');
+    mockSelectWhere.mockResolvedValue([mockUser({ subscriptionTier: 'pro' })]);
+
+    const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
+      method: 'POST',
+      body: JSON.stringify({ priceId: mockPriceId }),
+    });
+
+    const response = await POST(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.code).toBe('managed_by_app_store');
+    expect(mockStripeSubscriptionsCreate).not.toHaveBeenCalled();
+  });
+
+  it('given an App Store subscription in billing retry, refuses a Stripe checkout: Apple resumes it without a new purchase', async () => {
+    mockHasRenewableAppleSubscription.mockResolvedValueOnce(true);
+    mockSelectWhere.mockResolvedValue([mockUser({ subscriptionTier: 'free' })]);
+
+    const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
+      method: 'POST',
+      body: JSON.stringify({ priceId: mockPriceId }),
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(409);
+    expect((await response.json()).code).toBe('managed_by_app_store');
+    expect(mockHasRenewableAppleSubscription).toHaveBeenCalledWith(expect.anything(), expect.any(String), expect.any(Date), { autoRenewing: true });
+    expect(mockStripeSubscriptionsCreate).not.toHaveBeenCalled();
+  });
+
   it('should return 400 when user already has paid subscription', async () => {
     mockSelectWhere.mockResolvedValue([mockUser({ subscriptionTier: 'pro' })]);
 
@@ -256,6 +319,31 @@ describe('POST /api/stripe/create-subscription', () => {
     expect(body.error).toBe('Failed to create payment intent');
   });
 
+  it('should log audit event on successful subscription creation', async () => {
+    const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
+      method: 'POST',
+      body: JSON.stringify({ priceId: mockPriceId }),
+    });
+
+    await POST(request);
+
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: 'data.write', userId: mockUserId, resourceType: 'subscription', resourceId: 'sub_123', details: expect.objectContaining({ action: 'create', priceId: mockPriceId }) })
+    );
+  });
+
+  it('should not log audit event when subscription creation fails', async () => {
+    const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
+      method: 'POST',
+      body: JSON.stringify({}), // Missing priceId
+    });
+
+    await POST(request);
+
+    expect(auditRequest).not.toHaveBeenCalled();
+  });
+
   it('should create subscription with correct parameters', async () => {
     mockGetOrCreateStripeCustomer.mockResolvedValue('cus_test');
     mockSelectWhere.mockResolvedValue([mockUser({ stripeCustomerId: 'cus_test' })]);
@@ -277,6 +365,60 @@ describe('POST /api/stripe/create-subscription', () => {
       expand: ['latest_invoice.confirmation_secret'],
       metadata: { userId: mockUserId },
     });
+  });
+
+  it('SEAT-2 (partial) P1 rejects a lone user checking out with the Business (org-plan) price id — the UI hides it, but the server must too', async () => {
+    const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
+      method: 'POST',
+      body: JSON.stringify({ priceId: 'price_retired_business' }),
+    });
+
+    const response = await POST(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe('This plan cannot be purchased individually.');
+    expect(mockStripeSubscriptionsCreate).not.toHaveBeenCalled();
+  });
+
+  it('SEAT-2 (partial) P1 (independent review) rejects the grandfathered Founder price id — a removed tier is never re-purchasable', async () => {
+    const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
+      method: 'POST',
+      body: JSON.stringify({ priceId: 'price_retired_founder' }),
+    });
+
+    const response = await POST(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe('This plan cannot be purchased individually.');
+    expect(mockStripeSubscriptionsCreate).not.toHaveBeenCalled();
+  });
+
+  it('SEAT-2 (partial) P1 (independent review) rejects an unrecognized price id — the allowlist denies by default rather than falling through', async () => {
+    const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
+      method: 'POST',
+      body: JSON.stringify({ priceId: 'price_not_a_real_plan' }),
+    });
+
+    const response = await POST(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe('This plan cannot be purchased individually.');
+    expect(mockStripeSubscriptionsCreate).not.toHaveBeenCalled();
+  });
+
+  it('SEAT-2 (partial) P1 (independent review) accepts the Pro price id', async () => {
+    const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
+      method: 'POST',
+      body: JSON.stringify({ priceId: stripeConfig.priceIds.pro }),
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    expect(mockStripeSubscriptionsCreate).toHaveBeenCalled();
   });
 
 });

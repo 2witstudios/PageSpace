@@ -1,13 +1,11 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { verifyAdminAuth, isAdminAuthError } from '@/lib/auth';
-import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
-import {
-  getBuiltinProvider,
-  getProviderBySlug,
-  createProvider,
-} from '@pagespace/lib/integrations';
+import { db } from '@pagespace/db/db';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { getBuiltinProvider } from '@pagespace/lib/integrations/providers/builtin-providers';
+import { getProviderBySlug, createProvider } from '@pagespace/lib/integrations/repositories/provider-repository';
 
 const installSchema = z.object({
   builtinId: z.string().min(1),
@@ -59,6 +57,8 @@ export async function POST(request: Request) {
       driveId: null,
       enabled: true,
     });
+
+    auditRequest(request, { eventType: 'data.write', userId: adminUser.id, resourceType: 'integration_install', resourceId: provider.id, details: { builtinId, operation: 'install' } });
 
     return NextResponse.json({ provider: { id: provider.id, slug: provider.slug, name: provider.name } }, { status: 201 });
   } catch (error) {

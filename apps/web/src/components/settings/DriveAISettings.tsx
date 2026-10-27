@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Loader2, Save, Brain } from 'lucide-react';
-import { useToast } from '@/hooks/useToast';
+import { toast } from 'sonner';
 import { fetchWithAuth, patch } from '@/lib/auth/auth-fetch';
 
 interface DriveAISettingsProps {
@@ -17,7 +17,6 @@ export function DriveAISettings({ driveId }: DriveAISettingsProps) {
   const [originalContext, setOriginalContext] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const { toast } = useToast();
 
   const hasChanges = driveContext !== originalContext;
 
@@ -32,34 +31,23 @@ export function DriveAISettings({ driveId }: DriveAISettingsProps) {
         setOriginalContext(context);
       } catch (error) {
         console.error('Error fetching drive:', error);
-        toast({
-          title: 'Error',
-          description: 'Failed to load drive settings',
-          variant: 'destructive',
-        });
+        toast.error('Failed to load drive settings');
       } finally {
         setLoading(false);
       }
     };
     fetchDrive();
-  }, [driveId, toast]);
+  }, [driveId]);
 
   const handleSave = async () => {
     setSaving(true);
     try {
       await patch(`/api/drives/${driveId}`, { drivePrompt: driveContext });
       setOriginalContext(driveContext);
-      toast({
-        title: 'Success',
-        description: 'Drive context saved successfully',
-      });
+      toast.success('Drive context saved successfully');
     } catch (error) {
       console.error('Error saving drive context:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to save drive context',
-        variant: 'destructive',
-      });
+      toast.error('Failed to save drive context');
     } finally {
       setSaving(false);
     }

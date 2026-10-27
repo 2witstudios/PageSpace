@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
-import { validateCSRFToken, sessionService } from '@pagespace/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { validateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getSessionFromCookies } from './cookie-config';
 
 /**
@@ -88,8 +89,8 @@ export async function validateCSRF(request: Request): Promise<NextResponse | nul
     );
   }
 
-  // Validate session with server
-  const sessionClaims = await sessionService.validateSession(sessionToken);
+  // Validate session with server — only browser sessions carry CSRF tokens
+  const sessionClaims = await sessionService.validateSession(sessionToken, { expectedType: 'user' });
   if (!sessionClaims) {
     loggers.auth.warn('CSRF validation failed: invalid session', {
       method,

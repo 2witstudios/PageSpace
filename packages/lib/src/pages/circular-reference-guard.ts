@@ -1,4 +1,6 @@
-import { db, pages, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { pages } from '@pagespace/db/schema/core';
 
 /**
  * Check if setting newParentId as parent of pageId would create a circular reference

@@ -20,6 +20,7 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 const SHOW_PAGE_TREE_KEY = 'pagespace:assistant:showPageTree';
 const WEB_SEARCH_KEY = 'pagespace:assistant:webSearchEnabled';
 const WRITE_MODE_KEY = 'pagespace:assistant:writeMode';
+const IMAGE_GEN_KEY = 'pagespace:assistant:imageGenEnabled';
 
 interface AssistantSettingsState {
   // Settings
@@ -27,10 +28,13 @@ interface AssistantSettingsState {
   currentProvider: string | null;
   currentModel: string | null;
   isAnyProviderConfigured: boolean;
+  subscriptionTier: string;
+  isAdmin: boolean;
 
   // Chat input toggles (persisted to localStorage)
   webSearchEnabled: boolean;
   writeMode: boolean; // true = write mode, false = read-only
+  imageGenEnabled: boolean; // Whether the image-generation tool is enabled
 
   // Loading state
   isLoading: boolean;
@@ -47,6 +51,8 @@ interface AssistantSettingsState {
   setWriteMode: (enabled: boolean) => void;
   toggleWriteMode: () => void;
   toggleShowPageTree: () => void;
+  setImageGenEnabled: (enabled: boolean) => void;
+  toggleImageGen: () => void;
 }
 
 export const useAssistantSettingsStore = create<AssistantSettingsState>()((set, get) => ({
@@ -55,8 +61,11 @@ export const useAssistantSettingsStore = create<AssistantSettingsState>()((set, 
   currentProvider: null,
   currentModel: null,
   isAnyProviderConfigured: false,
+  subscriptionTier: 'free',
+  isAdmin: false,
   webSearchEnabled: false,
   writeMode: true, // Default to write mode (full access)
+  imageGenEnabled: false,
   isLoading: false,
   isInitialized: false,
 
@@ -71,8 +80,13 @@ export const useAssistantSettingsStore = create<AssistantSettingsState>()((set, 
   },
 
   toggleShowPageTree: () => {
-    const current = get().showPageTree;
-    get().setShowPageTree(!current);
+    set((state) => {
+      const next = !state.showPageTree;
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(SHOW_PAGE_TREE_KEY, String(next));
+      }
+      return { showPageTree: next };
+    });
   },
 
   setProviderSettings: (provider: string, model: string) => {
@@ -94,8 +108,13 @@ export const useAssistantSettingsStore = create<AssistantSettingsState>()((set, 
   },
 
   toggleWebSearch: () => {
-    const current = get().webSearchEnabled;
-    get().setWebSearchEnabled(!current);
+    set((state) => {
+      const next = !state.webSearchEnabled;
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(WEB_SEARCH_KEY, String(next));
+      }
+      return { webSearchEnabled: next };
+    });
   },
 
   setWriteMode: (enabled: boolean) => {
@@ -108,61 +127,77 @@ export const useAssistantSettingsStore = create<AssistantSettingsState>()((set, 
   },
 
   toggleWriteMode: () => {
-    const current = get().writeMode;
-    get().setWriteMode(!current);
+    set((state) => {
+      const next = !state.writeMode;
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(WRITE_MODE_KEY, String(next));
+      }
+      return { writeMode: next };
+    });
+  },
+
+  setImageGenEnabled: (enabled: boolean) => {
+    set({ imageGenEnabled: enabled });
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(IMAGE_GEN_KEY, String(enabled));
+    }
+  },
+
+  toggleImageGen: () => {
+    set((state) => {
+      const next = !state.imageGenEnabled;
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(IMAGE_GEN_KEY, String(next));
+      }
+      return { imageGenEnabled: next };
+    });
   },
 
   loadSettings: async () => {
     // Prevent duplicate loads
     if (get().isLoading || get().isInitialized) return;
 
-    set({ isLoading: true });
-
-    // Load settings from localStorage (client-side only) - outside try block
-    // so values are available in both success and error paths
+    // Apply localStorage values immediately (synchronously) so components
+    // that read the store before the API responds see the correct toggle state.
     let showPageTree = false;
     let webSearchEnabled = false;
     let writeMode = true;
+    let imageGenEnabled = false;
 
     if (typeof window !== 'undefined') {
       const storedShowPageTree = localStorage.getItem(SHOW_PAGE_TREE_KEY);
-      if (storedShowPageTree !== null) {
-        showPageTree = storedShowPageTree === 'true';
-      }
-
+      if (storedShowPageTree !== null) showPageTree = storedShowPageTree === 'true';
       const storedWebSearch = localStorage.getItem(WEB_SEARCH_KEY);
-      if (storedWebSearch !== null) {
-        webSearchEnabled = storedWebSearch === 'true';
-      }
-
+      if (storedWebSearch !== null) webSearchEnabled = storedWebSearch === 'true';
       const storedWriteMode = localStorage.getItem(WRITE_MODE_KEY);
-      if (storedWriteMode !== null) {
-        writeMode = storedWriteMode === 'true';
-      }
+      if (storedWriteMode !== null) writeMode = storedWriteMode === 'true';
+      const storedImageGen = localStorage.getItem(IMAGE_GEN_KEY);
+      if (storedImageGen !== null) imageGenEnabled = storedImageGen === 'true';
     }
+
+    set({ isLoading: true, showPageTree, webSearchEnabled, writeMode, imageGenEnabled });
 
     try {
       const response = await fetchWithAuth('/api/ai/settings');
       if (response.ok) {
         const data = await response.json();
         set({
-          showPageTree,
-          webSearchEnabled,
-          writeMode,
           currentProvider: data.currentProvider || null,
           currentModel: data.currentModel || null,
           isAnyProviderConfigured: data.isAnyProviderConfigured || false,
+          subscriptionTier: data.userSubscriptionTier || 'free',
+          isAdmin: data.isAdmin === true,
           isInitialized: true,
           isLoading: false,
         });
       } else {
-        set({ showPageTree, webSearchEnabled, writeMode, isInitialized: true, isLoading: false });
+        set({ isInitialized: true, isLoading: false });
       }
     } catch (error) {
       if (process.env.NODE_ENV === 'development') {
         console.warn('Failed to load assistant settings:', error);
       }
-      set({ showPageTree, webSearchEnabled, writeMode, isInitialized: true, isLoading: false });
+      set({ isInitialized: true, isLoading: false });
     }
   },
 }))

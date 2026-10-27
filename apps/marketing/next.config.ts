@@ -2,7 +2,46 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: 'standalone',
+  // Next paints a dev-mode indicator in the corner of the viewport, and
+  // Playwright's element screenshot captures whatever is painted over the
+  // element's box — so it was being burned into every exported store
+  // screenshot. Scoped to the capture run so ordinary `bun run dev` keeps it.
+  ...(process.env.CAPTURE === '1' ? { devIndicators: false as const } : {}),
+
   assetPrefix: '/_marketing',
+  images: {
+    path: '/_marketing/_next/image',
+    // AVIF first: the hero backdrop is a full-bleed photo and AVIF lands it
+    // ~30-40% smaller than WebP at the same quality.
+    formats: ['image/avif', 'image/webp'],
+    // Next 16 requires every non-default quality to be declared. 90 is the hero
+    // backdrop; 75 stays the default for everything else.
+    qualities: [75, 90],
+  },
+  // Apple requires the AASA file be served as application/json. It is
+  // deliberately extensionless, so Next's static handler would otherwise send
+  // application/octet-stream and Apple's CDN would reject the file — which is
+  // exactly how universal links silently never activated.
+  async headers() {
+    return [
+      {
+        // Prebuilt hero variants (scripts/encode-hero.ts). The names are not
+        // content-hashed, so not immutable: an hour, then revalidate by ETag.
+        source: '/_marketing/hero/:path*',
+        headers: [{ key: 'Cache-Control', value: 'public, max-age=3600, must-revalidate' }],
+      },
+      {
+        source: '/.well-known/apple-app-site-association',
+        headers: [{ key: 'Content-Type', value: 'application/json' }],
+      },
+    ];
+  },
+  async redirects() {
+    return [
+      { source: '/docs/mcp', destination: '/docs/integrations/mcp', permanent: true },
+      { source: '/docs/mcp/desktop', destination: '/docs/integrations/mcp/desktop', permanent: true },
+    ];
+  },
 };
 
 export default nextConfig;

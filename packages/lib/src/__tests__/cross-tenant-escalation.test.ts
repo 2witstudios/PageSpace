@@ -1,12 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { factories } from '@pagespace/db/test/factories';
-import { db, users, pages, drives, pagePermissions, driveMembers, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
+import { pages, drives } from '@pagespace/db/schema/core';
+import { pagePermissions, driveMembers } from '@pagespace/db/schema/members';
 import { createId } from '@paralleldrive/cuid2';
-import { getUserAccessLevel, getUserDriveAccess } from '../permissions/permissions';
-import { getUserDrivePermissions } from '../permissions/permissions-cached';
+import { getUserAccessLevel, getUserDriveAccess, getUserDrivePermissions } from '../permissions/permissions';
 import { EnforcedAuthContext } from '../permissions/enforced-context';
 import type { SessionClaims } from '../auth/session-service';
-import { PermissionCache } from '../services/permission-cache';
+import { credentialActor } from '../permissions/access-actor';
 
 function createClaims(overrides: Partial<SessionClaims> = {}): SessionClaims {
   return {
@@ -34,8 +37,6 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
   let mallory: Awaited<ReturnType<typeof factories.createUser>>;
 
   beforeEach(async () => {
-    await PermissionCache.getInstance().clearAll();
-
     alice = await factories.createUser();
     bob = await factories.createUser();
     mallory = await factories.createUser();
@@ -48,7 +49,6 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
   });
 
   afterEach(async () => {
-    await PermissionCache.getInstance().clearAll();
     // Clean up only our test data to avoid interfering with parallel tests
     if (driveA) {
       await db.delete(pagePermissions).where(eq(pagePermissions.pageId, pageA.id)).catch(() => {});
@@ -69,17 +69,17 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
 
   describe('IDOR via forged page IDs', () => {
     it('given Mallory supplies Alices page ID, should return null', async () => {
-      const access = await getUserAccessLevel(mallory.id, pageA.id);
+      const access = await getUserAccessLevel(credentialActor(mallory.id, null), pageA.id);
       expect(access).toBeNull();
     });
 
     it('given Bob supplies Alices page ID, should return null', async () => {
-      const access = await getUserAccessLevel(bob.id, pageA.id);
+      const access = await getUserAccessLevel(credentialActor(bob.id, null), pageA.id);
       expect(access).toBeNull();
     });
 
     it('given Alice supplies Bobs page ID, should return null', async () => {
-      const access = await getUserAccessLevel(alice.id, pageB.id);
+      const access = await getUserAccessLevel(credentialActor(alice.id, null), pageB.id);
       expect(access).toBeNull();
     });
 
@@ -88,10 +88,10 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
       const pageB2 = await factories.createPage(driveB.id);
 
       const results = await Promise.all([
-        getUserAccessLevel(mallory.id, pageA.id),
-        getUserAccessLevel(mallory.id, pageA2.id),
-        getUserAccessLevel(mallory.id, pageB.id),
-        getUserAccessLevel(mallory.id, pageB2.id),
+        getUserAccessLevel(credentialActor(mallory.id, null), pageA.id),
+        getUserAccessLevel(credentialActor(mallory.id, null), pageA2.id),
+        getUserAccessLevel(credentialActor(mallory.id, null), pageB.id),
+        getUserAccessLevel(credentialActor(mallory.id, null), pageB2.id),
       ]);
 
       expect(results.every((r) => r === null)).toBe(true);
@@ -100,8 +100,8 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
     it('given non-existent page ID, should return same null as existing unauthorized page', async () => {
       const nonExistentPageId = createId();
 
-      const existingUnauthorized = await getUserAccessLevel(mallory.id, pageA.id);
-      const nonExistent = await getUserAccessLevel(mallory.id, nonExistentPageId);
+      const existingUnauthorized = await getUserAccessLevel(credentialActor(mallory.id, null), pageA.id);
+      const nonExistent = await getUserAccessLevel(credentialActor(mallory.id, null), nonExistentPageId);
 
       expect(existingUnauthorized).toBeNull();
       expect(nonExistent).toBeNull();
@@ -110,16 +110,16 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
 
   describe('drive access isolation', () => {
     it('given Alice is owner of driveA, she should NOT have access to driveB', async () => {
-      const aliceDriveA = await getUserDrivePermissions(alice.id, driveA.id);
-      const aliceDriveB = await getUserDrivePermissions(alice.id, driveB.id);
+      const aliceDriveA = await getUserDrivePermissions(credentialActor(alice.id, null), driveA.id);
+      const aliceDriveB = await getUserDrivePermissions(credentialActor(alice.id, null), driveB.id);
 
       expect(aliceDriveA?.isOwner).toBe(true);
       expect(aliceDriveB).toBeNull();
     });
 
     it('given Bob is owner of driveB, he should NOT have access to driveA', async () => {
-      const bobDriveB = await getUserDrivePermissions(bob.id, driveB.id);
-      const bobDriveA = await getUserDrivePermissions(bob.id, driveA.id);
+      const bobDriveB = await getUserDrivePermissions(credentialActor(bob.id, null), driveB.id);
+      const bobDriveA = await getUserDrivePermissions(credentialActor(bob.id, null), driveA.id);
 
       expect(bobDriveB?.isOwner).toBe(true);
       expect(bobDriveA).toBeNull();
@@ -130,8 +130,8 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
       const driveC = await factories.createDrive(charlie.id);
       await factories.createDriveMember(driveC.id, bob.id, { role: 'ADMIN' });
 
-      const bobDriveC = await getUserDrivePermissions(bob.id, driveC.id);
-      const bobDriveA = await getUserDrivePermissions(bob.id, driveA.id);
+      const bobDriveC = await getUserDrivePermissions(credentialActor(bob.id, null), driveC.id);
+      const bobDriveA = await getUserDrivePermissions(credentialActor(bob.id, null), driveA.id);
 
       expect(bobDriveC?.isAdmin).toBe(true);
       expect(bobDriveA).toBeNull();
@@ -140,10 +140,10 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
     it('given MEMBER role in driveB, should NOT grant access to driveA pages', async () => {
       await factories.createDriveMember(driveB.id, mallory.id, { role: 'MEMBER' });
 
-      const malloryDriveB = await getUserDriveAccess(mallory.id, driveB.id);
+      const malloryDriveB = await getUserDriveAccess(credentialActor(mallory.id, null), driveB.id);
       expect(malloryDriveB).toBe(true);
 
-      const malloryPageA = await getUserAccessLevel(mallory.id, pageA.id);
+      const malloryPageA = await getUserAccessLevel(credentialActor(mallory.id, null), pageA.id);
       expect(malloryPageA).toBeNull();
     });
   });
@@ -158,10 +158,10 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
         grantedBy: alice.id,
       });
 
-      const pageAccess = await getUserAccessLevel(mallory.id, pageA.id);
+      const pageAccess = await getUserAccessLevel(credentialActor(mallory.id, null), pageA.id);
       expect(pageAccess?.canView).toBe(true);
 
-      const drivePermissions = await getUserDrivePermissions(mallory.id, driveA.id);
+      const drivePermissions = await getUserDrivePermissions(credentialActor(mallory.id, null), driveA.id);
       expect(drivePermissions).toBeNull();
     });
 
@@ -176,10 +176,10 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
         grantedBy: alice.id,
       });
 
-      const pageAAccess = await getUserAccessLevel(mallory.id, pageA.id);
+      const pageAAccess = await getUserAccessLevel(credentialActor(mallory.id, null), pageA.id);
       expect(pageAAccess?.canView).toBe(true);
 
-      const pageA2Access = await getUserAccessLevel(mallory.id, pageA2.id);
+      const pageA2Access = await getUserAccessLevel(credentialActor(mallory.id, null), pageA2.id);
       expect(pageA2Access).toBeNull();
     });
 
@@ -192,7 +192,7 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
         grantedBy: alice.id,
       });
 
-      const access = await getUserAccessLevel(mallory.id, pageA.id);
+      const access = await getUserAccessLevel(credentialActor(mallory.id, null), pageA.id);
 
       expect(access?.canEdit).toBe(true);
       expect(access?.canDelete).toBe(false);
@@ -207,7 +207,7 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
         grantedBy: alice.id,
       });
 
-      const access = await getUserAccessLevel(mallory.id, pageA.id);
+      const access = await getUserAccessLevel(credentialActor(mallory.id, null), pageA.id);
 
       expect(access?.canShare).toBe(true);
       expect(access?.canDelete).toBe(false);
@@ -337,26 +337,26 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
 
   describe('fail-closed on ambiguous state', () => {
     it('given no permission exists, access should be denied', async () => {
-      const access = await getUserAccessLevel(mallory.id, pageA.id);
+      const access = await getUserAccessLevel(credentialActor(mallory.id, null), pageA.id);
       expect(access).toBeNull();
     });
 
     it('given no drive permission exists, access should be denied', async () => {
-      const access = await getUserDrivePermissions(mallory.id, driveA.id);
+      const access = await getUserDrivePermissions(credentialActor(mallory.id, null), driveA.id);
       expect(access).toBeNull();
     });
 
     it('given non-existent drive, should return null', async () => {
       const nonExistentDriveId = createId();
 
-      const access = await getUserDrivePermissions(alice.id, nonExistentDriveId);
+      const access = await getUserDrivePermissions(credentialActor(alice.id, null), nonExistentDriveId);
       expect(access).toBeNull();
     });
 
     it('given drive access returns false for unknown drive, user cannot access', async () => {
       const unknownDriveId = createId();
 
-      const access = await getUserDriveAccess(alice.id, unknownDriveId);
+      const access = await getUserDriveAccess(credentialActor(alice.id, null), unknownDriveId);
       expect(access).toBe(false);
     });
   });
@@ -371,10 +371,10 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
         grantedBy: alice.id,
       });
 
-      const bobAccess = await getUserAccessLevel(bob.id, pageA.id);
+      const bobAccess = await getUserAccessLevel(credentialActor(bob.id, null), pageA.id);
       expect(bobAccess?.canView).toBe(true);
 
-      const malloryAccess = await getUserAccessLevel(mallory.id, pageA.id);
+      const malloryAccess = await getUserAccessLevel(credentialActor(mallory.id, null), pageA.id);
       expect(malloryAccess).toBeNull();
     });
 
@@ -387,7 +387,7 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
         grantedBy: alice.id,
       });
 
-      const malloryAccess = await getUserAccessLevel(mallory.id, pageA.id);
+      const malloryAccess = await getUserAccessLevel(credentialActor(mallory.id, null), pageA.id);
       expect(malloryAccess).toBeNull();
     });
 
@@ -411,9 +411,9 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
         grantedBy: alice.id,
       });
 
-      const accessA = await getUserAccessLevel(mallory.id, pageA.id);
-      const accessA2 = await getUserAccessLevel(mallory.id, pageA2.id);
-      const accessA3 = await getUserAccessLevel(mallory.id, pageA3.id);
+      const accessA = await getUserAccessLevel(credentialActor(mallory.id, null), pageA.id);
+      const accessA2 = await getUserAccessLevel(credentialActor(mallory.id, null), pageA2.id);
+      const accessA3 = await getUserAccessLevel(credentialActor(mallory.id, null), pageA3.id);
 
       expect(accessA?.canEdit).toBe(false);
       expect(accessA2?.canEdit).toBe(true);
@@ -425,8 +425,8 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
     it('given ADMIN in driveB, should NOT be ADMIN in driveA', async () => {
       await factories.createDriveMember(driveB.id, mallory.id, { role: 'ADMIN' });
 
-      const driveAPerms = await getUserDrivePermissions(mallory.id, driveA.id);
-      const driveBPerms = await getUserDrivePermissions(mallory.id, driveB.id);
+      const driveAPerms = await getUserDrivePermissions(credentialActor(mallory.id, null), driveA.id);
+      const driveBPerms = await getUserDrivePermissions(credentialActor(mallory.id, null), driveB.id);
 
       expect(driveBPerms?.isAdmin).toBe(true);
       expect(driveAPerms).toBeNull();
@@ -435,16 +435,16 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
     it('given MEMBER in driveB, should NOT be MEMBER in driveA', async () => {
       await factories.createDriveMember(driveB.id, mallory.id, { role: 'MEMBER' });
 
-      const driveAAccess = await getUserDriveAccess(mallory.id, driveA.id);
-      const driveBAccess = await getUserDriveAccess(mallory.id, driveB.id);
+      const driveAAccess = await getUserDriveAccess(credentialActor(mallory.id, null), driveA.id);
+      const driveBAccess = await getUserDriveAccess(credentialActor(mallory.id, null), driveB.id);
 
       expect(driveBAccess).toBe(true);
       expect(driveAAccess).toBe(false);
     });
 
     it('given owner of driveA, should not have ADMIN permissions in driveB', async () => {
-      const aliceDriveA = await getUserDrivePermissions(alice.id, driveA.id);
-      const aliceDriveB = await getUserDrivePermissions(alice.id, driveB.id);
+      const aliceDriveA = await getUserDrivePermissions(credentialActor(alice.id, null), driveA.id);
+      const aliceDriveB = await getUserDrivePermissions(credentialActor(alice.id, null), driveB.id);
 
       expect(aliceDriveA?.isOwner).toBe(true);
       expect(aliceDriveB).toBeNull();
@@ -465,7 +465,7 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
         grantedBy: alice.id,
       });
 
-      const access = await getUserAccessLevel(mallory.id, pageA.id);
+      const access = await getUserAccessLevel(credentialActor(mallory.id, null), pageA.id);
       expect(access).toBeNull();
     });
 
@@ -482,10 +482,10 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
         grantedBy: alice.id,
       });
 
-      const accessA = await getUserAccessLevel(mallory.id, pageA.id);
+      const accessA = await getUserAccessLevel(credentialActor(mallory.id, null), pageA.id);
       expect(accessA?.canView).toBe(true);
 
-      const accessB = await getUserAccessLevel(mallory.id, pageB.id);
+      const accessB = await getUserAccessLevel(credentialActor(mallory.id, null), pageB.id);
       expect(accessB).toBeNull();
     });
   });

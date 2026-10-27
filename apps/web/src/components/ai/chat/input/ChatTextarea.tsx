@@ -1,9 +1,9 @@
 'use client';
 
-import React, { forwardRef, useImperativeHandle, useRef, useState } from 'react';
+import React, { forwardRef, useCallback, useEffect, useId, useImperativeHandle, useRef, useState } from 'react';
 import { useSuggestion } from '@/hooks/useSuggestion';
 import { Textarea } from '@/components/ui/textarea';
-import SuggestionPopup from '@/components/mentions/SuggestionPopup';
+import { MentionPickerPortal } from '@/components/mentions/MentionPickerPortal';
 import {
   SuggestionProvider,
   useSuggestionContext,
@@ -11,8 +11,16 @@ import {
 import { cn } from '@/lib/utils';
 import { MentionHighlightOverlay } from '@/components/ui/mention-highlight-overlay';
 import { useMentionOverlay } from '@/hooks/useMentionOverlay';
-import { useMentionTracker } from '@/hooks/useMentionTracker';
+import { useMessageTokens } from '@/hooks/useMessageTokens';
 import { useEnterToSend } from '@/hooks/useEnterToSend';
+import { useCommandSuggestion } from '@/hooks/useCommandSuggestion';
+import { CommandPickerPortal } from '@/components/commands/CommandPickerPortal';
+import { commandResultsAnnouncement } from '@/lib/commands/command-picker-core';
+
+// Typography classes applied to both the textarea and the mention overlay.
+// They must stay in sync — mismatched line-height causes the overlay text to
+// drift relative to the caret with each newline.
+const CHAT_TYPOGRAPHY = 'text-base md:text-sm leading-relaxed';
 
 export interface ChatTextareaProps {
   /** Current input value (markdown format with @[label](id:type) mentions) */
@@ -21,10 +29,29 @@ export interface ChatTextareaProps {
   onChange: (value: string) => void;
   /** Send message handler (triggered on Enter without Shift) */
   onSend: () => void;
+  /** Allow Enter to send when the textarea is empty, for attachment-only sends */
+  canSendEmpty?: boolean;
   /** Placeholder text */
   placeholder?: string;
   /** Drive ID for mention suggestions */
   driveId?: string;
+  /**
+   * Drive scope for the `/` command picker, when it differs from the mention
+   * picker's `driveId` (defaults to it). MUST be the drive the server resolves
+   * this surface's command chips against — `page.driveId` for an agent turn
+   * (`page-chat-turn.ts`), the location context's drive for a global-assistant
+   * one (`global-chat-turn.ts`). Offering a scope the server won't use hands
+   * the user commands that fail as `not_found` the moment they're sent.
+   */
+  commandDriveId?: string;
+  /**
+   * Surface capability gate (default false): when false, client-handled
+   * commands (e.g. /btw) are excluded from the `/` picker. They fire via the
+   * composer's pre-send interception, which only some surfaces own — a
+   * surface without it (e.g. ChannelInput) would post the literal
+   * `/trigger …` text instead of firing the command.
+   */
+  allowClientHandledCommands?: boolean;
   /** Enable cross-drive mention search */
   crossDrive?: boolean;
   /** Whether the input is disabled */
@@ -47,7 +74,7 @@ export interface ChatTextareaRef {
 }
 
 /**
- * ChatTextareaInner - Textarea with mention support
+ * ChatTextareaInner - Textarea with mention + slash-command support
  * Must be wrapped in SuggestionProvider
  */
 const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
@@ -56,8 +83,11 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
       value,
       onChange,
       onSend,
+      canSendEmpty = false,
       placeholder = 'Type your message...',
       driveId,
+      commandDriveId,
+      allowClientHandledCommands = false,
       crossDrive = false,
       disabled = false,
       variant = 'main',
@@ -73,16 +103,18 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
     const [isComposing, setIsComposing] = useState(false);
     const enterToSend = useEnterToSend();
 
-    // Convert between markdown (parent) and display text (textarea)
+    // Convert between markdown (parent) and display text (textarea).
+    // Tracks both mention tokens and command chips through edits.
     const {
       displayText,
-      mentions,
-      hasMentions,
+      tokens,
+      hasTokens,
       handleDisplayTextChange,
-      registerMention,
-    } = useMentionTracker(value, onChange);
+      registerToken,
+      getTokens,
+    } = useMessageTokens(value, onChange);
 
-    const { overlayRef, handleScroll } = useMentionOverlay(textareaRef, hasMentions);
+    const { overlayRef, handleScroll } = useMentionOverlay(textareaRef, hasTokens);
 
     const suggestion = useSuggestion({
       inputRef: textareaRef as React.RefObject<HTMLTextAreaElement>,
@@ -93,29 +125,67 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
       mentionFormat: 'label',
       variant: 'chat',
       popupPlacement,
-      mentionRanges: mentions,
-      onMentionInserted: registerMention,
+      mentionRanges: tokens,
+      onMentionInserted: registerToken,
     });
+
+    const command = useCommandSuggestion({
+      inputRef: textareaRef,
+      enabled: !disabled,
+      driveId: commandDriveId ?? driveId,
+      popupPlacement,
+      getTokens,
+      enterSelects: enterToSend,
+      onValueChange: handleDisplayTextChange,
+      onTokenInserted: registerToken,
+      allowClientHandledCommands,
+    });
+    const { syncDisplayText } = command;
+
+    // Keep the command trigger detector in sync with programmatic value
+    // changes (clear on send, draft restore, emoji/mention button insertion).
+    // User typing flows through handleInput first, making this a no-op.
+    useEffect(() => {
+      syncDisplayText(displayText);
+    }, [displayText, syncDisplayText]);
+
+    const baseId = useId();
+    const commandListboxId = `${baseId}-command-listbox`;
+    const commandOptionId = useCallback(
+      (index: number) => `${baseId}-command-option-${index}`,
+      [baseId]
+    );
 
     useImperativeHandle(ref, () => ({
       clear: () => onChange(''),
       focus: () => textareaRef.current?.focus(),
     }));
 
+    // The command picker only intercepts Enter when it has a selectable item
+    // (spec §1.7); with nothing selectable (loading or "No commands match")
+    // Enter falls through and sends the literal text, matching pre-command
+    // behavior.
+    const commandPickerBlocksEnter =
+      command.isOpen && !command.loading && command.items.length > 0;
+
     const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      // Let the suggestion system handle navigation keys when open
+      // The command picker consumes navigation keys while open (spec §1.7)
+      command.handleKeyDown(e);
+      if (e.defaultPrevented) return;
+
+      // Let the mention suggestion system handle navigation keys when open
       suggestion.handleKeyDown(e);
 
       // Send on Enter (without Shift) when suggestions are closed
       // On mobile phones (and iPad with on-screen keyboard), Enter inserts a newline instead;
       // users send via the send button. Desktop and iPad with external keyboard keep Enter-to-send.
-      if (!context.isOpen && e.key === 'Enter' && !e.shiftKey && enterToSend) {
+      if (!context.isOpen && !commandPickerBlocksEnter && e.key === 'Enter' && !e.shiftKey && enterToSend) {
         // Don't send during IME composition (predictive text, etc.)
         if (isComposing || e.nativeEvent.isComposing) {
           return;
         }
         e.preventDefault();
-        if (value.trim() && !disabled) {
+        if ((value.trim() || canSendEmpty) && !disabled) {
           onSend();
         }
       }
@@ -143,63 +213,117 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
       // If no image files, let normal text paste proceed
     };
 
+    // Combobox wiring for the command picker (spec §9). DOM focus stays in
+    // the textarea while the picker is open — there is no inner search field.
+    const commandComboboxProps = {
+      role: 'combobox' as const,
+      'aria-expanded': command.isOpen,
+      'aria-haspopup': 'listbox' as const,
+      'aria-controls': command.isOpen ? commandListboxId : undefined,
+      'aria-activedescendant':
+        command.isOpen && command.items.length > 0
+          ? commandOptionId(command.selectedIndex)
+          : undefined,
+    };
+
     return (
       <div className="relative flex-1 min-w-0 overflow-hidden">
         <Textarea
+          data-testid="chat-textarea"
           ref={textareaRef}
           value={displayText}
-          onChange={(e) => suggestion.handleValueChange(e.target.value)}
+          onChange={(e) => {
+            suggestion.handleValueChange(e.target.value);
+            // Command trigger detection needs the native inputType to tell
+            // typing insertions from paste/drop/autofill (spec §1.1)
+            const inputType =
+              e.nativeEvent instanceof InputEvent ? e.nativeEvent.inputType : null;
+            command.handleInput(e.target.value, inputType);
+          }}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           onScroll={handleScroll}
-          onCompositionStart={() => setIsComposing(true)}
-          onCompositionEnd={() => setIsComposing(false)}
+          onCompositionStart={() => {
+            setIsComposing(true);
+            command.handleCompositionStart();
+          }}
+          onCompositionEnd={() => {
+            setIsComposing(false);
+            command.handleCompositionEnd();
+          }}
           placeholder={placeholder}
           disabled={disabled}
+          {...commandComboboxProps}
           className={cn(
             'min-h-[36px] max-h-48 resize-none break-words',
-            // Context-aware background:
-            // - main: transparent to blend with InputCard, no shadow in light mode for flush look
-            // - sidebar: white in light mode for contrast, slight gray lift in dark mode
+            variant === 'sidebar' && 'px-2.5 py-2',
+            CHAT_TYPOGRAPHY,
+            // Transparent in both variants so the text blends into its card (sidebar: the
+            // ChatInput card; main: InputCard). Only main keeps the dark-mode shadow.
             variant === 'sidebar'
-              ? 'bg-white dark:bg-card/50'
+              ? 'bg-transparent dark:bg-transparent shadow-none'
               : 'bg-transparent dark:bg-transparent shadow-none dark:shadow-xs',
             'border-none outline-none',
             'text-foreground placeholder:text-muted-foreground',
             'focus-visible:ring-0 focus-visible:ring-offset-0',
-            // When mentions are present, make text transparent so the overlay shows through
-            hasMentions && 'text-transparent caret-foreground',
+            // When tokens are present, make text transparent so the overlay shows through
+            hasTokens && 'text-transparent caret-foreground',
             className
           )}
           rows={1}
         />
 
-        {/* Overlay that renders formatted mentions on top of the transparent textarea text */}
-        {hasMentions && (
+        {/* Overlay that renders formatted mentions/command chips on top of the transparent textarea text */}
+        {hasTokens && (
           <MentionHighlightOverlay
             ref={overlayRef}
             value={displayText}
-            mentions={mentions}
+            mentions={tokens}
             className={cn(
-              'px-3 py-2 text-base md:text-sm',
+              'px-3 py-2',
+              CHAT_TYPOGRAPHY,
               'text-foreground',
               'min-h-[36px] max-h-48'
             )}
           />
         )}
 
-        <SuggestionPopup
+        <MentionPickerPortal
           isOpen={context.isOpen}
-          items={context.items}
-          selectedIndex={context.selectedIndex}
           position={context.position}
-          loading={context.loading}
-          error={context.error}
+          driveId={driveId}
+          crossDrive={crossDrive}
+          initialQuery={suggestion.query}
           onSelect={suggestion.actions.selectSuggestion}
-          onSelectionChange={suggestion.actions.selectItem}
-          variant="overlay"
-          popupPlacement={popupPlacement}
+          onClose={suggestion.actions.close}
         />
+
+        <>
+          <CommandPickerPortal
+            isOpen={command.isOpen}
+            position={command.position}
+            anchorRef={textareaRef}
+            items={command.items}
+            loading={command.loading}
+            loadFailed={command.loadFailed}
+            query={command.query}
+            selectedIndex={command.selectedIndex}
+            onSelect={command.actions.select}
+            onSelectionChange={command.actions.setSelectedIndex}
+            listboxId={commandListboxId}
+            optionId={commandOptionId}
+            hasAnyCommands={command.hasAnyCommands}
+            onNavigateToSettings={command.actions.close}
+            onClose={command.actions.close}
+            onDismiss={command.actions.dismiss}
+          />
+          {/* Polite live region announcing result counts (spec §9) */}
+          <span role="status" aria-live="polite" className="sr-only">
+            {command.isOpen && !command.loading
+              ? commandResultsAnnouncement(command.items.length)
+              : ''}
+          </span>
+        </>
       </div>
     );
   }
@@ -207,11 +331,12 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
 ChatTextareaInner.displayName = 'ChatTextareaInner';
 
 /**
- * ChatTextarea - Textarea with @ mention support
+ * ChatTextarea - Textarea with @ mention and / command support
  *
  * Provides:
  * - Auto-growing textarea
  * - @ mention suggestions with search
+ * - / slash-command picker, mid-message and multiple per message
  * - Platform-aware Enter key: sends on desktop/external keyboard, newline on mobile
  * - Cross-drive mention support
  */
@@ -223,5 +348,3 @@ export const ChatTextarea = forwardRef<ChatTextareaRef, ChatTextareaProps>(
   )
 );
 ChatTextarea.displayName = 'ChatTextarea';
-
-export default ChatTextarea;

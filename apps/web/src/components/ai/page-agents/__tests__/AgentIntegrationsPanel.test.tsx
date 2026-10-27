@@ -27,6 +27,11 @@ vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
+vi.mock('@/components/shared/PageWebhooksDialog', () => ({
+  PageWebhooksDialog: ({ open, pageId, pageType }: { open: boolean; pageId: string; pageType: string }) =>
+    open ? <div data-testid="webhooks-dialog" data-page-id={pageId} data-page-type={pageType} /> : null,
+}));
+
 import { useAgentGrants, useUserConnections, useDriveConnections } from '@/hooks/useIntegrations';
 
 // Fixtures
@@ -58,6 +63,11 @@ const expiredConnection: SafeConnection = {
   provider: { id: 'p2', slug: 'slack', name: 'Slack', description: null },
 };
 
+const githubProviderTools = [
+  { id: 'create_issue', name: 'create_issue', description: 'Create a new issue', category: 'write' as const },
+  { id: 'list_repos', name: 'list_repos', description: 'List repositories', category: 'read' as const },
+];
+
 const grantWithTools: SafeGrant = {
   id: 'grant-1',
   agentId: 'agent-1',
@@ -67,7 +77,7 @@ const grantWithTools: SafeGrant = {
   readOnly: false,
   rateLimitOverride: null,
   createdAt: '2025-01-01T00:00:00Z',
-  connection: { id: 'conn-1', name: 'GitHub Integration', status: 'active', provider: { slug: 'github', name: 'GitHub' } },
+  connection: { id: 'conn-1', name: 'GitHub Integration', status: 'active', provider: { slug: 'github', name: 'GitHub', tools: githubProviderTools, toolBundles: [] } },
 };
 
 const grantNoTools: SafeGrant = {
@@ -79,7 +89,7 @@ const grantNoTools: SafeGrant = {
   readOnly: true,
   rateLimitOverride: { requestsPerMinute: 30 },
   createdAt: '2025-01-01T00:00:00Z',
-  connection: { id: 'conn-1', name: 'GitHub Integration', status: 'active', provider: { slug: 'github', name: 'GitHub' } },
+  connection: { id: 'conn-1', name: 'GitHub Integration', status: 'active', provider: { slug: 'github', name: 'GitHub', tools: githubProviderTools, toolBundles: [] } },
 };
 
 function mockHooksDefault(overrides: {
@@ -231,20 +241,22 @@ describe('AgentIntegrationsPanel', () => {
     });
   });
 
-  // --- Tool filtering: shows allowed tools ---
-  it('displays tool filter section when grant has allowedTools', () => {
+  // --- Tool filtering: shows allowed tools as checkboxes ---
+  it('renders provider tools as a checkbox list when grant has allowedTools', () => {
     mockHooksDefault({
       userConnections: [activeConnection],
       grants: [grantWithTools],
     });
     render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
-    expect(screen.getByText(/tool access/i)).toBeInTheDocument();
-    expect(screen.getByText('create_issue')).toBeInTheDocument();
-    expect(screen.getByText('list_repos')).toBeInTheDocument();
+    expect(screen.getByLabelText('create_issue')).toBeChecked();
+    expect(screen.getByLabelText('list_repos')).toBeChecked();
+    expect(screen.getByText('Create a new issue')).toBeInTheDocument();
+    expect(screen.getByText('List repositories')).toBeInTheDocument();
+    expect(screen.getByText(/selected 2 of 2 tools/i)).toBeInTheDocument();
   });
 
   // --- Tool filtering: update allowed tools ---
-  it('calls PUT to update allowedTools when a tool chip is removed', async () => {
+  it('calls PUT to update allowedTools when a tool checkbox is unchecked', async () => {
     mockHooksDefault({
       userConnections: [activeConnection],
       grants: [grantWithTools],
@@ -254,9 +266,7 @@ describe('AgentIntegrationsPanel', () => {
 
     render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
 
-    // Find the remove button for create_issue tool
-    const removeButton = screen.getByRole('button', { name: /remove create_issue/i });
-    await user.click(removeButton);
+    await user.click(screen.getByLabelText('create_issue'));
 
     await waitFor(() => {
       expect(mockPut).toHaveBeenCalledWith(
@@ -266,14 +276,62 @@ describe('AgentIntegrationsPanel', () => {
     });
   });
 
-  // --- Tool filtering: all tools when allowedTools is null ---
-  it('shows "All tools" indicator when allowedTools is null', () => {
+  // --- Tool filtering: null allowedTools means all non-dangerous checked ---
+  it('renders all tools as checked when allowedTools is null', () => {
     mockHooksDefault({
       userConnections: [activeConnection],
       grants: [grantNoTools],
     });
     render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
-    expect(screen.getByText(/all tools/i)).toBeInTheDocument();
+    expect(screen.getByLabelText('create_issue')).toBeChecked();
+    expect(screen.getByLabelText('list_repos')).toBeChecked();
+    expect(screen.getByText(/selected 2 of 2 tools/i)).toBeInTheDocument();
+  });
+
+  // --- Tool filtering: dangerous tools stay unchecked under null allowedTools ---
+  it('keeps dangerous tools unchecked when allowedTools is null', async () => {
+    const grantWithDangerousTool: SafeGrant = {
+      ...grantNoTools,
+      id: 'grant-dangerous',
+      allowedTools: null,
+      connection: {
+        id: 'conn-1',
+        name: 'GitHub Integration',
+        status: 'active',
+        provider: {
+          slug: 'github',
+          name: 'GitHub',
+          tools: [
+            ...githubProviderTools,
+            { id: 'delete_repo', name: 'delete_repo', description: 'Delete a repository', category: 'dangerous' },
+          ],
+          toolBundles: [],
+        },
+      },
+    };
+    mockHooksDefault({
+      userConnections: [activeConnection],
+      grants: [grantWithDangerousTool],
+    });
+    mockPut.mockResolvedValue({});
+    const user = userEvent.setup();
+
+    render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
+
+    expect(screen.getByLabelText('create_issue')).toBeChecked();
+    expect(screen.getByLabelText('list_repos')).toBeChecked();
+    expect(screen.getByLabelText('delete_repo')).not.toBeChecked();
+    expect(screen.getByText(/selected 2 of 3 tools/i)).toBeInTheDocument();
+
+    // Unchecking a non-dangerous tool must NOT silently include the dangerous one
+    await user.click(screen.getByLabelText('list_repos'));
+
+    await waitFor(() => {
+      expect(mockPut).toHaveBeenCalledWith(
+        '/api/agents/agent-1/integrations/grant-dangerous',
+        expect.objectContaining({ allowedTools: ['create_issue'] })
+      );
+    });
   });
 
   // --- Deduplication ---
@@ -288,8 +346,115 @@ describe('AgentIntegrationsPanel', () => {
     expect(items.length).toBe(1);
   });
 
-  // --- Tool filtering: removing last tool sets allowedTools to null ---
-  it('sets allowedTools to null when the last tool is removed', async () => {
+  // --- Select All button ---
+  it('calls PUT with all tool ids when Select All is clicked', async () => {
+    const grantSingleTool: SafeGrant = {
+      ...grantWithTools,
+      id: 'grant-partial',
+      allowedTools: ['list_repos'],
+    };
+    mockHooksDefault({
+      userConnections: [activeConnection],
+      grants: [grantSingleTool],
+    });
+    mockPut.mockResolvedValue({});
+    const user = userEvent.setup();
+
+    render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
+
+    await user.click(screen.getByRole('button', { name: /^select all$/i }));
+
+    await waitFor(() => {
+      expect(mockPut).toHaveBeenCalledWith(
+        '/api/agents/agent-1/integrations/grant-partial',
+        expect.objectContaining({ allowedTools: ['create_issue', 'list_repos'] })
+      );
+    });
+  });
+
+  // --- Deselect All button ---
+  it('calls PUT with empty array when Deselect All is clicked', async () => {
+    mockHooksDefault({
+      userConnections: [activeConnection],
+      grants: [grantWithTools],
+    });
+    mockPut.mockResolvedValue({});
+    const user = userEvent.setup();
+
+    render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
+
+    await user.click(screen.getByRole('button', { name: /^deselect all$/i }));
+
+    await waitFor(() => {
+      expect(mockPut).toHaveBeenCalledWith(
+        '/api/agents/agent-1/integrations/grant-1',
+        expect.objectContaining({ allowedTools: [] })
+      );
+    });
+  });
+
+  // --- No-op short-circuits ---
+  it('does not call PUT when Select All matches current allowedTools', async () => {
+    mockHooksDefault({
+      userConnections: [activeConnection],
+      grants: [grantWithTools],
+    });
+    mockPut.mockResolvedValue({});
+    const user = userEvent.setup();
+
+    render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
+
+    await user.click(screen.getByRole('button', { name: /^select all$/i }));
+
+    await new Promise((r) => setTimeout(r, 30));
+    expect(mockPut).not.toHaveBeenCalled();
+  });
+
+  it('does not call PUT when Deselect All matches an already-empty allowedTools', async () => {
+    const grantEmpty: SafeGrant = {
+      ...grantWithTools,
+      id: 'grant-empty-allowed',
+      allowedTools: [],
+    };
+    mockHooksDefault({
+      userConnections: [activeConnection],
+      grants: [grantEmpty],
+    });
+    mockPut.mockResolvedValue({});
+    const user = userEvent.setup();
+
+    render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
+
+    await user.click(screen.getByRole('button', { name: /^deselect all$/i }));
+
+    await new Promise((r) => setTimeout(r, 30));
+    expect(mockPut).not.toHaveBeenCalled();
+  });
+
+  // --- Empty tool list rendering ---
+  it('renders fallback message when provider exposes no tools', () => {
+    const grantEmptyTools: SafeGrant = {
+      ...grantWithTools,
+      id: 'grant-empty',
+      connection: {
+        id: 'conn-1',
+        name: 'GitHub Integration',
+        status: 'active',
+        provider: { slug: 'github', name: 'GitHub', tools: [], toolBundles: [] },
+      },
+    };
+    mockHooksDefault({
+      userConnections: [activeConnection],
+      grants: [grantEmptyTools],
+    });
+    render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
+    expect(screen.getByText(/this integration does not expose any tools/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^select all$/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^deselect all$/i })).toBeDisabled();
+  });
+
+  // --- Tool filtering: unchecking last tool sends empty array ---
+  it('sends an empty allowedTools array when the last checked tool is unchecked', async () => {
     const grantSingleTool: SafeGrant = {
       ...grantWithTools,
       id: 'grant-single',
@@ -304,13 +469,12 @@ describe('AgentIntegrationsPanel', () => {
 
     render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
 
-    const removeButton = screen.getByRole('button', { name: /remove create_issue/i });
-    await user.click(removeButton);
+    await user.click(screen.getByLabelText('create_issue'));
 
     await waitFor(() => {
       expect(mockPut).toHaveBeenCalledWith(
         '/api/agents/agent-1/integrations/grant-single',
-        expect.objectContaining({ allowedTools: null })
+        expect.objectContaining({ allowedTools: [] })
       );
     });
   });
@@ -367,5 +531,131 @@ describe('AgentIntegrationsPanel', () => {
     render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
     expect(screen.getByText('User')).toBeInTheDocument();
     expect(screen.getByText('Drive')).toBeInTheDocument();
+  });
+});
+
+describe('AgentIntegrationsPanel bundle presets', () => {
+  const bundles = [
+    { id: 'read_only', name: 'Read-only', description: 'Reads only', toolIds: ['list_repos'], recommended: true },
+    { id: 'full', name: 'Full access', description: 'Everything', toolIds: ['create_issue', 'list_repos'] },
+  ];
+
+  const providerWithBundles = {
+    slug: 'github',
+    name: 'GitHub',
+    tools: githubProviderTools,
+    toolBundles: bundles,
+  };
+
+  const grantReadOnlyBundle: SafeGrant = {
+    id: 'grant-b',
+    agentId: 'agent-1',
+    connectionId: 'conn-1',
+    allowedTools: ['list_repos'],
+    deniedTools: null,
+    readOnly: false,
+    rateLimitOverride: null,
+    createdAt: '2025-01-01T00:00:00Z',
+    connection: { id: 'conn-1', name: 'GitHub Integration', status: 'active', provider: providerWithBundles },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('renders bundle preset buttons and category groups instead of Select All', () => {
+    mockHooksDefault({ userConnections: [activeConnection], grants: [grantReadOnlyBundle] });
+    render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
+
+    expect(screen.getByRole('button', { name: 'Read-only' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Full access' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'None' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^select all$/i })).not.toBeInTheDocument();
+    // Category group headers
+    expect(screen.getByText('Read')).toBeInTheDocument();
+    expect(screen.getByText('Write')).toBeInTheDocument();
+    // Capability preview
+    expect(screen.getByText(/this agent can use:/i)).toBeInTheDocument();
+  });
+
+  it('applies a bundle\'s tool ids when its preset is clicked', async () => {
+    mockHooksDefault({ userConnections: [activeConnection], grants: [grantReadOnlyBundle] });
+    mockPut.mockResolvedValue({});
+    const user = userEvent.setup();
+    render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
+
+    await user.click(screen.getByRole('button', { name: 'Full access' }));
+
+    await waitFor(() => {
+      expect(mockPut).toHaveBeenCalledWith(
+        '/api/agents/agent-1/integrations/grant-b',
+        expect.objectContaining({ allowedTools: ['create_issue', 'list_repos'] })
+      );
+    });
+  });
+
+  it('shows a Custom badge when the allowed set matches no bundle', () => {
+    const customGrant: SafeGrant = { ...grantReadOnlyBundle, id: 'grant-c', allowedTools: ['create_issue'] };
+    mockHooksDefault({ userConnections: [activeConnection], grants: [customGrant] });
+    render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
+
+    expect(screen.getByText('Custom')).toBeInTheDocument();
+  });
+
+  it('does not show a Custom badge when the allowed set matches a bundle', () => {
+    mockHooksDefault({ userConnections: [activeConnection], grants: [grantReadOnlyBundle] });
+    render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
+
+    expect(screen.queryByText('Custom')).not.toBeInTheDocument();
+  });
+
+  it('omits write tools from the capability summary when read-only mode is on', () => {
+    const readOnlyWithWrite: SafeGrant = {
+      ...grantReadOnlyBundle,
+      id: 'grant-ro',
+      readOnly: true,
+      allowedTools: ['create_issue', 'list_repos'],
+    };
+    mockHooksDefault({ userConnections: [activeConnection], grants: [readOnlyWithWrite] });
+    render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
+
+    const summary = screen.getByText(/this agent can use:/i);
+    expect(summary).toHaveTextContent('list_repos');
+    expect(summary).not.toHaveTextContent('create_issue');
+  });
+
+  describe('incoming webhooks', () => {
+    // Re-homed from the AI_CHAT page's header, which was removed for carrying a
+    // duplicate copy of the pane bar's Chat/History/Settings tabs. An external
+    // service calling this agent is an integration, so this is where it lives —
+    // which also gives the agents console a webhooks entry point it never had.
+    it('opens the webhooks dialog for this agent', async () => {
+      mockHooksDefault({});
+      render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
+
+      expect(screen.queryByTestId('webhooks-dialog')).toBeNull();
+      await userEvent.click(screen.getByRole('button', { name: /manage webhooks/i }));
+
+      const dialog = screen.getByTestId('webhooks-dialog');
+      expect(dialog).toHaveAttribute('data-page-id', 'agent-1');
+      expect(dialog).toHaveAttribute('data-page-type', 'AI_CHAT');
+    });
+
+    it('the trigger cannot submit the settings form it renders inside', () => {
+      // This panel is rendered inside PageAgentSettingsTab's <form>, where a
+      // typeless button defaults to submit — clicking it would save the whole
+      // agent config on the way to opening a dialog.
+      //
+      // This covers the TRIGGER only; the dialog mock above stands in for the
+      // real one. The dialog's OWN form is the other half of the same hazard
+      // (React propagates a portal's submit along the React tree, so it reaches
+      // this ancestor form too) and is covered where it lives, in
+      // PageWebhooksDialog.test.tsx — 'creating a webhook does not submit an
+      // ancestor form'.
+      mockHooksDefault({});
+      render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
+
+      expect(screen.getByRole('button', { name: /manage webhooks/i })).toHaveAttribute('type', 'button');
+    });
   });
 });

@@ -5,19 +5,23 @@
  * providing a clean seam for testing route handlers.
  */
 
-import {
-  db,
-  eq,
-  and,
-  sql,
-  driveMembers,
-  drives,
-  users,
-  userProfiles,
-  driveRoles,
-  pagePermissions,
-  pages,
-} from '@pagespace/db';
+import { checkActorDriveAuthentication } from '../permissions/actor-authentication';
+import { db } from '@pagespace/db/db';
+import { eq, and, sql, isNotNull } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
+import { drives, pages } from '@pagespace/db/schema/core';
+import { driveMembers, userProfiles, driveRoles, pagePermissions } from '@pagespace/db/schema/members';
+import { acceptedOrgMemberIds, driveOrgIdOf, isDriveGuest, isStaleOrgRow, type DriveMemberSource } from '../permissions/drive-member-labels';
+import { decryptUserRow, decryptUsersByIdOnce } from '../auth/user-repository';
+import { loadEffectiveDriveMembership } from '../permissions/org-drive-membership';
+import { isDriveLead } from '../permissions/drive-relationship';
+import { listDriveAudience } from '../permissions/drive-audience';
+import { isGuestRole } from '../permissions/guest-role';
+import { guardDriveAccess } from '../permissions/org-lapse-guard';
+import type { AccessActor } from '../permissions/access-actor';
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+type Executor = typeof db | Tx;
 
 // ============================================================================
 // Types
@@ -27,6 +31,10 @@ export interface MemberWithDetails {
   id: string;
   userId: string;
   role: 'OWNER' | 'ADMIN' | 'MEMBER';
+  /** How their standing came to be: an invitation, org membership (DRV-5), or the drive's lead. */
+  source: DriveMemberSource;
+  /** DRV-8: a member of an ORG drive with no accepted role in its org, labeled a guest (UI-5). */
+  isGuest: boolean;
   invitedBy: string | null;
   invitedAt: Date | null;
   acceptedAt: Date | null;
@@ -81,7 +89,7 @@ export interface MemberPermission {
  */
 export async function checkDriveAccess(
   driveId: string,
-  userId: string
+  actor: AccessActor
 ): Promise<DriveAccessResult> {
   const drive = await db.query.drives.findFirst({
     where: eq(drives.id, driveId),
@@ -91,76 +99,87 @@ export async function checkDriveAccess(
     return { isOwner: false, isAdmin: false, isMember: false, drive: null };
   }
 
-  const isOwner = drive.ownerId === userId;
+  // SEC-2/3: a credential the drive's org refuses holds no role in it, lead or not.
+  if (!(await checkActorDriveAuthentication(actor, driveId)).allowed) {
+    return { isOwner: false, isAdmin: false, isMember: false, drive };
+  }
+  const { userId } = actor;
+
+  const isOwner = isDriveLead(userId, drive);
 
   if (isOwner) {
     return { isOwner: true, isAdmin: true, isMember: true, drive };
   }
 
-  const membership = await db
-    .select({ role: driveMembers.role })
-    .from(driveMembers)
-    .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId)))
-    .limit(1);
+  // The shared org-aware membership: accepted rows only, org Owner/Admin power, implicit Open
+  // membership, and stale org or former-lead OWNER rows counting for nothing.
+  const membership = await loadEffectiveDriveMembership(userId, drive);
 
-  if (membership.length === 0) {
+  if (!membership) {
     return { isOwner: false, isAdmin: false, isMember: false, drive };
   }
 
-  const role = membership[0].role;
   return {
     isOwner: false,
-    isAdmin: role === 'ADMIN',
+    isAdmin: membership.role === 'ADMIN',
     isMember: true,
     drive,
   };
 }
 
 /**
- * Get all user IDs that are members of a drive
- * Efficient query for authorization checks
+ * Get all user IDs that are members of a drive: the drive's lead and everyone the org-aware
+ * membership admits (listDriveAudience). Pending invitations and stale org rows are no members.
  */
 export async function getDriveMemberUserIds(driveId: string): Promise<string[]> {
-  const members = await db
-    .select({ userId: driveMembers.userId })
-    .from(driveMembers)
-    .where(eq(driveMembers.driveId, driveId));
-
-  return members.map((m) => m.userId);
+  return (await listDriveAudience(driveId)).map((m) => m.userId);
 }
 
 /**
- * Get all user IDs who should receive broadcast events for a drive.
- * Returns owner + all drive members.
- *
- * Migration note: When org layer is added, this can be replaced with
- * org-scoped room membership or org member queries.
+ * Get all user IDs who should receive broadcast events for a drive: the lead plus every
+ * effective member (org Owner/Admins and implicit Open members included, stale org rows and
+ * pending invitations excluded).
  */
 export async function getDriveRecipientUserIds(driveId: string): Promise<string[]> {
-  const drive = await db.query.drives.findFirst({
-    where: eq(drives.id, driveId),
-    columns: { ownerId: true },
-  });
-  if (!drive) return [];
+  return (await listDriveAudience(driveId)).map((m) => m.userId);
+}
 
-  const members = await db
-    .select({ userId: driveMembers.userId })
-    .from(driveMembers)
-    .where(eq(driveMembers.driveId, driveId));
+/**
+ * Get user IDs of drive members with a specific standard role (the effective role: an org
+ * Owner/Admin is ADMIN). OWNER is the drive's lead (drives.ownerId).
+ */
+export async function getDriveMemberUserIdsByStandardRole(
+  driveId: string,
+  role: 'OWNER' | 'ADMIN' | 'MEMBER',
+): Promise<string[]> {
+  return (await listDriveAudience(driveId))
+    .filter((m) => (role === 'OWNER' ? m.isOwner : !m.isOwner && m.role === role))
+    .map((m) => m.userId);
+}
 
-  const userIds = new Set([drive.ownerId, ...members.map((m) => m.userId)]);
-  return Array.from(userIds);
+/**
+ * Get user IDs of drive members assigned a specific custom role (an implicit Open member holds
+ * the drive's default role).
+ */
+export async function getDriveMemberUserIdsByCustomRole(
+  driveId: string,
+  customRoleId: string,
+): Promise<string[]> {
+  return (await listDriveAudience(driveId))
+    .filter((m) => !m.isOwner && m.customRoleId === customRoleId)
+    .map((m) => m.userId);
 }
 
 /**
  * List all members of a drive with their details and permission counts
  */
 export async function listDriveMembers(driveId: string): Promise<MemberWithDetails[]> {
-  const members = await db
+  const rows = await db
     .select({
       id: driveMembers.id,
       userId: driveMembers.userId,
       role: driveMembers.role,
+      source: driveMembers.source,
       invitedBy: driveMembers.invitedBy,
       invitedAt: driveMembers.invitedAt,
       acceptedAt: driveMembers.acceptedAt,
@@ -187,67 +206,103 @@ export async function listDriveMembers(driveId: string): Promise<MemberWithDetai
     .leftJoin(driveRoles, eq(driveMembers.customRoleId, driveRoles.id))
     .where(eq(driveMembers.driveId, driveId));
 
-  // Get permission counts for each member
-  const memberData = await Promise.all(
-    members.map(async (member) => {
-      const { rows: permCounts } = await db.execute(sql`
-        SELECT 
-          COUNT(CASE WHEN pp."canView" = true THEN 1 END) as view_count,
-          COUNT(CASE WHEN pp."canEdit" = true THEN 1 END) as edit_count,
-          COUNT(CASE WHEN pp."canShare" = true THEN 1 END) as share_count
-        FROM page_permissions pp
-        JOIN pages p ON pp."pageId" = p.id
-        WHERE pp."userId" = ${member.userId} AND p."driveId" = ${driveId}
-      `);
+  // A GUEST is not a member of the drive: it is listed where its page grants
+  // are (the page's share dialog), not on the Members page or in member counts.
+  const members = rows.filter((m) => !isGuestRole(m.role));
 
-      return {
-        ...member,
-        role: member.role as 'OWNER' | 'ADMIN' | 'MEMBER',
-        permissionCounts: {
-          view: Number(permCounts[0]?.view_count || 0),
-          edit: Number(permCounts[0]?.edit_count || 0),
-          share: Number(permCounts[0]?.share_count || 0),
-        },
-      };
-    })
+  if (members.length === 0) return [];
+
+  const memberUserIds = members.map((m) => m.userId);
+  const idList = sql.join(memberUserIds.map((id) => sql`${id}`), sql`, `);
+
+  const { rows: permCountRows } = await db.execute(sql`
+    SELECT pp."userId",
+      COUNT(CASE WHEN pp."canView" THEN 1 END) as view_count,
+      COUNT(CASE WHEN pp."canEdit" THEN 1 END) as edit_count,
+      COUNT(CASE WHEN pp."canShare" THEN 1 END) as share_count
+    FROM page_permissions pp
+    JOIN pages p ON pp."pageId" = p.id
+    WHERE p."driveId" = ${driveId}
+      AND pp."userId" IN (${idList})
+    GROUP BY pp."userId"
+  `);
+
+  const permMap = new Map(
+    (permCountRows as Array<Record<string, unknown>>).map((row) => [
+      row.userId as string,
+      {
+        view: Number(row.view_count || 0),
+        edit: Number(row.edit_count || 0),
+        share: Number(row.share_count || 0),
+      },
+    ])
   );
 
-  return memberData;
+  // Decrypt each unique joined user once (legacy plaintext passes through),
+  // even if the same user is ever joined in on more than one row.
+  const decryptedUsersById = await decryptUsersByIdOnce(members.map((member) => member.user));
+
+  // DRV-8: on an org drive, a member with no accepted role in its org is a guest.
+  const driveOrgId = await driveOrgIdOf(driveId);
+  const orgMemberIds = driveOrgId ? await acceptedOrgMemberIds(driveOrgId, memberUserIds) : new Set<string>();
+
+  // A departed org member's materialized row is stale: not a member, not a guest (DRV-8).
+  return members.filter((member) => !isStaleOrgRow({ driveOrgId, isOrgMember: orgMemberIds.has(member.userId), source: member.source })).map((member) => ({
+    ...member,
+    isGuest: isDriveGuest({ driveOrgId, isOrgMember: orgMemberIds.has(member.userId) }),
+    user: member.user ? decryptedUsersById.get(member.user.id) ?? member.user : member.user,
+    role: member.role as 'OWNER' | 'ADMIN' | 'MEMBER',
+    permissionCounts: permMap.get(member.userId) ?? { view: 0, edit: 0, share: 0 },
+  }));
 }
 
 /**
- * Check if a user is already a member of a drive
+ * Build a MemberWithDetails-shaped entry for the drive owner. The owner is
+ * never a row in drive_members (ownership lives on drives.ownerId), so
+ * listDriveMembers alone omits them — callers that need a complete roster
+ * (e.g. the members list API) must prepend this. Returns null only if the
+ * drive itself doesn't exist.
  */
-export async function isMemberOfDrive(driveId: string, userId: string): Promise<boolean> {
-  const existing = await db
-    .select({ id: driveMembers.id })
-    .from(driveMembers)
-    .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId)))
+export async function getDriveOwnerAsMember(driveId: string): Promise<MemberWithDetails | null> {
+  const [row] = await db
+    .select({
+      id: users.id,
+      email: users.email,
+      name: users.name,
+      username: userProfiles.username,
+      displayName: userProfiles.displayName,
+      avatarUrl: userProfiles.avatarUrl,
+    })
+    .from(drives)
+    .innerJoin(users, eq(drives.ownerId, users.id))
+    .leftJoin(userProfiles, eq(userProfiles.userId, users.id))
+    .where(eq(drives.id, driveId))
     .limit(1);
 
-  return existing.length > 0;
+  if (!row) return null;
+
+  return {
+    id: `owner-${row.id}`,
+    userId: row.id,
+    role: 'OWNER',
+    source: 'lead',
+    isGuest: false,
+    invitedBy: null,
+    invitedAt: null,
+    acceptedAt: null,
+    lastAccessedAt: null,
+    user: await decryptUserRow({ id: row.id, email: row.email, name: row.name }),
+    profile: { username: row.username, displayName: row.displayName, avatarUrl: row.avatarUrl },
+    customRole: null,
+    permissionCounts: { view: 0, edit: 0, share: 0 },
+  };
 }
 
 /**
- * Add a new member to a drive
+ * Check if a user is a member of a drive: its lead or an effective member (listDriveAudience).
  */
-export async function addDriveMember(
-  driveId: string,
-  invitedBy: string,
-  input: AddMemberInput
-): Promise<typeof driveMembers.$inferSelect> {
-  const [newMember] = await db
-    .insert(driveMembers)
-    .values({
-      driveId,
-      userId: input.userId,
-      role: input.role || 'MEMBER',
-      invitedBy,
-      acceptedAt: new Date(), // Auto-accept for now
-    })
-    .returning();
-
-  return newMember;
+export async function isMemberOfDrive(driveId: string, userId: string): Promise<boolean> {
+  return (await listDriveAudience(driveId)).some((m) => m.userId === userId);
 }
 
 /**
@@ -262,6 +317,7 @@ export async function getDriveMemberDetails(
       id: driveMembers.id,
       userId: driveMembers.userId,
       role: driveMembers.role,
+      source: driveMembers.source,
       customRoleId: driveMembers.customRoleId,
       invitedBy: driveMembers.invitedBy,
       invitedAt: driveMembers.invitedAt,
@@ -284,12 +340,19 @@ export async function getDriveMemberDetails(
     .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, targetUserId)))
     .limit(1);
 
-  if (memberData.length === 0) {
+  // A GUEST is not a drive member, so it has no member detail page.
+  if (memberData.length === 0 || isGuestRole(memberData[0].role)) {
     return null;
   }
 
+  const driveOrgId = await driveOrgIdOf(driveId);
+  const isOrgMember = driveOrgId ? (await acceptedOrgMemberIds(driveOrgId, [targetUserId])).has(targetUserId) : false;
+  if (isStaleOrgRow({ driveOrgId, isOrgMember, source: memberData[0].source })) return null;
   return {
     ...memberData[0],
+    isGuest: isDriveGuest({ driveOrgId, isOrgMember }),
+    // Decrypt the joined user's PII at the edge (legacy plaintext passes through).
+    user: await decryptUserRow(memberData[0].user),
     role: memberData[0].role as 'OWNER' | 'ADMIN' | 'MEMBER',
     customRole: null, // Would need to join separately if customRoleId exists
   };
@@ -317,21 +380,23 @@ export async function getMemberPermissions(
 }
 
 /**
- * Update a member's role
+ * Update a member's role. Reached through updateMemberAccess, which guards the write ([D-OW-33]).
  */
 export async function updateMemberRole(
   driveId: string,
   targetUserId: string,
   role: 'ADMIN' | 'MEMBER',
-  customRoleId?: string | null
-): Promise<{ oldRole: string }> {
-  const [existing] = await db
-    .select({ role: driveMembers.role })
+  customRoleId?: string | null,
+  executor: Executor = db,
+): Promise<{ oldRole: string; oldCustomRoleId: string | null }> {
+  const [existing] = await executor
+    .select({ role: driveMembers.role, customRoleId: driveMembers.customRoleId })
     .from(driveMembers)
     .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, targetUserId)))
     .limit(1);
 
   const oldRole = existing?.role || 'MEMBER';
+  const oldCustomRoleId = existing?.customRoleId ?? null;
 
   const updateData: { role?: 'OWNER' | 'ADMIN' | 'MEMBER'; customRoleId?: string | null } = {};
   if (role) {
@@ -342,31 +407,32 @@ export async function updateMemberRole(
   }
 
   if (Object.keys(updateData).length > 0) {
-    await db
+    await executor
       .update(driveMembers)
       .set(updateData)
       .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, targetUserId)));
   }
 
-  return { oldRole };
+  return { oldRole, oldCustomRoleId };
 }
 
 /**
- * Update member's page permissions (replaces all existing permissions)
+ * Update member's page permissions (replaces all existing permissions). Reached through updateMemberAccess.
  */
 export async function updateMemberPermissions(
   driveId: string,
   targetUserId: string,
   grantedBy: string,
-  permissions: MemberPermission[]
+  permissions: MemberPermission[],
+  executor: Executor = db,
 ): Promise<number> {
   // Get all pages in the drive to validate pageIds
-  const drivePages = await db.select({ id: pages.id }).from(pages).where(eq(pages.driveId, driveId));
+  const drivePages = await executor.select({ id: pages.id }).from(pages).where(eq(pages.driveId, driveId));
 
   const validPageIds = new Set(drivePages.map((p) => p.id));
 
   // Get existing permissions for this user in this drive
-  const existingPermissions = await db
+  const existingPermissions = await executor
     .select({ pageId: pagePermissions.pageId })
     .from(pagePermissions)
     .innerJoin(pages, eq(pagePermissions.pageId, pages.id))
@@ -374,7 +440,7 @@ export async function updateMemberPermissions(
 
   // Delete existing permissions
   for (const perm of existingPermissions) {
-    await db
+    await executor
       .delete(pagePermissions)
       .where(and(eq(pagePermissions.userId, targetUserId), eq(pagePermissions.pageId, perm.pageId)));
   }
@@ -394,8 +460,26 @@ export async function updateMemberPermissions(
     }));
 
   if (newPermissions.length > 0) {
-    await db.insert(pagePermissions).values(newPermissions);
+    await executor.insert(pagePermissions).values(newPermissions);
   }
 
   return newPermissions.length;
+}
+
+/**
+ * The member settings PATCH: role, custom role and page grants, in ONE transaction. [D-OW-33] while the drive's org
+ * is lapsed the change may only restrict: if it gave the member more (a promotion, a wider custom role, a wider page
+ * grant), guardDriveAccess throws OrgLapsedError and nothing is written. Demoting and narrowing still apply.
+ */
+export async function updateMemberAccess(
+  driveId: string,
+  targetUserId: string,
+  grantedBy: string,
+  input: { role: 'ADMIN' | 'MEMBER'; customRoleId?: string | null; permissions: MemberPermission[] },
+): Promise<{ oldRole: string; oldCustomRoleId: string | null; permissionsUpdated: number }> {
+  return guardDriveAccess(db, driveId, { users: [targetUserId], agents: false }, async (tx) => {
+    const old = await updateMemberRole(driveId, targetUserId, input.role, input.customRoleId, tx);
+    const permissionsUpdated = await updateMemberPermissions(driveId, targetUserId, grantedBy, input.permissions, tx);
+    return { ...old, permissionsUpdated };
+  });
 }

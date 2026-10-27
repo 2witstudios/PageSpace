@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { db, users, sessions } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { users } from '@pagespace/db/schema/auth';
+import { sessions } from '@pagespace/db/schema/sessions';
 import { eq, and, isNull } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { sessionService } from '../session-service';
+import { ADMIN_SESSION_SERVICE } from '../constants';
 
 describe('Session Service', () => {
   let testUserId: string;
@@ -12,7 +15,6 @@ describe('Session Service', () => {
       id: createId(),
       name: 'Test Session User',
       email: `test-session-${Date.now()}@example.com`,
-      password: 'hashed_password',
       provider: 'email',
       role: 'user',
       tokenVersion: 1,
@@ -26,8 +28,23 @@ describe('Session Service', () => {
   });
 
   describe('createSession', () => {
+    it('SEC-2 (partial) SEC-3 (partial) preserves the verified ceremony on its credential without upgrading sibling sessions', async () => {
+      const authenticatedAtMs = Date.now() - 60_000;
+      const authentication = { authenticatedAtMs, assurance: 'user_verified_passkey' as const };
+      const oldToken = await sessionService.createSession({ authentication: null, userId: testUserId, type: 'user', scopes: ['*'], expiresInMs: 3600000 });
+      const freshToken = await sessionService.createSession({ userId: testUserId, type: 'user', scopes: ['*'], expiresInMs: 3600000, authentication });
+      expect((await sessionService.validateSession(freshToken))?.authentication).toEqual(authentication);
+      expect((await sessionService.validateSession(oldToken))?.authentication).toBeNull();
+      const derivedToken = await sessionService.createSession({ userId: testUserId, type: 'socket', scopes: [], expiresInMs: 300000, authentication: (await sessionService.validateSession(freshToken))?.authentication ?? null });
+      expect((await sessionService.validateSession(derivedToken))?.authentication).toEqual(authentication);
+    });
+
+    it('SEC-3 (partial) refuses future ceremony evidence when minting a session', async () => {
+      await expect(sessionService.createSession({ userId: testUserId, type: 'user', scopes: ['*'], expiresInMs: 3600000, authentication: { authenticatedAtMs: Date.now() + 10 * 60_000, assurance: 'single_factor' } })).rejects.toThrow('Invalid authentication evidence');
+    });
+
     it('creates session with valid user', async () => {
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'user',
         scopes: ['*'],
@@ -40,7 +57,7 @@ describe('Session Service', () => {
 
     it('throws for non-existent user', async () => {
       await expect(
-        sessionService.createSession({
+        sessionService.createSession({ authentication: null,
           userId: 'non-existent',
           type: 'user',
           scopes: ['*'],
@@ -50,7 +67,7 @@ describe('Session Service', () => {
     });
 
     it('stores tokenHash, not raw token', async () => {
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'user',
         scopes: ['*'],
@@ -67,7 +84,7 @@ describe('Session Service', () => {
     });
 
     it('captures user tokenVersion at creation', async () => {
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'user',
         scopes: ['*'],
@@ -84,7 +101,7 @@ describe('Session Service', () => {
 
   describe('validateSession', () => {
     it('returns claims for valid session', async () => {
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'user',
         scopes: ['files:read'],
@@ -100,7 +117,7 @@ describe('Session Service', () => {
     });
 
     it('returns null for expired session', async () => {
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'user',
         scopes: ['*'],
@@ -114,7 +131,7 @@ describe('Session Service', () => {
     });
 
     it('returns null for revoked session', async () => {
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'user',
         scopes: ['*'],
@@ -128,7 +145,7 @@ describe('Session Service', () => {
     });
 
     it('returns null for tokenVersion mismatch', async () => {
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'user',
         scopes: ['*'],
@@ -149,7 +166,7 @@ describe('Session Service', () => {
     });
 
     it('updates lastUsedAt on validation', async () => {
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'user',
         scopes: ['*'],
@@ -188,7 +205,7 @@ describe('Session Service', () => {
 
   describe('revokeSession', () => {
     it('marks session as revoked', async () => {
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'user',
         scopes: ['*'],
@@ -206,7 +223,7 @@ describe('Session Service', () => {
     });
 
     it('revoked session cannot be validated', async () => {
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'user',
         scopes: ['*'],
@@ -222,14 +239,14 @@ describe('Session Service', () => {
 
   describe('revokeAllUserSessions', () => {
     it('revokes all active sessions for user', async () => {
-      await sessionService.createSession({
+      await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'user',
         scopes: ['*'],
         expiresInMs: 3600000,
       });
 
-      await sessionService.createSession({
+      await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'device',
         scopes: ['files:read'],
@@ -251,7 +268,7 @@ describe('Session Service', () => {
     });
 
     it('returns count of revoked sessions', async () => {
-      await sessionService.createSession({
+      await sessionService.createSession({ authentication: null,
         userId: testUserId,
         type: 'user',
         scopes: ['*'],
@@ -260,6 +277,155 @@ describe('Session Service', () => {
 
       const count = await sessionService.revokeAllUserSessions(testUserId, 'test');
       expect(count).toBe(1);
+    });
+  });
+
+  describe('socket tokens (#1054)', () => {
+    it('mints a ps_sock_* token', async () => {
+      const token = await sessionService.createSession({ authentication: null,
+        userId: testUserId,
+        type: 'socket',
+        scopes: [],
+        expiresInMs: 5 * 60 * 1000,
+      });
+
+      expect(token).toMatch(/^ps_sock_/);
+    });
+
+    it('validates a socket token and returns claims with type socket', async () => {
+      const token = await sessionService.createSession({ authentication: null,
+        userId: testUserId,
+        type: 'socket',
+        scopes: [],
+        expiresInMs: 5 * 60 * 1000,
+      });
+
+      const claims = await sessionService.validateSession(token);
+
+      expect(claims).toBeTruthy();
+      expect(claims?.userId).toBe(testUserId);
+      expect(claims?.type).toBe('socket');
+    });
+
+    it('returns null for an expired socket token', async () => {
+      const token = await sessionService.createSession({ authentication: null,
+        userId: testUserId,
+        type: 'socket',
+        scopes: [],
+        expiresInMs: 50,
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      const claims = await sessionService.validateSession(token);
+      expect(claims).toBeNull();
+    });
+
+    it('returns null for a revoked socket token', async () => {
+      const token = await sessionService.createSession({ authentication: null,
+        userId: testUserId,
+        type: 'socket',
+        scopes: [],
+        expiresInMs: 5 * 60 * 1000,
+      });
+
+      await sessionService.revokeSession(token, 'test');
+
+      const claims = await sessionService.validateSession(token);
+      expect(claims).toBeNull();
+    });
+
+    it('rejects a socket token where a user session is expected (cookie/bearer surface)', async () => {
+      const token = await sessionService.createSession({ authentication: null,
+        userId: testUserId,
+        type: 'socket',
+        scopes: [],
+        expiresInMs: 5 * 60 * 1000,
+      });
+
+      const claims = await sessionService.validateSession(token, { expectedType: 'user' });
+      expect(claims).toBeNull();
+    });
+
+    it('accepts a socket token where a socket session is expected (realtime handshake)', async () => {
+      const token = await sessionService.createSession({ authentication: null,
+        userId: testUserId,
+        type: 'socket',
+        scopes: [],
+        expiresInMs: 5 * 60 * 1000,
+      });
+
+      const claims = await sessionService.validateSession(token, { expectedType: 'socket' });
+      expect(claims?.type).toBe('socket');
+    });
+
+    it('rejects a user session where a socket token is expected', async () => {
+      const token = await sessionService.createSession({ authentication: null,
+        userId: testUserId,
+        type: 'user',
+        scopes: ['*'],
+        expiresInMs: 3600000,
+      });
+
+      const claims = await sessionService.validateSession(token, { expectedType: 'socket' });
+      expect(claims).toBeNull();
+    });
+
+    it('type-mismatch rejection does not revoke the token for its own surface', async () => {
+      const token = await sessionService.createSession({ authentication: null,
+        userId: testUserId,
+        type: 'socket',
+        scopes: [],
+        expiresInMs: 5 * 60 * 1000,
+      });
+
+      await sessionService.validateSession(token, { expectedType: 'user' });
+
+      const claims = await sessionService.validateSession(token, { expectedType: 'socket' });
+      expect(claims?.type).toBe('socket');
+    });
+  });
+
+  describe('per-app session scoping', () => {
+    async function createWebSession() {
+      return sessionService.createSession({ authentication: null,
+        userId: testUserId,
+        type: 'user',
+        scopes: ['*'],
+        expiresInMs: 3600000,
+      });
+    }
+
+    async function createAdminSession() {
+      return sessionService.createSession({ authentication: null,
+        userId: testUserId,
+        type: 'user',
+        scopes: [],
+        expiresInMs: 3600000,
+        createdByService: ADMIN_SESSION_SERVICE,
+      });
+    }
+
+    it('revokeWebUserSessions revokes web sessions but leaves admin sessions intact', async () => {
+      const webToken = await createWebSession();
+      const adminToken = await createAdminSession();
+
+      const count = await sessionService.revokeWebUserSessions(testUserId, 'magic_link_login');
+
+      expect(count).toBe(1);
+      expect(await sessionService.validateSession(webToken)).toBeNull();
+      expect(await sessionService.validateSession(adminToken)).not.toBeNull();
+    });
+
+    it('revokeAdminUserSessions revokes admin sessions but leaves web sessions intact', async () => {
+      const webToken = await createWebSession();
+      const adminToken = await createAdminSession();
+
+      const count = await sessionService.revokeAdminUserSessions(testUserId, 'admin_login');
+
+      expect(count).toBe(1);
+      expect(await sessionService.validateSession(adminToken)).toBeNull();
+      expect(await sessionService.validateSession(webToken)).not.toBeNull();
     });
   });
 });

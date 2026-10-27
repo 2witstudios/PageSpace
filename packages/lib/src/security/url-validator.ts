@@ -352,7 +352,15 @@ export async function validateLocalProviderURL(
     return { valid: false, error: `Hostname blocked: ${url.hostname}` };
   }
 
-  // 4. If hostname is IP: check for cloud metadata IPs only
+  // 4. Hostnames that are safe for local providers but may fail dns.resolve4/6
+  //    (which bypasses /etc/hosts). Skip DNS and return valid immediately.
+  //    - host.docker.internal: Docker's hostname for the host machine
+  //    - localhost: resolves via /etc/hosts in containers, not DNS
+  if (url.hostname === 'host.docker.internal' || url.hostname === 'localhost') {
+    return { valid: true, url, resolvedIPs: [] };
+  }
+
+  // 5. If hostname is IP: check for cloud metadata IPs only
   const normalizedHostname = normalizeIP(url.hostname);
   const ipVersion = isIP(normalizedHostname);
 
@@ -363,7 +371,7 @@ export async function validateLocalProviderURL(
     return { valid: true, url, resolvedIPs: [normalizedHostname] };
   }
 
-  // 5. If hostname is domain: resolve DNS, check all IPs for cloud metadata only
+  // 6. If hostname is domain: resolve DNS, check all IPs for cloud metadata only
   try {
     const [resolvedIPv4, resolvedIPv6] = await Promise.all([
       dns.resolve4(url.hostname).catch(() => [] as string[]),

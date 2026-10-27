@@ -1,0 +1,446 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { render, screen, fireEvent, act } from '@testing-library/react';
+import React from 'react';
+
+import type { FileAttachment } from '@/hooks/useAttachmentUpload';
+
+// ── Mocks ──────────────────────────────────────────────────────────────
+
+vi.mock('next/navigation', () => ({
+  useParams: () => ({ conversationId: 'conv-1' }),
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
+}));
+
+const mockUser = {
+  id: 'user-me',
+  name: 'Me',
+  email: 'me@x.test',
+  image: '/api/avatar/user-me/avatar.png?t=1',
+};
+vi.mock('@/hooks/useAuth', () => ({
+  useAuth: () => ({ user: mockUser }),
+}));
+
+vi.mock('@/components/ui/avatar', async () => {
+  const React = await vi.importActual<typeof import('react')>('react');
+
+  return {
+    Avatar: ({ children, className }: React.ComponentProps<'div'>) => (
+      <div data-slot="avatar" className={className}>{children}</div>
+    ),
+    AvatarImage: ({ src }: React.ComponentProps<'img'>) =>
+      src ? React.createElement('img', { 'data-slot': 'avatar-image', src, alt: '' }) : null,
+    AvatarFallback: ({ children, className }: React.ComponentProps<'div'>) => (
+      <div data-slot="avatar-fallback" className={className}>{children}</div>
+    ),
+  };
+});
+
+// Controllable socket mock
+type Handler = (...args: unknown[]) => void;
+const socketHandlers: Record<string, Handler[]> = {};
+const fakeSocket = {
+  emit: vi.fn(),
+  on: vi.fn((event: string, handler: Handler) => {
+    socketHandlers[event] = (socketHandlers[event] ?? []).concat(handler);
+  }),
+  off: vi.fn((event: string, handler: Handler) => {
+    socketHandlers[event] = (socketHandlers[event] ?? []).filter((h) => h !== handler);
+  }),
+};
+vi.mock('@/hooks/useSocket', () => ({
+  useSocket: () => fakeSocket,
+}));
+
+// auth-fetch
+const mockPost = vi.fn<(url: string, body?: unknown) => Promise<unknown>>(
+  async () => ({}),
+);
+const mockPatch = vi.fn<(url: string, body?: unknown) => Promise<unknown>>(
+  async () => ({}),
+);
+const mockDel = vi.fn<(url: string, body?: unknown) => Promise<unknown>>(
+  async () => ({}),
+);
+vi.mock('@/lib/auth/auth-fetch', () => ({
+  post: (url: string, body?: unknown) => mockPost(url, body),
+  patch: (url: string, body?: unknown) => mockPatch(url, body),
+  del: (url: string, body?: unknown) => mockDel(url, body),
+  fetchWithAuth: vi.fn(async () => ({ ok: true, json: async () => ({}) })),
+}));
+
+// SWR — return controllable data per URL
+type SwrData = { messages: unknown[] } | { conversation: unknown } | undefined;
+let swrMessages: SwrData = { messages: [] };
+const swrConversation: SwrData = {
+  conversation: {
+    id: 'conv-1',
+    participant1Id: 'user-me',
+    participant2Id: 'user-other',
+    otherUser: {
+      id: 'user-other',
+      name: 'Bob',
+      email: 'bob@x.test',
+      image: null,
+      username: 'bob',
+      displayName: 'Bob',
+      avatarUrl: null,
+    },
+  },
+};
+vi.mock('swr', () => ({
+  default: (key: string | null) => {
+    if (!key) return { data: undefined };
+    if (key.includes('/conversations/')) return { data: swrConversation };
+    return { data: swrMessages };
+  },
+}));
+
+// Conversation primitives — bypass use-stick-to-bottom (needs ResizeObserver, missing in jsdom)
+vi.mock('@/components/ai/ui/conversation', () => ({
+  Conversation: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ConversationContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ConversationScrollButton: () => null,
+}));
+
+// RichText — render content as plain text for assertions
+vi.mock('@/components/messages/RichText', () => ({
+  RichText: ({ content }: { content: string }) => <span>{content}</span>,
+  addHardLineBreaks: (content: string) => content,
+}));
+
+// MessageLinkPreviews — stub out; this test covers attachments, not link previews
+vi.mock('@/components/messages/MessageLinkPreviews', () => ({
+  MessageLinkPreviews: () => null,
+}));
+
+// MessageAttachments — sentinel for inspection. The page renders the plural
+// gallery component; a message with no renderable attachment produces nothing,
+// which is what the negative assertions below rely on.
+const messageAttachmentCalls = vi.fn();
+vi.mock('@/components/shared/MessageAttachments', () => ({
+  MessageAttachments: ({
+    message,
+  }: {
+    message: { fileId?: string | null; attachments?: Array<{ fileId?: string | null }> | null };
+  }) => {
+    messageAttachmentCalls(message);
+    const ids = (message.attachments ?? []).map((a) => a.fileId).filter(Boolean);
+    const rendered = ids.length > 0 ? ids : message.fileId ? [message.fileId] : [];
+    if (rendered.length === 0) return null;
+    return (
+      <>
+        {rendered.map((id) => (
+          <div key={id} data-testid={`attachment-${id}`}>attachment</div>
+        ))}
+      </>
+    );
+  },
+}));
+
+// ChannelInput — capture props so tests can drive onSend / inspect conversationId
+type ChannelInputProps = {
+  value: string;
+  onChange: (v: string) => void;
+  onSend: (a?: FileAttachment[]) => void;
+  conversationId?: string;
+  channelId?: string;
+  attachmentsEnabled?: boolean;
+};
+const { lastChannelInputPropsRef } = vi.hoisted(() => ({
+  lastChannelInputPropsRef: { current: null as ChannelInputProps | null },
+}));
+vi.mock(
+  '@/components/layout/middle-content/page-views/channel/ChannelInput',
+  () => {
+    const Mock = React.forwardRef<unknown, ChannelInputProps>(
+      (props, _ref) => {
+        lastChannelInputPropsRef.current = props;
+        return (
+          <div data-testid="channel-input-mock">
+            <button
+              data-testid="send-text-only"
+              onClick={() => props.onSend(undefined)}
+            />
+            <button
+              data-testid="send-with-attachment"
+              onClick={() =>
+                props.onSend([{
+                  instanceId: 'instance-x',
+                  id: 'file-x',
+                  originalName: 'pic.png',
+                  size: 1024,
+                  mimeType: 'image/png',
+                  contentHash: 'hash-x',
+                }])
+              }
+            />
+          </div>
+        );
+      },
+    );
+    Mock.displayName = 'MockChannelInput';
+    return { ChannelInput: Mock };
+  },
+);
+
+// ── Module under test (import after mocks) ────────────────────────────
+import InboxDMPage from '../page';
+
+const sampleAttachment: FileAttachment = {
+  instanceId: 'instance-x',
+  id: 'file-x',
+  originalName: 'pic.png',
+  size: 1024,
+  mimeType: 'image/png',
+  contentHash: 'hash-x',
+};
+
+describe('InboxDMPage — attachments', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    Object.keys(socketHandlers).forEach((k) => delete socketHandlers[k]);
+    swrMessages = { messages: [] };
+    lastChannelInputPropsRef.current = null;
+  });
+
+  it('passesConversationId_andEnablesAttachments_onChannelInput', async () => {
+    await act(async () => {
+      render(<InboxDMPage />);
+    });
+    expect(lastChannelInputPropsRef.current).not.toBeNull();
+    expect(lastChannelInputPropsRef.current!.conversationId).toBe('conv-1');
+    expect(lastChannelInputPropsRef.current!.attachmentsEnabled).toBe(true);
+  });
+
+  it('sendWithAttachment_postsBodyIncludesTheAttachment', async () => {
+    await act(async () => {
+      render(<InboxDMPage />);
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('send-with-attachment'));
+    });
+
+    expect(mockPost).toHaveBeenCalledTimes(1);
+    const call = mockPost.mock.calls[0];
+    expect(call[0]).toBe('/api/messages/conv-1');
+    // One send is one message carrying an ARRAY now, even for a single file —
+    // the singular fileId/attachmentMeta pair is still accepted by the route
+    // for the published SDK and CLI, but this composer no longer sends it.
+    expect(call[1]).toMatchObject({
+      attachments: [
+        {
+          fileId: sampleAttachment.id,
+          attachmentMeta: {
+            originalName: sampleAttachment.originalName,
+            size: sampleAttachment.size,
+            mimeType: sampleAttachment.mimeType,
+            contentHash: sampleAttachment.contentHash,
+          },
+        },
+      ],
+    });
+    // And a nonce, so the echo retires exactly this row.
+    expect(typeof (call[1] as { clientNonce?: unknown }).clientNonce).toBe('string');
+  });
+
+  it('sendWithoutAttachment_postsBodyOmitsFileFields', async () => {
+    swrMessages = { messages: [] };
+    await act(async () => {
+      render(<InboxDMPage />);
+    });
+
+    // Set inputValue via ChannelInput.onChange so handleSendMessage has content
+    await act(async () => {
+      lastChannelInputPropsRef.current!.onChange('hello');
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('send-text-only'));
+    });
+
+    expect(mockPost).toHaveBeenCalledTimes(1);
+    const call = mockPost.mock.calls[0];
+    expect(call[0]).toBe('/api/messages/conv-1');
+    const body = call[1] as { content?: string; fileId?: unknown; attachmentMeta?: unknown };
+    expect(body).toMatchObject({ content: 'hello' });
+    expect(body.fileId).toBeUndefined();
+    expect(body.attachmentMeta).toBeUndefined();
+  });
+
+  it('renders the current user avatar for own DM messages', async () => {
+    swrMessages = {
+      messages: [
+        {
+          id: 'msg-own',
+          conversationId: 'conv-1',
+          senderId: 'user-me',
+          content: 'hello from me',
+          isRead: false,
+          readAt: null,
+          isEdited: false,
+          editedAt: null,
+          createdAt: '2026-05-06T12:00:00.000Z',
+          parentId: null,
+          reactions: [],
+        },
+      ],
+    };
+
+    await act(async () => {
+      render(<InboxDMPage />);
+    });
+
+    const avatarImage = document.querySelector('[data-slot="avatar-image"]');
+    expect(avatarImage).toHaveAttribute('src', mockUser.image);
+  });
+
+  it('renderMessage_withFileId_rendersMessageAttachment', async () => {
+    swrMessages = {
+      messages: [
+        {
+          id: 'm1',
+          conversationId: 'conv-1',
+          senderId: 'user-other',
+          content: 'here is the file',
+          isRead: false,
+          readAt: null,
+          isEdited: false,
+          editedAt: null,
+          createdAt: '2026-01-01T00:00:00Z',
+          fileId: 'file-rendered',
+          attachmentMeta: {
+            originalName: 'doc.pdf',
+            size: 5,
+            mimeType: 'application/pdf',
+            contentHash: 'h',
+          },
+        },
+      ],
+    };
+
+    await act(async () => {
+      render(<InboxDMPage />);
+    });
+
+    expect(screen.getByTestId('attachment-file-rendered')).toBeInTheDocument();
+  });
+
+  it('renderMessage_withoutFileId_doesNotRenderMessageAttachment', async () => {
+    swrMessages = {
+      messages: [
+        {
+          id: 'm2',
+          conversationId: 'conv-1',
+          senderId: 'user-me',
+          content: 'plain text',
+          isRead: false,
+          readAt: null,
+          isEdited: false,
+          editedAt: null,
+          createdAt: '2026-01-01T00:00:00Z',
+          fileId: null,
+          attachmentMeta: null,
+        },
+      ],
+    };
+
+    await act(async () => {
+      render(<InboxDMPage />);
+    });
+
+    // The MessageAttachment mock returns null when fileId is missing; assert no
+    // attachment node exists for any id.
+    expect(
+      document.querySelector('[data-testid^="attachment-"]'),
+    ).toBeNull();
+  });
+
+  it('optimisticAppend_includesAttachmentFields_onLocalEcho', async () => {
+    await act(async () => {
+      render(<InboxDMPage />);
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('send-with-attachment'));
+    });
+
+    // Optimistic append should immediately render the attachment for the
+    // freshly-sent message, before the realtime echo arrives.
+    expect(screen.getByTestId('attachment-file-x')).toBeInTheDocument();
+  });
+
+  it('realtimeEchoForOwnOptimisticDm_replacesTempRowWithoutDuplicatingAttachment', async () => {
+    await act(async () => {
+      render(<InboxDMPage />);
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('send-with-attachment'));
+    });
+    expect(screen.getAllByTestId('attachment-file-x')).toHaveLength(1);
+
+    const handlers = socketHandlers['new_dm_message'] ?? [];
+    expect(handlers.length).toBeGreaterThan(0);
+
+    await act(async () => {
+      handlers.forEach((h) =>
+        h({
+          id: 'm-server',
+          conversationId: 'conv-1',
+          senderId: 'user-me',
+          content: '',
+          isRead: false,
+          readAt: null,
+          isEdited: false,
+          editedAt: null,
+          createdAt: '2026-01-01T00:00:00Z',
+          fileId: sampleAttachment.id,
+          attachmentMeta: {
+            originalName: sampleAttachment.originalName,
+            size: sampleAttachment.size,
+            mimeType: sampleAttachment.mimeType,
+            contentHash: sampleAttachment.contentHash,
+          },
+        }),
+      );
+    });
+
+    expect(screen.getAllByTestId('attachment-file-x')).toHaveLength(1);
+    expect(mockPatch).not.toHaveBeenCalledWith('/api/messages/conv-1');
+  });
+
+  it('realtimeNewDmMessage_withAttachment_appendsRowAndRendersAttachment_withoutRefetch', async () => {
+    await act(async () => {
+      render(<InboxDMPage />);
+    });
+
+    // Fire the real-time event the way the realtime service does
+    const handlers = socketHandlers['new_dm_message'] ?? [];
+    expect(handlers.length).toBeGreaterThan(0);
+    await act(async () => {
+      handlers.forEach((h) =>
+        h({
+          id: 'm-rt',
+          conversationId: 'conv-1',
+          senderId: 'user-other',
+          content: 'realtime',
+          isRead: false,
+          readAt: null,
+          isEdited: false,
+          editedAt: null,
+          createdAt: '2026-01-01T00:00:00Z',
+          fileId: 'file-rt',
+          attachmentMeta: {
+            originalName: 'rt.png',
+            size: 9,
+            mimeType: 'image/png',
+            contentHash: 'h',
+          },
+        }),
+      );
+    });
+
+    expect(screen.getByTestId('attachment-file-rt')).toBeInTheDocument();
+  });
+});

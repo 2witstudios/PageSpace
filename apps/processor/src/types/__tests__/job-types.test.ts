@@ -48,11 +48,12 @@ describe('Job data interfaces', () => {
 });
 
 describe('QueueName type', () => {
-  it('is a union of the 4 queue names', () => {
+  it('is a union of the 5 queue names', () => {
     expectTypeOf<'ingest-file'>().toMatchTypeOf<QueueName>();
     expectTypeOf<'image-optimize'>().toMatchTypeOf<QueueName>();
     expectTypeOf<'text-extract'>().toMatchTypeOf<QueueName>();
     expectTypeOf<'ocr-process'>().toMatchTypeOf<QueueName>();
+    expectTypeOf<'siem-delivery'>().toMatchTypeOf<QueueName>();
 
     // Invalid queue name should not match
     expectTypeOf<'invalid-queue'>().not.toMatchTypeOf<QueueName>();

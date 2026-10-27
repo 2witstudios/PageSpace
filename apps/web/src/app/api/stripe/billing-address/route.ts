@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db, eq, users } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -25,14 +28,18 @@ export async function GET(request: NextRequest) {
     }
 
     if (!user.stripeCustomerId) {
+      auditRequest(request, { eventType: 'data.read', userId, resourceType: 'billing_address', resourceId: 'self', details: { hasCustomer: false } });
       return NextResponse.json({ address: null, name: user.name, email: user.email });
     }
 
     // Get customer
     const customer = await stripe.customers.retrieve(user.stripeCustomerId);
     if (customer.deleted) {
+      auditRequest(request, { eventType: 'data.read', userId, resourceType: 'billing_address', resourceId: 'self', details: { hasCustomer: false } });
       return NextResponse.json({ address: null, name: user.name, email: user.email });
     }
+
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'billing_address', resourceId: 'self', details: { hasCustomer: true } });
 
     return NextResponse.json({
       address: customer.address,
@@ -106,6 +113,8 @@ export async function PUT(request: NextRequest) {
         throw dbError;
       }
 
+      auditRequest(request, { eventType: 'data.write', userId, resourceType: 'billing_address', resourceId: customerId, details: { action: 'update' } });
+
       return NextResponse.json({
         success: true,
         address: customer.address,
@@ -125,6 +134,8 @@ export async function PUT(request: NextRequest) {
         country: address.country,
       },
     });
+
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'billing_address', resourceId: customerId, details: { action: 'update' } });
 
     return NextResponse.json({
       success: true,

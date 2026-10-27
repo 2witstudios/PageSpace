@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback } from 'react';
 import { startAuthentication } from '@simplewebauthn/browser';
 import { Button } from '@/components/ui/button';
 import { Fingerprint, Loader2 } from 'lucide-react';
@@ -9,12 +9,32 @@ import { cn } from '@/lib/utils';
 import { persistCsrfToken } from '@/lib/utils/persist-csrf-token';
 import { useWebAuthnSupport } from '@/hooks/useWebAuthnSupport';
 import { useAuthStore } from '@/stores/useAuthStore';
+import {
+  getDevicePlatformFields,
+  handleDesktopAuthResponse,
+  isDesktopPlatform,
+} from '@/lib/desktop-auth';
+import { buildPasskeyExternalUrl } from './passkeyExternal';
 
 interface PasskeyLoginButtonProps {
   csrfToken: string;
   refreshToken?: () => Promise<string | null>;
   email?: string;
   onSuccess?: (redirectUrl: string) => void;
+  /**
+   * Pre-validated relative path to redirect to on success. Caller is
+   * responsible for safety-checking this (e.g. via `isSafeNextPath`) before
+   * passing it in. When present, takes precedence over the server's
+   * `verifyData.redirectUrl`.
+   */
+  nextPath?: string;
+  /**
+   * Invite token to consume server-side as part of authentication. The verify
+   * route validates against `pending_invites` and creates the membership in
+   * the same response. On success the redirect target becomes the invited
+   * drive, overriding `nextPath` and the server default.
+   */
+  inviteToken?: string;
   className?: string;
   variant?: 'default' | 'outline' | 'secondary';
 }
@@ -24,8 +44,10 @@ export function PasskeyLoginButton({
   refreshToken,
   email,
   onSuccess,
+  nextPath,
+  inviteToken,
   className,
-  variant = 'outline',
+  variant = 'default',
 }: PasskeyLoginButtonProps) {
   const isSupported = useWebAuthnSupport();
   const [isAuthenticating, setIsAuthenticating] = useState(false);
@@ -39,8 +61,57 @@ export function PasskeyLoginButton({
     setIsAuthenticating(true);
 
     try {
+      // Desktop (Electron): delegate the WebAuthn ceremony to the system
+      // browser via the auth:open-external IPC. Electron's Chromium cannot
+      // drive platform authenticators on macOS without extra entitlements,
+      // so we mirror the OAuth flow: open an external page that runs the
+      // ceremony and hands back a one-time exchange code over the
+      // pagespace:// deep link.
+      if (isDesktopPlatform()) {
+        // The server rejects platform=desktop without desktopExchange, and
+        // Chromium inside the Electron BrowserWindow cannot drive platform
+        // authenticators without entitlements we don't ship — so an older
+        // desktop bridge that lacks the openExternal IPC has no working
+        // sign-in path. Surface a clear update prompt instead of silently
+        // falling through to a request the server will reject with 400.
+        if (!window.electron?.auth?.openExternal) {
+          toast.error(
+            'Your desktop app needs to be updated to sign in with a passkey. Please update the app and try again.'
+          );
+          return;
+        }
+
+        const fields = await getDevicePlatformFields();
+        if (!('deviceId' in fields) || !fields.deviceId) {
+          toast.error('Could not read desktop device info');
+          return;
+        }
+        const externalUrl = buildPasskeyExternalUrl(window.location.origin, {
+          deviceId: fields.deviceId,
+          deviceName: fields.deviceName,
+        });
+        const result = await window.electron.auth.openExternal(externalUrl);
+        if (!result.success) {
+          toast.error(result.error || 'Failed to open browser for sign-in');
+          return;
+        }
+        toast.info('Complete sign-in in your browser, then return here.');
+        return;
+      }
+
       // Refresh CSRF token to avoid expiry after sitting on the page
       const freshToken = refreshToken ? (await refreshToken() ?? csrfToken) : csrfToken;
+
+      // Web path: send a stable per-browser device identity (mirrors the OAuth
+      // sign-in flow). This scopes the login's session revocation to THIS browser
+      // instead of nuking every device, and lets the route mint a web device
+      // token at login so silent session recovery works immediately.
+      const { getOrCreateDeviceId, getDeviceName } = await import('@/lib/analytics');
+      const platformFields = {
+        platform: 'web' as const,
+        deviceId: getOrCreateDeviceId(),
+        deviceName: getDeviceName(),
+      };
 
       // Get authentication options
       const optionsRes = await fetch('/api/auth/passkey/authenticate/options', {
@@ -81,6 +152,8 @@ export function PasskeyLoginButton({
           response: authResponse,
           expectedChallenge: options.challenge,
           csrfToken: freshToken,
+          ...platformFields,
+          ...(inviteToken && { inviteToken }),
         }),
       });
 
@@ -98,17 +171,41 @@ export function PasskeyLoginButton({
         return;
       }
 
-      const { redirectUrl } = await verifyRes.json();
+      const verifyData = await verifyRes.json();
 
       persistCsrfToken();
       useAuthStore.getState().setAuthFailedPermanently(false);
 
       toast.success('Signed in successfully');
 
+      if (await handleDesktopAuthResponse(verifyData)) return;
+
+      // Web: now that we send a deviceId, the route mints/regenerates a web
+      // device token and returns it here. Persist it (rotating any prior token)
+      // so silent session recovery via /api/auth/device/refresh keeps working —
+      // otherwise a passkey login would leave a now-stale token in localStorage.
+      if (verifyData.deviceToken) {
+        try {
+          localStorage.setItem('deviceToken', verifyData.deviceToken);
+        } catch (storageError) {
+          // Storage may fail in private browsing or when quota is exceeded;
+          // log but never block sign-in.
+          console.warn('Failed to store device token:', storageError);
+        }
+      }
+
+      // When the request carried an invite, the server already encoded the
+      // correct landing path (drive on success, /dashboard?inviteError=… on
+      // race). Honour the server URL for invite flows; otherwise fall back to
+      // a pre-validated nextPath, then to the default redirect.
+      const targetUrl = inviteToken
+        ? verifyData.redirectUrl
+        : (nextPath ?? verifyData.redirectUrl);
+
       if (onSuccess) {
-        onSuccess(redirectUrl);
+        onSuccess(targetUrl);
       } else {
-        window.location.href = redirectUrl;
+        window.location.href = targetUrl;
       }
     } catch (err) {
       if (err instanceof Error) {
@@ -125,7 +222,7 @@ export function PasskeyLoginButton({
     } finally {
       setIsAuthenticating(false);
     }
-  }, [csrfToken, refreshToken, email, onSuccess]);
+  }, [csrfToken, refreshToken, email, onSuccess, nextPath, inviteToken]);
 
   // Don't render if browser doesn't support WebAuthn
   if (isSupported === false) {
@@ -154,105 +251,3 @@ export function PasskeyLoginButton({
   );
 }
 
-/**
- * Hook for conditional UI support (passkey autofill).
- * Call this on page load to start conditional UI in the background.
- */
-export function useConditionalPasskeyUI(
-  csrfToken: string,
-  onSuccess?: (redirectUrl: string) => void
-) {
-  const [isAvailable, setIsAvailable] = useState(false);
-  const [isAuthenticating, setIsAuthenticating] = useState(false);
-
-  useEffect(() => {
-    const checkAvailability = async () => {
-      if (typeof window === 'undefined') return;
-
-      // Check if conditional mediation is available
-      const available = await (
-        window.PublicKeyCredential?.isConditionalMediationAvailable?.() ??
-        Promise.resolve(false)
-      );
-
-      setIsAvailable(available);
-    };
-
-    checkAvailability();
-  }, []);
-
-  const startConditionalUI = useCallback(async () => {
-    if (!isAvailable || !csrfToken) return;
-
-    try {
-      // Get authentication options for conditional UI
-      const optionsRes = await fetch('/api/auth/passkey/authenticate/options', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          csrfToken,
-        }),
-      });
-
-      if (!optionsRes.ok) return;
-
-      const { options } = await optionsRes.json();
-
-      setIsAuthenticating(true);
-
-      // Start conditional UI authentication
-      const authResponse = await startAuthentication({
-        optionsJSON: options,
-        useBrowserAutofill: true,
-      });
-
-      // Verify authentication
-      const verifyRes = await fetch('/api/auth/passkey/authenticate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          response: authResponse,
-          expectedChallenge: options.challenge,
-          csrfToken,
-        }),
-      });
-
-      if (!verifyRes.ok) {
-        const error = await verifyRes.json();
-        toast.error(error.error || 'Authentication failed');
-        return;
-      }
-
-      const { redirectUrl } = await verifyRes.json();
-
-      persistCsrfToken();
-      useAuthStore.getState().setAuthFailedPermanently(false);
-
-      toast.success('Signed in successfully');
-
-      if (onSuccess) {
-        onSuccess(redirectUrl);
-      } else {
-        window.location.href = redirectUrl;
-      }
-    } catch (err) {
-      // Conditional UI was cancelled or failed - this is expected behavior
-      // Don't show error toast for AbortError (user cancelled)
-      if (err instanceof Error && err.name !== 'AbortError') {
-        console.debug('Conditional UI authentication failed:', err.message);
-      }
-    } finally {
-      setIsAuthenticating(false);
-    }
-  }, [isAvailable, csrfToken, onSuccess]);
-
-  return {
-    isAvailable,
-    isAuthenticating,
-    startConditionalUI,
-  };
-}

@@ -1,10 +1,7 @@
 import { NextResponse } from 'next/server';
-import {
-  registerPushToken,
-  unregisterPushToken,
-  getUserPushTokens,
-} from '@pagespace/lib/notifications';
-import { loggers } from '@pagespace/lib/server';
+import { registerPushToken, unregisterPushToken, getUserPushTokens } from '@pagespace/lib/notifications/push-notifications';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -62,6 +59,8 @@ export async function POST(req: Request) {
       webPushSubscription
     );
 
+    auditRequest(req, { eventType: 'auth.token.created', userId, details: { tokenType: 'push_token' } });
+
     return NextResponse.json({
       success: true,
       tokenId: result.id,
@@ -94,6 +93,8 @@ export async function DELETE(req: Request) {
     }
 
     await unregisterPushToken(userId, token);
+
+    auditRequest(req, { eventType: 'auth.token.revoked', userId, details: { tokenType: 'push_token', reason: 'user_request' } });
 
     return NextResponse.json({ success: true });
   } catch (error) {

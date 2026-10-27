@@ -3,30 +3,61 @@ import {
   createValidatedServiceToken,
   createPageServiceToken,
   createDriveServiceToken,
+  createFileServiceToken,
   createUserServiceToken,
+  createOrgServiceToken,
   createUploadServiceToken,
+  createSystemFileDeleteToken,
+  SYSTEM_SERVICE_USER_ID,
   PermissionDeniedError,
   isPermissionDeniedError,
 } from '../validated-service-token';
 
 // Mock the database module
 const mockFindFirst = vi.fn();
-vi.mock('@pagespace/db', () => ({
+const mockFileFindFirst = vi.fn();
+const mockOnConflictDoNothing = vi.fn().mockResolvedValue(undefined);
+const mockInsertValues = vi.fn(() => ({ onConflictDoNothing: mockOnConflictDoNothing }));
+const mockInsert = vi.fn((_table: unknown) => ({ values: mockInsertValues }));
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       pages: {
         findFirst: (...args: unknown[]) => mockFindFirst(...args),
       },
+      files: {
+        findFirst: (...args: unknown[]) => mockFileFindFirst(...args),
+      },
     },
+    insert: (table: unknown) => mockInsert(table),
   },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'pages.id' },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'users.id', email: 'users.email' },
+}));
+vi.mock('@pagespace/db/schema/storage', () => ({
+  files: { id: 'files.id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field: string, value: unknown) => ({ field, value })),
 }));
 
 // Mock the permissions module
-vi.mock('../../permissions/permissions-cached', () => ({
+vi.mock('../../permissions/permissions', () => ({
   getUserAccessLevel: vi.fn(),
   getUserDrivePermissions: vi.fn(),
+}));
+vi.mock('../../permissions/file-access', () => ({
+  canUserAccessFile: vi.fn(),
+}));
+
+// The ONE org authorization function (ORG-5): the org-bound token asks it, never orgMembers directly.
+const mockRequireOrgRole = vi.fn();
+vi.mock('../../organizations/authorize', () => ({
+  requireOrgRole: (...args: unknown[]) => mockRequireOrgRole(...args),
 }));
 
 // Mock the session service
@@ -49,13 +80,17 @@ vi.mock('../../logging/logger-config', () => ({
   },
 }));
 
-import { getUserAccessLevel, getUserDrivePermissions } from '../../permissions/permissions-cached';
+import { getUserAccessLevel, getUserDrivePermissions } from '../../permissions/permissions';
+import { canUserAccessFile } from '../../permissions/file-access';
 import { sessionService } from '../../auth/session-service';
 import { loggers } from '../../logging/logger-config';
+import { credentialActor } from '../../permissions/access-actor';
 
 describe('createValidatedServiceToken', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockFileFindFirst.mockResolvedValue({ driveId: 'drive-1' });
+    (canUserAccessFile as ReturnType<typeof vi.fn>).mockResolvedValue(true);
   });
 
   describe('page resource type', () => {
@@ -70,7 +105,7 @@ describe('createValidatedServiceToken', () => {
 
       // Act
       const result = await createValidatedServiceToken({
-        userId: 'user-1',
+        actor: credentialActor('user-1', null),
         resourceType: 'page',
         resourceId: 'page-1',
         requestedScopes: ['files:read', 'files:write'],
@@ -92,7 +127,7 @@ describe('createValidatedServiceToken', () => {
       // Act & Assert
       await expect(
         createValidatedServiceToken({
-          userId: 'user-1',
+          actor: credentialActor('user-1', null),
           resourceType: 'page',
           resourceId: 'page-1',
           requestedScopes: ['files:read'],
@@ -101,7 +136,7 @@ describe('createValidatedServiceToken', () => {
 
       expect(loggers.api.warn).toHaveBeenCalledWith(
         'Service token denied: no access to resource',
-        expect.any(Object)
+        expect.objectContaining({ userId: 'user-1', resourceType: 'page', resourceId: 'page-1' })
       );
     });
 
@@ -117,7 +152,7 @@ describe('createValidatedServiceToken', () => {
       // Act & Assert - request only write scope
       await expect(
         createValidatedServiceToken({
-          userId: 'user-1',
+          actor: credentialActor('user-1', null),
           resourceType: 'page',
           resourceId: 'page-1',
           requestedScopes: ['files:write'],
@@ -126,7 +161,7 @@ describe('createValidatedServiceToken', () => {
 
       expect(loggers.api.warn).toHaveBeenCalledWith(
         'Service token denied: no authorized scopes',
-        expect.any(Object)
+        expect.objectContaining({ userId: 'user-1', resourceType: 'page', resourceId: 'page-1', requestedScopes: ['files:write'] })
       );
     });
 
@@ -141,7 +176,7 @@ describe('createValidatedServiceToken', () => {
 
       // Act
       const result = await createValidatedServiceToken({
-        userId: 'user-1',
+        actor: credentialActor('user-1', null),
         resourceType: 'page',
         resourceId: 'page-1',
         requestedScopes: ['*'],
@@ -162,7 +197,7 @@ describe('createValidatedServiceToken', () => {
 
       // Act
       const result = await createValidatedServiceToken({
-        userId: 'user-1',
+        actor: credentialActor('user-1', null),
         resourceType: 'page',
         resourceId: 'page-1',
         requestedScopes: ['files:read', 'files:write', 'files:delete'],
@@ -183,7 +218,7 @@ describe('createValidatedServiceToken', () => {
 
       // Act
       const result = await createValidatedServiceToken({
-        userId: 'user-1',
+        actor: credentialActor('user-1', null),
         resourceType: 'page',
         resourceId: 'page-1',
         requestedScopes: ['files:read', 'files:write', 'files:delete'],
@@ -204,7 +239,7 @@ describe('createValidatedServiceToken', () => {
 
       // Act
       await createValidatedServiceToken({
-        userId: 'user-1',
+        actor: credentialActor('user-1', null),
         resourceType: 'page',
         resourceId: 'page-1',
         requestedScopes: ['files:read', 'files:write', 'files:delete'],
@@ -238,7 +273,7 @@ describe('createValidatedServiceToken', () => {
 
       // Act
       const result = await createValidatedServiceToken({
-        userId: 'user-1',
+        actor: credentialActor('user-1', null),
         resourceType: 'drive',
         resourceId: 'drive-1',
         requestedScopes: ['files:read', 'files:write', '*'],
@@ -260,7 +295,7 @@ describe('createValidatedServiceToken', () => {
 
       // Act
       const result = await createValidatedServiceToken({
-        userId: 'user-1',
+        actor: credentialActor('user-1', null),
         resourceType: 'drive',
         resourceId: 'drive-1',
         requestedScopes: ['files:read', 'files:write'],
@@ -277,7 +312,7 @@ describe('createValidatedServiceToken', () => {
       // Act & Assert
       await expect(
         createValidatedServiceToken({
-          userId: 'user-1',
+          actor: credentialActor('user-1', null),
           resourceType: 'drive',
           resourceId: 'drive-1',
           requestedScopes: ['files:read'],
@@ -297,7 +332,7 @@ describe('createValidatedServiceToken', () => {
 
       // Act
       const result = await createValidatedServiceToken({
-        userId: 'user-1',
+        actor: credentialActor('user-1', null),
         resourceType: 'drive',
         resourceId: 'drive-1',
         requestedScopes: ['files:read', '*'],
@@ -319,7 +354,7 @@ describe('createValidatedServiceToken', () => {
 
       // Act
       const result = await createValidatedServiceToken({
-        userId: 'user-1',
+        actor: credentialActor('user-1', null),
         resourceType: 'drive',
         resourceId: 'drive-1',
         requestedScopes: ['files:read', 'files:write', 'files:delete', '*'],
@@ -341,7 +376,7 @@ describe('createValidatedServiceToken', () => {
 
       // Act
       await createValidatedServiceToken({
-        userId: 'user-1',
+        actor: credentialActor('user-1', null),
         resourceType: 'drive',
         resourceId: 'drive-1',
         driveId: 'drive-1',
@@ -361,7 +396,7 @@ describe('createValidatedServiceToken', () => {
     it('grants all scopes for own user resources', async () => {
       // Act
       const result = await createValidatedServiceToken({
-        userId: 'user-1',
+        actor: credentialActor('user-1', null),
         resourceType: 'user',
         resourceId: 'user-1', // Same as userId
         requestedScopes: ['avatars:write', '*'],
@@ -375,12 +410,81 @@ describe('createValidatedServiceToken', () => {
       // Act & Assert
       await expect(
         createValidatedServiceToken({
-          userId: 'user-1',
+          actor: credentialActor('user-1', null),
           resourceType: 'user',
           resourceId: 'user-2', // Different from userId
           requestedScopes: ['avatars:write'],
         })
       ).rejects.toThrow('User has no access to user:user-2');
+    });
+
+    // Regression: `app-hosting:publish` is a declared `ServiceScope` (the
+    // publish route's `enqueuePublishBuild` requests it) but had no case in
+    // `filterScopesByPermissions`, so it fell to the `default: return false`
+    // branch — every publish would mint zero scopes and
+    // `createValidatedServiceToken` throws on an empty grant, breaking the
+    // publish flow end-to-end right after the row and Fly app were already
+    // created. This proves the scope is actually granted for the caller's
+    // own user resource, matching `erasure:enqueue`/`broadcast:enqueue`.
+    it('grants app-hosting:publish for the caller\'s own user resource', async () => {
+      const result = await createUserServiceToken(credentialActor('user-1', null), ['app-hosting:publish']);
+      expect(result.grantedScopes).toEqual(['app-hosting:publish']);
+    });
+  });
+
+  describe('organization resource type (org avatar upload)', () => {
+    it('ORG-1 (partial) an org Owner or Admin gets an org-bound org-avatars:write token, bound to that org', async () => {
+      mockRequireOrgRole.mockResolvedValue({ ok: true, role: 'ADMIN' });
+      const result = await createOrgServiceToken(credentialActor('user-1', null), 'org_nw', ['org-avatars:write'], '2m');
+      expect(result.grantedScopes).toEqual(['org-avatars:write']);
+      expect(mockRequireOrgRole).toHaveBeenCalledWith('user-1', 'org_nw', 'ADMIN');
+      expect(mockCreateSession).toHaveBeenCalledWith(expect.objectContaining({
+        userId: 'user-1', scopes: ['org-avatars:write'], resourceType: 'organization', resourceId: 'org_nw',
+      }));
+    });
+
+    it('ORG-1 (partial) a plain Member or a non-member gets no org-bound token at all', async () => {
+      for (const refusal of [{ ok: false, status: 403, reason: 'insufficient_role' }, { ok: false, status: 404, reason: 'not_member' }]) {
+        mockRequireOrgRole.mockResolvedValueOnce(refusal);
+        await expect(createOrgServiceToken(credentialActor('user-1', null), 'org_nw', ['org-avatars:write'])).rejects.toThrow('User has no access to organization:org_nw');
+      }
+      expect(mockCreateSession).not.toHaveBeenCalled();
+    });
+
+    it('ORG-1 (partial) an org-bound token never carries user-avatar, file, queue or wildcard scopes', async () => {
+      mockRequireOrgRole.mockResolvedValue({ ok: true, role: 'OWNER' });
+      const result = await createOrgServiceToken(credentialActor('user-1', null), 'org_nw', ['org-avatars:write', 'avatars:write', 'files:read', 'queue:read', '*']);
+      expect(result.grantedScopes).toEqual(['org-avatars:write']);
+    });
+
+    it('ORG-1 (partial) org-avatars:write is refused on every other resource type', async () => {
+      await expect(createUserServiceToken(credentialActor('user-1', null), ['org-avatars:write'])).rejects.toThrow('User lacks permissions');
+    });
+  });
+
+  describe('drive avatar scope', () => {
+    const drivePerms = (role: { isOwner: boolean; isAdmin: boolean }) => ({ hasAccess: true, isMember: !role.isOwner, canEdit: true, ...role });
+
+    it('a drive Owner or Admin gets a drive-bound drive-avatars:write token', async () => {
+      for (const role of [{ isOwner: true, isAdmin: false }, { isOwner: false, isAdmin: true }]) {
+        (getUserDrivePermissions as ReturnType<typeof vi.fn>).mockResolvedValueOnce(drivePerms(role));
+        const result = await createDriveServiceToken(credentialActor('user-1', null), 'drive-1', ['drive-avatars:write']);
+        expect(result.grantedScopes).toEqual(['drive-avatars:write']);
+      }
+      expect(mockCreateSession).toHaveBeenCalledWith(expect.objectContaining({
+        userId: 'user-1', scopes: ['drive-avatars:write'], resourceType: 'drive', resourceId: 'drive-1',
+      }));
+    });
+
+    it('a drive member who can edit, but is not an Owner or Admin, gets no drive-avatars:write', async () => {
+      (getUserDrivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue(drivePerms({ isOwner: false, isAdmin: false }));
+      await expect(createDriveServiceToken(credentialActor('user-1', null), 'drive-1', ['drive-avatars:write'])).rejects.toThrow();
+    });
+
+    it('drive-avatars:write is refused on every other resource type', async () => {
+      mockRequireOrgRole.mockResolvedValue({ ok: true, role: 'OWNER' });
+      await expect(createOrgServiceToken(credentialActor('user-1', null), 'org_nw', ['drive-avatars:write'])).rejects.toThrow();
+      await expect(createUserServiceToken(credentialActor('user-1', null), ['drive-avatars:write'])).rejects.toThrow();
     });
   });
 
@@ -395,7 +499,7 @@ describe('createValidatedServiceToken', () => {
       });
 
       // Act
-      const result = await createPageServiceToken('user-1', 'page-1', ['files:read']);
+      const result = await createPageServiceToken(credentialActor('user-1', null), 'page-1', ['files:read']);
 
       // Assert
       expect(result.grantedScopes).toEqual(['files:read']);
@@ -418,7 +522,7 @@ describe('createValidatedServiceToken', () => {
       });
 
       // Act
-      const result = await createDriveServiceToken('user-1', 'drive-1', ['files:write']);
+      const result = await createDriveServiceToken(credentialActor('user-1', null), 'drive-1', ['files:write']);
 
       // Assert
       expect(result.grantedScopes).toEqual(['files:write']);
@@ -433,7 +537,7 @@ describe('createValidatedServiceToken', () => {
 
     it('createUserServiceToken creates user-scoped token', async () => {
       // Act
-      const result = await createUserServiceToken('user-1', ['avatars:write']);
+      const result = await createUserServiceToken(credentialActor('user-1', null), ['avatars:write']);
 
       // Assert
       expect(result.grantedScopes).toEqual(['avatars:write']);
@@ -442,6 +546,23 @@ describe('createValidatedServiceToken', () => {
           resourceId: 'user-1',
           resourceType: 'user',
           userId: 'user-1',
+        })
+      );
+    });
+
+    it('createFileServiceToken creates an exact file-scoped read token after file access validation', async () => {
+      mockFileFindFirst.mockResolvedValue({ driveId: 'drive-1', storagePath: 'stored-content-hash' });
+
+      const result = await createFileServiceToken(credentialActor('user-1', null), 'file-1', ['files:read', 'files:write']);
+
+      expect(result.grantedScopes).toEqual(['files:read']);
+      expect(canUserAccessFile).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'file-1', 'drive-1');
+      expect(mockCreateSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          resourceId: 'stored-content-hash',
+          resourceType: 'file',
+          userId: 'user-1',
+          scopes: ['files:read'],
         })
       );
     });
@@ -459,7 +580,7 @@ describe('createValidatedServiceToken', () => {
 
       // Act
       await createValidatedServiceToken({
-        userId: 'user-1',
+        actor: credentialActor('user-1', null),
         resourceType: 'page',
         resourceId: 'page-1',
         requestedScopes: ['files:read'],
@@ -485,7 +606,7 @@ describe('createValidatedServiceToken', () => {
 
       // Act
       await createValidatedServiceToken({
-        userId: 'user-1',
+        actor: credentialActor('user-1', null),
         resourceType: 'page',
         resourceId: 'page-1',
         requestedScopes: ['files:read'],
@@ -514,7 +635,7 @@ describe('createValidatedServiceToken', () => {
 
     it('uses default for zero duration', async () => {
       await createValidatedServiceToken({
-        userId: 'user-1',
+        actor: credentialActor('user-1', null),
         resourceType: 'page',
         resourceId: 'page-1',
         requestedScopes: ['files:read'],
@@ -529,13 +650,13 @@ describe('createValidatedServiceToken', () => {
       );
       expect(loggers.api.warn).toHaveBeenCalledWith(
         'Invalid duration value (must be positive), using default',
-        expect.any(Object)
+        expect.objectContaining({ duration: '0m', value: 0, default: 300000 })
       );
     });
 
     it('uses default for invalid format', async () => {
       await createValidatedServiceToken({
-        userId: 'user-1',
+        actor: credentialActor('user-1', null),
         resourceType: 'page',
         resourceId: 'page-1',
         requestedScopes: ['files:read'],
@@ -550,13 +671,13 @@ describe('createValidatedServiceToken', () => {
       );
       expect(loggers.api.warn).toHaveBeenCalledWith(
         'Invalid duration format, using default',
-        expect.any(Object)
+        expect.objectContaining({ duration: 'invalid', default: 300000 })
       );
     });
 
     it('caps excessive duration at 30 days', async () => {
       await createValidatedServiceToken({
-        userId: 'user-1',
+        actor: credentialActor('user-1', null),
         resourceType: 'page',
         resourceId: 'page-1',
         requestedScopes: ['files:read'],
@@ -571,13 +692,13 @@ describe('createValidatedServiceToken', () => {
       );
       expect(loggers.api.warn).toHaveBeenCalledWith(
         'Duration exceeds maximum, capping',
-        expect.any(Object)
+        expect.objectContaining({ duration: '365d', max: 2592000000 })
       );
     });
 
     it('enforces minimum of 10 seconds', async () => {
       await createValidatedServiceToken({
-        userId: 'user-1',
+        actor: credentialActor('user-1', null),
         resourceType: 'page',
         resourceId: 'page-1',
         requestedScopes: ['files:read'],
@@ -592,13 +713,13 @@ describe('createValidatedServiceToken', () => {
       );
       expect(loggers.api.warn).toHaveBeenCalledWith(
         'Duration below minimum, using minimum',
-        expect.any(Object)
+        expect.objectContaining({ duration: '1s', ms: 1000, min: 10000 })
       );
     });
 
     it('accepts valid duration within bounds', async () => {
       await createValidatedServiceToken({
-        userId: 'user-1',
+        actor: credentialActor('user-1', null),
         resourceType: 'page',
         resourceId: 'page-1',
         requestedScopes: ['files:read'],
@@ -635,24 +756,27 @@ describe('createValidatedServiceToken', () => {
 
       // Act
       const result = await createUploadServiceToken({
-        userId: 'user-1',
+        actor: credentialActor('user-1', null),
         driveId: 'drive-1',
         pageId: 'new-page-1',
         parentId: 'parent-page-1',
       });
 
-      // Assert
-      expect(result.grantedScopes).toEqual(['files:write']);
+      // Assert — files:ingest must be granted so the post-upload enqueue can
+      // pass the processor's requireScope('files:ingest') on /api/ingest
+      expect(result.grantedScopes).toEqual(['files:write', 'files:ingest']);
       expect(result.token).toBe('ps_svc_mock-session-token');
-      expect(mockFindFirst).toHaveBeenCalled();
-      expect(getUserAccessLevel).toHaveBeenCalledWith('user-1', 'parent-page-1');
+      expect(mockFindFirst).toHaveBeenCalledWith(expect.objectContaining({
+        columns: { driveId: true },
+      }));
+      expect(getUserAccessLevel).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'parent-page-1');
       expect(getUserDrivePermissions).not.toHaveBeenCalled();
       expect(mockCreateSession).toHaveBeenCalledWith(
         expect.objectContaining({
           resourceId: 'new-page-1',
           resourceType: 'page',
           driveId: 'drive-1',
-          scopes: ['files:write'],
+          scopes: ['files:write', 'files:ingest'],
         })
       );
     });
@@ -669,23 +793,49 @@ describe('createValidatedServiceToken', () => {
 
       // Act
       const result = await createUploadServiceToken({
-        userId: 'user-1',
+        actor: credentialActor('user-1', null),
         driveId: 'drive-1',
         pageId: 'new-page-1',
       });
 
       // Assert
-      expect(result.grantedScopes).toEqual(['files:write']);
+      expect(result.grantedScopes).toEqual(['files:write', 'files:ingest']);
       expect(result.token).toBe('ps_svc_mock-session-token');
-      expect(getUserDrivePermissions).toHaveBeenCalledWith('user-1', 'drive-1');
+      expect(getUserDrivePermissions).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'drive-1');
       expect(getUserAccessLevel).not.toHaveBeenCalled();
       expect(mockCreateSession).toHaveBeenCalledWith(
         expect.objectContaining({
           resourceId: 'new-page-1',
           resourceType: 'page',
           driveId: 'drive-1',
-          scopes: ['files:write'],
+          scopes: ['files:write', 'files:ingest'],
         })
+      );
+    });
+
+    it('narrows granted scopes when an explicit scopes option is passed', async () => {
+      // Arrange - user has drive edit permission
+      (getUserDrivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue({
+        hasAccess: true,
+        isOwner: false,
+        isAdmin: false,
+        isMember: true,
+        canEdit: true,
+      });
+
+      // Act — attachment flows pass ['files:write'] so they don't inherit
+      // files:ingest from the page-upload default
+      const result = await createUploadServiceToken({
+        actor: credentialActor('user-1', null),
+        driveId: 'drive-1',
+        pageId: 'new-page-1',
+        scopes: ['files:write'],
+      });
+
+      // Assert
+      expect(result.grantedScopes).toEqual(['files:write']);
+      expect(mockCreateSession).toHaveBeenCalledWith(
+        expect.objectContaining({ scopes: ['files:write'] })
       );
     });
 
@@ -703,7 +853,7 @@ describe('createValidatedServiceToken', () => {
       // Act & Assert
       await expect(
         createUploadServiceToken({
-          userId: 'user-1',
+          actor: credentialActor('user-1', null),
           driveId: 'drive-1',
           pageId: 'new-page-1',
           parentId: 'parent-page-1',
@@ -726,7 +876,7 @@ describe('createValidatedServiceToken', () => {
       // Act & Assert
       await expect(
         createUploadServiceToken({
-          userId: 'user-1',
+          actor: credentialActor('user-1', null),
           driveId: 'drive-1',
           pageId: 'new-page-1',
         })
@@ -748,7 +898,7 @@ describe('createValidatedServiceToken', () => {
       // Act & Assert
       await expect(
         createUploadServiceToken({
-          userId: 'user-1',
+          actor: credentialActor('user-1', null),
           driveId: 'drive-1',
           pageId: 'new-page-1',
           parentId: 'nonexistent-parent',
@@ -771,7 +921,7 @@ describe('createValidatedServiceToken', () => {
       // Act & Assert - user claims drive-b but parent is from drive-a
       await expect(
         createUploadServiceToken({
-          userId: 'user-1',
+          actor: credentialActor('user-1', null),
           driveId: 'drive-b',
           pageId: 'new-page-1',
           parentId: 'page-from-drive-a',
@@ -798,7 +948,7 @@ describe('createValidatedServiceToken', () => {
       // Act & Assert
       await expect(
         createUploadServiceToken({
-          userId: 'user-1',
+          actor: credentialActor('user-1', null),
           driveId: 'drive-1',
           pageId: 'new-page-1',
           parentId: 'parent-page-1',
@@ -826,7 +976,7 @@ describe('createValidatedServiceToken', () => {
 
       // Act
       await createUploadServiceToken({
-        userId: 'user-1',
+        actor: credentialActor('user-1', null),
         driveId: 'drive-1',
         pageId: 'new-page-1',
       });
@@ -839,7 +989,7 @@ describe('createValidatedServiceToken', () => {
           driveId: 'drive-1',
           pageId: 'new-page-1',
           permissionSource: 'drive',
-          scopes: ['files:write'],
+          scopes: ['files:write', 'files:ingest'],
         })
       );
     });
@@ -856,7 +1006,7 @@ describe('createValidatedServiceToken', () => {
 
       // Act
       await createUploadServiceToken({
-        userId: 'user-1',
+        actor: credentialActor('user-1', null),
         driveId: 'drive-1',
         pageId: 'new-page-1',
         expiresIn: '15m',
@@ -882,7 +1032,7 @@ describe('createValidatedServiceToken', () => {
 
       // Act
       await createUploadServiceToken({
-        userId: 'user-1',
+        actor: credentialActor('user-1', null),
         driveId: 'drive-1',
         pageId: 'new-page-1',
       });
@@ -914,7 +1064,7 @@ describe('createValidatedServiceToken', () => {
       let caughtError: unknown;
       try {
         await createUploadServiceToken({
-          userId: 'user-1',
+          actor: credentialActor('user-1', null),
           driveId: 'drive-1',
           pageId: 'new-page-1',
         });
@@ -927,6 +1077,75 @@ describe('createValidatedServiceToken', () => {
       expect(caughtError).not.toBeInstanceOf(PermissionDeniedError);
       expect(isPermissionDeniedError(caughtError)).toBe(false);
       expect((caughtError as Error).message).toBe('Token signing failed');
+    });
+  });
+
+  describe('createSystemFileDeleteToken', () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+      // Restore the default resolved value — a prior test in this file leaves
+      // the createSession mock in a rejected state when bubbling signing errors.
+      mockCreateSession.mockResolvedValue('ps_svc_mock-session-token');
+    });
+
+    it('mints a system, file-bound, files:delete-scoped token (no permission check)', async () => {
+      const contentHash = 'a'.repeat(64);
+
+      const result = await createSystemFileDeleteToken({ contentHash });
+
+      expect(result.grantedScopes).toEqual(['files:delete']);
+      expect(result.token).toBe('ps_svc_mock-session-token');
+      // No drive/page permission lookups — this is a server-only system mint
+      // gated by the cron's HMAC, not by user identity.
+      expect(getUserAccessLevel).not.toHaveBeenCalled();
+      expect(getUserDrivePermissions).not.toHaveBeenCalled();
+      expect(mockCreateSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: SYSTEM_SERVICE_USER_ID,
+          type: 'service',
+          resourceType: 'file',
+          resourceId: contentHash,
+          scopes: ['files:delete'],
+        })
+      );
+    });
+
+    it('bootstraps the system principal user row before minting (FK satisfaction)', async () => {
+      // sessions.userId FKs users.id, so without an existing 'system' row the
+      // session insert would fail and orphan reaping would silently skip every
+      // file. The token mint must idempotently upsert the principal first.
+      mockInsert.mockClear();
+      mockInsertValues.mockClear();
+      mockOnConflictDoNothing.mockClear();
+
+      await createSystemFileDeleteToken({ contentHash: 'a'.repeat(64) });
+
+      expect(mockInsert).toHaveBeenCalledWith(expect.anything());
+      expect(mockInsertValues).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: SYSTEM_SERVICE_USER_ID,
+          name: 'System',
+          email: 'system@pagespace.invalid',
+        })
+      );
+      expect(mockOnConflictDoNothing).toHaveBeenCalled();
+    });
+
+    it('defaults expiration to 30s (orphan reap is short-lived)', async () => {
+      await createSystemFileDeleteToken({ contentHash: 'b'.repeat(64) });
+
+      // 30s = 30000ms (above the 10s minimum, below the 30d maximum).
+      expect(mockCreateSession).toHaveBeenCalledWith(
+        expect.objectContaining({ expiresInMs: 30000 })
+      );
+    });
+
+    it('honors a custom expiresIn within bounds', async () => {
+      await createSystemFileDeleteToken({ contentHash: 'c'.repeat(64), expiresIn: '1m' });
+
+      expect(mockCreateSession).toHaveBeenCalledWith(
+        expect.objectContaining({ expiresInMs: 60000 })
+      );
     });
   });
 

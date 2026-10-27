@@ -8,16 +8,17 @@ import {
   setMinutes,
 } from 'date-fns';
 import { cn } from '@/lib/utils';
-import { MapPin, Users } from 'lucide-react';
+import { MapPin, Users, Zap } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
   CalendarEvent,
   CalendarHandlers,
   TaskWithDueDate,
+  EventColorConfig,
   getEventsForDay,
   getTasksForDay,
   isToday,
-  getEventColors,
+  resolveEventColor,
   TASK_OVERLAY_STYLE,
 } from './calendar-types';
 
@@ -26,12 +27,14 @@ interface DayViewProps {
   events: CalendarEvent[];
   tasks: TaskWithDueDate[];
   handlers: CalendarHandlers;
+  driveColorMap?: Map<string | null, EventColorConfig> | null;
+  context?: 'user' | 'drive';
 }
 
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
 const HOUR_HEIGHT = 64; // Taller for day view
 
-export function DayView({ currentDate, events, tasks, handlers }: DayViewProps) {
+export function DayView({ currentDate, events, tasks, handlers, driveColorMap, context = 'drive' }: DayViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Get events and tasks for the current day
@@ -113,8 +116,9 @@ export function DayView({ currentDate, events, tasks, handlers }: DayViewProps) 
             </div>
             {allDayEvents.map((event) => (
               <AllDayEventCard
-                key={event.id}
+                key={`${event.id}-${event.startAt}`}
                 event={event}
+                colors={resolveEventColor(event, context, driveColorMap ?? null)}
                 onClick={() => handlers.onEventClick(event)}
               />
             ))}
@@ -170,8 +174,9 @@ export function DayView({ currentDate, events, tasks, handlers }: DayViewProps) 
 
               return (
                 <TimedEventCard
-                  key={event.id}
+                  key={`${event.id}-${event.startAt}`}
                   event={event}
+                  colors={resolveEventColor(event, context, driveColorMap ?? null)}
                   style={{ top, height }}
                   onClick={() => handlers.onEventClick(event)}
                 />
@@ -206,14 +211,15 @@ function CurrentTimeIndicator() {
 // Timed event card (expanded)
 function TimedEventCard({
   event,
+  colors,
   style,
   onClick,
 }: {
   event: CalendarEvent;
+  colors: EventColorConfig;
   style: { top: number; height: number };
   onClick: () => void;
 }) {
-  const colors = getEventColors(event.color);
   const showDetails = style.height > 60;
 
   return (
@@ -230,7 +236,15 @@ function TimedEventCard({
         onClick();
       }}
     >
-      <div className="font-medium truncate">{event.title}</div>
+      <div className="font-medium truncate">
+        {event.hasAgentTrigger && (
+          <>
+            <Zap className="inline-block h-3 w-3 mr-1 text-amber-500 align-text-top" aria-hidden="true" />
+            <span className="sr-only">Agent trigger configured. </span>
+          </>
+        )}
+        {event.title}
+      </div>
       <div className="text-xs text-muted-foreground">
         {format(new Date(event.startAt), 'h:mm a')} - {format(new Date(event.endAt), 'h:mm a')}
       </div>
@@ -269,12 +283,13 @@ function TimedEventCard({
 // All-day event card
 function AllDayEventCard({
   event,
+  colors,
   onClick,
 }: {
   event: CalendarEvent;
+  colors: EventColorConfig;
   onClick: () => void;
 }) {
-  const colors = getEventColors(event.color);
 
   return (
     <button
@@ -286,7 +301,15 @@ function AllDayEventCard({
       )}
       onClick={onClick}
     >
-      <div className="font-medium">{event.title}</div>
+      <div className="font-medium">
+        {event.hasAgentTrigger && (
+          <>
+            <Zap className="inline-block h-3 w-3 mr-1 text-amber-500 align-text-top" aria-hidden="true" />
+            <span className="sr-only">Agent trigger configured. </span>
+          </>
+        )}
+        {event.title}
+      </div>
       {event.location && (
         <div className="flex items-center gap-1 text-xs text-muted-foreground">
           <MapPin className="w-3 h-3" />

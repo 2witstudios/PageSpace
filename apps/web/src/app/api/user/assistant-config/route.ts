@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
-import { getOrCreateConfig, updateConfig } from '@pagespace/lib/integrations';
+import { db } from '@pagespace/db/db';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { getOrCreateConfig, updateConfig } from '@pagespace/lib/integrations/repositories/config-repository';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -24,6 +25,8 @@ const updateConfigSchema = z.object({
 export async function GET(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) return auth.error;
+
+  auditRequest(request, { eventType: 'data.read', userId: auth.userId, resourceType: 'assistant_config', resourceId: 'self' });
 
   try {
     const config = await getOrCreateConfig(db, auth.userId);
@@ -50,6 +53,8 @@ export async function GET(request: Request) {
 export async function PUT(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
+
+  auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'assistant_config', resourceId: 'self' });
 
   try {
     const body = await request.json();
@@ -82,6 +87,8 @@ export async function PUT(request: Request) {
     }
 
     const config = await updateConfig(db, auth.userId, updateData);
+
+    auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'config', resourceId: 'self' });
 
     return NextResponse.json({
       config: {

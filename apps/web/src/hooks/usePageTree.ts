@@ -1,7 +1,7 @@
 import useSWR, { useSWRConfig } from 'swr';
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { mergeChildren } from '@/lib/tree/tree-utils';
-import { Page } from '@pagespace/lib/client';
+import { Page } from '@pagespace/lib/types';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 
@@ -80,6 +80,7 @@ export function usePageTree(driveId?: string, trashView?: boolean) {
   const { cache } = useSWRConfig();
   const hasTreeSnapshotRef = useRef(!!data);
   hasTreeSnapshotRef.current = !!data;
+  const pendingInvalidateRef = useRef(false);
 
   // Self-healing: detect when SWR gets stuck (valid key, no data, no error, not fetching).
   // On desktop/Capacitor, async token retrieval in fetchWithAuth can cause SWR to lose track
@@ -125,18 +126,32 @@ export function usePageTree(driveId?: string, trashView?: boolean) {
 
   const invalidateTree = useCallback(() => {
     if (swrKey) {
-      // Don't revalidate tree if user is actively editing to prevent component remounting
-      // Allow revalidation during AI streaming to show real-time updates
+      // Guard: defer revalidation only during document or form editing to prevent
+      // the editor from receiving stale tree data mid-keystroke. AI streaming
+      // sessions do NOT block — users need to see pages created by AI tool calls
+      // appear in the sidebar in real time.
       const isEditing = useEditingStore.getState().isAnyEditing();
       if (isEditing) {
-        console.log('⏸️ Skipping tree revalidation - document editing in progress');
+        pendingInvalidateRef.current = true;
+        console.log('⏸️ Skipping tree revalidation - document or form editing in progress');
         return;
       }
 
-      cache.delete(swrKey);
-      mutate(); // Re-fetch
+      pendingInvalidateRef.current = false;
+      mutate();
     }
-  }, [swrKey, cache, mutate]);
+  }, [swrKey, mutate]);
+
+  // Flush any deferred invalidation once document/form editing ends.
+  useEffect(() => {
+    const unsubscribe = useEditingStore.subscribe((state) => {
+      if (!swrKey || !pendingInvalidateRef.current) return;
+      if (state.isAnyEditing()) return;
+      pendingInvalidateRef.current = false;
+      mutate();
+    });
+    return unsubscribe;
+  }, [swrKey, mutate]);
 
   const updateNode = useCallback((nodeId: string, updates: Partial<TreePage>) => {
     // Avoid optimistic mutation before the first tree snapshot exists.

@@ -1,9 +1,12 @@
-import { db, eq, deviceTokens } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
-import { secureCompare } from '@pagespace/lib/secure-compare';
-import { hashToken } from '@pagespace/lib/auth';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { deviceTokens } from '@pagespace/db/schema/auth';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { secureCompare } from '@pagespace/lib/auth/secure-compare';
+import { hashToken } from '@pagespace/lib/auth/token-utils';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { revokeDeviceToken } from '@pagespace/lib/device-auth-utils';
+import { revokeDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -59,6 +62,8 @@ export async function DELETE(
       tokenName: device.deviceName ?? undefined,
       deviceInfo: `${device.platform ?? 'Unknown'} - ${device.deviceName ?? 'Unknown'}`,
     }, actorInfo);
+
+    auditRequest(req, { eventType: 'auth.device.revoked', userId, resourceType: 'device', resourceId: deviceId });
 
     return Response.json({
       message: 'Device revoked successfully',

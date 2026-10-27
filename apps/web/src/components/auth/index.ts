@@ -1,9 +1,12 @@
 export { AuthShell } from './AuthShell';
+export { AuthFrame } from './AuthFrame';
+export { AuthLayout } from './AuthLayout';
 export { AuthDivider } from './AuthDivider';
 export { OAuthButtons } from './OAuthButtons';
 export { GoogleOneTap } from './GoogleOneTap';
 export { MagicLinkForm } from './MagicLinkForm';
-export { PasswordLoginForm } from './PasswordLoginForm';
+
 export { PasskeySignupButton } from './PasskeySignupButton';
 export { useWebAuthnSupport } from '@/hooks/useWebAuthnSupport';
-export { PasskeyLoginButton, useConditionalPasskeyUI } from './PasskeyLoginButton';
+export { PasskeyLoginButton } from './PasskeyLoginButton';
+export { ExternalAuthWaiting } from './ExternalAuthWaiting';

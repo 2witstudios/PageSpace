@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useId } from 'react';
 import dynamic from 'next/dynamic';
 import { useDocument } from '@/hooks/useDocument';
+import DocumentConflictGate from '@/components/layout/middle-content/page-views/document/DocumentConflictGate';
 import { motion, AnimatePresence } from 'motion/react';
-import { useSocket } from '@/hooks/useSocket';
-import { PageEventPayload } from '@/lib/websocket';
+import { usePageContentSocket } from '@/hooks/usePageContentSocket';
+import type { PageEventPayload } from '@/lib/websocket';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -23,6 +24,15 @@ import { useParams } from 'next/navigation';
 
 interface CodePageViewProps {
   pageId: string;
+  /**
+   * The page's own drive, for cross-drive socket updates — mirrors
+   * DocumentView's identical prop. Optional and falls back to the route's own
+   * `driveId` param for backward compat with callers inside a drive route
+   * (e.g. CenterPanel); a pane has no such route (or the wrong one, for a
+   * cross-drive page in a global-assistant session), so it must pass the
+   * fetched page's real driveId explicitly.
+   */
+  driveId?: string;
 }
 
 const MonacoEditor = dynamic(() => import('@/components/editors/MonacoEditor'), { ssr: false });
@@ -55,58 +65,25 @@ const LANGUAGES = [
   { value: 'scss', label: 'SCSS' },
 ] as const;
 
-const EXTENSION_MAP: Record<string, string> = {
-  'js': 'javascript',
-  'jsx': 'javascript',
-  'ts': 'typescript',
-  'tsx': 'typescript',
-  'py': 'python',
-  'java': 'java',
-  'c': 'c',
-  'cpp': 'cpp',
-  'cs': 'csharp',
-  'rb': 'ruby',
-  'go': 'go',
-  'rs': 'rust',
-  'php': 'php',
-  'swift': 'swift',
-  'kt': 'kotlin',
-  'html': 'html',
-  'css': 'css',
-  'scss': 'scss',
-  'json': 'json',
-  'xml': 'xml',
-  'yaml': 'yaml',
-  'yml': 'yaml',
-  'md': 'markdown',
-  'sh': 'shell',
-  'bash': 'shell',
-  'zsh': 'shell',
-  'sql': 'sql',
-  'graphql': 'graphql',
-  'gql': 'graphql',
-  'sudo': 'sudolang',
-  'sudolang': 'sudolang',
-};
+import { detectLanguageFromFilename } from '@pagespace/lib/utils/language-detection';
 
 function detectLanguageFromTitle(title: string): string {
-  const ext = title.toLowerCase().split('.').pop();
-  if (ext && ext in EXTENSION_MAP) {
-    return EXTENSION_MAP[ext];
-  }
-  return 'plaintext';
+  return detectLanguageFromFilename(title);
 }
 
-const CodePageView = ({ pageId }: CodePageViewProps) => {
+const CodePageView = ({ pageId, driveId: driveIdProp }: CodePageViewProps) => {
   const [isReadOnly, setIsReadOnly] = useState(false);
   const [language, setLanguage] = useState('plaintext');
   const isDirtyRef = useRef(false);
   const hasInitializedRef = useRef(false);
-  const socket = useSocket();
   const { user } = useAuth();
   const params = useParams();
-  const driveId = params.driveId as string;
+  const driveId = driveIdProp ?? (params.driveId as string);
   const { tree } = usePageTree(driveId);
+  // Distinguishes this mount from any other simultaneous mount of the SAME
+  // page (main center panel vs. an agent-session pane) — see DocumentView's
+  // identical fix for why the key must not be pageId alone.
+  const instanceId = useId();
 
   const {
     document: documentState,
@@ -116,6 +93,9 @@ const CodePageView = ({ pageId }: CodePageViewProps) => {
     updateContentFromServer,
     saveWithDebounce,
     forceSave,
+    conflict,
+    resolveConflict,
+    isResolvingConflict,
   } = useDocument(pageId);
 
   // Store forceSave in ref to prevent cleanup effects from re-running
@@ -148,7 +128,7 @@ const CodePageView = ({ pageId }: CodePageViewProps) => {
 
   // Register editing state when document is dirty
   useEffect(() => {
-    const componentId = `code-${pageId}`;
+    const componentId = `code-${pageId}-${instanceId}`;
 
     if (documentState?.isDirty && !isReadOnly) {
       useEditingStore.getState().startEditing(componentId, 'document', {
@@ -162,7 +142,7 @@ const CodePageView = ({ pageId }: CodePageViewProps) => {
     return () => {
       useEditingStore.getState().endEditing(componentId);
     };
-  }, [documentState?.isDirty, pageId, isReadOnly]);
+  }, [documentState?.isDirty, pageId, isReadOnly, instanceId]);
 
   // Check user permissions
   useEffect(() => {
@@ -189,35 +169,29 @@ const CodePageView = ({ pageId }: CodePageViewProps) => {
     checkPermissions();
   }, [user?.id, pageId]);
 
-  // Listen for content updates from other sources
-  useEffect(() => {
-    if (!socket) return;
-
-    const handleContentUpdate = async (eventData: PageEventPayload) => {
-      if (eventData.socketId && eventData.socketId === socket.id) {
-        return;
-      }
-
-      if (eventData.pageId === pageId) {
-        try {
-          const response = await fetchWithAuth(`/api/pages/${pageId}`);
-          if (response.ok) {
-            const updatedPage = await response.json();
-            if (updatedPage.content !== documentState?.content && !documentState?.isDirty) {
-              updateContentFromServer(updatedPage.content, updatedPage.revision);
-            }
-          }
-        } catch (error) {
-          console.error('Failed to fetch updated content:', error);
+  // Listen for content updates from other sources. Joins the PAGE's own
+  // drive room (not just whatever the route happens to be) — see
+  // DocumentView's identical usage: without this, a code page opened outside
+  // its own drive's route (a pane in the global-assistant console, or a
+  // cross-drive session) never receives live updates at all.
+  const handleContentUpdate = useCallback(async (_eventData: PageEventPayload) => {
+    try {
+      const response = await fetchWithAuth(`/api/pages/${pageId}`);
+      if (response.ok) {
+        const updatedPage = await response.json();
+        if (updatedPage.content !== documentState?.content && !documentState?.isDirty) {
+          updateContentFromServer(updatedPage.content, updatedPage.revision);
         }
       }
-    };
+    } catch (error) {
+      console.error('Failed to fetch updated content:', error);
+    }
+  }, [pageId, documentState?.content, documentState?.isDirty, updateContentFromServer]);
 
-    socket.on('page:content-updated', handleContentUpdate);
-    return () => {
-      socket.off('page:content-updated', handleContentUpdate);
-    };
-  }, [socket, pageId, documentState, updateContentFromServer]);
+  usePageContentSocket(pageId, driveId, {
+    onContentUpdated: handleContentUpdate,
+    enabled: !!driveId,
+  });
 
   // Handle content changes
   const handleContentChange = useCallback((newContent: string | undefined) => {
@@ -290,6 +264,12 @@ const CodePageView = ({ pageId }: CodePageViewProps) => {
       transition={{ duration: 0.2 }}
       className="h-full flex flex-col relative"
     >
+      <DocumentConflictGate
+        conflict={conflict}
+        onResolve={resolveConflict}
+        isResolving={isResolvingConflict}
+        previewMode="plain"
+      />
       {/* Language selector toolbar */}
       <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--separator)]">
         <Select value={language} onValueChange={setLanguage}>

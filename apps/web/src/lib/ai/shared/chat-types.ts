@@ -4,21 +4,60 @@
  */
 
 /**
- * Provider configuration status from the backend
+ * Provider availability snapshot returned by /api/ai/chat and /api/ai/settings.
+ * Each entry tells the UI whether the deployment can route AI calls through that
+ * provider (managed env keys present + on-prem allowlist satisfied).
  */
+export interface ProviderAvailability {
+  isAvailable: boolean;
+}
+
 export interface ProviderSettings {
   currentProvider: string;
   currentModel: string;
-  providers: {
-    pagespace?: { isConfigured: boolean; hasApiKey: boolean };
-    openrouter: { isConfigured: boolean; hasApiKey: boolean };
-    google: { isConfigured: boolean; hasApiKey: boolean };
-    openai?: { isConfigured: boolean; hasApiKey: boolean };
-    anthropic?: { isConfigured: boolean; hasApiKey: boolean };
-    xai?: { isConfigured: boolean; hasApiKey: boolean };
-    ollama?: { isConfigured: boolean; hasBaseUrl: boolean };
-    glm?: { isConfigured: boolean; hasApiKey: boolean };
-  };
+  providers: Partial<Record<
+    | 'openai'
+    | 'anthropic'
+    | 'google'
+    | 'xai'
+    | 'deepseek'
+    | 'qwen'
+    | 'mistral'
+    | 'moonshot'
+    | 'minimax'
+    | 'meta'
+    | 'bytedance'
+    | 'aion-labs'
+    | 'amazon'
+    | 'apodex'
+    | 'arcee-ai'
+    | 'cohere'
+    | 'dots-studio'
+    | 'ibm-granite'
+    | 'inclusionai'
+    | 'kwaipilot'
+    | 'liquid'
+    | 'meituan'
+    | 'nex-agi'
+    | 'nvidia'
+    | 'poolside'
+    | 'rekaai'
+    | 'relace'
+    | 'sakana'
+    | 'sao10k'
+    | 'stepfun'
+    | 'tencent'
+    | 'thedrummer'
+    | 'thinkingmachines'
+    | 'upstage'
+    | 'xiaomi'
+    | 'inception'
+    | 'writer'
+    | 'ollama'
+    | 'lmstudio'
+    | 'azure_openai',
+    ProviderAvailability
+  >>;
   isAnyProviderConfigured: boolean;
 }
 
@@ -46,6 +85,10 @@ export interface ConversationData {
   createdAt: Date;
   updatedAt: Date;
   messageCount: number;
+  isShared: boolean;
+  isOwner: boolean;
+  /** The session (workspace) the thread was born into — null for a plain chat. */
+  sessionId: string | null;
   lastMessage: {
     role: string;
     timestamp: Date;
@@ -62,6 +105,9 @@ export interface RawConversationData {
   createdAt: string;
   updatedAt: string;
   messageCount: number;
+  isShared?: boolean;
+  isOwner?: boolean;
+  sessionId?: string | null;
   lastMessage: {
     role: string;
     timestamp: string;
@@ -104,6 +150,9 @@ export interface AgentConfig {
 export function parseConversationData(raw: RawConversationData): ConversationData {
   return {
     ...raw,
+    isShared: raw.isShared ?? false,
+    isOwner: raw.isOwner ?? false,
+    sessionId: raw.sessionId ?? null,
     createdAt: new Date(raw.createdAt),
     updatedAt: new Date(raw.updatedAt),
     lastMessage: {

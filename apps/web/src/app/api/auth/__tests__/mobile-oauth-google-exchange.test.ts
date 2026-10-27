@@ -14,29 +14,42 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { POST } from '../mobile/oauth/google/exchange/route';
 
 // Mock dependencies
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+}));
+vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
   validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
-    deviceToken: 'mock-device-token',
-  }),
+      deviceToken: 'mock-device-token',
+    }),
+}));
+vi.mock('@pagespace/lib/auth/oauth-utils', () => ({
   verifyOAuthIdToken: vi.fn(),
   createOrLinkOAuthUser: vi.fn(),
+}));
+vi.mock('@pagespace/lib/auth/oauth-types', () => ({
   OAuthProvider: {
-    GOOGLE: 'google',
-    APPLE: 'apple',
-  },
-  loggers: {
-    auth: {
-      error: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      debug: vi.fn(),
+      GOOGLE: 'google',
+      APPLE: 'apple',
     },
-  },
-  logAuthEvent: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
+      auth: {
+        error: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        debug: vi.fn(),
+      },
+      security: {
+        warn: vi.fn(),
+      },
+    },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/auth', () => ({
+vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_oauth-token'),
     validateSession: vi.fn().mockResolvedValue({
@@ -51,11 +64,11 @@ vi.mock('@pagespace/lib/auth', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/security', () => ({
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn().mockResolvedValue({
     allowed: true,
     attemptsRemaining: 4,
@@ -70,35 +83,35 @@ vi.mock('@pagespace/lib/security', () => ({
   },
 }));
 
-vi.mock('@pagespace/db', () => ({
-  users: { id: 'id', image: 'image' },
-  db: {
-    update: vi.fn().mockReturnValue({
-      set: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(undefined),
-      }),
-    }),
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    updateUser: vi.fn().mockResolvedValue(undefined),
   },
-  eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
+}));
+
+vi.mock('@/lib/auth/google-avatar', () => ({
+  resolveGoogleAvatarImage: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock('@/lib/auth/cookie-config', () => ({
+  createSessionCookie: vi.fn().mockReturnValue('mock-session-cookie'),
 }));
 
 vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn().mockReturnValue('192.168.1.1'),
 }));
 
-import {
-  verifyOAuthIdToken,
-  createOrLinkOAuthUser,
-  validateOrCreateDeviceToken,
-  logAuthEvent,
-} from '@pagespace/lib/server';
+import { verifyOAuthIdToken, createOrLinkOAuthUser } from '@pagespace/lib/auth/oauth-utils';
+import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
-} from '@pagespace/lib/security';
-import { sessionService } from '@pagespace/lib/auth';
-import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+} from '@pagespace/lib/security/distributed-rate-limit';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 
 describe('/api/auth/mobile/oauth/google/exchange', () => {
   const mockUserInfo = {
@@ -142,7 +155,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       success: true,
       userInfo: mockUserInfo,
     } as never);
-    vi.mocked(createOrLinkOAuthUser).mockResolvedValue(mockUser as never);
+    vi.mocked(createOrLinkOAuthUser).mockResolvedValue({ status: 'linked', user: mockUser } as never);
     vi.mocked(validateOrCreateDeviceToken).mockResolvedValue({
       deviceToken: 'mock-device-token',
     } as never);
@@ -218,14 +231,17 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
 
       await POST(request);
 
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: mockUser.id,
-          deviceId: 'ios-device-789',
-          platform: 'ios',
-          deviceName: 'iPhone 15 Pro Max',
-        })
-      );
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
+        providedDeviceToken: undefined,
+        userId: mockUser.id,
+        deviceId: 'ios-device-789',
+        platform: 'ios',
+        tokenVersion: 0,
+        deviceName: 'iPhone 15 Pro Max',
+        userAgent: undefined,
+        ipAddress: '192.168.1.1',
+      });
     });
 
     it('logs OAuth login event', async () => {
@@ -237,12 +253,14 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
 
       await POST(request);
 
-      expect(logAuthEvent).toHaveBeenCalledWith(
-        'login',
-        mockUser.id,
-        mockUser.email,
-        '192.168.1.1',
-        'Google OAuth Mobile'
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'auth.login.success',
+          userId: mockUser.id,
+          sessionId: 'sfh0haxfpzowht3oi213oas1',
+          details: { method: 'Google OAuth Mobile' },
+        })
       );
     });
 
@@ -258,11 +276,14 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       expect(trackAuthEvent).toHaveBeenCalledWith(
         mockUser.id,
         'login',
-        expect.objectContaining({
+        {
+          email: 'oa***@example.com',
+          ip: '192.168.1.1',
           provider: 'google',
+          userAgent: null,
           platform: 'ios',
           appVersion: '1.0.0',
-        })
+        }
       );
     });
 
@@ -333,11 +354,17 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
 
       await POST(request);
 
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          platform: 'ios',
-        })
-      );
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
+        providedDeviceToken: undefined,
+        userId: mockUser.id,
+        deviceId: 'ios-device-789',
+        platform: 'ios',
+        tokenVersion: 0,
+        deviceName: undefined,
+        userAgent: undefined,
+        ipAddress: '192.168.1.1',
+      });
     });
   });
 
@@ -416,10 +443,12 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       expect(trackAuthEvent).toHaveBeenCalledWith(
         undefined,
         'failed_oauth',
-        expect.objectContaining({
+        {
           provider: 'google',
           reason: 'Verification failed',
-        })
+          ip: '192.168.1.1',
+          platform: 'ios',
+        }
       );
     });
   });
@@ -439,7 +468,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.idToken).toBeDefined();
+      expect(body.errors.idToken).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('returns 400 for missing deviceId', async () => {
@@ -456,7 +485,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.deviceId).toBeDefined();
+      expect(body.errors.deviceId).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('returns 400 for invalid platform', async () => {
@@ -473,7 +502,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.platform).toBeDefined();
+      expect(body.errors.platform).toEqual(['Invalid option: expected one of "ios"|"android"|"desktop"']);
     });
 
     it('returns 400 for empty idToken', async () => {
@@ -490,7 +519,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.idToken).toBeDefined();
+      expect(body.errors.idToken).toEqual(['ID token is required']);
     });
   });
 
@@ -566,7 +595,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
 
       const response = await POST(request);
 
-      expect(response.headers.get('X-RateLimit-Limit')).toBeDefined();
+      expect(response.headers.get('X-RateLimit-Limit')).toBe('5');
       expect(response.headers.get('X-RateLimit-Remaining')).toBe('0');
     });
 
@@ -595,7 +624,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
   });
 
   describe('session creation', () => {
-    it('creates 90-day session for mobile OAuth', async () => {
+    it('SEC-2 (partial) creates a 90-day session for mobile OAuth carrying Google single-factor evidence (D-OW-45)', async () => {
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -604,13 +633,16 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
 
       await POST(request);
 
-      expect(sessionService.createSession).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: mockUser.id,
-          expiresInMs: 90 * 24 * 60 * 60 * 1000,
-          createdByService: 'mobile-oauth-google',
-        })
-      );
+      expect(sessionService.createSession).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
+        userId: mockUser.id,
+        type: 'user',
+        scopes: ['*'],
+        expiresInMs: 90 * 24 * 60 * 60 * 1000,
+        deviceId: 'ios-device-789',
+        createdByService: 'mobile-oauth-google',
+        createdByIp: '192.168.1.1',
+      });
     });
 
     it('returns 500 when session validation fails', async () => {
@@ -632,7 +664,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
 
   describe('error handling', () => {
     it('returns 500 on unexpected error', async () => {
-      vi.mocked(verifyOAuthIdToken).mockRejectedValue(new Error('Network error'));
+      vi.mocked(verifyOAuthIdToken).mockRejectedValueOnce(new Error('Network error'));
 
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
@@ -648,7 +680,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
     });
 
     it('tracks failed OAuth on unexpected error', async () => {
-      vi.mocked(verifyOAuthIdToken).mockRejectedValue(new Error('Unexpected'));
+      vi.mocked(verifyOAuthIdToken).mockRejectedValueOnce(new Error('Unexpected'));
 
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
@@ -661,15 +693,16 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       expect(trackAuthEvent).toHaveBeenCalledWith(
         undefined,
         'failed_oauth',
-        expect.objectContaining({
+        {
           provider: 'google',
           error: 'Unexpected',
-        })
+          platform: 'ios',
+        }
       );
     });
 
     it('handles rate limit reset failures gracefully', async () => {
-      vi.mocked(resetDistributedRateLimit).mockRejectedValue(new Error('Redis error'));
+      vi.mocked(resetDistributedRateLimit).mockRejectedValueOnce(new Error('Redis error'));
 
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
@@ -684,8 +717,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
     });
 
     it('logs rate limit reset failures', async () => {
-      const { loggers } = await import('@pagespace/lib/server');
-      vi.mocked(resetDistributedRateLimit).mockRejectedValue(new Error('Reset failed'));
+      const { loggers } = await import('@pagespace/lib/logging/logger-config');
+      vi.mocked(resetDistributedRateLimit).mockRejectedValueOnce(new Error('Reset failed'));
 
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
@@ -697,7 +730,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
 
       expect(loggers.auth.warn).toHaveBeenCalledWith(
         'Rate limit reset failed after successful OAuth',
-        expect.any(Object)
+        { failureCount: 1, reasons: ['Reset failed'] }
       );
     });
   });
@@ -717,11 +750,17 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
 
       await POST(request);
 
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          providedDeviceToken: existingDeviceToken,
-        })
-      );
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
+        providedDeviceToken: existingDeviceToken,
+        userId: mockUser.id,
+        deviceId: 'ios-device-789',
+        platform: 'ios',
+        tokenVersion: 0,
+        deviceName: 'iPhone 15 Pro Max',
+        userAgent: undefined,
+        ipAddress: '192.168.1.1',
+      });
     });
 
     it('creates new device token if not provided', async () => {
@@ -733,11 +772,17 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
 
       await POST(request);
 
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          providedDeviceToken: undefined,
-        })
-      );
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
+        providedDeviceToken: undefined,
+        userId: mockUser.id,
+        deviceId: 'ios-device-789',
+        platform: 'ios',
+        tokenVersion: 0,
+        deviceName: 'iPhone 15 Pro Max',
+        userAgent: undefined,
+        ipAddress: '192.168.1.1',
+      });
     });
   });
 
@@ -779,6 +824,56 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const body = await response.json();
 
       expect(body.refreshToken).toBeUndefined();
+    });
+  });
+
+  describe('PII scrub in log metadata', () => {
+    const findInfoCall = (msg: string) =>
+      vi.mocked(loggers.auth.info).mock.calls.find(call => call[0] === msg);
+
+    it('masks email in "Google ID token verified" log', async () => {
+      const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validExchangePayload),
+      });
+
+      await POST(request);
+
+      const call = findInfoCall('Google ID token verified');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as { email?: string };
+      expect(meta.email).toBe('oa***@example.com');
+    });
+
+    it('masks email in "Creating or linking OAuth user" log', async () => {
+      const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validExchangePayload),
+      });
+
+      await POST(request);
+
+      const call = findInfoCall('Creating or linking OAuth user');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as { email?: string };
+      expect(meta.email).toBe('oa***@example.com');
+    });
+
+    it('masks email in "OAuth user created/linked" log', async () => {
+      const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validExchangePayload),
+      });
+
+      await POST(request);
+
+      const call = findInfoCall('OAuth user created/linked');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as { email?: string };
+      expect(meta.email).toBe('oa***@example.com');
     });
   });
 });

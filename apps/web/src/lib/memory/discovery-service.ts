@@ -2,94 +2,220 @@
  * Memory Discovery Service
  *
  * Runs focused LLM passes to discover insights about a user from their
- * recent conversations and activity. This is "blind" discovery - the LLM
+ * recent conversations and activity. This is "blind" discovery — the LLM
  * does NOT see the user's current personalization profile.
+ *
+ * Claims carry evidence and occurrence counts for corroboration.
  */
 
-import { generateText } from 'ai';
-import {
-  db,
-  conversations,
-  messages,
-  chatMessages,
-  pages,
-  activityLogs,
-  driveMembers,
-  eq,
-  and,
-  gte,
-  desc,
-  inArray,
-} from '@pagespace/db';
-import { createAIProvider, isProviderError } from '@/lib/ai/core';
-import { loggers } from '@pagespace/lib/server';
+import { generateObject } from 'ai';
+import { db } from '@pagespace/db/db';
+import { and, desc, eq, gte, inArray, ne } from '@pagespace/db/operators';
+import { pages } from '@pagespace/db/schema/core';
+import { activityLogs } from '@pagespace/db/schema/monitoring';
+import { orgIdsOfDrives } from '@pagespace/lib/permissions/org-derived-content';
+import { conversations, messages } from '@pagespace/db/schema/conversations';
+import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
+import { BACKGROUND_HEAVY_PROVIDER, BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core/ai-providers-config';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { AIMonitoring, discardUsageOutcome } from '@pagespace/lib/monitoring/ai-monitoring';
+import { memberDrivesReadableByModel } from '@/lib/ai/core/org-model-policy';
+import { reserveMemoryCall, type MemoryGateRefusal } from './memory-credit';
+import { z } from 'zod';
+import { type AccessActor, HELD_DRIVES, automationActor } from '@pagespace/lib/permissions/access-actor';
+
+/**
+ * The drives the user is a member of, owned or joined (org-aware), whose org lets the discovery model read them
+ * (POL-8): discovery runs in no drive, but it reads org content, and an org that does not allow the model keeps
+ * its content out. `allReadable` says no member drive was kept out, which is what lets discovery read the person's
+ * global-assistant conversations: they carry no drive, so any of those orgs' content may be in them.
+ */
+async function readableMemberDrives(userId: string): Promise<{ driveIds: string[]; allReadable: boolean }> {
+  return memberDrivesReadableByModel(discoveryActor(userId), { provider: BACKGROUND_HEAVY_PROVIDER, modelId: BACKGROUND_HEAVY_MODEL });
+}
+
+export type MemoryField = 'bio' | 'writingStyle' | 'rules';
+
+/**
+ * How far back a discovery run reads, in days.
+ *
+ * This window is REREAD IN FULL on every run, which is the single fact that
+ * shapes the rest of the pipeline: the same message is seen again night after
+ * night, so corroboration counts the day the EVIDENCE was written rather than
+ * the day the cron happened to run (see `evidenceAt`). Widening it widens the
+ * re-read, not the corroboration.
+ */
+const LOOKBACK_DAYS = 7;
+
+export interface DiscoveredClaim {
+  field: MemoryField;
+  claim: string;
+  evidence: string;
+  /**
+   * How many messages in THIS window support the claim.
+   *
+   * Not used for corroboration — that counts distinct evidence days across
+   * runs (see `evidenceAt`), and a count confined to one window cannot
+   * distinguish one emphatic day from a standing preference. It is kept
+   * because asking the model to count forces it to look for repetition rather
+   * than latch onto a single striking sentence, and it is worth having in the
+   * logs when tuning the prompts.
+   */
+  occurrencesInWindow: number;
+  /**
+   * When the newest message supporting this claim was written.
+   *
+   * This, NOT the time the cron happened to run, is what corroboration counts.
+   * Discovery re-reads the same rolling 7-day window every night, so a single
+   * unchanged message is rediscovered on consecutive runs; counting cron days
+   * would promote a one-off after two or three nights and defeat the whole
+   * point of the staging table.
+   *
+   * Derived server-side from `evidenceMessageIndex` — the model cites which
+   * message it quoted, and we look up that message's real timestamp. The model
+   * never supplies a date.
+   */
+  evidenceAt: Date;
+}
 
 export interface DiscoveryResult {
-  worldview: string[];
-  projects: string[];
-  communication: string[];
-  preferences: string[];
+  claims: DiscoveredClaim[];
+  /**
+   * SEC-2/3 (D-OW-62): the orgs whose drives fed the transcript and activity every pass read (personal drives and
+   * global conversations feed none). All three passes share one context, so every claim carries all of them.
+   */
+  orgIds: string[];
+  /** Set when the credit gate refused a pass: that pass ran no model and was not charged. */
+  creditRefusal?: MemoryGateRefusal;
 }
+
+/** One pass's result: its claims, or the credit refusal that kept its model from running. */
+type PassOutcome = { claims: DiscoveredClaim[] } | { creditRefusal: MemoryGateRefusal };
 
 interface ConversationMessage {
   role: string;
   content: string;
   createdAt: Date;
+  /** The drive of the page a page-agent message was written in; null for a global conversation. */
+  driveId: string | null;
 }
 
-// Discovery pass prompts
-const WORLDVIEW_PROMPT = `Analyze these conversations to discover:
-- What does this person believe or value?
-- What frameworks or mental models do they use?
-- What are they expert in?
-- What's their background or role?
+interface ActivityLine {
+  line: string;
+  driveId: string | null;
+}
 
-Only report clear patterns, not speculation. Return a JSON array of strings, each string being a distinct insight. If no clear patterns emerge, return an empty array.
+// Zod schema for structured output — eliminates silent parse failures.
+//
+// `field` is optional: `runDiscoveryPasses` assigns it from the pass the claim
+// came from, which is the authority. Requiring it here would make a response
+// that omits it fail schema validation and drop the whole pass to zero claims.
+const claimSchema = z.object({
+  field: z.enum(['bio', 'writingStyle', 'rules']).optional(),
+  claim: z.string().min(1),
+  evidence: z.string().min(1),
+  occurrencesInWindow: z.number().int().min(1),
+  /**
+   * Index (from the numbered transcript) of the newest message supporting the
+   * claim. An index rather than a date so the model cannot invent a timestamp;
+   * anything out of range falls back to the oldest message in the window,
+   * which is the conservative choice — it cannot fabricate recency.
+   */
+  evidenceMessageIndex: z.number().int().min(0),
+});
 
-Example output: ["Values test-driven development", "Expert in React and TypeScript", "Has background in finance"]`;
+const discoverySchema = z.object({
+  claims: z.array(claimSchema),
+});
 
-const PROJECTS_PROMPT = `Analyze these conversations to discover:
-- What is this person actively working on?
-- What projects or goals do they mention?
-- What problems are they trying to solve?
+// Discovery pass prompt — shared structure, field-specific logic
+const DISCOVERY_PROMPT_BASE = `Analyze these conversations to discover insights about this person that would change how an AI behaves.
 
-Focus on current/recent work, not historical. Return a JSON array of strings, each string being a distinct insight about their current work. If nothing clear emerges, return an empty array.
+ACTIONABILITY GATE (check first, everything fails this):
+Only capture something if knowing it would genuinely change AI behaviour in a conversation.
+If it is merely true about the person but doesn't affect what the AI should do, SKIP IT.
 
-Example output: ["Working on a memory system for AI personalization", "Building a collaborative workspace app"]`;
+EXPLICIT EXCLUSIONS (never record these, even if they seem actionable):
+- Personal history, family relationships, living situation
+- Religious or political beliefs
+- Hobbies, games, sports teams, entertainment preferences
+- Named third parties (real names of anyone other than the user)
+- Employer or product marketing claims
+- Self-reported metrics (lines of code, rankings, follower counts, scores)
+- Current tasks, projects, or work-in-progress status
 
-const COMMUNICATION_PROMPT = `Analyze these conversations to discover:
-- How does this person like to communicate?
-- Do they prefer brief or detailed responses?
-- What tone do they use and expect?
-- Any formatting preferences?
+Each message in the transcript below is numbered like [12 user], in chronological order: [0] is the OLDEST message and the highest number is the MOST RECENT. Use those numbers.
 
-Look for patterns in how they interact. Return a JSON array of strings, each string being a distinct communication preference. If no clear patterns emerge, return an empty array.
+Return a JSON object with a "claims" array. Each claim has:
+- claim: the insight itself — IMPERATIVE for writingStyle/rules (e.g. "Never use emojis", not "user prefers no emojis")
+- evidence: a verbatim quote from the user's messages that supports this claim
+- occurrencesInWindow: how many distinct messages in these conversations support this claim
+- evidenceMessageIndex: the NUMBER of the most recent message supporting this claim, exactly as shown in brackets
 
-Example output: ["Prefers concise responses", "Uses technical language comfortably"]`;
+Example output format:
+{
+  "claims": [
+    {
+      "claim": "Prefer concise responses without preamble or sign-off",
+      "evidence": "be concise, skip the preamble",
+      "occurrencesInWindow": 3,
+      "evidenceMessageIndex": 12
+    }
+  ]
+}`;
 
-const PREFERENCES_PROMPT = `Analyze these conversations to discover:
-- What has this person explicitly asked for or against?
-- What frustrates them about AI responses?
-- What specific instructions have they given?
+const WORLDVIEW_SPECIFIC = `
+Focus on: expertise, domain knowledge, thinking style, professional background.
+Examples of good bio claims:
+- "Software engineer specializing in React and TypeScript"
+- "Prefers test-driven development"
+- "Background in finance, now working on B2B SaaS"
+`;
 
-Only include explicit preferences, not inferred ones. Return a JSON array of strings, each string being a distinct preference or rule. If none found, return an empty array.
+const COMMUNICATION_SPECIFIC = `
+Focus on: how the AI should WRITE — both directions.
+- TO the user: tone, verbosity, formatting, interaction patterns
+- AS the user: voice, banned constructions, sentence shape, characteristic phrasing for ghostwriting
 
-Example output: ["Don't use emojis", "Always include TypeScript types"]`;
+EVERY claim must be IMPERATIVE, second-person, starting with a verb. Never describe how the user talks.
+Examples of good writingStyle claims:
+- "Be concise and direct. Do not use preamble or sign-off."
+- "When drafting text as the user, avoid em dashes. Use sentence fragments and single-word closings like 'Exactly.'"
+- "Use bullet points for lists. Provide code examples for technical concepts."
+- "When ghostwriting, enthymematic style: leave conclusions unstated so the reader fills the gap"
+`;
+
+const RULES_SPECIFIC = `
+Focus on: universal AI behavior preferences that apply in ANY workspace.
+- NOT project-specific technology choices
+- NOT scope or priority decisions for a specific release
+- NOT one-off decisions explained by their context
+
+Examples of good rules claims:
+- "Always suggest TypeScript solutions over JavaScript"
+- "Include error handling when writing code"
+- "Never use emojis in code comments or documentation"
+`;
 
 /**
- * Gather recent messages from all conversation sources for a user
+ * Gather recent messages from all conversation sources for a user.
+ *
+ * Wider window than before: 60 messages × 1500 chars each (vs 100 × 500).
  */
 async function gatherRecentConversations(
   userId: string,
-  lookbackDays: number = 7
+  lookbackDays: number = LOOKBACK_DAYS
 ): Promise<ConversationMessage[]> {
   const lookbackDate = new Date();
   lookbackDate.setDate(lookbackDate.getDate() - lookbackDays);
 
   const allMessages: ConversationMessage[] = [];
+  const { driveIds, allReadable } = await readableMemberDrives(userId);
 
-  // 1. Global/DM conversations (from unified conversations table)
-  const globalMessages = await db
+  // Global/DM conversations. eq(type, 'global') is REQUIRED — see D6 comment
+  // in agent-epic "Agent-Session Single Source of Truth". POL-8: read only when
+  // every org the person is in allows the discovery model (see readableMemberDrives).
+  const globalMessages = !allReadable ? [] : await db
     .select({
       content: messages.content,
       role: messages.role,
@@ -99,54 +225,57 @@ async function gatherRecentConversations(
     .innerJoin(conversations, eq(conversations.id, messages.conversationId))
     .where(
       and(
+        eq(conversations.type, 'global'),
         eq(conversations.userId, userId),
         eq(messages.isActive, true),
+        // Skip streaming placeholder rows
+        ne(messages.status, 'streaming'),
         gte(messages.createdAt, lookbackDate)
       )
     )
-    .orderBy(desc(messages.createdAt))
-    .limit(150);
+    .orderBy(desc(messages.createdAt), desc(messages.id))
+    .limit(60); // was 150, reduced to 60 for tighter window
 
   allMessages.push(
     ...globalMessages.map((m) => ({
       role: m.role,
       content: m.content,
       createdAt: m.createdAt,
+      driveId: null,
     }))
   );
 
-  // 2. Page agent conversations (chatMessages)
-  const userDrives = await db
-    .select({ driveId: driveMembers.driveId })
-    .from(driveMembers)
-    .where(eq(driveMembers.userId, userId));
-  const driveIds = userDrives.map((d) => d.driveId);
+  // Page agent conversations via drive membership.
 
   if (driveIds.length > 0) {
     const pageMessages = await db
       .select({
-        content: chatMessages.content,
-        role: chatMessages.role,
-        createdAt: chatMessages.createdAt,
+        content: messages.content,
+        role: messages.role,
+        createdAt: messages.createdAt,
+        driveId: pages.driveId,
       })
-      .from(chatMessages)
-      .innerJoin(pages, eq(pages.id, chatMessages.pageId))
+      .from(messages)
+      .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+      .innerJoin(pages, eq(pages.id, conversations.contextId))
       .where(
         and(
-          eq(chatMessages.userId, userId),
-          eq(chatMessages.isActive, true),
+          eq(conversations.type, 'page'),
+          eq(messages.userId, userId),
+          eq(messages.isActive, true),
           inArray(pages.driveId, driveIds),
-          gte(chatMessages.createdAt, lookbackDate)
+          gte(messages.createdAt, lookbackDate)
         )
       )
-      .orderBy(desc(chatMessages.createdAt))
-      .limit(100);
+      .orderBy(desc(messages.createdAt), desc(messages.id))
+      .limit(60);
 
     allMessages.push(
       ...pageMessages.map((m) => ({
         role: m.role,
         content: m.content || '',
         createdAt: m.createdAt,
+        driveId: m.driveId,
       }))
     );
   }
@@ -157,20 +286,24 @@ async function gatherRecentConversations(
 }
 
 /**
- * Gather recent activity patterns
+ * Discovery is a cron pass with no one signing in: it reads as the user, an automation (D-OW-34) over every drive they
+ * hold, because what it distills is filtered per reader by the sign-in policy of each org it drew from (D-OW-62).
+ */
+function discoveryActor(userId: string): AccessActor {
+  return automationActor(userId, 'memory-discovery', HELD_DRIVES);
+}
+
+/**
+ * Gather recent activity patterns.
  */
 async function gatherRecentActivity(
   userId: string,
-  lookbackDays: number = 7
-): Promise<string[]> {
+  lookbackDays: number = LOOKBACK_DAYS
+): Promise<ActivityLine[]> {
   const lookbackDate = new Date();
   lookbackDate.setDate(lookbackDate.getDate() - lookbackDays);
 
-  const userDrives = await db
-    .select({ driveId: driveMembers.driveId })
-    .from(driveMembers)
-    .where(eq(driveMembers.userId, userId));
-  const driveIds = userDrives.map((d) => d.driveId);
+  const { driveIds } = await readableMemberDrives(userId);
 
   if (driveIds.length === 0) return [];
 
@@ -179,6 +312,7 @@ async function gatherRecentActivity(
       operation: activityLogs.operation,
       resourceType: activityLogs.resourceType,
       resourceTitle: activityLogs.resourceTitle,
+      driveId: activityLogs.driveId,
     })
     .from(activityLogs)
     .where(
@@ -189,133 +323,220 @@ async function gatherRecentActivity(
       )
     )
     .orderBy(desc(activityLogs.timestamp))
-    .limit(50);
+    .limit(30); // was 50, reduced
 
-  return activities.map(
-    (a) =>
-      `${a.operation} ${a.resourceType}${a.resourceTitle ? `: "${a.resourceTitle}"` : ''}`
-  );
+  return activities.map((a) => ({
+    line: `${a.operation} ${a.resourceType}${a.resourceTitle ? `: "${a.resourceTitle}"` : ''}`,
+    driveId: a.driveId,
+  }));
 }
 
 /**
- * Run a single focused discovery pass
+ * Run a single focused discovery pass using generateObject.
  */
 async function runDiscoveryPass(
   userId: string,
   passName: string,
+  /** The field this pass is responsible for — the authority on every claim it returns. */
+  field: MemoryField,
   systemPrompt: string,
-  conversationContext: string
-): Promise<string[]> {
+  conversationContext: string,
+  /** Same order as the numbered transcript, so a cited index resolves to a real timestamp. */
+  messageDates: Date[]
+): Promise<PassOutcome> {
   const providerResult = await createAIProvider(userId, {
-    selectedProvider: 'pagespace',
-    selectedModel: 'pro',
-  });
+    selectedProvider: BACKGROUND_HEAVY_PROVIDER,
+    selectedModel: BACKGROUND_HEAVY_MODEL,
+  }, { driveId: null });
 
   if (isProviderError(providerResult)) {
     loggers.api.warn(`Memory discovery ${passName} pass failed: provider error`, {
       error: providerResult.error,
     });
-    return [];
+    return { claims: [] };
+  }
+
+  // Reserve before the model (SPEND-1). Refused: this pass finds nothing, as when the
+  // provider is unavailable, and nothing is charged.
+  const reservation = await reserveMemoryCall(userId, {
+    provider: providerResult.provider,
+    model: providerResult.modelName,
+    inputChars: systemPrompt.length + conversationContext.length,
+  });
+  if (!reservation.allowed) {
+    loggers.api.info(`Memory discovery ${passName} pass skipped: credit gate refused`, { reason: reservation.reason });
+    return { creditRefusal: reservation.reason };
   }
 
   try {
-    const result = await generateText({
+    const result = await generateObject({
       model: providerResult.model,
+      schema: discoverySchema,
       system: systemPrompt,
       messages: [
         {
           role: 'user',
-          content: `Here are recent conversations from this user:\n\n${conversationContext}\n\nBased on these conversations, what insights can you extract? Remember to return a JSON array of strings.`,
+          content: `Here are recent conversations from this user:\n\n${conversationContext}\n\nBased on these conversations, what insights can you extract? Remember the actionability gate — only record things that would change how an AI behaves.`,
         },
       ],
       temperature: 0.3,
       maxRetries: 2,
+    }).catch((error: unknown) => {
+      reservation.release();
+      throw error;
     });
 
-    // Parse JSON array from response
-    const text = result.text.trim();
-    // Handle both raw JSON and markdown code block responses
-    const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-    const jsonStr = jsonMatch ? jsonMatch[1] : text;
+    // Settles the reservation once (trackUsage takes the hold).
+    discardUsageOutcome(AIMonitoring.trackUsage({
+      userId,
+      provider: providerResult.provider,
+      model: providerResult.modelName,
+      source: 'memory',
+      holdId: reservation.holdId,
+      walletId: reservation.walletId,
+      inputTokens: result.usage?.inputTokens,
+      outputTokens: result.usage?.outputTokens,
+      totalTokens: result.usage
+        ? (result.usage.inputTokens ?? 0) + (result.usage.outputTokens ?? 0)
+        : undefined,
+      success: true,
+      metadata: { feature: 'memory_discovery', pass: passName },
+    }));
 
-    try {
-      const insights = JSON.parse(jsonStr);
-      if (Array.isArray(insights)) {
-        return insights.filter(
-          (item): item is string => typeof item === 'string' && item.trim().length > 0
-        );
-      }
-    } catch {
-      loggers.api.debug(`Memory discovery ${passName} pass: non-JSON response, skipping`);
-    }
+    // Resolve each cited index to the real message timestamp. The transcript is
+    // chronological, so index 0 is the OLDEST message in the window, and an
+    // unusable index falls back to it: a claim must never be able to look
+    // fresher than the evidence actually supports, since that is what would let
+    // it clear the corroboration bar early.
+    const oldest = messageDates[0] ?? new Date();
 
-    return [];
+    // The model's own `field` tag is discarded in favour of `field`, the field
+    // this pass is responsible for. The model can omit or mislabel it, and a
+    // claim filed into the wrong page is worse than one not filed at all.
+    return {
+      claims: result.object.claims.map(({ field: _modelTag, ...claim }) => ({
+        ...claim,
+        field,
+        evidenceAt: messageDates[claim.evidenceMessageIndex] ?? oldest,
+      })),
+    };
   } catch (error) {
     loggers.api.warn(`Memory discovery ${passName} pass failed`, { error });
-    return [];
+    return { claims: [] };
   }
 }
 
 /**
- * Run all discovery passes for a user
+ * Run all discovery passes for a user.
+ *
+ * Returns a unified set of claims across all three fields.
  */
 export async function runDiscoveryPasses(userId: string): Promise<DiscoveryResult> {
-  // Gather context
   const [recentMessages, recentActivity] = await Promise.all([
     gatherRecentConversations(userId),
     gatherRecentActivity(userId),
   ]);
 
-  // Check if there's enough data to analyze
   if (recentMessages.length < 3) {
     loggers.api.debug('Memory discovery: insufficient conversation data', {
       userId,
       messageCount: recentMessages.length,
     });
-    return {
-      worldview: [],
-      projects: [],
-      communication: [],
-      preferences: [],
-    };
+    return { claims: [], orgIds: [] };
   }
 
-  // Format conversation context for LLM
-  const conversationContext = recentMessages
-    .slice(0, 100)
-    .map((m) => `[${m.role}]: ${m.content.substring(0, 500)}`)
+  // Format conversation context: 60 messages × 1500 chars (was 100 × 500).
+  //
+  // `recentMessages` is newest-first (that is how the 60 most recent are
+  // selected), but the transcript is then REVERSED to chronological order
+  // before numbering. Numbering a newest-first list would make index 0 the
+  // newest message while a model reading a conversation naturally assumes
+  // ascending time — so "cite the most recent message" would return a high
+  // index, and `evidenceAt` would resolve to the OLDEST message instead.
+  //
+  // That failure is invisible: the index is in range, so the out-of-range
+  // fallback never fires, and today's evidence is silently stamped a week old.
+  // It also inverts the corroboration rule, since both
+  // `shouldIncrementOccurrences` and `promotionCutoff` key on `evidenceAt`.
+  const windowed = recentMessages.slice(0, 60).reverse();
+  const messageDates = windowed.map((m) => m.createdAt);
+  const conversationContext = windowed
+    .map((m, i) => `[${i} ${m.role}]: ${m.content.substring(0, 1500)}`)
     .join('\n\n');
 
-  // Add activity context if available
+  const activityShown = recentActivity.slice(0, 20);
   const activityContext =
-    recentActivity.length > 0
-      ? `\n\nRecent workspace activity:\n${recentActivity.slice(0, 20).join('\n')}`
+    activityShown.length > 0
+      ? `\n\nRecent workspace activity:\n${activityShown.map((a) => a.line).join('\n')}`
       : '';
+
+  // Exactly the drives whose content the passes are about to read.
+  const orgIds = await orgIdsOfDrives(
+    [...windowed, ...activityShown].flatMap((source) => (source.driveId ? [source.driveId] : []))
+  );
 
   const fullContext = conversationContext + activityContext;
 
-  // Run all 4 passes in parallel
-  const [worldview, projects, communication, preferences] = await Promise.all([
-    runDiscoveryPass(userId, 'worldview', WORLDVIEW_PROMPT, fullContext),
-    runDiscoveryPass(userId, 'projects', PROJECTS_PROMPT, fullContext),
-    runDiscoveryPass(userId, 'communication', COMMUNICATION_PROMPT, fullContext),
-    runDiscoveryPass(userId, 'preferences', PREFERENCES_PROMPT, fullContext),
+  // Run three focused passes in parallel. Each pass owns its field and stamps
+  // it onto every claim it returns, so the model's own tag never decides which
+  // page a claim lands in. Each pass reserves its own credits before its model
+  // runs (reserveMemoryCall) and settles that reservation once; a refused pass
+  // runs no model, is not charged and contributes no claims. allSettled, not
+  // all: one pass throwing must not discard its siblings' paid-for claims.
+  const passes = await Promise.allSettled([
+    runDiscoveryPass(
+      userId,
+      'worldview',
+      'bio',
+      DISCOVERY_PROMPT_BASE + '\n\n' + WORLDVIEW_SPECIFIC,
+      fullContext,
+      messageDates
+    ),
+    runDiscoveryPass(
+      userId,
+      'communication',
+      'writingStyle',
+      DISCOVERY_PROMPT_BASE + '\n\n' + COMMUNICATION_SPECIFIC,
+      fullContext,
+      messageDates
+    ),
+    runDiscoveryPass(
+      userId,
+      'preferences',
+      'rules',
+      DISCOVERY_PROMPT_BASE + '\n\n' + RULES_SPECIFIC,
+      fullContext,
+      messageDates
+    ),
   ]);
+
+  let creditRefusal: MemoryGateRefusal | undefined;
+  const [bioClaims, communicationClaims, rulesClaims] = passes.map((pass) => {
+    if (pass.status === 'rejected') {
+      loggers.api.warn('Memory discovery pass failed', { userId, error: pass.reason });
+      return [];
+    }
+    if ('creditRefusal' in pass.value) {
+      creditRefusal ??= pass.value.creditRefusal;
+      return [];
+    }
+    return pass.value.claims;
+  });
+
+  const allClaims = [...bioClaims, ...communicationClaims, ...rulesClaims];
 
   loggers.api.info('Memory discovery passes complete', {
     userId,
-    insightCounts: {
-      worldview: worldview.length,
-      projects: projects.length,
-      communication: communication.length,
-      preferences: preferences.length,
+    claimCounts: {
+      bio: bioClaims.length,
+      writingStyle: communicationClaims.length,
+      rules: rulesClaims.length,
     },
   });
 
-  return {
-    worldview,
-    projects,
-    communication,
-    preferences,
-  };
+  if (creditRefusal) {
+    loggers.api.info('Memory discovery: credit gate refused a pass', { userId, reason: creditRefusal });
+    return { claims: allClaims, orgIds, creditRefusal };
+  }
+  return { claims: allClaims, orgIds };
 }

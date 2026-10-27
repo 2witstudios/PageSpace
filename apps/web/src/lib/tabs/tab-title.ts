@@ -17,7 +17,10 @@ export type PathType =
   | 'drive-settings'
   | 'drive-trash'
   | 'drive-calendar'
-  | 'drive-inbox'
+  | 'drive-channels'
+  | 'drive-files'
+  | 'drive-workflows'
+  | 'drive-agents'
   // Global dashboard routes
   | 'dashboard-tasks'
   | 'dashboard-activity'
@@ -26,11 +29,13 @@ export type PathType =
   | 'dashboard-connections'
   | 'dashboard-calendar'
   | 'dashboard-drives'
-  // Inbox routes
-  | 'inbox'
-  | 'inbox-dm'
-  | 'inbox-channel'
-  | 'inbox-new'
+  | 'dashboard-agents'
+  // Direct Messages + Channels routes
+  | 'dms'
+  | 'dm'
+  | 'dm-new'
+  | 'channels'
+  | 'channel'
   // Settings routes
   | 'settings'
   // Admin routes
@@ -64,10 +69,24 @@ export interface TabMeta {
 }
 
 // Global dashboard routes (not drive-specific)
-const GLOBAL_DASHBOARD_ROUTES = ['tasks', 'activity', 'storage', 'trash', 'connections', 'calendar', 'inbox', 'drives'] as const;
+const GLOBAL_DASHBOARD_ROUTES = ['tasks', 'activity', 'storage', 'trash', 'connections', 'calendar', 'dms', 'channels', 'drives', 'agents'] as const;
 
 // Drive-specific special routes
-const DRIVE_SPECIAL_ROUTES = ['tasks', 'activity', 'members', 'settings', 'trash', 'calendar', 'inbox'] as const;
+const DRIVE_SPECIAL_ROUTES = ['tasks', 'activity', 'members', 'settings', 'trash', 'calendar', 'channels', 'files', 'workflows', 'agents'] as const;
+
+/**
+ * Whether a parsed route is scoped to ONE drive at the drive level — the bare
+ * `/dashboard/[driveId]` AND every `/dashboard/[driveId]/<section>` sub-route
+ * (tasks, members, settings, files, channels, workflows, calendar, trash,
+ * activity). All of them already carry `driveId`; consumers asking "which
+ * workspace is the user standing in" must not special-case only `'drive'`.
+ *
+ * Prefix-matched so a `drive-*` PathType added later is covered the day it
+ * lands. `'dashboard-drives'` (the global drive LIST) and `'page'` (a page
+ * INSIDE a drive, which callers handle separately) deliberately don't match.
+ */
+export const isDriveScopedPath = (parsed: ParsedPath): boolean =>
+  !!parsed.driveId && (parsed.type === 'drive' || parsed.type.startsWith('drive-'));
 
 export const parseTabPath = (path: string): ParsedPath => {
   const segments = path.split('/').filter(Boolean);
@@ -140,28 +159,28 @@ export const parseTabPath = (path: string): ParsedPath => {
 
   // Check if it's a global dashboard route first
   if (GLOBAL_DASHBOARD_ROUTES.includes(secondSegment as typeof GLOBAL_DASHBOARD_ROUTES[number])) {
-    // /dashboard/inbox routes
-    if (secondSegment === 'inbox') {
-      // /dashboard/inbox/dm/[conversationId]
-      if (segments[2] === 'dm' && segments[3]) {
-        return {
-          type: 'inbox-dm',
-          conversationId: segments[3],
-        };
-      }
-      // /dashboard/inbox/channel/[pageId]
-      if (segments[2] === 'channel' && segments[3]) {
-        return {
-          type: 'inbox-channel',
-          pageId: segments[3],
-        };
-      }
-      // /dashboard/inbox/new
+    // /dashboard/dms routes
+    if (secondSegment === 'dms') {
+      // /dashboard/dms/new
       if (segments[2] === 'new') {
-        return { type: 'inbox-new' };
+        return { type: 'dm-new' };
       }
-      // /dashboard/inbox
-      return { type: 'inbox' };
+      // /dashboard/dms/[conversationId]
+      if (segments[2]) {
+        return { type: 'dm', conversationId: segments[2] };
+      }
+      // /dashboard/dms
+      return { type: 'dms' };
+    }
+
+    // /dashboard/channels routes
+    if (secondSegment === 'channels') {
+      // /dashboard/channels/[pageId]
+      if (segments[2]) {
+        return { type: 'channel', pageId: segments[2] };
+      }
+      // /dashboard/channels
+      return { type: 'channels' };
     }
 
     // Other global dashboard routes
@@ -173,6 +192,7 @@ export const parseTabPath = (path: string): ParsedPath => {
       connections: 'dashboard-connections',
       calendar: 'dashboard-calendar',
       drives: 'dashboard-drives',
+      agents: 'dashboard-agents',
     };
     return { type: globalTypeMap[secondSegment] };
   }
@@ -219,7 +239,10 @@ export const parseTabPath = (path: string): ParsedPath => {
       settings: 'drive-settings',
       trash: 'drive-trash',
       calendar: 'drive-calendar',
-      inbox: 'drive-inbox',
+      channels: 'drive-channels',
+      files: 'drive-files',
+      workflows: 'drive-workflows',
+      agents: 'drive-agents',
     };
     return {
       type: typeMap[thirdSegment],
@@ -280,7 +303,12 @@ export const getStaticTabMeta = (parsed: ParsedPath): TabMeta | null => {
       return { title: 'Calendar', iconName: 'Calendar' };
 
     case 'dashboard-drives':
-      return { title: 'Drives', iconName: 'Folder' };
+      // The drives browser is what Files shows in the All drives focus, and
+      // the page is titled as such, so the tab is too.
+      return { title: 'Files', iconName: 'Folder' };
+
+    case 'dashboard-agents':
+      return { title: 'Agents', iconName: 'Bot' };
 
     // Drive-specific routes
     case 'drive-tasks':
@@ -308,22 +336,34 @@ export const getStaticTabMeta = (parsed: ParsedPath): TabMeta | null => {
     case 'drive-calendar':
       return { title: 'Calendar', iconName: 'Calendar' };
 
-    case 'drive-inbox':
-      return { title: 'Inbox', iconName: 'Inbox' };
+    case 'drive-channels':
+      return { title: 'Channels', iconName: 'Hash' };
 
-    // Global inbox routes
-    case 'inbox':
-      return { title: 'Inbox', iconName: 'Inbox' };
+    case 'drive-files':
+      return { title: 'Files', iconName: 'Folder' };
 
-    case 'inbox-dm':
+    case 'drive-workflows':
+      return { title: 'Workflows', iconName: 'Workflow' };
+
+    case 'drive-agents':
+      return { title: 'Agents', iconName: 'Bot' };
+
+    // Direct Messages + Channels routes
+    case 'dms':
+      return { title: 'Direct Messages', iconName: 'MessageSquare' };
+
+    case 'channels':
+      return { title: 'Channels', iconName: 'Hash' };
+
+    case 'dm':
       // Requires async lookup for conversation name
       return null;
 
-    case 'inbox-channel':
+    case 'channel':
       // Requires async lookup for channel name
       return null;
 
-    case 'inbox-new':
+    case 'dm-new':
       return { title: 'New Message', iconName: 'PenSquare' };
 
     // Settings routes

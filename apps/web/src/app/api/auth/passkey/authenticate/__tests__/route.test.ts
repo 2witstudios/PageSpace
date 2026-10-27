@@ -1,0 +1,859 @@
+/**
+ * Contract tests for POST /api/auth/passkey/authenticate
+ *
+ * Tests the Request -> Response contract for verifying WebAuthn authentication.
+ * Public endpoint (unauthenticated) - requires login CSRF token.
+ */
+
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+// Mock dependencies before imports
+vi.mock('next/server', () => ({
+  NextResponse: {
+    json: (body: unknown, init?: ResponseInit) => new Response(JSON.stringify(body), {
+      status: init?.status ?? 200,
+      headers: init?.headers ?? new Headers({ 'Content-Type': 'application/json' }),
+    }),
+  },
+}));
+
+vi.mock('@pagespace/lib/auth/passkey-service', () => ({
+  verifyAuthentication: vi.fn(),
+  findUserIdByCredentialId: vi.fn(),
+}));
+vi.mock('@pagespace/lib/auth/account-lockout', () => ({
+  getAccountLockoutStatus: vi.fn(),
+  recordFailedLoginAttempt: vi.fn(),
+  resetFailedLoginAttempts: vi.fn(),
+}));
+vi.mock('@pagespace/lib/auth/session-service', () => ({
+  sessionService: {
+    createSession: vi.fn().mockResolvedValue('ps_sess_mock_session_token'),
+    validateSession: vi.fn().mockResolvedValue({
+      sessionId: 'mock-session-id',
+      userId: 'user-1',
+      userRole: 'user',
+      tokenVersion: 0,
+      type: 'user',
+      scopes: ['*'],
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    }),
+    revokeAllUserSessions: vi.fn().mockResolvedValue(0),
+    revokeWebUserSessions: vi.fn().mockResolvedValue(0),
+    revokeAdminUserSessions: vi.fn().mockResolvedValue(0),
+    revokeSession: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
+  generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+}));
+vi.mock('@pagespace/lib/auth/exchange-codes', () => ({
+  createExchangeCode: vi.fn().mockResolvedValue('mock-exchange-code'),
+}));
+vi.mock('@pagespace/lib/auth/constants', () => ({
+  SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
+}));
+
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
+    auth: {
+      error: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      debug: vi.fn(),
+    },
+  },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  auditRequest: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
+  trackAuthEvent: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+  checkDistributedRateLimit: vi.fn(),
+  resetDistributedRateLimit: vi.fn(),
+  DISTRIBUTED_RATE_LIMITS: {
+    PASSKEY_AUTH: { maxAttempts: 5, windowMs: 300000, progressiveDelay: true },
+  },
+}));
+
+vi.mock('@/lib/auth', () => ({
+  validateLoginCSRFToken: vi.fn(),
+  getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
+  createDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
+  revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
+}));
+
+vi.mock('@/lib/auth/cookie-config', () => ({
+  appendSessionCookie: vi.fn(),
+}));
+
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserById: vi.fn().mockResolvedValue({
+      id: 'user-1',
+      tokenVersion: 5,
+    }),
+  },
+}));
+
+vi.mock('@/lib/repositories/drive-invite-repository', () => ({
+  driveInviteRepository: {
+    findUserVerificationStatusById: vi
+      .fn()
+      .mockResolvedValue({ email: 'user@example.com', emailVerified: null, suspendedAt: null }),
+  },
+}));
+
+vi.mock('@/lib/auth/native-invite-acceptance', () => ({
+  consumeAnyInviteIfPresent: vi.fn().mockResolvedValue({ kind: null, invitedDriveId: null, invitedPageId: null, connectionId: null, invitedOrgId: null, orgLandingPath: null }),
+  consumeAllInvitesForEmail: vi.fn().mockResolvedValue({ drivesAccepted: 0, pagesAccepted: 0, connectionsCreated: 0 }),
+}));
+
+vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
+  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'home-1', created: false }),
+}));
+
+import { POST } from '../route';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
+import { verifyAuthentication, findUserIdByCredentialId } from '@pagespace/lib/auth/passkey-service';
+import {
+  getAccountLockoutStatus,
+  recordFailedLoginAttempt,
+  resetFailedLoginAttempts,
+} from '@pagespace/lib/auth/account-lockout';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
+import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
+import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
+import { validateLoginCSRFToken, getClientIP, createDeviceToken, revokeSessionsForLogin } from '@/lib/auth';
+import { appendSessionCookie } from '@/lib/auth/cookie-config';
+
+const validPayload = {
+  response: { id: 'cred-1', rawId: 'raw', type: 'public-key' },
+  expectedChallenge: 'challenge-123',
+  csrfToken: 'valid-csrf',
+};
+
+const createRequest = (body: Record<string, unknown> = validPayload) =>
+  new Request('http://localhost/api/auth/passkey/authenticate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+describe('POST /api/auth/passkey/authenticate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    vi.mocked(getClientIP).mockReturnValue('127.0.0.1');
+    vi.mocked(checkDistributedRateLimit).mockResolvedValue({
+      allowed: true,
+      attemptsRemaining: 4,
+    });
+    vi.mocked(validateLoginCSRFToken).mockReturnValue(true);
+    vi.mocked(verifyAuthentication).mockResolvedValue({
+      ok: true,
+      // @ts-expect-error - partial mock data
+      data: { userId: 'user-1' },
+    });
+    vi.mocked(findUserIdByCredentialId).mockResolvedValue('user-1');
+    vi.mocked(getAccountLockoutStatus).mockResolvedValue({
+      isLocked: false,
+      failedAttempts: 0,
+      lockedUntil: null,
+      remainingAttempts: 10,
+    });
+    vi.mocked(recordFailedLoginAttempt).mockResolvedValue({ success: true });
+    vi.mocked(resetFailedLoginAttempts).mockResolvedValue(undefined);
+  });
+
+  describe('successful authentication', () => {
+    it.each([true, false])('SEC-2 (partial) binds only server-verified user verification to the new session (%s)', async (userVerified) => {
+      vi.mocked(verifyAuthentication).mockResolvedValue({ ok: true, data: { userId: 'user-1', isNewSession: true, userVerified } });
+      const before = Date.now();
+      await POST(createRequest({ ...validPayload, userVerified: true }));
+      const authentication = vi.mocked(sessionService.createSession).mock.calls[0][0].authentication;
+      expect(authentication?.assurance).toBe(userVerified ? 'user_verified_passkey' : 'single_factor');
+      expect(authentication?.authenticatedAtMs).toBeGreaterThanOrEqual(before);
+      expect(authentication?.authenticatedAtMs).toBeLessThanOrEqual(Date.now());
+    });
+
+    it('returns 200 with success, userId, and redirectUrl', async () => {
+      const response = await POST(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.userId).toBe('user-1');
+      expect(body.redirectUrl).toBe('/dashboard');
+    });
+
+    it('sets session cookie and CSRF cookie', async () => {
+      const response = await POST(createRequest());
+
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(appendSessionCookie).mock.calls[0][0]).toBeInstanceOf(Headers);
+      expect(vi.mocked(appendSessionCookie).mock.calls[0][1]).toBe('ps_sess_mock_session_token');
+      expect(response.headers.get('Cache-Control')).toBe('no-store, no-cache, must-revalidate');
+
+      // Check Set-Cookie contains CSRF token
+      const cookies = response.headers.getSetCookie();
+      const csrfCookie = cookies.find(c => c.startsWith('csrf_token='));
+      expect(csrfCookie).toContain('mock-csrf-token');
+    });
+
+    it('revokes prior sessions via the device-scoped helper before creating new one', async () => {
+      await POST(createRequest());
+
+      // No deviceId in the default payload → helper receives undefined and applies
+      // its legacy all-web-session fallback internally.
+      expect(revokeSessionsForLogin).toHaveBeenCalledWith('user-1', undefined, 'passkey_login', 'passkey');
+      expect(sessionService.createSession).toHaveBeenCalledWith(expect.objectContaining({
+        userId: 'user-1',
+        type: 'user',
+        scopes: ['*'],
+      }));
+    });
+
+    it('scopes revocation to the supplied deviceId (does not nuke other devices)', async () => {
+      await POST(createRequest({ ...validPayload, platform: 'web', deviceId: 'device-A' }));
+
+      expect(revokeSessionsForLogin).toHaveBeenCalledWith('user-1', 'device-A', 'passkey_login', 'passkey');
+    });
+
+    it('passes clientIP as createdByIp when not unknown', async () => {
+      vi.mocked(getClientIP).mockReturnValue('192.168.1.1');
+
+      await POST(createRequest());
+
+      expect(sessionService.createSession).toHaveBeenCalledWith(expect.objectContaining({
+        createdByIp: '192.168.1.1',
+      }));
+    });
+
+    it('passes undefined createdByIp when IP is unknown', async () => {
+      vi.mocked(getClientIP).mockReturnValue('unknown');
+
+      await POST(createRequest());
+
+      expect(sessionService.createSession).toHaveBeenCalledWith(expect.objectContaining({
+        createdByIp: undefined,
+      }));
+    });
+
+    it('generates CSRF token bound to session ID', async () => {
+      await POST(createRequest());
+
+      expect(sessionService.validateSession).toHaveBeenCalledWith('ps_sess_mock_session_token');
+      expect(generateCSRFToken).toHaveBeenCalledWith('mock-session-id');
+    });
+
+    it('resets rate limit on successful login', async () => {
+      await POST(createRequest());
+
+      expect(resetDistributedRateLimit).toHaveBeenCalledWith('passkey_auth:127.0.0.1');
+    });
+
+    it('tracks successful passkey login event', async () => {
+      await POST(createRequest());
+
+      expect(trackAuthEvent).toHaveBeenCalledWith('user-1', 'passkey_login', expect.objectContaining({
+        ip: '127.0.0.1',
+      }));
+    });
+
+    it('audits successful passkey login', async () => {
+      await POST(createRequest());
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'auth.login.success',
+          userId: 'user-1',
+          sessionId: 'mock-session-id',
+        })
+      );
+    });
+
+    it('does not include Secure flag in non-production', async () => {
+      vi.stubEnv('NODE_ENV', 'test');
+
+      const response = await POST(createRequest());
+      const cookies = response.headers.getSetCookie();
+      const csrfCookie = cookies.find(c => c.startsWith('csrf_token='));
+      expect(csrfCookie).not.toContain('; Secure');
+
+      vi.unstubAllEnvs();
+    });
+
+    it('includes Secure flag in production', async () => {
+      vi.stubEnv('NODE_ENV', 'production');
+
+      const response = await POST(createRequest());
+      const cookies = response.headers.getSetCookie();
+      const csrfCookie = cookies.find(c => c.startsWith('csrf_token='));
+      expect(csrfCookie).toContain('; Secure');
+
+      vi.unstubAllEnvs();
+    });
+  });
+
+  describe('account lockout (per-account layer, complements per-IP rate limiting)', () => {
+    it('rejects a locked account with 423 BEFORE verifying the assertion', async () => {
+      const lockedUntil = new Date(Date.now() + 10 * 60 * 1000);
+      vi.mocked(getAccountLockoutStatus).mockResolvedValue({
+        isLocked: true,
+        failedAttempts: 10,
+        lockedUntil,
+        remainingAttempts: 0,
+      });
+
+      const response = await POST(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(423);
+      expect(body.error).toMatch(/locked/i);
+      // The crypto verification must not run for a locked account
+      expect(verifyAuthentication).not.toHaveBeenCalled();
+      expect(findUserIdByCredentialId).toHaveBeenCalledWith('cred-1');
+    });
+
+    it('audits the lockout rejection', async () => {
+      vi.mocked(getAccountLockoutStatus).mockResolvedValue({
+        isLocked: true,
+        failedAttempts: 10,
+        lockedUntil: new Date(Date.now() + 10 * 60 * 1000),
+        remainingAttempts: 0,
+      });
+
+      await POST(createRequest());
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'security.rate.limited',
+          details: expect.objectContaining({ reason: 'passkey_account_locked' }),
+        }),
+      );
+    });
+
+    it('records a failed attempt on VERIFICATION_FAILED', async () => {
+      vi.mocked(verifyAuthentication).mockResolvedValue({
+        ok: false,
+        error: { code: 'VERIFICATION_FAILED', message: 'Error' },
+      });
+
+      await POST(createRequest());
+
+      expect(recordFailedLoginAttempt).toHaveBeenCalledWith('user-1');
+    });
+
+    it('records a failed attempt on COUNTER_REPLAY_DETECTED', async () => {
+      vi.mocked(verifyAuthentication).mockResolvedValue({
+        ok: false,
+        error: { code: 'COUNTER_REPLAY_DETECTED' },
+      });
+
+      await POST(createRequest());
+
+      expect(recordFailedLoginAttempt).toHaveBeenCalledWith('user-1');
+    });
+
+    it('does NOT record a failed attempt on a benign CHALLENGE_EXPIRED', async () => {
+      vi.mocked(verifyAuthentication).mockResolvedValue({
+        ok: false,
+        error: { code: 'CHALLENGE_EXPIRED' },
+      });
+
+      await POST(createRequest());
+
+      expect(recordFailedLoginAttempt).not.toHaveBeenCalled();
+    });
+
+    it('does NOT record a failed attempt when the credential maps to no account', async () => {
+      vi.mocked(findUserIdByCredentialId).mockResolvedValue(null);
+      vi.mocked(verifyAuthentication).mockResolvedValue({
+        ok: false,
+        error: { code: 'CREDENTIAL_NOT_FOUND' },
+      });
+
+      await POST(createRequest());
+
+      expect(recordFailedLoginAttempt).not.toHaveBeenCalled();
+    });
+
+    it('resets the lockout counter on successful authentication', async () => {
+      await POST(createRequest());
+
+      expect(resetFailedLoginAttempts).toHaveBeenCalledWith('user-1');
+    });
+  });
+
+  describe('rate limiting', () => {
+    it('returns 429 when rate limited', async () => {
+      vi.mocked(checkDistributedRateLimit).mockResolvedValue({
+        allowed: false,
+        attemptsRemaining: 0,
+        retryAfter: 300,
+      });
+
+      const response = await POST(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(429);
+      expect(body.error).toBe('Too many requests');
+      expect(body.retryAfter).toBe(300);
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'security.rate.limited',
+          details: expect.objectContaining({ reason: 'passkey_rate_limit_auth' }),
+          riskScore: 0.5,
+        })
+      );
+    });
+  });
+
+  describe('input validation', () => {
+    it('returns 400 for missing expectedChallenge', async () => {
+      const response = await POST(createRequest({ response: {}, csrfToken: 'csrf' }));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Invalid request body');
+    });
+
+    it('returns 400 for missing csrfToken', async () => {
+      const response = await POST(createRequest({ response: {}, expectedChallenge: 'ch' }));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Invalid request body');
+    });
+
+    it('returns 400 for empty expectedChallenge', async () => {
+      const response = await POST(createRequest({ response: {}, expectedChallenge: '', csrfToken: 'valid' }));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Invalid request body');
+    });
+
+    it('returns 400 for empty csrfToken', async () => {
+      const response = await POST(createRequest({ response: {}, expectedChallenge: 'ch', csrfToken: '' }));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Invalid request body');
+    });
+  });
+
+  describe('CSRF validation', () => {
+    it('returns 403 when CSRF token is invalid', async () => {
+      vi.mocked(validateLoginCSRFToken).mockReturnValue(false);
+
+      const response = await POST(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toBe('Invalid CSRF token');
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'security.suspicious.activity',
+          details: expect.objectContaining({ reason: 'passkey_csrf_invalid', flow: 'authenticate' }),
+          riskScore: 0.6,
+        })
+      );
+    });
+  });
+
+  describe('verification errors', () => {
+    const errorCases = [
+      { code: 'CREDENTIAL_NOT_FOUND', status: 400, message: 'Passkey not found' },
+      { code: 'CHALLENGE_NOT_FOUND', status: 400, message: 'Challenge not found or invalid' },
+      { code: 'CHALLENGE_EXPIRED', status: 400, message: 'Challenge expired, please try again' },
+      { code: 'CHALLENGE_ALREADY_USED', status: 400, message: 'Challenge already used' },
+      { code: 'VERIFICATION_FAILED', status: 400, message: 'Verification failed' },
+      { code: 'USER_SUSPENDED', status: 403, message: 'Account suspended' },
+      { code: 'COUNTER_REPLAY_DETECTED', status: 400, message: 'Security error: credential replay detected' },
+    ];
+
+    errorCases.forEach(({ code, status, message }) => {
+      it(`returns ${status} for ${code}`, async () => {
+        vi.mocked(verifyAuthentication).mockResolvedValue({
+          ok: false,
+          // @ts-expect-error - partial mock data
+          error: { code, message: 'Error' },
+        });
+
+        const response = await POST(createRequest());
+        const body = await response.json();
+
+        expect(response.status).toBe(status);
+        expect(body.error).toBe(message);
+        expect(body.code).toBe(code);
+      });
+    });
+
+    it('returns 500 for unknown error code', async () => {
+      vi.mocked(verifyAuthentication).mockResolvedValue({
+        ok: false,
+        // @ts-expect-error - partial mock data
+        error: { code: 'UNKNOWN_ERROR', message: 'Something' },
+      });
+
+      const response = await POST(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('Internal server error');
+      expect(body.code).toBe('UNKNOWN_ERROR');
+    });
+
+    it('logs verification failure', async () => {
+      vi.mocked(verifyAuthentication).mockResolvedValue({
+        ok: false,
+        error: { code: 'VERIFICATION_FAILED', message: 'Error' },
+      });
+
+      await POST(createRequest());
+
+      expect(loggers.auth.warn).toHaveBeenCalledWith('Passkey authentication failed', expect.objectContaining({
+        error: 'VERIFICATION_FAILED',
+      }));
+    });
+
+    it('audits auth failure on verification error', async () => {
+      vi.mocked(verifyAuthentication).mockResolvedValue({
+        ok: false,
+        error: { code: 'VERIFICATION_FAILED', message: 'Error' },
+      });
+
+      await POST(createRequest());
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'auth.login.failure',
+          details: expect.objectContaining({ reason: 'passkey_auth_verification_failed' }),
+          riskScore: 0.3,
+        })
+      );
+    });
+  });
+
+  // Passkey is the on-prem sign-in (password auth was removed in #861, and
+  // on-prem has no email delivery). Without this call a returning on-prem user
+  // would never reach Home-drive / Imago-agent provisioning.
+  describe('Home drive and Imago agent provisioning', () => {
+    it('given a successful sign-in, should provision the Home drive and Imago agents for the verified user', async () => {
+      const response = await POST(createRequest());
+
+      expect(response.status).toBe(200);
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledTimes(1);
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('user-1');
+    });
+
+    it('given a desktop exchange sign-in, should provision too', async () => {
+      await POST(createRequest({ ...validPayload, platform: 'desktop', deviceId: 'device-1', desktopExchange: true }));
+
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('user-1');
+    });
+
+    it('given provisioning fails, should still sign the user in and log the failure', async () => {
+      vi.mocked(provisionHomeDriveIfNeeded).mockRejectedValueOnce(new Error('db blip'));
+
+      const response = await POST(createRequest());
+
+      expect(response.status).toBe(200);
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      expect(loggers.auth.error).toHaveBeenCalledWith(
+        'Failed to provision Home drive during passkey sign-in',
+        expect.any(Error),
+        { userId: 'user-1' },
+      );
+    });
+
+    it('given a failed verification, should not provision anything', async () => {
+      vi.mocked(verifyAuthentication).mockResolvedValueOnce({
+        ok: false,
+        // @ts-expect-error - partial mock data
+        error: { code: 'VERIFICATION_FAILED' },
+      });
+
+      await POST(createRequest());
+
+      expect(provisionHomeDriveIfNeeded).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('session creation errors', () => {
+    it('returns 500 when session validation fails after creation', async () => {
+      vi.mocked(sessionService.validateSession).mockResolvedValueOnce(null);
+
+      const response = await POST(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('Session creation failed');
+      expect(loggers.auth.error).toHaveBeenCalledWith('Failed to validate newly created session', expect.objectContaining({
+        userId: 'user-1',
+      }));
+    });
+  });
+
+  describe('unexpected errors', () => {
+    it('returns 500 on unexpected throw', async () => {
+      vi.mocked(checkDistributedRateLimit).mockRejectedValueOnce(new Error('Unexpected'));
+
+      const response = await POST(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('Internal server error');
+      expect(loggers.auth.error).toHaveBeenCalledWith('Passkey auth verification error', new Error('Unexpected'));
+    });
+  });
+
+  describe('device token creation', () => {
+    it('does not create device token without deviceId', async () => {
+      await POST(createRequest());
+
+      expect(createDeviceToken).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('desktop external-browser handoff (desktopExchange flag)', () => {
+    const desktopExchangePayload = {
+      ...validPayload,
+      platform: 'desktop' as const,
+      deviceId: 'device-xyz',
+      deviceName: 'Jono Mac',
+      desktopExchange: true,
+    };
+
+    const createExchangeRequest = () =>
+      new Request('http://localhost/api/auth/passkey/authenticate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(desktopExchangePayload),
+      });
+
+    it('mints an exchange code with the created session, csrf and device tokens', async () => {
+      await POST(createExchangeRequest());
+
+      expect(createExchangeCode).toHaveBeenCalledWith(expect.objectContaining({
+        sessionToken: 'ps_sess_mock_session_token',
+        csrfToken: 'mock-csrf-token',
+        deviceToken: 'ps_dev_mock_token',
+        provider: 'passkey',
+        userId: 'user-1',
+      }));
+    });
+
+    it('returns desktopExchangeCode at the top of the response body', async () => {
+      const response = await POST(createExchangeRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.desktopExchangeCode).toBe('mock-exchange-code');
+    });
+
+    it('does not return raw session tokens when desktopExchange is set', async () => {
+      const response = await POST(createExchangeRequest());
+      const body = await response.json();
+
+      expect(body.sessionToken).toBeUndefined();
+      expect(body.csrfToken).toBeUndefined();
+      expect(body.deviceToken).toBeUndefined();
+    });
+
+    it('does not set a session cookie on the response when using exchange handoff', async () => {
+      await POST(createExchangeRequest());
+
+      expect(appendSessionCookie).not.toHaveBeenCalled();
+    });
+
+    it('still creates a session and device token (exchange is just the delivery mechanism)', async () => {
+      await POST(createExchangeRequest());
+
+      expect(sessionService.createSession).toHaveBeenCalled();
+      expect(createDeviceToken).toHaveBeenCalledWith(expect.objectContaining({
+        platform: 'desktop',
+        deviceId: 'device-xyz',
+      }));
+    });
+
+    it('returns 400 if desktopExchange is set with platform=web (inconsistent request)', async () => {
+      const response = await POST(
+        new Request('http://localhost/api/auth/passkey/authenticate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...validPayload,
+            platform: 'web',
+            deviceId: 'device-xyz',
+            desktopExchange: true,
+          }),
+        }),
+      );
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toMatch(/platform/i);
+      expect(createExchangeCode).not.toHaveBeenCalled();
+    });
+
+    it('logs an auth.info entry on successful exchange mint', async () => {
+      await POST(createExchangeRequest());
+
+      expect(loggers.auth.info).toHaveBeenCalledWith(
+        'Desktop passkey exchange mint',
+        expect.objectContaining({ userId: 'user-1', provider: 'passkey' }),
+      );
+    });
+
+    it('returns 400 if desktopExchange is set without deviceId (device token required)', async () => {
+      const response = await POST(
+        new Request('http://localhost/api/auth/passkey/authenticate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...validPayload,
+            platform: 'desktop',
+            desktopExchange: true,
+          }),
+        }),
+      );
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toMatch(/device/i);
+      expect(createExchangeCode).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('platform=desktop requires desktopExchange (legacy raw-token path removed)', () => {
+    it('returns 400 when platform=desktop is sent without desktopExchange=true', async () => {
+      const response = await POST(
+        new Request('http://localhost/api/auth/passkey/authenticate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...validPayload,
+            platform: 'desktop',
+            deviceId: 'device-xyz',
+            deviceName: 'My Mac',
+          }),
+        }),
+      );
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toMatch(/desktopExchange/i);
+      expect(sessionService.createSession).not.toHaveBeenCalled();
+      expect(appendSessionCookie).not.toHaveBeenCalled();
+      expect(createExchangeCode).not.toHaveBeenCalled();
+    });
+
+    it('never returns a raw sessionToken in the response body for any desktop request', async () => {
+      const response = await POST(
+        new Request('http://localhost/api/auth/passkey/authenticate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...validPayload,
+            platform: 'desktop',
+            deviceId: 'device-xyz',
+            deviceName: 'My Mac',
+            desktopExchange: true,
+          }),
+        }),
+      );
+      const body = await response.json();
+
+      expect(body.sessionToken).toBeUndefined();
+      expect(body.deviceToken).toBeUndefined();
+    });
+  });
+
+  describe('inviteToken handling (web JSON response)', () => {
+    it('given an inviteToken consumed successfully, returns redirectUrl pointing to the invited drive with invited=1', async () => {
+      const { consumeAnyInviteIfPresent } = await import('@/lib/auth/native-invite-acceptance');
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({ kind: 'drive', invitedDriveId: 'drive_xyz', invitedPageId: null, connectionId: null, invitedOrgId: null, orgLandingPath: null });
+
+      const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_abc' }));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.redirectUrl).toBe('/dashboard/drive_xyz?invited=1');
+      expect(body.invitedDriveId).toBe('drive_xyz');
+    });
+
+    it('given an inviteToken whose consumption failed (e.g. TOKEN_CONSUMED race), returns redirectUrl carrying ?inviteError=<code> so the UI can surface the failure', async () => {
+      const { consumeAnyInviteIfPresent } = await import('@/lib/auth/native-invite-acceptance');
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: null, invitedDriveId: null, invitedPageId: null, connectionId: null, invitedOrgId: null, orgLandingPath: null, inviteError: 'TOKEN_CONSUMED',
+      });
+
+      const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_abc' }));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.redirectUrl).toBe('/dashboard?inviteError=TOKEN_CONSUMED');
+      expect(body.invitedDriveId).toBeUndefined();
+    });
+
+    it('given EMAIL_MISMATCH on invite consumption, surfaces ?inviteError=EMAIL_MISMATCH on the redirect', async () => {
+      const { consumeAnyInviteIfPresent } = await import('@/lib/auth/native-invite-acceptance');
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: null, invitedDriveId: null, invitedPageId: null, connectionId: null, invitedOrgId: null, orgLandingPath: null, inviteError: 'EMAIL_MISMATCH',
+      });
+
+      const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_abc' }));
+      const body = await response.json();
+
+      expect(body.redirectUrl).toBe('/dashboard?inviteError=EMAIL_MISMATCH');
+    });
+
+    it('given no inviteToken, returns the plain /dashboard redirect (no inviteError leakage)', async () => {
+      const response = await POST(createRequest());
+      const body = await response.json();
+
+      expect(body.redirectUrl).toBe('/dashboard');
+      expect(body.redirectUrl).not.toContain('inviteError');
+    });
+  });
+
+  describe('deviceName input bounds', () => {
+    it('returns 400 when deviceName exceeds 256 characters', async () => {
+      const response = await POST(
+        new Request('http://localhost/api/auth/passkey/authenticate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...validPayload,
+            platform: 'desktop',
+            deviceId: 'device-xyz',
+            deviceName: 'x'.repeat(257),
+            desktopExchange: true,
+          }),
+        }),
+      );
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBeDefined();
+    });
+  });
+
+});

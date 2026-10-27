@@ -1,12 +1,13 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db, integrationConnections, eq } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
-import {
-  getConnectionById,
-  deleteConnection,
-} from '@pagespace/lib/integrations';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { integrationConnections } from '@pagespace/db/schema/integrations';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { getConnectionById, deleteConnection } from '@pagespace/lib/integrations/repositories/connection-repository';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -25,6 +26,7 @@ export async function GET(
   request: Request,
   context: { params: Promise<{ connectionId: string }> }
 ) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   const { connectionId } = await context.params;
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) return auth.error;
@@ -64,6 +66,7 @@ export async function PATCH(
   request: Request,
   context: { params: Promise<{ connectionId: string }> }
 ) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   const { connectionId } = await context.params;
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
@@ -125,6 +128,7 @@ export async function DELETE(
   request: Request,
   context: { params: Promise<{ connectionId: string }> }
 ) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   const { connectionId } = await context.params;
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
@@ -136,6 +140,9 @@ export async function DELETE(
     }
 
     await deleteConnection(db, connectionId);
+
+    auditRequest(request, { eventType: 'auth.token.revoked', userId: auth.userId, details: { tokenType: 'integration', reason: 'user_disconnect' } });
+
     return NextResponse.json({ success: true });
   } catch (error) {
     loggers.api.error('Error deleting user integration:', error as Error);

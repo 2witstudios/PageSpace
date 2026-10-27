@@ -4,7 +4,7 @@ import type { Request, Response, NextFunction } from 'express';
 const VALID_HASH = 'a'.repeat(64);
 const OTHER_HASH = 'b'.repeat(64);
 
-vi.mock('@pagespace/lib/logger-config', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     security: {
       warn: vi.fn(),
@@ -12,6 +12,8 @@ vi.mock('@pagespace/lib/logger-config', () => ({
       error: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('../../cache/content-store', () => ({
@@ -79,7 +81,7 @@ describe('requireResourceBinding', () => {
 
       middleware(req, res, next);
 
-      expect(next).toHaveBeenCalled();
+      expect(next).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -94,7 +96,7 @@ describe('requireResourceBinding', () => {
 
       middleware(req, res, next);
 
-      expect(next).toHaveBeenCalled();
+      expect(next).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -111,7 +113,7 @@ describe('requireResourceBinding', () => {
 
       middleware(req, res, next);
 
-      expect(next).toHaveBeenCalled();
+      expect(next).toHaveBeenCalledTimes(1);
     });
 
     it('returns 403 when contentHash does NOT match binding', () => {
@@ -143,7 +145,7 @@ describe('requireResourceBinding', () => {
 
       middleware(req, res, next);
 
-      expect(next).toHaveBeenCalled();
+      expect(next).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -160,7 +162,7 @@ describe('requireResourceBinding', () => {
 
       middleware(req, res, next);
 
-      expect(next).toHaveBeenCalled();
+      expect(next).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -177,7 +179,7 @@ describe('requireResourceBinding', () => {
 
       middleware(req, res, next);
 
-      expect(next).toHaveBeenCalled();
+      expect(next).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -195,7 +197,7 @@ describe('requireResourceBinding', () => {
 
       middleware(req, res, next);
 
-      expect(next).toHaveBeenCalled();
+      expect(next).toHaveBeenCalledTimes(1);
     });
 
     it('reads contentHash from body when source is body', () => {
@@ -211,7 +213,7 @@ describe('requireResourceBinding', () => {
 
       middleware(req, res, next);
 
-      expect(next).toHaveBeenCalled();
+      expect(next).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -228,7 +230,7 @@ describe('requireResourceBinding', () => {
 
       middleware(req, res, next);
 
-      expect(next).toHaveBeenCalled();
+      expect(next).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -245,7 +247,7 @@ describe('requireResourceBinding', () => {
 
       middleware(req, res, next);
 
-      expect(next).toHaveBeenCalled();
+      expect(next).toHaveBeenCalledTimes(1);
     });
   });
 });
@@ -266,7 +268,7 @@ describe('requirePageBinding', () => {
 
       middleware(req, res, next);
 
-      expect(next).toHaveBeenCalled();
+      expect(next).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -281,7 +283,7 @@ describe('requirePageBinding', () => {
 
       middleware(req, res, next);
 
-      expect(next).toHaveBeenCalled();
+      expect(next).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -298,7 +300,7 @@ describe('requirePageBinding', () => {
 
       middleware(req, res, next);
 
-      expect(next).toHaveBeenCalled();
+      expect(next).toHaveBeenCalledTimes(1);
     });
 
     it('returns 403 when pageId does NOT match binding', () => {
@@ -332,7 +334,7 @@ describe('requirePageBinding', () => {
 
       middleware(req, res, next);
 
-      expect(next).toHaveBeenCalled();
+      expect(next).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -349,7 +351,7 @@ describe('requirePageBinding', () => {
 
       middleware(req, res, next);
 
-      expect(next).toHaveBeenCalled();
+      expect(next).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -366,7 +368,7 @@ describe('requirePageBinding', () => {
 
       middleware(req, res, next);
 
-      expect(next).toHaveBeenCalled();
+      expect(next).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -31,6 +31,15 @@ describe('slackProvider', () => {
       expect(authMethod.config.scopes).toContain('users:read.email');
     });
 
+    it('given the provider config, should request DM scopes for 1:1 and group DMs', () => {
+      const { authMethod } = slackProvider;
+      if (authMethod.type !== 'oauth2') throw new Error('unexpected auth type');
+      expect(authMethod.config.scopes).toContain('im:read');
+      expect(authMethod.config.scopes).toContain('im:history');
+      expect(authMethod.config.scopes).toContain('mpim:read');
+      expect(authMethod.config.scopes).toContain('mpim:history');
+    });
+
     it('given the provider config, should not require PKCE', () => {
       const { authMethod } = slackProvider;
       if (authMethod.type !== 'oauth2') throw new Error('unexpected auth type');
@@ -142,11 +151,19 @@ describe('slackProvider', () => {
       expect(result.body).toBeUndefined();
     });
 
-    it('given no params, should build request without query string params', () => {
+    it('given no params, should default types to all four conversation kinds so DMs surface alongside channels', () => {
       const config = (tool.execution as { config: HttpExecutionConfig }).config;
       const result = buildHttpRequest(config, {}, 'https://slack.com/api');
 
-      expect(result.url).toBe('https://slack.com/api/conversations.list');
+      expect(result.url).toContain('types=public_channel%2Cprivate_channel%2Cmpim%2Cim');
+    });
+
+    it('given an explicit types argument, should override the default rather than concatenate', () => {
+      const config = (tool.execution as { config: HttpExecutionConfig }).config;
+      const result = buildHttpRequest(config, { types: 'im,mpim' }, 'https://slack.com/api');
+
+      expect(result.url).toContain('types=im%2Cmpim');
+      expect(result.url).not.toContain('public_channel');
     });
 
     it('given the tool, should have output transform with mapping and maxLength', () => {
@@ -155,6 +172,10 @@ describe('slackProvider', () => {
       expect(tool.outputTransform!.mapping).toHaveProperty('id');
       expect(tool.outputTransform!.mapping).toHaveProperty('name');
       expect(tool.outputTransform!.maxLength).toBe(500);
+    });
+
+    it('given an IM-shaped channel, should map the user field so DMs are identifiable', () => {
+      expect(tool.outputTransform!.mapping).toHaveProperty('user', 'user');
     });
   });
 

@@ -1,156 +1,42 @@
 name: Test Suite
 
+# A LONG-LIVED BRANCH DOES NOT BELONG IN EITHER LIST WHILE ITS PR IS OPEN, and
+# this branch put itself in both. The cost was measured, not theorised: every
+# push produced TWO full Test Suite runs (`event=push` and
+# `event=pull_request`) for the same commit, so a burst of commits queued eight
+# runs where four were wanted and the checks took twice as long to settle.
+#
+#  - `push.branches` matches the branch being pushed TO, so listing this branch
+#    added a second, redundant run of the run `pull_request` already gives.
+#  - `pull_request.branches` filters on the BASE branch, not the head. This PR's
+#    base is `master`, already listed — so that entry bought nothing at all. It
+#    would only matter for a PR *targeting* this branch, and there are none.
+#
+# Removed, and the branch keeps full CI on every push through `pull_request`'s
+# `synchronize`. `pu/flash-sandbox` and `pu/panes-agent` carry the same
+# redundancy and are left alone: they predate this branch and are not its to
+# change.
+#
+# `pu/**` (base-branch filter) replaced `pu/imago`: PRs into any integration
+# branch get the full suite, and nothing goes dead when pu/imago merges and is
+# deleted. pu/imago's own pushes were redundant with its master PR's
+# `synchronize` runs, for the reason above.
 on:
   push:
-    branches: [main, master, develop]
+    branches: [main, master, develop, pu/flash-sandbox, pu/panes-agent]
   pull_request:
-    branches: [main, master, develop]
+    branches: [main, master, develop, pu/flash-sandbox, pu/panes-agent, 'pu/**']
   workflow_dispatch:
 
-env:
-  NODE_VERSION: '22'
+# A newer push to the same PR makes the older run irrelevant, so cancel it:
+# superseded runs queued behind each other and held CI for ~40 minutes.
+# Only pull_request runs share a group (keyed on the PR number). Every push and
+# manual run gets its own group (run_id), so a master run is never cancelled or
+# replaced by a later one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  unit-tests:
-    name: Unit Tests
-    runs-on: ubuntu-latest
-
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: pagespace_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build packages
-        run: pnpm build
-
-      - name: Generate migrations
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
-        run: pnpm db:generate
-
-      - name: Setup test database
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
-          JWT_SECRET: test-secret-key-minimum-32-characters-long-for-ci
-          JWT_ISSUER: pagespace-test
-          JWT_AUDIENCE: pagespace-test-users
-        run: pnpm --filter @pagespace/db db:migrate
-
-      - name: Run tests with coverage
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
-          REDIS_URL: redis://localhost:6379
-          REDIS_SESSION_URL: redis://localhost:6379/0
-          REDIS_RATE_LIMIT_URL: redis://localhost:6379/1
-          JWT_SECRET: test-secret-key-minimum-32-characters-long-for-ci
-          JWT_ISSUER: pagespace-test
-          JWT_AUDIENCE: pagespace-test-users
-        run: pnpm test:coverage
-
-      - name: Coverage report
-        if: always()
-        run: node scripts/coverage-report.mjs
-
-      - name: Upload coverage artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-reports
-          path: |
-            apps/*/coverage/coverage-summary.json
-            packages/*/coverage/coverage-summary.json
-          retention-days: 30
-
-      - name: Coverage PR comment
-        if: github.event_name == 'pull_request'
-        uses: davelosert/vitest-coverage-report-action@v2
-        with:
-          json-summary-path: packages/lib/coverage/coverage-summary.json
-          name: packages/lib
-
-      - name: Coverage PR comment (web)
-        if: github.event_name == 'pull_request'
-        uses: davelosert/vitest-coverage-report-action@v2
-        with:
-          json-summary-path: apps/web/coverage/coverage-summary.json
-          name: apps/web
-
-      - name: Coverage PR comment (realtime)
-        if: github.event_name == 'pull_request'
-        uses: davelosert/vitest-coverage-report-action@v2
-        with:
-          json-summary-path: apps/realtime/coverage/coverage-summary.json
-          name: apps/realtime
-
-      - name: Coverage PR comment (processor)
-        if: github.event_name == 'pull_request'
-        uses: davelosert/vitest-coverage-report-action@v2
-        with:
-          json-summary-path: apps/processor/coverage/coverage-summary.json
-          name: apps/processor
-
-      - name: Coverage PR comment (db)
-        if: github.event_name == 'pull_request'
-        uses: davelosert/vitest-coverage-report-action@v2
-        with:
-          json-summary-path: packages/db/coverage/coverage-summary.json
-          name: packages/db
-
-  lint:
-    name: Lint & TypeScript Check
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Run ESLint
-        run: pnpm lint
-
-      - name: Run TypeScript check
-        run: pnpm typecheck
+  ci:
+    uses: ./.github/workflows/ci.yml

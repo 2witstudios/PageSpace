@@ -66,8 +66,9 @@ export async function processImage(data: ImageOptimizeJobData): Promise<ImagePro
           effort: 4 // Balance between speed and compression
         });
         break;
+      /* c8 ignore next 7 */
       case 'png':
-        pipeline = pipeline.png({ 
+        pipeline = pipeline.png({
           quality: preset.quality,
           compressionLevel: 9,
           adaptiveFiltering: true

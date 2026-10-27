@@ -1,12 +1,11 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createVerificationToken } from '@pagespace/lib';
-import { sendEmail } from '@pagespace/lib/services/email-service';
-import { VerificationEmail } from '@pagespace/lib/email-templates/VerificationEmail';
-import { loggers } from '@pagespace/lib/server';
-import { db, users, eq } from '@pagespace/db';
-import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security';
-import React from 'react';
+import { sendVerificationEmail } from '@/lib/auth/send-verification-email';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { maskEmail } from '@pagespace/lib/audit/mask-email';
+import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
+import { authRepository } from '@/lib/repositories/auth-repository';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -18,11 +17,7 @@ export async function POST(request: Request) {
     }
 
     // Fetch user details from database
-    const [user] = await db
-      .select({ id: users.id, email: users.email, name: users.name, emailVerified: users.emailVerified })
-      .from(users)
-      .where(eq(users.id, auth.userId))
-      .limit(1);
+    const user = await authRepository.findUserById(auth.userId);
 
     if (!user) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
@@ -35,7 +30,7 @@ export async function POST(request: Request) {
     );
 
     if (!rateLimitResult.allowed) {
-      loggers.auth.warn('Email resend rate limit exceeded', { email: user.email });
+      loggers.auth.warn('Email resend rate limit exceeded', { email: maskEmail(user.email) });
       return NextResponse.json(
         { error: 'Too many verification emails requested. Please try again later.' },
         {
@@ -55,27 +50,17 @@ export async function POST(request: Request) {
       );
     }
 
-    // Create new verification token
-    const verificationToken = await createVerificationToken({
-      userId: user.id,
-      type: 'email_verification',
-    });
-
-    const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-    const verificationUrl = `${baseUrl}/api/auth/verify-email?token=${verificationToken}`;
-
-    // Send verification email (rate limited in sendEmail function)
+    // Send verification email (token bound to the user's current address;
+    // sendEmail applies its own per-address rate limit).
     try {
-      await sendEmail({
-        to: user.email,
-        subject: 'Verify your PageSpace email',
-        react: React.createElement(VerificationEmail, {
-          userName: user.name,
-          verificationUrl
-        }),
+      await sendVerificationEmail({
+        userId: user.id,
+        email: user.email,
+        userName: user.name,
       });
 
-      loggers.auth.info('Verification email resent', { userId: user.id, email: user.email });
+      loggers.auth.info('Verification email resent', { userId: user.id, email: maskEmail(user.email) });
+      auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'email_verification', resourceId: auth.userId });
 
       return NextResponse.json({
         message: 'Verification email sent successfully. Please check your inbox.'

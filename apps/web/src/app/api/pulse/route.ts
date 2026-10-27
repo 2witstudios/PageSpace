@@ -1,29 +1,26 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import {
-  db,
-  pulseSummaries,
-  taskItems,
-  directMessages,
-  dmConversations,
-  pages,
-  driveMembers,
-  calendarEvents,
-  eventAttendees,
-  users,
-  eq,
-  and,
-  or,
-  lt,
-  gte,
-  ne,
-  desc,
-  count,
-  inArray,
-  isNull,
-} from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
-import { getStartOfTodayInTimezone, normalizeTimezone } from '@/lib/ai/core';
+import { db } from '@pagespace/db/db'
+import { eq, and, or, lt, gte, ne, desc, count, inArray, isNull } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { pages } from '@pagespace/db/schema/core'
+import { taskItems } from '@pagespace/db/schema/tasks'
+import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar'
+import { directMessages, dmConversations } from '@pagespace/db/schema/social'
+import { pulseSummaries } from '@pagespace/db/schema/dashboard';
+import { userAutomationPreferences } from '@pagespace/db/schema/automation-preferences';
+import { resolvePulseEnabled } from '@pagespace/lib/billing/automation-preferences';
+import { accessiblePageIds } from '@pagespace/lib/permissions/accessible-page-ids';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { getStartOfTodayInTimezone, normalizeTimezone } from '@/lib/ai/core/timestamp-utils';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
+import { SINCE_LAST_VISIT_THRESHOLD_MS } from '@pagespace/lib/home-signals/composer';
+import type { HomeContext, Signal } from '@pagespace/lib/home-signals/types';
+import { computeAllSignals, computeFootprint } from './compute-signals';
+import { actorFromAuth } from '@/lib/auth/request-actor';
+import { checkDerivedContentAccess } from '@pagespace/lib/permissions/org-derived-content';
+import type { OrgAuthenticationDenialCode } from '@pagespace/lib/permissions/access-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 
@@ -38,6 +35,10 @@ export type PulseResponse = {
     expiresAt: Date;
     isStale: boolean; // True if older than 6 hours
   } | null;
+
+  // SEC-2/3 (D-OW-62): set when the latest summary was withheld because the sign-in policy of an org whose drives fed
+  // it refuses this credential — `code` says what unlocks it (a passkey, or signing in again), `orgIds` which orgs.
+  signInRequired: { code: OrgAuthenticationDenialCode; orgIds: readonly string[] } | null;
 
   // Real-time stats (always fresh)
   stats: {
@@ -62,6 +63,12 @@ export type PulseResponse = {
 
   // Should the client request a new summary?
   shouldRefresh: boolean;
+
+  // Ranked, permission-scoped facts behind the Home "signal line" (see
+  // packages/lib/src/home-signals). Additive: existing clients (the sidebar
+  // Pulse widget) can ignore this and keep reading `summary`/`stats`.
+  signals: Signal[];
+  context: HomeContext;
 };
 
 export async function GET(req: Request) {
@@ -74,8 +81,22 @@ export async function GET(req: Request) {
     const sixHoursAgo = new Date(now.getTime() - 6 * 60 * 60 * 1000);
 
     // Get user timezone for accurate "today" boundaries
-    const [user] = await db.select({ timezone: users.timezone }).from(users).where(eq(users.id, userId));
+    const [user] = await db.select({ timezone: users.timezone, name: users.name }).from(users).where(eq(users.id, userId));
     const userTimezone = normalizeTimezone(user?.timezone);
+    // users.name is field-level encrypted when PII encryption is on;
+    // decryptField is a no-op on already-plaintext values. Trim before
+    // splitting so a whitespace-only or whitespace-prefixed stored name
+    // (passkey signup allows both) can't produce "Good morning, .".
+    const userNamePlain = user?.name ? (await decryptField(user.name)).trim() : '';
+    const displayName = userNamePlain.split(/\s+/)[0] || 'there';
+
+    // Whether the user has Pulse enabled (opt-out: no row ⇒ enabled). When off, we
+    // never tell the client to auto-generate, so no credits are spent on Pulse.
+    const [pulsePref] = await db
+      .select({ pulseEnabled: userAutomationPreferences.pulseEnabled })
+      .from(userAutomationPreferences)
+      .where(eq(userAutomationPreferences.userId, userId));
+    const pulseEnabled = resolvePulseEnabled(pulsePref);
     const startOfToday = getStartOfTodayInTimezone(userTimezone);
     const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
 
@@ -88,15 +109,14 @@ export async function GET(req: Request) {
     const endOfWeek = new Date(startOfWeek.getTime() + 7 * 24 * 60 * 60 * 1000);
 
     // Phase 1: Fire all independent queries in parallel
-    // Task queries, summary, drives, and conversations are all independent
+    // Summary, drives, and conversations are all independent. Task counts depend
+    // on driveIds (to scope by membership and exclude trashed pages), so they
+    // move to Phase 2 below.
     const [
       summaryResult,
       userDrives,
-      tasksOverdueResult,
-      tasksDueTodayResult,
-      tasksDueThisWeekResult,
-      tasksCompletedThisWeekResult,
       userConversations,
+      accessiblePagesList,
     ] = await Promise.all([
       // Latest pulse summary
       db.select()
@@ -104,52 +124,8 @@ export async function GET(req: Request) {
         .where(eq(pulseSummaries.userId, userId))
         .orderBy(desc(pulseSummaries.generatedAt))
         .limit(1),
-      // User's drives
-      db.select({ driveId: driveMembers.driveId })
-        .from(driveMembers)
-        .where(eq(driveMembers.userId, userId)),
-      // Tasks overdue
-      db.select({ count: count() })
-        .from(taskItems)
-        .where(
-          and(
-            or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
-            ne(taskItems.status, 'completed'),
-            lt(taskItems.dueDate, startOfToday)
-          )
-        ),
-      // Tasks due today
-      db.select({ count: count() })
-        .from(taskItems)
-        .where(
-          and(
-            or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
-            ne(taskItems.status, 'completed'),
-            gte(taskItems.dueDate, startOfToday),
-            lt(taskItems.dueDate, endOfToday)
-          )
-        ),
-      // Tasks due this week
-      db.select({ count: count() })
-        .from(taskItems)
-        .where(
-          and(
-            or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
-            ne(taskItems.status, 'completed'),
-            gte(taskItems.dueDate, startOfToday),
-            lt(taskItems.dueDate, endOfWeek)
-          )
-        ),
-      // Tasks completed this week
-      db.select({ count: count() })
-        .from(taskItems)
-        .where(
-          and(
-            or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
-            eq(taskItems.status, 'completed'),
-            gte(taskItems.completedAt, startOfWeek)
-          )
-        ),
+      // User's drives: owned or joined (org-aware; page-level access does not count)
+      getMemberDriveIds(actorFromAuth(auth), { includeTrashed: true }),
       // User conversations
       db.select({ id: dmConversations.id })
         .from(dmConversations)
@@ -159,14 +135,26 @@ export async function GET(req: Request) {
             eq(dmConversations.participant2Id, userId)
           )
         ),
+      // Pages the user is actually permitted to view (owner | drive-admin |
+      // explicit page permission | default member read) — the same canonical
+      // access-control primitive used elsewhere in Pulse (generate/cron) for
+      // content scoping. Task counts below scope to this set rather than
+      // driveIds: it already covers owner access (no accepted drive_members
+      // row required — that row is only lazily backfilled on first drive
+      // access) and explicit page-level grants with no drive membership at
+      // all, and excludes trashed pages and pages in trashed drives.
+      accessiblePageIds(actorFromAuth(auth)),
     ]);
 
-    const latestSummary = summaryResult[0] ?? null;
-    const driveIds = userDrives.map(d => d.driveId);
-    const [tasksOverdue] = tasksOverdueResult;
-    const [tasksDueToday] = tasksDueTodayResult;
-    const [tasksDueThisWeek] = tasksDueThisWeekResult;
-    const [tasksCompletedThisWeek] = tasksCompletedThisWeekResult;
+    const storedSummary = summaryResult[0] ?? null;
+    // The summary was distilled from every drive the person holds: serve it only to a credential every contributing
+    // org admits, else withhold it and say why. The stats below are computed through this credential, so they stand.
+    const summaryAccess = storedSummary
+      ? await checkDerivedContentAccess(actorFromAuth(auth), storedSummary.orgIds)
+      : { allowed: true as const };
+    const latestSummary = summaryAccess.allowed ? storedSummary : null;
+    const signInRequired = summaryAccess.allowed ? null : { code: summaryAccess.code, orgIds: summaryAccess.orgIds };
+    const driveIds = userDrives;
 
     // Phase 2: Queries that depend on driveIds or conversationIds
     const calendarVisibility = driveIds.length > 0
@@ -190,8 +178,14 @@ export async function GET(req: Request) {
       pendingInvitesArr,
       pagesTodayArr,
       pagesWeekArr,
+      tasksOverdueResult,
+      tasksDueTodayResult,
+      tasksDueThisWeekResult,
+      tasksCompletedThisWeekResult,
     ] = await Promise.all([
-      // Unread messages
+      // Unread messages — exclude thread replies (parentId IS NOT NULL) so the
+      // pulse unread count matches the inbox unread count. Thread replies live
+      // in the panel; PR 5 will reintroduce per-follower thread bumps.
       conversationIds.length > 0
         ? db.select({ count: count() })
             .from(directMessages)
@@ -199,7 +193,9 @@ export async function GET(req: Request) {
               and(
                 inArray(directMessages.conversationId, conversationIds),
                 ne(directMessages.senderId, userId),
-                eq(directMessages.isRead, false)
+                eq(directMessages.isRead, false),
+                eq(directMessages.isActive, true),
+                isNull(directMessages.parentId)
               )
             )
         : Promise.resolve([{ count: 0 }]),
@@ -250,6 +246,52 @@ export async function GET(req: Request) {
               )
             )
         : Promise.resolve([{ count: 0 }]),
+      // Tasks overdue
+      db.select({ count: count() })
+        .from(taskItems)
+        .where(
+          and(
+            or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
+            ne(taskItems.status, 'completed'),
+            lt(taskItems.dueDate, startOfToday),
+            inArray(taskItems.pageId, accessiblePagesList)
+          )
+        ),
+      // Tasks due today
+      db.select({ count: count() })
+        .from(taskItems)
+        .where(
+          and(
+            or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
+            ne(taskItems.status, 'completed'),
+            gte(taskItems.dueDate, startOfToday),
+            lt(taskItems.dueDate, endOfToday),
+            inArray(taskItems.pageId, accessiblePagesList)
+          )
+        ),
+      // Tasks due this week
+      db.select({ count: count() })
+        .from(taskItems)
+        .where(
+          and(
+            or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
+            ne(taskItems.status, 'completed'),
+            gte(taskItems.dueDate, startOfToday),
+            lt(taskItems.dueDate, endOfWeek),
+            inArray(taskItems.pageId, accessiblePagesList)
+          )
+        ),
+      // Tasks completed this week
+      db.select({ count: count() })
+        .from(taskItems)
+        .where(
+          and(
+            or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
+            eq(taskItems.status, 'completed'),
+            gte(taskItems.completedAt, startOfWeek),
+            inArray(taskItems.pageId, accessiblePagesList)
+          )
+        ),
     ]);
 
     const unreadCount = unreadResult[0]?.count ?? 0;
@@ -257,14 +299,49 @@ export async function GET(req: Request) {
     const [pendingInvitesResult] = pendingInvitesArr;
     const pagesUpdatedToday = pagesTodayArr[0]?.count ?? 0;
     const pagesUpdatedThisWeek = pagesWeekArr[0]?.count ?? 0;
+    const [tasksOverdue] = tasksOverdueResult;
+    const [tasksDueToday] = tasksDueTodayResult;
+    const [tasksDueThisWeek] = tasksDueThisWeekResult;
+    const [tasksCompletedThisWeek] = tasksCompletedThisWeekResult;
 
     // Determine if summary is stale
-    const isStale = latestSummary
-      ? new Date(latestSummary.generatedAt).getTime() < sixHoursAgo.getTime()
+    const isStale = storedSummary
+      ? new Date(storedSummary.generatedAt).getTime() < sixHoursAgo.getTime()
       : true;
 
-    // Determine if client should refresh
-    const shouldRefresh = !latestSummary || isStale;
+    // Determine if client should refresh — never when the user disabled Pulse. A withheld summary that is still
+    // fresh is not a reason to spend credits on another: signing in as the org asks unlocks it.
+    const shouldRefresh = pulseEnabled && (!storedSummary || isStale);
+
+    // Footprint (drives actually used, last visit) drives whether the signal
+    // line frames itself as "today" or "since you were last here".
+    const { drivesInUse, lastVisitAt } = await computeFootprint(userId, driveIds, now);
+    const sinceLastVisit =
+      lastVisitAt !== null && now.getTime() - lastVisitAt.getTime() > SINCE_LAST_VISIT_THRESHOLD_MS;
+    const signalWindowStart = sinceLastVisit ? lastVisitAt! : startOfToday;
+
+    const context: HomeContext = {
+      userId,
+      displayName,
+      timezone: userTimezone,
+      driveIds,
+      drivesInUse,
+      lastVisitAt,
+      pulseEnabled,
+    };
+
+    const signals = await computeAllSignals({
+      userId,
+      accessiblePageIds: accessiblePagesList,
+      driveIds,
+      drivesInUse,
+      unreadDmCount: unreadCount,
+      summary: latestSummary ? { text: latestSummary.summary, isStale } : null,
+      now,
+      startOfToday,
+      endOfToday,
+      sinceWindowStart: signalWindowStart,
+    });
 
     const response: PulseResponse = {
       summary: latestSummary
@@ -277,6 +354,7 @@ export async function GET(req: Request) {
             isStale,
           }
         : null,
+      signInRequired,
       stats: {
         tasks: {
           dueToday: tasksDueToday?.count ?? 0,
@@ -297,6 +375,8 @@ export async function GET(req: Request) {
         },
       },
       shouldRefresh,
+      signals,
+      context,
     };
 
     return NextResponse.json(response);

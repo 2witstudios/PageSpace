@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db, eq, users } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe } from '@/lib/stripe';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -38,6 +41,8 @@ export async function GET(request: NextRequest) {
         .where(eq(users.id, userId));
       return NextResponse.json({ customer: null });
     }
+
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'billing_customer', resourceId: 'self', details: { hasCustomer: true } });
 
     return NextResponse.json({
       customer: {

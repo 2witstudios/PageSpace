@@ -112,11 +112,11 @@ Tests should be run in CI using the same workaround:
 - Try killing any running processes on test ports
 
 ### Import errors
-- Run `pnpm install` in the root directory
-- Ensure workspace dependencies are linked: `pnpm install`
+- Run `bun install` in the root directory
+- Ensure workspace dependencies are linked: `bun install`
 
 ### TypeScript errors
-- Run `pnpm typecheck` to verify TypeScript compiles
+- Run `bun run typecheck` to verify TypeScript compiles
 - Check that `@pagespace/lib` and `@pagespace/db` are built
 
 ## Adding New Tests
@@ -133,14 +133,16 @@ Example test structure:
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock external dependencies
-vi.mock('@pagespace/lib', () => ({
-  logger: {
-    child: vi.fn(() => ({
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
-    })),
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
+    api: {
+      child: vi.fn(() => ({
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      })),
+    },
   },
 }));
 
@@ -165,5 +167,3 @@ describe('My Feature', () => {
 ## Resources
 
 - [Vitest Documentation](https://vitest.dev/)
-- [Main Testing Guide](../../docs/testing/README.md)
-- [Test Coverage Requirements](../../docs/testing/README.md#coverage-targets)

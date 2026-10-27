@@ -3,8 +3,8 @@ import { NextResponse } from 'next/server';
 import { GET } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // Use inferred types to avoid export issues
-type DriveSearchInfo = NonNullable<Awaited<ReturnType<typeof import('@pagespace/lib/server').checkDriveAccessForSearch>>>;
-type GlobSearchResponse = Awaited<ReturnType<typeof import('@pagespace/lib/server').globSearchPages>>;
+type DriveSearchInfo = NonNullable<Awaited<ReturnType<typeof import('@pagespace/lib/services/drive-search-service').checkDriveAccessForSearch>>>;
+type GlobSearchResponse = Awaited<ReturnType<typeof import('@pagespace/lib/services/drive-search-service').globSearchPages>>;
 
 // ============================================================================
 // Contract Tests for /api/drives/[driveId]/search/glob
@@ -12,10 +12,15 @@ type GlobSearchResponse = Awaited<ReturnType<typeof import('@pagespace/lib/serve
 // These tests mock at the SERVICE SEAM level, NOT at the ORM/query-builder level.
 // ============================================================================
 
-vi.mock('@pagespace/lib/server', () => ({
-  checkDriveAccessForSearch: vi.fn(),
-  globSearchPages: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/services/drive-search-service', () => ({
+    checkDriveAccessForSearch: vi.fn(),
+    globSearchPages: vi.fn(),
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -23,16 +28,24 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
   checkMCPDriveScope: vi.fn(() => null), // Allow all drives by default
+  isScopedMCPAuth: vi.fn(() => false), // Session/unscoped fixtures by default
 }));
 
-import { checkDriveAccessForSearch, globSearchPages } from '@pagespace/lib/server';
+vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
+  getAppDriveAccessLevel: vi.fn(),
+}));
+
+import { checkDriveAccessForSearch, globSearchPages } from '@pagespace/lib/services/drive-search-service';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { PAGE_TYPE_VALUES } from '@pagespace/lib/utils/enums';
 
 // ============================================================================
 // Test Fixtures
@@ -112,7 +125,7 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
       expect(response.status).toBe(401);
     });
 
-    it('should allow JWT authentication', async () => {
+    it('should allow session authentication', async () => {
       vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
       vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse());
 
@@ -189,7 +202,7 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*.md`);
       await GET(request, createContext(mockDriveId));
 
-      expect(checkDriveAccessForSearch).toHaveBeenCalledWith(mockDriveId, mockUserId);
+      expect(checkDriveAccessForSearch).toHaveBeenCalledWith(mockDriveId, expect.objectContaining({ userId: mockUserId }));
     });
 
     it('should call globSearchPages with correct parameters', async () => {
@@ -201,7 +214,7 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
 
       expect(globSearchPages).toHaveBeenCalledWith(
         mockDriveId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         '*.md',
         'test-drive',
         { includeTypes: undefined, maxResults: 50 }
@@ -217,7 +230,7 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
 
       expect(globSearchPages).toHaveBeenCalledWith(
         mockDriveId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         '*',
         'test-drive',
         { includeTypes: ['DOCUMENT', 'FOLDER'], maxResults: 100 }
@@ -233,11 +246,106 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
 
       expect(globSearchPages).toHaveBeenCalledWith(
         mockDriveId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         '*',
         'test-drive',
         { includeTypes: ['DOCUMENT'], maxResults: 100 }
       );
+    });
+
+    it('should include TASK_LIST as a valid includeTypes value (#1773)', async () => {
+      vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
+      vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse());
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*&includeTypes=TASK_LIST`);
+      await GET(request, createContext(mockDriveId));
+
+      expect(globSearchPages).toHaveBeenCalledWith(
+        mockDriveId,
+        expect.objectContaining({ userId: mockUserId }),
+        '*',
+        'test-drive',
+        { includeTypes: ['TASK_LIST'], maxResults: 100 }
+      );
+    });
+
+    it('should not silently drop the filter when TASK_LIST is the only requested type (#1773)', async () => {
+      vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
+      vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse());
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*&includeTypes=TASK_LIST`);
+      await GET(request, createContext(mockDriveId));
+
+      const [, , , , options] = vi.mocked(globSearchPages).mock.calls[0];
+      // Must be a real, non-empty filter — NOT undefined (which would mean "return everything").
+      expect(options?.includeTypes).toEqual(['TASK_LIST']);
+    });
+
+    // Regression test for #2150: the route hand-declared VALID_PAGE_TYPES with
+    // only 8 of the enum's 9 members, so FILE was stripped from the filter.
+    // Asking for FILE alone left an empty array, which globSearchPages treats
+    // as "no filter" — the caller silently got EVERY page instead of only files.
+    it('should include FILE as a valid includeTypes value (#2150)', async () => {
+      vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
+      vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse());
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*&includeTypes=FILE`);
+      await GET(request, createContext(mockDriveId));
+
+      expect(globSearchPages).toHaveBeenCalledWith(
+        mockDriveId,
+        expect.objectContaining({ userId: mockUserId }),
+        '*',
+        'test-drive',
+        { includeTypes: ['FILE'], maxResults: 100 }
+      );
+    });
+
+    it('should not silently widen the search when FILE is the only requested type (#2150)', async () => {
+      vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
+      vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse());
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*&includeTypes=FILE`);
+      await GET(request, createContext(mockDriveId));
+
+      const [, , , , options] = vi.mocked(globSearchPages).mock.calls[0];
+      // Must be a real, non-empty filter — an empty array would mean "return everything".
+      expect(options?.includeTypes).toEqual(['FILE']);
+    });
+
+    it('should accept every page type in the canonical enum (#2150)', async () => {
+      vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
+      vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse());
+
+      const request = new Request(
+        `https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*&includeTypes=${PAGE_TYPE_VALUES.join(',')}`
+      );
+      await GET(request, createContext(mockDriveId));
+
+      const [, , , , options] = vi.mocked(globSearchPages).mock.calls[0];
+      expect(options?.includeTypes).toEqual([...PAGE_TYPE_VALUES]);
+    });
+
+    it('should trim whitespace around includeTypes values (#2150)', async () => {
+      vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
+      vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse());
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*&includeTypes=FOLDER,%20FILE`);
+      await GET(request, createContext(mockDriveId));
+
+      const [, , , , options] = vi.mocked(globSearchPages).mock.calls[0];
+      expect(options?.includeTypes).toEqual(['FOLDER', 'FILE']);
+    });
+
+    it('should dedupe repeated includeTypes values (#2150)', async () => {
+      vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
+      vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse());
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*&includeTypes=FILE,FOLDER,FILE`);
+      await GET(request, createContext(mockDriveId));
+
+      const [, , , , options] = vi.mocked(globSearchPages).mock.calls[0];
+      expect(options?.includeTypes).toEqual(['FILE', 'FOLDER']);
     });
 
     it('should cap maxResults at 200', async () => {
@@ -249,7 +357,7 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
 
       expect(globSearchPages).toHaveBeenCalledWith(
         mockDriveId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         '*',
         'test-drive',
         { includeTypes: undefined, maxResults: 200 }
@@ -323,13 +431,18 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
       const response = await GET(request, createContext(mockDriveId));
       const body = await response.json();
 
-      expect(body.summary).toBeDefined();
-      expect(body.stats).toBeDefined();
-      expect(body.stats.totalPagesScanned).toBeDefined();
-      expect(body.stats.matchingPages).toBeDefined();
-      expect(body.stats.documentTypes).toBeDefined();
-      expect(body.stats.matchTypes).toBeDefined();
-      expect(body.nextSteps).toBeDefined();
+      expect(body.summary).toBe('Found 1 page matching pattern "*.md"');
+      expect(body.stats).toEqual({
+        totalPagesScanned: 10,
+        matchingPages: 1,
+        documentTypes: ['DOCUMENT'],
+        matchTypes: { path: 0, title: 1 },
+      });
+      expect(body.stats.totalPagesScanned).toBe(10);
+      expect(body.stats.matchingPages).toBe(1);
+      expect(body.stats.documentTypes).toEqual(['DOCUMENT']);
+      expect(body.stats.matchTypes).toEqual({ path: 0, title: 1 });
+      expect(body.nextSteps).toEqual(['Use read_page with the pageId to examine content']);
     });
 
     it('should return empty results when no matches', async () => {
@@ -357,7 +470,7 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
 
   describe('error handling', () => {
     it('should return 500 when service throws unexpected error', async () => {
-      vi.mocked(checkDriveAccessForSearch).mockRejectedValue(new Error('Database error'));
+      vi.mocked(checkDriveAccessForSearch).mockRejectedValueOnce(new Error('Database error'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*`);
       const response = await GET(request, createContext(mockDriveId));
@@ -369,7 +482,7 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
 
     it('should return 500 when globSearchPages throws', async () => {
       vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
-      vi.mocked(globSearchPages).mockRejectedValue(new Error('Search failed'));
+      vi.mocked(globSearchPages).mockRejectedValueOnce(new Error('Search failed'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*`);
       const response = await GET(request, createContext(mockDriveId));

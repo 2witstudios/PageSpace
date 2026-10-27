@@ -1,0 +1,197 @@
+import { db } from '@pagespace/db/db'
+import { eq, and, or, desc, count, gte, lte, ilike, isNotNull } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { activityLogs } from '@pagespace/db/schema/monitoring';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { decryptFieldValuesOnce } from '@pagespace/lib/encryption/field-crypto';
+import { escapeLikePattern } from '@pagespace/lib/db/like-pattern';
+import { withAdminAuth } from '@/lib/auth';
+import { parseBoundedIntParam } from '@/lib/utils/query-params';
+
+export const GET = withAdminAuth(async (_adminUser, request) => {
+  try {
+
+    // Parse query parameters
+    const url = new URL(request.url);
+    const page = parseBoundedIntParam(url.searchParams.get('page'), {
+      defaultValue: 1,
+      min: 1,
+      max: 100000,
+    });
+    const limit = parseBoundedIntParam(url.searchParams.get('limit'), {
+      defaultValue: 50,
+      min: 1,
+      max: 100,
+    });
+    const offset = (page - 1) * limit;
+
+    // Filter parameters
+    const userId = url.searchParams.get('userId');
+    const operation = url.searchParams.get('operation');
+    const resourceType = url.searchParams.get('resourceType');
+    const dateFrom = url.searchParams.get('dateFrom');
+    const dateTo = url.searchParams.get('dateTo');
+    const search = url.searchParams.get('search');
+
+    // Build filter conditions
+    const conditions = [];
+
+    if (userId) {
+      conditions.push(eq(activityLogs.userId, userId));
+    }
+
+    if (operation) {
+      // Cast to the enum type for type safety
+      conditions.push(eq(activityLogs.operation, operation as typeof activityLogs.operation.enumValues[number]));
+    }
+
+    if (resourceType) {
+      // Cast to the enum type for type safety
+      conditions.push(eq(activityLogs.resourceType, resourceType as typeof activityLogs.resourceType.enumValues[number]));
+    }
+
+    if (dateFrom) {
+      const fromDate = new Date(dateFrom);
+      if (!isNaN(fromDate.getTime())) {
+        conditions.push(gte(activityLogs.timestamp, fromDate));
+      }
+    }
+
+    if (dateTo) {
+      const toDate = new Date(dateTo);
+      if (!isNaN(toDate.getTime())) {
+        // Add end of day to include the entire day
+        toDate.setHours(23, 59, 59, 999);
+        conditions.push(lte(activityLogs.timestamp, toDate));
+      }
+    }
+
+    if (search) {
+      // Escape LIKE pattern special characters to prevent pattern injection
+      const searchPattern = `%${escapeLikePattern(search)}%`;
+
+      // Use Drizzle's ilike function for proper parameterization
+      conditions.push(
+        or(
+          ilike(activityLogs.resourceTitle, searchPattern),
+          ilike(activityLogs.actorEmail, searchPattern),
+          ilike(activityLogs.actorDisplayName, searchPattern),
+          ilike(activityLogs.resourceId, searchPattern)
+        )
+      );
+    }
+
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    // Get total count + per-field totals in parallel
+    const [countResult, aiGenResult, hashChainResult] = await Promise.all([
+      db.select({ count: count() }).from(activityLogs).where(whereClause),
+      db.select({ count: count() }).from(activityLogs).where(
+        whereClause ? and(whereClause, eq(activityLogs.isAiGenerated, true)) : eq(activityLogs.isAiGenerated, true)
+      ),
+      db.select({ count: count() }).from(activityLogs).where(
+        whereClause ? and(whereClause, isNotNull(activityLogs.logHash)) : isNotNull(activityLogs.logHash)
+      ),
+    ]);
+
+    const totalCount = countResult?.[0]?.count || 0;
+    const aiGeneratedTotal = aiGenResult?.[0]?.count || 0;
+    const hashChainTotal = hashChainResult?.[0]?.count || 0;
+    const totalPages = Math.ceil(totalCount / limit);
+
+    // Fetch paginated activity logs with user info
+    const logs = await db
+      .select({
+        id: activityLogs.id,
+        timestamp: activityLogs.timestamp,
+        userId: activityLogs.userId,
+        actorEmail: activityLogs.actorEmail,
+        actorDisplayName: activityLogs.actorDisplayName,
+        isAiGenerated: activityLogs.isAiGenerated,
+        aiProvider: activityLogs.aiProvider,
+        aiModel: activityLogs.aiModel,
+        aiConversationId: activityLogs.aiConversationId,
+        operation: activityLogs.operation,
+        resourceType: activityLogs.resourceType,
+        resourceId: activityLogs.resourceId,
+        resourceTitle: activityLogs.resourceTitle,
+        driveId: activityLogs.driveId,
+        pageId: activityLogs.pageId,
+        updatedFields: activityLogs.updatedFields,
+        previousValues: activityLogs.previousValues,
+        newValues: activityLogs.newValues,
+        metadata: activityLogs.metadata,
+        isArchived: activityLogs.isArchived,
+        // Hash chain fields
+        previousLogHash: activityLogs.previousLogHash,
+        logHash: activityLogs.logHash,
+        chainSeed: activityLogs.chainSeed,
+        // User info (optional join)
+        userName: users.name,
+        userEmail: users.email,
+        userImage: users.image,
+      })
+      .from(activityLogs)
+      .leftJoin(users, eq(activityLogs.userId, users.id))
+      .where(whereClause)
+      .orderBy(desc(activityLogs.timestamp))
+      .limit(limit)
+      .offset(offset);
+
+    // users.name/email are encrypted at rest, and activityLogs.actorEmail/actorDisplayName
+    // are denormalized snapshots that may also hold ciphertext from historical write paths
+    // that predate the actor-info decrypt-before-write fix. Decrypt all four for display,
+    // batching the joined and snapshot columns of the same shape together so a repeated
+    // actor across many rows only decrypts once per unique value.
+    const decryptName = await decryptFieldValuesOnce([
+      ...logs.map((log) => log.userName),
+      ...logs.map((log) => log.actorDisplayName),
+    ]);
+    const decryptEmail = await decryptFieldValuesOnce([
+      ...logs.map((log) => log.userEmail),
+      ...logs.map((log) => log.actorEmail),
+    ]);
+    const decryptedLogs = logs.map((log) => ({
+      ...log,
+      userName: decryptName(log.userName),
+      userEmail: decryptEmail(log.userEmail),
+      actorDisplayName: decryptName(log.actorDisplayName),
+      actorEmail: decryptEmail(log.actorEmail),
+    }));
+
+    auditRequest(request, { eventType: 'data.read', userId: _adminUser.id, resourceType: 'audit_log', resourceId: '*', details: {
+      source: 'admin',
+      resultCount: logs.length,
+      hasFilters: !!(userId || operation || resourceType),
+    } });
+
+    return Response.json({
+      logs: decryptedLogs,
+      pagination: {
+        page,
+        limit,
+        totalCount,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPreviousPage: page > 1,
+        aiGeneratedTotal,
+        hashChainTotal,
+      },
+      filters: {
+        userId,
+        operation,
+        resourceType,
+        dateFrom,
+        dateTo,
+        search,
+      },
+    });
+  } catch (error) {
+    loggers.api.error('Error fetching audit logs:', error as Error);
+    return Response.json(
+      { error: 'Failed to fetch audit logs' },
+      { status: 500 }
+    );
+  }
+});

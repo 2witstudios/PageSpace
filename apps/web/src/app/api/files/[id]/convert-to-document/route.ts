@@ -1,11 +1,19 @@
+import { canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth/principal-permissions';
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db, pages, eq } from '@pagespace/db';
-import { PageType, canConvertToType, canUserEditPage, canUserViewPage, createPageServiceToken } from '@pagespace/lib';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core';
+import { PageType } from '@pagespace/lib/utils/enums'
+import { canConvertToType } from '@pagespace/lib/content/page-type-validators'
+
+import { createPageServiceToken } from '@pagespace/lib/services/validated-service-token';
 import mammoth from 'mammoth';
 import { createId } from '@paralleldrive/cuid2';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { getActorInfo, logFileActivity, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -26,7 +34,10 @@ export async function POST(
     // Verify authentication
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
+    const actor = actorFromAuth(auth);
     const userId = auth.userId;
+
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'file', resourceId: id, details: { action: 'convert' } });
 
     // Get request body
     const body = await request.json();
@@ -63,14 +74,14 @@ export async function POST(
       return NextResponse.json({ error: 'File is not a Word document' }, { status: 400 });
     }
 
-    const canView = await canUserViewPage(userId, filePage.id);
+    const canView = await canPrincipalViewPage(auth, filePage.id);
     if (!canView) {
-      return NextResponse.json({ error: 'You do not have access to this file' }, { status: 403 });
+      return deniedResponse(actor, filePage.id, NextResponse.json({ error: 'You do not have access to this file' }, { status: 403 }));
     }
 
-    const canEdit = await canUserEditPage(userId, filePage.id);
+    const canEdit = await canPrincipalEditPage(auth, filePage.id);
     if (!canEdit) {
-      return NextResponse.json({ error: 'You do not have permission to convert this file' }, { status: 403 });
+      return deniedResponse(actor, filePage.id, NextResponse.json({ error: 'You do not have permission to convert this file' }, { status: 403 }));
     }
 
     if (!filePage.filePath) {
@@ -87,9 +98,9 @@ export async function POST(
       processorUrl: `${PROCESSOR_URL}/cache/${contentHash}/original`,
     });
 
-    // Create service JWT token for processor authentication (validates page permissions)
+    // Create opaque service token for processor authentication (validates page permissions)
     const { token: serviceToken } = await createPageServiceToken(
-      userId,
+      actor,
       filePage.id,
       ['files:read'],
       '5m'

@@ -1,0 +1,215 @@
+import { describe, test, expect, vi } from 'vitest'
+import { createAdminSeeder, type TenantDbConnection } from '../admin-seeder'
+
+function makeMockDb(existingUser: Record<string, unknown> | null = null): TenantDbConnection {
+  return {
+    query: vi.fn().mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT')) {
+        return existingUser ? [existingUser] : []
+      }
+      if (sql.includes('INSERT')) {
+        return [{ id: 'new-user-id', email: 'owner@test.com', role: 'admin' }]
+      }
+      return []
+    }),
+    end: vi.fn().mockResolvedValue(undefined),
+  }
+}
+
+function makeMockDbConnector(db: TenantDbConnection) {
+  return vi.fn().mockResolvedValue(db)
+}
+
+describe('AdminSeeder', () => {
+  describe('seed admin user', () => {
+    test('given a newly provisioned tenant, should create admin user with owner email', async () => {
+      const db = makeMockDb(null)
+      const connect = makeMockDbConnector(db)
+      const seeder = createAdminSeeder({ connect })
+
+      const result = await seeder.seed({
+        slug: 'acme',
+        ownerEmail: 'owner@acme.com',
+        databaseUrl: 'postgres://localhost/ps_acme',
+      })
+
+      expect(result.email).toBe('owner@acme.com')
+      expect(result.alreadyExisted).toBe(false)
+    })
+
+    test('given a new user, should insert into db without password', async () => {
+      const db = makeMockDb(null)
+      const connect = makeMockDbConnector(db)
+      const seeder = createAdminSeeder({ connect })
+
+      await seeder.seed({
+        slug: 'acme',
+        ownerEmail: 'owner@acme.com',
+        databaseUrl: 'postgres://localhost/ps_acme',
+      })
+
+      const insertCall = (db.query as ReturnType<typeof vi.fn>).mock.calls.find(
+        (call: unknown[]) => (call[0] as string).includes('INSERT')
+      )
+      expect(insertCall).toBeDefined()
+      expect(insertCall![0]).not.toContain('password')
+      expect(insertCall![1]).toHaveLength(5) // id, email, name, role, emailVerified
+    })
+
+    test('given a new user, seeds plaintext + emailVerified and does NOT write a cross-key emailBidx', async () => {
+      const db = makeMockDb(null)
+      const connect = makeMockDbConnector(db)
+      const seeder = createAdminSeeder({ connect })
+
+      await seeder.seed({
+        slug: 'acme',
+        ownerEmail: 'Owner@ACME.com',
+        databaseUrl: 'postgres://localhost/ps_acme',
+      })
+
+      const insertCall = (db.query as ReturnType<typeof vi.fn>).mock.calls.find(
+        (call: unknown[]) => (call[0] as string).includes('INSERT')
+      )
+      // emailBidx is deliberately NOT written: the control-plane can't compute
+      // the tenant's blind index (per-tenant key it doesn't hold). emailVerified
+      // is pre-set so the admin needs no separate verification step.
+      expect(insertCall![0]).not.toContain('emailBidx')
+      expect(insertCall![0]).toContain('emailVerified')
+      // Email is normalized (lowercased) at the write.
+      expect(insertCall![1][1]).toBe('owner@acme.com')
+      // emailVerified is a concrete timestamp (pre-verified tenant admin).
+      expect(insertCall![1][4]).toBeInstanceOf(Date)
+    })
+
+    test('given the seeder, should connect using the tenant database URL', async () => {
+      const db = makeMockDb(null)
+      const connect = makeMockDbConnector(db)
+      const seeder = createAdminSeeder({ connect })
+
+      await seeder.seed({
+        slug: 'acme',
+        ownerEmail: 'owner@acme.com',
+        databaseUrl: 'postgres://localhost/ps_acme',
+      })
+
+      expect(connect).toHaveBeenCalledWith('postgres://localhost/ps_acme')
+    })
+
+    test('given the seeder, should close the db connection after seeding', async () => {
+      const db = makeMockDb(null)
+      const connect = makeMockDbConnector(db)
+      const seeder = createAdminSeeder({ connect })
+
+      await seeder.seed({
+        slug: 'acme',
+        ownerEmail: 'owner@acme.com',
+        databaseUrl: 'postgres://localhost/ps_acme',
+      })
+
+      expect(db.end).toHaveBeenCalled()
+    })
+  })
+
+  describe('CUID2 id generation', () => {
+    test('given a new user, should include id column in INSERT with a generated CUID2', async () => {
+      const db = makeMockDb(null)
+      const connect = makeMockDbConnector(db)
+      const seeder = createAdminSeeder({ connect })
+
+      await seeder.seed({
+        slug: 'acme',
+        ownerEmail: 'owner@acme.com',
+        databaseUrl: 'postgres://localhost/ps_acme',
+      })
+
+      const insertCall = (db.query as ReturnType<typeof vi.fn>).mock.calls.find(
+        (call: unknown[]) => (call[0] as string).includes('INSERT')
+      )
+      expect(insertCall![0]).toContain('id')
+      expect(insertCall![1]).toHaveLength(5) // id, email, name, role, emailVerified
+      expect(typeof insertCall![1][0]).toBe('string')
+      expect(insertCall![1][0].length).toBeGreaterThan(0)
+    })
+  })
+
+  describe('idempotent seeding', () => {
+    test('given a legacy mixed-case admin row, matches case-insensitively so no duplicate is inserted', async () => {
+      // The old seeder inserted `ownerEmail` verbatim, so a pre-normalization
+      // tenant may hold a mixed-case admin row. The existence check must match
+      // it case-insensitively, else a re-run inserts a second admin.
+      const existingUser = { id: 'legacy-1', email: 'Owner@ACME.com', role: 'admin' }
+      const db = makeMockDb(existingUser)
+      const connect = makeMockDbConnector(db)
+      const seeder = createAdminSeeder({ connect })
+
+      const result = await seeder.seed({
+        slug: 'acme',
+        ownerEmail: 'Owner@ACME.com',
+        databaseUrl: 'postgres://localhost/ps_acme',
+      })
+
+      const selectCall = (db.query as ReturnType<typeof vi.fn>).mock.calls.find(
+        (call: unknown[]) => (call[0] as string).includes('SELECT')
+      )
+      expect(selectCall![0]).toContain('lower(email)')
+      // Lowercased param compared against lower(email) matches the legacy row.
+      expect(selectCall![1][0]).toBe('owner@acme.com')
+      expect(result.alreadyExisted).toBe(true)
+      const insertCall = (db.query as ReturnType<typeof vi.fn>).mock.calls.find(
+        (call: unknown[]) => (call[0] as string).includes('INSERT')
+      )
+      expect(insertCall).toBeUndefined()
+    })
+
+    test('given an existing user with that email, should skip insert and return existing info', async () => {
+      const existingUser = { id: 'existing-id', email: 'owner@acme.com', role: 'admin' }
+      const db = makeMockDb(existingUser)
+      const connect = makeMockDbConnector(db)
+      const seeder = createAdminSeeder({ connect })
+
+      const result = await seeder.seed({
+        slug: 'acme',
+        ownerEmail: 'owner@acme.com',
+        databaseUrl: 'postgres://localhost/ps_acme',
+      })
+
+      expect(result.email).toBe('owner@acme.com')
+      expect(result.alreadyExisted).toBe(true)
+    })
+
+    test('given an existing user, should not call db insert', async () => {
+      const existingUser = { id: 'existing-id', email: 'owner@acme.com', role: 'admin' }
+      const db = makeMockDb(existingUser)
+      const connect = makeMockDbConnector(db)
+      const seeder = createAdminSeeder({ connect })
+
+      await seeder.seed({
+        slug: 'acme',
+        ownerEmail: 'owner@acme.com',
+        databaseUrl: 'postgres://localhost/ps_acme',
+      })
+
+      const insertCall = (db.query as ReturnType<typeof vi.fn>).mock.calls.find(
+        (call: unknown[]) => (call[0] as string).includes('INSERT')
+      )
+      expect(insertCall).toBeUndefined()
+    })
+  })
+
+  describe('error handling', () => {
+    test('given a db connection failure, should still attempt to close connection', async () => {
+      const db = makeMockDb(null)
+      ;(db.query as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('connection refused'))
+      const connect = makeMockDbConnector(db)
+      const seeder = createAdminSeeder({ connect })
+
+      await expect(seeder.seed({
+        slug: 'acme',
+        ownerEmail: 'owner@acme.com',
+        databaseUrl: 'postgres://localhost/ps_acme',
+      })).rejects.toThrow('connection refused')
+
+      expect(db.end).toHaveBeenCalled()
+    })
+  })
+})

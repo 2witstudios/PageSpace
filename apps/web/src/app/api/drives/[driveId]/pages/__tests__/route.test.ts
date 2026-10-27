@@ -1,0 +1,663 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { NextResponse } from 'next/server';
+import type { SessionAuthResult, AuthError } from '@/lib/auth';
+
+// ============================================================================
+// Contract Tests for GET /api/drives/[driveId]/pages
+//
+// The route has no service-seam abstraction, so we mock at the DB layer
+// and the auth/utility boundaries.
+// ============================================================================
+
+// ---------- hoisted mocks (safe for vi.mock factories) ----------
+
+const {
+  mockFindFirst,
+  mockFindMany,
+  mockSelectDistinctWhere,
+  mockSelectWhere,
+  mockSelectLimit,
+  mockExecute,
+} = vi.hoisted(() => ({
+  mockFindFirst: vi.fn(),
+  mockFindMany: vi.fn(),
+  mockSelectDistinctWhere: vi.fn(),
+  mockSelectWhere: vi.fn(),
+  mockSelectLimit: vi.fn(),
+  mockExecute: vi.fn(),
+}));
+
+// ---------- vi.mock declarations ----------
+
+vi.mock('@pagespace/db/db', () => {
+  const selectDistinctChain = {
+    from: vi.fn().mockReturnThis(),
+    leftJoin: vi.fn().mockReturnThis(),
+    innerJoin: vi.fn().mockReturnThis(),
+    where: mockSelectDistinctWhere,
+  };
+
+  const selectChain = {
+    from: vi.fn().mockReturnThis(),
+    where: mockSelectWhere.mockReturnThis(),
+    limit: mockSelectLimit,
+  };
+  return {
+    db: {
+      query: {
+        drives: { findFirst: mockFindFirst },
+        pages: { findMany: mockFindMany },
+      },
+      selectDistinct: vi.fn().mockReturnValue(selectDistinctChain),
+      select: vi.fn().mockReturnValue(selectChain),
+      execute: mockExecute,
+    },
+  };
+});
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((_col: unknown, _val: unknown) => ({ type: 'eq' })),
+  and: vi.fn((..._args: unknown[]) => ({ type: 'and' })),
+  inArray: vi.fn((_col: unknown, _vals: unknown[]) => ({ type: 'inArray' })),
+  asc: vi.fn((_col: unknown) => ({ type: 'asc' })),
+  isNotNull: vi.fn((_col: unknown) => ({ type: 'isNotNull' })),
+  ne: vi.fn((a: unknown, b: unknown) => ({ _ne: true, a, b })),
+  sql: Object.assign(
+    (strings: TemplateStringsArray, ..._values: unknown[]) => ({ strings, _values, type: 'sql' }),
+    { join: vi.fn(() => ({ type: 'sql.join' })) }
+  ),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'pages.id', driveId: 'pages.driveId', isTrashed: 'pages.isTrashed', parentId: 'pages.parentId', position: 'pages.position' },
+  drives: { id: 'drives.id', ownerId: 'drives.ownerId' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  pagePermissions: { pageId: 'pp.pageId', userId: 'pp.userId', canView: 'pp.canView' },
+  driveMembers: { driveId: 'dm.driveId', userId: 'dm.userId', role: 'dm.role', id: 'dm.id' },
+}));
+vi.mock('@pagespace/db/schema/tasks', () => ({
+  taskItems: { pageId: 'ti.pageId' },
+  taskLists: { id: 'tl.id', pageId: 'tl.pageId' },
+}));
+
+vi.mock('@pagespace/lib/content/tree-utils', () => ({
+    buildTree: vi.fn((items: unknown[]) => items),
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
+    api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+  },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+
+vi.mock('@pagespace/lib/utils/api-utils', () => ({
+  jsonResponse: vi.fn((data: unknown) => NextResponse.json(data, { status: 200 })),
+}));
+
+vi.mock('@/lib/auth', () => ({
+  authenticateRequestWithOptions: vi.fn(),
+  isAuthError: vi.fn(),
+  checkMCPDriveScope: vi.fn(),
+  isScopedMCPAuth: vi.fn(() => false), // Session/unscoped fixtures by default
+  getPrincipalAccessiblePagesInDrive: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
+  getUserAccessiblePagesInDrive: vi.fn(),
+}));
+// The org-aware relationship is the gate (its pure role decisions stay real).
+vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => ({
+  loadDriveRelationship: vi.fn(),
+}));
+
+// ---------- imports (after mocks) ----------
+
+import { GET } from '../route';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { buildTree } from '@pagespace/lib/content/tree-utils'
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { getUserAccessiblePagesInDrive } from '@pagespace/lib/permissions/permissions';
+import type { DriveRelationship } from '@pagespace/lib/permissions/drive-relationship';
+import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
+
+// ---------- helpers ----------
+
+const LEAD: DriveRelationship = { isOwner: true, membership: null };
+const NONE: DriveRelationship = { isOwner: false, membership: null };
+const asMember = (role: 'ADMIN' | 'MEMBER', source: 'invite' | 'org' = 'invite'): DriveRelationship => ({
+  isOwner: false,
+  membership: { role, customRoleId: null, source, auditOrgAdminPrivateAccess: false, openDriveFloor: null },
+});
+
+const mockWebAuth = (userId: string): SessionAuthResult => ({
+  userId,
+  tokenVersion: 0,
+  tokenType: 'session',
+  sessionId: 'test-session-id',
+  role: 'user',
+  adminRoleVersion: 0,
+});
+
+const mockAuthErrorResponse = (status = 401): AuthError => ({
+  error: NextResponse.json({ error: 'Unauthorized' }, { status }),
+});
+
+const createContext = (driveId: string) => ({
+  params: Promise.resolve({ driveId }),
+});
+
+const createRequest = (driveId = 'drive_abc') =>
+  new Request(`https://example.com/api/drives/${driveId}/pages`);
+
+const createLsRequest = (driveId = 'drive_abc', params: Record<string, string> = {}) => {
+  const url = new URL(`https://example.com/api/drives/${driveId}/pages`);
+  url.searchParams.set('ls', 'true');
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  return new Request(url.toString());
+};
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+describe('GET /api/drives/[driveId]/pages', () => {
+  const mockUserId = 'user_123';
+  const mockDriveId = 'drive_abc';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(checkMCPDriveScope).mockReturnValue(null);
+
+    // Default: drive found, user is owner
+    mockFindFirst.mockResolvedValue({ id: mockDriveId, ownerId: mockUserId, name: 'Test Drive' });
+
+    // Default: pages query returns empty
+    mockFindMany.mockResolvedValue([]);
+
+    // Default: selectDistinct returns empty (task-linked pages, permitted pages)
+    mockSelectDistinctWhere.mockResolvedValue([]);
+
+    // Default: select chain (admin membership check) returns empty
+    mockSelectLimit.mockResolvedValue([]);
+
+    // Default: execute (ancestor query, unread activity query) returns empty rows
+    mockExecute.mockResolvedValue({ rows: [] });
+
+    // buildTree pass-through
+    vi.mocked(buildTree).mockImplementation((items: unknown[]) => items as ReturnType<typeof buildTree>);
+
+    // Default: the caller leads the drive; a non-admin sees no pages
+    vi.mocked(loadDriveRelationship).mockResolvedValue(LEAD);
+    vi.mocked(getUserAccessiblePagesInDrive).mockResolvedValue([]);
+  });
+
+  // ---------- Authentication ----------
+
+  describe('authentication', () => {
+    it('should return 401 when not authenticated', async () => {
+      vi.mocked(isAuthError).mockReturnValue(true);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthErrorResponse(401));
+
+      const response = await GET(createRequest() as never, createContext(mockDriveId));
+
+      expect(response.status).toBe(401);
+    });
+
+    it('should call authenticateRequestWithOptions with correct auth options', async () => {
+      const request = createRequest();
+      await GET(request as never, createContext(mockDriveId));
+
+      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(request, {
+        allow: ['session', 'mcp'],
+        requireCSRF: false,
+      });
+    });
+  });
+
+  // ---------- MCP Scope ----------
+
+  describe('MCP scope checking', () => {
+    it('should return scope error when MCP token lacks drive access', async () => {
+      const scopeError = NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      vi.mocked(checkMCPDriveScope).mockReturnValue(scopeError);
+
+      const response = await GET(createRequest() as never, createContext(mockDriveId));
+
+      expect(response.status).toBe(403);
+      const scopeArgs = vi.mocked(checkMCPDriveScope).mock.calls[0];
+      expect(scopeArgs[0]).toEqual(mockWebAuth(mockUserId));
+      expect(scopeArgs[1]).toBe(mockDriveId);
+    });
+
+    it('should proceed when checkMCPDriveScope returns null', async () => {
+      vi.mocked(checkMCPDriveScope).mockReturnValue(null);
+
+      const response = await GET(createRequest() as never, createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+    });
+  });
+
+  // ---------- Drive not found ----------
+
+  describe('drive lookup', () => {
+    it('should return 404 when drive not found', async () => {
+      mockFindFirst.mockResolvedValue(undefined);
+
+      const response = await GET(createRequest() as never, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(response.status).toBe(404);
+      expect(body.error).toBe('Drive not found');
+    });
+  });
+
+  // ---------- Owner path ----------
+
+  describe('owner access', () => {
+    it('should fetch all pages when user is drive owner', async () => {
+      const pageData = [
+        { id: 'page_1', parentId: null, position: 0 },
+        { id: 'page_2', parentId: 'page_1', position: 1 },
+      ];
+      mockFindMany.mockResolvedValue(pageData);
+
+      const response = await GET(createRequest() as never, createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+      expect(mockFindMany).toHaveBeenCalledWith({
+        where: { type: 'and' },
+        orderBy: [{ type: 'asc' }],
+      });
+    });
+  });
+
+  // ---------- Admin path ----------
+
+  describe('admin access', () => {
+    it('should fetch all pages when user is admin (not owner)', async () => {
+      // User is NOT owner
+      mockFindFirst.mockResolvedValue({ id: mockDriveId, ownerId: 'other_owner', name: 'Test' });
+
+      // User IS admin
+      vi.mocked(loadDriveRelationship).mockResolvedValue(asMember('ADMIN'));
+
+      mockFindMany.mockResolvedValue([{ id: 'page_1', parentId: null, position: 0 }]);
+
+      const response = await GET(createRequest() as never, createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+      expect(mockFindMany).toHaveBeenCalledWith({
+        where: { type: 'and' },
+        orderBy: [{ type: 'asc' }],
+      });
+      expect(getUserAccessiblePagesInDrive).not.toHaveBeenCalled();
+    });
+
+    it('ORG-4 (partial) an org Admin with no drive_members row gets every page of an org drive', async () => {
+      mockFindFirst.mockResolvedValue({ id: mockDriveId, ownerId: 'other_owner', name: 'Finance', orgId: 'org_1', orgVisibility: 'PRIVATE' });
+      vi.mocked(loadDriveRelationship).mockResolvedValue(asMember('ADMIN'));
+      mockFindMany.mockResolvedValue([{ id: 'page_1', parentId: null, position: 0 }]);
+
+      const response = await GET(createRequest() as never, createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+      expect(loadDriveRelationship).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), expect.objectContaining({ orgId: 'org_1', orgVisibility: 'PRIVATE' }));
+      expect(getUserAccessiblePagesInDrive).not.toHaveBeenCalled();
+    });
+  });
+
+  // ---------- Non-owner, non-admin (permitted pages) path ----------
+
+  describe('member access (permitted pages)', () => {
+    beforeEach(() => {
+      // Not owner
+      mockFindFirst.mockResolvedValue({ id: mockDriveId, ownerId: 'other_owner', name: 'Test' });
+      // Not admin
+      vi.mocked(loadDriveRelationship).mockResolvedValue(asMember('MEMBER'));
+    });
+
+    it('should return empty tree when member has no page permissions', async () => {
+      // selectDistinct for permitted pages returns empty
+      mockSelectDistinctWhere.mockResolvedValue([]);
+
+      const response = await GET(createRequest() as never, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body).toEqual([]);
+    });
+
+    it('does not give a GUEST row (redeemed page share link) rule-4 reads: the page set is getUserAccessiblePagesInDrive', async () => {
+      vi.mocked(getUserAccessiblePagesInDrive).mockResolvedValue([]);
+
+      await GET(createRequest() as never, createContext(mockDriveId));
+
+      // No drive_members read of this route's own: getUserAccessiblePagesInDrive gives a GUEST
+      // row only its explicit grants (share-link-guest.integration.test.ts, real Postgres).
+      expect(getUserAccessiblePagesInDrive).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), mockDriveId);
+    });
+
+    it('should fetch permitted pages and ancestors when member has some permissions', async () => {
+      // The canonical page set (membership, custom or default role, live explicit grants)
+      vi.mocked(getUserAccessiblePagesInDrive).mockResolvedValue(['page_2']);
+
+      // execute: first for ancestor query, second for unread activity
+      mockExecute
+        .mockResolvedValueOnce({ rows: [{ id: 'page_1' }, { id: 'page_2' }] })  // ancestors
+        .mockResolvedValueOnce({ rows: [] });  // unread activity
+
+      // findMany for the permitted + ancestor pages
+      mockFindMany.mockResolvedValue([
+        { id: 'page_1', parentId: null, position: 0 },
+        { id: 'page_2', parentId: 'page_1', position: 1 },
+      ]);
+
+      const response = await GET(createRequest() as never, createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+      expect(mockFindMany).toHaveBeenCalledWith({
+        where: { type: 'and' },
+        orderBy: [{ type: 'asc' }],
+      });
+      const executeArgs = mockExecute.mock.calls[0];
+      expect(executeArgs[0]).toHaveProperty('type', 'sql');
+      expect(getUserAccessiblePagesInDrive).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), mockDriveId);
+    });
+
+    it('DRV-5 (partial) an implicit Open member with no row sees exactly the pages the canonical resolver gives their drive default role', async () => {
+      mockFindFirst.mockResolvedValue({ id: mockDriveId, ownerId: 'other_owner', name: 'Product', orgId: 'org_1', orgVisibility: 'OPEN' });
+      vi.mocked(getUserAccessiblePagesInDrive).mockResolvedValue(['page_1']);
+      mockExecute
+        .mockResolvedValueOnce({ rows: [{ id: 'page_1' }] })
+        .mockResolvedValueOnce({ rows: [] });
+      mockFindMany.mockResolvedValue([{ id: 'page_1', parentId: null, position: 0 }]);
+
+      const response = await GET(createRequest() as never, createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual([expect.objectContaining({ id: 'page_1' })]);
+      expect(getUserAccessiblePagesInDrive).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), mockDriveId);
+    });
+
+    it('X-6 (partial) a stale source=org ADMIN row opens nothing beyond the canonical page set: the route never reads drive_members', async () => {
+      mockFindFirst.mockResolvedValue({ id: mockDriveId, ownerId: 'other_owner', name: 'Finance', orgId: 'org_1', orgVisibility: 'PRIVATE' });
+      // The row the old inline admin check would have honoured.
+      mockSelectLimit.mockResolvedValue([{ id: 'membership_1', role: 'ADMIN', source: 'org' }]);
+      vi.mocked(loadDriveRelationship).mockResolvedValue(NONE);
+      vi.mocked(getUserAccessiblePagesInDrive).mockResolvedValue([]);
+
+      const response = await GET(createRequest() as never, createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual([]);
+      expect(mockSelectLimit).not.toHaveBeenCalled();
+      expect(mockFindMany).not.toHaveBeenCalled();
+    });
+  });
+
+  // ---------- Task-linked & hasChanges flags ----------
+
+  describe('page flags', () => {
+    it('should add isTaskLinked flag to pages', async () => {
+      const pageData = [
+        { id: 'page_1', parentId: null, position: 0 },
+        { id: 'page_2', parentId: null, position: 1 },
+      ];
+      mockFindMany.mockResolvedValue(pageData);
+
+      // Task-linked: page_1 is linked
+      mockSelectDistinctWhere.mockResolvedValue([{ pageId: 'page_1' }]);
+
+      // Unread activity
+      mockExecute.mockResolvedValue({ rows: [] });
+
+      let receivedPages: Array<Record<string, unknown>> = [];
+      vi.mocked(buildTree).mockImplementation((items: unknown[]) => {
+        receivedPages = items as Array<Record<string, unknown>>;
+        return items as ReturnType<typeof buildTree>;
+      });
+
+      await GET(createRequest() as never, createContext(mockDriveId));
+
+      expect(receivedPages[0].isTaskLinked).toBe(true);
+      expect(receivedPages[1].isTaskLinked).toBe(false);
+    });
+
+    it('should add hasChanges flag based on activity logs', async () => {
+      const pageData = [
+        { id: 'page_1', parentId: null, position: 0 },
+        { id: 'page_2', parentId: null, position: 1 },
+      ];
+      mockFindMany.mockResolvedValue(pageData);
+
+      // Task-linked: none
+      mockSelectDistinctWhere.mockResolvedValue([]);
+
+      // Unread activity: page_2 has changes
+      mockExecute.mockResolvedValue({ rows: [{ page_id: 'page_2' }] });
+
+      let receivedPages: Array<Record<string, unknown>> = [];
+      vi.mocked(buildTree).mockImplementation((items: unknown[]) => {
+        receivedPages = items as Array<Record<string, unknown>>;
+        return items as ReturnType<typeof buildTree>;
+      });
+
+      await GET(createRequest() as never, createContext(mockDriveId));
+
+      expect(receivedPages[0].hasChanges).toBe(false);
+      expect(receivedPages[1].hasChanges).toBe(true);
+    });
+
+    it('should skip unread activity query when no pages exist', async () => {
+      mockFindMany.mockResolvedValue([]);
+      mockSelectDistinctWhere.mockResolvedValue([]);
+
+      await GET(createRequest() as never, createContext(mockDriveId));
+
+      // execute should NOT be called when pageIds is empty
+      expect(mockExecute).not.toHaveBeenCalled();
+    });
+  });
+
+  // ---------- Response ----------
+
+  describe('response contract', () => {
+    it('should call buildTree with flagged pages and return result via jsonResponse', async () => {
+      const pageData = [{ id: 'page_1', parentId: null, position: 0 }];
+      mockFindMany.mockResolvedValue(pageData);
+      mockSelectDistinctWhere.mockResolvedValue([]);
+
+      const response = await GET(createRequest() as never, createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+      expect(buildTree).toHaveBeenCalledWith([
+        { id: 'page_1', parentId: null, position: 0, isTaskLinked: false, hasChanges: false },
+      ]);
+    });
+  });
+
+  // ---------- Error handling ----------
+
+  describe('error handling', () => {
+    it('should return 500 when an error is thrown', async () => {
+      mockFindFirst.mockRejectedValueOnce(new Error('Database failure'));
+
+      const response = await GET(createRequest() as never, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('Failed to fetch pages');
+    });
+
+    it('should log error when an error is thrown', async () => {
+      const error = new Error('Database failure');
+      mockFindFirst.mockRejectedValueOnce(error);
+
+      await GET(createRequest() as never, createContext(mockDriveId));
+
+      expect(loggers.api.error).toHaveBeenCalledWith('Error fetching pages:', error);
+    });
+  });
+
+  // ---------- ls-mode (?ls=true) ----------
+
+  describe('ls-mode (?ls=true)', () => {
+    const flatPages = [
+      { id: 'page_root1', parentId: null, position: 0, type: 'DOCUMENT', title: 'Root Doc' },
+      { id: 'page_folder', parentId: null, position: 1, type: 'FOLDER', title: 'Folder' },
+      { id: 'page_child1', parentId: 'page_folder', position: 0, type: 'DOCUMENT', title: 'Child Doc' },
+    ];
+
+    beforeEach(() => {
+      // Drive needs a slug for ls-mode location strings
+      mockFindFirst.mockResolvedValue({
+        id: mockDriveId,
+        ownerId: mockUserId,
+        name: 'Test Drive',
+        slug: 'test-drive',
+      });
+      mockFindMany.mockResolvedValue(flatPages);
+      mockSelectDistinctWhere.mockResolvedValue([]);
+    });
+
+    it('should return ls-mode shape instead of tree when ?ls=true', async () => {
+      const response = await GET(createLsRequest() as never, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.mode).toBe('ls');
+      expect(body.driveName).toBe('Test Drive');
+      expect(body.driveSlug).toBe('test-drive');
+      // buildTree should NOT be called in ls-mode
+      expect(buildTree).not.toHaveBeenCalled();
+    });
+
+    it('should return only root-level pages when no parentId is given', async () => {
+      const response = await GET(createLsRequest() as never, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(body.pages).toHaveLength(2);
+      expect(body.pages.map((p: { id: string }) => p.id)).toEqual(['page_root1', 'page_folder']);
+      expect(body.count).toBe(2);
+      expect(body.totalInDrive).toBe(3);
+    });
+
+    it('should set hasChildren=true on folder that has children', async () => {
+      const response = await GET(createLsRequest() as never, createContext(mockDriveId));
+      const body = await response.json();
+
+      const folder = body.pages.find((p: { id: string }) => p.id === 'page_folder');
+      const doc = body.pages.find((p: { id: string }) => p.id === 'page_root1');
+      expect(folder.hasChildren).toBe(true);
+      expect(doc.hasChildren).toBe(false);
+    });
+
+    it('should return root location when no parentId', async () => {
+      const response = await GET(createLsRequest() as never, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(body.location).toBe('/test-drive');
+      expect(body.breadcrumb).toEqual([]);
+    });
+
+    it('should return children of parentId when parentId is given', async () => {
+      const response = await GET(
+        createLsRequest(mockDriveId, { parentId: 'page_folder' }) as never,
+        createContext(mockDriveId)
+      );
+      const body = await response.json();
+
+      expect(body.pages).toHaveLength(1);
+      expect(body.pages[0].id).toBe('page_child1');
+      expect(body.pages[0].hasChildren).toBe(false);
+    });
+
+    it('should include breadcrumb when navigating into a folder', async () => {
+      const response = await GET(
+        createLsRequest(mockDriveId, { parentId: 'page_folder' }) as never,
+        createContext(mockDriveId)
+      );
+      const body = await response.json();
+
+      expect(body.breadcrumb).toEqual([{ id: 'page_folder', title: 'Folder' }]);
+      expect(body.location).toBe('/test-drive/Folder');
+    });
+
+    it('should return 404 when parentId does not exist in visible pages', async () => {
+      const response = await GET(
+        createLsRequest(mockDriveId, { parentId: 'nonexistent_page' }) as never,
+        createContext(mockDriveId)
+      );
+      const body = await response.json();
+
+      expect(response.status).toBe(404);
+      expect(body.error).toContain('parentId');
+    });
+
+    it('should return 404 for empty-string parentId (not treated as root)', async () => {
+      const url = new URL(`https://example.com/api/drives/${mockDriveId}/pages`);
+      url.searchParams.set('ls', 'true');
+      url.searchParams.set('parentId', '');
+      const response = await GET(new Request(url.toString()) as never, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(response.status).toBe(404);
+      expect(body.error).toContain('parentId');
+    });
+
+    it('should return full subtree when recursive=true', async () => {
+      const response = await GET(
+        createLsRequest(mockDriveId, { recursive: 'true' }) as never,
+        createContext(mockDriveId)
+      );
+      const body = await response.json();
+
+      // All 3 pages should appear in depth-first order: root1, folder, child1
+      expect(body.pages).toHaveLength(3);
+      expect(body.pages.map((p: { id: string }) => p.id)).toEqual([
+        'page_root1',
+        'page_folder',
+        'page_child1',
+      ]);
+    });
+
+    it('should mark isTaskLinked on pages linked to tasks', async () => {
+      mockSelectDistinctWhere.mockResolvedValue([{ pageId: 'page_root1' }]);
+
+      const response = await GET(createLsRequest() as never, createContext(mockDriveId));
+      const body = await response.json();
+
+      const doc = body.pages.find((p: { id: string }) => p.id === 'page_root1');
+      const folder = body.pages.find((p: { id: string }) => p.id === 'page_folder');
+      expect(doc.isTaskLinked).toBe(true);
+      expect(folder.isTaskLinked).toBe(false);
+    });
+
+    it('should NOT call buildTree in ls-mode (backward compat: tree still works without ?ls)', async () => {
+      // Tree mode (no ?ls)
+      await GET(createRequest() as never, createContext(mockDriveId));
+      expect(buildTree).toHaveBeenCalled();
+
+      vi.clearAllMocks();
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+      vi.mocked(isAuthError).mockReturnValue(false);
+      vi.mocked(checkMCPDriveScope).mockReturnValue(null);
+      mockFindFirst.mockResolvedValue({ id: mockDriveId, ownerId: mockUserId, name: 'Test Drive', slug: 'test-drive' });
+      mockFindMany.mockResolvedValue(flatPages);
+      mockSelectDistinctWhere.mockResolvedValue([]);
+      mockExecute.mockResolvedValue({ rows: [] });
+      vi.mocked(buildTree).mockImplementation((items: unknown[]) => items as ReturnType<typeof buildTree>);
+
+      // ls-mode
+      await GET(createLsRequest() as never, createContext(mockDriveId));
+      expect(buildTree).not.toHaveBeenCalled();
+    });
+  });
+});

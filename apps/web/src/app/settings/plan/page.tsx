@@ -1,23 +1,51 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { mutate } from 'swr';
 import { useTheme } from 'next-themes';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { ArrowLeft, CheckCircle, XCircle, Loader2 } from 'lucide-react';
-import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth, post, getCachedCSRFToken } from '@/lib/auth/auth-fetch';
 import { StripeProvider } from '@/components/billing/StripeProvider';
 import { EmbeddedCheckoutForm } from '@/components/billing/EmbeddedCheckoutForm';
 import { PlanChangeConfirmation } from '@/components/billing/PlanChangeConfirmation';
 import { PlanCard } from '@/components/billing/PlanCard';
 import { BillingGuard } from '@/components/billing/BillingGuard';
-import { getAllPlans, getPlan, getTierFromPriceId, type SubscriptionTier, type PlanDefinition } from '@/lib/subscription/plans';
+import { ApplePlanPanel } from '@/components/billing/ApplePlanPanel';
+import { useBillingVisibility } from '@/hooks/useBillingVisibility';
+import {
+  APPLE_BILLING_CHANGED_EVENT,
+  MANAGED_IN_APP_STORE_DETAIL,
+  MANAGED_IN_APP_STORE_TITLE,
+  type BillingProvider,
+} from '@/lib/iap/apple-store-core';
+import {
+  getPersonalPlans,
+  getPlan,
+  getTierFromPriceId,
+  withCreditOverrides,
+  type SubscriptionTier,
+  type PlanDefinition,
+} from '@/lib/subscription/plans';
+import { creditsCellPhrase } from '@/lib/subscription/credits';
 import type { AppliedPromo } from '@/components/billing/PromoCodeInput';
 
 interface SubscriptionData {
   subscriptionTier: SubscriptionTier;
+  /**
+   * MON-2 / D-OW-17: the server's included-credit figure, per tier, in whole
+   * cents. The ratio is a literal in money-model.ts, identical in every
+   * process, so this client bundle could derive the same number itself — there is no longer a value only the
+   * server can see. Patching it from the server response anyway keeps this
+   * page correct even if a FUTURE change ever makes the included-credit
+   * figure depend on something genuinely server-only (a per-user grant, a
+   * promo override); see withCreditOverrides in @/lib/subscription/plans.
+   * Patched onto `plans` below.
+   */
+  planCredits?: Partial<Record<SubscriptionTier, number>>;
   subscription?: {
     status: string;
     currentPeriodStart: string;
@@ -26,12 +54,16 @@ interface SubscriptionData {
     scheduledPriceId?: string | null;
     scheduledChangeDate?: string | null;
   };
+  /** Who sells the current paid personal plan: Stripe (web), Apple (In-App Purchase), or neither. */
+  billingProvider?: BillingProvider;
 }
 
 export default function PlanPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { resolvedTheme } = useTheme();
+  const { channel } = useBillingVisibility();
+  const isAppleChannel = channel === 'apple';
   const [subscriptionData, setSubscriptionData] = useState<SubscriptionData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -54,11 +86,35 @@ export default function PlanPage() {
   // Ref to track subscriptionId for cleanup (avoids stale closure)
   const subscriptionIdRef = useRef<string | null>(null);
 
+  // Stable reference: a fresh object here on every render makes <Elements> keep
+  // re-syncing with Stripe.js, which can loop with its hidden-frame lifecycle
+  const stripeElementsOptions = useMemo(() => (
+    clientSecret
+      ? {
+          clientSecret,
+          appearance: {
+            theme: (resolvedTheme === 'dark' ? 'night' : 'stripe') as 'night' | 'stripe',
+            variables: {
+              colorPrimary: resolvedTheme === 'dark' ? '#818cf8' : '#0F172A',
+            },
+          },
+        }
+      : undefined
+  ), [clientSecret, resolvedTheme]);
+
   const success = searchParams.get('success');
   const canceled = searchParams.get('canceled');
 
   useEffect(() => {
     fetchSubscriptionData();
+  }, []);
+
+  // An App Store transaction confirmed in the background (Ask to Buy approval, renewal,
+  // refund) changes the plan this page shows: refetch it in place.
+  useEffect(() => {
+    const refresh = () => void fetchSubscriptionData({ quiet: true });
+    window.addEventListener(APPLE_BILLING_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(APPLE_BILLING_CHANGED_EVENT, refresh);
   }, []);
 
   // Clear URL params after showing alerts
@@ -92,11 +148,8 @@ export default function PlanPage() {
     const handleBeforeUnload = () => {
       if (!subscriptionIdRef.current) return;
 
-      // Get CSRF token from cookie
-      const csrfToken = document.cookie
-        .split('; ')
-        .find((row) => row.startsWith('csrf_token='))
-        ?.split('=')[1];
+      // Reuse the already-fetched in-memory CSRF token (there's no time to await a fresh one here)
+      const csrfToken = getCachedCSRFToken();
 
       // Use fetch with keepalive - continues after page unloads
       fetch('/api/stripe/cancel-checkout', {
@@ -115,23 +168,29 @@ export default function PlanPage() {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, []);
 
-  const fetchSubscriptionData = async () => {
+  const fetchSubscriptionData = async ({ quiet = false }: { quiet?: boolean } = {}) => {
     try {
-      setLoading(true);
-      setError(null);
+      // A background refresh leaves the error on screen alone (it may be about something else).
+      if (!quiet) {
+        setLoading(true);
+        setError(null);
+      }
       const res = await fetchWithAuth('/api/subscriptions/status');
       if (!res.ok) throw new Error('Failed to fetch subscription data');
       const data = await res.json();
       setSubscriptionData(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred');
+      // A background refresh keeps what is on screen rather than replacing it with an error.
+      if (!quiet) setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   };
 
   const handlePlanSelect = async (targetTier: SubscriptionTier) => {
     if (!subscriptionData) return;
+    // Stripe never sells on the Apple channel, nor changes a plan the App Store sold.
+    if (isAppleChannel || subscriptionData.billingProvider === 'apple') return;
 
     const target = getPlan(targetTier);
     const currentTier = subscriptionData.subscriptionTier;
@@ -196,8 +255,30 @@ export default function PlanPage() {
     // Brief delay for webhook to process
     await new Promise(r => setTimeout(r, 2000));
 
-    // Hard refresh - guaranteed fresh data for both plan page and navbar
-    window.location.href = '/settings/plan?success=true';
+    // Refetch in place rather than reloading the document. A hard navigation to a
+    // path outside /dashboard is cancelled and punted to Safari by the iOS shell,
+    // blanking the WebView (see lib/navigation/app-navigator.ts); router.replace is
+    // pushState and never reaches that policy check.
+    //
+    // The document reload this replaces refreshed the navbar as well as this page,
+    // so the SWR caches it used to blow away must be invalidated by hand — the tier
+    // label in UserDropdown (/api/subscriptions/status, a 5-minute refreshInterval)
+    // and the credit balance (/api/credits, no polling at all) would otherwise show
+    // the pre-checkout plan for minutes after a successful upgrade.
+    router.replace('/settings/plan?success=true');
+    router.refresh();
+    try {
+      await Promise.all([
+        fetchSubscriptionData(),
+        mutate('/api/subscriptions/status'),
+        mutate('/api/credits'),
+      ]);
+    } catch (err) {
+      // The checkout itself already succeeded; a failed revalidation only means
+      // stale display data, so it must not reject out of here as an unhandled
+      // rejection. The SWR keys recover on their next poll or focus.
+      console.error('Post-checkout cache refresh failed', err);
+    }
   };
 
   const handleCheckoutCancel = () => {
@@ -259,14 +340,25 @@ export default function PlanPage() {
     );
   }
 
-  const plans = getAllPlans();
+  // SEAT-2: personal settings offer Free and Pro; Business belongs to an org.
+  // MON-2 / D-OW-17: patch each plan's credit-derived fields with the server's
+  // planCredits (see the SubscriptionData.planCredits doc comment above for
+  // why this still runs even though the client could now compute the same
+  // number itself under the compile-time constant).
+  const plans = withCreditOverrides(
+    getPersonalPlans(),
+    subscriptionData?.planCredits,
+  );
   const currentPlan = subscriptionData ? getPlan(subscriptionData.subscriptionTier) : getPlan('free');
   const scheduledTier = subscriptionData?.subscription?.scheduledPriceId
     ? getTierFromPriceId(subscriptionData.subscription.scheduledPriceId)
     : null;
+  // Bought through the App Store: Stripe must not sell, change or cancel it here.
+  const managedInAppStore = !isAppleChannel && subscriptionData?.billingProvider === 'apple';
+  const proPlan = plans.find((plan) => plan.id === 'pro') ?? getPlan('pro');
 
   return (
-    <BillingGuard>
+    <BillingGuard surface="purchases">
     <div className="container mx-auto p-6 space-y-8">
       {/* Header */}
       <div>
@@ -322,8 +414,29 @@ export default function PlanPage() {
         </div>
       )}
 
+      {/* Web, but the plan was bought in the iOS app: no Stripe controls for it. */}
+      {managedInAppStore && (
+        <Alert data-testid="managed-in-app-store">
+          <AlertDescription>
+            <span className="font-medium">{MANAGED_IN_APP_STORE_TITLE}.</span> {MANAGED_IN_APP_STORE_DETAIL}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* iOS with StoreKit: In-App Purchase only — never Stripe checkout or a web price. */}
+      {/* Only once the status is known: an unknown status must never offer Subscribe to
+          someone who may already pay on the web (that would bill one plan twice). */}
+      {isAppleChannel && subscriptionData && (
+        <ApplePlanPanel
+          plan={proPlan}
+          subscriptionTier={subscriptionData.subscriptionTier}
+          billingProvider={subscriptionData.billingProvider}
+          onChanged={fetchSubscriptionData}
+        />
+      )}
+
       {/* Embedded Checkout */}
-      {checkoutPlan && clientSecret && subscriptionId && (
+      {!isAppleChannel && checkoutPlan && clientSecret && subscriptionId && (
         <Card className="max-w-lg mx-auto relative">
           <CardHeader>
             <CardTitle>Complete Your Subscription</CardTitle>
@@ -340,15 +453,7 @@ export default function PlanPage() {
             )}
             <StripeProvider
               key={clientSecret}
-              options={{
-                clientSecret,
-                appearance: {
-                  theme: resolvedTheme === 'dark' ? 'night' : 'stripe',
-                  variables: {
-                    colorPrimary: resolvedTheme === 'dark' ? '#818cf8' : '#0F172A',
-                  },
-                },
-              }}
+              options={stripeElementsOptions}
             >
               <EmbeddedCheckoutForm
                 plan={checkoutPlan}
@@ -366,8 +471,8 @@ export default function PlanPage() {
       )}
 
       {/* Plan Cards - Only show when not in checkout */}
-      {!checkoutPlan && (
-        <div className="flex overflow-x-auto gap-4 pt-6 pb-4 snap-x snap-mandatory -mx-6 px-6 justify-center">
+      {!isAppleChannel && !checkoutPlan && (
+        <div className="mx-auto grid w-full max-w-4xl grid-cols-1 gap-6 pt-6 pb-4 md:grid-cols-2">
           {plans.map((plan) => (
             <PlanCard
               key={plan.id}
@@ -380,6 +485,9 @@ export default function PlanPage() {
               onManageBilling={() => router.push('/settings/billing')}
               onCancelSchedule={handleCancelSchedule}
               cancellingSchedule={cancellingSchedule}
+              actionOverride={managedInAppStore ? (
+                <p className="text-center text-sm text-muted-foreground">{MANAGED_IN_APP_STORE_TITLE}</p>
+              ) : undefined}
               className={plan.highlighted ? 'relative z-10' : ''}
             />
           ))}
@@ -410,22 +518,30 @@ export default function PlanPage() {
                 </thead>
                 <tbody>
                   <tr className="border-b">
-                    <td className="py-4 pr-6">AI Calls per Day</td>
+                    <td className="py-4 pr-6">Credits</td>
                     {plans.map((plan) => (
                       <td key={plan.id} className="text-center py-4 px-4 font-semibold">
-                        {plan.limits.aiCalls}
+                        {creditsCellPhrase(plan.id, plan.limits.monthlyCreditsCents)}
                       </td>
                     ))}
                   </tr>
                   <tr className="border-b">
-                    <td className="py-4 pr-6">Pro AI Calls</td>
+                    <td className="py-4 pr-6">AI models</td>
                     {plans.map((plan) => (
                       <td key={plan.id} className="text-center py-4 px-4">
-                        {plan.limits.pro > 0 ? (
-                          <span className="font-semibold">{plan.limits.pro}</span>
+                        {plan.limits.proModels ? (
+                          <span className="font-semibold">Standard + Pro</span>
                         ) : (
-                          <span className="text-muted-foreground">—</span>
+                          <span className="text-muted-foreground">Standard</span>
                         )}
+                      </td>
+                    ))}
+                  </tr>
+                  <tr className="border-b">
+                    <td className="py-4 pr-6">Buy more credits</td>
+                    {plans.map((plan) => (
+                      <td key={plan.id} className="text-center py-4 px-4 text-muted-foreground">
+                        Anytime
                       </td>
                     ))}
                   </tr>
@@ -453,7 +569,7 @@ export default function PlanPage() {
       )}
 
       {/* Plan Change Confirmation Dialog */}
-      {targetPlan && subscriptionData && (
+      {!isAppleChannel && !managedInAppStore && targetPlan && subscriptionData && (
         <PlanChangeConfirmation
           open={changePlanDialog}
           onOpenChange={setChangePlanDialog}

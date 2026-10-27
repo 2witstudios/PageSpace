@@ -3,8 +3,18 @@
  * Simple and works everywhere - dashboard, sidebar, across navigation
  */
 
-import { post } from '@/lib/auth/auth-fetch';
 import { getCookieValue } from '@/lib/utils/get-cookie-value';
+import { createId } from '@paralleldrive/cuid2';
+
+/**
+ * Pure function: classify a conversation GET response status for loadConversation.
+ * 404 = conversation not yet persisted (lazy creation) → treat as empty, not an error.
+ */
+export function classifyConversationLoadResponse(status: number): 'ok' | 'not-found' | 'error' {
+  if (status >= 200 && status < 300) return 'ok';
+  if (status === 404) return 'not-found';
+  return 'error';
+}
 
 const ACTIVE_CONVERSATION_COOKIE = 'activeConversationId';
 const ACTIVE_AGENT_COOKIE = 'activeAgentId';
@@ -42,32 +52,25 @@ export const conversationState = {
   },
 
   /**
-   * Create a new conversation and set it as active
+   * Create a new conversation ID locally and set it as active.
+   * No backend call — the conversation row is created on the first message POST.
+   * The useChat({ id }) prop is a React state key only; it does not require a DB record.
+   * Source: useChatTransport.ts (DefaultChatTransport routes to api URL, not id prop).
    */
   async createAndSetActiveConversation(options: {
     title?: string;
     type?: 'global' | 'page' | 'drive';
     contextId?: string;
   } = {}) {
-    try {
-      const conversation = await post<{
-        id: string;
-        title: string;
-        type: string;
-        lastMessageAt: string;
-        createdAt: string;
-      }>('/api/ai/global', {
-        title: options.title,
-        type: options.type || 'global',
-        contextId: options.contextId,
-      });
-
-      this.setActiveConversationId(conversation.id);
-      return conversation;
-    } catch (error) {
-      console.error('Error creating conversation:', error);
-      throw error;
-    }
+    const id = createId();
+    this.setActiveConversationId(id);
+    return {
+      id,
+      type: options.type ?? 'global',
+      title: null,
+      lastMessageAt: null,
+      createdAt: new Date().toISOString(),
+    };
   },
 
   /**

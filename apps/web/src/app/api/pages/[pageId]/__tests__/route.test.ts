@@ -5,7 +5,7 @@
  * - Request validation → appropriate error responses
  * - Service delegation → correct parameters passed
  * - Response mapping → service results mapped to HTTP responses
- * - Side effects → broadcasts/cache with correct payload essentials
+ * - Side effects → broadcasts with correct payload essentials
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
@@ -29,6 +29,7 @@ vi.mock('@/lib/auth', () => ({
   // MCP scope check - returns null (allowed) by default for session auth tests
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
   isMCPAuthResult: vi.fn().mockReturnValue(false),
+  canPrincipalSharePage: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -41,14 +42,63 @@ vi.mock('@/lib/websocket', () => ({
   })),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  agentAwarenessCache: {
-    invalidateDriveAgents: vi.fn().mockResolvedValue(undefined),
+// Revocation kicking is centralized (#2158) — the route calls this hook
+// instead of picking rooms itself. Its own room-set and best-effort behavior
+// are covered by packages/lib/src/permissions/__tests__/revocation-kick.test.ts;
+// here we only assert the route wires it up with the right arguments.
+vi.mock('@pagespace/lib/permissions/revocation-kick', () => ({
+  kickForPagePermissionRevocation: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
+  canUserSharePage: vi.fn().mockResolvedValue(true),
+  getUsersWhoCanViewPage: vi.fn(async () => new Set<string>()),
+}));
+
+// The drive's members, from the one org-aware enumeration.
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+  getDriveRecipientUserIds: vi.fn(async () => []),
+}));
+
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    query: {
+      pages: { findFirst: vi.fn() },
+      drives: { findFirst: vi.fn() },
+    },
+    select: vi.fn().mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue([]),
+      }),
+    }),
   },
-  pageTreeCache: {
-    invalidateDriveTree: vi.fn().mockResolvedValue(undefined),
-  },
-  loggers: {
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  and: vi.fn((...args: unknown[]) => args),
+  eq: vi.fn((a: unknown, b: unknown) => [a, b]),
+  isNotNull: vi.fn((a: unknown) => ({ _isNotNull: true, col: a })),
+  ne: vi.fn((a: unknown, b: unknown) => ({ ne: [a, b] })),
+  not: vi.fn((a: unknown) => ({ not: a })),
+  exists: vi.fn((a: unknown) => ({ exists: a })),
+  or: vi.fn((...args: unknown[]) => args),
+  isNull: vi.fn((a: unknown) => ({ isNull: a })),
+  gt: vi.fn((a: unknown, b: unknown) => ({ gt: [a, b] })),
+  inArray: vi.fn((a: unknown, b: unknown) => ({ inArray: [a, b] })),
+  sql: vi.fn((...args: unknown[]) => ({ sql: args })),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'pages.id', isPrivate: 'pages.isPrivate' },
+  drives: { id: 'drives.id', ownerId: 'drives.ownerId' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: { driveId: 'driveMembers.driveId', userId: 'driveMembers.userId', acceptedAt: 'driveMembers.acceptedAt', role: 'driveMembers.role', customRoleId: 'driveMembers.customRoleId' },
+  pagePermissions: { id: 'pagePermissions.id', pageId: 'pagePermissions.pageId', userId: 'pagePermissions.userId', canView: 'pagePermissions.canView', expiresAt: 'pagePermissions.expiresAt' },
+  driveRoles: { id: 'driveRoles.id', permissions: 'driveRoles.permissions' },
+}));
+
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -56,25 +106,39 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' }),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+    getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' }),
 }));
 
-vi.mock('@pagespace/lib', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   logPageActivity: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackPageOperation: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/api-utils', () => ({
+vi.mock('@pagespace/lib/utils/api-utils', () => ({
   jsonResponse: vi.fn((data) => NextResponse.json(data)),
 }));
 
 import { pageService } from '@/services/api';
-import { authenticateRequestWithOptions } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isMCPAuthResult, canPrincipalSharePage } from '@/lib/auth';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { agentAwarenessCache, pageTreeCache } from '@pagespace/lib/server';
+import { kickForPagePermissionRevocation } from '@pagespace/lib/permissions/revocation-kick';
+import { getUsersWhoCanViewPage } from '@pagespace/lib/permissions/permissions';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
+import { jsonResponse } from '@pagespace/lib/utils/api-utils';
+import { db } from '@pagespace/db/db';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // Test helpers
 const mockUserId = 'user_123';
@@ -134,9 +198,18 @@ describe('GET /api/pages/[pageId]', () => {
   };
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(isAuthError).mockImplementation((result: unknown) => result != null && typeof result === 'object' && 'error' in result);
+    vi.mocked(checkMCPPageScope).mockResolvedValue(null);
+    vi.mocked(isMCPAuthResult).mockReturnValue(false);
     vi.mocked(pageService.getPage).mockResolvedValue(successResult);
+    vi.mocked(jsonResponse).mockImplementation((data: unknown) => NextResponse.json(data));
+    vi.mocked(auditRequest).mockReturnValue(undefined);
+    // @ts-expect-error - partial mock data
+    vi.mocked(createPageEventPayload).mockImplementation((driveId: string, pageId: string, type: string, data: Record<string, unknown>) => ({
+      driveId, pageId, type, ...data,
+    }));
   });
 
   describe('authentication', () => {
@@ -183,20 +256,58 @@ describe('GET /api/pages/[pageId]', () => {
 
       expect(response.status).toBe(200);
       expect(body.title).toBe('Test Page');
-      expect(body.children).toBeDefined();
-      expect(body.messages).toBeDefined();
+      expect(body.children).toEqual([]);
+      expect(body.messages).toEqual([]);
     });
 
     it('passes correct parameters to service', async () => {
       await GET(createRequest(), { params: mockParams });
 
-      expect(pageService.getPage).toHaveBeenCalledWith(mockPageId, mockUserId);
+      expect(pageService.getPage).toHaveBeenCalledWith(
+        mockPageId,
+        expect.objectContaining({ userId: mockUserId }),
+        // Principal-aware view authorization is injected by the route
+        expect.objectContaining({ authorizeView: expect.any(Function) })
+      );
+    });
+
+    it('logs read audit event on successful page retrieval', async () => {
+      await GET(createRequest(), { params: mockParams });
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({ eventType: 'data.read', userId: mockUserId, resourceType: 'page', resourceId: mockPageId })
+      );
+    });
+
+    it('does NOT log read audit event when page not found', async () => {
+      vi.mocked(pageService.getPage).mockResolvedValue({
+        success: false,
+        error: 'Page not found',
+        status: 404,
+      });
+
+      await GET(createRequest(), { params: mockParams });
+
+      expect(auditRequest).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('MCP scope check', () => {
+    it('returns scope error when MCP page scope check fails', async () => {
+      const scopeErrorResponse = NextResponse.json({ error: 'Scope denied' }, { status: 403 });
+      vi.mocked(checkMCPPageScope).mockResolvedValue(scopeErrorResponse);
+
+      const response = await GET(createRequest(), { params: mockParams });
+
+      expect(response.status).toBe(403);
+      expect(pageService.getPage).not.toHaveBeenCalled();
     });
   });
 
   describe('error handling', () => {
     it('returns 500 when service throws', async () => {
-      vi.mocked(pageService.getPage).mockRejectedValue(new Error('Database error'));
+      vi.mocked(pageService.getPage).mockRejectedValueOnce(new Error('Database error'));
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -227,9 +338,33 @@ describe('PATCH /api/pages/[pageId]', () => {
   };
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(isAuthError).mockImplementation((result: unknown) => result != null && typeof result === 'object' && 'error' in result);
+    vi.mocked(checkMCPPageScope).mockResolvedValue(null);
+    vi.mocked(isMCPAuthResult).mockReturnValue(false);
     vi.mocked(pageService.updatePage).mockResolvedValue(successResult);
+    vi.mocked(jsonResponse).mockImplementation((data: unknown) => NextResponse.json(data));
+    vi.mocked(auditRequest).mockReturnValue(undefined);
+    // @ts-expect-error - partial mock data
+    vi.mocked(createPageEventPayload).mockImplementation((driveId: string, pageId: string, type: string, data: Record<string, unknown>) => ({
+      driveId, pageId, type, ...data,
+    }));
+    vi.mocked(canPrincipalSharePage).mockResolvedValue(true);
+    // @ts-expect-error - partial mock: page is not private by default
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ isPrivate: false });
+    // @ts-expect-error - partial mock
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue({ ownerId: 'owner_user' });
+    // Default: no members lose access
+    vi.mocked(getDriveRecipientUserIds).mockResolvedValue([]);
+    vi.mocked(getUsersWhoCanViewPage).mockResolvedValue(new Set());
+    // @ts-expect-error - partial mock chain
+    vi.mocked(db.select).mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue([]),
+      }),
+    });
+    vi.mocked(kickForPagePermissionRevocation).mockResolvedValue(undefined);
   });
 
   describe('authentication', () => {
@@ -278,6 +413,18 @@ describe('PATCH /api/pages/[pageId]', () => {
     });
   });
 
+  describe('MCP scope check', () => {
+    it('returns scope error when MCP page scope check fails', async () => {
+      const scopeErrorResponse = NextResponse.json({ error: 'Scope denied' }, { status: 403 });
+      vi.mocked(checkMCPPageScope).mockResolvedValue(scopeErrorResponse);
+
+      const response = await PATCH(createRequest({ title: 'Updated' }), { params: mockParams });
+
+      expect(response.status).toBe(403);
+      expect(pageService.updatePage).not.toHaveBeenCalled();
+    });
+  });
+
   describe('service delegation', () => {
     it('passes correct parameters to service', async () => {
       await PATCH(
@@ -287,12 +434,64 @@ describe('PATCH /api/pages/[pageId]', () => {
 
       expect(pageService.updatePage).toHaveBeenCalledWith(
         mockPageId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         expect.objectContaining({
           title: 'Updated Title',
           content: '<p>New content</p>',
         }),
         expect.objectContaining({ expectedRevision: undefined })
+      );
+    });
+
+    it('passes MCP context when authenticated via MCP', async () => {
+      vi.mocked(isMCPAuthResult).mockReturnValue(true);
+
+      await PATCH(
+        createRequest({ title: 'MCP Update' }),
+        { params: mockParams }
+      );
+
+      expect(pageService.updatePage).toHaveBeenCalledWith(
+        mockPageId,
+        expect.objectContaining({ userId: mockUserId }),
+        expect.objectContaining({ title: 'MCP Update' }),
+        expect.objectContaining({
+          context: expect.objectContaining({
+            metadata: { source: 'mcp' },
+          }),
+        })
+      );
+    });
+
+    it('passes changeGroupId in context when provided', async () => {
+      await PATCH(
+        createRequest({ title: 'Grouped', changeGroupId: 'group_123' }),
+        { params: mockParams }
+      );
+
+      expect(pageService.updatePage).toHaveBeenCalledWith(
+        mockPageId,
+        expect.objectContaining({ userId: mockUserId }),
+        expect.objectContaining({ title: 'Grouped' }),
+        expect.objectContaining({
+          context: expect.objectContaining({
+            changeGroupId: 'group_123',
+          }),
+        })
+      );
+    });
+
+    it('passes expectedRevision for optimistic concurrency', async () => {
+      await PATCH(
+        createRequest({ title: 'Concurrent', expectedRevision: 5 }),
+        { params: mockParams }
+      );
+
+      expect(pageService.updatePage).toHaveBeenCalledWith(
+        mockPageId,
+        expect.objectContaining({ userId: mockUserId }),
+        expect.objectContaining({ title: 'Concurrent' }),
+        expect.objectContaining({ expectedRevision: 5 })
       );
     });
   });
@@ -303,7 +502,7 @@ describe('PATCH /api/pages/[pageId]', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.title).toBeDefined();
+      expect(body.title).toBe('Test Page');
     });
   });
 
@@ -319,7 +518,7 @@ describe('PATCH /api/pages/[pageId]', () => {
           title: 'Updated Title',
         })
       );
-      expect(broadcastPageEvent).toHaveBeenCalled();
+      expect(broadcastPageEvent).toHaveBeenCalledTimes(1);
     });
 
     it('broadcasts content update event with correct payload', async () => {
@@ -334,29 +533,29 @@ describe('PATCH /api/pages/[pageId]', () => {
         mockDriveId,
         mockPageId,
         'content-updated',
-        expect.any(Object)
+        { title: 'Test Page', parentId: undefined, socketId: undefined }
       );
-      expect(broadcastPageEvent).toHaveBeenCalled();
+      expect(broadcastPageEvent).toHaveBeenCalledTimes(1);
     });
 
-    it('invalidates page tree cache on title change', async () => {
-      await PATCH(createRequest({ title: 'Updated' }), { params: mockParams });
-
-      expect(pageTreeCache.invalidateDriveTree).toHaveBeenCalledWith(mockDriveId);
-    });
-
-    it('invalidates agent cache when AI_CHAT title changes', async () => {
+    it('broadcasts content update when all content is deleted (empty string)', async () => {
       vi.mocked(pageService.updatePage).mockResolvedValue({
         ...successResult,
-        isAIChatPage: true,
+        updatedFields: ['content'],
       });
 
-      await PATCH(createRequest({ title: 'AI Agent' }), { params: mockParams });
+      await PATCH(createRequest({ content: '' }), { params: mockParams });
 
-      expect(agentAwarenessCache.invalidateDriveAgents).toHaveBeenCalledWith(mockDriveId);
+      expect(createPageEventPayload).toHaveBeenCalledWith(
+        mockDriveId,
+        mockPageId,
+        'content-updated',
+        expect.objectContaining({ title: 'Test Page' })
+      );
+      expect(broadcastPageEvent).toHaveBeenCalledTimes(1);
     });
 
-    it('does NOT broadcast or invalidate cache on service failure', async () => {
+    it('does NOT broadcast on service failure', async () => {
       vi.mocked(pageService.updatePage).mockResolvedValue({
         success: false,
         error: 'Not found',
@@ -366,19 +565,193 @@ describe('PATCH /api/pages/[pageId]', () => {
       await PATCH(createRequest({ title: 'Updated' }), { params: mockParams });
 
       expect(broadcastPageEvent).not.toHaveBeenCalled();
-      expect(pageTreeCache.invalidateDriveTree).not.toHaveBeenCalled();
+    });
+
+    it('tracks page update operation', async () => {
+      await PATCH(createRequest({ title: 'Updated' }), { params: mockParams });
+
+      expect(trackPageOperation).toHaveBeenCalledWith(
+        mockUserId,
+        'update',
+        mockPageId,
+        expect.objectContaining({
+          hasTitleUpdate: true,
+        })
+      );
+    });
+
+    it('logs write audit event on successful page update', async () => {
+      await PATCH(createRequest({ title: 'Updated' }), { params: mockParams });
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({ eventType: 'data.write', userId: mockUserId, resourceType: 'page', resourceId: mockPageId })
+      );
+    });
+
+    it('passes Socket-ID header to broadcast', async () => {
+      const request = new Request(`https://example.com/api/pages/${mockPageId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Socket-ID': 'socket_abc',
+        },
+        body: JSON.stringify({ title: 'Updated' }),
+      });
+
+      await PATCH(request, { params: mockParams });
+
+      expect(createPageEventPayload).toHaveBeenCalledWith(
+        mockDriveId,
+        mockPageId,
+        'updated',
+        expect.objectContaining({
+          socketId: 'socket_abc',
+        })
+      );
+    });
+  });
+
+  describe('privacy change side effects', () => {
+    it('broadcasts page:updated event when isPrivate changes to true', async () => {
+      await PATCH(createRequest({ isPrivate: true }), { params: mockParams });
+
+      expect(createPageEventPayload).toHaveBeenCalledWith(
+        mockDriveId,
+        mockPageId,
+        'updated',
+        expect.objectContaining({ isPrivate: true })
+      );
+      expect(broadcastPageEvent).toHaveBeenCalledTimes(1);
+    });
+
+    it('SEAT-9 (partial) [D-OW-33] when the page service refuses (the page was private and the drive\'s org is lapsed), the route answers 402 org_lapsed and broadcasts nothing', async () => {
+      // @ts-expect-error - partial mock: the page row carries only isPrivate
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue({ isPrivate: true });
+      const { OrgLapsedError } = await import('@pagespace/lib/permissions/org-lapse-guard');
+      vi.mocked(pageService.updatePage).mockRejectedValueOnce(new OrgLapsedError());
+      const res = await PATCH(createRequest({ isPrivate: false }), { params: mockParams });
+      expect(res.status).toBe(402);
+      expect(await res.json()).toMatchObject({ code: 'org_lapsed' });
+      expect(broadcastPageEvent).not.toHaveBeenCalled();
+    });
+
+    it('broadcasts page:updated event when isPrivate changes to false', async () => {
+      // @ts-expect-error - partial mock: page was private
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue({ isPrivate: true });
+
+      await PATCH(createRequest({ isPrivate: false }), { params: mockParams });
+
+      expect(createPageEventPayload).toHaveBeenCalledWith(
+        mockDriveId,
+        mockPageId,
+        'updated',
+        expect.objectContaining({ isPrivate: false })
+      );
+    });
+
+    it('kicks members who lose implicit access when page transitions false→true', async () => {
+      // @ts-expect-error - partial mock: page was public
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue({ isPrivate: false });
+      vi.mocked(getDriveRecipientUserIds).mockResolvedValueOnce(['lead_1', 'admin_1', 'member_1', 'member_2']);
+      // After the change only the lead and the admin can still view it.
+      vi.mocked(getUsersWhoCanViewPage).mockResolvedValueOnce(new Set(['lead_1', 'admin_1']));
+
+      await PATCH(createRequest({ isPrivate: true }), { params: mockParams });
+
+      expect(getUsersWhoCanViewPage).toHaveBeenCalledWith(mockPageId, ['lead_1', 'admin_1', 'member_1', 'member_2']);
+      expect(kickForPagePermissionRevocation).toHaveBeenCalledWith({
+        userId: 'member_1', pageId: mockPageId, reason: 'page_private',
+      });
+      expect(kickForPagePermissionRevocation).toHaveBeenCalledWith({
+        userId: 'member_2', pageId: mockPageId, reason: 'page_private',
+      });
+      expect(kickForPagePermissionRevocation).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not kick members who retain access via custom role or an explicit grant when page transitions false→true', async () => {
+      // @ts-expect-error - partial mock: page was public
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue({ isPrivate: false });
+      vi.mocked(getDriveRecipientUserIds).mockResolvedValueOnce(['lead_1', 'role_member', 'granted_member']);
+      vi.mocked(getUsersWhoCanViewPage).mockResolvedValueOnce(new Set(['lead_1', 'role_member', 'granted_member']));
+
+      await PATCH(createRequest({ isPrivate: true }), { params: mockParams });
+
+      expect(kickForPagePermissionRevocation).not.toHaveBeenCalled();
+    });
+
+    it('DRV-5 (partial) X-6 (partial) the kick audience is the org-aware drive membership (an implicit Open member is kicked too), decided by the canonical viewer check, never a drive_members read here', async () => {
+      // @ts-expect-error - partial mock: page was public
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue({ isPrivate: false });
+      vi.mocked(getDriveRecipientUserIds).mockResolvedValueOnce(['lead_1', 'implicit_member']);
+      vi.mocked(getUsersWhoCanViewPage).mockResolvedValueOnce(new Set(['lead_1']));
+
+      await PATCH(createRequest({ isPrivate: true }), { params: mockParams });
+
+      expect(getDriveRecipientUserIds).toHaveBeenCalledWith(mockDriveId);
+      expect(kickForPagePermissionRevocation).toHaveBeenCalledWith({ userId: 'implicit_member', pageId: mockPageId, reason: 'page_private' });
+      expect(db.select).not.toHaveBeenCalled();
+    });
+
+    it('does not kick anyone when page is already private (no transition)', async () => {
+      // @ts-expect-error - partial mock: page was already private
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue({ isPrivate: true });
+
+      await PATCH(createRequest({ isPrivate: true }), { params: mockParams });
+
+      expect(kickForPagePermissionRevocation).not.toHaveBeenCalled();
+    });
+
+    it('returns 403 when user lacks share permission to change privacy', async () => {
+      vi.mocked(canPrincipalSharePage).mockResolvedValue(false);
+
+      const response = await PATCH(createRequest({ isPrivate: true }), { params: mockParams });
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toMatch(/owner.*admin|admin.*owner|visibility/i);
     });
   });
 
   describe('error handling', () => {
     it('returns 500 when service throws', async () => {
-      vi.mocked(pageService.updatePage).mockRejectedValue(new Error('Database error'));
+      vi.mocked(pageService.updatePage).mockRejectedValueOnce(new Error('Database error'));
 
       const response = await PATCH(createRequest({ title: 'Updated' }), { params: mockParams });
       const body = await response.json();
 
       expect(response.status).toBe(500);
       expect(body.error).toMatch(/failed/i);
+    });
+
+    it('returns 400 for Zod validation errors', async () => {
+      // Send a body with invalid type for a field that Zod validates
+      const request = new Request(`https://example.com/api/pages/${mockPageId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isPaginated: 'not-a-boolean' }),
+      });
+
+      const response = await PATCH(request, { params: mockParams });
+
+      expect(response.status).toBe(400);
+    });
+
+    it('returns update failure with currentRevision info', async () => {
+      vi.mocked(pageService.updatePage).mockResolvedValue({
+        success: false,
+        error: 'Conflict',
+        status: 409,
+        currentRevision: 10,
+        expectedRevision: 5,
+      });
+
+      const response = await PATCH(createRequest({ title: 'Updated' }), { params: mockParams });
+      const body = await response.json();
+
+      expect(response.status).toBe(409);
+      expect(body.currentRevision).toBe(10);
+      expect(body.expectedRevision).toBe(5);
     });
   });
 });
@@ -404,9 +777,18 @@ describe('DELETE /api/pages/[pageId]', () => {
   };
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(isAuthError).mockImplementation((result: unknown) => result != null && typeof result === 'object' && 'error' in result);
+    vi.mocked(checkMCPPageScope).mockResolvedValue(null);
+    vi.mocked(isMCPAuthResult).mockReturnValue(false);
     vi.mocked(pageService.trashPage).mockResolvedValue(successResult);
+    vi.mocked(jsonResponse).mockImplementation((data: unknown) => NextResponse.json(data));
+    vi.mocked(auditRequest).mockReturnValue(undefined);
+    // @ts-expect-error - partial mock data
+    vi.mocked(createPageEventPayload).mockImplementation((driveId: string, pageId: string, type: string, data: Record<string, unknown>) => ({
+      driveId, pageId, type, ...data,
+    }));
   });
 
   describe('authentication', () => {
@@ -442,18 +824,28 @@ describe('DELETE /api/pages/[pageId]', () => {
 
       expect(pageService.trashPage).toHaveBeenCalledWith(
         mockPageId,
-        mockUserId,
-        { trashChildren: true }
+        expect.objectContaining({ userId: mockUserId }),
+        expect.objectContaining({ trashChildren: true, authorizeDelete: expect.any(Function) })
       );
     });
 
-    it('defaults trashChildren to false', async () => {
+    it('defaults trashChildren to true (cascade)', async () => {
       await DELETE(createRequest({}), { params: mockParams });
 
       expect(pageService.trashPage).toHaveBeenCalledWith(
         mockPageId,
-        mockUserId,
-        { trashChildren: false }
+        expect.objectContaining({ userId: mockUserId }),
+        expect.objectContaining({ trashChildren: true, authorizeDelete: expect.any(Function) })
+      );
+    });
+
+    it('honors an explicit trash_children: false (move children up)', async () => {
+      await DELETE(createRequest({ trash_children: false }), { params: mockParams });
+
+      expect(pageService.trashPage).toHaveBeenCalledWith(
+        mockPageId,
+        expect.objectContaining({ userId: mockUserId }),
+        expect.objectContaining({ trashChildren: false, authorizeDelete: expect.any(Function) })
       );
     });
   });
@@ -492,27 +884,10 @@ describe('DELETE /api/pages/[pageId]', () => {
           title: 'Test Page',
         })
       );
-      expect(broadcastPageEvent).toHaveBeenCalled();
+      expect(broadcastPageEvent).toHaveBeenCalledTimes(1);
     });
 
-    it('invalidates page tree cache', async () => {
-      await DELETE(createRequest({}), { params: mockParams });
-
-      expect(pageTreeCache.invalidateDriveTree).toHaveBeenCalledWith(mockDriveId);
-    });
-
-    it('invalidates agent cache when AI_CHAT page is trashed', async () => {
-      vi.mocked(pageService.trashPage).mockResolvedValue({
-        ...successResult,
-        isAIChatPage: true,
-      });
-
-      await DELETE(createRequest({}), { params: mockParams });
-
-      expect(agentAwarenessCache.invalidateDriveAgents).toHaveBeenCalledWith(mockDriveId);
-    });
-
-    it('does NOT broadcast or invalidate cache on service failure', async () => {
+    it('does NOT broadcast on service failure', async () => {
       vi.mocked(pageService.trashPage).mockResolvedValue({
         success: false,
         error: 'Page not found',
@@ -522,13 +897,85 @@ describe('DELETE /api/pages/[pageId]', () => {
       await DELETE(createRequest({}), { params: mockParams });
 
       expect(broadcastPageEvent).not.toHaveBeenCalled();
-      expect(pageTreeCache.invalidateDriveTree).not.toHaveBeenCalled();
     });
+  });
+
+  describe('MCP scope check', () => {
+    it('returns scope error when MCP page scope check fails', async () => {
+      const scopeErrorResponse = NextResponse.json({ error: 'Scope denied' }, { status: 403 });
+      vi.mocked(checkMCPPageScope).mockResolvedValue(scopeErrorResponse);
+
+      const response = await DELETE(createRequest({}), { params: mockParams });
+
+      expect(response.status).toBe(403);
+      expect(pageService.trashPage).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('service delegation (MCP)', () => {
+    it('passes MCP metadata when authenticated via MCP', async () => {
+      vi.mocked(isMCPAuthResult).mockReturnValue(true);
+
+      await DELETE(createRequest({}), { params: mockParams });
+
+      expect(pageService.trashPage).toHaveBeenCalledWith(
+        mockPageId,
+        expect.objectContaining({ userId: mockUserId }),
+        expect.objectContaining({
+          metadata: { source: 'mcp' },
+        })
+      );
+    });
+  });
+
+  describe('empty body handling', () => {
+    it('handles request with no JSON body gracefully', async () => {
+      const request = new Request(`https://example.com/api/pages/${mockPageId}`, {
+        method: 'DELETE',
+        // No body at all
+      });
+
+      const response = await DELETE(request, { params: mockParams });
+
+      expect(response.status).toBe(200);
+      expect(pageService.trashPage).toHaveBeenCalledWith(
+        mockPageId,
+        expect.objectContaining({ userId: mockUserId }),
+        expect.objectContaining({ trashChildren: true })
+      );
+    });
+  });
+
+  describe('activity tracking', () => {
+    it('tracks page trash operation', async () => {
+      await DELETE(createRequest({}), { params: mockParams });
+
+      expect(trackPageOperation).toHaveBeenCalledWith(
+        mockUserId,
+        'trash',
+        mockPageId,
+        expect.objectContaining({
+          trashChildren: true,
+          pageTitle: 'Test Page',
+          pageType: 'DOCUMENT',
+        })
+      );
+    });
+
+    it('logs delete audit event on successful page trash', async () => {
+      await DELETE(createRequest({}), { params: mockParams });
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({ eventType: 'data.delete', userId: mockUserId, resourceType: 'page', resourceId: mockPageId })
+      );
+    });
+
   });
 
   describe('error handling', () => {
     it('returns 500 when service throws', async () => {
-      vi.mocked(pageService.trashPage).mockRejectedValue(new Error('Database error'));
+      vi.mocked(pageService.trashPage).mockRejectedValueOnce(new Error('Database error'));
 
       const response = await DELETE(createRequest({}), { params: mockParams });
       const body = await response.json();
@@ -546,4 +993,13 @@ describe('DELETE /api/pages/[pageId]', () => {
       expect(response.status).toBe(400);
     });
   });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    canPrincipalSharePage: (auth: { userId: string }, resourceId: string) => permissions.canUserSharePage(credentialActor(auth.userId, null), resourceId),
+  };
 });

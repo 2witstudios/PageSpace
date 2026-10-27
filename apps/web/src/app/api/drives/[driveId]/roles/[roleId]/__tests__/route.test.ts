@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, PATCH, DELETE } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
-import type { DriveRoleAccessInfo, DriveRole, RolePermissions } from '@pagespace/lib/server';
+import type { DriveRoleAccessInfo, DriveRole, RolePermissions } from '@pagespace/lib/services/drive-role-service';
 
 // ============================================================================
 // Contract Tests for /api/drives/[driveId]/roles/[roleId]
@@ -10,27 +10,32 @@ import type { DriveRoleAccessInfo, DriveRole, RolePermissions } from '@pagespace
 // These tests mock at the SERVICE SEAM level, NOT at the ORM/query-builder level.
 // ============================================================================
 
-vi.mock('@pagespace/lib/server', () => ({
-  checkDriveAccessForRoles: vi.fn(),
-  getRoleById: vi.fn(),
-  updateDriveRole: vi.fn(),
-  deleteDriveRole: vi.fn(),
-  validateRolePermissions: vi.fn(),
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: vi.fn(),
+    auditRequest: vi.fn(),
 }));
+vi.mock('@pagespace/lib/services/drive-role-service', async () => {
+    const actual = await vi.importActual<typeof import('@pagespace/lib/services/drive-role-service')>(
+      '@pagespace/lib/services/drive-role-service'
+    );
+    return {
+      ...actual,
+      checkDriveAccessForRoles: vi.fn(),
+      getRoleById: vi.fn(),
+      updateDriveRole: vi.fn(),
+      deleteDriveRole: vi.fn(),
+      validateRolePermissions: vi.fn(),
+    };
+});
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  checkMCPDriveScope: vi.fn(),
 }));
 
-import {
-  checkDriveAccessForRoles,
-  getRoleById,
-  updateDriveRole,
-  deleteDriveRole,
-  validateRolePermissions,
-} from '@pagespace/lib/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { checkDriveAccessForRoles, getRoleById, updateDriveRole, deleteDriveRole, validateRolePermissions, OpenRoleFloorError } from '@pagespace/lib/services/drive-role-service';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 
 // ============================================================================
 // Test Fixtures
@@ -78,6 +83,7 @@ const createRoleFixture = (overrides: {
   color: '#000000',
   isDefault: overrides.isDefault ?? false,
   permissions: overrides.permissions ?? { page_1: { canView: true, canEdit: false, canShare: false } },
+  driveWidePermissions: null,
   position: overrides.position ?? 0,
   createdAt: new Date('2024-01-01'),
   updatedAt: new Date('2024-01-01'),
@@ -100,6 +106,7 @@ describe('GET /api/drives/[driveId]/roles/[roleId]', () => {
     vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(checkMCPDriveScope).mockReturnValue(null);
   });
 
   describe('authentication', () => {
@@ -156,7 +163,7 @@ describe('GET /api/drives/[driveId]/roles/[roleId]', () => {
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/${mockRoleId}`);
       await GET(request, createContext(mockDriveId, mockRoleId));
 
-      expect(checkDriveAccessForRoles).toHaveBeenCalledWith(mockDriveId, mockUserId);
+      expect(checkDriveAccessForRoles).toHaveBeenCalledWith(mockDriveId, expect.objectContaining({ userId: mockUserId }));
     });
 
     it('should call getRoleById with driveId and roleId', async () => {
@@ -190,7 +197,27 @@ describe('GET /api/drives/[driveId]/roles/[roleId]', () => {
       const body = await response.json();
 
       expect(response.status).toBe(404);
-      expect(body.error).toBe('Role not found');
+      expect(body.error).toBe(`Role "${mockRoleId}" not found in this drive`);
+    });
+
+    // Issue #2470: `get_drive_role "member"` / `roles get <driveId> member` can
+    // only ever miss here — system roles are not rows in drive_roles — so the
+    // 404 names where they do live rather than leaving a dead end.
+    it('should point a SYSTEM role name at where system roles actually live', async () => {
+      vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        isMember: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test', ownerId: mockUserId }),
+      }));
+      vi.mocked(getRoleById).mockResolvedValue(null);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/member`);
+      const response = await GET(request, createContext(mockDriveId, 'member'));
+      const body = await response.json();
+
+      expect(response.status).toBe(404);
+      expect(body.error).toMatch(/system role/i);
+      expect(body.error).toMatch(/drive membership/i);
     });
 
     it('should return role when user is owner', async () => {
@@ -233,7 +260,7 @@ describe('GET /api/drives/[driveId]/roles/[roleId]', () => {
 
   describe('error handling', () => {
     it('should return 500 when service throws', async () => {
-      vi.mocked(checkDriveAccessForRoles).mockRejectedValue(new Error('Database error'));
+      vi.mocked(checkDriveAccessForRoles).mockRejectedValueOnce(new Error('Database error'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/${mockRoleId}`);
       const response = await GET(request, createContext(mockDriveId, mockRoleId));
@@ -259,6 +286,7 @@ describe('PATCH /api/drives/[driveId]/roles/[roleId]', () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(validateRolePermissions).mockReturnValue(true);
+    vi.mocked(checkMCPDriveScope).mockReturnValue(null);
   });
 
   describe('authentication', () => {
@@ -296,7 +324,7 @@ describe('PATCH /api/drives/[driveId]/roles/[roleId]', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['session'], requireCSRF: true }
+        { allow: ['session', 'mcp'], requireCSRF: true }
       );
     });
   });
@@ -445,6 +473,126 @@ describe('PATCH /api/drives/[driveId]/roles/[roleId]', () => {
     });
   });
 
+  // ==========================================================================
+  // permissionsPatch (read-merge-write) — regression coverage for #1765:
+  // a single-page PATCH must never wipe another page's per-page grant.
+  // ==========================================================================
+  describe('permissionsPatch (read-merge-write)', () => {
+    beforeEach(() => {
+      vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+      }));
+      vi.mocked(updateDriveRole).mockResolvedValue({
+        role: createRoleFixture({ id: mockRoleId, name: 'Original', driveId: mockDriveId }),
+        wasDefault: false,
+      });
+    });
+
+    it('forwards permissionsPatch to updateDriveRole untouched so the merge happens under the service\'s row lock, not against this unlocked read', async () => {
+      // updateDriveRole now merges permissionsPatch against the role row it
+      // locks inside its own transaction; the route must not pre-merge
+      // against `existingRole` (an unlocked read) and pass a full `permissions`
+      // replace, which would reintroduce the read-modify-write race permissionsPatch
+      // exists to prevent (#1425).
+      vi.mocked(getRoleById).mockResolvedValue(
+        createRoleFixture({
+          id: mockRoleId,
+          name: 'Original',
+          driveId: mockDriveId,
+          permissions: {
+            page_1: { canView: true, canEdit: true, canShare: false },
+          },
+        })
+      );
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/${mockRoleId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          permissionsPatch: {
+            page_2: { canView: true, canEdit: false, canShare: false },
+          },
+        }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId, mockRoleId));
+
+      expect(response.status).toBe(200);
+      expect(updateDriveRole).toHaveBeenCalledWith(mockDriveId, mockRoleId, expect.objectContaining({
+        permissionsPatch: {
+          page_2: { canView: true, canEdit: false, canShare: false },
+        },
+      }));
+      const call = vi.mocked(updateDriveRole).mock.calls[0][2];
+      expect(call.permissions).toBeUndefined();
+    });
+
+    it('forwards a null patch entry (prune) to updateDriveRole untouched', async () => {
+      vi.mocked(getRoleById).mockResolvedValue(
+        createRoleFixture({
+          id: mockRoleId,
+          name: 'Original',
+          driveId: mockDriveId,
+          permissions: {
+            page_1: { canView: true, canEdit: true, canShare: false },
+            page_2: { canView: true, canEdit: false, canShare: false },
+          },
+        })
+      );
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/${mockRoleId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          permissionsPatch: { page_1: null },
+        }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId, mockRoleId));
+
+      expect(response.status).toBe(200);
+      expect(updateDriveRole).toHaveBeenCalledWith(mockDriveId, mockRoleId, expect.objectContaining({
+        permissionsPatch: { page_1: null },
+      }));
+    });
+
+    it('rejects a request specifying both permissions and permissionsPatch', async () => {
+      vi.mocked(getRoleById).mockResolvedValue(
+        createRoleFixture({ id: mockRoleId, name: 'Original', driveId: mockDriveId })
+      );
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/${mockRoleId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          permissions: { page_1: { canView: true, canEdit: false, canShare: false } },
+          permissionsPatch: { page_2: { canView: true, canEdit: false, canShare: false } },
+        }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId, mockRoleId));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Cannot specify both permissions and permissionsPatch');
+      expect(updateDriveRole).not.toHaveBeenCalled();
+    });
+
+    it('rejects an invalid permissionsPatch structure', async () => {
+      vi.mocked(getRoleById).mockResolvedValue(
+        createRoleFixture({ id: mockRoleId, name: 'Original', driveId: mockDriveId })
+      );
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/${mockRoleId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          permissionsPatch: { page_1: { canView: 'yes' } },
+        }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId, mockRoleId));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Invalid permissionsPatch structure');
+      expect(updateDriveRole).not.toHaveBeenCalled();
+    });
+  });
+
   describe('response contract', () => {
     it('should return 404 when role not found', async () => {
       vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
@@ -461,7 +609,7 @@ describe('PATCH /api/drives/[driveId]/roles/[roleId]', () => {
       const body = await response.json();
 
       expect(response.status).toBe(404);
-      expect(body.error).toBe('Role not found');
+      expect(body.error).toBe(`Role "${mockRoleId}" not found in this drive`);
     });
 
     it('should return updated role on success', async () => {
@@ -497,7 +645,7 @@ describe('PATCH /api/drives/[driveId]/roles/[roleId]', () => {
       vi.mocked(getRoleById).mockResolvedValue(
         createRoleFixture({ id: mockRoleId, name: 'Original', driveId: mockDriveId })
       );
-      vi.mocked(updateDriveRole).mockRejectedValue(new Error('unique constraint'));
+      vi.mocked(updateDriveRole).mockRejectedValueOnce(new Error('unique constraint'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/${mockRoleId}`, {
         method: 'PATCH',
@@ -510,6 +658,26 @@ describe('PATCH /api/drives/[driveId]/roles/[roleId]', () => {
       expect(body.error).toBe('A role with this name already exists');
     });
 
+    it('POL-6 (partial) a default role below the org floor is refused 403 naming the policy', async () => {
+      vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+      }));
+      vi.mocked(getRoleById).mockResolvedValue(
+        createRoleFixture({ id: mockRoleId, name: 'Original', driveId: mockDriveId })
+      );
+      vi.mocked(updateDriveRole).mockRejectedValueOnce(new OpenRoleFloorError('edit'));
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/${mockRoleId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ isDefault: true }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId, mockRoleId));
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ code: 'org_policy', policy: 'openDriveRoleFloor' });
+    });
+
     it('should return 500 for other errors', async () => {
       vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
         isOwner: true,
@@ -518,7 +686,7 @@ describe('PATCH /api/drives/[driveId]/roles/[roleId]', () => {
       vi.mocked(getRoleById).mockResolvedValue(
         createRoleFixture({ id: mockRoleId, name: 'Original', driveId: mockDriveId })
       );
-      vi.mocked(updateDriveRole).mockRejectedValue(new Error('Connection lost'));
+      vi.mocked(updateDriveRole).mockRejectedValueOnce(new Error('Connection lost'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/${mockRoleId}`, {
         method: 'PATCH',
@@ -546,6 +714,7 @@ describe('DELETE /api/drives/[driveId]/roles/[roleId]', () => {
     vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(checkMCPDriveScope).mockReturnValue(null);
   });
 
   describe('authentication', () => {
@@ -578,7 +747,7 @@ describe('DELETE /api/drives/[driveId]/roles/[roleId]', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['session'], requireCSRF: true }
+        { allow: ['session', 'mcp'], requireCSRF: true }
       );
     });
   });
@@ -671,7 +840,7 @@ describe('DELETE /api/drives/[driveId]/roles/[roleId]', () => {
       const body = await response.json();
 
       expect(response.status).toBe(404);
-      expect(body.error).toBe('Role not found');
+      expect(body.error).toBe(`Role "${mockRoleId}" not found in this drive`);
     });
 
     it('should return success=true on successful deletion', async () => {
@@ -696,6 +865,25 @@ describe('DELETE /api/drives/[driveId]/roles/[roleId]', () => {
   });
 
   describe('error handling', () => {
+    it('POL-6 (partial) deleting the default of an Open drive under an edit floor is refused 403 naming the policy', async () => {
+      vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+      }));
+      vi.mocked(getRoleById).mockResolvedValue(
+        createRoleFixture({ id: mockRoleId, name: 'ToDelete', driveId: mockDriveId })
+      );
+      vi.mocked(deleteDriveRole).mockRejectedValueOnce(new OpenRoleFloorError('edit'));
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/${mockRoleId}`, {
+        method: 'DELETE',
+      });
+      const response = await DELETE(request, createContext(mockDriveId, mockRoleId));
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ code: 'org_policy', policy: 'openDriveRoleFloor' });
+    });
+
     it('should return 500 when delete fails', async () => {
       vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
         isOwner: true,
@@ -704,7 +892,7 @@ describe('DELETE /api/drives/[driveId]/roles/[roleId]', () => {
       vi.mocked(getRoleById).mockResolvedValue(
         createRoleFixture({ id: mockRoleId, name: 'ToDelete', driveId: mockDriveId })
       );
-      vi.mocked(deleteDriveRole).mockRejectedValue(new Error('Delete failed'));
+      vi.mocked(deleteDriveRole).mockRejectedValueOnce(new Error('Delete failed'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/${mockRoleId}`, {
         method: 'DELETE',

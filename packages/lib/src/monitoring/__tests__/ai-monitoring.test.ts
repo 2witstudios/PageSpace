@@ -1,0 +1,1403 @@
+/**
+ * Tests for ai-monitoring.ts
+ * Mocks @pagespace/db, logger-database, and logger-config
+ */
+
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// ── Hoisted mocks ─────────────────────────────────────────────────────────────
+const mockWriteAiUsage = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockConsumeCredits = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockReleaseHold = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockAiLogger = vi.hoisted(() => ({
+  debug: vi.fn(),
+  error: vi.fn(),
+  warn: vi.fn(),
+}));
+const mockDbSelectFn = vi.hoisted(() => vi.fn());
+
+// vi.mock paths are resolved relative to THIS test file.
+// ai-monitoring.ts (in src/monitoring/) imports from '../logging/logger-database'
+// which resolves to src/logging/logger-database.ts.
+// From this test file (src/monitoring/__tests__/) → ../../logging/logger-database
+vi.mock('../../logging/logger-database', () => ({
+  writeAiUsage: mockWriteAiUsage,
+}));
+
+const mockHoldSettleFacts = vi.hoisted(() => vi.fn().mockResolvedValue(null));
+vi.mock('../../billing/credit-consume', () => ({
+  consumeCredits: mockConsumeCredits,
+  releaseHold: mockReleaseHold,
+  holdSettleFacts: mockHoldSettleFacts,
+}));
+
+vi.mock('../../logging/logger-config', () => ({
+  loggers: {
+    ai: mockAiLogger,
+  },
+}));
+
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    select: mockDbSelectFn,
+  },
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
+  aiUsageLogs: {
+    userId: 'userId',
+    provider: 'provider',
+    model: 'model',
+    cost: 'cost',
+    totalTokens: 'totalTokens',
+    inputTokens: 'inputTokens',
+    outputTokens: 'outputTokens',
+    duration: 'duration',
+    success: 'success',
+    timestamp: 'timestamp',
+    error: 'error',
+    metadata: 'metadata',
+  },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  sql: vi.fn(),
+  and: vi.fn((...conditions) => ({ type: 'and', conditions })),
+  eq: vi.fn((field, value) => ({ type: 'eq', field, value })),
+  gte: vi.fn((field, value) => ({ type: 'gte', field, value })),
+  lte: vi.fn((field, value) => ({ type: 'lte', field, value })),
+}));
+
+// ── Import module under test AFTER mocks ─────────────────────────────────────
+import {
+  calculateCost,
+  estimateTokens,
+  getContextWindow,
+  trackAIUsage,
+  trackAIToolUsage,
+  getUserAIStats,
+  getPopularAIFeatures,
+  detectAIErrorPatterns,
+  getTokenEfficiencyMetrics,
+  AI_PRICING,
+  MODEL_CONTEXT_WINDOWS,
+  AIMonitoring,
+  extractOpenRouterCostDollars,
+  extractOpenRouterGenerationIds,
+} from '../ai-monitoring';
+
+// ---------------------------------------------------------------------------
+// DB chain helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Set up db.select().from().where() → resolves to rows.
+ * Also supports: db.select().from().where().limit() for detectAIErrorPatterns.
+ * Also supports: db.select().from() → resolves to rows (no .where() call).
+ */
+function setupSelectChain(rows: unknown[]) {
+  const limitFn = vi.fn().mockResolvedValue(rows);
+
+  // whereFn result is both a thenable (for direct await) and has .limit()
+  const whereResult = {
+    limit: limitFn,
+    then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+      Promise.resolve(rows).then(resolve, reject),
+    catch: (reject: (e: unknown) => unknown) =>
+      Promise.resolve(rows).catch(reject),
+    finally: (cb: () => void) => Promise.resolve(rows).finally(cb),
+  };
+  const whereFn = vi.fn().mockReturnValue(whereResult);
+
+  // fromFn result is both thenable (no .where() used) and has .where()
+  const fromResult = {
+    where: whereFn,
+    then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+      Promise.resolve(rows).then(resolve, reject),
+    catch: (reject: (e: unknown) => unknown) =>
+      Promise.resolve(rows).catch(reject),
+    finally: (cb: () => void) => Promise.resolve(rows).finally(cb),
+  };
+  const fromFn = vi.fn().mockReturnValue(fromResult);
+  mockDbSelectFn.mockReturnValue({ from: fromFn });
+  return { fromFn, whereFn, limitFn };
+}
+
+// ---------------------------------------------------------------------------
+// calculateCost
+// ---------------------------------------------------------------------------
+describe('calculateCost', () => {
+  it('should calculate cost for a known model', () => {
+    // anthropic/claude-3.5-sonnet: input=3.00, output=15.00 per 1M
+    const cost = calculateCost('anthropic/claude-3.5-sonnet', 1_000_000, 1_000_000);
+    expect(cost).toBe(Number((18.00).toFixed(6)));
+  });
+
+  it('should return 0 for free/local model', () => {
+    expect(calculateCost('llama3.2', 100_000, 100_000)).toBe(0);
+  });
+
+  it('should return 0 for unknown model', () => {
+    expect(calculateCost('completely-unknown-model', 1_000_000, 1_000_000)).toBe(0);
+  });
+
+  it('does not warn for unknown model (warning lives in trackAIUsage with provider context)', () => {
+    vi.clearAllMocks();
+    calculateCost('completely-unknown-model', 1_000_000, 500_000);
+    expect(mockAiLogger.warn).not.toHaveBeenCalled();
+  });
+
+  // Regression guard: the retired GLM model ids must stay priced as a legacy billing
+  // fallback. Historical ai_usage rows were recorded under these bare ids (glm-4.5-air
+  // was the old agent/chat default; glm-4.7 / glm-5 the old standard/pro tiers) before
+  // every model moved onto OpenRouter. If any drops out of AI_PRICING those historical
+  // rows cost at $0 and the platform eats the spend (see PR #1475 — glm-4.5-air was
+  // previously unpriced).
+  it.each(['glm-4.5-air', 'glm-4.7', 'glm-5'])(
+    'prices retired GLM model "%s" above $0',
+    (model) => {
+      expect(calculateCost(model, 1_000_000, 1_000_000)).toBeGreaterThan(0);
+    }
+  );
+
+  it('prices glm-4.5-air at its published rate (0.35 in / 1.55 out per 1M)', () => {
+    expect(calculateCost('glm-4.5-air', 1_000_000, 1_000_000)).toBe(
+      Number((1.90).toFixed(6))
+    );
+  });
+
+  it('should handle zero tokens', () => {
+    expect(calculateCost('gpt-4o', 0, 0)).toBe(0);
+  });
+
+  it('should use default values of 0 for inputTokens and outputTokens', () => {
+    expect(calculateCost('gpt-4o')).toBe(0);
+  });
+
+  it('should calculate only input cost when outputTokens is 0', () => {
+    // gpt-4o: input=2.50 per 1M
+    const cost = calculateCost('gpt-4o', 1_000_000, 0);
+    expect(cost).toBe(Number((2.50).toFixed(6)));
+  });
+
+  it('should calculate only output cost when inputTokens is 0', () => {
+    const cost = calculateCost('gpt-4o', 0, 1_000_000);
+    expect(cost).toBe(Number((10.00).toFixed(6)));
+  });
+
+  it('should return result rounded to 6 decimal places', () => {
+    const cost = calculateCost('gpt-4o-mini', 1, 1);
+    const str = cost.toString();
+    const decimals = str.includes('.') ? str.split('.')[1]!.length : 0;
+    expect(decimals).toBeLessThanOrEqual(6);
+  });
+
+  // ── cache / reasoning opts (estimate fallback path only) ──────────────────
+  // CACHE_READ_DISCOUNT_FACTOR_BPS defaults to 1000 (0.10×). gpt-4o: in 2.50 / out 10.00 per 1M.
+
+  it('omitting opts == old behavior (regression guard for existing 3-arg callers)', () => {
+    expect(calculateCost('gpt-4o', 1_000_000, 1_000_000, {})).toBe(
+      calculateCost('gpt-4o', 1_000_000, 1_000_000)
+    );
+  });
+
+  it('discounts cached input tokens at the cache-read factor', () => {
+    // all 1M input cached -> 1M * 2.50 * 0.10 = 0.25 (vs 2.50 undiscounted)
+    expect(calculateCost('gpt-4o', 1_000_000, 0, { cachedInputTokens: 1_000_000 })).toBe(
+      Number((0.25).toFixed(6))
+    );
+  });
+
+  it('bills the fresh remainder at full rate and only the cached subset at the discount', () => {
+    // 750k fresh @ 2.50/M + 250k cached @ 0.25/M = 1.875 + 0.0625 = 1.9375
+    expect(calculateCost('gpt-4o', 1_000_000, 0, { cachedInputTokens: 250_000 })).toBe(
+      Number((1.9375).toFixed(6))
+    );
+  });
+
+  it('clamps cachedInputTokens to inputTokens (bad metadata cannot go below the all-cached cost)', () => {
+    expect(calculateCost('gpt-4o', 1_000_000, 0, { cachedInputTokens: 5_000_000 })).toBe(
+      calculateCost('gpt-4o', 1_000_000, 0, { cachedInputTokens: 1_000_000 })
+    );
+  });
+
+  it('bills reasoning tokens at the output rate (adds to visible output)', () => {
+    // (1M output + 1M reasoning) @ 10.00/M = 20.00 (vs 10.00 ignoring reasoning)
+    expect(calculateCost('gpt-4o', 0, 1_000_000, { reasoningTokens: 1_000_000 })).toBe(
+      Number((20.0).toFixed(6))
+    );
+  });
+
+  it('a reasoning-heavy call costs more than ignoring reasoning would', () => {
+    const withReasoning = calculateCost('gpt-4o', 0, 500_000, { reasoningTokens: 500_000 });
+    const without = calculateCost('gpt-4o', 0, 500_000);
+    expect(withReasoning).toBeGreaterThan(without);
+  });
+
+  it('ignores negative opts (clamped to 0)', () => {
+    expect(
+      calculateCost('gpt-4o', 1_000_000, 1_000_000, { cachedInputTokens: -10, reasoningTokens: -10 })
+    ).toBe(calculateCost('gpt-4o', 1_000_000, 1_000_000));
+  });
+
+  it('unknown model returns 0 regardless of opts', () => {
+    expect(
+      calculateCost('completely-unknown-model', 1_000_000, 0, { reasoningTokens: 1_000_000 })
+    ).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// estimateTokens
+// ---------------------------------------------------------------------------
+describe('estimateTokens', () => {
+  it('should return 0 for empty string', () => {
+    expect(estimateTokens('')).toBe(0);
+  });
+
+  it('should return 0 for falsy value', () => {
+    // @ts-expect-error intentional runtime test
+    expect(estimateTokens(null)).toBe(0);
+  });
+
+  it('should return ceil(length/4)', () => {
+    expect(estimateTokens('abcd')).toBe(1);
+    expect(estimateTokens('abcde')).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getContextWindow
+// ---------------------------------------------------------------------------
+describe('getContextWindow', () => {
+  it('should return known context window for a recognised model', () => {
+    expect(getContextWindow('gpt-4o')).toBe(MODEL_CONTEXT_WINDOWS['gpt-4o']);
+  });
+
+  it('should return default context window for unknown model', () => {
+    expect(getContextWindow('totally-unknown-model')).toBe(MODEL_CONTEXT_WINDOWS.default);
+  });
+
+  it('should return correct value for anthropic model', () => {
+    expect(getContextWindow('claude-3-5-sonnet-20241022')).toBe(200_000);
+  });
+
+  // Drift guard: every priced model must declare a context window, otherwise
+  // getContextWindow() silently falls back to the 200k default and can truncate
+  // or trip provider-side context limits. Keep AI_PRICING and
+  // MODEL_CONTEXT_WINDOWS in lockstep when adding/removing models.
+  it('should have a MODEL_CONTEXT_WINDOWS entry for every AI_PRICING model', () => {
+    const missing = Object.keys(AI_PRICING).filter(
+      (model) => model !== 'default' && !(model in MODEL_CONTEXT_WINDOWS)
+    );
+    expect(missing).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// trackAIUsage
+// ---------------------------------------------------------------------------
+describe('trackAIUsage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // The DEFAULT is a write that lands and a settle that completes. `writeAiUsage`
+    // resolves `string | null` and a null is a LOST usage row — the one
+    // unrecoverable outcome in this function — so a default of `undefined` would
+    // have every unrelated test exercising the failure path.
+    mockWriteAiUsage.mockResolvedValue('aul_default');
+    mockConsumeCredits.mockResolvedValue('settled');
+    mockReleaseHold.mockResolvedValue(undefined);
+  });
+
+  it('debits credits with the returned usage-log id on a successful call', async () => {
+    mockWriteAiUsage.mockResolvedValueOnce('aul_42');
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'claude-3-5-sonnet-20241022',
+      inputTokens: 1000,
+      outputTokens: 500,
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockConsumeCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ aiUsageLogId: 'aul_42', userId: 'user-1' }),
+    );
+    const arg = mockConsumeCredits.mock.calls[0][0] as { costDollars: number };
+    expect(arg.costDollars).toBeGreaterThan(0);
+  });
+
+  it('awaits persistence before returning so the write/charge cannot be dropped on a serverless freeze', async () => {
+    // Durability: trackAIUsage must not return until writeAiUsage AND the consume
+    // have settled. We resolve writeAiUsage on a later microtask and assert that,
+    // by the time the awaited trackAIUsage resolves, consumeCredits already ran —
+    // WITHOUT any post-call setTimeout flush. A fire-and-forget chain would fail this.
+    let resolveWrite!: (id: string) => void;
+    mockWriteAiUsage.mockReturnValueOnce(new Promise<string>((res) => { resolveWrite = res; }));
+    const tracked = trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'claude-3-5-sonnet-20241022',
+      inputTokens: 1000,
+      outputTokens: 500,
+    });
+    expect(mockConsumeCredits).not.toHaveBeenCalled(); // write hasn't resolved yet
+    resolveWrite('aul_durable');
+    await tracked;
+    // No setTimeout(0) flush here — if trackAIUsage were fire-and-forget this would be empty.
+    expect(mockConsumeCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ aiUsageLogId: 'aul_durable', userId: 'user-1' }),
+    );
+  });
+
+  it('marks an OpenRouter row with generation ids + real cost for reconcile (pending)', async () => {
+    mockWriteAiUsage.mockResolvedValueOnce('aul_or');
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'openrouter',
+      model: 'anthropic/claude-3.5-sonnet',
+      inputTokens: 1000,
+      outputTokens: 500,
+      providerCostDollars: 0.01,
+      openrouterGenerationIds: ['gen-1', 'gen-2'],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const arg = mockWriteAiUsage.mock.calls[0][0] as {
+      reconcileStatus?: string;
+      metadata?: { generationIds?: string[]; costSource?: string };
+    };
+    expect(arg.reconcileStatus).toBe('pending');
+    expect(arg.metadata?.generationIds).toEqual(['gen-1', 'gen-2']);
+    expect(arg.metadata?.costSource).toBe('openrouter');
+  });
+
+  it('does NOT mark for reconcile when the OpenRouter cost was missing (estimate fallback)', async () => {
+    mockWriteAiUsage.mockResolvedValueOnce('aul_or2');
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'openrouter',
+      model: 'anthropic/claude-3.5-sonnet',
+      inputTokens: 1000,
+      outputTokens: 500,
+      // no providerCostDollars → estimate fallback
+      openrouterGenerationIds: ['gen-1'],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const arg = mockWriteAiUsage.mock.calls[0][0] as { reconcileStatus?: string };
+    expect(arg.reconcileStatus).toBeUndefined();
+  });
+
+  it('does NOT mark for reconcile for a direct provider even with a real cost', async () => {
+    mockWriteAiUsage.mockResolvedValueOnce('aul_direct');
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'claude-3-5-sonnet-20241022',
+      inputTokens: 1000,
+      outputTokens: 500,
+      providerCostDollars: 0.02,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const arg = mockWriteAiUsage.mock.calls[0][0] as { reconcileStatus?: string };
+    expect(arg.reconcileStatus).toBeUndefined();
+  });
+
+  it('does not debit credits for a token-less failure (pre-generation error, 0 tokens)', async () => {
+    mockWriteAiUsage.mockResolvedValueOnce('aul_43');
+    await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o', success: false, error: 'fail' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockConsumeCredits).not.toHaveBeenCalled();
+  });
+
+  it('logs but does NOT debit credits for a metering-exempt provider (admin glm)', async () => {
+    // The admin Z.ai Coder Plan (`glm`) bills on a flat-rate external subscription:
+    // the usage row is still written for observability, but no credits are debited.
+    mockWriteAiUsage.mockResolvedValueOnce('aul_glm');
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'glm',
+      model: 'glm-4.7',
+      inputTokens: 1000,
+      outputTokens: 500,
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockWriteAiUsage).toHaveBeenCalledTimes(1); // logged
+    expect(mockConsumeCredits).not.toHaveBeenCalled(); // not billed
+  });
+
+  it('releases a stray hold for an exempt provider without debiting', async () => {
+    // The gate is normally skipped for exempt providers (no hold), but if a hold was
+    // placed anyway it must be released at settle rather than left for the cron.
+    mockWriteAiUsage.mockResolvedValueOnce('aul_glm2');
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'glm',
+      model: 'glm-5.1',
+      inputTokens: 100,
+      outputTokens: 50,
+      holdId: 'hold_glm',
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockReleaseHold).toHaveBeenCalledWith('hold_glm');
+    expect(mockConsumeCredits).not.toHaveBeenCalled();
+  });
+
+  it('still bills the public OpenRouter-backed zai provider normally', async () => {
+    mockWriteAiUsage.mockResolvedValueOnce('aul_zai');
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'zai',
+      model: 'z-ai/glm-4.6',
+      inputTokens: 1000,
+      outputTokens: 500,
+      providerCostDollars: 0.01,
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockConsumeCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ aiUsageLogId: 'aul_zai', userId: 'user-1' }),
+    );
+  });
+
+  it('debits credits for an errored call that still consumed tokens (errored-but-real spend)', async () => {
+    // A mid-stream error/abort after tokens were generated: success=false but
+    // real provider cost was incurred, so it must be billed.
+    mockWriteAiUsage.mockResolvedValueOnce('aul_err');
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'claude-3-5-sonnet-20241022',
+      inputTokens: 1000,
+      outputTokens: 500,
+      success: false,
+      error: 'stream aborted',
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockConsumeCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ aiUsageLogId: 'aul_err', userId: 'user-1' }),
+    );
+    const arg = mockConsumeCredits.mock.calls[0][0] as { costDollars: number };
+    expect(arg.costDollars).toBeGreaterThan(0);
+  });
+
+  it('does not debit credits when no usage-log id is returned (write failed/skipped)', async () => {
+    mockWriteAiUsage.mockResolvedValueOnce(null); // writeAiUsage resolves string | null
+    await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o', inputTokens: 10, outputTokens: 10 });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockConsumeCredits).not.toHaveBeenCalled();
+  });
+
+  // ── The persistence CONTRACT ────────────────────────────────────────────────
+  // `trackAIUsage` used to resolve `void` whatever happened below it, so no caller
+  // could tell a committed charge from a lost one and every meter that advances a
+  // watermark after awaiting it could close a window over spend that never landed.
+
+  it('reports a persisted, settled charge on the happy path', async () => {
+    mockWriteAiUsage.mockResolvedValueOnce('aul_ok');
+    mockConsumeCredits.mockResolvedValueOnce('settled');
+    const outcome = await trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'claude-3-5-sonnet-20241022',
+      inputTokens: 1000,
+      outputTokens: 500,
+    });
+    expect(outcome).toEqual({ persisted: true, creditsSettled: true });
+  });
+
+  it('WAL-5 (partial) a settle that names only its hold records the hold\'s wallet and fallback origin on the usage row AND hands the same to the settle', async () => {
+    mockHoldSettleFacts.mockResolvedValueOnce({ walletId: 'w-held', fallbackFromWalletId: 'w-chosen' });
+    mockWriteAiUsage.mockResolvedValueOnce('aul_held');
+    mockConsumeCredits.mockResolvedValueOnce('settled');
+    await trackAIUsage({ userId: 'user-1', provider: 'anthropic', model: 'claude-3-5-sonnet-20241022', inputTokens: 10, outputTokens: 5, holdId: 'hold-1' });
+    expect(mockWriteAiUsage).toHaveBeenCalledWith(expect.objectContaining({ walletId: 'w-held', metadata: expect.objectContaining({ fallbackFromWalletId: 'w-chosen' }) }));
+    expect(mockConsumeCredits).toHaveBeenCalledWith(expect.objectContaining({ holdId: 'hold-1', walletId: 'w-held', fallbackFromWalletId: 'w-chosen' }));
+  });
+
+  it('reports persisted:false when the usage row was NOT written — the one unrecoverable outcome', async () => {
+    // `writeAiUsage` catches its own failure and resolves null. With no
+    // `ai_usage_logs` row the credit backfill cron's orphan sweep, which reads that
+    // table, can never find this charge: it is gone unless a meter re-bills the window.
+    mockWriteAiUsage.mockResolvedValueOnce(null);
+    const outcome = await trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'claude-3-5-sonnet-20241022',
+      inputTokens: 1000,
+      outputTokens: 500,
+      holdId: 'hold_lost',
+    });
+    expect(outcome).toEqual({ persisted: false, creditsSettled: false });
+    expect(mockAiLogger.error).toHaveBeenCalled();
+    // The reservation is returned rather than left to pin the payer's spendable
+    // balance until its TTL — nothing downstream will ever settle it.
+    expect(mockReleaseHold).toHaveBeenCalledWith('hold_lost');
+  });
+
+  it('reports persisted:false when the usage write THROWS', async () => {
+    mockWriteAiUsage.mockRejectedValueOnce(new Error('db down'));
+    const outcome = await trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'claude-3-5-sonnet-20241022',
+      inputTokens: 1000,
+      outputTokens: 500,
+    });
+    expect(outcome).toEqual({ persisted: false, creditsSettled: false });
+  });
+
+  it('reports persisted:true with creditsSettled:false when the ledger settle was DEFERRED', async () => {
+    // Deferred is not lost: the usage row exists, so credit-backfill.ts settles this
+    // charge on its next sweep. Meters must therefore NOT hold a watermark on this —
+    // doing so would bill the payer twice for one span.
+    mockWriteAiUsage.mockResolvedValueOnce('aul_deferred');
+    mockConsumeCredits.mockResolvedValueOnce('deferred');
+    const outcome = await trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'claude-3-5-sonnet-20241022',
+      inputTokens: 1000,
+      outputTokens: 500,
+    });
+    expect(outcome).toEqual({ persisted: true, creditsSettled: false });
+  });
+
+  it('reports a settled outcome for a metering-exempt provider — nothing was owed', async () => {
+    mockWriteAiUsage.mockResolvedValueOnce('aul_exempt');
+    const outcome = await trackAIUsage({
+      userId: 'user-1',
+      provider: 'glm',
+      model: 'glm-4.7',
+      inputTokens: 1000,
+      outputTokens: 500,
+    });
+    expect(outcome).toEqual({ persisted: true, creditsSettled: true });
+    expect(mockConsumeCredits).not.toHaveBeenCalled();
+  });
+
+  it('reports a settled outcome for a token-less failure — deliberately unbilled, not lost', async () => {
+    mockWriteAiUsage.mockResolvedValueOnce('aul_nobill');
+    const outcome = await trackAIUsage({
+      userId: 'user-1',
+      provider: 'openai',
+      model: 'gpt-4o',
+      success: false,
+      error: 'pre-generation failure',
+    });
+    expect(outcome).toEqual({ persisted: true, creditsSettled: true });
+  });
+
+  it('should call writeAiUsage with computed cost and totals', async () => {
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'claude-3-5-sonnet-20241022',
+      inputTokens: 1000,
+      outputTokens: 500,
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockWriteAiUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        provider: 'anthropic',
+        model: 'claude-3-5-sonnet-20241022',
+        inputTokens: 1000,
+        outputTokens: 500,
+        totalTokens: 1500,
+      })
+    );
+  });
+
+  it('should compute totalTokens from inputTokens + outputTokens', async () => {
+    await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o', inputTokens: 200, outputTokens: 100 });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockWriteAiUsage).toHaveBeenCalledWith(expect.objectContaining({ totalTokens: 300 }));
+  });
+
+  it('should not override totalTokens when already provided', async () => {
+    await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o', inputTokens: 200, outputTokens: 100, totalTokens: 999 });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockWriteAiUsage).toHaveBeenCalledWith(expect.objectContaining({ totalTokens: 999 }));
+  });
+
+  it('sanitizes NaN token counts to undefined before DB write (400-error onFinish guard)', async () => {
+    // When a provider returns a 400 error, onFinish fires with NaN usage fields.
+    // Passing NaN to a Postgres integer column crashes with "invalid input syntax for type integer".
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'openai',
+      model: 'gpt-4o',
+      inputTokens: NaN,
+      outputTokens: NaN,
+      totalTokens: NaN,
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockWriteAiUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inputTokens: undefined,
+        outputTokens: undefined,
+        totalTokens: undefined,
+      }),
+    );
+  });
+
+  it('should pass through optional context tracking fields', async () => {
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'openai',
+      model: 'gpt-4o',
+      contextMessages: ['msg-1', 'msg-2'],
+      contextSize: 500,
+      systemPromptTokens: 100,
+      toolDefinitionTokens: 50,
+      conversationTokens: 350,
+      messageCount: 2,
+      wasTruncated: false,
+      truncationStrategy: 'none',
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockWriteAiUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextMessages: ['msg-1', 'msg-2'],
+        contextSize: 500,
+        systemPromptTokens: 100,
+        messageCount: 2,
+        wasTruncated: false,
+      })
+    );
+  });
+
+  it('should set success=true when success is not false', async () => {
+    await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockWriteAiUsage).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+  });
+
+  it('honors an explicit costSource override (voice list_price) instead of the computed openrouter/estimate', async () => {
+    // A finite providerCostDollars would normally stamp costSource='openrouter'
+    // (mislabeling voice as a live provider-returned cost). The explicit override
+    // must win so the admin panel classifies voice coverage as 'list_price'.
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'openai_voice',
+      model: 'whisper-1',
+      providerCostDollars: 0.006,
+      costSource: 'list_price',
+      metadata: { type: 'voice_stt' },
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockWriteAiUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ type: 'voice_stt', costSource: 'list_price' }),
+      }),
+    );
+  });
+
+  it('should set success=false when explicitly set', async () => {
+    await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o', success: false, error: 'fail' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockWriteAiUsage).toHaveBeenCalledWith(expect.objectContaining({ success: false, error: 'fail' }));
+  });
+
+  it('should merge streamingDuration into metadata', async () => {
+    await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o', streamingDuration: 1234, metadata: { custom: 'value' } });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockWriteAiUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ custom: 'value', streamingDuration: 1234 }),
+      })
+    );
+  });
+
+  it('should pass a known feature source through to writeAiUsage', async () => {
+    await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o', source: 'pulse' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockWriteAiUsage).toHaveBeenCalledWith(expect.objectContaining({ source: 'pulse' }));
+  });
+
+  it('should default a missing source to "other" via normalizeUsageSource', async () => {
+    await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockWriteAiUsage).toHaveBeenCalledWith(expect.objectContaining({ source: 'other' }));
+  });
+
+  it('should not throw, and should log at ERROR, when writeAiUsage rejects (spend may be unbilled)', async () => {
+    // A failed usage write is a silent billing gap: the provider already charged us, but with
+    // no ai_usage_logs row nothing debits the user and the orphan sweep (which keys off
+    // ai_usage_logs) can never find it. It must be visible at ERROR, not buried in debug.
+    mockWriteAiUsage.mockRejectedValueOnce(new Error('db error'));
+    await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockAiLogger.error).toHaveBeenCalledWith(
+      'AI usage tracking failed — spend may be UNBILLED',
+      expect.any(Error),
+      expect.objectContaining({ model: 'gpt-4o', provider: 'openai' })
+    );
+  });
+
+  it('should release the hold when writeAiUsage THROWS, not just when it resolves null', async () => {
+    // The gate's reservation would otherwise sit against the payer's spendable
+    // balance for its whole TTL — a throw here never confirmed a charge, so
+    // there is nothing this release could double-free.
+    mockWriteAiUsage.mockRejectedValueOnce(new Error('db error'));
+    const outcome = await trackAIUsage({
+      userId: 'user-1',
+      provider: 'openai',
+      model: 'gpt-4o',
+      holdId: 'hold-thrown',
+    });
+    expect(outcome).toEqual({ persisted: false, creditsSettled: false });
+    expect(mockReleaseHold).toHaveBeenCalledWith('hold-thrown');
+  });
+
+  it('should release the hold when the usage CALCULATION itself throws, before writeAiUsage is even reached', async () => {
+    // A getter that throws on `model` forces the OUTER catch — `calculateCost`
+    // reads it before `writeAiUsage` is ever called, so this exercises the
+    // catch that never even attempted a write.
+    const data: Record<string, unknown> = { userId: 'user-1', provider: 'openai', holdId: 'hold-calc-thrown' };
+    Object.defineProperty(data, 'model', {
+      get() {
+        throw new Error('boom');
+      },
+    });
+
+    const outcome = await trackAIUsage(data as never);
+
+    expect(outcome).toEqual({ persisted: false, creditsSettled: false });
+    expect(mockReleaseHold).toHaveBeenCalledWith('hold-calc-thrown');
+  });
+
+  it('given AI request completes, should NOT write prompt or completion content to ai_usage_logs (#957 — GDPR data minimization)', async () => {
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'claude-3-5-sonnet-20241022',
+      inputTokens: 1000,
+      outputTokens: 500,
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(mockWriteAiUsage).toHaveBeenCalledOnce();
+    const callArg = mockWriteAiUsage.mock.calls[0][0] as Record<string, unknown>;
+    expect(callArg).not.toHaveProperty('prompt');
+    expect(callArg).not.toHaveProperty('completion');
+    // Token counts must still be present
+    expect(callArg.inputTokens).toBe(1000);
+    expect(callArg.outputTokens).toBe(500);
+  });
+
+  // ── Real provider cost (OpenRouter) vs static estimate ──────────────────────
+
+  it('bills the real provider cost when providerCostDollars is present (preferred over the static estimate)', async () => {
+    mockWriteAiUsage.mockResolvedValueOnce('aul_real');
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'openrouter',
+      model: 'anthropic/claude-3.5-sonnet',
+      inputTokens: 1000,
+      outputTokens: 500,
+      providerCostDollars: 0.0123,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Both the usage log and the charge bill on the real cost, not calculateCost().
+    expect(mockWriteAiUsage).toHaveBeenCalledWith(expect.objectContaining({ cost: 0.0123 }));
+    const arg = mockConsumeCredits.mock.calls[0][0] as { costDollars: number };
+    expect(arg.costDollars).toBe(0.0123);
+  });
+
+  it('stamps costSource=openrouter on the usage log when real cost is used', async () => {
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'openrouter',
+      model: 'anthropic/claude-3.5-sonnet',
+      inputTokens: 1000,
+      outputTokens: 500,
+      providerCostDollars: 0.02,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mockWriteAiUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: expect.objectContaining({ costSource: 'openrouter' }) }),
+    );
+  });
+
+  it('falls back to the static estimate and stamps costSource=estimate when providerCostDollars is absent', async () => {
+    mockWriteAiUsage.mockResolvedValueOnce('aul_est');
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'claude-3-5-sonnet-20241022',
+      inputTokens: 1_000_000,
+      outputTokens: 0,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const expected = calculateCost('claude-3-5-sonnet-20241022', 1_000_000, 0);
+    expect(mockWriteAiUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ cost: expected, metadata: expect.objectContaining({ costSource: 'estimate' }) }),
+    );
+    const arg = mockConsumeCredits.mock.calls[0][0] as { costDollars: number };
+    expect(arg.costDollars).toBe(expected);
+  });
+
+  it('accepts a real cost of exactly 0 (cached/free OpenRouter call) instead of falling back', async () => {
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'openrouter',
+      model: 'anthropic/claude-3.5-sonnet',
+      inputTokens: 1000,
+      outputTokens: 500,
+      providerCostDollars: 0,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mockWriteAiUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ cost: 0, metadata: expect.objectContaining({ costSource: 'openrouter' }) }),
+    );
+  });
+
+  it('ignores a non-finite or negative providerCostDollars and falls back to the estimate', async () => {
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'openrouter',
+      model: 'anthropic/claude-3.5-sonnet',
+      inputTokens: 1_000_000,
+      outputTokens: 0,
+      providerCostDollars: -5,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const expected = calculateCost('anthropic/claude-3.5-sonnet', 1_000_000, 0);
+    expect(mockWriteAiUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ cost: expected, metadata: expect.objectContaining({ costSource: 'estimate' }) }),
+    );
+  });
+
+  it('logs a coverage-gap debug when an OpenRouter call is missing cost metadata', async () => {
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'openai',
+      model: 'openai/o3',
+      inputTokens: 10,
+      outputTokens: 10,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mockAiLogger.debug).toHaveBeenCalledWith(
+      'openrouter cost metadata missing; falling back to estimate',
+      expect.objectContaining({ provider: 'openai' }),
+    );
+  });
+
+  it('does NOT log a coverage gap for a local provider (estimate is expected there)', async () => {
+    // Local providers (ollama/lmstudio/azure_openai) never route through OpenRouter,
+    // so a missing real cost is expected and must not be logged as a coverage gap.
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'ollama',
+      model: 'llama3.2',
+      inputTokens: 10,
+      outputTokens: 10,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mockAiLogger.debug).not.toHaveBeenCalledWith(
+      'openrouter cost metadata missing; falling back to estimate',
+      expect.anything(),
+    );
+  });
+
+  it('warns when a cloud provider uses an unknown model with non-zero tokens', async () => {
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'completely-unknown-model',
+      inputTokens: 1_000_000,
+      outputTokens: 500_000,
+    });
+    expect(mockAiLogger.warn).toHaveBeenCalledWith(
+      'unknown model pricing, billing $0',
+      expect.objectContaining({ model: 'completely-unknown-model', provider: 'anthropic' }),
+    );
+  });
+
+  it('does not warn when a local provider uses an unknown model (expected $0)', async () => {
+    vi.clearAllMocks();
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'ollama',
+      model: 'qwen3',
+      inputTokens: 1_000_000,
+      outputTokens: 500_000,
+    });
+    expect(mockAiLogger.warn).not.toHaveBeenCalled();
+  });
+
+  it('does not warn when a real OpenRouter cost is present (no estimate fallback)', async () => {
+    vi.clearAllMocks();
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'completely-unknown-model',
+      inputTokens: 1_000_000,
+      outputTokens: 500_000,
+      providerCostDollars: 0.42,
+    });
+    expect(mockAiLogger.warn).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// extractOpenRouterCostDollars
+// ---------------------------------------------------------------------------
+describe('extractOpenRouterCostDollars', () => {
+  function step(cost?: number, upstreamInferenceCost?: number) {
+    const usage: Record<string, unknown> = {};
+    if (cost !== undefined) usage.cost = cost;
+    if (upstreamInferenceCost !== undefined) usage.costDetails = { upstreamInferenceCost };
+    return { providerMetadata: { openrouter: { usage } } };
+  }
+
+  it('returns the single-step OpenRouter cost', () => {
+    expect(extractOpenRouterCostDollars([step(0.0042)])).toBe(0.0042);
+  });
+
+  it('sums cost across multiple tool-loop steps', () => {
+    expect(extractOpenRouterCostDollars([step(0.001), step(0.002), step(0.003)])).toBeCloseTo(0.006, 10);
+  });
+
+  it('ignores upstreamInferenceCost — it is a sub-breakdown of cost, not additive', () => {
+    // usage.cost is the complete OpenRouter charge (inclusive of upstream inference).
+    // Adding upstreamInferenceCost on top would double-count it.
+    expect(extractOpenRouterCostDollars([step(0.24, 0.17)])).toBeCloseTo(0.24, 10);
+  });
+
+  it('treats a zeroed (cached) cost as a real 0, not a missing value', () => {
+    expect(extractOpenRouterCostDollars([step(0)])).toBe(0);
+  });
+
+  it('returns undefined when no step carries OpenRouter metadata (caller falls back)', () => {
+    expect(extractOpenRouterCostDollars([{ providerMetadata: { anthropic: {} } }])).toBeUndefined();
+    expect(extractOpenRouterCostDollars([{ providerMetadata: undefined }])).toBeUndefined();
+    expect(extractOpenRouterCostDollars([{}])).toBeUndefined();
+  });
+
+  it('returns undefined for an empty or undefined steps array', () => {
+    expect(extractOpenRouterCostDollars([])).toBeUndefined();
+    expect(extractOpenRouterCostDollars(undefined)).toBeUndefined();
+  });
+
+  it('ignores malformed (non-numeric / NaN) cost fields', () => {
+    const bad = { providerMetadata: { openrouter: { usage: { cost: 'free' } } } } as unknown as { providerMetadata?: Record<string, unknown> };
+    expect(extractOpenRouterCostDollars([bad])).toBeUndefined();
+    const nan = { providerMetadata: { openrouter: { usage: { cost: Number.NaN } } } };
+    expect(extractOpenRouterCostDollars([nan])).toBeUndefined();
+  });
+
+  it('counts only the steps that carry cost when some are missing', () => {
+    expect(extractOpenRouterCostDollars([step(0.01), { providerMetadata: undefined }, step(0.02)])).toBeCloseTo(0.03, 10);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// extractOpenRouterGenerationIds
+// ---------------------------------------------------------------------------
+describe('extractOpenRouterGenerationIds', () => {
+  const idStep = (id?: unknown) => ({ providerMetadata: { openrouter: id === undefined ? {} : { id } } });
+
+  it('returns the single generation id', () => {
+    expect(extractOpenRouterGenerationIds([idStep('gen-abc')])).toEqual(['gen-abc']);
+  });
+
+  it('collects distinct ids across multiple tool-loop steps in order', () => {
+    expect(extractOpenRouterGenerationIds([idStep('gen-1'), idStep('gen-2'), idStep('gen-3')]))
+      .toEqual(['gen-1', 'gen-2', 'gen-3']);
+  });
+
+  it('de-dupes a repeated id (same generation reported on multiple steps)', () => {
+    expect(extractOpenRouterGenerationIds([idStep('gen-1'), idStep('gen-1'), idStep('gen-2')]))
+      .toEqual(['gen-1', 'gen-2']);
+  });
+
+  it('returns [] when no step carries an OpenRouter id', () => {
+    expect(extractOpenRouterGenerationIds([idStep(undefined)])).toEqual([]);
+    expect(extractOpenRouterGenerationIds([{ providerMetadata: { anthropic: {} } }])).toEqual([]);
+    expect(extractOpenRouterGenerationIds([{ providerMetadata: undefined }])).toEqual([]);
+    expect(extractOpenRouterGenerationIds([{}])).toEqual([]);
+  });
+
+  it('returns [] for an empty or undefined steps array', () => {
+    expect(extractOpenRouterGenerationIds([])).toEqual([]);
+    expect(extractOpenRouterGenerationIds(undefined)).toEqual([]);
+  });
+
+  it('ignores non-string / empty ids', () => {
+    expect(extractOpenRouterGenerationIds([idStep(123)])).toEqual([]);
+    expect(extractOpenRouterGenerationIds([idStep('')])).toEqual([]);
+    expect(extractOpenRouterGenerationIds([idStep(''), idStep('gen-9')])).toEqual(['gen-9']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// trackAIToolUsage
+// ---------------------------------------------------------------------------
+describe('trackAIToolUsage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockWriteAiUsage.mockResolvedValue(undefined);
+  });
+
+  it('should call trackAIUsage with tool metadata', async () => {
+    await trackAIToolUsage({
+      userId: 'user-1',
+      provider: 'openai',
+      model: 'gpt-4o',
+      toolName: 'searchPages',
+      toolId: 'tool-123',
+      args: { query: 'hello' },
+      result: { pages: [] },
+      duration: 300,
+      success: true,
+      conversationId: 'conv-1',
+      pageId: 'page-1',
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockWriteAiUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'tool',
+        metadata: expect.objectContaining({ type: 'tool_call', toolName: 'searchPages', toolId: 'tool-123' }),
+      })
+    );
+  });
+
+  it('propagates the awaited persistence promise so the tool-call path is durable too', async () => {
+    // trackAIToolUsage must RETURN trackAIUsage's promise — otherwise a caller that
+    // `await`s trackToolUsage resolves before writeAiUsage settles, and the analytics
+    // log can be dropped on a serverless freeze. We hold writeAiUsage open and assert
+    // the awaited trackAIToolUsage does NOT resolve until the write settles. A wrapper
+    // that didn't return the inner promise would resolve immediately and fail this.
+    let resolveWrite!: (id: string) => void;
+    mockWriteAiUsage.mockReturnValueOnce(new Promise<string>((res) => { resolveWrite = res; }));
+    let resolved = false;
+    const tracked = trackAIToolUsage({
+      userId: 'user-1',
+      provider: 'openai',
+      model: 'gpt-4o',
+      toolName: 'searchPages',
+      success: true,
+    }).then(() => { resolved = true; });
+    await Promise.resolve(); // flush microtasks — write is still pending
+    expect(resolved).toBe(false);
+    resolveWrite('aul_tool');
+    await tracked;
+    expect(resolved).toBe(true);
+    expect(mockWriteAiUsage).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getUserAIStats
+// ---------------------------------------------------------------------------
+describe('getUserAIStats', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('should return correct totals from DB records', async () => {
+    const rows = [
+      { provider: 'openai', model: 'gpt-4o', cost: 0.5, totalTokens: 1000, duration: 200, success: true },
+      { provider: 'openai', model: 'gpt-4o', cost: 0.3, totalTokens: 800, duration: 150, success: true },
+      { provider: 'anthropic', model: 'claude-3-5-sonnet-20241022', cost: 0.1, totalTokens: 500, duration: null, success: false },
+    ];
+    setupSelectChain(rows);
+    const stats = await getUserAIStats('user-1');
+    expect(stats.requestCount).toBe(3);
+    expect(stats.totalCost).toBeCloseTo(0.9, 5);
+    expect(stats.totalTokens).toBe(2300);
+    expect(stats.successRate).toBeCloseTo((2 / 3) * 100, 2);
+    expect(stats.byProvider['openai']?.requests).toBe(2);
+    expect(stats.byProvider['anthropic']?.requests).toBe(1);
+    expect(stats.byModel['gpt-4o']?.requests).toBe(2);
+  });
+
+  it('should return zero stats when no records exist', async () => {
+    setupSelectChain([]);
+    const stats = await getUserAIStats('user-1');
+    expect(stats.requestCount).toBe(0);
+    expect(stats.totalCost).toBe(0);
+    expect(stats.successRate).toBe(0);
+    expect(stats.averageDuration).toBe(0);
+    expect(stats.byProvider).toEqual({});
+    expect(stats.byModel).toEqual({});
+  });
+
+  it('should handle date filters', async () => {
+    setupSelectChain([]);
+    const stats = await getUserAIStats('user-1', new Date('2024-01-01'), new Date('2024-01-31'));
+    expect(stats.requestCount).toBe(0);
+  });
+
+  it('should return empty stats on DB error', async () => {
+    mockDbSelectFn.mockImplementation(() => { throw new Error('db failure'); });
+    const stats = await getUserAIStats('user-1');
+    expect(stats.requestCount).toBe(0);
+    expect(mockAiLogger.error).toHaveBeenCalledWith('Failed to get AI usage stats', expect.any(Error));
+  });
+
+  it('should compute averageDuration correctly', async () => {
+    const rows = [
+      { provider: 'openai', model: 'gpt-4o', cost: 0, totalTokens: 0, duration: 100, success: true },
+      { provider: 'openai', model: 'gpt-4o', cost: 0, totalTokens: 0, duration: 300, success: true },
+    ];
+    setupSelectChain(rows);
+    const stats = await getUserAIStats('user-1');
+    expect(stats.averageDuration).toBe(200);
+  });
+
+  it('should handle null cost and totalTokens in records', async () => {
+    setupSelectChain([{ provider: 'openai', model: 'gpt-4o', cost: null, totalTokens: null, duration: null, success: true }]);
+    const stats = await getUserAIStats('user-1');
+    expect(stats.totalCost).toBe(0);
+    expect(stats.totalTokens).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getPopularAIFeatures
+// ---------------------------------------------------------------------------
+describe('getPopularAIFeatures', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('should return feature usage grouped by type', async () => {
+    const rows = [
+      { metadata: { type: 'tool_call' }, userId: 'user-1' },
+      { metadata: { type: 'tool_call' }, userId: 'user-2' },
+      { metadata: { type: 'general_chat' }, userId: 'user-1' },
+      { metadata: { feature: 'document_search' }, userId: 'user-3' },
+    ];
+    setupSelectChain(rows);
+    const features = await getPopularAIFeatures();
+    const toolCallFeature = features.find(f => f.feature === 'tool_call');
+    expect(toolCallFeature).toBeDefined();
+    expect(toolCallFeature?.users).toBe(2);
+  });
+
+  it('should use general_chat fallback when no type or feature in metadata', async () => {
+    setupSelectChain([{ metadata: {}, userId: 'user-1' }]);
+    const features = await getPopularAIFeatures();
+    expect(features.find(f => f.feature === 'general_chat')).toBeDefined();
+  });
+
+  it('should skip records with no metadata', async () => {
+    setupSelectChain([{ metadata: null, userId: 'user-1' }]);
+    const features = await getPopularAIFeatures();
+    expect(features).toHaveLength(0);
+  });
+
+  it('should respect the limit parameter', async () => {
+    const rows = Array.from({ length: 20 }, (_, i) => ({
+      metadata: { type: `feature-${i}` },
+      userId: `user-${i}`,
+    }));
+    setupSelectChain(rows);
+    const features = await getPopularAIFeatures(5);
+    expect(features.length).toBeLessThanOrEqual(5);
+  });
+
+  it('should apply date filters when provided', async () => {
+    setupSelectChain([]);
+    const features = await getPopularAIFeatures(10, new Date('2024-01-01'), new Date('2024-01-31'));
+    expect(features).toEqual([]);
+  });
+
+  it('should apply no conditions when neither startDate nor endDate is provided', async () => {
+    setupSelectChain([]);
+    const features = await getPopularAIFeatures();
+    expect(features).toEqual([]);
+  });
+
+  it('should return empty array on error', async () => {
+    mockDbSelectFn.mockImplementation(() => { throw new Error('db error'); });
+    const features = await getPopularAIFeatures();
+    expect(features).toEqual([]);
+    expect(mockAiLogger.error).toHaveBeenCalledWith('Failed to get popular AI features', expect.any(Error));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// detectAIErrorPatterns
+// ---------------------------------------------------------------------------
+describe('detectAIErrorPatterns', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function setupErrorChain(rows: Array<{ error: string | null; provider: string; model: string }>) {
+    const limitFn = vi.fn().mockResolvedValue(rows);
+    const whereFn = vi.fn().mockReturnValue({ limit: limitFn });
+    const fromFn = vi.fn().mockReturnValue({ where: whereFn });
+    mockDbSelectFn.mockReturnValue({ from: fromFn });
+  }
+
+  it('should classify rate_limit_exceeded pattern', async () => {
+    setupErrorChain([{ error: 'Rate limit exceeded on token budget', provider: 'openai', model: 'gpt-4o' }]);
+    expect((await detectAIErrorPatterns()).find(p => p.pattern === 'rate_limit_exceeded')).toBeDefined();
+  });
+
+  it('should classify request_timeout pattern', async () => {
+    setupErrorChain([{ error: 'Request timeout after 30s', provider: 'openai', model: 'gpt-4o' }]);
+    expect((await detectAIErrorPatterns()).find(p => p.pattern === 'request_timeout')).toBeDefined();
+  });
+
+  it('should classify token_limit_exceeded pattern', async () => {
+    setupErrorChain([{ error: 'Token limit exceeded by 500 tokens', provider: 'anthropic', model: 'claude-3-5-sonnet-20241022' }]);
+    expect((await detectAIErrorPatterns()).find(p => p.pattern === 'token_limit_exceeded')).toBeDefined();
+  });
+
+  it('should classify invalid_api_key pattern', async () => {
+    setupErrorChain([{ error: 'Invalid key provided in authorization header', provider: 'openai', model: 'gpt-4o' }]);
+    expect((await detectAIErrorPatterns()).find(p => p.pattern === 'invalid_api_key')).toBeDefined();
+  });
+
+  it('should classify network_error pattern', async () => {
+    setupErrorChain([{ error: 'Network connection failed', provider: 'openai', model: 'gpt-4o' }]);
+    expect((await detectAIErrorPatterns()).find(p => p.pattern === 'network_error')).toBeDefined();
+  });
+
+  it('should classify model_not_found pattern', async () => {
+    setupErrorChain([{ error: 'Model not found: gpt-99', provider: 'openai', model: 'gpt-99' }]);
+    expect((await detectAIErrorPatterns()).find(p => p.pattern === 'model_not_found')).toBeDefined();
+  });
+
+  it('should classify context_length_exceeded pattern', async () => {
+    setupErrorChain([{ error: 'Context window overflow detected', provider: 'openai', model: 'gpt-4o' }]);
+    expect((await detectAIErrorPatterns()).find(p => p.pattern === 'context_length_exceeded')).toBeDefined();
+  });
+
+  it('should classify unknown_error for unrecognised messages', async () => {
+    setupErrorChain([{ error: 'Something unexpected happened', provider: 'openai', model: 'gpt-4o' }]);
+    expect((await detectAIErrorPatterns()).find(p => p.pattern === 'unknown_error')).toBeDefined();
+  });
+
+  it('should skip records with null error', async () => {
+    setupErrorChain([{ error: null, provider: 'openai', model: 'gpt-4o' }]);
+    expect(await detectAIErrorPatterns()).toHaveLength(0);
+  });
+
+  it('should apply startDate filter when provided', async () => {
+    setupErrorChain([]);
+    expect(await detectAIErrorPatterns(10, new Date('2024-01-01'))).toHaveLength(0);
+  });
+
+  it('should respect the limit parameter', async () => {
+    setupErrorChain(Array.from({ length: 3 }, (_, i) => ({ error: `rate limit hit #${i}`, provider: 'openai', model: 'gpt-4o' })));
+    const patterns = await detectAIErrorPatterns(5);
+    expect(patterns.length).toBeLessThanOrEqual(5);
+  });
+
+  it('should truncate sample to 200 chars', async () => {
+    setupErrorChain([{ error: 'X'.repeat(300), provider: 'openai', model: 'gpt-4o' }]);
+    const patterns = await detectAIErrorPatterns();
+    expect(patterns[0]?.sample.length).toBeLessThanOrEqual(200);
+  });
+
+  it('should return empty array on error', async () => {
+    mockDbSelectFn.mockImplementation(() => { throw new Error('db failure'); });
+    const patterns = await detectAIErrorPatterns();
+    expect(patterns).toEqual([]);
+    expect(mockAiLogger.error).toHaveBeenCalledWith('Failed to detect AI error patterns', expect.any(Error));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getTokenEfficiencyMetrics
+// ---------------------------------------------------------------------------
+describe('getTokenEfficiencyMetrics', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('should return zero metrics when no records', async () => {
+    setupSelectChain([]);
+    const metrics = await getTokenEfficiencyMetrics();
+    expect(metrics.averageTokensPerRequest).toBe(0);
+    expect(metrics.mostEfficientModel).toBeNull();
+    expect(metrics.leastEfficientModel).toBeNull();
+  });
+
+  it('should compute averages and efficiency from records', async () => {
+    const rows = [
+      { model: 'gpt-4o', inputTokens: 100, outputTokens: 50, totalTokens: 150, cost: 0.003 },
+      { model: 'gpt-4o-mini', inputTokens: 200, outputTokens: 100, totalTokens: 300, cost: 0.001 },
+    ];
+    setupSelectChain(rows);
+    const metrics = await getTokenEfficiencyMetrics();
+    expect(metrics.averageTokensPerRequest).toBe(225);
+    expect(metrics.mostEfficientModel).toBe('gpt-4o-mini');
+    expect(metrics.leastEfficientModel).toBe('gpt-4o');
+  });
+
+  it('should handle records with null tokens and cost', async () => {
+    setupSelectChain([{ model: 'gpt-4o', inputTokens: null, outputTokens: null, totalTokens: null, cost: null }]);
+    const metrics = await getTokenEfficiencyMetrics();
+    expect(metrics.averageTokensPerRequest).toBe(0);
+  });
+
+  it('should handle userId filter', async () => {
+    setupSelectChain([]);
+    const metrics = await getTokenEfficiencyMetrics('user-1');
+    expect(metrics.averageTokensPerRequest).toBe(0);
+  });
+
+  it('should handle date filters', async () => {
+    setupSelectChain([]);
+    const metrics = await getTokenEfficiencyMetrics(undefined, new Date('2024-01-01'), new Date('2024-01-31'));
+    expect(metrics.averageTokensPerRequest).toBe(0);
+  });
+
+  it('should return zero metrics on DB error', async () => {
+    mockDbSelectFn.mockImplementation(() => { throw new Error('db error'); });
+    const metrics = await getTokenEfficiencyMetrics();
+    expect(metrics.averageTokensPerRequest).toBe(0);
+    expect(mockAiLogger.error).toHaveBeenCalledWith('Failed to calculate token efficiency metrics', expect.any(Error));
+  });
+
+  it('should compute inputOutputRatio', async () => {
+    setupSelectChain([{ model: 'gpt-4o', inputTokens: 100, outputTokens: 50, totalTokens: 150, cost: 0.01 }]);
+    const metrics = await getTokenEfficiencyMetrics();
+    expect(metrics.inputOutputRatio).toBe(Number((50 / 100).toFixed(2)));
+  });
+
+  it('should set inputOutputRatio to 0 when inputTokens is 0', async () => {
+    setupSelectChain([{ model: 'gpt-4o', inputTokens: 0, outputTokens: 50, totalTokens: 50, cost: 0.01 }]);
+    const metrics = await getTokenEfficiencyMetrics();
+    expect(metrics.inputOutputRatio).toBe(0);
+  });
+
+  it('should not add model to efficiency map when tokens are 0', async () => {
+    setupSelectChain([{ model: 'gpt-4o', inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: 0.01 }]);
+    const metrics = await getTokenEfficiencyMetrics();
+    expect(metrics.mostEfficientModel).toBeNull();
+    expect(metrics.leastEfficientModel).toBeNull();
+  });
+
+  it('should handle userId + date filter combination', async () => {
+    setupSelectChain([]);
+    const metrics = await getTokenEfficiencyMetrics('user-1', new Date('2024-01-01'), new Date('2024-12-31'));
+    expect(metrics.averageTokensPerRequest).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AIMonitoring namespace object
+// ---------------------------------------------------------------------------
+describe('AIMonitoring', () => {
+  it('should expose all tracking functions', () => {
+    expect(typeof AIMonitoring.trackUsage).toBe('function');
+    expect(typeof AIMonitoring.trackToolUsage).toBe('function');
+    expect(typeof AIMonitoring.getUserStats).toBe('function');
+    expect(typeof AIMonitoring.getPopularFeatures).toBe('function');
+    expect(typeof AIMonitoring.detectErrorPatterns).toBe('function');
+    expect(typeof AIMonitoring.getEfficiencyMetrics).toBe('function');
+    expect(typeof AIMonitoring.calculateCost).toBe('function');
+    expect(typeof AIMonitoring.estimateTokens).toBe('function');
+    expect(typeof AIMonitoring.getContextWindow).toBe('function');
+  });
+
+  it('should expose pricing and context window maps', () => {
+    expect(AIMonitoring.pricing).toBe(AI_PRICING);
+    expect(AIMonitoring.contextWindows).toBe(MODEL_CONTEXT_WINDOWS);
+  });
+});

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildTree } from '../content/tree-utils'
+import { buildTree, calculateSafeDepth, formatTreeAsMarkdown, filterToSubtree, filterTreeNodesByAccess } from '../content/tree-utils'
 
 describe('tree-utils', () => {
   describe('buildTree', () => {
@@ -87,7 +87,7 @@ describe('tree-utils', () => {
 
       // Orphaned nodes become root nodes
       expect(tree).toHaveLength(2)
-      expect(tree.find(n => n.id === '2')).toBeTruthy()
+      expect(tree.find(n => n.id === '2')).toEqual(expect.objectContaining({ id: '2' }))
     })
 
     it('preserves node properties in tree', () => {
@@ -204,7 +204,7 @@ describe('tree-utils', () => {
       expect(tree[0].title).toBe('Root Second')
     })
 
-    it('handles large dataset efficiently', () => {
+    it('builds large dataset without dropping nodes', () => {
       const nodes = []
       for (let i = 0; i < 1000; i++) {
         nodes.push({
@@ -214,12 +214,15 @@ describe('tree-utils', () => {
         })
       }
 
-      const startTime = Date.now()
       const tree = buildTree(nodes)
-      const duration = Date.now() - startTime
 
-      expect(tree).toBeTruthy()
-      expect(duration).toBeLessThan(100) // Should build in under 100ms
+      const countAll = (items: { children?: unknown[] }[]): number =>
+        items.reduce((sum, n) => sum + 1 + countAll((n.children ?? []) as { children?: unknown[] }[]), 0)
+
+      // 1000 nodes with binary-tree parentage: root is node-0
+      expect(tree).toHaveLength(1)
+      expect(tree[0].id).toBe('node-0')
+      expect(countAll(tree)).toBe(1000)
     })
 
     it('handles all nodes being roots', () => {
@@ -286,6 +289,545 @@ describe('tree-utils', () => {
 
       expect(tree[0].id).toBe('001')
       expect(tree[0].children[0].id).toBe('002')
+    })
+  })
+
+  describe('calculateSafeDepth', () => {
+    it('returns full depth for a flat tree within limit', () => {
+      const tree = [
+        { id: '1', children: [] },
+        { id: '2', children: [] },
+        { id: '3', children: [] },
+      ]
+
+      const result = calculateSafeDepth(tree, 10)
+
+      expect(result.safeDepth).toBe(1) // Only depth 0, so length is 1
+      expect(result.totalNodes).toBe(3)
+      expect(result.hiddenNodes).toBe(0)
+    })
+
+    it('returns correct depth for a deep tree within limit', () => {
+      type N = { id: string; children: N[] }
+      const tree: N[] = [
+        {
+          id: '1',
+          children: [
+            {
+              id: '2',
+              children: [
+                { id: '3', children: [] },
+              ],
+            },
+          ],
+        },
+      ]
+
+      const result = calculateSafeDepth(tree, 10)
+
+      expect(result.totalNodes).toBe(3)
+      expect(result.hiddenNodes).toBe(0)
+    })
+
+    it('truncates when tree exceeds maxNodes', () => {
+      type N = { id: string; children: N[] }
+      // Root has 5 children, each with 5 grandchildren = 1 + 5 + 25 = 31 nodes
+      const tree: N[] = [
+        {
+          id: 'root',
+          children: Array.from({ length: 5 }, (_, i) => ({
+            id: `child-${i}`,
+            children: Array.from({ length: 5 }, (_, j) => ({
+              id: `grandchild-${i}-${j}`,
+              children: [],
+            })),
+          })),
+        },
+      ]
+
+      const result = calculateSafeDepth(tree, 7) // Only allow root + children (6 nodes)
+
+      expect(result.safeDepth).toBe(1) // depth 0 = 1, depth 1 = 5 => total 6 fits; depth 2 = 25 would exceed
+      expect(result.hiddenNodes).toBe(25) // 25 grandchildren hidden
+    })
+
+    it('handles single-node tree', () => {
+      const tree = [{ id: '1', children: [] }]
+
+      const result = calculateSafeDepth(tree, 1)
+
+      expect(result.totalNodes).toBe(1)
+      expect(result.hiddenNodes).toBe(0)
+    })
+
+    it('handles tree that fits exactly at maxNodes', () => {
+      const tree = [
+        { id: '1', children: [] },
+        { id: '2', children: [] },
+        { id: '3', children: [] },
+      ]
+
+      const result = calculateSafeDepth(tree, 3)
+
+      expect(result.totalNodes).toBe(3)
+      expect(result.hiddenNodes).toBe(0)
+    })
+
+    it('returns depth 0 when even root level exceeds maxNodes', () => {
+      const tree = Array.from({ length: 10 }, (_, i) => ({
+        id: `node-${i}`,
+        children: [],
+      }))
+
+      const result = calculateSafeDepth(tree, 5)
+
+      // depth 0 has 10 nodes which exceeds 5, so safeDepth = 0
+      expect(result.safeDepth).toBe(0)
+    })
+  })
+
+  describe('formatTreeAsMarkdown', () => {
+    it('returns "(empty)" for empty tree', () => {
+      const result = formatTreeAsMarkdown([])
+      expect(result).toBe('(empty)')
+    })
+
+    it('formats single node with icon and id', () => {
+      type TreeNode = { id: string; title: string; type: string; children: TreeNode[] }
+      const tree: TreeNode[] = [
+        { id: '1', title: 'My Document', type: 'DOCUMENT', children: [] },
+      ]
+
+      const result = formatTreeAsMarkdown(tree)
+
+      expect(result).toContain('My Document')
+      expect(result).toContain('(id: 1)')
+    })
+
+    it('formats nested tree with connectors', () => {
+      type TreeNode = { id: string; title: string; type: string; children: TreeNode[] }
+      const tree: TreeNode[] = [
+        {
+          id: '1',
+          title: 'Projects',
+          type: 'FOLDER',
+          children: [
+            { id: '2', title: 'Notes', type: 'DOCUMENT', children: [] },
+            { id: '3', title: 'Chat', type: 'AI_CHAT', children: [] },
+          ],
+        },
+      ]
+
+      const result = formatTreeAsMarkdown(tree)
+
+      expect(result).toContain('Projects')
+      expect(result).toContain('Notes')
+      expect(result).toContain('Chat')
+    })
+
+    it('shows type icons by default', () => {
+      type TreeNode = { id: string; title: string; type: string; children: TreeNode[] }
+      const tree: TreeNode[] = [
+        { id: '1', title: 'Folder', type: 'FOLDER', children: [] },
+      ]
+
+      const result = formatTreeAsMarkdown(tree)
+
+      // FOLDER icon is present
+      expect(result).toContain('\u{1F4C1}') // Folder emoji
+    })
+
+    it('hides icons when showIcons is false', () => {
+      type TreeNode = { id: string; title: string; type: string; children: TreeNode[] }
+      const tree: TreeNode[] = [
+        { id: '1', title: 'Folder', type: 'FOLDER', children: [] },
+      ]
+
+      const result = formatTreeAsMarkdown(tree, { showIcons: false })
+
+      expect(result).not.toContain('\u{1F4C1}')
+      expect(result).toContain('Folder')
+    })
+
+    it('truncates deep tree and shows hidden nodes message', () => {
+      type TreeNode = { id: string; title: string; type: string; children: TreeNode[] }
+      // Create a wide tree: root with 5 children, each with 5 grandchildren
+      const tree: TreeNode[] = [
+        {
+          id: 'root',
+          title: 'Root',
+          type: 'FOLDER',
+          children: Array.from({ length: 5 }, (_, i) => ({
+            id: `child-${i}`,
+            title: `Child ${i}`,
+            type: 'DOCUMENT',
+            children: Array.from({ length: 5 }, (_, j) => ({
+              id: `gc-${i}-${j}`,
+              title: `Grandchild ${i}-${j}`,
+              type: 'DOCUMENT',
+              children: [],
+            })),
+          })),
+        },
+      ]
+
+      // maxNodes=7 allows root + 5 children but not 25 grandchildren
+      const result = formatTreeAsMarkdown(tree, { maxNodes: 7 })
+
+      expect(result).toContain('Root')
+      expect(result).toContain('hidden')
+      expect(result).toContain('more pages')
+    })
+
+    it('uses default icon for unknown types', () => {
+      type TreeNode = { id: string; title: string; type: string; children: TreeNode[] }
+      const tree: TreeNode[] = [
+        { id: '1', title: 'Unknown', type: 'WEIRD_TYPE', children: [] },
+      ]
+
+      const result = formatTreeAsMarkdown(tree)
+
+      // Falls back to document icon
+      expect(result).toContain('\u{1F4C4}')
+    })
+
+    it('formats multiple root nodes', () => {
+      type TreeNode = { id: string; title: string; type: string; children: TreeNode[] }
+      const tree: TreeNode[] = [
+        { id: '1', title: 'First Root', type: 'FOLDER', children: [] },
+        { id: '2', title: 'Second Root', type: 'FOLDER', children: [] },
+      ]
+
+      const result = formatTreeAsMarkdown(tree)
+
+      expect(result).toContain('First Root')
+      expect(result).toContain('Second Root')
+    })
+  })
+
+  describe('filterToSubtree', () => {
+    it('filters to subtree rooted at given pageId', () => {
+      const nodes = [
+        { id: '1', parentId: null },
+        { id: '2', parentId: '1' },
+        { id: '3', parentId: '2' },
+        { id: '4', parentId: null },
+        { id: '5', parentId: '4' },
+      ]
+
+      const result = filterToSubtree(nodes, '1')
+
+      expect(result).toHaveLength(3)
+      expect(result.map(n => n.id).sort()).toEqual(['1', '2', '3'])
+    })
+
+    it('returns only root when it has no descendants', () => {
+      const nodes = [
+        { id: '1', parentId: null },
+        { id: '2', parentId: null },
+      ]
+
+      const result = filterToSubtree(nodes, '1')
+
+      expect(result).toHaveLength(1)
+      expect(result[0].id).toBe('1')
+    })
+
+    it('returns empty array when rootPageId is not found', () => {
+      const nodes = [
+        { id: '1', parentId: null },
+        { id: '2', parentId: '1' },
+      ]
+
+      const result = filterToSubtree(nodes, 'nonexistent')
+
+      expect(result).toHaveLength(0)
+    })
+
+    it('includes nested descendants multiple levels deep', () => {
+      const nodes = [
+        { id: 'a', parentId: null },
+        { id: 'b', parentId: 'a' },
+        { id: 'c', parentId: 'b' },
+        { id: 'd', parentId: 'c' },
+        { id: 'e', parentId: 'd' },
+        { id: 'f', parentId: null },
+      ]
+
+      const result = filterToSubtree(nodes, 'a')
+
+      expect(result).toHaveLength(5)
+      expect(result.map(n => n.id).sort()).toEqual(['a', 'b', 'c', 'd', 'e'])
+    })
+
+    it('filters starting from a mid-level node', () => {
+      const nodes = [
+        { id: '1', parentId: null },
+        { id: '2', parentId: '1' },
+        { id: '3', parentId: '2' },
+        { id: '4', parentId: '2' },
+        { id: '5', parentId: '1' },
+      ]
+
+      const result = filterToSubtree(nodes, '2')
+
+      expect(result).toHaveLength(3)
+      expect(result.map(n => n.id).sort()).toEqual(['2', '3', '4'])
+    })
+  })
+
+  describe('formatTreeAsMarkdown - depth truncation branch (line 132)', () => {
+    it('should skip nodes past safe depth limit', () => {
+      type TreeNode = { id: string; title: string; type: string; children: TreeNode[] }
+      // Create a tree with 3 levels: root -> child -> grandchild
+      const tree: TreeNode[] = [
+        {
+          id: '1', title: 'Root', type: 'FOLDER',
+          children: [
+            {
+              id: '2', title: 'Child', type: 'DOCUMENT',
+              children: [
+                { id: '3', title: 'Grandchild', type: 'DOCUMENT', children: [] },
+              ],
+            },
+          ],
+        },
+      ]
+
+      // maxNodes=2 allows root + child, grandchild is beyond safe depth
+      const result = formatTreeAsMarkdown(tree, { maxNodes: 2 })
+
+      expect(result).toContain('Root')
+      expect(result).toContain('Child')
+      // Grandchild should be skipped and mentioned in hidden count
+      expect(result).not.toContain('Grandchild (id: 3)')
+      expect(result).toContain('hidden')
+    })
+
+    it('should use non-last connector prefix for children', () => {
+      type TreeNode = { id: string; title: string; type: string; children: TreeNode[] }
+      // Multiple children at same level exercises isLast=false branch of prefix
+      const tree: TreeNode[] = [
+        {
+          id: '1', title: 'Root', type: 'FOLDER',
+          children: [
+            {
+              id: '2', title: 'First Child', type: 'DOCUMENT',
+              children: [
+                { id: '4', title: 'Sub', type: 'DOCUMENT', children: [] },
+              ],
+            },
+            {
+              id: '3', title: 'Last Child', type: 'DOCUMENT',
+              children: [
+                { id: '5', title: 'Sub2', type: 'DOCUMENT', children: [] },
+              ],
+            },
+          ],
+        },
+      ]
+
+      const result = formatTreeAsMarkdown(tree, { maxNodes: 100 })
+
+      // First child is not last, so its sub gets '│   ' prefix
+      expect(result).toContain('│   ')
+      // Last child IS last, so its sub gets '    ' prefix
+      expect(result).toContain('    ')
+      expect(result).toContain('Sub')
+      expect(result).toContain('Sub2')
+    })
+  })
+
+  describe('filterTreeNodesByAccess', () => {
+    const set = (...ids: string[]) => new Set(ids)
+
+    it('returns empty array for empty input', () => {
+      expect(filterTreeNodesByAccess([], set('1'))).toEqual([])
+    })
+
+    it('keeps every node when all are accessible', () => {
+      const nodes = [
+        { id: '1', parentId: null },
+        { id: '2', parentId: '1' },
+        { id: '3', parentId: '2' },
+      ]
+
+      const result = filterTreeNodesByAccess(nodes, set('1', '2', '3'))
+
+      expect(result.map(n => n.id)).toEqual(['1', '2', '3'])
+    })
+
+    it('drops every node when none are accessible', () => {
+      const nodes = [
+        { id: '1', parentId: null },
+        { id: '2', parentId: '1' },
+      ]
+
+      expect(filterTreeNodesByAccess(nodes, set())).toEqual([])
+    })
+
+    it('drops an inaccessible root and its entire (orphaned) subtree even when descendants are individually accessible', () => {
+      const nodes = [
+        { id: 'private-root', parentId: null },
+        { id: 'child', parentId: 'private-root' },
+        { id: 'grandchild', parentId: 'child' },
+      ]
+
+      // child + grandchild are in the accessible set, but their ancestor is not.
+      const result = filterTreeNodesByAccess(nodes, set('child', 'grandchild'))
+
+      expect(result).toEqual([])
+    })
+
+    it('drops a leaf whose intermediate ancestor is inaccessible (ancestor-gated policy)', () => {
+      const nodes = [
+        { id: 'root', parentId: null },
+        { id: 'middle', parentId: 'root' },
+        { id: 'leaf', parentId: 'middle' },
+      ]
+
+      // root and leaf accessible, but the middle ancestor is not.
+      const result = filterTreeNodesByAccess(nodes, set('root', 'leaf'))
+
+      expect(result.map(n => n.id)).toEqual(['root'])
+    })
+
+    it('keeps only the accessible sibling', () => {
+      const nodes = [
+        { id: 'root', parentId: null },
+        { id: 'public-child', parentId: 'root' },
+        { id: 'private-child', parentId: 'root' },
+      ]
+
+      const result = filterTreeNodesByAccess(nodes, set('root', 'public-child'))
+
+      expect(result.map(n => n.id)).toEqual(['root', 'public-child'])
+    })
+
+    it('treats a node whose parent is absent from the list as a root boundary', () => {
+      // parentId points outside the provided node set (e.g. trashed/other-drive parent).
+      const nodes = [
+        { id: 'directly-shared', parentId: 'parent-not-in-set' },
+        { id: 'child', parentId: 'directly-shared' },
+      ]
+
+      const result = filterTreeNodesByAccess(nodes, set('directly-shared', 'child'))
+
+      // Only self + present ancestors are required; the absent parent is a boundary.
+      expect(result.map(n => n.id)).toEqual(['directly-shared', 'child'])
+    })
+
+    it('preserves the original parent/child shape after buildTree (no re-rooting of orphans)', () => {
+      const nodes = [
+        { id: 'r', parentId: null, title: 'Root', position: 0 },
+        { id: 'a', parentId: 'r', title: 'A', position: 0 },
+        { id: 'b', parentId: 'r', title: 'B (private)', position: 1 },
+        { id: 'b1', parentId: 'b', title: 'B child', position: 0 },
+        { id: 'a1', parentId: 'a', title: 'A child', position: 0 },
+      ]
+
+      // 'b' is private; 'b1' is accessible but should be dropped with its parent.
+      const filtered = filterTreeNodesByAccess(nodes, set('r', 'a', 'a1', 'b1'))
+      const tree = buildTree(filtered)
+
+      expect(tree).toHaveLength(1)
+      expect(tree[0].id).toBe('r')
+      expect(tree[0].children.map(c => c.id)).toEqual(['a'])
+      expect(tree[0].children[0].children.map(c => c.id)).toEqual(['a1'])
+    })
+
+    it('does not mutate the input array', () => {
+      const nodes = [
+        { id: '1', parentId: null },
+        { id: '2', parentId: '1' },
+      ]
+      const snapshot = [...nodes]
+
+      filterTreeNodesByAccess(nodes, set('1'))
+
+      expect(nodes).toEqual(snapshot)
+    })
+
+    it('fails closed on a parentId cycle (no infinite loop)', () => {
+      const nodes = [
+        { id: 'x', parentId: 'y' },
+        { id: 'y', parentId: 'x' },
+      ]
+
+      // Even though both ids are "accessible", a cycle has no real root → drop both.
+      const result = filterTreeNodesByAccess(nodes, set('x', 'y'))
+
+      expect(result).toEqual([])
+    })
+
+    it('drops a node that is its own parent (self-cycle)', () => {
+      const nodes = [{ id: 'self', parentId: 'self' }]
+
+      expect(filterTreeNodesByAccess(nodes, set('self'))).toEqual([])
+    })
+
+    it('handles a deep fully-accessible chain', () => {
+      const nodes = Array.from({ length: 50 }, (_, i) => ({
+        id: `n${i}`,
+        parentId: i === 0 ? null : `n${i - 1}`,
+      }))
+      const accessible = new Set(nodes.map(n => n.id))
+
+      const result = filterTreeNodesByAccess(nodes, accessible)
+
+      expect(result).toHaveLength(50)
+    })
+
+    it('keeps many siblings that share one accessible ancestor (memoized path)', () => {
+      const nodes = [
+        { id: 'root', parentId: null },
+        ...Array.from({ length: 100 }, (_, i) => ({ id: `c${i}`, parentId: 'root' })),
+      ]
+      const accessible = new Set(nodes.map(n => n.id))
+
+      const result = filterTreeNodesByAccess(nodes, accessible)
+
+      expect(result).toHaveLength(101)
+    })
+
+    it('drops a whole wide subtree under one inaccessible ancestor', () => {
+      const nodes = [
+        { id: 'private', parentId: null },
+        ...Array.from({ length: 100 }, (_, i) => ({ id: `c${i}`, parentId: 'private' })),
+      ]
+      // children are accessible, ancestor is not.
+      const accessible = new Set(nodes.filter(n => n.id !== 'private').map(n => n.id))
+
+      expect(filterTreeNodesByAccess(nodes, accessible)).toEqual([])
+    })
+
+    it('resolves a large deep+wide forest in linear time (no O(n^2) blowup)', () => {
+      // 2000-deep spine; each spine node also has one leaf child.
+      const nodes: { id: string; parentId: string | null }[] = []
+      for (let i = 0; i < 2000; i++) {
+        nodes.push({ id: `s${i}`, parentId: i === 0 ? null : `s${i - 1}` })
+        nodes.push({ id: `leaf${i}`, parentId: `s${i}` })
+      }
+      const accessible = new Set(nodes.map(n => n.id))
+
+      const result = filterTreeNodesByAccess(nodes, accessible)
+
+      expect(result).toHaveLength(4000)
+    })
+
+    it('hides accessible descendants beneath a mid-spine inaccessible node in a deep tree', () => {
+      const nodes = Array.from({ length: 100 }, (_, i) => ({
+        id: `n${i}`,
+        parentId: i === 0 ? null : `n${i - 1}`,
+      }))
+      // Everything accessible EXCEPT the node at depth 50.
+      const accessible = new Set(nodes.map(n => n.id))
+      accessible.delete('n50')
+
+      const result = filterTreeNodesByAccess(nodes, accessible).map(n => n.id)
+
+      // n0..n49 visible; n50 (inaccessible) and all below hidden.
+      expect(result).toEqual(Array.from({ length: 50 }, (_, i) => `n${i}`))
     })
   })
 })

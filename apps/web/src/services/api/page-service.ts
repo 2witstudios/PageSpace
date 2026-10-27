@@ -1,27 +1,37 @@
-import { db, pages, drives, users, chatMessages, eq, and, desc, isNull } from '@pagespace/db';
-import {
-  canUserViewPage,
-  canUserEditPage,
-  canUserDeletePage,
-  getActorInfo,
-  detectPageContentFormat,
-  hashWithPrefix,
-  computePageStateHash,
-  createPageVersion,
-  type PageVersionSource,
-} from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db'
+import { DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
+import { eq, and, asc, desc, isNull } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { pages, drives } from '@pagespace/db/schema/core';
+import { conversations, messages as unifiedMessages } from '@pagespace/db/schema/conversations';
+import { unifiedPageScope, derivedPageId } from '@/lib/repositories/unified-message-scope';
+import { driveAgentMembers } from '@pagespace/db/schema/members';
+import { canUserViewPage, canUserEditPage, canUserDeletePage } from '@pagespace/lib/permissions/permissions'
+import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger'
+import { detectPageContentFormat } from '@pagespace/lib/content/page-content-format'
+import { hashWithPrefix } from '@pagespace/lib/utils/hash-utils'
+import type { PageTypeValue } from '@pagespace/lib/utils/enums'
+import { computePageStateHash, createPageVersion, type PageVersionSource } from '@pagespace/lib/services/page-version-service';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
-import {
-  validatePageCreation,
-  validateAIChatTools,
-  getDefaultContent,
-  PageType as PageTypeEnum,
-  isAIChatPage,
-  isDriveOwnerOrAdmin,
-} from '@pagespace/lib';
-import { createChangeGroupId, inferChangeGroupType, logActivityWithTx, type DeferredWorkflowTrigger } from '@pagespace/lib/monitoring';
+import { validatePageCreation, validateAIChatTools } from '@pagespace/lib/content/page-type-validators'
+import { getDefaultContent, isAIChatPage } from '@pagespace/lib/content/page-types.config'
+import { PageType as PageTypeEnum } from '@pagespace/lib/utils/enums'
+import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
+import { logActivityWithTx, type DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 import { createId } from '@paralleldrive/cuid2';
-import { applyPageMutation, PageRevisionMismatchError, type PageMutationContext } from './page-mutation-service';
+import { applyPageMutation, OrgModelPolicyError, PageRevisionMismatchError, type PageMutationContext } from './page-mutation-service';
+import { isSheetType } from '@pagespace/lib/sheets/sheet';
+import { readSheetDocument } from '@pagespace/lib/sheets/store';
+import { ensureTaskItemForPage, ensureTaskListForPage } from './task-sync-service';
+import {
+  isProtectedMemoryPage,
+  MEMORY_PAGE_DELETE_ERROR,
+  MEMORY_PAGE_MOVE_ERROR,
+} from '@pagespace/lib/memory/memory-pages';
+import { OrgLapsedError, checkPageMayLoosen } from '@pagespace/lib/permissions/org-lapse-guard';
+import { agentModelSaveRefusal } from '@/lib/ai/core/org-model-policy';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * Helper to convert DB page result to PageData type
@@ -111,9 +121,12 @@ function sanitizeEmptyContent(content: string): string {
 }
 
 /**
- * Page types
+ * Page types. Derived from the canonical enum — the hand-written union this
+ * replaced had drifted and omitted FILE, so FILE pages did not fit the type
+ * used for API page data (#2150). Guarded by
+ * `__tests__/page-type-drift-guard.test.ts`.
  */
-export type PageType = 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'SHEET' | 'TASK_LIST' | 'CODE';
+export type PageType = PageTypeValue;
 
 /**
  * Message with user info for page details
@@ -242,6 +255,13 @@ export interface CreatePageParams {
   contentMode?: 'html' | 'markdown';
   systemPrompt?: string;
   enabledTools?: string[];
+  /**
+   * The per-agent sandbox switch, for an AI_CHAT page. Accepted at creation for
+   * the same reason the dedicated agent-create route accepts it: `enabledTools`
+   * without it can only ever store a sandbox allowlist that grants nothing
+   * (issue #2460).
+   */
+  sandboxEnabled?: boolean;
   aiProvider?: string;
   aiModel?: string;
 }
@@ -249,6 +269,13 @@ export interface CreatePageParams {
 export interface CreatePageOptions {
   context?: Omit<PageMutationContext, 'userId'>;
   source?: PageVersionSource;
+  /**
+   * Edit-authorization predicate for the create target (the parent page id, or
+   * the drive id for root pages). Defaults to the user-level check; routes
+   * serving scoped MCP tokens inject canPrincipalEditPage so the token's own
+   * drive-membership role decides instead of the owning user's.
+   */
+  authorizeEdit?: (targetId: string) => Promise<boolean>;
 }
 
 /**
@@ -261,12 +288,17 @@ export interface UpdatePageParams {
   aiModel?: string;
   parentId?: string | null;
   isPaginated?: boolean;
+  isPrivate?: boolean;
 }
 
 export interface UpdatePageOptions {
   expectedRevision?: number;
   context?: Omit<PageMutationContext, 'userId'>;
   source?: PageVersionSource;
+  skipPermissionCheck?: boolean;
+  /** Edit-authorization predicate; defaults to the user-level check. Routes
+   * serving scoped MCP tokens inject canPrincipalEditPage. */
+  authorizeEdit?: (pageId: string) => Promise<boolean>;
 }
 
 type TransactionType = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -284,6 +316,12 @@ async function recursivelyTrash(
   const children = await tx.select({ id: pages.id }).from(pages).where(eq(pages.parentId, pageId));
 
   for (const child of children) {
+    // `parentId` is user-editable, so a memory page can be moved under an
+    // ordinary page and would otherwise be swept up by that page's cascade —
+    // deleting a profile as a side effect of deleting something else. The
+    // top-level guard in `trashPage` only sees the page it was asked about.
+    if (await isProtectedMemoryPage(child.id)) continue;
+
     const childTriggers = await recursivelyTrash(child.id, tx, context);
     triggers.push(...childTriggers);
   }
@@ -316,33 +354,85 @@ async function recursivelyTrash(
  * Page service - encapsulates all DB operations for page CRUD
  * This is the boundary seam that route tests should mock
  */
+/**
+ * A page's chat messages for the page payload, author included.
+ *
+ * Reads the one `messages` table (epic "Agent-Session Single Source of
+ * Truth", Phase 4 / D6). Page scope is `unifiedPageScope` - the join through
+ * `conversations`, which is what `chat_messages.pageId` became.
+ *
+ * Deliberately keeps the legacy shape verbatim, including the ABSENCE of a
+ * `status` filter (this payload has always included mid-flight 'streaming'
+ * placeholders) and the nested `user` object the drizzle relational query
+ * produced. Unbounded like its predecessor.
+ */
+async function fetchPageChatMessages(pageId: string) {
+  const rows = await db
+    .select({
+      id: unifiedMessages.id,
+      pageId: derivedPageId(),
+      conversationId: unifiedMessages.conversationId,
+      userId: unifiedMessages.userId,
+      role: unifiedMessages.role,
+      content: unifiedMessages.content,
+      messageType: unifiedMessages.messageType,
+      isActive: unifiedMessages.isActive,
+      createdAt: unifiedMessages.createdAt,
+      editedAt: unifiedMessages.editedAt,
+      toolCalls: unifiedMessages.toolCalls,
+      toolResults: unifiedMessages.toolResults,
+      sourceAgentId: unifiedMessages.sourceAgentId,
+      status: unifiedMessages.status,
+      authorId: users.id,
+      authorName: users.name,
+      authorEmail: users.email,
+      authorImage: users.image,
+    })
+    .from(unifiedMessages)
+    .innerJoin(conversations, eq(conversations.id, unifiedMessages.conversationId))
+    .leftJoin(users, eq(users.id, unifiedMessages.userId))
+    .where(and(unifiedPageScope(pageId), eq(unifiedMessages.isActive, true)))
+    .orderBy(asc(unifiedMessages.createdAt));
+
+  return rows.map(({ authorId, authorName, authorEmail, authorImage, ...message }) => ({
+    ...message,
+    // The LEFT JOIN types every `users` column as nullable, but `authorId`
+    // being present means the row joined — `users.email` is NOT NULL in the
+    // schema, so the assertion restates a database guarantee rather than
+    // papering over an unknown.
+    user: authorId === null
+      ? null
+      : { id: authorId, name: authorName, email: authorEmail!, image: authorImage },
+  }));
+}
+
 export const pageService = {
   /**
    * Check if user can view a page
    */
-  async canUserView(userId: string, pageId: string): Promise<boolean> {
-    return canUserViewPage(userId, pageId);
+  async canUserView(actor: AccessActor, pageId: string): Promise<boolean> {
+    return canUserViewPage(actor, pageId);
   },
 
   /**
    * Check if user can edit a page
    */
-  async canUserEdit(userId: string, pageId: string): Promise<boolean> {
-    return canUserEditPage(userId, pageId);
+  async canUserEdit(actor: AccessActor, pageId: string): Promise<boolean> {
+    return canUserEditPage(actor, pageId);
   },
 
   /**
    * Check if user can delete a page
    */
-  async canUserDelete(userId: string, pageId: string): Promise<boolean> {
-    return canUserDeletePage(userId, pageId);
+  async canUserDelete(actor: AccessActor, pageId: string): Promise<boolean> {
+    return canUserDeletePage(actor, pageId);
   },
 
   /**
    * Check if user is drive owner or admin
    */
-  async isDriveOwnerOrAdmin(userId: string, driveId: string): Promise<boolean> {
-    return isDriveOwnerOrAdmin(userId, driveId);
+  async isDriveOwnerOrAdmin(actor: AccessActor, driveId: string): Promise<boolean> {
+    return isDriveOwnerOrAdmin(actor, driveId);
   },
 
   /**
@@ -355,9 +445,15 @@ export const pageService = {
   /**
    * Get page with children and messages
    */
-  async getPage(pageId: string, userId: string): Promise<GetPageResult> {
-    // Check authorization
-    const canView = await canUserViewPage(userId, pageId);
+  async getPage(
+    pageId: string,
+    actor: AccessActor,
+    options?: { authorizeView?: (pageId: string) => Promise<boolean> },
+  ): Promise<GetPageResult> {
+    // Check authorization — routes serving scoped MCP tokens inject
+    // canPrincipalViewPage so the token's own role decides (see CreatePageOptions.authorizeEdit).
+    const authorizeView = options?.authorizeView ?? ((id: string) => canUserViewPage(actor, id));
+    const canView = await authorizeView(pageId);
     if (!canView) {
       return { success: false, error: 'You do not have permission to view this page', status: 403 };
     }
@@ -373,22 +469,32 @@ export const pageService = {
 
     // Fetch related data in parallel
     const [children, messages] = await Promise.all([
+      // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
       db.query.pages.findMany({
         where: eq(pages.parentId, pageId)
       }),
-      db.query.chatMessages.findMany({
-        where: and(eq(chatMessages.pageId, pageId), eq(chatMessages.isActive, true)),
-        with: { user: { columns: { id: true, name: true, email: true, image: true } } },
-        orderBy: (messages, { asc }) => [asc(messages.createdAt)],
-      })
+      fetchPageChatMessages(pageId)
     ]);
 
     const pageData = toPageData(page);
+
+    // A sheet's content is generated from its rows.
+    //
+    // `pages.content` is empty for a materialised sheet, and this endpoint is
+    // what `useSheetPersistence` refetches on every `content-updated` socket
+    // event. Returning the empty column made an open, non-dirty sheet adopt a
+    // blank document, render blank, and then write that blank sheet back on the
+    // next autosave — deleting every row. Cross-sheet `@[Sheet]:A1` references
+    // read this endpoint too, and resolved against an empty grid.
+    const content = isSheetType(page.type as PageTypeEnum)
+      ? (await readSheetDocument(pageId)) ?? pageData.content ?? ''
+      : sanitizeEmptyContent(pageData.content || '');
+
     return {
       success: true,
       page: {
         ...pageData,
-        content: sanitizeEmptyContent(pageData.content || ''),
+        content,
         children: children.map(toPageData),
         messages,
       },
@@ -401,18 +507,30 @@ export const pageService = {
    */
   async updatePage(
     pageId: string,
-    userId: string,
+    actor: AccessActor,
     updates: UpdatePageParams,
     options?: UpdatePageOptions
   ): Promise<UpdatePageResult> {
-    // Check authorization
-    const canEdit = await canUserEditPage(userId, pageId, { bypassCache: true });
-    if (!canEdit) {
-      return { success: false, error: 'You need edit permission to modify this page', status: 403 };
+    const userId = actor.userId;
+    // Check authorization (can be skipped by callers that have already verified a sufficient permission)
+    if (!options?.skipPermissionCheck) {
+      const authorizeEdit = options?.authorizeEdit ?? ((id: string) => canUserEditPage(actor, id));
+      const canEdit = await authorizeEdit(pageId);
+      if (!canEdit) {
+        return { success: false, error: 'You need edit permission to modify this page', status: 403 };
+      }
     }
 
     // Validate parent change
     if (updates.parentId !== undefined) {
+      // Memory pages stay in their Memory folder. Moving one out is how it ends
+      // up under an ordinary page and inside that page's delete cascade, and it
+      // also breaks the folder link the settings screen offers. Editing the
+      // CONTENT is untouched — only relocation is refused.
+      if (await isProtectedMemoryPage(pageId)) {
+        return { success: false, error: MEMORY_PAGE_MOVE_ERROR, status: 403 };
+      }
+
       const validation = await validatePageMove(pageId, updates.parentId);
       if (!validation.valid) {
         return { success: false, error: validation.error || 'Invalid parent', status: 400 };
@@ -450,16 +568,33 @@ export const pageService = {
           resourceType: options?.context?.resourceType,
         };
 
-        await applyPageMutation({
+        const mutation = {
           pageId,
-          operation: 'update',
+          operation: 'update' as const,
           updates: processedUpdates,
           updatedFields,
           expectedRevision: options?.expectedRevision,
           context: mutationContext,
           source: options?.source,
-        });
+        };
+        if (processedUpdates.isPrivate === false) {
+          // [D-OW-33] making a page readable by the whole drive loosens access: judged INSIDE the write's transaction,
+          // against the page row locked FOR UPDATE, so a concurrent "make private" cannot slip between the check and
+          // the write. Refused (OrgLapsedError) only when the page is private now and its drive's org is lapsed.
+          const result = await db.transaction(async (tx) => {
+            const [current] = await tx.select({ isPrivate: pages.isPrivate }).from(pages).where(eq(pages.id, pageId)).for('update');
+            if (current?.isPrivate === true && (await checkPageMayLoosen(tx, pageId, true))) throw new OrgLapsedError();
+            return applyPageMutation({ ...mutation, tx: tx as unknown as typeof db });
+          });
+          result.deferredTrigger?.();
+        } else {
+          await applyPageMutation(mutation);
+        }
       } catch (error) {
+        // POL-8: a model or provider the drive's org does not allow is refused, nothing saved.
+        if (error instanceof OrgModelPolicyError) {
+          return { success: false, error: error.message, status: error.refusal.status };
+        }
         if (error instanceof PageRevisionMismatchError) {
           return {
             success: false,
@@ -478,14 +613,11 @@ export const pageService = {
       db.query.pages.findFirst({
         where: eq(pages.id, pageId),
       }),
+      // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
       db.query.pages.findMany({
         where: eq(pages.parentId, pageId)
       }),
-      db.query.chatMessages.findMany({
-        where: and(eq(chatMessages.pageId, pageId), eq(chatMessages.isActive, true)),
-        with: { user: { columns: { id: true, name: true, email: true, image: true } } },
-        orderBy: (messages, { asc }) => [asc(messages.createdAt)],
-      })
+      fetchPageChatMessages(pageId)
     ]);
 
     if (!updatedPage) {
@@ -493,10 +625,21 @@ export const pageService = {
     }
 
     const pageData = toPageData(updatedPage);
+
+    // Same projection as `getPage`. Without it a successful sheet save answers
+    // with `content: ""` — the blanked column — and any client that adopts the
+    // response body (MCP, the SDK, an SWR cache write) sees the spreadsheet as
+    // empty. The web editor happens to read only `revision` off this, which is
+    // exactly the kind of accident that stops being true later.
+    const responseContent = isSheetType(updatedPage.type as PageTypeEnum)
+      ? (await readSheetDocument(pageId)) ?? pageData.content ?? ''
+      : pageData.content;
+
     return {
       success: true,
       page: {
         ...pageData,
+        content: responseContent,
         children: children.map(toPageData),
         messages,
       },
@@ -509,11 +652,25 @@ export const pageService = {
   /**
    * Trash a page (soft delete)
    */
-  async trashPage(pageId: string, userId: string, options: { trashChildren: boolean; metadata?: Record<string, unknown> }): Promise<TrashPageResult> {
-    // Check authorization
-    const canDelete = await canUserDeletePage(userId, pageId, { bypassCache: true });
+  async trashPage(
+    pageId: string,
+    actor: AccessActor,
+    options: { trashChildren: boolean; metadata?: Record<string, unknown>; authorizeDelete?: (pageId: string) => Promise<boolean> },
+  ): Promise<TrashPageResult> {
+    const userId = actor.userId;
+    // Check authorization — injectable for scoped MCP tokens (canPrincipalDeletePage).
+    const authorizeDelete = options.authorizeDelete ?? ((id: string) => canUserDeletePage(actor, id));
+    const canDelete = await authorizeDelete(pageId);
     if (!canDelete) {
       return { success: false, error: 'You need delete permission to remove this page', status: 403 };
+    }
+
+    // Memory pages are structural, like the Home drive: the cron writes to them
+    // by pointer and the settings screen links to them, so deleting one leaves
+    // a profile with nowhere to live. Emptying the page is the way to erase the
+    // content; the personalization toggle is the way to stop it being used.
+    if (await isProtectedMemoryPage(pageId)) {
+      return { success: false, error: MEMORY_PAGE_DELETE_ERROR, status: 403 };
     }
 
     // Get page info before trashing
@@ -596,7 +753,8 @@ export const pageService = {
   /**
    * Create a new page
    */
-  async createPage(userId: string, params: CreatePageParams, options?: CreatePageOptions): Promise<CreatePageResult> {
+  async createPage(actor: AccessActor, params: CreatePageParams, options?: CreatePageOptions): Promise<CreatePageResult> {
+    const userId = actor.userId;
     // Validate required fields
     if (!params.title || !params.type || !params.driveId) {
       return { success: false, error: 'Missing required fields', status: 400 };
@@ -611,10 +769,26 @@ export const pageService = {
       return { success: false, error: 'Drive not found', status: 404 };
     }
 
-    // Check authorization
-    const hasPermission = await isDriveOwnerOrAdmin(userId, params.driveId);
-    if (!hasPermission) {
-      return { success: false, error: 'Only drive owners and admins can create pages', status: 403 };
+    // Check authorization — nested pages require edit permission on the parent;
+    // root-level pages treat the drive as the root parent and require canEdit on the drive.
+    const authorizeEdit = options?.authorizeEdit ?? ((targetId: string) => canUserEditPage(actor, targetId));
+    if (params.parentId) {
+      const parentPage = await db.query.pages.findFirst({
+        where: and(eq(pages.id, params.parentId), eq(pages.driveId, params.driveId)),
+        columns: { id: true },
+      });
+      if (!parentPage) {
+        return { success: false, error: 'Parent page not found in this drive', status: 400 };
+      }
+      const canEdit = await authorizeEdit(params.parentId);
+      if (!canEdit) {
+        return { success: false, error: 'Insufficient permissions to create pages in this folder', status: 403 };
+      }
+    } else {
+      const canEdit = await authorizeEdit(params.driveId);
+      if (!canEdit) {
+        return { success: false, error: 'Insufficient permissions to create pages in this drive', status: 403 };
+      }
     }
 
     // Calculate position - use isNull when parentId is null/undefined
@@ -650,6 +824,13 @@ export const pageService = {
       }
     }
 
+    // POL-8: a model or provider the request sets must be one the drive's org allows. A defaulted pair (the
+    // creator's own selection) is not a choice made here; the provider factory judges it when it runs.
+    if (isAIChatPage(params.type as PageTypeEnum) && (params.aiProvider || params.aiModel)) {
+      const decision = await agentModelSaveRefusal(drive.id, { provider: params.aiProvider, modelId: params.aiModel });
+      if (!decision.ok) return { success: false, error: decision.message, status: decision.status };
+    }
+
     // Get default AI settings for AI_CHAT pages
     let defaultAiProvider: string | null = null;
     let defaultAiModel: string | null = null;
@@ -663,9 +844,16 @@ export const pageService = {
         },
       });
 
-      if (user) {
-        defaultAiProvider = user.currentAiProvider || 'pagespace';
-        defaultAiModel = user.currentAiModel || 'qwen/qwen3-coder:free';
+      // Resolve provider+model as one pair — never mix a stored provider with the
+      // default model (or vice-versa). A partial user row (only one column set) would
+      // otherwise yield an impossible pair like `anthropic` + `z-ai/glm-5.3-flash`
+      // that the provider factory rejects on first use.
+      if (user?.currentAiProvider && user.currentAiModel) {
+        defaultAiProvider = user.currentAiProvider;
+        defaultAiModel = user.currentAiModel;
+      } else {
+        defaultAiProvider = DEFAULT_PROVIDER;
+        defaultAiModel = DEFAULT_MODEL;
       }
     }
 
@@ -694,10 +882,12 @@ export const pageService = {
         updatedAt: Date;
         revision: number;
         stateHash: string;
+        createdBy: string;
         aiProvider?: string | null;
         aiModel?: string | null;
         systemPrompt?: string | null;
         enabledTools?: string[] | null;
+        sandboxEnabled?: boolean;
       }
 
       const pageData: PageInsertData = {
@@ -712,6 +902,7 @@ export const pageService = {
         updatedAt: new Date(),
         revision: 0,
         stateHash: '',
+        createdBy: userId,
       };
 
       if (isAIChatPage(params.type as PageTypeEnum)) {
@@ -724,6 +915,10 @@ export const pageService = {
         if (params.enabledTools && params.enabledTools.length > 0) {
           pageData.enabledTools = params.enabledTools;
         }
+        if (params.sandboxEnabled !== undefined) {
+          pageData.sandboxEnabled = params.sandboxEnabled;
+        }
+
       }
 
       const contentFormat = detectPageContentFormat(pageData.content);
@@ -744,6 +939,51 @@ export const pageService = {
       pageData.stateHash = stateHash;
 
       const [page] = await tx.insert(pages).values(pageData).returning();
+
+      // Keep the task-list membership invariant: a TASK_LIST created under a
+      // TASK_LIST parent must have its task_items row, no matter the entry point.
+      await ensureTaskItemForPage(tx, {
+        pageId: page.id,
+        pageType: page.type,
+        parentId: page.parentId,
+        userId,
+      });
+
+      // Every TASK_LIST page needs its own `task_lists` + default status configs
+      // seeded immediately, not lazily on first UI load — a bare top-level TASK_LIST
+      // (no TASK_LIST parent) isn't covered by ensureTaskItemForPage above.
+      if (page.type === PageTypeEnum.TASK_LIST) {
+        await ensureTaskListForPage(tx, {
+          pageId: page.id,
+          title: page.title ?? 'Task List',
+          userId,
+        });
+      }
+
+      if (isAIChatPage(params.type as PageTypeEnum)) {
+        await tx.insert(driveAgentMembers).values({
+          driveId: drive.id,
+          agentPageId: page.id,
+          role: 'MEMBER',
+          addedBy: userId,
+        });
+      }
+
+      // Create page version BEFORE acquiring the activity chain lock,
+      // so disk I/O (compression + fs.writeFile) doesn't hold the global lock.
+      await createPageVersion({
+        pageId: page.id,
+        driveId: page.driveId,
+        createdBy: userId,
+        source: options?.source ?? 'system',
+        content: pageData.content,
+        contentFormat,
+        pageRevision: 0,
+        stateHash,
+        changeGroupId,
+        changeGroupType,
+        metadata: options?.context?.metadata,
+      }, { tx });
 
       deferredTrigger = await logActivityWithTx({
         userId,
@@ -770,20 +1010,6 @@ export const pageService = {
         stateHashAfter: stateHash,
       }, tx);
 
-      await createPageVersion({
-        pageId: page.id,
-        driveId: page.driveId,
-        createdBy: userId,
-        source: options?.source ?? 'system',
-        content: pageData.content,
-        contentFormat,
-        pageRevision: 0,
-        stateHash,
-        changeGroupId,
-        changeGroupType,
-        metadata: options?.context?.metadata,
-      }, { tx });
-
       return page;
     });
     deferredTrigger?.();
@@ -796,5 +1022,3 @@ export const pageService = {
     };
   },
 };
-
-export type PageService = typeof pageService;

@@ -1,0 +1,21 @@
+# Source is always text, and must always diff as text.
+#
+# git classifies a blob as binary if it finds a NUL byte in the first 8k — and a
+# stray NUL in a source file is easy to introduce (a NUL used as a string
+# delimiter, pasted verbatim instead of escaped) and almost impossible to notice.
+# The cost is severe and silent: `git diff` and GitHub render the whole file as
+# "Bin N -> M bytes", so every change to it sails through review unseen, and it
+# gets no three-way merge.
+#
+# This happened: MachineKeepAliveHost.tsx carried a literal NUL and was binary to
+# git for its whole history. Forcing `diff` on source extensions makes that class
+# of mistake cosmetic instead of review-defeating.
+*.ts    diff
+*.tsx   diff
+*.js    diff
+*.jsx   diff
+*.mjs   diff
+*.cjs   diff
+*.json  diff
+*.css   diff
+*.md    diff

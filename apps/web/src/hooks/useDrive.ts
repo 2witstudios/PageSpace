@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { Drive } from '@pagespace/lib/client';
+import { Drive } from '@pagespace/lib/types';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 export type { Drive };
 
@@ -14,6 +14,7 @@ interface DriveState {
   removeDrive: (driveId: string) => void;
   updateDrive: (driveId: string, updates: Partial<Drive>) => void;
   setCurrentDrive: (driveId: string | null) => void;
+  reset: () => void;
 }
 
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
@@ -61,6 +62,7 @@ export const useDriveStore = create<DriveState>()(
         lastFetched: Date.now()
       })),
       setCurrentDrive: (driveId: string | null) => set({ currentDriveId: driveId }),
+      reset: () => set({ drives: [], lastFetched: 0, currentDriveId: null, isLoading: false }),
     }),
     {
       name: 'drive-storage',

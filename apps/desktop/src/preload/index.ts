@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import { APP_IDENTITY } from '../shared/current-app-identity';
 import type {
   MCPConfig,
   MCPServerStatusInfo,
@@ -47,10 +48,18 @@ contextBridge.exposeInMainWorld('electron', {
   // App version
   version: process.env.npm_package_version || '1.0.0',
 
+  // Which app this shell is. The web app needs it to build a deep link back
+  // into THIS app rather than into its sibling — the two register different
+  // protocol schemes, and those links carry single-use auth exchange codes.
+  appVariant: APP_IDENTITY.variant,
+
   // Authentication
   auth: {
     getSessionToken: () => ipcRenderer.invoke('auth:get-session-token'),
     getSession: () => ipcRenderer.invoke('auth:get-session'),
+    // Begin a desktop-initiated auth flow (binds the returning
+    // pagespace://auth-exchange deep link to this instance — finding L9).
+    beginExchange: () => ipcRenderer.invoke('auth:begin-exchange'),
     storeSession: (session: {
       sessionToken: string;
       csrfToken?: string | null;
@@ -58,6 +67,7 @@ contextBridge.exposeInMainWorld('electron', {
     }) => ipcRenderer.invoke('auth:store-session', session),
     clearAuth: () => ipcRenderer.invoke('auth:clear-auth'),
     getDeviceInfo: () => ipcRenderer.invoke('auth:get-device-info'),
+    openExternal: (url: string) => ipcRenderer.invoke('auth:open-external', url),
   },
 
   // MCP Server Management
@@ -77,6 +87,15 @@ contextBridge.exposeInMainWorld('electron', {
     getAvailableTools: () => ipcRenderer.invoke('mcp:get-available-tools'),
     executeTool: (serverName: string, toolName: string, args?: Record<string, unknown>) =>
       ipcRenderer.invoke('mcp:execute-tool', serverName, toolName, args),
+  },
+
+  // Passkey lifecycle events (from pagespace://passkey-registered deep link)
+  passkey: {
+    onRegistered: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on('passkey:registered', handler);
+      return () => ipcRenderer.removeListener('passkey:registered', handler);
+    },
   },
 
   // WebSocket MCP Bridge
@@ -137,6 +156,7 @@ export interface ElectronAPI {
       csrfToken?: string | null;
       deviceToken?: string | null;
     } | null>;
+    beginExchange: () => Promise<string | null>;
     storeSession: (session: {
       sessionToken: string;
       csrfToken?: string | null;
@@ -150,6 +170,10 @@ export interface ElectronAPI {
       appVersion: string;
       userAgent: string;
     }>;
+    openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
+  };
+  passkey: {
+    onRegistered: (callback: () => void) => () => void;
   };
   mcp: {
     getConfig: () => Promise<MCPConfig>;

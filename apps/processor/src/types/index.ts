@@ -40,6 +40,7 @@ export interface IngestFileJobData {
   fileId?: string;
   mimeType: string;
   originalName: string;
+  detectedLabel?: string;
 }
 
 export interface ImageOptimizeJobData {
@@ -62,12 +63,87 @@ export interface OCRJobData {
   provider?: 'tesseract' | 'ai-vision';
 }
 
+export interface VideoProcessJobData {
+  contentHash: string;
+  fileId?: string;
+  mimeType: string;
+}
+
+/** Direct-to-S3 verified ingest: pull bytes, hash/Magika gate, then process. */
+export interface PullVerifyJobData {
+  pageId: string;
+  contentHash: string;
+  /**
+   * Set only by the stuck-page reconciler (#2159): 1-based count of automatic
+   * re-enqueues for this page. The next reconciler run reads the max tag back
+   * out of pgboss.job/archive to know when attempts are exhausted.
+   */
+  reconcileAttempt?: number;
+}
+
+export interface VideoProcessResult {
+  success: boolean;
+  duration?: number;
+  width?: number;
+  height?: number;
+  thumbnailKey?: string;
+  error?: string;
+}
+
+/**
+ * Durable GDPR account-erasure job (#906). Carries only identifiers; the worker
+ * re-reads the data_subject_requests row for the authoritative state.
+ */
+export interface AccountErasureJobData {
+  requestId: string;
+  userId: string;
+}
+
+/**
+ * Durable admin-console email broadcast job. Carries only the broadcast id; the
+ * worker re-reads the email_broadcasts row for the authoritative state, exactly
+ * like AccountErasureJobData.
+ */
+export interface EmailBroadcastJobData {
+  broadcastId: string;
+}
+
+/**
+ * Build-and-deploy a published app (Fly Machines, epic Phase 2).
+ *
+ * Carries only what identifies the work; every other fact (the Fly app name, the
+ * current machine, the previous digest) is re-read from `published_apps` by the
+ * worker, so a job that waited in the queue while the app changed underneath it
+ * acts on the app's real state rather than a stale snapshot.
+ */
+export interface AppBuildJobData {
+  publishedAppId: string;
+  /** The workspace source to build. Resolved against APP_BUILD_SOURCE_ROOT. */
+  sourceRef: string;
+  /**
+   * Set only by the build reconciler: 1-based count of automatic recoveries for
+   * this app. The next pass reads the max tag back out of pgboss.job/archive to
+   * know when the attempt budget is spent.
+   */
+  reconcileAttempt?: number;
+}
+
 // Discriminated union for addJob
 export type JobDataMap = {
   'ingest-file': IngestFileJobData;
   'image-optimize': ImageOptimizeJobData;
   'text-extract': TextExtractJobData;
   'ocr-process': OCRJobData;
+  'video-process': VideoProcessJobData;
+  'pull-verify': PullVerifyJobData;
+  'siem-delivery': Record<string, never>;
+  'account-erasure': AccountErasureJobData;
+  'audit-chainer': Record<string, never>;
+  'email-broadcast': EmailBroadcastJobData;
+  'stuck-page-reconciler': Record<string, never>;
+  'app-build': AppBuildJobData;
+  'app-build-reconciler': Record<string, never>;
+  'app-build-source-retention': Record<string, never>;
 };
 
 export type QueueName = keyof JobDataMap;
@@ -106,7 +182,7 @@ export interface OCRResult {
   provider: string;
 }
 
-export type JobResult = IngestResult | ImageProcessResult | TextExtractResult | OCRResult;
+export type JobResult = IngestResult | ImageProcessResult | TextExtractResult | OCRResult | VideoProcessResult;
 
 // Queue status reporting
 export interface QueueStats {

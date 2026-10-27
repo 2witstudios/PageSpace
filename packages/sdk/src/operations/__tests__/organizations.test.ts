@@ -1,0 +1,147 @@
+/**
+ * `operations/organizations.ts` (Spec X-1) — the five org READ operations. The
+ * decision parts live in the schemas: inputs are strict (an unknown argument
+ * fails before the network), outputs are open-world (an unknown field is
+ * stripped, never rejected, per ADR 0001 D5) while every declared field keeps
+ * its type. Drift vs `@pagespace/lib` is pinned separately in
+ * `organizations-drift-guard.test.ts`.
+ */
+import { describe, expect, it } from 'vitest';
+import type { Operation } from '../../registry/define.js';
+import {
+  getOrgPolicies,
+  getOrganization,
+  listMyOrganizations,
+  listOrgDriveDirectory,
+  listOrgMembers,
+} from '../organizations.js';
+
+const SUMMARY = {
+  id: 'o1',
+  name: 'Northwind',
+  slug: 'northwind',
+  avatarUrl: null,
+  role: 'MEMBER',
+  lapsed: false,
+};
+
+const ORG_DETAIL = {
+  organization: { id: 'o1', name: 'Northwind', slug: 'northwind', avatarUrl: null, ownerId: 'u1', createdAt: '2026-09-01T00:00:00.000Z' },
+  viewer: { userId: 'u2', role: 'MEMBER' },
+  billingNotice: { kind: 'read_only', canManageBilling: false },
+};
+
+const MEMBERS = {
+  members: [{ userId: 'u1', role: 'OWNER', joinedAt: '2026-09-01T00:00:00.000Z', name: 'Jono', email: 'j@pagespace.co', image: null }],
+};
+
+const DIRECTORY = {
+  drives: [
+    {
+      id: 'd1',
+      name: 'Research',
+      slug: 'research',
+      orgVisibility: 'RESTRICTED',
+      joined: false,
+      joinRequest: null,
+      canRequest: true,
+      lead: { id: 'u1', name: 'Jono', image: null },
+    },
+  ],
+};
+
+const POLICIES = {
+  policies: {
+    requireStrongSignIn: false,
+    maximumSessionAgeMinutes: null,
+    guests: 'approve',
+    publicShareLinks: true,
+    publishWeb: true,
+    customDomains: true,
+    whoCanInvite: 'admins',
+    whoCanCreateDrives: 'members',
+    openDriveRoleFloor: 'view',
+    modelAllowlist: null,
+    providerAllowlist: null,
+    agentsAutonomous: true,
+    crossDriveAgents: true,
+    cloudSandbox: true,
+    persistentEnvironments: true,
+    publishedApps: true,
+    integrationsAllowlist: null,
+  },
+};
+
+describe('operations/organizations.ts — the five org reads', () => {
+  it('X-1 (partial) all five are GETs on the org routes with account scope', () => {
+    expect(listMyOrganizations.method).toBe('GET');
+    expect(listMyOrganizations.path).toBe('/api/orgs');
+    expect(getOrganization.path).toBe('/api/orgs/:orgId');
+    expect(listOrgMembers.path).toBe('/api/orgs/:orgId/members');
+    expect(listOrgDriveDirectory.path).toBe('/api/orgs/:orgId/drives');
+    expect(getOrgPolicies.path).toBe('/api/orgs/:orgId/policies');
+    for (const op of [listMyOrganizations, getOrganization, listOrgMembers, listOrgDriveDirectory, getOrgPolicies]) {
+      expect(op.requiredScope, op.name).toBe('account');
+      expect(op.method, op.name).toBe('GET');
+      expect(op.description.length, op.name).toBeGreaterThan(0);
+    }
+  });
+
+  it('X-1 (partial) every operation in the file carries account scope and a description that states the key rules', async () => {
+    const isOperation = (value: unknown): value is Operation =>
+      typeof value === 'object' && value !== null && 'method' in value && 'path' in value;
+    const ops = (Object.values(await import('../organizations.js')) as unknown[]).filter(isOperation);
+    expect(ops.length).toBe(34);
+    for (const op of ops) {
+      expect(op.requiredScope, op.name).toBe('account');
+      expect(op.description, op.name).toMatch(/no drive restriction|scoped to specific drives/);
+      // Accepting an invite and confirming a domain mail are not acts IN an org yet: no org policy governs them.
+      if (op.name !== 'organizations.acceptInvitation' && op.name !== 'organizations.confirmDomainEmail') {
+        expect(op.description, op.name).toMatch(/sign-in/);
+      }
+    }
+  });
+
+  it('X-1 (partial) orgs.list parses the route response and strips unknown fields', () => {
+    const parsed = listMyOrganizations.outputSchema.parse({ organizations: [{ ...SUMMARY, someFutureField: 1 }] });
+    expect(parsed).toEqual({ organizations: [SUMMARY] });
+  });
+
+  it('X-1 (partial) orgs.get keeps the billing notice without vouching for its shape', () => {
+    const parsed = getOrganization.outputSchema.parse(ORG_DETAIL);
+    expect(parsed.viewer).toEqual({ userId: 'u2', role: 'MEMBER' });
+    expect(parsed.billingNotice).toEqual({ kind: 'read_only', canManageBilling: false });
+    expect(getOrganization.outputSchema.safeParse({ ...ORG_DETAIL, billingNotice: { kind: 'something_new' } }).success).toBe(true);
+  });
+
+  it('X-1 (partial) members.list requires every roster field and rejects a malformed role', () => {
+    expect(listOrgMembers.outputSchema.safeParse(MEMBERS).success).toBe(true);
+    expect(listOrgMembers.outputSchema.safeParse({ members: [{ ...MEMBERS.members[0], role: 'LEAD' }] }).success).toBe(false);
+  });
+
+  it('X-1 (partial) the directory entry types a Restricted drive line exactly (DRV-6)', () => {
+    const parsed = listOrgDriveDirectory.outputSchema.parse(DIRECTORY);
+    expect(parsed.drives[0]).toEqual(DIRECTORY.drives[0]);
+    expect(parsed.drives[0].joinRequest).toBeNull();
+    expect(listOrgDriveDirectory.outputSchema.safeParse({ drives: [{ ...DIRECTORY.drives[0], orgVisibility: 'SECRET' }] }).success).toBe(false);
+  });
+
+  it('X-1 (partial) policies parse with every key present (defaults filled in server-side)', () => {
+    expect(getOrgPolicies.outputSchema.safeParse(POLICIES).success).toBe(true);
+    expect(getOrgPolicies.outputSchema.safeParse({ policies: { ...POLICIES.policies, guests: 'sometimes' } }).success).toBe(false);
+  });
+
+  it.each([
+    [null, true], [15, true], [43_200, true], [0, true],
+    [14, false], [1, false], [43_201, false], [15.5, false], [-1, false],
+  ])('SEC-3 (partial) maximumSessionAgeMinutes %s matches what the server can answer: %s', (value, ok) => {
+    // 0 is the strictest value a damaged stored age reads as (policies-core SPECS); 1..14 are never answered.
+    expect(getOrgPolicies.outputSchema.safeParse({ policies: { ...POLICIES.policies, maximumSessionAgeMinutes: value } }).success).toBe(ok);
+  });
+
+  it('X-1 (partial) inputs are strict: an unknown argument is a client-side validation error', () => {
+    expect(listMyOrganizations.inputSchema.safeParse({ extra: true }).success).toBe(false);
+    expect(getOrganization.inputSchema.safeParse({ orgId: 'o1', extra: true }).success).toBe(false);
+    expect(listOrgMembers.inputSchema.safeParse({}).success).toBe(false);
+  });
+});

@@ -1,14 +1,27 @@
 /**
- * Utilities for computing storage limits and tiers from subscription data
- * This replaces the complex sync logic with simple computed values
+ * Storage-limit enforcement derived from the canonical tier table.
+ *
+ * The tier vocabulary and every limit number live in
+ * `../billing/subscription-tiers` (TIER_PLAN_LIMITS); this module derives the
+ * storage-enforcement view of that table and applies the on-prem/tenant
+ * override. The old SubscriptionTier/StorageTier distinction collapsed long
+ * ago — both names now alias the canonical SubscriptionTier.
  */
 
-import { isOnPrem } from '../deployment-mode';
+import { isOnPrem, isTenantMode } from '../deployment-mode';
+import {
+  TIERS,
+  TIER_PLAN_LIMITS,
+  formatTierBytes,
+  toSubscriptionTier,
+  type SubscriptionTier,
+} from '../billing/subscription-tiers';
 
-export type SubscriptionTier = 'free' | 'pro' | 'founder' | 'business';
-export type StorageTier = 'free' | 'pro' | 'founder' | 'business';
+export type { SubscriptionTier };
+export type StorageTier = SubscriptionTier;
 
 export interface StorageConfig {
+  name: string;
   tier: StorageTier;
   quotaBytes: number;
   maxFileSize: number;
@@ -18,88 +31,59 @@ export interface StorageConfig {
 }
 
 /**
- * Get storage tier from subscription tier
+ * Storage-enforcement view of the canonical TIER_PLAN_LIMITS table — used by
+ * upload-validation.ts (per-file size gate) and storage-limits.ts (quota +
+ * file-count gate). Display surfaces (apps/web plans.ts, marketing pricing)
+ * derive from the same canonical table, so the numbers cannot drift.
  */
-export function getStorageTierFromSubscription(subscriptionTier: SubscriptionTier): StorageTier {
-  if (subscriptionTier === 'business') return 'business';
-  if (subscriptionTier === 'founder') return 'founder';
-  if (subscriptionTier === 'pro') return 'pro';
-  return 'free';
-}
+export const STORAGE_TIERS: Record<StorageTier, StorageConfig> = Object.fromEntries(
+  TIERS.map((tier) => {
+    const limits = TIER_PLAN_LIMITS[tier];
+    const features = [
+      `${formatTierBytes(limits.quotaBytes)} storage`,
+      `${formatTierBytes(limits.maxFileSize)} per file`,
+      ...(tier === 'free' ? ['Basic processing'] : []),
+    ];
+    return [
+      tier,
+      {
+        name: limits.name,
+        tier,
+        quotaBytes: limits.quotaBytes,
+        maxFileSize: limits.maxFileSize,
+        maxConcurrentUploads: limits.maxConcurrentUploads,
+        maxFileCount: limits.maxFileCount,
+        features,
+      },
+    ];
+  }),
+) as Record<StorageTier, StorageConfig>;
 
 /**
- * Get storage quota in bytes from subscription tier
+ * Get storage quota in bytes from subscription tier.
+ * Delegates to getStorageConfigFromSubscription so the on-prem/tenant override
+ * is honored consistently (otherwise these two could disagree for on-prem).
  */
-export function getStorageQuotaFromSubscription(subscriptionTier: SubscriptionTier): number {
-  if (subscriptionTier === 'business') return 50 * 1024 * 1024 * 1024; // 50GB for business
-  if (subscriptionTier === 'founder') return 10 * 1024 * 1024 * 1024;  // 10GB for founder
-  if (subscriptionTier === 'pro') return 2 * 1024 * 1024 * 1024;       // 2GB for pro
-  return 500 * 1024 * 1024;                                            // 500MB for free
+export function getStorageQuotaFromSubscription(subscriptionTier: SubscriptionTier | string): number {
+  return getStorageConfigFromSubscription(subscriptionTier).quotaBytes;
 }
 
 /**
  * Get complete storage configuration from subscription tier.
- * On-prem: always returns business-tier limits regardless of stored tier.
+ * On-prem / tenant: always returns business-tier limits regardless of stored tier.
+ * The stored column is untyped text, so unknown values coerce to 'free'.
  */
-export function getStorageConfigFromSubscription(subscriptionTier: SubscriptionTier): StorageConfig {
-  if (isOnPrem()) {
-    return {
-      tier: 'business',
-      quotaBytes: 50 * 1024 * 1024 * 1024,    // 50GB
-      maxFileSize: 100 * 1024 * 1024,         // 100MB
-      maxConcurrentUploads: 10,
-      maxFileCount: 5000,
-      features: ['50GB storage', '100MB per file']
-    };
+export function getStorageConfigFromSubscription(subscriptionTier: SubscriptionTier | string): StorageConfig {
+  if (isOnPrem() || isTenantMode()) {
+    return STORAGE_TIERS.business;
   }
-
-  if (subscriptionTier === 'business') {
-    return {
-      tier: 'business',
-      quotaBytes: 50 * 1024 * 1024 * 1024,    // 50GB
-      maxFileSize: 100 * 1024 * 1024,         // 100MB
-      maxConcurrentUploads: 10,
-      maxFileCount: 5000,
-      features: ['50GB storage', '100MB per file']
-    };
-  }
-
-  if (subscriptionTier === 'founder') {
-    return {
-      tier: 'founder',
-      quotaBytes: 10 * 1024 * 1024 * 1024,    // 10GB
-      maxFileSize: 50 * 1024 * 1024,          // 50MB
-      maxConcurrentUploads: 3,
-      maxFileCount: 500,
-      features: ['10GB storage', '50MB per file']
-    };
-  }
-
-  if (subscriptionTier === 'pro') {
-    return {
-      tier: 'pro',
-      quotaBytes: 2 * 1024 * 1024 * 1024,     // 2GB
-      maxFileSize: 50 * 1024 * 1024,          // 50MB
-      maxConcurrentUploads: 3,
-      maxFileCount: 500,
-      features: ['2GB storage', '50MB per file']
-    };
-  }
-
-  return {
-    tier: 'free',
-    quotaBytes: 500 * 1024 * 1024,           // 500MB
-    maxFileSize: 20 * 1024 * 1024,           // 20MB
-    maxConcurrentUploads: 2,
-    maxFileCount: 100,
-    features: ['500MB storage', '20MB per file', 'Basic processing']
-  };
+  return STORAGE_TIERS[toSubscriptionTier(subscriptionTier)];
 }
 
 /**
  * Check if a subscription tier allows a feature
  */
-export function subscriptionAllows(subscriptionTier: SubscriptionTier, feature: string): boolean {
+export function subscriptionAllows(subscriptionTier: SubscriptionTier | string, feature: string): boolean {
   const config = getStorageConfigFromSubscription(subscriptionTier);
   return config.features.includes(feature);
 }

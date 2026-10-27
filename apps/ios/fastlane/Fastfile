@@ -1,0 +1,66 @@
+default_platform(:ios)
+
+# Absolute paths so lanes run correctly regardless of the invoking cwd.
+IOS_DIR   = File.expand_path("..", __dir__)          # apps/ios
+XCODEPROJ = File.join(IOS_DIR, "ios/App/App.xcodeproj")
+SCHEME    = "App"
+
+# App Store Connect API key from env (no interactive Apple ID / 2FA).
+#   ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_PATH (path to the .p8 file)
+def asc_api_key
+  app_store_connect_api_key(
+    key_id: ENV.fetch("ASC_KEY_ID"),
+    issuer_id: ENV.fetch("ASC_ISSUER_ID"),
+    key_filepath: ENV.fetch("ASC_KEY_PATH"),
+    in_house: false,
+  )
+end
+
+platform :ios do
+  desc "Sync the Capacitor web layer into the native project"
+  lane :sync do
+    sh("cd #{IOS_DIR} && bun run build:full")
+  end
+
+  desc "Archive and upload the current build to TestFlight"
+  lane :beta do
+    api_key = asc_api_key
+
+    build_app(
+      project: XCODEPROJ,
+      scheme: SCHEME,
+      configuration: "Release",
+      export_method: "app-store",
+      export_options: File.join(IOS_DIR, "ExportOptions.plist"),
+      output_directory: File.join(IOS_DIR, "build"),
+      clean: true,
+    )
+
+    upload_to_testflight(
+      api_key: api_key,
+      skip_waiting_for_build_processing: false,
+      distribute_external: false,
+    )
+  end
+
+  desc "Submit the latest build's App Store version for review"
+  lane :release do
+    api_key = asc_api_key
+
+    # Push metadata/screenshots (edit fastlane/metadata + fastlane/screenshots), attach the
+    # latest processed build, and submit for review. Requires reviewer notes + a demo account
+    # configured in App Store Connect (Guideline 4.2).
+    deliver(
+      api_key: api_key,
+      submit_for_review: true,
+      automatic_release: false,
+      force: true,                       # skip the interactive HTML preview
+      skip_binary_upload: true,          # binary already uploaded by `beta`
+      precheck_include_in_app_purchases: false,
+      submission_information: {
+        add_id_info_uses_idfa: false,
+        export_compliance_uses_encryption: false,
+      },
+    )
+  end
+end

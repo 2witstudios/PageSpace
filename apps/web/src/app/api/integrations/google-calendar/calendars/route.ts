@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getValidAccessToken } from '@/lib/integrations/google-calendar/token-refresh';
 import { listCalendars } from '@/lib/integrations/google-calendar/api-client';
 
@@ -12,6 +14,7 @@ const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
  * Used by the settings UI for calendar selection.
  */
 export async function GET(request: Request) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
@@ -53,6 +56,8 @@ export async function GET(request: Request) {
         if (!a.primary && b.primary) return 1;
         return (a.summary || '').localeCompare(b.summary || '');
       });
+
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'google_calendars', resourceId: 'self', details: { calendarCount: calendars.length } });
 
     return NextResponse.json({ calendars });
   } catch (error) {

@@ -1,11 +1,55 @@
 
-import { migrate } from "drizzle-orm/node-postgres/migrator";
-import { db } from ".";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { readMigrationFiles } from "drizzle-orm/migrator";
+import { getMigrationPool } from "./db";
+import { assertOrgFundingCutoverOffline, assertPersonalBillingCutoverOffline } from "./personal-cutover-gate";
+import { runMigrations } from "./migration-runner";
 
+/**
+ * Main-DB migration entrypoint. The per-migration-transaction logic lives in
+ * migration-runner.ts (shared with the Admin PG runner, migrate-admin.ts);
+ * this shell only binds the main journal: ./drizzle + the 'drizzle' schema.
+ *
+ * Runs on getMigrationPool(), NOT the app-throttled `db` — migrations run
+ * DDL that can legitimately exceed the app pool's statement_timeout/
+ * lock_timeout (see getMigrationPool()'s doc comment in db.ts).
+ */
 async function main() {
   console.log("Running migrations...");
   console.log("DATABASE_URL:", process.env.DATABASE_URL ? "Set" : "Not set");
-  await migrate(db, { migrationsFolder: "drizzle" });
+
+  const migrations = readMigrationFiles({ migrationsFolder: "drizzle" });
+  const migrationPool = getMigrationPool();
+
+  try {
+    const retired = await migrationPool.query<{ present: boolean }>(`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = 'users'
+          AND column_name = 'subscriptionGrandfathered'
+      ) AS present
+    `);
+    assertPersonalBillingCutoverOffline(retired.rows[0]?.present === true, process.env.BILLING_CUTOVER_OFFLINE);
+    const funding = await migrationPool.query<{ funding: boolean; subscriptions: boolean }>(`
+      SELECT to_regclass('org_subscription_funding') IS NOT NULL AS funding,
+             to_regclass('org_subscriptions') IS NOT NULL AS subscriptions
+    `);
+    const hasOrgSubscriptions = funding.rows[0]?.subscriptions === true
+      && ((await migrationPool.query(`SELECT 1 FROM org_subscriptions LIMIT 1`)).rowCount ?? 0) > 0;
+    assertOrgFundingCutoverOffline(
+      { fundingTableExists: funding.rows[0]?.funding === true, hasOrgSubscriptions },
+      process.env.BILLING_CUTOVER_OFFLINE,
+    );
+    await runMigrations(
+      drizzle(migrationPool),
+      migrations,
+      { migrationsSchema: "drizzle", migrationsTable: "__drizzle_migrations" },
+      console.log,
+    );
+  } finally {
+    await migrationPool.end();
+  }
+
   console.log("Migrations finished.");
   process.exit(0);
 }

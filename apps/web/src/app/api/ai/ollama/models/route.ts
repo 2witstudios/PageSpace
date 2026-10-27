@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { authenticateSessionRequest, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
-import { getUserOllamaSettings } from '@/lib/ai/core';
-import { validateLocalProviderURL } from '@pagespace/lib/security';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { getManagedProviderKey } from '@/lib/ai/core/ai-utils';
+import { validateLocalProviderURL } from '@pagespace/lib/security/url-validator';
 
 /**
  * GET /api/ai/ollama/models
@@ -14,41 +14,59 @@ export async function GET(request: Request) {
     if (isAuthError(auth)) return auth.error;
     const { userId } = auth;
 
-    // Get user's Ollama settings
-    const ollamaSettings = await getUserOllamaSettings(userId);
+    // Get managed Ollama base URL
+    const ollamaSettings = getManagedProviderKey('ollama');
 
     if (!ollamaSettings || !ollamaSettings.baseUrl) {
       return NextResponse.json({
         success: false,
-        error: 'Ollama not configured. Please configure your Ollama base URL first.',
-        models: []
-      }, { status: 400 });
+        error: 'Ollama is not configured on this deployment.',
+        models: {}
+      }, { status: 503 });
     }
 
-    // SECURITY: Validate URL to prevent SSRF attacks
-    const urlValidation = await validateLocalProviderURL(ollamaSettings.baseUrl);
-    if (!urlValidation.valid) {
-      loggers.ai.warn('SSRF protection: blocked Ollama URL', {
-        userId,
-        baseUrl: ollamaSettings.baseUrl,
-        error: urlValidation.error,
-      });
+    // Check if desktop bridge is available for local AI
+    const { isFetchBridgeInitialized, getFetchBridge } = await import('@/lib/fetch-bridge');
+    const useDesktopBridge = isFetchBridgeInitialized() && getFetchBridge().isUserConnected(userId);
+
+    // Basic URL format validation applies to both paths
+    try { new URL(ollamaSettings.baseUrl); } catch {
       return NextResponse.json({
         success: false,
-        error: 'Invalid URL: blocked for security reasons. Please use a valid, non-internal URL.',
+        error: 'Ollama base URL is not a valid URL.',
         models: {}
       }, { status: 400 });
     }
 
+    if (!useDesktopBridge) {
+      // SECURITY: Full SSRF validation for direct server fetch
+      const urlValidation = await validateLocalProviderURL(ollamaSettings.baseUrl);
+      if (!urlValidation.valid) {
+        loggers.ai.warn('SSRF protection: blocked Ollama URL', {
+          userId,
+          baseUrl: ollamaSettings.baseUrl,
+          error: urlValidation.error,
+        });
+        return NextResponse.json({
+          success: false,
+          error: 'Invalid URL: blocked for security reasons. Please use a valid, non-internal URL.',
+          models: {}
+        }, { status: 400 });
+      }
+    }
+
     try {
       // Connect to user's Ollama instance and fetch available models
-      const ollamaResponse = await fetch(`${ollamaSettings.baseUrl}/api/tags`, {
+      // When desktop bridge is connected, route through WebSocket to user's machine
+      const fetchFn = useDesktopBridge
+        ? (await import('@/lib/fetch-bridge/ws-proxy-fetch')).createWsProxyFetch(userId, getFetchBridge())
+        : fetch;
+      const ollamaResponse = await fetchFn(`${ollamaSettings.baseUrl}/api/tags`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
         },
-        // Add timeout to prevent hanging
-        signal: AbortSignal.timeout(5000), // 5 second timeout
+        signal: AbortSignal.timeout(useDesktopBridge ? 10000 : 5000),
       });
 
       if (!ollamaResponse.ok) {

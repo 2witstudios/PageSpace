@@ -12,8 +12,8 @@ import type { SessionAuthResult, MCPAuthResult } from '@/lib/auth';
 // ============================================================================
 
 // Mock the repository seam (boundary)
-vi.mock('@/lib/repositories/chat-message-repository', () => ({
-  chatMessageRepository: {
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
     getMessagesForPage: vi.fn().mockResolvedValue([]),
   },
 }));
@@ -23,21 +23,30 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result: any) => 'error' in result),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
+  canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
+    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
+    return canUserViewPage(credentialActor(auth.userId, null), pageId);
+  }),
 }));
 
 // Mock permissions (boundary)
-vi.mock('@pagespace/lib/server', () => ({
-  canUserViewPage: vi.fn().mockResolvedValue(true),
-  loggers: {
-    ai: {
-      info: vi.fn(),
-      error: vi.fn(),
-    },
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
+    canUserViewPage: vi.fn().mockResolvedValue(true),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
+    ai: { info: vi.fn(), error: vi.fn() },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
 // Mock message converter (boundary)
-vi.mock('@/lib/ai/core', () => ({
+vi.mock('@/lib/ai/core/message-utils', () => ({
   convertDbMessageToUIMessage: vi.fn((msg: any) => ({
     id: msg.id,
     role: msg.role,
@@ -46,8 +55,9 @@ vi.mock('@/lib/ai/core', () => ({
 }));
 
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/server';
-import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { messageRepository } from '@/lib/repositories/message-repository';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ============================================================================
 // Test Fixtures
@@ -121,7 +131,7 @@ describe('GET /api/ai/chat/messages - MCP page scope enforcement', () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(auth);
     vi.mocked(checkMCPPageScope).mockResolvedValue(null);
     vi.mocked(canUserViewPage).mockResolvedValue(true);
-    vi.mocked(chatMessageRepository.getMessagesForPage).mockResolvedValue([]);
+    vi.mocked(messageRepository.getMessagesForPage).mockResolvedValue([]);
 
     const request = createRequest(pageIdInScope);
     const response = await GET(request);
@@ -135,7 +145,7 @@ describe('GET /api/ai/chat/messages - MCP page scope enforcement', () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(auth);
     vi.mocked(checkMCPPageScope).mockResolvedValue(null);
     vi.mocked(canUserViewPage).mockResolvedValue(true);
-    vi.mocked(chatMessageRepository.getMessagesForPage).mockResolvedValue([]);
+    vi.mocked(messageRepository.getMessagesForPage).mockResolvedValue([]);
 
     const request = createRequest(pageIdInScope);
     const response = await GET(request);

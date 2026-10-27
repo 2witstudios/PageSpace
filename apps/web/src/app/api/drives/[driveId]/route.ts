@@ -1,20 +1,24 @@
+import { recordOrgPowerDriveAction } from '@pagespace/lib/permissions/drive-relationship-loader';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import {
-  getDriveById,
-  getDriveAccess,
-  getDriveWithAccess,
-  updateDrive,
-  trashDrive,
-} from '@pagespace/lib/server';
-import { loggers } from '@pagespace/lib/server';
+import { getDriveById, getDriveWithAccess, updateDrive, trashDrive, isValidDriveHomePage, isValidDriveNotFoundPage } from '@pagespace/lib/services/drive-service';
+import { isReservedDriveName, isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isMCPAuthResult } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isMCPAuthResult, isScopedMCPAuth, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
+import { getAppDriveMembership, getAppDriveAccessLevel } from '@pagespace/lib/permissions/app-permissions';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
+import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
+import { syncPublishedHomeRoot, regeneratePublishedSiteFiles } from '@/lib/canvas/publish-page';
+import { resolveUploadedImageAssetUrl } from '@/lib/canvas/asset-pipeline';
+import { db } from '@pagespace/db/db';
+import { publishDriveTransitionInvalidation } from '@pagespace/lib/services/drive-transition-invalidation';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
+import { MARK_COLORS } from '@pagespace/lib/avatars/avatar-core';
 
-const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 const patchSchema = z.object({
@@ -22,7 +26,24 @@ const patchSchema = z.object({
   aiProvider: z.string().optional(),
   aiModel: z.string().optional(),
   drivePrompt: z.string().max(10000).optional(),
-});
+  // min(1): "" must never reach the FK; null is the only clear signal
+  homePageId: z.string().min(1).nullable().optional(),
+  // Drive-wide default OG/share image. "" or null clears it; a non-empty value
+  // must be a valid URL.
+  publishDefaultOgImageUrl: z.union([z.literal(''), z.string().url()]).nullable().optional(),
+  // CANVAS page rendered as the published site's 404.html. min(1): "" must
+  // never reach the FK; null is the only clear "unset" signal.
+  notFoundPageId: z.string().min(1).nullable().optional(),
+  // Drive-wide favicon override, same shape/semantics as publishDefaultOgImageUrl.
+  publishFaviconUrl: z.union([z.literal(''), z.string().url()]).nullable().optional(),
+  // Alternative to pasting a URL: reference an uploaded FILE page. Resolved
+  // server-side to a durable public CDN URL and stored in the URL column above
+  // — never trusted as a URL directly.
+  ogImageFileId: z.string().min(1).optional(),
+  faviconFileId: z.string().min(1).optional(),
+  // The color the drive's initial sits on without an avatar: a mark palette key, null for the default.
+  color: z.enum(MARK_COLORS).nullable().optional(),
+}).strict();
 
 /**
  * GET /api/drives/[driveId]
@@ -43,9 +64,34 @@ export async function GET(
     const scopeError = checkMCPDriveScope(auth, driveId);
     if (scopeError) return scopeError;
 
-    const userId = auth.userId;
 
-    const driveWithAccess = await getDriveWithAccess(driveId, userId);
+    // A scoped MCP token is its own drive member — gate on and report the
+    // TOKEN's membership, not the owning user's.
+    if (isScopedMCPAuth(auth)) {
+      const drive = await getDriveById(driveId);
+      if (!drive) {
+        return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      }
+      const level = await getAppDriveAccessLevel(actorFromAuth(auth), auth.tokenId, driveId);
+      if (!level?.canView) {
+        return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
+      }
+      const membership = await getAppDriveMembership(actorFromAuth(auth), auth.tokenId, driveId);
+      if (membership?.role === null) {
+        // Inherit: the key is its owner — present the owner's own relationship.
+        const inherited = await getDriveWithAccess(driveId, actorFromAuth(auth));
+        if (inherited) return NextResponse.json(inherited);
+      }
+      return NextResponse.json({
+        ...drive,
+        isOwned: false,
+        isMember: true,
+        role: membership?.role ?? 'MEMBER',
+        lastAccessedAt: null,
+      });
+    }
+
+    const driveWithAccess = await getDriveWithAccess(driveId, actorFromAuth(auth));
 
     if (!driveWithAccess) {
       // Check if drive exists at all for proper error
@@ -53,7 +99,7 @@ export async function GET(
       if (!drive) {
         return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
       }
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
     }
 
     return NextResponse.json(driveWithAccess);
@@ -85,6 +131,18 @@ export async function PATCH(
     const userId = auth.userId;
 
     const body = await request.json();
+
+    // publishSubdomain lives on this schema's reject-list, not its allow-list:
+    // it has its own dedicated endpoint (tier-gating, conflict checks, and
+    // republish/rollback via changePublishSubdomain()) that this generic route
+    // must not bypass or duplicate.
+    if (typeof body === 'object' && body !== null && 'publishSubdomain' in body) {
+      return NextResponse.json(
+        { error: 'publishSubdomain cannot be changed via this endpoint. Use PATCH /api/drives/[driveId]/subdomain instead.' },
+        { status: 400 }
+      );
+    }
+
     const validatedBody = patchSchema.parse(body);
 
     // Check drive exists
@@ -93,23 +151,102 @@ export async function PATCH(
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    // Check authorization
-    const access = await getDriveAccess(driveId, userId);
-    if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json(
-        { error: 'Only drive owners and admins can update drive settings' },
-        { status: 403 }
-      );
+    // Home drives cannot be renamed; drivePrompt-only updates are allowed.
+    if (validatedBody.name !== undefined && isHomeDrive(drive)) {
+      return NextResponse.json({ error: homeDriveActionError(drive, 'rename') }, { status: 403 });
     }
 
-    // Update the drive
+    // Reserved-name check for the new name.
+    if (validatedBody.name !== undefined && isReservedDriveName(validatedBody.name)) {
+      return NextResponse.json({ error: 'Cannot rename a drive to that name.' }, { status: 400 });
+    }
+
+    // Check authorization: owner/admin authority. Scoped tokens with an
+    // explicit role need OWNER/ADMIN; inherited keys use the owner's authority.
+    if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json(
+        { error: 'Only drive owners and admins can update drive settings' },
+        { status: 403 }
+      ));
+    }
+
+    // A rename taken through org Owner/Admin power (an org drive the actor does not lead) is audited.
+    if (validatedBody.name !== undefined) {
+      await recordOrgPowerDriveAction(actorFromAuth(auth), drive, 'rename');
+    }
+
+    // A home page must be a non-trashed page belonging to this drive
+    if (typeof validatedBody.homePageId === 'string') {
+      const validHomePage = await isValidDriveHomePage(driveId, validatedBody.homePageId);
+      if (!validHomePage) {
+        return NextResponse.json(
+          { error: 'Home page must be a non-trashed page in this drive' },
+          { status: 400 }
+        );
+      }
+    }
+
+    // The custom 404 page must be a non-trashed CANVAS page belonging to this drive.
+    if (typeof validatedBody.notFoundPageId === 'string') {
+      const validNotFoundPage = await isValidDriveNotFoundPage(driveId, validatedBody.notFoundPageId);
+      if (!validNotFoundPage) {
+        return NextResponse.json(
+          { error: '404 page must be a non-trashed Canvas page in this drive' },
+          { status: 400 }
+        );
+      }
+    }
+
+    // ogImageFileId/faviconFileId are an alternative to pasting a URL: the
+    // client picked an uploaded FILE page, and we resolve it server-side to a
+    // durable public CDN URL rather than trusting a client-supplied URL.
+    // Pasting a URL and picking a file are mutually exclusive per field; when
+    // both are sent, the resolved file wins (it's the more specific action).
+    let resolvedOgImageUrl = validatedBody.publishDefaultOgImageUrl;
+    if (validatedBody.ogImageFileId) {
+      const resolved = await resolveUploadedImageAssetUrl({ fileId: validatedBody.ogImageFileId, driveId, actor: actorFromAuth(auth), db });
+      if (!resolved) {
+        return NextResponse.json({ error: 'Selected image is unavailable or not accessible' }, { status: 400 });
+      }
+      resolvedOgImageUrl = resolved;
+    }
+
+    let resolvedFaviconUrl = validatedBody.publishFaviconUrl;
+    if (validatedBody.faviconFileId) {
+      const resolved = await resolveUploadedImageAssetUrl({ fileId: validatedBody.faviconFileId, driveId, actor: actorFromAuth(auth), db });
+      if (!resolved) {
+        return NextResponse.json({ error: 'Selected favicon is unavailable or not accessible' }, { status: 400 });
+      }
+      resolvedFaviconUrl = resolved;
+    }
+
+    // Update the drive. An empty-string default OG image/favicon is normalized
+    // to null (clear) so the column never holds a blank string.
     const updatedDrive = await updateDrive(driveId, {
       name: validatedBody.name,
       drivePrompt: validatedBody.drivePrompt,
+      homePageId: validatedBody.homePageId,
+      publishDefaultOgImageUrl:
+        resolvedOgImageUrl === undefined
+          ? undefined
+          : resolvedOgImageUrl || null,
+      notFoundPageId: validatedBody.notFoundPageId,
+      publishFaviconUrl:
+        resolvedFaviconUrl === undefined
+          ? undefined
+          : resolvedFaviconUrl || null,
+      color: validatedBody.color,
     });
 
-    // Broadcast drive update event if name changed
-    if (validatedBody.name && updatedDrive) {
+    // A changed 404 page or favicon must be reflected in the site files
+    // immediately, not wait on an unrelated publish/unpublish. Fire-and-forget,
+    // mirroring the syncPublishedHomeRoot call below for homePageId.
+    if (validatedBody.notFoundPageId !== undefined || resolvedFaviconUrl !== undefined) {
+      void regeneratePublishedSiteFiles(driveId);
+    }
+
+    // Broadcast drive update event if name, drivePrompt, homePageId or the mark color changed
+    if (updatedDrive && (validatedBody.name || validatedBody.drivePrompt !== undefined || validatedBody.homePageId !== undefined || validatedBody.color !== undefined)) {
       const recipientUserIds = await getDriveRecipientUserIds(driveId);
       await broadcastDriveEvent(
         createDriveEventPayload(drive.id, 'updated', {
@@ -140,6 +277,10 @@ export async function PATCH(
       previousValues.drivePrompt = drive.drivePrompt;
       newValues.drivePrompt = updatedDrive?.drivePrompt ?? drive.drivePrompt;
     }
+    if (validatedBody.homePageId !== undefined) {
+      previousValues.homePageId = drive.homePageId;
+      newValues.homePageId = validatedBody.homePageId;
+    }
 
     const isMCP = isMCPAuthResult(auth);
     logDriveActivity(userId, 'update', {
@@ -156,6 +297,16 @@ export async function PATCH(
       previousValues: Object.keys(previousValues).length > 0 ? previousValues : undefined,
       newValues: Object.keys(newValues).length > 0 ? newValues : undefined,
     });
+
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'drive', resourceId: driveId, details: { operation: 'update' } });
+
+    // When the home page changes, sync the subdomain root immediately so `/`
+    // reflects the new home without requiring a manual republish. Best-effort,
+    // fire-and-forget — never blocks the response. An unpublished page set as
+    // home stays private (syncPublishedHomeRoot checks the published_pages table).
+    if (validatedBody.homePageId !== undefined) {
+      void syncPublishedHomeRoot(driveId);
+    }
 
     return NextResponse.json(updatedDrive);
   } catch (error) {
@@ -197,14 +348,22 @@ export async function DELETE(
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    // Check authorization
-    const access = await getDriveAccess(driveId, userId);
-    if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json(
+    // Home drives cannot be trashed.
+    if (isHomeDrive(drive)) {
+      return NextResponse.json({ error: homeDriveActionError(drive, 'trash') }, { status: 403 });
+    }
+
+    // Check authorization: owner/admin authority. Scoped tokens with an
+    // explicit role need OWNER/ADMIN; inherited keys use the owner's authority.
+    if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json(
         { error: 'Only drive owners and admins can delete drives' },
         { status: 403 }
-      );
+      ));
     }
+
+    // Trashing through org Owner/Admin power (an org drive the actor does not lead) is audited.
+    await recordOrgPowerDriveAction(actorFromAuth(auth), drive, 'trash');
 
     // Get recipients BEFORE trashing (ensures we have valid member list)
     const recipientUserIds = await getDriveRecipientUserIds(driveId);
@@ -220,6 +379,16 @@ export async function DELETE(
       }),
       recipientUserIds
     );
+
+    // ARCH-2: a trash ends live access for everyone but the owner (who reaches it through
+    // their trash), with no row deleted — re-resolve each recipient post-commit and kick
+    // the held rooms of those whose access ended.
+    await publishDriveTransitionInvalidation({
+      driveId,
+      orgIdBefore: drive.orgId,
+      orgIdAfter: drive.orgId,
+      audienceBefore: recipientUserIds,
+    });
 
     trackDriveOperation(userId, 'delete', driveId, {
       name: drive.name,
@@ -238,6 +407,8 @@ export async function DELETE(
       previousValues: { isTrashed: drive.isTrashed },
       newValues: { isTrashed: true },
     });
+
+    auditRequest(request, { eventType: 'data.delete', userId, resourceType: 'drive', resourceId: driveId, details: { operation: 'trash' } });
 
     return NextResponse.json({ success: true });
   } catch (error) {

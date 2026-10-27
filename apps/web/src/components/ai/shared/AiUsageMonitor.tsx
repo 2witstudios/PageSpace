@@ -1,13 +1,14 @@
 'use client';
 
 import { useEffect } from 'react';
+import { useAuth } from '@/hooks/useAuth';
 import { useAiUsage, usePageAiUsage } from '@/hooks/useAiUsage';
 import { Progress } from '@/components/ui/progress';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Activity, DollarSign, Database, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useSocketStore } from '@/stores/useSocketStore';
-import type { UsageEventPayload } from '@/lib/websocket';
+import type { CreditsEventPayload } from '@/lib/websocket';
 import { getUserFacingModelName } from '@/lib/ai/core/ai-providers-config';
 
 interface AiUsageMonitorProps {
@@ -28,6 +29,8 @@ interface AiUsageMonitorProps {
  * - For Page AI: pass both `conversationId` and `pageId` (will prioritize conversationId)
  */
 export function AiUsageMonitor({ conversationId, pageId, className, compact = false }: AiUsageMonitorProps) {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const connect = useSocketStore((state) => state.connect);
   const socket = useSocketStore((state) => state.socket);
 
@@ -46,15 +49,20 @@ export function AiUsageMonitor({ conversationId, pageId, className, compact = fa
     connect();
   }, [connect]);
 
-  // Socket.IO listener for real-time usage updates
-  // Reactive to `socket` so the listener is registered once the async connection completes
+  // Socket.IO listener for real-time usage updates. A `credits:updated` event fires
+  // after an AI call settles (it carries the new balance for the header widget); we
+  // piggyback on it as a "a call just completed, refresh my token/context view" ping.
+  // Reactive to `socket` so the listener is registered once the async connection completes.
   useEffect(() => {
     if (!socket) return;
 
-    const handleUsageUpdated = (payload: UsageEventPayload & { conversationId?: string; pageId?: string }) => {
-      // Skip events targeting a different conversation or page
-      if (payload.conversationId && payload.conversationId !== conversationId) return;
-      if (payload.pageId && payload.pageId !== pageId) return;
+    const handleCreditsUpdated = (payload: CreditsEventPayload) => {
+      // Skip events scoped to a different conversation or page (the AI-stream emitters
+      // set these hints; the funding emitter omits them, so unscoped events refresh).
+      // Only compare an id this monitor is actually scoped to: in page-agent mode
+      // conversationId is undefined here, so we must not drop events that carry one.
+      if (conversationId && payload.conversationId && payload.conversationId !== conversationId) return;
+      if (pageId && payload.pageId && payload.pageId !== pageId) return;
 
       if (conversationId) {
         mutateConversation();
@@ -63,10 +71,10 @@ export function AiUsageMonitor({ conversationId, pageId, className, compact = fa
       }
     };
 
-    socket.on('usage:updated', handleUsageUpdated);
+    socket.on('credits:updated', handleCreditsUpdated);
 
     return () => {
-      socket.off('usage:updated', handleUsageUpdated);
+      socket.off('credits:updated', handleCreditsUpdated);
     };
   }, [socket, conversationId, pageId, mutateConversation, mutatePage]);
 
@@ -147,8 +155,8 @@ export function AiUsageMonitor({ conversationId, pageId, className, compact = fa
             </TooltipContent>
           </Tooltip>
 
-          {/* Session Cost */}
-          {usage.billing.cost > 0 && (
+          {/* Session Cost — admin only */}
+          {isAdmin && usage.billing.cost > 0 && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <div className="flex items-center gap-1">
@@ -236,8 +244,8 @@ export function AiUsageMonitor({ conversationId, pageId, className, compact = fa
             </Tooltip>
           </div>
 
-          {/* Cost (if applicable) */}
-          {usage.billing.cost > 0 && (
+          {/* Cost — admin only */}
+          {isAdmin && usage.billing.cost > 0 && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <div className="flex items-center justify-between pt-1 text-xs">

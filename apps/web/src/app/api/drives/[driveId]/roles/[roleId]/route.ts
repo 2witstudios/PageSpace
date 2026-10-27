@@ -1,16 +1,16 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import {
-  checkDriveAccessForRoles,
-  getRoleById,
-  updateDriveRole,
-  deleteDriveRole,
-  validateRolePermissions,
-} from '@pagespace/lib/server';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { auditRequest } from '@pagespace/lib/audit/audit-log'
+import { checkDriveAccessForRoles, getRoleById, roleNotFoundMessage, updateDriveRole, deleteDriveRole, validateRolePermissions, validateRolePermissionsPatch, OpenRoleFloorError } from '@pagespace/lib/services/drive-role-service';
 import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
+import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
-const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 /**
  * Transform RolePermissions to Record<string, boolean> for audit logging.
@@ -36,25 +36,31 @@ export async function GET(
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
-    const userId = auth.userId;
 
     const { driveId, roleId } = await context.params;
 
+    const scopeError = checkMCPDriveScope(auth, driveId);
+    if (scopeError) return scopeError;
+
     // Check if user has access to this drive
-    const access = await checkDriveAccessForRoles(driveId, userId);
+    const access = await checkDriveAccessForRoles(driveId, actorFromAuth(auth));
 
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
 
     if (!access.isOwner && !access.isMember) {
-      return NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 }));
     }
 
     const role = await getRoleById(driveId, roleId);
 
     if (!role) {
-      return NextResponse.json({ error: 'Role not found' }, { status: 404 });
+      // `roleNotFoundMessage`, not a bare 'Role not found' — here and in PATCH
+      // and DELETE below: asking for a SYSTEM role name (member/admin/owner)
+      // can only ever miss whichever verb it arrives at, and the caller needs
+      // to be told where those live instead of being left at a dead end.
+      return NextResponse.json({ error: roleNotFoundMessage(roleId) }, { status: 404 });
     }
 
     return NextResponse.json({ role });
@@ -76,26 +82,29 @@ export async function PATCH(
 
     const { driveId, roleId } = await context.params;
 
+    const scopeError = checkMCPDriveScope(auth, driveId);
+    if (scopeError) return scopeError;
+
     // Check if user is owner or admin
-    const access = await checkDriveAccessForRoles(driveId, userId);
+    const access = await checkDriveAccessForRoles(driveId, actorFromAuth(auth));
 
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
 
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Only owners and admins can update roles' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only owners and admins can update roles' }, { status: 403 }));
     }
 
     // Check role exists
     const existingRole = await getRoleById(driveId, roleId);
 
     if (!existingRole) {
-      return NextResponse.json({ error: 'Role not found' }, { status: 404 });
+      return NextResponse.json({ error: roleNotFoundMessage(roleId) }, { status: 404 });
     }
 
     const body = await request.json();
-    const { name, description, color, isDefault, permissions } = body;
+    const { name, description, color, isDefault, permissions, permissionsPatch, driveWidePermissions } = body;
 
     // Validate name length if provided
     if (name !== undefined) {
@@ -105,18 +114,44 @@ export async function PATCH(
       }
     }
 
+    if (permissions !== undefined && permissionsPatch !== undefined) {
+      return NextResponse.json({ error: 'Cannot specify both permissions and permissionsPatch' }, { status: 400 });
+    }
+
     // Validate permissions structure if provided
     if (permissions !== undefined && !validateRolePermissions(permissions)) {
       return NextResponse.json({ error: 'Invalid permissions structure' }, { status: 400 });
     }
 
+    // permissionsPatch is a read-merge-write per-page patch: unlike `permissions`
+    // (a full-map replace), pages not named in the patch are left untouched — a
+    // single-page PATCH can never wipe another page's grant. `null` prunes a
+    // page's override rather than persisting an explicit all-false entry.
+    if (permissionsPatch !== undefined && !validateRolePermissionsPatch(permissionsPatch)) {
+      return NextResponse.json({ error: 'Invalid permissionsPatch structure' }, { status: 400 });
+    }
+
+    // Forward permissionsPatch to the service untouched: updateDriveRole
+    // merges it against the role row it locks inside its transaction. Merging
+    // here against the unlocked `existingRole` read above would reintroduce
+    // the read-modify-write race the patch input exists to prevent.
     const { role: updatedRole } = await updateDriveRole(driveId, roleId, {
       name,
       description,
       color,
       isDefault,
       permissions,
+      ...(permissionsPatch !== undefined && { permissionsPatch }),
+      ...(driveWidePermissions !== undefined && { driveWidePermissions }),
     });
+
+    // Broadcast role change so other admins see it live (best-effort — don't fail the request if it errors)
+    try {
+      const recipientUserIds = await getDriveRecipientUserIds(driveId);
+      await broadcastDriveEvent(createDriveEventPayload(driveId, 'updated', {}), recipientUserIds);
+    } catch (broadcastError) {
+      console.error('Failed to broadcast role update event for drive', driveId, broadcastError);
+    }
 
     // Log activity for audit trail
     const actorInfo = await getActorInfo(userId);
@@ -124,13 +159,24 @@ export async function PATCH(
       roleId,
       roleName: updatedRole.name,
       driveId,
-      permissions: permissions ? summarizePermissions(permissions) : undefined,
+      permissions: (permissions !== undefined || permissionsPatch !== undefined)
+        ? summarizePermissions(updatedRole.permissions)
+        : undefined,
       previousPermissions: summarizePermissions(existingRole.permissions),
+      driveWidePermissions: driveWidePermissions !== undefined ? (driveWidePermissions ?? null) : undefined,
+      previousDriveWidePermissions: existingRole.driveWidePermissions ?? null,
     }, actorInfo);
+
+    auditRequest(request, { eventType: 'authz.role.assigned', userId, resourceType: 'drive', resourceId: driveId, details: { roleId, operation: 'update' } });
 
     return NextResponse.json({ role: updatedRole });
   } catch (error) {
     console.error('Error updating role:', error);
+    // [D-OW-33] the write would give a role's holders more while the drive's org is lapsed.
+    if (isOrgLapsedError(error)) return orgLapsedResponse();
+    if (error instanceof OpenRoleFloorError) {
+      return NextResponse.json({ error: error.message, code: error.code, policy: error.policy }, { status: error.status });
+    }
     if (error instanceof Error && error.message.includes('unique')) {
       return NextResponse.json({ error: 'A role with this name already exists' }, { status: 409 });
     }
@@ -150,25 +196,36 @@ export async function DELETE(
 
     const { driveId, roleId } = await context.params;
 
+    const scopeError = checkMCPDriveScope(auth, driveId);
+    if (scopeError) return scopeError;
+
     // Check if user is owner or admin
-    const access = await checkDriveAccessForRoles(driveId, userId);
+    const access = await checkDriveAccessForRoles(driveId, actorFromAuth(auth));
 
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
 
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Only owners and admins can delete roles' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only owners and admins can delete roles' }, { status: 403 }));
     }
 
     // Check role exists
     const existingRole = await getRoleById(driveId, roleId);
 
     if (!existingRole) {
-      return NextResponse.json({ error: 'Role not found' }, { status: 404 });
+      return NextResponse.json({ error: roleNotFoundMessage(roleId) }, { status: 404 });
     }
 
     await deleteDriveRole(driveId, roleId);
+
+    // Broadcast role change so other admins see it live (best-effort — don't fail the request if it errors)
+    try {
+      const recipientUserIdsForDelete = await getDriveRecipientUserIds(driveId);
+      await broadcastDriveEvent(createDriveEventPayload(driveId, 'updated', {}), recipientUserIdsForDelete);
+    } catch (broadcastError) {
+      console.error('Failed to broadcast role delete event for drive', driveId, broadcastError);
+    }
 
     // Log activity for audit trail
     const actorInfo = await getActorInfo(userId);
@@ -179,9 +236,16 @@ export async function DELETE(
       previousPermissions: summarizePermissions(existingRole.permissions),
     }, actorInfo);
 
+    auditRequest(request, { eventType: 'authz.role.removed', userId, resourceType: 'drive', resourceId: driveId, details: { roleId } });
+
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error deleting role:', error);
+    // [D-OW-33] the write would give a role's holders more while the drive's org is lapsed.
+    if (isOrgLapsedError(error)) return orgLapsedResponse();
+    if (error instanceof OpenRoleFloorError) {
+      return NextResponse.json({ error: error.message, code: error.code, policy: error.policy }, { status: error.status });
+    }
     return NextResponse.json({ error: 'Failed to delete role' }, { status: 500 });
   }
 }

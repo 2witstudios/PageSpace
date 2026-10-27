@@ -5,68 +5,33 @@ import { useRouter } from "next/navigation";
 import { useMCP } from "@/hooks/useMCP";
 import { useAuth } from "@/hooks/useAuth";
 import { useBillingVisibility } from "@/hooks/useBillingVisibility";
+import { useCapacitor } from "@/hooks/useCapacitor";
 import { Button } from "@/components/ui/button";
-import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, ChevronRight, Keyboard, Sparkles, Eye, Cable, Calendar } from "lucide-react";
+import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, Keyboard, Sparkles, Eye, Cable, Calendar, Scale, HardDrive, SlashSquare, Coins, Cookie, FileText, Lock, KeyRound } from "lucide-react";
+import { SettingsRow, type SettingsItem } from "./SettingsRow";
+import { MarketingLink } from "@/components/ui/MarketingLink";
+import { filterSettingsItems } from "./settings-visibility";
+import { AccountOrganizationsSection } from "@/components/orgs/AccountOrganizationsSection";
 
-interface SettingsItem {
-  title: string;
-  description: string;
-  icon: typeof User;
-  href: string;
-  available: boolean;
-  desktopOnly?: boolean;
-  mobileHidden?: boolean;
-}
+const ADMIN_APP_URL = process.env.NEXT_PUBLIC_ADMIN_APP_URL || 'http://localhost:3005';
 
 interface SettingsSection {
   title: string;
   items: SettingsItem[];
 }
 
-function SettingsRow({ item, index }: { item: SettingsItem; index: number }) {
-  return (
-    <div
-      className={`
-        flex items-center gap-4 px-4 py-3 transition-colors
-        ${item.available ? "hover:bg-accent" : "opacity-50"}
-        ${index > 0 ? "border-t" : ""}
-      `}
-    >
-      <div className="flex-shrink-0">
-        <item.icon className="h-5 w-5 text-muted-foreground" />
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="font-medium">{item.title}</div>
-        <div className="text-sm text-muted-foreground truncate">
-          {item.description}
-        </div>
-      </div>
-      <div className="flex-shrink-0">
-        {!item.available ? (
-          <span className="text-xs text-muted-foreground">
-            Coming Soon
-          </span>
-        ) : (
-          <ChevronRight className="h-4 w-4 text-muted-foreground" />
-        )}
-      </div>
-    </div>
-  );
-}
-
 export default function SettingsPage() {
   const router = useRouter();
   const mcp = useMCP();
   const { user } = useAuth();
-  const { hideBilling } = useBillingVisibility();
+  const { showBilling, channel: billingChannel } = useBillingVisibility();
   const isDesktop = mcp.isDesktop;
   const isAdmin = user?.role === 'admin';
 
-  const filterItems = (items: SettingsItem[]) => items.filter((item) => {
-    if (item.desktopOnly && !isDesktop) return false;
-    if (item.mobileHidden && hideBilling) return false;
-    return true;
-  });
+  const { isNative } = useCapacitor();
+
+  const filterItems = (items: SettingsItem[]) =>
+    filterSettingsItems(items, { isDesktop, showBilling, isNative, billingChannel });
 
   const settingsSections: SettingsSection[] = [
     {
@@ -101,12 +66,35 @@ export default function SettingsPage() {
           available: true,
         },
         {
-          title: "Billing & Subscription",
-          description: "Manage your subscription and billing",
+          title: "Backups",
+          description: "Create and manage snapshots of your drives",
+          icon: HardDrive,
+          href: "/settings/backups",
+          available: true,
+        },
+        {
+          title: "Usage",
+          description: "Credits, usage breakdown, automations & storage",
+          icon: Coins,
+          href: "/settings/usage",
+          available: true,
+        },
+        {
+          title: "Billing",
+          description: "Subscription, payment methods & invoices",
           icon: CreditCard,
           href: "/settings/billing",
           available: true,
           mobileHidden: true,
+        },
+        {
+          // The iOS app has no Billing entry (Stripe); its plan sells through In-App Purchase.
+          title: "Plan",
+          description: "Your subscription",
+          icon: CreditCard,
+          href: "/settings/plan",
+          available: true,
+          appleChannelOnly: true,
         },
       ]),
     },
@@ -121,8 +109,15 @@ export default function SettingsPage() {
           available: true,
         },
         {
-          title: "AI API Keys",
-          description: "Configure AI provider API keys",
+          title: "Commands",
+          description: "Register pages as slash commands for AI",
+          icon: SlashSquare,
+          href: "/settings/commands",
+          available: true,
+        },
+        {
+          title: "AI Providers",
+          description: "Check which AI providers are available on this deployment",
           icon: Key,
           href: "/settings/ai",
           available: true,
@@ -147,6 +142,13 @@ export default function SettingsPage() {
           available: true,
         },
         {
+          title: "Agent Accounts",
+          description: "API keys your global assistant can use without ever seeing them",
+          icon: KeyRound,
+          href: "/settings/agent-accounts",
+          available: true,
+        },
+        {
           title: "MCP Connection",
           description: "Connect external tools to PageSpace (Cloud)",
           icon: Plug2,
@@ -163,13 +165,50 @@ export default function SettingsPage() {
         },
       ]),
     },
+    {
+      title: "Legal",
+      items: filterItems([
+        {
+          title: "Privacy Policy",
+          description: "How PageSpace collects and uses your data",
+          icon: Lock,
+          href: "/privacy",
+          available: true,
+          marketing: true,
+        },
+        {
+          title: "Terms of Service",
+          description: "The terms that govern your use of PageSpace",
+          icon: FileText,
+          href: "/terms",
+          available: true,
+          marketing: true,
+        },
+        {
+          title: "Privacy & Cookies",
+          description: "Review or withdraw cookie consent",
+          icon: Cookie,
+          href: "/settings/privacy",
+          available: true,
+          // Same reason the cookie banner is hidden there: App Review reads a cookie prompt as tracking.
+          nativeHidden: true,
+        },
+        {
+          title: "Open-source licenses",
+          description: "Third-party OSS attribution notices",
+          icon: Scale,
+          href: "/settings/legal/oss-licenses",
+          available: true,
+        },
+      ]),
+    },
     ...(isAdmin ? [{
       title: "Administration",
       items: [{
-        title: "Admin",
-        description: "System administration and debugging tools",
+        title: "Admin Console",
+        description: "System administration, monitoring, and debugging tools",
         icon: Shield,
-        href: "/admin",
+        href: ADMIN_APP_URL,
         available: true,
       }],
     }] : []),
@@ -194,17 +233,28 @@ export default function SettingsPage() {
       </div>
 
       <div className="space-y-8">
-        {settingsSections.map((section) => (
-          <div key={section.title}>
+        {settingsSections.map((section, sectionIndex) => (
+          <div key={section.title} className="space-y-8">
+            <div>
             <h2 className="text-sm font-medium text-muted-foreground mb-2 px-1">
               {section.title}
             </h2>
             <div className="rounded-lg border bg-card overflow-hidden">
               {section.items.map((item, index) =>
                 item.available ? (
-                  <Link key={item.href} href={item.href}>
-                    <SettingsRow item={item} index={index} />
-                  </Link>
+                  item.marketing ? (
+                    <MarketingLink key={item.href} href={item.href}>
+                      <SettingsRow item={item} index={index} />
+                    </MarketingLink>
+                  ) : item.href.startsWith('http') ? (
+                    <a key={item.href} href={item.href} target="_blank" rel="noopener noreferrer">
+                      <SettingsRow item={item} index={index} />
+                    </a>
+                  ) : (
+                    <Link key={item.href} href={item.href}>
+                      <SettingsRow item={item} index={index} />
+                    </Link>
+                  )
                 ) : (
                   <div
                     key={item.href}
@@ -216,6 +266,8 @@ export default function SettingsPage() {
                 )
               )}
             </div>
+            </div>
+            {sectionIndex === 0 ? <AccountOrganizationsSection /> : null}
           </div>
         ))}
       </div>

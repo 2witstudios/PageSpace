@@ -1,41 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db, eq, users } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
-import { getTierFromPrice } from '@/lib/stripe/price-config';
+import { tierFromInvoiceLines } from '@/lib/stripe/price-config';
+import { completeInvoiceLines } from '@/lib/stripe/invoice-lines';
 import { PLANS } from '@/lib/subscription/plans';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
 /**
  * Get a friendly plan name from invoice line items.
- * For proration invoices, finds the new plan (positive amount line).
+ * Resolves the configured plan across all subscription lines, including prorations.
  * Falls back to Stripe's description if plan can't be determined.
  */
 function getInvoiceDescription(invoice: Stripe.Invoice): string {
-  // Filter to subscription-related line items with pricing info
-  const subscriptionLines = invoice.lines.data.filter(
-    line => line.parent?.subscription_item_details && line.pricing?.price_details?.price
-  );
-
-  // Prefer the positive-amount line (new plan charge) over credits
-  const targetLine = subscriptionLines.find(line => line.amount > 0)
-    || subscriptionLines[0];
-
-  const priceData = targetLine?.pricing?.price_details?.price;
-  // In Stripe v20, price can be a string ID or expanded Price object
-  const priceId = typeof priceData === 'string' ? priceData : priceData?.id;
-  if (priceId) {
-    // Parse unit_amount_decimal to get cents for fallback tier detection
-    const unitAmount = targetLine.pricing?.unit_amount_decimal
-      ? Math.round(parseFloat(targetLine.pricing.unit_amount_decimal) * 100)
-      : null;
-    const tier = getTierFromPrice(priceId, unitAmount);
-    if (tier !== 'free') {
-      return PLANS[tier].displayName;
-    }
+  const tier = tierFromInvoiceLines(invoice.lines.data);
+  if (tier && tier !== 'free') {
+    return PLANS[tier].displayName;
   }
 
   return invoice.description || invoice.lines.data[0]?.description || 'Subscription';
@@ -70,6 +56,7 @@ export async function GET(request: NextRequest) {
     }
 
     if (!user.stripeCustomerId) {
+      auditRequest(request, { eventType: 'data.read', userId, resourceType: 'invoices', resourceId: 'list', details: { count: 0, hasCustomer: false } });
       return NextResponse.json({ invoices: [], hasMore: false });
     }
 
@@ -80,8 +67,11 @@ export async function GET(request: NextRequest) {
       starting_after: startingAfter,
     });
 
+    const completeInvoices = await Promise.all(invoices.data.map(completeInvoiceLines));
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'invoices', resourceId: 'list', details: { count: completeInvoices.length } });
+
     return NextResponse.json({
-      invoices: invoices.data.map(invoice => ({
+      invoices: completeInvoices.map(invoice => ({
         id: invoice.id,
         number: invoice.number,
         status: invoice.status,

@@ -1,0 +1,401 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// Table sentinels so the db mock can branch on which table `.from()` received.
+vi.mock('@pagespace/db/schema/credits', () => ({
+  creditHolds: { __t: 'holds' },
+}));
+// The balance row is the personal root wallet (X-5); `personalRootWalletOf` is recorded
+// so a test can pin that the read is scoped to it rather than to any wallet of the user.
+const { mockPersonalRootWalletOf } = vi.hoisted(() => ({
+  mockPersonalRootWalletOf: vi.fn((userId: string) => ({ personalRootOf: userId })),
+}));
+vi.mock('@pagespace/db/schema/wallets', () => ({
+  wallets: { __t: 'balances' },
+  personalRootWalletOf: mockPersonalRootWalletOf,
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({ users: { __t: 'users' } }));
+
+vi.mock('@pagespace/db/operators', () => ({
+  and: vi.fn(() => ({})),
+  eq: vi.fn(() => ({})),
+  gt: vi.fn(() => ({})),
+  sql: vi.fn(() => ({})),
+}));
+
+const { mockIsBillingEnabled } = vi.hoisted(() => ({ mockIsBillingEnabled: vi.fn(() => true) }));
+vi.mock('../../deployment-mode', () => ({ isBillingEnabled: mockIsBillingEnabled }));
+
+// Mutable fixtures the db mock reads.
+let balanceRows: Array<Record<string, unknown>> = [];
+let holdRows: Array<{ reserved: number }> = [{ reserved: 0 }];
+let userRows: Array<{ subscriptionTier: string }> = [{ subscriptionTier: 'free' }];
+
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    select: () => ({
+      from: (table: { __t: string }) => ({
+        where: () => {
+          const rows =
+            table.__t === 'balances' ? balanceRows : table.__t === 'holds' ? holdRows : userRows;
+          // Balance/users read via .limit(1); holds awaited directly. Support both by
+          // returning a thenable that also exposes .limit().
+          const thenable = {
+            limit: () => Promise.resolve(rows),
+            then: (resolve: (v: unknown) => unknown) => Promise.resolve(rows).then(resolve),
+          };
+          return thenable;
+        },
+      }),
+    }),
+  },
+}));
+
+import { getCreditBalance, readSpendableCents, resolveTier } from '../credit-balance';
+
+const future = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+const past = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockIsBillingEnabled.mockReturnValue(true);
+  balanceRows = [];
+  holdRows = [{ reserved: 0 }];
+  userRows = [{ subscriptionTier: 'free' }];
+});
+
+describe('getCreditBalance', () => {
+  it('returns a disabled summary when billing is off', async () => {
+    mockIsBillingEnabled.mockReturnValue(false);
+    const b = await getCreditBalance('u1', 'free');
+    expect(b.billingEnabled).toBe(false);
+    expect(b.spendable).toBe(0);
+  });
+
+  it('shows the tier allowance when no balance row exists yet', async () => {
+    balanceRows = [];
+    const b = await getCreditBalance('u1', 'free');
+    expect(b.billingEnabled).toBe(true);
+    expect(b.monthly.allowance).toBeGreaterThan(0);
+    expect(b.monthly.remaining).toBe(b.monthly.allowance);
+    expect(b.spendable).toBe(b.monthly.allowance);
+  });
+
+  it('reports active holds as reserved but does NOT subtract them from spendable when no row exists', async () => {
+    balanceRows = [];
+    holdRows = [{ reserved: 25 }];
+    const b = await getCreditBalance('u1', 'free');
+    // Display is gross of in-flight holds: reserved is surfaced separately, but the
+    // headline spendable stays the funded balance so it doesn't dip when a call starts.
+    expect(b.reserved).toBe(25);
+    expect(b.spendable).toBe(b.monthly.allowance);
+  });
+
+  it('uses stored remaining for a free tier within its period', async () => {
+    balanceRows = [
+      {
+        monthlyRemainingCents: 320,
+        monthlyAllowanceCents: 500,
+        topupRemainingCents: 1000,
+        monthlyPeriodEnd: future,
+      },
+    ];
+    const b = await getCreditBalance('u1', 'free');
+    expect(b.monthly.remaining).toBe(320);
+    expect(b.topup.remaining).toBe(1000);
+    expect(b.spendable).toBe(320 + 1000);
+  });
+
+  it('shows ZERO for a free tier whose period has lapsed with zero carry — the starter grant is one-time, nothing upcoming', async () => {
+    balanceRows = [
+      {
+        monthlyRemainingCents: 0,
+        monthlyAllowanceCents: 500,
+        topupRemainingCents: 0,
+        monthlyPeriodEnd: past,
+      },
+    ];
+    const b = await getCreditBalance('u1', 'free');
+    // No refill is ever coming: do NOT pre-credit the allowance.
+    expect(b.monthly.remaining).toBe(0);
+    expect(b.spendable).toBe(0);
+    expect(b.monthly.allowance).toBe(500);
+  });
+
+  it('shows only the stored remaining for a free tier with a carried balance past its window (no rollover)', async () => {
+    balanceRows = [
+      {
+        monthlyRemainingCents: 200,
+        monthlyAllowanceCents: 500,
+        topupRemainingCents: 0,
+        monthlyPeriodEnd: past,
+      },
+    ];
+    const b = await getCreditBalance('u1', 'free');
+    // 200 stored, no +500: the free grant never refills. The 200 stays spendable (no expiry).
+    expect(b.monthly.remaining).toBe(200);
+    expect(b.spendable).toBe(200);
+  });
+
+  it('shows actual debt for an expired free window; spendable goes negative because no reset will net it', async () => {
+    // 0¢ remaining, 300¢ debt, expired period. Free never resets, so nothing will absorb
+    // the debt — only a top-up purchase clears it. Display: remaining 0, debt 300, spendable −300.
+    balanceRows = [
+      {
+        monthlyRemainingCents: 0,
+        monthlyAllowanceCents: 500,
+        topupRemainingCents: 0,
+        debtCents: 300,
+        monthlyPeriodEnd: past,
+      },
+    ];
+    const b = await getCreditBalance('u1', 'free');
+    expect(b.monthly.remaining).toBe(0);
+    expect(b.debt).toBe(300);
+    expect(b.spendable).toBe(-300);
+  });
+
+  it('shows the stored monthly remaining for a paid tier whose period has lapsed (rollover: credits carry forward)', async () => {
+    balanceRows = [
+      {
+        monthlyRemainingCents: 900,
+        monthlyAllowanceCents: 1500,
+        topupRemainingCents: 250,
+        monthlyPeriodEnd: past,
+      },
+    ];
+    const b = await getCreditBalance('u1', 'pro');
+    // Rollover: credits never expire — show the stored remaining; the renewal will add
+    // the new allowance when invoice.paid fires.
+    expect(b.monthly.remaining).toBe(900);
+    expect(b.spendable).toBe(900 + 250);
+  });
+
+  it('surfaces a NEGATIVE spendable and the debt when the user is in the red', async () => {
+    // Debt accrues only after both buckets are exhausted, so monthly/topup are 0.
+    balanceRows = [
+      {
+        monthlyRemainingCents: 0,
+        monthlyAllowanceCents: 1500,
+        topupRemainingCents: 0,
+        debtCents: 250,
+        monthlyPeriodEnd: future,
+      },
+    ];
+    const b = await getCreditBalance('u1', 'pro');
+    expect(b.debt).toBe(250);
+    // Not clamped: the user owes $2.50, shown as a negative balance.
+    expect(b.spendable).toBe(-250);
+  });
+
+  it('reports debt: 0 when no balance row exists', async () => {
+    balanceRows = [];
+    const b = await getCreditBalance('u1', 'free');
+    expect(b.debt).toBe(0);
+  });
+
+  it('does not let in-flight holds reduce the displayed spendable', async () => {
+    balanceRows = [
+      {
+        monthlyRemainingCents: 10,
+        monthlyAllowanceCents: 500,
+        topupRemainingCents: 0,
+        monthlyPeriodEnd: future,
+      },
+    ];
+    holdRows = [{ reserved: 50 }];
+    const b = await getCreditBalance('u1', 'free');
+    // Holds larger than the balance must NOT drive the headline to 0 mid-call; the
+    // gate enforces overspend independently. Spendable stays the funded balance.
+    expect(b.reserved).toBe(50);
+    expect(b.spendable).toBe(10);
+  });
+
+  describe('monthly.periodEnd display projection', () => {
+    it('returns an active periodEnd as-is (ISO string) for a refilling tier', async () => {
+      balanceRows = [
+        {
+          monthlyRemainingCents: 400,
+          monthlyAllowanceCents: 1500,
+          topupRemainingCents: 0,
+          monthlyPeriodEnd: future,
+        },
+      ];
+      const b = await getCreditBalance('u1', 'pro');
+      expect(b.monthly.periodEnd).toBe(future.toISOString());
+    });
+
+    it('returns null periodEnd for a free user even inside an active window — the grant never renews', async () => {
+      balanceRows = [
+        {
+          monthlyRemainingCents: 400,
+          monthlyAllowanceCents: 500,
+          topupRemainingCents: 0,
+          monthlyPeriodEnd: future,
+        },
+      ];
+      const b = await getCreditBalance('u1', 'free');
+      expect(b.monthly.periodEnd).toBeNull();
+    });
+
+    it('returns null periodEnd for a free user with an expired period — no phantom "renews on" date', async () => {
+      balanceRows = [
+        {
+          monthlyRemainingCents: 0,
+          monthlyAllowanceCents: 500,
+          topupRemainingCents: 0,
+          monthlyPeriodEnd: past,
+        },
+      ];
+      const b = await getCreditBalance('u1', 'free');
+      expect(b.monthly.periodEnd).toBeNull();
+    });
+
+    it('projects addOneMonth(pastPeriodEnd) for a paid user with an expired period — shows next expected Stripe cycle date', async () => {
+      balanceRows = [
+        {
+          monthlyRemainingCents: 900,
+          monthlyAllowanceCents: 1500,
+          topupRemainingCents: 0,
+          monthlyPeriodEnd: past,
+        },
+      ];
+      const b = await getCreditBalance('u1', 'pro');
+      expect(b.monthly.periodEnd).not.toBeNull();
+      expect(new Date(b.monthly.periodEnd!).getTime()).toBeGreaterThan(Date.now());
+    });
+
+    it('returns null periodEnd for a free user when no periodEnd has been stamped yet (null in DB)', async () => {
+      balanceRows = [
+        {
+          monthlyRemainingCents: 500,
+          monthlyAllowanceCents: 500,
+          topupRemainingCents: 0,
+          monthlyPeriodEnd: null,
+        },
+      ];
+      const b = await getCreditBalance('u1', 'free');
+      expect(b.monthly.periodEnd).toBeNull();
+    });
+
+    it('pre-credits the pending starter grant for a free bare top-up row (no period stamped) — the gate grants it on next call', async () => {
+      balanceRows = [
+        {
+          monthlyRemainingCents: 0,
+          monthlyAllowanceCents: 0,
+          topupRemainingCents: 2500,
+          monthlyPeriodEnd: null,
+        },
+      ];
+      const b = await getCreditBalance('u1', 'free');
+      expect(b.monthly.remaining).toBe(500);
+      expect(b.spendable).toBe(3000);
+      expect(await readSpendableCents('u1', 'free')).toBe(3000); // lean read agrees
+    });
+
+    it('does NOT pre-credit a free row whose period IS stamped (the grant already landed)', async () => {
+      balanceRows = [
+        {
+          monthlyRemainingCents: 120,
+          monthlyAllowanceCents: 500,
+          topupRemainingCents: 0,
+          monthlyPeriodEnd: past,
+        },
+      ];
+      const b = await getCreditBalance('u1', 'free');
+      expect(b.monthly.remaining).toBe(120);
+      expect(b.spendable).toBe(120);
+    });
+
+    it('projects addOneMonth(now) for a paid user when no periodEnd has been stamped yet (null in DB)', async () => {
+      balanceRows = [
+        {
+          monthlyRemainingCents: 1500,
+          monthlyAllowanceCents: 1500,
+          topupRemainingCents: 0,
+          monthlyPeriodEnd: null,
+        },
+      ];
+      const b = await getCreditBalance('u1', 'pro');
+      expect(b.monthly.periodEnd).not.toBeNull();
+      expect(new Date(b.monthly.periodEnd!).getTime()).toBeGreaterThan(Date.now());
+    });
+  });
+});
+
+describe('readSpendableCents — the routing edge lean read', () => {
+  /** A funded row with a live period. */
+  const funded = (over: Record<string, unknown> = {}) => [{
+    monthlyRemainingCents: 500,
+    monthlyAllowanceCents: 500,
+    topupRemainingCents: 0,
+    debtCents: 0,
+    monthlyPeriodEnd: future,
+    ...over,
+  }];
+
+  it('never reads credit_holds — that aggregate is the reason this function exists', async () => {
+    balanceRows = funded();
+    // A hold big enough to change the answer if it were subtracted.
+    holdRows = [{ reserved: 100_000 }];
+
+    expect(await readSpendableCents('u1', 'pro')).toBe(500);
+  });
+
+  it('WAL-1 (partial): both balance reads are scoped to the personal root wallet, never any wallet of the user', async () => {
+    balanceRows = funded();
+    await readSpendableCents('u1', 'pro');
+    await getCreditBalance('u1', 'pro');
+    expect(mockPersonalRootWalletOf.mock.calls).toEqual([['u1'], ['u1']]);
+  });
+
+  it('agrees with the display read for a funded row', async () => {
+    balanceRows = funded();
+    const [lean, display] = [await readSpendableCents('u1', 'pro'), await getCreditBalance('u1', 'pro')];
+    expect(lean).toBe(display.spendable);
+  });
+
+  it('agrees with the display read when no row exists yet', async () => {
+    balanceRows = [];
+    const [lean, display] = [await readSpendableCents('u1', 'free'), await getCreditBalance('u1', 'free')];
+    expect(lean).toBe(display.spendable);
+    expect(lean).toBeGreaterThan(0);
+  });
+
+  it('agrees with the display read for a free user whose window has lapsed (no pre-credit: only top-up remains)', async () => {
+    // Free never refills, so a lapsed window adds nothing; whatever top-up is funded is
+    // all that's spendable, and both reads must agree on that.
+    balanceRows = funded({ monthlyRemainingCents: 0, monthlyPeriodEnd: past });
+    const [lean, display] = [await readSpendableCents('u1', 'free'), await getCreditBalance('u1', 'free')];
+    expect(lean).toBe(display.spendable);
+    expect(lean).toBe(display.topup.remaining);
+  });
+
+  it('agrees with the display read for a user in debt, and goes negative', async () => {
+    balanceRows = funded({ monthlyRemainingCents: 0, topupRemainingCents: 0, debtCents: 750 });
+    const [lean, display] = [await readSpendableCents('u1', 'pro'), await getCreditBalance('u1', 'pro')];
+    expect(lean).toBe(display.spendable);
+    expect(lean).toBeLessThan(0);
+  });
+
+  it('clamps at zero when there is no debt', async () => {
+    balanceRows = funded({ monthlyRemainingCents: 0, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: future });
+    expect(await readSpendableCents('u1', 'pro')).toBe(0);
+  });
+});
+
+describe('resolveTier', () => {
+  it.each(['business', 'founder', 'unknown'])('A-9 gives no personal paid entitlement to %s', async (subscriptionTier) => {
+    userRows = [{ subscriptionTier }];
+    expect(await resolveTier('u1')).toBe('free');
+  });
+
+  it('returns the stored subscription tier', async () => {
+    userRows = [{ subscriptionTier: 'pro' }];
+    expect(await resolveTier('u1')).toBe('pro');
+  });
+
+  it('defaults to free when the user has no stored tier', async () => {
+    userRows = [{ subscriptionTier: null as unknown as string }];
+    expect(await resolveTier('u1')).toBe('free');
+  });
+});

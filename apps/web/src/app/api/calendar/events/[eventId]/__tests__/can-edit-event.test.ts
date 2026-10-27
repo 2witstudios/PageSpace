@@ -17,8 +17,8 @@ vi.mock('next/server', async () => {
   };
 });
 
-vi.mock('@pagespace/db', () => ({
-  db: {
+vi.mock('@pagespace/db/db', () => {
+  const db = {
     query: {
       calendarEvents: { findFirst: vi.fn() },
       eventAttendees: { findFirst: vi.fn() },
@@ -35,7 +35,15 @@ vi.mock('@pagespace/db', () => ({
         where: vi.fn().mockResolvedValue([]),
       })),
     })),
-  },
+    transaction: vi.fn(async (cb: (tx: unknown) => unknown) => cb(db)),
+  };
+  return { db };
+});
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn((...args: unknown[]) => args),
+}));
+vi.mock('@pagespace/db/schema/calendar', () => ({
   calendarEvents: {
     id: 'id',
     driveId: 'driveId',
@@ -47,16 +55,29 @@ vi.mock('@pagespace/db', () => ({
     eventId: 'eventId',
     userId: 'userId',
   },
-  eq: vi.fn(),
-  and: vi.fn((...args: unknown[]) => args),
 }));
 
-vi.mock('@pagespace/lib', () => ({
+vi.mock('@pagespace/db/schema/calendar-triggers', () => ({
+  calendarTriggers: {
+    calendarEventId: 'calendarEventId',
+    status: 'status',
+  },
+}));
+
+// timestamp-utils is pure; the real parser is used rather than a partial stub.
+
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isUserDriveMember: vi.fn(),
   isDriveOwnerOrAdmin: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/services/calendar-event-drive-service', () => ({
+  isUserMemberOfAnyEventDrive: vi.fn().mockResolvedValue(false),
+  getAllDriveIdsForEvent: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: {
       info: vi.fn(),
@@ -65,6 +86,12 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('../../../../../../lib/auth', () => ({
@@ -73,6 +100,18 @@ vi.mock('../../../../../../lib/auth', () => ({
     return typeof result === 'object' && result !== null && 'error' in result;
   }),
   checkMCPDriveScope: vi.fn(() => null), // Default: MCP scope check passes
+  isScopedMCPAuth: (auth: { tokenType?: string; allowedDriveIds?: string[] }) =>
+    auth?.tokenType === 'mcp' && ((auth.allowedDriveIds?.length ?? 0) > 0),
+  // Principal dispatch: session auth falls through to the user-level checks,
+  // so delegate to the mocked permissions fns to keep call-arg assertions.
+  isPrincipalDriveMember: vi.fn(async (auth: { userId: string }, driveId: string) => {
+    const { isUserDriveMember } = await import('@pagespace/lib/permissions/permissions');
+    return isUserDriveMember(credentialActor(auth.userId, null), driveId);
+  }),
+  isPrincipalDriveOwnerOrAdmin: vi.fn(async (auth: { userId: string }, driveId: string) => {
+    const { isDriveOwnerOrAdmin } = await import('@pagespace/lib/permissions/permissions');
+    return isDriveOwnerOrAdmin(credentialActor(auth.userId, null), driveId);
+  }),
 }));
 
 vi.mock('../../../../../../lib/websocket/calendar-events', () => ({
@@ -85,9 +124,10 @@ vi.mock('../../../../../../lib/integrations/google-calendar/push-service', () =>
 }));
 
 import { PATCH } from '../route';
-import { db } from '@pagespace/db';
-import { isDriveOwnerOrAdmin } from '@pagespace/lib';
+import { db } from '@pagespace/db/db';
+import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions } from '../../../../../../lib/auth';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ============================================================================
 // Test Helpers
@@ -108,6 +148,15 @@ const mockWebAuth = (userId: string): SessionAuthResult => ({
   sessionId: 'test-session-id',
   role: 'user',
   adminRoleVersion: 0,
+});
+
+// A drive-scoped MCP token (allowedDriveIds non-empty) — matches the
+// isScopedMCPAuth mock above (tokenType === 'mcp' && allowedDriveIds.length > 0).
+const mockScopedMcpAuth = (userId: string) => ({
+  userId,
+  tokenType: 'mcp' as const,
+  tokenId: 'mcp-token-1',
+  allowedDriveIds: [DRIVE_ID],
 });
 
 const createMockEvent = (overrides: Record<string, unknown> = {}) => ({
@@ -159,11 +208,12 @@ function createContext(): { params: Promise<{ eventId: string }> } {
 
 /**
  * Helper to set up db mocks for a PATCH request flow.
- * The PATCH handler calls:
+ * The PATCH handler:
  *   1. db.query.calendarEvents.findFirst (get existing event)
- *   2. db.update().set().where().returning() (update the event)
+ *   2. db.transaction(cb) — wraps update + optional trigger sync
  *   3. db.query.calendarEvents.findFirst (fetch complete event with relations)
  *   4. db.select().from().where() (get attendee IDs)
+ * The transaction mock passes `db` itself as `tx` so update/set/where chains work.
  */
 function setupDbMocksForPatch(event: ReturnType<typeof createMockEvent>) {
   const findFirstMock = vi.fn()
@@ -176,6 +226,9 @@ function setupDbMocksForPatch(event: ReturnType<typeof createMockEvent>) {
   const whereMock = vi.fn(() => ({ returning: returningMock }));
   const setMock = vi.fn(() => ({ where: whereMock }));
   (db.update as Mock).mockReturnValue({ set: setMock });
+
+  // transaction passes db itself as the tx object
+  (db.transaction as Mock).mockImplementation(async (cb: (tx: typeof db) => unknown) => cb(db));
 
   const selectWhereMock = vi.fn().mockResolvedValue([]);
   const selectFromMock = vi.fn(() => ({ where: selectWhereMock }));
@@ -212,7 +265,7 @@ describe('PATCH /api/calendar/events/[eventId] — canEditEvent auth policy', ()
     const response = await PATCH(createPatchRequest(), createContext());
     expect(response.status).toBe(200);
 
-    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(ADMIN_ID, DRIVE_ID);
+    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(expect.objectContaining({ userId: ADMIN_ID }), DRIVE_ID);
   });
 
   it('returns 200 when a drive owner edits a drive event', async () => {
@@ -224,7 +277,7 @@ describe('PATCH /api/calendar/events/[eventId] — canEditEvent auth policy', ()
     const response = await PATCH(createPatchRequest(), createContext());
     expect(response.status).toBe(200);
 
-    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(OWNER_ID, DRIVE_ID);
+    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(expect.objectContaining({ userId: OWNER_ID }), DRIVE_ID);
   });
 
   it('returns 403 when a regular drive member tries to edit', async () => {
@@ -278,5 +331,32 @@ describe('PATCH /api/calendar/events/[eventId] — canEditEvent auth policy', ()
 
     // isDriveOwnerOrAdmin should NOT be called; creator short-circuits
     expect(isDriveOwnerOrAdmin).not.toHaveBeenCalled();
+  });
+
+  // #1846 Codex P2 (2nd round): a scoped MCP token can now create a personal
+  // (driveless) event (calendar/events/route.ts fix) — it must also be able
+  // to read/edit/delete that SAME event it created, or the create is a
+  // permanent dead end. It must still have no power over a driveless event
+  // created by a DIFFERENT user.
+  it('returns 200 when a scoped MCP token edits a personal event it created itself', async () => {
+    const personalEvent = createMockEvent({ driveId: null, createdById: CREATOR_ID });
+    (authenticateRequestWithOptions as Mock).mockResolvedValue(mockScopedMcpAuth(CREATOR_ID));
+    setupDbMocksForPatch(personalEvent);
+
+    const response = await PATCH(createPatchRequest(), createContext());
+    expect(response.status).toBe(200);
+    expect(isDriveOwnerOrAdmin).not.toHaveBeenCalled();
+  });
+
+  it('returns 403 when a scoped MCP token tries to edit a personal event created by someone else', async () => {
+    const personalEvent = createMockEvent({ driveId: null, createdById: CREATOR_ID });
+    (authenticateRequestWithOptions as Mock).mockResolvedValue(mockScopedMcpAuth(OUTSIDER_ID));
+    (db.query.calendarEvents.findFirst as Mock).mockResolvedValue(personalEvent);
+
+    const response = await PATCH(createPatchRequest(), createContext());
+    expect(response.status).toBe(403);
+
+    const body = await response.json();
+    expect(body.error).toBe('You do not have permission to edit this event');
   });
 });

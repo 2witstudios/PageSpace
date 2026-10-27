@@ -1,0 +1,144 @@
+import { NextResponse } from 'next/server';
+import { authenticateRequestWithOptions, isAuthError, canPrincipalEditPage } from '@/lib/auth';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
+import { channelMessageRepository } from '@pagespace/lib/services/channel-message-repository';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
+
+const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+
+type RouteParams = { params: Promise<{ pageId: string; messageId: string }> };
+
+/**
+ * PATCH /api/channels/[pageId]/messages/[messageId]
+ * Edit a channel message (own messages only, requires edit permission)
+ */
+export async function PATCH(req: Request, { params }: RouteParams) {
+  const { pageId, messageId } = await params;
+
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  if (isAuthError(auth)) return auth.error;
+  const userId = auth.userId;
+
+  const canEdit = await canPrincipalEditPage(auth, pageId);
+  if (!canEdit) {
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'You need edit permission to modify channel messages' }, { status: 403 }));
+  }
+
+  const message = await channelMessageRepository.findChannelMessageInPage({ messageId, pageId });
+
+  if (!message) {
+    return NextResponse.json({ error: 'Message not found' }, { status: 404 });
+  }
+
+  if (message.userId !== userId) {
+    return NextResponse.json({ error: 'You can only edit your own messages' }, { status: 403 });
+  }
+
+  if (message.aiMeta) {
+    return NextResponse.json({ error: 'AI messages cannot be edited' }, { status: 403 });
+  }
+
+  const { content } = await req.json() as { content: string };
+  if (!content || typeof content !== 'string' || !content.trim()) {
+    return NextResponse.json({ error: 'Content is required' }, { status: 400 });
+  }
+
+  const editedAt = new Date();
+  await channelMessageRepository.updateChannelMessageContent({
+    messageId,
+    content: content.trim(),
+    editedAt,
+  });
+
+  auditRequest(req, {
+    eventType: 'data.write',
+    userId,
+    resourceType: 'channel_message',
+    resourceId: messageId,
+    details: { pageId },
+  });
+
+  if (process.env.INTERNAL_REALTIME_URL) {
+    try {
+      const requestBody = JSON.stringify({
+        channelId: pageId,
+        event: 'message_edited',
+        payload: { messageId, content: content.trim(), editedAt: editedAt.toISOString() },
+      });
+      await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
+        method: 'POST',
+        headers: createSignedBroadcastHeaders(requestBody),
+        body: requestBody,
+      });
+    } catch (error) {
+      loggers.realtime.error('Failed to broadcast message_edited:', error as Error);
+    }
+  }
+
+  return NextResponse.json({ id: messageId, content: content.trim(), editedAt: editedAt.toISOString() });
+}
+
+/**
+ * DELETE /api/channels/[pageId]/messages/[messageId]
+ * Soft-delete a channel message (own messages only, requires edit permission)
+ */
+export async function DELETE(req: Request, { params }: RouteParams) {
+  const { pageId, messageId } = await params;
+
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  if (isAuthError(auth)) return auth.error;
+  const userId = auth.userId;
+
+  const canEdit = await canPrincipalEditPage(auth, pageId);
+  if (!canEdit) {
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'You need edit permission to modify channel messages' }, { status: 403 }));
+  }
+
+  const message = await channelMessageRepository.findChannelMessageInPage({ messageId, pageId });
+
+  if (!message) {
+    return NextResponse.json({ error: 'Message not found' }, { status: 404 });
+  }
+
+  if (message.userId !== userId) {
+    return NextResponse.json({ error: 'You can only delete your own messages' }, { status: 403 });
+  }
+
+  // softDeleteChannelMessage is gated on isActive=true, so a concurrent or
+  // duplicate DELETE returns 0 affected rows. Surface that as a 404 instead of
+  // re-broadcasting message_deleted (and re-auditing) for an already-deleted
+  // row.
+  const deleted = await channelMessageRepository.softDeleteChannelMessage(messageId);
+  if (deleted === 0) {
+    return NextResponse.json({ error: 'Message not found' }, { status: 404 });
+  }
+
+  auditRequest(req, {
+    eventType: 'data.delete',
+    userId,
+    resourceType: 'channel_message',
+    resourceId: messageId,
+    details: { pageId },
+  });
+
+  if (process.env.INTERNAL_REALTIME_URL) {
+    try {
+      const requestBody = JSON.stringify({
+        channelId: pageId,
+        event: 'message_deleted',
+        payload: { messageId },
+      });
+      await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
+        method: 'POST',
+        headers: createSignedBroadcastHeaders(requestBody),
+        body: requestBody,
+      });
+    } catch (error) {
+      loggers.realtime.error('Failed to broadcast message_deleted:', error as Error);
+    }
+  }
+
+  return NextResponse.json({ success: true });
+}

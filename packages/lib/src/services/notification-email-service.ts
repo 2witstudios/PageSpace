@@ -1,6 +1,13 @@
-import { db, users, emailNotificationPreferences, emailNotificationLog, emailUnsubscribeTokens, eq, and } from '@pagespace/db';
-import { sendEmail } from './email-service';
+import { db } from '@pagespace/db/db';
+import { eq, and } from '@pagespace/db/operators';
+import { users, emailUnsubscribeTokens } from '@pagespace/db/schema/auth';
+import { emailNotificationPreferences, emailNotificationLog } from '@pagespace/db/schema/email-notifications';
+import { sendEmail, resolveAppUrl } from './email-service';
 import { DriveInvitationEmail } from '../email-templates/DriveInvitationEmail';
+import { OrgInvitationEmail } from '../email-templates/OrgInvitationEmail';
+import { DomainVerificationEmail } from '../email-templates/DomainVerificationEmail';
+import { ConnectionInvitationEmail } from '../email-templates/ConnectionInvitationEmail';
+import { PageShareInvitationEmail } from '../email-templates/PageShareInvitationEmail';
 import { DirectMessageEmail } from '../email-templates/DirectMessageEmail';
 import { ConnectionRequestEmail } from '../email-templates/ConnectionRequestEmail';
 import { PageSharedEmail } from '../email-templates/PageSharedEmail';
@@ -12,10 +19,12 @@ import { PermissionUpdatedEmail } from '../email-templates/PermissionUpdatedEmai
 import { DriveJoinedEmail } from '../email-templates/DriveJoinedEmail';
 import { DriveRoleChangedEmail } from '../email-templates/DriveRoleChangedEmail';
 import { hashToken, getTokenPrefix } from '../auth/token-utils';
+import { decryptUserRow } from '../auth/user-repository';
+import { decryptField } from '../encryption/field-crypto';
 import { randomBytes } from 'crypto';
 import type { ReactElement } from 'react';
 
-type NotificationType =
+export type NotificationType =
   | 'PERMISSION_GRANTED'
   | 'PERMISSION_REVOKED'
   | 'PERMISSION_UPDATED'
@@ -30,7 +39,13 @@ type NotificationType =
   | 'EMAIL_VERIFICATION_REQUIRED'
   | 'TOS_PRIVACY_UPDATED'
   | 'MENTION'
-  | 'TASK_ASSIGNED';
+  | 'TASK_ASSIGNED'
+  // In-app only (SPEND-6): no email is sent for it, but the column type is the db enum.
+  | 'AUTOMATION_SKIPPED'
+  // In-app only (WAL-6e): the funder's once-per-period notice that a wallet is in debt.
+  | 'WALLET_DEBT'
+  | 'WALLET_CAP_ALERT'
+  | 'PRODUCT_UPDATE';
 
 interface NotificationEmailData {
   userId: string;
@@ -41,7 +56,10 @@ interface NotificationEmailData {
 
 // Generate unsubscribe token for a specific user and notification type
 // Uses opaque tokens stored in database (replaces JWT for P5-T5 Legacy JWT Deprecation)
-async function generateUnsubscribeToken(userId: string, notificationType: NotificationType): Promise<string> {
+// Exported so one-off broadcast scripts mint their opt-out links through the
+// same token table (and therefore the same /api/notifications/unsubscribe flow)
+// as the per-event notification emails.
+export async function generateUnsubscribeToken(userId: string, notificationType: NotificationType): Promise<string> {
   // Generate opaque token with prefix for identification
   const token = `ps_unsub_${randomBytes(24).toString('base64url')}`;
   const tokenHash = hashToken(token);
@@ -108,7 +126,7 @@ interface TemplateData {
 }
 
 function getEmailTemplate(data: NotificationEmailData, user: { name: string; email: string }, unsubscribeUrl: string): TemplateData | null {
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+  const appUrl = resolveAppUrl();
 
   switch (data.type) {
     case 'DRIVE_INVITED':
@@ -130,7 +148,7 @@ function getEmailTemplate(data: NotificationEmailData, user: { name: string; ema
           userName: user.name,
           senderName: (data.metadata.senderName as string) || 'Someone',
           messagePreview: (data.metadata.messagePreview as string) || 'New message received',
-          viewUrl: `${appUrl}/dashboard/messages/${data.metadata.conversationId}`,
+          viewUrl: `${appUrl}/dashboard/dms/${data.metadata.conversationId}`,
           unsubscribeUrl,
         }),
       };
@@ -257,10 +275,170 @@ function getEmailTemplate(data: NotificationEmailData, user: { name: string; ema
         }),
       };
 
-    default:
-      // No email template for this notification type
+    // No per-event email, each deliberately. Listed by name so the switch is exhaustive:
+    // a NEW type reaches the `never` below and fails typecheck until someone decides
+    // whether it gets a template or joins this list.
+    case 'EMAIL_VERIFICATION_REQUIRED':
+    case 'TOS_PRIVACY_UPDATED':
+    case 'MENTION':
+    case 'TASK_ASSIGNED':
+    case 'PRODUCT_UPDATE': // broadcast-only (email_broadcasts), never a per-event email
+    case 'AUTOMATION_SKIPPED': // in-app only (SPEND-6): the drive lead's skip notice
+    case 'WALLET_DEBT': // in-app only (WAL-6e): the funder's debt notice
+    case 'WALLET_CAP_ALERT': // in-app only (WAL-7): the funder's 80% / 100% cap alert
       return null;
+
+    default: {
+      const unhandled: never = data.type;
+      return unhandled;
+    }
   }
+}
+
+/**
+ * Strip CR/LF and other ASCII control characters from a string before
+ * interpolating it into an email subject or other header. Defends against
+ * header-injection attempts (e.g., "Eve\r\nBcc: attacker@evil.com").
+ */
+function stripHeaderControls(input: string): string {
+  // eslint-disable-next-line no-control-regex
+  return input.replace(/[\x00-\x1f\x7f]/g, '');
+}
+
+/**
+ * Send a "you've been invited to a drive" email to a recipient who does not
+ * yet hold an active session. The route mints a single-use invite token,
+ * encodes it into inviteUrl pointing at the consent screen, and hands it
+ * here. Errors propagate so the caller can decide whether to surface a 5xx.
+ */
+export async function sendPendingDriveInvitationEmail(input: {
+  recipientEmail: string;
+  inviterName: string;
+  driveName: string;
+  inviteUrl: string;
+}): Promise<void> {
+  const safeInviterName = stripHeaderControls(input.inviterName) || 'Someone';
+  const safeDriveName = stripHeaderControls(input.driveName) || 'a workspace';
+
+  await sendEmail({
+    to: input.recipientEmail,
+    subject: `${safeInviterName} invited you to ${safeDriveName} on PageSpace`,
+    react: DriveInvitationEmail({
+      userName: input.recipientEmail,
+      inviterName: safeInviterName,
+      driveName: safeDriveName,
+      acceptUrl: input.inviteUrl,
+    }),
+  });
+}
+
+/**
+ * Send an organization invitation (Spec ORG-3). Transactional: it goes to an
+ * address the inviter typed, which may have no account yet. Errors propagate so
+ * the route can report a failed send; the invite row stays and can be resent.
+ */
+export async function sendOrgInvitationEmail(input: {
+  recipientEmail: string;
+  inviterName: string;
+  orgName: string;
+  role: 'ADMIN' | 'MEMBER';
+  expiresInDays: number;
+  inviteUrl: string;
+}): Promise<void> {
+  const safeInviterName = stripHeaderControls(input.inviterName) || 'Someone';
+  const safeOrgName = stripHeaderControls(input.orgName) || 'an organization';
+
+  await sendEmail({
+    to: input.recipientEmail,
+    subject: `${safeInviterName} invited you to join ${safeOrgName} on PageSpace`,
+    react: OrgInvitationEmail({
+      userName: input.recipientEmail,
+      inviterName: safeInviterName,
+      orgName: safeOrgName,
+      roleLabel: input.role === 'ADMIN' ? 'an Admin' : 'a Member',
+      expiresInDays: input.expiresInDays,
+      acceptUrl: input.inviteUrl,
+    }),
+  });
+}
+
+/**
+ * The domain-ownership proof for a verified email domain (SEC-1), sent to one of the domain's
+ * administrative mailboxes. Errors propagate so the caller can withdraw the stored token.
+ */
+export async function sendDomainVerificationEmail(input: {
+  recipientEmail: string;
+  orgName: string;
+  domain: string;
+  expiresInHours: number;
+  verifyUrl: string;
+}): Promise<void> {
+  const safeOrgName = stripHeaderControls(input.orgName) || 'an organization';
+  await sendEmail({
+    to: input.recipientEmail,
+    subject: `Verify ${input.domain} for ${safeOrgName} on PageSpace`,
+    react: DomainVerificationEmail({
+      orgName: safeOrgName,
+      domain: input.domain,
+      expiresInHours: input.expiresInHours,
+      verifyUrl: input.verifyUrl,
+    }),
+  });
+}
+
+/**
+ * Send a "someone wants to connect with you" invite email to a recipient who
+ * does not yet hold a PageSpace account. Errors propagate so the caller can
+ * compensating-delete the pending row on SMTP failure.
+ */
+export async function sendPendingConnectionInvitationEmail(input: {
+  recipientEmail: string;
+  inviterName: string;
+  message?: string;
+  inviteUrl: string;
+}): Promise<void> {
+  const safeInviterName = stripHeaderControls(input.inviterName) || 'Someone';
+
+  await sendEmail({
+    to: input.recipientEmail,
+    subject: `${safeInviterName} wants to connect on PageSpace`,
+    react: ConnectionInvitationEmail({
+      recipientEmail: input.recipientEmail,
+      inviterName: safeInviterName,
+      message: input.message,
+      acceptUrl: input.inviteUrl,
+    }),
+  });
+}
+
+/**
+ * Send a "you've been invited to view a page" email to a recipient who does not
+ * yet hold an active session. Errors propagate so the caller can compensating-delete
+ * the pending row on failure.
+ */
+export async function sendPendingPageShareInvitationEmail(input: {
+  recipientEmail: string;
+  inviterName: string;
+  pageTitle: string;
+  driveName: string;
+  permissions: string[];
+  inviteUrl: string;
+}): Promise<void> {
+  const safeInviterName = stripHeaderControls(input.inviterName) || 'Someone';
+  const safePageTitle = stripHeaderControls(input.pageTitle) || 'a document';
+  const safeDriveName = stripHeaderControls(input.driveName) || 'a workspace';
+
+  await sendEmail({
+    to: input.recipientEmail,
+    subject: `${safeInviterName} shared "${safePageTitle}" with you on PageSpace`,
+    react: PageShareInvitationEmail({
+      inviterName: safeInviterName,
+      pageTitle: safePageTitle,
+      driveName: safeDriveName,
+      permissions: input.permissions,
+      acceptUrl: input.inviteUrl,
+    }),
+  });
 }
 
 /**
@@ -275,14 +453,17 @@ export async function sendNotificationEmail(data: NotificationEmailData): Promis
       return; // User opted out
     }
 
-    // Get user details
-    const user = await db.query.users.findFirst({
+    // Get user details. Decrypt PII at the edge (GDPR #965): `user.email` is the
+    // actual send-to address (ciphertext would break delivery) and `user.name`
+    // greets the recipient. Legacy plaintext passes through unchanged.
+    const userRow = await db.query.users.findFirst({
       where: eq(users.id, data.userId),
       columns: {
         name: true,
         email: true,
       },
     });
+    const user = userRow ? await decryptUserRow(userRow) : undefined;
 
     if (!user?.email) {
       console.warn('Cannot send email notification: user %s has no email', String(data.userId).replace(/[\x00-\x1f\x7f-\x9f\n\r]/g, '').slice(0, 100));
@@ -291,8 +472,7 @@ export async function sendNotificationEmail(data: NotificationEmailData): Promis
 
     // Generate unsubscribe URL
     const unsubscribeToken = await generateUnsubscribeToken(data.userId, data.type);
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-    const unsubscribeUrl = `${appUrl}/api/notifications/unsubscribe/${unsubscribeToken}`;
+    const unsubscribeUrl = `${resolveAppUrl()}/api/notifications/unsubscribe/${unsubscribeToken}`;
 
     // Get email template
     const templateData = getEmailTemplate(data, user, unsubscribeUrl);
@@ -322,12 +502,13 @@ export async function sendNotificationEmail(data: NotificationEmailData): Promis
       where: eq(users.id, data.userId),
       columns: { email: true },
     });
+    const recipientEmail = userEmail ? await decryptField(userEmail.email) : undefined;
 
     await logEmailNotification(
       data.userId,
       data.notificationId,
       data.type,
-      userEmail?.email || 'unknown',
+      recipientEmail || 'unknown',
       false,
       error instanceof Error ? error.message : 'Unknown error'
     );

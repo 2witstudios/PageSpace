@@ -1,25 +1,74 @@
-import { pgTable, text, timestamp, jsonb, real, boolean, pgEnum, primaryKey, index, integer, check } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, real, boolean, pgEnum, index, uniqueIndex, unique, integer, check, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { relations } from 'drizzle-orm';
 import { users } from './auth';
+import { driveEnvs } from './drive-envs';
+import { organizations } from './organizations';
 import { createId } from '@paralleldrive/cuid2';
-export const pageType = pgEnum('PageType', ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'FILE', 'SHEET', 'TASK_LIST', 'CODE']);
+// 'MACHINE' is a DEAD value, kept only because Postgres cannot DROP VALUE from
+// an enum type — the Machines/Development surface that used it was torn down
+// (phase 8 of the agent-sessions rebuild) with no data migration. Nothing may
+// ever write it again: it is removed from the application-level PageType enum
+// (packages/lib/src/utils/enums.ts) and every validator/config that governs
+// what a page's `type` can be set to.
+export const pageType = pgEnum('PageType', ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'FILE', 'SHEET', 'TASK_LIST', 'CODE', 'MACHINE']);
 export type PageTypeEnum = (typeof pageType.enumValues)[number];
+export const driveKind = pgEnum('DriveKind', ['STANDARD', 'HOME']);
+export type DriveKindEnum = (typeof driveKind.enumValues)[number];
+// Visibility of an org-owned drive to the org's members (Spec DRV-4..DRV-7).
+// Ignored for personal drives (orgId IS NULL).
+export const ORG_DRIVE_VISIBILITIES = ['OPEN', 'RESTRICTED', 'PRIVATE'] as const;
+export const orgDriveVisibility = pgEnum('OrgDriveVisibility', ORG_DRIVE_VISIBILITIES);
+export type OrgDriveVisibility = (typeof ORG_DRIVE_VISIBILITIES)[number];
 
 export const drives = pgTable('drives', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   name: text('name').notNull(),
   slug: text('slug').notNull(),
   ownerId: text('ownerId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  kind: driveKind('kind').default('STANDARD').notNull(),
+  // Set when an org owns the drive (DRV-1); the human lead stays ownerId. RESTRICT, not
+  // SET NULL: deleting an org must first transfer or trash its drives (ORG-6).
+  orgId: text('orgId').references((): AnyPgColumn => organizations.id, { onDelete: 'restrict' }),
+  orgVisibility: orgDriveVisibility('orgVisibility').default('OPEN').notNull(),
   isTrashed: boolean('isTrashed').default(false).notNull(),
   trashedAt: timestamp('trashedAt', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
   drivePrompt: text('drivePrompt'), // Custom AI instructions for this drive
+  publishSubdomain: text('publishSubdomain').unique(), // Globally-unique subdomain for published pages; set on first publish
+  homePageId: text('homePageId').references((): AnyPgColumn => pages.id, { onDelete: 'set null' }), // Drive landing page shown at drive root
+  publishDefaultOgImageUrl: text('publish_default_og_image_url'), // Drive-wide default social share image for published pages lacking their own
+  notFoundPageId: text('not_found_page_id').references((): AnyPgColumn => pages.id, { onDelete: 'set null' }), // Canvas page rendered as the published site's 404.html; falls back to the generic branded 404 when unset
+  publishFaviconUrl: text('publish_favicon_url'), // Drive-wide favicon override for published pages lacking their own <link rel="icon">
+  // The drive's mark: an image PageSpace stores and serves, never an outside URL (drives_avatar_url_chk
+  // below; the pure rule is lib avatars/avatar-core.ts), and the color its initial sits on without one.
+  avatarUrl: text('avatarUrl'),
+  color: text('color'),
 }, (table) => {
     return {
         ownerIdx: index('drives_owner_id_idx').on(table.ownerId),
         ownerSlugKey: index('drives_owner_id_slug_key').on(table.ownerId, table.slug),
+        // At most one Home drive per owner, forever. Race arbiter between lazy
+        // provisioning and the backfill script (both insert ON CONFLICT DO NOTHING).
+        ownerHomeKey: uniqueIndex('drives_owner_home_unique').on(table.ownerId).where(sql`${table.kind} = 'HOME'`),
+        // Drive slugs are unique per org for org drives (D-OW-15). Personal drives keep
+        // per-owner slugs. Leading orgId also serves "drives of this org" lookups.
+        orgSlugKey: uniqueIndex('drives_org_slug_unique').on(table.orgId, table.slug).where(sql`${table.orgId} IS NOT NULL`),
+        // A Home drive is a person's own space and never belongs to an org (DRV-1). A CHECK
+        // rather than an app guard so no write path (move-in, backfill, restore) can skip it;
+        // safe because orgId is ON DELETE RESTRICT, never SET NULL, so no cascade rewrites it.
+        homeNeverOrg: check('drives_home_never_org_check', sql`${table.kind} <> 'HOME' OR ${table.orgId} IS NULL`),
+        // Only this drive's own avatar route, exactly as avatarPath('drive', …) builds it: no other host, no other drive.
+        avatarUrlCheck: check(
+          'drives_avatar_url_chk',
+          sql`${table.avatarUrl} IS NULL OR ${table.avatarUrl} ~ ('^/api/drives/' || ${table.id} || '/avatar/avatar-[a-z0-9]{1,32}\\.(png|jpg|gif|webp)$')`,
+        ),
+        // A key from the fixed mark palette (MARK_COLORS in lib avatars/avatar-core.ts).
+        colorCheck: check(
+          'drives_color_chk',
+          sql`${table.color} IS NULL OR ${table.color} IN ('slate', 'red', 'orange', 'amber', 'green', 'teal', 'blue', 'indigo', 'violet', 'pink')`,
+        ),
     }
 });
 
@@ -41,7 +90,17 @@ export const pages = pgTable('pages', {
   visibleToGlobalAssistant: boolean('visibleToGlobalAssistant').default(true).notNull(), // Whether this agent appears in global assistant's system prompt
   includePageTree: boolean('includePageTree').default(false).notNull(), // Whether to include page tree in AI context
   pageTreeScope: text('pageTreeScope', { enum: ['children', 'drive'] }).default('children'), // Scope of page tree to include
-  // File-specific fields
+  toolExposureMode: text('toolExposureMode', { enum: ['upfront', 'search'] }).default('upfront').notNull(), // How tools are exposed to AI_CHAT agents: all schemas upfront, or core tools + tool_search/execute_tool
+  sandboxEnabled: boolean('sandboxEnabled').default(false).notNull(), // AI_CHAT agents: whether the sandbox tool families (bash/files, git+gh, sessions/shells) are offered to this agent. Provisioning stays lazy and automatic on first use — this is the settings switch, not a provision button. Successor to the old pages.terminalAccess (dropped in 0234, phase 8's teardown of the Machines model — never pages.machineAccess, which never existed in this package).
+  defaultEnvId: text('defaultEnvId').references((): AnyPgColumn => driveEnvs.id, { onDelete: 'set null' }), // AI_CHAT agents: the drive Environment (drive_envs) pre-selected when spawning a new session for this agent. A DEFAULT, not a binding — spawn time (useSpawnSession / POST /api/agent-workspaces) still allows overriding to ephemeral or another env. NULL = no default (ephemeral). Not coupled at the DB level to sandboxEnabled — inert data when the switch is off, enforced only in the settings UI. `onDelete: 'set null'` so deleting the env falls the agent back to ephemeral rather than touching the page row.
+  userScopedAccess: boolean('userScopedAccess').default(false).notNull(), // AI_CHAT agents only, owner-toggled: when true, actor-permission helpers fall back to the invoking user's own access instead of this agent's drive memberships
+  siteMode: boolean('siteMode').default(false).notNull(), // CANVAS pages only, author-toggled: when true the page renders under buildSiteCsp() instead of buildBaselineCsp() — script-src/connect-src open to any https host so the page can load CDN libraries and call APIs like an ordinary website. Defaults false so no page already published silently widens its policy; flipping it is the author's explicit opt-in.
+  description: text('description'), // Freeform description surfaced on a page's Settings tab
+  // File-specific fields.
+  // fileSize/mimeType/contentHash are DERIVED DISPLAY METADATA copied from the
+  // content-addressed `files` row at upload time (#2155). The authoritative
+  // storage-accounting value is files.sizeBytes (reached via file_pages); these
+  // per-page copies are never re-synced and must not feed quota/usage math.
   fileSize: real('fileSize'),
   mimeType: text('mimeType'),
   originalFileName: text('originalFileName'),
@@ -55,6 +114,8 @@ export const pages = pgTable('pages', {
   extractionMetadata: jsonb('extractionMetadata'),
   contentHash: text('contentHash'),
   excludeFromSearch: boolean('excludeFromSearch').default(false).notNull(),
+  isPrivate: boolean('isPrivate').default(false).notNull(),
+  createdBy: text('createdBy').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
   trashedAt: timestamp('trashedAt', { mode: 'date' }),
@@ -72,43 +133,47 @@ export const pages = pgTable('pages', {
     }
 });
 
-export const chatMessages = pgTable('chat_messages', {
-  id: text('id').primaryKey().$defaultFn(() => createId()),
-  pageId: text('pageId').notNull().references(() => pages.id, { onDelete: 'cascade' }),
-  conversationId: text('conversationId').notNull().$defaultFn(() => createId()), // Group messages into conversation sessions
-  role: text('role').notNull(),
-  content: text('content').notNull(),
-  toolCalls: jsonb('toolCalls'),
-  toolResults: jsonb('toolResults'),
-  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
-  isActive: boolean('isActive').default(true).notNull(),
-  editedAt: timestamp('editedAt', { mode: 'date' }),
-  userId: text('userId').references(() => users.id, { onDelete: 'cascade' }),
-  sourceAgentId: text('sourceAgentId').references(() => pages.id, { onDelete: 'set null' }),
-  messageType: text('messageType', { enum: ['standard', 'todo_list'] }).default('standard').notNull(),
-}, (table) => {
-    return {
-        pageIdx: index('chat_messages_page_id_idx').on(table.pageId),
-        userIdx: index('chat_messages_user_id_idx').on(table.userId),
-        conversationIdx: index('chat_messages_conversation_id_idx').on(table.conversationId), // Index for conversation filtering
-        pageConversationIdx: index('chat_messages_page_id_conversation_id_idx').on(table.pageId, table.conversationId), // Composite index for queries
-        pageIsActiveCreatedAtIndex: index('chat_messages_page_id_is_active_created_at_idx').on(table.pageId, table.isActive, table.createdAt),
-    }
-});
-
-
+/**
+ * The tag VOCABULARY — one row per distinct tag name per drive.
+ *
+ * Reclaimed rather than replaced. The table has existed since migration 0000
+ * and has never had a writer, but its original shape could not be used: `name`
+ * was `unique()` GLOBALLY, across every drive and every tenant, so the first
+ * drive to mint "roadmap" would have taken the name away from all the others —
+ * a multi-tenancy bug rather than a missing feature. `color` was `notNull` with
+ * no default besides, which blocked any insert that did not pick one.
+ *
+ * `normalizedKey` is `text`, NOT `varchar(64)`, and that is a decision rather
+ * than laziness. The 64-code-point limit (`MAX_TAG_NAME_LENGTH`) is on the
+ * display NAME; the key is derived through NFKC, which expands — the worst
+ * single character, U+FDFA, expands to 18 code points — so a legal name keys
+ * to as much as 1152 code points / 2112 bytes (`MAX_TAG_KEY_LENGTH`, exported
+ * from `@pagespace/lib/tags/tag-core` for exactly this choice). A `varchar(64)`
+ * mirroring the name limit would reject a legal tag at INSERT time. 2112 bytes
+ * still fits under Postgres's ~2704-byte btree tuple limit, so the unique index
+ * below is safe.
+ *
+ * `color` is nullable: a vocabulary entry is a NAME first, and forcing every
+ * writer to invent a colour is what made the original table unusable.
+ */
 export const tags = pgTable('tags', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
-  name: text('name').unique().notNull(),
-  color: text('color').notNull(),
-});
-
-export const pageTags = pgTable('page_tags', {
-  pageId: text('pageId').notNull().references(() => pages.id, { onDelete: 'cascade' }),
-  tagId: text('tagId').notNull().references(() => tags.id, { onDelete: 'cascade' }),
+  driveId: text('driveId').notNull().references(() => drives.id, { onDelete: 'cascade' }),
+  /** Display form: NFC, whitespace-collapsed, stored as the first writer typed it. */
+  name: text('name').notNull(),
+  /** The casefolded NFKC dedupe key from `tagKey()` — what uniqueness is taken on. */
+  normalizedKey: text('normalizedKey').notNull(),
+  color: text('color'),
+  description: text('description'),
+  createdBy: text('createdBy').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
 }, (table) => {
     return {
-        pk: primaryKey({ columns: [table.pageId, table.tagId] }),
+        driveIdx: index('tags_drive_id_idx').on(table.driveId),
+        // The dedupe rule, baked in. Two spellings that fold to the same key are
+        // ONE tag inside a drive and different tags across drives.
+        driveKeyKey: unique('tags_drive_id_normalized_key_key').on(table.driveId, table.normalizedKey),
     }
 });
 
@@ -180,6 +245,10 @@ export const drivesRelations = relations(drives, ({ one, many }) => ({
         fields: [drives.ownerId],
         references: [users.id],
     }),
+    organization: one(organizations, {
+        fields: [drives.orgId],
+        references: [organizations.id],
+    }),
     pages: many(pages),
 }));
 
@@ -204,46 +273,26 @@ export const pagesRelations = relations(pages, ({ one, many }) => ({
     restoredChildren: many(pages, {
         relationName: 'OriginalParent',
     }),
-    tags: many(pageTags),
+    // contentTags relation handled in schema/content-tags.ts to avoid a circular import
     favorites: many(favorites),
     mentionsFrom: many(mentions, { relationName: 'MentionsFrom' }),
     mentionsTo: many(mentions, { relationName: 'MentionsTo' }),
     userMentionsFrom: many(userMentions, { relationName: 'UserMentionsFrom' }),
-    messages: many(chatMessages),
     // permissions relation handled separately to avoid circular dependency
 }));
 
 
-export const chatMessagesRelations = relations(chatMessages, ({ one }) => ({
-    page: one(pages, {
-        fields: [chatMessages.pageId],
-        references: [pages.id],
+export const tagsRelations = relations(tags, ({ one }) => ({
+    drive: one(drives, {
+        fields: [tags.driveId],
+        references: [drives.id],
     }),
-    user: one(users, {
-        fields: [chatMessages.userId],
+    creator: one(users, {
+        fields: [tags.createdBy],
         references: [users.id],
     }),
-    sourceAgent: one(pages, {
-        fields: [chatMessages.sourceAgentId],
-        references: [pages.id],
-        relationName: 'sourceAgent',
-    }),
-}));
-
-
-export const tagsRelations = relations(tags, ({ many }) => ({
-    pages: many(pageTags),
-}));
-
-export const pageTagsRelations = relations(pageTags, ({ one }) => ({
-    page: one(pages, {
-        fields: [pageTags.pageId],
-        references: [pages.id],
-    }),
-    tag: one(tags, {
-        fields: [pageTags.tagId],
-        references: [tags.id],
-    }),
+    // The assignment side lives in schema/content-tags.ts, for the same
+    // circular-import reason page_permissions' does.
 }));
 
 export const favoritesRelations = relations(favorites, ({ one }) => ({

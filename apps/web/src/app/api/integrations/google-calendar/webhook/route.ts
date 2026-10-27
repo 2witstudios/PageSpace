@@ -1,5 +1,6 @@
 import { NextResponse, after } from 'next/server';
-import { loggers } from '@pagespace/lib/server';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { syncGoogleCalendar } from '@/lib/integrations/google-calendar/sync-service';
 import { validateWebhookAuth } from '@/lib/integrations/google-calendar/webhook-auth';
 
@@ -22,6 +23,7 @@ import { validateWebhookAuth } from '@/lib/integrations/google-calendar/webhook-
  * - No unauthenticated code paths
  */
 export async function POST(request: Request) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   try {
     const channelId = request.headers.get('X-Goog-Channel-ID') || request.headers.get('x-goog-channel-id');
     const resourceId = request.headers.get('X-Goog-Resource-ID') || request.headers.get('x-goog-resource-id');

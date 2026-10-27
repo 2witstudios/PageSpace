@@ -1,0 +1,1 @@
+ALTER TABLE "pages" ADD COLUMN "userScopedAccess" boolean DEFAULT false NOT NULL;

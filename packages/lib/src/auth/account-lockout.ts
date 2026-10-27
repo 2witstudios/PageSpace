@@ -10,9 +10,13 @@
  * - Provides audit trail of failed attempts
  */
 
-import { db, users } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { users } from '@pagespace/db/schema/auth';
 import { eq, sql } from 'drizzle-orm';
 import { loggers } from '../logging/logger-config';
+import { maskEmail } from '../audit/mask-email';
+import { userEmailMatch } from './user-repository';
+import { decryptField } from '../encryption/field-crypto';
 
 // Lockout thresholds
 const MAX_FAILED_ATTEMPTS = 10;
@@ -74,7 +78,7 @@ export async function isAccountLockedByEmail(
   email: string
 ): Promise<{ isLocked: boolean; lockedUntil: Date | null }> {
   const user = await db.query.users.findFirst({
-    where: eq(users.email, email.toLowerCase()),
+    where: userEmailMatch(email.toLowerCase()),
     columns: {
       lockedUntil: true,
     },
@@ -148,9 +152,12 @@ export async function recordFailedLoginAttempt(
         .set({ lockedUntil })
         .where(eq(users.id, userId));
 
+      // Decrypt the stored email PII at the edge (GDPR #965) before masking it
+      // for the log — otherwise maskEmail() would mangle ciphertext into a
+      // meaningless masked blob (legacy plaintext passes through unchanged).
       loggers.api.warn('Account locked due to failed login attempts', {
         userId,
-        email,
+        email: maskEmail(await decryptField(email)),
         failedAttempts: failedLoginAttempts,
         lockedUntil: lockedUntil.toISOString(),
       });
@@ -176,14 +183,14 @@ export async function recordFailedLoginAttempt(
 
 /**
  * Record failed login attempt by email (before we know the userId).
- * Useful when the email exists but password is wrong.
+ * Useful when the email exists but authentication fails.
  */
 export async function recordFailedLoginAttemptByEmail(
   email: string
 ): Promise<AccountLockoutResult> {
   try {
     const user = await db.query.users.findFirst({
-      where: eq(users.email, email.toLowerCase()),
+      where: userEmailMatch(email.toLowerCase()),
       columns: { id: true },
     });
 

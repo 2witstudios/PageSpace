@@ -34,24 +34,37 @@ vi.mock('google-auth-library', () => ({
   })),
 }));
 
-import { POST } from '../route';
-
-vi.mock('@pagespace/db', () => ({
-  users: { id: 'id', googleId: 'googleId', email: 'email' },
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn(),
-      },
-    },
-    insert: vi.fn(),
-    update: vi.fn(),
-  },
-  eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
-  or: vi.fn((...conditions: unknown[]) => conditions),
+vi.mock('@/lib/auth/native-invite-acceptance', () => ({
+  consumeAnyInviteIfPresent: vi.fn().mockResolvedValue({
+    kind: null,
+    invitedDriveId: null,
+    invitedPageId: null,
+    connectionId: null, invitedOrgId: null, orgLandingPath: null,
+  }),
+  consumeAllInvitesForEmail: vi.fn().mockResolvedValue({
+    drivesAccepted: 0,
+    pagesAccepted: 0,
+    connectionsCreated: 0,
+  }),
 }));
 
-vi.mock('@pagespace/lib/auth', () => ({
+import { POST } from '../route';
+import {
+  consumeAnyInviteIfPresent,
+  consumeAllInvitesForEmail,
+} from '@/lib/auth/native-invite-acceptance';
+
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserByGoogleId: vi.fn(),
+    findUserByEmail: vi.fn(),
+    findUserById: vi.fn(),
+    createUser: vi.fn(),
+    updateUser: vi.fn(),
+  },
+}));
+
+vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_mock_session_token'),
     validateSession: vi.fn().mockResolvedValue({
@@ -63,29 +76,42 @@ vi.mock('@pagespace/lib/auth', () => ({
       scopes: ['*'],
     }),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
+    revokeWebUserSessions: vi.fn().mockResolvedValue(0),
+    revokeAdminUserSessions: vi.fn().mockResolvedValue(0),
     revokeSession: vi.fn().mockResolvedValue(undefined),
   },
+}));
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+}));
+vi.mock('@pagespace/lib/auth/constants', () => ({
   SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
   validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
-    deviceToken: 'mock-device-token',
-    deviceTokenRecordId: 'device-record-id',
-  }),
+      deviceToken: 'mock-device-token',
+      deviceTokenRecordId: 'device-record-id',
+    }),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
-    auth: {
-      error: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      debug: vi.fn(),
+      auth: {
+        error: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        debug: vi.fn(),
+      },
+      security: {
+        warn: vi.fn(),
+      },
     },
-  },
-  logAuthEvent: vi.fn(),
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/security', () => ({
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn(),
   resetDistributedRateLimit: vi.fn().mockResolvedValue(undefined),
   DISTRIBUTED_RATE_LIMITS: {
@@ -98,33 +124,44 @@ vi.mock('@pagespace/lib/security', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'mock-user-id'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
-vi.mock('@/lib/onboarding/getting-started-drive', () => ({
-  provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'drive-123', created: true }),
+vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
+  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'drive-123', created: true }),
 }));
 
 vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn(() => '127.0.0.1'),
+  isSafeReturnUrl: vi.fn(() => true),
+  revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
 }));
 
 vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
 }));
 
-import { db, users } from '@pagespace/db';
-import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
-import { validateOrCreateDeviceToken, logAuthEvent } from '@pagespace/lib/server';
-import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
-import { getClientIP } from '@/lib/auth';
+vi.mock('@/lib/auth/google-avatar', () => ({
+  resolveGoogleAvatarImage: vi.fn().mockResolvedValue(null),
+}));
+
+import { authRepository } from '@/lib/repositories/auth-repository';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
+import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
+import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
+import { getClientIP, revokeSessionsForLogin } from '@/lib/auth';
+import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 
 const mockNewUser = {
   id: 'user-123',
@@ -134,7 +171,6 @@ const mockNewUser = {
   tokenVersion: 0,
   role: 'user',
   provider: 'google',
-  password: null,
   image: 'https://example.com/avatar.png',
 };
 
@@ -146,7 +182,6 @@ const mockExistingUser = {
   tokenVersion: 1,
   role: 'user',
   provider: 'google',
-  password: null,
   image: 'https://example.com/old-avatar.png',
 };
 
@@ -199,6 +234,17 @@ describe('POST /api/auth/google/native', () => {
     // Default mocks for successful flow
     vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
     vi.mocked(resetDistributedRateLimit).mockResolvedValue(undefined);
+    vi.mocked(consumeAnyInviteIfPresent).mockResolvedValue({
+      kind: null,
+      invitedDriveId: null,
+      invitedPageId: null,
+      connectionId: null, invitedOrgId: null, orgLandingPath: null,
+    });
+    vi.mocked(consumeAllInvitesForEmail).mockResolvedValue({
+      drivesAccepted: 0,
+      pagesAccepted: 0,
+      connectionsCreated: 0,
+    });
 
     // Default session mocks
     vi.mocked(sessionService.createSession).mockResolvedValue('ps_sess_mock_session_token');
@@ -210,7 +256,7 @@ describe('POST /api/auth/google/native', () => {
       type: 'user',
       scopes: ['*'],
     } as never);
-    vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(0);
+    vi.mocked(sessionService.revokeWebUserSessions).mockResolvedValue(0);
     vi.mocked(generateCSRFToken).mockReturnValue('mock-csrf-token');
 
     // Default device token mock
@@ -220,32 +266,21 @@ describe('POST /api/auth/google/native', () => {
     } as never);
 
     // Default provisioning mock
-    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({ driveId: 'drive-123', created: true });
+    vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({ driveId: 'drive-123', created: true });
 
     // Default getClientIP mock
     vi.mocked(getClientIP).mockReturnValue('127.0.0.1');
 
+    // Default avatar resolution
+    vi.mocked(resolveGoogleAvatarImage).mockResolvedValue(null);
+
     // Default to new user flow
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
+    vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserById).mockResolvedValue(null);
+    vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
+    vi.mocked(authRepository.updateUser).mockResolvedValue(undefined);
 
-    vi.mocked(db.insert).mockImplementation((table: unknown) => {
-      if (table === users) {
-        return {
-          values: vi.fn(() => ({
-            returning: vi.fn(() => Promise.resolve([mockNewUser])),
-          })),
-        } as never;
-      }
-      return {
-        values: vi.fn(() => Promise.resolve(undefined)),
-      } as never;
-    });
-
-    vi.mocked(db.update).mockReturnValue({
-      set: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(undefined),
-      }),
-    } as never);
   });
 
   afterEach(() => {
@@ -267,7 +302,8 @@ describe('POST /api/auth/google/native', () => {
     });
 
     it('given valid idToken for existing user, should return tokens without creating user', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(mockExistingUser as never);
 
       const request = createNativeRequest(validNativePayload);
       const response = await POST(request);
@@ -277,53 +313,57 @@ describe('POST /api/auth/google/native', () => {
       expect(body.sessionToken).toBe('ps_sess_mock_session_token');
       expect(body.deviceToken).toBe('mock-device-token');
       expect(body.isNewUser).toBe(false);
-      expect(db.insert).not.toHaveBeenCalled();
+      expect(authRepository.createUser).not.toHaveBeenCalled();
     });
 
     it('given new user, should provision Getting Started drive', async () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledWith(mockNewUser.id);
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith(mockNewUser.id);
     });
 
-    it('given existing user, should not provision Getting Started drive', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(mockExistingUser as never);
+    it('given existing user, should provision Home drive (idempotent lazy provisioning)', async () => {
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({ driveId: 'drive-123', created: false });
 
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(provisionGettingStartedDriveIfNeeded).not.toHaveBeenCalled();
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith(mockExistingUser.id);
     });
 
-    it('should create session with correct parameters', async () => {
+    it('SEC-2 (partial) should create session with correct parameters, including Google single-factor evidence (D-OW-45)', async () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(sessionService.createSession).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: mockNewUser.id,
-          type: 'user',
-          scopes: ['*'],
-          expiresInMs: 7 * 24 * 60 * 60 * 1000,
-          createdByIp: '127.0.0.1',
-        })
-      );
+      expect(sessionService.createSession).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
+        userId: mockNewUser.id,
+        type: 'user',
+        scopes: ['*'],
+        expiresInMs: 7 * 24 * 60 * 60 * 1000,
+        deviceId: 'device-123',
+        createdByIp: '127.0.0.1',
+      });
     });
 
-    it('should create device token with platform info', async () => {
+    it('SEC-2 (partial) should create device token with platform info, carrying the same Google evidence (D-OW-45)', async () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: mockNewUser.id,
-          deviceId: 'device-123',
-          platform: 'ios',
-          deviceName: 'iPhone 15',
-          tokenVersion: 0,
-        })
-      );
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
+        providedDeviceToken: undefined,
+        userId: mockNewUser.id,
+        deviceId: 'device-123',
+        platform: 'ios',
+        tokenVersion: 0,
+        deviceName: 'iPhone 15',
+        userAgent: 'PageSpace-iOS/1.0',
+        ipAddress: '127.0.0.1',
+      });
     });
 
     it('given deviceName not provided, should use default name based on platform', async () => {
@@ -336,11 +376,17 @@ describe('POST /api/auth/google/native', () => {
       const request = createNativeRequest(payloadWithoutDeviceName);
       await POST(request);
 
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          deviceName: 'iOS App',
-        })
-      );
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
+        providedDeviceToken: undefined,
+        userId: mockNewUser.id,
+        deviceId: 'device-123',
+        platform: 'ios',
+        tokenVersion: 0,
+        deviceName: 'iOS App',
+        userAgent: 'PageSpace-iOS/1.0',
+        ipAddress: '127.0.0.1',
+      });
     });
 
     it('given android platform, should use Android default name', async () => {
@@ -353,11 +399,17 @@ describe('POST /api/auth/google/native', () => {
       const request = createNativeRequest(androidPayload);
       await POST(request);
 
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          deviceName: 'Android App',
-        })
-      );
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
+        providedDeviceToken: undefined,
+        userId: mockNewUser.id,
+        deviceId: 'device-123',
+        platform: 'android',
+        tokenVersion: 0,
+        deviceName: 'Android App',
+        userAgent: 'PageSpace-iOS/1.0',
+        ipAddress: '127.0.0.1',
+      });
     });
 
     it('should reset rate limit on successful auth', async () => {
@@ -371,22 +423,32 @@ describe('POST /api/auth/google/native', () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(logAuthEvent).toHaveBeenCalledWith(
-        'login',
-        mockNewUser.id,
-        'test@example.com',
-        '127.0.0.1',
-        'Google OAuth Native (ios)'
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'auth.login.success',
+          userId: mockNewUser.id,
+          sessionId: 'mock-session-id',
+          details: { method: 'Google OAuth Native (ios)' },
+        })
       );
 
       expect(trackAuthEvent).toHaveBeenCalledWith(
         mockNewUser.id,
         'login',
         expect.objectContaining({
+          ip: '127.0.0.1',
           provider: 'google-native',
           platform: 'ios',
+          userAgent: 'PageSpace-iOS/1.0',
         })
       );
+      // Email must be masked, never raw — guards against the PII regression
+      // CodeRabbit flagged on the parallel apple/callback handler.
+      const trackCall = vi.mocked(trackAuthEvent).mock.calls.find(([, event]) => event === 'login');
+      const meta = trackCall?.[2] as { email?: string };
+      expect(meta?.email).toBe('te***@example.com');
+      expect(meta?.email).not.toBe('test@example.com');
     });
   });
 
@@ -401,7 +463,7 @@ describe('POST /api/auth/google/native', () => {
 
       expect(response.status).toBe(400);
       expect(body.error).toBe('Invalid request');
-      expect(body.details.idToken).toBeDefined();
+      expect(body.details.idToken).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('given empty idToken, should return 400', async () => {
@@ -424,7 +486,7 @@ describe('POST /api/auth/google/native', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.details.deviceId).toBeDefined();
+      expect(body.details.deviceId).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('given empty deviceId, should return 400', async () => {
@@ -448,7 +510,7 @@ describe('POST /api/auth/google/native', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.details.platform).toBeDefined();
+      expect(body.details.platform).toEqual(['Invalid option: expected one of "ios"|"android"']);
     });
 
     it('given missing platform, should return 400', async () => {
@@ -480,7 +542,7 @@ describe('POST /api/auth/google/native', () => {
       const body = await response.json();
 
       expect(response.status).toBe(401);
-      expect(body.error).toContain('expired');
+      expect(body.error).toBe('Token expired. Please try again.');
     });
 
     it('given token without email, should return 401', async () => {
@@ -513,7 +575,7 @@ describe('POST /api/auth/google/native', () => {
       const body = await response.json();
 
       expect(response.status).toBe(429);
-      expect(body.error).toContain('Too many login attempts');
+      expect(body.error).toBe('Too many login attempts. Please try again later.');
       expect(body.retryAfter).toBe(900);
     });
 
@@ -532,15 +594,17 @@ describe('POST /api/auth/google/native', () => {
   });
 
   describe('session management', () => {
-    it('should revoke existing sessions before creating new one (session fixation prevention)', async () => {
-      vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(2);
-
+    it('should revoke prior sessions scoped to the request deviceId (device-scoped, not nuclear)', async () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith(
+      // deviceId is required by the schema, so the helper always receives it and
+      // revokes only THIS device's sessions — other devices stay signed in.
+      expect(revokeSessionsForLogin).toHaveBeenCalledWith(
         mockNewUser.id,
-        'new_login'
+        'device-123',
+        'new_login',
+        'Google native',
       );
     });
 
@@ -573,10 +637,10 @@ describe('POST /api/auth/google/native', () => {
       const body = await response.json();
 
       expect(response.status).toBe(500);
-      expect(body.error).toContain('not configured');
+      expect(body.error).toBe('Google sign-in not configured');
     });
 
-    it('given missing GOOGLE_OAUTH_IOS_CLIENT_ID, should return 500', async () => {
+    it('given missing GOOGLE_OAUTH_IOS_CLIENT_ID, should return 500 for an iOS token', async () => {
       delete process.env.GOOGLE_OAUTH_IOS_CLIENT_ID;
 
       const request = createNativeRequest(validNativePayload);
@@ -584,13 +648,48 @@ describe('POST /api/auth/google/native', () => {
       const body = await response.json();
 
       expect(response.status).toBe(500);
-      expect(body.error).toContain('not configured');
+      expect(body.error).toBe('Google sign-in not configured');
+    });
+
+    // The Android SDK is configured with the WEB client id and its token carries
+    // the web client as the audience, so an Android-only deployment need never
+    // register an iOS OAuth client. Requiring one made native Google sign-in
+    // unusable there — reachable for the first time now that a client can send
+    // `platform: 'android'`.
+    it('given missing GOOGLE_OAUTH_IOS_CLIENT_ID, should still accept an Android token', async () => {
+      delete process.env.GOOGLE_OAUTH_IOS_CLIENT_ID;
+
+      const request = createNativeRequest({ ...validNativePayload, platform: 'android' });
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+    });
+
+    it('given an Android token, should not accept the iOS client as an audience', async () => {
+      const request = createNativeRequest({ ...validNativePayload, platform: 'android' });
+      await POST(request);
+
+      expect(mockVerifyIdToken).toHaveBeenCalledWith({
+        idToken: 'valid-google-id-token',
+        audience: ['test-web-client-id'],
+      });
+    });
+
+    it('given an iOS token, should keep accepting either client as an audience', async () => {
+      const request = createNativeRequest(validNativePayload);
+      await POST(request);
+
+      expect(mockVerifyIdToken).toHaveBeenCalledWith({
+        idToken: 'valid-google-id-token',
+        audience: ['test-web-client-id', 'test-ios-client-id'],
+      });
     });
   });
 
   describe('error handling', () => {
     it('given unexpected error, should return 500', async () => {
-      vi.mocked(db.query.users.findFirst).mockRejectedValue(new Error('Database error'));
+      vi.mocked(authRepository.findUserByGoogleId).mockRejectedValueOnce(new Error('Database error'));
+      vi.mocked(authRepository.findUserByEmail).mockRejectedValueOnce(new Error('Database error'));
 
       const request = createNativeRequest(validNativePayload);
       const response = await POST(request);
@@ -601,7 +700,7 @@ describe('POST /api/auth/google/native', () => {
     });
 
     it('given provisioning error, should still succeed', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValue(
+      vi.mocked(provisionHomeDriveIfNeeded).mockRejectedValueOnce(
         new Error('Provisioning failed')
       );
 
@@ -610,44 +709,229 @@ describe('POST /api/auth/google/native', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.sessionToken).toBeDefined();
+      expect(body.sessionToken).toBe('ps_sess_mock_session_token');
     });
 
     it('given rate limit reset fails, should still succeed', async () => {
-      vi.mocked(resetDistributedRateLimit).mockRejectedValue(new Error('Redis error'));
+      vi.mocked(resetDistributedRateLimit).mockRejectedValueOnce(new Error('Redis error'));
 
       const request = createNativeRequest(validNativePayload);
       const response = await POST(request);
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.sessionToken).toBeDefined();
+      expect(body.sessionToken).toBe('ps_sess_mock_session_token');
     });
   });
 
   describe('user update scenarios', () => {
     it('given existing user without googleId, should update with googleId', async () => {
       const userWithoutGoogleId = { ...mockExistingUser, googleId: null };
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(userWithoutGoogleId as never)
-        .mockResolvedValueOnce(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce(mockExistingUser as never);
 
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(db.update).toHaveBeenCalled();
+      const updateArgs = vi.mocked(authRepository.updateUser).mock.calls[0];
+      expect(updateArgs[0]).toBe(userWithoutGoogleId.id);
+      expect((updateArgs[1] as Record<string, unknown>).googleId).toBe('google-id-123');
     });
 
-    it('given existing user with password, should set provider to both', async () => {
-      const userWithPassword = { ...mockExistingUser, googleId: null, password: 'hashed-pw' };
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(userWithPassword as never)
-        .mockResolvedValueOnce({ ...userWithPassword, provider: 'both', googleId: 'google-id-123' } as never);
+    it('given existing user without name, should set name from Google payload', async () => {
+      const userWithoutName = { ...mockExistingUser, googleId: null, name: null };
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userWithoutName as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userWithoutName as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithoutName, name: 'Test User', googleId: 'google-id-123' } as never);
 
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(db.update).toHaveBeenCalled();
+      const updateArgs = vi.mocked(authRepository.updateUser).mock.calls[0];
+      expect(updateArgs[0]).toBe(userWithoutName.id);
+      expect((updateArgs[1] as Record<string, unknown>).name).toBe('Test User');
+    });
+
+    it('given existing user with different avatar, should update image', async () => {
+      const userWithOldAvatar = { ...mockExistingUser, image: '/old-avatar.jpg' };
+      vi.mocked(resolveGoogleAvatarImage).mockResolvedValue('/new-avatar.jpg');
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userWithOldAvatar as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userWithOldAvatar as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithOldAvatar, image: '/new-avatar.jpg' } as never);
+
+      const request = createNativeRequest(validNativePayload);
+      await POST(request);
+
+      expect(authRepository.updateUser).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(authRepository.updateUser).mock.calls[0][0]).toBe(userWithOldAvatar.id);
+      expect((vi.mocked(authRepository.updateUser).mock.calls[0][1] as Record<string, unknown>).image).toBe('/new-avatar.jpg');
+    });
+
+    it('given existing user with unverified email and email_verified token, should update emailVerified', async () => {
+      const userUnverified = { ...mockExistingUser, emailVerified: null };
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userUnverified as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userUnverified as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userUnverified, emailVerified: new Date() } as never);
+
+      const request = createNativeRequest(validNativePayload);
+      await POST(request);
+
+      expect(authRepository.updateUser).toHaveBeenCalledTimes(1);
+      const updateArgs = vi.mocked(authRepository.updateUser).mock.calls[0];
+      expect(updateArgs[0]).toBe(userUnverified.id);
+      expect(updateArgs[1]).toHaveProperty('emailVerified');
+      expect((updateArgs[1] as Record<string, unknown>).emailVerified).toBeInstanceOf(Date);
+    });
+
+    it('given existing user where no updates needed, should NOT call updateUser', async () => {
+      // User has all fields set correctly
+      const fullyUpdatedUser = {
+        ...mockExistingUser,
+        googleId: 'google-id-123',
+        name: 'Existing User',
+        image: null, // resolveGoogleAvatarImage returns null by default
+        emailVerified: new Date(),
+      };
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(fullyUpdatedUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(fullyUpdatedUser as never);
+
+      const request = createNativeRequest(validNativePayload);
+      await POST(request);
+
+      expect(authRepository.updateUser).not.toHaveBeenCalled();
+    });
+
+    it('given new user where resolvedImage differs from initial null, should update avatar', async () => {
+      vi.mocked(resolveGoogleAvatarImage).mockResolvedValue('/processed-avatar.jpg');
+
+      const request = createNativeRequest(validNativePayload);
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      // updateUser should be called to set the resolved image
+      const updateArgs = vi.mocked(authRepository.updateUser).mock.calls[0];
+      expect(updateArgs[0]).toBe(mockNewUser.id);
+      expect((updateArgs[1] as Record<string, unknown>).image).toBe('/processed-avatar.jpg');
+    });
+
+  });
+
+  describe('PII scrub in log metadata', () => {
+    const findInfoCall = (msg: string) =>
+      vi.mocked(loggers.auth.info).mock.calls.find(call => call[0] === msg);
+
+    it('masks email in "Creating new user via native Google OAuth" log', async () => {
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(null);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
+      vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
+
+      const request = createNativeRequest(validNativePayload);
+      await POST(request);
+
+      const call = findInfoCall('Creating new user via native Google OAuth');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as { email?: string };
+      expect(meta.email).toBe('te***@example.com');
+    });
+
+    it('masks email in "Updating existing user via native Google OAuth" log', async () => {
+      const userWithoutGoogleId = { ...mockExistingUser, googleId: null };
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce(mockExistingUser as never);
+
+      const request = createNativeRequest(validNativePayload);
+      await POST(request);
+
+      const call = findInfoCall('Updating existing user via native Google OAuth');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as { email?: string };
+      expect(meta.email).toBe('te***@example.com');
     });
   });
+
+  describe('invite acceptance', () => {
+    it('forwards inviteToken to consumeAnyInviteIfPresent and includes invitedDriveId in response', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'drive',
+        invitedDriveId: 'drive-from-invite',
+        invitedPageId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
+      });
+
+      const request = createNativeRequest({ ...validNativePayload, inviteToken: 'ps_invite_xyz' });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(consumeAnyInviteIfPresent).toHaveBeenCalledWith(
+        expect.objectContaining({ inviteToken: 'ps_invite_xyz', isNewUser: true }),
+      );
+      expect(body.invitedDriveId).toBe('drive-from-invite');
+      expect(body.inviteError).toBeUndefined();
+    });
+
+    it('passes inviteError through when pipe rejects with EMAIL_MISMATCH', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: null,
+        invitedDriveId: null,
+        invitedPageId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
+        inviteError: 'EMAIL_MISMATCH',
+      });
+
+      const request = createNativeRequest({ ...validNativePayload, inviteToken: 'ps_invite_xyz' });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(body.invitedDriveId).toBeNull();
+      expect(body.inviteError).toBe('EMAIL_MISMATCH');
+    });
+
+    it('returns invitedDriveId: null and no inviteError when no inviteToken provided', async () => {
+      const request = createNativeRequest(validNativePayload);
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(body.invitedDriveId).toBeNull();
+      expect(body.inviteError).toBeUndefined();
+    });
+
+    it('surfaces invitedKind=page + invitedPageId for page-kind acceptances so native clients can route to /pages/<pageId>', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'page',
+        invitedDriveId: 'drv_1',
+        invitedPageId: 'page_1',
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
+      });
+
+      const request = createNativeRequest({ ...validNativePayload, inviteToken: 'ps_invite_p' });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(body.invitedKind).toBe('page');
+      expect(body.invitedDriveId).toBe('drv_1');
+      expect(body.invitedPageId).toBe('page_1');
+      expect(body.invitedConnectionId).toBeNull();
+    });
+
+    it('surfaces invitedKind=connection + invitedConnectionId for connection-kind acceptances so native clients have a non-null success signal', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'connection',
+        invitedDriveId: null,
+        invitedPageId: null,
+        connectionId: 'conn_1', invitedOrgId: null, orgLandingPath: null,
+      });
+
+      const request = createNativeRequest({ ...validNativePayload, inviteToken: 'ps_invite_c' });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(body.invitedKind).toBe('connection');
+      expect(body.invitedDriveId).toBeNull();
+      expect(body.invitedPageId).toBeNull();
+      expect(body.invitedConnectionId).toBe('conn_1');
+    });
+  });
+
 });

@@ -1,15 +1,16 @@
-import { anonymizeAiUsageContent, purgeAiUsageLogs } from '@pagespace/lib';
+import { purgeAiUsageLogs } from '@pagespace/lib/logging/ai-usage-purge';
+import { getAiUsageLogsRetentionDays, getRetentionCutoff } from '@pagespace/lib/compliance/retention/monitoring-retention';
+import { audit } from '@pagespace/lib/audit/audit-log';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { NextResponse } from 'next/server';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 
 /**
- * Cron endpoint to anonymize and purge old AI usage logs.
+ * Cron endpoint to purge old AI usage logs.
  *
- * Two-phase approach:
- * 1. Anonymize prompt/completion text for logs older than 30 days
- * 2. Purge entire rows older than 90 days
- *
- * This preserves recent analytics while enforcing data retention limits.
+ * Deletes entire rows older than RETENTION_AI_USAGE_LOGS_DAYS (default 90) to
+ * enforce data retention limits. The window is env-configurable so tenant
+ * deployments can tune it without a code change.
  *
  * Authentication: HMAC-signed request with X-Cron-Timestamp, X-Cron-Nonce, X-Cron-Signature headers.
  */
@@ -21,22 +22,21 @@ export async function GET(request: Request) {
 
   try {
     const now = new Date();
-    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-    const ninetyDaysAgo = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+    const cutoff = getRetentionCutoff(getAiUsageLogsRetentionDays());
 
-    const anonymized = await anonymizeAiUsageContent(thirtyDaysAgo);
-    const purged = await purgeAiUsageLogs(ninetyDaysAgo);
+    const purged = await purgeAiUsageLogs(cutoff);
 
-    console.log(`[Cron] AI usage logs: anonymized ${anonymized}, purged ${purged}`);
+    console.log(`[Cron] AI usage logs: purged ${purged}`);
+
+    audit({ eventType: 'data.delete', resourceType: 'cron_job', resourceId: 'purge_ai_usage', details: { purged } });
 
     return NextResponse.json({
       success: true,
-      anonymized,
       purged,
       timestamp: now.toISOString(),
     });
   } catch (error) {
-    console.error('[Cron] Error purging AI usage logs:', error);
+    loggers.system.error('[Cron] Error purging AI usage logs', error as Error);
     return NextResponse.json(
       {
         success: false,

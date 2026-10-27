@@ -1,0 +1,93 @@
+// @vitest-environment jsdom
+import '@/retained/test/setup';
+import React from 'react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Drive } from '@pagespace/lib/types';
+
+const push = vi.hoisted(() => vi.fn());
+vi.mock('@/retained-adapters/navigation', () => ({ imagoHref: (href: string) => href, useRouter: () => ({ push }), useParams: () => ({}), usePathname: () => '/dashboard' }));
+vi.mock('@/retained/lib/auth/auth-fetch', () => ({ fetchWithAuth: vi.fn(() => Promise.resolve(new Response(null, { status: 200 }))), post: vi.fn(), del: vi.fn() }));
+vi.mock('@/retained/components/layout/left-sidebar/CreateDriveDialog', () => ({ default: () => null }));
+vi.mock('@/retained/hooks/useMyOrganizations', () => ({
+  useMyOrganizations: () => ({ organizations: [{ id: 'o-northwind', name: 'Northwind Labs', slug: 'northwind', avatarUrl: null, role: 'MEMBER' }] }),
+}));
+
+import DriveSwitcherDialog from '../DriveSwitcherDialog';
+import { useDriveStore } from '@/retained/hooks/useDrive';
+import { useFavorites } from '@/retained/hooks/useFavorites';
+import { fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
+
+const drive = (o: Partial<Drive> & Pick<Drive, 'id' | 'name'>): Drive => ({
+  slug: o.name.toLowerCase(), ownerId: 'u1', isTrashed: false, trashedAt: null,
+  createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', isOwned: false, ...o,
+});
+
+// The store holds exactly what GET /api/drives answered: the accessible list. An un-joined
+// RESTRICTED drive (Finance) is not in it, so the picker cannot show it (A-4, DRV-6).
+const accessible: Drive[] = [
+  drive({ id: 'd-product', name: 'Product', orgId: 'o-northwind', orgVisibility: 'OPEN' }),
+  drive({ id: 'd-research', name: 'Customer Research', orgId: 'o-northwind', orgVisibility: 'RESTRICTED' }),
+  drive({ id: 'd-home', name: 'Home', orgId: null, isOwned: true }),
+];
+
+describe('DriveSwitcherDialog with organizations', () => {
+  beforeEach(() => {
+    useDriveStore.setState({ drives: accessible, currentDriveId: null, isLoading: false, lastFetched: Date.now() });
+    useFavorites.setState({ driveIds: new Set(), pageIds: new Set(), favorites: [], isSynced: true, isLoading: false, addFavorite: vi.fn(async () => {}), removeFavorite: vi.fn(async () => {}) });
+  });
+
+  it('DRV-9 (partial) groups drives under the org header (with a settings link) and a Personal group, from the same accessible list', () => {
+    render(<DriveSwitcherDialog open onOpenChange={vi.fn()} />);
+    const org = screen.getByTestId('picker-group-org');
+    expect(org.textContent).toContain('Northwind Labs');
+    expect(org.textContent).toContain('· 2');
+    expect(within(org).getByRole('link', { name: 'Northwind Labs settings', hidden: true }).getAttribute('href')).toBe('/orgs/o-northwind/settings');
+    const orgGroup = within(org.closest('[cmdk-group]') as HTMLElement);
+    expect(orgGroup.getByText('Product')).toBeTruthy();
+    expect(orgGroup.getByText('Customer Research')).toBeTruthy();
+    const personal = within(screen.getByTestId('picker-group-personal').closest('[cmdk-group]') as HTMLElement);
+    expect(personal.getByText('Home')).toBeTruthy();
+    expect(screen.queryByText(/All drives ·/)).toBeNull();
+  });
+
+  it('UI-1 (partial) the org hub is reachable from the picker by keyboard and assistive tech: a "settings" option in the org group, not only the icon in its hidden heading', () => {
+    const onOpenChange = vi.fn();
+    render(<DriveSwitcherDialog open onOpenChange={onOpenChange} />);
+    const option = screen.getByRole('option', { name: 'Northwind Labs settings' });
+    expect(option.closest('[cmdk-group]')).toBe(screen.getByTestId('picker-group-org').closest('[cmdk-group]'));
+    fireEvent.click(option);
+    expect(push).toHaveBeenCalledWith('/orgs/o-northwind/settings');
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it('DRV-9 (partial) shows nothing the person cannot open: an un-joined Restricted drive is never listed', () => {
+    render(<DriveSwitcherDialog open onOpenChange={vi.fn()} />);
+    expect(screen.queryByText('Finance')).toBeNull();
+    // Every option but the way out (All drives), an org's settings and its directory is a drive.
+    const listed = screen.getAllByRole('option').map((o) => o.textContent ?? '').filter((t) => !/ settings$/.test(t) && !/^Browse .* drives$/.test(t));
+    expect(listed.filter((t) => /Product|Customer Research|Home/.test(t)).length).toBe(listed.filter((t) => !/All drives/.test(t)).length);
+  });
+
+  it('DRV-6 (partial) each org group offers its Drives directory, where a Restricted drive is found and asked for', () => {
+    render(<DriveSwitcherDialog open onOpenChange={vi.fn()} />);
+    const browse = screen.getAllByRole('option').filter((o) => /^Browse .* drives$/.test(o.textContent ?? ''));
+    expect(browse.length).toBeGreaterThan(0);
+    fireEvent.click(browse[0]);
+    expect(push).toHaveBeenCalledWith(expect.stringMatching(/^\/orgs\/[^/]+\/drives$/));
+  });
+
+  it('DRV-5 (partial) DRV-9 (partial) the picker (the sidebar\'s drive switcher opens this same dialog) lists exactly what GET /api/drives answered: an Open drive of my org with no membership row appears under its org header', async () => {
+    useDriveStore.setState({ drives: [], currentDriveId: null, isLoading: false, lastFetched: 0 });
+    const answered = [drive({ id: 'd-open', name: 'Engineering', orgId: 'o-northwind', orgVisibility: 'OPEN' }), drive({ id: 'd-home', name: 'Home', orgId: null, isOwned: true })];
+    vi.mocked(fetchWithAuth).mockResolvedValueOnce(new Response(JSON.stringify(answered), { status: 200 }));
+
+    await useDriveStore.getState().fetchDrives(false, true);
+    expect(fetchWithAuth).toHaveBeenCalledWith('/api/drives');
+    render(<DriveSwitcherDialog open onOpenChange={vi.fn()} />);
+
+    const org = within(screen.getByTestId('picker-group-org').closest('[cmdk-group]') as HTMLElement);
+    expect(org.getByText('Engineering')).toBeTruthy();
+    expect(screen.queryByText('Product')).toBeNull();
+  });
+});

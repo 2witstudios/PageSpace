@@ -1,31 +1,43 @@
 /**
- * Room Management Tests
+ * @scaffold - Room Management Tests
  * Tests for Socket.IO room join/leave event handlers
+ *
+ * @REVIEW Room handlers are defined inline in index.ts and not exported.
+ * createRoomHandlers() below is a LOCAL REIMPLEMENTATION of the production
+ * logic, NOT a test of the actual production code. These tests characterize
+ * expected room-join behavior but do not prove the production handlers work.
+ *
+ * To fix: extract room handlers from index.ts into a separate rooms.ts module
+ * with exported functions, then import and test the real code.
+ *
+ * @REVIEW ORM chain mock (db.select().from().where().limit()) is used for the
+ * DM conversation lookup. This should be replaced with a repository seam.
+ *
+ * Suggested integration tests:
+ * - Socket.IO client integration test: connect, emit join_channel, verify room membership
+ * - Socket.IO client integration test: verify permission denial disconnects socket
  */
 
 import { describe, it, expect, beforeEach, vi, MockedFunction } from 'vitest';
 
 // Mock the permission functions
-vi.mock('@pagespace/lib/permissions-cached', () => ({
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getUserAccessLevel: vi.fn(),
   getUserDriveAccess: vi.fn(),
 }));
 
 // Mock the database
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnThis(),
     from: vi.fn().mockReturnThis(),
     where: vi.fn().mockReturnThis(),
     limit: vi.fn().mockResolvedValue([]),
   },
-  eq: vi.fn((field, value) => ({ field, value })),
-  or: vi.fn(),
-  dmConversations: { id: 'id', participant1Id: 'participant1Id', participant2Id: 'participant2Id' },
 }));
 
 // Mock the logger
-vi.mock('@pagespace/lib/logger-config', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     realtime: {
       debug: vi.fn(),
@@ -34,10 +46,12 @@ vi.mock('@pagespace/lib/logger-config', () => ({
       error: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
-import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions-cached';
-import { db } from '@pagespace/db';
+import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
+import { db } from '@pagespace/db/db';
 
 // Create a mock socket that tracks room joins/leaves
 const createMockSocket = (userId?: string) => {
@@ -72,10 +86,12 @@ const createRoomHandlers = (socket: ReturnType<typeof createMockSocket>) => {
         const taskRoom = `user:${user.id}:tasks`;
         const calendarRoom = `user:${user.id}:calendar`;
         const userDrivesRoom = `user:${user.id}:drives`;
+        const globalRoom = `user:${user.id}:global`;
         socket.join(notificationRoom);
         socket.join(taskRoom);
         socket.join(calendarRoom);
         socket.join(userDrivesRoom);
+        socket.join(globalRoom);
       }
     },
 
@@ -160,6 +176,7 @@ const createRoomHandlers = (socket: ReturnType<typeof createMockSocket>) => {
   };
 };
 
+/** @scaffold */
 describe('Room Management', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -215,7 +232,7 @@ describe('Room Management', () => {
       await handlers.joinChannel(pageId);
 
       expect(socket.hasJoinedRoom(pageId)).toBe(false);
-      expect(socket.disconnect).toHaveBeenCalled();
+      expect(socket.disconnect).toHaveBeenCalledTimes(1);
     });
 
     it('given permission check throws error, should disconnect socket', async () => {
@@ -229,7 +246,7 @@ describe('Room Management', () => {
       await handlers.joinChannel(pageId);
 
       expect(socket.hasJoinedRoom(pageId)).toBe(false);
-      expect(socket.disconnect).toHaveBeenCalled();
+      expect(socket.disconnect).toHaveBeenCalledTimes(1);
     });
 
     it('given no user in socket.data, should return early', async () => {
@@ -418,6 +435,44 @@ describe('Room Management', () => {
 
       expect(socket.leave).toHaveBeenCalledWith(`user:${userId}:drives`);
       expect(socket.hasJoinedRoom(`user:${userId}:drives`)).toBe(false);
+    });
+  });
+
+  describe('user-scoped global room', () => {
+    it('given authenticated user on connect, should auto-join user:{userId}:global room', () => {
+      const userId = 'test-user-123';
+      const socket = createMockSocket(userId);
+      const handlers = createRoomHandlers(socket);
+
+      handlers.onConnect();
+
+      expect(socket.hasJoinedRoom(`user:${userId}:global`)).toBe(true);
+    });
+
+    it('given unauthenticated socket, should not join global room', () => {
+      const socket = createMockSocket(undefined);
+      const handlers = createRoomHandlers(socket);
+
+      handlers.onConnect();
+
+      expect(socket.join).not.toHaveBeenCalled();
+    });
+
+    it('given two users, user A should NOT be in user B global room', () => {
+      const userA = 'user-a-111';
+      const userB = 'user-b-222';
+      const socketA = createMockSocket(userA);
+      const socketB = createMockSocket(userB);
+      const handlersA = createRoomHandlers(socketA);
+      const handlersB = createRoomHandlers(socketB);
+
+      handlersA.onConnect();
+      handlersB.onConnect();
+
+      expect(socketA.hasJoinedRoom(`user:${userA}:global`)).toBe(true);
+      expect(socketB.hasJoinedRoom(`user:${userB}:global`)).toBe(true);
+      expect(socketA.hasJoinedRoom(`user:${userB}:global`)).toBe(false);
+      expect(socketB.hasJoinedRoom(`user:${userA}:global`)).toBe(false);
     });
   });
 

@@ -4,6 +4,7 @@
 
 import { logger, LogContext } from './logger';
 import type { LogInput, HttpMethod } from './logger-types';
+import { getClientIP } from '../security/client-ip';
 
 interface NextLikeRequest {
   nextUrl: { pathname: string; searchParams: URLSearchParams };
@@ -47,9 +48,7 @@ export function extractRequestContext(req: LoggableRequest): LogContext {
   if ('nextUrl' in req) {
     context.endpoint = req.nextUrl.pathname;
     context.method = req.method;
-    context.ip = req.headers.get('x-forwarded-for')?.split(',')[0] || 
-                  req.headers.get('x-real-ip') || 
-                  'unknown';
+    context.ip = getClientIP(req);
     context.userAgent = req.headers.get('user-agent') || undefined;
     
     // Extract query params
@@ -181,7 +180,7 @@ export function logAuthEvent(
   const metadata = {
     event,
     userId,
-    email: email ? email.replace(/(.{2}).*(@.*)/, '$1***$2') : undefined, // Partially mask email
+    email: email ? '[REDACTED]' : undefined,
     ip,
     reason
   };
@@ -258,18 +257,36 @@ export function withLogging<T extends (...args: unknown[]) => Promise<unknown>>(
 }
 
 /**
- * Log unhandled errors
+ * Log unhandled errors and exit. Node (15+) crashes the process by default on
+ * BOTH uncaughtException and unhandledRejection — but registering a listener
+ * for either event, for any reason, suppresses that default. Since a state-
+ * corrupting failure that leaves the process silently running unsupervised is
+ * worse than one that gets restarted, this handler always exits after
+ * logging, matching the default it's overriding. An optional onFatalError
+ * hook (e.g. Sentry capture + flush) is awaited before that exit; the hook's
+ * own errors are swallowed so a broken hook never blocks shutdown or masks
+ * the original error.
  */
-export function setupErrorHandlers(): void {
-  process.on('uncaughtException', (error: Error) => {
-    loggers.system.fatal('Uncaught exception', error);
+export function setupErrorHandlers(onFatalError?: (error: unknown) => Promise<void> | void): void {
+  const handleFatal = async (error: unknown) => {
+    if (onFatalError) {
+      try {
+        await onFatalError(error);
+      } catch { /* never let the hook block shutdown */ }
+    }
     process.exit(1);
+  };
+
+  process.on('uncaughtException', async (error: Error) => {
+    loggers.system.fatal('Uncaught exception', error);
+    await handleFatal(error);
   });
 
-  process.on('unhandledRejection', (reason: unknown) => {
+  process.on('unhandledRejection', async (reason: unknown) => {
     loggers.system.error('Unhandled rejection', undefined, {
       reason: String(reason),
     });
+    await handleFatal(reason);
   });
 }
 
@@ -297,9 +314,9 @@ export function logPerformanceDecorator(target: object, propertyName: string, de
 /**
  * Initialize logging for the application
  */
-export function initializeLogging(): void {
+export function initializeLogging(onFatalError?: (error: unknown) => Promise<void> | void): void {
   // Set up error handlers
-  setupErrorHandlers();
+  setupErrorHandlers(onFatalError);
   
   // Log startup
   loggers.system.info('Application starting', {
@@ -312,6 +329,14 @@ export function initializeLogging(): void {
       used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024)
     }
   });
+}
+
+/**
+ * Execute fn(); swallow any exception so a broken logger never propagates into
+ * call-site error handling.
+ */
+export function trySilently(fn: () => void): void {
+  try { fn(); } catch { /* */ }
 }
 
 // Export everything

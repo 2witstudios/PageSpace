@@ -2,7 +2,7 @@
  * Mobile Google OAuth Token Exchange Endpoint
  *
  * This endpoint accepts an ID token from the iOS Google Sign-In SDK,
- * verifies it server-side, and returns JWT tokens for authentication.
+ * verifies it server-side, and returns an opaque session token.
  *
  * Flow:
  * 1. iOS app uses GoogleSignIn SDK to authenticate user
@@ -10,7 +10,7 @@
  * 3. iOS app sends ID token to this endpoint
  * 4. Server verifies ID token with Google
  * 5. Server creates/links user account
- * 6. Server returns JWT access + refresh tokens
+ * 6. Server returns an opaque session token (device tokens handle refresh on mobile)
  *
  * Security Model:
  *
@@ -47,24 +47,28 @@
  */
 
 import { z } from 'zod/v4';
-import {
-  generateCSRFToken,
-  validateOrCreateDeviceToken,
-} from '@pagespace/lib/server';
-import { db, users, eq } from '@pagespace/db';
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
+import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
+import { authRepository } from '@/lib/repositories/auth-repository';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
-} from '@pagespace/lib/security';
-import { sessionService } from '@pagespace/lib/auth';
-import { loggers, logAuthEvent } from '@pagespace/lib/server';
-import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
-import { verifyOAuthIdToken, createOrLinkOAuthUser, OAuthProvider } from '@pagespace/lib/server';
-import type { MobileOAuthResponse } from '@pagespace/lib/server';
+} from '@pagespace/lib/security/distributed-rate-limit';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { maskEmail } from '@pagespace/lib/audit/mask-email';
+import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
+import { verifyOAuthIdToken, createOrLinkOAuthUser } from '@pagespace/lib/auth/oauth-utils';
+import { OAuthProvider } from '@pagespace/lib/auth/oauth-types';
+import type { MobileOAuthResponse } from '@pagespace/lib/auth/oauth-types';
 import { getClientIP } from '@/lib/auth';
 import { createSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
+import { autoJoinVerifiedDomainAfterSignIn } from '@/lib/orgs/domain-auto-join';
+import { ceremonyAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 
 const oauthExchangeSchema = z.object({
   idToken: z.string().min(1, 'ID token is required'),
@@ -167,6 +171,11 @@ export async function POST(req: Request) {
       loggers.auth.warn('Google ID token verification failed', {
         error: verificationResult.error,
       });
+      auditRequest(req, {
+        eventType: 'auth.login.failure',
+        riskScore: 0.3,
+        details: { reason: 'mobile_google_verify_failed' },
+      });
 
       // Track failed OAuth attempt
       trackAuthEvent(undefined, 'failed_oauth', {
@@ -184,7 +193,7 @@ export async function POST(req: Request) {
 
     const { userInfo } = verificationResult;
     loggers.auth.info('Google ID token verified', {
-      email: userInfo.email,
+      email: maskEmail(userInfo.email),
       provider: userInfo.provider,
     });
 
@@ -212,15 +221,35 @@ export async function POST(req: Request) {
 
     // Create or link user account
     loggers.auth.info('Creating or linking OAuth user', {
-      email: userInfo.email,
+      email: maskEmail(userInfo.email),
       provider: userInfo.provider,
     });
 
     const googlePictureUrl = userInfo.picture;
-    let user = await createOrLinkOAuthUser({
+    const linkResult = await createOrLinkOAuthUser({
       ...userInfo,
       picture: undefined,
     });
+
+    // SECURITY (M5): refuse sign-in when an unverified provider email collides
+    // with an existing account (the helper never links it).
+    if (linkResult.status === 'rejected') {
+      loggers.auth.warn('Blocked OAuth account link via mobile exchange: unverified email conflict', {
+        email: maskEmail(userInfo.email),
+        provider: userInfo.provider,
+      });
+      auditRequest(req, {
+        eventType: 'auth.login.failure',
+        riskScore: 0.8,
+        details: { reason: 'mobile_oauth_unverified_email_link_blocked' },
+      });
+      return Response.json(
+        { error: 'Unable to sign in with this account. Please use your original sign-in method.' },
+        { status: 403 }
+      );
+    }
+
+    let user = linkResult.user;
 
     const resolvedImage = await resolveGoogleAvatarImage({
       userId: user.id,
@@ -229,24 +258,38 @@ export async function POST(req: Request) {
     });
 
     if (resolvedImage !== (user.image ?? null)) {
-      await db.update(users)
-        .set({ image: resolvedImage })
-        .where(eq(users.id, user.id));
+      await authRepository.updateUser(user.id, { image: resolvedImage });
       user = { ...user, image: resolvedImage };
     }
 
     loggers.auth.info('OAuth user created/linked', {
       userId: user.id,
-      email: user.email,
+      email: maskEmail(user.email),
       provider: user.provider,
     });
 
+    // SEC-1: a new account on an org's verified email domain joins it (seat permitting). Never throws.
+    await autoJoinVerifiedDomainAfterSignIn(user.id);
+
+    // Provision the user's Home drive (idempotent). Non-fatal: a failure is
+    // retried lazily on the next login through any auth path.
+    await provisionHomeDriveIfNeeded(user.id).catch((error) => {
+      loggers.auth.error('Failed to provision Home drive', error as Error, {
+        userId: user.id,
+        provider: 'google-mobile-exchange',
+      });
+    });
+
     // Create session token (opaque, stored in DB)
+    // D-OW-45: the ceremony this route just verified, recorded on every credential it mints.
+    const authentication = ceremonyAuthentication({ method: 'google' }, Date.now());
     const sessionToken = await sessionService.createSession({
+      authentication,
       userId: user.id,
       type: 'user',
       scopes: ['*'],
       expiresInMs: 90 * 24 * 60 * 60 * 1000, // 90 days for mobile
+      deviceId,
       createdByService: 'mobile-oauth-google',
       createdByIp: clientIP,
     });
@@ -263,6 +306,7 @@ export async function POST(req: Request) {
 
     // Create or validate device token for the mobile device
     const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
+      authentication,
       providedDeviceToken,
       userId: user.id,
       deviceId,
@@ -289,12 +333,9 @@ export async function POST(req: Request) {
       });
     }
 
-    // Log successful OAuth login
-    logAuthEvent('login', user.id, user.email, clientIP, 'Google OAuth Mobile');
-
     // Track successful OAuth login
     trackAuthEvent(user.id, 'login', {
-      email: user.email,
+      email: maskEmail(user.email),
       ip: clientIP,
       provider: 'google',
       userAgent: req.headers.get('user-agent'),
@@ -304,6 +345,12 @@ export async function POST(req: Request) {
 
     // Generate CSRF token using session ID
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
+    auditRequest(req, {
+      eventType: 'auth.login.success',
+      userId: user.id,
+      sessionId: sessionClaims.sessionId,
+      details: { method: 'Google OAuth Mobile' },
+    });
 
     // Return tokens in JSON response for mobile client
     // Note: No refreshToken - mobile uses device tokens for refresh
@@ -336,6 +383,11 @@ export async function POST(req: Request) {
     return Response.json(response, { status: 200, headers });
   } catch (error) {
     loggers.auth.error('Mobile Google OAuth error', error as Error);
+    auditRequest(req, {
+      eventType: 'auth.login.failure',
+      riskScore: 0.3,
+      details: { reason: 'mobile_google_exchange_error' },
+    });
 
     // Track failed OAuth attempt
     trackAuthEvent(undefined, 'failed_oauth', {

@@ -6,7 +6,7 @@
  * mention format: @[Label](id:type) and returns the IDs for processing.
  */
 
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 export interface ProcessedMention {
   id: string;
@@ -98,40 +98,6 @@ You MUST:
 4. If you cannot access a mentioned document, acknowledge this in your response
 
 The mentioned documents provide critical context for answering the user's question effectively.
-`;
-}
-
-/**
- * Create tool calls for reading mentioned pages
- * This helps the AI automatically read mentioned documents
- * 
- * @param pageIds - Array of page IDs to read
- * @param mentions - Array of processed mentions for context
- * @returns Instructions for the AI to execute read_page tools
- */
-export function createMentionToolInstructions(pageIds: string[], mentions: ProcessedMention[]): string {
-  if (pageIds.length === 0) {
-    return '';
-  }
-  
-  const mentionMap = new Map(mentions.map(m => [m.id, m]));
-  
-  const instructions = pageIds
-    .map(id => {
-      const mention = mentionMap.get(id);
-      if (!mention) return null;
-      
-      // Build a path hint for the AI (it may not be accurate but helps with context)
-      const pathHint = `/${mention.label}`;
-      
-      return `read_page(path: "${pathHint}", pageId: "${id}")`;
-    })
-    .filter(Boolean)
-    .join('\n');
-  
-  return `
-Before responding, execute these tool calls to read the mentioned documents:
-${instructions}
 `;
 }
 

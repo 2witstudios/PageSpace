@@ -8,8 +8,9 @@
  * making it detectable if any entry is modified, deleted, or inserted out of order.
  */
 
-import { db, activityLogs } from '@pagespace/db';
-import { asc, isNotNull, count, and, gte, lte, SQL } from 'drizzle-orm';
+import { db } from '@pagespace/db/db';
+import { activityLogs } from '@pagespace/db/schema/monitoring';
+import { asc, desc, isNotNull, count, and, gte, lte, SQL } from 'drizzle-orm';
 import { computeLogHash } from './activity-logger';
 
 /**
@@ -205,7 +206,7 @@ export async function verifyHashChain(
       // Fetch batch of entries ordered by timestamp
       const entries = await db.query.activityLogs.findMany({
         where: conditions.length > 0 ? and(...conditions) : undefined,
-        orderBy: [asc(activityLogs.timestamp)],
+        orderBy: [asc(activityLogs.chainSeq)],
         offset,
         limit: currentBatchSize,
         columns: {
@@ -256,13 +257,11 @@ export async function verifyHashChain(
         // Determine what previous hash to use
         const hashInput = previousHash ?? '';
 
-        // Compute expected hash
+        // Compute expected hash (PII fields excluded per GDPR #541)
         const computedHash = computeLogHash(
           {
             id: storedEntry.id,
             timestamp: storedEntry.timestamp,
-            userId: storedEntry.userId,
-            actorEmail: storedEntry.actorEmail,
             operation: storedEntry.operation,
             resourceType: storedEntry.resourceType,
             resourceId: storedEntry.resourceId,
@@ -375,7 +374,7 @@ export async function quickIntegrityCheck(
     // Check first entry for chain seed
     const firstEntry = await db.query.activityLogs.findFirst({
       where: isNotNull(activityLogs.logHash),
-      orderBy: [asc(activityLogs.timestamp)],
+      orderBy: [asc(activityLogs.chainSeq)],
       columns: {
         id: true,
         chainSeed: true,
@@ -388,7 +387,7 @@ export async function quickIntegrityCheck(
     // Verify last few entries
     const lastEntries = await db.query.activityLogs.findMany({
       where: isNotNull(activityLogs.logHash),
-      orderBy: [asc(activityLogs.timestamp)],
+      orderBy: [asc(activityLogs.chainSeq)],
       limit: 5,
       columns: {
         id: true,
@@ -465,7 +464,7 @@ export async function getHashChainStats(): Promise<{
     // Get first entry with chain seed
     const firstEntry = await db.query.activityLogs.findFirst({
       where: isNotNull(activityLogs.chainSeed),
-      orderBy: [asc(activityLogs.timestamp)],
+      orderBy: [asc(activityLogs.chainSeq)],
       columns: {
         timestamp: true,
         chainSeed: true,
@@ -475,7 +474,7 @@ export async function getHashChainStats(): Promise<{
     // Get last entry
     const lastEntry = await db.query.activityLogs.findFirst({
       where: isNotNull(activityLogs.logHash),
-      orderBy: [asc(activityLogs.timestamp)],
+      orderBy: [desc(activityLogs.chainSeq)],
       columns: {
         timestamp: true,
       },
@@ -544,13 +543,11 @@ export async function verifyEntry(
       previousHashUsed = storedEntry.previousLogHash;
     }
 
-    // Compute expected hash
+    // Compute expected hash (PII fields excluded per GDPR #541)
     const computedHash = computeLogHash(
       {
         id: storedEntry.id,
         timestamp: storedEntry.timestamp,
-        userId: storedEntry.userId,
-        actorEmail: storedEntry.actorEmail,
         operation: storedEntry.operation,
         resourceType: storedEntry.resourceType,
         resourceId: storedEntry.resourceId,

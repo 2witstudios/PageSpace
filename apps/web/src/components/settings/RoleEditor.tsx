@@ -7,11 +7,15 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
+import { Checkbox } from '@/components/ui/checkbox';
 import { ChevronLeft, Save } from 'lucide-react';
-import { useToast } from '@/hooks/useToast';
+import { toast } from 'sonner';
 import { post, patch } from '@/lib/auth/auth-fetch';
 import { ROLE_COLORS } from '@/lib/utils';
 import { PermissionsGrid } from '@/components/members/PermissionsGrid';
+import { useDriveStore } from '@/hooks/useDrive';
+import { LAPSED_LOOSEN_NOTE, useOrgLapsed } from '@/hooks/useOrgLapsed';
+import { roleGrantWidens } from '@pagespace/lib/organizations/loosening-core';
 
 interface Role {
   id: string;
@@ -20,6 +24,7 @@ interface Role {
   color?: string;
   isDefault: boolean;
   permissions: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
+  driveWidePermissions?: { canView: boolean; canEdit: boolean; canShare: boolean } | null;
   position: number;
 }
 
@@ -32,7 +37,6 @@ interface RoleEditorProps {
 
 export function RoleEditor({ driveId, role, onSave, onCancel }: RoleEditorProps) {
   const isEditing = !!role;
-  const { toast } = useToast();
 
   const [name, setName] = useState(role?.name || '');
   const [description, setDescription] = useState(role?.description || '');
@@ -40,14 +44,27 @@ export function RoleEditor({ driveId, role, onSave, onCancel }: RoleEditorProps)
   const [isDefault, setIsDefault] = useState(role?.isDefault || false);
   const [permissions, setPermissions] = useState<Map<string, { canView: boolean; canEdit: boolean; canShare: boolean }>>(
     () => {
-      // Initialize from role's permissions if editing
       if (role?.permissions) {
         return new Map(Object.entries(role.permissions));
       }
       return new Map();
     }
   );
+  const [driveWidePerms, setDriveWidePerms] = useState<{ canView: boolean; canEdit: boolean; canShare: boolean } | null>(
+    role?.driveWidePermissions ?? null
+  );
   const [saving, setSaving] = useState(false);
+
+  // [D-OW-33] while the drive's org is unpaid a role may only be narrowed: widening an existing role or making one
+  // the default waits until it pays (a new non-default role gives nobody anything and stays allowed). The route
+  // refuses only a widening someone holds; the editor cannot see holders, so it holds back any widening.
+  const driveOrgId = useDriveStore((state) => state.drives.find((d) => d.id === driveId)?.orgId ?? null);
+  const lapsed = useOrgLapsed(driveOrgId);
+  const editedGrant = { permissions: Object.fromEntries(permissions), driveWidePermissions: driveWidePerms };
+  const widens = isEditing && role
+    ? roleGrantWidens({ permissions: role.permissions, driveWidePermissions: role.driveWidePermissions ?? null }, editedGrant) || (isDefault && !role.isDefault)
+    : isDefault;
+  const lapsedBlocksSave = lapsed && widens;
 
   const handlePermissionChange = (pageId: string, perms: { canView: boolean; canEdit: boolean; canShare: boolean }) => {
     setPermissions(prev => {
@@ -57,32 +74,41 @@ export function RoleEditor({ driveId, role, onSave, onCancel }: RoleEditorProps)
     });
   };
 
+  const handleDriveWideChange = (perm: 'canView' | 'canEdit' | 'canShare', value: boolean) => {
+    setDriveWidePerms(prev => {
+      const base = prev ?? { canView: false, canEdit: false, canShare: false };
+      const next = { ...base };
+      if (perm === 'canView' && !value) {
+        return null;
+      } else if ((perm === 'canEdit' || perm === 'canShare') && value) {
+        next.canView = true;
+        next[perm] = true;
+      } else {
+        next[perm] = value;
+      }
+      return (next.canView || next.canEdit || next.canShare) ? next : null;
+    });
+  };
+
   const handleSave = async () => {
     const trimmedName = name.trim();
     if (!trimmedName) {
-      toast({
-        title: 'Name required',
-        description: 'Please enter a name for this role',
-        variant: 'destructive',
-      });
+      toast.error('Please enter a name for this role');
       return;
     }
 
     if (trimmedName.length > 50) {
-      toast({
-        title: 'Name too long',
-        description: 'Role name must be 50 characters or less',
-        variant: 'destructive',
-      });
+      toast.error('Role name must be 50 characters or less');
       return;
     }
 
     setSaving(true);
     try {
-      // Convert Map to object for JSON - only include pages with at least one permission
       const permissionsObj: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }> = {};
       permissions.forEach((perms, pageId) => {
-        if (perms.canView || perms.canEdit || perms.canShare) {
+        // When drive-wide access is active, retain all-false entries as explicit denials —
+        // the permission resolver uses canView:false entries to remove pages from the drive-wide grant.
+        if (perms.canView || perms.canEdit || perms.canShare || driveWidePerms) {
           permissionsObj[pageId] = perms;
         }
       });
@@ -93,30 +119,21 @@ export function RoleEditor({ driveId, role, onSave, onCancel }: RoleEditorProps)
         color,
         isDefault,
         permissions: permissionsObj,
+        driveWidePermissions: driveWidePerms,
       };
 
       if (isEditing && role) {
         await patch(`/api/drives/${driveId}/roles/${role.id}`, roleData);
-        toast({
-          title: 'Success',
-          description: 'Role updated successfully',
-        });
+        toast.success('Role updated successfully');
       } else {
         await post(`/api/drives/${driveId}/roles`, roleData);
-        toast({
-          title: 'Success',
-          description: 'Role created successfully',
-        });
+        toast.success('Role created successfully');
       }
 
       onSave();
     } catch (error) {
       console.error('Error saving role:', error);
-      toast({
-        title: 'Error',
-        description: error instanceof Error ? error.message : 'Failed to save role',
-        variant: 'destructive',
-      });
+      toast.error(error instanceof Error ? error.message : 'Failed to save role');
     } finally {
       setSaving(false);
     }
@@ -199,20 +216,55 @@ export function RoleEditor({ driveId, role, onSave, onCancel }: RoleEditorProps)
         </CardContent>
       </Card>
 
-      {/* Page Permissions */}
+      {/* Access Level */}
       <Card>
         <CardHeader>
-          <CardTitle>Page Permissions</CardTitle>
+          <CardTitle>Access Level</CardTitle>
           <CardDescription>
-            Select which pages members with this role can access
+            Set what members with this role can access across the drive
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          <PermissionsGrid
-            driveId={driveId}
-            permissions={permissions}
-            onChange={handlePermissionChange}
-          />
+        <CardContent className="space-y-6">
+          {/* Drive-Wide Access */}
+          <div className="space-y-3">
+            <div>
+              <p className="text-sm font-medium">Drive-Wide Access</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Grant the same permission to every non-private page in the drive. Leave unchecked to control access per page below.
+              </p>
+            </div>
+            <div className="flex gap-6">
+              {(['canView', 'canEdit', 'canShare'] as const).map((perm) => (
+                <label key={perm} className="flex items-center gap-2 cursor-pointer select-none">
+                  <Checkbox
+                    checked={driveWidePerms?.[perm] ?? false}
+                    onCheckedChange={(v) => handleDriveWideChange(perm, !!v)}
+                  />
+                  <span className="text-sm capitalize">{perm.replace('can', '')}</span>
+                </label>
+              ))}
+            </div>
+            {driveWidePerms && (
+              <p className="text-xs text-amber-600 dark:text-amber-400">
+                Drive-wide access is active — use per-page settings below to grant private pages or deny specific pages.
+              </p>
+            )}
+          </div>
+
+          {/* Per-Page Overrides */}
+          <div className="space-y-2">
+            <div>
+              <p className="text-sm font-medium">Per-Page Overrides</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Fine-tune access for individual pages.
+              </p>
+            </div>
+            <PermissionsGrid
+              driveId={driveId}
+              permissions={permissions}
+              onChange={handlePermissionChange}
+            />
+          </div>
         </CardContent>
       </Card>
 
@@ -221,7 +273,12 @@ export function RoleEditor({ driveId, role, onSave, onCancel }: RoleEditorProps)
         <Button variant="outline" onClick={onCancel} disabled={saving}>
           Cancel
         </Button>
-        <Button onClick={handleSave} disabled={saving}>
+        {lapsedBlocksSave && (
+          <p className="mr-auto self-center text-xs text-muted-foreground" data-testid="lapsed-loosen-note">
+            Widening a role or making it the default is paused. {LAPSED_LOOSEN_NOTE}
+          </p>
+        )}
+        <Button onClick={handleSave} disabled={saving || lapsedBlocksSave}>
           <Save className="w-4 h-4 mr-2" />
           {saving ? 'Saving...' : isEditing ? 'Save Changes' : 'Create Role'}
         </Button>

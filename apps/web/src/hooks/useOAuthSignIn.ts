@@ -1,17 +1,82 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
+import { isDesktopPlatform } from '@/lib/desktop-auth';
+import { currentDesktopShell, type DesktopShell } from '@/lib/auth/desktop-shell';
+
+const EXTERNAL_AUTH_TIMEOUT_MS = 5 * 60 * 1000;
+
+type OAuthProvider = 'google' | 'apple';
+
+export interface OAuthSigninBodyInput {
+  platform: 'web' | 'desktop';
+  deviceId: string;
+  deviceName: string;
+  inviteToken?: string;
+  returnUrl?: string;
+  /**
+   * Which desktop app is asking. Round-trips through the signed OAuth state so
+   * the callback deep-links back into THIS app rather than its sibling — the
+   * two register different protocol schemes.
+   */
+  shell?: DesktopShell;
+}
+
+export const buildOAuthSigninBody = ({
+  platform,
+  deviceId,
+  deviceName,
+  inviteToken,
+  returnUrl,
+  shell,
+}: OAuthSigninBodyInput): Record<string, string> => ({
+  platform,
+  deviceId,
+  deviceName,
+  ...(inviteToken && { inviteToken }),
+  ...(returnUrl && { returnUrl }),
+  ...(shell && { shell }),
+});
+
+export interface PostNativeAuthRedirectInput {
+  isNewUser?: boolean;
+  invitedDriveId?: string | null;
+  returnUrl?: string;
+}
+
+/**
+ * Decide where to land a user after a successful native (iOS/Android) OAuth flow.
+ *
+ * Precedence: invite-consumed drive > returnUrl > new-user welcome > /dashboard.
+ * Pure function — extracted so the redirect logic can be tested without
+ * rendering the hook.
+ */
+export const buildPostNativeAuthRedirect = ({
+  isNewUser,
+  invitedDriveId,
+  returnUrl,
+}: PostNativeAuthRedirectInput): string => {
+  if (invitedDriveId) return `/dashboard/${invitedDriveId}?invited=1`;
+  if (returnUrl) return returnUrl;
+  if (isNewUser) return '/dashboard?welcome=true';
+  return '/dashboard';
+};
 
 interface UseOAuthSignInOptions {
   onStart?: () => void;
   onError?: (message: string) => void;
+  inviteToken?: string;
+  returnUrl?: string;
 }
 
-export function useOAuthSignIn({ onStart, onError }: UseOAuthSignInOptions = {}) {
+export function useOAuthSignIn({ onStart, onError, inviteToken, returnUrl }: UseOAuthSignInOptions = {}) {
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [isAppleLoading, setIsAppleLoading] = useState(false);
+  const [waitingProvider, setWaitingProvider] = useState<OAuthProvider | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cleanupRef = useRef<(() => void) | null>(null);
   const router = useRouter();
 
   const reportError = (message: string) => {
@@ -19,8 +84,29 @@ export function useOAuthSignIn({ onStart, onError }: UseOAuthSignInOptions = {})
     onError?.(message);
   };
 
+  const cancelExternalAuth = useCallback(() => {
+    setWaitingProvider(null);
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    if (cleanupRef.current) {
+      cleanupRef.current();
+      cleanupRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      if (cleanupRef.current) cleanupRef.current();
+    };
+  }, []);
+
   const handleNativeSuccess = async (result: {
     isNewUser?: boolean;
+    invitedDriveId?: string | null;
+    returnUrl?: string;
     user?: { id: string; name: string | null; email: string | null; image?: string | null };
   }) => {
     const { useAuthStore } = await import('@/stores/useAuthStore');
@@ -28,35 +114,83 @@ export function useOAuthSignIn({ onStart, onError }: UseOAuthSignInOptions = {})
     if (result.user) {
       useAuthStore.getState().setUser(result.user);
     }
-    router.replace(result.isNewUser ? '/dashboard?welcome=true' : '/dashboard');
+    router.replace(buildPostNativeAuthRedirect({
+      isNewUser: result.isNewUser,
+      invitedDriveId: result.invitedDriveId,
+      returnUrl: result.returnUrl,
+    }));
   };
 
   const getDeviceInfo = async () => {
-    const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
-
-    if (isDesktop && window.electron) {
+    if (isDesktopPlatform() && window.electron) {
       const info = await window.electron.auth.getDeviceInfo();
-      return { platform: 'desktop' as const, deviceId: info.deviceId, deviceName: info.deviceName };
+      return {
+        platform: 'desktop' as const,
+        deviceId: info.deviceId,
+        deviceName: info.deviceName,
+        shell: currentDesktopShell(),
+      };
     }
 
     const { getOrCreateDeviceId, getDeviceName } = await import('@/lib/analytics');
-    return { platform: 'web' as const, deviceId: getOrCreateDeviceId(), deviceName: getDeviceName() };
+    return {
+      platform: 'web' as const,
+      deviceId: getOrCreateDeviceId(),
+      deviceName: getDeviceName(),
+      shell: undefined,
+    };
   };
 
-  const initiateWebOAuth = async (endpoint: string, providerName: string) => {
-    const { platform, deviceId, deviceName } = await getDeviceInfo();
+  const initiateWebOAuth = async (endpoint: string, provider: OAuthProvider) => {
+    const { platform, deviceId, deviceName, shell } = await getDeviceInfo();
+    const body = buildOAuthSigninBody({
+      platform,
+      deviceId,
+      deviceName,
+      inviteToken,
+      returnUrl,
+      shell,
+    });
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ platform, deviceId, deviceName }),
+      body: JSON.stringify(body),
     });
 
     if (response.ok) {
       const data = await response.json();
+
+      if (isDesktopPlatform() && window.electron?.auth?.openExternal) {
+        // Clean up any prior waiting state before starting new attempt
+        cancelExternalAuth();
+
+        const result = await window.electron.auth.openExternal(data.url);
+        if (!result.success) {
+          reportError(result.error || 'Failed to open browser for sign-in');
+          return;
+        }
+
+        setWaitingProvider(provider);
+
+        timeoutRef.current = setTimeout(() => {
+          cancelExternalAuth();
+          toast.error('Sign-in timed out. Please try again.');
+        }, EXTERNAL_AUTH_TIMEOUT_MS);
+
+        const removeListener = window.electron.on('auth-error', (...args: unknown[]) => {
+          const errorData = args[0] as { error?: string } | undefined;
+          cancelExternalAuth();
+          reportError(errorData?.error || 'Authentication failed');
+        });
+        cleanupRef.current = removeListener;
+
+        return;
+      }
+
       window.location.href = data.url;
     } else {
       const errorData = await response.json();
-      reportError(errorData.error || `${providerName} sign-in failed. Please try again.`);
+      reportError(errorData.error || `${provider} sign-in failed. Please try again.`);
     }
   };
 
@@ -67,10 +201,20 @@ export function useOAuthSignIn({ onStart, onError }: UseOAuthSignInOptions = {})
 
     try {
       const { isNativeGoogleAuthAvailable, signInWithGoogle: nativeSignIn } =
-        await import('@/lib/ios-google-auth');
+        await import('@/lib/native-google-auth');
 
       if (isNativeGoogleAuthAvailable()) {
-        const result = await nativeSignIn();
+        const result = await nativeSignIn({
+          ...(inviteToken && { inviteToken }),
+          ...(returnUrl && { returnUrl }),
+        });
+        // Deliberately no fall-through to web OAuth on a native failure. There
+        // is no working web OAuth inside either native shell — iOS ends on
+        // Google's `disallowed_useragent` page in the WebView, Android leaves for
+        // the external browser and drops the session in the wrong cookie jar, and
+        // the `pagespace://auth-exchange` handoff that would close the gap has no
+        // `appUrlOpen` consumer on either platform. Falling through would trade a
+        // visible error inside a working app for a silent dead end outside it.
         if (result.success) {
           await handleNativeSuccess(result);
         } else if (result.error !== 'Sign-in cancelled') {
@@ -79,7 +223,7 @@ export function useOAuthSignIn({ onStart, onError }: UseOAuthSignInOptions = {})
         return;
       }
 
-      await initiateWebOAuth('/api/auth/google/signin', 'Google');
+      await initiateWebOAuth('/api/auth/google/signin', 'google');
     } catch (error) {
       console.error('Google sign-in error:', error);
       reportError('Network error. Please check your connection and try again.');
@@ -95,10 +239,14 @@ export function useOAuthSignIn({ onStart, onError }: UseOAuthSignInOptions = {})
 
     try {
       const { isNativeAppleAuthAvailable, signInWithApple: nativeSignIn } =
-        await import('@/lib/ios-apple-auth');
+        await import('@/lib/native-apple-auth');
 
       if (isNativeAppleAuthAvailable()) {
-        const result = await nativeSignIn();
+        const result = await nativeSignIn({
+          ...(inviteToken && { inviteToken }),
+          ...(returnUrl && { returnUrl }),
+        });
+        // See the Google branch: no fall-through on a native failure.
         if (result.success) {
           await handleNativeSuccess(result);
         } else if (result.error !== 'Sign-in cancelled') {
@@ -107,7 +255,7 @@ export function useOAuthSignIn({ onStart, onError }: UseOAuthSignInOptions = {})
         return;
       }
 
-      await initiateWebOAuth('/api/auth/apple/signin', 'Apple');
+      await initiateWebOAuth('/api/auth/apple/signin', 'apple');
     } catch (error) {
       console.error('Apple sign-in error:', error);
       reportError('Network error. Please check your connection and try again.');
@@ -116,5 +264,13 @@ export function useOAuthSignIn({ onStart, onError }: UseOAuthSignInOptions = {})
     }
   };
 
-  return { handleGoogleSignIn, handleAppleSignIn, isGoogleLoading, isAppleLoading };
+  return {
+    handleGoogleSignIn,
+    handleAppleSignIn,
+    isGoogleLoading,
+    isAppleLoading,
+    isWaitingForExternalAuth: waitingProvider !== null,
+    waitingProvider,
+    cancelExternalAuth,
+  };
 }

@@ -27,18 +27,23 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 // Mock logging (boundary)
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
       warn: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
 // Mock AI monitoring (boundary)
-vi.mock('@pagespace/lib/ai-monitoring', () => ({
+vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   getContextWindow: vi.fn(() => 200000),
 }));
 
@@ -47,21 +52,23 @@ import {
   calculateUsageSummary as mockedCalculateUsageSummary,
 } from '@/lib/repositories/global-conversation-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
-import { getContextWindow } from '@pagespace/lib/ai-monitoring';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { getContextWindow } from '@pagespace/lib/monitoring/ai-monitoring';
 
 // Test fixtures
 const mockUserId = 'user_123';
 const mockConversationId = 'conv_123';
 
-const mockWebAuth = (userId: string): SessionAuthResult => ({
+const mockWebAuth = (userId: string, role: 'user' | 'admin' = 'user'): SessionAuthResult => ({
   userId,
   tokenVersion: 0,
   tokenType: 'session',
   sessionId: 'test-session-id',
-  role: 'user',
+  role,
   adminRoleVersion: 0,
 });
+
+const mockAdminAuth = (userId: string): SessionAuthResult => mockWebAuth(userId, 'admin');
 
 const mockAuthError = (status = 401): AuthError => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status }),
@@ -208,7 +215,8 @@ describe('GET /api/ai/global/[id]/usage', () => {
   });
 
   describe('successful retrieval', () => {
-    it('should return usage statistics for conversation', async () => {
+    it('should return usage statistics including cost for admin', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAdminAuth(mockUserId));
       const usageLogs = [
         mockUsageLog({ inputTokens: 1000, outputTokens: 500 }),
         mockUsageLog({ inputTokens: 2000, outputTokens: 800 }),
@@ -223,9 +231,31 @@ describe('GET /api/ai/global/[id]/usage', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.logs).toBeDefined();
-      expect(body.summary).toBeDefined();
-      expect(body.summary.billing).toBeDefined();
+      expect(Array.isArray(body.logs)).toBe(true);
+      expect(body.summary.billing).toEqual({
+        totalInputTokens: 3000,
+        totalOutputTokens: 1300,
+        totalTokens: 4300,
+        totalCost: 0.03,
+      });
+      // Admin sees real cost in logs
+      expect(body.logs[0].cost).toBe(0.015);
+    });
+
+    it('should strip cost from non-admin responses', async () => {
+      const usageLogs = [mockUsageLog({ cost: 0.015 })];
+      vi.mocked(globalConversationRepository.getUsageLogs).mockResolvedValue(usageLogs);
+      vi.mocked(mockedCalculateUsageSummary).mockReturnValue(mockUsageSummary());
+
+      const request = createRequest(mockConversationId);
+      const context = createContext(mockConversationId);
+
+      const response = await GET(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.summary.billing.totalCost).toBe(0);
+      expect(body.logs[0].cost).toBeNull();
     });
 
     it('should call repository methods with correct arguments', async () => {
@@ -268,7 +298,7 @@ describe('GET /api/ai/global/[id]/usage', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to fetch AI usage');
-      expect(loggers.api.error).toHaveBeenCalled();
+      expect(loggers.api.error).toHaveBeenCalledWith('Error fetching AI usage:', expect.objectContaining({ message: 'Database error' }));
     });
   });
 });

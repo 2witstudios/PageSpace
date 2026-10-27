@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db, eq, and, inArray, desc, users, subscriptions } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, inArray, desc } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
-import { loggers } from '@pagespace/lib/server';
+import { personalPlanItems } from '@/lib/stripe/price-config';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { isPersonalPlanPriceId } from '@/lib/subscription/plans';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -25,6 +31,18 @@ export async function POST(request: NextRequest) {
     if (!priceId) {
       return NextResponse.json(
         { error: 'Price ID is required' },
+        { status: 400 }
+      );
+    }
+
+    // SEAT-2 P1 (independent review, allowlist inversion): only a price id
+    // this app recognizes as a PERSONAL plan's current price may be switched
+    // to here. This is deny-by-default — it rejects Business, the
+    // grandfathered Founder price, and any unrecognized price id, not just
+    // the one price id it happens to know is the org plan's.
+    if (!isPersonalPlanPriceId(priceId)) {
+      return NextResponse.json(
+        { error: 'This plan cannot be purchased individually.' },
         { status: 400 }
       );
     }
@@ -72,8 +90,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const currentItemId = subscription.items.data[0]?.id;
-    if (!currentItemId) {
+    // The plan item, never items[0]: a storage add-on item may ride along.
+    const personalItems = personalPlanItems(subscription.items);
+    const currentItemId = personalItems?.planItem.id;
+    if (!personalItems || !currentItemId) {
       return NextResponse.json(
         { error: 'No subscription items found' },
         { status: 400 }
@@ -85,8 +105,12 @@ export async function POST(request: NextRequest) {
       // Use subscription schedule to properly defer downgrade to period end.
       // This ensures the user keeps their current plan features until the
       // billing cycle ends, then automatically switches to the new plan.
-      const subscriptionItem = subscription.items.data[0];
+      const subscriptionItem = personalItems.planItem;
       const currentPriceId = subscriptionItem.price.id;
+      // Carry the storage add-on through both phases: a plan change never drops it.
+      const storagePhaseItems = personalItems.storageItem && (personalItems.storageItem.quantity ?? 0) > 0
+        ? [{ price: personalItems.storageItem.price.id, quantity: personalItems.storageItem.quantity ?? 0 }]
+        : [];
       const currentPeriodEnd = subscriptionItem.current_period_end;
 
       // Check if subscription already has a schedule attached
@@ -110,12 +134,12 @@ export async function POST(request: NextRequest) {
       await stripe.subscriptionSchedules.update(schedule.id, {
         phases: [
           {
-            items: [{ price: currentPriceId }],
+            items: [{ price: currentPriceId }, ...storagePhaseItems],
             start_date: schedule.phases[0].start_date,
             end_date: currentPeriodEnd,
           },
           {
-            items: [{ price: priceId }],
+            items: [{ price: priceId }, ...storagePhaseItems],
             start_date: currentPeriodEnd,
           },
         ],
@@ -130,6 +154,8 @@ export async function POST(request: NextRequest) {
           updatedAt: new Date(),
         })
         .where(eq(subscriptions.stripeSubscriptionId, subscription.id));
+
+      auditRequest(request, { eventType: 'data.write', userId, resourceType: 'subscription', resourceId: subscription.id, details: { action: 'update', priceId, isDowngrade: true } });
 
       return NextResponse.json({
         subscriptionId: subscription.id,
@@ -173,6 +199,8 @@ export async function POST(request: NextRequest) {
           updatedAt: new Date(),
         })
         .where(eq(subscriptions.stripeSubscriptionId, subscription.id));
+
+      auditRequest(request, { eventType: 'data.write', userId, resourceType: 'subscription', resourceId: subscription.id, details: { action: 'update', priceId, isDowngrade: false } });
 
       return NextResponse.json({
         subscriptionId: updatedSubscription.id,

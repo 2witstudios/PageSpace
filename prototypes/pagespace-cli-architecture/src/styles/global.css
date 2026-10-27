@@ -1,0 +1,173 @@
+:root {
+  --bg: #09090f;
+  --s1: #111119;
+  --s2: #181822;
+  --s3: #1f1f2e;
+  --border: #2a2a3d;
+  --border2: #353548;
+  --blue: #4d8eff;
+  --green: #3dd68c;
+  --red: #ff4d6a;
+  --amber: #ffb84d;
+  --violet: #a78bfa;
+  --cyan: #22d3ee;
+  --text: #e2e2ef;
+  --mid: #8b8ba0;
+  --dim: #5b5b72;
+  --sans: "Plus Jakarta Sans", system-ui, sans-serif;
+  --mono: "JetBrains Mono", monospace;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: rgba(77, 142, 255, 0.25);
+}
+
+a {
+  color: var(--blue);
+  text-decoration: none;
+}
+
+hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 32px 0;
+}
+
+/* Typography */
+.sl {
+  font-size: 10px;
+  color: var(--blue);
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  font-weight: 600;
+  margin-bottom: 14px;
+}
+
+h2 {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.4px;
+  margin-bottom: 8px;
+  line-height: 1.3;
+}
+
+h2 .hl {
+  color: var(--blue);
+}
+
+h3 {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+h4 {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mid);
+  letter-spacing: 0.3px;
+  margin-bottom: 6px;
+}
+
+p {
+  font-size: 13.5px;
+  line-height: 1.8;
+  color: var(--mid);
+}
+
+p strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Grids */
+.g2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.g3 {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 12px;
+}
+
+/* Code blocks */
+pre {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.8;
+  background: var(--s2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px 20px;
+  overflow-x: auto;
+  color: var(--mid);
+}
+
+.k {
+  color: var(--violet);
+}
+.s {
+  color: var(--green);
+}
+.c {
+  color: var(--dim);
+  font-style: italic;
+}
+.t {
+  color: var(--cyan);
+}
+.v {
+  color: var(--amber);
+}
+.e {
+  color: var(--red);
+}
+
+/* Pane animation */
+@keyframes fi {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.pane {
+  padding: 36px 28px;
+  max-width: 1160px;
+  animation: fi 0.25s ease;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .g2,
+  .g3 {
+    grid-template-columns: 1fr;
+  }
+
+  h2 {
+    font-size: 22px;
+  }
+}

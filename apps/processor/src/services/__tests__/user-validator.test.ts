@@ -11,23 +11,24 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
  */
 
 // Mock the database module
-vi.mock('@pagespace/db', () => {
-  const mockDb = {
+vi.mock('@pagespace/db/db', () => ({
+  db: {
     query: {
       users: {
         findFirst: vi.fn(),
       },
     },
-  };
-  return {
-    db: mockDb,
-    users: { id: 'id' },
-    eq: vi.fn((field, value) => ({ field, value, op: 'eq' })),
-  };
-});
+  },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((field, value) => ({ field, value, op: 'eq' })),
+}));
 
 // Import after mocking
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { validateServiceUser, type ServiceUserValidationResult } from '../user-validator';
 
 describe('validateServiceUser', () => {
@@ -52,18 +53,17 @@ describe('validateServiceUser', () => {
         updatedAt: new Date(),
         emailVerified: null,
         image: null,
-        password: null,
         googleId: null,
         appleId: null,
         tokenVersion: 0,
         adminRoleVersion: 0,
         storageUsedBytes: 0,
+        activeUploads: 0,
         stripeCustomerId: null,
         stripeSubscriptionId: null,
         tosAcceptedAt: null,
-        currentAiProvider: 'pagespace',
-        currentAiModel: 'glm-4.5-air',
-        activeUploads: 0,
+        currentAiProvider: 'openai',
+        currentAiModel: 'openai/gpt-5.4-nano',
         lastStorageCalculated: null,
         failedLoginAttempts: 0,
         lockedUntil: null,
@@ -148,18 +148,17 @@ describe('validateServiceUser', () => {
         updatedAt: new Date(),
         emailVerified: new Date(),
         image: null,
-        password: null,
         googleId: null,
         appleId: null,
         tokenVersion: 0,
         adminRoleVersion: 0,
         storageUsedBytes: 0,
+        activeUploads: 0,
         stripeCustomerId: null,
         stripeSubscriptionId: null,
         tosAcceptedAt: null,
-        currentAiProvider: 'pagespace',
-        currentAiModel: 'glm-4.5-air',
-        activeUploads: 0,
+        currentAiProvider: 'openai',
+        currentAiModel: 'openai/gpt-5.4-nano',
         lastStorageCalculated: null,
         failedLoginAttempts: 0,
         lockedUntil: null,
@@ -193,18 +192,17 @@ describe('validateServiceUser', () => {
         updatedAt: new Date(),
         emailVerified: new Date(),
         image: null,
-        password: null,
         googleId: null,
         appleId: null,
         tokenVersion: 0,
         adminRoleVersion: 0,
         storageUsedBytes: 0,
+        activeUploads: 0,
         stripeCustomerId: null,
         stripeSubscriptionId: null,
         tosAcceptedAt: null,
-        currentAiProvider: 'pagespace',
-        currentAiModel: 'glm-4.5-air',
-        activeUploads: 0,
+        currentAiProvider: 'openai',
+        currentAiModel: 'openai/gpt-5.4-nano',
         lastStorageCalculated: null,
         failedLoginAttempts: 0,
         lockedUntil: null,

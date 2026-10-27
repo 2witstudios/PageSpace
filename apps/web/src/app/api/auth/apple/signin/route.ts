@@ -1,17 +1,24 @@
 import { z } from 'zod/v4';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
-} from '@pagespace/lib/security';
-import crypto from 'crypto';
+} from '@pagespace/lib/security/distributed-rate-limit';
+import { createSignedState } from '@pagespace/lib/integrations/oauth/oauth-state';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
+import { INVITE_TOKEN_MAX_LENGTH } from '@/lib/auth/oauth-state';
+import { DESKTOP_SHELLS } from '@/lib/auth/desktop-shell';
 
+// Length bounds must match verifyOAuthState's oauthStateDataSchema — otherwise
+// the server can mint a signed state it will later reject at the callback,
+// bouncing users with oauth_error after they complete provider auth.
 const appleSigninSchema = z.object({
-  returnUrl: z.string().optional(),
-  platform: z.enum(['web', 'desktop', 'ios']).optional(),
-  deviceId: z.string().optional(),
-  deviceName: z.string().optional(),
+  returnUrl: z.string().max(2048).optional(),
+  platform: z.enum(['web', 'desktop', 'ios', 'android']).optional(),
+  shell: z.enum(DESKTOP_SHELLS).optional(),
+  deviceId: z.string().min(1).max(128).optional(),
+  deviceName: z.string().max(255).optional(),
+  inviteToken: z.string().min(1).max(INVITE_TOKEN_MAX_LENGTH).optional(),
 });
 
 export async function POST(req: Request) {
@@ -40,7 +47,7 @@ export async function POST(req: Request) {
       return Response.json({ errors: validation.error.flatten().fieldErrors }, { status: 400 });
     }
 
-    const { returnUrl, platform, deviceId, deviceName } = validation.data;
+    const { returnUrl, platform, deviceId, deviceName, inviteToken, shell } = validation.data;
 
     // SECURITY: Validate returnUrl to prevent open redirect attacks
     if (!isSafeReturnUrl(returnUrl)) {
@@ -78,27 +85,20 @@ export async function POST(req: Request) {
       );
     }
 
-    // Create state object to preserve platform and deviceId through OAuth redirect
-    const stateData = {
-      returnUrl: returnUrl || '/dashboard',
-      platform: platform || 'web',
-      ...(deviceId && { deviceId }),
-      ...(deviceName && { deviceName }),
-    };
-
-    // Sign state parameter with HMAC-SHA256 to prevent tampering
-    const statePayload = JSON.stringify(stateData);
-    const signature = crypto
-      .createHmac('sha256', process.env.OAUTH_STATE_SECRET!)
-      .update(statePayload)
-      .digest('hex');
-
-    const stateWithSignature = JSON.stringify({
-      data: stateData,
-      sig: signature,
-    });
-
-    const stateParam = Buffer.from(stateWithSignature).toString('base64');
+    // Sign state with HMAC-SHA256 + auto-attached timestamp via the shared
+    // helper (matches Google signin); verifyOAuthState requires timestamp to
+    // accept the state at the callback.
+    const stateParam = createSignedState(
+      {
+        returnUrl: returnUrl || '/dashboard',
+        platform: platform || 'web',
+        ...(shell && { shell }),
+        ...(deviceId && { deviceId }),
+        ...(deviceName && { deviceName }),
+        ...(inviteToken && { inviteToken }),
+      },
+      process.env.OAUTH_STATE_SECRET!
+    );
 
     // Generate Apple OAuth URL
     // Note: Apple uses response_mode=form_post which POSTs the authorization response
@@ -150,24 +150,12 @@ export async function GET(req: Request) {
       return Response.redirect(new URL('/auth/signin?error=rate_limit', baseUrl).toString());
     }
 
-    // SECURITY: Create signed state parameter to prevent CSRF attacks
-    const stateData = {
-      returnUrl: '/dashboard',
-      platform: 'web',
-    };
-
-    const statePayload = JSON.stringify(stateData);
-    const signature = crypto
-      .createHmac('sha256', process.env.OAUTH_STATE_SECRET!)
-      .update(statePayload)
-      .digest('hex');
-
-    const stateWithSignature = JSON.stringify({
-      data: stateData,
-      sig: signature,
-    });
-
-    const stateParam = Buffer.from(stateWithSignature).toString('base64');
+    // SECURITY: Create signed state parameter to prevent CSRF attacks.
+    // Auto-attaches timestamp required by verifyOAuthState at the callback.
+    const stateParam = createSignedState(
+      { returnUrl: '/dashboard', platform: 'web' },
+      process.env.OAUTH_STATE_SECRET!
+    );
 
     // Generate OAuth URL for direct link access
     const params = new URLSearchParams({

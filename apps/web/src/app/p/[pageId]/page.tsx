@@ -1,34 +1,48 @@
 import { redirect, notFound } from 'next/navigation';
 import { cookies } from 'next/headers';
-import { db, pages, eq } from '@pagespace/db';
-import { getUserAccessLevel } from '@pagespace/lib/server';
-import { sessionService } from '@pagespace/lib/auth';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core';
+import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
+import { sessionService } from '@pagespace/lib/auth/session-service';
 import { getSessionFromCookies } from '@/lib/auth/cookie-config';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 interface PageProps {
   params: Promise<{ pageId: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }
 
 /**
  * Page redirect route - navigates to the correct dashboard URL for a page
  * This allows mentions to link directly to a page ID without knowing the driveId
  */
-export default async function PageRedirect({ params }: PageProps) {
+export default async function PageRedirect({ params, searchParams }: PageProps) {
   const { pageId } = await params;
+  // Forwarded verbatim (e.g. `?conversationId=&sessionId=` from the agents
+  // console's past-conversations list) — this route only resolves the driveId,
+  // it must not drop query params the destination page itself interprets.
+  const query = new URLSearchParams(
+    Object.entries(await searchParams).flatMap(([key, value]): [string, string][] =>
+      value === undefined ? [] : (typeof value === 'string' ? [value] : value).map((v): [string, string] => [key, v]),
+    ),
+  ).toString();
 
   // Get session token from cookies
   const cookieStore = await cookies();
   const cookieHeader = cookieStore.toString();
   const sessionToken = getSessionFromCookies(cookieHeader);
 
+  const callbackUrl = query ? `/p/${pageId}?${query}` : `/p/${pageId}`;
+
   if (!sessionToken) {
-    redirect(`/auth/signin?callbackUrl=/p/${pageId}`);
+    redirect(`/auth/signin?callbackUrl=${encodeURIComponent(callbackUrl)}`);
   }
 
-  // Validate the session token
-  const session = await sessionService.validateSession(sessionToken);
+  // Validate the session token — only a browser session may drive this redirect.
+  const session = await sessionService.validateSession(sessionToken, { expectedType: 'user' });
   if (!session) {
-    redirect(`/auth/signin?callbackUrl=/p/${pageId}`);
+    redirect(`/auth/signin?callbackUrl=${encodeURIComponent(callbackUrl)}`);
   }
 
   const userId = session.userId;
@@ -44,11 +58,11 @@ export default async function PageRedirect({ params }: PageProps) {
   }
 
   // Check user has access to the page
-  const accessLevel = await getUserAccessLevel(userId, pageId);
+  const accessLevel = await getUserAccessLevel(credentialActor(userId, session.authentication), pageId);
   if (!accessLevel) {
     notFound();
   }
 
   // Redirect to the full dashboard URL
-  redirect(`/dashboard/${page.driveId}/${pageId}`);
+  redirect(query ? `/dashboard/${page.driveId}/${pageId}?${query}` : `/dashboard/${page.driveId}/${pageId}`);
 }

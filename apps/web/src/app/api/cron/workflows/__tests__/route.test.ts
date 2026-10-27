@@ -6,15 +6,15 @@ import { NextResponse } from 'next/server';
 // ============================================================================
 
 const {
-  mockReturning,
   mockUpdateWhere,
   mockUpdateSet,
   mockUpdate,
   mockSelectWhere,
   mockSelectFrom,
   mockSelect,
+  mockCreditAdmission,
 } = vi.hoisted(() => ({
-  mockReturning: vi.fn().mockResolvedValue([]),
+  mockCreditAdmission: vi.fn(),
   mockUpdateWhere: vi.fn(),
   mockUpdateSet: vi.fn(),
   mockUpdate: vi.fn(),
@@ -35,36 +35,60 @@ vi.mock('@/lib/workflows/cron-utils', () => ({
   getNextRunDate: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@/lib/workflows/workflow-credit-gate', () => ({
+  creditAdmission: mockCreditAdmission,
+}));
+
+const mockAudit = vi.hoisted(() => vi.fn());
+
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  audit: mockAudit,
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: mockSelect,
     update: mockUpdate,
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn(),
+  isNull: vi.fn(),
+  lte: vi.fn(),
+  sql: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/workflows', () => ({
   workflows: {
     id: 'id',
     isEnabled: 'isEnabled',
+    ownerLeftAt: 'ownerLeftAt',
     nextRunAt: 'nextRunAt',
-    lastRunStatus: 'lastRunStatus',
-    lastRunAt: 'lastRunAt',
     triggerType: 'triggerType',
   },
-  eq: vi.fn(),
-  and: vi.fn(),
-  lte: vi.fn(),
-  ne: vi.fn(),
-  inArray: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/workflow-runs', () => ({
+  workflowRuns: {
+    id: 'id',
+    workflowId: 'workflowId',
+    status: 'status',
+    startedAt: 'startedAt',
+  },
 }));
 
 import { POST } from '../route';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { executeWorkflow } from '@/lib/workflows/workflow-executor';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';
+import { isNull } from '@pagespace/db/operators';
+import { workflows } from '@pagespace/db/schema/workflows';
 
 // ============================================================================
 // Fixtures
@@ -84,12 +108,10 @@ const MOCK_WORKFLOW = {
   eventTriggers: null,
   watchedFolderIds: null,
   eventDebounceSecs: null,
-  lastRunStatus: 'never_run',
-  lastRunAt: null,
-  lastRunError: null,
-  lastRunDurationMs: null,
+  instructionPageId: null,
   nextRunAt: new Date('2025-01-01T09:00:00Z'),
   createdBy: 'user_123',
+  ownerLeftAt: null as Date | null,
   createdAt: new Date('2024-01-01'),
   updatedAt: new Date('2024-01-01'),
 };
@@ -108,15 +130,28 @@ describe('POST /api/cron/workflows', () => {
     mockSelectFrom.mockReturnValue({ where: mockSelectWhere });
     mockSelectWhere.mockResolvedValue([]);
 
-    // db.update(workflows).set(...).where(...).returning() — atomic claim + post-exec update
+    // db.update(workflows | workflowRuns).set(...).where(...) — stuck-run sweep + advance nextRunAt
     mockUpdate.mockReturnValue({ set: mockUpdateSet });
     mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
-    mockUpdateWhere.mockImplementation(() => {
-      const p = Promise.resolve(undefined) as Promise<undefined> & { returning: typeof mockReturning };
-      p.returning = mockReturning;
-      return p;
-    });
-    mockReturning.mockResolvedValue([]);
+    mockUpdateWhere.mockResolvedValue(undefined);
+
+    mockCreditAdmission.mockReturnValue(async () => ({ admitted: true, release: () => {} }));
+  });
+
+  it('SPEND-6 (partial) discovery leaves out owner-left workflows ([D-OW-36])', async () => {
+    const request = new Request('https://example.com/api/cron/workflows', { method: 'POST' });
+    await POST(request);
+    expect(vi.mocked(isNull)).toHaveBeenCalledWith(workflows.ownerLeftAt);
+  });
+
+  it('SPEND-6 (partial) a due workflow whose creator deleted their account since discovery is skipped before any gate or hold, and its schedule is not advanced ([D-OW-36])', async () => {
+    mockSelectWhere.mockResolvedValue([{ ...MOCK_WORKFLOW, createdBy: null }]);
+    const request = new Request('https://example.com/api/cron/workflows', { method: 'POST' });
+    const body = await (await POST(request)).json();
+    expect(body).toMatchObject({ executed: 0, total: 0, skipped: 1 });
+    expect(executeWorkflow).not.toHaveBeenCalled();
+    expect(mockCreditAdmission).not.toHaveBeenCalled();
+    expect(getNextRunDate).not.toHaveBeenCalled();
   });
 
   it('should return auth error when cron request is invalid', async () => {
@@ -143,7 +178,6 @@ describe('POST /api/cron/workflows', () => {
 
   it('should execute due workflows and return counts', async () => {
     mockSelectWhere.mockResolvedValue([MOCK_WORKFLOW]);
-    mockReturning.mockResolvedValue([MOCK_WORKFLOW]);
     vi.mocked(executeWorkflow).mockResolvedValue({
       success: true,
       responseText: 'Report generated',
@@ -159,12 +193,40 @@ describe('POST /api/cron/workflows', () => {
     const body = await response.json();
     expect(body.executed).toBe(1);
     expect(body.total).toBe(1);
-    expect(executeWorkflow).toHaveBeenCalledWith(MOCK_WORKFLOW);
+    expect(executeWorkflow).toHaveBeenCalledWith(expect.objectContaining({
+      workflowId: MOCK_WORKFLOW.id,
+      workflowName: MOCK_WORKFLOW.name,
+      driveId: MOCK_WORKFLOW.driveId,
+      createdBy: MOCK_WORKFLOW.createdBy,
+      agentPageId: MOCK_WORKFLOW.agentPageId,
+      prompt: MOCK_WORKFLOW.prompt,
+      timezone: MOCK_WORKFLOW.timezone,
+      source: { table: 'cron', id: null, triggerAt: MOCK_WORKFLOW.nextRunAt },
+    }), expect.objectContaining({ admit: expect.any(Function) }));
+  });
+
+  it('should not advance nextRunAt when the executor reports a claim conflict', async () => {
+    mockSelectWhere.mockResolvedValue([MOCK_WORKFLOW]);
+    vi.mocked(executeWorkflow).mockResolvedValue({
+      success: false,
+      durationMs: 0,
+      error: 'Workflow already running',
+      claimConflict: true,
+    });
+    vi.mocked(getNextRunDate).mockReturnValue(new Date('2025-01-02T09:00:00Z'));
+
+    const request = new Request('https://example.com/api/cron/workflows', { method: 'POST' });
+    const response = await POST(request);
+
+    const body = await response.json();
+    expect(body.executed).toBe(0);
+    expect(body.total).toBe(0);
+    // Stuck-run sweep is the only update call; no nextRunAt advancement.
+    expect(getNextRunDate).not.toHaveBeenCalled();
   });
 
   it('should handle workflow execution errors gracefully', async () => {
     mockSelectWhere.mockResolvedValue([MOCK_WORKFLOW]);
-    mockReturning.mockResolvedValue([MOCK_WORKFLOW]);
     vi.mocked(executeWorkflow).mockResolvedValue({
       success: false,
       durationMs: 1000,
@@ -182,9 +244,50 @@ describe('POST /api/cron/workflows', () => {
     expect(body.errors[0]).toContain('Agent failed');
   });
 
+  it('should log audit event after workflow execution', async () => {
+    mockSelectWhere.mockResolvedValue([MOCK_WORKFLOW]);
+    vi.mocked(executeWorkflow).mockResolvedValue({
+      success: true,
+      responseText: 'Report generated',
+      toolCallCount: 2,
+      durationMs: 5000,
+    });
+    vi.mocked(getNextRunDate).mockReturnValue(new Date('2025-01-02T09:00:00Z'));
+
+    const request = new Request('https://example.com/api/cron/workflows', { method: 'POST' });
+    await POST(request);
+
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'workflows', details: { executed: 1, failed: 0, skipped: 0 } })
+    );
+    expect(mockAudit).not.toHaveBeenCalledWith(expect.objectContaining({ userId: expect.anything() }));
+  });
+
+  it('should log audit event with zero executed when no workflows are due', async () => {
+    const request = new Request('https://example.com/api/cron/workflows', { method: 'POST' });
+    await POST(request);
+
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'workflows', details: { executed: 0, failed: 0 } })
+    );
+    expect(mockAudit).not.toHaveBeenCalledWith(expect.objectContaining({ userId: expect.anything() }));
+  });
+
+  it('sweeps stuck workflow_runs (status=running, startedAt < cutoff) before discovery', async () => {
+    // Stuck-run sweep is the very first thing the route does on each tick.
+    const request = new Request('https://example.com/api/cron/workflows', { method: 'POST' });
+    await POST(request);
+
+    // First update call is the sweep — set status='error' with the timeout error message.
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'error',
+      endedAt: expect.any(Date),
+      error: expect.stringContaining('timed out'),
+    }));
+  });
+
   it('should handle thrown exceptions during execution', async () => {
     mockSelectWhere.mockResolvedValue([MOCK_WORKFLOW]);
-    mockReturning.mockResolvedValue([MOCK_WORKFLOW]);
     vi.mocked(executeWorkflow).mockRejectedValue(new Error('Network error'));
     vi.mocked(getNextRunDate).mockReturnValue(new Date('2025-01-02T09:00:00Z'));
 
@@ -196,5 +299,58 @@ describe('POST /api/cron/workflows', () => {
     expect(body.executed).toBe(0);
     expect(body.errors).toBeDefined();
     expect(body.errors[0]).toContain('Network error');
+  });
+
+  describe('credit gate', () => {
+    const tick = async () => {
+      const response = await POST(new Request('https://example.com/api/cron/workflows', { method: 'POST' }));
+      return response.json();
+    };
+
+    beforeEach(() => {
+      mockSelectWhere.mockResolvedValue([MOCK_WORKFLOW]);
+      vi.mocked(getNextRunDate).mockReturnValue(new Date('2025-01-02T09:00:00Z'));
+      vi.mocked(executeWorkflow).mockResolvedValue({ success: true, durationMs: 1 });
+    });
+
+    it('SPEND-6 (partial) hands the executor the credit gate as its admit hook, gating the drive the workflow runs in as a scheduled run', async () => {
+      const admit = async () => ({ admitted: true as const, release: () => {} });
+      mockCreditAdmission.mockReturnValue(admit);
+
+      await tick();
+
+      const [input, options] = vi.mocked(executeWorkflow).mock.calls[0];
+      expect(options?.admit).toBe(admit);
+      expect(mockCreditAdmission).toHaveBeenCalledWith(input, 'scheduled');
+      expect(input.createdBy).toBe(MOCK_WORKFLOW.createdBy);
+      // SPEND-6: the gate is told the drive the run spends; the creator is only who it is recorded against.
+      expect(input.driveId).toBe(MOCK_WORKFLOW.driveId);
+    });
+
+    it('a refused fire advances the schedule and counts as skipped, not as a failure', async () => {
+      vi.mocked(executeWorkflow).mockResolvedValue({
+        success: false, skipped: true, durationMs: 0, runId: 'run_1', error: 'AI credit gate denied: out_of_credits',
+      });
+
+      const body = await tick();
+
+      // Advancing is what stops the next tick re-firing it: no per-minute storm.
+      expect(getNextRunDate).toHaveBeenCalledWith(MOCK_WORKFLOW.cronExpression, MOCK_WORKFLOW.timezone);
+      expect(body.skipped).toBe(1);
+      expect(body.executed).toBe(0);
+      expect(body.total).toBe(0);
+      expect(body.errors).toBeUndefined();
+    });
+
+    it('a fire that lost the claim to an overlapping run is neither skipped nor advanced', async () => {
+      vi.mocked(executeWorkflow).mockResolvedValue({
+        success: false, claimConflict: true, durationMs: 0, error: 'Workflow already running',
+      });
+
+      const body = await tick();
+
+      expect(getNextRunDate).not.toHaveBeenCalled();
+      expect(body.skipped).toBe(0);
+    });
   });
 });

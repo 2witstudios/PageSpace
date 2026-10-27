@@ -1,14 +1,18 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { verifyRegistration, validateCSRFToken } from '@pagespace/lib/auth';
-import { loggers, logSecurityEvent } from '@pagespace/lib/server';
-import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+import { verifyRegistration } from '@pagespace/lib/auth/passkey-service';
+import { validateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
+import { consumePasskeyRegisterHandoff } from '@pagespace/lib/auth/passkey-register-handoff';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
-} from '@pagespace/lib/security';
+} from '@pagespace/lib/security/distributed-rate-limit';
 import {
   authenticateSessionRequest,
+  getBearerToken,
   isAuthError,
   isSessionAuthResult,
   getClientIP,
@@ -18,65 +22,33 @@ const verifySchema = z.object({
   response: z.any(), // WebAuthn response - validated by simplewebauthn
   expectedChallenge: z.string().min(1),
   name: z.string().max(255).optional(),
+  handoffToken: z.string().min(1).optional(),
 });
 
 /**
  * POST /api/auth/passkey/register
  *
  * Verify WebAuthn registration response and store the new passkey.
- * Requires session authentication and CSRF token.
+ *
+ * Two auth modes:
+ * - Session: `authenticateSessionRequest` + CSRF header.
+ * - Desktop handoff: `{ handoffToken }` in body — atomically consumed
+ *   (one-time use). Bypasses session + CSRF; the handoff token IS the
+ *   capability, minted against a session and TTL-bound.
  */
 export async function POST(req: Request) {
   try {
     const clientIP = getClientIP(req);
 
-    // Verify session auth
-    const authResult = await authenticateSessionRequest(req);
-    if (isAuthError(authResult)) {
-      return authResult.error;
-    }
-
-    const userId = authResult.userId;
-    const sessionId = isSessionAuthResult(authResult) ? authResult.sessionId : null;
-
-    // Verify CSRF token (skip for Bearer token auth - not vulnerable to CSRF)
-    const hasBearerAuth = !!req.headers.get('authorization');
-    if (!hasBearerAuth && sessionId) {
-      const csrfToken = req.headers.get('x-csrf-token');
-      if (!csrfToken || !validateCSRFToken(csrfToken, sessionId)) {
-        logSecurityEvent('passkey_csrf_invalid', {
-          userId,
-          ip: clientIP,
-          flow: 'register',
-        });
-        return NextResponse.json(
-          { error: 'Invalid CSRF token' },
-          { status: 403 }
-        );
-      }
-    }
-
-    // Rate limiting
-    const rateLimitKey = `passkey_register:${userId}`;
-    const rateLimitResult = await checkDistributedRateLimit(
-      rateLimitKey,
-      DISTRIBUTED_RATE_LIMITS.PASSKEY_REGISTER
-    );
-
-    if (!rateLimitResult.allowed) {
-      logSecurityEvent('passkey_rate_limit_register', {
-        userId,
-        ip: clientIP,
-        retryAfter: rateLimitResult.retryAfter,
-      });
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
       return NextResponse.json(
-        { error: 'Too many requests', retryAfter: rateLimitResult.retryAfter },
-        { status: 429 }
+        { error: 'Invalid request body' },
+        { status: 400 }
       );
     }
-
-    // Parse and validate request body
-    const body = await req.json();
     const validation = verifySchema.safeParse(body);
 
     if (!validation.success) {
@@ -86,9 +58,70 @@ export async function POST(req: Request) {
       );
     }
 
-    const { response, expectedChallenge, name } = validation.data;
+    const { response, expectedChallenge, name, handoffToken } = validation.data;
 
-    // Verify registration
+    let userId: string;
+
+    if (handoffToken) {
+      const consumed = await consumePasskeyRegisterHandoff(handoffToken);
+      if (!consumed) {
+        auditRequest(req, {
+          eventType: 'security.suspicious.activity',
+          riskScore: 0.6,
+          details: { reason: 'passkey_handoff_invalid', flow: 'register' },
+        });
+        return NextResponse.json(
+          { error: 'Invalid or expired handoff token', code: 'HANDOFF_INVALID' },
+          { status: 401 }
+        );
+      }
+      userId = consumed.userId;
+    } else {
+      const authResult = await authenticateSessionRequest(req);
+      if (isAuthError(authResult)) {
+        return authResult.error;
+      }
+
+      userId = authResult.userId;
+      const sessionId = isSessionAuthResult(authResult) ? authResult.sessionId : null;
+
+      const hasBearerAuth = !!getBearerToken(req);
+      if (!hasBearerAuth && sessionId) {
+        const csrfToken = req.headers.get('x-csrf-token');
+        if (!csrfToken || !validateCSRFToken(csrfToken, sessionId)) {
+          auditRequest(req, {
+            eventType: 'security.suspicious.activity',
+            userId,
+            riskScore: 0.6,
+            details: { reason: 'passkey_csrf_invalid', flow: 'register' },
+          });
+          return NextResponse.json(
+            { error: 'Invalid CSRF token' },
+            { status: 403 }
+          );
+        }
+      }
+
+      const rateLimitKey = `passkey_register:${userId}`;
+      const rateLimitResult = await checkDistributedRateLimit(
+        rateLimitKey,
+        DISTRIBUTED_RATE_LIMITS.PASSKEY_REGISTER
+      );
+
+      if (!rateLimitResult.allowed) {
+        auditRequest(req, {
+          eventType: 'security.rate.limited',
+          userId,
+          riskScore: 0.5,
+          details: { reason: 'passkey_rate_limit_register' },
+        });
+        return NextResponse.json(
+          { error: 'Too many requests', retryAfter: rateLimitResult.retryAfter },
+          { status: 429 }
+        );
+      }
+    }
+
     const result = await verifyRegistration({
       userId,
       response,
@@ -119,7 +152,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // Track successful passkey registration
     trackAuthEvent(userId, 'passkey_registered', {
       ip: clientIP,
       passkeyId: result.data.passkeyId,
@@ -131,6 +163,11 @@ export async function POST(req: Request) {
       userId,
       passkeyId: result.data.passkeyId,
       ip: clientIP,
+    });
+    auditRequest(req, {
+      eventType: 'auth.token.created',
+      userId,
+      details: { tokenType: 'passkey' },
     });
 
     return NextResponse.json({

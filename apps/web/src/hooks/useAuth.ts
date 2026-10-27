@@ -3,9 +3,15 @@
 import { useEffect, useCallback, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore, authStoreHelpers } from '@/stores/useAuthStore';
+import { purgePendingSetups } from '@/lib/orgs/pending-setup';
 import { useTokenRefresh } from './useTokenRefresh';
 import { post, clearSessionCache } from '@/lib/auth/auth-fetch';
+import { setAppNavigator } from '@/lib/navigation/app-navigator';
 import { getOrCreateDeviceId, getDeviceName } from '@/lib/analytics';
+import type { SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+
+// Module-level flag to prevent concurrent lazy device registration attempts
+let deviceRegistrationInFlight = false;
 
 interface User {
   id: string;
@@ -13,13 +19,10 @@ interface User {
   email: string | null;
   image?: string | null;
   role?: 'user' | 'admin';
+  subscriptionTier?: SubscriptionTier;
 }
 
 interface AuthActions {
-  login: (
-    email: string,
-    password: string
-  ) => Promise<{ success: boolean; error?: string; redirectTo?: string }>;
   logout: () => Promise<void>;
   refreshAuth: () => Promise<void>;
   checkAuth: () => Promise<void>;
@@ -45,7 +48,7 @@ export function useAuth(): {
   const hasHydrated = useAuthStore(state => state.hasHydrated);
 
   // Access stable methods without subscribing (they don't change)
-  const { setUser, setLoading, setHydrated, startSession, endSession } = useAuthStore.getState();
+  const { setHydrated, endSession } = useAuthStore.getState();
 
   const { refreshToken, startTokenRefresh, stopTokenRefresh } = useTokenRefresh();
   const router = useRouter();
@@ -63,155 +66,29 @@ export function useAuth(): {
     await authStoreHelpers.loadSession();
   }, [isLoading]);
 
-  // Login function
-  const login = useCallback(async (email: string, password: string) => {
-    // CRITICAL: Clear permanent auth failure flag to allow retry
-    // This resets the loop detection state so users can attempt to log in again
-    useAuthStore.getState().setAuthFailedPermanently(false);
-
-    setLoading(true);
-    try {
-      // Fetch login CSRF token first (prevents Login CSRF attacks)
-      let loginCsrfToken: string | null = null;
-      try {
-        const csrfResponse = await fetch('/api/auth/login-csrf', {
-          credentials: 'include',
-        });
-        if (csrfResponse.ok) {
-          const csrfData = await csrfResponse.json();
-          loginCsrfToken = csrfData.csrfToken;
-        }
-      } catch (csrfError) {
-        console.error('Failed to fetch login CSRF token:', csrfError);
-        // Continue without CSRF token - server will reject if required
-      }
-
-      const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
-
-      if (isDesktop && window.electron) {
-        const [deviceInfo, existingSession] = await Promise.all([
-          window.electron.auth.getDeviceInfo(),
-          window.electron.auth.getSession(),
-        ]);
-
-        const desktopLoginPayload: {
-          email: string;
-          password: string;
-          deviceId: string;
-          platform: 'desktop';
-          deviceName: string;
-          appVersion: string;
-          deviceToken?: string;
-        } = {
-          email,
-          password,
-          deviceId: deviceInfo.deviceId,
-          platform: 'desktop',
-          deviceName: deviceInfo.deviceName,
-          appVersion: deviceInfo.appVersion,
-        };
-
-        if (existingSession?.deviceToken) {
-          desktopLoginPayload.deviceToken = existingSession.deviceToken;
-        }
-
-        const response = await fetch('/api/auth/mobile/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(desktopLoginPayload),
-          credentials: 'include',
-        });
-
-        if (response.ok) {
-          const userData = await response.json();
-
-          await window.electron.auth.storeSession({
-            sessionToken: userData.sessionToken,
-            csrfToken: userData.csrfToken,
-            deviceToken: userData.deviceToken,
-          });
-
-          clearSessionCache();
-
-          // CRITICAL FIX: Verify token is actually retrievable before proceeding
-          // This prevents race condition where loadSession is triggered before storage completes
-          const storedSession = await window.electron.auth.getSessionToken();
-          if (!storedSession) {
-            console.error('[Desktop Login] Token storage verification failed');
-            return {
-              success: false,
-              error: 'Failed to save login session. Please try again.'
-            };
-          }
-
-          setUser(userData.user);
-          startSession();
-          return { success: true };
-        }
-
-        const errorData = await response.json().catch(() => ({}));
-        return {
-          success: false,
-          error: errorData.error || 'Login failed',
-        };
-      }
-
-      // Get device information for device token creation
-      const deviceId = getOrCreateDeviceId();
-      const deviceName = getDeviceName();
-      const existingDeviceToken = typeof localStorage !== 'undefined' ? localStorage.getItem('deviceToken') : null;
-
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(loginCsrfToken && { 'X-Login-CSRF-Token': loginCsrfToken }),
-        },
-        body: JSON.stringify({
-          email,
-          password,
-          deviceId,
-          deviceName,
-          ...(existingDeviceToken && { deviceToken: existingDeviceToken }),
-        }),
-        credentials: 'include',
-      });
-
-      if (response.ok) {
-        const userData = await response.json();
-
-        // Store device token if returned
-        if (userData.deviceToken && typeof localStorage !== 'undefined') {
-          localStorage.setItem('deviceToken', userData.deviceToken);
-        }
-
-        setUser(userData);
-        startSession();
-        const redirectTo =
-          typeof userData.redirectTo === 'string' ? userData.redirectTo : undefined;
-        return { success: true, ...(redirectTo && { redirectTo }) };
-      } else {
-        const errorData = await response.json();
-        return {
-          success: false,
-          error: errorData.error || 'Login failed'
-        };
-      }
-    } catch (error) {
-      console.error('Login error:', error);
-      return {
-        success: false,
-        error: 'Network error. Please try again.'
-      };
-    } finally {
-      setLoading(false);
-    }
-  }, [setUser, setLoading, startSession]);
-
   // Logout function
   const logout = useCallback(async () => {
     try {
-      await post('/api/auth/logout');
+      // SECURITY (M9): send the device context so the server can revoke the
+      // long-lived (90-day) device token, not just the session. Otherwise
+      // device/refresh could silently re-mint sessions after "logout". We
+      // prefer the device token value (works on every platform via by-value
+      // revocation) and include deviceId+platform as a fallback. Reading
+      // device context must never block logout.
+      let logoutBody: Record<string, unknown> = {};
+      try {
+        const { getPlatformStorage } = await import('@/lib/auth/platform-storage');
+        const storage = getPlatformStorage();
+        const stored = await storage.getStoredSession();
+        logoutBody = {
+          deviceToken: stored?.deviceToken ?? undefined,
+          deviceId: stored?.deviceId ?? undefined,
+          platform: storage.platform,
+        };
+      } catch (err) {
+        console.error('Failed to read device context for logout', err);
+      }
+      await post('/api/auth/logout', logoutBody);
     } catch (error) {
       console.error('Logout error:', error);
     } finally {
@@ -224,16 +101,27 @@ export function useAuth(): {
         clearSessionCache();
       }
 
-      // iOS: Clear session from Keychain
+      // Native shells: clear the secure-storage session through the platform
+      // adapter. Asking the capability, not the platform, is what makes this
+      // cover Android — which writes to the same `PageSpaceKeychain` under the
+      // same key as iOS, so an iOS-only branch would leave a revoked session on
+      // the device for `fetchWithAuth` to keep presenting until a 401.
+      //
+      // The capability lookup is inside the try, not before it: this runs in
+      // logout's `finally`, so anything that escapes here skips the rest of the
+      // cleanup — the localStorage token, the store reset, the redirect to
+      // sign-in. A dynamic import can reject on its own (a chunk that will not
+      // load), and no failure to *read* a capability is worth stranding a user
+      // in a half-logged-out shell.
       if (typeof window !== 'undefined') {
-        const { isCapacitorApp, getPlatform } = await import('@/lib/capacitor-bridge');
-        if (isCapacitorApp() && getPlatform() === 'ios') {
-          try {
-            const { clearStoredSession } = await import('@/lib/ios-google-auth');
-            await clearStoredSession();
-          } catch (err) {
-            console.error('Failed to clear iOS Keychain session', err);
+        try {
+          const { hasNativeCapability } = await import('@/lib/capacitor-bridge');
+          if (hasNativeCapability('secureStore')) {
+            const { getPlatformStorage } = await import('@/lib/auth/platform-storage');
+            await getPlatformStorage().clearSession();
           }
+        } catch (err) {
+          console.error('Failed to clear native secure-storage session', err);
         }
       }
 
@@ -244,6 +132,8 @@ export function useAuth(): {
         } catch (err) {
           console.error('Failed to clear device token from localStorage', err);
         }
+        // The create-org setup plan is per person; the next account on this browser must not inherit it.
+        purgePendingSetups();
       }
 
       // Reset token refresh state
@@ -257,6 +147,31 @@ export function useAuth(): {
         useTabsStore.setState({ tabs: [], activeTabId: null });
       } catch {
         // Non-critical — tabs will just show dashboard on next login
+      }
+
+      try {
+        const { useDriveStore } = await import('@/hooks/useDrive');
+        useDriveStore.getState().reset();
+      } catch {
+        // Non-critical
+      }
+
+      // Hotkey overrides are per-user. Left in place, the next person to sign
+      // in through this same document gets the previous user's shortcuts —
+      // and, since the reset notice is derived from the cached payload, that
+      // user's notice too.
+      //
+      // The SWR entry has to go with the store: most sign-in paths replace the
+      // document, but native OAuth returns via `router.replace`, and there the
+      // dashboard remounts against a warm cache and feeds the old user's
+      // payload straight back in before the new fetch lands.
+      try {
+        const { useHotkeyStore } = await import('@/stores/useHotkeyStore');
+        useHotkeyStore.getState().reset();
+        const { mutate: globalMutate } = await import('swr');
+        await globalMutate('/api/settings/hotkey-preferences', undefined, { revalidate: false });
+      } catch {
+        // Non-critical
       }
 
       endSession();
@@ -309,22 +224,54 @@ export function useAuth(): {
     return new URLSearchParams(window.location.search).get('auth') === 'success';
   });
 
-  // Capture device token from URL (signup redirect) and store in localStorage
+  // Capture device token from cookie (set by OAuth/signup redirect) and persist to localStorage
   useEffect(() => {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
 
-    const params = new URLSearchParams(window.location.search);
-    const deviceTokenParam = params.get('deviceToken');
-
-    if (deviceTokenParam) {
-      localStorage.setItem('deviceToken', deviceTokenParam);
-      // Clean up URL
-      params.delete('deviceToken');
-      const newUrl = new URL(window.location.href);
-      newUrl.search = params.toString();
-      window.history.replaceState({}, '', newUrl.toString());
+    const match = document.cookie.match(/(?:^|;\s*)ps_device_token=([^;]+)/);
+    if (match?.[1]) {
+      localStorage.setItem('deviceToken', match[1]);
+      // Clear the short-lived cookie
+      document.cookie = 'ps_device_token=; Path=/; Max-Age=0';
     }
   }, []);
+
+  // Lazy device registration: if authenticated but no device token (e.g., magic link login),
+  // register the device to enable session recovery when the cookie expires.
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof localStorage === 'undefined') return;
+    if (!isAuthenticated || !hasHydrated) return;
+    if (window.electron?.isDesktop) return;
+    if (deviceRegistrationInFlight) return;
+
+    const existingToken = localStorage.getItem('deviceToken');
+    if (existingToken) return;
+
+    deviceRegistrationInFlight = true;
+
+    const registerDevice = async () => {
+      try {
+        // Skip for Capacitor apps — they handle device tokens via platform-specific mechanisms
+        const { isCapacitorApp } = await import('@/lib/capacitor-bridge');
+        if (isCapacitorApp()) return;
+
+        const deviceId = getOrCreateDeviceId();
+        const deviceName = getDeviceName();
+
+        const data = await post<{ deviceToken?: string }>('/api/auth/device/register', { deviceId, deviceName });
+        if (data?.deviceToken) {
+          localStorage.setItem('deviceToken', data.deviceToken);
+          console.log('[AUTH_HOOK] Device registered via lazy registration');
+        }
+      } catch (error) {
+        console.warn('[AUTH_HOOK] Lazy device registration failed:', error);
+      } finally {
+        deviceRegistrationInFlight = false;
+      }
+    };
+
+    void registerDevice();
+  }, [isAuthenticated, hasHydrated]);
 
   // Initial auth check - simplified with store-level deduplication
   // Desktop OAuth now uses secure exchange codes handled in Electron main process
@@ -375,6 +322,15 @@ export function useAuth(): {
     authStoreHelpers.initializeEventListeners();
   }, []); // Empty dependency array ensures this runs only once
 
+  // Hand the client router to the store's global auth:expired listener, which
+  // has no React context of its own. It must route rather than hard-navigate,
+  // or the iOS shell punts the signin page to Safari and blanks the WebView.
+  // Not cleared on unmount: useAuth has many concurrent instances, and one of
+  // them unmounting must not strip the navigator out from under the others.
+  useEffect(() => {
+    setAppNavigator((path) => router.replace(path));
+  }, [router]);
+
   return {
     user,
     isLoading: isLoading || !hasHydrated || isOAuthSuccess,
@@ -382,7 +338,6 @@ export function useAuth(): {
     isRefreshing,
     sessionDuration: authStoreHelpers.getSessionDuration(),
     actions: {
-      login,
       logout,
       refreshAuth,
       checkAuth,

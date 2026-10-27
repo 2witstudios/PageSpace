@@ -5,7 +5,7 @@ import useSWR, { mutate } from 'swr';
 import { fetchWithAuth, post, patch, del } from '@/lib/auth/auth-fetch';
 import { useCalendarSocket } from '@/hooks/useCalendarSocket';
 import { useEditingStore } from '@/stores/useEditingStore';
-import { CalendarEvent, TaskWithDueDate } from './calendar-types';
+import { CalendarEvent, CalendarEventAttendee, RecurrenceRule, TaskWithDueDate } from './calendar-types';
 import {
   startOfMonth,
   endOfMonth,
@@ -45,7 +45,7 @@ export function useCalendarData({
   includeTasks = true,
 }: UseCalendarDataOptions) {
   const hasLoadedRef = useRef(false);
-  const isAnyActive = useEditingStore((state) => state.isAnyActive());
+  const isAnyEditing = useEditingStore((state) => state.isAnyEditing());
 
   // Calculate date range for the current view (include buffer for multi-day events)
   const dateRange = useMemo(() => {
@@ -78,7 +78,7 @@ export function useCalendarData({
     isLoading: eventsLoading,
   } = useSWR<CalendarEventsResponse>(eventsUrl, fetcher, {
     revalidateOnFocus: false,
-    isPaused: () => hasLoadedRef.current && isAnyActive,
+    isPaused: () => hasLoadedRef.current && isAnyEditing,
     onSuccess: () => {
       hasLoadedRef.current = true;
     },
@@ -105,7 +105,7 @@ export function useCalendarData({
     tasksUrl ? fetcher : null,
     {
       revalidateOnFocus: false,
-      isPaused: () => hasLoadedRef.current && isAnyActive,
+      isPaused: () => hasLoadedRef.current && isAnyEditing,
       refreshInterval: 60000,
     }
   );
@@ -123,10 +123,20 @@ export function useCalendarData({
       visibility?: 'DRIVE' | 'ATTENDEES_ONLY' | 'PRIVATE';
       color?: string;
       attendeeIds?: string[];
-      pageId?: string;
-    }) => {
+      pageId?: string | null;
+      recurrenceRule?: RecurrenceRule | null;
+      agentTrigger?: {
+        agentPageId: string;
+        prompt?: string;
+        instructionPageId: string | null;
+        contextPageIds: string[];
+      };
+    }, overrideDriveId?: string | null) => {
+      const targetDriveId = overrideDriveId !== undefined
+        ? overrideDriveId
+        : (context === 'drive' ? driveId : null);
       const result = await post<CalendarEvent>('/api/calendar/events', {
-        driveId: context === 'drive' ? driveId : null,
+        driveId: targetDriveId,
         ...eventData,
         startAt: eventData.startAt.toISOString(),
         endAt: eventData.endAt.toISOString(),
@@ -141,7 +151,20 @@ export function useCalendarData({
 
   // Update event - patch() returns parsed JSON directly, throws on error
   const updateEvent = useCallback(
-    async (eventId: string, updates: Partial<Omit<CalendarEvent, 'startAt' | 'endAt'>> & { startAt?: Date | string; endAt?: Date | string }) => {
+    async (
+      eventId: string,
+      updates: Partial<Omit<CalendarEvent, 'startAt' | 'endAt'>> & {
+        startAt?: Date | string;
+        endAt?: Date | string;
+        // agentTrigger has three states: undefined no-op, null remove, object upsert
+        agentTrigger?: {
+          agentPageId: string;
+          prompt?: string;
+          instructionPageId: string | null;
+          contextPageIds: string[];
+        } | null;
+      },
+    ) => {
       const result = await patch<CalendarEvent>(`/api/calendar/events/${eventId}`, {
         ...updates,
         startAt: updates.startAt ? (updates.startAt instanceof Date ? updates.startAt.toISOString() : updates.startAt) : undefined,
@@ -185,6 +208,23 @@ export function useCalendarData({
     [eventsUrl]
   );
 
+  const addAttendees = useCallback(
+    async (eventId: string, userIds: string[], isOptional = false) => {
+      const data = await post<{ attendees?: CalendarEventAttendee[] }>(`/api/calendar/events/${eventId}/attendees`, { userIds, isOptional });
+      mutate(eventsUrl);
+      return data.attendees ?? [];
+    },
+    [eventsUrl]
+  );
+
+  const removeAttendee = useCallback(
+    async (eventId: string, userId: string) => {
+      await del(`/api/calendar/events/${eventId}/attendees?userId=${userId}`);
+      mutate(eventsUrl);
+    },
+    [eventsUrl]
+  );
+
   // Refresh data
   const refresh = useCallback(() => {
     mutate(eventsUrl);
@@ -212,6 +252,8 @@ export function useCalendarData({
     updateEvent,
     deleteEvent,
     updateRsvp,
+    addAttendees,
+    removeAttendee,
     refresh,
   };
 }

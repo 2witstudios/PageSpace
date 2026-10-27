@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { useRouter } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -9,7 +9,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { Search, UserPlus, UserMinus, UserCheck, UserX, MessageSquare, MoreVertical, User } from 'lucide-react';
+import { UserPlus, UserMinus, UserCheck, UserX, MessageSquare, MoreVertical, User, Mail, Ban } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,6 +21,9 @@ import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
 import { VerificationRequiredAlert } from '@/components/VerificationRequiredAlert';
 import { post, patch, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { useSocket } from '@/hooks/useSocket';
+import { useNotificationStore } from '@/stores/useNotificationStore';
+import { BlockedUsersList } from '@/components/moderation/BlockedUsersList';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -49,23 +52,14 @@ interface Connection {
   isRequester: boolean;
 }
 
-interface SearchResult {
-  id: string;
-  name: string;
-  email: string;
-  image: string | null;
-  displayName: string | null;
-  bio: string | null;
-  avatarUrl: string | null;
-}
-
 export default function ConnectionsPage() {
   const { } = useAuth();
   const router = useRouter();
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-  const [sendingRequest, setSendingRequest] = useState<string | null>(null);
+  const socket = useSocket();
+  const [email, setEmail] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isInviting, setIsInviting] = useState(false);
+  const [invitableEmail, setInvitableEmail] = useState<string | null>(null);
   const [showVerificationAlert, setShowVerificationAlert] = useState(false);
 
   // Fetch accepted connections
@@ -83,43 +77,52 @@ export default function ConnectionsPage() {
   const acceptedConnections = acceptedData?.connections || [];
   const pendingConnections = pendingData?.connections || [];
 
-  const handleSearch = async () => {
-    if (!searchQuery.trim()) return;
+  useEffect(() => {
+    if (!socket) return;
 
-    setIsSearching(true);
-    setSearchResults([]);
+    const handleNotification = (notification: { type: string }) => {
+      if (notification.type === 'CONNECTION_ACCEPTED') {
+        mutate('/api/connections?status=PENDING');
+        mutate('/api/connections?status=ACCEPTED');
+      } else if (notification.type === 'CONNECTION_REJECTED' || notification.type === 'CONNECTION_REQUEST') {
+        mutate('/api/connections?status=PENDING');
+      }
+    };
 
+    socket.on('notification:new', handleNotification);
+    return () => { socket.off('notification:new', handleNotification); };
+  }, [socket]);
+
+  const handleSendConnectionRequest = async () => {
+    const trimmedEmail = email.trim().toLowerCase();
+    if (!trimmedEmail) return;
+
+    setInvitableEmail(null);
+    setIsSubmitting(true);
     try {
-      const response = await fetchWithAuth(`/api/connections/search?email=${encodeURIComponent(searchQuery)}`);
-      if (!response.ok) throw new Error('Search failed');
+      const response = await fetchWithAuth(`/api/connections/search?email=${encodeURIComponent(trimmedEmail)}`);
+      if (!response.ok) throw new Error('Failed to search for user');
 
       const data = await response.json();
 
-      if (data.error) {
-        toast.error(data.error);
-      } else if (data.user) {
-        setSearchResults([data.user]);
-      } else {
-        toast.info('No user found with this email address');
+      if (!data.user) {
+        // The search endpoint now returns a single generic `{ user: null }` for
+        // every non-actionable case (no account, self-search, or an existing
+        // PENDING/ACCEPTED/BLOCKED relationship) so relationship state cannot be
+        // enumerated. Offer the invite path uniformly; /api/connections/invite
+        // enforces the real rules (dedupe, blocks, self) when a request is sent.
+        setInvitableEmail(trimmedEmail);
+        return;
       }
-    } catch (error) {
-      toast.error('Failed to search users');
-      console.error('Search error:', error);
-    } finally {
-      setIsSearching(false);
-    }
-  };
 
-  const handleSendRequest = async (targetUserId: string) => {
-    setSendingRequest(targetUserId);
-    try {
-      await post('/api/connections', { targetUserId });
+      const targetUser = data.user;
+      await post('/api/connections', { targetUserId: targetUser.id });
 
-      toast.success('Connection request sent');
-      setSearchResults(prev => prev.filter(u => u.id !== targetUserId));
+      const recipientLabel = targetUser.displayName || targetUser.name;
+      toast.success(`Connection request sent to ${recipientLabel} (${targetUser.email})`);
+      setEmail('');
       mutate('/api/connections?status=PENDING');
     } catch (error) {
-      // Check if this is a verification required error
       const errorMessage = (error as Error).message;
       if (errorMessage.includes('requiresEmailVerification') || errorMessage.includes('verification')) {
         setShowVerificationAlert(true);
@@ -128,7 +131,54 @@ export default function ConnectionsPage() {
 
       toast.error(errorMessage || 'Failed to send connection request');
     } finally {
-      setSendingRequest(null);
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleSendRequestOrInvite = async () => {
+    if (!invitableEmail) return;
+    const targetEmail = invitableEmail;
+
+    setIsInviting(true);
+    try {
+      try {
+        await post('/api/connections/invite', { email: targetEmail });
+      } catch (error) {
+        const errorMessage = (error as Error).message ?? '';
+        // Only caller-side conditions are safe to surface — they reveal nothing
+        // about the target's account or relationship state.
+        if (/verification|requiresEmailVerification/i.test(errorMessage)) {
+          setShowVerificationAlert(true);
+          return;
+        }
+        if (/too many/i.test(errorMessage)) {
+          toast.error('Too many requests right now. Please try again later.');
+          return;
+        }
+        // Everything else — already connected / pending / blocked / self / "invite
+        // already pending" / generic failure — falls through to the SAME uniform
+        // confirmation below. The connections/search response is intentionally
+        // generic (L2); surfacing these distinguishing outcomes here would let a
+        // user recover the existence/relationship state it conceals.
+      }
+      toast.success(`If ${targetEmail} can be reached, your connection request is on its way.`);
+      setEmail('');
+      setInvitableEmail(null);
+    } finally {
+      setIsInviting(false);
+    }
+  };
+
+  const handleBlockUser = async (userId: string, name: string) => {
+    if (!window.confirm(`Block ${name}? Neither of you will be able to send the other direct messages.`)) return;
+    try {
+      await post(`/api/users/${encodeURIComponent(userId)}/block`);
+      toast.success(`${name} is blocked`);
+      mutate('/api/connections?status=ACCEPTED');
+      mutate('/api/connections?status=BLOCKED');
+    } catch (error) {
+      toast.error('Failed to block user');
+      console.error('Block user error:', error);
     }
   };
 
@@ -140,6 +190,28 @@ export default function ConnectionsPage() {
       } else {
         await patch(`/api/connections/${connectionId}`, { action });
         toast.success(`Connection ${action}ed`);
+
+        // Optimistically mark the matching CONNECTION_REQUEST notification as actioned
+        const { notifications: storeNotifications, updateNotification } =
+          useNotificationStore.getState();
+        const stale = storeNotifications.find(
+          (n) =>
+            n.type === 'CONNECTION_REQUEST' &&
+            n.metadata &&
+            typeof n.metadata === 'object' &&
+            'connectionId' in n.metadata &&
+            n.metadata.connectionId === connectionId,
+        );
+        if (stale) {
+          updateNotification(stale.id, {
+            isRead: true,
+            metadata: {
+              ...(stale.metadata as Record<string, unknown>),
+              actioned: true,
+              actionedStatus: action === 'accept' ? 'accepted' : 'rejected',
+            },
+          });
+        }
       }
 
       // Refresh data
@@ -154,7 +226,7 @@ export default function ConnectionsPage() {
   const handleStartConversation = async (userId: string) => {
     try {
       const data = await post<{ conversation: { id: string } }>('/api/messages/conversations', { recipientId: userId });
-      router.push(`/dashboard/inbox/dm/${data.conversation.id}`);
+      router.push(`/dashboard/dms/${data.conversation.id}`);
     } catch {
       toast.error('Failed to start conversation');
     }
@@ -248,6 +320,13 @@ export default function ConnectionsPage() {
                                 <UserMinus className="h-4 w-4 mr-2" />
                                 Remove Connection
                               </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onClick={() => void handleBlockUser(connection.user.id, displayName)}
+                                className="text-destructive"
+                              >
+                                <Ban className="h-4 w-4 mr-2" />
+                                Block
+                              </DropdownMenuItem>
                             </DropdownMenuContent>
                           </DropdownMenu>
                         </div>
@@ -256,6 +335,9 @@ export default function ConnectionsPage() {
                   })}
                 </div>
               )}
+              <div className="mt-6">
+                <BlockedUsersList />
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
@@ -358,50 +440,40 @@ export default function ConnectionsPage() {
                   <Input
                     type="email"
                     placeholder="Enter email address"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+                    value={email}
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      if (invitableEmail) setInvitableEmail(null);
+                    }}
+                    onKeyDown={(e) => e.key === 'Enter' && handleSendConnectionRequest()}
+                    disabled={isSubmitting || isInviting}
                   />
-                  <Button onClick={handleSearch} disabled={isSearching || !searchQuery.trim()}>
-                    <Search className="h-4 w-4 mr-2" />
-                    Add
+                  <Button
+                    onClick={handleSendConnectionRequest}
+                    disabled={isSubmitting || isInviting || !email.trim()}
+                  >
+                    <UserPlus className="h-4 w-4 mr-2" />
+                    {isSubmitting ? 'Searching...' : 'Find User'}
                   </Button>
                 </div>
-
-                {searchResults.length > 0 && (
-                  <div className="space-y-4">
-                    {searchResults.map((user) => {
-                      const displayName = user.displayName || user.name;
-                      return (
-                        <div key={user.id} className="flex items-center justify-between p-4 border rounded-lg">
-                          <div className="flex items-center gap-4">
-                            <Avatar className="h-10 w-10">
-                              <AvatarImage src={user.image || user.avatarUrl || ''} />
-                              <AvatarFallback>{displayName.charAt(0).toUpperCase()}</AvatarFallback>
-                            </Avatar>
-                            <div>
-                              <p className="font-medium">{displayName}</p>
-                              <p className="text-sm text-muted-foreground">{user.email}</p>
-                              {user.bio && (
-                                <p className="text-sm text-muted-foreground line-clamp-1 mt-1">{user.bio}</p>
-                              )}
-                            </div>
-                          </div>
-                          <Button
-                            onClick={() => handleSendRequest(user.id)}
-                            disabled={sendingRequest === user.id}
-                          >
-                            <UserPlus className="h-4 w-4 mr-2" />
-                            {sendingRequest === user.id ? 'Sending...' : 'Send Request'}
-                          </Button>
-                        </div>
-                      );
-                    })}
+                {invitableEmail && (
+                  <div className="flex items-start gap-3 rounded-lg border border-dashed p-4">
+                    <Mail className="h-5 w-5 text-muted-foreground mt-0.5 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium">Send a connection request</p>
+                      <p className="text-sm text-muted-foreground truncate">
+                        We&apos;ll reach {invitableEmail} — inviting them to PageSpace if they&apos;re not a member yet.
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      onClick={handleSendRequestOrInvite}
+                      disabled={isInviting}
+                    >
+                      <Mail className="h-4 w-4 mr-2" />
+                      {isInviting ? 'Sending...' : 'Send request'}
+                    </Button>
                   </div>
-                )}
-
-                {isSearching && (
-                  <p className="text-center text-muted-foreground py-8">Searching...</p>
                 )}
               </div>
             </CardContent>

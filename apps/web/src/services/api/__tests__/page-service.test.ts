@@ -1,0 +1,288 @@
+import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
+
+/**
+ * pageService.createPage() — TASK_LIST seeding coverage.
+ *
+ * Mocks every dependency at its architectural boundary so the transaction body
+ * actually runs, letting these tests assert on the exact `ensureTaskListForPage`
+ * call `createPage()` makes for a TASK_LIST page — the fix that guarantees the
+ * browser page-creation flow seeds `taskStatusConfigs` immediately instead of
+ * relying on lazy self-heal on first UI load.
+ */
+
+const mockFindFirstDrive = vi.fn();
+const mockFindFirstPage = vi.fn();
+const mockTxInsertReturning = vi.fn();
+/** The row actually handed to the insert — what the page ends up being. */
+const mockTxInsertValues = vi.fn();
+const mockEnsureTaskItemForPage = vi.fn();
+const mockEnsureTaskListForPage = vi.fn();
+const mockCreatePageVersion = vi.fn();
+const mockLogActivityWithTx = vi.fn();
+
+vi.mock('@/lib/ai/core/ai-providers-config', () => ({
+  DEFAULT_PROVIDER: 'anthropic',
+  DEFAULT_MODEL: 'test-model',
+}));
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    query: {
+      drives: { findFirst: (...args: unknown[]) => mockFindFirstDrive(...args) },
+      pages: { findFirst: (...args: unknown[]) => mockFindFirstPage(...args) },
+      users: { findFirst: vi.fn() },
+    },
+    transaction: (cb: (tx: unknown) => Promise<unknown>) => cb({
+      insert: () => ({
+        values: (row: unknown) => {
+          mockTxInsertValues(row);
+          return {
+            returning: (...args: unknown[]) => mockTxInsertReturning(...args),
+          };
+        },
+      }),
+    }),
+  },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn(),
+  desc: vi.fn(),
+  isNull: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({ users: {} }));
+vi.mock('@pagespace/db/schema/core', () => ({ pages: {}, drives: {} }));
+vi.mock('@pagespace/db/schema/members', () => ({ driveAgentMembers: {} }));
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
+  canUserViewPage: vi.fn(),
+  canUserEditPage: vi.fn().mockResolvedValue(true),
+  canUserDeletePage: vi.fn(),
+  isDriveOwnerOrAdmin: vi.fn(),
+}));
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+  getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' }),
+  logActivityWithTx: (...args: unknown[]) => mockLogActivityWithTx(...args),
+}));
+vi.mock('@pagespace/lib/content/page-content-format', () => ({
+  detectPageContentFormat: vi.fn(() => 'text'),
+}));
+vi.mock('@pagespace/lib/utils/hash-utils', () => ({
+  hashWithPrefix: vi.fn(() => 'content-ref'),
+}));
+vi.mock('@pagespace/lib/services/page-version-service', () => ({
+  computePageStateHash: vi.fn(() => 'state-hash'),
+  createPageVersion: (...args: unknown[]) => mockCreatePageVersion(...args),
+}));
+vi.mock('@pagespace/lib/pages/circular-reference-guard', () => ({
+  validatePageMove: vi.fn(),
+}));
+vi.mock('@pagespace/lib/content/page-type-validators', () => ({
+  validatePageCreation: vi.fn(() => ({ valid: true, errors: [] })),
+  validateAIChatTools: vi.fn(() => ({ valid: true, errors: [] })),
+}));
+vi.mock('@pagespace/lib/content/page-types.config', () => ({
+  getDefaultContent: vi.fn(() => ''),
+  isAIChatPage: vi.fn((type: string) => type === 'AI_CHAT'),
+  // Reached only by the AI_CHAT path's validation; the TASK_LIST cases above
+  // never touched it, which is why the mock did not have it.
+  getCreatablePageTypes: vi.fn(() => ['DOCUMENT', 'TASK_LIST', 'AI_CHAT']),
+  getPageTypeConfig: vi.fn(() => ({
+    capabilities: { canAcceptUploads: false },
+    defaultContent: '',
+  })),
+}));
+vi.mock('@pagespace/lib/utils/enums', () => ({
+  PageType: { TASK_LIST: 'TASK_LIST', DOCUMENT: 'DOCUMENT', AI_CHAT: 'AI_CHAT' },
+}));
+vi.mock('@pagespace/lib/monitoring/change-group', () => ({
+  createChangeGroupId: vi.fn(() => 'change-group-1'),
+  inferChangeGroupType: vi.fn(() => 'user'),
+}));
+vi.mock('../page-mutation-service', () => ({
+  applyPageMutation: vi.fn(),
+  PageRevisionMismatchError: class PageRevisionMismatchError extends Error {},
+  OrgModelPolicyError: class OrgModelPolicyError extends Error {},
+}));
+// POL-8: the drive's org allowlists for a chosen model. Default: allowed (no org).
+const mockAgentModelSaveRefusal = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/ai/core/org-model-policy', () => ({
+  agentModelSaveRefusal: (...args: unknown[]) => mockAgentModelSaveRefusal(...args),
+}));
+vi.mock('../task-sync-service', () => ({
+  ensureTaskItemForPage: (...args: unknown[]) => mockEnsureTaskItemForPage(...args),
+  ensureTaskListForPage: (...args: unknown[]) => mockEnsureTaskListForPage(...args),
+}));
+
+import { pageService } from '../page-service';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
+
+describe('pageService.createPage — TASK_LIST seeding', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindFirstDrive.mockResolvedValue({ id: 'drive-1', ownerId: 'owner-1' });
+    mockFindFirstPage.mockResolvedValue(undefined); // no sibling pages -> position 1
+    mockEnsureTaskItemForPage.mockResolvedValue(undefined);
+    mockEnsureTaskListForPage.mockResolvedValue({ id: 'tasklist-1' });
+    mockCreatePageVersion.mockResolvedValue(undefined);
+    mockLogActivityWithTx.mockResolvedValue(undefined);
+  });
+
+  it('seeds task_lists + default task_status_configs for a root TASK_LIST page (no TASK_LIST parent)', async () => {
+    mockTxInsertReturning.mockResolvedValue([{
+      id: 'new-tasklist-page',
+      title: 'My Tasks',
+      type: 'TASK_LIST',
+      parentId: null,
+      driveId: 'drive-1',
+      content: '',
+      contentMode: 'html',
+      position: 1,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      revision: 0,
+      stateHash: 'state-hash',
+      isTrashed: false,
+      trashedAt: null,
+      aiProvider: null,
+      aiModel: null,
+      systemPrompt: null,
+      enabledTools: null,
+      isPaginated: null,
+    }]);
+
+    const result = await pageService.createPage(credentialActor('user-123', null), {
+      title: 'My Tasks',
+      type: 'TASK_LIST',
+      driveId: 'drive-1',
+    });
+
+    expect(result.success).toBe(true);
+    // This is the crux of the fix: a bare top-level TASK_LIST page (parentId
+    // null, so ensureTaskItemForPage's TASK_LIST-under-TASK_LIST check never
+    // fires) must still get its own task_lists/task_status_configs seeded here,
+    // immediately, rather than relying on lazy self-heal on first UI load.
+    expect(mockEnsureTaskListForPage).toHaveBeenCalledWith(
+      expect.anything(),
+      { pageId: 'new-tasklist-page', title: 'My Tasks', userId: 'user-123' }
+    );
+  });
+
+  it('does not seed task_lists for non-TASK_LIST page types', async () => {
+    mockTxInsertReturning.mockResolvedValue([{
+      id: 'new-doc-page',
+      title: 'My Doc',
+      type: 'DOCUMENT',
+      parentId: null,
+      driveId: 'drive-1',
+      content: '',
+      contentMode: 'html',
+      position: 1,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      revision: 0,
+      stateHash: 'state-hash',
+      isTrashed: false,
+      trashedAt: null,
+      aiProvider: null,
+      aiModel: null,
+      systemPrompt: null,
+      enabledTools: null,
+      isPaginated: null,
+    }]);
+
+    const result = await pageService.createPage(credentialActor('user-123', null), {
+      title: 'My Doc',
+      type: 'DOCUMENT',
+      driveId: 'drive-1',
+    });
+
+    expect(result.success).toBe(true);
+    expect(mockEnsureTaskListForPage).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Issue #2460: this door accepts `enabledTools`, so without the switch beside it
+ * an AI_CHAT page could be created holding a sandbox allowlist that grants
+ * nothing — the contradiction, at birth, through the generic page API.
+ */
+describe('pageService.createPage — the per-agent sandbox switch', () => {
+  // createPage validates enabledTools against the real tool registry through a dynamic import of ai-tools, a large
+  // module graph. Load it once here, outside any one test's timeout, so no test's verdict depends on cold-load time.
+  beforeAll(async () => {
+    await import('@/lib/ai/core/ai-tools');
+  }, 120_000);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindFirstDrive.mockResolvedValue({ id: 'drive-1', ownerId: 'owner-1' });
+    mockFindFirstPage.mockResolvedValue(undefined);
+    mockCreatePageVersion.mockResolvedValue(undefined);
+    mockLogActivityWithTx.mockResolvedValue(undefined);
+    mockEnsureTaskItemForPage.mockResolvedValue(undefined);
+    mockAgentModelSaveRefusal.mockResolvedValue({ ok: true });
+    mockTxInsertReturning.mockResolvedValue([{
+      id: 'new-agent-page',
+      title: 'Scraper Runner',
+      type: 'AI_CHAT',
+      parentId: null,
+      driveId: 'drive-1',
+      content: '',
+      contentMode: 'html',
+      position: 1,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      revision: 0,
+      stateHash: 'state-hash',
+      isTrashed: false,
+      trashedAt: null,
+      aiProvider: 'anthropic',
+      aiModel: 'test-model',
+      systemPrompt: null,
+      enabledTools: ['bash'],
+      isPaginated: null,
+    }]);
+  });
+
+  it('POL-8 (partial) a chosen model the drive\'s org does not allow is refused 403 and nothing is inserted; an unchosen model is not judged here', async () => {
+    mockAgentModelSaveRefusal.mockResolvedValueOnce({ ok: false, code: 'org_policy', reason: 'org_policy', policy: 'modelAllowlist', status: 403, message: "This organization doesn't allow that AI model." });
+    const refused = await pageService.createPage(credentialActor('user-123', null), { title: 'Analyst', type: 'AI_CHAT', driveId: 'drive-1', aiProvider: 'openai', aiModel: 'openai/gpt-6-sol' });
+
+    expect(refused).toMatchObject({ success: false, status: 403 });
+    expect(mockAgentModelSaveRefusal).toHaveBeenCalledWith('drive-1', { provider: 'openai', modelId: 'openai/gpt-6-sol' });
+    expect(mockTxInsertValues).not.toHaveBeenCalled();
+
+    mockAgentModelSaveRefusal.mockClear();
+    await pageService.createPage(credentialActor('user-123', null), { title: 'Analyst', type: 'AI_CHAT', driveId: 'drive-1' });
+    expect(mockAgentModelSaveRefusal).not.toHaveBeenCalled();
+  });
+
+  it('stores the switch on an AI_CHAT page', async () => {
+    const result = await pageService.createPage(credentialActor('user-123', null), {
+      title: 'Scraper Runner',
+      type: 'AI_CHAT',
+      driveId: 'drive-1',
+      enabledTools: ['bash'],
+      sandboxEnabled: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(mockTxInsertValues).toHaveBeenCalledWith(
+      expect.objectContaining({ enabledTools: ['bash'], sandboxEnabled: true }),
+    );
+  });
+
+  it('leaves it to the column default when the caller says nothing', async () => {
+    await pageService.createPage(credentialActor('user-123', null), {
+      title: 'Scraper Runner',
+      type: 'AI_CHAT',
+      driveId: 'drive-1',
+      enabledTools: ['bash'],
+    });
+
+    const row = mockTxInsertValues.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    // Absent, not `false`: the column's own default decides, and writing an
+    // explicit false here would silently overrule a future change to it.
+    expect(row).not.toHaveProperty('sandboxEnabled');
+  });
+});

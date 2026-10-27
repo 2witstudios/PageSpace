@@ -17,12 +17,34 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result: any) => 'error' in result),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
+  getAllowedDriveIds: vi.fn(() => []),
+  isScopedMCPAuth: vi.fn(() => false),
+  // Same boolean as isScopedMCPAuth for these fixtures; the real helper reads
+  // through getAllowedDriveIds so it also covers dispatched service auth.
+  //
+  // Typed from the REAL exports, so a signature change here fails typecheck
+  // rather than leaving a silently stale stub. The bodies reimplement rather
+  // than delegate to the sibling `getAllowedDriveIds` mock: that mock is a
+  // fixed `() => []` in these fixtures, so delegating would make every
+  // credential read as unscoped and the scope assertions vacuous.
+  isDriveScopedPrincipal: vi.fn<typeof import('@/lib/auth').isDriveScopedPrincipal>(
+    (auth) => (('allowedDriveIds' in auth ? auth.allowedDriveIds : []) ?? []).length > 0,
+  ),
+  isServiceAuthResult: vi.fn<typeof import('@/lib/auth').isServiceAuthResult>(
+    (result): result is import('@/lib/auth').ServiceAuthResult =>
+      !('error' in result) && 'tokenType' in result && result.tokenType === 'service',
+  ),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  canUserViewPage: vi.fn().mockResolvedValue(true),
-  canUserEditPage: vi.fn().mockResolvedValue(true),
-  getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@test.com', actorDisplayName: 'Test' }),
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
+    canUserViewPage: vi.fn().mockResolvedValue(true),
+    canUserEditPage: vi.fn().mockResolvedValue(true),
+}));
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+    getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@test.com', actorDisplayName: 'Test' }),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     ai: {
       info: vi.fn(),
@@ -39,9 +61,13 @@ vi.mock('@pagespace/lib/server', () => ({
       })),
     },
   },
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn(() => ({
       from: vi.fn(() => ({
@@ -51,8 +77,8 @@ vi.mock('@pagespace/db', () => ({
             title: 'Test Page',
             systemPrompt: null,
             enabledTools: null,
-            aiProvider: 'pagespace',
-            aiModel: 'test-model',
+            aiProvider: 'openai',
+            aiModel: 'openai/gpt-5.4-nano',
             driveId: 'drive_A',
             includeDrivePrompt: false,
             includePageTree: false,
@@ -65,62 +91,86 @@ vi.mock('@pagespace/db', () => ({
       })),
     })),
   },
-  users: { id: 'id' },
-  chatMessages: { pageId: 'pageId', conversationId: 'conversationId', isActive: 'isActive', createdAt: 'createdAt' },
-  pages: { id: 'id' },
-  drives: { id: 'id', drivePrompt: 'drivePrompt' },
+}));
+// exists/sql: globalConversationRepository's module-scope `hasMessages` query
+// (now reachable transitively via stream-takeover -> materialize-interrupted-stream
+// -> global-conversation-repository, #2153) needs both or the module throws on import.
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
+  exists: vi.fn(),
+  sql: vi.fn(),
 }));
-
-vi.mock('@/lib/subscription/usage-service', () => ({
-  incrementUsage: vi.fn(),
-  getCurrentUsage: vi.fn().mockResolvedValue({ success: true, remainingCalls: 100, currentCount: 0, limit: 100 }),
-  getUserUsageSummary: vi.fn(),
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'id' },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id' },
+  drives: { id: 'id', drivePrompt: 'drivePrompt' },
 }));
 
 vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
   requiresProSubscription: vi.fn().mockReturnValue(false),
-  createRateLimitResponse: vi.fn(),
   createSubscriptionRequiredResponse: vi.fn(),
 }));
 
-vi.mock('@/lib/websocket', () => ({
-  broadcastUsageEvent: vi.fn(),
+vi.mock('@pagespace/lib/billing/credit-gate', () => ({
+  canConsumeAI: vi.fn().mockResolvedValue({ allowed: true, reason: 'unlimited' }),
 }));
 
-vi.mock('@/lib/ai/core', () => ({
+vi.mock('@/lib/websocket', () => ({
+  broadcastCreditsEvent: vi.fn(),
+}));
+
+vi.mock('@/lib/ai/core/provider-factory', () => ({
   createAIProvider: vi.fn().mockResolvedValue({ model: {} }),
   updateUserProviderSettings: vi.fn(),
   createProviderErrorResponse: vi.fn(),
   isProviderError: vi.fn().mockReturnValue(false),
-  getUserOpenRouterSettings: vi.fn(),
-  getUserGoogleSettings: vi.fn(),
-  getDefaultPageSpaceSettings: vi.fn(),
-  getUserOpenAISettings: vi.fn(),
-  getUserAnthropicSettings: vi.fn(),
-  getUserXAISettings: vi.fn(),
-  getUserOllamaSettings: vi.fn(),
-  getUserLMStudioSettings: vi.fn(),
-  getUserGLMSettings: vi.fn(),
+}));
+vi.mock('@/lib/ai/core/ai-tools', () => ({
   pageSpaceTools: {},
+}));
+vi.mock('@/lib/ai/core/message-utils', () => ({
   extractMessageContent: vi.fn().mockReturnValue('test content'),
   extractToolCalls: vi.fn().mockReturnValue([]),
   extractToolResults: vi.fn().mockReturnValue([]),
   saveMessageToDatabase: vi.fn(),
   sanitizeMessagesForModel: vi.fn().mockReturnValue([]),
   convertDbMessageToUIMessage: vi.fn(),
+}));
+vi.mock('@/lib/ai/core/mention-processor', () => ({
   processMentionsInMessage: vi.fn().mockReturnValue({ mentions: [], pageIds: [] }),
+}));
+vi.mock('@/lib/ai/core/timestamp-utils', () => ({
   buildTimestampSystemPrompt: vi.fn().mockReturnValue(''),
+}));
+vi.mock('@/lib/ai/core/system-prompt', () => ({
   buildSystemPrompt: vi.fn().mockReturnValue(''),
   buildPersonalizationPrompt: vi.fn().mockReturnValue(''),
+}));
+vi.mock('@/lib/ai/core/tool-filtering', () => ({
+  filterToolsForSandboxTier: vi.fn((tools: unknown) => tools),
+  filterToolsForEphemeralWorkspace: vi.fn((tools: unknown) => tools),
+  filterToolsForSandboxEnablement: vi.fn((tools: unknown) => tools),
+  filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
   filterToolsForReadOnly: vi.fn().mockReturnValue({}),
   filterToolsForWebSearch: vi.fn().mockReturnValue({}),
+  filterToolsForMcpScope: vi.fn().mockReturnValue({}),
+  buildPageAITools: vi.fn().mockReturnValue({}),
+}));
+vi.mock('@/lib/ai/core/page-tree-context', () => ({
   getPageTreeContext: vi.fn(),
+}));
+vi.mock('@/lib/ai/core/model-capabilities', () => ({
   getModelCapabilities: vi.fn(),
+}));
+vi.mock('@/lib/ai/core/mcp-tool-converter', () => ({
   convertMCPToolsToAISDKSchemas: vi.fn(),
   parseMCPToolName: vi.fn(),
   sanitizeToolNamesForProvider: vi.fn(),
+}));
+vi.mock('@/lib/ai/core/personalization-utils', () => ({
   getUserPersonalization: vi.fn().mockResolvedValue(null),
 }));
 
@@ -128,27 +178,32 @@ vi.mock('ai', () => ({
   streamText: vi.fn(),
   convertToModelMessages: vi.fn().mockReturnValue([]),
   stepCountIs: vi.fn(),
+  hasToolCall: vi.fn(() => () => false),
+  tool: vi.fn((config) => config),
   createUIMessageStream: vi.fn(),
   createUIMessageStreamResponse: vi.fn(),
 }));
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn().mockReturnValue('generated_id'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
 vi.mock('@/lib/logging/mask', () => ({
   maskIdentifier: vi.fn((id: string) => `***${id.slice(-3)}`),
 }));
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackFeature: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/ai-monitoring', () => ({
+vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: {
     trackUsage: vi.fn(),
     trackToolUsage: vi.fn(),
   },
+  extractOpenRouterCostDollars: vi.fn(() => undefined),
+  extractOpenRouterGenerationIds: vi.fn(() => []),
 }));
 
 vi.mock('@/lib/mcp', () => ({
@@ -176,6 +231,7 @@ vi.mock('@/lib/ai/core/model-capabilities', () => ({
 }));
 
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ============================================================================
 // Test Fixtures
@@ -207,14 +263,14 @@ const mockMCPAuth = (userId: string, allowedDriveIds: string[]): MCPAuthResult =
 const createChatRequest = (chatId: string) => {
   return new Request('https://example.com/api/ai/chat', {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'content-length': '200' },
+    headers: { 'content-type': 'application/json', 'content-length': '200', 'X-Browser-Session-Id': 'session-1' },
     body: JSON.stringify({
       messages: [
         { id: 'msg_1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] },
       ],
       chatId,
-      selectedProvider: 'pagespace',
-      selectedModel: 'test-model',
+      selectedProvider: 'openai',
+      selectedModel: 'openai/gpt-5.4-nano',
     }),
   });
 };
@@ -284,4 +340,14 @@ describe('POST /api/ai/chat - MCP page scope enforcement', () => {
       expect(body.error).not.toContain('token does not have access');
     }
   });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(credentialActor(auth.userId, null), resourceId),
+    canPrincipalEditPage: (auth: { userId: string }, resourceId: string) => permissions.canUserEditPage(credentialActor(auth.userId, null), resourceId),
+  };
 });

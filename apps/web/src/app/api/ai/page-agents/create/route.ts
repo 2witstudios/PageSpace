@@ -1,12 +1,27 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, canPrincipalEditPage, isScopedMCPAuth } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
-import { canUserEditPage, agentAwarenessCache } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { pageSpaceTools } from '@/lib/ai/core';
-import { loggers } from '@pagespace/lib/server';
+import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
+import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
+import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
+import {
+  describeAgentToolSurface,
+  formatConfigSurfaceNotes,
+  toolSurfaceEcho,
+} from '@/lib/ai/core/agent-tool-surface';
+import { DEFAULT_PROVIDER, DEFAULT_MODEL, ONPREM_ALLOWED_PROVIDERS, isValidModel } from '@/lib/ai/core/ai-providers-config';
+import { agentModelSaveRefusal } from '@/lib/ai/core/org-model-policy';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { pageAgentRepository, type AgentData } from '@/lib/repositories/page-agent-repository';
+import { db } from '@pagespace/db/db';
+import { pages } from '@pagespace/db/schema/core';
+import { driveAgentMembers } from '@pagespace/db/schema/members';
+import { getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
+import { isDriveLead } from '@pagespace/lib/permissions/drive-relationship';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 /**
  * POST /api/ai/page-agents/create
@@ -15,11 +30,16 @@ import { pageAgentRepository, type AgentData } from '@/lib/repositories/page-age
 export async function POST(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'page_agent', resourceId: 'create', details: { reason: 'auth_failed', method: 'POST', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
+      return auth.error;
+    }
     const { userId } = auth;
+    // Read once, up front: whether a drive-scoped MCP token is calling decides which tools it may enable.
+    const mcpScoped = isScopedMCPAuth(auth);
 
     const body = await request.json();
-    const { driveId, parentId, title, systemPrompt, enabledTools, aiProvider, aiModel, welcomeMessage } = body;
+    const { driveId, parentId, title, systemPrompt, enabledTools, aiProvider, aiModel, welcomeMessage, sandboxEnabled } = body;
 
     if (!driveId || !title || !systemPrompt) {
       return NextResponse.json(
@@ -40,7 +60,18 @@ export async function POST(request: Request) {
 
     // Enforce MCP token scope
     const scopeError = checkMCPDriveScope(auth, driveId);
-    if (scopeError) return scopeError;
+    if (scopeError) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: 'create', details: { reason: 'mcp_drive_scope_denied', driveId, method: 'POST' }, riskScore: 0.5 });
+      return scopeError;
+    }
+
+    // Lead ownership alone cannot satisfy an organization's credential policy.
+    const actor = actorFromAuth(auth);
+    if (!(await getUserDriveAccess(actor, driveId))) {
+      return deniedResponse(actor, driveId, NextResponse.json(
+        { error: 'You do not have access to this drive' }, { status: 403 },
+      ));
+    }
 
     // If parentId is provided, verify it exists and belongs to this drive
     if (parentId) {
@@ -57,16 +88,30 @@ export async function POST(request: Request) {
     // Check permissions for agent creation
     if (parentId) {
       // Creating in a folder - check permissions on parent page
-      const canEdit = await canUserEditPage(userId, parentId);
+      const canEdit = await canPrincipalEditPage(auth, parentId);
       if (!canEdit) {
-        return NextResponse.json(
+        auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: 'create', details: { reason: 'no_edit_permission_on_parent', parentId, driveId, method: 'POST' }, riskScore: 0.5 });
+        return deniedResponse(actorFromAuth(auth), parentId, NextResponse.json(
           { error: 'Insufficient permissions to create agents in this folder' },
           { status: 403 }
-        );
+        ));
       }
     } else {
-      // Creating at root level - check if user owns the drive
-      if (drive.ownerId !== userId) {
+      // Creating at root level — owner-only. An explicit-role key needs the
+      // OWNER role (its role replaces its owner's identity); an inherited key
+      // falls through to the user ownership check (it IS the owner acting).
+      if (mcpScoped) {
+        const membership = await getAppDriveMembership(actorFromAuth(auth), auth.tokenId, driveId);
+        if (!membership || (membership.role !== null && membership.role !== 'OWNER')) {
+          auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: 'create', details: { reason: 'token_role_not_owner', driveId, method: 'POST' }, riskScore: 0.5 });
+          return NextResponse.json(
+            { error: 'Only drive owners can create agents at the root level' },
+            { status: 403 }
+          );
+        }
+      }
+      if (!isDriveLead(userId, drive)) {
+        auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: 'create', details: { reason: 'not_drive_owner', driveId, method: 'POST' }, riskScore: 0.5 });
         return NextResponse.json(
           { error: 'Only drive owners can create agents at the root level' },
           { status: 403 }
@@ -74,9 +119,11 @@ export async function POST(request: Request) {
       }
     }
 
-    // Validate enabled tools
+    // Validate enabled tools. A drive-scoped MCP token cannot newly enable an
+    // account-level-only tool (e.g. create_drive) — mirrors the runtime
+    // chat/consult tool-list filtering.
     if (enabledTools && enabledTools.length > 0) {
-      const availableToolNames = Object.keys(pageSpaceTools);
+      const availableToolNames = Object.keys(filterToolsForMcpScope(pageSpaceTools, mcpScoped));
       const invalidTools = enabledTools.filter((toolName: string) => !availableToolNames.includes(toolName));
       if (invalidTools.length > 0) {
         return NextResponse.json(
@@ -86,10 +133,54 @@ export async function POST(request: Request) {
       }
     }
 
+    // The per-agent sandbox switch, settable AT BIRTH (issue #2460). Without it
+    // an agent created here with `enabledTools: ['bash', …]` was born in the
+    // contradiction this PR exists to end: the names stored, the switch off, and
+    // a response below cheerfully listing tools it would never be granted.
+    // Rejected rather than coerced, like the other doors that write it —
+    // `Boolean("false")` is `true`.
+    if (sandboxEnabled !== undefined && typeof sandboxEnabled !== 'boolean') {
+      return NextResponse.json(
+        { error: 'sandboxEnabled must be a boolean' },
+        { status: 400 }
+      );
+    }
+
+    // Resolve the agent's (provider, model) as one atomic pair — never mix a caller
+    // provider with the default model. A partial body (only one field) falls back to
+    // the product default pair rather than synthesizing an impossible combination.
+    let agentProvider: string;
+    let agentModel: string;
+    if (aiProvider && aiModel) {
+      agentProvider = aiProvider;
+      agentModel = aiModel;
+    } else {
+      agentProvider = DEFAULT_PROVIDER;
+      agentModel = DEFAULT_MODEL;
+    }
+
+    // Reject an explicit, off-catalog cloud pair at this write boundary (like the
+    // settings PATCH) so a broken selection is surfaced now, not as a 400 on first
+    // use. Local/on-prem providers serve runtime-discovered models, so only their
+    // provider name is gated, not the model id.
+    if (!ONPREM_ALLOWED_PROVIDERS.has(agentProvider) && !isValidModel(agentProvider, agentModel)) {
+      return NextResponse.json(
+        { error: `Invalid AI model selection: ${agentProvider} / ${agentModel}` },
+        { status: 400 }
+      );
+    }
+
+    // POL-8: a model the caller chose must be one the drive's org allows (the product default is judged when it runs).
+    if (aiProvider && aiModel) {
+      const decision = await agentModelSaveRefusal(drive.id, { provider: agentProvider, modelId: agentModel });
+      if (!decision.ok) {
+        return NextResponse.json({ error: decision.message, code: decision.code, policy: decision.policy }, { status: decision.status });
+      }
+    }
+
     // Get next position
     const nextPosition = await pageAgentRepository.getNextPosition(drive.id, parentId || null);
 
-    // Prepare agent data with default PageSpace provider and standard model
     const agentData: AgentData = {
       title,
       type: 'AI_CHAT',
@@ -99,19 +190,36 @@ export async function POST(request: Request) {
       parentId: parentId || null,
       isTrashed: false,
       systemPrompt,
-      // Default to PageSpace provider with "standard" model
-      // Agents can use 'standard' or 'pro' as friendly aliases
-      aiProvider: aiProvider || 'pagespace',
-      aiModel: aiModel || 'standard',
+      aiProvider: agentProvider,
+      aiModel: agentModel,
+      createdBy: userId,
     };
 
     // Add optional configuration (save even if empty array)
     if (enabledTools !== undefined) {
       agentData.enabledTools = enabledTools;
     }
+    if (sandboxEnabled !== undefined) {
+      agentData.sandboxEnabled = sandboxEnabled;
+    }
 
-    // Create the agent
-    const newAgent = await pageAgentRepository.createAgent(agentData);
+    // Create the agent and membership atomically so there is never an agent
+    // without a drive role (partial failure rolls back both).
+    const newAgent = await db.transaction(async (tx) => {
+      const [created] = await tx
+        .insert(pages)
+        .values(agentData)
+        .returning({ id: pages.id, title: pages.title, type: pages.type });
+
+      await tx.insert(driveAgentMembers).values({
+        driveId: drive.id,
+        agentPageId: created.id,
+        role: 'MEMBER',
+        addedBy: userId,
+      });
+
+      return created;
+    });
 
     // Broadcast agent creation event
     await broadcastPageEvent(
@@ -122,9 +230,6 @@ export async function POST(request: Request) {
       })
     );
 
-    // Invalidate agent awareness cache for this drive
-    await agentAwarenessCache.invalidateDriveAgents(driveId);
-
     loggers.api.info('AI agent created', {
       agentId: newAgent.id,
       title,
@@ -133,22 +238,45 @@ export async function POST(request: Request) {
       userId
     });
 
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'page_agent', resourceId: newAgent.id, details: {
+      action: 'create_agent',
+      driveId,
+    } });
+
+    // What the stored config becomes at runtime, computed exactly as the update
+    // doors compute it so a create and an update never describe the same agent
+    // differently.
+    const toolSurface = describeAgentToolSurface({
+      enabledTools: Array.isArray(enabledTools) ? enabledTools : null,
+      sandboxEnabled: Boolean(agentData.sandboxEnabled),
+      // Creation does not set the exposure mode, so it is the column default.
+      toolExposureMode: 'upfront',
+      registeredToolNames: Object.keys(filterToolsForMcpScope(pageSpaceTools, mcpScoped)),
+    });
+    const toolSurfaceNotes = formatConfigSurfaceNotes(toolSurface);
+
     return NextResponse.json({
       success: true,
       id: newAgent.id,
       title: newAgent.title,
       type: 'AI_CHAT',
       parentId: parentId || 'root',
-      message: `Successfully created AI agent "${title}" with custom configuration`,
-      summary: `Created AI agent "${title}" in ${parentId ? `parent ${parentId}` : 'drive root'} with ${enabledTools?.length || 0} tools`,
+      message: toolSurface.blocked.length > 0
+        ? `Created AI agent "${title}", but ${toolSurface.blocked.length} configured tool(s) will NOT be granted at runtime.`
+        : `Successfully created AI agent "${title}" with custom configuration`,
+      summary: `Created AI agent "${title}" in ${parentId ? `parent ${parentId}` : 'drive root'} with ${enabledTools?.length || 0} tools (${toolSurface.granted.length} of them actually granted)`,
       agentConfig: {
         systemPrompt: systemPrompt.substring(0, 100) + (systemPrompt.length > 100 ? '...' : ''),
         enabledToolsCount: enabledTools?.length || 0,
         enabledTools: enabledTools || [],
+        // STORED vs EFFECTIVE, the same block every other config door reports.
+        ...toolSurfaceEcho(toolSurface),
+        sandboxEnabled: Boolean(agentData.sandboxEnabled),
         aiProvider: agentData.aiProvider,
         aiModel: agentData.aiModel,
         hasWelcomeMessage: !!welcomeMessage
       },
+      ...(toolSurfaceNotes.length > 0 ? { warnings: toolSurfaceNotes } : {}),
       stats: {
         pageType: 'AI_CHAT',
         location: parentId ? `Parent ID: ${parentId}` : 'Drive root',
@@ -157,7 +285,13 @@ export async function POST(request: Request) {
       },
       nextSteps: [
         `AI agent "${title}" is ready to use`,
-        `Agent has access to ${enabledTools?.length || 0} tools: ${(enabledTools || []).join(', ')}`,
+        // What it can ACTUALLY call — the old line listed whatever was stored,
+        // which is the sentence the reporter of #2460 believed for three spawns.
+        // An agent created with no allowlist is unrestricted; naming its ninety
+        // tools here would be noise, so it says so instead.
+        toolSurface.configured === null
+          ? `Agent can call every available tool (${toolSurface.granted.length})`
+          : `Agent can call ${toolSurface.granted.length} tool(s): ${toolSurface.granted.join(', ') || 'none'}`,
         'Start a conversation to test the agent\'s behavior',
         `Agent ID: ${newAgent.id} - use this for further operations`,
         'Use read_page to view the agent\'s full configuration'

@@ -26,7 +26,7 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args),
 }));
 
-vi.mock('@pagespace/lib/ai-monitoring', () => ({
+vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   getContextWindow: vi.fn((model: string) => {
     const windows: Record<string, number> = {
       'gpt-4': 128000,

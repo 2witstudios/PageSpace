@@ -4,7 +4,7 @@ import { GET } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 // Mock dependencies
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       pages: {
@@ -12,13 +12,20 @@ vi.mock('@pagespace/db', () => ({
       },
     },
   },
-  pages: { id: 'pages.id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
 }));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'pages.id' },
+}));
 
-vi.mock('@pagespace/lib/server', () => ({
-  canUserViewPage: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
+    canUserViewPage: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -26,14 +33,19 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  generateDOCX: vi.fn(),
-  sanitizeFilename: vi.fn((name: string) => name.replace(/[^a-zA-Z0-9-_]/g, '_')),
+vi.mock('@pagespace/lib/content/export-utils', () => ({
+    generateDOCX: vi.fn(),
+    sanitizeFilename: vi.fn((name: string) => name.replace(/[^a-zA-Z0-9-_]/g, '_')),
 }));
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackPageOperation: vi.fn(),
 }));
 
@@ -41,13 +53,24 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result) => 'error' in result),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
+  canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
+    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
+    return canUserViewPage(credentialActor(auth.userId, null), pageId);
+  }),
 }));
 
-import { db } from '@pagespace/db';
+vi.mock('marked', () => ({
+  marked: {
+    parse: vi.fn(() => Promise.resolve('<h1>Hello World</h1>')),
+  },
+}));
+
+import { db } from '@pagespace/db/db';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/server';
-import { generateDOCX, sanitizeFilename } from '@pagespace/lib';
-import { trackPageOperation } from '@pagespace/lib/activity-tracker';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { generateDOCX, sanitizeFilename } from '@pagespace/lib/content/export-utils';
+import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -190,12 +213,28 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
       expect(response.headers.get('Content-Disposition')).toContain('.docx');
     });
 
+    it('converts markdown content to HTML before generating DOCX', async () => {
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue({
+        ...mockPage(),
+        contentMode: 'markdown',
+        content: '# Hello World',
+      } as never);
+
+      await GET(createRequest(), { params: mockParams });
+
+      // generateDOCX should receive HTML converted from markdown, not the raw markdown
+      expect(generateDOCX).toHaveBeenCalledWith(
+        '<h1>Hello World</h1>',
+        'Test Document'
+      );
+    });
+
     it('uses default content when page has no content', async () => {
       vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPage({ content: '' }) as never);
 
       await GET(createRequest(), { params: mockParams });
 
-      expect(generateDOCX).toHaveBeenCalledWith('<p>No content</p>', expect.any(String));
+      expect(generateDOCX).toHaveBeenCalledWith('<p>No content</p>', 'Test Document');
     });
 
     it('uses fallback filename when title cannot be sanitized', async () => {
@@ -215,17 +254,17 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
         mockUserId,
         'read',
         mockPageId,
-        expect.objectContaining({
+        {
           exportFormat: 'docx',
           pageTitle: 'Test Document',
-        })
+        }
       );
     });
   });
 
   describe('error handling', () => {
     it('returns 500 when DOCX generation fails', async () => {
-      vi.mocked(generateDOCX).mockRejectedValue(new Error('Generation failed'));
+      vi.mocked(generateDOCX).mockRejectedValueOnce(new Error('Generation failed'));
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -235,7 +274,7 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
     });
 
     it('returns 500 when database query fails', async () => {
-      vi.mocked(db.query.pages.findFirst).mockRejectedValue(new Error('Database error'));
+      vi.mocked(db.query.pages.findFirst).mockRejectedValueOnce(new Error('Database error'));
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();

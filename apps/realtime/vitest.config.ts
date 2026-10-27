@@ -6,6 +6,8 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['src/**/*.{test,spec}.{js,ts}'],
+    // Real-Postgres tests run only under vitest.integration.config.ts (`bun run test:integration`).
+    exclude: ['**/node_modules/**', 'src/**/*.integration.test.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html', 'json-summary'],
@@ -18,6 +20,13 @@ export default defineConfig({
         '**/test/**',
         '**/drizzle/**',
         '**/node_modules/**',
+        // Sentry bootstrap: must be the process's first import and needs a real
+        // DSN side effect, so no test can execute it meaningfully.
+        'src/instrument.ts',
+        // The composition root: 25 inline socket handlers plus the listen/shutdown
+        // wiring, exercised for real by the integration config and smoke boot, not
+        // meaningfully by unit suites.
+        'src/index.ts',
       ],
       thresholds: {
         lines: 75,

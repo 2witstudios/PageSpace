@@ -1,0 +1,490 @@
+import React from 'react';
+import { flushSync } from 'react-dom';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen } from '@testing-library/react';
+
+const fetchWithAuthMock = vi.fn();
+vi.mock('@/lib/auth/auth-fetch', () => ({
+  fetchWithAuth: (...args: unknown[]) => fetchWithAuthMock(...args),
+}));
+
+const useThemeMock = vi.fn();
+vi.mock('next-themes', () => ({
+  useTheme: () => useThemeMock(),
+}));
+
+const routerPushMock = vi.fn();
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: routerPushMock }),
+}));
+
+import { CANVAS_IFRAME_SANDBOX, CanvasFrame } from '../CanvasFrame';
+import { PREVIEW_SANDBOX_TOKENS } from '@pagespace/lib/canvas/preview-headers';
+
+// React 19.2.6 production build in this sandbox doesn't export `act`;
+// @testing-library/react 16.x requires it. Polyfill with flushSync so React
+// updates are committed synchronously. In CI (development React build) React.act
+// exists and this is never reached.
+if (typeof (React as Record<string, unknown>).act !== 'function') {
+  (React as Record<string, unknown>).act = (cb: () => unknown) => {
+    let result: unknown;
+    flushSync(() => { result = cb(); });
+    return result;
+  };
+}
+
+/**
+ * Security invariant guard for the in-app canvas iframe.
+ *
+ * CanvasFrame navigates to author HTML/JS at a SAME-ORIGIN url (the preview
+ * route), so the ONLY thing making it an opaque, isolated origin is the absence
+ * of `allow-same-origin` in its sandbox. Granting `allow-same-origin` together
+ * with `allow-scripts` would let author JavaScript run AS the logged-in app — a
+ * full session/account compromise, with cookies and the viewer's API access.
+ * This is one token away, so it gets a dedicated regression test.
+ *
+ * Note this matters MORE since the switch away from `srcDoc`: the url is now
+ * genuinely same-origin, where before it was inherited.
+ */
+describe('CANVAS_IFRAME_SANDBOX', () => {
+  it('given the canvas iframe sandbox, should NEVER grant allow-same-origin', () => {
+    expect(CANVAS_IFRAME_SANDBOX.split(/\s+/)).not.toContain('allow-same-origin');
+  });
+
+  it('given the canvas iframe sandbox, should allow forms so a canvas <form> behaves as it will once published', () => {
+    // form-action is the actual control (see the constant's doc); this token
+    // only decides whether the form is submittable at all.
+    expect(CANVAS_IFRAME_SANDBOX.split(/\s+/)).toContain('allow-forms');
+  });
+
+  it('given the canvas iframe sandbox, should run author JS in an opaque origin and allow new-tab links', () => {
+    const tokens = CANVAS_IFRAME_SANDBOX.split(/\s+/);
+    expect(tokens).toContain('allow-scripts');
+    expect(tokens).toContain('allow-popups');
+    expect(tokens).toContain('allow-popups-to-escape-sandbox');
+    // Must not be able to navigate the app's own (top) tab.
+    expect(tokens).not.toContain('allow-top-navigation');
+    expect(tokens).not.toContain('allow-top-navigation-by-user-activation');
+  });
+});
+
+describe('CanvasFrame', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useThemeMock.mockReturnValue({ resolvedTheme: 'dark' });
+    fetchWithAuthMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        links: [{
+          driveId: 'drive-1',
+          pageId: 'file-1',
+          url: '/dashboard/drive-1/file-1/view?token=signed',
+        }],
+      }),
+    });
+  });
+
+  it('given a pageId, should NAVIGATE to the preview route rather than inlining the document', () => {
+    // srcDoc inherits the embedder's CSP; a real navigation does not. That is the
+    // whole reason this component uses `src` — see the preview route.
+    render(React.createElement(CanvasFrame, { pageId: 'page-1', title: 'Canvas' }));
+
+    const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+    expect(iframe.getAttribute('src')).toContain('/api/canvas/page-1/preview');
+    expect(iframe.hasAttribute('srcdoc')).toBe(false);
+  });
+
+  it('given a pageId needing encoding, should encode it into the preview path', () => {
+    render(React.createElement(CanvasFrame, { pageId: 'a/b', title: 'Canvas' }));
+
+    const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+    expect(iframe.getAttribute('src')).toContain('/api/canvas/a%2Fb/preview');
+  });
+
+  it('given a changed previewKey, should re-navigate so a save is reflected', () => {
+    const { rerender } = render(
+      React.createElement(CanvasFrame, { pageId: 'page-1', previewKey: 1, title: 'Canvas' }),
+    );
+    const first = (screen.getByTitle('Canvas') as HTMLIFrameElement).getAttribute('src');
+
+    rerender(React.createElement(CanvasFrame, { pageId: 'page-1', previewKey: 2, title: 'Canvas' }));
+    const second = (screen.getByTitle('Canvas') as HTMLIFrameElement).getAttribute('src');
+
+    expect(second).not.toBe(first);
+  });
+});
+
+describe('CanvasFrame — theme sync', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useThemeMock.mockReturnValue({ resolvedTheme: 'dark' });
+    fetchWithAuthMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ links: [] }),
+    });
+  });
+
+  // Bridge-script INJECTION is no longer this component's job — the preview route
+  // renders the document server-side, and renderCanvasDocument's own tests cover
+  // which bridges get injected. What stays this component's job, and is tested
+  // below, is the parent half of each bridge: responding to and validating the
+  // messages the frame posts back.
+
+  it('given resolvedTheme, should postMessage the theme to the iframe on mount', async () => {
+    const mockPostMessage = vi.fn();
+
+    render(React.createElement(CanvasFrame, {
+      pageId: 'page-1',
+      title: 'Canvas',
+    }));
+
+    // jsdom does not create contentWindow for sandboxed iframes, so inject a
+    // mock that the effect's postMessage call will use.
+    const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: { postMessage: mockPostMessage },
+      configurable: true,
+    });
+
+    mockPostMessage.mockClear();
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'pagespace-theme-request' },
+      source: iframe.contentWindow,
+    }));
+
+    expect(mockPostMessage).toHaveBeenCalledWith(
+      { type: 'pagespace-theme', isDark: true },
+      '*',
+    );
+  });
+
+  it('given a pagespace-theme-request message from the iframe, should respond with the current theme', async () => {
+    const mockPostMessage = vi.fn();
+    const mockContentWindow = { postMessage: mockPostMessage };
+
+    render(React.createElement(CanvasFrame, {
+      pageId: 'page-1',
+      title: 'Canvas',
+    }));
+
+    const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: mockContentWindow,
+      configurable: true,
+    });
+
+    // Simulate the iframe's bridge script requesting the theme on load.
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'pagespace-theme-request' },
+      source: mockContentWindow as unknown as MessageEventSource,
+    }));
+
+    expect(mockPostMessage).toHaveBeenCalledWith(
+      { type: 'pagespace-theme', isDark: true },
+      '*',
+    );
+  });
+
+  it('given resolvedTheme is light, should send isDark: false', async () => {
+    useThemeMock.mockReturnValue({ resolvedTheme: 'light' });
+    const mockPostMessage = vi.fn();
+    const mockContentWindow = { postMessage: mockPostMessage };
+
+    const { container } = render(React.createElement(CanvasFrame, {
+      pageId: 'page-1',
+      title: 'Canvas',
+    }));
+
+    const iframe = container.querySelector('iframe') as HTMLIFrameElement;
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: mockContentWindow,
+      configurable: true,
+    });
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'pagespace-theme-request' },
+      source: mockContentWindow as unknown as MessageEventSource,
+    }));
+
+    expect(mockPostMessage).toHaveBeenCalledWith(
+      { type: 'pagespace-theme', isDark: false },
+      '*',
+    );
+  });
+
+  it('given a message from a different source, should NOT respond', async () => {
+    const mockPostMessage = vi.fn();
+    const mockContentWindow = { postMessage: mockPostMessage };
+
+    render(React.createElement(CanvasFrame, {
+      pageId: 'page-1',
+      title: 'Canvas',
+    }));
+
+    const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: mockContentWindow,
+      configurable: true,
+    });
+
+    // Simulate a message from a source that is NOT the iframe.
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'pagespace-theme-request' },
+      source: window,
+    }));
+
+    expect(mockPostMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('CanvasFrame — navigation bridge', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useThemeMock.mockReturnValue({ resolvedTheme: 'dark' });
+    fetchWithAuthMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ links: [] }),
+    });
+  });
+
+  it('given a pagespace-navigate message with a valid dashboard page href from the iframe, should router.push it', () => {
+    const mockContentWindow = { postMessage: vi.fn() };
+
+    render(React.createElement(CanvasFrame, {
+      pageId: 'page-1',
+      title: 'Canvas',
+    }));
+
+    const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: mockContentWindow,
+      configurable: true,
+    });
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'pagespace-navigate', href: '/dashboard/drive-1/page-1' },
+      source: mockContentWindow as unknown as MessageEventSource,
+    }));
+
+    expect(routerPushMock).toHaveBeenCalledWith('/dashboard/drive-1/page-1');
+  });
+
+  it('given a pagespace-navigate message with a forged/invalid href, should NOT router.push (independent re-validation)', () => {
+    const mockContentWindow = { postMessage: vi.fn() };
+
+    render(React.createElement(CanvasFrame, {
+      pageId: 'page-1',
+      title: 'Canvas',
+    }));
+
+    const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: mockContentWindow,
+      configurable: true,
+    });
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'pagespace-navigate', href: 'https://evil.example.com' },
+      source: mockContentWindow as unknown as MessageEventSource,
+    }));
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'pagespace-navigate', href: '/dashboard/drive-1/page-1/view' },
+      source: mockContentWindow as unknown as MessageEventSource,
+    }));
+
+    expect(routerPushMock).not.toHaveBeenCalled();
+  });
+
+  it('given a pagespace-navigate message from a different source, should NOT router.push', () => {
+    const mockContentWindow = { postMessage: vi.fn() };
+
+    render(React.createElement(CanvasFrame, {
+      pageId: 'page-1',
+      title: 'Canvas',
+    }));
+
+    const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: mockContentWindow,
+      configurable: true,
+    });
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'pagespace-navigate', href: '/dashboard/drive-1/page-1' },
+      source: window,
+    }));
+
+    expect(routerPushMock).not.toHaveBeenCalled();
+  });
+
+  // Regression: without a user-activation gate, author JS inside the canvas
+  // iframe could postMessage `pagespace-navigate` on load (no real click at
+  // all) and force the app's own tab to navigate — reopening the exact hole
+  // CANVAS_IFRAME_SANDBOX closes by omitting allow-top-navigation*. jsdom has
+  // no navigator.userActivation at all (verified separately), so the tests
+  // above exercise the "API unsupported" fallback path; these explicitly
+  // stub the API to exercise the gate itself.
+  describe('given the User Activation API is available', () => {
+    const originalDescriptor = Object.getOwnPropertyDescriptor(window.navigator, 'userActivation');
+
+    afterEach(() => {
+      if (originalDescriptor) {
+        Object.defineProperty(window.navigator, 'userActivation', originalDescriptor);
+      } else {
+        delete (window.navigator as { userActivation?: unknown }).userActivation;
+      }
+    });
+
+    function stubUserActivation(isActive: boolean) {
+      Object.defineProperty(window.navigator, 'userActivation', {
+        value: { isActive, hasBeenActive: isActive },
+        configurable: true,
+      });
+    }
+
+    it('given no recent user gesture (isActive: false), should NOT router.push even for a valid href', () => {
+      stubUserActivation(false);
+      const mockContentWindow = { postMessage: vi.fn() };
+
+      render(React.createElement(CanvasFrame, {
+        pageId: 'page-1',
+        title: 'Canvas',
+      }));
+
+      const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        configurable: true,
+      });
+
+      window.dispatchEvent(new MessageEvent('message', {
+        data: { type: 'pagespace-navigate', href: '/dashboard/drive-1/page-1' },
+        source: mockContentWindow as unknown as MessageEventSource,
+      }));
+
+      expect(routerPushMock).not.toHaveBeenCalled();
+    });
+
+    it('given a recent user gesture (isActive: true), should router.push a valid href', () => {
+      stubUserActivation(true);
+      const mockContentWindow = { postMessage: vi.fn() };
+
+      render(React.createElement(CanvasFrame, {
+        pageId: 'page-1',
+        title: 'Canvas',
+      }));
+
+      const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        configurable: true,
+      });
+
+      window.dispatchEvent(new MessageEvent('message', {
+        data: { type: 'pagespace-navigate', href: '/dashboard/drive-1/page-1' },
+        source: mockContentWindow as unknown as MessageEventSource,
+      }));
+
+      expect(routerPushMock).toHaveBeenCalledWith('/dashboard/drive-1/page-1');
+    });
+  });
+});
+
+describe('CanvasFrame — escape bridge', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useThemeMock.mockReturnValue({ resolvedTheme: 'dark' });
+    fetchWithAuthMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ links: [] }),
+    });
+  });
+
+  it('given no onEscape prop, should ignore a pagespace-escape message rather than throwing', () => {
+    const mockContentWindow = { postMessage: vi.fn() };
+
+    render(React.createElement(CanvasFrame, { pageId: 'page-1', title: 'Canvas' }));
+
+    const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+    Object.defineProperty(iframe, 'contentWindow', { value: mockContentWindow, writable: true });
+
+    // The route injects the escape bridge unconditionally, so a frame whose
+    // parent has nothing to close will still post this — it must be a no-op.
+    expect(() => {
+      window.dispatchEvent(
+        new MessageEvent('message', { data: { type: 'pagespace-escape' }, source: mockContentWindow as unknown as Window }),
+      );
+    }).not.toThrow();
+  });
+
+  it('given a pagespace-escape message from the iframe, should call onEscape', () => {
+    const mockContentWindow = { postMessage: vi.fn() };
+    const onEscape = vi.fn();
+
+    render(React.createElement(CanvasFrame, {
+      pageId: 'page-1',
+      title: 'Canvas',
+      onEscape,
+    }));
+
+    const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: mockContentWindow,
+      configurable: true,
+    });
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'pagespace-escape' },
+      source: mockContentWindow as unknown as MessageEventSource,
+    }));
+
+    expect(onEscape).toHaveBeenCalledOnce();
+  });
+
+  it('given a pagespace-escape message from a different source, should NOT call onEscape', () => {
+    const mockContentWindow = { postMessage: vi.fn() };
+    const onEscape = vi.fn();
+
+    render(React.createElement(CanvasFrame, {
+      pageId: 'page-1',
+      title: 'Canvas',
+      onEscape,
+    }));
+
+    const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: mockContentWindow,
+      configurable: true,
+    });
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'pagespace-escape' },
+      source: window,
+    }));
+
+    expect(onEscape).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The frame attribute and the response header must stay in lockstep.
+ *
+ * The preview document lives at a real, authenticated, same-origin url. The
+ * iframe's `sandbox` ATTRIBUTE only covers the embedded case — a direct
+ * navigation (which author JS can trigger itself via the granted
+ * `allow-popups-to-escape-sandbox`) is covered solely by the response's CSP
+ * `sandbox` directive. If the two ever diverge, one load path silently becomes
+ * weaker than the other.
+ */
+describe('CANVAS_IFRAME_SANDBOX ↔ PREVIEW_SANDBOX_TOKENS', () => {
+  it('given both sandbox declarations, should grant exactly the same tokens', () => {
+    const frame = CANVAS_IFRAME_SANDBOX.split(/\s+/).sort();
+    const response = PREVIEW_SANDBOX_TOKENS.split(/\s+/).sort();
+    expect(response).toEqual(frame);
+  });
+
+  it('given the response sandbox, should NEVER grant allow-same-origin', () => {
+    expect(PREVIEW_SANDBOX_TOKENS.split(/\s+/)).not.toContain('allow-same-origin');
+  });
+});

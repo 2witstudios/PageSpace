@@ -1,0 +1,190 @@
+import { describe, it, expect } from 'vitest';
+import {
+  validateInviteForUser,
+  validateMagicLinkRequest,
+  validateRevokeRequest,
+} from '../validators';
+import type { Invite, UserAccount } from '../types';
+
+const baseInvite = (overrides: Partial<Invite> = {}): Invite => ({
+  id: 'inv_1',
+  email: 'invitee@example.com',
+  driveId: 'drive_1',
+  driveName: 'Acme',
+  role: 'MEMBER',
+  customRoleId: null,
+  invitedBy: 'user_inviter',
+  expiresAt: new Date('2099-01-01T00:00:00.000Z'),
+  consumedAt: null,
+  ...overrides,
+});
+
+describe('validateInviteForUser', () => {
+  const now = new Date('2026-05-06T12:00:00.000Z');
+  const userEmail = 'invitee@example.com';
+
+  it('given a fresh invite for the same email and an active user, should return ok with the invite', () => {
+    expect(
+      validateInviteForUser({ invite: baseInvite(), userEmail, suspendedAt: null, now }),
+    ).toEqual({ ok: true, data: baseInvite() });
+  });
+
+  it('given a suspended user, should return ACCOUNT_SUSPENDED before any other check', () => {
+    const result = validateInviteForUser({
+      invite: baseInvite({ consumedAt: now, expiresAt: new Date(0) }),
+      userEmail: 'wrong@example.com',
+      suspendedAt: new Date('2026-01-01'),
+      now,
+    });
+    expect(result).toEqual({ ok: false, error: 'ACCOUNT_SUSPENDED' });
+  });
+
+  it('given a consumed invite, should return TOKEN_CONSUMED', () => {
+    const result = validateInviteForUser({
+      invite: baseInvite({ consumedAt: new Date('2026-04-01') }),
+      userEmail,
+      suspendedAt: null,
+      now,
+    });
+    expect(result).toEqual({ ok: false, error: 'TOKEN_CONSUMED' });
+  });
+
+  it('given an expired invite, should return TOKEN_EXPIRED', () => {
+    const result = validateInviteForUser({
+      invite: baseInvite({ expiresAt: new Date('2026-01-01') }),
+      userEmail,
+      suspendedAt: null,
+      now,
+    });
+    expect(result).toEqual({ ok: false, error: 'TOKEN_EXPIRED' });
+  });
+
+  it('given an email mismatch, should return EMAIL_MISMATCH', () => {
+    const result = validateInviteForUser({
+      invite: baseInvite(),
+      userEmail: 'someone-else@example.com',
+      suspendedAt: null,
+      now,
+    });
+    expect(result).toEqual({ ok: false, error: 'EMAIL_MISMATCH' });
+  });
+
+  it('given consumed AND expired, should return TOKEN_CONSUMED (consumed wins)', () => {
+    const result = validateInviteForUser({
+      invite: baseInvite({ consumedAt: now, expiresAt: new Date(0) }),
+      userEmail,
+      suspendedAt: null,
+      now,
+    });
+    expect(result).toEqual({ ok: false, error: 'TOKEN_CONSUMED' });
+  });
+
+  it('given expired AND email mismatch, should return TOKEN_EXPIRED (expiry wins)', () => {
+    const result = validateInviteForUser({
+      invite: baseInvite({ expiresAt: new Date(0) }),
+      userEmail: 'wrong@example.com',
+      suspendedAt: null,
+      now,
+    });
+    expect(result).toEqual({ ok: false, error: 'TOKEN_EXPIRED' });
+  });
+
+  it('given an invite with null expiresAt (no expiry), should return ok', () => {
+    const invite = baseInvite({ expiresAt: null });
+    expect(
+      validateInviteForUser({ invite, userEmail, suspendedAt: null, now }),
+    ).toEqual({ ok: true, data: invite });
+  });
+});
+
+describe('validateMagicLinkRequest', () => {
+  it('given user is null (unknown email), should return ok with null data so the pipe can branch into auto-create', () => {
+    expect(validateMagicLinkRequest({ user: null })).toEqual({
+      ok: true,
+      data: null,
+    });
+  });
+
+  it('given a suspended user, should return ACCOUNT_SUSPENDED', () => {
+    const user: UserAccount = { id: 'u_1', suspendedAt: new Date('2026-04-01') };
+    expect(validateMagicLinkRequest({ user })).toEqual({
+      ok: false,
+      error: 'ACCOUNT_SUSPENDED',
+    });
+  });
+
+  it('given an active user (suspendedAt null), should return ok with the user', () => {
+    const user: UserAccount = { id: 'u_1', suspendedAt: null };
+    expect(validateMagicLinkRequest({ user })).toEqual({ ok: true, data: user });
+  });
+});
+
+describe('validateRevokeRequest', () => {
+  const requestedDriveId = 'drive_1';
+  const inviteRow = {
+    id: 'inv_1',
+    email: 'pending@example.com',
+    role: 'MEMBER' as const,
+    driveId: 'drive_1',
+  };
+
+  it('given invite is null, should return NOT_FOUND', () => {
+    expect(
+      validateRevokeRequest({
+        invite: null,
+        requestedDriveId,
+        actorRole: 'OWNER',
+      }),
+    ).toEqual({ ok: false, error: 'NOT_FOUND' });
+  });
+
+  it('given invite belongs to a different drive than requested, should return NOT_FOUND', () => {
+    expect(
+      validateRevokeRequest({
+        invite: { ...inviteRow, driveId: 'drive_other' },
+        requestedDriveId,
+        actorRole: 'OWNER',
+      }),
+    ).toEqual({ ok: false, error: 'NOT_FOUND' });
+  });
+
+  it('given actor has no effective role on the drive (no membership, or only a pending invitation), should return FORBIDDEN', () => {
+    expect(
+      validateRevokeRequest({
+        invite: inviteRow,
+        requestedDriveId,
+        actorRole: null,
+      }),
+    ).toEqual({ ok: false, error: 'FORBIDDEN' });
+  });
+
+  it('given an accepted MEMBER actor, should return FORBIDDEN (only OWNER/ADMIN can revoke)', () => {
+    expect(
+      validateRevokeRequest({
+        invite: inviteRow,
+        requestedDriveId,
+        actorRole: 'MEMBER',
+      }),
+    ).toEqual({ ok: false, error: 'FORBIDDEN' });
+  });
+
+  it('given an accepted OWNER, should return ok with the invite', () => {
+    expect(
+      validateRevokeRequest({
+        invite: inviteRow,
+        requestedDriveId,
+        actorRole: 'OWNER',
+      }),
+    ).toEqual({ ok: true, data: inviteRow });
+  });
+
+  it('given an accepted ADMIN, should return ok with the invite', () => {
+    expect(
+      validateRevokeRequest({
+        invite: inviteRow,
+        requestedDriveId,
+        actorRole: 'ADMIN',
+      }),
+    ).toEqual({ ok: true, data: inviteRow });
+  });
+});

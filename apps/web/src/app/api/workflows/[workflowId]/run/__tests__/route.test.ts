@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
-import type { DriveAccessResult } from '@pagespace/lib/server';
+import type { DriveAccessResult } from '@pagespace/lib/services/drive-member-service';
 
 // ============================================================================
 // Contract Tests for POST /api/workflows/[workflowId]/run
@@ -15,7 +15,9 @@ const {
   mockSelectWhere,
   mockSelectFrom,
   mockSelect,
+  mockCreditAdmission,
 } = vi.hoisted(() => ({
+  mockCreditAdmission: vi.fn(),
   mockReturning: vi.fn().mockResolvedValue([{ id: 'wf_1' }]),
   mockUpdateWhere: vi.fn(),
   mockUpdateSet: vi.fn(),
@@ -25,15 +27,17 @@ const {
   mockSelect: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: mockSelect,
     update: mockUpdate,
   },
-  workflows: { id: 'id', driveId: 'driveId', lastRunStatus: 'lastRunStatus' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
-  and: vi.fn(),
-  ne: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/workflows', () => ({
+  workflows: { id: 'id', driveId: 'driveId' },
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -41,11 +45,20 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
   checkDriveAccess: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    security: { warn: vi.fn() },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@/lib/workflows/workflow-executor', () => ({
@@ -56,9 +69,13 @@ vi.mock('@/lib/workflows/cron-utils', () => ({
   getNextRunDate: vi.fn(),
 }));
 
+vi.mock('@/lib/workflows/workflow-credit-gate', () => ({
+  creditAdmission: mockCreditAdmission,
+}));
+
 import { POST } from '../../run/route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { checkDriveAccess } from '@pagespace/lib/server';
+import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { executeWorkflow } from '@/lib/workflows/workflow-executor';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';
 
@@ -96,6 +113,16 @@ const createDriveFixture = (overrides: { id: string; name: string; ownerId?: str
   isTrashed: false,
   trashedAt: null,
   drivePrompt: null,
+  kind: 'STANDARD' as const,
+  publishSubdomain: null,
+  homePageId: null,
+  publishDefaultOgImageUrl: null,
+  notFoundPageId: null,
+  publishFaviconUrl: null,
+  avatarUrl: null,
+  color: null,
+  orgId: null,
+  orgVisibility: 'OPEN' as const,
 });
 
 const mockWorkflow = {
@@ -112,12 +139,10 @@ const mockWorkflow = {
   eventTriggers: null,
   watchedFolderIds: null,
   eventDebounceSecs: null,
-  lastRunStatus: 'never_run',
-  lastRunAt: null,
-  lastRunError: null,
-  lastRunDurationMs: null,
+  instructionPageId: null,
   nextRunAt: null,
-  createdBy: 'user_123',
+  createdBy: 'user_123' as string | null,
+  ownerLeftAt: null as Date | null,
   createdAt: new Date('2024-01-01'),
   updatedAt: new Date('2024-01-01'),
 };
@@ -145,15 +170,17 @@ describe('POST /api/workflows/[workflowId]/run', () => {
     }));
     mockUpdate.mockReturnValue({ set: mockUpdateSet });
     mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
-    // mockUpdateWhere must serve as both thenable (for post-execution updates)
-    // and have .returning() (for atomic claim)
-    mockUpdateWhere.mockImplementation(() => {
-      const p = Promise.resolve(undefined) as Promise<undefined> & { returning: typeof mockReturning };
-      p.returning = mockReturning;
-      return p;
+    mockUpdateWhere.mockResolvedValue(undefined);
+    mockReturning.mockResolvedValue([]);
+    // Default executor result: success. Conflict tests override with claimConflict.
+    vi.mocked(executeWorkflow).mockResolvedValue({
+      success: true,
+      responseText: 'OK',
+      toolCallCount: 0,
+      durationMs: 1,
     });
-    mockReturning.mockResolvedValue([{ id: 'wf_1' }]);
     vi.mocked(getNextRunDate).mockReturnValue(new Date('2025-06-01T09:00:00Z'));
+    mockCreditAdmission.mockReturnValue(async () => ({ admitted: true, release: () => {} }));
   });
 
   test('returns 401 when not authenticated', async () => {
@@ -187,9 +214,29 @@ describe('POST /api/workflows/[workflowId]/run', () => {
     expect(response.status).toBe(403);
   });
 
-  test('returns 409 when workflow is already running', async () => {
-    // Atomic claim returns empty array = workflow was already running
-    mockReturning.mockResolvedValue([]);
+  test.each([
+    ['flagged owner-left', { ownerLeftAt: new Date() }],
+    ['whose creator deleted their account', { createdBy: null }],
+  ])('SPEND-6 (partial) a Run of a workflow %s is refused 409 owner_left before the executor or any gate ([D-OW-36])', async (_label, overrides) => {
+    mockSelectWhere.mockResolvedValue([{ ...mockWorkflow, ...overrides }]);
+
+    const response = await POST(new Request('https://example.com/api/workflows/wf_1/run', { method: 'POST' }), createContext('wf_1'));
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: 'owner_left' });
+    expect(executeWorkflow).not.toHaveBeenCalled();
+    expect(mockCreditAdmission).not.toHaveBeenCalled();
+  });
+
+  test('returns 409 when executor reports a claim conflict', async () => {
+    // The atomic claim is now the workflow_runs partial unique index inside
+    // the executor. A peer fire holding the lock surfaces as claimConflict.
+    vi.mocked(executeWorkflow).mockResolvedValue({
+      success: false,
+      durationMs: 0,
+      error: 'Workflow already running',
+      claimConflict: true,
+    });
 
     const request = new Request('https://example.com/api/workflows/wf_1/run', { method: 'POST' });
     const response = await POST(request, createContext('wf_1'));
@@ -197,7 +244,6 @@ describe('POST /api/workflows/[workflowId]/run', () => {
     expect(response.status).toBe(409);
     const body = await response.json();
     expect(body.error).toBe('Workflow is already running');
-    expect(executeWorkflow).not.toHaveBeenCalled();
   });
 
   test('executes workflow and returns success result', async () => {
@@ -216,26 +262,30 @@ describe('POST /api/workflows/[workflowId]/run', () => {
     expect(body.success).toBe(true);
     expect(body.responseText).toBe('Report generated');
     expect(body.toolCallCount).toBe(3);
-    expect(executeWorkflow).toHaveBeenCalledWith(mockWorkflow);
+    expect(executeWorkflow).toHaveBeenCalledWith(expect.objectContaining({
+      workflowId: mockWorkflow.id,
+      workflowName: mockWorkflow.name,
+      driveId: mockWorkflow.driveId,
+      createdBy: mockWorkflow.createdBy,
+      agentPageId: mockWorkflow.agentPageId,
+      prompt: mockWorkflow.prompt,
+      timezone: mockWorkflow.timezone,
+    }), expect.objectContaining({ admit: expect.any(Function) }));
   });
 
-  test('event workflow with stale cronExpression does not compute nextRunAt', async () => {
+  test('non-scheduled workflow is treated as not found', async () => {
     const eventWorkflow = {
       ...mockWorkflow,
       triggerType: 'event' as const,
       cronExpression: '0 9 * * 1-5', // stale leftover
     };
     mockSelectWhere.mockResolvedValue([eventWorkflow]);
-    vi.mocked(executeWorkflow).mockResolvedValue({
-      success: true,
-      responseText: 'Done',
-      toolCallCount: 0,
-      durationMs: 100,
-    });
 
     const request = new Request('https://example.com/api/workflows/wf_1/run', { method: 'POST' });
-    await POST(request, createContext('wf_1'));
+    const response = await POST(request, createContext('wf_1'));
 
+    expect(response.status).toBe(404);
+    expect(executeWorkflow).not.toHaveBeenCalled();
     expect(getNextRunDate).not.toHaveBeenCalled();
   });
 
@@ -267,5 +317,76 @@ describe('POST /api/workflows/[workflowId]/run', () => {
     const body = await response.json();
     expect(body.success).toBe(false);
     expect(body.error).toBe('Agent crashed');
+  });
+
+  describe('credit gate', () => {
+    const run = () => POST(
+      new Request('https://example.com/api/workflows/wf_1/run', { method: 'POST' }),
+      createContext('wf_1'),
+    );
+
+    // An executor stand-in that consults `admit` the way the real one does
+    // (inside its claim): a refusal comes back as a skipped run.
+    const executorThatAdmits = () => vi.mocked(executeWorkflow).mockImplementation(async (_input, options) => {
+      const admission = await options?.admit?.();
+      if (admission && !admission.admitted) {
+        return { success: false, skipped: true, durationMs: 0, runId: 'run_1', error: admission.error };
+      }
+      return { success: true, durationMs: 1 };
+    });
+
+    const denyWith = (reason: string) => mockCreditAdmission.mockImplementation(
+      (_input: unknown, _mode: unknown, onDenied?: (r: string) => void) => async () => {
+        onDenied?.(reason);
+        return { admitted: false, error: `AI credit gate denied: ${reason}` };
+      },
+    );
+
+    test('SPEND-6 (partial) WAL-7 (partial) hands the executor the credit gate as its admit hook: the drive the workflow runs in pays, and the person who pressed Run is gated, so their caps bind', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth('admin_clicker'));
+      const admit = async () => ({ admitted: true as const, release: () => {} });
+      mockCreditAdmission.mockReturnValue(admit);
+
+      await run();
+
+      const [input, options] = vi.mocked(executeWorkflow).mock.calls[0];
+      expect(options?.admit).toBe(admit);
+      expect(mockCreditAdmission).toHaveBeenCalledWith(input, 'interactive', expect.any(Function), 'admin_clicker');
+      expect(input.createdBy).toBe('user_123');
+      // SPEND-6: the gate is told the drive the run spends; the creator is only who it is recorded against.
+      expect(input.driveId).toBe(mockWorkflow.driveId);
+    });
+
+    test('out of credits: 402 with a readable error, and the schedule is not advanced', async () => {
+      executorThatAdmits();
+      denyWith('out_of_credits');
+
+      const response = await run();
+
+      expect(response.status).toBe(402);
+      // The Run button toasts `error` verbatim, so it must read as a sentence, not a code.
+      const body = await response.json();
+      expect(body.code).toBe('out_of_credits');
+      expect(body.error).toMatch(/credit balance is too low/);
+      expect(getNextRunDate).not.toHaveBeenCalled();
+    });
+
+    test('in-flight cap: 429', async () => {
+      executorThatAdmits();
+      denyWith('too_many_in_flight');
+
+      const response = await run();
+
+      expect(response.status).toBe(429);
+    });
+
+    test('an admitted run returns the normal result', async () => {
+      executorThatAdmits();
+
+      const response = await run();
+
+      expect(response.status).toBe(200);
+      expect((await response.json()).success).toBe(true);
+    });
   });
 });

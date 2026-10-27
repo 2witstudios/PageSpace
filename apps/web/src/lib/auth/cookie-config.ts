@@ -13,7 +13,7 @@
  * @module @pagespace/web/lib/auth/cookie-config
  */
 
-import { serialize } from 'cookie';
+import { serialize, parse } from 'cookie';
 
 /**
  * Session duration: 7 days in seconds
@@ -40,15 +40,40 @@ export const COOKIE_CONFIG = {
 /**
  * Get common cookie options based on environment
  */
-function getCommonOptions() {
+function getCommonOptions(httpOnly = true) {
   const isProduction = process.env.NODE_ENV === 'production';
+  // Use 'lax' when COOKIE_DOMAIN is set (multi-tenant subdomain sharing).
+  // Existing CSRF token validation covers POST protection independently of sameSite.
+  const sameSite = (isProduction && process.env.COOKIE_DOMAIN) ? 'lax' as const : 'strict' as const;
   return {
-    httpOnly: true,
+    httpOnly,
     secure: isProduction,
-    sameSite: 'strict' as const,
+    sameSite,
     ...(isProduction && process.env.COOKIE_DOMAIN && { domain: process.env.COOKIE_DOMAIN }),
   };
 }
+
+let policyLogged = false;
+
+/**
+ * Log the resolved SameSite/domain cookie policy exactly once.
+ * Self-hosters who set NODE_ENV=production but forget COOKIE_DOMAIN silently
+ * get SameSite=Strict (no cross-subdomain auth); surface the choice so it's
+ * visible in deployment logs.
+ */
+function logCookiePolicyOnce(): void {
+  if (policyLogged) return;
+  policyLogged = true;
+  const isProduction = process.env.NODE_ENV === 'production';
+  const cookieDomain = process.env.COOKIE_DOMAIN;
+  const sameSite = (isProduction && cookieDomain) ? 'Lax' : 'Strict';
+  console.info(
+    `[auth] cookie policy: SameSite=${sameSite} domain=${cookieDomain ?? 'unset'} ` +
+    `(NODE_ENV=${process.env.NODE_ENV ?? 'unset'}, COOKIE_DOMAIN=${cookieDomain ? 'set' : 'unset'})`,
+  );
+}
+
+logCookiePolicyOnce();
 
 /**
  * Create a session cookie string
@@ -74,14 +99,10 @@ export function createSessionCookie(token: string): string {
  * rotation). Never use it to gate access -- only for UI hints.
  */
 export function createLoggedInIndicatorCookie(): string {
-  const isProduction = process.env.NODE_ENV === 'production';
   return serialize(COOKIE_CONFIG.loggedIn.name, COOKIE_CONFIG.loggedIn.value, {
-    httpOnly: false,
-    secure: isProduction,
-    sameSite: 'strict' as const,
+    ...getCommonOptions(false),
     path: COOKIE_CONFIG.loggedIn.path,
     maxAge: COOKIE_CONFIG.loggedIn.maxAge,
-    ...(isProduction && process.env.COOKIE_DOMAIN && { domain: process.env.COOKIE_DOMAIN }),
   });
 }
 
@@ -89,14 +110,10 @@ export function createLoggedInIndicatorCookie(): string {
  * Create a cookie that clears the logged-in indicator
  */
 export function createClearLoggedInIndicatorCookie(): string {
-  const isProduction = process.env.NODE_ENV === 'production';
   return serialize(COOKIE_CONFIG.loggedIn.name, '', {
-    httpOnly: false,
-    secure: isProduction,
-    sameSite: 'strict' as const,
+    ...getCommonOptions(false),
     path: COOKIE_CONFIG.loggedIn.path,
     expires: new Date(0),
-    ...(isProduction && process.env.COOKIE_DOMAIN && { domain: process.env.COOKIE_DOMAIN }),
   });
 }
 
@@ -125,6 +142,22 @@ export function appendSessionCookie(headers: Headers, sessionToken: string): voi
 }
 
 /**
+ * Create a short-lived, JS-readable cookie to hand a device token to the client
+ * during OAuth/signup redirects. The client reads it once, stores the value in
+ * localStorage, then immediately clears the cookie.
+ *
+ * NOT httpOnly so document.cookie can read it; SameSite=Lax for redirect compat.
+ */
+export function createDeviceTokenHandoffCookie(deviceToken: string): string {
+  return serialize('ps_device_token', deviceToken, {
+    ...getCommonOptions(false), // httpOnly = false
+    sameSite: 'lax',
+    path: '/',
+    maxAge: 60, // 1 minute — just long enough for the redirect round-trip
+  });
+}
+
+/**
  * Append clear cookies to headers for logout responses
  *
  * @param headers - Headers object to append cookies to
@@ -142,12 +175,6 @@ export function appendClearCookies(headers: Headers): void {
  */
 export function getSessionFromCookies(cookieHeader: string | null): string | null {
   if (!cookieHeader) return null;
-
-  const cookies = cookieHeader.split(';').reduce((acc, cookie) => {
-    const [key, value] = cookie.trim().split('=');
-    if (key && value) acc[key] = value;
-    return acc;
-  }, {} as Record<string, string>);
-
+  const cookies = parse(cookieHeader);
   return cookies[COOKIE_CONFIG.session.name] ?? null;
 }

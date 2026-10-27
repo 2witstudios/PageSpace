@@ -2,9 +2,11 @@
  * Socket.IO utilities for broadcasting page tree and drive events
  */
 
-import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
-import { browserLoggers } from '@pagespace/lib/logger-browser';
+import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
+import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-workspaces/shells-contract';
+import { browserLoggers } from '@pagespace/lib/logging/logger-browser';
 import { isNodeEnvironment } from '@pagespace/lib/utils/environment';
+import type { AttachmentMeta } from '@pagespace/lib/types';
 import { maskIdentifier } from '@/lib/logging/mask';
 
 // Use browser-safe logger for all environments
@@ -15,10 +17,12 @@ export type PageOperation = 'created' | 'updated' | 'moved' | 'deleted' | 'resto
 export type DriveOperation = 'created' | 'updated' | 'deleted';
 export type DriveMemberOperation = 'member_added' | 'member_role_changed' | 'member_removed';
 export type TaskOperation = 'task_list_created' | 'task_added' | 'task_updated' | 'task_completed' | 'task_deleted' | 'tasks_reordered';
-export type UsageOperation = 'updated';
-export type ActivityOperation = 'logged';
-export type KickReason = 'member_removed' | 'role_changed' | 'permission_revoked' | 'session_revoked';
-export type InboxOperation = 'dm_updated' | 'channel_updated' | 'read_status_changed';
+export type CreditsOperation = 'updated';
+export type InboxOperation = 'dm_updated' | 'channel_updated' | 'read_status_changed' | 'thread_updated';
+
+// Kick/revocation types - re-export from shared lib (#2158) so the web client
+// and the realtime server's kick transport can never drift on shape.
+export type { KickReason, KickPayload, KickResult, AccessRevokedPayload } from '@pagespace/lib/realtime/kick-client';
 
 export interface ActivityEventPayload {
   activityId: string;
@@ -38,6 +42,7 @@ export interface PageEventPayload {
   operation: PageOperation;
   title?: string;
   type?: string;
+  isPrivate?: boolean;
   socketId?: string; // Socket ID of the user who triggered this event (to prevent self-refetch)
 }
 
@@ -46,6 +51,8 @@ export interface DriveEventPayload {
   operation: DriveOperation;
   name?: string;
   slug?: string;
+  /** Discriminates command/workflow broadcasts from drive-level changes. Absent = drive-level. */
+  resourceType?: 'command' | 'workflow';
 }
 
 export interface DriveMemberEventPayload {
@@ -67,38 +74,35 @@ export interface TaskEventPayload {
   };
 }
 
-export interface UsageEventPayload {
+/**
+ * Live prepaid-credit balance pushed to a user's notifications channel after their
+ * balance changes (an AI call settles, a monthly refill lands, or a top-up pack is
+ * purchased). Replaces the retired daily-quota `usage:updated` payload — the cutover
+ * to metered credits removed the per-day call counters this used to carry.
+ *
+ * All money fields are whole cents of customer-facing credit value, mirroring
+ * `GET /api/credits`. `conversationId`/`pageId` are optional scoping hints set only
+ * by the AI-stream emitters so the per-conversation usage monitor can refresh just
+ * the relevant view; the funding emitter omits them.
+ */
+export interface CreditsEventPayload {
   userId: string;
-  operation: UsageOperation;
-  subscriptionTier: 'free' | 'pro' | 'business';
-  standard: {
-    current: number;
-    limit: number;
+  operation: CreditsOperation;
+  billingEnabled: boolean;
+  monthly: {
+    remaining: number;
+    allowance: number;
+    periodEnd: string | null;
+  };
+  topup: {
     remaining: number;
   };
-  pro: {
-    current: number;
-    limit: number;
-    remaining: number;
-  };
-}
-
-export interface KickPayload {
-  userId: string;
-  roomPattern: string;
-  reason: KickReason;
-  metadata?: {
-    driveId?: string;
-    pageId?: string;
-    driveName?: string;
-  };
-}
-
-export interface KickResult {
-  success: boolean;
-  kickedCount: number;
-  rooms: string[];
-  error?: string;
+  /** Outstanding overage owed (non-negative). When > 0, `spendable` is negative. */
+  debt: number;
+  spendable: number;
+  reserved: number;
+  conversationId?: string;
+  pageId?: string;
 }
 
 export interface InboxEventPayload {
@@ -110,10 +114,31 @@ export interface InboxEventPayload {
   lastMessagePreview?: string;
   lastMessageSender?: string;
   unreadCount?: number;
+  attachmentMeta?: AttachmentMeta | null;
+  // thread_updated-only fields. Added inline (rather than as a discriminated
+  // union) so existing call sites keep compiling — only thread_updated emitters
+  // populate these. Recipients are computed at the call site from
+  // `listFollowers`; the payload itself does not carry a recipient list.
+  rootMessageId?: string;
+  lastReplyAt?: string;
+  lastReplyPreview?: string;
+  lastReplySender?: { id: string; name: string };
+}
+
+/**
+ * Emitted on the channel/DM room after a thread reply commits so parent-stream
+ * viewers can update the parent's reply-count footer without refetching.
+ *
+ * Channel room: pageId.  DM room: `dm:${conversationId}`.
+ */
+export interface ThreadReplyCountUpdatedPayload {
+  rootId: string;
+  replyCount: number;
+  lastReplyAt: string;
 }
 
 // Presence types - re-export from shared lib
-export type { PresenceViewer, PresencePageViewersPayload } from '@pagespace/lib/client-safe';
+export type { PresenceViewer, PresencePageViewersPayload } from '@pagespace/lib/types';
 
 const realtimeLogger = loggers.realtime.child({ module: 'socket-utils' });
 
@@ -200,18 +225,23 @@ export async function broadcastDriveEvent(
 
   try {
     const results = await Promise.allSettled(
-      recipientUserIds.map((userId) => {
+      recipientUserIds.map(async (userId) => {
         const requestBody = JSON.stringify({
           channelId: `user:${userId}:drives`,
           event: `drive:${payload.operation}`,
           payload,
         });
-        return fetch(`${realtimeUrl}/api/broadcast`, {
+        const response = await fetch(`${realtimeUrl}/api/broadcast`, {
           method: 'POST',
           headers: createSignedBroadcastHeaders(requestBody),
           body: requestBody,
           signal: AbortSignal.timeout(5000),
         });
+        // fetch only rejects on network error; HTTP 4xx/5xx must be surfaced explicitly.
+        if (!response.ok) {
+          throw new Error(`Broadcast HTTP ${response.status}`);
+        }
+        return response;
       })
     );
 
@@ -294,6 +324,83 @@ export async function broadcastDriveMemberEvent(payload: DriveMemberEventPayload
 }
 
 /**
+ * Broadcasts a drive member event to a list of recipient users.
+ *
+ * Mirrors broadcastDriveEvent's fan-out pattern but for member-event payloads.
+ * Used by post-login pending acceptance so admins watching a drive's members
+ * page see the realtime promotion as the invitee accepts.
+ *
+ * Internal failures are logged and swallowed — broadcast is best-effort and
+ * must NEVER abort the calling operation (login, in particular).
+ */
+export async function broadcastDriveMemberEventToRecipients(
+  payload: DriveMemberEventPayload,
+  recipientUserIds: string[]
+): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping member event broadcast', {
+      event: 'drive_member',
+      operation: payload.operation,
+    });
+    return;
+  }
+
+  if (recipientUserIds.length === 0) {
+    realtimeLogger.debug('No recipients for drive member event broadcast', {
+      driveId: maskIdentifier(payload.driveId),
+      operation: payload.operation,
+    });
+    return;
+  }
+
+  try {
+    const results = await Promise.allSettled(
+      recipientUserIds.map(async (userId) => {
+        const requestBody = JSON.stringify({
+          channelId: `user:${userId}:drives`,
+          event: `drive:${payload.operation}`,
+          payload,
+        });
+        const response = await fetch(`${realtimeUrl}/api/broadcast`, {
+          method: 'POST',
+          headers: createSignedBroadcastHeaders(requestBody),
+          body: requestBody,
+          signal: AbortSignal.timeout(5000),
+        });
+        // fetch only rejects on network error; HTTP 4xx/5xx must be surfaced explicitly.
+        if (!response.ok) {
+          throw new Error(`Broadcast HTTP ${response.status}`);
+        }
+        return response;
+      })
+    );
+
+    const failures = results.filter((r) => r.status === 'rejected');
+    if (failures.length > 0) {
+      realtimeLogger.warn('Some drive member event broadcasts failed', {
+        operation: payload.operation,
+        driveId: maskIdentifier(payload.driveId),
+        failedCount: failures.length,
+        totalCount: recipientUserIds.length,
+      });
+    } else if (verboseRealtimeLogging) {
+      realtimeLogger.debug('Drive member event broadcasted to recipients', {
+        operation: payload.operation,
+        driveId: maskIdentifier(payload.driveId),
+        recipientCount: recipientUserIds.length,
+      });
+    }
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast drive member event to recipients',
+      error instanceof Error ? error : undefined,
+      { event: 'drive_member', operation: payload.operation }
+    );
+  }
+}
+
+/**
  * Helper to create a page event payload
  */
 export function createPageEventPayload(
@@ -304,6 +411,7 @@ export function createPageEventPayload(
     parentId?: string | null;
     title?: string;
     type?: string;
+    isPrivate?: boolean;
     socketId?: string;
   } = {}
 ): PageEventPayload {
@@ -324,6 +432,7 @@ export function createDriveEventPayload(
   options: {
     name?: string;
     slug?: string;
+    resourceType?: DriveEventPayload['resourceType'];
   } = {}
 ): DriveEventPayload {
   return {
@@ -354,7 +463,14 @@ export function createDriveMemberEventPayload(
 }
 
 /**
- * Broadcasts a task event to the realtime server
+ * Broadcasts a task event to the realtime server.
+ *
+ * Always fans out to the originating user's task channel
+ * (`user:${userId}:tasks`) so their other tabs stay in sync. When
+ * `payload.pageId` is set, ALSO fans out to the `pageId` room so any
+ * collaborator currently viewing that task list (joined via
+ * `join_channel`) sees badge / list updates without a manual refresh.
+ *
  * @param payload - The task event payload to broadcast
  */
 export async function broadcastTaskEvent(payload: TaskEventPayload): Promise<void> {
@@ -367,42 +483,52 @@ export async function broadcastTaskEvent(payload: TaskEventPayload): Promise<voi
     return;
   }
 
-  try {
-    const requestBody = JSON.stringify({
-      channelId: `user:${payload.userId}:tasks`,
-      event: `task:${payload.type}`,
-      payload,
-    });
-
-    await fetch(`${realtimeUrl}/api/broadcast`, {
-      method: 'POST',
-      headers: createSignedBroadcastHeaders(requestBody),
-      body: requestBody,
-      signal: AbortSignal.timeout(5000),
-    });
-  } catch (error) {
-    // Log error but don't throw - broadcasting failures shouldn't break operations
-    realtimeLogger.error(
-      'Failed to broadcast task event',
-      error instanceof Error ? error : undefined,
-      {
-        event: 'task',
-        channel: `user:${maskIdentifier(payload.userId)}:tasks`
-      }
-    );
+  const event = `task:${payload.type}`;
+  const channelIds = [`user:${payload.userId}:tasks`];
+  if (payload.pageId) {
+    channelIds.push(payload.pageId);
   }
+
+  await Promise.all(
+    channelIds.map(async (channelId) => {
+      try {
+        const requestBody = JSON.stringify({ channelId, event, payload });
+        await fetch(`${realtimeUrl}/api/broadcast`, {
+          method: 'POST',
+          headers: createSignedBroadcastHeaders(requestBody),
+          body: requestBody,
+          signal: AbortSignal.timeout(5000),
+        });
+      } catch (error) {
+        // Log error but don't throw - broadcasting failures shouldn't break operations
+        realtimeLogger.error(
+          'Failed to broadcast task event',
+          error instanceof Error ? error : undefined,
+          {
+            event: 'task',
+            channel: channelId.startsWith('user:')
+              ? `user:${maskIdentifier(payload.userId)}:tasks`
+              : maskIdentifier(channelId),
+          }
+        );
+      }
+    })
+  );
 }
 
 /**
- * Broadcasts a usage event to the realtime server
- * @param payload - The usage event payload to broadcast
+ * Broadcasts a prepaid-credit balance update to the user's notifications channel.
+ * Emitted after the balance changes — an AI call settles, a monthly refill lands,
+ * or a top-up pack is purchased — so the credit-balance widget updates live without
+ * polling. Best-effort: a broadcast failure is logged and swallowed, never thrown.
+ * @param payload - The credits event payload to broadcast
  */
-export async function broadcastUsageEvent(payload: UsageEventPayload): Promise<void> {
+export async function broadcastCreditsEvent(payload: CreditsEventPayload): Promise<void> {
   // Only broadcast if realtime URL is configured
   const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
   if (!realtimeUrl) {
-    realtimeLogger.warn('Realtime URL not configured, skipping usage event broadcast', {
-      event: 'usage'
+    realtimeLogger.warn('Realtime URL not configured, skipping credits event broadcast', {
+      event: 'credits'
     });
     return;
   }
@@ -410,7 +536,7 @@ export async function broadcastUsageEvent(payload: UsageEventPayload): Promise<v
   try {
     const requestBody = JSON.stringify({
       channelId: `notifications:${payload.userId}`,
-      event: `usage:${payload.operation}`,
+      event: `credits:${payload.operation}`,
       payload,
     });
 
@@ -422,20 +548,19 @@ export async function broadcastUsageEvent(payload: UsageEventPayload): Promise<v
     });
 
     if (verboseRealtimeLogging) {
-      realtimeLogger.debug('Usage event broadcasted', {
+      realtimeLogger.debug('Credits event broadcasted', {
         userId: maskIdentifier(payload.userId),
         operation: payload.operation,
-        standard: `${payload.standard.current}/${payload.standard.limit}`,
-        pro: `${payload.pro.current}/${payload.pro.limit}`
+        spendable: payload.spendable,
       });
     }
   } catch (error) {
     // Log error but don't throw - broadcasting failures shouldn't break operations
     realtimeLogger.error(
-      'Failed to broadcast usage event',
+      'Failed to broadcast credits event',
       error instanceof Error ? error : undefined,
       {
-        event: 'usage',
+        event: 'credits',
         channel: `notifications:${maskIdentifier(payload.userId)}`
       }
     );
@@ -487,6 +612,548 @@ export async function broadcastInboxEvent(userId: string, payload: InboxEventPay
       {
         event: 'inbox',
         channel: `notifications:${maskIdentifier(userId)}`,
+      }
+    );
+  }
+}
+
+/**
+ * Broadcasts thread_reply_count_updated to a channel or DM room so the parent
+ * footer (e.g. "3 replies · last reply 2m ago") stays live without a refetch.
+ *
+ * Failures are logged and swallowed — the originating insert has already
+ * committed, and a missed broadcast is recoverable on the next refresh.
+ */
+export async function broadcastThreadReplyCountUpdated(
+  channelId: string,
+  payload: ThreadReplyCountUpdatedPayload
+): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping thread reply count broadcast', {
+      event: 'thread_reply_count_updated',
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId,
+      event: 'thread_reply_count_updated',
+      payload,
+    });
+
+    await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast thread_reply_count_updated',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'thread_reply_count_updated',
+        channel: maskIdentifier(channelId),
+      }
+    );
+  }
+}
+
+// ============================================================================
+// AI Stream Events
+// ============================================================================
+
+export interface AiStreamStartPayload {
+  messageId: string;
+  pageId: string;
+  conversationId: string;
+  /**
+   * ISO timestamp of the stream's `aiStreamSessions.started_at`, so remote
+   * surfaces can stamp synthesized bubbles. Optional for cross-version safety:
+   * during a rolling deploy an originator running the previous build emits this
+   * event without the field, and consumers degrade to a timestamp-less bubble.
+   */
+  startedAt?: string;
+  /**
+   * Whether the stream's conversation is explicitly shared.
+   *
+   * A page room contains every member of the page, but conversations are PRIVATE by
+   * default (`listConversations` shows you only `userId = you OR isShared`). Without
+   * this flag every member's client would try to join every stream on the page and be
+   * refused — a wasted request and an `authz.access.denied` audit row per member per
+   * assistant message, on entirely routine private chat.
+   *
+   * Optional for the same cross-version reason as `startedAt`: during a rolling deploy
+   * an originator on the previous build emits no field, so consumers must treat
+   * `undefined` as "unknown, ask the server" and only skip on an explicit `false`.
+   * The server remains the authority either way (see stream-subscription-authz.ts).
+   */
+  isShared?: boolean;
+  triggeredBy: { userId: string; displayName: string; browserSessionId: string };
+}
+
+export interface AiStreamCompletePayload {
+  messageId: string;
+  pageId: string;
+  conversationId?: string;
+  aborted?: boolean;
+}
+
+export interface ChatUserMessagePayload {
+  message: import('ai').UIMessage;
+  pageId: string;
+  conversationId: string;
+  triggeredBy: { userId: string; displayName: string; browserSessionId: string };
+}
+
+export interface ChatMessageEditedPayload {
+  messageId: string;
+  pageId: string;
+  conversationId: string;
+  parts: import('ai').UIMessage['parts'];
+  editedAt: string;
+  triggeredBy: { userId: string; displayName: string; browserSessionId: string };
+}
+
+export interface ChatMessageDeletedPayload {
+  messageId: string;
+  pageId: string;
+  conversationId: string;
+  triggeredBy: { userId: string; displayName: string; browserSessionId: string };
+}
+
+export interface ChatUndoAppliedPayload {
+  conversationId: string;
+  pageId: string;
+  mode: 'messages_only' | 'messages_and_changes';
+  affectedMessageIds: string[];
+  triggeredBy: { userId: string; displayName: string; browserSessionId: string };
+}
+
+export interface ChatConversationAddedPayload {
+  agentId: string;
+  conversation: {
+    id: string;
+    title: string;
+    createdAt: string;
+  };
+  triggeredBy: { userId: string; displayName: string; browserSessionId: string };
+}
+
+export interface ChatGlobalConversationAddedPayload {
+  conversation: {
+    id: string;
+    title: string;
+    type: string;
+    createdAt: string;
+  };
+  triggeredBy: { userId: string; displayName: string; browserSessionId: string };
+}
+
+export interface ChatConversationRenamedPayload {
+  agentId: string;
+  conversationId: string;
+  title: string;
+  triggeredBy: { userId: string; displayName: string; browserSessionId: string };
+}
+
+export interface ChatConversationDeletedPayload {
+  agentId: string;
+  conversationId: string;
+  triggeredBy: { userId: string; displayName: string; browserSessionId: string };
+}
+
+export interface AgentGrantChangedPayload {
+  agentId: string;
+  triggeredBy: { userId: string };
+}
+
+export async function broadcastAiStreamStart(payload: AiStreamStartPayload): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping AI stream start broadcast', {
+      event: 'ai_stream_start',
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId: payload.pageId,
+      event: 'chat:stream_start',
+      payload,
+    });
+
+    await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast AI stream start',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'ai_stream_start',
+        channel: maskIdentifier(payload.pageId),
+      }
+    );
+  }
+}
+
+export async function broadcastAiStreamComplete(payload: AiStreamCompletePayload): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping AI stream complete broadcast', {
+      event: 'ai_stream_complete',
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId: payload.pageId,
+      event: 'chat:stream_complete',
+      payload,
+    });
+
+    await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast AI stream complete',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'ai_stream_complete',
+        channel: maskIdentifier(payload.pageId),
+      }
+    );
+  }
+}
+
+export async function broadcastChatUserMessage(payload: ChatUserMessagePayload): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping chat user-message broadcast', {
+      event: 'chat:user_message',
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId: payload.pageId,
+      event: 'chat:user_message',
+      payload,
+    });
+
+    await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast chat user-message',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'chat:user_message',
+        channel: maskIdentifier(payload.pageId),
+      }
+    );
+  }
+}
+
+export async function broadcastAiMessageEdited(payload: ChatMessageEditedPayload): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping chat message-edited broadcast', {
+      event: 'chat:message_edited',
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId: payload.pageId,
+      event: 'chat:message_edited',
+      payload,
+    });
+
+    await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast chat message-edited',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'chat:message_edited',
+        channel: maskIdentifier(payload.pageId),
+      }
+    );
+  }
+}
+
+export async function broadcastAiMessageDeleted(payload: ChatMessageDeletedPayload): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping chat message-deleted broadcast', {
+      event: 'chat:message_deleted',
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId: payload.pageId,
+      event: 'chat:message_deleted',
+      payload,
+    });
+
+    await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast chat message-deleted',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'chat:message_deleted',
+        channel: maskIdentifier(payload.pageId),
+      }
+    );
+  }
+}
+
+export async function broadcastAiUndoApplied(payload: ChatUndoAppliedPayload): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping chat undo-applied broadcast', {
+      event: 'chat:undo_applied',
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId: payload.pageId,
+      event: 'chat:undo_applied',
+      payload,
+    });
+
+    await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast chat undo-applied',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'chat:undo_applied',
+        channel: maskIdentifier(payload.pageId),
+      }
+    );
+  }
+}
+
+export async function broadcastAiConversationAdded(payload: ChatConversationAddedPayload): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping chat conversation-added broadcast', {
+      event: 'chat:conversation_added',
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId: payload.agentId,
+      event: 'chat:conversation_added',
+      payload,
+    });
+
+    await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast chat conversation-added',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'chat:conversation_added',
+        channel: maskIdentifier(payload.agentId),
+      }
+    );
+  }
+}
+
+export async function broadcastGlobalConversationAdded(
+  channelId: string,
+  payload: ChatGlobalConversationAddedPayload,
+): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping global conversation-added broadcast', {
+      event: 'chat:global_conversation_added',
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId,
+      event: 'chat:global_conversation_added',
+      payload,
+    });
+
+    const response = await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      throw new Error(`Broadcast failed with status ${response.status}`);
+    }
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast global conversation-added',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'chat:global_conversation_added',
+        channel: maskIdentifier(channelId),
+      }
+    );
+  }
+}
+
+export async function broadcastAiConversationRenamed(payload: ChatConversationRenamedPayload): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping chat conversation-renamed broadcast', {
+      event: 'chat:conversation_renamed',
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId: payload.agentId,
+      event: 'chat:conversation_renamed',
+      payload,
+    });
+
+    const response = await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      throw new Error(`Broadcast HTTP ${response.status}`);
+    }
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast chat conversation-renamed',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'chat:conversation_renamed',
+        channel: maskIdentifier(payload.agentId),
+      }
+    );
+  }
+}
+
+export async function broadcastAiConversationDeleted(payload: ChatConversationDeletedPayload): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping chat conversation-deleted broadcast', {
+      event: 'chat:conversation_deleted',
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId: payload.agentId,
+      event: 'chat:conversation_deleted',
+      payload,
+    });
+
+    const response = await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      throw new Error(`Broadcast HTTP ${response.status}`);
+    }
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast chat conversation-deleted',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'chat:conversation_deleted',
+        channel: maskIdentifier(payload.agentId),
+      }
+    );
+  }
+}
+
+export async function broadcastAgentGrantChanged(payload: AgentGrantChangedPayload): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping agent grant-changed broadcast', {
+      event: 'agent:grant_changed',
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId: payload.agentId,
+      event: 'agent:grant_changed',
+      payload,
+    });
+
+    const response = await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      throw new Error(`Broadcast HTTP ${response.status}`);
+    }
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast agent grant-changed',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'agent:grant_changed',
+        channel: maskIdentifier(payload.agentId),
       }
     );
   }
@@ -578,141 +1245,61 @@ export async function broadcastActivityEvent(payload: ActivityEventPayload): Pro
 }
 
 // ============================================================================
-// Permission Revocation (Kick API)
+// Shell Activity Feed (activity visibility)
 // ============================================================================
 
+export interface ShellActivityEventPayload {
+  /** The session whose sandbox the agent acted on — ≡ its conversation id. */
+  sessionId: string;
+  command: string;
+  output: string;
+  exitCode: number;
+  agentLabel: string;
+}
+
 /**
- * Kicks a user from Socket.IO rooms on permission revocation.
- * This is called when permissions are changed to immediately revoke real-time access.
- *
- * @param payload - The kick payload specifying user and rooms to remove from
- * @returns The result of the kick operation
+ * Streams a successful agent bash run into the live PTY feed of every shell in
+ * that session, via a dedicated (non-broadcast-room) realtime endpoint — live
+ * shells are resolved from the session id, not from Socket.IO room membership.
+ * Best-effort: a failure (or nobody watching) must never affect the tool call
+ * that already succeeded.
  */
-export async function kickUserFromRooms(payload: KickPayload): Promise<KickResult> {
+export async function notifyShellAgentActivity(payload: ShellActivityEventPayload): Promise<void> {
   const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
   if (!realtimeUrl) {
-    realtimeLogger.warn('Realtime URL not configured, skipping kick', {
-      userId: maskIdentifier(payload.userId),
-      roomPattern: payload.roomPattern,
-    });
-    return { success: false, kickedCount: 0, rooms: [], error: 'Realtime URL not configured' };
+    return;
   }
 
   try {
     const requestBody = JSON.stringify(payload);
-
-    const response = await fetch(`${realtimeUrl}/api/kick`, {
+    await fetch(`${realtimeUrl}${SHELL_BRIDGE_ROUTES.activity}`, {
       method: 'POST',
       headers: createSignedBroadcastHeaders(requestBody),
       body: requestBody,
-      signal: AbortSignal.timeout(30000),
+      signal: AbortSignal.timeout(5000),
     });
-
-    const result = await response.json() as KickResult;
-
-    if (result.success) {
-      realtimeLogger.info('User kicked from rooms', {
-        userId: maskIdentifier(payload.userId),
-        roomPattern: payload.roomPattern,
-        reason: payload.reason,
-        kickedCount: result.kickedCount,
-      });
-    }
-
-    return result;
   } catch (error) {
     realtimeLogger.error(
-      'Failed to kick user from rooms',
+      'Failed to notify shell agent activity',
       error instanceof Error ? error : undefined,
       {
-        userId: maskIdentifier(payload.userId),
-        roomPattern: payload.roomPattern,
+        event: 'shell_activity',
+        sessionId: maskIdentifier(payload.sessionId),
       }
     );
-    return { success: false, kickedCount: 0, rooms: [], error: 'Network error' };
   }
 }
 
-/**
- * Kicks a user from all rooms related to a specific drive.
- * Called when a user is removed from a drive or loses drive access.
- *
- * @param driveId - The drive ID to remove user from
- * @param userId - The user to kick
- * @param reason - The reason for the kick
- * @param driveName - Optional drive name for client notification
- */
-export async function kickUserFromDrive(
-  driveId: string,
-  userId: string,
-  reason: KickReason,
-  driveName?: string
-): Promise<KickResult> {
-  return kickUserFromRooms({
-    userId,
-    roomPattern: `drive:${driveId}`,
-    reason,
-    metadata: { driveId, driveName },
-  });
-}
-
-/**
- * Kicks a user from all activity rooms related to a specific drive.
- *
- * @param driveId - The drive ID
- * @param userId - The user to kick
- * @param reason - The reason for the kick
- */
-export async function kickUserFromDriveActivity(
-  driveId: string,
-  userId: string,
-  reason: KickReason
-): Promise<KickResult> {
-  return kickUserFromRooms({
-    userId,
-    roomPattern: `activity:drive:${driveId}`,
-    reason,
-    metadata: { driveId },
-  });
-}
-
-/**
- * Kicks a user from a specific page room.
- * Called when page-level permissions are revoked.
- *
- * @param pageId - The page ID to remove user from
- * @param userId - The user to kick
- * @param reason - The reason for the kick
- */
-export async function kickUserFromPage(
-  pageId: string,
-  userId: string,
-  reason: KickReason
-): Promise<KickResult> {
-  return kickUserFromRooms({
-    userId,
-    roomPattern: pageId,
-    reason,
-    metadata: { pageId },
-  });
-}
-
-/**
- * Kicks a user from a page's activity room.
- *
- * @param pageId - The page ID
- * @param userId - The user to kick
- * @param reason - The reason for the kick
- */
-export async function kickUserFromPageActivity(
-  pageId: string,
-  userId: string,
-  reason: KickReason
-): Promise<KickResult> {
-  return kickUserFromRooms({
-    userId,
-    roomPattern: `activity:page:${pageId}`,
-    reason,
-    metadata: { pageId },
-  });
-}
+// ============================================================================
+// Permission Revocation (Kick API)
+// ============================================================================
+//
+// The kick transport itself (kickUserFromRooms) and the revocation→kick hooks
+// that call it (kickForPagePermissionRevocation, kickForDriveMembershipRevocation)
+// now live in @pagespace/lib (#2158) — permission mutations trigger kicks
+// directly at the mutation layer, and the remaining call sites that revoke
+// access outside that layer (drive member removal, activity rollback,
+// page-goes-private) import the hooks from '@pagespace/lib/permissions/revocation-kick'
+// instead of hand-picking rooms here. See that module's doc comment for the
+// full rationale (this used to be four per-route kick calls, easy to forget
+// on a new revocation path).

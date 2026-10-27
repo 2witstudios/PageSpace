@@ -2,15 +2,58 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 
+const { streamdownSpy } = vi.hoisted(() => ({
+  streamdownSpy: vi.fn(),
+}));
+
 // Mock Streamdown with a simple implementation that passes children through
 vi.mock('streamdown', () => ({
-  Streamdown: ({ children, mode, className }: { children: string; mode: string; className?: string }) => (
-    React.createElement('div', { 'data-testid': 'streamdown', 'data-mode': mode, className }, children)
-  ),
+  defaultRemarkPlugins: {
+    gfm: () => undefined,
+  },
+  Streamdown: ({
+    children,
+    mode,
+    className,
+    remarkPlugins,
+  }: {
+    children: string;
+    mode: string;
+    className?: string;
+    remarkPlugins?: unknown[];
+  }) => {
+    streamdownSpy({ children, mode, className, remarkPlugins });
+    return React.createElement('div', { 'data-testid': 'streamdown', 'data-mode': mode, className }, children);
+  },
 }));
 
 // Import after mocking
-import { StreamingMarkdown } from '../chat/StreamingMarkdown';
+import { StreamingMarkdown, addHardLineBreaks } from '../chat/StreamingMarkdown';
+
+interface MarkdownNode {
+  type: string;
+  value?: string;
+  url?: string;
+  children?: MarkdownNode[];
+}
+
+type RemarkTransformer = (tree: MarkdownNode) => void;
+type RemarkPlugin = () => RemarkTransformer;
+
+function getLastRemarkPlugins(): RemarkPlugin[] {
+  const lastCall = streamdownSpy.mock.lastCall as [{ remarkPlugins?: RemarkPlugin[] }] | undefined;
+  return lastCall?.[0].remarkPlugins ?? [];
+}
+
+function applyUserHtmlTextPlugin(tree: MarkdownNode): void {
+  const remarkPlugins = getLastRemarkPlugins();
+  const rawHtmlTextPlugin = remarkPlugins[remarkPlugins.length - 1];
+
+  expect(rawHtmlTextPlugin).toBeTypeOf('function');
+
+  const transform = rawHtmlTextPlugin();
+  transform(tree);
+}
 
 /**
  * Tests for StreamingMarkdown component
@@ -63,7 +106,7 @@ describe('preprocessMentions', () => {
     render(<StreamingMarkdown content="Hello @[User](user123:user) world" />);
 
     const streamdown = screen.getByTestId('streamdown');
-    expect(streamdown.textContent).toBe('Hello [mention:User](mention://user123/user) world');
+    expect(streamdown.textContent).toBe('Hello [mention:User](/mention/user123/user) world');
   });
 
   it('should convert multiple mentions', () => {
@@ -73,7 +116,7 @@ describe('preprocessMentions', () => {
 
     const streamdown = screen.getByTestId('streamdown');
     expect(streamdown.textContent).toBe(
-      '[mention:Alice](mention://alice/user) and [mention:Bob](mention://bob/user) are here'
+      '[mention:Alice](/mention/alice/user) and [mention:Bob](/mention/bob/user) are here'
     );
   });
 
@@ -84,7 +127,7 @@ describe('preprocessMentions', () => {
 
     const streamdown = screen.getByTestId('streamdown');
     expect(streamdown.textContent).toBe(
-      'See [mention:Project](mention://proj123/page) and [mention:Team](mention://team456/agent)'
+      'See [mention:Project](/mention/proj123/page) and [mention:Team](/mention/team456/agent)'
     );
   });
 
@@ -106,24 +149,214 @@ describe('preprocessMentions', () => {
     render(<StreamingMarkdown content="@[SingleMention](id:type)" />);
 
     const streamdown = screen.getByTestId('streamdown');
-    expect(streamdown.textContent).toBe('[mention:SingleMention](mention://id/type)');
+    expect(streamdown.textContent).toBe('[mention:SingleMention](/mention/id/type)');
   });
 
   it('should handle mentions with special characters in label', () => {
     render(<StreamingMarkdown content="@[User Name](id:type)" />);
 
     const streamdown = screen.getByTestId('streamdown');
-    expect(streamdown.textContent).toBe('[mention:User Name](mention://id/type)');
+    expect(streamdown.textContent).toBe('[mention:User Name](/mention/id/type)');
   });
 
   it('should handle consecutive calls correctly (regex state)', () => {
     // First render
     const { rerender } = render(<StreamingMarkdown content="@[First](id1:type)" />);
-    expect(screen.getByTestId('streamdown').textContent).toBe('[mention:First](mention://id1/type)');
+    expect(screen.getByTestId('streamdown').textContent).toBe('[mention:First](/mention/id1/type)');
 
     // Second render - regex lastIndex should be reset
     rerender(<StreamingMarkdown content="@[Second](id2:type)" />);
-    expect(screen.getByTestId('streamdown').textContent).toBe('[mention:Second](mention://id2/type)');
+    expect(screen.getByTestId('streamdown').textContent).toBe('[mention:Second](/mention/id2/type)');
+  });
+});
+
+describe('autoLinkUrls', () => {
+  it('should convert bare URL to markdown link', () => {
+    render(<StreamingMarkdown content="check out https://example.com today" />);
+    expect(screen.getByTestId('streamdown').textContent).toBe(
+      'check out [https://example.com](https://example.com) today'
+    );
+  });
+
+  it('should strip trailing punctuation from URL', () => {
+    render(<StreamingMarkdown content="see https://example.com." />);
+    expect(screen.getByTestId('streamdown').textContent).toBe(
+      'see [https://example.com](https://example.com).'
+    );
+  });
+
+  it('should not double-wrap URLs already inside markdown links', () => {
+    render(<StreamingMarkdown content="[click here](https://example.com)" />);
+    expect(screen.getByTestId('streamdown').textContent).toBe(
+      '[click here](https://example.com)'
+    );
+  });
+
+  it('should not double-wrap URLs used as markdown link labels', () => {
+    render(<StreamingMarkdown content="[https://example.com](https://example.com)" />);
+    expect(screen.getByTestId('streamdown').textContent).toBe(
+      '[https://example.com](https://example.com)'
+    );
+  });
+
+  it('should auto-link alongside mentions', () => {
+    render(
+      <StreamingMarkdown content="@[User](id:user) see https://example.com" />
+    );
+    expect(screen.getByTestId('streamdown').textContent).toBe(
+      '[mention:User](/mention/id/user) see [https://example.com](https://example.com)'
+    );
+  });
+
+  it('should handle http:// URLs', () => {
+    render(<StreamingMarkdown content="visit http://example.com" />);
+    expect(screen.getByTestId('streamdown').textContent).toBe(
+      'visit [http://example.com](http://example.com)'
+    );
+  });
+
+  it('should preserve balanced parens in URL paths (Wikipedia-style)', () => {
+    render(
+      <StreamingMarkdown content="see https://en.wikipedia.org/wiki/Foo_(bar) for details" />
+    );
+    expect(screen.getByTestId('streamdown').textContent).toBe(
+      'see [https://en.wikipedia.org/wiki/Foo_(bar)](https://en.wikipedia.org/wiki/Foo_(bar)) for details'
+    );
+  });
+
+  it('should strip unbalanced trailing ) from URL', () => {
+    render(<StreamingMarkdown content="(see https://example.com)" />);
+    expect(screen.getByTestId('streamdown').textContent).toBe(
+      '(see [https://example.com](https://example.com))'
+    );
+  });
+});
+
+describe('raw HTML rendering', () => {
+  it('should keep raw user markdown source intact while installing an HTML-to-text remark plugin', () => {
+    render(
+      React.createElement(
+        StreamingMarkdown as React.ComponentType<{ content: string; renderHtmlAsText?: boolean }>,
+        {
+          content: 'Write a <style> block inside <html>',
+          renderHtmlAsText: true,
+        }
+      )
+    );
+
+    const streamdown = screen.getByTestId('streamdown');
+    expect(streamdown.textContent).toBe('Write a <style> block inside <html>');
+
+    const tree: MarkdownNode = {
+      type: 'root',
+      children: [
+        { type: 'text', value: 'Write a ' },
+        { type: 'html', value: '<style>' },
+        { type: 'text', value: ' block inside ' },
+        { type: 'html', value: '<html>' },
+      ],
+    };
+
+    applyUserHtmlTextPlugin(tree);
+
+    expect(tree.children).toEqual([
+      { type: 'text', value: 'Write a ' },
+      { type: 'text', value: '<style>' },
+      { type: 'text', value: ' block inside ' },
+      { type: 'text', value: '<html>' },
+    ]);
+  });
+
+  it('should preserve mention preprocessing without escaping the raw markdown source', () => {
+    render(
+      React.createElement(
+        StreamingMarkdown as React.ComponentType<{ content: string; renderHtmlAsText?: boolean }>,
+        {
+          content: 'See <style> and @[Project](proj123:page)',
+          renderHtmlAsText: true,
+        }
+      )
+    );
+
+    const streamdown = screen.getByTestId('streamdown');
+    expect(streamdown.textContent).toBe(
+      'See <style> and [mention:Project](/mention/proj123/page)'
+    );
+  });
+
+  it('should leave inline code and autolink nodes untouched when converting raw HTML nodes to text', () => {
+    render(
+      React.createElement(
+        StreamingMarkdown as React.ComponentType<{ content: string; renderHtmlAsText?: boolean }>,
+        {
+          content: '`<div>` <https://example.com> <style>',
+          renderHtmlAsText: true,
+        }
+      )
+    );
+
+    const tree: MarkdownNode = {
+      type: 'root',
+      children: [
+        { type: 'inlineCode', value: '<div>' },
+        { type: 'text', value: ' ' },
+        {
+          type: 'link',
+          url: 'https://example.com',
+          children: [{ type: 'text', value: 'https://example.com' }],
+        },
+        { type: 'text', value: ' ' },
+        { type: 'html', value: '<style>' },
+      ],
+    };
+
+    applyUserHtmlTextPlugin(tree);
+
+    expect(tree.children).toEqual([
+      { type: 'inlineCode', value: '<div>' },
+      { type: 'text', value: ' ' },
+      {
+        type: 'link',
+        url: 'https://example.com',
+        children: [{ type: 'text', value: 'https://example.com' }],
+      },
+      { type: 'text', value: ' ' },
+      { type: 'text', value: '<style>' },
+    ]);
+  });
+});
+
+describe('addHardLineBreaks', () => {
+  it('converts a single newline to a CommonMark hard line break', () => {
+    expect(addHardLineBreaks('line1\nline2')).toBe('line1  \nline2');
+  });
+
+  it('leaves paragraph breaks (double newline) untouched', () => {
+    expect(addHardLineBreaks('para1\n\npara2')).toBe('para1\n\npara2');
+  });
+
+  it('converts multiple single newlines independently', () => {
+    expect(addHardLineBreaks('a\nb\nc')).toBe('a  \nb  \nc');
+  });
+
+  it('handles mixed single and double newlines', () => {
+    expect(addHardLineBreaks('a\nb\n\nc')).toBe('a  \nb\n\nc');
+  });
+
+  it('returns empty string unchanged', () => {
+    expect(addHardLineBreaks('')).toBe('');
+  });
+
+  it('returns a single-line string unchanged', () => {
+    expect(addHardLineBreaks('no newlines here')).toBe('no newlines here');
+  });
+
+  it('does not modify a leading newline', () => {
+    expect(addHardLineBreaks('\ntext')).toBe('\ntext');
+  });
+
+  it('does not modify a trailing newline', () => {
+    expect(addHardLineBreaks('text\n')).toBe('text\n');
   });
 });
 
@@ -142,5 +375,23 @@ describe('memoization', () => {
 
     rerender(<StreamingMarkdown content="Test" isStreaming={true} />);
     expect(screen.getByTestId('streamdown')).toHaveAttribute('data-mode', 'streaming');
+  });
+
+  it('should re-render when renderHtmlAsText changes', () => {
+    const { rerender } = render(
+      React.createElement(
+        StreamingMarkdown as React.ComponentType<{ content: string; renderHtmlAsText?: boolean }>,
+        { content: 'Test', renderHtmlAsText: false }
+      )
+    );
+    expect(getLastRemarkPlugins()).toHaveLength(0);
+
+    rerender(
+      React.createElement(
+        StreamingMarkdown as React.ComponentType<{ content: string; renderHtmlAsText?: boolean }>,
+        { content: 'Test', renderHtmlAsText: true }
+      )
+    );
+    expect(getLastRemarkPlugins().length).toBeGreaterThan(0);
   });
 });

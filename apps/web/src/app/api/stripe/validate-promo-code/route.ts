@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
 import { getUserFriendlyStripeError } from '@/lib/stripe-errors';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { dollarsFromCents } from '@pagespace/lib/billing/money-model';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
@@ -36,6 +38,7 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
+    const userId = auth.userId;
 
     const body = await request.json() as ValidatePromoCodeRequest;
     const { code, priceId } = body;
@@ -116,7 +119,7 @@ export async function POST(request: NextRequest) {
       savingsFormatted = new Intl.NumberFormat('en-US', {
         style: 'currency',
         currency: coupon.currency || 'usd',
-      }).format(coupon.amount_off / 100);
+      }).format(dollarsFromCents(coupon.amount_off));
     }
 
     const savings = originalAmount - discountedAmount;
@@ -145,6 +148,8 @@ export async function POST(request: NextRequest) {
       percentOff: coupon.percent_off,
       amountOff: coupon.amount_off,
     });
+
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'promo_code', resourceId: normalizedCode, details: { promoId: promoCode.id } });
 
     return NextResponse.json({
       valid: true,

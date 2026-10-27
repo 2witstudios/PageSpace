@@ -1,27 +1,40 @@
-import { users, db, eq, or } from '@pagespace/db';
 import { z } from 'zod/v4';
-import { sessionService, generateCSRFToken, SESSION_DURATION_MS } from '@pagespace/lib/auth';
-import { validateOrCreateDeviceToken } from '@pagespace/lib/server';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
+import { SESSION_DURATION_MS } from '@pagespace/lib/auth/constants';
+import { revokeSessionsForLogin, createDeviceToken } from '@/lib/auth';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
-} from '@pagespace/lib/security';
+} from '@pagespace/lib/security/distributed-rate-limit';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers, logAuthEvent } from '@pagespace/lib/server';
-import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { maskEmail } from '@pagespace/lib/audit/mask-email';
+import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { OAuth2Client } from 'google-auth-library';
 import { NextResponse } from 'next/server';
-import { provisionGettingStartedDriveIfNeeded, type ProvisionGettingStartedDriveResult } from '@/lib/onboarding/getting-started-drive';
+import { provisionHomeDriveIfNeeded, type ProvisionHomeDriveResult } from '@pagespace/lib/onboarding/home-drive';
 import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
+import { authRepository } from '@/lib/repositories/auth-repository';
+import { resolveOAuthAccount } from '@/lib/auth/oauth-account-resolver';
+import { INVITE_TOKEN_MAX_LENGTH } from '@/lib/auth/oauth-state';
+import {
+  consumeAllInvitesForEmail,
+  consumeAnyInviteIfPresent,
+} from '@/lib/auth/native-invite-acceptance';
+import { autoJoinVerifiedDomainAfterSignIn } from '@/lib/orgs/domain-auto-join';
+import { ceremonyAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 
 const oneTapSchema = z.object({
   credential: z.string().min(1, 'Credential is required'),
   platform: z.enum(['web', 'desktop']).optional().default('web'),
   deviceId: z.string().optional(),
   deviceName: z.string().optional(),
+  inviteToken: z.string().min(1).max(INVITE_TOKEN_MAX_LENGTH).optional(),
 });
 
 const client = new OAuth2Client(process.env.GOOGLE_OAUTH_CLIENT_ID);
@@ -48,7 +61,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const { credential, platform, deviceId, deviceName } = validation.data;
+    const { credential, platform, deviceId, deviceName, inviteToken } = validation.data;
 
     // Rate limiting by IP address
     const clientIP = getClientIP(req);
@@ -86,6 +99,11 @@ export async function POST(req: Request) {
       loggers.auth.warn('Google ID token verification failed', {
         error: verifyError instanceof Error ? verifyError.message : String(verifyError),
       });
+      auditRequest(req, {
+        eventType: 'auth.login.failure',
+        riskScore: 0.3,
+        details: { reason: 'google_one_tap_verify_failed' },
+      });
       return NextResponse.json(
         { error: 'Invalid Google credential. Please try again.' },
         { status: 401 }
@@ -113,10 +131,36 @@ export async function POST(req: Request) {
     // Create fallback name if Google doesn't provide one
     const userName = name || email.split('@')[0] || 'User';
 
-    // Check if user exists by Google ID or email
-    let user = await db.query.users.findFirst({
-      where: or(eq(users.googleId, googleId), eq(users.email, email)),
+    // Resolve the account match through the shared, security-critical decision.
+    // SECURITY (M5): the Google subject id (`googleId`) is the strong identity and
+    // may always match; an EXISTING account may only be matched by raw email when
+    // Google asserts `email_verified === true`. An unverified email that collides
+    // with a magic-link / passkey account is refused — never linked.
+    const { decision: matchDecision, user: matchedUser, emailMatch } = await resolveOAuthAccount({
+      provider: 'google',
+      providerId: googleId!,
+      email,
+      emailVerified: email_verified === true,
     });
+
+    if (matchDecision === 'reject') {
+      loggers.auth.warn('Blocked OAuth account link: unverified email matches existing account', {
+        email: maskEmail(email),
+        provider: 'google-one-tap',
+      });
+      auditRequest(req, {
+        eventType: 'auth.login.failure',
+        riskScore: 0.8,
+        userId: emailMatch?.id,
+        details: { reason: 'google_one_tap_unverified_email_link_blocked' },
+      });
+      return NextResponse.json(
+        { error: 'Unable to sign in with this account. Please use your original sign-in method.' },
+        { status: 403 }
+      );
+    }
+
+    let user = matchedUser;
 
     let isNewUser = false;
 
@@ -134,50 +178,38 @@ export async function POST(req: Request) {
         user.image !== resolvedImage ||
         (email_verified && !user.emailVerified)
       ) {
-        loggers.auth.info('Updating existing user via Google One Tap', { email });
-        await db
-          .update(users)
-          .set({
-            googleId: googleId || user.googleId,
-            provider: user.password ? 'both' : 'google',
-            name: user.name || userName,
-            image: resolvedImage,
-            emailVerified: email_verified ? new Date() : user.emailVerified,
-          })
-          .where(eq(users.id, user.id));
+        loggers.auth.info('Updating existing user via Google One Tap', { email: maskEmail(email) });
+        await authRepository.updateUser(user.id, {
+          googleId: googleId || user.googleId,
+          provider: user.provider === 'email' ? 'google' : user.provider,
+          name: user.name || userName,
+          image: resolvedImage,
+          emailVerified: email_verified ? new Date() : user.emailVerified,
+        });
 
         // Refetch the user to get updated data
-        user =
-          (await db.query.users.findFirst({
-            where: eq(users.id, user.id),
-          })) || user;
+        user = await authRepository.findUserById(user.id) || user;
         loggers.auth.info('User updated via Google One Tap', {
           userId: user.id,
-          name: user.name,
         });
       }
     } else {
       // Create new user
       isNewUser = true;
-      loggers.auth.info('Creating new user via Google One Tap', { email });
-      const [newUser] = await db
-        .insert(users)
-        .values({
-          id: createId(),
-          name: userName,
-          email,
-          emailVerified: email_verified ? new Date() : null,
-          image: null,
-          googleId,
-          provider: 'google',
-          tokenVersion: 0,
-          role: 'user',
-          storageUsedBytes: 0,
-          subscriptionTier: 'free',
-        })
-        .returning();
-
-      user = newUser;
+      loggers.auth.info('Creating new user via Google One Tap', { email: maskEmail(email) });
+      user = await authRepository.createUser({
+        id: createId(),
+        name: userName,
+        email,
+        emailVerified: email_verified ? new Date() : null,
+        image: null,
+        googleId,
+        provider: 'google',
+        tokenVersion: 0,
+        role: 'user',
+        storageUsedBytes: 0,
+        subscriptionTier: 'free',
+      });
 
       const resolvedImage = await resolveGoogleAvatarImage({
         userId: user.id,
@@ -186,108 +218,43 @@ export async function POST(req: Request) {
       });
 
       if (resolvedImage !== (user.image ?? null)) {
-        await db
-          .update(users)
-          .set({ image: resolvedImage })
-          .where(eq(users.id, user.id));
+        await authRepository.updateUser(user.id, { image: resolvedImage });
         user = { ...user, image: resolvedImage };
       }
 
       loggers.auth.info('New user created via Google One Tap', {
         userId: user.id,
-        name: user.name,
       });
     }
 
-    // Provision Getting Started drive for new or existing users without drives
-    let provisionedDrive: ProvisionGettingStartedDriveResult | null = null;
+    // SEC-1: a new account on an org's verified email domain joins it (seat permitting). Never throws.
+    await autoJoinVerifiedDomainAfterSignIn(user.id);
+
+    // Provision the Home drive (idempotent) for new or existing users
+    let provisionedDrive: ProvisionHomeDriveResult | null = null;
     try {
-      provisionedDrive = await provisionGettingStartedDriveIfNeeded(user.id);
+      provisionedDrive = await provisionHomeDriveIfNeeded(user.id);
     } catch (error) {
-      loggers.auth.error('Failed to provision Getting Started drive', error as Error, {
+      loggers.auth.error('Failed to provision Home drive', error as Error, {
         userId: user.id,
         provider: 'google-one-tap',
       });
     }
 
-    // Reset rate limits on successful login
-    try {
-      await resetDistributedRateLimit(`oauth:onetap:ip:${clientIP}`);
-    } catch (error) {
-      loggers.auth.warn('Rate limit reset failed after successful One Tap', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    let redirectTo = provisionedDrive?.created ? `/dashboard/${provisionedDrive.driveId}` : '/dashboard';
 
-    // Log successful login
-    logAuthEvent('login', user.id, email, clientIP, 'Google One Tap');
-
-    // Track login event (mask email to prevent PII in activity logs)
-    const maskedEmail = email.replace(/(.{2}).*(@.*)/, '$1***$2');
-    trackAuthEvent(user.id, isNewUser ? 'signup' : 'login', {
-      email: maskedEmail,
-      ip: clientIP,
-      provider: 'google-one-tap',
-      userAgent: req.headers.get('user-agent'),
-    });
-
-    const redirectTo = provisionedDrive?.created ? `/dashboard/${provisionedDrive.driveId}` : '/dashboard';
-
-    // DESKTOP PLATFORM: Return device token in response body
-    // Desktop uses device tokens, not web sessions
-    if (platform === 'desktop') {
-      if (!deviceId) {
-        loggers.auth.error('Desktop One Tap missing deviceId', {
-          userId: user.id,
-          email: user.email,
-        });
-        return NextResponse.json(
-          { error: 'Device ID required for desktop sign-in' },
-          { status: 400 }
-        );
-      }
-
-      // Generate device token for desktop
-      const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
-        providedDeviceToken: undefined,
-        userId: user.id,
-        deviceId: deviceId,
-        platform: 'desktop',
-        tokenVersion: user.tokenVersion,
-        deviceName: deviceName || req.headers.get('user-agent') || 'Desktop App',
-        userAgent: req.headers.get('user-agent') || undefined,
-        ipAddress: clientIP,
-      });
-
-      return NextResponse.json({
-        success: true,
-        user: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          emailVerified: user.emailVerified,
-        },
-        tokens: {
-          deviceToken: deviceTokenValue,
-        },
-        redirectTo,
-        isNewUser,
-      });
-    }
-
-    // WEB PLATFORM: Use session-based authentication
-    // SESSION FIXATION PREVENTION: Revoke all existing sessions before creating new one
-    const revokedCount = await sessionService.revokeAllUserSessions(user.id, 'new_login');
-    if (revokedCount > 0) {
-      loggers.auth.info('Revoked existing sessions on Google One Tap login', { userId: user.id, count: revokedCount });
-    }
+    await revokeSessionsForLogin(user.id, deviceId, 'new_login', 'Google One Tap');
 
     // Create new session
+    // D-OW-45: the ceremony this route just verified, recorded on every credential it mints.
+    const authentication = ceremonyAuthentication({ method: 'google' }, Date.now());
     const sessionToken = await sessionService.createSession({
+      authentication,
       userId: user.id,
       type: 'user',
       scopes: ['*'],
       expiresInMs: SESSION_DURATION_MS,
+      deviceId,
       createdByIp: clientIP !== 'unknown' ? clientIP : undefined,
     });
 
@@ -299,6 +266,77 @@ export async function POST(req: Request) {
     }
 
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
+
+    // Reset rate limits on successful login.
+    try {
+      await resetDistributedRateLimit(`oauth:onetap:ip:${clientIP}`);
+    } catch (error) {
+      loggers.auth.warn('Rate limit reset failed after successful One Tap', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    // Track login event — use the shared maskEmail utility so 1-char local
+    // parts and unusual addresses cannot leak through (the regex form would
+    // emit the raw email when the pattern did not match).
+    trackAuthEvent(user.id, isNewUser ? 'signup' : 'login', {
+      email: maskEmail(email),
+      ip: clientIP,
+      provider: 'google-one-tap',
+      userAgent: req.headers.get('user-agent'),
+    });
+
+    auditRequest(req, {
+      eventType: 'auth.login.success',
+      userId: user.id,
+      sessionId: sessionClaims.sessionId,
+      details: { method: 'Google One Tap' },
+    });
+
+    let deviceTokenValue: string | undefined;
+    if (deviceId) {
+      try {
+        deviceTokenValue = await createDeviceToken({
+          authentication,
+          userId: user.id, deviceId, tokenVersion: user.tokenVersion,
+          platform: platform || 'web',
+          deviceName: deviceName || req.headers.get('user-agent') || (platform === 'desktop' ? 'Desktop App' : 'Web Browser'),
+          userAgent: req.headers.get('user-agent') || undefined,
+          ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
+        });
+      } catch (error) {
+        loggers.auth.warn('Failed to create device token', {
+          userId: user.id, error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const inviteResult = await consumeAnyInviteIfPresent({
+      request: req,
+      inviteToken,
+      user,
+      isNewUser,
+      email,
+    });
+
+    await consumeAllInvitesForEmail({
+      request: req,
+      email,
+      user: { id: user.id, suspendedAt: user.suspendedAt },
+      now: new Date(),
+    });
+
+    const { invitedDriveId, invitedPageId, inviteError, kind: inviteKind } = inviteResult;
+    if (inviteResult.orgLandingPath) {
+      // ORG-3: the org hub once joined; the invite page (which says why) when refused.
+      redirectTo = inviteResult.orgLandingPath;
+    } else if (inviteKind === 'page' && invitedDriveId && invitedPageId) {
+      redirectTo = `/dashboard/${invitedDriveId}/pages/${invitedPageId}?invited=1`;
+    } else if (inviteKind === 'connection') {
+      redirectTo = `/dashboard/connections?connection_requested=1`;
+    } else if (invitedDriveId) {
+      redirectTo = `/dashboard/${invitedDriveId}?invited=1`;
+    }
 
     const headers = new Headers();
     appendSessionCookie(headers, sessionToken);
@@ -313,13 +351,28 @@ export async function POST(req: Request) {
           emailVerified: user.emailVerified,
         },
         csrfToken,
+        ...(platform === 'desktop' && { sessionToken }),
+        ...(deviceTokenValue && { deviceToken: deviceTokenValue }),
         redirectTo,
         isNewUser,
+        // Surface every kind-specific id the dispatcher returned so native
+        // (One Tap on iOS/Desktop) clients have the same routing inputs as
+        // the response-driven redirectTo.
+        invitedKind: inviteKind,
+        invitedDriveId,
+        invitedPageId,
+        invitedConnectionId: inviteResult.connectionId,
+        ...(inviteError && { inviteError }),
       },
       { headers }
     );
   } catch (error) {
     loggers.auth.error('Google One Tap error', error as Error);
+    auditRequest(req, {
+      eventType: 'auth.login.failure',
+      riskScore: 0.3,
+      details: { reason: 'google_one_tap_error' },
+    });
     return NextResponse.json(
       { error: 'An unexpected error occurred. Please try again.' },
       { status: 500 }

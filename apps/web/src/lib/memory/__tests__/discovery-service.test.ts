@@ -1,416 +1,571 @@
-import { describe, it, vi, beforeEach } from 'vitest';
+import { describe, it, vi, beforeEach, expect } from 'vitest';
 import { assert } from '@/test/riteway';
+import { HELD_DRIVES, automationActor, type AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * Discovery Service Tests
  *
- * The discovery service runs focused LLM passes to extract insights from
- * user conversations. It is "blind" - it does NOT see the current profile.
- *
- * Key behaviors to test:
- * 1. Returns empty results when insufficient conversation data
- * 2. Runs 4 focused passes (worldview, projects, communication, preferences)
- * 3. Parses JSON array responses from LLM
- * 4. Handles LLM errors gracefully (returns empty arrays, doesn't throw)
- * 5. Gathers conversations from multiple sources
+ * Discovery is "blind" — it never sees the current profile. Its output is a
+ * flat list of claims, each tagged with the field it belongs to, so the caller
+ * can stage them for corroboration.
  */
 
-// Mock database - we don't want to hit real DB
-const mockDbSelect = vi.fn();
-vi.mock('@pagespace/db', () => ({
-  db: {
-    select: () => mockDbSelect(),
+const mockGetMemberDriveIds = vi.fn(async (_actor: AccessActor, _options: { includeTrashed: boolean }) => ['drive-1']);
+// The one member-drive set (org-aware).
+vi.mock('@pagespace/lib/permissions/member-drives', () => ({
+  getMemberDriveIds: (actor: AccessActor, options: { includeTrashed: boolean }) => mockGetMemberDriveIds(actor, options),
+}));
+
+// POL-8: the drives whose org lets the discovery model read them. Default: every drive.
+const mockScopeReadableByModel = vi.fn(async (_use: { provider: string; modelId: string }, scope: { driveIds: readonly string[] }) => ({ driveIds: [...scope.driveIds], pageIds: [] as string[] }));
+// memberDrivesReadableByModel is the shared rule (the person's member drives, judged by scopeReadableByModel, and
+// whether ALL passed), composed here from the two mocked reads so each stays observable.
+vi.mock('@/lib/ai/core/org-model-policy', () => ({
+  memberDrivesReadableByModel: async (actor: AccessActor, use: { provider: string; modelId: string }) => {
+    const memberDriveIds: string[] = await mockGetMemberDriveIds(actor, { includeTrashed: true });
+    const { driveIds } = await mockScopeReadableByModel(use, { driveIds: memberDriveIds });
+    return { driveIds, allReadable: driveIds.length === memberDriveIds.length };
   },
-  conversations: { id: 'id', userId: 'userId' },
-  messages: { content: 'content', role: 'role', conversationId: 'conversationId', isActive: 'isActive', createdAt: 'createdAt' },
-  chatMessages: { content: 'content', role: 'role', pageId: 'pageId', userId: 'userId', isActive: 'isActive', createdAt: 'createdAt' },
-  pages: { id: 'id', driveId: 'driveId' },
-  activityLogs: { operation: 'operation', resourceType: 'resourceType', resourceTitle: 'resourceTitle', userId: 'userId', driveId: 'driveId', timestamp: 'timestamp' },
-  driveMembers: { driveId: 'driveId', userId: 'userId' },
+}));
+const mockOrgIdsOfDrives = vi.fn(async (_driveIds: readonly string[]) => [] as string[]);
+vi.mock('@pagespace/lib/permissions/org-derived-content', () => ({
+  orgIdsOfDrives: (driveIds: readonly string[]) => mockOrgIdsOfDrives(driveIds),
+}));
+
+const mockDbSelect = vi.fn();
+vi.mock('@pagespace/db/db', () => ({
+  db: { select: (...args: unknown[]) => mockDbSelect(...args) },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   gte: vi.fn(),
   desc: vi.fn(),
   inArray: vi.fn(),
+  isNotNull: vi.fn(),
+  ne: vi.fn(),
 }));
-
-// Mock AI provider
-const mockCreateAIProvider = vi.fn();
-vi.mock('@/lib/ai/core', () => ({
-  createAIProvider: () => mockCreateAIProvider(),
-  isProviderError: (result: unknown) => result !== null && typeof result === 'object' && 'error' in result,
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', driveId: 'driveId' },
 }));
-
-// Mock loggers
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
-    api: {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
-    },
+vi.mock('@pagespace/db/schema/monitoring', () => ({
+  activityLogs: {
+    operation: 'operation',
+    resourceType: 'resourceType',
+    resourceTitle: 'resourceTitle',
+    userId: 'userId',
+    driveId: 'driveId',
+    timestamp: 'timestamp',
   },
 }));
-
-// Mock generateText from AI SDK
-const mockGenerateText = vi.fn();
-vi.mock('ai', () => ({
-  generateText: (...args: unknown[]) => mockGenerateText(...args),
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: { userId: 'userId', driveId: 'driveId', acceptedAt: 'acceptedAt', role: 'role' },
+}));
+vi.mock('@pagespace/db/schema/conversations', () => ({
+  conversations: { id: 'id', type: 'type', userId: 'userId', contextId: 'contextId' },
+  messages: {
+    conversationId: 'conversationId',
+    content: 'content',
+    role: 'role',
+    isActive: 'isActive',
+    status: 'status',
+    userId: 'userId',
+    createdAt: 'createdAt',
+    id: 'id',
+  },
+}));
+vi.mock('@/lib/ai/core/provider-factory', () => ({
+  createAIProvider: vi.fn(async () => ({
+    model: {},
+    provider: 'anthropic',
+    modelName: 'claude-sonnet-5',
+  })),
+  isProviderError: vi.fn(() => false),
+}));
+vi.mock('@/lib/ai/core/ai-providers-config', () => ({
+  BACKGROUND_HEAVY_PROVIDER: 'anthropic',
+  BACKGROUND_HEAVY_MODEL: 'anthropic/claude-sonnet-5',
+}));
+vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
+  AIMonitoring: { trackUsage: vi.fn() },
+  // These are pure-telemetry call sites: they hand the tracking promise to a NAMED
+  // discard rather than leaving it to float, so the mocked module has to provide it.
+  discardUsageOutcome: (tracking: Promise<unknown>) => {
+    void Promise.resolve(tracking).then(
+      () => undefined,
+      () => undefined,
+    );
+  },
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: { api: { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() } },
 }));
 
-// Helper to set up DB mock to return messages
-function setupDbWithMessages(messageCount: number) {
-  const now = Date.now();
-  const messages = Array.from({ length: messageCount }, (_, i) => ({
-    content: `Message ${i + 1}`,
-    role: i % 2 === 0 ? 'user' : 'assistant',
-    createdAt: new Date(now - i * 1000),
-  }));
+const mockGenerateObject = vi.fn();
+vi.mock('ai', () => ({
+  generateObject: (...args: unknown[]) => mockGenerateObject(...args),
+}));
 
-  // Chain for messages query
-  const messagesChain = {
-    from: vi.fn(() => ({
-      innerJoin: vi.fn(() => ({
-        where: vi.fn(() => ({
-          orderBy: vi.fn(() => ({
-            limit: vi.fn(() => Promise.resolve(messages)),
-          })),
-        })),
-      })),
-    })),
+const { mockReserve, mockReleaseMemoryHold } = vi.hoisted(() => {
+  const mockReleaseMemoryHold = vi.fn();
+  return {
+    mockReleaseMemoryHold,
+    mockReserve: vi.fn(async (_userId: string, _call: { provider: string; model: string; inputChars: number }) => ({ allowed: true as const, holdId: 'hold-m', walletId: 'w-root', release: mockReleaseMemoryHold })),
   };
+});
+vi.mock('../memory-credit', () => ({ reserveMemoryCall: mockReserve }));
 
-  // Chain for driveMembers query (returns empty - no drives)
-  const driveMembersChain = {
-    from: vi.fn(() => ({
-      where: vi.fn(() => Promise.resolve([])),
-    })),
-  };
-
-  let callCount = 0;
+/**
+ * Stand in for the two query shapes this module uses:
+ *   message/activity reads  → .where().orderBy().limit()  (awaited at the end)
+ *   drive-membership reads  → .where()                    (awaited directly)
+ *
+ * `where()` therefore has to be both thenable and chainable.
+ */
+function setupDb(messageRows: unknown[], driveRows: unknown[] = [{ driveId: 'drive-1' }]) {
+  // The module runs three `.limit()` queries: global messages, page messages,
+  // then activity. Serving `messageRows` to every one would silently duplicate
+  // the transcript, which would make an index-resolution assertion meaningless.
+  // So the rows are served ONCE and later queries come back empty.
+  let served = false;
   mockDbSelect.mockImplementation(() => {
-    callCount++;
-    // First call is for messages, second for driveMembers
-    if (callCount === 1) return messagesChain;
-    return driveMembersChain;
+    const chain = {
+      from: () => chain,
+      innerJoin: () => chain,
+      orderBy: () => chain,
+      limit: () => {
+        if (served) return Promise.resolve([]);
+        served = true;
+        return Promise.resolve(messageRows);
+      },
+      // Awaiting the chain directly resolves the drive-membership shape.
+      where: () => Object.assign(Promise.resolve(driveRows), chain),
+    };
+    return chain;
   });
 }
 
-// Helper to set up AI provider success with specific response
-function setupAIProviderSuccess(responses: string[]) {
-  mockCreateAIProvider.mockResolvedValue({
-    model: 'test-model',
-    provider: 'test',
-    modelName: 'test',
-  });
-
-  let callIndex = 0;
-  mockGenerateText.mockImplementation(() => {
-    const response = responses[callIndex % responses.length];
-    callIndex++;
-    return Promise.resolve({ text: response });
-  });
+function messages(count: number) {
+  return Array.from({ length: count }, (_, i) => ({
+    content: `Message ${i}`,
+    role: i % 2 === 0 ? 'user' : 'assistant',
+    createdAt: new Date(Date.now() - i * 1000),
+  }));
 }
 
-describe('discovery-service', () => {
+describe('runDiscoveryPasses', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Default: setup DB to return empty (insufficient data)
-    setupDbWithMessages(0);
+    mockReserve.mockImplementation(async () => ({ allowed: true as const, holdId: 'hold-m', walletId: 'w-root', release: mockReleaseMemoryHold }));
   });
 
-  describe('runDiscoveryPasses', () => {
-    it('should exist and be callable', async () => {
-      const { runDiscoveryPasses } = await import('../discovery-service');
+  it('returns no claims when there is too little conversation to read', async () => {
+    setupDb([]);
+    const { runDiscoveryPasses } = await import('../discovery-service');
 
-      assert({
-        given: 'discovery-service module',
-        should: 'export runDiscoveryPasses function',
-        actual: typeof runDiscoveryPasses,
-        expected: 'function',
-      });
-    });
+    const result = await runDiscoveryPasses('user-with-no-data');
 
-    it('should return DiscoveryResult with four arrays', async () => {
-      const { runDiscoveryPasses } = await import('../discovery-service');
-
-      const result = await runDiscoveryPasses('user-123');
-
-      assert({
-        given: 'a userId',
-        should: 'return result with worldview array',
-        actual: Array.isArray(result.worldview),
-        expected: true,
-      });
-
-      assert({
-        given: 'a userId',
-        should: 'return result with projects array',
-        actual: Array.isArray(result.projects),
-        expected: true,
-      });
-
-      assert({
-        given: 'a userId',
-        should: 'return result with communication array',
-        actual: Array.isArray(result.communication),
-        expected: true,
-      });
-
-      assert({
-        given: 'a userId',
-        should: 'return result with preferences array',
-        actual: Array.isArray(result.preferences),
-        expected: true,
-      });
-    });
-
-    it('should return empty arrays when user has insufficient conversations', async () => {
-      // Default mock returns empty arrays (no conversations)
-      setupDbWithMessages(0);
-      const { runDiscoveryPasses } = await import('../discovery-service');
-
-      const result = await runDiscoveryPasses('user-with-no-data');
-
-      assert({
-        given: 'a user with fewer than 3 conversations',
-        should: 'return empty worldview array',
-        actual: result.worldview,
-        expected: [],
-      });
-
-      assert({
-        given: 'a user with fewer than 3 conversations',
-        should: 'return empty projects array',
-        actual: result.projects,
-        expected: [],
-      });
+    assert({
+      given: 'a user with fewer than 3 messages',
+      should: 'return no claims and not call the model at all',
+      actual: { claims: result.claims, modelCalls: mockGenerateObject.mock.calls.length },
+      expected: { claims: [], modelCalls: 0 },
     });
   });
 
-  describe('DiscoveryResult type', () => {
-    it('should define DiscoveryResult interface', async () => {
-      // Type check - if this compiles, the type exists
-      const { runDiscoveryPasses } = await import('../discovery-service');
-      const result = await runDiscoveryPasses('test');
+  it('DRV-5 (partial) X-6 (partial) scopes page-agent messages and activity to the org-aware member-drive set, never a drive_members read of its own', async () => {
+    setupDb(messages(10));
+    mockGenerateObject.mockResolvedValue({
+      object: { claims: [] },
+      usage: { inputTokens: 10, outputTokens: 5 },
+    });
 
-      // TypeScript will fail compilation if these properties don't exist
-      const _worldview: string[] = result.worldview;
-      const _projects: string[] = result.projects;
-      const _communication: string[] = result.communication;
-      const _preferences: string[] = result.preferences;
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    await runDiscoveryPasses('user-org-member');
 
-      assert({
-        given: 'DiscoveryResult',
-        should: 'have string array types for all fields',
-        actual: true,
-        expected: true,
-      });
+    assert({
+      given: 'a user whose member drives come from the permissions layer',
+      should: 'ask getMemberDriveIds (trash included, as before) for both the message and the activity scope',
+      actual: mockGetMemberDriveIds.mock.calls,
+      expected: [[automationActor('user-org-member', 'memory-discovery', HELD_DRIVES), { includeTrashed: true }], [automationActor('user-org-member', 'memory-discovery', HELD_DRIVES), { includeTrashed: true }]],
     });
   });
 
-  describe('LLM integration', () => {
-    beforeEach(() => {
-      vi.clearAllMocks();
+  it('SEC-2 (partial) records as contributing orgs exactly the drives whose messages and activity the passes read', async () => {
+    // The three reads run concurrently, so each is told apart by its shape: activity joins nothing, global messages
+    // join conversations, page-agent messages also join pages.
+    const byJoins: unknown[][] = [
+      [{ operation: 'update', resourceType: 'page', resourceTitle: 'Roadmap', driveId: 'drive-other-org' }],
+      messages(2),
+      [{ content: 'From an org page', role: 'user', createdAt: new Date(Date.now() - 5000), driveId: 'drive-org' },
+       { content: 'From a personal page', role: 'user', createdAt: new Date(Date.now() - 6000), driveId: 'drive-personal' }],
+    ];
+    mockDbSelect.mockImplementation(() => {
+      let joins = 0;
+      const chain = {
+        from: () => chain,
+        innerJoin: () => { joins++; return chain; },
+        orderBy: () => chain,
+        limit: () => Promise.resolve(byJoins[joins] ?? []),
+        where: () => Object.assign(Promise.resolve([]), chain),
+      };
+      return chain;
+    });
+    mockOrgIdsOfDrives.mockResolvedValueOnce(['org-a', 'org-b']);
+    mockGenerateObject.mockResolvedValue({ object: { claims: [] }, usage: { inputTokens: 10, outputTokens: 5 } });
+
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    const result = await runDiscoveryPasses('user-in-orgs');
+
+    assert({
+      given: 'a transcript with global and page-agent messages, and workspace activity',
+      should: 'resolve orgs from the page and activity drives only (global conversations belong to no drive) and return them',
+      actual: { asked: [...(mockOrgIdsOfDrives.mock.calls[0]?.[0] ?? [])].sort(), orgIds: result.orgIds },
+      expected: { asked: ['drive-org', 'drive-other-org', 'drive-personal'], orgIds: ['org-a', 'org-b'] },
+    });
+  });
+
+  it('POL-8 (partial) reads only the member drives whose org allows the discovery model, for both scopes', async () => {
+    mockGetMemberDriveIds.mockResolvedValueOnce(['personal', 'strict-org']).mockResolvedValueOnce(['personal', 'strict-org']);
+    const strictOrgOut = async (_use: unknown, scope: { driveIds: readonly string[] }) => ({ driveIds: scope.driveIds.filter((d) => d !== 'strict-org'), pageIds: [] });
+    mockScopeReadableByModel.mockImplementationOnce(strictOrgOut).mockImplementationOnce(strictOrgOut);
+    setupDb(messages(10));
+    mockGenerateObject.mockResolvedValue({ object: { claims: [] }, usage: { inputTokens: 10, outputTokens: 5 } });
+
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    await runDiscoveryPasses('user-org-member');
+    const { inArray } = await import('@pagespace/db/operators');
+
+    expect(mockScopeReadableByModel).toHaveBeenCalledWith({ provider: 'anthropic', modelId: 'anthropic/claude-sonnet-5' }, { driveIds: ['personal', 'strict-org'] });
+    expect(vi.mocked(inArray).mock.calls.map((c) => c[1])).toEqual([['personal'], ['personal']]);
+  });
+
+  it('POL-8 (partial) global-assistant conversations are read only when every org the person is in allows the discovery model (they carry no drive, so any org\'s content may be in them)', async () => {
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    const { eq } = await import('@pagespace/db/operators');
+    const readsGlobal = () => vi.mocked(eq).mock.calls.some((c) => c[1] === 'global');
+    mockGenerateObject.mockResolvedValue({ object: { claims: [] }, usage: { inputTokens: 10, outputTokens: 5 } });
+
+    mockGetMemberDriveIds.mockResolvedValue(['personal', 'strict-org']);
+    const strictOrgOut = async (_use: unknown, scope: { driveIds: readonly string[] }) => ({ driveIds: scope.driveIds.filter((d) => d !== 'strict-org'), pageIds: [] });
+    mockScopeReadableByModel.mockImplementation(strictOrgOut);
+    setupDb(messages(10));
+    vi.mocked(eq).mockClear();
+    await runDiscoveryPasses('user-org-member');
+    expect(readsGlobal()).toBe(false);
+
+    mockScopeReadableByModel.mockImplementation(async (_use, scope) => ({ driveIds: [...scope.driveIds], pageIds: [] }));
+    setupDb(messages(10));
+    vi.mocked(eq).mockClear();
+    await runDiscoveryPasses('user-org-member');
+    expect(readsGlobal()).toBe(true);
+
+    mockGetMemberDriveIds.mockImplementation(async () => ['drive-1']);
+  });
+
+  it('tags each claim with the field of the pass that produced it', async () => {
+    setupDb(messages(10));
+    // Every pass returns an untagged claim; the caller must assign the field so
+    // a model that omits or misreports `field` cannot file a claim in the wrong page.
+    mockGenerateObject.mockResolvedValue({
+      object: { claims: [{ claim: 'c', evidence: 'e', occurrencesInWindow: 2 }] },
+      usage: { inputTokens: 10, outputTokens: 5 },
     });
 
-    it('should run 4 LLM passes when sufficient conversations exist', async () => {
-      setupDbWithMessages(10);
-      setupAIProviderSuccess([
-        '["Expert in TypeScript"]',
-        '["Working on memory system"]',
-        '["Prefers concise responses"]',
-        '["No emojis please"]',
-      ]);
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    const result = await runDiscoveryPasses('user-with-data');
 
-      const { runDiscoveryPasses } = await import('../discovery-service');
-      await runDiscoveryPasses('user-with-data');
+    assert({
+      given: 'three passes each returning one claim',
+      should: 'tag them bio, writingStyle, and rules respectively',
+      actual: result.claims.map((c) => c.field).sort(),
+      expected: ['bio', 'rules', 'writingStyle'],
+    });
+  });
 
-      // Should have called generateText 4 times (one per pass)
-      assert({
-        given: 'user with sufficient conversations',
-        should: 'call LLM 4 times for 4 discovery passes',
-        actual: mockGenerateText.mock.calls.length,
-        expected: 4,
-      });
+  it('overrides a field the model reported incorrectly', async () => {
+    setupDb(messages(10));
+    // The bio pass returns a claim self-labelled as `rules`. The pass it came
+    // from is the authority, not the model's own tag.
+    mockGenerateObject.mockResolvedValue({
+      object: {
+        claims: [{ field: 'rules', claim: 'c', evidence: 'e', occurrencesInWindow: 2 }],
+      },
+      usage: { inputTokens: 10, outputTokens: 5 },
     });
 
-    it('should parse JSON array responses from LLM', async () => {
-      setupDbWithMessages(10);
-      setupAIProviderSuccess([
-        '["Expert in TypeScript", "Values TDD"]',
-        '["Working on memory system"]',
-        '["Prefers concise responses"]',
-        '["No emojis please"]',
-      ]);
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    const result = await runDiscoveryPasses('user-with-data');
 
-      const { runDiscoveryPasses } = await import('../discovery-service');
-      const result = await runDiscoveryPasses('user-with-data');
+    assert({
+      given: 'every pass mislabelling its claim as "rules"',
+      should: 'still produce one claim per field, from the pass of origin',
+      actual: result.claims.map((c) => c.field).sort(),
+      expected: ['bio', 'rules', 'writingStyle'],
+    });
+  });
 
-      assert({
-        given: 'LLM returns JSON array for worldview',
-        should: 'parse and return insights',
-        actual: result.worldview,
-        expected: ['Expert in TypeScript', 'Values TDD'],
-      });
+  it('carries evidence through so claims can be corroborated', async () => {
+    setupDb(messages(10));
+    mockGenerateObject.mockResolvedValue({
+      object: {
+        claims: [
+          { claim: 'Be concise', evidence: 'keep it short', occurrencesInWindow: 3 },
+        ],
+      },
+      usage: { inputTokens: 10, outputTokens: 5 },
     });
 
-    it('should handle markdown code block JSON responses', async () => {
-      setupDbWithMessages(10);
-      setupAIProviderSuccess([
-        '```json\n["Expert in TypeScript"]\n```',
-        '["Working on memory system"]',
-        '["Prefers concise responses"]',
-        '["No emojis"]',
-      ]);
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    const result = await runDiscoveryPasses('user-with-data');
 
-      const { runDiscoveryPasses } = await import('../discovery-service');
-      const result = await runDiscoveryPasses('user-with-data');
+    assert({
+      given: 'a model response with evidence and an occurrence count',
+      should: 'preserve both on the returned claim',
+      actual: {
+        evidence: result.claims[0].evidence,
+        occurrencesInWindow: result.claims[0].occurrencesInWindow,
+      },
+      expected: { evidence: 'keep it short', occurrencesInWindow: 3 },
+    });
+  });
 
-      assert({
-        given: 'LLM returns markdown code block with JSON',
-        should: 'extract and parse the JSON',
-        actual: result.worldview,
-        expected: ['Expert in TypeScript'],
-      });
+  it('resolves a cited message index against a chronological transcript', async () => {
+    // The db returns newest-first (that is how the most recent N are picked),
+    // so the transcript must be reversed before numbering. Numbering it
+    // newest-first would make [0] the newest while a model reading a
+    // conversation assumes ascending time — "cite the most recent message"
+    // would then return a HIGH index and resolve to the OLDEST message.
+    //
+    // The failure is silent: the index is in range, so the out-of-range
+    // fallback never fires, and today's evidence is stamped a week old —
+    // inverting the corroboration rule, which keys entirely on evidenceAt.
+    const newest = new Date('2026-03-12T00:00:00.000Z');
+    const oldest = new Date('2026-03-05T00:00:00.000Z');
+    setupDb([
+      { content: 'newest', role: 'user', createdAt: newest },
+      { content: 'middle', role: 'user', createdAt: new Date('2026-03-08T00:00:00.000Z') },
+      { content: 'oldest', role: 'user', createdAt: oldest },
+    ]);
+
+    // Cite the highest index — what a model means by "the most recent message".
+    mockGenerateObject.mockResolvedValue({
+      object: {
+        claims: [
+          { claim: 'c', evidence: 'e', occurrencesInWindow: 1, evidenceMessageIndex: 2 },
+        ],
+      },
+      usage: { inputTokens: 10, outputTokens: 5 },
     });
 
-    it('should return empty array when LLM returns non-JSON', async () => {
-      setupDbWithMessages(10);
-      setupAIProviderSuccess([
-        'I found some insights about this user',
-        '["Working on memory system"]',
-        '["Prefers concise responses"]',
-        '["No emojis"]',
-      ]);
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    const result = await runDiscoveryPasses('user-1');
 
-      const { runDiscoveryPasses } = await import('../discovery-service');
-      const result = await runDiscoveryPasses('user-with-data');
+    assert({
+      given: 'a claim citing the highest message number',
+      should: 'date it from the NEWEST message, not the oldest',
+      actual: result.claims[0]?.evidenceAt,
+      expected: newest,
+    });
+  });
 
-      assert({
-        given: 'LLM returns non-JSON response',
-        should: 'return empty array for that pass',
-        actual: result.worldview,
-        expected: [],
-      });
+  it('dates a claim from the oldest message when the cited index is unusable', async () => {
+    const oldest = new Date('2026-03-05T00:00:00.000Z');
+    setupDb([
+      { content: 'newest', role: 'user', createdAt: new Date('2026-03-12T00:00:00.000Z') },
+      { content: 'middle', role: 'user', createdAt: new Date('2026-03-08T00:00:00.000Z') },
+      { content: 'oldest', role: 'user', createdAt: oldest },
+    ]);
+
+    mockGenerateObject.mockResolvedValue({
+      object: {
+        claims: [
+          { claim: 'c', evidence: 'e', occurrencesInWindow: 1, evidenceMessageIndex: 999 },
+        ],
+      },
+      usage: { inputTokens: 10, outputTokens: 5 },
     });
 
-    it('should return empty arrays when AI provider fails', async () => {
-      setupDbWithMessages(10);
-      mockCreateAIProvider.mockResolvedValue({
-        error: 'API key not configured',
-        status: 400,
-      });
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    const result = await runDiscoveryPasses('user-1');
 
-      const { runDiscoveryPasses } = await import('../discovery-service');
-      const result = await runDiscoveryPasses('user-with-data');
-
-      assert({
-        given: 'AI provider returns error',
-        should: 'return empty arrays without throwing',
-        actual: result.worldview,
-        expected: [],
-      });
+    assert({
+      given: 'an out-of-range message index',
+      should: 'fall back to the oldest message, so a claim can never look fresher than its evidence',
+      actual: result.claims[0]?.evidenceAt,
+      expected: oldest,
     });
+  });
 
-    it('should include recent page messages when context is limited to 100', async () => {
-      const now = Date.now();
-      const globalMessages = Array.from({ length: 150 }, (_, i) => ({
-        content: `Global message ${i + 1}`,
-        role: i % 2 === 0 ? 'user' : 'assistant',
-        createdAt: new Date(now - (i + 50) * 1000),
-      }));
-      const pageMessages = [
-        {
-          content: 'Recent page message 1',
-          role: 'user',
-          createdAt: new Date(now - 1000),
-        },
-        {
-          content: 'Recent page message 2',
-          role: 'assistant',
-          createdAt: new Date(now - 2000),
-        },
-      ];
+  it('degrades to no claims when a pass throws', async () => {
+    setupDb(messages(10));
+    mockGenerateObject.mockRejectedValue(new Error('LLM error'));
 
-      mockDbSelect.mockImplementation(() => {
-        return {
-          from: vi.fn((table: Record<string, unknown>) => {
-            // messages table
-            if ('conversationId' in table) {
-              return {
-                innerJoin: vi.fn(() => ({
-                  where: vi.fn(() => ({
-                    orderBy: vi.fn(() => ({
-                      limit: vi.fn(() => Promise.resolve(globalMessages)),
-                    })),
-                  })),
-                })),
-              };
-            }
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    const result = await runDiscoveryPasses('user-with-error');
 
-            // chatMessages table
-            if ('pageId' in table) {
-              return {
-                innerJoin: vi.fn(() => ({
-                  where: vi.fn(() => ({
-                    orderBy: vi.fn(() => ({
-                      limit: vi.fn(() => Promise.resolve(pageMessages)),
-                    })),
-                  })),
-                })),
-              };
-            }
-
-            // activityLogs table
-            if ('operation' in table) {
-              return {
-                where: vi.fn(() => ({
-                  orderBy: vi.fn(() => ({
-                    limit: vi.fn(() => Promise.resolve([])),
-                  })),
-                })),
-              };
-            }
-
-            // driveMembers table
-            if ('driveId' in table && 'userId' in table) {
-              return {
-                where: vi.fn(() => Promise.resolve([{ driveId: 'drive-1' }])),
-              };
-            }
-
-            return {
-              where: vi.fn(() => Promise.resolve([])),
-            };
-          }),
-        };
-      });
-
-      const { runDiscoveryPasses } = await import('../discovery-service');
-      mockCreateAIProvider.mockResolvedValue({
-        model: 'test-model',
-        provider: 'test',
-        modelName: 'test',
-      });
-      mockGenerateText.mockImplementation((payload: { messages?: Array<{ content?: string }> }) => {
-        const prompt = payload.messages?.[0]?.content ?? '';
-        return Promise.resolve({
-          text: prompt.includes('Recent page message 1')
-            ? '["Includes page context"]'
-            : '[]',
-        });
-      });
-
-      const result = await runDiscoveryPasses('user-with-page-messages');
-
-      assert({
-        given: 'recent page messages are newer than many global messages',
-        should: 'include recent page messages in limited LLM context',
-        actual: result.worldview,
-        expected: ['Includes page context'],
-      });
+    assert({
+      given: 'every discovery pass failing',
+      should: 'return no claims rather than throwing',
+      actual: result.claims,
+      expected: [],
     });
+  });
+
+  it('takes no credit hold when there is too little conversation to read', async () => {
+    setupDb([]);
+    const { runDiscoveryPasses } = await import('../discovery-service');
+
+    await runDiscoveryPasses('user-with-no-data');
+
+    assert({
+      given: 'a user with nothing to discover',
+      should: 'not reserve credits for model calls that will never run',
+      actual: mockReserve.mock.calls.length,
+      expected: 0,
+    });
+  });
+
+  it('reserves once per pass — three holds, one per model call', async () => {
+    setupDb(messages(10));
+    mockGenerateObject.mockResolvedValue({ object: { claims: [] }, usage: { inputTokens: 10, outputTokens: 5 } });
+
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    await runDiscoveryPasses('user-funded');
+
+    assert({
+      given: 'a user with enough conversation to read',
+      should: 'take one hold for each of the three passes, on that user',
+      actual: mockReserve.mock.calls.map(([userId]) => userId),
+      expected: ['user-funded', 'user-funded', 'user-funded'],
+    });
+  });
+
+  it('runs no model and charges nothing when the credit gate refuses', async () => {
+    setupDb(messages(10));
+    mockReserve.mockResolvedValue({ allowed: false, reason: 'out_of_credits' } as never);
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    const result = await runDiscoveryPasses('user-in-debt');
+
+    assert({
+      given: 'a user whose balance the gate refuses',
+      should: 'return no claims, say why, and never call a model or hold anything',
+      actual: {
+        result,
+        modelCalls: mockGenerateObject.mock.calls.length,
+        charges: vi.mocked(AIMonitoring.trackUsage).mock.calls.length,
+        releases: mockReleaseMemoryHold.mock.calls.length,
+      },
+      expected: {
+        result: { claims: [], orgIds: [], creditRefusal: 'out_of_credits' },
+        modelCalls: 0,
+        charges: 0,
+        releases: 0,
+      },
+    });
+  });
+
+  it('settles each surviving pass on its own hold, even when a sibling pass throws', async () => {
+    setupDb(messages(10));
+    const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    vi.mocked(createAIProvider).mockRejectedValueOnce(new Error('provider lookup failed'));
+    mockGenerateObject.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return { object: { claims: [{ claim: 'c', evidence: 'e', occurrencesInWindow: 1 }] }, usage: { inputTokens: 10, outputTokens: 5 } };
+    });
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    const result = await runDiscoveryPasses('user-with-data');
+
+    assert({
+      given: 'one pass whose provider throws while the other two are still calling the model',
+      should: 'reserve and settle exactly once for each surviving call, and keep their claims',
+      actual: {
+        reserves: mockReserve.mock.calls.length,
+        settledHolds: vi.mocked(AIMonitoring.trackUsage).mock.calls.map(([usage]) => usage.holdId),
+        releases: mockReleaseMemoryHold.mock.calls.length,
+        claims: result.claims.length,
+      },
+      expected: { reserves: 2, settledHolds: ['hold-m', 'hold-m'], releases: 0, claims: 2 },
+    });
+  });
+
+  it('a refusal on one pass keeps the paid-for passes\' claims and reports the refusal', async () => {
+    setupDb(messages(10));
+    mockReserve.mockResolvedValueOnce({ allowed: false, reason: 'out_of_credits' } as never);
+    mockGenerateObject.mockResolvedValue({ object: { claims: [{ claim: 'c', evidence: 'e', occurrencesInWindow: 1 }] }, usage: { inputTokens: 10, outputTokens: 5 } });
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    const result = await runDiscoveryPasses('user-running-low');
+
+    assert({
+      given: 'credit for two of the three passes',
+      should: 'run and settle only the two, keep their claims, and name the refusal',
+      actual: {
+        modelCalls: mockGenerateObject.mock.calls.length,
+        charges: vi.mocked(AIMonitoring.trackUsage).mock.calls.length,
+        claims: result.claims.length,
+        creditRefusal: result.creditRefusal,
+      },
+      expected: { modelCalls: 2, charges: 2, claims: 2, creditRefusal: 'out_of_credits' },
+    });
+  });
+});
+
+describe('runDiscoveryPasses — the credit gate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockReserve.mockImplementation(async () => ({ allowed: true as const, holdId: 'hold-m', walletId: 'w-root', release: mockReleaseMemoryHold }));
+    mockGenerateObject.mockResolvedValue({
+      object: { claims: [{ claim: 'c', evidence: 'e', occurrencesInWindow: 2 }] },
+      usage: { inputTokens: 10, outputTokens: 5 },
+    });
+  });
+
+  it('SPEND-1 (partial) an exhausted person\'s discovery calls no model, charges nothing, and stages no claims', async () => {
+    setupDb(messages(10));
+    mockReserve.mockResolvedValue({ allowed: false, reason: 'out_of_credits' } as never);
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+    const { runDiscoveryPasses } = await import('../discovery-service');
+
+    const result = await runDiscoveryPasses('user-1');
+
+    expect(result).toEqual({ claims: [], orgIds: [], creditRefusal: 'out_of_credits' });
+    expect(mockGenerateObject).not.toHaveBeenCalled();
+    expect(AIMonitoring.trackUsage).not.toHaveBeenCalled();
+  });
+
+  it('SPEND-8 (partial) each funded discovery pass reserves before its model call and settles once on that hold and wallet', async () => {
+    setupDb(messages(10));
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+    const { runDiscoveryPasses } = await import('../discovery-service');
+
+    await runDiscoveryPasses('user-1');
+
+    const passes = mockGenerateObject.mock.calls.length;
+    expect(passes).toBeGreaterThan(0);
+    expect(mockReserve).toHaveBeenCalledTimes(passes);
+    expect(AIMonitoring.trackUsage).toHaveBeenCalledTimes(passes);
+    for (const [usage] of vi.mocked(AIMonitoring.trackUsage).mock.calls) {
+      expect(usage).toMatchObject({ holdId: 'hold-m', walletId: 'w-root', source: 'memory' });
+    }
+    expect(mockReleaseMemoryHold).not.toHaveBeenCalled();
+  });
+
+  it('a pass whose model call fails releases its reservation', async () => {
+    setupDb(messages(10));
+    mockGenerateObject.mockRejectedValue(new Error('down'));
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+    const { runDiscoveryPasses } = await import('../discovery-service');
+
+    const result = await runDiscoveryPasses('user-1');
+
+    expect(result.claims).toEqual([]);
+    expect(AIMonitoring.trackUsage).not.toHaveBeenCalled();
+    expect(mockReleaseMemoryHold).toHaveBeenCalledTimes(mockGenerateObject.mock.calls.length);
   });
 });

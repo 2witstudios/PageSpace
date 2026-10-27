@@ -1,6 +1,7 @@
-import { pgTable, text, timestamp, boolean, pgEnum, index, unique } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { pgTable, text, timestamp, boolean, jsonb, integer, pgEnum, index, unique, uniqueIndex, primaryKey, check, type AnyPgColumn } from 'drizzle-orm/pg-core';
+import { relations, sql } from 'drizzle-orm';
 import { users } from './auth';
+import { files, type AttachmentMeta } from './storage';
 import { createId } from '@paralleldrive/cuid2';
 
 // Connection status enum
@@ -61,24 +62,108 @@ export const directMessages = pgTable('direct_messages', {
   conversationId: text('conversationId').notNull().references(() => dmConversations.id, { onDelete: 'cascade' }),
   senderId: text('senderId').notNull().references(() => users.id, { onDelete: 'cascade' }),
   content: text('content').notNull(),
+  fileId: text('fileId').references(() => files.id, { onDelete: 'set null' }),
+  attachmentMeta: jsonb('attachmentMeta').$type<AttachmentMeta | null>(),
   isRead: boolean('isRead').default(false).notNull(),
   readAt: timestamp('readAt', { mode: 'date' }),
   isEdited: boolean('isEdited').default(false).notNull(),
   editedAt: timestamp('editedAt', { mode: 'date' }),
+  isActive: boolean('isActive').default(true).notNull(),
+  deletedAt: timestamp('deletedAt', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+  // Threading: parentId points at the thread root (top-level DM). Replies are
+  // exactly one level deep, so a parent must itself have parentId IS NULL.
+  parentId: text('parentId').references((): AnyPgColumn => directMessages.id, { onDelete: 'cascade' }),
+  replyCount: integer('replyCount').default(0).notNull(),
+  lastReplyAt: timestamp('lastReplyAt', { mode: 'date' }),
+  // When "Also send to DM" mirrors a thread reply to the top-level conversation,
+  // the top-level copy carries mirroredFromId pointing at the thread reply's id.
+  mirroredFromId: text('mirroredFromId').references((): AnyPgColumn => directMessages.id, { onDelete: 'set null' }),
+  // Inline quote reply: top-level message embedding another in the same conversation.
+  // Orthogonal to threading — quoted messages are top-level (parentId IS NULL) and
+  // live in the main feed. onDelete: 'set null' so a quote-reply outlives a hard
+  // delete of its source; soft-deletes leave the FK intact for tombstone rendering.
+  quotedMessageId: text('quotedMessageId').references((): AnyPgColumn => directMessages.id, { onDelete: 'set null' }),
 }, (table) => {
   return {
     conversationIdx: index('direct_messages_conversation_id_idx').on(table.conversationId),
     senderIdx: index('direct_messages_sender_id_idx').on(table.senderId),
     createdAtIdx: index('direct_messages_created_at_idx').on(table.createdAt),
-    // Composite index for fetching messages in a conversation
+    fileIdx: index('direct_messages_file_id_idx').on(table.fileId),
+    // Serves the conversation list query filtered by isActive — keeping isActive in the
+    // index lets the planner skip a heap fetch when soft-deleted messages must be excluded.
+    conversationActiveCreatedIdx: index('direct_messages_conversation_active_created_idx').on(table.conversationId, table.isActive, table.createdAt),
+    // Serves the retention job that permanently purges soft-deleted DMs.
+    inactiveDeletedAtIdx: index('direct_messages_inactive_deleted_at_idx').on(table.isActive, table.deletedAt),
+    // Composite index for fetching messages in a conversation (kept for queries that don't filter isActive)
     conversationCreatedIdx: index('direct_messages_conversation_created_idx').on(table.conversationId, table.createdAt),
     // Index for unread messages
     conversationIsReadIdx: index('direct_messages_conversation_is_read_idx').on(table.conversationId, table.isRead),
     // Composite index for efficient unread count queries (conversationId, senderId, isRead)
     unreadCountIdx: index('direct_messages_unread_count_idx').on(table.conversationId, table.senderId, table.isRead),
+    parentCreatedIdx: index('direct_messages_parent_created_idx').on(table.parentId, table.createdAt),
+    quotedIdx: index('direct_messages_quoted_id_idx').on(table.quotedMessageId),
   }
 });
+
+/**
+ * Attachments carried by a direct message. Mirror of
+ * `channel_message_attachments` — see its docblock for why the two surfaces get
+ * mirrored tables rather than one polymorphic one, and why `fileId` is SET NULL.
+ */
+export const directMessageAttachments = pgTable('direct_message_attachments', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  messageId: text('messageId').notNull().references(() => directMessages.id, { onDelete: 'cascade' }),
+  fileId: text('fileId').references(() => files.id, { onDelete: 'set null' }),
+  attachmentMeta: jsonb('attachmentMeta').$type<AttachmentMeta | null>(),
+  position: integer('position').notNull(),
+  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+  messagePositionIdx: uniqueIndex('direct_message_attachments_message_position_idx').on(table.messageId, table.position),
+  fileIdx: index('direct_message_attachments_file_id_idx').on(table.fileId),
+  positionRange: check('direct_message_attachments_position_range', sql`${table.position} >= 0 AND ${table.position} < 10`),
+}));
+
+export const directMessageAttachmentsRelations = relations(directMessageAttachments, ({ one }) => ({
+  message: one(directMessages, {
+    fields: [directMessageAttachments.messageId],
+    references: [directMessages.id],
+  }),
+  file: one(files, {
+    fields: [directMessageAttachments.fileId],
+    references: [files.id],
+  }),
+}));
+
+/**
+ * DM message reactions - emoji reactions on direct messages.
+ *
+ * Mirrors channelMessageReactions in shape and constraints: each user can add
+ * one reaction per emoji per message; supports any Unicode emoji (text).
+ */
+export const dmMessageReactions = pgTable('dm_message_reactions', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  messageId: text('messageId').notNull().references(() => directMessages.id, { onDelete: 'cascade' }),
+  userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  emoji: text('emoji').notNull(),
+  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+  uniqueReaction: uniqueIndex('dm_unique_reaction_idx').on(table.messageId, table.userId, table.emoji),
+  messageIdx: index('dm_reaction_message_idx').on(table.messageId),
+}));
+
+/**
+ * Followers of a DM thread root. Auto-populated when a user posts in the
+ * thread (parent author + every replier). Cascades on root delete.
+ */
+export const dmThreadFollowers = pgTable('dm_thread_followers', {
+  rootMessageId: text('rootMessageId').notNull().references(() => directMessages.id, { onDelete: 'cascade' }),
+  userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.rootMessageId, table.userId] }),
+  userIdx: index('dm_thread_followers_user_id_idx').on(table.userId),
+}));
 
 // Relations
 export const connectionsRelations = relations(connections, ({ one }) => ({
@@ -118,13 +203,46 @@ export const dmConversationsRelations = relations(dmConversations, ({ one, many 
   messages: many(directMessages),
 }));
 
-export const directMessagesRelations = relations(directMessages, ({ one }) => ({
+export const directMessagesRelations = relations(directMessages, ({ one, many }) => ({
   conversation: one(dmConversations, {
     fields: [directMessages.conversationId],
     references: [dmConversations.id],
   }),
   sender: one(users, {
     fields: [directMessages.senderId],
+    references: [users.id],
+  }),
+  file: one(files, {
+    fields: [directMessages.fileId],
+    references: [files.id],
+  }),
+  attachments: many(directMessageAttachments),
+  reactions: many(dmMessageReactions),
+  mirroredFrom: one(directMessages, {
+    fields: [directMessages.mirroredFromId],
+    references: [directMessages.id],
+    relationName: 'mirroredFrom',
+  }),
+}));
+
+export const dmMessageReactionsRelations = relations(dmMessageReactions, ({ one }) => ({
+  message: one(directMessages, {
+    fields: [dmMessageReactions.messageId],
+    references: [directMessages.id],
+  }),
+  user: one(users, {
+    fields: [dmMessageReactions.userId],
+    references: [users.id],
+  }),
+}));
+
+export const dmThreadFollowersRelations = relations(dmThreadFollowers, ({ one }) => ({
+  rootMessage: one(directMessages, {
+    fields: [dmThreadFollowers.rootMessageId],
+    references: [directMessages.id],
+  }),
+  user: one(users, {
+    fields: [dmThreadFollowers.userId],
     references: [users.id],
   }),
 }));

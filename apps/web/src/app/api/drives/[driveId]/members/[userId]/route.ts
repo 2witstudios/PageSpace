@@ -1,27 +1,37 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log'
 import {
-  loggers,
   checkDriveAccess,
   getDriveMemberDetails,
   getMemberPermissions,
-  updateMemberRole,
-  updateMemberPermissions,
-  invalidateUserPermissions,
-  invalidateDrivePermissions,
-} from '@pagespace/lib/server';
-import { createDriveNotification } from '@pagespace/lib';
+  updateMemberAccess,
+  getDriveRecipientUserIds,
+} from '@pagespace/lib/services/drive-member-service';
+import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import {
+  revokeAgentMembershipsGrantedBy,
+  recapAgentMembershipsGrantedBy,
+} from '@pagespace/lib/services/drive-agent-service';
+import { createDriveNotification } from '@pagespace/lib/notifications/notifications';
 import {
   broadcastDriveMemberEvent,
+  broadcastDriveMemberEventToRecipients,
   createDriveMemberEventPayload,
-  kickUserFromDrive,
-  kickUserFromDriveActivity,
-  kickUserFromPage,
-  kickUserFromPageActivity,
 } from '@/lib/websocket';
+import { kickForDriveMembershipRevocation } from '@pagespace/lib/permissions/revocation-kick';
 import { getActorInfo, logMemberActivity, logPermissionActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
-import { db, driveMembers, pagePermissions, pages, eq, and, inArray } from '@pagespace/db';
+import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
+import { db } from '@pagespace/db/db'
+import { eq, and, inArray } from '@pagespace/db/operators'
+import { mcpTokenDrives } from '@pagespace/db/schema/members'
+import { mcpTokens } from '@pagespace/db/schema/auth'
+import { pages } from '@pagespace/db/schema/core'
+import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
+import { isDriveLead } from '@pagespace/lib/permissions/drive-relationship';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -33,19 +43,19 @@ export async function GET(
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
-    const currentUserId = auth.userId;
+    const actor = actorFromAuth(auth);
 
     const { driveId, userId } = await context.params;
 
     // Check if user is owner or admin
-    const access = await checkDriveAccess(driveId, currentUserId);
+    const access = await checkDriveAccess(driveId, actor);
 
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actor, driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
 
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Only drive owners and admins can manage member settings' }, { status: 403 });
+      return deniedResponse(actor, driveId, NextResponse.json({ error: 'Only drive owners and admins can manage member settings' }, { status: 403 }));
     }
 
     // Get member details
@@ -88,6 +98,7 @@ export async function PATCH(
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) return auth.error;
+    const actor = actorFromAuth(auth);
     const currentUserId = auth.userId;
 
     const { driveId, userId } = await context.params;
@@ -104,14 +115,14 @@ export async function PATCH(
     }
 
     // Check if user is owner or admin
-    const access = await checkDriveAccess(driveId, currentUserId);
+    const access = await checkDriveAccess(driveId, actor);
 
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actor, driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
 
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Only drive owners and admins can manage member settings' }, { status: 403 });
+      return deniedResponse(actor, driveId, NextResponse.json({ error: 'Only drive owners and admins can manage member settings' }, { status: 403 }));
     }
 
     // Verify member exists in drive
@@ -121,11 +132,25 @@ export async function PATCH(
       return NextResponse.json({ error: 'Member not found' }, { status: 404 });
     }
 
-    // Update role and customRoleId if provided
-    const { oldRole } = await updateMemberRole(driveId, userId, role, customRoleId);
+    // Update role, customRoleId and page permissions in one transaction. It returns
+    // the pre-update values it read from the row (getDriveMemberDetails hardcodes
+    // customRole: null, so it cannot be used to detect a custom-role change).
+    // [D-OW-33] while the drive's org is lapsed a change that gives the member
+    // more is refused (402 org_lapsed) and nothing is written.
+    const { oldRole, oldCustomRoleId, permissionsUpdated } = await updateMemberAccess(driveId, userId, currentUserId, {
+      role,
+      customRoleId,
+      permissions,
+    });
+
+    const roleChanged = Boolean(role) && role !== oldRole;
+    // `customRoleId` is only meaningful when present in the request body;
+    // `updateMemberAccess` coerces falsy values to null when clearing it, so a
+    // clear (customRoleId: null over a prior role) is a real change too.
+    const customRoleChanged = customRoleId !== undefined && (customRoleId || null) !== oldCustomRoleId;
 
     // Send notification if role changed (boundary obligation)
-    if (role && role !== oldRole) {
+    if (roleChanged) {
       await createDriveNotification(
         userId,
         driveId,
@@ -152,21 +177,27 @@ export async function PATCH(
         role: role as string,
         previousRole: oldRole as string,
       }, actorInfo);
+
+      auditRequest(request, { eventType: 'authz.role.assigned', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId: userId, previousRole: oldRole, newRole: role } });
     }
 
-    // Update permissions
-    const permissionsUpdated = await updateMemberPermissions(
-      driveId,
-      userId,
-      currentUserId,
-      permissions
-    );
+    // Cascade: re-cap the external agents this user granted in the drive to the
+    // grant they can make now. Triggered by ANY change to their grant ceiling —
+    // a standard-role change OR a custom-role change (tightened or cleared) —
+    // since both alter the driveAgentMembers row they could create today. A
+    // custom-role downgrade would otherwise leave agents with stale access to
+    // pages the user can no longer grant. recapAgentMembershipsGrantedBy never
+    // escalates beyond the user's own access.
+    if (roleChanged || customRoleChanged) {
+      const recappedAgentIds = await recapAgentMembershipsGrantedBy(driveId, userId);
+      if (recappedAgentIds.length > 0) {
+        auditRequest(request, { eventType: 'authz.role.assigned', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId: userId, recappedAgentPageIds: recappedAgentIds, newCap: role ?? oldRole, reason: 'member_recap' } });
+      }
+    }
 
-    // Invalidate permission caches so changes take effect immediately
-    await Promise.all([
-      invalidateUserPermissions(userId),
-      invalidateDrivePermissions(driveId),
-    ]);
+    if (permissions.length > 0) {
+      auditRequest(request, { eventType: 'authz.permission.granted', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId: userId, permissionsUpdated: permissions.length } });
+    }
 
     return NextResponse.json({
       success: true,
@@ -174,6 +205,7 @@ export async function PATCH(
       permissionsUpdated
     });
   } catch (error) {
+    if (isOrgLapsedError(error)) return orgLapsedResponse();
     loggers.api.error('Error updating member permissions:', error as Error);
     return NextResponse.json(
       { error: 'Failed to update member permissions' },
@@ -194,23 +226,24 @@ export async function DELETE(
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) return auth.error;
+    const actor = actorFromAuth(auth);
     const currentUserId = auth.userId;
 
     const { driveId, userId: targetUserId } = await context.params;
 
     // Check if current user is owner or admin
-    const access = await checkDriveAccess(driveId, currentUserId);
+    const access = await checkDriveAccess(driveId, actor);
 
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actor, driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
 
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Only drive owners and admins can remove members' }, { status: 403 });
+      return deniedResponse(actor, driveId, NextResponse.json({ error: 'Only drive owners and admins can remove members' }, { status: 403 }));
     }
 
     // Cannot remove the drive owner
-    if (targetUserId === access.drive.ownerId) {
+    if (isDriveLead(targetUserId, access.drive)) {
       return NextResponse.json({ error: 'Cannot remove the drive owner' }, { status: 400 });
     }
 
@@ -230,6 +263,7 @@ export async function DELETE(
 
     // Remove member and their permissions in a transaction
     // Fix 12: Log permissions BEFORE deletion for rollback support
+    let revokedAgentIds: string[] = [];
     await db.transaction(async (tx) => {
       // Get all pages in this drive
       const drivePages = await tx.select({ id: pages.id, title: pages.title })
@@ -293,6 +327,24 @@ export async function DELETE(
           eq(driveMembers.driveId, driveId),
           eq(driveMembers.userId, targetUserId)
         ));
+
+      // Cascade: revoke the external agent memberships this user granted in the
+      // drive. Their access was capped at this user's, so it must not outlive
+      // their membership. (Home-drive memberships are preserved.)
+      revokedAgentIds = await revokeAgentMembershipsGrantedBy(tx, driveId, targetUserId);
+
+      // Cascade: the removed user's API keys lose this drive too. Inherited
+      // rows would deny automatically (dangling-inherit), but explicit-role
+      // rows would otherwise retain stale authority — delete both. Keys owned
+      // by OTHER users (admin-added foreign apps) are untouched.
+      await tx.delete(mcpTokenDrives)
+        .where(and(
+          eq(mcpTokenDrives.driveId, driveId),
+          inArray(
+            mcpTokenDrives.tokenId,
+            tx.select({ id: mcpTokens.id }).from(mcpTokens).where(eq(mcpTokens.userId, targetUserId)),
+          ),
+        ));
     });
 
     trackDriveOperation(currentUserId, 'remove_member', driveId, {
@@ -314,37 +366,46 @@ export async function DELETE(
       acceptedAt: memberData.acceptedAt,
     }, actorInfo);
 
-    // Broadcast member removal event
-    await broadcastDriveMemberEvent(
-      createDriveMemberEventPayload(driveId, targetUserId, 'member_removed', {
-        driveName: access.drive.name,
-      })
-    );
+    auditRequest(request, { eventType: 'authz.permission.revoked', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId } });
 
-    // CRITICAL: Kick user from real-time rooms immediately (zero-trust revocation)
-    // This ensures the user stops receiving updates even if their socket is still connected
-
-    // First, kick from drive-level rooms
-    await Promise.all([
-      kickUserFromDrive(driveId, targetUserId, 'member_removed', access.drive.name),
-      kickUserFromDriveActivity(driveId, targetUserId, 'member_removed'),
-    ]);
-
-    // Also kick from all page rooms in this drive (page rooms use pageId, not drive pattern)
-    const drivePages = await db.select({ id: pages.id }).from(pages).where(eq(pages.driveId, driveId));
-    if (drivePages.length > 0) {
-      const pageKickPromises = drivePages.flatMap((page) => [
-        kickUserFromPage(page.id, targetUserId, 'member_removed'),
-        kickUserFromPageActivity(page.id, targetUserId, 'member_removed'),
-      ]);
-      await Promise.all(pageKickPromises);
+    // Audit the cascaded agent-membership revocations (the user's external
+    // agents lost their inherited drive access alongside the user).
+    if (revokedAgentIds.length > 0) {
+      auditRequest(request, { eventType: 'authz.permission.revoked', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId, revokedAgentPageIds: revokedAgentIds, reason: 'member_removal' } });
     }
 
-    // Invalidate permission caches so removed user loses access immediately
-    await Promise.all([
-      invalidateUserPermissions(targetUserId),
-      invalidateDrivePermissions(driveId),
-    ]);
+    // Fan out member_removed to owner + remaining accepted members so any admin
+    // watching the members page sees the row disappear without a manual refresh.
+    // Called after the transaction so the just-removed user is excluded.
+    // Best-effort: the membership delete has already committed, so a transient
+    // failure here must NOT turn a successful removal into a 500 response.
+    try {
+      const recipientUserIds = await getDriveRecipientUserIds(driveId);
+      await broadcastDriveMemberEventToRecipients(
+        createDriveMemberEventPayload(driveId, targetUserId, 'member_removed', {
+          driveName: access.drive.name,
+        }),
+        recipientUserIds
+      );
+    } catch (broadcastError) {
+      loggers.api.error(
+        'Failed to broadcast member_removed (post-commit, non-fatal)',
+        broadcastError instanceof Error ? broadcastError : new Error(String(broadcastError)),
+      );
+    }
+
+    // Kick user from real-time rooms immediately (zero-trust revocation): the
+    // centralized hook (#2158) kicks the drive-level rooms plus every page
+    // room in the drive (page rooms use pageId, not a drive pattern). It is
+    // best-effort by design and never throws — same contract as the broadcast
+    // above: the membership delete has already committed, so a kick failure
+    // must not turn a successful removal into a 500 response.
+    await kickForDriveMembershipRevocation({
+      userId: targetUserId,
+      driveId,
+      driveName: access.drive.name,
+      reason: 'member_removed',
+    });
 
     // Note: No in-app notification sent for removal - the broadcast event
     // will trigger a page refresh/redirect for the removed user, and the

@@ -1,7 +1,12 @@
-# Build outputs
+# Build outputs. The coder variant gets its own trees on purpose: the app
+# identity is baked into the bundle, so a coder build sitting where the
+# PageSpace packager looks would produce a PageSpace-branded installer running
+# the coder app.
 dist/
 dist-electron/
+dist-electron-coder/
 out/
+out-coder/
 
 # Dependencies
 node_modules/

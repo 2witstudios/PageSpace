@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { createDriveBackup, listDriveBackups } from '@/services/api/drive-backup-service';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -36,7 +38,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ driv
       return NextResponse.json({ error: 'Invalid offset parameter' }, { status: 400 });
     }
 
-    const result = await listDriveBackups(driveId, auth.userId, {
+    const result = await listDriveBackups(driveId, actorFromAuth(auth), {
       limit: parsedLimit ?? undefined,
       offset: parsedOffset ?? undefined,
     });
@@ -63,10 +65,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ dri
     const body = await request.json();
     const parsed = createBackupSchema.parse(body);
 
-    const result = await createDriveBackup(driveId, auth.userId, parsed);
+    const result = await createDriveBackup(driveId, actorFromAuth(auth), parsed);
     if (!result.success) {
       return NextResponse.json({ error: result.error }, { status: 403 });
     }
+
+    auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'drive', resourceId: driveId, details: { operation: 'create_backup' } });
 
     return NextResponse.json({
       backupId: result.backupId,

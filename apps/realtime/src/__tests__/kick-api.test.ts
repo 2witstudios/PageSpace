@@ -12,7 +12,7 @@ import {
 } from '../kick-handler';
 
 // Mock the logger
-vi.mock('@pagespace/lib/logger-config', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     realtime: {
       debug: vi.fn(),
@@ -21,6 +21,8 @@ vi.mock('@pagespace/lib/logger-config', () => ({
       error: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 describe('Kick API', () => {

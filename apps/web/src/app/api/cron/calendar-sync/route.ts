@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
-import { db, googleCalendarConnections, eq, and, or, lt, isNull, sql } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db'
+import { eq, and, or, lt, isNull, sql } from '@pagespace/db/operators'
+import { googleCalendarConnections } from '@pagespace/db/schema/calendar';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { audit } from '@pagespace/lib/audit/audit-log';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { syncGoogleCalendar } from '@/lib/integrations/google-calendar/sync-service';
 
@@ -27,9 +30,11 @@ export async function GET(request: Request) {
     const now = new Date();
 
     // Find all active connections that are due for sync (filtering in SQL)
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const dueConnections = await db.query.googleCalendarConnections.findMany({
       where: and(
         eq(googleCalendarConnections.status, 'active'),
+        sql`jsonb_array_length(coalesce(${googleCalendarConnections.selectedCalendars}, '[]'::jsonb)) > 0`,
         or(
           isNull(googleCalendarConnections.lastSyncAt),
           lt(
@@ -78,6 +83,8 @@ export async function GET(request: Request) {
     }
 
     loggers.api.info('Calendar sync cron completed', { synced, failed });
+
+    audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'calendar_sync', details: { synced, failed } });
 
     return NextResponse.json({
       success: true,

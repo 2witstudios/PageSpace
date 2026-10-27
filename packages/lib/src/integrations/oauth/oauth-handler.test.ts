@@ -40,7 +40,7 @@ describe('buildOAuthAuthorizationUrl', () => {
     });
 
     const parsed = new URL(url);
-    expect(parsed.searchParams.get('code_challenge')).toBeTruthy();
+    expect(typeof parsed.searchParams.get('code_challenge')).toBe('string');
     expect(parsed.searchParams.get('code_challenge_method')).toBe('S256');
   });
 
@@ -103,13 +103,10 @@ describe('exchangeOAuthCode', () => {
     expect(result.expiresIn).toBe(3600);
     expect(result.tokenType).toBe('Bearer');
 
-    expect(mockFetch).toHaveBeenCalledWith(
-      'https://auth.example.com/token',
-      expect.objectContaining({
-        method: 'POST',
-        signal: expect.any(AbortSignal),
-      }),
-    );
+    const fetchCallArgs = mockFetch.mock.calls[0];
+    expect(fetchCallArgs[0]).toBe('https://auth.example.com/token');
+    expect(fetchCallArgs[1].method).toBe('POST');
+    expect(fetchCallArgs[1].signal).toBeInstanceOf(AbortSignal);
   });
 
   it('given PKCE code verifier, should include it in request body', async () => {
@@ -333,8 +330,10 @@ describe('generatePKCE', () => {
   it('should generate a code verifier and challenge', () => {
     const { codeVerifier, codeChallenge } = generatePKCE();
 
-    expect(codeVerifier).toBeTruthy();
-    expect(codeChallenge).toBeTruthy();
+    expect(typeof codeVerifier).toBe('string');
+    expect(codeVerifier.length).toBeGreaterThanOrEqual(43);
+    expect(typeof codeChallenge).toBe('string');
+    expect(codeChallenge.length).toBeGreaterThanOrEqual(43);
     expect(codeVerifier).not.toBe(codeChallenge);
   });
 

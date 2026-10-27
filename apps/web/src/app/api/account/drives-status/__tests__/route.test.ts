@@ -3,8 +3,10 @@ import { NextResponse } from 'next/server';
 import { GET } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
-// Mock dependencies
-vi.mock('@pagespace/db', () => ({
+// @scaffold — ORM chain mock: drives-status route has no repository seam yet.
+// Replace with a drives-status-repository seam that exposes getOwnedDrives(),
+// getDriveMemberCount(), and getDriveAdmins() when one is introduced.
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       drives: {
@@ -16,15 +18,23 @@ vi.mock('@pagespace/db', () => ({
     },
     select: vi.fn(),
   },
-  drives: {},
-  driveMembers: {},
-  users: {},
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field, value) => ({ field, value, type: 'eq' })),
   and: vi.fn((...args: unknown[]) => ({ args, type: 'and' })),
   sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ strings, values, type: 'sql' })),
 }));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: {},
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  drives: {},
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: {},
+}));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     auth: {
       info: vi.fn(),
@@ -33,6 +43,8 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -40,9 +52,10 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { sql } from '@pagespace/db/operators';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string, tokenVersion = 0): SessionAuthResult => ({
@@ -70,6 +83,16 @@ const mockDrive = (overrides: { id: string; name: string }) => ({
   isTrashed: false,
   trashedAt: null,
   drivePrompt: null,
+  kind: 'STANDARD' as const,
+  publishSubdomain: null,
+  homePageId: null,
+  publishDefaultOgImageUrl: null,
+  notFoundPageId: null,
+  publishFaviconUrl: null,
+  avatarUrl: null,
+  color: null,
+  orgId: null,
+  orgVisibility: 'OPEN' as const,
 });
 
 describe('GET /api/account/drives-status', () => {
@@ -142,6 +165,30 @@ describe('GET /api/account/drives-status', () => {
       memberCount: 1,
     });
     expect(body.multiMemberDrives).toEqual([]);
+  });
+
+  it('D-OW-7 an org drive the person leads needs no action before account deletion and is not listed', async () => {
+    vi.mocked(db.query.drives.findMany).mockResolvedValue([
+      { ...mockDrive({ id: 'drive_product', name: 'Product' }), orgId: 'org-northwind' },
+    ]);
+    setupSelectMocks(9);
+
+    const response = await GET(new Request('https://example.com/api/account/drives-status'));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.soloDrives).toEqual([]);
+    expect(body.multiMemberDrives).toEqual([]);
+  });
+
+  it('counts members without GUEST rows (redeemed page share links), as account deletion does', async () => {
+    vi.mocked(db.query.drives.findMany).mockResolvedValue([mockDrive({ id: 'drive_solo', name: 'My Solo Drive' })]);
+    setupSelectMocks(1);
+
+    await GET(new Request('https://example.com/api/account/drives-status'));
+
+    const countSql = vi.mocked(sql).mock.calls.map(([strings]) => strings.join('?'));
+    expect(countSql).toContain("count(*) filter (where ? <> 'GUEST')");
   });
 
   it('should categorize multi-member drive correctly', async () => {
@@ -251,7 +298,7 @@ describe('GET /api/account/drives-status', () => {
   });
 
   it('should handle database errors gracefully', async () => {
-    vi.mocked(db.query.drives.findMany).mockRejectedValue(new Error('Database connection lost'));
+    vi.mocked(db.query.drives.findMany).mockRejectedValueOnce(new Error('Database connection lost'));
 
     const request = new Request('https://example.com/api/account/drives-status');
 
@@ -260,7 +307,10 @@ describe('GET /api/account/drives-status', () => {
 
     expect(response.status).toBe(500);
     expect(body.error).toBe('Failed to fetch drives status');
-    expect(loggers.auth.error).toHaveBeenCalled();
+    const errorArgs = vi.mocked(loggers.auth.error).mock.calls[0];
+    expect(errorArgs[0]).toBe('Error fetching drives status:');
+    expect(errorArgs[1]).toBeInstanceOf(Error);
+    expect((errorArgs[1] as Error).message).toBe('Database connection lost');
   });
 
   it('should handle drive with 0 members (edge case)', async () => {

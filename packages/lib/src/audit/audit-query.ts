@@ -1,0 +1,109 @@
+/**
+ * Standalone audit query function.
+ *
+ * Extracts the query logic from SecurityAuditService into a plain function
+ * so callers don't need a class instance or initialization ceremony.
+ */
+
+import { desc, and, or, gte, lte, eq } from '@pagespace/db/operators';
+import { securityAuditLog } from '@pagespace/db/schema/security-audit';
+import type { SelectSecurityAuditLog } from '@pagespace/db/schema/security-audit';
+import type { QueryEventsOptions } from './security-audit';
+import type { SecurityAuditDatabase } from './security-audit-repository';
+import { resolveAuditDbBinding } from './audit-db-binding';
+import { deriveIndexKey } from '../encryption/blind-index';
+import { auditIpBlindIndex } from '../encryption/audit-ip-crypto';
+import { decryptField } from '../encryption/field-crypto';
+
+export interface AuditQueryDeps {
+  /**
+   * Drizzle client to query — the main app db or the Admin PG client.
+   * Defaults to the resolved audit binding (#890 Phase 2, leaf 5): the
+   * Admin PG when dedicated, the main db under break-glass. Until the
+   * backfill leaf migrates legacy rows, default reads in dedicated mode see
+   * only post-cutover events (transitional dual-location state).
+   */
+  db?: SecurityAuditDatabase;
+}
+
+/**
+ * Query audit events with filtering options.
+ * Standalone equivalent of SecurityAuditService.queryEvents().
+ */
+export async function queryAuditEvents(
+  options: QueryEventsOptions,
+  deps: AuditQueryDeps = {}
+): Promise<SelectSecurityAuditLog[]> {
+  const db = deps.db ?? resolveAuditDbBinding().db;
+  const conditions = [];
+
+  if (options.userId) {
+    conditions.push(eq(securityAuditLog.userId, options.userId));
+  }
+
+  if (options.eventType) {
+    conditions.push(eq(securityAuditLog.eventType, options.eventType));
+  }
+
+  if (options.resourceType) {
+    conditions.push(eq(securityAuditLog.resourceType, options.resourceType));
+  }
+
+  if (options.resourceId) {
+    conditions.push(eq(securityAuditLog.resourceId, options.resourceId));
+  }
+
+  if (options.ipAddress) {
+    // Match both encrypted rows (by blind index) and legacy plaintext rows.
+    const master = process.env.ENCRYPTION_KEY ?? '';
+    if (master.length >= 32) {
+      const bidx = auditIpBlindIndex(options.ipAddress, deriveIndexKey(master));
+      conditions.push(
+        or(
+          eq(securityAuditLog.ipBidx, bidx),
+          eq(securityAuditLog.ipAddress, options.ipAddress),
+        )!,
+      );
+    } else {
+      conditions.push(eq(securityAuditLog.ipAddress, options.ipAddress));
+    }
+  }
+
+  if (options.fromTimestamp) {
+    conditions.push(gte(securityAuditLog.timestamp, options.fromTimestamp));
+  }
+
+  if (options.toTimestamp) {
+    conditions.push(lte(securityAuditLog.timestamp, options.toTimestamp));
+  }
+
+  const baseQuery = db
+    .select()
+    .from(securityAuditLog)
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .orderBy(desc(securityAuditLog.timestamp));
+
+  let rows: SelectSecurityAuditLog[];
+  if (options.limit !== undefined) {
+    if (!Number.isInteger(options.limit) || options.limit < 0) {
+      throw new Error('limit must be a non-negative integer');
+    }
+    rows = await baseQuery.limit(options.limit);
+  } else {
+    rows = await baseQuery;
+  }
+
+  // Decrypt the at-rest IP for display. `decryptField` passes legacy plaintext
+  // and null through unchanged, so mixed encrypted/plaintext rows both work. A
+  // single undecryptable row (corruption / key rotation) must not fail the whole
+  // forensic query — fall back to the stored value for that row only.
+  return Promise.all(rows.map((row) => decryptRowIp(row)));
+}
+
+async function decryptRowIp(row: SelectSecurityAuditLog): Promise<SelectSecurityAuditLog> {
+  try {
+    return { ...row, ipAddress: await decryptField(row.ipAddress) };
+  } catch {
+    return row;
+  }
+}

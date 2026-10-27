@@ -8,19 +8,27 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { PermissionsGrid, PermissionsGridRef } from '@/components/members/PermissionsGrid';
 import { UserSearch } from '@/components/members/UserSearch';
-import { ChevronLeft, UserPlus, User, RefreshCw, Shield } from 'lucide-react';
-import { useToast } from '@/hooks/useToast';
+import { ChevronLeft, UserPlus, User, RefreshCw, Shield, Mail } from 'lucide-react';
+import { toast } from 'sonner';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { getRoleColorClasses } from '@/lib/utils';
 import { VerificationRequiredAlert } from '@/components/VerificationRequiredAlert';
+import { inviteeStanding } from '@pagespace/lib/organizations/invite-choice';
+import { InviteJoinChoice, defaultJoinChoice, useInviteOrgContext, type JoinChoice } from '@/components/members/InviteJoinChoice';
+import { useDriveStore } from '@/hooks/useDrive';
+import { useMyOrganizations } from '@/hooks/useMyOrganizations';
+import { LAPSED_LOOSEN_NOTE } from '@/hooks/useOrgLapsed';
+import { orgErrorCode, orgErrorMessage, orgErrorPolicy } from '@/lib/orgs/org-error-copy';
 
 interface SelectedUser {
   userId: string;
   username?: string;
   displayName: string;
-  email: string;
+  // Optional: substring profile matches no longer carry an email (M3); invites
+  // use userId, so the email is display-only here.
+  email?: string;
   avatarUrl?: string;
 }
 
@@ -39,16 +47,35 @@ type UnifiedRole = { type: 'admin' } | { type: 'custom'; roleId: string } | null
 export default function InviteMemberPage() {
   const params = useParams();
   const router = useRouter();
-  const { toast } = useToast();
   const driveId = params.driveId as string;
 
   const [selectedUser, setSelectedUser] = useState<SelectedUser | null>(null);
+  const [pendingEmail, setPendingEmail] = useState<string | null>(null);
   const [customRoles, setCustomRoles] = useState<CustomRole[]>([]);
   const [selectedUnifiedRole, setSelectedUnifiedRole] = useState<UnifiedRole>(null);
   const [permissions, setPermissions] = useState<Map<string, { canView: boolean; canEdit: boolean; canShare: boolean }>>(new Map());
+  const [expiryDays, setExpiryDays] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [showVerificationAlert, setShowVerificationAlert] = useState(false);
   const permissionsGridRef = useRef<PermissionsGridRef>(null);
+
+  // UI-5: on an org drive, an outsider joins as a guest of this drive or as a member of the org.
+  const drive = useDriveStore((state) => state.drives.find((d) => d.id === driveId));
+  const driveOrgId = drive?.orgId ?? null;
+  const { orgById } = useMyOrganizations();
+  const orgName = orgById(driveOrgId)?.name ?? 'the organization';
+  // [D-OW-33] a lapsed org invites nobody, to the drive or to the org, until it pays.
+  const lapsed = orgById(driveOrgId)?.lapsed === true;
+  const orgContext = useInviteOrgContext(driveOrgId);
+  const [joinChoice, setJoinChoice] = useState<JoinChoice | null>(null);
+  // POL-2: an inviter who cannot read the policy learns it from a refusal naming `guests`.
+  const [guestsRefused, setGuestsRefused] = useState(false);
+  const guestPolicy = guestsRefused ? 'off' : orgContext.guestPolicy;
+  const invitee = selectedUser ? { userId: selectedUser.userId, email: selectedUser.email ?? null } : pendingEmail ? { email: pendingEmail } : null;
+  const isOutsider = orgContext.enabled && invitee !== null && inviteeStanding(invitee, orgContext.members) === 'outsider';
+  const effectiveJoinChoice: JoinChoice | null = isOutsider
+    ? joinChoice ?? defaultJoinChoice({ driveName: drive?.name ?? 'this drive', orgName, guestPolicy, hasEmail: Boolean(invitee?.email) })
+    : null;
 
   // Fetch custom roles
   useEffect(() => {
@@ -94,22 +121,30 @@ export default function InviteMemberPage() {
       const role = customRoles.find(r => r.id === selectedUnifiedRole.roleId);
       if (role && permissionsGridRef.current) {
         permissionsGridRef.current.applyRolePermissions(role.permissions);
-        toast({
-          title: 'Permissions synced',
-          description: `Permissions reset to "${role.name}" defaults`,
-        });
+        toast.success(`Permissions reset to "${role.name}" defaults`);
       }
     }
   };
 
   const handleUserSelect = (user: SelectedUser) => {
+    setJoinChoice(null);
     setSelectedUser(user);
+    setPendingEmail(null);
+  };
+
+  const handleInviteEmail = (email: string) => {
+    setJoinChoice(null);
+    setPendingEmail(email);
+    setSelectedUser(null);
   };
 
   const handleClearUser = () => {
+    setJoinChoice(null);
     setSelectedUser(null);
+    setPendingEmail(null);
     setPermissions(new Map());
     setSelectedUnifiedRole(null);
+    setExpiryDays(null);
   };
 
   const handlePermissionChange = (pageId: string, perms: { canView: boolean; canEdit: boolean; canShare: boolean }) => {
@@ -121,94 +156,104 @@ export default function InviteMemberPage() {
   };
 
   const handleInvite = async () => {
-    if (!selectedUser) return;
+    if (!selectedUser && !pendingEmail) return;
 
-    // Map unified role back to backend model
-    const backendRole = selectedUnifiedRole?.type === 'admin' ? 'ADMIN' : 'MEMBER';
-    const backendCustomRoleId = selectedUnifiedRole?.type === 'custom'
-      ? selectedUnifiedRole.roleId
-      : null;
-
-    // Skip permission validation for Admin
-    if (selectedUnifiedRole?.type === 'admin') {
+    // UI-5: an outsider joining as a member of the org gets an org invitation, which holds a seat.
+    if (effectiveJoinChoice === 'member' && driveOrgId && invitee?.email) {
       setSaving(true);
       try {
-        await post(`/api/drives/${driveId}/members/invite`, {
-          userId: selectedUser.userId,
-          role: 'ADMIN',
-          customRoleId: null,
-          permissions: [],
-        });
-
-        toast({
-          title: 'Success',
-          description: 'Admin invited successfully',
-        });
-
+        await post(`/api/orgs/${driveOrgId}/invitations`, { email: invitee.email, role: 'MEMBER' });
+        toast.success(`Invitation to ${orgName} sent to ${invitee.email}. Once they accept they can open every Open drive.`);
         router.push(`/dashboard/${driveId}/members`);
       } catch (error) {
-        if (error instanceof Error && 'requiresEmailVerification' in error) {
-          setShowVerificationAlert(true);
-          return;
-        }
-        console.error('Error adding member:', error);
-        toast({
-          title: 'Error',
-          description: error instanceof Error ? error.message : 'Failed to add member',
-          variant: 'destructive',
-        });
+        toast.error(orgErrorMessage(error, 'The invitation could not be sent.'));
       } finally {
         setSaving(false);
       }
       return;
     }
 
-    // For non-admin, convert permissions map to array format
-    const permissionArray = Array.from(permissions.entries())
-      .filter(([, perms]) => perms.canView || perms.canEdit || perms.canShare)
-      .map(([pageId, perms]) => ({
-        pageId,
-        canView: perms.canView,
-        canEdit: perms.canEdit,
-        canShare: perms.canShare,
-      }));
+    const backendRole = selectedUnifiedRole?.type === 'admin' ? 'ADMIN' : 'MEMBER';
+    const backendCustomRoleId = selectedUnifiedRole?.type === 'custom'
+      ? selectedUnifiedRole.roleId
+      : null;
+    const isAdmin = selectedUnifiedRole?.type === 'admin';
 
-    if (permissionArray.length === 0) {
-      toast({
-        title: 'No permissions selected',
-        description: 'Please select at least one permission to grant',
-        variant: 'destructive',
-      });
-      return;
+    // Snapshot the email at submit time so the toast renders the right address
+    // even if pendingEmail changes before the async response resolves.
+    const submittedEmail = pendingEmail;
+
+    let payload: Record<string, unknown>;
+    if (pendingEmail) {
+      // Email-payload path: page permissions cannot be granted to a user who
+      // has not joined yet, so we always send an empty permissions array.
+      payload = {
+        email: pendingEmail,
+        role: backendRole,
+        customRoleId: backendCustomRoleId,
+        permissions: [],
+        ...(expiryDays !== null && { expiryDays }),
+      };
+    } else if (isAdmin) {
+      payload = {
+        userId: selectedUser!.userId,
+        role: 'ADMIN',
+        customRoleId: null,
+        permissions: [],
+      };
+    } else {
+      const permissionArray = Array.from(permissions.entries())
+        .filter(([, perms]) => perms.canView || perms.canEdit || perms.canShare)
+        .map(([pageId, perms]) => ({
+          pageId,
+          canView: perms.canView,
+          canEdit: perms.canEdit,
+          canShare: perms.canShare,
+        }));
+
+      if (permissionArray.length === 0 && !backendCustomRoleId) {
+        toast.error('Please assign a role or select at least one page permission');
+        return;
+      }
+
+      payload = {
+        userId: selectedUser!.userId,
+        role: backendRole,
+        customRoleId: backendCustomRoleId,
+        permissions: permissionArray,
+      };
     }
 
     setSaving(true);
     try {
-      await post(`/api/drives/${driveId}/members/invite`, {
-        userId: selectedUser.userId,
-        role: backendRole,
-        customRoleId: backendCustomRoleId,
-        permissions: permissionArray,
-      });
+      const response = await post<{ kind?: 'invited' | 'added' | 'pending_approval'; email?: string }>(
+        `/api/drives/${driveId}/members/invite`,
+        payload
+      );
 
-      toast({
-        title: 'Success',
-        description: 'Member invited successfully',
-      });
+      if (response?.kind === 'pending_approval') {
+        // POL-2 'approve': nothing is granted and no email goes out until an org admin approves.
+        toast.success(`Sent to the ${orgName} Owner and Admins for approval. Nothing is shared until they approve.`);
+      } else if (response?.kind === 'invited' && submittedEmail) {
+        toast.success(`Invitation sent to ${submittedEmail}`);
+      } else {
+        toast.success(isAdmin ? 'Admin invited successfully' : 'Member invited successfully');
+      }
 
       router.push(`/dashboard/${driveId}/members`);
     } catch (error) {
-      // Check if this is a verification required error
       if (error instanceof Error && 'requiresEmailVerification' in error) {
         setShowVerificationAlert(true);
         return;
       }
       console.error('Error adding member:', error);
-      toast({
-        title: 'Error',
-        description: error instanceof Error ? error.message : 'Failed to add member',
-        variant: 'destructive',
-      });
+      if (orgErrorPolicy(error) === 'guests') {
+        setGuestsRefused(true);
+        setJoinChoice(null);
+        toast.error(`Guests are turned off for ${orgName}, so they cannot join as a guest.${invitee?.email ? ' Give them a seat instead.' : ''}`);
+        return;
+      }
+      toast.error(orgErrorCode(error) ? orgErrorMessage(error, 'Failed to add member') : error instanceof Error ? error.message : 'Failed to add member');
     } finally {
       setSaving(false);
     }
@@ -226,6 +271,11 @@ export default function InviteMemberPage() {
   return (
     <div className="h-full overflow-auto">
       <div className="max-w-6xl mx-auto p-6">
+        {lapsed && (
+          <p className="mb-4 text-sm text-muted-foreground" data-testid="lapsed-loosen-note">
+            Inviting is paused while {orgName} is unpaid. {LAPSED_LOOSEN_NOTE}
+          </p>
+        )}
         {/* Header with back button */}
         <div className="mb-6">
           <Button
@@ -257,7 +307,9 @@ export default function InviteMemberPage() {
             <CardDescription>
               {selectedUser
                 ? 'User selected. You can change your selection below.'
-                : 'Search for a user to invite to this drive'
+                : pendingEmail
+                  ? 'No matching user — they will receive an email invitation.'
+                  : 'Search for a user to invite to this drive'
               }
             </CardDescription>
           </CardHeader>
@@ -285,14 +337,44 @@ export default function InviteMemberPage() {
                   Change User
                 </Button>
               </div>
+            ) : pendingEmail ? (
+              <div className="flex items-center justify-between p-4 bg-muted rounded-lg">
+                <div className="flex items-center space-x-4">
+                  <Avatar className="w-12 h-12">
+                    <AvatarFallback>
+                      <Mail className="w-5 h-5" />
+                    </AvatarFallback>
+                  </Avatar>
+                  <div>
+                    <p className="font-medium">{pendingEmail}</p>
+                    <p className="text-sm text-muted-foreground">Will receive an email invitation</p>
+                  </div>
+                </div>
+                <Button variant="outline" size="sm" onClick={handleClearUser}>
+                  Change
+                </Button>
+              </div>
             ) : (
-              <UserSearch onSelect={handleUserSelect} />
+              <UserSearch onSelect={handleUserSelect} onInviteEmail={handleInviteEmail} />
             )}
           </CardContent>
         </Card>
 
-        {/* Role & Permissions - Only show when user is selected */}
-        {selectedUser && (
+        {isOutsider && invitee && effectiveJoinChoice && (
+          <InviteJoinChoice
+            inviteeName={selectedUser?.displayName ?? pendingEmail ?? 'They'}
+            invitee={invitee}
+            driveName={drive?.name ?? 'This drive'}
+            orgName={orgName}
+            members={orgContext.members}
+            guestPolicy={guestPolicy}
+            value={effectiveJoinChoice}
+            onChange={setJoinChoice}
+          />
+        )}
+
+        {/* Role & Permissions - Show when user is selected OR an email invitation is pending */}
+        {(selectedUser || pendingEmail) && effectiveJoinChoice !== 'member' && (
           <>
             {/* Unified Role Selection Card */}
             <Card className="mb-6">
@@ -362,8 +444,38 @@ export default function InviteMemberPage() {
               </CardContent>
             </Card>
 
-            {/* Permissions Card - Hidden when Admin is selected */}
-            {selectedUnifiedRole?.type !== 'admin' && (
+            {/* Invite expiry — only relevant for email invites that create a pending row */}
+            {pendingEmail && (
+              <Card className="mb-6">
+                <CardHeader>
+                  <CardTitle>Invite expiry</CardTitle>
+                  <CardDescription>
+                    Set when this invite link expires. Leave as &ldquo;Never&rdquo; for a permanent invite.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="max-w-xs">
+                    <Select
+                      value={expiryDays === null ? 'never' : String(expiryDays)}
+                      onValueChange={(v) => setExpiryDays(v === 'never' ? null : Number(v))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="never">Never</SelectItem>
+                        <SelectItem value="1">1 day</SelectItem>
+                        <SelectItem value="7">7 days</SelectItem>
+                        <SelectItem value="30">30 days</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Permissions Card - Hidden when Admin is selected or for pending email invites */}
+            {selectedUnifiedRole?.type !== 'admin' && !pendingEmail && (
               <Card className="mb-6">
                 <CardHeader>
                   <div className="flex items-center justify-between">
@@ -392,6 +504,7 @@ export default function InviteMemberPage() {
                     driveId={driveId}
                     permissions={permissions}
                     onChange={handlePermissionChange}
+                    readOnlyDriveRoot
                   />
                 </CardContent>
               </Card>
@@ -426,12 +539,24 @@ export default function InviteMemberPage() {
               >
                 Cancel
               </Button>
-              <Button onClick={handleInvite} disabled={saving}>
+              <Button onClick={handleInvite} disabled={saving || lapsed}>
                 <UserPlus className="w-4 h-4 mr-2" />
                 {saving ? 'Inviting...' : 'Invite Member'}
               </Button>
             </div>
           </>
+        )}
+
+        {effectiveJoinChoice === 'member' && (
+          <div className="flex justify-end gap-3">
+            <Button variant="outline" onClick={() => router.push(`/dashboard/${driveId}/members`)} disabled={saving}>
+              Cancel
+            </Button>
+            <Button onClick={handleInvite} disabled={saving || lapsed}>
+              <UserPlus className="w-4 h-4 mr-2" />
+              {saving ? 'Inviting...' : `Invite to ${orgName}`}
+            </Button>
+          </div>
         )}
       </div>
     </div>

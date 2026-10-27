@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PageSpace for Book Writing — research, draft, and revise your manuscript in one workspace</title>
+<meta name="description" content="A writing workspace where AI agents do the work alongside you: research the world, build your story bible, draft chapters in a real editor, and catch continuity slips across 90,000 words — using 33+ real tools, not chatbot copy-paste.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..900;1,9..144,400..700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#f4ece0;        /* warm parchment */
+    --paper:#fbf6ee;     /* page white */
+    --s1:#fffdf9;
+    --s2:#f0e6d6;
+    --s3:#e8dcc8;
+    --border:#ddcdb4;
+    --border2:#cdb893;
+    --ink:#221c17;       /* warm near-black */
+    --ink2:#4a3f34;
+    --mid:#7a6c5b;
+    --dim:#a4937c;
+    --wine:#8a2f3b;      /* burgundy accent */
+    --wine2:#b4434f;
+    --gold:#b07d24;      /* aged gold */
+    --gold2:#d49a36;
+    --sage:#5f7a4f;      /* "done" green */
+    --teal:#2f6f6a;
+    --serif:"Fraunces",Georgia,serif;
+    --sans:"Inter",system-ui,sans-serif;
+    --mono:"JetBrains Mono",monospace;
+    --maxw:1140px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:var(--sans);
+    line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
+  }
+  ::selection{background:var(--wine);color:#fff}
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px}
+
+  /* subtle paper grain via layered gradients */
+  body::before{
+    content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+    background:
+      radial-gradient(900px 500px at 78% -8%, rgba(176,125,36,.10), transparent 60%),
+      radial-gradient(700px 500px at -5% 12%, rgba(138,47,59,.07), transparent 55%);
+  }
+
+  /* NAV */
+  nav{position:sticky;top:0;z-index:50;background:rgba(244,236,224,.82);
+    backdrop-filter:blur(14px);border-bottom:1px solid var(--border)}
+  .nav-inner{display:flex;align-items:center;justify-content:space-between;height:66px}
+  .logo{display:flex;align-items:center;gap:11px;font-family:var(--serif);
+    font-weight:600;font-size:21px;letter-spacing:-.01em}
+  .mark{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;
+    background:linear-gradient(135deg,var(--wine),var(--gold));color:#fff;
+    font-weight:700;font-size:16px;font-family:var(--serif);box-shadow:0 4px 12px rgba(138,47,59,.3)}
+  .nav-links{display:flex;align-items:center;gap:30px;font-size:15px;font-weight:500;color:var(--ink2)}
+  .nav-links a:not(.btn):hover{color:var(--wine)}
+  .btn{display:inline-flex;align-items:center;gap:8px;border-radius:10px;font-weight:600;
+    font-family:var(--sans);cursor:pointer;transition:.18s;border:1px solid transparent;font-size:15px}
+  .btn-primary{background:var(--ink);color:var(--paper);padding:10px 18px}
+  .btn-primary:hover{background:var(--wine);transform:translateY(-1px);box-shadow:0 8px 22px rgba(138,47,59,.28)}
+  .btn-ghost{background:transparent;color:var(--ink);border-color:var(--border2);padding:10px 18px}
+  .btn-ghost:hover{background:var(--s2);border-color:var(--ink2)}
+  .btn-lg{padding:15px 28px;font-size:16.5px;border-radius:12px}
+
+  /* HERO */
+  .hero{padding:84px 0 40px;text-align:center}
+  .eyebrow{display:inline-flex;align-items:center;gap:9px;background:var(--s1);
+    border:1px solid var(--border);color:var(--ink2);padding:7px 15px;border-radius:100px;
+    font-size:13.5px;font-weight:600;letter-spacing:.01em;margin-bottom:30px}
+  .eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--gold);
+    box-shadow:0 0 0 4px rgba(176,125,36,.18)}
+  h1{font-family:var(--serif);font-weight:600;font-size:clamp(38px,6.2vw,70px);
+    line-height:1.04;letter-spacing:-.02em;margin-bottom:24px;color:var(--ink)}
+  h1 .grad{font-style:italic;background:linear-gradient(115deg,var(--wine),var(--gold));
+    -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+  .sub{max-width:680px;margin:0 auto 34px;font-size:clamp(17px,2vw,20px);color:var(--ink2);line-height:1.62}
+  .hero-cta{display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
+  .micro{margin-top:24px;font-size:14px;color:var(--mid);font-weight:500}
+  .micro strong{color:var(--ink)}
+
+  /* MOCK */
+  .mock{max-width:1020px;margin:58px auto 0;background:var(--s1);
+    border:1px solid var(--border);border-radius:16px;overflow:hidden;
+    box-shadow:0 40px 90px -30px rgba(58,42,28,.4),0 8px 26px -12px rgba(58,42,28,.22)}
+  .mock-bar{display:flex;align-items:center;gap:8px;padding:13px 16px;
+    background:var(--s2);border-bottom:1px solid var(--border)}
+  .mock-bar .d{width:11px;height:11px;border-radius:50%;background:var(--border2)}
+  .mock-bar .tab{margin-left:14px;font-family:var(--mono);font-size:12px;color:var(--mid);
+    background:var(--s1);padding:5px 13px;border-radius:7px;border:1px solid var(--border);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:74%}
+  .mock-body{display:grid;grid-template-columns:198px 1fr 268px;min-height:412px;text-align:left}
+  .mock-side{background:var(--s2);border-right:1px solid var(--border);padding:14px 10px;font-size:13px}
+  .grp{font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);
+    font-weight:700;margin:13px 8px 7px}
+  .grp:first-child{margin-top:2px}
+  .tree-item{display:flex;align-items:center;gap:9px;padding:6px 9px;border-radius:7px;
+    color:var(--ink2);cursor:default;font-weight:500}
+  .tree-item .ic{font-size:14px}
+  .tree-item.active{background:var(--s1);color:var(--ink);font-weight:600;
+    box-shadow:inset 2px 0 0 var(--wine)}
+  .tree-item.sub{margin-left:13px;font-size:12.5px;color:var(--mid)}
+
+  .mock-main{padding:22px 24px;background:var(--paper);overflow:hidden}
+  .doc-h{font-family:var(--serif);font-size:23px;font-weight:600;letter-spacing:-.01em;margin-bottom:4px}
+  .doc-meta{font-family:var(--mono);font-size:11px;color:var(--dim);margin-bottom:18px}
+  .doc-p{font-family:var(--serif);font-size:14.5px;line-height:1.75;color:var(--ink2);margin-bottom:11px}
+  .doc-p .drop{float:left;font-size:46px;line-height:.82;padding:4px 8px 0 0;
+    font-weight:600;color:var(--wine);font-family:var(--serif)}
+  .flag{margin-top:6px;background:var(--s1);border:1px solid var(--border);
+    border-left:3px solid var(--gold);border-radius:9px;padding:12px 14px}
+  .flag .lbl{font-family:var(--mono);font-size:10.5px;font-weight:600;color:var(--gold);
+    text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px}
+  .flag p{font-size:13px;color:var(--ink2);line-height:1.55}
+  .flag .hl{background:rgba(138,47,59,.13);color:var(--wine);border-radius:4px;padding:0 4px;font-weight:600}
+
+  .mock-ai{background:var(--s1);border-left:1px solid var(--border);padding:15px 15px;display:flex;flex-direction:column}
+  .ai-h{display:flex;align-items:center;gap:9px;font-size:12.5px;font-weight:700;color:var(--ink);margin-bottom:4px}
+  .ai-av{width:24px;height:24px;border-radius:7px;background:linear-gradient(135deg,var(--wine),var(--gold));
+    display:grid;place-items:center;color:#fff;font-size:13px}
+  .ai-sub{font-size:11px;color:var(--dim);margin-bottom:14px;font-family:var(--mono)}
+  .tool{font-family:var(--mono);font-size:11px;background:var(--paper);border:1px solid var(--border);
+    border-radius:7px;padding:8px 10px;margin-bottom:8px;color:var(--ink2)}
+  .tool .tn{color:var(--wine);font-weight:600}
+  .tool .ok{color:var(--sage);float:right;font-weight:600}
+  .tool .args{color:var(--mid);display:block;margin-top:3px;font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ai-msg{margin-top:auto;font-size:12.5px;color:var(--ink2);background:var(--paper);
+    border:1px solid var(--border);border-radius:10px;padding:11px 12px;line-height:1.5}
+  .ai-msg b{color:var(--ink)}
+  .typing{display:inline-flex;gap:3px;margin-left:3px}
+  .typing span{width:4px;height:4px;border-radius:50%;background:var(--gold);animation:bl 1.2s infinite}
+  .typing span:nth-child(2){animation-delay:.2s}.typing span:nth-child(3){animation-delay:.4s}
+  @keyframes bl{0%,60%,100%{opacity:.25}30%{opacity:1}}
+
+  /* SECTION shell */
+  section{padding:88px 0}
+  .sec-head{text-align:center;max-width:680px;margin:0 auto 54px}
+  .kicker{font-family:var(--mono);font-size:12.5px;font-weight:600;letter-spacing:.12em;
+    text-transform:uppercase;color:var(--wine);margin-bottom:14px}
+  h2{font-family:var(--serif);font-weight:600;font-size:clamp(29px,3.8vw,44px);
+    line-height:1.1;letter-spacing:-.015em;margin-bottom:16px}
+  h2 .it{font-style:italic;color:var(--wine)}
+  .sec-head p{font-size:17.5px;color:var(--ink2)}
+
+  /* PROBLEM */
+  .prob-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:18px}
+  .prob{background:var(--s1);border:1px solid var(--border);border-radius:14px;padding:24px 22px}
+  .prob .pe{font-size:26px;margin-bottom:13px;display:block}
+  .prob h3{font-family:var(--serif);font-size:18px;font-weight:600;margin-bottom:8px}
+  .prob p{font-size:14.5px;color:var(--mid);line-height:1.55}
+
+  /* HOW */
+  .steps{display:flex;flex-direction:column;gap:18px;max-width:920px;margin:0 auto}
+  .step{display:grid;grid-template-columns:62px 1fr;gap:24px;background:var(--s1);
+    border:1px solid var(--border);border-radius:16px;padding:26px 28px;align-items:start}
+  .step-n{font-family:var(--serif);font-size:30px;font-weight:600;color:#fff;
+    width:52px;height:52px;border-radius:13px;display:grid;place-items:center;
+    background:linear-gradient(140deg,var(--wine),var(--gold));box-shadow:0 8px 20px -6px rgba(138,47,59,.4)}
+  .step h3{font-family:var(--serif);font-size:21px;font-weight:600;margin-bottom:7px}
+  .step p{color:var(--ink2);font-size:15.5px;margin-bottom:14px;max-width:640px}
+  .tags{display:flex;flex-wrap:wrap;gap:8px}
+  .tag{font-family:var(--mono);font-size:12px;font-weight:500;background:var(--s2);
+    border:1px solid var(--border);color:var(--ink2);padding:5px 11px;border-radius:7px}
+  .tag b{color:var(--wine);font-weight:600}
+
+  /* FEATURES */
+  .feat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+  .feat{background:var(--s1);border:1px solid var(--border);border-radius:14px;padding:26px 24px;transition:.2s}
+  .feat:hover{transform:translateY(-3px);border-color:var(--border2);box-shadow:0 18px 40px -22px rgba(58,42,28,.45)}
+  .feat .fi{width:42px;height:42px;border-radius:11px;display:grid;place-items:center;
+    font-size:20px;background:var(--s2);border:1px solid var(--border);margin-bottom:15px}
+  .feat h3{font-family:var(--serif);font-size:19px;font-weight:600;margin-bottom:9px}
+  .feat p{font-size:14.5px;color:var(--mid);line-height:1.58}
+  .feat p code{font-family:var(--mono);font-size:12.5px;color:var(--wine);background:var(--s2);
+    padding:1px 5px;border-radius:5px}
+
+  /* SPLIT / artifact */
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:54px;align-items:center}
+  .split h2{text-align:left}
+  .check{list-style:none;margin-top:26px;display:flex;flex-direction:column;gap:15px}
+  .check li{display:flex;gap:13px;font-size:15.5px;color:var(--ink2)}
+  .check .ck{flex:none;width:23px;height:23px;border-radius:7px;background:var(--sage);
+    color:#fff;display:grid;place-items:center;font-size:13px;margin-top:1px}
+  .check b{color:var(--ink)}
+
+  /* sheet artifact */
+  .sheet{background:var(--s1);border:1px solid var(--border);border-radius:14px;overflow:hidden;
+    box-shadow:0 28px 60px -28px rgba(58,42,28,.4)}
+  .sheet-h{display:flex;align-items:center;gap:9px;padding:13px 16px;background:var(--s2);
+    border-bottom:1px solid var(--border);font-size:13.5px;font-weight:600}
+  .sheet-h .ic{font-size:15px}
+  .sheet-h .by{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--dim)}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{background:var(--s2);text-align:left;padding:9px 13px;font-weight:600;color:var(--mid);
+    font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--border)}
+  td{padding:10px 13px;border-bottom:1px solid var(--border);color:var(--ink2)}
+  td b{color:var(--ink);font-weight:600}
+  tr:last-child td{border-bottom:none}
+  .pill{font-family:var(--mono);font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:20px}
+  .pill.s{background:rgba(95,122,79,.16);color:var(--sage)}
+  .pill.w{background:rgba(176,125,36,.16);color:var(--gold)}
+  .pill.r{background:rgba(138,47,59,.13);color:var(--wine)}
+  .sheet-foot{padding:9px 14px;font-family:var(--mono);font-size:10.5px;color:var(--dim);
+    background:var(--s2);border-top:1px solid var(--border)}
+
+  /* STATS */
+  .stats{background:var(--ink);border-radius:22px;padding:54px 40px;color:var(--paper)}
+  .stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:30px;text-align:center}
+  .stat .num{font-family:var(--serif);font-size:clamp(38px,5vw,56px);font-weight:600;line-height:1;
+    background:linear-gradient(120deg,var(--gold2),var(--wine2));-webkit-background-clip:text;
+    background-clip:text;-webkit-text-fill-color:transparent}
+  .stat .lbl{margin-top:11px;font-size:14px;color:#d9cdba;font-weight:500}
+
+  /* USE CASES */
+  .uc-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:18px}
+  .uc{background:var(--s1);border:1px solid var(--border);border-radius:14px;padding:25px 26px;
+    display:flex;gap:18px;align-items:flex-start}
+  .uc .ue{font-size:27px;flex:none}
+  .uc h3{font-family:var(--serif);font-size:19px;font-weight:600;margin-bottom:7px}
+  .uc p{font-size:14.5px;color:var(--mid);line-height:1.55}
+
+  /* QUOTE */
+  .quote{max-width:840px;margin:0 auto;text-align:center}
+  .quote blockquote{font-family:var(--serif);font-size:clamp(22px,3.2vw,32px);
+    font-weight:500;line-height:1.36;letter-spacing:-.01em;color:var(--ink)}
+  .quote blockquote .mk{color:var(--wine);font-style:italic}
+  .qby{margin-top:26px;display:flex;align-items:center;gap:13px;justify-content:center}
+  .qav{width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,var(--wine),var(--gold));
+    display:grid;place-items:center;color:#fff;font-family:var(--serif);font-weight:600;font-size:18px}
+  .qby .qn{text-align:left;font-size:14px}
+  .qby .qn b{display:block;color:var(--ink)}
+  .qby .qn span{color:var(--mid);font-size:13px}
+
+  /* CTA */
+  .cta-panel{background:linear-gradient(140deg,var(--wine),#6d2530 55%,var(--gold));
+    border-radius:24px;padding:64px 40px;text-align:center;color:#fff;position:relative;overflow:hidden}
+  .cta-panel::after{content:"";position:absolute;inset:0;opacity:.5;
+    background:radial-gradient(600px 300px at 80% -20%,rgba(255,255,255,.18),transparent 60%)}
+  .cta-panel>*{position:relative;z-index:1}
+  .cta-panel h2{color:#fff}
+  .cta-panel h2 .it{color:#f6d99a}
+  .cta-panel p{font-size:18px;color:rgba(255,255,255,.9);max-width:560px;margin:14px auto 30px}
+  .cta-panel .btn-primary{background:#fff;color:var(--ink)}
+  .cta-panel .btn-primary:hover{background:#f6ecdb;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+  .cta-panel .btn-ghost{color:#fff;border-color:rgba(255,255,255,.5)}
+  .cta-panel .btn-ghost:hover{background:rgba(255,255,255,.12)}
+  .cta-micro{margin-top:22px;font-size:13.5px;color:rgba(255,255,255,.8)}
+
+  /* FOOTER */
+  footer{border-top:1px solid var(--border);padding:54px 0 40px;margin-top:30px}
+  .foot-grid{display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:36px}
+  .foot-brand .logo{margin-bottom:14px}
+  .foot-brand p{font-size:14px;color:var(--mid);max-width:300px;line-height:1.6}
+  .foot-col h4{font-size:12.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);
+    font-weight:700;margin-bottom:14px}
+  .foot-col a{display:block;font-size:14.5px;color:var(--ink2);margin-bottom:10px}
+  .foot-col a:hover{color:var(--wine)}
+  .foot-bot{margin-top:42px;padding-top:22px;border-top:1px solid var(--border);
+    display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;
+    font-size:13px;color:var(--mid)}
+  .proto{font-family:var(--mono);font-size:12px;color:var(--dim);
+    background:var(--s2);border:1px solid var(--border);padding:4px 11px;border-radius:7px}
+
+  /* reveal */
+  .fade{opacity:0;transform:translateY(26px);transition:.7s cubic-bezier(.2,.7,.2,1)}
+  .fade.in{opacity:1;transform:none}
+
+  @media(max-width:880px){
+    .nav-links a:not(.btn){display:none}
+    .hero{padding:54px 0 20px}
+    section{padding:62px 0}
+    .mock-body{grid-template-columns:1fr}
+    .mock-side{display:none}
+    .mock-ai{border-left:none;border-top:1px solid var(--border)}
+    .prob-grid,.feat-grid,.stats-grid,.uc-grid{grid-template-columns:1fr}
+    .stats-grid{gap:34px}
+    .split{grid-template-columns:1fr;gap:34px}
+    .split h2{text-align:center}
+    .step{grid-template-columns:1fr;gap:14px}
+    .foot-grid{grid-template-columns:1fr 1fr}
+    .foot-brand{grid-column:1/-1}
+  }
+  @media(max-width:520px){
+    .foot-grid{grid-template-columns:1fr}
+    .stats{padding:40px 24px}
+  }
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <div class="wrap nav-inner">
+    <div class="logo"><span class="mark">P</span> PageSpace</div>
+    <div class="nav-links">
+      <a href="#how">How it works</a>
+      <a href="#features">Features</a>
+      <a href="#bible">Story bible</a>
+      <a href="#usecases">Who it's for</a>
+      <a href="#cta" class="btn btn-primary">Start your book free</a>
+    </div>
+  </div>
+</nav>
+
+<!-- HERO -->
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow"><span class="dot"></span> The AI-native writing workspace</div>
+    <h1>From blank page to<br>finished manuscript —<br><span class="grad">without losing the thread.</span></h1>
+    <p class="sub">Drop your premise into a drive. PageSpace agents research the world, build your story bible, draft chapters in a real editor beside you, and catch the continuity slip on page 240 — all in one workspace where the AI does the work with you, not in a chat window you copy out of.</p>
+    <div class="hero-cta">
+      <a href="#cta" class="btn btn-primary btn-lg">Start your book free</a>
+      <a href="#how" class="btn btn-ghost btn-lg">See how it works</a>
+    </div>
+    <p class="micro">No credit card · <strong>33+ real AI tools</strong> · 100+ models · Self-host or cloud</p>
+
+    <!-- HERO MOCK -->
+    <div class="mock fade">
+      <div class="mock-bar">
+        <span class="d"></span><span class="d"></span><span class="d"></span>
+        <span class="tab">pagespace.ai / drives / the-salt-road / Ch. 14 — The Tide Turns</span>
+      </div>
+      <div class="mock-body">
+        <aside class="mock-side">
+          <div class="grp">Manuscript</div>
+          <div class="tree-item"><span class="ic">📖</span> Ch. 12 — Low Water</div>
+          <div class="tree-item"><span class="ic">📖</span> Ch. 13 — The Wreck</div>
+          <div class="tree-item active"><span class="ic">📖</span> Ch. 14 — The Tide Turns</div>
+          <div class="grp">Story bible</div>
+          <div class="tree-item"><span class="ic">👤</span> Characters</div>
+          <div class="tree-item"><span class="ic">🗺️</span> Worldbuilding</div>
+          <div class="tree-item"><span class="ic">🕰️</span> Timeline</div>
+          <div class="grp">Process</div>
+          <div class="tree-item"><span class="ic">🔎</span> Research</div>
+          <div class="tree-item"><span class="ic">✅</span> Revision board</div>
+          <div class="tree-item"><span class="ic">💬</span> Dev editor</div>
+        </aside>
+        <main class="mock-main">
+          <div class="doc-h">Ch. 14 — The Tide Turns</div>
+          <div class="doc-meta">document · 2,140 words · last edited 3m ago</div>
+          <p class="doc-p"><span class="drop">M</span>ara had not gone down to the harbour since the morning they pulled her brother's boat in empty. But the bell was ringing now, the cracked one in the chapel tower, and a ringing bell meant a ship on the rocks or a body on the sand.</p>
+          <p class="doc-p">She took the cliff path anyway, the salt wind tearing at the grey shawl her mother had —</p>
+          <div class="flag">
+            <div class="lbl">⚑ continuity · flagged by Dev editor</div>
+            <p>In Ch. 3, Mara's shawl is described as <span class="hl">"the colour of dried heather."</span> Here it's <span class="hl">grey</span>. Same garment? I can fix this line or update the character sheet — your call.</p>
+          </div>
+        </main>
+        <aside class="mock-ai">
+          <div class="ai-h"><span class="ai-av">✦</span> Dev editor</div>
+          <div class="ai-sub">AI Chat · briefed agent</div>
+          <div class="tool"><span class="tn">regex_search</span><span class="ok">12 hits</span><span class="args">"shawl|heather" · across Manuscript</span></div>
+          <div class="tool"><span class="tn">read_page</span><span class="ok">✓</span><span class="args">Ch. 3 — The Salt Cellar</span></div>
+          <div class="tool"><span class="tn">edit_sheet_cells</span><span class="ok">✓</span><span class="args">Characters › Mara › "shawl"</span></div>
+          <div class="ai-msg"><b>Logged the discrepancy</b> and pinned the canonical detail in the story bible. Drafting Ch. 14's next beat from the timeline<span class="typing"><span></span><span></span><span></span></span></div>
+        </aside>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- PROBLEM -->
+<section id="problem">
+  <div class="wrap">
+    <div class="sec-head fade">
+      <div class="kicker">The mid-book wall</div>
+      <h2>A novel is too big to hold in <span class="it">one head.</span></h2>
+      <p>Somewhere around 40,000 words, the project stops fitting in your memory — and the tools fight you.</p>
+    </div>
+    <div class="prob-grid">
+      <div class="prob fade"><span class="pe">🗂️</span><h3>Twelve scattered places</h3><p>Manuscript in one app, research in tabs, character notes in a notebook, outline on a whiteboard. Nothing knows about anything else.</p></div>
+      <div class="prob fade"><span class="pe">🔁</span><h3>Continuity rot</h3><p>Her eyes were green in chapter two. The journey took three days, then somehow four. You only catch it when a reader does.</p></div>
+      <div class="prob fade"><span class="pe">📋</span><h3>Copy-paste AI</h3><p>The chatbot drafts in its own window. You paste it in, lose the formatting, lose the thread, and it never saw chapter nine.</p></div>
+      <div class="prob fade"><span class="pe">🌫️</span><h3>The sagging middle</h3><p>You know what happens in act one and the ending. The 30,000 words between them are fog — and no outline survives them.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- HOW -->
+<section id="how" style="background:var(--s1);border-block:1px solid var(--border)">
+  <div class="wrap">
+    <div class="sec-head fade">
+      <div class="kicker">How it works</div>
+      <h2>One workspace, the <span class="it">whole arc.</span></h2>
+      <p>Research, bible, draft, revise — every step uses real tools the AI actually runs in your pages.</p>
+    </div>
+    <div class="steps">
+      <div class="step fade">
+        <div class="step-n">1</div>
+        <div>
+          <h3>Research the world before you build it</h3>
+          <p>Ask for the texture you need — 1890s Cornish pilchard fishing, period diction, the inheritance laws that drive your plot. The agent searches the live web, reads the strong sources, and writes a clean research Document you can cite from while drafting.</p>
+          <div class="tags"><span class="tag"><b>web_search</b></span><span class="tag"><b>web_fetch</b></span><span class="tag"><b>create_page</b> · Document</span></div>
+        </div>
+      </div>
+      <div class="step fade">
+        <div class="step-n">2</div>
+        <div>
+          <h3>Build a story bible that stays canon</h3>
+          <p>Characters, timeline, and worldbuilding live in Sheets the AI fills and maintains. As you draft, it writes new facts back into the bible — so the source of truth is one place, not your memory.</p>
+          <div class="tags"><span class="tag"><b>edit_sheet_cells</b> · Sheet</span><span class="tag"><b>create_page</b></span><span class="tag"><b>update_drive_context</b></span></div>
+        </div>
+      </div>
+      <div class="step fade">
+        <div class="step-n">3</div>
+        <div>
+          <h3>Draft chapters in a real editor, beside you</h3>
+          <p>Each chapter is a Document in the rich-text editor — not a chat bubble. The agent drafts a scene, you rewrite a line, it makes a precise edit to the paragraph you point at. Real-time, in the actual manuscript.</p>
+          <div class="tags"><span class="tag"><b>create_page</b> · Document</span><span class="tag"><b>replace_lines</b></span><span class="tag"><b>read_page</b></span></div>
+        </div>
+      </div>
+      <div class="step fade">
+        <div class="step-n">4</div>
+        <div>
+          <h3>Revise with an editor agent and a real board</h3>
+          <p>Brief an AI Chat agent as your developmental editor — its own persona, your style notes. It sweeps the manuscript for continuity slips, consults on a sagging scene, and turns its notes into a Task List you can actually work through.</p>
+          <div class="tags"><span class="tag"><b>ask_agent</b></span><span class="tag"><b>regex_search</b></span><span class="tag"><b>create_task</b> · Task List</span><span class="tag"><b>update_agent_config</b></span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head fade">
+      <div class="kicker">What's in the workspace</div>
+      <h2>Built from real <span class="it">primitives</span>, not promises.</h2>
+      <p>Nine page types and 33+ tools, mapped onto the work of finishing a book.</p>
+    </div>
+    <div class="feat-grid">
+      <div class="feat fade"><div class="fi">📖</div><h3>Chapters as Documents</h3><p>Every chapter is a rich-text Document in the TipTap editor. The AI drafts and edits in place with <code>replace_lines</code> — no copy-paste round trips.</p></div>
+      <div class="feat fade"><div class="fi">👤</div><h3>Character & timeline Sheets</h3><p>Your bible is a set of Sheets the agent maintains with <code>edit_sheet_cells</code>. Eye colour, allegiances, who knows what when — one canonical row each.</p></div>
+      <div class="feat fade"><div class="fi">✦</div><h3>Briefed editor agents</h3><p>An AI Chat page is a configurable agent. Give it a persona and your style with <code>update_agent_config</code>, then consult it with <code>ask_agent</code> — a dev editor that remembers the book.</p></div>
+      <div class="feat fade"><div class="fi">🔎</div><h3>Continuity sweeps</h3><p>Find every mention of a character, place, or motif across the whole manuscript with <code>regex_search</code> and <code>multi_drive_search</code> — catch the slip before a reader does.</p></div>
+      <div class="feat fade"><div class="fi">✅</div><h3>A revision board</h3><p>Turn editorial notes into a Task List with <code>create_task</code> and custom statuses. Track every scene from <em>rough</em> to <em>polished</em> without a separate app.</p></div>
+      <div class="feat fade"><div class="fi">🌐</div><h3>Research that lands in the book</h3><p><code>web_search</code> and <code>web_fetch</code> bring period detail, facts, and comp-title research straight into a Document you draft from — sources and all.</p></div>
+      <div class="feat fade"><div class="fi">💬</div><h3>Co-authors & beta readers</h3><p>Channels and real-time collaboration mean a co-writer or editor works in the same drive — comments and messages, not a thread of emailed .docx files.</p></div>
+      <div class="feat fade"><div class="fi">🧠</div><h3>100+ models, your pick</h3><p>Draft prose on one model, plan structure on another, run a local model for privacy. 100+ models across 6 providers, including Ollama on your own machine.</p></div>
+      <div class="feat fade"><div class="fi">🔒</div><h3>Your manuscript, your infrastructure</h3><p>Cloud, self-hosted, desktop, or mobile. Keep an unpublished novel on your own server in on-prem mode — passwordless auth, no third party in the middle.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- SPLIT / story bible -->
+<section id="bible" style="background:var(--s1);border-block:1px solid var(--border)">
+  <div class="wrap split">
+    <div class="fade">
+      <div class="kicker">The artifact</div>
+      <h2>A story bible the AI <span class="it">keeps for you.</span></h2>
+      <p style="color:var(--ink2);font-size:17px;margin-top:6px">It's a Sheet — the AI builds it, fills it, and writes new canon back into it every time you draft a scene. Ask "what colour is Mara's shawl?" and it reads the row, not its imagination.</p>
+      <ul class="check">
+        <li><span class="ck">✓</span><span>One canonical row per character, place, and object — updated with <b>edit_sheet_cells</b> as the story grows.</span></li>
+        <li><span class="ck">✓</span><span>Flags contradictions between a chapter and the bible, then offers to fix the line or the record.</span></li>
+        <li><span class="ck">✓</span><span>The whole drive's context feeds the agents, so every chapter draft stays consistent with canon.</span></li>
+        <li><span class="ck">✓</span><span>Export-ready: it's a real page in your workspace, not a hidden model memory you can't inspect.</span></li>
+      </ul>
+    </div>
+    <div class="fade">
+      <div class="sheet">
+        <div class="sheet-h"><span class="ic">👤</span> Characters — The Salt Road <span class="by">edit_sheet_cells · agent</span></div>
+        <table>
+          <thead><tr><th>Name</th><th>Detail</th><th>Last seen</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Mara Trevenna</b></td><td>Heather-grey shawl; brother lost at sea</td><td>Ch. 14</td><td><span class="pill r">conflict</span></td></tr>
+            <tr><td><b>Old Pengelly</b></td><td>Harbour master; limp, left leg</td><td>Ch. 13</td><td><span class="pill s">canon</span></td></tr>
+            <tr><td><b>The Curate</b></td><td>Name not yet given — pin before Ch. 16</td><td>Ch. 9</td><td><span class="pill w">open</span></td></tr>
+            <tr><td><b>Esther</b></td><td>Knows about the wreck; mother doesn't</td><td>Ch. 11</td><td><span class="pill s">canon</span></td></tr>
+          </tbody>
+        </table>
+        <div class="sheet-foot">4 tracked · 1 conflict flagged · synced from manuscript 3m ago</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- STATS -->
+<section>
+  <div class="wrap">
+    <div class="stats fade">
+      <div class="stats-grid">
+        <div class="stat"><div class="num">9</div><div class="lbl">page types — Document, Sheet, Task List, Channel, AI Chat & more</div></div>
+        <div class="stat"><div class="num">33+</div><div class="lbl">real tools the AI runs inside your pages</div></div>
+        <div class="stat"><div class="num">100+</div><div class="lbl">models across 6 providers, incl. local Ollama</div></div>
+        <div class="stat"><div class="num">∞</div><div class="lbl">cloud, self-host, desktop or mobile — your call</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- USE CASES -->
+<section id="usecases" style="background:var(--s1);border-block:1px solid var(--border)">
+  <div class="wrap">
+    <div class="sec-head fade">
+      <div class="kicker">Who it's for</div>
+      <h2>Long-form, any <span class="it">genre.</span></h2>
+      <p>If it has chapters, characters, or a structure to hold together, the same workspace fits.</p>
+    </div>
+    <div class="uc-grid">
+      <div class="uc fade"><span class="ue">🗡️</span><div><h3>Fantasy & sci-fi worldbuilders</h3><p>Magic systems, maps, and lineages in Sheets the AI keeps consistent across a trilogy. Continuity sweeps catch the rule you broke in book two.</p></div></div>
+      <div class="uc fade"><span class="ue">📚</span><div><h3>Nonfiction & memoir authors</h3><p>Research with <code style="font-family:var(--mono);font-size:12px;color:var(--wine)">web_search</code>, outline in a Document, draft chapters with citations landing straight in the page.</p></div></div>
+      <div class="uc fade"><span class="ue">✍️</span><div><h3>Indie & serial authors</h3><p>A revision Task List across a backlist, a briefed editor agent per series, and self-hosting so the unpublished work stays yours.</p></div></div>
+      <div class="uc fade"><span class="ue">🎬</span><div><h3>Screen & game writers</h3><p>Beat sheets in Sheets, scene status on a board, a writers'-room Channel for the team — structure and collaboration in one drive.</p></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- QUOTE -->
+<section>
+  <div class="wrap quote fade">
+    <blockquote>"It's the first time the research, the outline, and the actual chapters lived in <span class="mk">one place that talks to itself.</span> The editor agent caught a timeline error I'd have shipped."</blockquote>
+    <div class="qby">
+      <div class="qav">R</div>
+      <div class="qn"><b>Rowan Ellis</b><span>novelist · illustrative persona</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section id="cta">
+  <div class="wrap">
+    <div class="cta-panel fade">
+      <h2>Your book is waiting in <span class="it">chapter one.</span></h2>
+      <p>Open a drive, drop in your premise, and let the agents start building the world with you. Finish the draft you keep starting.</p>
+      <div class="hero-cta">
+        <a href="#" class="btn btn-primary btn-lg">Start your book free</a>
+        <a href="#how" class="btn btn-ghost btn-lg">See how it works</a>
+      </div>
+      <p class="cta-micro">Passwordless sign-in · 33+ real tools · self-host or cloud — your manuscript, your infrastructure</p>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div class="foot-brand">
+        <div class="logo"><span class="mark">P</span> PageSpace</div>
+        <p>The AI-native workspace where humans and AI agents write, research, and revise together — using real tools, in real pages.</p>
+      </div>
+      <div class="foot-col">
+        <h4>Workspace</h4>
+        <a href="#how">How it works</a>
+        <a href="#features">Features</a>
+        <a href="#bible">Story bible</a>
+      </div>
+      <div class="foot-col">
+        <h4>For writers</h4>
+        <a href="#usecases">Fiction</a>
+        <a href="#usecases">Nonfiction</a>
+        <a href="#usecases">Screen & games</a>
+      </div>
+      <div class="foot-col">
+        <h4>Deploy</h4>
+        <a href="#">Cloud</a>
+        <a href="#">Self-hosted</a>
+        <a href="#">Desktop & mobile</a>
+      </div>
+    </div>
+    <div class="foot-bot">
+      <span>© PageSpace — AI-native knowledge & collaboration.</span>
+      <span class="proto">Prototype · book-writing landing</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+  const io=new IntersectionObserver((es)=>{
+    es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}});
+  },{threshold:.12,rootMargin:'0px 0px -40px 0px'});
+  document.querySelectorAll('.fade').forEach((el,i)=>{
+    el.style.transitionDelay=(Math.min(i%4,3)*0.06)+'s';
+    io.observe(el);
+  });
+</script>
+</body>
+</html>

@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
-import { db, emailNotificationPreferences, eq, and } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and } from '@pagespace/db/operators'
+import { emailNotificationPreferences } from '@pagespace/db/schema/email-notifications';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { audit } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -19,6 +22,10 @@ const NOTIFICATION_TYPES = [
   'CONNECTION_ACCEPTED',
   'CONNECTION_REJECTED',
   'NEW_DIRECT_MESSAGE',
+  // Product announcements (e.g. the SDK/CLI launch). Not an in-app notification —
+  // it exists here so a broadcast opt-out is visible and reversible from settings
+  // rather than being a one-way switch the user can never find again.
+  'PRODUCT_UPDATE',
 ] as const;
 
 // GET /api/settings/notification-preferences - Get user's email notification preferences
@@ -102,6 +109,7 @@ export async function PATCH(request: Request) {
         ))
         .returning();
 
+      audit({ eventType: 'admin.settings.changed', userId, resourceType: 'notification_preference' });
       return NextResponse.json({ preference: updated });
     } else {
       // Create new preference
@@ -114,6 +122,7 @@ export async function PATCH(request: Request) {
         })
         .returning();
 
+      audit({ eventType: 'admin.settings.changed', userId, resourceType: 'notification_preference' });
       return NextResponse.json({ preference: created });
     }
   } catch (error) {

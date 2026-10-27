@@ -1,22 +1,23 @@
 'use client';
 
-import { forwardRef, useImperativeHandle, useRef, useState } from 'react';
+import React, { forwardRef, useImperativeHandle, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
-import { ArrowUp, X, FileIcon, ImageIcon, FileText } from 'lucide-react';
-import { toast } from 'sonner';
+import { ArrowUp, X, FileIcon, ImageIcon, FileText, CornerUpLeft } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { InputCard } from '@/components/ui/floating-input';
 import { ChatTextarea, type ChatTextareaRef } from '@/components/ai/chat/input/ChatTextarea';
 import { ChannelInputFooter } from './ChannelInputFooter';
-import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { useAttachmentUpload, type FileAttachment } from '@/hooks/useAttachmentUpload';
+import { formatFileSize } from '@/lib/attachment-utils';
+import { useEditingSession } from '@/stores/useEditingSession';
+import { MentionFormatter } from '@/lib/mentions/mentionConfig';
+import type { MentionSuggestion } from '@/types/mentions';
 
-// File attachment info returned from upload
-export interface FileAttachment {
-  id: string;
-  originalName: string;
-  size: number;
-  mimeType: string;
-  contentHash: string;
+export type { FileAttachment };
+
+export interface ChannelInputSendOptions {
+  /** When true (thread mode), the reply should be mirrored as a top-level message in the parent context */
+  alsoSendToParent?: boolean;
 }
 
 export interface ChannelInputProps {
@@ -24,8 +25,8 @@ export interface ChannelInputProps {
   value: string;
   /** Input change handler */
   onChange: (value: string) => void;
-  /** Send message handler - receives optional attachment */
-  onSend: (attachment?: FileAttachment) => void;
+  /** Send message handler - receives optional attachment and thread options */
+  onSend: (attachments?: FileAttachment[], options?: ChannelInputSendOptions) => void;
   /** Whether the input is disabled */
   disabled?: boolean;
   /** Placeholder text */
@@ -36,8 +37,21 @@ export interface ChannelInputProps {
   crossDrive?: boolean;
   /** Whether attachments are enabled */
   attachmentsEnabled?: boolean;
-  /** Channel page ID for uploads */
+  /** Channel page ID for uploads (mutually exclusive with conversationId; channelId wins if both set) */
   channelId?: string;
+  /** DM conversation ID for uploads (used when this input is rendered in a DM context) */
+  conversationId?: string;
+  /** Thread root id — when set, this input composes a reply for that thread */
+  parentId?: string;
+  /** Render the "Also send to channel/DM" checkbox in the footer (thread composer only) */
+  showAlsoSendToParent?: boolean;
+  /** Stable key used to register the draft with useEditingStore so SWR can't clobber unsent text */
+  editingSessionKey?: string;
+  /** Author + snippet for the quote-reply chip rendered above the input row.
+      Parent owns the active quoted message id; this prop only drives the chip UI. */
+  quotedPreview?: { authorName: string; snippet: string } | null;
+  /** Dismiss the active quote — invoked when the user clicks the chip's X. */
+  onClearQuote?: () => void;
   /** Additional class names */
   className?: string;
 }
@@ -49,6 +63,12 @@ export interface ChannelInputRef {
   clear: () => void;
   /** Insert text at cursor position */
   insertText: (text: string) => void;
+  /** Upload one or more files into the composer's attachment slot (used for drops outside the composer) */
+  uploadFiles: (files: File[]) => void;
+  /** Put files back after a send failed, so the user need not re-upload them */
+  restoreAttachments: (restored: FileAttachment[]) => void;
+  /** Whether the composer can currently accept a new attachment */
+  canAcceptDrop: () => boolean;
 }
 
 /**
@@ -77,6 +97,12 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
       crossDrive = false,
       attachmentsEnabled = false,
       channelId,
+      conversationId,
+      parentId,
+      showAlsoSendToParent = false,
+      editingSessionKey,
+      quotedPreview,
+      onClearQuote,
       className,
     },
     ref
@@ -85,8 +111,37 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
     const fileInputRef = useRef<HTMLInputElement>(null);
     const shouldReduceMotion = useReducedMotion();
     const [isFocused, setIsFocused] = useState(false);
-    const [attachment, setAttachment] = useState<FileAttachment | null>(null);
-    const [isUploading, setIsUploading] = useState(false);
+    const [alsoSendToParent, setAlsoSendToParent] = useState(false);
+
+    // Hold an editing-store session whenever the user has unsent draft text in
+    // this composer instance. Prevents SWR refreshes / auth refreshes from
+    // unmounting or clobbering the in-progress message — see useEditingStore
+    // for the broader contract.
+    useEditingSession(
+      editingSessionKey ?? '',
+      Boolean(editingSessionKey) && value.trim().length > 0,
+      'form',
+      { componentName: 'ChannelInput', pageId: channelId, conversationId },
+    );
+
+    const uploadUrl = channelId
+      ? `/api/channels/${channelId}/upload`
+      : conversationId
+        ? `/api/messages/${conversationId}/upload`
+        : null;
+    const hasUploadTarget = !!uploadUrl;
+
+    const {
+      attachments,
+      isUploading,
+      uploadFiles,
+      clearAttachment,
+      removeAttachment,
+      restoreAttachments,
+    } = useAttachmentUpload({
+      uploadUrl,
+      onUploaded: () => textareaRef.current?.focus(),
+    });
 
     useImperativeHandle(ref, () => ({
       focus: () => textareaRef.current?.focus(),
@@ -96,89 +151,66 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
         onChange(value + text);
         textareaRef.current?.focus();
       },
+      uploadFiles: (files: File[]) => {
+        if (!canUpload) return;
+        void uploadFiles(files);
+      },
+      canAcceptDrop: () => canUpload,
+      restoreAttachments,
     }));
 
     const handleSend = () => {
-      if ((value.trim() || attachment) && !disabled && !isUploading) {
-        onSend(attachment || undefined);
-        setAttachment(null);
+      if ((value.trim() || attachments.length > 0) && !disabled && !isUploading) {
+        const toSend = attachments.length > 0 ? attachments : undefined;
+        if (parentId) {
+          onSend(toSend, { alsoSendToParent });
+        } else {
+          onSend(toSend);
+        }
+        clearAttachment();
+        if (parentId) setAlsoSendToParent(false);
       }
     };
 
-    // Handle file selection
     const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (!file || !channelId) return;
-
-      setIsUploading(true);
+      const files = Array.from(e.target.files ?? []);
+      if (files.length === 0) return;
       try {
-        const formData = new FormData();
-        formData.append('file', file);
-
-        const response = await fetchWithAuth(`/api/channels/${channelId}/upload`, {
-          method: 'POST',
-          body: formData,
-        });
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({ error: 'Upload failed' }));
-          if (response.status === 413) {
-            toast.error(errorData.error || 'File too large');
-          } else if (response.status === 429) {
-            toast.error('Too many uploads in progress. Please wait.');
-          } else if (response.status === 503) {
-            toast.error('Server is busy. Please try again later.');
-          } else if (response.status === 403) {
-            toast.error(errorData.error || 'You do not have permission to upload files here.');
-          } else {
-            toast.error(errorData.error || 'Upload failed');
-          }
-          return;
-        }
-
-        const result = await response.json();
-        setAttachment({
-          id: result.file.id,
-          originalName: result.file.originalName,
-          size: result.file.size,
-          mimeType: result.file.mimeType,
-          contentHash: result.file.contentHash,
-        });
-        textareaRef.current?.focus();
-      } catch (error) {
-        console.error('Failed to upload file:', error);
-        toast.error('Failed to upload file. Please try again.');
+        await uploadFiles(files);
       } finally {
-        setIsUploading(false);
-        // Reset file input
-        if (fileInputRef.current) {
-          fileInputRef.current.value = '';
-        }
+        if (fileInputRef.current) fileInputRef.current.value = '';
       }
     };
 
-    // Handle attachment button click
     const handleAttachmentClick = () => {
       fileInputRef.current?.click();
     };
 
-    // Remove attachment
-    const handleRemoveAttachment = () => {
-      setAttachment(null);
+    const canUpload = attachmentsEnabled && hasUploadTarget && !isUploading;
+
+    const handlePasteFiles = (files: File[]) => {
+      if (!canUpload || files.length === 0) return;
+      void uploadFiles(files);
     };
 
-    // Get icon for file type
+    const handleDragOver = (e: React.DragEvent) => {
+      if (!canUpload) return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    const handleDrop = (e: React.DragEvent) => {
+      if (!canUpload) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const files = Array.from(e.dataTransfer?.files ?? []);
+      if (files.length > 0) void uploadFiles(files);
+    };
+
     const getFileIcon = (mimeType: string) => {
       if (mimeType.startsWith('image/')) return ImageIcon;
       if (mimeType.includes('pdf') || mimeType.includes('document')) return FileText;
       return FileIcon;
-    };
-
-    // Format file size
-    const formatFileSize = (bytes: number) => {
-      if (bytes < 1024) return `${bytes} B`;
-      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
     };
 
     // Handle formatting shortcuts
@@ -196,9 +228,14 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
       textareaRef.current?.focus();
     };
 
-    // Handle mention button - insert @ to trigger mention popup
-    const handleMentionClick = () => {
-      onChange(value + '@');
+    const handleMentionSelect = (suggestion: MentionSuggestion) => {
+      const text = MentionFormatter.format(
+        suggestion.label,
+        suggestion.id,
+        suggestion.type,
+        'markdown-typed',
+      );
+      onChange(value + text + ' ');
       textareaRef.current?.focus();
     };
 
@@ -208,7 +245,7 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
       textareaRef.current?.focus();
     };
 
-    const canSend = (value.trim().length > 0 || attachment) && !disabled && !isUploading;
+    const canSend = (value.trim().length > 0 || attachments.length > 0) && !disabled && !isUploading;
 
     const sendButton = (
       <button
@@ -234,14 +271,19 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
     );
 
     return (
-      <div className={cn('w-full', className)}>
+      <div
+        className={cn('w-full', className)}
+        data-testid="channel-input-root"
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+      >
         {/* Hidden file input */}
         <input
           ref={fileInputRef}
           type="file"
+          multiple
           className="hidden"
           onChange={handleFileSelect}
-          accept="image/*,.pdf,.doc,.docx,.txt,.md"
         />
 
         <InputCard
@@ -251,49 +293,78 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
             isFocused && 'ring-1 ring-primary/20'
           )}
         >
-          {/* Attachment preview */}
-          {(attachment || isUploading) && (
-            <div className="px-3 pt-3">
-              <div className="flex items-center gap-2 p-2 bg-muted/50 rounded-lg">
-                {isUploading ? (
-                  <>
-                    <div className="w-8 h-8 rounded bg-muted animate-pulse" />
-                    <div className="flex-1 min-w-0">
-                      <div className="h-4 w-24 bg-muted animate-pulse rounded" />
-                      <div className="h-3 w-16 bg-muted animate-pulse rounded mt-1" />
-                    </div>
-                  </>
-                ) : attachment ? (
-                  <>
-                    {attachment.mimeType.startsWith('image/') ? (
-                      // eslint-disable-next-line @next/next/no-img-element -- 32px thumbnail preview; auth-gated API route
-                      <img
-                        src={`/api/files/${attachment.id}/view`}
-                        alt={attachment.originalName}
-                        className="w-8 h-8 rounded object-cover"
-                      />
-                    ) : (
-                      <div className="w-8 h-8 rounded bg-muted flex items-center justify-center">
-                        {(() => {
-                          const Icon = getFileIcon(attachment.mimeType);
-                          return <Icon className="h-4 w-4 text-muted-foreground" />;
-                        })()}
-                      </div>
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{attachment.originalName}</p>
-                      <p className="text-xs text-muted-foreground">{formatFileSize(attachment.size)}</p>
-                    </div>
-                    <button
-                      onClick={handleRemoveAttachment}
-                      className="p-1 hover:bg-muted rounded"
-                      title="Remove attachment"
-                    >
-                      <X className="h-4 w-4 text-muted-foreground" />
-                    </button>
-                  </>
+          {/* Quote-reply chip — mirrors the attachment-preview language so users
+              recognise it as a dismissable composer affordance. Parent owns the
+              state; we only render the chip when quotedPreview is set. */}
+          {quotedPreview && (
+            <div className="px-3 pt-3" data-testid="channel-input-quote-chip">
+              <div className="flex items-center gap-2 p-2 bg-muted/50 rounded-lg border-l-2 border-primary/40">
+                <CornerUpLeft className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium truncate">
+                    Replying to {quotedPreview.authorName}
+                  </p>
+                  <p className="text-xs text-muted-foreground truncate">
+                    {quotedPreview.snippet}
+                  </p>
+                </div>
+                {onClearQuote ? (
+                  <button
+                    onClick={onClearQuote}
+                    className="p-1 hover:bg-muted rounded"
+                    title="Cancel quote reply"
+                    aria-label="Cancel quote reply"
+                    type="button"
+                  >
+                    <X className="h-4 w-4 text-muted-foreground" />
+                  </button>
                 ) : null}
               </div>
+            </div>
+          )}
+
+          {/* Attachment previews */}
+          {(attachments.length > 0 || isUploading) && (
+            <div className="px-3 pt-3 flex flex-col gap-1">
+              {isUploading && (
+                <div className="flex items-center gap-2 p-2 bg-muted/50 rounded-lg">
+                  <div className="w-8 h-8 rounded bg-muted animate-pulse" />
+                  <div className="flex-1 min-w-0">
+                    <div className="h-4 w-24 bg-muted animate-pulse rounded" />
+                    <div className="h-3 w-16 bg-muted animate-pulse rounded mt-1" />
+                  </div>
+                </div>
+              )}
+              {attachments.map(att => (
+                <div key={att.instanceId} className="flex items-center gap-2 p-2 bg-muted/50 rounded-lg">
+                  {att.mimeType.startsWith('image/') ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- 32px thumbnail preview; auth-gated API route
+                    <img
+                      src={`/api/files/${att.id}/view`}
+                      alt={att.originalName}
+                      className="w-8 h-8 rounded object-cover"
+                    />
+                  ) : (
+                    <div className="w-8 h-8 rounded bg-muted flex items-center justify-center">
+                      {(() => {
+                        const Icon = getFileIcon(att.mimeType);
+                        return <Icon className="h-4 w-4 text-muted-foreground" />;
+                      })()}
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">{att.originalName}</p>
+                    <p className="text-xs text-muted-foreground">{formatFileSize(att.size)}</p>
+                  </div>
+                  <button
+                    onClick={() => removeAttachment(att.instanceId)}
+                    className="p-1 hover:bg-muted rounded"
+                    title="Remove attachment"
+                  >
+                    <X className="h-4 w-4 text-muted-foreground" />
+                  </button>
+                </div>
+              ))}
             </div>
           )}
 
@@ -308,12 +379,14 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
               value={value}
               onChange={onChange}
               onSend={handleSend}
+              canSendEmpty={attachments.length > 0}
               placeholder={placeholder}
               driveId={driveId}
               crossDrive={crossDrive}
               disabled={disabled}
               variant="main"
               popupPlacement="top"
+              onPasteFiles={canUpload ? handlePasteFiles : undefined}
             />
 
             {/* Send button with press animation */}
@@ -333,11 +406,19 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
           {/* Footer with formatting actions */}
           <ChannelInputFooter
             onFormatClick={handleFormatClick}
-            onMentionClick={handleMentionClick}
+            onMentionSelect={driveId ? handleMentionSelect : undefined}
+            driveId={driveId}
+            crossDrive={crossDrive}
             onEmojiSelect={handleEmojiSelect}
             onAttachmentClick={handleAttachmentClick}
-            attachmentsEnabled={attachmentsEnabled && !!channelId}
+            attachmentsEnabled={attachmentsEnabled && hasUploadTarget}
             disabled={disabled || isUploading}
+            alsoSendToParentEnabled={Boolean(parentId) && showAlsoSendToParent}
+            alsoSendToParentLabel={
+              conversationId && !channelId ? 'Also send to DM' : 'Also send to channel'
+            }
+            alsoSendToParent={alsoSendToParent}
+            onAlsoSendToParentChange={setAlsoSendToParent}
           />
         </InputCard>
       </div>
@@ -346,5 +427,3 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
 );
 
 ChannelInput.displayName = 'ChannelInput';
-
-export default ChannelInput;

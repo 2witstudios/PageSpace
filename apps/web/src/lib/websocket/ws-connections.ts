@@ -1,5 +1,6 @@
 import type { WebSocket } from 'ws';
-import { logger, sessionService } from '@pagespace/lib';
+import { logger } from '@pagespace/lib/logging/logger-config'
+import { sessionService } from '@pagespace/lib/auth/session-service';
 
 /**
  * WebSocket Connection Manager
@@ -117,13 +118,6 @@ export function unregisterConnection(userId: string, ws: WebSocket): void {
  */
 export function getConnection(userId: string): WebSocket | undefined {
   return connections.get(userId);
-}
-
-/**
- * Get all active connections
- */
-export function getAllConnections(): Map<string, WebSocket> {
-  return connections;
 }
 
 /**
@@ -520,30 +514,6 @@ export function checkConnectionHealth(ws: WebSocket): ConnectionHealthCheck {
     lastPing: metadata.lastPing,
     connectedDuration,
   };
-}
-
-/**
- * Checks if connection is healthy and can execute tools
- * Throws an error with descriptive message if unhealthy
- *
- * @param ws - WebSocket connection to check
- * @throws Error if connection is unhealthy
- */
-export function assertConnectionHealthy(ws: WebSocket): void {
-  const health = checkConnectionHealth(ws);
-
-  if (!health.isHealthy) {
-    throw new Error(`Connection health check failed: ${health.reason}`);
-  }
-}
-
-/**
- * Get user ID for a WebSocket connection
- * Returns undefined if connection not registered
- */
-export function getUserIdForConnection(ws: WebSocket): string | undefined {
-  const metadata = connectionMetadata.get(ws);
-  return metadata?.userId;
 }
 
 /**

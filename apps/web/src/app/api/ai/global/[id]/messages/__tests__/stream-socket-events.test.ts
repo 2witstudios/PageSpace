@@ -1,0 +1,1261 @@
+/**
+ * Verifies that the global chat POST handler delegates streaming lifecycle
+ * (registry, DB persistence, socket broadcasts) to createStreamLifecycle and
+ * routes chunk/finish/abort events through the returned handle.
+ *
+ * Lifecycle internals are tested in stream-lifecycle.test.ts.
+ */
+
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+const {
+  mockCreateStreamLifecycle,
+  mockLifecycleFinish,
+  mockBroadcastChatUserMessage,
+  mockBroadcastGlobalConversationAdded,
+  mockSaveGlobalAssistantMessageToDatabase,
+  mockRespondWithHelpAnswer,
+  mockCanConsumeAI,
+} = vi.hoisted(() => ({
+  mockCreateStreamLifecycle: vi.fn(),
+  mockLifecycleFinish: vi.fn(),
+  mockBroadcastChatUserMessage: vi.fn().mockResolvedValue(undefined),
+  mockBroadcastGlobalConversationAdded: vi.fn().mockResolvedValue(undefined),
+  mockSaveGlobalAssistantMessageToDatabase: vi.fn().mockResolvedValue(undefined),
+  mockRespondWithHelpAnswer: vi.fn().mockResolvedValue(new Response('', { status: 200 })),
+  mockCanConsumeAI: vi.fn().mockResolvedValue({ allowed: true, reason: 'unlimited' }),
+}));
+
+interface MockUIStreamOptions {
+  execute?: (ctx: Record<string, unknown>) => Promise<void> | void;
+  onFinish?: (result: { responseMessage: unknown }) => Promise<void> | void;
+  originalMessages?: unknown[];
+  generateId?: () => string;
+}
+interface MockStreamTextOptions {
+  onChunk?: (ctx: { chunk: Record<string, unknown> }) => void;
+  onAbort?: () => void;
+}
+const captured = vi.hoisted(() => ({
+  createUIMessageStreamOptions: {} as MockUIStreamOptions,
+  streamTextOptions: {} as MockStreamTextOptions,
+}));
+
+const { mockTakeOverConversationStreams } = vi.hoisted(() => ({
+  mockTakeOverConversationStreams: vi.fn().mockResolvedValue({ aborted: [], reconciled: [] }),
+}));
+
+// The payer-tier sandbox tool filter (review #2326) hits the real DB through
+// resolveSandboxToolEligibility; a DB-backed lookup is out of scope for this
+// suite, so the payer is always eligible (the filter is a pass-through).
+// The bound-session lookup for payer-derived sandbox eligibility (review
+// #2326) hits the real DB through the agent-sessions runtime; this suite's
+// conversations are unbound, so the eligibility path takes the userId branch.
+vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
+  findSessionForConversation: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock('@/lib/ai/core/sandbox-tool-eligibility', () => ({
+  resolveSandboxToolEligibility: vi.fn().mockResolvedValue(true),
+  resolveSandboxToolEligibilityForConversation: vi.fn().mockResolvedValue(true),
+}));
+
+vi.mock('@/lib/ai/core/stream-lifecycle', () => ({
+  createStreamLifecycle: mockCreateStreamLifecycle,
+}));
+
+vi.mock('@/lib/websocket', () => ({
+  broadcastCreditsEvent: vi.fn().mockResolvedValue(undefined),
+  broadcastChatUserMessage: mockBroadcastChatUserMessage,
+}));
+
+vi.mock('@/lib/websocket/socket-utils', () => ({
+  broadcastGlobalConversationAdded: mockBroadcastGlobalConversationAdded,
+}));
+
+vi.mock('@/lib/auth', () => ({
+  authenticateRequestWithOptions: vi.fn(),
+  isAuthError: vi.fn((result: unknown) => typeof result === 'object' && result !== null && 'error' in result),
+  // Session auth = unscoped, which is all this route accepts. Stubbed because
+  // the route passes the scope ceiling into the Home-drive hint.
+  getAllowedDriveIds: vi.fn(() => []),
+  authSessionIdOf: vi.fn<typeof import('@/lib/auth').authSessionIdOf>((result) => (result.tokenType === 'session' ? result.sessionId : undefined)),
+  // The turn's tool selection reads this; a session principal is never
+  // drive-scoped, so the account-level tools stay advertised.
+  isDriveScopedPrincipal: vi.fn(() => false),
+}));
+
+vi.mock('@/lib/ai/core/stream-takeover', () => ({
+  takeOverConversationStreams: mockTakeOverConversationStreams,
+}));
+
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
+    ai: {
+      info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn(),
+      child: vi.fn(() => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn() })),
+    },
+    api: {
+      info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn(),
+      child: vi.fn(() => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn() })),
+    },
+  },
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+  logPerformance: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
+
+const mockConversation = {
+  id: 'conv-1',
+  userId: 'user-1',
+  title: 'Test Conversation',
+  type: 'global',
+  contextId: null,
+  isActive: true,
+};
+
+const mockUserProfile = { displayName: 'Display User' };
+const mockAuthUser = { name: 'Auth User' };
+
+// Read dynamically (not closure-captured) by the `for('update').limit()` mock
+// below, so a test can simulate a concurrent History-delete committing
+// between resolveOrCreateConversation's earlier resolve and the route's
+// late, lock-guarded re-check — flip false, call POST, reset in beforeEach.
+const mockConversationActiveAtLockTime = vi.hoisted(() => ({ current: true }));
+
+vi.mock('@pagespace/db/db', () => {
+  // Reused inside `transaction()`'s callback too — `tx` needs the identical
+  // shape as `db` since `saveGlobalAssistantMessageToDatabase`'s `dbClient`
+  // override (and the route's own locked SELECT) run against whichever one
+  // the caller passed in.
+  const makeDbLike = () => {
+    const select = vi.fn(() => ({
+      from: vi.fn((table: unknown) => {
+        const tableLabel = table as { __label?: string } | undefined;
+        const isUsers = tableLabel?.__label === 'users';
+        const isConversations = tableLabel?.__label === 'conversations';
+        return {
+          where: vi.fn(() => ({
+            then: <T>(
+              resolve?: ((value: unknown[]) => T | PromiseLike<T>) | null,
+              reject?: ((reason: unknown) => T | PromiseLike<T>) | null,
+            ) => Promise.resolve([mockConversation]).then(resolve, reject),
+            orderBy: vi.fn().mockResolvedValue([]),
+            limit: vi.fn().mockResolvedValue(isUsers ? [mockAuthUser] : [mockUserProfile]),
+            // The route's atomic active-conversation re-check
+            // (`.where(...).for('update').limit(1)`, run inside a
+            // transaction right before the first message's persist) —
+            // active by default so the happy-path tests below don't each
+            // need their own override.
+            for: vi.fn(() => ({
+              limit: vi.fn(() =>
+                Promise.resolve(
+                  isConversations ? [{ isActive: mockConversationActiveAtLockTime.current }] : [mockConversation],
+                ),
+              ),
+            })),
+          })),
+        };
+      }),
+    }));
+
+    const insert = vi.fn(() => ({
+      values: vi.fn(() => ({
+        onConflictDoUpdate: vi.fn(() => ({
+          returning: vi.fn().mockResolvedValue([{ id: 'msg-1' }]),
+        })),
+      })),
+    }));
+
+    const update = vi.fn(() => ({
+      set: vi.fn(() => ({
+        where: vi.fn().mockResolvedValue(undefined),
+      })),
+    }));
+
+    return { select, insert, update };
+  };
+
+  const dbLike = makeDbLike();
+  // A transaction runs its callback against a FRESH db-like object (its own
+  // mock-call history), same as a real transaction's `tx` is a distinct
+  // client from `db` — tests asserting call counts on the outer `db` mock
+  // (e.g. `db.update`) stay accurate; assertions that need calls made
+  // *inside* a transaction read from this.
+  const transaction = vi.fn(async (callback: (tx: ReturnType<typeof makeDbLike>) => Promise<unknown>) => {
+    return callback(makeDbLike());
+  });
+
+  // startGenerationExclusive's advisory lock: always free, so takeover+lifecycle-create run
+  // exactly as before. Its own retry/degrade behavior is covered by
+  // start-generation-exclusive.test.ts — this file only verifies this route wires it in.
+  const getAdvisoryLockPool = vi.fn(() => ({
+    connect: vi.fn(async () => ({
+      query: vi.fn().mockResolvedValue({ rows: [{ acquired: true }] }),
+      release: vi.fn(),
+    })),
+  }));
+
+  return {
+    db: { ...dbLike, transaction },
+    getAdvisoryLockPool,
+  };
+});
+
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  ne: vi.fn(),
+  and: vi.fn(),
+  desc: vi.fn(),
+  gt: vi.fn(),
+  lt: vi.fn(),
+  exists: vi.fn((sub) => ({ type: 'exists', sub })),
+}));
+
+// The global route's auto-title now routes through the repository (rev bump
+// + emit); stubbed so these route tests don't wire its update chain.
+vi.mock('@/lib/repositories/global-conversation-repository', () => ({
+  globalConversationRepository: {
+    autoTitleConversation: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
+// The repository choke point (SSoT Phase 2), shimmed to preserve this file's
+// assertion surface: beforeSave runs against the mocked db's transaction
+// (exactly like the real repository), the raw write forwards to
+// mockSaveGlobalAssistantMessageToDatabase — the same spy the route used to
+// call directly — and the in-transaction lastMessageAt/rev bump surfaces as
+// a `db.update(conversations)` call for the bump assertions.
+vi.mock('@/lib/repositories/message-repository', async () => {
+  const { db } = await import('@pagespace/db/db');
+  const { conversations } = await import('@pagespace/db/schema/conversations');
+  type Tx = {
+    select: (...a: unknown[]) => {
+      from: (...a: unknown[]) => {
+        where: (...a: unknown[]) => { for: (...a: unknown[]) => { limit: (n: number) => Promise<Array<{ isActive: boolean }>> } };
+      };
+    };
+    insert: (...a: unknown[]) => { values: (...a: unknown[]) => unknown };
+  };
+  type SaveArgs = Record<string, unknown> & { beforeSave?: (tx: Tx) => Promise<unknown> };
+  const dbAny = db as unknown as {
+    transaction: (fn: (tx: Tx) => Promise<boolean>) => Promise<boolean>;
+    update: (t: unknown) => { set: (v: unknown) => { where: (w: unknown) => Promise<unknown> } };
+  };
+  return {
+    messageRepository: {
+      saveGlobalMessage: vi.fn(async (args: SaveArgs) => {
+        const saved = await dbAny.transaction(async (tx) => {
+          if (args.beforeSave) {
+            const r = await args.beforeSave(tx);
+            if (r === false) return false;
+            if (r && typeof r === 'object' && (r as { proceed?: boolean }).proceed === false) return false;
+          }
+          const { beforeSave: _b, triggeredBy: _t, ...rest } = args;
+          await mockSaveGlobalAssistantMessageToDatabase({ ...rest, dbClient: tx });
+          return true;
+        });
+        // The real repository bumps rev + lastMessageAt in the same
+        // transaction; surfaced here on the outer db.update spy.
+        if (saved) await dbAny.update(conversations).set({}).where({});
+        return { saved, rev: 1 };
+      }),
+      insertGlobalStreamingPlaceholder: vi.fn(async (args: { messageId: string; conversationId: string; userId: string }) => {
+        const inserted = await dbAny.transaction(async (tx) => {
+          const [row] = await tx.select({}).from(conversations).where({}).for('update').limit(1);
+          if (!row?.isActive) return false;
+          await tx.insert({}).values({ id: args.messageId, status: 'streaming' });
+          return true;
+        });
+        return { inserted };
+      }),
+      // The POST history load goes through the repository since the reader
+      // cutover (epic "Agent-Session Single Source of Truth", Phase 4 / D6,
+      // PR 12) — `messages` was always the global leg, so no rows moved; what
+      // changed is that the query is no longer spelled out in the route.
+      getMessagesByConversationId: vi.fn().mockResolvedValue([]),
+    },
+  };
+});
+
+// resolveOrCreateConversation is tested in its own file; here we stub it so
+// the route tests don't have to wire up the conversations db mock for it.
+vi.mock('@/lib/repositories/resolve-or-create-conversation', () => ({
+  resolveOrCreateConversation: vi.fn().mockResolvedValue({
+    conversation: { id: 'conv-1', userId: 'user-1', title: 'Test Conversation', type: 'global', contextId: null, isActive: true, createdAt: new Date('2024-01-01') },
+    isNew: false,
+  }),
+  ConversationOwnershipError: class ConversationOwnershipError extends Error {},
+  ConversationHistoryDeletedError: class ConversationHistoryDeletedError extends Error {},
+}));
+
+vi.mock('@pagespace/db/schema/core', () => ({
+  drives: { id: 'id', drivePrompt: 'drivePrompt' },
+}));
+
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { __label: 'users', id: 'id', name: 'name' },
+}));
+
+vi.mock('@pagespace/db/schema/conversations', () => ({
+  conversations: { __label: 'conversations', id: 'id', userId: 'userId', isActive: 'isActive', lastMessageAt: 'lastMessageAt', updatedAt: 'updatedAt', title: 'title' },
+  messages: { conversationId: 'conversationId', isActive: 'isActive', createdAt: 'createdAt', id: 'id' },
+}));
+
+vi.mock('@pagespace/db/schema/members', () => ({
+  userProfiles: { __label: 'userProfiles', userId: 'userId', displayName: 'displayName' },
+}));
+
+vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
+  createAdminRestrictedResponse: vi.fn(),
+  requiresProSubscription: vi.fn().mockReturnValue(false),
+  createSubscriptionRequiredResponse: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/billing/credit-gate', () => ({
+  canConsumeAI: mockCanConsumeAI,
+}));
+
+vi.mock('@/lib/ai/core/help-responder', () => ({
+  respondWithHelpAnswer: mockRespondWithHelpAnswer,
+}));
+
+vi.mock('@/lib/ai/core/provider-factory', () => ({
+  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.4-nano' }),
+  updateUserProviderSettings: vi.fn(),
+  createProviderErrorResponse: vi.fn(),
+  isProviderError: vi.fn().mockReturnValue(false),
+}));
+vi.mock('@/lib/ai/core/ai-tools', () => ({
+  pageSpaceTools: {},
+  corePageSpaceTools: {},
+}));
+vi.mock('@/lib/ai/core/system-prompt', () => ({
+  TOOL_DISCOVERY_PROMPT: 'TOOLS: mock',
+  buildSystemPrompt: vi.fn().mockReturnValue(''),
+  buildNonCoreToolNamesPrompt: vi.fn().mockReturnValue(''),
+}));
+vi.mock('@/lib/ai/core/message-utils', () => ({
+  extractMessageContent: vi.fn().mockReturnValue('test content'),
+  extractToolCalls: vi.fn().mockReturnValue([]),
+  extractToolResults: vi.fn().mockReturnValue([]),
+  sanitizeMessagesForModel: vi.fn().mockReturnValue([]),
+  convertGlobalAssistantMessageToUIMessage: vi.fn(),
+  saveGlobalAssistantMessageToDatabase: mockSaveGlobalAssistantMessageToDatabase,
+}));
+vi.mock('@/lib/ai/core/mention-processor', () => ({
+  processMentionsInMessage: vi.fn().mockReturnValue({ mentions: [], pageIds: [] }),
+  buildMentionSystemPrompt: vi.fn().mockReturnValue(''),
+}));
+vi.mock('@/lib/ai/core/timestamp-utils', () => ({
+  buildTimestampSystemPrompt: vi.fn().mockReturnValue(''),
+}));
+vi.mock('@/lib/ai/core/agent-awareness', () => ({
+  buildAgentAwarenessPrompt: vi.fn().mockResolvedValue(''),
+}));
+vi.mock('@/lib/ai/core/tool-filtering', () => ({
+  filterToolsForSandboxEnablement: vi.fn((tools: unknown) => tools),
+  filterToolsForSandboxTier: vi.fn((tools: unknown) => tools),
+  filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
+  filterToolsForAgentAccounts: vi.fn((tools: unknown) => tools),
+  filterToolsForMcpScope: vi.fn((tools: unknown) => tools),
+  filterToolsForReadOnly: vi.fn().mockReturnValue({}),
+  filterToolsForWebSearch: vi.fn().mockReturnValue({}),
+  filterToolsForImageGen: vi.fn((t) => t),
+}));
+vi.mock('@/lib/ai/core/page-tree-context', () => ({
+  getPageTreeContext: vi.fn().mockResolvedValue(''),
+  getDriveListSummary: vi.fn().mockResolvedValue(''),
+}));
+vi.mock('@/lib/ai/core/mcp-tool-converter', () => ({
+  convertMCPToolsToAISDKSchemas: vi.fn(),
+  parseMCPToolName: vi.fn(),
+  sanitizeToolNamesForProvider: vi.fn((t: unknown) => t),
+}));
+vi.mock('@/lib/ai/core/personalization-utils', () => ({
+  getUserPersonalization: vi.fn().mockResolvedValue(null),
+  getUserTimezone: vi.fn().mockResolvedValue('UTC'),
+}));
+
+vi.mock('@/lib/ai/core/stub-tools', () => ({
+  CORE_TOOL_NAMES: new Set(['list_drives', 'list_pages', 'read_page', 'get_page_details', 'create_page', 'replace_lines', 'regex_search', 'multi_drive_search']),
+}));
+
+vi.mock('@/lib/ai/tools/execute-tool', () => ({
+  createExecuteTool: vi.fn().mockReturnValue({}),
+}));
+
+vi.mock('ai', () => ({
+  streamText: vi.fn().mockImplementation((options: MockStreamTextOptions) => {
+    captured.streamTextOptions = options;
+    return {
+      toUIMessageStream: () => (async function* () {})(),
+      totalUsage: Promise.resolve({ inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
+      steps: Promise.resolve([]),
+      finishReason: Promise.resolve('stop'),
+      response: Promise.resolve({ messages: [] }),
+    };
+  }),
+  convertToModelMessages: vi.fn().mockReturnValue([]),
+  stepCountIs: vi.fn(),
+  hasToolCall: vi.fn(() => () => false),
+  tool: vi.fn((config: unknown) => config),
+  createUIMessageStream: vi.fn().mockImplementation((options: MockUIStreamOptions) => {
+    captured.createUIMessageStreamOptions = options;
+    return {};
+  }),
+  createUIMessageStreamResponse: vi.fn().mockReturnValue(new Response('', { status: 200 })),
+}));
+
+vi.mock('@paralleldrive/cuid2', () => ({
+  createId: vi.fn().mockReturnValue('test-message-id'),
+}));
+
+vi.mock('@/lib/logging/mask', () => ({
+  maskIdentifier: vi.fn((id: string) => `***${id.slice(-3)}`),
+}));
+
+vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
+  AIMonitoring: { trackUsage: vi.fn(), trackToolUsage: vi.fn() },
+  extractOpenRouterCostDollars: vi.fn(() => undefined),
+  extractOpenRouterGenerationIds: vi.fn(() => []),
+  // $2 / $10 per million input / output tokens, and 4 chars per token.
+  calculateCost: vi.fn((_model: string, input = 0, output = 0) => (input * 2 + output * 10) / 1e6),
+  estimateTokens: vi.fn((text: string) => Math.ceil(text.length / 4)),
+}));
+
+// Deterministic hold: 3 cents reserved per chat call.
+vi.mock('@pagespace/lib/monitoring/chat-pricing', () => ({
+  estimateChatHoldCentsForModel: vi.fn(() => 3),
+  calcStepCostDollars: vi.fn(() => 0),
+  shouldAbortAfterStep: vi.fn(() => false),
+}));
+
+vi.mock('@pagespace/lib/monitoring/ai-context-calculator', () => ({
+  calculateTotalContextSize: vi.fn().mockReturnValue({
+    totalTokens: 0,
+    messageCount: 0,
+    systemPromptTokens: 0,
+    toolDefinitionTokens: 0,
+    conversationTokens: 0,
+    wasTruncated: false,
+    truncationStrategy: undefined,
+    messageIds: [],
+  }),
+}));
+
+vi.mock('@pagespace/lib/services/drive-service', () => ({
+  getDriveAccess: vi.fn().mockResolvedValue({ isMember: false, role: null }),
+}));
+
+vi.mock('@/lib/utils/query-params', () => ({
+  parseBoundedIntParam: vi.fn().mockReturnValue(50),
+}));
+
+vi.mock('@/lib/mcp', () => ({ getMCPBridge: vi.fn() }));
+
+vi.mock('@/lib/ai/core/stream-abort-registry', () => ({
+  attachStreamFinisher: vi.fn(),
+  createStreamAbortController: vi.fn().mockReturnValue({ streamId: 'stream_123', signal: new AbortController().signal }),
+  removeStream: vi.fn(),
+  STREAM_ID_HEADER: 'x-stream-id',
+}));
+
+vi.mock('@/lib/ai/core/stream-pipe-utils', () => ({
+  pipeUIMessageStreamStrippingStart: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('@/lib/ai/core/validate-image-parts', () => ({
+  validateUserMessageFileParts: vi.fn().mockReturnValue({ valid: true }),
+  hasFileParts: vi.fn().mockReturnValue(false),
+}));
+
+vi.mock('@/lib/ai/core/model-capabilities', () => ({
+  getModelCapabilities: vi.fn().mockResolvedValue({}),
+  hasVisionCapability: vi.fn().mockReturnValue(true),
+  DEFAULT_IMAGE_MODEL: 'google/gemini-3.1-flash-image',
+}));
+
+vi.mock('@/lib/ai/core/ai-providers-config', () => ({
+  isModelAllowedForTier: vi.fn().mockReturnValue(true),
+  ADMIN_ONLY_PROVIDERS: new Set<string>([]),
+  resolveProviderModel: vi.fn((sp: string, sm: string) => ({
+    provider: sp && sm ? sp : 'openai',
+    model: sm || 'openai/gpt-5.4-nano',
+  })),
+}));
+
+vi.mock('@/lib/ai/core/tool-utils', () => ({
+  mergeToolSets: vi.fn((a: Record<string, unknown>, b: Record<string, unknown>) => ({ ...a, ...b })),
+}));
+
+vi.mock('@/lib/ai/tools/finish-tool', () => ({
+  finishTool: {},
+  FINISH_TOOL_NAME: 'finish',
+}));
+
+vi.mock('@/lib/ai/tools/tool-search-tool', () => ({
+  createToolSearchTool: vi.fn().mockReturnValue({}),
+}));
+vi.mock('@/lib/ai/core/compaction/prepare-context', () => ({
+  prepareConversationContext: vi.fn().mockImplementation(
+    ({ messages }: { messages: unknown[] }) =>
+      Promise.resolve({ messages, scheduleCompaction: () => {}, pendingCompaction: null }),
+  ),
+}));
+
+import { POST } from '../route';
+import { authenticateRequestWithOptions } from '@/lib/auth';
+import type { SessionAuthResult } from '@/lib/auth';
+import { MAX_BROWSER_SESSION_ID_LENGTH } from '@/lib/ai/core/browser-session-id-validation';
+import { createStreamAbortController } from '@/lib/ai/core/stream-abort-registry';
+import { db } from '@pagespace/db/db';
+import { conversations } from '@pagespace/db/schema/conversations';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { extractMessageContent } from '@/lib/ai/core/message-utils';
+import { streamText, type UIMessageChunk } from 'ai';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { pipeUIMessageStreamStrippingStart } from '@/lib/ai/core/stream-pipe-utils';
+import { calculateTotalContextSize } from '@pagespace/lib/monitoring/ai-context-calculator';
+
+/** A signal that reports aborted=true — simulates onAbort having already fired. */
+const abortedSignal = (): AbortSignal => {
+  const ac = new AbortController();
+  ac.abort();
+  return ac.signal;
+};
+
+const mockAuth = (): SessionAuthResult => ({
+  userId: 'user-1',
+  tokenVersion: 0,
+  tokenType: 'session',
+  sessionId: 'sess-1',
+  role: 'user',
+  adminRoleVersion: 0,
+});
+
+/**
+ * A stand-in for the lifecycle's frame channel.
+ *
+ * The turn strategies hand the SDK stream to the pump and serve the response by SUBSCRIBING
+ * to this — so a mocked lifecycle has to carry one or the route cannot build a response at
+ * all. Only the surface `pumpAndRespond` touches is modelled; the channel's real behaviour is
+ * covered in stream-channel.test.ts, and the reduction in foldChunksToParts.test.ts.
+ */
+const makeFakeChannel = () => {
+  const frames: unknown[] = [];
+  return {
+    messageId: 'msg-1',
+    get nextSeq() { return frames.length; },
+    firstAvailableSeq: 0,
+    finished: false,
+    aborted: false,
+    subscriberCount: 0,
+    append: (chunk: unknown) => { frames.push(chunk); },
+    finish: () => {},
+    getFrames: () => frames.slice(),
+    subscribe: () => () => {},
+    subscribeReadable: () => new ReadableStream({ start(c) { c.close(); } }),
+  } as never;
+};
+
+
+const makeRequest = (overrides: { browserSessionId?: string | null } = {}) => {
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+    'content-length': '200',
+  };
+  if (overrides.browserSessionId !== null) {
+    headers['X-Browser-Session-Id'] = overrides.browserSessionId ?? 'session-1';
+  }
+  return new Request('https://example.com/api/ai/global/conv-1/messages', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      messages: [{ id: 'msg_1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] }],
+      selectedProvider: 'openai',
+      selectedModel: 'openai/gpt-5.4-nano',
+    }),
+  });
+};
+
+const makeContext = () => ({ params: Promise.resolve({ id: 'conv-1' }) });
+
+const mockResponseMessage = {
+  id: 'test-message-id',
+  role: 'assistant' as const,
+  parts: [{ type: 'text', text: 'Hello' }],
+};
+
+describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    captured.createUIMessageStreamOptions = {};
+    captured.streamTextOptions = {};
+    mockConversationActiveAtLockTime.current = true;
+    // clearAllMocks() clears calls, not implementations: the takeover test near the end
+    // installs a persistent rejection that would otherwise leak into any later test.
+    mockTakeOverConversationStreams.mockResolvedValue({ aborted: [], reconciled: [] });
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
+    mockCreateStreamLifecycle.mockResolvedValue({
+      channel: makeFakeChannel(),
+      finish: mockLifecycleFinish,
+      getParts: vi.fn().mockResolvedValue([]),
+    });
+  });
+
+  describe('X-Browser-Session-Id contract', () => {
+    it('given a missing X-Browser-Session-Id header, should return 400 before invoking the lifecycle', async () => {
+      const response = await POST(makeRequest({ browserSessionId: null }), makeContext());
+
+      expect(response.status).toBe(400);
+      expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
+    });
+
+    it('given an X-Browser-Session-Id header longer than the cap, should return 400 before invoking the lifecycle', async () => {
+      const oversized = 'a'.repeat(MAX_BROWSER_SESSION_ID_LENGTH + 1);
+      const response = await POST(makeRequest({ browserSessionId: oversized }), makeContext());
+
+      expect(response.status).toBe(400);
+      expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
+    });
+
+    it('given an X-Browser-Session-Id header at exactly the cap, should accept and invoke the lifecycle', async () => {
+      const maxLength = 'a'.repeat(MAX_BROWSER_SESSION_ID_LENGTH);
+      await POST(makeRequest({ browserSessionId: maxLength }), makeContext());
+
+      expect(mockCreateStreamLifecycle).toHaveBeenCalledWith(
+        expect.objectContaining({ browserSessionId: maxLength }),
+      );
+    });
+  });
+
+  // AC5 applied to this route too. Without it the global assistant happily starts a
+  // SECOND generation on the same conversation — two agents, two assistant rows, two
+  // bills — which is exactly what the guard on POST /api/ai/chat prevents. The gap was
+  // real: this route calls createStreamLifecycle and had no in-flight guard at all.
+  describe('per-conversation takeover guard', () => {
+    it('given a new stream, should take over any in-flight stream on this conversation BEFORE creating the lifecycle', async () => {
+      await POST(makeRequest(), makeContext());
+
+      expect(mockTakeOverConversationStreams).toHaveBeenCalledTimes(1);
+      // Exact values. Both are known constants here, so expect.any(String) would have accepted a
+      // route that SWAPPED them — and a takeover keyed on the wrong conversation aborts the wrong
+      // streams, or none, while a second generation starts beside the first.
+      expect(mockTakeOverConversationStreams).toHaveBeenCalledWith(
+        expect.objectContaining({
+          conversationId: 'conv-1',
+          channelId: 'user:user-1:global',
+        }),
+      );
+      expect(mockTakeOverConversationStreams.mock.invocationCallOrder[0])
+        .toBeLessThan(mockCreateStreamLifecycle.mock.invocationCallOrder[0]);
+    });
+  });
+
+  // resolveOrCreateConversation resolved this conversation as active (the
+  // mocked `resolve-or-create-conversation` module always returns
+  // isActive: true), but the credit-gate check, @mention processing, and
+  // command resolution that follow all do their own unrelated I/O — plenty
+  // of room for a concurrent History-delete to commit before
+  // saveGlobalAssistantMessageToDatabase runs. The atomic, lock-guarded
+  // re-check immediately adjacent to that write is what must catch this,
+  // not the earlier resolve (review finding — chatgpt-codex-connector and
+  // coderabbitai on PR #2299).
+  describe('atomic re-check before the first message write', () => {
+    it('given a concurrent History-delete committed after resolution but before the write, should 404 and never invoke the lifecycle', async () => {
+      mockConversationActiveAtLockTime.current = false;
+
+      const response = await POST(makeRequest(), makeContext());
+
+      expect(response.status).toBe(404);
+      expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
+    });
+  });
+
+  // The user-message write's atomic re-check above only covers that ONE write. The
+  // 'streaming' placeholder row inserted right after createStreamLifecycle resolves is a
+  // SEPARATE, later write, with its own window for a concurrent History-delete to land in
+  // between (review finding — chatgpt-codex-connector on PR #2299, round 7).
+  describe('assistant placeholder row (stream start) — atomic re-check', () => {
+    it('given the conversation looked active through the message write but a concurrent History-delete commits before the placeholder insert, should skip the insert without failing the request', async () => {
+      mockCreateStreamLifecycle.mockImplementationOnce(async () => {
+        // The user-message write above already ran (and saw isActive: true) by this
+        // point — flipping here simulates the delete committing in the window between
+        // that write and this stream-start placeholder insert.
+        mockConversationActiveAtLockTime.current = false;
+        return {
+          channel: makeFakeChannel(),
+          finish: mockLifecycleFinish,
+          getParts: vi.fn().mockResolvedValue([]),
+        };
+      });
+
+      const response = await POST(makeRequest(), makeContext());
+
+      // Best-effort, same as an insert failure: the generation still proceeds.
+      expect(response.status).not.toBe(404);
+      expect(mockCreateStreamLifecycle).toHaveBeenCalled();
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Global AI messages API: skipped placeholder assistant row, conversation no longer active',
+        expect.objectContaining({ conversationId: 'conv-1' }),
+      );
+    });
+
+    it('given the conversation is still active at placeholder-insert time, should NOT skip (no false-positive warning)', async () => {
+      await POST(makeRequest(), makeContext());
+
+      expect(loggers.api.warn).not.toHaveBeenCalledWith(
+        'Global AI messages API: skipped placeholder assistant row, conversation no longer active',
+        expect.anything(),
+      );
+    });
+  });
+
+  describe('createStreamLifecycle invocation', () => {
+    it('given a new global stream, should construct the lifecycle with channelId user:${userId}:global and the request browserSessionId', async () => {
+      await POST(makeRequest({ browserSessionId: 'session-y' }), makeContext());
+
+      expect(mockCreateStreamLifecycle).toHaveBeenCalledTimes(1);
+      expect(mockCreateStreamLifecycle).toHaveBeenCalledWith({
+        messageId: 'test-message-id',
+        channelId: 'user:user-1:global',
+        conversationId: 'conv-1',
+        userId: 'user-1',
+        displayName: 'Display User',
+        browserSessionId: 'session-y',
+        // Persisted on the row so an abort landing on ANY instance can resolve the streamId it was
+        // handed in X-Stream-Id back to a stream. The registry that mints it is in-process.
+        streamId: 'stream_123',
+        // Rides the stream_start broadcast so page members can tell a stream they may
+        // watch from a co-member's PRIVATE conversation, without firing a doomed join.
+        isShared: false,
+      });
+    });
+
+    it('given userProfiles displayName is null, should fall back to users.name from the auth-user lookup', async () => {
+      const dbModule = await import('@pagespace/db/db');
+      const fromImpl = vi.fn((table: unknown) => {
+        const tableLabel = table as { __label?: string } | undefined;
+        const isUsers = tableLabel?.__label === 'users';
+        return {
+          where: vi.fn(() => ({
+            then: <T>(resolve?: ((value: unknown[]) => T | PromiseLike<T>) | null) =>
+              Promise.resolve([mockConversation]).then(resolve),
+            orderBy: vi.fn().mockResolvedValue([]),
+            limit: vi.fn().mockResolvedValue(isUsers ? [{ name: 'Auth User' }] : [{ displayName: null }]),
+          })),
+        };
+      });
+      vi.mocked(dbModule.db.select).mockImplementationOnce(() => ({
+        from: fromImpl,
+      }) as unknown as ReturnType<typeof dbModule.db.select>);
+      // Then for the other selects in the route, use default mock
+      vi.mocked(dbModule.db.select).mockImplementation(() => ({
+        from: vi.fn((table: unknown) => {
+          const tableLabel = table as { __label?: string } | undefined;
+          const isUsers = tableLabel?.__label === 'users';
+          return {
+            where: vi.fn(() => ({
+              then: <T>(resolve?: ((value: unknown[]) => T | PromiseLike<T>) | null) =>
+                Promise.resolve([mockConversation]).then(resolve),
+              orderBy: vi.fn().mockResolvedValue([]),
+              limit: vi.fn().mockResolvedValue(
+                isUsers ? [{ name: 'Auth User' }] : [{ displayName: null }],
+              ),
+            })),
+          };
+        }),
+      }) as unknown as ReturnType<typeof dbModule.db.select>);
+
+      await POST(makeRequest(), makeContext());
+
+      expect(mockCreateStreamLifecycle).toHaveBeenCalledWith(
+        expect.objectContaining({ displayName: 'Auth User' }),
+      );
+    });
+  });
+
+  describe('user-message broadcast', () => {
+    it('given a POST with a user message, should broadcast chat:user_message routed to the per-user global channel', async () => {
+      await POST(makeRequest({ browserSessionId: 'session-y' }), makeContext());
+
+      expect(mockBroadcastChatUserMessage).toHaveBeenCalledTimes(1);
+      // displayName resolution is covered by its own test; here we lock the
+      // routing fields and the saved-message passthrough.
+      expect(mockBroadcastChatUserMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: { id: 'msg_1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] },
+          pageId: 'user:user-1:global',
+          conversationId: 'conv-1',
+          triggeredBy: expect.objectContaining({
+            userId: 'user-1',
+            browserSessionId: 'session-y',
+          }),
+        }),
+      );
+    });
+
+    it('given the user-message DB save rejects, should NOT broadcast chat:user_message', async () => {
+      mockSaveGlobalAssistantMessageToDatabase.mockRejectedValueOnce(new Error('db down'));
+
+      await POST(makeRequest(), makeContext());
+
+      expect(mockBroadcastChatUserMessage).not.toHaveBeenCalled();
+    });
+
+    it('given broadcastChatUserMessage rejects, should not block the request', async () => {
+      mockBroadcastChatUserMessage.mockRejectedValueOnce(new Error('socket dead'));
+
+      await expect(POST(makeRequest(), makeContext())).resolves.toBeDefined();
+    });
+  });
+
+  const newConv = {
+    id: 'conv-1', userId: 'user-1', title: null, type: 'global',
+    contextId: null, isActive: true, isShared: false,
+  agentPageId: null, chosenWalletId: null, rev: 0, planPageId: null,
+    createdAt: new Date('2024-01-01'), updatedAt: new Date('2024-01-01'), lastMessageAt: null,
+  };
+
+  describe('global conversation-added broadcast', () => {
+    it('given isNew=true, should broadcast chat:global_conversation_added to the user channel', async () => {
+      const { resolveOrCreateConversation } = await import('@/lib/repositories/resolve-or-create-conversation');
+      vi.mocked(resolveOrCreateConversation).mockResolvedValueOnce({ conversation: newConv, isNew: true });
+
+      await POST(makeRequest({ browserSessionId: 'session-z' }), makeContext());
+
+      expect(mockBroadcastGlobalConversationAdded).toHaveBeenCalledTimes(1);
+      expect(mockBroadcastGlobalConversationAdded).toHaveBeenCalledWith(
+        'user:user-1:global',
+        expect.objectContaining({
+          conversation: expect.objectContaining({ id: 'conv-1', type: 'global' }),
+          triggeredBy: expect.objectContaining({ userId: 'user-1', browserSessionId: 'session-z' }),
+        }),
+      );
+    });
+
+    it('given isNew=true and no prior title, broadcast carries the auto-generated title', async () => {
+      const { resolveOrCreateConversation } = await import('@/lib/repositories/resolve-or-create-conversation');
+      vi.mocked(resolveOrCreateConversation).mockResolvedValueOnce({ conversation: newConv, isNew: true });
+
+      await POST(makeRequest(), makeContext());
+
+      // extractMessageContent is mocked to return 'test content'; title is sliced from it.
+      expect(mockBroadcastGlobalConversationAdded).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          conversation: expect.objectContaining({ title: 'test content' }),
+        }),
+      );
+    });
+
+    it('given isNew=false, should NOT broadcast chat:global_conversation_added', async () => {
+      // default resolveOrCreateConversation mock returns isNew: false
+      await POST(makeRequest(), makeContext());
+
+      expect(mockBroadcastGlobalConversationAdded).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('solo /help short-circuit', () => {
+    const HELP_CHIP = '/[help](builtin:help:command)';
+
+    it('answers via respondWithHelpAnswer and skips the credit gate entirely', async () => {
+      vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
+
+      const response = await POST(makeRequest(), makeContext());
+
+      expect(response).toBe(await mockRespondWithHelpAnswer.mock.results[0].value);
+      expect(mockCanConsumeAI).not.toHaveBeenCalled();
+      expect(mockRespondWithHelpAnswer).toHaveBeenCalledWith(
+        expect.objectContaining({ sender: expect.objectContaining({ userId: 'user-1' }) })
+      );
+    });
+
+    it('/help combined with other text is NOT a solo request — the credit gate and normal flow still run', async () => {
+      vi.mocked(extractMessageContent).mockReturnValueOnce(`${HELP_CHIP} how do I use spreadsheets`);
+
+      await POST(makeRequest(), makeContext());
+
+      expect(mockRespondWithHelpAnswer).not.toHaveBeenCalled();
+      expect(mockCanConsumeAI).toHaveBeenCalled();
+    });
+
+    it('still takes over any in-flight generation on the conversation before answering', async () => {
+      vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
+
+      await POST(makeRequest(), makeContext());
+
+      expect(mockTakeOverConversationStreams).toHaveBeenCalledWith(
+        expect.objectContaining({ conversationId: 'conv-1', channelId: 'user:user-1:global' })
+      );
+    });
+
+    it('broadcasts the user message unconditionally, same as a real turn', async () => {
+      vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
+
+      await POST(makeRequest({ browserSessionId: 'session-y' }), makeContext());
+
+      expect(mockBroadcastChatUserMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ pageId: 'user:user-1:global', conversationId: 'conv-1' })
+      );
+    });
+
+    it('broadcasts the new-conversation sidebar event when isNew=true (previously an acknowledged gap)', async () => {
+      const { resolveOrCreateConversation } = await import('@/lib/repositories/resolve-or-create-conversation');
+      vi.mocked(resolveOrCreateConversation).mockResolvedValueOnce({ conversation: newConv, isNew: true });
+      vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
+
+      await POST(makeRequest({ browserSessionId: 'session-z' }), makeContext());
+
+      expect(mockBroadcastGlobalConversationAdded).toHaveBeenCalledWith(
+        'user:user-1:global',
+        expect.objectContaining({ conversation: expect.objectContaining({ id: 'conv-1' }) })
+      );
+    });
+
+    it('the injected persist closure writes an assistant message via saveGlobalAssistantMessageToDatabase with the human userId', async () => {
+      vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
+
+      await POST(makeRequest(), makeContext());
+
+      const { persist } = mockRespondWithHelpAnswer.mock.calls[0][0];
+      mockSaveGlobalAssistantMessageToDatabase.mockClear();
+      await persist({ content: 'help text', toolCalls: undefined, toolResults: undefined, uiMessage: {} }, 'help-msg-1');
+
+      expect(mockSaveGlobalAssistantMessageToDatabase).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messageId: 'help-msg-1',
+          conversationId: 'conv-1',
+          userId: 'user-1',
+          role: 'assistant',
+          status: 'complete',
+          content: 'help text',
+        })
+      );
+    });
+
+    it('the injected persist closure skips the write when the conversation went inactive in the gap', async () => {
+      vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
+
+      await POST(makeRequest(), makeContext());
+
+      const { persist } = mockRespondWithHelpAnswer.mock.calls[0][0];
+      mockSaveGlobalAssistantMessageToDatabase.mockClear();
+      mockConversationActiveAtLockTime.current = false;
+      await persist({ content: 'help text', toolCalls: undefined, toolResults: undefined, uiMessage: {} }, 'help-msg-1');
+
+      expect(mockSaveGlobalAssistantMessageToDatabase).not.toHaveBeenCalled();
+    });
+  });
+
+  // DELETED with the chunkToPart projection: the "chunk forwarding" block (text-delta,
+  // tool-call, tool-result, tool-error each asserted to arrive at lifecycle.pushPart as a
+  // rendered part).
+  //
+  // There is no forwarding left to assert. The pump captures the SDK's own UIMessageChunks
+  // verbatim and the reduction to parts happens in one place, so what those four cases really
+  // pinned — that a chunk becomes the right part — is now foldChunksToParts.test.ts's job, and
+  // it is pinned there against the SDK's own reducer rather than against a hand-written table.
+  // Not ported: keeping them would test a mock of a mechanism that no longer exists.
+
+  describe('finish forwarding', () => {
+    it('given onFinish runs, should call lifecycle.finish(false)', async () => {
+      await POST(makeRequest(), makeContext());
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+
+      expect(mockLifecycleFinish).toHaveBeenCalledWith(false);
+    });
+
+    it('given onAbort fires, should call lifecycle.finish(true)', async () => {
+      await POST(makeRequest(), makeContext());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+
+      captured.streamTextOptions.onAbort?.();
+
+      expect(mockLifecycleFinish).toHaveBeenCalledWith(true);
+    });
+
+    // Server Stream Durability epic PR 2 — Codex review: a run the user stopped must persist as
+    // 'interrupted', not 'complete'. And the write must happen even with no responseMessage when
+    // aborted — otherwise a stream stopped before any token arrives leaves its placeholder stuck
+    // at 'streaming' forever (excluded from every reader by default, 409s on edit/delete).
+    it('given the run was aborted, onFinish should persist with status interrupted even with a responseMessage', async () => {
+      vi.mocked(createStreamAbortController).mockReturnValueOnce({ streamId: 'stream_123', signal: abortedSignal(), controller: new AbortController() });
+
+      await POST(makeRequest(), makeContext());
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+
+      const saveCalls = mockSaveGlobalAssistantMessageToDatabase.mock.calls;
+      const assistantSave = saveCalls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
+      expect(assistantSave?.[0]).toMatchObject({ status: 'interrupted' });
+    });
+
+    it('given a normal (non-aborted) run, onFinish should persist with status complete', async () => {
+      await POST(makeRequest(), makeContext());
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+
+      const saveCalls = mockSaveGlobalAssistantMessageToDatabase.mock.calls;
+      const assistantSave = saveCalls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
+      expect(assistantSave?.[0]).toMatchObject({ status: 'complete' });
+    });
+
+    // CodeRabbit review: execute-end (not onFinish) is now the durable, unconditional terminal
+    // write — it runs regardless of client disconnect (onFinish is response-stream-coupled and
+    // may never fire when a mobile client backgrounds mid-stream, per #2065). onFinish's own
+    // no-responseMessage branch does nothing now; execute-end has already terminalized the row
+    // by the time onFinish would have run.
+    it('given the run was aborted with buffered content, execute-end should persist an interrupted placeholder', async () => {
+      vi.mocked(createStreamAbortController).mockReturnValueOnce({ streamId: 'stream_123', signal: abortedSignal(), controller: new AbortController() });
+      mockCreateStreamLifecycle.mockResolvedValueOnce({
+        channel: makeFakeChannel(),
+        finish: mockLifecycleFinish,
+        getParts: vi.fn().mockResolvedValue([{ type: 'text', text: 'partial reply' }]),
+      });
+
+      await POST(makeRequest(), makeContext());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+
+      const saveCalls = mockSaveGlobalAssistantMessageToDatabase.mock.calls;
+      const assistantSave = saveCalls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
+      expect(assistantSave?.[0]).toMatchObject({ status: 'interrupted', messageId: 'test-message-id' });
+    });
+
+    // Line-by-line review finding: the terminal write must bump conversations.lastMessageAt —
+    // otherwise a conversation-list view sorted by lastMessageAt never surfaces a conversation
+    // whose only new activity was an interrupted, no-responseMessage assistant row.
+    it('given the run was aborted with buffered content, execute-end should bump conversations.lastMessageAt', async () => {
+      vi.mocked(createStreamAbortController).mockReturnValueOnce({ streamId: 'stream_123', signal: abortedSignal(), controller: new AbortController() });
+      mockCreateStreamLifecycle.mockResolvedValueOnce({
+        channel: makeFakeChannel(),
+        finish: mockLifecycleFinish,
+        getParts: vi.fn().mockResolvedValue([{ type: 'text', text: 'partial reply' }]),
+      });
+
+      await POST(makeRequest(), makeContext());
+      const updateCallsBeforeExecute = vi.mocked(db.update).mock.calls.length;
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+
+      const newUpdateCalls = vi.mocked(db.update).mock.calls.slice(updateCallsBeforeExecute);
+      expect(newUpdateCalls.some((call) => call[0] === conversations)).toBe(true);
+    });
+
+    // CodeRabbit review: a run that exhausted its retries without ever aborting or producing a
+    // responseMessage (a sustained provider outage, say) used to fall through BOTH onFinish's
+    // `if (responseMessage)` guard and (before this PR) any execute-end equivalent, leaving the
+    // placeholder stuck at 'streaming' forever. execute-end now always terminalizes the row.
+    it('given buffered content and the run was NOT aborted, execute-end should persist as complete (not leave the row stuck at streaming)', async () => {
+      mockCreateStreamLifecycle.mockResolvedValueOnce({
+        channel: makeFakeChannel(),
+        finish: mockLifecycleFinish,
+        getParts: vi.fn().mockResolvedValue([]),
+      });
+
+      await POST(makeRequest(), makeContext());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+
+      const saveCalls = mockSaveGlobalAssistantMessageToDatabase.mock.calls;
+      const assistantSave = saveCalls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
+      expect(assistantSave?.[0]).toMatchObject({ status: 'complete', messageId: 'test-message-id' });
+    });
+
+    it('given an error throws after lifecycle creation, should call lifecycle.finish(true) from the outer catch', async () => {
+      const { createUIMessageStream } = await import('ai');
+      vi.mocked(createUIMessageStream).mockImplementationOnce(() => {
+        throw new Error('post-lifecycle boom');
+      });
+
+      await POST(makeRequest(), makeContext());
+
+      const aborted = mockLifecycleFinish.mock.calls.filter(([flag]) => flag === true);
+      expect(aborted.length).toBeGreaterThan(0);
+    });
+
+    // Server Stream Durability epic PR 2 — Codex review, extended: if createUIMessageStream
+    // itself throws, onFinish never ran — without a last-resort write here, the placeholder
+    // inserted before this point would be stuck at 'streaming' forever.
+    it('given an error throws after lifecycle creation, should terminalize the placeholder as interrupted', async () => {
+      const { createUIMessageStream } = await import('ai');
+      vi.mocked(createUIMessageStream).mockImplementationOnce(() => {
+        throw new Error('post-lifecycle boom');
+      });
+
+      await POST(makeRequest(), makeContext());
+
+      const saveCalls = mockSaveGlobalAssistantMessageToDatabase.mock.calls;
+      const assistantSave = saveCalls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
+      expect(assistantSave?.[0]).toMatchObject({ status: 'interrupted', messageId: 'test-message-id' });
+    });
+
+    // Regression guard: getBufferedParts() MUST be read before lifecycle.finish() is called —
+    // finish() deletes the multicast registry entry backing it, so reading it afterward always
+    // sees an empty buffer. This mock reproduces that real ordering dependency.
+    it('given an error throws after lifecycle creation with real buffered content, should preserve that content', async () => {
+      const bufferedParts = [{ type: 'text', text: 'partial reply before the crash' }];
+      let finished = false;
+      mockLifecycleFinish.mockImplementationOnce(() => { finished = true; });
+      mockCreateStreamLifecycle.mockResolvedValueOnce({
+        channel: makeFakeChannel(),
+        finish: mockLifecycleFinish,
+        getParts: vi.fn(async () => (finished ? [] : bufferedParts)),
+      });
+      const { createUIMessageStream } = await import('ai');
+      vi.mocked(createUIMessageStream).mockImplementationOnce(() => {
+        throw new Error('post-lifecycle boom');
+      });
+
+      await POST(makeRequest(), makeContext());
+
+      const saveCalls = mockSaveGlobalAssistantMessageToDatabase.mock.calls;
+      const assistantSave = saveCalls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
+      expect(assistantSave?.[0]).toMatchObject({ status: 'interrupted' });
+      expect((assistantSave?.[0] as { uiMessage?: { parts?: unknown[] } })?.uiMessage?.parts).toEqual(bufferedParts);
+    });
+
+    // Server Stream Durability epic PR 2 — self-review: the AI SDK always calls onFinish with a
+    // non-null responseMessage (an empty shell), even when execute() returned immediately without
+    // writing anything. For a pre-aborted stream the placeholder INSERT is deliberately skipped —
+    // without this guard, onFinish's upsert would INSERT a phantom empty 'interrupted' row for a
+    // request that never reached the model.
+    it('given the stream was pre-aborted, onFinish should NOT persist a phantom row (no placeholder was ever inserted)', async () => {
+      // preAborted's own handling calls abortController.abort() — needs a real controller,
+      // unlike the file's bare-signal default (see "given the run was aborted" above).
+      vi.mocked(createStreamAbortController).mockReturnValueOnce({ streamId: 'stream_123', signal: abortedSignal(), controller: new AbortController() });
+      mockCreateStreamLifecycle.mockResolvedValueOnce({
+        channel: makeFakeChannel(),
+        finish: mockLifecycleFinish,
+        getParts: vi.fn().mockResolvedValue([]),
+        preAborted: true,
+      });
+
+      await POST(makeRequest(), makeContext());
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: { id: 'test-message-id', role: 'assistant', parts: [] } });
+
+      const assistantSave = mockSaveGlobalAssistantMessageToDatabase.mock.calls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
+      expect(assistantSave).toBeUndefined();
+    });
+
+    // Server Stream Durability epic PR 2 — self-review: the outer-catch cleanup must not fire
+    // when `lifecycle` was never assigned (an exception inside startGenerationExclusive's
+    // callback, before the placeholder INSERT ever ran) — otherwise it fabricates a phantom
+    // 'interrupted' row for a request that never started generating.
+    it('given the pre-generation setup throws before lifecycle is created, should NOT persist a phantom row', async () => {
+      // Persistent (not -Once) so this stays a valid regression test regardless: a `run`
+      // failure now propagates once and is never retried unlocked (see
+      // start-generation-exclusive.ts's guardedRun/runThrew — the double-generation/
+      // double-billing fix), so takeOverConversationStreams below is asserted to run exactly
+      // once. If that guard ever regresses, a persistent rejection means the retried call
+      // would ALSO fail loudly here rather than silently succeeding and masking the bug.
+      mockTakeOverConversationStreams.mockRejectedValue(new Error('takeover boom'));
+
+      await POST(makeRequest(), makeContext());
+
+      expect(mockTakeOverConversationStreams).toHaveBeenCalledTimes(1);
+      expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
+      const assistantSave = mockSaveGlobalAssistantMessageToDatabase.mock.calls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
+      expect(assistantSave).toBeUndefined();
+    });
+  });
+
+  // Mirrors the page route's test: the global settle must bill the step a Stop interrupted.
+  // ai@6 rejects `steps` and `totalUsage` for a single-step turn stopped mid-stream.
+  describe('billing a turn aborted mid-step', () => {
+    it('given a Stop during the only step, settles the hold ONCE and bills the prompt plus the streamed output', async () => {
+      const signalAny = (AbortSignal as { any?: unknown }).any;
+      (AbortSignal as unknown as { any: (signals: AbortSignal[]) => AbortSignal }).any = (signals) =>
+        signals.find((sig) => sig.aborted) ?? signals[0];
+      try {
+        mockCanConsumeAI.mockResolvedValueOnce({
+          allowed: true,
+          holdId: 'hold-1',
+          balanceSnapshot: { netSpendableCents: 1000 },
+        });
+        // The system prompt + tool definitions the interrupted step's prompt carries.
+        vi.mocked(calculateTotalContextSize).mockReturnValueOnce({
+          ...vi.mocked(calculateTotalContextSize)({} as Parameters<typeof calculateTotalContextSize>[0]),
+          systemPromptTokens: 900,
+          toolDefinitionTokens: 100,
+        });
+        vi.mocked(createStreamAbortController).mockReturnValueOnce({ streamId: 'stream_123', signal: abortedSignal(), controller: new AbortController() });
+        vi.mocked(streamText).mockImplementationOnce(((options: MockStreamTextOptions) => {
+          captured.streamTextOptions = options;
+          const aborted = Promise.reject(new DOMException('This operation was aborted', 'AbortError'));
+          aborted.catch(() => {});
+          return {
+            toUIMessageStream: () => (async function* () {})(),
+            totalUsage: aborted,
+            steps: aborted,
+            finishReason: aborted,
+            response: aborted,
+          };
+        }) as unknown as typeof streamText);
+        vi.mocked(pipeUIMessageStreamStrippingStart).mockImplementationOnce(async (_result, _writer, options) => {
+          const chunks: UIMessageChunk[] = [
+            { type: 'start-step' },
+            { type: 'text-start', id: 't' },
+            { type: 'text-delta', id: 't', delta: 'o'.repeat(200) },
+          ];
+          for (const chunk of chunks) options?.onChunk?.(chunk);
+          options?.onContent?.();
+        });
+
+        await POST(makeRequest(), makeContext());
+        await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+        await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+      } finally {
+        (AbortSignal as { any?: unknown }).any = signalAny;
+      }
+
+      const calls = vi.mocked(AIMonitoring.trackUsage).mock.calls;
+      expect(calls).toHaveLength(1);
+      const settled = calls[0][0];
+      expect(settled.holdId).toBe('hold-1');
+      // 900 system-prompt + 100 tool tokens in (this harness has no message history),
+      // 50 streamed out (200 chars): 1000 * $2/M + 50 * $10/M, under the 3-cent hold.
+      expect(settled.inputTokens).toBe(1000);
+      expect(settled.outputTokens).toBe(50);
+      expect(settled.providerCostDollars).toBeCloseTo(0.0025, 9);
+      expect(settled.metadata).toMatchObject({ abortedStep: { inputTokens: 1000, outputTokens: 50, capped: false } });
+    });
+  });
+  describe('turn timing marks', () => {
+    it('persists the preflight marks on the usage row, in the order the steps complete', async () => {
+      await POST(makeRequest(), makeContext());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+
+      const calls = vi.mocked(AIMonitoring.trackUsage).mock.calls;
+      expect(calls).toHaveLength(1);
+      const timing = (calls[0][0].metadata as { timing?: { marks: Record<string, number> } }).timing;
+      expect(timing).toBeDefined();
+      const names = Object.keys(timing!.marks);
+      // Conditional steps (drive prompt, page tree, drive summary, MCP drive access) may be
+      // absent for this fixture (this file does not mock the integration resolver, so
+      // `integrations_ready` is skipped by its caught failure); the rest must appear, each after the step it follows.
+      const inOrder = [
+        'credit_gate',
+        'provider_ready',
+        'history_loaded',
+        'history_converted',
+        // The payer's eligibility first, then the context the shared
+        // assistant-surface builder assembles (IMG-10.10).
+        'sandbox_eligibility',
+        'personalization',
+        'home_drive_resolved',
+        'agent_awareness_built',
+        'commands_loaded',
+        'active_plan_loaded',
+        'system_prompt',
+        'integrations_import',
+        'history_compacted',
+        'model_messages_built',
+        'history_prepared',
+        'display_name_ready',
+        'generation_started',
+      ];
+      expect(names.filter((name) => inOrder.includes(name))).toEqual(inOrder);
+    });
+  });
+});

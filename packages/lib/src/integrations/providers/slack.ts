@@ -28,6 +28,10 @@ export const slackProvider: IntegrationProviderConfig = {
         'channels:history',
         'groups:read',
         'groups:history',
+        'im:read',
+        'im:history',
+        'mpim:read',
+        'mpim:history',
         'chat:write',
         'users:read',
         'users:read.email',
@@ -78,7 +82,7 @@ export const slackProvider: IntegrationProviderConfig = {
           },
           types: {
             type: 'string',
-            description: 'Comma-separated channel types (public_channel, private_channel)',
+            description: 'Comma-separated conversation types (public_channel, private_channel, mpim, im). Defaults to all four so DMs surface alongside channels.',
           },
         },
         required: [],
@@ -91,7 +95,7 @@ export const slackProvider: IntegrationProviderConfig = {
           queryParams: {
             limit: { $param: 'limit', transform: 'string' },
             cursor: { $param: 'cursor' },
-            types: { $param: 'types' },
+            types: { $param: 'types', default: 'public_channel,private_channel,mpim,im' },
           },
         },
       },
@@ -101,6 +105,7 @@ export const slackProvider: IntegrationProviderConfig = {
         mapping: {
           id: 'id',
           name: 'name',
+          user: 'user',
           topic: 'topic.value',
           purpose: 'purpose.value',
           num_members: 'num_members',

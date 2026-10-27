@@ -1,11 +1,19 @@
 import { NextResponse } from 'next/server';
-import { pages, db, and, eq } from '@pagespace/db';
-import { loggers, pageTreeCache, getActorInfo } from '@pagespace/lib/server';
-import { trackPageOperation } from '@pagespace/lib/activity-tracker';
+import { db } from '@pagespace/db/db'
+import { and, eq } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, canPrincipalDeletePage } from '@/lib/auth';
+import { canRestorePage } from './restore-authorization';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
-import { createChangeGroupId, inferChangeGroupType, type DeferredWorkflowTrigger } from '@pagespace/lib/monitoring';
+import { ensureTaskItemForPage } from '@/services/api/task-sync-service';
+import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
+import { type DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -48,7 +56,7 @@ async function recursivelyRestore(
   }
 
   const orphanedChildren = await tx
-    .select({ id: pages.id, revision: pages.revision })
+    .select({ id: pages.id, revision: pages.revision, type: pages.type })
     .from(pages)
     .where(eq(pages.originalParentId, pageId));
 
@@ -63,6 +71,14 @@ async function recursivelyRestore(
       tx,
     });
     if (moveResult.deferredTrigger) triggers.push(moveResult.deferredTrigger);
+
+    // Re-parenting an orphan back under a restored TASK_LIST must restore its task_items row.
+    await ensureTaskItemForPage(tx, {
+      pageId: child.id,
+      pageType: child.type,
+      parentId: pageId,
+      userId: context.userId,
+    });
   }
 
   return triggers;
@@ -76,7 +92,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   }
 
   try {
-    // Check MCP token scope before page access
+    // Check MCP token scope before page access. Keeps scoped MCP tokens bounded
+    // to their drives (returns 403/404). Session auth and unscoped tokens pass.
     const scopeError = await checkMCPPageScope(auth, pageId);
     if (scopeError) return scopeError;
 
@@ -91,6 +108,19 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
     if (!page || !page.isTrashed) {
       return NextResponse.json({ error: 'Page is not in trash' }, { status: 400 });
+    }
+
+    // Resource authorization (security finding H1): require the SAME delete/manage
+    // permission the sibling trash endpoint enforces. Without this, any
+    // authenticated caller could restore any trashed page in any drive (IDOR).
+    // The decision itself is the pure `canRestorePage`; this shell only resolves
+    // the facts it consumes.
+    // `withinTokenScope` is always true here because `checkMCPPageScope` above
+    // already returned on an out-of-scope token; we still pass it so the pure
+    // decision models the full rule (defense-in-depth) rather than assuming it.
+    const canDelete = await canPrincipalDeletePage(auth, pageId);
+    if (!canRestorePage({ canDelete, withinTokenScope: scopeError === null })) {
+      return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'Forbidden' }, { status: 403 }));
     }
 
     const actorInfo = await getActorInfo(auth.userId);
@@ -119,20 +149,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
           type: page.type,
         }),
       );
-
-      // Invalidate page tree cache when structure changes
-      pageTreeCache.invalidateDriveTree(page.drive.id).catch(err => {
-        loggers.api.warn('Page tree cache invalidation failed', {
-          error: err instanceof Error ? err.message : String(err),
-          driveId: page.drive.id,
-        });
-      });
     }
 
     trackPageOperation(auth.userId, 'restore', pageId, {
       pageTitle: page.title,
       pageType: page.type,
     });
+
+    auditRequest(req, { eventType: 'data.write', userId: auth.userId, resourceType: 'page', resourceId: pageId, details: { operation: 'restore' } });
 
     return NextResponse.json({ message: 'Page restored successfully.' });
   } catch (error) {

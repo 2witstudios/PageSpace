@@ -48,6 +48,9 @@ export const taskStatusConfigs = pgTable('task_status_configs', {
   color: text('color').notNull(),
   group: text('group', { enum: ['todo', 'in_progress', 'done'] }).notNull(),
   position: integer('position').notNull().default(0),
+  // Advisory work-in-progress limit for this status column. NULL = no limit.
+  // Never enforced on writes — the board only warns when a column exceeds it.
+  wipLimit: integer('wipLimit'),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
 }, (table) => {
@@ -59,8 +62,13 @@ export const taskStatusConfigs = pgTable('task_status_configs', {
 
 /**
  * Task Items - Individual tasks within a task list
- * For page-based task lists, each task has a linked document page (pageId)
- * For conversation-based task lists, description field is used instead
+ * Each task has a linked TASK_LIST page (pageId, NOT NULL) which owns the title. TASK_LIST, not
+ * DOCUMENT as this said until 2026-08: a task's linked page is itself a task list, which is the
+ * mechanism behind nesting — GET /api/pages/[pageId]/tasks selects children by
+ * `eq(pages.type, 'TASK_LIST')`, so calling it with a TASK's pageId returns that task's
+ * sub-tasks. Proven against a real database in apps/web/src/components/layout/middle-content/
+ * page-views/task-list/__tests__/useTaskSubTasks.integration.test.tsx.
+ * Read titles from the linked page; do not store them on task_items.
  *
  * Assignment (legacy single-assignee fields kept for backward compatibility):
  * - assigneeId: Human user assignment (references users.id) [DEPRECATED: use taskAssignees]
@@ -68,19 +76,23 @@ export const taskStatusConfigs = pgTable('task_status_configs', {
  *
  * Status: References a taskStatusConfigs.slug for this task's task list.
  * Default value 'pending' works with auto-created default status configs.
+ *
+ * Ordering is NOT stored here. Task order lives solely on the linked page's
+ * `pages.position`, the same rail users reorder by drag. This table used to carry
+ * its own `position` that only AI tools read and wrote, so the two orders silently
+ * diverged (#2143).
  */
 export const taskItems = pgTable('task_items', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
-  taskListId: text('taskListId').notNull().references(() => taskLists.id, { onDelete: 'cascade' }),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
   assigneeId: text('assigneeId').references(() => users.id, { onDelete: 'set null' }),
   assigneeAgentId: text('assigneeAgentId').references(() => pages.id, { onDelete: 'set null' }),
-  pageId: text('pageId').references(() => pages.id, { onDelete: 'cascade' }),
-  title: text('title').notNull(),
-  description: text('description'),
+  pageId: text('pageId').notNull().references(() => pages.id, { onDelete: 'cascade' }).unique(),
   status: text('status').notNull().default('pending'),
   priority: text('priority', { enum: ['low', 'medium', 'high'] }).notNull().default('medium'),
-  position: integer('position').notNull().default(0),
+  // Optional start of the task's scheduled span; when set alongside dueDate it
+  // must be on or before it (enforced by the task write routes).
+  startDate: timestamp('startDate', { mode: 'date' }),
   dueDate: timestamp('dueDate', { mode: 'date' }),
   metadata: jsonb('metadata'),
   completedAt: timestamp('completedAt', { mode: 'date' }),
@@ -88,8 +100,6 @@ export const taskItems = pgTable('task_items', {
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
 }, (table) => {
   return {
-    taskListIdx: index('task_items_task_list_id_idx').on(table.taskListId),
-    taskListStatusIdx: index('task_items_task_list_status_idx').on(table.taskListId, table.status),
     assigneeIdx: index('task_items_assignee_id_idx').on(table.assigneeId),
     assigneeAgentIdx: index('task_items_assignee_agent_id_idx').on(table.assigneeAgentId),
     pageIdx: index('task_items_page_id_idx').on(table.pageId),
@@ -136,7 +146,6 @@ export const taskListsRelations = relations(taskLists, ({ one, many }) => ({
     fields: [taskLists.pageId],
     references: [pages.id],
   }),
-  items: many(taskItems),
   statusConfigs: many(taskStatusConfigs),
 }));
 
@@ -148,10 +157,6 @@ export const taskStatusConfigsRelations = relations(taskStatusConfigs, ({ one })
 }));
 
 export const taskItemsRelations = relations(taskItems, ({ one, many }) => ({
-  taskList: one(taskLists, {
-    fields: [taskItems.taskListId],
-    references: [taskLists.id],
-  }),
   user: one(users, {
     fields: [taskItems.userId],
     references: [users.id],

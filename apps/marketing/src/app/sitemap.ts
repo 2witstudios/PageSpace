@@ -39,6 +39,12 @@ export default function sitemap(): MetadataRoute.Sitemap {
       priority: 0.6,
     },
     {
+      url: `${BASE_URL}/homeschool`,
+      lastModified,
+      changeFrequency: "monthly",
+      priority: 0.8,
+    },
+    {
       url: `${BASE_URL}/contact`,
       lastModified,
       changeFrequency: "monthly",
@@ -63,37 +69,36 @@ export default function sitemap(): MetadataRoute.Sitemap {
     "/docs",
     "/docs/getting-started",
     "/docs/core-concepts",
+    // Page Types
     "/docs/page-types",
-    // AI
-    "/docs/ai",
-    "/docs/ai/providers",
-    "/docs/ai/tool-calling",
-    "/docs/ai/agents",
-    // MCP
-    "/docs/mcp",
-    "/docs/mcp/desktop",
-    // API Reference
-    "/docs/api",
-    "/docs/api/auth",
-    "/docs/api/pages",
-    "/docs/api/drives",
-    "/docs/api/ai",
-    "/docs/api/channels",
-    "/docs/api/mcp",
-    "/docs/api/files",
-    "/docs/api/search",
-    "/docs/api/users",
-    "/docs/api/admin",
-    // Security
+    "/docs/page-types/document",
+    "/docs/page-types/folder",
+    "/docs/page-types/ai-chat",
+    "/docs/page-types/channel",
+    "/docs/page-types/sheet",
+    "/docs/page-types/canvas",
+    "/docs/page-types/code",
+    "/docs/page-types/task-list",
+    "/docs/page-types/file",
+    // Features
+    "/docs/features",
+    "/docs/features/pages",
+    "/docs/features/drives",
+    "/docs/features/ai",
+    "/docs/features/sharing",
+    "/docs/features/search",
+    "/docs/features/accounts",
+    // Integrations
+    "/docs/integrations",
+    "/docs/integrations/google-calendar",
+    "/docs/integrations/github",
+    "/docs/integrations/mcp",
+    "/docs/integrations/mcp/desktop",
+    // Security & Trust
     "/docs/security",
     "/docs/security/authentication",
     "/docs/security/permissions",
     "/docs/security/zero-trust",
-    // Self-Hosting
-    "/docs/self-hosting",
-    "/docs/self-hosting/docker",
-    "/docs/self-hosting/environment",
-    "/docs/self-hosting/architecture",
   ];
 
   const docsRoutes: MetadataRoute.Sitemap = docPaths.map((path) => ({

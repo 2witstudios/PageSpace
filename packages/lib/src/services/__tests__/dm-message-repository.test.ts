@@ -1,0 +1,1869 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// Boundary-level test double: see test-doubles/db.ts for the design rationale.
+import { testDbState } from './test-doubles/db';
+
+vi.mock('@pagespace/db/db', async () => {
+  const m = await import('./test-doubles/db');
+  return { db: m.testDb };
+});
+vi.mock('@pagespace/db/operators', async () => {
+  const m = await import('./test-doubles/db');
+  return m.operators;
+});
+vi.mock('@pagespace/db/schema/chat', async () => {
+  const m = await import('./test-doubles/db');
+  return m.chatSchema;
+});
+vi.mock('@pagespace/db/schema/social', async () => {
+  const m = await import('./test-doubles/db');
+  return m.socialSchema;
+});
+vi.mock('@pagespace/db/schema/storage', async () => {
+  const m = await import('./test-doubles/db');
+  return m.storageSchema;
+});
+
+import { dmMessageRepository } from '../dm-message-repository';
+import type { MessageAttachmentInput } from '../attachment-upload-core';
+// Real encryption helpers (NOT mocked) — prove ciphertext seeded at rest is
+// decrypted at the read edge. Legacy plaintext must still pass through.
+import { encryptField, looksEncrypted } from '../../encryption/field-crypto';
+
+interface AssertParams {
+  given: string;
+  should: string;
+  actual: unknown;
+  expected: unknown;
+}
+
+const assert = ({ given, should, actual, expected }: AssertParams): void => {
+  expect(actual, `Given ${given}, should ${should}`).toEqual(expected);
+};
+
+beforeEach(() => {
+  testDbState.reset();
+});
+
+describe('dmMessageRepository.softDeleteMessage', () => {
+  it('records deletedAt without falsifying the read receipt', async () => {
+    testDbState.seed('directMessages', [
+      { id: 'msg-1', conversationId: 'conv-1', senderId: 'u-1', isActive: true, isRead: true, readAt: new Date('2026-05-01T10:00:00Z'), parentId: null, replyCount: 0 },
+    ]);
+
+    const count = await dmMessageRepository.softDeleteMessage('msg-1');
+
+    const row = testDbState.rows('directMessages')[0];
+    assert({
+      given: 'a soft-delete of an active DM with a prior read receipt',
+      should: 'flip isActive=false and stamp deletedAt — the read flags must remain truthful evidence the recipient saw it',
+      actual: {
+        count,
+        isActive: row.isActive,
+        deletedAtIsDate: row.deletedAt instanceof Date,
+        isRead: row.isRead,
+        readAt: row.readAt,
+      },
+      expected: {
+        count: 1,
+        isActive: false,
+        deletedAtIsDate: true,
+        isRead: true,
+        readAt: new Date('2026-05-01T10:00:00Z'),
+      },
+    });
+  });
+
+  it('decrements parent replyCount when the soft-deleted row is a thread reply', async () => {
+    testDbState.seed('directMessages', [
+      { id: 'parent-1', conversationId: 'conv-1', senderId: 'u-parent', isActive: true, parentId: null, replyCount: 3 },
+      { id: 'reply-1', conversationId: 'conv-1', senderId: 'u-replier', isActive: true, parentId: 'parent-1', replyCount: 0 },
+    ]);
+
+    await dmMessageRepository.softDeleteMessage('reply-1');
+
+    const rows = testDbState.rows('directMessages');
+    assert({
+      given: 'a soft-delete of a DM thread reply with parent.replyCount=3',
+      should: 'decrement the parent counter to 2 in the same transaction as the reply tombstone',
+      actual: {
+        replyActive: rows.find((r) => r.id === 'reply-1')?.isActive,
+        parentReplyCount: rows.find((r) => r.id === 'parent-1')?.replyCount,
+      },
+      expected: { replyActive: false, parentReplyCount: 2 },
+    });
+  });
+
+  it('does not issue a parent-counter update when the row is top-level (parentId is null)', async () => {
+    testDbState.seed('directMessages', [
+      { id: 'top-1', conversationId: 'conv-1', senderId: 'u-1', isActive: true, parentId: null, replyCount: 9 },
+    ]);
+
+    await dmMessageRepository.softDeleteMessage('top-1');
+
+    const row = testDbState.rows('directMessages')[0];
+    assert({
+      given: 'a soft-delete of a top-level DM (parentId IS NULL)',
+      should: 'flip isActive but never touch its own replyCount',
+      actual: { isActive: row.isActive, replyCount: row.replyCount },
+      expected: { isActive: false, replyCount: 9 },
+    });
+  });
+
+  it('returns 0 when the message is already inactive', async () => {
+    testDbState.seed('directMessages', [
+      { id: 'msg-1', conversationId: 'conv-1', senderId: 'u-1', isActive: false, parentId: null, replyCount: 0 },
+    ]);
+
+    const count = await dmMessageRepository.softDeleteMessage('msg-1');
+
+    assert({
+      given: 'a soft-delete of an already-inactive DM',
+      should: 'return 0 so the route can 404 instead of re-broadcasting',
+      actual: count,
+      expected: 0,
+    });
+  });
+});
+
+describe('dmMessageRepository.markActiveMessagesRead', () => {
+  it('flips unread active rows from the other participant and returns the count flipped (AC1)', async () => {
+    testDbState.seed('directMessages', [
+      { id: 'msg-1', conversationId: 'conv-1', senderId: 'u-other', isActive: true, isRead: false, readAt: null },
+      { id: 'msg-2', conversationId: 'conv-1', senderId: 'u-other', isActive: true, isRead: false, readAt: null },
+    ]);
+
+    const readAt = new Date('2026-05-01T10:00:00Z');
+    const count = await dmMessageRepository.markActiveMessagesRead({
+      conversationId: 'conv-1',
+      otherUserId: 'u-other',
+      readAt,
+    });
+
+    const rows = testDbState.rows('directMessages');
+    assert({
+      given: 'two unread active DMs from the other participant',
+      should: 'flip both to isRead=true/readAt and report the count of rows it actually flipped',
+      actual: {
+        count,
+        isRead: rows.map((r) => r.isRead),
+        readAt: rows.map((r) => r.readAt),
+      },
+      expected: { count: 2, isRead: [true, true], readAt: [readAt, readAt] },
+    });
+  });
+
+  it('does not flip the caller\'s own messages, other conversations, already-read rows, or soft-deleted rows', async () => {
+    testDbState.seed('directMessages', [
+      { id: 'own-msg', conversationId: 'conv-1', senderId: 'u-self', isActive: true, isRead: false, readAt: null },
+      { id: 'other-conv', conversationId: 'conv-2', senderId: 'u-other', isActive: true, isRead: false, readAt: null },
+      { id: 'already-read', conversationId: 'conv-1', senderId: 'u-other', isActive: true, isRead: true, readAt: new Date('2026-04-01T00:00:00Z') },
+      { id: 'soft-deleted', conversationId: 'conv-1', senderId: 'u-other', isActive: false, isRead: false, readAt: null },
+    ]);
+
+    const count = await dmMessageRepository.markActiveMessagesRead({
+      conversationId: 'conv-1',
+      otherUserId: 'u-other',
+      readAt: new Date('2026-05-01T10:00:00Z'),
+    });
+
+    assert({
+      given: 'rows that must never be flipped by this call (own message, other conversation, already read, soft-deleted)',
+      should: 'return 0 — none of them match the (conversationId, senderId=otherUserId, isRead=false, isActive=true) predicate',
+      actual: count,
+      expected: 0,
+    });
+  });
+
+  it('returns 0 when there is nothing unread to mark (GET-path noise / AC3 precondition)', async () => {
+    testDbState.seed('directMessages', [
+      { id: 'msg-1', conversationId: 'conv-1', senderId: 'u-other', isActive: true, isRead: true, readAt: new Date('2026-04-01T00:00:00Z') },
+    ]);
+
+    const count = await dmMessageRepository.markActiveMessagesRead({
+      conversationId: 'conv-1',
+      otherUserId: 'u-other',
+      readAt: new Date('2026-05-01T10:00:00Z'),
+    });
+
+    assert({
+      given: 'a conversation with no unread rows from the other participant',
+      should: 'return 0 so the route can skip broadcasting/notification-clearing entirely',
+      actual: count,
+      expected: 0,
+    });
+  });
+});
+
+describe('dmMessageRepository.restoreDmMessage', () => {
+  it('flips isActive=true and resets deletedAt; bumps parent.replyCount when the parent is still active', async () => {
+    testDbState.seed('directMessages', [
+      { id: 'parent-1', conversationId: 'conv-1', senderId: 'u-parent', isActive: true, parentId: null, replyCount: 1 },
+      { id: 'reply-1', conversationId: 'conv-1', senderId: 'u-replier', isActive: false, deletedAt: new Date('2026-04-01T00:00:00Z'), parentId: 'parent-1', replyCount: 0 },
+    ]);
+
+    const count = await dmMessageRepository.restoreDmMessage('reply-1');
+
+    const rows = testDbState.rows('directMessages');
+    const reply = rows.find((r) => r.id === 'reply-1');
+    const parent = rows.find((r) => r.id === 'parent-1');
+    assert({
+      given: 'a restore of a DM thread reply whose parent is still active',
+      should: 'flip the reply isActive=true, NULL deletedAt, and bump parent.replyCount to 2 in the same tx',
+      actual: {
+        count,
+        replyActive: reply?.isActive,
+        // deletedAt MUST be reset on restore — otherwise the retention purge
+        // (filters by deletedAt < olderThan) could either skip the row forever
+        // or purge it unexpectedly when re-soft-deleted.
+        replyDeletedAt: reply?.deletedAt,
+        parentReplyCount: parent?.replyCount,
+      },
+      expected: { count: 1, replyActive: true, replyDeletedAt: null, parentReplyCount: 2 },
+    });
+  });
+
+  it('does NOT bump the parent counter when the parent has been soft-deleted in the meantime, but still returns 1', async () => {
+    testDbState.seed('directMessages', [
+      { id: 'parent-1', conversationId: 'conv-1', senderId: 'u-parent', isActive: false, parentId: null, replyCount: 5 },
+      { id: 'reply-1', conversationId: 'conv-1', senderId: 'u-replier', isActive: false, parentId: 'parent-1', replyCount: 0 },
+    ]);
+
+    const count = await dmMessageRepository.restoreDmMessage('reply-1');
+
+    const parent = testDbState.rows('directMessages').find((r) => r.id === 'parent-1');
+    assert({
+      given: 'a restore of a DM thread reply whose parent is itself soft-deleted',
+      should: 'restore the reply but leave the tombstoned parent counter exactly where it was',
+      actual: { count, parentReplyCount: parent?.replyCount },
+      expected: { count: 1, parentReplyCount: 5 },
+    });
+  });
+
+  it('locks the parent row for the duration of the restore tx (SELECT ... FOR UPDATE) so a concurrent soft-delete cannot race the bump', async () => {
+    testDbState.seed('directMessages', [
+      { id: 'parent-1', conversationId: 'conv-1', senderId: 'u-parent', isActive: true, parentId: null, replyCount: 1 },
+      { id: 'reply-1', conversationId: 'conv-1', senderId: 'u-replier', isActive: false, parentId: 'parent-1', replyCount: 0 },
+    ]);
+
+    await dmMessageRepository.restoreDmMessage('reply-1');
+
+    assert({
+      given: 'a DM restore parent re-read inside the tx',
+      should: 'invoke .for("update") against directMessages twice — once for the parent re-validation before the replyCount bump, once more inside recomputeThreadLastReply (#2153) before it re-derives lastReplyAt — both against the same parent row, so the second is a safe reentrant re-lock, not a new race window',
+      actual: testDbState.selectsForUpdate('directMessages').length,
+      expected: 2,
+    });
+  });
+});
+
+describe('dmMessageRepository.purgeInactiveMessages', () => {
+  it('purges only DMs older than the cutoff and returns the row count', async () => {
+    const cutoff = new Date('2026-04-01T00:00:00Z');
+    const old = new Date('2026-03-01T00:00:00Z');
+    const recent = new Date('2026-05-01T00:00:00Z');
+    testDbState.seed('directMessages', [
+      { id: 'old-purge-me', conversationId: 'conv-1', senderId: 'u-1', isActive: false, deletedAt: old, parentId: null, fileId: 'file-1' },
+      { id: 'recent-keep', conversationId: 'conv-1', senderId: 'u-1', isActive: false, deletedAt: recent, parentId: null, fileId: null },
+      { id: 'active-keep', conversationId: 'conv-1', senderId: 'u-1', isActive: true, deletedAt: null, parentId: null, fileId: null },
+    ]);
+
+    const count = await dmMessageRepository.purgeInactiveMessages(cutoff);
+
+    const remaining = testDbState
+      .rows('directMessages')
+      .map((r) => r.id)
+      .sort();
+    assert({
+      given: 'one stale tombstone, one fresh tombstone, and one active DM',
+      should: 'hard-delete only the stale tombstone (count 1) and leave both other rows in place',
+      actual: { count, remaining },
+      expected: { count: 1, remaining: ['active-keep', 'recent-keep'] },
+    });
+  });
+
+  it('cleans up orphaned file_conversations links AFTER the message rows are purged — but ONLY when no surviving DM still references the (fileId, conversationId) pair', async () => {
+    const cutoff = new Date('2026-04-01T00:00:00Z');
+    const old = new Date('2026-03-01T00:00:00Z');
+    testDbState.seed('directMessages', [
+      // Two stale tombstones in conv-1 attaching the same file. Both purge,
+      // and no other DM references (file-shared, conv-1) — the link must go.
+      { id: 'stale-a', conversationId: 'conv-1', senderId: 'u-1', isActive: false, deletedAt: old, parentId: null, fileId: 'file-shared' },
+      { id: 'stale-b', conversationId: 'conv-1', senderId: 'u-1', isActive: false, deletedAt: old, parentId: null, fileId: 'file-shared' },
+      // Stale tombstone in conv-2 attaching file-still-used. The link must
+      // STAY because an active DM in the same conv still references it.
+      { id: 'stale-c', conversationId: 'conv-2', senderId: 'u-1', isActive: false, deletedAt: old, parentId: null, fileId: 'file-still-used' },
+      { id: 'active-keeper', conversationId: 'conv-2', senderId: 'u-1', isActive: true, deletedAt: null, parentId: null, fileId: 'file-still-used' },
+      // Stale tombstone with no fileId — should NOT contribute to the
+      // orphan-link cleanup at all.
+      { id: 'stale-text-only', conversationId: 'conv-1', senderId: 'u-1', isActive: false, deletedAt: old, parentId: null, fileId: null },
+    ]);
+    testDbState.seed('fileConversations', [
+      { fileId: 'file-shared', conversationId: 'conv-1' },
+      { fileId: 'file-still-used', conversationId: 'conv-2' },
+      // Untouched link in a third conversation — no purge candidate references
+      // it, so the cleanup query must not see it as a candidate at all.
+      { fileId: 'file-other', conversationId: 'conv-3' },
+    ]);
+
+    const count = await dmMessageRepository.purgeInactiveMessages(cutoff);
+
+    const remainingLinks = testDbState
+      .rows('fileConversations')
+      .map((l) => `${l.fileId}:${l.conversationId}`)
+      .sort();
+    assert({
+      given: 'four stale rows (two sharing an orphaned file link, one whose file is still referenced by an active DM, one text-only) plus an unrelated active DM',
+      should: 'purge all four stale rows, drop the (file-shared, conv-1) link (no surviving reference), AND keep both (file-still-used, conv-2) and the unrelated (file-other, conv-3) links intact',
+      actual: { count, remainingLinks },
+      expected: {
+        count: 4,
+        remainingLinks: ['file-other:conv-3', 'file-still-used:conv-2'],
+      },
+    });
+  });
+
+  it('purges a large sweep without exceeding the bind-parameter ceiling', async () => {
+    // Postgres caps a statement at 65535 bind parameters, and a retention
+    // sweep can cover far more tombstones than that. The message lock, the
+    // legacy-pair capture and the DELETE are predicate-based and name no ids
+    // at all. Two things do name rows — the attachment capture here, and the
+    // orphan-link statements further down, which the sibling test covers —
+    // and both are chunked well under the ceiling. An unbounded list in
+    // either would turn a large sweep into an opaque 08P01 protocol error.
+    //
+    // Asserting on the purge's RESULT cannot see any of that: an unchunked
+    // `inArray(directMessages.id, doomedIds)` returns exactly the same rows
+    // here and only fails in production. So this reads the binds the double
+    // records — how many ids each query actually named — which is the property
+    // the ceiling is about.
+    const cutoff = new Date('2026-04-01T00:00:00Z');
+    const old = new Date('2026-03-01T00:00:00Z');
+
+    const SWEEP = 1200;
+    testDbState.seed(
+      'directMessages',
+      Array.from({ length: SWEEP }, (_, i) => ({
+        id: `stale-${i}`,
+        conversationId: 'conv-1',
+        senderId: 'u-1',
+        isActive: false,
+        deletedAt: old,
+        parentId: null,
+        fileId: null,
+      })),
+    );
+    // Give every doomed message an attachment row, so the one query that does
+    // name ids runs over the whole sweep.
+    testDbState.seed(
+      'directMessageAttachments',
+      Array.from({ length: SWEEP }, (_, i) => ({
+        id: `att-${i}`,
+        messageId: `stale-${i}`,
+        fileId: `file-${i}`,
+        attachmentMeta: null,
+        position: 0,
+      })),
+    );
+
+    const count = await dmMessageRepository.purgeInactiveMessages(cutoff);
+
+    const messageIdBinds = testDbState.binds({ table: 'directMessages', name: 'id' });
+    const attachmentBinds = testDbState.binds({
+      table: 'directMessageAttachments',
+      name: 'messageId',
+    });
+
+    assert({
+      given: 'a sweep of 1200 tombstones, each carrying an attachment row',
+      should:
+        'purge them all, name no message ids in the predicate-based queries, and chunk the one lookup that does name them',
+      actual: {
+        count,
+        remaining: testDbState.count('directMessages'),
+        boundMessageIdLists: messageIdBinds.length,
+        attachmentChunks: attachmentBinds.length,
+        largestAttachmentChunk: Math.max(0, ...attachmentBinds.map((b) => b.count)),
+        idsNamedInTotal: attachmentBinds.reduce((sum, b) => sum + b.count, 0),
+      },
+      expected: {
+        count: SWEEP,
+        remaining: 0,
+        boundMessageIdLists: 0,
+        attachmentChunks: 3,
+        largestAttachmentChunk: 500,
+        idsNamedInTotal: SWEEP,
+      },
+    });
+  });
+
+  it('splits the orphan-link cleanup across statements instead of naming every pair at once', async () => {
+    // The capture is chunked, but the two statements that follow it inline the
+    // released pairs as a VALUES list — two bind parameters per pair. A large
+    // retention sweep would hit the same 65535 ceiling there, and the failure
+    // is an opaque 08P01 rather than anything that names the cause.
+    const cutoff = new Date('2026-04-01T00:00:00Z');
+    const old = new Date('2026-03-01T00:00:00Z');
+    const SWEEP = 600;
+
+    testDbState.seed(
+      'directMessages',
+      Array.from({ length: SWEEP }, (_, i) => ({
+        id: `stale-${i}`,
+        conversationId: 'conv-1',
+        senderId: 'u-1',
+        isActive: false,
+        deletedAt: old,
+        parentId: null,
+        fileId: null,
+      })),
+    );
+    testDbState.seed(
+      'directMessageAttachments',
+      Array.from({ length: SWEEP }, (_, i) => ({
+        id: `att-${i}`,
+        messageId: `stale-${i}`,
+        fileId: `file-${String(i).padStart(4, '0')}`,
+        position: 0,
+      })),
+    );
+    testDbState.seed(
+      'fileConversations',
+      Array.from({ length: SWEEP }, (_, i) => ({
+        fileId: `file-${String(i).padStart(4, '0')}`,
+        conversationId: 'conv-1',
+      })),
+    );
+
+    await dmMessageRepository.purgeInactiveMessages(cutoff);
+
+    // Every released link is gone — chunking must not lose a pair at a
+    // boundary — and no statement named more than one chunk's worth.
+    // BOTH statements, not just the DELETE. The lock SELECT that precedes it
+    // inlines the same VALUES list and carries the identical bind risk, so
+    // scoping this to the DELETE would leave the test green with the lock
+    // un-chunked — the 08P01 back, from the statement one line earlier.
+    const pairStatements = testDbState
+      .executes()
+      .filter((marker) => /file_conversations/i.test(marker.strings.join(' ')))
+      .map((marker) => {
+        const join = marker.values.find(
+          (value): value is { __sqlJoin: true; items: unknown[] } =>
+            typeof value === 'object' && value !== null && '__sqlJoin' in value,
+        );
+        return join ? join.items.length : 0;
+      });
+
+    assert({
+      given: '600 released (file, conversation) pairs in one sweep',
+      should:
+        'delete every orphaned link, with the lock and the delete each split into bounded statements rather than one unbounded one',
+      actual: {
+        remainingLinks: testDbState.count('fileConversations'),
+        // Two chunks, each locking then deleting: four statements naming pairs.
+        statements: pairStatements.length,
+        largestStatement: Math.max(0, ...pairStatements),
+        pairsNamed: pairStatements.reduce((sum, n) => sum + n, 0),
+      },
+      expected: {
+        remainingLinks: 0,
+        statements: 4,
+        largestStatement: 500,
+        pairsNamed: SWEEP * 2,
+      },
+    });
+  });
+
+  it('keeps a file_conversations link that a live message still references through an attachment row, not the legacy column', async () => {
+    // The data-loss case this change had to close. A message can now carry
+    // several files, and only the FIRST is mirrored into the legacy
+    // directMessages.fileId column. An orphan check that looked only at that
+    // column would drop the link for files 2..N of a live message — and once
+    // the link is gone the file is unreferenced, so the orphaned-file cron
+    // deletes the row and its S3 blob. Nothing else in the codebase deletes a
+    // file_conversations row, so this query is the only way in.
+    const cutoff = new Date('2026-04-01T00:00:00Z');
+    const old = new Date('2026-03-01T00:00:00Z');
+
+    testDbState.seed('directMessages', [
+      { id: 'stale', conversationId: 'conv-1', senderId: 'u-1', isActive: false, deletedAt: old, parentId: null, fileId: 'file-shared' },
+      // Live three-photo message. Its legacy column names only file-shared;
+      // file-second and file-third exist ONLY as attachment rows.
+      { id: 'live', conversationId: 'conv-1', senderId: 'u-1', isActive: true, deletedAt: null, parentId: null, fileId: 'file-shared' },
+    ]);
+    testDbState.seed('directMessageAttachments', [
+      { id: 'att-1', messageId: 'stale', fileId: 'file-shared', position: 0 },
+      { id: 'att-2', messageId: 'live', fileId: 'file-shared', position: 0 },
+      { id: 'att-3', messageId: 'live', fileId: 'file-second', position: 1 },
+      { id: 'att-4', messageId: 'live', fileId: 'file-third', position: 2 },
+    ]);
+    testDbState.seed('fileConversations', [
+      { fileId: 'file-shared', conversationId: 'conv-1' },
+      { fileId: 'file-second', conversationId: 'conv-1' },
+      { fileId: 'file-third', conversationId: 'conv-1' },
+    ]);
+
+    const count = await dmMessageRepository.purgeInactiveMessages(cutoff);
+
+    assert({
+      given: 'a purged message sharing a conversation with a live three-photo message whose 2nd and 3rd files exist only as attachment rows',
+      should: 'purge the stale row and keep every link — dropping one would end with the file deleted from S3',
+      actual: {
+        count,
+        remainingLinks: testDbState
+          .rows('fileConversations')
+          .map((l) => `${l.fileId}:${l.conversationId}`)
+          .sort(),
+      },
+      expected: {
+        count: 1,
+        remainingLinks: ['file-second:conv-1', 'file-shared:conv-1', 'file-third:conv-1'],
+      },
+    });
+  });
+
+  it('releases the links of a purged multi-attachment message once nothing references them', async () => {
+    // The other half: attachment rows cascade away with the message, so the
+    // released files cannot be read from DELETE ... RETURNING. If the impl
+    // stopped capturing them before the delete, these links would leak.
+    const cutoff = new Date('2026-04-01T00:00:00Z');
+    const old = new Date('2026-03-01T00:00:00Z');
+
+    testDbState.seed('directMessages', [
+      { id: 'stale', conversationId: 'conv-1', senderId: 'u-1', isActive: false, deletedAt: old, parentId: null, fileId: 'file-a' },
+    ]);
+    testDbState.seed('directMessageAttachments', [
+      { id: 'att-1', messageId: 'stale', fileId: 'file-a', position: 0 },
+      { id: 'att-2', messageId: 'stale', fileId: 'file-b', position: 1 },
+    ]);
+    testDbState.seed('fileConversations', [
+      { fileId: 'file-a', conversationId: 'conv-1' },
+      { fileId: 'file-b', conversationId: 'conv-1' },
+    ]);
+
+    const count = await dmMessageRepository.purgeInactiveMessages(cutoff);
+
+    assert({
+      given: 'a purged two-photo message whose second file is referenced only by its attachment row',
+      should: 'release BOTH links — capturing only the legacy column would strand file-b forever',
+      actual: { count, remainingLinks: testDbState.rows('fileConversations') },
+      expected: { count: 1, remainingLinks: [] },
+    });
+  });
+
+  it('locks the candidate link rows (FOR UPDATE) in a SEPARATE statement before the orphan-check DELETE — the re-check needs a fresh snapshot that sees a concurrently committed send', async () => {
+    const cutoff = new Date('2026-04-01T00:00:00Z');
+    const old = new Date('2026-03-01T00:00:00Z');
+    testDbState.seed('directMessages', [
+      { id: 'stale-a', conversationId: 'conv-1', senderId: 'u-1', isActive: false, deletedAt: old, parentId: null, fileId: 'file-1' },
+    ]);
+    testDbState.seed('fileConversations', [
+      { fileId: 'file-1', conversationId: 'conv-1' },
+    ]);
+
+    await dmMessageRepository.purgeInactiveMessages(cutoff);
+
+    const statements = testDbState.executes().map((m) => m.strings.join(' '));
+    const lockIndex = statements.findIndex((s) => /FOR UPDATE OF fc/.test(s) && !/DELETE/i.test(s));
+    const deleteIndex = statements.findIndex((s) => /DELETE\s+FROM\s+file_conversations/i.test(s));
+    assert({
+      given: 'a purge run that produced orphan-link cleanup candidates',
+      should: 'issue exactly two raw statements — a standalone SELECT ... FOR UPDATE OF fc lock, then the NOT EXISTS DELETE — in that order (a single locking DELETE would re-use its pre-block snapshot and could still drop a link a just-committed message depends on)',
+      actual: { total: statements.length, lockIndex, deleteIndex },
+      expected: { total: 2, lockIndex: 0, deleteIndex: 1 },
+    });
+  });
+
+  it('issues NO raw link-cleanup SQL (neither lock nor delete) when no purged message carried an attachment', async () => {
+    const cutoff = new Date('2026-04-01T00:00:00Z');
+    const old = new Date('2026-03-01T00:00:00Z');
+    testDbState.seed('directMessages', [
+      { id: 'stale-text-only', conversationId: 'conv-1', senderId: 'u-1', isActive: false, deletedAt: old, parentId: null, fileId: null },
+    ]);
+
+    const count = await dmMessageRepository.purgeInactiveMessages(cutoff);
+
+    assert({
+      given: 'a purge run whose only candidate was a text-only tombstone',
+      should: 'purge the row without taking link locks or running the cleanup DELETE',
+      actual: { count, executeCount: testDbState.executes().length },
+      expected: { count: 1, executeCount: 0 },
+    });
+  });
+});
+
+describe('dmMessageRepository.insertDmThreadReply', () => {
+  const baseInput = {
+    parentId: 'parent-1',
+    conversationId: 'conv-1',
+    senderId: 'user-replier',
+    content: 'thread response',
+    attachments: [],
+  };
+
+  const seedActiveParent = (overrides: Partial<Record<string, unknown>> = {}) => {
+    testDbState.seed('directMessages', [
+      {
+        id: 'parent-1',
+        conversationId: 'conv-1',
+        senderId: 'user-parent',
+        parentId: null,
+        isActive: true,
+        replyCount: 0,
+        lastReplyAt: null,
+        ...overrides,
+      },
+    ]);
+  };
+
+  it('locks the parent row for the duration of the tx (SELECT ... FOR UPDATE) so a concurrent soft-delete cannot orphan the reply', async () => {
+    seedActiveParent();
+
+    await dmMessageRepository.insertDmThreadReply(baseInput);
+
+    assert({
+      given: 'a DM parent validation read inside the insert tx',
+      should: 'invoke .for("update") against directMessages exactly once — the lock blocks a concurrent softDelete until this tx commits',
+      actual: testDbState.selectsForUpdate('directMessages').length,
+      expected: 1,
+    });
+  });
+
+  it('rejects with parent_not_found when the parent is missing', async () => {
+    const result = await dmMessageRepository.insertDmThreadReply(baseInput);
+
+    assert({
+      given: 'a parent id that does not resolve to any row',
+      should: 'return parent_not_found WITHOUT inserting a reply or follower row',
+      actual: {
+        kind: result.kind,
+        rowCount: testDbState.count('directMessages'),
+        followerCount: testDbState.count('dmThreadFollowers'),
+      },
+      expected: { kind: 'parent_not_found', rowCount: 0, followerCount: 0 },
+    });
+  });
+
+  it('rejects with parent_not_found when the parent row exists but is soft-deleted (isActive=false)', async () => {
+    seedActiveParent({ isActive: false });
+
+    const result = await dmMessageRepository.insertDmThreadReply(baseInput);
+
+    assert({
+      given: 'a DM parent that has been soft-deleted',
+      should: 'return parent_not_found — clients cannot reply into a tombstoned thread',
+      actual: { kind: result.kind, rowCount: testDbState.count('directMessages') },
+      expected: { kind: 'parent_not_found', rowCount: 1 },
+    });
+  });
+
+  it('rejects with parent_wrong_conversation when the parent belongs to a different conversation', async () => {
+    seedActiveParent({ conversationId: 'other-conv' });
+
+    const result = await dmMessageRepository.insertDmThreadReply(baseInput);
+
+    assert({
+      given: 'a parent id whose conversationId differs from the request conversation',
+      should: 'return parent_wrong_conversation so the route can 400',
+      actual: { kind: result.kind, rowCount: testDbState.count('directMessages') },
+      expected: { kind: 'parent_wrong_conversation', rowCount: 1 },
+    });
+  });
+
+  it('rejects with parent_not_top_level when the parent itself has parentId set (depth-2 attempt)', async () => {
+    seedActiveParent({ parentId: 'grandparent' });
+
+    const result = await dmMessageRepository.insertDmThreadReply(baseInput);
+
+    assert({
+      given: 'a DM parent that is itself a thread reply',
+      should: 'return parent_not_top_level — DM threads are exactly one level deep',
+      actual: { kind: result.kind, rowCount: testDbState.count('directMessages') },
+      expected: { kind: 'parent_not_top_level', rowCount: 1 },
+    });
+  });
+
+  it('inserts the reply with parentId set, bumps replyCount + lastReplyAt, and upserts both followers', async () => {
+    seedActiveParent();
+
+    const result = await dmMessageRepository.insertDmThreadReply(baseInput);
+
+    const messages = testDbState.rows('directMessages');
+    const followers = testDbState.rows('dmThreadFollowers');
+    const reply = messages.find((r) => r.parentId === 'parent-1');
+    const parent = messages.find((r) => r.id === 'parent-1');
+    assert({
+      given: 'a happy-path DM thread reply with a distinct replier and parent author',
+      should: 'insert the reply with parentId, bump parent.replyCount, set lastReplyAt, and add follower rows for parent author + replier',
+      actual: {
+        kind: result.kind,
+        replyParentId: reply?.parentId,
+        parentReplyCount: parent?.replyCount,
+        parentLastReplyAt: parent?.lastReplyAt,
+        followerUserIds: followers.map((f) => f.userId).sort(),
+      },
+      expected: {
+        kind: 'ok',
+        replyParentId: 'parent-1',
+        parentReplyCount: 1,
+        parentLastReplyAt: reply?.createdAt,
+        followerUserIds: ['user-parent', 'user-replier'],
+      },
+    });
+  });
+
+  it('writes a second top-level row with mirroredFromId set when alsoSendToParent is true', async () => {
+    seedActiveParent();
+
+    const result = await dmMessageRepository.insertDmThreadReply({
+      ...baseInput,
+      alsoSendToParent: true,
+    });
+
+    const messages = testDbState.rows('directMessages');
+    const reply = messages.find((r) => r.parentId === 'parent-1');
+    const mirror = messages.find((r) => r.mirroredFromId === reply?.id);
+    assert({
+      given: 'an alsoSendToParent DM thread reply',
+      should: 'write a second top-level row (parentId IS NULL) with mirroredFromId pointing at the reply',
+      actual: {
+        kind: result.kind,
+        rowCount: messages.length,
+        mirrorParentId: mirror?.parentId,
+        mirrorMirroredFromId: mirror?.mirroredFromId,
+        resultMirrorId: result.kind === 'ok' ? result.mirror?.id : null,
+      },
+      expected: {
+        kind: 'ok',
+        rowCount: 3,
+        mirrorParentId: null,
+        mirrorMirroredFromId: reply?.id,
+        resultMirrorId: mirror?.id,
+      },
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Attachment locking (issue #1865 — mirrors insertDmMessageWithAttachment's
+  // top-level lock coverage, which the thread-reply path lacked)
+  // -------------------------------------------------------------------------
+
+  it('locks the file and link rows (FOR UPDATE) once each when the reply carries a fileId, inside the same transaction as the parent lock', async () => {
+    seedActiveParent();
+    testDbState.seed('files', [{ id: 'file-1', createdBy: 'user-replier' }]);
+    testDbState.seed('fileConversations', [{ fileId: 'file-1', conversationId: 'conv-1' }]);
+
+    const result = await dmMessageRepository.insertDmThreadReply({
+      ...baseInput,
+      attachments: [{ fileId: 'file-1', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } }],
+    });
+
+    assert({
+      given: 'a thread reply with a fileId owned by the replier and linked to the conversation',
+      should: 'lock files and fileConversations exactly once each, insert successfully, all inside one db.transaction',
+      actual: {
+        kind: result.kind,
+        fileLocks: testDbState.selectsForUpdate('files').length,
+        linkLocks: testDbState.selectsForUpdate('fileConversations').length,
+        transactionCalls: testDbState.transactionCalls(),
+      },
+      expected: { kind: 'ok', fileLocks: 1, linkLocks: 1, transactionCalls: 1 },
+    });
+  });
+
+  it('takes only one file/link lock even when alsoSendToParent writes a second row referencing the same fileId', async () => {
+    seedActiveParent();
+    testDbState.seed('files', [{ id: 'file-1', createdBy: 'user-replier' }]);
+    testDbState.seed('fileConversations', [{ fileId: 'file-1', conversationId: 'conv-1' }]);
+
+    const result = await dmMessageRepository.insertDmThreadReply({
+      ...baseInput,
+      attachments: [{ fileId: 'file-1', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } }],
+      alsoSendToParent: true,
+    });
+
+    const messages = testDbState.rows('directMessages');
+    assert({
+      given: 'an alsoSendToParent thread reply with a fileId, so the reply AND the mirror both reference file-1',
+      should: 'lock files/fileConversations exactly once each — one lock covers both inserts in this transaction',
+      actual: {
+        kind: result.kind,
+        rowCount: messages.length,
+        fileLocks: testDbState.selectsForUpdate('files').length,
+        linkLocks: testDbState.selectsForUpdate('fileConversations').length,
+      },
+      expected: { kind: 'ok', rowCount: 3, fileLocks: 1, linkLocks: 1 },
+    });
+  });
+
+  it('inserts without touching files/fileConversations when the reply has no fileId', async () => {
+    seedActiveParent();
+
+    const result = await dmMessageRepository.insertDmThreadReply(baseInput);
+
+    assert({
+      given: 'a text-only thread reply',
+      should: 'return kind ok and never lock files or fileConversations',
+      actual: {
+        kind: result.kind,
+        fileLocks: testDbState.selectsForUpdate('files').length,
+        linkLocks: testDbState.selectsForUpdate('fileConversations').length,
+      },
+      expected: { kind: 'ok', fileLocks: 0, linkLocks: 0 },
+    });
+  });
+
+  it('rejects with not_found and inserts no reply when the fileId does not exist', async () => {
+    seedActiveParent();
+
+    const result = await dmMessageRepository.insertDmThreadReply({
+      ...baseInput,
+      attachments: [{ fileId: 'missing-file', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } }],
+    });
+
+    assert({
+      given: 'a thread reply whose fileId has no matching file row',
+      should: 'return not_found without inserting a reply — only the seeded parent remains',
+      actual: { kind: result.kind, rowCount: testDbState.count('directMessages') },
+      expected: { kind: 'not_found', rowCount: 1 },
+    });
+  });
+
+  it('rejects with wrong_owner and inserts no reply when the fileId belongs to another user', async () => {
+    seedActiveParent();
+    testDbState.seed('files', [{ id: 'file-1', createdBy: 'someone-else' }]);
+
+    const result = await dmMessageRepository.insertDmThreadReply({
+      ...baseInput,
+      attachments: [{ fileId: 'file-1', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } }],
+    });
+
+    assert({
+      given: 'a fileId owned by a different user than the replier',
+      should: 'return wrong_owner without inserting a reply',
+      actual: { kind: result.kind, rowCount: testDbState.count('directMessages') },
+      expected: { kind: 'wrong_owner', rowCount: 1 },
+    });
+  });
+
+  it('rejects with not_linked and inserts no reply when the fileId is not linked to the conversation', async () => {
+    seedActiveParent();
+    testDbState.seed('files', [{ id: 'file-1', createdBy: 'user-replier' }]);
+
+    const result = await dmMessageRepository.insertDmThreadReply({
+      ...baseInput,
+      attachments: [{ fileId: 'file-1', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } }],
+    });
+
+    assert({
+      given: 'a fileId owned by the replier but not linked to this conversation',
+      should: 'return not_linked without inserting a reply',
+      actual: { kind: result.kind, rowCount: testDbState.count('directMessages') },
+      expected: { kind: 'not_linked', rowCount: 1 },
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Edge cases (PR 6b — added per audit findings)
+  // -------------------------------------------------------------------------
+
+  it('upserts exactly two follower rows for a reply with distinct parent author and replier', async () => {
+    seedActiveParent();
+
+    await dmMessageRepository.insertDmThreadReply(baseInput);
+
+    const followers = testDbState.rows('dmThreadFollowers');
+    assert({
+      given: 'a DM thread reply where the parent author and the replier are different users',
+      should: 'leave exactly two rows in dmThreadFollowers, one for each — and both keyed to the root',
+      actual: {
+        rowCount: followers.length,
+        rows: followers
+          .map((f) => ({ rootMessageId: f.rootMessageId, userId: f.userId }))
+          .sort((a, b) => String(a.userId).localeCompare(String(b.userId))),
+      },
+      expected: {
+        rowCount: 2,
+        rows: [
+          { rootMessageId: 'parent-1', userId: 'user-parent' },
+          { rootMessageId: 'parent-1', userId: 'user-replier' },
+        ],
+      },
+    });
+  });
+
+  it('upserts exactly one follower row when the parent author replies to their own DM thread (self-reply dedup)', async () => {
+    seedActiveParent({ senderId: 'user-self' });
+
+    await dmMessageRepository.insertDmThreadReply({
+      ...baseInput,
+      senderId: 'user-self',
+    });
+
+    const followers = testDbState.rows('dmThreadFollowers');
+    assert({
+      given: 'a DM reply where the parent author and the replier are the same user',
+      should: 'collapse to a single follower row — Postgres rejects two identical rows in the same INSERT, even with onConflictDoNothing',
+      actual: followers.map((f) => ({ rootMessageId: f.rootMessageId, userId: f.userId })),
+      expected: [{ rootMessageId: 'parent-1', userId: 'user-self' }],
+    });
+  });
+
+  it('rolls the entire transaction back when the follower upsert step throws — no reply, no follower, parent counter unchanged', async () => {
+    const seededLastReplyAt = new Date('2026-04-01T00:00:00Z');
+    seedActiveParent({ replyCount: 7, lastReplyAt: seededLastReplyAt });
+    testDbState.failBefore('insert', 'dmThreadFollowers');
+
+    await expect(
+      dmMessageRepository.insertDmThreadReply(baseInput)
+    ).rejects.toThrow();
+
+    const messages = testDbState.rows('directMessages');
+    const followers = testDbState.rows('dmThreadFollowers');
+    const parent = messages.find((r) => r.id === 'parent-1');
+    assert({
+      given: 'an insertDmThreadReply call where the follower upsert step fails inside the transaction',
+      should: 'roll back every write — only the seeded parent remains, replyCount + lastReplyAt as-seeded, no followers',
+      actual: {
+        rowCount: messages.length,
+        parentReplyCount: parent?.replyCount,
+        parentLastReplyAt: parent?.lastReplyAt,
+        followerCount: followers.length,
+      },
+      expected: {
+        rowCount: 1,
+        parentReplyCount: 7,
+        parentLastReplyAt: seededLastReplyAt,
+        followerCount: 0,
+      },
+    });
+  });
+
+  it('rolls the entire transaction back when alsoSendToParent mirror-insert throws — no reply, no mirror, parent counter unchanged', async () => {
+    seedActiveParent({ replyCount: 4 });
+    // The reply is the first directMessages insert; the mirror is the second
+    // (the followers insert hits dmThreadFollowers). Skip the first and fail
+    // the second so we exercise rollback after a successful reply write.
+    testDbState.failBefore('insert', 'directMessages', { skip: 1 });
+
+    await expect(
+      dmMessageRepository.insertDmThreadReply({
+        ...baseInput,
+        alsoSendToParent: true,
+      })
+    ).rejects.toThrow();
+
+    const messages = testDbState.rows('directMessages');
+    const followers = testDbState.rows('dmThreadFollowers');
+    const parent = messages.find((r) => r.id === 'parent-1');
+    assert({
+      given: 'an alsoSendToParent DM reply where the mirror insert step throws inside the transaction',
+      should: 'roll back EVERY write — no thread reply, no mirror, no follower rows, parent counter exactly as seeded',
+      actual: {
+        rowCount: messages.length,
+        parentReplyCount: parent?.replyCount,
+        followerCount: followers.length,
+      },
+      expected: { rowCount: 1, parentReplyCount: 4, followerCount: 0 },
+    });
+  });
+
+  it('soft-deleting a DM reply decrements parent.replyCount; restoring it (parent still active) increments it back', async () => {
+    seedActiveParent({ replyCount: 3 });
+    testDbState.seed('directMessages', [
+      { id: 'reply-1', conversationId: 'conv-1', senderId: 'user-replier', parentId: 'parent-1', isActive: true, replyCount: 0 },
+    ]);
+
+    await dmMessageRepository.softDeleteMessage('reply-1');
+    const afterDelete = testDbState.rows('directMessages').find((r) => r.id === 'parent-1')?.replyCount;
+    await dmMessageRepository.restoreDmMessage('reply-1');
+    const afterRestore = testDbState.rows('directMessages').find((r) => r.id === 'parent-1')?.replyCount;
+
+    assert({
+      given: 'a parent with replyCount=3 and an active DM reply, then a soft-delete followed by a restore',
+      should: 'decrement parent.replyCount to 2 on delete, then increment back to 3 on restore (parent stays active)',
+      actual: { afterDelete, afterRestore },
+      expected: { afterDelete: 2, afterRestore: 3 },
+    });
+  });
+
+  it('restoring a DM reply when the parent itself has been soft-deleted in the meantime does NOT bump the tombstoned parent counter', async () => {
+    testDbState.seed('directMessages', [
+      { id: 'parent-1', conversationId: 'conv-1', senderId: 'user-parent', parentId: null, isActive: true, replyCount: 2 },
+      { id: 'reply-1', conversationId: 'conv-1', senderId: 'user-replier', parentId: 'parent-1', isActive: false, replyCount: 0 },
+    ]);
+    await dmMessageRepository.softDeleteMessage('parent-1');
+    const parentBeforeRestore = testDbState.rows('directMessages').find((r) => r.id === 'parent-1');
+    expect(parentBeforeRestore?.isActive).toBe(false);
+
+    await dmMessageRepository.restoreDmMessage('reply-1');
+
+    const rows = testDbState.rows('directMessages');
+    const parent = rows.find((r) => r.id === 'parent-1');
+    const reply = rows.find((r) => r.id === 'reply-1');
+    assert({
+      given: 'a restore of a DM reply whose parent has been soft-deleted in the meantime',
+      should: 'restore the reply (isActive=true) but leave the tombstoned parent.replyCount exactly where it was',
+      actual: {
+        replyActive: reply?.isActive,
+        parentActive: parent?.isActive,
+        parentReplyCount: parent?.replyCount,
+      },
+      expected: { replyActive: true, parentActive: false, parentReplyCount: 2 },
+    });
+  });
+});
+
+describe('dmMessageRepository.listActiveMessages [reactions parity]', () => {
+  it('joins the reactions relation with the user columns the broadcast payload needs', async () => {
+    testDbState.seed('users', [{ id: 'u-1', name: 'Alice' }]);
+    testDbState.seed('directMessages', [
+      { id: 'msg-1', conversationId: 'conv-1', senderId: 'u-1', isActive: true, parentId: null, createdAt: new Date('2026-05-04T12:00:00Z') },
+    ]);
+    testDbState.seed('dmMessageReactions', [
+      { id: 'rx-1', messageId: 'msg-1', userId: 'u-1', emoji: '👍' },
+    ]);
+
+    const rows = await dmMessageRepository.listActiveMessages({ conversationId: 'conv-1', limit: 50 });
+
+    const msg = rows[0] as { reactions: Array<{ user: { id: string; name: string } | null }> };
+    assert({
+      given: 'a DM list fetch on a conversation with a reaction',
+      should: 'return reactions joined with user.id and user.name so the DM page renders chips identically to channels',
+      actual: {
+        reactionCount: msg.reactions?.length,
+        user: msg.reactions?.[0]?.user,
+      },
+      expected: { reactionCount: 1, user: { id: 'u-1', name: 'Alice' } },
+    });
+  });
+
+  it('hydrates sender, file, and reactions.user on each row — the dmMessageWith parity contract with channels', async () => {
+    testDbState.seed('users', [
+      { id: 'u-sender', name: 'Author', image: '/avatar.png' },
+      { id: 'u-reactor', name: 'Reactor', image: null },
+    ]);
+    testDbState.seed('files', [
+      { id: 'file-1', mimeType: 'image/png', sizeBytes: 2048 },
+    ]);
+    testDbState.seed('directMessages', [
+      {
+        id: 'msg-1', conversationId: 'conv-1', senderId: 'u-sender',
+        isActive: true, parentId: null, fileId: 'file-1',
+        createdAt: new Date('2026-05-04T12:00:00Z'),
+      },
+    ]);
+    testDbState.seed('dmMessageReactions', [
+      { id: 'rx-1', messageId: 'msg-1', userId: 'u-reactor', emoji: '🎉' },
+    ]);
+
+    const rows = await dmMessageRepository.listActiveMessages({ conversationId: 'conv-1', limit: 50 });
+
+    const msg = rows[0] as {
+      sender: { id: string; name: string; image: string | null } | null;
+      file: { id: string; mimeType: string; sizeBytes: number } | null;
+      reactions: Array<{ user: { id: string; name: string } | null }>;
+    };
+    assert({
+      given: 'a DM list fetch where the message has both an attachment and a reaction by another user',
+      should: 'hydrate sender (id, name, image), file (id, mimeType, sizeBytes), and reactions.user (id, name) — the same column whitelist channel-message-repository.messageWith uses, so the DM panel renders parity with channels without a re-fetch',
+      actual: {
+        sender: msg.sender,
+        file: msg.file,
+        reactionUser: msg.reactions[0]?.user,
+      },
+      expected: {
+        sender: { id: 'u-sender', name: 'Author', image: '/avatar.png' },
+        file: { id: 'file-1', mimeType: 'image/png', sizeBytes: 2048 },
+        reactionUser: { id: 'u-reactor', name: 'Reactor' },
+      },
+    });
+  });
+});
+
+describe('dmMessageRepository.listActiveMessages [thread-isolation]', () => {
+  it('filters out replies by requiring parentId IS NULL — thread replies must NEVER leak into the main DM stream', async () => {
+    testDbState.seed('directMessages', [
+      { id: 'top-a', conversationId: 'conv-1', senderId: 'u-1', isActive: true, parentId: null, createdAt: new Date('2026-05-01T00:00:00Z') },
+      { id: 'reply-leak', conversationId: 'conv-1', senderId: 'u-1', isActive: true, parentId: 'top-a', createdAt: new Date('2026-05-01T00:01:00Z') },
+      { id: 'top-b', conversationId: 'conv-1', senderId: 'u-2', isActive: true, parentId: null, createdAt: new Date('2026-05-01T00:02:00Z') },
+    ]);
+
+    const rows = await dmMessageRepository.listActiveMessages({ conversationId: 'conv-1', limit: 50 });
+
+    assert({
+      given: 'a top-level DM messages fetch where a thread reply also exists',
+      should: 'omit the reply — only top-level rows leak into the main stream',
+      actual: rows.map((r) => r.id).sort(),
+      expected: ['top-a', 'top-b'],
+    });
+  });
+});
+
+describe('dmMessageRepository.listDmThreadReplies', () => {
+  it('filters by parentId AND isActive=true and orders ascending by (createdAt, id)', async () => {
+    const t0 = new Date('2026-05-04T12:00:00Z');
+    const t1 = new Date('2026-05-04T12:01:00Z');
+    const t2 = new Date('2026-05-04T12:02:00Z');
+    testDbState.seed('directMessages', [
+      { id: 'parent-1', conversationId: 'conv-1', senderId: 'u-1', isActive: true, parentId: null },
+      { id: 'r-3', conversationId: 'conv-1', senderId: 'u-1', isActive: true, parentId: 'parent-1', createdAt: t2 },
+      { id: 'r-1', conversationId: 'conv-1', senderId: 'u-1', isActive: true, parentId: 'parent-1', createdAt: t0 },
+      { id: 'r-2', conversationId: 'conv-1', senderId: 'u-1', isActive: true, parentId: 'parent-1', createdAt: t1 },
+      { id: 'r-deleted', conversationId: 'conv-1', senderId: 'u-1', isActive: false, parentId: 'parent-1', createdAt: t1 },
+      { id: 'other-parent-reply', conversationId: 'conv-1', senderId: 'u-1', isActive: true, parentId: 'other', createdAt: t1 },
+    ]);
+
+    const result = await dmMessageRepository.listDmThreadReplies({ rootId: 'parent-1', limit: 50 });
+
+    assert({
+      given: 'a DM list-replies request for a thread root with active+deleted replies and an unrelated reply on another parent',
+      should: 'return only the parent-1 active replies, ordered ascending by (createdAt, id)',
+      actual: result.map((r) => r.id),
+      expected: ['r-1', 'r-2', 'r-3'],
+    });
+  });
+
+  it('builds a strictly-greater-than composite cursor when after is supplied', async () => {
+    const t0 = new Date('2026-05-04T12:00:00Z');
+    const t1 = new Date('2026-05-04T12:01:00Z');
+    testDbState.seed('directMessages', [
+      { id: 'r-1', conversationId: 'conv-1', senderId: 'u-1', isActive: true, parentId: 'parent-1', createdAt: t0 },
+      { id: 'r-2-cursor', conversationId: 'conv-1', senderId: 'u-1', isActive: true, parentId: 'parent-1', createdAt: t1 },
+      { id: 'r-3', conversationId: 'conv-1', senderId: 'u-1', isActive: true, parentId: 'parent-1', createdAt: t1 },
+      { id: 'r-4', conversationId: 'conv-1', senderId: 'u-1', isActive: true, parentId: 'parent-1', createdAt: new Date('2026-05-04T12:02:00Z') },
+    ]);
+
+    const result = await dmMessageRepository.listDmThreadReplies({
+      rootId: 'parent-1',
+      limit: 50,
+      after: { createdAt: t1, id: 'r-2-cursor' },
+    });
+
+    assert({
+      given: 'an ascending-cursor DM pagination request at (t1, r-2-cursor)',
+      should: 'return rows strictly newer by createdAt OR same-createdAt with strictly larger id — never the cursor row, never anything older',
+      actual: result.map((r) => r.id).sort(),
+      expected: ['r-3', 'r-4'],
+    });
+  });
+
+  it('hydrates sender, file, and reactions on each thread reply — the parity contract with channel replies', async () => {
+    testDbState.seed('users', [
+      { id: 'u-replier', name: 'Replier', image: '/r.png' },
+      { id: 'u-reactor', name: 'Reactor', image: null },
+    ]);
+    testDbState.seed('files', [
+      { id: 'file-att', mimeType: 'application/pdf', sizeBytes: 9001 },
+    ]);
+    testDbState.seed('directMessages', [
+      {
+        id: 'reply-1', conversationId: 'conv-1', senderId: 'u-replier',
+        isActive: true, parentId: 'parent-1', fileId: 'file-att',
+        createdAt: new Date('2026-05-04T12:00:00Z'),
+      },
+    ]);
+    testDbState.seed('dmMessageReactions', [
+      { id: 'rx-1', messageId: 'reply-1', userId: 'u-reactor', emoji: '👀' },
+    ]);
+
+    const rows = await dmMessageRepository.listDmThreadReplies({ rootId: 'parent-1', limit: 50 });
+
+    const reply = rows[0] as unknown as {
+      sender: { id: string; name: string; image: string | null } | null;
+      file: { id: string; mimeType: string; sizeBytes: number } | null;
+      reactions: Array<{ user: { id: string; name: string } | null }>;
+    };
+    assert({
+      given: 'a DM thread reply with an attachment and a reaction by a different user',
+      should: 'return the reply with sender, file, and reactions.user hydrated using the same column whitelist as the channel side, so the thread panel renders without a follow-up fetch',
+      actual: {
+        sender: reply.sender,
+        file: reply.file,
+        reactionUser: reply.reactions[0]?.user,
+      },
+      expected: {
+        sender: { id: 'u-replier', name: 'Replier', image: '/r.png' },
+        file: { id: 'file-att', mimeType: 'application/pdf', sizeBytes: 9001 },
+        reactionUser: { id: 'u-reactor', name: 'Reactor' },
+      },
+    });
+  });
+});
+
+describe('dmMessageRepository thread follower helpers', () => {
+  it('addDmThreadFollower inserts (rootId, userId) and is idempotent under a re-add', async () => {
+    await dmMessageRepository.addDmThreadFollower('root-1', 'user-1');
+    await dmMessageRepository.addDmThreadFollower('root-1', 'user-1');
+
+    const rows = testDbState.rows('dmThreadFollowers');
+    assert({
+      given: 'two DM follower adds for the same (rootId, userId)',
+      should: 'persist exactly one row — onConflictDoNothing makes the second add a no-op',
+      actual: rows.map((r) => ({ rootMessageId: r.rootMessageId, userId: r.userId })),
+      expected: [{ rootMessageId: 'root-1', userId: 'user-1' }],
+    });
+  });
+
+  it('removeDmThreadFollower deletes scoped to (rootId, userId) — never another user', async () => {
+    testDbState.seed('dmThreadFollowers', [
+      { rootMessageId: 'root-1', userId: 'user-1' },
+      { rootMessageId: 'root-1', userId: 'user-other' },
+      { rootMessageId: 'root-other', userId: 'user-1' },
+    ]);
+
+    await dmMessageRepository.removeDmThreadFollower('root-1', 'user-1');
+
+    const remaining = testDbState
+      .rows('dmThreadFollowers')
+      .map((r) => `${r.rootMessageId}:${r.userId}`)
+      .sort();
+    assert({
+      given: 'a remove of (root-1, user-1) when other follower rows exist',
+      should: 'delete only the matching tuple — leave (root-1, user-other) and (root-other, user-1) intact',
+      actual: remaining,
+      expected: ['root-1:user-other', 'root-other:user-1'],
+    });
+  });
+
+  it('listDmThreadFollowers returns a flat array of user ids', async () => {
+    testDbState.seed('dmThreadFollowers', [
+      { rootMessageId: 'root-1', userId: 'user-a' },
+      { rootMessageId: 'root-1', userId: 'user-b' },
+      { rootMessageId: 'root-other', userId: 'user-c' },
+    ]);
+
+    const result = await dmMessageRepository.listDmThreadFollowers('root-1');
+
+    assert({
+      given: 'a DM thread root with two followers and an unrelated follower on another root',
+      should: 'return a flat string[] of user ids scoped to the requested root only',
+      actual: result.sort(),
+      expected: ['user-a', 'user-b'],
+    });
+  });
+});
+
+describe('dmMessageRepository.addDmReaction', () => {
+  it('writes (messageId, userId, emoji) verbatim and returns the inserted row', async () => {
+    const result = await dmMessageRepository.addDmReaction({
+      messageId: 'msg-1',
+      userId: 'user-1',
+      emoji: '👍',
+    });
+
+    const rows = testDbState.rows('dmMessageReactions');
+    assert({
+      given: 'a DM reaction add request',
+      should: 'persist the triple (messageId, userId, emoji) and return the inserted row',
+      actual: {
+        rowCount: rows.length,
+        persisted: { messageId: rows[0].messageId, userId: rows[0].userId, emoji: rows[0].emoji },
+        returned: { messageId: result.messageId, userId: result.userId, emoji: result.emoji },
+      },
+      expected: {
+        rowCount: 1,
+        persisted: { messageId: 'msg-1', userId: 'user-1', emoji: '👍' },
+        returned: { messageId: 'msg-1', userId: 'user-1', emoji: '👍' },
+      },
+    });
+  });
+});
+
+describe('dmMessageRepository.loadDmReactionWithUser', () => {
+  it('fetches the reaction with the user relation so broadcasts include name+id without a re-fetch', async () => {
+    testDbState.seed('users', [{ id: 'u-1', name: 'Alice' }]);
+    testDbState.seed('dmMessageReactions', [
+      { id: 'rx-1', messageId: 'msg-1', userId: 'u-1', emoji: '👍' },
+    ]);
+
+    const result = await dmMessageRepository.loadDmReactionWithUser('rx-1');
+
+    assert({
+      given: 'a freshly added DM reaction',
+      should: 'load the user relation (id, name) so the broadcast payload renders the actor without an extra round-trip',
+      actual: (result?.user as { id: string; name: string } | null),
+      expected: { id: 'u-1', name: 'Alice' },
+    });
+  });
+});
+
+describe('dmMessageRepository.removeDmReaction', () => {
+  it('returns 0 when the delete matched no rows so the route can 404 on no-op', async () => {
+    const removed = await dmMessageRepository.removeDmReaction({
+      messageId: 'msg-1',
+      userId: 'user-1',
+      emoji: '👍',
+    });
+
+    assert({
+      given: 'a delete that matched no rows (already removed or never existed)',
+      should: 'return 0 so the route can return 404 instead of pretending success',
+      actual: removed,
+      expected: 0,
+    });
+  });
+
+  it('scopes the delete to (messageId, userId, emoji) — never deletes another participant\'s reaction', async () => {
+    testDbState.seed('dmMessageReactions', [
+      { id: 'rx-mine', messageId: 'msg-1', userId: 'user-1', emoji: '👍' },
+      { id: 'rx-other-user', messageId: 'msg-1', userId: 'user-other', emoji: '👍' },
+      { id: 'rx-other-msg', messageId: 'msg-other', userId: 'user-1', emoji: '👍' },
+      { id: 'rx-other-emoji', messageId: 'msg-1', userId: 'user-1', emoji: '🎉' },
+    ]);
+
+    const removed = await dmMessageRepository.removeDmReaction({
+      messageId: 'msg-1',
+      userId: 'user-1',
+      emoji: '👍',
+    });
+
+    const remaining = testDbState
+      .rows('dmMessageReactions')
+      .map((r) => r.id)
+      .sort();
+    assert({
+      given: 'a reaction-removal request when reactions for other users / messages / emojis exist',
+      should: 'delete only the (msg-1, user-1, 👍) row, return 1, and leave the three unrelated rows intact',
+      actual: { removed, remaining },
+      expected: { removed: 1, remaining: ['rx-other-emoji', 'rx-other-msg', 'rx-other-user'] },
+    });
+  });
+});
+
+describe('dmMessageRepository.insertDmMessageWithAttachment', () => {
+  const baseInput = {
+    conversationId: 'conv-1',
+    senderId: 'user-1',
+    content: 'hello',
+    attachments: [] as MessageAttachmentInput[],
+  };
+
+  it('persists an explicit quotedMessageId on the row when provided', async () => {
+    await dmMessageRepository.insertDmMessageWithAttachment({
+      ...baseInput,
+      content: 'inline quote reply',
+      quotedMessageId: 'quoted-dm-1',
+    });
+
+    const inserted = testDbState.rows('directMessages')[0];
+    assert({
+      given: 'an insert request with quotedMessageId set',
+      should: 'forward the value verbatim so the new DM links to the quoted source',
+      actual: inserted.quotedMessageId,
+      expected: 'quoted-dm-1',
+    });
+  });
+
+  it('persists null quotedMessageId when the caller omits the field', async () => {
+    await dmMessageRepository.insertDmMessageWithAttachment({
+      ...baseInput,
+      content: 'plain top-level message',
+    });
+
+    const inserted = testDbState.rows('directMessages')[0];
+    assert({
+      given: 'a top-level message with no quote context',
+      should: 'still write the column as null rather than dropping it from the payload',
+      actual: inserted.quotedMessageId,
+      expected: null,
+    });
+  });
+
+  it('inserts without touching files/fileConversations when no fileId is provided', async () => {
+    const result = await dmMessageRepository.insertDmMessageWithAttachment(baseInput);
+
+    assert({
+      given: 'a text-only top-level DM',
+      should: 'return kind ok, insert the row, and never lock files or fileConversations',
+      actual: {
+        kind: result.kind,
+        rowCount: testDbState.count('directMessages'),
+        fileLocks: testDbState.selectsForUpdate('files').length,
+        linkLocks: testDbState.selectsForUpdate('fileConversations').length,
+      },
+      expected: { kind: 'ok', rowCount: 1, fileLocks: 0, linkLocks: 0 },
+    });
+  });
+
+  it('validates and inserts atomically when fileId is owned by the sender and linked to the conversation', async () => {
+    testDbState.seed('files', [{ id: 'file-1', createdBy: 'user-1' }]);
+    testDbState.seed('fileConversations', [{ fileId: 'file-1', conversationId: 'conv-1' }]);
+
+    const result = await dmMessageRepository.insertDmMessageWithAttachment({
+      ...baseInput,
+      attachments: [{ fileId: 'file-1', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } }],
+    });
+
+    const inserted = testDbState.rows('directMessages')[0];
+    assert({
+      given: 'a fileId owned by the sender and linked to the conversation',
+      should: 'lock both the file and link rows exactly once, then insert the message referencing the file, all inside a single db.transaction',
+      actual: {
+        kind: result.kind,
+        insertedFileId: inserted?.fileId,
+        fileLocks: testDbState.selectsForUpdate('files').length,
+        linkLocks: testDbState.selectsForUpdate('fileConversations').length,
+        transactionCalls: testDbState.transactionCalls(),
+      },
+      expected: {
+        kind: 'ok',
+        insertedFileId: 'file-1',
+        fileLocks: 1,
+        linkLocks: 1,
+        transactionCalls: 1,
+      },
+    });
+  });
+
+  it('rejects with not_found and inserts nothing when the file does not exist', async () => {
+    const result = await dmMessageRepository.insertDmMessageWithAttachment({
+      ...baseInput,
+      attachments: [{ fileId: 'missing-file', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } }],
+    });
+
+    assert({
+      given: 'a fileId with no matching file row',
+      should: 'return not_found without inserting a message',
+      actual: { kind: result.kind, rowCount: testDbState.count('directMessages') },
+      expected: { kind: 'not_found', rowCount: 0 },
+    });
+  });
+
+  it('rejects with wrong_owner and inserts nothing when the file belongs to another user', async () => {
+    testDbState.seed('files', [{ id: 'file-1', createdBy: 'someone-else' }]);
+
+    const result = await dmMessageRepository.insertDmMessageWithAttachment({
+      ...baseInput,
+      attachments: [{ fileId: 'file-1', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } }],
+    });
+
+    assert({
+      given: 'a fileId owned by a different user than the sender',
+      should: 'return wrong_owner without inserting a message',
+      actual: { kind: result.kind, rowCount: testDbState.count('directMessages') },
+      expected: { kind: 'wrong_owner', rowCount: 0 },
+    });
+  });
+
+  it('rejects with not_linked and inserts nothing when the file is not linked to this conversation', async () => {
+    testDbState.seed('files', [{ id: 'file-1', createdBy: 'user-1' }]);
+
+    const result = await dmMessageRepository.insertDmMessageWithAttachment({
+      ...baseInput,
+      attachments: [{ fileId: 'file-1', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } }],
+    });
+
+    assert({
+      given: 'a fileId owned by the sender but not linked to the conversation',
+      should: 'return not_linked without inserting a message',
+      actual: { kind: result.kind, rowCount: testDbState.count('directMessages') },
+      expected: { kind: 'not_linked', rowCount: 0 },
+    });
+  });
+});
+
+// Surface guard: keep the public API shape stable so consumers don't break.
+describe('dmMessageRepository surface', () => {
+  it('exports the reaction functions the DM routes need at parity with channels', () => {
+    const keys = Object.keys(dmMessageRepository);
+    assert({
+      given: 'the repository module',
+      should: 'expose addDmReaction, removeDmReaction, and loadDmReactionWithUser',
+      actual: {
+        addDmReaction: keys.includes('addDmReaction'),
+        removeDmReaction: keys.includes('removeDmReaction'),
+        loadDmReactionWithUser: keys.includes('loadDmReactionWithUser'),
+      },
+      expected: {
+        addDmReaction: true,
+        removeDmReaction: true,
+        loadDmReactionWithUser: true,
+      },
+    });
+  });
+});
+
+describe('dmMessageRepository — PII decryption at the read edge (GDPR #965)', () => {
+  const ORIGINAL_ENV = { ...process.env };
+
+  beforeEach(() => {
+    process.env.ENCRYPTION_KEY = 'dm-repo-pii-test-master-key-32-chars-long!';
+  });
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+  });
+
+  it('listActiveMessages decrypts the joined sender and reactor names', async () => {
+    const aliceCipher = await encryptField('Alice');
+    const bobCipher = await encryptField('Bob');
+    expect(looksEncrypted(aliceCipher)).toBe(true);
+    expect(looksEncrypted(bobCipher)).toBe(true);
+
+    testDbState.seed('users', [
+      { id: 'u-1', name: aliceCipher },
+      { id: 'u-2', name: bobCipher },
+    ]);
+    testDbState.seed('directMessages', [
+      { id: 'm-1', conversationId: 'conv-1', senderId: 'u-1', isActive: true, parentId: null, replyCount: 0, createdAt: new Date('2026-05-01T00:00:00Z') },
+    ]);
+    testDbState.seed('dmMessageReactions', [
+      { id: 'rx-1', messageId: 'm-1', userId: 'u-2', emoji: '👍' },
+    ]);
+
+    const rows = await dmMessageRepository.listActiveMessages({ conversationId: 'conv-1', limit: 10 });
+
+    assert({
+      given: 'sender + reactor names stored as AES-GCM ciphertext at rest',
+      should: 'return plaintext names at the read edge for both the sender and the reactor',
+      actual: {
+        sender: (rows[0]?.sender as { name: string } | null)?.name,
+        reactor: (rows[0]?.reactions as Array<{ user: { name: string } }> | undefined)?.[0]?.user?.name,
+      },
+      expected: { sender: 'Alice', reactor: 'Bob' },
+    });
+  });
+
+  it('loadDmReactionWithUser decrypts the reactor name before broadcast', async () => {
+    const cipher = await encryptField('Dave');
+    testDbState.seed('users', [{ id: 'u-7', name: cipher }]);
+    testDbState.seed('dmMessageReactions', [
+      { id: 'rx-7', messageId: 'm-7', userId: 'u-7', emoji: '🎉' },
+    ]);
+
+    const row = await dmMessageRepository.loadDmReactionWithUser('rx-7');
+
+    assert({
+      given: 'a DM reaction whose reactor name is ciphertext at rest',
+      should: 'decrypt the reactor name before the row is broadcast/returned',
+      actual: (row?.user as { name: string } | null)?.name,
+      expected: 'Dave',
+    });
+  });
+
+  it('passes legacy plaintext sender names through unchanged (mixed-state safety)', async () => {
+    testDbState.seed('users', [{ id: 'u-legacy', name: 'Plain Pat' }]);
+    testDbState.seed('directMessages', [
+      { id: 'm-legacy', conversationId: 'conv-1', senderId: 'u-legacy', isActive: true, parentId: null, replyCount: 0 },
+    ]);
+
+    const rows = await dmMessageRepository.listActiveMessages({ conversationId: 'conv-1', limit: 10 });
+
+    assert({
+      given: 'a legacy row whose sender name is still plaintext (mid-backfill)',
+      should: 'pass the plaintext name through unchanged',
+      actual: (rows[0]?.sender as { name: string } | null)?.name,
+      expected: 'Plain Pat',
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #2153 — derived-field maintenance on every mutation path.
+// dmConversations.lastMessageAt/lastMessagePreview and parent.lastReplyAt are
+// derived from the surviving active rows; every mutation (insert, edit,
+// delete, restore, purge) must leave them consistent with that source.
+// ---------------------------------------------------------------------------
+
+describe('DM conversation derived state (#2153)', () => {
+  const T1 = new Date('2026-07-01T10:00:00Z');
+  const T2 = new Date('2026-07-01T11:00:00Z');
+
+  const seedConversation = () => {
+    testDbState.seed('dmConversations', [
+      {
+        id: 'conv-1',
+        participant1Id: 'u-1',
+        participant2Id: 'u-2',
+        lastMessageAt: T2,
+        lastMessagePreview: 'newest words',
+      },
+    ]);
+  };
+
+  it('soft-deleting the newest DM recomputes the conversation preview from the surviving row', async () => {
+    seedConversation();
+    testDbState.seed('directMessages', [
+      { id: 'm-old', conversationId: 'conv-1', senderId: 'u-1', content: 'older words', isActive: true, parentId: null, createdAt: T1 },
+      { id: 'm-new', conversationId: 'conv-1', senderId: 'u-2', content: 'newest words', isActive: true, parentId: null, createdAt: T2 },
+    ]);
+
+    await dmMessageRepository.softDeleteMessage('m-new');
+
+    const conv = testDbState.rows('dmConversations')[0];
+    assert({
+      given: 'a soft-delete of the newest top-level DM',
+      should: 'recompute lastMessageAt/lastMessagePreview from the surviving older message — deleted content must not linger in the inbox',
+      actual: { lastMessageAt: conv.lastMessageAt, lastMessagePreview: conv.lastMessagePreview },
+      expected: { lastMessageAt: T1, lastMessagePreview: 'older words' },
+    });
+  });
+
+  it('soft-deleting the only DM clears the conversation preview', async () => {
+    seedConversation();
+    testDbState.seed('directMessages', [
+      { id: 'm-only', conversationId: 'conv-1', senderId: 'u-1', content: 'newest words', isActive: true, parentId: null, createdAt: T2 },
+    ]);
+
+    await dmMessageRepository.softDeleteMessage('m-only');
+
+    const conv = testDbState.rows('dmConversations')[0];
+    assert({
+      given: 'a soft-delete of the only active DM in the conversation',
+      should: 'null out both derived fields instead of leaving the deleted content visible',
+      actual: { lastMessageAt: conv.lastMessageAt, lastMessagePreview: conv.lastMessagePreview },
+      expected: { lastMessageAt: null, lastMessagePreview: null },
+    });
+  });
+
+  it('editing the newest DM recomputes the conversation preview to the new content', async () => {
+    seedConversation();
+    testDbState.seed('directMessages', [
+      { id: 'm-new', conversationId: 'conv-1', senderId: 'u-2', content: 'newest words', isActive: true, parentId: null, createdAt: T2 },
+    ]);
+
+    await dmMessageRepository.editActiveMessage({
+      messageId: 'm-new',
+      content: 'edited words',
+      editedAt: new Date('2026-07-01T12:00:00Z'),
+    });
+
+    const conv = testDbState.rows('dmConversations')[0];
+    assert({
+      given: 'an edit of the newest top-level DM',
+      should: 'recompute the preview so the inbox shows the edited content, not the original',
+      actual: { lastMessageAt: conv.lastMessageAt, lastMessagePreview: conv.lastMessagePreview },
+      expected: { lastMessageAt: T2, lastMessagePreview: 'edited words' },
+    });
+  });
+
+  it('restoring a top-level DM recomputes the conversation preview from it', async () => {
+    testDbState.seed('dmConversations', [
+      { id: 'conv-1', participant1Id: 'u-1', participant2Id: 'u-2', lastMessageAt: T1, lastMessagePreview: 'older words' },
+    ]);
+    testDbState.seed('directMessages', [
+      { id: 'm-old', conversationId: 'conv-1', senderId: 'u-1', content: 'older words', isActive: true, parentId: null, createdAt: T1 },
+      { id: 'm-new', conversationId: 'conv-1', senderId: 'u-2', content: 'newest words', isActive: false, deletedAt: T2, parentId: null, createdAt: T2 },
+    ]);
+
+    await dmMessageRepository.restoreDmMessage('m-new');
+
+    const conv = testDbState.rows('dmConversations')[0];
+    assert({
+      given: 'a restore of the newest (previously soft-deleted) top-level DM',
+      should: 'recompute the conversation derived state from the restored row',
+      actual: { lastMessageAt: conv.lastMessageAt, lastMessagePreview: conv.lastMessagePreview },
+      expected: { lastMessageAt: T2, lastMessagePreview: 'newest words' },
+    });
+  });
+
+  it('inserting a top-level DM recomputes the conversation preview inside the same transaction', async () => {
+    testDbState.seed('dmConversations', [
+      { id: 'conv-1', participant1Id: 'u-1', participant2Id: 'u-2', lastMessageAt: null, lastMessagePreview: null },
+    ]);
+
+    await dmMessageRepository.insertDmMessageWithAttachment({
+      conversationId: 'conv-1',
+      senderId: 'u-1',
+      content: 'fresh send',
+      attachments: [],
+    });
+
+    const conv = testDbState.rows('dmConversations')[0];
+    const msg = testDbState.rows('directMessages')[0];
+    assert({
+      given: 'a top-level DM insert',
+      should: 'set the conversation derived state from the inserted row — the repository, not the route, owns the bump',
+      actual: { lastMessageAt: conv.lastMessageAt, lastMessagePreview: conv.lastMessagePreview },
+      expected: { lastMessageAt: msg.createdAt, lastMessagePreview: 'fresh send' },
+    });
+  });
+
+  it('a mirror created by alsoSendToParent bumps the conversation preview', async () => {
+    testDbState.seed('dmConversations', [
+      { id: 'conv-1', participant1Id: 'u-1', participant2Id: 'u-2', lastMessageAt: null, lastMessagePreview: null },
+    ]);
+    testDbState.seed('directMessages', [
+      { id: 'parent-1', conversationId: 'conv-1', senderId: 'u-1', content: 'root', isActive: true, parentId: null, replyCount: 0, createdAt: T1 },
+    ]);
+
+    const result = await dmMessageRepository.insertDmThreadReply({
+      parentId: 'parent-1',
+      conversationId: 'conv-1',
+      senderId: 'u-2',
+      content: 'echoed reply',
+      attachments: [],
+      alsoSendToParent: true,
+    });
+
+    const conv = testDbState.rows('dmConversations')[0];
+    assert({
+      given: 'a thread reply mirrored to the top-level stream',
+      should: 'derive the conversation preview from the mirror row inside the same transaction',
+      actual: {
+        kind: result.kind,
+        lastMessagePreview: conv.lastMessagePreview,
+        lastMessageAtIsDate: conv.lastMessageAt instanceof Date,
+      },
+      expected: { kind: 'ok', lastMessagePreview: 'echoed reply', lastMessageAtIsDate: true },
+    });
+  });
+
+  it('purging tombstones repairs a conversation preview that drifted before the fix', async () => {
+    // Pre-fix drift: the tombstone's content is still in the preview.
+    testDbState.seed('dmConversations', [
+      { id: 'conv-1', participant1Id: 'u-1', participant2Id: 'u-2', lastMessageAt: T2, lastMessagePreview: 'newest words' },
+    ]);
+    testDbState.seed('directMessages', [
+      { id: 'm-old', conversationId: 'conv-1', senderId: 'u-1', content: 'older words', isActive: true, parentId: null, createdAt: T1 },
+      { id: 'm-dead', conversationId: 'conv-1', senderId: 'u-2', content: 'newest words', isActive: false, deletedAt: new Date('2026-06-01T00:00:00Z'), parentId: null, createdAt: T2 },
+    ]);
+
+    await dmMessageRepository.purgeInactiveMessages(new Date('2026-06-15T00:00:00Z'));
+
+    const conv = testDbState.rows('dmConversations')[0];
+    assert({
+      given: 'a purge that hard-deletes a tombstone whose content still sat in the (pre-fix drifted) preview',
+      should: 'recompute the preview from the surviving rows while purging',
+      actual: { lastMessageAt: conv.lastMessageAt, lastMessagePreview: conv.lastMessagePreview },
+      expected: { lastMessageAt: T1, lastMessagePreview: 'older words' },
+    });
+  });
+
+  it('locks the conversation row before recomputing (SELECT ... FOR UPDATE), so a concurrent recompute cannot interleave and overwrite a fresher preview with a stale one', async () => {
+    seedConversation();
+    testDbState.seed('directMessages', [
+      { id: 'm-only', conversationId: 'conv-1', senderId: 'u-1', content: 'newest words', isActive: true, parentId: null, createdAt: T2 },
+    ]);
+
+    await dmMessageRepository.softDeleteMessage('m-only');
+
+    assert({
+      given: 'a soft-delete that triggers the conversation-preview recompute — a path with no pre-existing parent-row lock to piggyback on',
+      should: 'invoke .for("update") against dmConversations exactly once before reading the surviving messages (#2153) — this is the lock a concurrent send/edit/delete/restore/purge on the same conversation must serialize against',
+      actual: testDbState.selectsForUpdate('dmConversations').length,
+      expected: 1,
+    });
+  });
+});
+
+describe('DM thread lastReplyAt recompute (#2153)', () => {
+  const T1 = new Date('2026-07-01T10:00:00Z');
+  const T2 = new Date('2026-07-01T11:00:00Z');
+
+  it('soft-deleting the newest reply moves parent.lastReplyAt back to the surviving reply', async () => {
+    testDbState.seed('directMessages', [
+      { id: 'parent-1', conversationId: 'conv-1', senderId: 'u-1', content: 'root', isActive: true, parentId: null, replyCount: 2, lastReplyAt: T2, createdAt: new Date('2026-07-01T09:00:00Z') },
+      { id: 'reply-1', conversationId: 'conv-1', senderId: 'u-2', content: 'first', isActive: true, parentId: 'parent-1', createdAt: T1 },
+      { id: 'reply-2', conversationId: 'conv-1', senderId: 'u-1', content: 'second', isActive: true, parentId: 'parent-1', createdAt: T2 },
+    ]);
+
+    await dmMessageRepository.softDeleteMessage('reply-2');
+
+    const parent = testDbState.rows('directMessages').find((r) => r.id === 'parent-1');
+    assert({
+      given: 'a soft-delete of the newest reply in a DM thread',
+      should: 'recompute lastReplyAt from the surviving replies instead of leaving it pointing at the deleted one',
+      actual: { replyCount: parent?.replyCount, lastReplyAt: parent?.lastReplyAt },
+      expected: { replyCount: 1, lastReplyAt: T1 },
+    });
+  });
+
+  it('soft-deleting the only reply clears parent.lastReplyAt', async () => {
+    testDbState.seed('directMessages', [
+      { id: 'parent-1', conversationId: 'conv-1', senderId: 'u-1', content: 'root', isActive: true, parentId: null, replyCount: 1, lastReplyAt: T1, createdAt: new Date('2026-07-01T09:00:00Z') },
+      { id: 'reply-1', conversationId: 'conv-1', senderId: 'u-2', content: 'only', isActive: true, parentId: 'parent-1', createdAt: T1 },
+    ]);
+
+    await dmMessageRepository.softDeleteMessage('reply-1');
+
+    const parent = testDbState.rows('directMessages').find((r) => r.id === 'parent-1');
+    assert({
+      given: 'a soft-delete of the only reply in a DM thread',
+      should: 'clear lastReplyAt (no surviving replies) alongside the counter decrement',
+      actual: { replyCount: parent?.replyCount, lastReplyAt: parent?.lastReplyAt },
+      expected: { replyCount: 0, lastReplyAt: null },
+    });
+  });
+
+  it('restoring a reply recomputes parent.lastReplyAt from the now-surviving rows', async () => {
+    testDbState.seed('directMessages', [
+      { id: 'parent-1', conversationId: 'conv-1', senderId: 'u-1', content: 'root', isActive: true, parentId: null, replyCount: 1, lastReplyAt: T1, createdAt: new Date('2026-07-01T09:00:00Z') },
+      { id: 'reply-1', conversationId: 'conv-1', senderId: 'u-2', content: 'first', isActive: true, parentId: 'parent-1', createdAt: T1 },
+      { id: 'reply-2', conversationId: 'conv-1', senderId: 'u-1', content: 'second', isActive: false, deletedAt: T2, parentId: 'parent-1', createdAt: T2 },
+    ]);
+
+    await dmMessageRepository.restoreDmMessage('reply-2');
+
+    const parent = testDbState.rows('directMessages').find((r) => r.id === 'parent-1');
+    assert({
+      given: 'a restore of the newest (previously soft-deleted) DM reply',
+      should: 'move lastReplyAt forward to the restored reply',
+      actual: { replyCount: parent?.replyCount, lastReplyAt: parent?.lastReplyAt },
+      expected: { replyCount: 2, lastReplyAt: T2 },
+    });
+  });
+
+  it('locks the parent row before recomputing lastReplyAt on soft-delete — a path with no pre-existing parent lock to piggyback on', async () => {
+    testDbState.seed('directMessages', [
+      { id: 'parent-1', conversationId: 'conv-1', senderId: 'u-1', content: 'root', isActive: true, parentId: null, replyCount: 1, lastReplyAt: T1, createdAt: new Date('2026-07-01T09:00:00Z') },
+      { id: 'reply-1', conversationId: 'conv-1', senderId: 'u-2', content: 'only', isActive: true, parentId: 'parent-1', createdAt: T1 },
+    ]);
+
+    await dmMessageRepository.softDeleteMessage('reply-1');
+
+    assert({
+      given: 'a reply soft-delete — softDeleteMessage never pre-locks the parent the way restoreDmMessage does',
+      should: 'invoke .for("update") against the parent row exactly once via recomputeThreadLastReply (#2153), closing the same concurrent-delete race window restore already had covered',
+      actual: testDbState.selectsForUpdate('directMessages').length,
+      expected: 1,
+    });
+  });
+});
+
+describe('DM mirror edit propagation (#2153)', () => {
+  const T1 = new Date('2026-07-01T10:00:00Z');
+  const editedAt = new Date('2026-07-01T12:00:00Z');
+
+  it('editing a thread reply propagates the new content to its top-level mirror', async () => {
+    testDbState.seed('dmConversations', [
+      { id: 'conv-1', participant1Id: 'u-1', participant2Id: 'u-2', lastMessageAt: T1, lastMessagePreview: 'echo' },
+    ]);
+    testDbState.seed('directMessages', [
+      { id: 'parent-1', conversationId: 'conv-1', senderId: 'u-1', content: 'root', isActive: true, parentId: null, createdAt: new Date('2026-07-01T09:00:00Z') },
+      { id: 'reply-1', conversationId: 'conv-1', senderId: 'u-2', content: 'echo', isActive: true, parentId: 'parent-1', createdAt: T1 },
+      { id: 'mirror-1', conversationId: 'conv-1', senderId: 'u-2', content: 'echo', isActive: true, parentId: null, mirroredFromId: 'reply-1', createdAt: T1 },
+    ]);
+
+    await dmMessageRepository.editActiveMessage({ messageId: 'reply-1', content: 'edited echo', editedAt });
+
+    const mirror = testDbState.rows('directMessages').find((r) => r.id === 'mirror-1');
+    assert({
+      given: 'an edit of a thread reply that has an alsoSendToParent mirror',
+      should: 'propagate the edit to the mirror row so the two copies cannot disagree',
+      actual: { content: mirror?.content, isEdited: mirror?.isEdited, editedAt: mirror?.editedAt },
+      expected: { content: 'edited echo', isEdited: true, editedAt },
+    });
+  });
+
+  it('editing the mirror propagates the new content back to the thread reply', async () => {
+    testDbState.seed('dmConversations', [
+      { id: 'conv-1', participant1Id: 'u-1', participant2Id: 'u-2', lastMessageAt: T1, lastMessagePreview: 'echo' },
+    ]);
+    testDbState.seed('directMessages', [
+      { id: 'parent-1', conversationId: 'conv-1', senderId: 'u-1', content: 'root', isActive: true, parentId: null, createdAt: new Date('2026-07-01T09:00:00Z') },
+      { id: 'reply-1', conversationId: 'conv-1', senderId: 'u-2', content: 'echo', isActive: true, parentId: 'parent-1', createdAt: T1 },
+      { id: 'mirror-1', conversationId: 'conv-1', senderId: 'u-2', content: 'echo', isActive: true, parentId: null, mirroredFromId: 'reply-1', createdAt: T1 },
+    ]);
+
+    await dmMessageRepository.editActiveMessage({ messageId: 'mirror-1', content: 'edited echo', editedAt });
+
+    const reply = testDbState.rows('directMessages').find((r) => r.id === 'reply-1');
+    assert({
+      given: 'an edit of the top-level mirror row',
+      should: 'propagate the edit back to the source thread reply',
+      actual: { content: reply?.content, isEdited: reply?.isEdited, editedAt: reply?.editedAt },
+      expected: { content: 'edited echo', isEdited: true, editedAt },
+    });
+  });
+});

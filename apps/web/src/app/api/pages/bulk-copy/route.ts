@@ -1,13 +1,26 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { loggers, pageTreeCache } from '@pagespace/lib/server';
-import { pages, drives, driveMembers, db, and, eq, inArray, desc, isNull } from '@pagespace/db';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { db } from '@pagespace/db/db'
+import { and, eq, inArray, desc, isNull } from '@pagespace/db/operators'
+import { pages, drives } from '@pagespace/db/schema/core'
+import { isSheetType } from '@pagespace/lib/sheets/sheet';
+import { copySheetRows } from '@pagespace/lib/sheets/store';
+import { PageType } from '@pagespace/lib/utils/enums';
+import { driveRoleOf } from '@pagespace/lib/permissions/drive-relationship';
+import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult, isScopedMCPAuth, canPrincipalViewPage } from '@/lib/auth';
+import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { createId } from '@paralleldrive/cuid2';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { createChangeGroupId } from '@pagespace/lib/monitoring';
+import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
+import { ensureTaskItemForPage } from '@/services/api/task-sync-service';
+import { OrgLapsedError, checkDriveMayLoosen, isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { assertAgentModelAllowed, orgModelPolicyErrorResponse } from '@/services/api/page-mutation-service';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -53,18 +66,21 @@ export async function POST(request: Request) {
       return targetScopeError;
     }
 
-    // Check user has edit access to target drive
-    const isOwner = targetDrive.ownerId === userId;
-    let canEditDrive = isOwner;
-
-    if (!isOwner) {
-      const membership = await db.query.driveMembers.findFirst({
-        where: and(
-          eq(driveMembers.driveId, targetDriveId),
-          eq(driveMembers.userId, userId)
-        ),
-      });
-      canEditDrive = membership?.role === 'OWNER' || membership?.role === 'ADMIN';
+    // Check the principal has edit access to target drive. A scoped MCP token
+    // is its own drive member — use the TOKEN's role, not its owning user's.
+    let canEditDrive: boolean;
+    const tokenMembership = isScopedMCPAuth(auth)
+      ? await getAppDriveMembership(actorFromAuth(auth), auth.tokenId, targetDriveId)
+      : null;
+    if (isScopedMCPAuth(auth) && tokenMembership?.role !== null) {
+      // Explicit-role keys need OWNER/ADMIN; inherited keys (role null) fall
+      // through to the owner's own authority below.
+      canEditDrive = tokenMembership?.role === 'OWNER' || tokenMembership?.role === 'ADMIN';
+    } else {
+      // The drive's lead or an effective OWNER/ADMIN (the org-aware membership reads ACCEPTED rows
+      // only, so a pending ADMIN invitee cannot write into a drive they have not joined).
+      const role = driveRoleOf(await loadDriveRelationship(actorFromAuth(auth), targetDrive));
+      canEditDrive = role === 'OWNER' || role === 'ADMIN';
     }
 
     if (!canEditDrive) {
@@ -89,6 +105,7 @@ export async function POST(request: Request) {
     }
 
     // Fetch source pages
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const sourcePages = await db.query.pages.findMany({
       where: inArray(pages.id, pageIds),
     });
@@ -113,12 +130,12 @@ export async function POST(request: Request) {
 
     // Verify view permissions for all pages
     for (const page of sourcePages) {
-      const canView = await canUserViewPage(userId, page.id);
+      const canView = await canPrincipalViewPage(auth, page.id);
       if (!canView) {
-        return NextResponse.json(
+        return deniedResponse(actorFromAuth(auth), page.id, NextResponse.json(
           { error: `You do not have permission to copy page: ${page.title}` },
           { status: 403 }
-        );
+        ));
       }
     }
 
@@ -138,7 +155,14 @@ export async function POST(request: Request) {
 
     // Copy pages in transaction
     await db.transaction(async (tx) => {
+      // [D-OW-33] ruling P2-4: copying pages OUT of a lapsed org's drive puts its content where another drive's members
+      // read it: refused, checked against each SOURCE drive in this transaction. A copy within the same drive is not
+      // this. Exporting data (account / GDPR export) stays available.
+      for (const sourceDriveId of new Set(sourcePages.map((p) => p.driveId))) {
+        if (sourceDriveId !== targetDriveId && (await checkDriveMayLoosen(tx, sourceDriveId, true))) throw new OrgLapsedError();
+      }
       for (const page of sourcePages) {
+        await assertCopiedAgentModelAllowed(targetDriveId, page);
         const newPageId = createId();
         copiedPages.push({ newId: newPageId, sourceTitle: page.title, sourceId: page.id });
 
@@ -182,6 +206,20 @@ export async function POST(request: Request) {
           contentHash: page.contentHash,
         });
 
+        // A sheet's cells live in rows; `content` is empty for a materialised
+        // one, so copying the column alone produced a blank spreadsheet.
+        if (isSheetType(page.type as PageType)) {
+          await copySheetRows(page.id, newPageId, tx);
+        }
+
+        // A TASK_LIST copied under a TASK_LIST parent must appear as a task.
+        await ensureTaskItemForPage(tx, {
+          pageId: newPageId,
+          pageType: page.type,
+          parentId: targetParentId,
+          userId,
+        });
+
         copiedCount += 1;
         nextPosition += 1;
 
@@ -191,7 +229,8 @@ export async function POST(request: Request) {
             tx,
             page.id,
             newPageId,
-            targetDriveId
+            targetDriveId,
+            userId
           );
           copiedCount += childCount;
         }
@@ -221,22 +260,20 @@ export async function POST(request: Request) {
       });
     }
 
-    // Invalidate cache and broadcast event
-    pageTreeCache.invalidateDriveTree(targetDriveId).catch(err => {
-      loggers.api.warn('Page tree cache invalidation failed', {
-        error: err instanceof Error ? err.message : String(err),
-        driveId: targetDriveId,
-      });
-    });
     await broadcastPageEvent(
       createPageEventPayload(targetDriveId, '', 'created')
     );
+
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'page', resourceId: 'bulk', details: { operation: 'bulk_copy', count: copiedCount } });
 
     return NextResponse.json({
       success: true,
       copiedCount,
     });
   } catch (error) {
+    if (isOrgLapsedError(error)) return orgLapsedResponse();
+    const refused = orgModelPolicyErrorResponse(error);
+    if (refused) return NextResponse.json(refused.body, { status: refused.status });
     loggers.api.error('Error bulk copying pages:', error as Error);
     return NextResponse.json(
       { error: 'Failed to copy pages' },
@@ -245,13 +282,24 @@ export async function POST(request: Request) {
   }
 }
 
+/**
+ * POL-8: a copied agent page stores its provider/model in the target drive, which is a save there: refused (and the
+ * whole copy rolled back) when the target drive's org does not allow it.
+ */
+async function assertCopiedAgentModelAllowed(targetDriveId: string, page: { type: string; aiProvider: string | null; aiModel: string | null }): Promise<void> {
+  if (page.type !== PageType.AI_CHAT) return;
+  await assertAgentModelAllowed(targetDriveId, { provider: page.aiProvider, modelId: page.aiModel });
+}
+
 // Recursively copy children
 async function copyChildrenRecursively(
   tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
   sourceParentId: string,
   newParentId: string,
-  targetDriveId: string
+  targetDriveId: string,
+  userId: string
 ): Promise<number> {
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const children = await tx.query.pages.findMany({
     where: and(
       eq(pages.parentId, sourceParentId),
@@ -262,6 +310,7 @@ async function copyChildrenRecursively(
   let copiedCount = 0;
 
   for (const child of children) {
+    await assertCopiedAgentModelAllowed(targetDriveId, child);
     const newChildId = createId();
 
     await tx.insert(pages).values({
@@ -303,6 +352,18 @@ async function copyChildrenRecursively(
       contentHash: child.contentHash,
     });
 
+    if (isSheetType(child.type as PageType)) {
+      await copySheetRows(child.id, newChildId, tx);
+    }
+
+    // A TASK_LIST copied under a TASK_LIST parent must appear as a task.
+    await ensureTaskItemForPage(tx, {
+      pageId: newChildId,
+      pageType: child.type,
+      parentId: newParentId,
+      userId,
+    });
+
     copiedCount += 1;
 
     // Recursively copy grandchildren
@@ -310,7 +371,8 @@ async function copyChildrenRecursively(
       tx,
       child.id,
       newChildId,
-      targetDriveId
+      targetDriveId,
+      userId
     );
     copiedCount += grandchildCount;
   }

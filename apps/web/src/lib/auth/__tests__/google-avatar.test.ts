@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@pagespace/lib', () => ({
+vi.mock('@pagespace/lib/services/validated-service-token', () => ({
   createUserServiceToken: vi.fn().mockResolvedValue({ token: 'service-token' }),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     auth: {
       debug: vi.fn(),
@@ -13,8 +13,8 @@ vi.mock('@pagespace/lib/server', () => ({
   },
 }));
 
-import { createUserServiceToken } from '@pagespace/lib';
-import { loggers } from '@pagespace/lib/server';
+import { createUserServiceToken } from '@pagespace/lib/services/validated-service-token';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isExternalHttpUrl, resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 
 describe('google-avatar', () => {
@@ -100,7 +100,7 @@ describe('google-avatar', () => {
     });
 
     expect(result).toMatch(/^\/api\/avatar\/user-123\/avatar\.png\?t=\d+$/);
-    expect(createUserServiceToken).toHaveBeenCalledWith('user-123', ['avatars:write'], '5m');
+    expect(createUserServiceToken).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-123' }), ['avatars:write'], '5m');
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 

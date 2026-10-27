@@ -50,7 +50,7 @@ const {
   subscriptionsTable: Symbol('subscriptions'),
 }));
 
-vi.mock('@pagespace/db', () => {
+vi.mock('@pagespace/db/db', () => {
   return {
     db: {
       select: vi.fn(() => ({
@@ -68,14 +68,20 @@ vi.mock('@pagespace/db', () => {
         }),
       })),
     },
-    users: usersTable,
-    subscriptions: subscriptionsTable,
-    eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
-    and: vi.fn((...args: unknown[]) => ({ args, type: 'and' })),
-    inArray: vi.fn((field: unknown, values: unknown) => ({ field, values, type: 'inArray' })),
-    desc: vi.fn((field: unknown) => ({ field, type: 'desc' })),
   };
 });
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
+  and: vi.fn((...args: unknown[]) => ({ args, type: 'and' })),
+  inArray: vi.fn((field: unknown, values: unknown) => ({ field, values, type: 'inArray' })),
+  desc: vi.fn((field: unknown) => ({ field, type: 'desc' })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: usersTable,
+}));
+vi.mock('@pagespace/db/schema/subscriptions', () => ({
+  subscriptions: subscriptionsTable,
+}));
 
 // Mock auth
 vi.mock('@/lib/auth', () => ({
@@ -83,9 +89,23 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
+    api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    security: { warn: vi.fn() },
+  },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
+}));
+
 // Import after mocks
 import { GET } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -284,9 +304,9 @@ describe('Upcoming Invoice API', () => {
         subtotal: 1500,
         total: 1500,
         currency: 'usd',
-        periodStart: expect.any(String),
-        periodEnd: expect.any(String),
-        nextPaymentAttempt: expect.any(String),
+        periodStart: new Date(1700000000 * 1000).toISOString(),
+        periodEnd: new Date(1702592000 * 1000).toISOString(),
+        nextPaymentAttempt: new Date(1702592000 * 1000).toISOString(),
       });
       expect(body.invoice.lines).toHaveLength(1);
       expect(body.proration).toBeNull();
@@ -413,6 +433,19 @@ describe('Upcoming Invoice API', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to fetch upcoming invoice');
+    });
+
+    it('should log audit event on GET upcoming invoice', async () => {
+      const request = new Request('https://example.com/api/stripe/upcoming-invoice', {
+        method: 'GET',
+      }) as unknown as import('next/server').NextRequest;
+
+      await GET(request);
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ eventType: 'data.read', userId: 'user_123', resourceType: 'invoice', resourceId: 'upcoming' })
+      );
     });
   });
 });

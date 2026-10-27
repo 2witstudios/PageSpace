@@ -251,6 +251,25 @@ describe('applyAuth', () => {
         queryParams: { access_token: 'query-oauth-token' },
       });
     });
+
+    it('given oauth2 auth with access_token credential key, should use fallback key', () => {
+      const credentials = { access_token: 'fallback-token' };
+      const authMethod: AuthMethod = {
+        type: 'oauth2',
+        config: {
+          authorizationUrl: 'https://example.com/oauth/authorize',
+          tokenUrl: 'https://example.com/oauth/token',
+          scopes: [],
+        },
+      };
+
+      const result = applyAuth(credentials, authMethod);
+
+      expect(result).toEqual({
+        headers: { Authorization: 'Bearer fallback-token' },
+        queryParams: {},
+      });
+    });
   });
 
   describe('custom_header auth', () => {

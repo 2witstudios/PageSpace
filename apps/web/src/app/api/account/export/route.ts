@@ -1,13 +1,19 @@
 import { collectAllUserData } from '@pagespace/lib/compliance/export/gdpr-export';
-import { db } from '@pagespace/db';
+import { credentialExportGate } from '@pagespace/lib/compliance/export/export-sign-in-gate';
+import {
+  parseExportFormat,
+  buildNativeExportFiles,
+  buildPortableExportFiles,
+  buildExportManifest,
+} from '@pagespace/lib/compliance/export/export-format';
+import { db } from '@pagespace/db/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { actorFromAuth } from '@/lib/auth/request-actor';
+import { checkDistributedRateLimit, resetDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import archiver from 'archiver';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
-
-// Rate limit: track last export time per user (in-memory, resets on deploy)
-const lastExportMap = new Map<string, number>();
-const EXPORT_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 /**
  * GET /api/account/export
@@ -25,15 +31,23 @@ export async function GET(request: Request) {
   }
   const userId = auth.userId;
 
-  // Rate limiting
-  const lastExport = lastExportMap.get(userId);
-  if (lastExport && Date.now() - lastExport < EXPORT_COOLDOWN_MS) {
-    const retryAfterSeconds = Math.ceil((EXPORT_COOLDOWN_MS - (Date.now() - lastExport)) / 1000);
+  // Portability format selection (Art 20). `native` = per-section JSON (default);
+  // `portable` = a single documented schema.org bundle. Unknown values → native.
+  const format = parseExportFormat(new URL(request.url).searchParams.get('format'));
+
+  // Rate limiting (distributed via Postgres rate_limit_buckets)
+  const rateLimitKey = `export:user:${userId}`;
+  const rateLimitResult = await checkDistributedRateLimit(
+    rateLimitKey,
+    DISTRIBUTED_RATE_LIMITS.EXPORT_DATA
+  );
+
+  if (!rateLimitResult.allowed) {
     return Response.json(
       { error: 'Export rate limit exceeded. You can request one export per 24 hours.' },
       {
         status: 429,
-        headers: { 'Retry-After': String(retryAfterSeconds) },
+        headers: { 'Retry-After': String(rateLimitResult.retryAfter || 86400) },
       }
     );
   }
@@ -42,18 +56,22 @@ export async function GET(request: Request) {
     const data = await collectAllUserData(
       db as Parameters<typeof collectAllUserData>[0],
       userId,
+      // SEC-2/3 (D-OW-62): the bundle carries only the org content, and the digests derived from it, that this
+      // session's sign-in may read; the manifest names what it left out and the sign-in that brings it back.
+      credentialExportGate(actorFromAuth(auth)),
     );
 
     if (!data) {
+      await resetDistributedRateLimit(rateLimitKey);
       return Response.json({ error: 'User not found' }, { status: 404 });
     }
 
-    // Record this export for rate limiting
-    lastExportMap.set(userId, Date.now());
+    auditRequest(request, { eventType: 'data.export', userId, resourceType: 'account', resourceId: userId, details: { operation: 'gdpr_export' } });
 
     // Build ZIP archive
     const archive = archiver('zip', { zlib: { level: 6 } });
-    const dateStr = new Date().toISOString().split('T')[0];
+    const exportedAt = new Date();
+    const dateStr = exportedAt.toISOString().split('T')[0];
 
     // Bridge Node Readable → Web ReadableStream
     const readable = new ReadableStream({
@@ -70,15 +88,16 @@ export async function GET(request: Request) {
       },
     });
 
-    // Add JSON files to archive
-    archive.append(JSON.stringify(data.profile, null, 2), { name: `pagespace-export-${dateStr}/profile.json` });
-    archive.append(JSON.stringify(data.drives, null, 2), { name: `pagespace-export-${dateStr}/drives.json` });
-    archive.append(JSON.stringify(data.pages, null, 2), { name: `pagespace-export-${dateStr}/pages.json` });
-    archive.append(JSON.stringify(data.messages, null, 2), { name: `pagespace-export-${dateStr}/messages.json` });
-    archive.append(JSON.stringify(data.files, null, 2), { name: `pagespace-export-${dateStr}/files-metadata.json` });
-    archive.append(JSON.stringify(data.activity, null, 2), { name: `pagespace-export-${dateStr}/activity.json` });
-    archive.append(JSON.stringify(data.aiUsage, null, 2), { name: `pagespace-export-${dateStr}/ai-usage.json` });
-    archive.append(JSON.stringify(data.tasks, null, 2), { name: `pagespace-export-${dateStr}/tasks.json` });
+    // Build the file set for the requested format and append each as JSON.
+    const files = format === 'portable' ? buildPortableExportFiles(data) : buildNativeExportFiles(data);
+    for (const file of files) {
+      archive.append(JSON.stringify(file.data, null, 2), { name: `pagespace-export-${dateStr}/${file.name}` });
+    }
+
+    // manifest.json documents the schema version + file inventory so the bundle
+    // is self-describing (GDPR Art 20 portability).
+    const manifest = buildExportManifest(files, { exportedAt, format, withheld: data.withheld });
+    archive.append(JSON.stringify(manifest, null, 2), { name: `pagespace-export-${dateStr}/manifest.json` });
 
     // Finalize the archive (must be called after all data is appended)
     archive.finalize();
@@ -91,6 +110,7 @@ export async function GET(request: Request) {
       },
     });
   } catch (error) {
+    await resetDistributedRateLimit(rateLimitKey);
     console.error('[GDPR Export] Error generating export:', error);
     return Response.json(
       { error: 'Failed to generate data export' },

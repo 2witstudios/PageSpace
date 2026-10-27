@@ -21,14 +21,16 @@ import { validateCSRF, requiresCSRFProtection } from '../csrf-validation';
  */
 
 // Mock dependencies at system boundary
-vi.mock('@pagespace/lib/auth', () => ({
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
   validateCSRFToken: vi.fn(),
+}));
+vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
     validateSession: vi.fn(),
   },
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     auth: {
       warn: vi.fn(),
@@ -42,7 +44,8 @@ vi.mock('../cookie-config', () => ({
   getSessionFromCookies: vi.fn(),
 }));
 
-import { validateCSRFToken, sessionService } from '@pagespace/lib/auth';
+import { validateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
+import { sessionService } from '@pagespace/lib/auth/session-service';
 import { getSessionFromCookies } from '../cookie-config';
 
 describe('csrf-validation', () => {
@@ -154,11 +157,9 @@ describe('csrf-validation', () => {
         expect(result).not.toBeNull();
         expect(result?.status).toBe(403);
         const body = await result?.json();
-        expect(body).toMatchObject({
-          error: 'CSRF token required',
-          code: 'CSRF_TOKEN_MISSING',
-          details: expect.stringContaining('X-CSRF-Token'),
-        });
+        expect(body.error).toBe('CSRF token required');
+        expect(body.code).toBe('CSRF_TOKEN_MISSING');
+        expect(body.details).toBe('Include X-CSRF-Token header with your request');
       });
 
       it('validateCSRF_POSTWithCSRFButNoSession_returns401WithCSRF_NO_SESSION', async () => {
@@ -226,7 +227,7 @@ describe('csrf-validation', () => {
         expect(body).toMatchObject({
           error: 'Invalid or expired CSRF token',
           code: 'CSRF_TOKEN_INVALID',
-          details: expect.any(String),
+          details: 'Your CSRF token is invalid or has expired. Refresh and try again.',
         });
       });
     });
@@ -264,7 +265,7 @@ describe('csrf-validation', () => {
 
         // Assert: Verify the session-based binding flow
         expect(getSessionFromCookies).toHaveBeenCalled();
-        expect(sessionService.validateSession).toHaveBeenCalledWith('ps_sess_valid');
+        expect(sessionService.validateSession).toHaveBeenCalledWith('ps_sess_valid', { expectedType: 'user' });
         expect(validateCSRFToken).toHaveBeenCalledWith('valid-csrf-token', mockSessionId);
       });
     });
@@ -323,7 +324,7 @@ describe('csrf-validation', () => {
         await validateCSRF(request);
 
         // Assert: Session service validates the correct token
-        expect(sessionService.validateSession).toHaveBeenCalledWith('ps_sess_custom');
+        expect(sessionService.validateSession).toHaveBeenCalledWith('ps_sess_custom', { expectedType: 'user' });
       });
     });
   });

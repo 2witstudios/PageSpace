@@ -33,17 +33,24 @@ export interface TaskAssigneeData {
 
 export interface TaskItem {
   id: string;
-  taskListId: string;
   userId: string;
   assigneeId: string | null;
   assigneeAgentId: string | null;
   pageId: string | null;
   title: string;
-  description: string | null;
   status: string;
   priority: 'low' | 'medium' | 'high';
+  /** Mirror of the linked page's `pages.position` — the single ordering rail (#2143). */
   position: number;
   dueDate: string | null;
+  metadata?: Record<string, unknown> | null;
+  // activeTriggerCount is the canonical UI source for trigger presence (live join in
+  // /api/pages/[pageId]/tasks). The DB row also carries metadata.hasTrigger/triggerTypes
+  // written by recomputeTaskTriggerMetadata, but no UI path reads them.
+  activeTriggerCount?: number;
+  hasContent?: boolean;
+  subTaskCount?: number;
+  subTaskCompletedCount?: number;
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -67,6 +74,7 @@ export interface TaskItem {
   } | null;
   page?: {
     id: string;
+    type: string;
     isTrashed: boolean;
     position: number;
   } | null;
@@ -82,10 +90,10 @@ export interface TaskListData {
   };
   tasks: TaskItem[];
   statusConfigs: TaskStatusConfig[];
+  hasMore: boolean;
 }
 
 export type TaskPriority = 'low' | 'medium' | 'high';
-export type ViewMode = 'table' | 'kanban';
 
 // Build a STATUS_CONFIG-compatible map from custom status configs
 export function buildStatusConfig(configs: TaskStatusConfig[]): Record<string, { label: string; color: string; group: TaskStatusGroup }> {
@@ -119,13 +127,13 @@ export const PRIORITY_CONFIG: Record<TaskPriority, { label: string; color: strin
 
 // Backward-compatible aliases
 export type TaskStatus = string;
-export const STATUS_CONFIG = DEFAULT_STATUS_CONFIG;
 export const STATUS_ORDER: string[] = ['pending', 'in_progress', 'blocked', 'completed'];
 
 // Task handlers interface for shared components
 export interface TaskHandlers {
   onToggleComplete: (task: TaskItem) => void;
-  onStatusChange: (taskId: string, status: string) => void;
+  /** Takes the task, not just its id: the sub-task completion guard needs the row. */
+  onStatusChange: (task: TaskItem, status: string) => void;
   onPriorityChange: (taskId: string, priority: string) => void;
   onAssigneeChange: (taskId: string, assigneeId: string | null, agentId: string | null) => void;
   onMultiAssigneeChange?: (taskId: string, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => void;
@@ -134,4 +142,67 @@ export interface TaskHandlers {
   onDelete: (taskId: string) => void;
   onNavigate: (task: TaskItem) => void;
   onStartEdit: (task: TaskItem) => void;
+  onConfigureTriggers?: (task: TaskItem) => void;
 }
+
+/**
+ * Which list a task belongs to, alongside the task itself.
+ *
+ * Every task write goes to `/api/pages/{listPageId}/tasks/{taskId}`, where
+ * `listPageId` is the page of the list CONTAINING the task — not the task's own
+ * page. At the top level that is always the viewed page, which is why the
+ * handlers hard-coded it. Nested rows belong to their parent task's list, so
+ * the list id has to travel with the task id or a sub-task's PATCH goes to the
+ * root list and 404s on the parent-child check.
+ */
+export interface TaskLocation {
+  readonly listPageId: string;
+  readonly taskId: string;
+}
+
+/**
+ * The same handler set, but addressed by TaskLocation. This is what TaskListView
+ * implements; `bindTaskHandlersToList` narrows it back down for the surfaces
+ * that only ever render top-level tasks.
+ */
+export interface LocatedTaskHandlers {
+  onToggleComplete: (loc: TaskLocation, task: TaskItem) => void;
+  onStatusChange: (loc: TaskLocation, task: TaskItem, status: string) => void;
+  onPriorityChange: (loc: TaskLocation, priority: string) => void;
+  onAssigneeChange: (loc: TaskLocation, assigneeId: string | null, agentId: string | null) => void;
+  onMultiAssigneeChange?: (loc: TaskLocation, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => void;
+  onDueDateChange: (loc: TaskLocation, date: Date | null) => void;
+  onSaveTitle: (loc: TaskLocation, title: string) => void;
+  onDelete: (loc: TaskLocation) => void;
+  onNavigate: (task: TaskItem) => void;
+  onStartEdit: (task: TaskItem) => void;
+  onConfigureTriggers?: (task: TaskItem) => void;
+}
+
+/**
+ * Adapt located handlers to the flat `TaskHandlers` shape by fixing the list.
+ *
+ * Kanban and the mobile card list only ever render tasks of the viewed list, so
+ * they keep their existing prop contract instead of being churned through the
+ * whole tree refactor.
+ */
+export const bindTaskHandlersToList = (
+  h: LocatedTaskHandlers,
+  listPageId: string,
+): TaskHandlers => ({
+  onToggleComplete: (task) => h.onToggleComplete({ listPageId, taskId: task.id }, task),
+  onStatusChange: (task, status) => h.onStatusChange({ listPageId, taskId: task.id }, task, status),
+  onPriorityChange: (taskId, priority) => h.onPriorityChange({ listPageId, taskId }, priority),
+  onAssigneeChange: (taskId, assigneeId, agentId) =>
+    h.onAssigneeChange({ listPageId, taskId }, assigneeId, agentId),
+  ...(h.onMultiAssigneeChange && {
+    onMultiAssigneeChange: (taskId: string, assigneeIds: { type: 'user' | 'agent'; id: string }[]) =>
+      h.onMultiAssigneeChange!({ listPageId, taskId }, assigneeIds),
+  }),
+  onDueDateChange: (taskId, date) => h.onDueDateChange({ listPageId, taskId }, date),
+  onSaveTitle: (taskId, title) => h.onSaveTitle({ listPageId, taskId }, title),
+  onDelete: (taskId) => h.onDelete({ listPageId, taskId }),
+  onNavigate: h.onNavigate,
+  onStartEdit: h.onStartEdit,
+  ...(h.onConfigureTriggers && { onConfigureTriggers: h.onConfigureTriggers }),
+});

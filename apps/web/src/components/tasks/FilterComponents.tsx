@@ -10,89 +10,17 @@ import {
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import type { TaskStatus, TaskPriority } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
-import type { Drive } from './types';
 
 export type DueDateFilter = 'all' | 'overdue' | 'today' | 'this_week' | 'upcoming';
 export type AssigneeFilter = 'mine' | 'all';
+export type StatusGroupFilter = 'all' | 'active' | 'completed';
 
 export interface FilterValues {
   status?: TaskStatus;
   priority?: TaskPriority;
-  driveId?: string;
   dueDateFilter?: DueDateFilter;
   assigneeFilter?: AssigneeFilter;
-}
-
-export interface FilterSelectProps {
-  value: string;
-  onValueChange: (value: string) => void;
-  placeholder: string;
-  options: Array<{ value: string; label: string }>;
-  className?: string;
-  triggerClassName?: string;
-}
-
-export function FilterSelect({
-  value,
-  onValueChange,
-  placeholder,
-  options,
-  className,
-  triggerClassName,
-}: FilterSelectProps) {
-  return (
-    <Select value={value} onValueChange={onValueChange}>
-      <SelectTrigger className={triggerClassName}>
-        <SelectValue placeholder={placeholder} />
-      </SelectTrigger>
-      <SelectContent className={className}>
-        {options.map((opt) => (
-          <SelectItem key={opt.value} value={opt.value}>
-            {opt.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
-export interface DriveSelectProps {
-  context: 'user' | 'drive';
-  drives: Drive[];
-  selectedDriveId: string | undefined;
-  driveFilterId: string | undefined;
-  onDriveChange: (driveId: string) => void;
-  triggerClassName?: string;
-}
-
-export function DriveSelect({
-  context,
-  drives,
-  selectedDriveId,
-  driveFilterId,
-  onDriveChange,
-  triggerClassName,
-}: DriveSelectProps) {
-  const value = context === 'drive' ? selectedDriveId : (driveFilterId || 'all');
-
-  return (
-    <Select
-      value={value}
-      onValueChange={(v) => onDriveChange(v === 'all' ? '' : v)}
-    >
-      <SelectTrigger className={triggerClassName}>
-        <SelectValue placeholder="All drives" />
-      </SelectTrigger>
-      <SelectContent>
-        {context === 'user' && <SelectItem value="all">All drives</SelectItem>}
-        {drives.map((drive) => (
-          <SelectItem key={drive.id} value={drive.id}>
-            {drive.name}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
+  statusGroup?: StatusGroupFilter;
 }
 
 export interface StatusSelectProps {
@@ -259,6 +187,45 @@ export function AssigneeToggle({ value, onChange, variant = 'compact', className
         <Users className="h-3.5 w-3.5" />
         <span className="hidden sm:inline">All tasks</span>
       </button>
+    </div>
+  );
+}
+
+export interface StatusGroupToggleProps {
+  value: StatusGroupFilter;
+  onChange: (value: StatusGroupFilter) => void;
+  className?: string;
+}
+
+const STATUS_GROUP_OPTIONS: Array<{ value: StatusGroupFilter; label: string }> = [
+  { value: 'active', label: 'Active' },
+  { value: 'all', label: 'All' },
+  { value: 'completed', label: 'Completed' },
+];
+
+export function StatusGroupToggle({ value, onChange, className }: StatusGroupToggleProps) {
+  return (
+    <div
+      role="group"
+      aria-label="Task completion filter"
+      className={cn('flex items-center bg-muted rounded-md p-0.5', className)}
+    >
+      {STATUS_GROUP_OPTIONS.map((opt) => (
+        <button
+          key={opt.value}
+          type="button"
+          onClick={() => onChange(opt.value)}
+          aria-pressed={value === opt.value}
+          className={cn(
+            'px-3 py-1.5 text-sm font-medium rounded transition-colors flex-1 sm:flex-none',
+            value === opt.value
+              ? 'bg-background text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'
+          )}
+        >
+          {opt.label}
+        </button>
+      ))}
     </div>
   );
 }

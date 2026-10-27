@@ -1,179 +1,83 @@
+import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { authenticateRequestWithOptions, getPrincipalDriveAccess, isAuthError } from '@/lib/auth';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
+import { offeredModels } from '@/lib/ai/core/org-model-policy';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import {
-  getUserOpenRouterSettings,
-  createOpenRouterSettings,
-  getUserGoogleSettings,
-  createGoogleSettings,
-  deleteOpenRouterSettings,
-  deleteGoogleSettings,
-  getDefaultPageSpaceSettings,
-  getUserOpenAISettings,
-  createOpenAISettings,
-  deleteOpenAISettings,
-  getUserAnthropicSettings,
-  createAnthropicSettings,
-  deleteAnthropicSettings,
-  getUserXAISettings,
-  createXAISettings,
-  deleteXAISettings,
-  getUserOllamaSettings,
-  createOllamaSettings,
-  deleteOllamaSettings,
-  getUserLMStudioSettings,
-  createLMStudioSettings,
-  deleteLMStudioSettings,
-  getUserGLMSettings,
-  createGLMSettings,
-  deleteGLMSettings,
-  getUserMiniMaxSettings,
-  createMiniMaxSettings,
-  deleteMiniMaxSettings,
-  getUserAzureOpenAISettings,
-  createAzureOpenAISettings,
-  deleteAzureOpenAISettings,
-} from '@/lib/ai/core';
-import { ONPREM_ALLOWED_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
+  ALL_PROVIDER_NAMES,
+  buildProviderAvailabilityMap,
+  isProviderAvailable,
+} from '@/lib/ai/core/ai-utils';
+import { ONPREM_ALLOWED_PROVIDERS, DYNAMIC_MODEL_PROVIDERS, isValidModel, resolveProviderModel, ADMIN_ONLY_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
 import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
-import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
-import { isOnPrem } from '@pagespace/lib';
-
-function isProviderBlocked(provider: string): boolean {
-  return isOnPrem() && !ONPREM_ALLOWED_PROVIDERS.has(provider);
-}
-
-/** Providers that accept API key / base-URL configuration (POST + DELETE). */
-const CONFIGURABLE_PROVIDERS = [
-  'openrouter', 'google', 'openai', 'anthropic', 'xai',
-  'ollama', 'lmstudio', 'glm', 'minimax', 'azure_openai',
-] as const;
-
-/** Providers valid for model-selection (PATCH) — includes virtual providers. */
-const SELECTABLE_PROVIDERS = [
-  'pagespace', 'openrouter_free', ...CONFIGURABLE_PROVIDERS,
-] as const;
-
-/** Providers whose model list is discovered dynamically (empty model OK). */
-const LOCAL_PROVIDERS = new Set(['ollama', 'lmstudio', 'azure_openai']);
-
-/** Providers that accept a base URL (need SSRF validation). */
-const URL_PROVIDERS = LOCAL_PROVIDERS;
-
-const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
-  openrouter: 'OpenRouter',
-  google: 'Google AI',
-  openai: 'OpenAI',
-  anthropic: 'Anthropic',
-  xai: 'xAI',
-  ollama: 'Ollama',
-  lmstudio: 'LM Studio',
-  glm: 'GLM Coder Plan',
-  minimax: 'MiniMax',
-  azure_openai: 'Azure OpenAI',
-};
+import { requiresProSubscription, createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
+const GONE_RESPONSE = {
+  error: 'Per-user API key configuration has been retired. AI providers are now managed at the deployment level.',
+};
+
+function availabilityOptions() {
+  return { isOnPrem: isOnPrem(), onPremAllowed: ONPREM_ALLOWED_PROVIDERS };
+}
+
 /**
- * GET /api/ai/settings
- * Returns current AI provider settings and configuration status
+ * GET /api/ai/settings[?driveId=]
+ * Returns deployment-level provider availability and the user's selected provider/model. With `driveId` (a drive the
+ * caller can reach), also `allowedModels`: the models that drive's org lets its pickers offer (POL-8), as provider →
+ * allowed model ids (a dynamic provider: the allowed ids, or null for any), or null when nothing is restricted.
  */
 export async function GET(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'ai_settings', resourceId: 'get', details: { reason: 'auth_failed', method: 'GET', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
+      return auth.error;
+    }
     const userId = auth.userId;
 
-    // Get user's current provider settings via repository
+    const driveId = new URL(request.url).searchParams.get('driveId');
+    if (driveId && !(await getPrincipalDriveAccess(auth, driveId))) {
+      // A member the org's sign-in policy holds back is told to sign in again, not just refused (D-OW-45).
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
+    }
+
     const user = await aiSettingsRepository.getUserSettings(userId);
-    
-    // Check PageSpace default settings
-    const pageSpaceSettings = await getDefaultPageSpaceSettings();
-    
-    // Check OpenRouter settings
-    const openRouterSettings = await getUserOpenRouterSettings(userId);
-    
-    // Check Google AI settings
-    const googleSettings = await getUserGoogleSettings(userId);
-    
-    // Check OpenAI settings
-    const openAISettings = await getUserOpenAISettings(userId);
-    
-    // Check Anthropic settings
-    const anthropicSettings = await getUserAnthropicSettings(userId);
-    
-    // Check xAI settings
-    const xaiSettings = await getUserXAISettings(userId);
+    // Every cloud vendor is OpenRouter-backed and user-visible; on-prem masking is
+    // handled inside buildProviderAvailabilityMap via the on-prem allowlist.
+    const providers = buildProviderAvailabilityMap(availabilityOptions());
 
-    // Check Ollama settings
-    const ollamaSettings = await getUserOllamaSettings(userId);
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'ai_settings', resourceId: userId, details: {
+      action: 'get_settings',
+    } });
 
-    // Check LM Studio settings
-    const lmstudioSettings = await getUserLMStudioSettings(userId);
-
-    // Check GLM settings
-    const glmSettings = await getUserGLMSettings(userId);
-
-    // Check MiniMax settings
-    const minimaxSettings = await getUserMiniMaxSettings(userId);
-
-    // Check Azure OpenAI settings
-    const azureOpenAISettings = await getUserAzureOpenAISettings(userId);
+    // Resolve the stored pair through the same function the provider factory uses, so
+    // the selection we report is the one that would actually run. A user whose stored
+    // model has since been delisted from the catalog (model retirements happen every
+    // catalog refresh) would otherwise be shown a model the selector can't offer, while
+    // their requests silently ran the substituted default. Local/dynamic providers serve
+    // runtime-discovered models, so resolveProviderModel gates only their name.
+    const { provider: currentProvider, model: currentModel } = resolveProviderModel(
+      null,
+      null,
+      user?.currentAiProvider,
+      user?.currentAiModel,
+    );
 
     return NextResponse.json({
-      currentProvider: user?.currentAiProvider || 'pagespace',
-      currentModel: user?.currentAiModel || 'glm-4.5-air',
-      userSubscriptionTier: user?.subscriptionTier || 'free',
-      providers: {
-        pagespace: {
-          isConfigured: !!pageSpaceSettings?.isConfigured,
-          hasApiKey: !!pageSpaceSettings?.apiKey,
-        },
-        openrouter: {
-          isConfigured: !!openRouterSettings?.isConfigured,
-          hasApiKey: !!openRouterSettings?.apiKey,
-        },
-        google: {
-          isConfigured: !!googleSettings?.isConfigured,
-          hasApiKey: !!googleSettings?.apiKey,
-        },
-        openai: {
-          isConfigured: !!openAISettings?.isConfigured,
-          hasApiKey: !!openAISettings?.apiKey,
-        },
-        anthropic: {
-          isConfigured: !!anthropicSettings?.isConfigured,
-          hasApiKey: !!anthropicSettings?.apiKey,
-        },
-        xai: {
-          isConfigured: !!xaiSettings?.isConfigured,
-          hasApiKey: !!xaiSettings?.apiKey,
-        },
-        ollama: {
-          isConfigured: !!ollamaSettings?.isConfigured,
-          hasBaseUrl: !!ollamaSettings?.baseUrl,
-        },
-        lmstudio: {
-          isConfigured: !!lmstudioSettings?.isConfigured,
-          hasBaseUrl: !!lmstudioSettings?.baseUrl,
-        },
-        glm: {
-          isConfigured: !!glmSettings?.isConfigured,
-          hasApiKey: !!glmSettings?.apiKey,
-        },
-        minimax: {
-          isConfigured: !!minimaxSettings?.isConfigured,
-          hasApiKey: !!minimaxSettings?.apiKey,
-        },
-        azure_openai: {
-          isConfigured: !!azureOpenAISettings?.isConfigured,
-          hasApiKey: !!azureOpenAISettings?.apiKey,
-          hasBaseUrl: !!azureOpenAISettings?.baseUrl,
-        },
-      },
-      isAnyProviderConfigured: !!(pageSpaceSettings?.isConfigured || openRouterSettings?.isConfigured || googleSettings?.isConfigured || openAISettings?.isConfigured || anthropicSettings?.isConfigured || xaiSettings?.isConfigured || ollamaSettings?.isConfigured || lmstudioSettings?.isConfigured || glmSettings?.isConfigured || minimaxSettings?.isConfigured || azureOpenAISettings?.isConfigured),
+      currentProvider,
+      currentModel,
+      imageGenerationModel: user?.imageGenerationModel ?? null,
+      userSubscriptionTier: resolvePersonalCapabilityTier(user?.subscriptionTier),
+      isAdmin: auth.role === 'admin',
+      providers,
+      isAnyProviderConfigured: Object.values(providers).some((p) => p.isAvailable),
+      allowedModels: await offeredModels(driveId),
     });
   } catch (error) {
     loggers.ai.error('Failed to get AI settings', error as Error);
@@ -185,158 +89,71 @@ export async function GET(request: Request) {
 }
 
 /**
- * POST /api/ai/settings
- * Saves or updates API key for specified provider
+ * POST /api/ai/settings — RETIRED
+ * Per-user API keys are no longer accepted; deployment env vars are the single source.
  */
-export async function POST(request: Request) {
-  try {
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
-    if (isAuthError(auth)) return auth.error;
-    const userId = auth.userId;
+export async function POST() {
+  return NextResponse.json(GONE_RESPONSE, { status: 410 });
+}
 
-    const body = await request.json();
-    const { provider, apiKey, baseUrl } = body;
-
-    // Validate input
-    if (!provider || !(CONFIGURABLE_PROVIDERS as readonly string[]).includes(provider)) {
-      return NextResponse.json(
-        { error: 'Invalid provider' },
-        { status: 400 }
-      );
-    }
-
-    if (isProviderBlocked(provider)) {
-      return NextResponse.json(
-        { error: 'This provider is not available in on-premise mode' },
-        { status: 403 }
-      );
-    }
-
-    // Validate based on provider type
-    if (provider === 'azure_openai') {
-      if (!apiKey || typeof apiKey !== 'string' || !apiKey.trim()) {
-        return NextResponse.json({ error: 'API key is required for Azure OpenAI' }, { status: 400 });
-      }
-      if (!baseUrl || typeof baseUrl !== 'string' || !baseUrl.trim()) {
-        return NextResponse.json({ error: 'Endpoint URL is required for Azure OpenAI' }, { status: 400 });
-      }
-    } else if (provider === 'ollama' || provider === 'lmstudio') {
-      if (!baseUrl || typeof baseUrl !== 'string' || !baseUrl.trim()) {
-        return NextResponse.json(
-          { error: `Base URL is required for ${provider === 'ollama' ? 'Ollama' : 'LM Studio'}` },
-          { status: 400 }
-        );
-      }
-    } else {
-      if (!apiKey || typeof apiKey !== 'string' || !apiKey.trim()) {
-        return NextResponse.json(
-          { error: 'API key is required' },
-          { status: 400 }
-        );
-      }
-    }
-
-    // Sanitize inputs (remove whitespace)
-    const sanitizedApiKey = apiKey?.trim();
-    const sanitizedBaseUrl = baseUrl?.trim();
-
-    // SECURITY: Validate base URL for providers that accept URLs to prevent SSRF
-    if (URL_PROVIDERS.has(provider)) {
-      const { validateLocalProviderURL } = await import('@pagespace/lib/security');
-      const urlValidation = await validateLocalProviderURL(sanitizedBaseUrl);
-      if (!urlValidation.valid) {
-        return NextResponse.json(
-          { error: `Invalid base URL: ${urlValidation.error}` },
-          { status: 400 }
-        );
-      }
-    }
-
-    // Save the API key based on provider
-    try {
-      if (provider === 'openrouter') {
-        await createOpenRouterSettings(userId, sanitizedApiKey);
-      } else if (provider === 'google') {
-        await createGoogleSettings(userId, sanitizedApiKey);
-      } else if (provider === 'openai') {
-        await createOpenAISettings(userId, sanitizedApiKey);
-      } else if (provider === 'anthropic') {
-        await createAnthropicSettings(userId, sanitizedApiKey);
-      } else if (provider === 'xai') {
-        await createXAISettings(userId, sanitizedApiKey);
-      } else if (provider === 'ollama') {
-        await createOllamaSettings(userId, sanitizedBaseUrl);
-      } else if (provider === 'lmstudio') {
-        await createLMStudioSettings(userId, sanitizedBaseUrl);
-      } else if (provider === 'glm') {
-        await createGLMSettings(userId, sanitizedApiKey);
-      } else if (provider === 'minimax') {
-        await createMiniMaxSettings(userId, sanitizedApiKey);
-      } else if (provider === 'azure_openai') {
-        await createAzureOpenAISettings(userId, sanitizedApiKey, sanitizedBaseUrl);
-      }
-
-      return NextResponse.json(
-        {
-          success: true,
-          provider,
-          message: `${PROVIDER_DISPLAY_NAMES[provider] ?? provider} API key saved successfully`
-        },
-        { status: 201 }
-      );
-    } catch (saveError) {
-      loggers.ai.error(`Failed to save ${provider} API key`, saveError as Error, { provider });
-      return NextResponse.json(
-        { error: `Failed to save ${provider} API key` },
-        { status: 500 }
-      );
-    }
-  } catch (error) {
-    loggers.ai.error('Failed to save API key', error as Error);
-    return NextResponse.json(
-      { error: 'Failed to save API key' },
-      { status: 500 }
-    );
-  }
+/**
+ * DELETE /api/ai/settings — RETIRED
+ * Per-user API keys are no longer accepted.
+ */
+export async function DELETE() {
+  return NextResponse.json(GONE_RESPONSE, { status: 410 });
 }
 
 /**
  * PATCH /api/ai/settings
- * Updates provider and model selection
+ * Updates user's current provider/model selection. Rejects providers that are unavailable on this deployment.
  */
 export async function PATCH(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'ai_settings', resourceId: 'update_selection', details: { reason: 'auth_failed', method: 'PATCH', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
+      return auth.error;
+    }
     const userId = auth.userId;
 
     const body = await request.json();
     const { provider, model } = body;
 
-    if (!provider || !(SELECTABLE_PROVIDERS as readonly string[]).includes(provider)) {
+    if (!provider || !(ALL_PROVIDER_NAMES as readonly string[]).includes(provider)) {
       return NextResponse.json(
-        { error: `Invalid provider. Must be one of: ${SELECTABLE_PROVIDERS.join(', ')}` },
+        { error: `Invalid provider. Must be one of: ${ALL_PROVIDER_NAMES.join(', ')}` },
         { status: 400 }
       );
     }
 
-    if (isProviderBlocked(provider)) {
+    if (!isProviderAvailable(provider, availabilityOptions())) {
       return NextResponse.json(
-        { error: 'This provider is not available in on-premise mode' },
-        { status: 403 }
+        { error: `Provider "${provider}" is not configured on this deployment.` },
+        { status: 503 }
       );
     }
 
-    // Local providers can have empty model (models discovered dynamically)
-    const isLocalProvider = LOCAL_PROVIDERS.has(provider);
-    if (!isLocalProvider && (!model || typeof model !== 'string')) {
+    const skipModelValidation = ONPREM_ALLOWED_PROVIDERS.has(provider) || DYNAMIC_MODEL_PROVIDERS.has(provider);
+    if (!skipModelValidation && (!model || typeof model !== 'string')) {
       return NextResponse.json(
         { error: 'Model is required' },
         { status: 400 }
       );
     }
 
-    // Get user's subscription tier to check access permissions via repository
+    // Hard-enforce the curated catalog at the explicit selection boundary: a saved
+    // (provider, model) must exist in AI_PROVIDERS. Generation is tolerant (it
+    // substitutes the default for stale stored configs), but a user/API explicitly
+    // choosing an off-catalog model gets a clear 400 here rather than a silent
+    // fallback later.
+    if (!skipModelValidation && !isValidModel(provider, model)) {
+      return NextResponse.json(
+        { error: `Model "${model}" is not a valid model for provider "${provider}".` },
+        { status: 400 }
+      );
+    }
+
     const user = await aiSettingsRepository.getUserSettings(userId);
     if (!user) {
       return NextResponse.json(
@@ -345,28 +162,36 @@ export async function PATCH(request: Request) {
       );
     }
 
-    // Check if user is trying to select PageSpace pro AI model without proper subscription
-    if (requiresProSubscription(provider, model, user.subscriptionTier ?? undefined)) {
+    if (ADMIN_ONLY_PROVIDERS.has(provider) && auth.role !== 'admin') {
+      return createAdminRestrictedResponse();
+    }
+
+    if (requiresProSubscription(provider, model, resolvePersonalCapabilityTier(user.subscriptionTier), auth.role === 'admin')) {
       return NextResponse.json(
         {
           error: 'Subscription required',
-          message: 'PageSpace Pro AI requires a Pro or Business subscription.',
-          upgradeUrl: '/settings/billing',
+          message: 'This model is available on paid plans.',
+          upgradeUrl: '/settings/plan',
         },
         { status: 403 }
       );
     }
 
-    // Update user's current provider and model selection via repository
     try {
       await aiSettingsRepository.updateProviderSettings(userId, { provider, model });
 
+      auditRequest(request, { eventType: 'data.write', userId, resourceType: 'ai_settings', resourceId: provider, details: {
+        action: 'update_model_selection',
+        provider,
+        model,
+      } });
+
       return NextResponse.json(
-        { 
+        {
           success: true,
           provider,
           model,
-          message: 'Model selection updated successfully'
+          message: 'Model selection updated successfully',
         },
         { status: 200 }
       );
@@ -381,68 +206,6 @@ export async function PATCH(request: Request) {
     loggers.ai.error('Failed to update settings', error as Error);
     return NextResponse.json(
       { error: 'Failed to update settings' },
-      { status: 500 }
-    );
-  }
-}
-
-/**
- * DELETE /api/ai/settings
- * Removes API key for specified provider
- */
-export async function DELETE(request: Request) {
-  try {
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
-    if (isAuthError(auth)) return auth.error;
-    const userId = auth.userId;
-
-    const body = await request.json();
-    const { provider } = body;
-
-    if (!provider || !(CONFIGURABLE_PROVIDERS as readonly string[]).includes(provider)) {
-      return NextResponse.json(
-        { error: 'Invalid provider' },
-        { status: 400 }
-      );
-    }
-
-    // Delete the API key based on provider
-    try {
-      if (provider === 'openrouter') {
-        await deleteOpenRouterSettings(userId);
-      } else if (provider === 'google') {
-        await deleteGoogleSettings(userId);
-      } else if (provider === 'openai') {
-        await deleteOpenAISettings(userId);
-      } else if (provider === 'anthropic') {
-        await deleteAnthropicSettings(userId);
-      } else if (provider === 'xai') {
-        await deleteXAISettings(userId);
-      } else if (provider === 'ollama') {
-        await deleteOllamaSettings(userId);
-      } else if (provider === 'lmstudio') {
-        await deleteLMStudioSettings(userId);
-      } else if (provider === 'glm') {
-        await deleteGLMSettings(userId);
-      } else if (provider === 'minimax') {
-        await deleteMiniMaxSettings(userId);
-      } else if (provider === 'azure_openai') {
-        await deleteAzureOpenAISettings(userId);
-      }
-
-      // Return success with 204 No Content
-      return new Response(null, { status: 204 });
-    } catch (deleteError) {
-      loggers.ai.error(`Failed to delete ${provider} API key`, deleteError as Error, { provider });
-      return NextResponse.json(
-        { error: `Failed to delete ${provider} API key` },
-        { status: 500 }
-      );
-    }
-  } catch (error) {
-    loggers.ai.error('Failed to delete API key', error as Error);
-    return NextResponse.json(
-      { error: 'Failed to delete API key' },
       { status: 500 }
     );
   }

@@ -2,16 +2,19 @@
 
 import { useState, useMemo } from 'react';
 import Link from 'next/link';
+import { Grip, List, Plus } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Button } from '@/components/ui/button';
+import { FocusTrigger } from '@/components/shared/FocusTrigger';
 import { usePageTree } from '@/hooks/usePageTree';
 import { useDriveStore } from '@/hooks/useDrive';
 import { findNodeAndParent } from '@/lib/tree/tree-utils';
-import { FolderViewHeader } from '@/components/layout/middle-content/page-views/folder/FolderViewHeader';
+import { useUIStore } from '@/stores/useUIStore';
 import { FilesBreadcrumbs } from './FilesBreadcrumbs';
 import { FilesGridView } from './FilesGridView';
 import { FilesListView } from './FilesListView';
+import { FilesEmptyState } from './FilesEmptyState';
 import type { ViewMode, SortKey, SortDirection } from '@/components/layout/middle-content/page-views/folder/types';
-import { FolderOpen } from 'lucide-react';
 
 interface FilesFinderContentProps {
   driveId: string;
@@ -23,6 +26,8 @@ export function FilesFinderContent({ driveId, currentPageId }: FilesFinderConten
   const drives = useDriveStore((state) => state.drives);
   const drive = drives.find((d) => d.id === driveId);
   const driveName = drive?.name ?? 'Files';
+  const canWrite = drive?.role === 'OWNER' || drive?.role === 'ADMIN';
+  const openQuickCreate = useUIStore((s) => s.openQuickCreate);
 
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [sortKey, setSortKey] = useState<SortKey>('title');
@@ -101,21 +106,46 @@ export function FilesFinderContent({ driveId, currentPageId }: FilesFinderConten
   return (
     <div className="h-full overflow-y-auto">
       <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-5xl">
-        <FilesBreadcrumbs
-          driveId={driveId}
-          driveName={driveName}
-          currentPageId={currentPageId}
-          tree={tree}
-        />
-        <FolderViewHeader viewMode={viewMode} onViewChange={setViewMode} />
+        <div className="flex items-center justify-between gap-4 mb-6">
+          <div className="min-w-0 flex-1">
+            {currentPageId ? (
+              <FilesBreadcrumbs
+                driveId={driveId}
+                driveName={driveName}
+                currentPageId={currentPageId}
+                tree={tree}
+              />
+            ) : (
+              <>
+                {/* Title names the section; the focus line under it names the drive and changes it. */}
+                <h1 className="text-2xl font-bold">Files</h1>
+                <FocusTrigger section="files" />
+              </>
+            )}
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <Button variant={viewMode === 'list' ? 'secondary' : 'ghost'} size="icon" onClick={() => setViewMode('list')}>
+              <List className="h-4 w-4" />
+            </Button>
+            <Button variant={viewMode === 'grid' ? 'secondary' : 'ghost'} size="icon" onClick={() => setViewMode('grid')}>
+              <Grip className="h-4 w-4" />
+            </Button>
+            {canWrite && (
+              <Button size="sm" onClick={() => openQuickCreate()}>
+                <Plus className="h-4 w-4 mr-1" />
+                New Page
+              </Button>
+            )}
+          </div>
+        </div>
 
         {sortedItems.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-16 text-center">
-            <FolderOpen className="h-12 w-12 text-muted-foreground/50 mb-4" />
-            <p className="text-muted-foreground">
-              {currentPageId ? 'No child pages' : 'No pages in this drive'}
-            </p>
-          </div>
+          <FilesEmptyState
+            driveId={driveId}
+            parentId={currentPageId}
+            canWrite={canWrite}
+            onMutate={handleMutate}
+          />
         ) : viewMode === 'grid' ? (
           <FilesGridView items={sortedItems} driveId={driveId} onMutate={handleMutate} />
         ) : (

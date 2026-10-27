@@ -1,0 +1,732 @@
+/**
+ * Contract tests for POST /api/auth/signup-passkey
+ *
+ * Tests the Request -> Response contract for passkey-based signup.
+ * Public endpoint (unauthenticated) - requires login CSRF token.
+ */
+
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+// Mock dependencies before imports
+vi.mock('@pagespace/lib/auth/passkey-service', () => ({
+  verifySignupRegistration: vi.fn(),
+}));
+vi.mock('@pagespace/lib/auth/verification-utils', () => ({
+  markEmailVerified: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('@/lib/auth/send-verification-email', () => ({
+  sendVerificationEmail: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('@pagespace/lib/auth/session-service', () => ({
+  sessionService: {
+    createSession: vi.fn().mockResolvedValue('ps_sess_mock_session_token'),
+    validateSession: vi.fn().mockResolvedValue({
+      sessionId: 'mock-session-id',
+      userId: 'new-user-1',
+      userRole: 'user',
+      tokenVersion: 0,
+      type: 'user',
+      scopes: ['*'],
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    }),
+    revokeAllUserSessions: vi.fn().mockResolvedValue(0),
+    revokeSession: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
+  generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+}));
+vi.mock('@pagespace/lib/auth/constants', () => ({
+  SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
+}));
+
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
+      auth: {
+        error: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        debug: vi.fn(),
+      },
+      security: {
+        warn: vi.fn(),
+      },
+    },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  auditRequest: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
+  trackAuthEvent: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+  checkDistributedRateLimit: vi.fn(),
+  resetDistributedRateLimit: vi.fn(),
+  DISTRIBUTED_RATE_LIMITS: {
+    SIGNUP: { maxAttempts: 3, windowMs: 3600000, progressiveDelay: false },
+  },
+}));
+
+vi.mock('@/lib/auth', () => ({
+  validateLoginCSRFToken: vi.fn(),
+  getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
+}));
+
+vi.mock('@/lib/auth/cookie-config', () => ({
+  appendSessionCookie: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
+  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'drive-1', created: true }),
+}));
+
+vi.mock('@/lib/auth/native-invite-acceptance', () => ({
+  consumeAnyInviteIfPresent: vi.fn().mockResolvedValue({
+    kind: null,
+    invitedDriveId: null,
+    invitedPageId: null,
+    connectionId: null, invitedOrgId: null, orgLandingPath: null,
+  }),
+  consumeAllInvitesForEmail: vi.fn().mockResolvedValue({
+    drivesAccepted: 0,
+    pagesAccepted: 0,
+    connectionsCreated: 0,
+  }),
+}));
+
+import { POST } from '../route';
+import { consumeAnyInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
+import { verifySignupRegistration } from '@pagespace/lib/auth/passkey-service';
+import { markEmailVerified } from '@pagespace/lib/auth/verification-utils';
+import { sendVerificationEmail } from '@/lib/auth/send-verification-email';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
+import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
+import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
+import { appendSessionCookie } from '@/lib/auth/cookie-config';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
+
+const validPayload = {
+  email: 'user@example.com',
+  name: 'Test User',
+  response: { id: 'cred-1', rawId: 'raw', type: 'public-key' },
+  expectedChallenge: 'challenge-123',
+  csrfToken: 'valid-csrf',
+  acceptedTos: true,
+  passkeyName: 'My Device',
+};
+
+const createRequest = (body: Record<string, unknown> = validPayload) =>
+  new Request('http://localhost/api/auth/signup-passkey', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+describe('POST /api/auth/signup-passkey', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    vi.mocked(getClientIP).mockReturnValue('127.0.0.1');
+    vi.mocked(checkDistributedRateLimit).mockResolvedValue({
+      allowed: true,
+      attemptsRemaining: 2,
+    });
+    vi.mocked(validateLoginCSRFToken).mockReturnValue(true);
+    vi.mocked(verifySignupRegistration).mockResolvedValue({
+      ok: true,
+      data: { userId: 'new-user-1', passkeyId: 'pk-1', userVerified: true },
+    });
+  });
+
+  describe('successful signup', () => {
+    it('returns 200 with success, userId, and redirectUrl', async () => {
+      const response = await POST(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.userId).toBe('new-user-1');
+      expect(body.redirectUrl).toBe('/dashboard/drive-1?welcome=true');
+    });
+
+    it('sets session cookie and CSRF cookie', async () => {
+      const response = await POST(createRequest());
+
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      const [sessionHeaders, sessionToken] = vi.mocked(appendSessionCookie).mock.calls[0];
+      expect(sessionHeaders).toBeInstanceOf(Headers);
+      expect(sessionToken).toBe('ps_sess_mock_session_token');
+      expect(response.headers.get('Cache-Control')).toBe('no-store, no-cache, must-revalidate');
+
+      const cookies = response.headers.getSetCookie();
+      const csrfCookie = cookies.find(c => c.startsWith('csrf_token='));
+      expect(csrfCookie).toContain('mock-csrf-token');
+    });
+
+    it('normalizes email to lowercase', async () => {
+      await POST(createRequest({ ...validPayload, email: 'USER@EXAMPLE.COM' }));
+
+      expect(verifySignupRegistration).toHaveBeenCalledWith(expect.objectContaining({
+        email: 'user@example.com',
+      }));
+    });
+
+    it('calls verifySignupRegistration with correct params', async () => {
+      await POST(createRequest());
+
+      expect(verifySignupRegistration).toHaveBeenCalledWith({
+        email: 'user@example.com',
+        name: 'Test User',
+        response: validPayload.response,
+        expectedChallenge: 'challenge-123',
+        passkeyName: 'My Device',
+        acceptedTos: true,
+      });
+    });
+
+    it('provisions getting started drive', async () => {
+      await POST(createRequest());
+
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('new-user-1');
+    });
+
+    it('logs auth events', async () => {
+      await POST(createRequest());
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'auth.login.success',
+          userId: 'new-user-1',
+          details: expect.objectContaining({ signup: true, method: 'passkey' }),
+        })
+      );
+    });
+
+    it('resets rate limits on successful signup', async () => {
+      await POST(createRequest());
+
+      expect(resetDistributedRateLimit).toHaveBeenCalledWith('signup:ip:127.0.0.1');
+      expect(resetDistributedRateLimit).toHaveBeenCalledWith('signup:email:user@example.com');
+    });
+
+    it('tracks signup and passkey_registered events with masked PII', async () => {
+      await POST(createRequest());
+
+      // 'us***@example.com' is the canonical maskEmail output (2 visible chars
+      // before ***@); the inline 3-char masking previously used here would leak
+      // domain characters into the local part for short addresses.
+      expect(trackAuthEvent).toHaveBeenCalledWith('new-user-1', 'signup', expect.objectContaining({
+        email: 'us***@example.com',
+        name: 'T***',
+        method: 'passkey',
+      }));
+      expect(trackAuthEvent).toHaveBeenCalledWith('new-user-1', 'passkey_registered', expect.objectContaining({
+        passkeyId: 'pk-1',
+      }));
+    });
+
+    it('generates CSRF token bound to session ID', async () => {
+      await POST(createRequest());
+
+      expect(sessionService.validateSession).toHaveBeenCalledWith('ps_sess_mock_session_token');
+      expect(generateCSRFToken).toHaveBeenCalledWith('mock-session-id');
+    });
+
+    it('passes clientIP as createdByIp when not unknown', async () => {
+      vi.mocked(getClientIP).mockReturnValue('192.168.1.1');
+
+      await POST(createRequest());
+
+      expect(sessionService.createSession).toHaveBeenCalledWith(expect.objectContaining({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'user_verified_passkey' },
+        createdByIp: '192.168.1.1',
+      }));
+    });
+
+    it.each([
+      [true, 'user_verified_passkey'],
+      [false, 'single_factor'],
+    ] as const)('SEC-2 (partial) a signup passkey with userVerified=%s records %s on the new session (D-OW-45)', async (userVerified, assurance) => {
+      vi.mocked(verifySignupRegistration).mockResolvedValue({ ok: true, data: { userId: 'new-user-1', passkeyId: 'pk-1', userVerified } });
+      const before = Date.now();
+
+      await POST(createRequest());
+
+      const [options] = vi.mocked(sessionService.createSession).mock.calls[0];
+      expect(options.authentication).toEqual({ authenticatedAtMs: expect.any(Number), assurance });
+      expect(options.authentication?.authenticatedAtMs).toBeGreaterThanOrEqual(before);
+    });
+
+    it('passes undefined createdByIp when IP is unknown', async () => {
+      vi.mocked(getClientIP).mockReturnValue('unknown');
+
+      await POST(createRequest());
+
+      expect(sessionService.createSession).toHaveBeenCalledWith(expect.objectContaining({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'user_verified_passkey' },
+        createdByIp: undefined,
+      }));
+    });
+
+    it('redirects to /dashboard when drive provisioning returns null', async () => {
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValueOnce(null as never);
+
+      const response = await POST(createRequest());
+      const body = await response.json();
+
+      expect(body.redirectUrl).toBe('/dashboard?welcome=true');
+    });
+
+    it('does not include Secure flag on CSRF cookie in non-production', async () => {
+      vi.stubEnv('NODE_ENV', 'test');
+
+      const response = await POST(createRequest());
+      const cookies = response.headers.getSetCookie();
+      const csrfCookie = cookies.find(c => c.startsWith('csrf_token='));
+      expect(csrfCookie).not.toContain('; Secure');
+
+      vi.unstubAllEnvs();
+    });
+
+    it('includes Secure flag on CSRF cookie in production', async () => {
+      vi.stubEnv('NODE_ENV', 'production');
+
+      const response = await POST(createRequest());
+      const cookies = response.headers.getSetCookie();
+      const csrfCookie = cookies.find(c => c.startsWith('csrf_token='));
+      expect(csrfCookie).toContain('; Secure');
+
+      vi.unstubAllEnvs();
+    });
+  });
+
+  describe('graceful degradation', () => {
+    it('continues when drive provisioning fails', async () => {
+      vi.mocked(provisionHomeDriveIfNeeded).mockRejectedValueOnce(new Error('Drive error'));
+
+      const response = await POST(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.redirectUrl).toBe('/dashboard?welcome=true');
+      expect(loggers.auth.error).toHaveBeenCalledWith('Failed to provision Home drive', new Error('Drive error'), {
+        userId: 'new-user-1',
+      });
+    });
+
+    it('continues when getting started drive returns null', async () => {
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValueOnce(null as never);
+
+      const response = await POST(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.redirectUrl).toBe('/dashboard?welcome=true');
+    });
+  });
+
+  describe('input validation', () => {
+    it('returns 400 for missing email', async () => {
+      const { email: _, ...payload } = validPayload;
+      const response = await POST(createRequest(payload));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Invalid request body');
+      expect(typeof body.details).toBe('object');
+    });
+
+    it('returns 400 for invalid email format', async () => {
+      const response = await POST(createRequest({ ...validPayload, email: 'not-email' }));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Invalid request body');
+    });
+
+    it('returns 400 for missing name', async () => {
+      const { name: _, ...payload } = validPayload;
+      const response = await POST(createRequest(payload));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Invalid request body');
+    });
+
+    it('returns 400 for empty name', async () => {
+      const response = await POST(createRequest({ ...validPayload, name: '' }));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Invalid request body');
+    });
+
+    it('returns 400 for missing expectedChallenge', async () => {
+      const { expectedChallenge: _, ...payload } = validPayload;
+      const response = await POST(createRequest(payload));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Invalid request body');
+    });
+
+    it('returns 400 for missing csrfToken', async () => {
+      const { csrfToken: _, ...payload } = validPayload;
+      const response = await POST(createRequest(payload));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Invalid request body');
+    });
+
+    it('returns 400 when acceptedTos is false', async () => {
+      const response = await POST(createRequest({ ...validPayload, acceptedTos: false }));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Invalid request body');
+    });
+
+    it('returns 400 when acceptedTos is missing', async () => {
+      const { acceptedTos: _, ...payload } = validPayload;
+      const response = await POST(createRequest(payload));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Invalid request body');
+    });
+  });
+
+  describe('CSRF validation', () => {
+    it('returns 403 when CSRF token is invalid', async () => {
+      vi.mocked(validateLoginCSRFToken).mockReturnValue(false);
+
+      const response = await POST(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toBe('Invalid CSRF token');
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'security.suspicious.activity',
+          riskScore: 0.6,
+          details: expect.objectContaining({ reason: 'passkey_csrf_invalid', flow: 'signup' }),
+        })
+      );
+    });
+  });
+
+  describe('rate limiting', () => {
+    it('returns 429 when IP rate limit exceeded', async () => {
+      vi.mocked(checkDistributedRateLimit)
+        .mockResolvedValueOnce({ allowed: false, attemptsRemaining: 0, retryAfter: 3600 });
+
+      const response = await POST(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(429);
+      expect(body.error).toBe('Too many requests from this IP');
+      expect(body.retryAfter).toBe(3600);
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'security.rate.limited',
+          riskScore: 0.5,
+          details: expect.objectContaining({ reason: 'rate_limit_signup_ip' }),
+        })
+      );
+    });
+
+    it('returns 429 when email rate limit exceeded', async () => {
+      vi.mocked(checkDistributedRateLimit)
+        .mockResolvedValueOnce({ allowed: true, attemptsRemaining: 2 })
+        .mockResolvedValueOnce({ allowed: false, attemptsRemaining: 0, retryAfter: 3600 });
+
+      const response = await POST(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(429);
+      expect(body.error).toBe('Too many signup attempts for this email');
+      expect(body.retryAfter).toBe(3600);
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'security.rate.limited',
+          riskScore: 0.5,
+          details: expect.objectContaining({ reason: 'rate_limit_signup_email' }),
+        })
+      );
+    });
+  });
+
+  describe('verification errors', () => {
+    const errorCases = [
+      { code: 'EMAIL_EXISTS', status: 409, message: 'An account with this email already exists' },
+      { code: 'CHALLENGE_NOT_FOUND', status: 400, message: 'Challenge not found or invalid' },
+      { code: 'CHALLENGE_EXPIRED', status: 400, message: 'Challenge expired, please try again' },
+      { code: 'CHALLENGE_ALREADY_USED', status: 400, message: 'Challenge already used' },
+      { code: 'VERIFICATION_FAILED', status: 400, message: 'Passkey verification failed' },
+      { code: 'VALIDATION_FAILED', status: 400, message: 'Invalid data provided' },
+    ];
+
+    errorCases.forEach(({ code, status, message }) => {
+      it(`returns ${status} for ${code}`, async () => {
+        vi.mocked(verifySignupRegistration).mockResolvedValue({
+          ok: false,
+          // @ts-expect-error - partial mock data
+          error: { code, message: 'Error' },
+        });
+
+        const response = await POST(createRequest());
+        const body = await response.json();
+
+        expect(response.status).toBe(status);
+        expect(body.error).toBe(message);
+        expect(body.code).toBe(code);
+      });
+    });
+
+    it('returns 500 for unknown error code', async () => {
+      vi.mocked(verifySignupRegistration).mockResolvedValue({
+        ok: false,
+        // @ts-expect-error - partial mock data
+        error: { code: 'UNKNOWN_ERROR', message: 'Something' },
+      });
+
+      const response = await POST(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('Internal server error');
+      expect(body.code).toBe('UNKNOWN_ERROR');
+    });
+
+    it('logs verification failures with masked email', async () => {
+      vi.mocked(verifySignupRegistration).mockResolvedValue({
+        ok: false,
+        error: { code: 'VERIFICATION_FAILED', message: 'Error' },
+      });
+
+      await POST(createRequest());
+
+      expect(loggers.auth.warn).toHaveBeenCalledWith('Passkey signup failed', expect.objectContaining({
+        error: 'VERIFICATION_FAILED',
+        email: 'us***@example.com',
+      }));
+    });
+  });
+
+  describe('PII scrub in log metadata', () => {
+    const findInfoCall = (msg: string) =>
+      vi.mocked(loggers.auth.info).mock.calls.find(call => call[0] === msg);
+
+    it('masks email and omits name in "Passkey signup successful" log', async () => {
+      await POST(createRequest());
+
+      const call = findInfoCall('Passkey signup successful');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as Record<string, unknown>;
+      expect(meta.email).toBe('us***@example.com');
+      expect(meta).not.toHaveProperty('name');
+    });
+  });
+
+  describe('session creation errors', () => {
+    it('returns 500 when session validation fails after creation', async () => {
+      vi.mocked(sessionService.validateSession).mockResolvedValue(null);
+
+      const response = await POST(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('Session creation failed');
+      expect(loggers.auth.error).toHaveBeenCalledWith('Failed to validate newly created session', expect.objectContaining({
+        userId: 'new-user-1',
+      }));
+    });
+  });
+
+  describe('unexpected errors', () => {
+    it('returns 500 on unexpected throw', async () => {
+      vi.mocked(checkDistributedRateLimit).mockRejectedValueOnce(new Error('Unexpected'));
+
+      const response = await POST(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('Internal server error');
+      expect(loggers.auth.error).toHaveBeenCalledWith(
+        'Passkey signup verification error',
+        new Error('Unexpected'),
+        { email: 'us***@example.com', clientIP: '127.0.0.1' },
+      );
+    });
+  });
+
+  describe('inviteToken plumbing', () => {
+    beforeEach(() => {
+      // Earlier suites in this file override validateSession with
+      // mockResolvedValue(null); vi.clearAllMocks() does not restore default
+      // implementations, so re-prime it here.
+      // @ts-expect-error - partial mock data
+      vi.mocked(sessionService.validateSession).mockResolvedValue({
+        sessionId: 'mock-session-id',
+        userId: 'new-user-1',
+        userRole: 'user',
+        tokenVersion: 0,
+        type: 'user',
+        scopes: ['*'],
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      });
+    });
+
+    it('given inviteToken absent, does not call consumeAnyInviteIfPresent and uses provisioned drive redirect', async () => {
+      const response = await POST(createRequest());
+      const body = await response.json();
+
+      expect(consumeAnyInviteIfPresent).not.toHaveBeenCalled();
+      expect(body.redirectUrl).toBe('/dashboard/drive-1?welcome=true');
+    });
+
+    it('given inviteToken present and acceptance succeeds, redirects to /dashboard/<driveId>?welcome=true (overrides provisioning)', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'drive',
+        invitedDriveId: 'drive_invited',
+        invitedPageId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
+      });
+
+      const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_xyz' }));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(consumeAnyInviteIfPresent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inviteToken: 'ps_invite_xyz',
+          isNewUser: true,
+          email: 'user@example.com',
+        }),
+      );
+      expect(body.redirectUrl).toBe('/dashboard/drive_invited?welcome=true');
+    });
+
+    it('given inviteToken present and acceptance fails (EMAIL_MISMATCH), signup still succeeds with inviteError query param (NON-FATAL)', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: null,
+        invitedDriveId: null,
+        invitedPageId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
+        inviteError: 'EMAIL_MISMATCH',
+      });
+
+      const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_xyz' }));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.redirectUrl).toContain('inviteError=EMAIL_MISMATCH');
+      expect(sessionService.revokeSession).not.toHaveBeenCalled();
+    });
+
+    it('given inviteToken present and dispatcher returns TOKEN_NOT_FOUND, signup still succeeds with TOKEN_NOT_FOUND inviteError', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: null,
+        invitedDriveId: null,
+        invitedPageId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
+        inviteError: 'TOKEN_NOT_FOUND',
+      });
+
+      const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_xyz' }));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.redirectUrl).toContain('inviteError=TOKEN_NOT_FOUND');
+    });
+  });
+
+  describe('email verification', () => {
+    it('non-invited signup sends a verification email and does not mark verified', async () => {
+      const response = await POST(createRequest());
+
+      expect(response.status).toBe(200);
+      expect(markEmailVerified).not.toHaveBeenCalled();
+      expect(sendVerificationEmail).toHaveBeenCalledWith({
+        userId: 'new-user-1',
+        email: 'user@example.com',
+        userName: 'Test User',
+      });
+    });
+
+    it('signup via a successfully consumed invite marks verified and sends no verification email', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'drive',
+        invitedDriveId: 'drive_invited',
+        invitedPageId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
+      });
+
+      const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_xyz' }));
+
+      expect(response.status).toBe(200);
+      expect(markEmailVerified).toHaveBeenCalledWith('new-user-1');
+      expect(sendVerificationEmail).not.toHaveBeenCalled();
+    });
+
+    it('signup via a successfully consumed CONNECTION invite also marks verified (inbox ownership proven)', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'connection',
+        invitedDriveId: null,
+        invitedPageId: null,
+        connectionId: 'conn_1', invitedOrgId: null, orgLandingPath: null,
+      });
+
+      const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_conn' }));
+
+      expect(response.status).toBe(200);
+      expect(markEmailVerified).toHaveBeenCalledWith('new-user-1');
+      expect(sendVerificationEmail).not.toHaveBeenCalled();
+    });
+
+    it('failed invite acceptance falls back to sending a verification email', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: null,
+        invitedDriveId: null,
+        invitedPageId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
+        inviteError: 'EMAIL_MISMATCH',
+      });
+
+      const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_xyz' }));
+
+      expect(response.status).toBe(200);
+      expect(markEmailVerified).not.toHaveBeenCalled();
+      expect(sendVerificationEmail).toHaveBeenCalled();
+    });
+
+    it('a verification-email failure does not fail the signup', async () => {
+      vi.mocked(sendVerificationEmail).mockRejectedValueOnce(new Error('SMTP down'));
+
+      const response = await POST(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(loggers.auth.warn).toHaveBeenCalledWith(
+        'Failed to send passkey-signup verification email',
+        expect.objectContaining({ userId: 'new-user-1' }),
+      );
+    });
+  });
+});

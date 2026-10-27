@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, POST } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
-import type { DriveRoleAccessInfo, DriveRole, RolePermissions } from '@pagespace/lib/server';
+import type { DriveRoleAccessInfo, DriveRole, RolePermissions } from '@pagespace/lib/services/drive-role-service';
 
 // ============================================================================
 // Contract Tests for /api/drives/[driveId]/roles
@@ -10,25 +10,30 @@ import type { DriveRoleAccessInfo, DriveRole, RolePermissions } from '@pagespace
 // These tests mock at the SERVICE SEAM level, NOT at the ORM/query-builder level.
 // ============================================================================
 
-vi.mock('@pagespace/lib/server', () => ({
-  checkDriveAccessForRoles: vi.fn(),
-  listDriveRoles: vi.fn(),
-  createDriveRole: vi.fn(),
-  validateRolePermissions: vi.fn(),
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: vi.fn(),
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/services/drive-role-service', () => ({
+    checkDriveAccessForRoles: vi.fn(),
+    listDriveRoles: vi.fn(),
+    createDriveRole: vi.fn(),
+    validateRolePermissions: vi.fn(),
+    OpenRoleFloorError: class OpenRoleFloorError extends Error {
+      readonly code = 'org_policy';
+      readonly policy = 'openDriveRoleFloor';
+      readonly status = 403;
+    },
 }));
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  checkMCPDriveScope: vi.fn(),
 }));
 
-import {
-  checkDriveAccessForRoles,
-  listDriveRoles,
-  createDriveRole,
-  validateRolePermissions,
-} from '@pagespace/lib/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { checkDriveAccessForRoles, listDriveRoles, createDriveRole, validateRolePermissions, OpenRoleFloorError } from '@pagespace/lib/services/drive-role-service';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 
 // ============================================================================
 // Test Fixtures
@@ -76,6 +81,7 @@ const createRoleFixture = (overrides: {
   color: '#000000',
   isDefault: overrides.isDefault ?? false,
   permissions: overrides.permissions ?? { page_1: { canView: true, canEdit: false, canShare: false } },
+  driveWidePermissions: null,
   position: overrides.position ?? 0,
   createdAt: new Date('2024-01-01'),
   updatedAt: new Date('2024-01-01'),
@@ -97,6 +103,7 @@ describe('GET /api/drives/[driveId]/roles', () => {
     vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(checkMCPDriveScope).mockReturnValue(null);
   });
 
   describe('authentication', () => {
@@ -123,7 +130,7 @@ describe('GET /api/drives/[driveId]/roles', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['session'], requireCSRF: false }
+        { allow: ['session', 'mcp'], requireCSRF: false }
       );
     });
   });
@@ -168,7 +175,7 @@ describe('GET /api/drives/[driveId]/roles', () => {
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles`);
       await GET(request, createContext(mockDriveId));
 
-      expect(checkDriveAccessForRoles).toHaveBeenCalledWith(mockDriveId, mockUserId);
+      expect(checkDriveAccessForRoles).toHaveBeenCalledWith(mockDriveId, expect.objectContaining({ userId: mockUserId }));
     });
 
     it('should call listDriveRoles with driveId', async () => {
@@ -245,7 +252,7 @@ describe('GET /api/drives/[driveId]/roles', () => {
 
   describe('error handling', () => {
     it('should return 500 when service throws', async () => {
-      vi.mocked(checkDriveAccessForRoles).mockRejectedValue(new Error('Database error'));
+      vi.mocked(checkDriveAccessForRoles).mockRejectedValueOnce(new Error('Database error'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles`);
       const response = await GET(request, createContext(mockDriveId));
@@ -270,6 +277,7 @@ describe('POST /api/drives/[driveId]/roles', () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(validateRolePermissions).mockReturnValue(true);
+    vi.mocked(checkMCPDriveScope).mockReturnValue(null);
   });
 
   describe('authentication', () => {
@@ -303,7 +311,7 @@ describe('POST /api/drives/[driveId]/roles', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['session'], requireCSRF: true }
+        { allow: ['session', 'mcp'], requireCSRF: true }
       );
     });
   });
@@ -463,6 +471,7 @@ describe('POST /api/drives/[driveId]/roles', () => {
         color: '#ff0000',
         isDefault: true,
         permissions,
+        driveWidePermissions: null,
       });
     });
   });
@@ -496,7 +505,7 @@ describe('POST /api/drives/[driveId]/roles', () => {
         isOwner: true,
         drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
       }));
-      vi.mocked(createDriveRole).mockRejectedValue(new Error('unique constraint violation'));
+      vi.mocked(createDriveRole).mockRejectedValueOnce(new Error('unique constraint violation'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles`, {
         method: 'POST',
@@ -509,12 +518,29 @@ describe('POST /api/drives/[driveId]/roles', () => {
       expect(body.error).toBe('A role with this name already exists');
     });
 
+    it('POL-6 (partial) a new default role below the org floor is refused 403 naming the policy', async () => {
+      vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+      }));
+      vi.mocked(createDriveRole).mockRejectedValueOnce(new OpenRoleFloorError('edit'));
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles`, {
+        method: 'POST',
+        body: JSON.stringify({ name: 'Default', permissions: {}, isDefault: true }),
+      });
+      const response = await POST(request, createContext(mockDriveId));
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ code: 'org_policy', policy: 'openDriveRoleFloor' });
+    });
+
     it('should return 500 for other database errors', async () => {
       vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
         isOwner: true,
         drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
       }));
-      vi.mocked(createDriveRole).mockRejectedValue(new Error('Connection lost'));
+      vi.mocked(createDriveRole).mockRejectedValueOnce(new Error('Connection lost'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles`, {
         method: 'POST',

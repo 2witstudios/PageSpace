@@ -31,21 +31,13 @@ export interface TaskPage {
   isTrashed: boolean;
 }
 
-export interface TaskList {
-  id: string;
-  pageId: string | null;
-  title: string;
-}
-
 export interface Task {
   id: string;
-  taskListId: string;
   userId: string;
   assigneeId: string | null;
   assigneeAgentId: string | null;
   pageId: string | null;
   title: string;
-  description: string | null;
   status: TaskStatus;
   priority: TaskPriority;
   position: number;
@@ -59,11 +51,14 @@ export interface Task {
   assignees?: TaskAssigneeData[];
   user: TaskUser | null;
   page: TaskPage | null;
-  taskList: TaskList | null;
   // Enriched fields from API
   driveId?: string;
   taskListPageId?: string;
   taskListPageTitle?: string;
+  // Live join from /api/pages/[pageId]/tasks. Optional here because /api/tasks
+  // (the dashboard endpoint) does not currently surface this field — the bell
+  // badge stays hidden until a follow-up enriches that response.
+  activeTriggerCount?: number;
   // Status metadata (computed from custom status configs)
   statusGroup?: TaskStatusGroup;
   statusLabel?: string;
@@ -75,13 +70,6 @@ export interface TaskFilters {
   priority?: TaskPriority;
   startDate?: Date;
   endDate?: Date;
-  driveId?: string;
-}
-
-export interface Drive {
-  id: string;
-  name: string;
-  slug: string;
 }
 
 export interface Pagination {

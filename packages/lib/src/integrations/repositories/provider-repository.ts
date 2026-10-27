@@ -5,15 +5,9 @@
  * Handles listing, creating, updating, and deleting provider configurations.
  */
 
-import {
-  db as defaultDb,
-  eq,
-  and,
-  integrationProviders,
-  integrationConnections,
-  type IntegrationProvider,
-  type NewIntegrationProvider,
-} from '@pagespace/db';
+import { db as defaultDb } from '@pagespace/db/db';
+import { eq, and } from '@pagespace/db/operators';
+import { integrationProviders, integrationConnections, type IntegrationProvider, type NewIntegrationProvider } from '@pagespace/db/schema/integrations';
 import type { IntegrationProviderConfig } from '../types';
 
 /**
@@ -173,6 +167,60 @@ export const seedBuiltinProviders = async (
   }
 
   return seeded;
+};
+
+/**
+ * Deterministic JSON serialization with sorted keys at all levels.
+ * Needed because PostgreSQL JSONB does not preserve key order.
+ */
+function stableStringify(value: unknown): string {
+  if (value === null || value === undefined) return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (typeof value === 'object') {
+    const sorted = Object.keys(value as Record<string, unknown>).sort()
+      .map((k) => `${JSON.stringify(k)}:${stableStringify((value as Record<string, unknown>)[k])}`);
+    return `{${sorted.join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/**
+ * Refresh builtin provider configs from the in-memory definitions.
+ * Compares the full config (tools, schemas, rate limits, etc.) via stable
+ * JSON serialization. Only touches providers with providerType 'builtin'.
+ *
+ * No longer load-bearing for staleness: every read path that resolves a
+ * builtin provider's config now goes through `resolveProviderConfig`
+ * (`../providers/builtin-providers`), which always prefers the in-memory
+ * definition over this persisted row. This write-back is kept only so the
+ * persisted row (visible to direct DB queries, admin tooling, etc.) doesn't
+ * drift indefinitely — it is a sync convenience, not a correctness dependency.
+ */
+export const refreshBuiltinProviders = async (
+  database: typeof defaultDb,
+  builtins: IntegrationProviderConfig[]
+): Promise<number> => {
+  let updated = 0;
+
+  for (const builtin of builtins) {
+    const existing = await database.query.integrationProviders.findFirst({
+      where: and(
+        eq(integrationProviders.slug, builtin.id),
+        eq(integrationProviders.providerType, 'builtin')
+      ),
+    });
+    if (!existing) continue;
+
+    if (stableStringify(existing.config) === stableStringify(builtin)) continue;
+
+    await database
+      .update(integrationProviders)
+      .set({ config: builtin as unknown as Record<string, unknown> })
+      .where(eq(integrationProviders.id, existing.id));
+    updated++;
+  }
+
+  return updated;
 };
 
 /**

@@ -1,19 +1,37 @@
-import { users, db, eq, or } from '@pagespace/db';
 import { z } from 'zod/v4';
-import { sessionService, generateCSRFToken, createExchangeCode, SESSION_DURATION_MS, verifyAppleIdToken } from '@pagespace/lib/auth';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
+import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';
+import { SESSION_DURATION_MS } from '@pagespace/lib/auth/constants';
+import { verifyAppleIdToken } from '@pagespace/lib/auth/oauth-utils';
+import { captureAppleRefreshToken } from '@pagespace/lib/auth/apple/capture-apple-refresh-token';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
-} from '@pagespace/lib/security';
+} from '@pagespace/lib/security/distributed-rate-limit';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers, logAuthEvent, validateOrCreateDeviceToken } from '@pagespace/lib/server';
-import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
+import { maskEmail } from '@pagespace/lib/audit/mask-email';
+import { revokeSessionsForLogin, createWebDeviceToken } from '@/lib/auth';
+import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { NextResponse } from 'next/server';
-import crypto from 'crypto';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { desktopDeepLink } from '@/lib/auth/desktop-shell';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
-import { appendSessionCookie } from '@/lib/auth/cookie-config';
+import { verifyOAuthState } from '@/lib/auth/oauth-state';
+import { appendSessionCookie, createDeviceTokenHandoffCookie } from '@/lib/auth/cookie-config';
+import { authRepository } from '@/lib/repositories/auth-repository';
+import { resolveOAuthAccount } from '@/lib/auth/oauth-account-resolver';
+import { buildHandoffBridgeResponse } from '@/app/api/auth/_shared/handoffBridgeResponse';
+import {
+  consumeAllInvitesForEmail,
+  consumeAnyInviteIfPresent,
+} from '@/lib/auth/native-invite-acceptance';
+import { autoJoinVerifiedDomainAfterSignIn } from '@/lib/orgs/domain-auto-join';
+import { ceremonyAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 
 // Apple sends name info as JSON in the 'user' field (only on first authorization)
 const appleUserSchema = z.object({
@@ -31,87 +49,52 @@ const appleUserSchema = z.object({
 export async function POST(req: Request) {
   try {
     // Parse form data (Apple uses application/x-www-form-urlencoded)
-    // Note: Apple sends both 'code' and 'id_token' with response_type=code id_token
-    // We use id_token directly for verification (no token exchange needed)
+    // Note: Apple sends both 'code' and 'id_token' with response_type=code id_token.
+    // The id_token alone authenticates the user; the code is exchanged afterwards,
+    // out of band, only to keep a revocable refresh token (TN3194).
     const formData = await req.formData();
     const idToken = formData.get('id_token') as string | null;
+    const authorizationCode = formData.get('code');
     const state = formData.get('state') as string | null;
-    const error = formData.get('error') as string | null;
     const userJson = formData.get('user') as string | null;
+    const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || new URL(req.url).origin;
 
-    // Handle errors from Apple
-    if (error) {
-      loggers.auth.warn('Apple OAuth error', { error: String(error).slice(0, 100) });
-      let errorParam = 'oauth_error';
-      if (error === 'user_cancelled_authorize') {
-        errorParam = 'access_denied';
-      }
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || new URL(req.url).origin;
-      return NextResponse.redirect(new URL(`/auth/signin?error=${encodeURIComponent(errorParam)}`, baseUrl));
-    }
+    // Verify state HMAC upfront — this is the server-side security gate
+    const stateResult = state ? verifyOAuthState(state) : null;
+    const verifiedState = stateResult?.status === 'valid' ? stateResult.data : null;
 
-    // Validate required fields
-    if (!idToken) {
-      loggers.auth.warn('Apple OAuth callback missing id_token');
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || new URL(req.url).origin;
-      return NextResponse.redirect(new URL('/auth/signin?error=invalid_request', baseUrl));
-    }
-
-    // Parse state parameter
-    let returnUrl = '/dashboard';
-    let platform = 'web';
-    let deviceId: string | undefined;
-    let deviceName: string | undefined;
-
-    if (state) {
-      try {
-        const stateWithSignature = JSON.parse(
-          Buffer.from(state, 'base64').toString('utf-8')
-        );
-
-        if (stateWithSignature.data && stateWithSignature.sig) {
-          const { data, sig } = stateWithSignature;
-          const expectedSignature = crypto
-            .createHmac('sha256', process.env.OAUTH_STATE_SECRET!)
-            .update(JSON.stringify(data))
-            .digest('hex');
-
-          if (sig !== expectedSignature) {
-            loggers.auth.warn('Apple OAuth state signature mismatch', { state: state.slice(0, 50) });
-            const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
-            return NextResponse.redirect(new URL('/auth/signin?error=invalid_request', baseUrl));
-          }
-
-          returnUrl = data.returnUrl || '/dashboard';
-          platform = data.platform || 'web';
-          deviceId = data.deviceId;
-          deviceName = data.deviceName;
-        } else {
-          // SECURITY: State without signature is invalid - reject and use safe defaults
-          loggers.auth.warn('Apple OAuth state missing signature - using safe defaults', {
-            hasData: !!stateWithSignature.data,
-            hasSig: !!stateWithSignature.sig,
-          });
-          returnUrl = '/dashboard';
-          platform = 'web';
-        }
-      } catch {
-        // SECURITY: Malformed state is invalid - reject and use safe defaults
-        loggers.auth.warn('Apple OAuth state parse failed - using safe defaults', {
-          stateLength: state?.length,
-        });
-        returnUrl = '/dashboard';
-        platform = 'web';
-      }
-    }
-
-    if (!isSafeReturnUrl(returnUrl)) {
-      loggers.auth.warn('Unsafe returnUrl in Apple OAuth callback - falling back to dashboard', {
-        returnUrl,
+    // Single rejection guard: id_token + HMAC-verified state required
+    // `error` is never a branch condition — only read as a UX hint inside
+    if (!idToken || !verifiedState) {
+      const errorHint = formData.get('error') as string | null;
+      loggers.auth.warn('Apple OAuth callback rejected', {
+        hasIdToken: !!idToken,
         hasState: !!state,
+        stateStatus: stateResult?.status ?? 'missing',
+        errorHint: errorHint ? String(errorHint).slice(0, 100) : 'none',
       });
-      returnUrl = '/dashboard';
+      const errorType = errorHint === 'user_cancelled_authorize' ? 'access_denied' : 'oauth_error';
+      auditRequest(req, {
+        eventType: 'auth.login.failure',
+        riskScore: 0.1,
+        details: { reason: 'apple_oauth_rejected' },
+      });
+
+      if (verifiedState?.platform === 'desktop') {
+        return NextResponse.redirect(
+          `${desktopDeepLink(verifiedState?.shell, 'auth-error')}?error=${errorType}`,
+        );
+      }
+      return NextResponse.redirect(new URL(`/auth/signin?error=${encodeURIComponent(errorType)}`, baseUrl));
     }
+
+    // Past this point: id_token present + HMAC-verified state
+    let returnUrl = isSafeReturnUrl(verifiedState.returnUrl)
+      ? (verifiedState.returnUrl || '/dashboard')
+      : '/dashboard';
+    const platform = verifiedState.platform || 'web';
+    const deviceId = verifiedState.deviceId;
+    const deviceName = verifiedState.deviceName;
 
     const clientIP = getClientIP(req);
 
@@ -121,7 +104,6 @@ export async function POST(req: Request) {
       DISTRIBUTED_RATE_LIMITS.LOGIN
     );
     if (!ipRateLimit.allowed) {
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
       return NextResponse.redirect(new URL('/auth/signin?error=rate_limit', baseUrl));
     }
 
@@ -132,7 +114,6 @@ export async function POST(req: Request) {
       loggers.auth.error('Apple ID token verification failed', {
         error: verificationResult.error,
       });
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
       return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
     }
 
@@ -140,7 +121,6 @@ export async function POST(req: Request) {
 
     if (!email) {
       loggers.auth.error('Missing required email from Apple');
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
       return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
     }
 
@@ -168,36 +148,57 @@ export async function POST(req: Request) {
     const name = [givenName, familyName].filter(Boolean).join(' ') || undefined;
     const userName = name || email.split('@')[0] || 'User';
 
-    // Find or create user
-    let user = await db.query.users.findFirst({
-      where: or(
-        eq(users.appleId, appleId),
-        eq(users.email, email)
-      ),
+    // Resolve the account match through the shared, security-critical decision.
+    // SECURITY (M5): match an EXISTING account by raw email only when Apple
+    // asserts the email is verified; the subject id (appleId) may always match.
+    const { decision: matchDecision, user: matchedUser, emailMatch } = await resolveOAuthAccount({
+      provider: 'apple',
+      providerId: appleId,
+      email,
+      emailVerified: emailVerified === true,
     });
+
+    if (matchDecision === 'reject') {
+      loggers.auth.warn('Blocked OAuth account link: unverified email matches existing account', {
+        email: maskEmail(email),
+        provider: 'apple',
+      });
+      auditRequest(req, {
+        eventType: 'auth.login.failure',
+        riskScore: 0.8,
+        userId: emailMatch?.id,
+        details: { reason: 'apple_oauth_unverified_email_link_blocked' },
+      });
+      if (platform === 'desktop') {
+        return NextResponse.redirect(
+          `${desktopDeepLink(verifiedState.shell, 'auth-error')}?error=oauth_error`,
+        );
+      }
+      return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
+    }
+
+    // Find or create user
+    let user = matchedUser;
+    const wasNewUser = !user;
 
     if (user) {
       // Update existing user if needed
       if (!user.appleId || !user.name) {
-        loggers.auth.info('Updating existing user via Apple OAuth', { email });
-        await db.update(users)
-          .set({
-            appleId: appleId || user.appleId,
-            provider: user.password ? 'both' : 'apple',
-            name: user.name || userName,
-            emailVerified: emailVerified ? new Date() : user.emailVerified,
-          })
-          .where(eq(users.id, user.id));
+        loggers.auth.info('Updating existing user via Apple OAuth', { email: maskEmail(email) });
+        await authRepository.updateUser(user.id, {
+          appleId: appleId || user.appleId,
+          provider: 'apple',
+          name: user.name || userName,
+          emailVerified: emailVerified ? new Date() : user.emailVerified,
+        });
 
-        user = await db.query.users.findFirst({
-          where: eq(users.id, user.id),
-        }) || user;
-        loggers.auth.info('User updated via Apple OAuth', { userId: user.id, name: user.name });
+        user = await authRepository.findUserById(user.id) || user;
+        loggers.auth.info('User updated via Apple OAuth', { userId: user.id });
       }
     } else {
       // Create new user
-      loggers.auth.info('Creating new user via Apple OAuth', { email });
-      const [newUser] = await db.insert(users).values({
+      loggers.auth.info('Creating new user via Apple OAuth', { email: maskEmail(email) });
+      user = await authRepository.createUser({
         id: createId(),
         name: userName,
         email,
@@ -209,39 +210,42 @@ export async function POST(req: Request) {
         role: 'user',
         storageUsedBytes: 0,
         subscriptionTier: 'free',
-      }).returning();
-
-      user = newUser;
-      loggers.auth.info('New user created via Apple OAuth', { userId: user.id, name: user.name });
+      });
+      loggers.auth.info('New user created via Apple OAuth', { userId: user.id });
     }
 
-    // Provision getting started drive for new users
+    // SEC-1: a new account on an org's verified email domain joins it (seat permitting). Never throws.
+    await autoJoinVerifiedDomainAfterSignIn(user.id);
+
+    // Provision the Home drive (idempotent)
     let isNewlyProvisioned = false;
     try {
-      const provisionedDrive = await provisionGettingStartedDriveIfNeeded(user.id);
+      const provisionedDrive = await provisionHomeDriveIfNeeded(user.id);
       if (provisionedDrive.created) {
         isNewlyProvisioned = true;
-        returnUrl = `/dashboard/${provisionedDrive.driveId}`;
+        if (!returnUrl.startsWith('/s/')) {
+          returnUrl = `/dashboard/${provisionedDrive.driveId}`;
+        }
       }
     } catch (provisionError) {
-      loggers.auth.error('Failed to provision Getting Started drive', provisionError as Error, {
+      loggers.auth.error('Failed to provision Home drive', provisionError as Error, {
         userId: user.id,
         provider: 'apple',
       });
     }
 
-    // SESSION FIXATION PREVENTION: Revoke all existing sessions before creating new one
-    const revokedCount = await sessionService.revokeAllUserSessions(user.id, 'new_login');
-    if (revokedCount > 0) {
-      loggers.auth.info('Revoked existing sessions on Apple OAuth login', { userId: user.id, count: revokedCount });
-    }
+    await revokeSessionsForLogin(user.id, deviceId, 'new_login', 'Apple OAuth');
 
     // Create new session
+    // D-OW-45: the ceremony this route just verified, recorded on every credential it mints.
+    const authentication = ceremonyAuthentication({ method: 'apple' }, Date.now());
     const sessionToken = await sessionService.createSession({
+      authentication,
       userId: user.id,
       type: 'user',
       scopes: ['*'],
       expiresInMs: SESSION_DURATION_MS,
+      deviceId,
       createdByIp: clientIP !== 'unknown' ? clientIP : undefined,
     });
 
@@ -249,11 +253,31 @@ export async function POST(req: Request) {
     const sessionClaims = await sessionService.validateSession(sessionToken);
     if (!sessionClaims) {
       loggers.auth.error('Failed to validate newly created session', { userId: user.id });
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
       return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
     }
 
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
+
+    // TN3194: keep a revocable refresh token so account deletion can revoke the
+    // Apple authorization. Called only once each platform's response is built,
+    // and never awaited — sign-in must not wait on, or fail because of, Apple.
+    const appleClientId = verificationResult.audience;
+    const signedInUserId = user.id;
+    const captureAppleTokenInBackground = () => {
+      if (typeof authorizationCode !== 'string' || authorizationCode.length === 0 || !appleClientId) return;
+      void captureAppleRefreshToken({
+        userId: signedInUserId,
+        code: authorizationCode,
+        clientId: appleClientId,
+        expectedSub: appleId,
+        redirectUri: process.env.APPLE_REDIRECT_URI,
+      }).catch((error: unknown) => {
+        loggers.auth.warn('Apple refresh token capture threw', {
+          userId: signedInUserId,
+          reason: error instanceof Error ? error.name : 'unknown_error',
+        });
+      });
+    };
 
     try {
       await resetDistributedRateLimit(`oauth:callback:ip:${clientIP}`);
@@ -263,12 +287,37 @@ export async function POST(req: Request) {
       });
     }
 
-    logAuthEvent('login', user.id, email, clientIP, 'Apple OAuth');
+    auditRequest(req, {
+      eventType: 'auth.login.success',
+      userId: user.id,
+      sessionId: sessionClaims.sessionId,
+      details: { method: 'Apple OAuth' },
+    });
     trackAuthEvent(user.id, 'login', {
-      email,
+      email: maskEmail(email),
       ip: clientIP,
       provider: 'apple',
       userAgent: req.headers.get('user-agent')
+    });
+
+    // Invite consumption runs BEFORE platform branching so desktop/iOS users
+    // who arrived with `?invite=<token>` don't have their invite silently
+    // dropped at the deep-link handoff. The invite is fully consumed (the
+    // membership row is created) regardless of platform; deep-link clients
+    // get `invitedDriveId` as a query param for forward-compatible routing.
+    const oauthInviteResult = await consumeAnyInviteIfPresent({
+      request: req,
+      inviteToken: verifiedState.inviteToken,
+      user: { id: user.id, suspendedAt: user.suspendedAt },
+      isNewUser: wasNewUser,
+      email,
+    });
+
+    await consumeAllInvitesForEmail({
+      request: req,
+      email,
+      user: { id: user.id, suspendedAt: user.suspendedAt },
+      now: new Date(),
     });
 
     // DESKTOP PLATFORM: Redirect with tokens encoded via exchange code
@@ -276,13 +325,13 @@ export async function POST(req: Request) {
       if (!deviceId) {
         loggers.auth.error('Desktop OAuth callback missing deviceId', {
           userId: user.id,
-          email: user.email,
+          email: maskEmail(user.email),
         });
-        const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
-        return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
+          return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
       }
 
       const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
+        authentication,
         providedDeviceToken: undefined,
         userId: user.id,
         deviceId: deviceId,
@@ -302,27 +351,62 @@ export async function POST(req: Request) {
         createdAt: Date.now(),
       });
 
-      const deepLinkUrl = new URL('pagespace://auth-exchange');
+      const deepLinkUrl = new URL(desktopDeepLink(verifiedState.shell, 'auth-exchange'));
       deepLinkUrl.searchParams.set('code', exchangeCode);
       deepLinkUrl.searchParams.set('provider', 'apple');
       if (isNewlyProvisioned) {
         deepLinkUrl.searchParams.set('isNewUser', 'true');
       }
+      if (oauthInviteResult.invitedDriveId) {
+        deepLinkUrl.searchParams.set('invitedDriveId', oauthInviteResult.invitedDriveId);
+      }
 
-      loggers.auth.info('Desktop Apple OAuth deep link redirect', {
+      loggers.auth.info('Desktop Apple OAuth deep link bridge', {
         userId: user.id,
         provider: 'apple',
         hasNewUserFlag: isNewlyProvisioned,
+        invitedDriveId: oauthInviteResult.invitedDriveId ?? null,
       });
 
-      return NextResponse.redirect(deepLinkUrl.toString());
+      const desktopResponse = buildHandoffBridgeResponse(deepLinkUrl.toString(), "You're signed in");
+      captureAppleTokenInBackground();
+      return desktopResponse;
     }
 
     // iOS PLATFORM: Same as desktop - use secure exchange code flow
+    // Deliberately iOS only, though the state schema now accepts 'android'.
+    //
+    // Android's web OAuth does NOT stay in the Capacitor WebView:
+    // `apps/android/capacitor.config.ts` allowlists only `pagespace.ai`, so a
+    // provider host is handed to `Bridge.launchIntent()` and opens externally —
+    // where a successful sign-in drops the session cookie in the wrong jar and
+    // the app stays logged out. This deep link is exactly the fix for that, and
+    // Phase C shipped the Android intent filter in anticipation of it.
+    //
+    // Two things must land before it may be emitted for Android, and the first is
+    // a security precondition, not a plumbing one:
+    //
+    //  1. The handoff must be bound to the app that started the flow. Custom
+    //     schemes are NOT exclusive on Android — any installed app may also
+    //     register `pagespace://` and be offered in the chooser or set as the
+    //     default handler — so an unbound one-time exchange code sent over this
+    //     scheme is a code another app can claim. `apps/android/README.md`
+    //     ("Deep links: what ships, and what is deliberately deferred") states
+    //     this as a precondition in as many words.
+    //  2. Something has to consume it. Nothing listens for the `@capacitor/app`
+    //     `appUrlOpen` event on EITHER platform, so a captured code is silently
+    //     dropped today (same file, "Prerequisite 2 — link routing in the web
+    //     app").
+    //
+    // Widening the state enum removes the blocker Phase C named. Emitting the
+    // link before (1) would trade a wrong-cookie-jar failure for a credential
+    // that can be intercepted — strictly worse — and before (2) it would not
+    // work at all.
     if (platform === 'ios') {
       const iosDeviceId = deviceId || createId();
 
       const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
+        authentication,
         providedDeviceToken: undefined,
         userId: user.id,
         deviceId: iosDeviceId,
@@ -342,36 +426,82 @@ export async function POST(req: Request) {
         createdAt: Date.now(),
       });
 
+      // iOS is a separate Capacitor app that registers `pagespace://`
+      // itself; the desktop shell variant does not apply here.
       const deepLinkUrl = new URL('pagespace://auth-exchange');
       deepLinkUrl.searchParams.set('code', exchangeCode);
       deepLinkUrl.searchParams.set('provider', 'apple');
       if (isNewlyProvisioned) {
         deepLinkUrl.searchParams.set('isNewUser', 'true');
       }
+      if (oauthInviteResult.invitedDriveId) {
+        deepLinkUrl.searchParams.set('invitedDriveId', oauthInviteResult.invitedDriveId);
+      }
 
       loggers.auth.info('iOS Apple OAuth deep link redirect', {
         userId: user.id,
         provider: 'apple',
         hasNewUserFlag: isNewlyProvisioned,
+        invitedDriveId: oauthInviteResult.invitedDriveId ?? null,
       });
 
-      return NextResponse.redirect(deepLinkUrl.toString());
+      const iosResponse = NextResponse.redirect(deepLinkUrl.toString());
+      captureAppleTokenInBackground();
+      return iosResponse;
     }
 
-    // WEB PLATFORM: Redirect with session cookie
-    const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
+    let webDeviceTokenValue: string | undefined;
+    if (deviceId) {
+      try {
+        webDeviceTokenValue = await createWebDeviceToken({
+          authentication,
+          userId: user.id, deviceId, tokenVersion: user.tokenVersion,
+          deviceName: deviceName || req.headers.get('user-agent') || 'Web Browser',
+          userAgent: req.headers.get('user-agent') || undefined,
+          ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
+        });
+      } catch (error) {
+        loggers.auth.warn('Failed to create device token', {
+          userId: user.id, error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    if (oauthInviteResult.orgLandingPath) {
+      // ORG-3: the org hub once joined; the invite page (which says why) when refused.
+      returnUrl = oauthInviteResult.orgLandingPath;
+    } else if (oauthInviteResult.kind === 'page' && oauthInviteResult.invitedDriveId && oauthInviteResult.invitedPageId) {
+      returnUrl = `/dashboard/${oauthInviteResult.invitedDriveId}/pages/${oauthInviteResult.invitedPageId}?invited=1`;
+    } else if (oauthInviteResult.kind === 'connection') {
+      returnUrl = `/dashboard/connections?connection_requested=1`;
+    } else if (oauthInviteResult.invitedDriveId) {
+      returnUrl = `/dashboard/${oauthInviteResult.invitedDriveId}?invited=1`;
+    } else if (oauthInviteResult.inviteError) {
+      const sep = returnUrl.includes('?') ? '&' : '?';
+      returnUrl = `${returnUrl}${sep}inviteError=${oauthInviteResult.inviteError}`;
+    }
+
     const redirectUrl = new URL(returnUrl, baseUrl);
     redirectUrl.searchParams.set('auth', 'success');
-    redirectUrl.searchParams.set('csrfToken', csrfToken);
 
     const headers = new Headers();
     appendSessionCookie(headers, sessionToken);
+    if (webDeviceTokenValue) {
+      headers.append('Set-Cookie', createDeviceTokenHandoffCookie(webDeviceTokenValue));
+    }
 
-    return NextResponse.redirect(redirectUrl, { headers });
+    const webResponse = NextResponse.redirect(redirectUrl, { headers });
+    captureAppleTokenInBackground();
+    return webResponse;
 
   } catch (error) {
     loggers.auth.error('Apple OAuth callback error', error as Error);
-    const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
-    return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
+    auditRequest(req, {
+      eventType: 'auth.login.failure',
+      riskScore: 0.3,
+      details: { reason: 'apple_oauth_error' },
+    });
+    const errorRedirectBase = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
+    return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', errorRedirectBase));
   }
 }

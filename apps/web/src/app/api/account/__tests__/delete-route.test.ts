@@ -2,51 +2,49 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
-// Mock repository seams - the proper architectural boundary
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
-    auth: {
-      info: vi.fn(),
-      error: vi.fn(),
-      warn: vi.fn(),
-      debug: vi.fn(),
-    },
-  },
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: { auth: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } },
+}));
+
+vi.mock('@pagespace/lib/repositories/account-repository', () => ({
   accountRepository: {
     findById: vi.fn(),
     getOwnedDrives: vi.fn(),
+    getOwnedOrganizationNames: vi.fn(),
     getDriveMemberCount: vi.fn(),
-    deleteDrive: vi.fn(),
-    deleteUser: vi.fn(),
-  },
-  activityLogRepository: {
-    anonymizeForUser: vi.fn(),
   },
 }));
+
+vi.mock('@pagespace/lib/repositories/data-subject-request-repository', () => ({
+  dataSubjectRequestRepository: {
+    findActiveErasureForUser: vi.fn(),
+  },
+}));
+
+vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn(), auditRequest: vi.fn() }));
+
+vi.mock('@/lib/erasure/request-erasure', () => ({ lodgeAndEnqueueErasure: vi.fn() }));
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  createUserServiceToken: vi.fn(),
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+  getActorInfo: vi.fn(),
+  logUserActivity: vi.fn(),
 }));
 
+import { LeaveOrganizationRefusedError } from '@pagespace/lib/organizations/leave';
 import { DELETE } from '../route';
-import {
-  loggers,
-  accountRepository,
-  activityLogRepository,
-} from '@pagespace/lib/server';
+import { accountRepository } from '@pagespace/lib/repositories/account-repository';
+import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createUserServiceToken } from '@pagespace/lib';
+import { lodgeAndEnqueueErasure } from '@/lib/erasure/request-erasure';
 
-// Type the mocked repositories
 const mockAccountRepo = vi.mocked(accountRepository);
-const mockActivityLogRepo = vi.mocked(activityLogRepository);
+const mockDsrRepo = vi.mocked(dataSubjectRequestRepository);
 
-// Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string, tokenVersion = 0): SessionAuthResult => ({
   userId,
   tokenVersion,
@@ -56,389 +54,192 @@ const mockWebAuth = (userId: string, tokenVersion = 0): SessionAuthResult => ({
   adminRoleVersion: 0,
 });
 
-// Helper to create mock AuthError
 const mockAuthError = (status = 401): AuthError => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status }),
 });
 
-describe('DELETE /api/account', () => {
+const deleteReq = (emailConfirmation: string) =>
+  new Request('https://example.com/api/account', {
+    method: 'DELETE',
+    body: JSON.stringify({ emailConfirmation }),
+  });
+
+describe('DELETE /api/account (async erasure)', () => {
   const mockUserId = 'user_123';
   const mockUserEmail = 'test@example.com';
 
   beforeEach(() => {
     vi.clearAllMocks();
-
-    // Arrange: default successful auth
-    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(
-      mockWebAuth(mockUserId)
-    );
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
-
-    // Arrange: default user exists
     mockAccountRepo.findById.mockResolvedValue({
       id: mockUserId,
       email: mockUserEmail,
       image: null,
+      stripeCustomerId: null,
+      appleId: null,
     });
-
-    // Arrange: default no owned drives
     mockAccountRepo.getOwnedDrives.mockResolvedValue([]);
-
-    // Arrange: default successful operations
-    mockAccountRepo.deleteDrive.mockResolvedValue(undefined);
-    mockAccountRepo.deleteUser.mockResolvedValue(undefined);
-    mockActivityLogRepo.anonymizeForUser.mockResolvedValue({ success: true });
-  });
-
-  describe('email confirmation validation', () => {
-    it('should reject when email confirmation does not match', async () => {
-      // Arrange
-      const request = new Request('https://example.com/api/account', {
-        method: 'DELETE',
-        body: JSON.stringify({ emailConfirmation: 'wrong@example.com' }),
-      });
-
-      // Act
-      const response = await DELETE(request);
-      const body = await response.json();
-
-      // Assert
-      expect(response.status).toBe(400);
-      expect(body.error).toBe('Email confirmation does not match your account email');
-    });
-
-    it('should reject when email confirmation is empty', async () => {
-      // Arrange
-      const request = new Request('https://example.com/api/account', {
-        method: 'DELETE',
-        body: JSON.stringify({ emailConfirmation: '' }),
-      });
-
-      // Act
-      const response = await DELETE(request);
-      const body = await response.json();
-
-      // Assert
-      expect(response.status).toBe(400);
-      expect(body.error).toBe('Email confirmation does not match your account email');
-    });
-
-    it('should accept email confirmation with different case', async () => {
-      // Arrange
-      const request = new Request('https://example.com/api/account', {
-        method: 'DELETE',
-        body: JSON.stringify({ emailConfirmation: 'TEST@EXAMPLE.COM' }),
-      });
-
-      // Act
-      const response = await DELETE(request);
-
-      // Assert
-      expect(response.status).toBe(200);
-    });
-
-    it('should trim and lowercase email confirmation', async () => {
-      // Arrange
-      const request = new Request('https://example.com/api/account', {
-        method: 'DELETE',
-        body: JSON.stringify({ emailConfirmation: '  TEST@EXAMPLE.COM  ' }),
-      });
-
-      // Act
-      const response = await DELETE(request);
-
-      // Assert
-      expect(response.status).toBe(200);
+    mockAccountRepo.getOwnedOrganizationNames.mockResolvedValue([]);
+    mockDsrRepo.findActiveErasureForUser.mockResolvedValue(null);
+    vi.mocked(lodgeAndEnqueueErasure).mockResolvedValue({
+      requestId: 'dsr_1',
+      jobId: 'job_1',
+      slaDeadline: new Date('2026-03-01T00:00:00.000Z'),
+      appleSignIn: 'none',
     });
   });
 
-  describe('authentication', () => {
-    it('should return 401 when not authenticated', async () => {
-      // Arrange
-      vi.mocked(isAuthError).mockReturnValue(true);
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(
-        mockAuthError(401)
-      );
-
-      const request = new Request('https://example.com/api/account', {
-        method: 'DELETE',
-        body: JSON.stringify({ emailConfirmation: mockUserEmail }),
-      });
-
-      // Act
-      const response = await DELETE(request);
-
-      // Assert
-      expect(response.status).toBe(401);
-    });
-
-    it('should return 404 when user not found', async () => {
-      // Arrange
-      mockAccountRepo.findById.mockResolvedValue(null);
-
-      const request = new Request('https://example.com/api/account', {
-        method: 'DELETE',
-        body: JSON.stringify({ emailConfirmation: mockUserEmail }),
-      });
-
-      // Act
-      const response = await DELETE(request);
-      const body = await response.json();
-
-      // Assert
-      expect(response.status).toBe(404);
-      expect(body.error).toBe('User not found');
-    });
-  });
-
-  describe('drive ownership handling', () => {
-    it('should auto-delete solo drives before account deletion', async () => {
-      // Arrange: user owns one solo drive (1 member)
-      mockAccountRepo.getOwnedDrives.mockResolvedValue([
-        { id: 'drive_solo', name: 'Solo Drive' },
-      ]);
-      mockAccountRepo.getDriveMemberCount.mockResolvedValue(1);
-
-      const request = new Request('https://example.com/api/account', {
-        method: 'DELETE',
-        body: JSON.stringify({ emailConfirmation: mockUserEmail }),
-      });
-
-      // Act
-      const response = await DELETE(request);
-
-      // Assert - verify boundary interactions
-      expect(response.status).toBe(200);
-      expect(mockAccountRepo.deleteDrive).toHaveBeenCalledWith('drive_solo');
-      expect(mockAccountRepo.deleteUser).toHaveBeenCalledWith(mockUserId);
-      expect(loggers.auth.info).toHaveBeenCalledWith(
-        expect.stringContaining('Auto-deleted 1 solo drives')
-      );
-    });
-
-    it('should block deletion when multi-member drives exist', async () => {
-      // Arrange: user owns one multi-member drive (3 members)
-      mockAccountRepo.getOwnedDrives.mockResolvedValue([
-        { id: 'drive_multi', name: 'Team Drive' },
-      ]);
-      mockAccountRepo.getDriveMemberCount.mockResolvedValue(3);
-
-      const request = new Request('https://example.com/api/account', {
-        method: 'DELETE',
-        body: JSON.stringify({ emailConfirmation: mockUserEmail }),
-      });
-
-      // Act
-      const response = await DELETE(request);
-      const body = await response.json();
-
-      // Assert
-      expect(response.status).toBe(400);
-      expect(body.error).toContain('must transfer ownership or delete');
-      expect(body.multiMemberDrives).toContain('Team Drive');
-      expect(mockAccountRepo.deleteUser).not.toHaveBeenCalled();
-    });
-
-    it('should handle multiple solo drives correctly', async () => {
-      // Arrange: user owns 3 solo drives
-      mockAccountRepo.getOwnedDrives.mockResolvedValue([
-        { id: 'drive_1', name: 'Solo 1' },
-        { id: 'drive_2', name: 'Solo 2' },
-        { id: 'drive_3', name: 'Solo 3' },
-      ]);
-      mockAccountRepo.getDriveMemberCount.mockResolvedValue(1);
-
-      const request = new Request('https://example.com/api/account', {
-        method: 'DELETE',
-        body: JSON.stringify({ emailConfirmation: mockUserEmail }),
-      });
-
-      // Act
-      const response = await DELETE(request);
-
-      // Assert - verify all drives deleted
-      expect(response.status).toBe(200);
-      expect(mockAccountRepo.deleteDrive).toHaveBeenCalledWith('drive_1');
-      expect(mockAccountRepo.deleteDrive).toHaveBeenCalledWith('drive_2');
-      expect(mockAccountRepo.deleteDrive).toHaveBeenCalledWith('drive_3');
-      expect(loggers.auth.info).toHaveBeenCalledWith(
-        expect.stringContaining('Auto-deleted 3 solo drives')
-      );
-    });
-  });
-
-  describe('avatar deletion', () => {
-    it('should delete user avatar via processor service', async () => {
-      // Arrange
-      const mockToken = 'mock-service-token';
-      vi.mocked(createUserServiceToken).mockResolvedValue({
-        token: mockToken,
-        grantedScopes: ['avatars:write'],
-      });
-
+  describe('Sign in with Apple (Guideline 5.1.1(v))', () => {
+    it('given a user who signed in with Apple, should tell the erasure so and return its Apple outcome', async () => {
       mockAccountRepo.findById.mockResolvedValue({
         id: mockUserId,
         email: mockUserEmail,
-        image: '/avatars/user_123.jpg',
+        image: null,
+        stripeCustomerId: null,
+        appleId: 'apple-sub-1',
+      });
+      vi.mocked(lodgeAndEnqueueErasure).mockResolvedValue({
+        requestId: 'dsr_1',
+        jobId: 'job_1',
+        slaDeadline: new Date('2026-03-01T00:00:00.000Z'),
+        appleSignIn: 'manual',
       });
 
-      global.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
+      const res = await DELETE(deleteReq(mockUserEmail));
+      const body = await res.json();
+
+      expect(res.status).toBe(202);
+      expect(lodgeAndEnqueueErasure).toHaveBeenCalledWith(expect.objectContaining({ subjectAppleLinked: true }));
+      expect(body.appleSignIn).toBe('manual');
+    });
+
+    it('given a retry while the erasure is already in flight, should still tell an Apple user the manual steps', async () => {
+      mockAccountRepo.findById.mockResolvedValue({
+        id: mockUserId,
+        email: mockUserEmail,
+        image: null,
+        stripeCustomerId: null,
+        appleId: 'apple-sub-1',
       });
+      mockDsrRepo.findActiveErasureForUser.mockResolvedValue({
+        id: 'dsr_existing',
+        status: 'queued',
+        slaDeadline: new Date('2026-03-01T00:00:00.000Z'),
+      } as never);
 
-      const request = new Request('https://example.com/api/account', {
-        method: 'DELETE',
-        body: JSON.stringify({ emailConfirmation: mockUserEmail }),
-      });
+      const body = await (await DELETE(deleteReq(mockUserEmail))).json();
 
-      // Act
-      await DELETE(request);
+      expect(body.requestId).toBe('dsr_existing');
+      expect(body.appleSignIn).toBe('manual');
+    });
 
-      // Assert - verify fetch called with correct payload
-      expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('/api/avatar/'),
+    it('given a user who never used Sign in with Apple, should report none', async () => {
+      const res = await DELETE(deleteReq(mockUserEmail));
+      const body = await res.json();
+
+      expect(lodgeAndEnqueueErasure).toHaveBeenCalledWith(expect.objectContaining({ subjectAppleLinked: false }));
+      expect(body.appleSignIn).toBe('none');
+    });
+  });
+
+  describe('validation + auth', () => {
+    it('should reject when email confirmation does not match', async () => {
+      const res = await DELETE(deleteReq('wrong@example.com'));
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe('Email confirmation does not match your account email');
+    });
+
+    it('should return 401 when not authenticated', async () => {
+      vi.mocked(isAuthError).mockReturnValue(true);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
+      const res = await DELETE(deleteReq(mockUserEmail));
+      expect(res.status).toBe(401);
+    });
+
+    it('should return 404 when user not found', async () => {
+      mockAccountRepo.findById.mockResolvedValue(null);
+      const res = await DELETE(deleteReq(mockUserEmail));
+      expect(res.status).toBe(404);
+    });
+
+    it('should accept case-insensitive / whitespace-padded confirmation', async () => {
+      const res = await DELETE(deleteReq('  TEST@EXAMPLE.COM  '));
+      expect(res.status).toBe(202);
+    });
+  });
+
+  describe('async queueing', () => {
+    it('given no owned drives, should queue erasure and return 202 with requestId', async () => {
+      const res = await DELETE(deleteReq(mockUserEmail));
+      const body = await res.json();
+      expect(res.status).toBe(202);
+      expect(body.requestId).toBe('dsr_1');
+      expect(body.status).toBe('queued');
+      expect(lodgeAndEnqueueErasure).toHaveBeenCalledWith(
         expect.objectContaining({
-          method: 'DELETE',
-          headers: expect.objectContaining({
-            Authorization: `Bearer ${mockToken}`,
-          }),
+          subjectUserId: mockUserId,
+          caller: expect.objectContaining({ userId: mockUserId }),
+          requestedByType: 'self',
+          forceDelete: false,
         })
       );
     });
 
-    it('should not delete avatar for external URLs', async () => {
-      // Arrange
-      mockAccountRepo.findById.mockResolvedValue({
-        id: mockUserId,
-        email: mockUserEmail,
-        image: 'https://example.com/avatar.jpg',
-      });
-
-      global.fetch = vi.fn();
-
-      const request = new Request('https://example.com/api/account', {
-        method: 'DELETE',
-        body: JSON.stringify({ emailConfirmation: mockUserEmail }),
-      });
-
-      // Act
-      await DELETE(request);
-
-      // Assert
-      expect(global.fetch).not.toHaveBeenCalled();
+    it('given solo drives only, should not block and should queue', async () => {
+      mockAccountRepo.getOwnedDrives.mockResolvedValue([{ id: 'd1', name: 'Solo' }]);
+      mockAccountRepo.getDriveMemberCount.mockResolvedValue(1);
+      const res = await DELETE(deleteReq(mockUserEmail));
+      expect(res.status).toBe(202);
+      expect(lodgeAndEnqueueErasure).toHaveBeenCalled();
     });
 
-    it('should continue deletion if avatar deletion fails', async () => {
-      // Arrange
-      mockAccountRepo.findById.mockResolvedValue({
-        id: mockUserId,
-        email: mockUserEmail,
-        image: '/avatars/user_123.jpg',
-      });
-
-      vi.mocked(createUserServiceToken).mockRejectedValue(new Error('Token creation failed'));
-
-      const request = new Request('https://example.com/api/account', {
-        method: 'DELETE',
-        body: JSON.stringify({ emailConfirmation: mockUserEmail }),
-      });
-
-      // Act
-      const response = await DELETE(request);
-
-      // Assert - should still succeed despite avatar deletion failure
-      expect(response.status).toBe(200);
-      expect(loggers.auth.error).toHaveBeenCalledWith(
-        expect.stringContaining('avatar'),
-        expect.any(Error)
-      );
-    });
-  });
-
-  describe('audit trail compliance (GDPR)', () => {
-    it('should anonymize activity logs before user deletion', async () => {
-      // Arrange
-      const request = new Request('https://example.com/api/account', {
-        method: 'DELETE',
-        body: JSON.stringify({ emailConfirmation: mockUserEmail }),
-      });
-
-      // Act
-      const response = await DELETE(request);
-
-      // Assert - verify anonymization boundary payload
-      expect(response.status).toBe(200);
-      expect(mockActivityLogRepo.anonymizeForUser).toHaveBeenCalledWith(
-        mockUserId,
-        expect.stringMatching(/^deleted_user_[a-f0-9]+$/)
-      );
-      expect(loggers.auth.info).toHaveBeenCalledWith(
-        expect.stringContaining('Anonymized activity logs')
-      );
+    it('given multi-member drives, should block with 400 and NOT queue', async () => {
+      mockAccountRepo.getOwnedDrives.mockResolvedValue([{ id: 'd1', name: 'Team Drive' }]);
+      mockAccountRepo.getDriveMemberCount.mockResolvedValue(3);
+      const res = await DELETE(deleteReq(mockUserEmail));
+      const body = await res.json();
+      expect(res.status).toBe(400);
+      expect(body.multiMemberDrives).toContain('Team Drive');
+      expect(lodgeAndEnqueueErasure).not.toHaveBeenCalled();
     });
 
-    it('should continue with user deletion if anonymization fails', async () => {
-      // Arrange
-      mockActivityLogRepo.anonymizeForUser.mockResolvedValue({
-        success: false,
-        error: 'Database connection lost',
-      });
-
-      const request = new Request('https://example.com/api/account', {
-        method: 'DELETE',
-        body: JSON.stringify({ emailConfirmation: mockUserEmail }),
-      });
-
-      // Act
-      const response = await DELETE(request);
-
-      // Assert - should still succeed
-      expect(response.status).toBe(200);
-      expect(loggers.auth.error).toHaveBeenCalledWith(
-        expect.stringContaining('anonymize'),
-        expect.any(Error)
-      );
-      expect(mockAccountRepo.deleteUser).toHaveBeenCalledWith(mockUserId);
-    });
-  });
-
-  describe('user deletion', () => {
-    it('should delete user from database', async () => {
-      // Arrange
-      const request = new Request('https://example.com/api/account', {
-        method: 'DELETE',
-        body: JSON.stringify({ emailConfirmation: mockUserEmail }),
-      });
-
-      // Act
-      const response = await DELETE(request);
-
-      // Assert
-      expect(response.status).toBe(200);
-      expect(mockAccountRepo.deleteUser).toHaveBeenCalledWith(mockUserId);
-      expect(loggers.auth.info).toHaveBeenCalledWith(
-        expect.stringContaining('User account deleted')
-      );
+    it('ORG-6 an Owner cannot delete their account while owning an org', async () => {
+      mockAccountRepo.getOwnedOrganizationNames.mockResolvedValue(['Northwind Labs']);
+      const res = await DELETE(deleteReq(mockUserEmail));
+      const body = await res.json();
+      expect(res.status).toBe(400);
+      expect(body.error).toBe('Transfer ownership of your organizations or delete them before deleting your account');
+      expect(body.ownedOrganizations).toEqual(['Northwind Labs']);
+      expect(lodgeAndEnqueueErasure).not.toHaveBeenCalled();
     });
 
-    it('should handle database errors gracefully', async () => {
-      // Arrange
-      mockAccountRepo.deleteUser.mockRejectedValue(new Error('Database connection lost'));
+    it('ORG-6 (partial) an ownership race refused by atomic lodge returns the ownership refusal instead of 500', async () => {
+      mockAccountRepo.getOwnedOrganizationNames.mockResolvedValueOnce([]).mockResolvedValueOnce(['Northwind Labs']);
+      vi.mocked(lodgeAndEnqueueErasure).mockRejectedValueOnce(new LeaveOrganizationRefusedError('org-raced', 'OWNER_MUST_TRANSFER'));
+      const response = await DELETE(deleteReq(mockUserEmail));
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: expect.stringMatching(/Transfer ownership/), ownedOrganizations: ['Northwind Labs'] });
+    });
 
-      const request = new Request('https://example.com/api/account', {
-        method: 'DELETE',
-        body: JSON.stringify({ emailConfirmation: mockUserEmail }),
-      });
+    it('given an in-flight erasure, should be idempotent and return the existing request', async () => {
+      mockDsrRepo.findActiveErasureForUser.mockResolvedValue({
+        id: 'dsr_existing',
+        status: 'in_progress',
+        slaDeadline: new Date('2026-03-01T00:00:00.000Z'),
+      } as never);
+      const res = await DELETE(deleteReq(mockUserEmail));
+      const body = await res.json();
+      expect(res.status).toBe(202);
+      expect(body.requestId).toBe('dsr_existing');
+      expect(lodgeAndEnqueueErasure).not.toHaveBeenCalled();
+    });
 
-      // Act
-      const response = await DELETE(request);
-      const body = await response.json();
-
-      // Assert
-      expect(response.status).toBe(500);
-      expect(body.error).toBe('Failed to delete account');
-      expect(loggers.auth.error).toHaveBeenCalled();
+    it('given enqueue failure, should return 500', async () => {
+      vi.mocked(lodgeAndEnqueueErasure).mockRejectedValue(new Error('processor down'));
+      const res = await DELETE(deleteReq(mockUserEmail));
+      expect(res.status).toBe(500);
+      expect((await res.json()).error).toBe('Failed to queue account erasure');
     });
   });
 });

@@ -9,16 +9,8 @@
 /** Fields to spread into a `users` insert/update for on-prem deployments. */
 export function getOnPremUserDefaults() {
   return {
-    subscriptionTier: 'business' as const,
+    subscriptionTier: 'free' as const,
     currentAiProvider: 'ollama',
     currentAiModel: '',
-  };
-}
-
-/** Fields for the default Ollama `userAiSettings` row. */
-export function getOnPremOllamaSettings() {
-  return {
-    provider: 'ollama' as const,
-    baseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
   };
 }

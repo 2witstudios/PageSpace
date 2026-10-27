@@ -1,34 +1,30 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { createId } from '@paralleldrive/cuid2';
 import { useDocumentManagerStore, DocumentState } from '@/stores/useDocumentManagerStore';
 import { useDirtyStore } from '@/stores/useDirtyStore';
 import { toast } from 'sonner';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useSocket } from './useSocket';
+import {
+  canScheduleSave,
+  decideConflictOutcome,
+  planConflictResolution,
+  readContent,
+  type ConflictResolutionChoice,
+  type ConflictResponseBody,
+  type RemotePageSnapshot,
+} from '@/lib/documents/conflict-resolution';
 
-// Document state selectors
 export const useDocumentState = (pageId: string) => {
   const document = useDocumentManagerStore(
     useCallback((state) => state.documents.get(pageId), [pageId])
   );
-  
-  const createDocument = useDocumentManagerStore((state) => state.createDocument);
+
   const updateDocument = useDocumentManagerStore((state) => state.updateDocument);
   const clearDocument = useDocumentManagerStore((state) => state.clearDocument);
-  
-  // Initialize document if it doesn't exist
-  const initializeDocument = useCallback(
-    (initialContent?: string, contentMode?: 'html' | 'markdown') => {
-      if (!document) {
-        createDocument(pageId, initialContent, contentMode);
-      }
-    },
-    [document, createDocument, pageId]
-  );
-  
+
   return {
     document,
-    initializeDocument,
     updateDocument: useCallback(
       (updates: Partial<DocumentState>) => updateDocument(pageId, updates),
       [updateDocument, pageId]
@@ -44,12 +40,10 @@ export const useActiveDocument = () => {
   const activeDocumentId = useDocumentManagerStore((state) => state.activeDocumentId);
   const getActiveDocument = useDocumentManagerStore((state) => state.getActiveDocument);
   const setActiveDocument = useDocumentManagerStore((state) => state.setActiveDocument);
-  
-  const activeDocument = useMemo(() => getActiveDocument(), [getActiveDocument]);
-  
+
   return {
     activeDocumentId,
-    activeDocument,
+    activeDocument: getActiveDocument(),
     setActiveDocument,
   };
 };
@@ -63,9 +57,6 @@ export const useDocumentSaving = (pageId: string) => {
   const markAsSaved = useDocumentManagerStore((state) => state.markAsSaved);
   const socket = useSocket();
 
-  // Generate a stable session ID for this editing session
-  // This groups related edits in the activity log
-  // Resets when user navigates away (component remounts)
   const [sessionId] = useState(() => createId());
 
   const clearSavingState = useCallback((id: string) => {
@@ -76,18 +67,34 @@ export const useDocumentSaving = (pageId: string) => {
   }, []);
 
   const saveDocument = useCallback(
-    async (content: string) => {
+    async (
+      content: string,
+      options?: { expectedRevision?: number; resolvingConflict?: boolean }
+    ) => {
+      // Deepest guard: while a conflict is parked the stored revision is
+      // known-stale, so ONLY the resolution path may write. This is an explicit
+      // per-call opt-in rather than a temporary clear of the shared conflict
+      // state — clearing it early would open the debounce/forceSave guards for
+      // the whole duration of the awaited retry, letting a keystroke fire a
+      // second PATCH with the stale revision and park a phantom conflict for a
+      // save that actually succeeded.
+      if (
+        !options?.resolvingConflict &&
+        !canScheduleSave({
+          hasPendingConflict: useDocumentManagerStore.getState().conflicts.has(pageId),
+        })
+      ) {
+        return false;
+      }
+
       try {
-        // Record when save started to detect if updates happened during save
         const saveStartTime = Date.now();
 
         markAsSaving(pageId);
 
-        // Read current revision for optimistic locking
         const docBeforeSave = useDocumentManagerStore.getState().documents.get(pageId);
-        const expectedRevision = docBeforeSave?.revision;
+        const expectedRevision = options?.expectedRevision ?? docBeforeSave?.revision;
 
-        // Include socket ID in request headers to prevent self-refetch loop
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
         };
@@ -95,7 +102,6 @@ export const useDocumentSaving = (pageId: string) => {
           headers['X-Socket-ID'] = socket.id;
         }
 
-        // Pass changeGroupId and expectedRevision to detect concurrent edits
         const response = await fetchWithAuth(`/api/pages/${pageId}`, {
           method: 'PATCH',
           headers,
@@ -104,32 +110,50 @@ export const useDocumentSaving = (pageId: string) => {
 
         if (!response.ok) {
           if (response.status === 409) {
-            // Revision conflict - another tab/user modified the page
-            // Log the discarded local content so it can be recovered from dev tools
-            console.warn(
-              `[conflict] Page ${pageId}: local edits discarded. Content was:`,
-              content
-            );
-            toast.error('Document was modified elsewhere. Your local copy has been updated.', {
-              id: `conflict-${pageId}`,
-            });
-            // Refetch latest to update revision and content, stopping the retry loop
+            // NEVER replace the user's buffer here. Park the server's copy
+            // beside it and let the user choose; `content` / `isDirty` and the
+            // dirty store are deliberately left exactly as they are.
+            const conflictBody: ConflictResponseBody | null = await response
+              .json()
+              .catch(() => null);
+
+            let remotePage: RemotePageSnapshot | null = null;
             try {
               const freshResponse = await fetchWithAuth(`/api/pages/${pageId}`);
               if (freshResponse.ok) {
-                const freshPage = await freshResponse.json();
-                useDocumentManagerStore.getState().updateDocument(pageId, {
-                  content: freshPage.content ?? '',
-                  revision: freshPage.revision,
-                  isDirty: false,
-                  lastSaved: Date.now(),
-                  lastUpdateTime: Date.now(),
-                });
-                useDirtyStore.getState().clearDirty(pageId);
+                remotePage = (await freshResponse.json()) as RemotePageSnapshot;
               }
             } catch {
-              // Refetch failed - user can still manually refresh
+              // Leave remotePage null — decideConflictOutcome reports an error
+              // rather than offering a resolution we cannot honour.
             }
+
+            const outcome = decideConflictOutcome({
+              conflictBody,
+              remotePage,
+              detectedAt: Date.now(),
+            });
+
+            // Cancel any debounce queued before the conflict was detected —
+            // otherwise it fires, 409s again, and the toast loops.
+            const pending = useDocumentManagerStore.getState().documents.get(pageId);
+            if (pending?.saveTimeout) {
+              clearTimeout(pending.saveTimeout);
+              useDocumentManagerStore
+                .getState()
+                .updateDocument(pageId, { saveTimeout: undefined });
+            }
+
+            if (outcome.kind === 'conflict') {
+              useDocumentManagerStore.getState().setConflict(pageId, outcome.conflict);
+              toast.error(
+                'Document was modified elsewhere. Your unsaved changes are still here — choose which version to keep.',
+                { id: `conflict-${pageId}` }
+              );
+            } else {
+              toast.error(outcome.message, { id: `conflict-${pageId}` });
+            }
+
             clearSavingState(pageId);
             return false;
           }
@@ -139,23 +163,20 @@ export const useDocumentSaving = (pageId: string) => {
 
         const savedPage = await response.json();
 
-        // Update stored revision from server response
         if (savedPage.revision !== undefined) {
           useDocumentManagerStore.getState().updateDocument(pageId, { revision: savedPage.revision });
         }
 
-        // Only mark as saved if NO updates happened since save started
-        // This prevents showing "Saved" when user typed during the save
         const currentDoc = useDocumentManagerStore.getState().documents.get(pageId);
 
-        // Check: content matches AND no updates during save (lastUpdateTime < saveStartTime)
-        if (currentDoc &&
-            currentDoc.content === content &&
-            currentDoc.lastUpdateTime < saveStartTime) {
+        if (
+          currentDoc &&
+          currentDoc.content === content &&
+          currentDoc.lastUpdateTime < saveStartTime
+        ) {
           markAsSaved(pageId);
           useDirtyStore.getState().clearDirty(pageId);
         } else {
-          // Content changed while saving - keep dirty
           clearSavingState(pageId);
         }
 
@@ -176,85 +197,72 @@ export const useDocumentSaving = (pageId: string) => {
   };
 };
 
-// Combined document hook for components
-export const useDocument = (pageId: string, initialContent?: string) => {
+export const useDocument = (pageId: string) => {
   const documentState = useDocumentState(pageId);
   const saving = useDocumentSaving(pageId);
   const { setActiveDocument } = useActiveDocument();
+  const conflict = useDocumentManagerStore(
+    useCallback((state) => state.conflicts.get(pageId), [pageId])
+  );
   const [isLoading, setIsLoading] = useState(false);
+  // Store-level, so every view mounting this page shares one resolution state.
+  const isResolvingConflict = useDocumentManagerStore(
+    useCallback((state) => state.resolvingConflicts.has(pageId), [pageId])
+  );
 
-  // Initialize document on mount - fetches content if not provided
   const initializeAndActivate = useCallback(async () => {
-    // Check if document already exists - if so, just activate it
-    const existingDoc = useDocumentManagerStore.getState().documents.get(pageId);
-    if (existingDoc) {
-      setActiveDocument(pageId);
-      return;
-    }
-
-    // If initialContent provided, use it (optional optimization)
-    if (initialContent !== undefined) {
-      const createDocument = useDocumentManagerStore.getState().createDocument;
-      createDocument(pageId, initialContent);
-      setActiveDocument(pageId);
-      return;
-    }
-
-    // Otherwise, fetch content from API
     setIsLoading(true);
     try {
       const response = await fetchWithAuth(`/api/pages/${pageId}`);
       if (response.ok) {
         const page = await response.json();
-        const store = useDocumentManagerStore.getState();
-        store.createDocument(pageId, page.content || '', page.contentMode || 'html');
-        if (page.revision !== undefined) {
-          store.updateDocument(pageId, { revision: page.revision });
-        }
+        useDocumentManagerStore.getState().upsertDocument(
+          pageId,
+          page.content || '',
+          page.contentMode || 'html',
+          page.revision
+        );
         setActiveDocument(pageId);
       } else {
         console.error('Failed to fetch page content:', response.status);
-        const createDocument = useDocumentManagerStore.getState().createDocument;
-        createDocument(pageId, ''); // Fallback to empty
+        // Only fall back to empty when there is no existing cached content —
+        // a transient failure should not blank a valid in-memory document
+        if (!useDocumentManagerStore.getState().documents.get(pageId)) {
+          useDocumentManagerStore.getState().upsertDocument(pageId, '', 'html');
+        }
         setActiveDocument(pageId);
       }
     } catch (error) {
       console.error('Failed to fetch page content:', error);
-      const createDocument = useDocumentManagerStore.getState().createDocument;
-      createDocument(pageId, ''); // Fallback to empty
+      if (!useDocumentManagerStore.getState().documents.get(pageId)) {
+        useDocumentManagerStore.getState().upsertDocument(pageId, '', 'html');
+      }
       setActiveDocument(pageId);
     } finally {
       setIsLoading(false);
     }
-  }, [initialContent, setActiveDocument, pageId]);
-  
-  // Content update handler for user edits
+  }, [setActiveDocument, pageId]);
+
   const updateContent = useCallback(
     (newContent: string) => {
       const currentDoc = useDocumentManagerStore.getState().documents.get(pageId);
 
-      // Only update if content actually changed
       if (currentDoc?.content === newContent) return;
 
-      // Update content with timestamp and dirty flag
-      const updateDocument = useDocumentManagerStore.getState().updateDocument;
-      updateDocument(pageId, {
+      useDocumentManagerStore.getState().updateDocument(pageId, {
         content: newContent,
-        lastUpdateTime: Date.now(), // Track when content was last updated
-        isDirty: true, // Always mark as dirty on user edits
+        lastUpdateTime: Date.now(),
+        isDirty: true,
       });
 
-      // Also update useDirtyStore for browser "unsaved changes" warning
       useDirtyStore.getState().setDirty(pageId, true);
     },
     [pageId]
   );
-  
-  // Content update handler for server updates (already saved)
+
   const updateContentFromServer = useCallback(
     (newContent: string, revision?: number) => {
       const now = Date.now();
-      const updateDocument = useDocumentManagerStore.getState().updateDocument;
       const updates: Partial<DocumentState> = {
         content: newContent,
         isDirty: false,
@@ -262,12 +270,16 @@ export const useDocument = (pageId: string, initialContent?: string) => {
         lastUpdateTime: now,
       };
       if (revision !== undefined) updates.revision = revision;
-      updateDocument(pageId, updates);
+      useDocumentManagerStore.getState().updateDocument(pageId, updates);
     },
     [pageId]
   );
 
-  // Auto-save with debouncing
+  const hasPendingConflict = useCallback(
+    () => useDocumentManagerStore.getState().conflicts.has(pageId),
+    [pageId]
+  );
+
   const saveWithDebounce = useCallback(
     (content: string, delay = 1000) => {
       const document = useDocumentManagerStore.getState().documents.get(pageId);
@@ -275,29 +287,127 @@ export const useDocument = (pageId: string, initialContent?: string) => {
         clearTimeout(document.saveTimeout);
       }
 
+      // A parked conflict means our revision is known-stale: another PATCH
+      // would 409 again and the debounce would keep re-firing.
+      if (!canScheduleSave({ hasPendingConflict: hasPendingConflict() })) {
+        // Drop the handle we just cleared so the store does not advertise a
+        // pending save that no longer exists. Only on this path — the normal
+        // one overwrites it below, and a second write per keystroke would
+        // re-render every subscriber for nothing.
+        if (document?.saveTimeout) {
+          useDocumentManagerStore.getState().updateDocument(pageId, { saveTimeout: undefined });
+        }
+        return;
+      }
+
       const timeout = setTimeout(() => {
+        // Re-check: a conflict can be detected during the debounce window.
+        if (!canScheduleSave({ hasPendingConflict: hasPendingConflict() })) return;
         saving.saveDocument(content).catch(console.error);
       }, delay);
 
-      const updateDocument = useDocumentManagerStore.getState().updateDocument;
-      updateDocument(pageId, { saveTimeout: timeout });
+      useDocumentManagerStore.getState().updateDocument(pageId, { saveTimeout: timeout });
     },
-    [pageId, saving]
+    [pageId, saving, hasPendingConflict]
   );
-  
-  // Force save (immediate)
+
   const forceSave = useCallback(async () => {
     const document = useDocumentManagerStore.getState().documents.get(pageId);
     if (!document?.isDirty) return false;
 
-    // Clear debounced save
     if (document.saveTimeout) {
       clearTimeout(document.saveTimeout);
     }
 
+    if (!canScheduleSave({ hasPendingConflict: hasPendingConflict() })) return false;
+
     return saving.saveDocument(document.content);
-  }, [pageId, saving]);
-  
+  }, [pageId, saving, hasPendingConflict]);
+
+  /**
+   * Apply the user's choice from the conflict banner.
+   *
+   * `keep-mine` re-saves the local text against the revision we observed, so it
+   * cannot 409 on the same conflict; if a THIRD party has saved since, the
+   * retry 409s again and `saveDocument` re-parks a fresh conflict with the newer
+   * remote content — the local text is still never replaced.
+   *
+   * `use-theirs` adopts the server copy locally; no PATCH is needed because the
+   * server already holds it.
+   */
+  const resolveConflict = useCallback(
+    async (choice: ConflictResolutionChoice) => {
+      const state = useDocumentManagerStore.getState();
+      const conflict = state.conflicts.get(pageId);
+      if (!conflict) return false;
+
+      // Serialize: a page can be open in more than one view, each rendering its
+      // own banner. Without this, two clicks send two PATCHes with the same
+      // expectedRevision — the server takes one and 409s the other, parking a
+      // spurious conflict on the conflict that was just resolved.
+      if (state.resolvingConflicts.has(pageId)) return false;
+
+      // Mirror of the remote-side guard in decideConflictOutcome: "no local
+      // record" must never become "save an empty document over their work".
+      const local = readContent(state.documents.get(pageId)?.content);
+      if (!local.present) {
+        toast.error(
+          'Your local copy of this document is no longer loaded, so it cannot be compared. Reopen the page to see the current version.',
+          { id: `conflict-${pageId}` }
+        );
+        return false;
+      }
+
+      const plan = planConflictResolution(choice, { localContent: local.content, conflict });
+
+      if (plan.action === 'adopt-remote') {
+        const now = Date.now();
+        state.updateDocument(pageId, {
+          content: plan.contentToAdopt,
+          revision: plan.revision,
+          isDirty: false,
+          lastSaved: now,
+          lastUpdateTime: now,
+        });
+        useDirtyStore.getState().clearDirty(pageId);
+        state.clearConflict(pageId);
+        return true;
+      }
+
+      // The conflict stays PARKED for the whole retry, so the autosave guards
+      // stay closed and a keystroke mid-flight cannot race this PATCH. It is
+      // cleared only once the retry has actually succeeded; a repeat 409 leaves
+      // the fresher snapshot `saveDocument` just parked in its place, and any
+      // other failure leaves the banner up so the user can try again.
+      state.setResolvingConflict(pageId, true);
+      try {
+        const saved = await saving
+          .saveDocument(plan.contentToSave, {
+            expectedRevision: plan.expectedRevision,
+            resolvingConflict: true,
+          })
+          .catch(() => false);
+
+        if (saved) {
+          useDocumentManagerStore.getState().clearConflict(pageId);
+
+          // Edits made DURING the retry were blocked by the (correctly closed)
+          // autosave guard, so nothing is scheduled for them. Without this they
+          // sit unsaved until the next keystroke, blur or manual save.
+          const afterSave = useDocumentManagerStore.getState().documents.get(pageId);
+          if (afterSave?.isDirty) {
+            saveWithDebounce(afterSave.content);
+          }
+        }
+
+        return saved;
+      } finally {
+        useDocumentManagerStore.getState().setResolvingConflict(pageId, false);
+      }
+    },
+    [pageId, saving, saveWithDebounce]
+  );
+
   return {
     document: documentState.document,
     isLoading,
@@ -307,6 +417,9 @@ export const useDocument = (pageId: string, initialContent?: string) => {
     updateContentFromServer,
     saveWithDebounce,
     forceSave,
+    conflict,
+    resolveConflict,
+    isResolvingConflict,
     clearDocument: documentState.clearDocument,
   };
 };

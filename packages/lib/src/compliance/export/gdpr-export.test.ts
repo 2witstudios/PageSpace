@@ -1,10 +1,170 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { db, users } from '@pagespace/db';
-import { drives, pages, chatMessages } from '@pagespace/db';
-import { taskLists, taskItems } from '@pagespace/db';
-import { aiUsageLogs } from '@pagespace/db';
-import { eq } from 'drizzle-orm';
-import { createId } from '@paralleldrive/cuid2';
+/**
+ * @scaffold — GDPR Export Tests
+ *
+ * These functions use module-level ORM queries with no injected seam.
+ * Chain mocks and order-dependent mock ladders (createChainDb callIndex)
+ * are structural necessities — assertions focus on the observable data
+ * contracts (return types, aggregation logic, deduplication).
+ *
+ * REVIEW: introduce a GdprExportRepository seam so these functions can
+ * be tested without reproducing the ORM chain shape. Once that seam
+ * exists, remove the chain mocks and promote these to contract tests.
+ */
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+const { mockTable } = vi.hoisted(() => {
+  const fn = (name: string) => ({
+    id: `${name}.id`,
+    name: `${name}.name`,
+    email: `${name}.email`,
+    image: `${name}.image`,
+    timezone: `${name}.timezone`,
+    createdAt: `${name}.createdAt`,
+    updatedAt: `${name}.updatedAt`,
+    slug: `${name}.slug`,
+    ownerId: `${name}.ownerId`,
+    role: `${name}.role`,
+    driveId: `${name}.driveId`,
+    userId: `${name}.userId`,
+    title: `${name}.title`,
+    type: `${name}.type`,
+    content: `${name}.content`,
+    pageId: `${name}.pageId`,
+    conversationId: `${name}.conversationId`,
+    contextId: `${name}.contextId`,
+    sizeBytes: `${name}.sizeBytes`,
+    mimeType: `${name}.mimeType`,
+    storagePath: `${name}.storagePath`,
+    createdBy: `${name}.createdBy`,
+    operation: `${name}.operation`,
+    resourceType: `${name}.resourceType`,
+    resourceId: `${name}.resourceId`,
+    timestamp: `${name}.timestamp`,
+    metadata: `${name}.metadata`,
+    provider: `${name}.provider`,
+    model: `${name}.model`,
+    inputTokens: `${name}.inputTokens`,
+    outputTokens: `${name}.outputTokens`,
+    cost: `${name}.cost`,
+    status: `${name}.status`,
+    priority: `${name}.priority`,
+    taskListId: `${name}.taskListId`,
+    senderId: `${name}.senderId`,
+    participant1Id: `${name}.participant1Id`,
+    participant2Id: `${name}.participant2Id`,
+    isRead: `${name}.isRead`,
+    readAt: `${name}.readAt`,
+    isActive: `${name}.isActive`,
+    deletedAt: `${name}.deletedAt`,
+    message: `${name}.message`,
+    preferenceType: `${name}.preferenceType`,
+    enabled: `${name}.enabled`,
+    bio: `${name}.bio`,
+    writingStyle: `${name}.writingStyle`,
+    rules: `${name}.rules`,
+    scopes: `${name}.scopes`,
+    deviceId: `${name}.deviceId`,
+    createdByIp: `${name}.createdByIp`,
+    lastUsedAt: `${name}.lastUsedAt`,
+    lastUsedIp: `${name}.lastUsedIp`,
+    expiresAt: `${name}.expiresAt`,
+    revokedAt: `${name}.revokedAt`,
+    revokedReason: `${name}.revokedReason`,
+    level: `${name}.level`,
+    category: `${name}.category`,
+    duration: `${name}.duration`,
+    statusCode: `${name}.statusCode`,
+    requestSize: `${name}.requestSize`,
+    responseSize: `${name}.responseSize`,
+    stack: `${name}.stack`,
+    file: `${name}.file`,
+    line: `${name}.line`,
+    column: `${name}.column`,
+    resolved: `${name}.resolved`,
+    method: `${name}.method`,
+    endpoint: `${name}.endpoint`,
+    tagId: `${name}.tagId`,
+    targetKind: `${name}.targetKind`,
+    anchor: `${name}.anchor`,
+    anchorStatus: `${name}.anchorStatus`,
+    channelMessageId: `${name}.channelMessageId`,
+    aiMessageId: `${name}.aiMessageId`,
+    source: `${name}.source`,
+    confidence: `${name}.confidence`,
+  });
+  return { mockTable: fn };
+});
+
+vi.mock('@pagespace/db/schema/auth', () => ({ users: mockTable('users') }));
+// Local environments: the collector joins these two; mocked by path like every
+// other schema module so the real declarations never load under the mocked drizzle-orm.
+vi.mock('@pagespace/db/schema/drive-envs', () => ({ driveEnvs: mockTable('driveEnvs') }));
+vi.mock('@pagespace/db/schema/drive-env-local', () => ({ driveEnvLocal: mockTable('driveEnvLocal') }));
+vi.mock('@pagespace/db/schema/core', () => ({
+  drives: mockTable('drives'),
+  pages: mockTable('pages'),
+  tags: mockTable('tags'),
+}));
+vi.mock('@pagespace/db/schema/content-tags', () => ({
+  contentTags: mockTable('contentTags'),
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
+  activityLogs: mockTable('activityLogs'),
+  aiUsageLogs: mockTable('aiUsageLogs'),
+  systemLogs: mockTable('systemLogs'),
+  apiMetrics: mockTable('apiMetrics'),
+  errorLogs: mockTable('errorLogs'),
+  errorResolutions: mockTable('errorResolutions'),
+}));
+vi.mock('../../observability/clickhouse-client', () => ({
+  getClickHouseGdprClient: vi.fn(() => null),
+}));
+vi.mock('../../observability/analytics-gdpr', () => ({
+  collectChUserSystemLogs: vi.fn(),
+  collectChUserApiMetrics: vi.fn(),
+  collectChUserErrorLogs: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/storage', () => ({
+  files: mockTable('files'),
+  filePages: mockTable('filePages'),
+}));
+vi.mock('@pagespace/db/schema/members', () => ({ driveMembers: mockTable('driveMembers') }));
+vi.mock('@pagespace/db/schema/chat', () => ({
+  channelMessages: mockTable('channelMessages'),
+  channelMessageAttachments: mockTable('channelMessageAttachments'),
+}));
+vi.mock('@pagespace/db/schema/conversations', () => ({
+  conversations: mockTable('conversations'),
+  messages: mockTable('messages'),
+}));
+vi.mock('@pagespace/db/schema/social', () => ({
+  directMessages: mockTable('directMessages'),
+  directMessageAttachments: mockTable('directMessageAttachments'),
+  dmConversations: mockTable('dmConversations'),
+}));
+vi.mock('@pagespace/db/schema/tasks', () => ({
+  taskLists: mockTable('taskLists'),
+  taskItems: mockTable('taskItems'),
+}));
+vi.mock('@pagespace/db/schema/sessions', () => ({ sessions: mockTable('sessions') }));
+vi.mock('@pagespace/db/schema/notifications', () => ({ notifications: mockTable('notifications') }));
+vi.mock('@pagespace/db/schema/display-preferences', () => ({ displayPreferences: mockTable('displayPreferences') }));
+vi.mock('@pagespace/db/schema/personalization', () => ({
+  userPersonalization: mockTable('userPersonalization'),
+  personalizationCandidates: mockTable('personalizationCandidates'),
+}));
+
+vi.mock('drizzle-orm', () => ({
+  eq: (col: unknown, val: unknown) => ({ _op: 'eq', col, val }),
+  inArray: (col: unknown, vals: unknown[]) => ({ _op: 'inArray', col, vals }),
+  or: (...conditions: unknown[]) => ({ _op: 'or', conditions }),
+  and: (...conditions: unknown[]) => ({ _op: 'and', conditions }),
+  ne: (col: unknown, val: unknown) => ({ _op: 'ne', col, val }),
+  isNull: (col: unknown) => ({ _op: 'isNull', col }),
+  gt: (col: unknown, val: unknown) => ({ _op: 'gt', col, val }),
+  asc: (col: unknown) => ({ _op: 'asc', col }),
+}));
+
 import {
   collectUserProfile,
   collectUserDrives,
@@ -12,219 +172,821 @@ import {
   collectUserMessages,
   collectUserFiles,
   collectUserActivity,
+  collectUserSystemLogs,
+  collectUserApiMetrics,
+  collectUserErrorLogs,
   collectUserAiUsage,
   collectUserTasks,
+  collectUserSessions,
+  collectUserNotifications,
+  collectUserDisplayPreferences,
+  collectUserPersonalization,
   collectAllUserData,
 } from './gdpr-export';
+import type { ExportSignInGate } from './export-sign-in-gate';
+import { getClickHouseGdprClient } from '../../observability/clickhouse-client';
+import {
+  collectChUserSystemLogs,
+  collectChUserApiMetrics,
+  collectChUserErrorLogs,
+} from '../../observability/analytics-gdpr';
 
-type DBParam = Parameters<typeof collectUserProfile>[0];
+/** A gate that withholds nothing (the sign-in gate itself is proven in export-sign-in-gate.integration.test.ts). */
+const ADMIT_ALL: ExportSignInGate = {
+  derivedContent: async () => ({ allowed: true }),
+  refusedDrives: async () => new Map(),
+  refusedDerivedPages: async () => new Map(),
+};
 
-let testUserId: string;
-let testDriveId: string;
+/** Creates a chain-mock db that resolves .where() calls with queued results */
+function createChainDb(whereResults: unknown[][]) {
+  let callIndex = 0;
+  return {
+    select: vi.fn().mockReturnThis(),
+    from: vi.fn().mockReturnThis(),
+    where: vi.fn(() => {
+      const result = whereResults[callIndex] ?? [];
+      callIndex++;
+      return result;
+    }),
+    innerJoin: vi.fn().mockReturnThis(),
+  };
+}
 
-beforeEach(async () => {
-  const [user] = await db.insert(users).values({
-    id: createId(),
-    name: 'GDPR Export Test User',
-    email: `gdpr-test-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`,
-    password: 'hashed_password',
-    provider: 'email',
-    role: 'user',
-    tokenVersion: 1,
-    timezone: 'America/New_York',
-  }).returning();
-  testUserId = user.id;
-
-  const [drive] = await db.insert(drives).values({
-    id: createId(),
-    name: 'GDPR Test Drive',
-    slug: `gdpr-test-${Date.now()}`,
-    ownerId: testUserId,
-    updatedAt: new Date(),
-  }).returning();
-  testDriveId = drive.id;
-});
-
-afterEach(async () => {
-  await db.delete(drives).where(eq(drives.id, testDriveId));
-  await db.delete(users).where(eq(users.id, testUserId));
-});
+/** Creates a chain-mock db where the first where() returns a .limit() chain */
+function createLimitDb(limitResult: unknown[]) {
+  return {
+    select: vi.fn().mockReturnThis(),
+    from: vi.fn().mockReturnThis(),
+    where: vi.fn(() => ({ limit: vi.fn().mockReturnValue(limitResult) })),
+    innerJoin: vi.fn().mockReturnThis(),
+  };
+}
 
 describe('collectUserProfile', () => {
-  it('returns profile with expected fields', async () => {
-    const profile = await collectUserProfile(db as DBParam, testUserId);
+  it('given_userExists_returnsProfile', async () => {
+    const profile = {
+      id: 'user-1',
+      name: 'Test User',
+      email: 'test@example.com',
+      image: null,
+      timezone: 'UTC',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const db = createLimitDb([profile]);
 
-    expect(profile).toBeTruthy();
-    expect(profile!.id).toBe(testUserId);
-    expect(Object.keys(profile!).sort()).toEqual([
-      'createdAt', 'email', 'id', 'image', 'name', 'timezone', 'updatedAt',
-    ]);
+    const result = await collectUserProfile(db as never, 'user-1');
+
+    expect(result).toEqual(profile);
   });
 
-  it('returns null for nonexistent user', async () => {
-    const profile = await collectUserProfile(db as DBParam, 'nonexistent-id');
+  it('given_userDoesNotExist_returnsNull', async () => {
+    const db = createLimitDb([]);
 
-    expect(profile).toBeNull();
+    const result = await collectUserProfile(db as never, 'nonexistent');
+
+    expect(result).toBeNull();
   });
 });
 
 describe('collectUserDrives', () => {
-  it('returns owned drives', async () => {
-    const userDrives = await collectUserDrives(db as DBParam, testUserId);
+  it('given_ownedAndMemberDrives_returnsBothWithCorrectRoles', async () => {
+    const ownedDrive = { id: 'drive-1', name: 'My Drive', slug: 'my-drive', createdAt: new Date() };
+    const memberDrive = { id: 'drive-2', name: 'Shared Drive', slug: 'shared', role: 'MEMBER', createdAt: new Date() };
+    const db = createChainDb([[ownedDrive], [memberDrive]]);
 
-    expect(userDrives.length).toBeGreaterThanOrEqual(1);
-    const ownedDrive = userDrives.find(d => d.id === testDriveId);
-    expect(ownedDrive).toBeTruthy();
-    expect(ownedDrive!.role).toBe('OWNER');
+    const result = await collectUserDrives(db as never, 'user-1');
+
+    expect(result).toHaveLength(2);
+    expect(result[0].role).toBe('OWNER');
+    expect(result[1].role).toBe('MEMBER');
+  });
+
+  it('given_userIsBothOwnerAndMember_deduplicatesKeepingOwnerRole', async () => {
+    const drive = { id: 'drive-1', name: 'Drive', slug: 'drive', createdAt: new Date() };
+    const db = createChainDb([[drive], [{ ...drive, role: 'ADMIN' }]]);
+
+    const result = await collectUserDrives(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].role).toBe('OWNER');
   });
 });
 
 describe('collectUserPages', () => {
-  let testPageId: string;
-
-  beforeEach(async () => {
-    const [page] = await db.insert(pages).values({
-      id: createId(),
-      title: 'GDPR Test Page',
+  it('given_driveIds_returnsPagesFromThoseDrives', async () => {
+    const page = {
+      id: 'page-1',
+      title: 'Test Page',
       type: 'DOCUMENT',
-      driveId: testDriveId,
-      position: 0,
+      content: 'Hello',
+      driveId: 'drive-1',
+      createdAt: new Date(),
       updatedAt: new Date(),
-    }).returning();
-    testPageId = page.id;
+    };
+    const db = createChainDb([[page]]);
+
+    const result = await collectUserPages(db as never, 'user-1', ['drive-1']);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].title).toBe('Test Page');
   });
 
-  afterEach(async () => {
-    await db.delete(pages).where(eq(pages.id, testPageId));
+  it('given_emptyDriveIds_returnsEmptyArrayWithoutQuery', async () => {
+    const db = createChainDb([]);
+
+    const result = await collectUserPages(db as never, 'user-1', []);
+
+    expect(result).toEqual([]);
   });
 
-  it('returns pages from user drives', async () => {
-    const userPages = await collectUserPages(db as DBParam, testUserId);
+  it('given_noPreloadedDriveIds_fetchesDrivesFirst', async () => {
+    // owned drives → empty, member drives → empty → no pages
+    const db = createChainDb([[], []]);
 
-    expect(userPages.length).toBeGreaterThanOrEqual(1);
-    const found = userPages.find(p => p.id === testPageId);
-    expect(found).toBeTruthy();
-    expect(found!.title).toBe('GDPR Test Page');
+    const result = await collectUserPages(db as never, 'user-1');
+
+    expect(result).toEqual([]);
   });
 });
 
 describe('collectUserMessages', () => {
-  let testPageId: string;
+  /**
+   * The ladder is channel, unified conversation messages, sent DMs,
+   * dm-conversation ids (+ one more for received DMs when that lookup is
+   * non-empty), with a batched attachment lookup inserted after the channel
+   * and sent-DM queries — each skipped entirely when its message list is
+   * empty, so a queue position only exists when the branch has rows. The legacy `chat_messages` query is GONE —
+   * Phase 4 PR 13 cut the export over to the unified `messages` table alone,
+   * because the dual-write + backfill made it a superset under the same
+   * primary keys and reading both duplicated every page-chat row.
+   */
+  it('given_messagesInAllSources_aggregatesWithCorrectSourceLabels', async () => {
+    const channelMsg = { id: 'm2', content: 'Channel msg', pageId: 'p2', createdAt: new Date() };
+    const pageChatMsg = { id: 'm1', content: 'Page chat msg', role: 'user', conversationId: 'c1', createdAt: new Date(), conversationType: 'page', conversationContextId: 'p1' };
+    const globalMsg = { id: 'm3', content: 'Conv msg', role: 'user', conversationId: 'c2', createdAt: new Date(), conversationType: 'global', conversationContextId: null };
+    const dmMsg = { id: 'm4', content: 'DM msg', conversationId: 'c3', createdAt: new Date() };
+    // Ladder: channel, channel attachments, conv, sent DMs, sent-DM
+    // attachments, dmConversations. The two attachment lookups only run when
+    // their message list is non-empty, which it is on both branches here. The
+    // dmConversations lookup returns [] so there is no received-DM query.
+    const db = createChainDb([[channelMsg], [], [pageChatMsg, globalMsg], [dmMsg], [], []]);
 
-  beforeEach(async () => {
-    const [page] = await db.insert(pages).values({
-      id: createId(),
-      title: 'Chat Test Page',
-      type: 'AI_CHAT',
-      driveId: testDriveId,
-      position: 0,
-      updatedAt: new Date(),
-    }).returning();
-    testPageId = page.id;
+    const result = await collectUserMessages(db as never, 'user-1');
+
+    expect(result).toHaveLength(4);
+    expect(result.map(r => r.source)).toEqual([
+      'channel', 'ai_chat', 'conversation', 'direct_message',
+    ]);
   });
 
-  afterEach(async () => {
-    await db.delete(chatMessages).where(eq(chatMessages.pageId, testPageId));
-    await db.delete(pages).where(eq(pages.id, testPageId));
+  it('labels a page thread ai_chat and takes its pageId from conversations.contextId, not the transitional messages.pageId', async () => {
+    const pageChatMsg = { id: 'm1', content: 'Page chat msg', role: 'assistant', conversationId: 'c1', createdAt: new Date(), conversationType: 'page', conversationContextId: 'agent-page-1' };
+    const db = createChainDb([[], [pageChatMsg], [], []]);
+
+    const result = await collectUserMessages(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual(expect.objectContaining({ source: 'ai_chat', pageId: 'agent-page-1' }));
   });
 
-  it('returns AI chat messages for the user', async () => {
-    await db.insert(chatMessages).values({
-      id: createId(),
-      pageId: testPageId,
-      role: 'user',
-      content: 'Hello AI',
-      userId: testUserId,
+  it('reports no pageId for a type=client thread — its contextId is a DRIVE id, and a wrong page is worse than none', async () => {
+    const clientMsg = { id: 'm1', content: 'API thread msg', role: 'user', conversationId: 'c1', createdAt: new Date(), conversationType: 'client', conversationContextId: 'drive-1' };
+    const db = createChainDb([[], [clientMsg], [], []]);
+
+    const result = await collectUserMessages(db as never, 'user-1');
+
+    expect(result[0].source).toBe('ai_chat');
+    expect(result[0].pageId).toBeUndefined();
+  });
+
+  it('exports every attachment on a channel message, in display order', async () => {
+    const channelMsg = { id: 'm1', content: '', pageId: 'p1', createdAt: new Date() };
+    // The rows come back in whatever order the index hands them over; the
+    // subject's copy must be in the order they sent them.
+    const attachmentRows = [
+      { messageId: 'm1', fileId: 'f-2', attachmentMeta: { originalName: 'second.png', mimeType: 'image/png', size: 20 }, position: 1 },
+      { messageId: 'm1', fileId: 'f-1', attachmentMeta: { originalName: 'first.png', mimeType: 'image/png', size: 10 }, position: 0 },
+    ];
+    // channel msgs, channel attachments, conv, sentDms, dmConvIds
+    const db = createChainDb([[channelMsg], attachmentRows, [], [], []]);
+
+    const result = await collectUserMessages(db as never, 'user-1');
+
+    expect(result[0].attachments).toEqual([
+      { fileId: 'f-1', originalName: 'first.png', mimeType: 'image/png', size: 10 },
+      { fileId: 'f-2', originalName: 'second.png', mimeType: 'image/png', size: 20 },
+    ]);
+  });
+
+  it('never binds more message ids in one attachment lookup than Postgres allows', async () => {
+    // Drizzle expands each inArray value into its own bind parameter and
+    // Postgres caps a statement at 65535 of them. A subject prolific enough to
+    // cross that would get an opaque 08P01 protocol error instead of their
+    // Art 15 export, so the lookup is chunked — and this observes the binds
+    // themselves, not just the result, because the ceiling is invisible in the
+    // returned rows.
+    const channelMsgs = Array.from({ length: 1200 }, (_, i) => ({
+      id: `m-${i}`, content: '', pageId: 'p1', createdAt: new Date(),
+    }));
+    const db = createChainDb([channelMsgs, [], [], [], []]);
+
+    await collectUserMessages(db as never, 'user-1');
+
+    // `where` is a bare vi.fn(), so its recorded args are an empty tuple type.
+    const calls = db.where.mock.calls as unknown as unknown[][];
+    const boundIdCounts = calls
+      .map((call) => call[0] as { _op?: string; vals?: unknown[] } | undefined)
+      .filter((predicate) => predicate?._op === 'inArray')
+      .map((predicate) => predicate?.vals?.length ?? 0);
+
+    expect(boundIdCounts.length).toBeGreaterThan(1);
+    expect(Math.max(...boundIdCounts)).toBeLessThanOrEqual(500);
+    expect(boundIdCounts.reduce((sum, n) => sum + n, 0)).toBe(1200);
+  });
+
+  it('given_noMessages_returnsEmptyArray', async () => {
+    // 4 calls: channel, conv, sentDms, dmConversations
+    const db = createChainDb([[], [], [], []]);
+
+    const result = await collectUserMessages(db as never, 'user-1');
+
+    expect(result).toEqual([]);
+  });
+
+  it('given_userHasSentDMs_setsDirectionSent', async () => {
+    const sentDm = { id: 'm4', content: 'Sent DM', conversationId: 'conv-1', createdAt: new Date() };
+    // channel=[], conv=[], sentDms=[sentDm], dmConvIds=[] (no received)
+    const db = createChainDb([[], [], [sentDm], []]);
+
+    const result = await collectUserMessages(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].source).toBe('direct_message');
+    expect(result[0].direction).toBe('sent');
+  });
+
+  it('given_retainedSoftDeletedDM_includesDeletionStateForTransparency', async () => {
+    const deletedAt = new Date('2026-04-15T12:00:00.000Z');
+    const sentDm = {
+      id: 'm4',
+      content: 'Retained deleted DM',
+      conversationId: 'conv-1',
+      createdAt: new Date('2026-04-01T12:00:00.000Z'),
+      isActive: false,
+      deletedAt,
+    };
+    const db = createChainDb([[], [], [sentDm], []]);
+
+    const result = await collectUserMessages(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual(
+      expect.objectContaining({
+        source: 'direct_message',
+        direction: 'sent',
+        isActive: false,
+        deletedAt,
+      })
+    );
+  });
+
+  it('given_userHasReceivedDMs_includesThemWithDirectionReceived', async () => {
+    const convId = { id: 'conv-1' };
+    const receivedDm = { id: 'm5', content: 'Received DM', conversationId: 'conv-1', createdAt: new Date() };
+    // channel=[], conv=[], sentDms=[], dmConvIds=[convId], receivedDms=[receivedDm]
+    const db = createChainDb([[], [], [], [convId], [receivedDm]]);
+
+    const result = await collectUserMessages(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].source).toBe('direct_message');
+    expect(result[0].direction).toBe('received');
+    expect(result[0].content).toBe('Received DM');
+  });
+
+  it('given_userHasBothSentAndReceivedDMs_includesBothWithCorrectDirections', async () => {
+    const sentDm = { id: 'm4', content: 'Sent DM', conversationId: 'conv-1', createdAt: new Date() };
+    const convId = { id: 'conv-1' };
+    const receivedDm = { id: 'm5', content: 'Received DM', conversationId: 'conv-1', createdAt: new Date() };
+    // channel=[], conv=[], sentDms=[sentDm], sent-DM attachments=[],
+    // dmConvIds=[convId], receivedDms=[receivedDm]
+    const db = createChainDb([[], [], [sentDm], [], [convId], [receivedDm]]);
+
+    const result = await collectUserMessages(db as never, 'user-1');
+
+    expect(result).toHaveLength(2);
+    const directions = result.map(r => r.direction);
+    expect(directions).toContain('sent');
+    expect(directions).toContain('received');
+  });
+});
+
+describe('collectUserFiles', () => {
+  it('given_filesExist_returnsFileMetadata', async () => {
+    const file = {
+      id: 'f1', driveId: 'd1', sizeBytes: 1024,
+      mimeType: 'text/plain', storagePath: '/path', createdAt: new Date(),
+    };
+    const db = createChainDb([[file]]);
+
+    const result = await collectUserFiles(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual(expect.objectContaining({ id: 'f1', sizeBytes: 1024 }));
+  });
+});
+
+describe('collectUserActivity', () => {
+  it('given_activityExists_returnsLogs', async () => {
+    const activity = {
+      id: 'a1', operation: 'create', resourceType: 'page',
+      resourceId: 'p1', timestamp: new Date(), metadata: null,
+    };
+    const db = createChainDb([[activity]]);
+
+    const result = await collectUserActivity(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].operation).toBe('create');
+  });
+});
+
+describe('collectUserSystemLogs', () => {
+  it('given_systemLogsExist_returnsLogs', async () => {
+    const log = {
+      id: 'sl1', timestamp: new Date(), level: 'error', message: 'boom',
+      category: 'api', endpoint: '/api/foo', method: 'POST', duration: 12,
+    };
+    const db = createChainDb([[log]]);
+
+    const result = await collectUserSystemLogs(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].message).toBe('boom');
+  });
+
+  it('given_nullableFieldsAreNull_passesThroughNull', async () => {
+    const log = {
+      id: 'sl2', timestamp: new Date(), level: 'info', message: 'no context',
+      category: null, endpoint: null, method: null, duration: null,
+    };
+    const db = createChainDb([[log]]);
+
+    const result = await collectUserSystemLogs(db as never, 'user-1');
+
+    expect(result[0].category).toBeNull();
+    expect(result[0].endpoint).toBeNull();
+    expect(result[0].method).toBeNull();
+    expect(result[0].duration).toBeNull();
+  });
+});
+
+describe('collectUserApiMetrics', () => {
+  it('given_apiMetricsExist_returnsMetrics', async () => {
+    const metric = {
+      id: 'am1', timestamp: new Date(), endpoint: '/api/foo', method: 'GET',
+      statusCode: 200, duration: 42, requestSize: 100, responseSize: 200,
+    };
+    const db = createChainDb([[metric]]);
+
+    const result = await collectUserApiMetrics(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].statusCode).toBe(200);
+  });
+
+  it('given_requestAndResponseSizeAreNull_passesThroughNull', async () => {
+    const metric = {
+      id: 'am2', timestamp: new Date(), endpoint: '/api/bar', method: 'DELETE',
+      statusCode: 204, duration: 5, requestSize: null, responseSize: null,
+    };
+    const db = createChainDb([[metric]]);
+
+    const result = await collectUserApiMetrics(db as never, 'user-1');
+
+    expect(result[0].requestSize).toBeNull();
+    expect(result[0].responseSize).toBeNull();
+  });
+});
+
+describe('collectUserErrorLogs', () => {
+  it('given_errorLogsExist_returnsLogs', async () => {
+    const errorLog = {
+      id: 'el1', timestamp: new Date(), name: 'TypeError', message: 'oops',
+      endpoint: '/api/foo', method: 'POST', file: 'foo.ts', line: 10, column: 5,
+      resolved: false,
+    };
+    const db = createChainDb([[errorLog]]);
+
+    const result = await collectUserErrorLogs(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe('TypeError');
+  });
+
+  it('given_resolvedTrueAndNullableFieldsNull_passesThroughCorrectly', async () => {
+    const errorLog = {
+      id: 'el2', timestamp: new Date(), name: 'RangeError', message: 'fixed now',
+      endpoint: null, method: null, file: null, line: null, column: null,
+      resolved: true,
+    };
+    const db = createChainDb([[errorLog]]);
+
+    const result = await collectUserErrorLogs(db as never, 'user-1');
+
+    expect(result[0].resolved).toBe(true);
+    expect(result[0].endpoint).toBeNull();
+    expect(result[0].file).toBeNull();
+  });
+});
+
+describe('analytics collectors with CH configured (union of both stores — #890 Phase 3 leaf 4 + FIX)', () => {
+  const chClient = { query: vi.fn() };
+
+  beforeEach(() => {
+    // getClickHouseGdprClient returns a client whenever CH is configured at
+    // ALL — including the flag-rollback window (CLICKHOUSE_ENABLED toggled
+    // off after rows landed in CH). The export union must not depend on the
+    // write-cutover flag; the flag→client logic is unit-tested in
+    // clickhouse-client/clickhouse-env.
+    vi.mocked(getClickHouseGdprClient).mockReturnValue(chClient as never);
+    vi.mocked(collectChUserSystemLogs).mockResolvedValue([]);
+    vi.mocked(collectChUserApiMetrics).mockResolvedValue([]);
+    vi.mocked(collectChUserErrorLogs).mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    vi.mocked(getClickHouseGdprClient).mockReturnValue(null);
+  });
+
+  it('given_aMisconfiguredCh_exportPropagates_theGdprClientAccessorThrow', async () => {
+    vi.mocked(getClickHouseGdprClient).mockImplementation(() => {
+      throw new Error('ClickHouse misconfigured: GDPR client unavailable');
     });
+    const db = createChainDb([[]]);
 
-    const userMessages = await collectUserMessages(db as DBParam, testUserId);
+    await expect(collectUserSystemLogs(db as never, 'user-1')).rejects.toThrow(
+      'ClickHouse misconfigured',
+    );
+  });
 
-    const found = userMessages.find(m => m.content === 'Hello AI');
-    expect(found).toBeTruthy();
-    expect(found!.source).toBe('ai_chat');
+  it('given_rowsInBothStores_systemLogsExportReturnsTheUnion', async () => {
+    // Writers gate on the same flag, so pre-cutover rows live only in PG and
+    // post-cutover rows only in CH — the union is complete with no overlap.
+    const pgLog = {
+      id: 'pg1', timestamp: new Date('2026-01-01'), level: 'info', message: 'pre-cutover',
+      category: null, endpoint: null, method: null, duration: null,
+    };
+    const chLog = {
+      id: 'ch1', timestamp: new Date('2026-07-01'), level: 'warn', message: 'post-cutover',
+      category: 'api', endpoint: '/api/x', method: 'GET', duration: 3,
+    };
+    vi.mocked(collectChUserSystemLogs).mockResolvedValue([chLog]);
+    const db = createChainDb([[pgLog]]);
+
+    const result = await collectUserSystemLogs(db as never, 'user-1');
+
+    expect(collectChUserSystemLogs).toHaveBeenCalledWith(chClient, 'user-1');
+    expect(result.map(r => r.id)).toEqual(['pg1', 'ch1']);
+  });
+
+  it('given_rowsInBothStores_apiMetricsExportReturnsTheUnion', async () => {
+    const pgMetric = {
+      id: 'pg1', timestamp: new Date('2026-01-01'), endpoint: '/a', method: 'GET',
+      statusCode: 200, duration: 1, requestSize: null, responseSize: null,
+    };
+    const chMetric = {
+      id: 'ch1', timestamp: new Date('2026-07-01'), endpoint: '/b', method: 'POST',
+      statusCode: 201, duration: 2, requestSize: 10, responseSize: 20,
+    };
+    vi.mocked(collectChUserApiMetrics).mockResolvedValue([chMetric]);
+    const db = createChainDb([[pgMetric]]);
+
+    const result = await collectUserApiMetrics(db as never, 'user-1');
+
+    expect(collectChUserApiMetrics).toHaveBeenCalledWith(chClient, 'user-1');
+    expect(result.map(r => r.id)).toEqual(['pg1', 'ch1']);
+  });
+
+  it('given_chErrorRows_errorLogsExportAttachesResolvedFromTheErrorResolutionsMiniTable', async () => {
+    const chError = {
+      id: 'ch-resolved', timestamp: new Date('2026-07-01'), name: 'TypeError', message: 'boom',
+      endpoint: null, method: null, file: null, line: null, column: null,
+    };
+    const chUnresolved = {
+      id: 'ch-open', timestamp: new Date('2026-07-02'), name: 'RangeError', message: 'bad',
+      endpoint: null, method: null, file: null, line: null, column: null,
+    };
+    vi.mocked(collectChUserErrorLogs).mockResolvedValue([chError, chUnresolved]);
+    // First where(): PG errorLogs rows; second where(): errorResolutions rows.
+    const db = createChainDb([[], [{ errorId: 'ch-resolved', resolved: true }]]);
+
+    const result = await collectUserErrorLogs(db as never, 'user-1');
+
+    expect(result).toHaveLength(2);
+    expect(result.find(r => r.id === 'ch-resolved')?.resolved).toBe(true);
+    // No workflow row = never resolved; PG legacy default is false, not null.
+    expect(result.find(r => r.id === 'ch-open')?.resolved).toBe(false);
+  });
+
+  it('given_noChErrorRows_errorLogsExportSkipsTheResolutionsQuery', async () => {
+    const pgError = {
+      id: 'pg1', timestamp: new Date('2026-01-01'), name: 'TypeError', message: 'old',
+      endpoint: null, method: null, file: null, line: null, column: null, resolved: false,
+    };
+    const db = createChainDb([[pgError]]);
+
+    const result = await collectUserErrorLogs(db as never, 'user-1');
+
+    expect(result.map(r => r.id)).toEqual(['pg1']);
+    expect(db.where).toHaveBeenCalledTimes(1);
+  });
+
+  it('given_aChReadFailure_exportPropagates_neverSilentlyOmitsSubjectData', async () => {
+    vi.mocked(collectChUserSystemLogs).mockRejectedValue(new Error('CH unreachable'));
+    const db = createChainDb([[]]);
+
+    await expect(collectUserSystemLogs(db as never, 'user-1')).rejects.toThrow('CH unreachable');
   });
 });
 
 describe('collectUserAiUsage', () => {
-  it('returns AI usage logs for the user', async () => {
-    const logId = createId();
-    await db.insert(aiUsageLogs).values({
-      id: logId,
-      userId: testUserId,
-      provider: 'openrouter',
-      model: 'gpt-4o',
-      inputTokens: 100,
-      outputTokens: 50,
-      cost: 0.01,
-    });
+  it('given_usageExists_returnsLogs', async () => {
+    const usage = {
+      id: 'u1', provider: 'openai', model: 'gpt-4',
+      inputTokens: 100, outputTokens: 50, cost: 0.01, timestamp: new Date(),
+    };
+    const db = createChainDb([[usage]]);
 
-    const usage = await collectUserAiUsage(db as DBParam, testUserId);
+    const result = await collectUserAiUsage(db as never, 'user-1');
 
-    const found = usage.find(u => u.id === logId);
-    expect(found).toBeTruthy();
-    expect(found!.provider).toBe('openrouter');
-    expect(found!.model).toBe('gpt-4o');
-
-    // cleanup
-    await db.delete(aiUsageLogs).where(eq(aiUsageLogs.id, logId));
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual(expect.objectContaining({ provider: 'openai', model: 'gpt-4' }));
   });
 });
 
 describe('collectUserTasks', () => {
-  let testListId: string;
+  it('given_tasksExist_returnsListsWithItems', async () => {
+    const list = { id: 'tl1', pageId: 'page_tl1', title: 'My Tasks' };
+    const item = { id: 'ti1', title: 'Task 1', status: 'pending', priority: 'high', taskListPageId: 'page_tl1', createdAt: new Date() };
+    const db = createChainDb([[list], [item]]);
 
-  beforeEach(async () => {
-    const [list] = await db.insert(taskLists).values({
-      id: createId(),
-      userId: testUserId,
-      title: 'GDPR Test Tasks',
-    }).returning();
-    testListId = list.id;
+    const result = await collectUserTasks(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].listTitle).toBe('My Tasks');
+    expect(result[0].items).toHaveLength(1);
+    expect(result[0].items[0].title).toBe('Task 1');
   });
 
-  afterEach(async () => {
-    await db.delete(taskItems).where(eq(taskItems.taskListId, testListId));
-    await db.delete(taskLists).where(eq(taskLists.id, testListId));
+  it('given_noTaskLists_returnsEmptyArray', async () => {
+    const db = createChainDb([[]]);
+
+    const result = await collectUserTasks(db as never, 'user-1');
+
+    expect(result).toEqual([]);
   });
 
-  it('returns task lists with items', async () => {
-    await db.insert(taskItems).values({
-      id: createId(),
-      taskListId: testListId,
-      userId: testUserId,
-      title: 'Test Task Item',
-      status: 'pending',
-      priority: 'medium',
-    });
+  it('given_listsWithNoItems_returnsListsWithEmptyItemsArray', async () => {
+    const db = createChainDb([[{ id: 'tl1', pageId: 'page_tl1', title: 'Empty List' }], []]);
 
-    const tasks = await collectUserTasks(db as DBParam, testUserId);
+    const result = await collectUserTasks(db as never, 'user-1');
 
-    const found = tasks.find(t => t.listId === testListId);
-    expect(found).toBeTruthy();
-    expect(found!.listTitle).toBe('GDPR Test Tasks');
-    expect(found!.items.length).toBe(1);
-    expect(found!.items[0].title).toBe('Test Task Item');
+    expect(result).toHaveLength(1);
+    expect(result[0].items).toEqual([]);
+  });
+});
+
+describe('collectUserSessions', () => {
+  it('given_userHasSessions_returnsSessionsWithoutCredentialFields', async () => {
+    const session = {
+      id: 'sess-1',
+      type: 'user',
+      deviceId: 'device-abc',
+      scopes: [],
+      createdByIp: '1.2.3.4',
+      lastUsedAt: new Date(),
+      lastUsedIp: '1.2.3.4',
+      expiresAt: new Date(),
+      revokedAt: null,
+      revokedReason: null,
+      createdAt: new Date(),
+    };
+    const db = createChainDb([[session]]);
+
+    const result = await collectUserSessions(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe('sess-1');
+    expect(result[0].type).toBe('user');
+    expect(result[0].createdByIp).toBe('1.2.3.4');
+  });
+
+  it('given_userHasNoSessions_returnsEmptyArray', async () => {
+    const db = createChainDb([[]]);
+
+    const result = await collectUserSessions(db as never, 'user-1');
+
+    expect(result).toEqual([]);
+  });
+});
+
+describe('collectUserNotifications', () => {
+  it('given_userHasNotifications_returnsNotificationHistory', async () => {
+    const notification = {
+      id: 'notif-1',
+      type: 'MENTION',
+      title: 'You were mentioned',
+      message: 'Alice mentioned you in a page',
+      metadata: null,
+      isRead: true,
+      createdAt: new Date(),
+      readAt: new Date(),
+    };
+    const db = createChainDb([[notification]]);
+
+    const result = await collectUserNotifications(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe('MENTION');
+    expect(result[0].isRead).toBe(true);
+  });
+
+  it('given_userHasNoNotifications_returnsEmptyArray', async () => {
+    const db = createChainDb([[]]);
+
+    const result = await collectUserNotifications(db as never, 'user-1');
+
+    expect(result).toEqual([]);
+  });
+});
+
+describe('collectUserDisplayPreferences', () => {
+  it('given_userHasDisplayPreferences_returnsAllPreferences', async () => {
+    const pref = {
+      preferenceType: 'SHOW_TOKEN_COUNTS',
+      enabled: true,
+      updatedAt: new Date(),
+    };
+    const db = createChainDb([[pref]]);
+
+    const result = await collectUserDisplayPreferences(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].preferenceType).toBe('SHOW_TOKEN_COUNTS');
+    expect(result[0].enabled).toBe(true);
+  });
+
+  it('given_userHasNoDisplayPreferences_returnsEmptyArray', async () => {
+    const db = createChainDb([[]]);
+
+    const result = await collectUserDisplayPreferences(db as never, 'user-1');
+
+    expect(result).toEqual([]);
+  });
+});
+
+describe('collectUserPersonalization', () => {
+  it('given_userHasPersonalization_returnsPersonalizationData', async () => {
+    const personalization = {
+      bio: 'I am a software engineer',
+      writingStyle: 'concise and technical',
+      rules: 'always use TypeScript',
+      enabled: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const db = createLimitDb([personalization]);
+
+    const result = await collectUserPersonalization(db as never, 'user-1');
+
+    expect(result).not.toBeNull();
+    expect(result!.bio).toBe('I am a software engineer');
+    expect(result!.writingStyle).toBe('concise and technical');
+    expect(result!.rules).toBe('always use TypeScript');
+  });
+
+  it('given_profileMigratedToPages_readsThePagesNotTheClearedColumns', async () => {
+    // After migration the columns are cleared — they are a fallback for users
+    // the backfill has not reached, not a second copy. Reading them alone would
+    // return three nulls and understate the profile of every migrated user.
+    const personalization = {
+      bio: null,
+      writingStyle: null,
+      rules: null,
+      enabled: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      bioPageId: 'page-bio',
+      writingStylePageId: 'page-style',
+      rulesPageId: 'page-rules',
+    };
+    const memoryPages = [
+      { id: 'page-bio', content: 'bio from the page', isTrashed: false },
+      { id: 'page-style', content: 'style from the page', isTrashed: false },
+      // Trashed: the subject deleted it, so it reports as absent rather than
+      // disclosing content they removed.
+      { id: 'page-rules', content: 'rules the user deleted', isTrashed: true },
+    ];
+
+    let call = 0;
+    const db = {
+      select: vi.fn().mockReturnThis(),
+      from: vi.fn().mockReturnThis(),
+      innerJoin: vi.fn().mockReturnThis(),
+      where: vi.fn(() => {
+        call += 1;
+        // First query ends in .limit(); the page lookup is awaited directly.
+        return call === 1
+          ? { limit: vi.fn().mockReturnValue([personalization]) }
+          : Promise.resolve(memoryPages);
+      }),
+    };
+
+    const result = await collectUserPersonalization(db as never, 'user-1');
+
+    expect(result!.bio).toBe('bio from the page');
+    expect(result!.writingStyle).toBe('style from the page');
+    expect(result!.rules).toBeNull();
+  });
+
+  it('given_userHasNoPersonalization_returnsNull', async () => {
+    const db = createLimitDb([]);
+
+    const result = await collectUserPersonalization(db as never, 'user-1');
+
+    expect(result).toBeNull();
   });
 });
 
 describe('collectAllUserData', () => {
-  it('returns all data categories', async () => {
-    const data = await collectAllUserData(db as DBParam, testUserId);
+  it('given_userDoesNotExist_returnsNull', async () => {
+    const db = createLimitDb([]);
 
-    expect(data).toBeTruthy();
-    expect(data!.profile.id).toBe(testUserId);
-    expect(Array.isArray(data!.drives)).toBe(true);
-    expect(Array.isArray(data!.pages)).toBe(true);
-    expect(Array.isArray(data!.messages)).toBe(true);
-    expect(Array.isArray(data!.files)).toBe(true);
-    expect(Array.isArray(data!.activity)).toBe(true);
-    expect(Array.isArray(data!.aiUsage)).toBe(true);
-    expect(Array.isArray(data!.tasks)).toBe(true);
+    const result = await collectAllUserData(db as never, 'nonexistent', ADMIT_ALL);
+
+    expect(result).toBeNull();
   });
 
-  it('returns null for nonexistent user', async () => {
-    const data = await collectAllUserData(db as DBParam, 'nonexistent-id');
+  it('given_userExists_aggregatesAllDataCategories', async () => {
+    const profile = {
+      id: 'user-1', name: 'Test', email: 'test@test.com',
+      image: null, timezone: 'UTC', createdAt: new Date(), updatedAt: new Date(),
+    };
 
-    expect(data).toBeNull();
+    // Returns an empty array that also has a .limit() method so both
+    // callers that chain .limit() (profile, personalization) and callers
+    // that use the array directly (drives, messages, etc.) both work.
+    // The funding-leg collector also chains .orderBy() before .limit() (HIST-02).
+    const emptyWithLimit = () => Object.assign([], {
+      orderBy: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnValue([]),
+    });
+
+    let callCount = 0;
+    const db = {
+      select: vi.fn().mockReturnThis(),
+      from: vi.fn().mockReturnThis(),
+      where: vi.fn(() => {
+        callCount++;
+        if (callCount === 1) {
+          return Object.assign([], { limit: vi.fn().mockReturnValue([profile]) });
+        }
+        return emptyWithLimit();
+      }),
+      innerJoin: vi.fn().mockReturnThis(),
+      leftJoin: vi.fn().mockReturnThis(),
+    };
+
+    const result = await collectAllUserData(db as never, 'user-1', ADMIT_ALL);
+
+    expect(result).not.toBeNull();
+    expect(result!.profile.id).toBe('user-1');
+    expect(result!.profile.email).toBe('test@test.com');
+    expect(Array.isArray(result!.drives)).toBe(true);
+    expect(Array.isArray(result!.pages)).toBe(true);
+    expect(Array.isArray(result!.messages)).toBe(true);
+    expect(Array.isArray(result!.files)).toBe(true);
+    expect(Array.isArray(result!.activity)).toBe(true);
+    expect(Array.isArray(result!.systemLogs)).toBe(true);
+    expect(Array.isArray(result!.apiMetrics)).toBe(true);
+    expect(Array.isArray(result!.errorLogs)).toBe(true);
+    expect(Array.isArray(result!.aiUsage)).toBe(true);
+    expect(Array.isArray(result!.tasks)).toBe(true);
+    expect(Array.isArray(result!.sessions)).toBe(true);
+    expect(Array.isArray(result!.notifications)).toBe(true);
+    expect(Array.isArray(result!.displayPreferences)).toBe(true);
+    // The agent-session epic's categories. Aggregated here for the same reason
+    // as every other one: a collector nobody calls from `collectAllUserData`
+    // reaches nobody's export.
+    expect(Array.isArray(result!.agentWorkspaces)).toBe(true);
+    expect(Array.isArray(result!.agentAccounts.accounts)).toBe(true);
+    expect(Array.isArray(result!.streamState)).toBe(true);
+    // Same rule again for the content-tags category: a collector that
+    // `collectAllUserData` never calls reaches nobody's export.
+    expect(Array.isArray(result!.contentTags)).toBe(true);
+    expect(result!.personalization).toBeNull();
   });
 });

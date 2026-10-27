@@ -12,10 +12,11 @@ import {
 } from '@/components/ui/table';
 import { ListViewProps, SortKey } from './types';
 import { PageTypeIcon } from '@/components/common/PageTypeIcon';
-import { PageType } from '@pagespace/lib/client-safe';
+import { PageType } from '@pagespace/lib/utils/enums';
 import { toTitleCase } from '@/lib/utils/formatters';
+import { cn } from '@/lib/utils';
 
-export function ListView({ items, sortKey, sortDirection, onSort }: ListViewProps) {
+export function ListView({ items, sortKey, sortDirection, onSort, findMatchSet, currentFindId }: ListViewProps) {
   const params = useParams();
   const driveId = params.driveId as string;
 
@@ -35,6 +36,7 @@ export function ListView({ items, sortKey, sortDirection, onSort }: ListViewProp
   );
 
   return (
+    <div className="overflow-x-auto">
     <Table>
       <TableHeader>
         <TableRow>
@@ -47,7 +49,15 @@ export function ListView({ items, sortKey, sortDirection, onSort }: ListViewProp
       </TableHeader>
       <TableBody>
         {items.map((child) => (
-          <TableRow key={child.id} className="cursor-pointer">
+          <TableRow
+            key={child.id}
+            data-item-id={child.id}
+            className={cn(
+              'cursor-pointer',
+              findMatchSet?.has(child.id) && 'find-highlight',
+              currentFindId === child.id && 'find-highlight-current',
+            )}
+          >
             <TableCell>
               <Link href={`/dashboard/${driveId}/${child.id}`} className="flex items-center">
                 <PageTypeIcon type={child.type as PageType} className="h-5 w-5" />
@@ -77,5 +87,6 @@ export function ListView({ items, sortKey, sortDirection, onSort }: ListViewProp
         ))}
       </TableBody>
     </Table>
+    </div>
   );
 }

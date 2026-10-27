@@ -22,7 +22,9 @@ import {
   AtSign,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { EmojiPickerPopover } from '@/components/ui/emoji-picker';
+import { EmojiPicker } from '@/components/ui/emoji-picker';
+import { MentionPicker } from '@/components/mentions/MentionPicker';
+import type { MentionSuggestion, MentionType } from '@/types/mentions';
 
 export interface ChannelInputFooterProps {
   /** Callback when formatting button clicked */
@@ -31,12 +33,26 @@ export interface ChannelInputFooterProps {
   onAttachmentClick?: () => void;
   /** Callback when emoji is selected */
   onEmojiSelect?: (emoji: string) => void;
-  /** Callback when mention button clicked */
-  onMentionClick?: () => void;
+  /** Callback when a mention suggestion is selected from the picker */
+  onMentionSelect?: (suggestion: MentionSuggestion) => void;
+  /** Drive ID for scoping mention search */
+  driveId?: string;
+  /** Enable cross-drive mention search */
+  crossDrive?: boolean;
+  /** Which mention types to include */
+  allowedMentionTypes?: MentionType[];
   /** Whether attachments are supported */
   attachmentsEnabled?: boolean;
   /** Whether input is disabled */
   disabled?: boolean;
+  /** Render the "Also send to {parent}" checkbox (thread composer only) */
+  alsoSendToParentEnabled?: boolean;
+  /** Label shown next to the also-send checkbox (e.g. "Also send to channel") */
+  alsoSendToParentLabel?: string;
+  /** Current checkbox value */
+  alsoSendToParent?: boolean;
+  /** Checkbox change handler */
+  onAlsoSendToParentChange?: (checked: boolean) => void;
   /** Additional class names */
   className?: string;
 }
@@ -55,34 +71,33 @@ const FORMAT_BUTTONS: FormatButton[] = [
   { id: 'list', icon: List, label: 'List', shortcut: '⌘⇧L' },
 ];
 
-/**
- * ChannelInputFooter - Footer actions for channel message input
- *
- * Contains:
- * - Formatting buttons (bold, italic, code, list) in a popover
- * - Attachment button (future: file uploads)
- * - Emoji picker trigger
- * - Mention shortcut button
- *
- * Designed to complement the floating input card design.
- */
 export function ChannelInputFooter({
   onFormatClick,
   onAttachmentClick,
   onEmojiSelect,
-  onMentionClick,
+  onMentionSelect,
+  driveId,
+  crossDrive = false,
+  allowedMentionTypes,
   attachmentsEnabled = false,
   disabled = false,
+  alsoSendToParentEnabled = false,
+  alsoSendToParentLabel = 'Also send to channel',
+  alsoSendToParent = false,
+  onAlsoSendToParentChange,
   className,
 }: ChannelInputFooterProps) {
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
+  const [mentionPickerOpen, setMentionPickerOpen] = useState(false);
+
+
   return (
     <div
       className={cn(
         'flex items-center justify-between',
         'px-3 py-2',
         'border-t border-border/40',
-        className
+        className,
       )}
     >
       {/* Left group - Formatting & Actions */}
@@ -99,7 +114,7 @@ export function ChannelInputFooter({
                   className={cn(
                     'h-8 w-8 p-0',
                     'text-muted-foreground hover:text-foreground',
-                    'hover:bg-muted/50'
+                    'hover:bg-muted/50',
                   )}
                 >
                   <Bold className="h-4 w-4" />
@@ -131,7 +146,10 @@ export function ChannelInputFooter({
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent side="top">
-                    {btn.label} <span className="text-muted-foreground ml-1">{btn.shortcut}</span>
+                    {btn.label}{' '}
+                    <span className="text-muted-foreground ml-1">
+                      {btn.shortcut}
+                    </span>
                   </TooltipContent>
                 </Tooltip>
               ))}
@@ -142,39 +160,42 @@ export function ChannelInputFooter({
         {/* Divider */}
         <div className="w-px h-4 bg-border/60 mx-1" />
 
-        {/* Mention button */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onMentionClick}
-              disabled={disabled}
-              className={cn(
-                'h-8 w-8 p-0',
-                'text-muted-foreground hover:text-foreground',
-                'hover:bg-muted/50'
-              )}
-            >
-              <AtSign className="h-4 w-4" />
-              <span className="sr-only">Mention</span>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top">Mention someone</TooltipContent>
-        </Tooltip>
-
-        {/* Emoji picker */}
-        <EmojiPickerPopover
-          open={emojiPickerOpen}
-          onOpenChange={setEmojiPickerOpen}
-          onEmojiSelect={(emoji) => {
-            onEmojiSelect?.(emoji);
-            setEmojiPickerOpen(false);
-          }}
-          side="top"
-          align="start"
-          showQuickReactions={false}
-        >
+        {/* Mention picker */}
+        {onMentionSelect && driveId ? (
+          <Popover open={mentionPickerOpen} onOpenChange={setMentionPickerOpen}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={disabled}
+                    className={cn(
+                      'h-8 w-8 p-0',
+                      'text-muted-foreground hover:text-foreground',
+                      'hover:bg-muted/50',
+                    )}
+                  >
+                    <AtSign className="h-4 w-4" />
+                    <span className="sr-only">Mention someone</span>
+                  </Button>
+                </PopoverTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="top">Mention someone</TooltipContent>
+            </Tooltip>
+            <PopoverContent side="top" align="start" className="w-auto p-0" sideOffset={8}>
+              <MentionPicker
+                driveId={driveId}
+                crossDrive={crossDrive}
+                allowedTypes={allowedMentionTypes}
+                onMentionSelect={(s) => {
+                  onMentionSelect(s);
+                  setMentionPickerOpen(false);
+                }}
+              />
+            </PopoverContent>
+          </Popover>
+        ) : (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -184,20 +205,76 @@ export function ChannelInputFooter({
                 className={cn(
                   'h-8 w-8 p-0',
                   'text-muted-foreground hover:text-foreground',
-                  'hover:bg-muted/50'
+                  'hover:bg-muted/50',
                 )}
               >
-                <Smile className="h-4 w-4" />
-                <span className="sr-only">Emoji</span>
+                <AtSign className="h-4 w-4" />
+                <span className="sr-only">Mention someone</span>
               </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top">Mention someone</TooltipContent>
+          </Tooltip>
+        )}
+
+        {/* Emoji picker */}
+        <Popover open={emojiPickerOpen} onOpenChange={setEmojiPickerOpen}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={disabled}
+                  className={cn(
+                    'h-8 w-8 p-0',
+                    'text-muted-foreground hover:text-foreground',
+                    'hover:bg-muted/50',
+                  )}
+                >
+                  <Smile className="h-4 w-4" />
+                  <span className="sr-only">Emoji</span>
+                </Button>
+              </PopoverTrigger>
             </TooltipTrigger>
             <TooltipContent side="top">Add emoji</TooltipContent>
           </Tooltip>
-        </EmojiPickerPopover>
+          <PopoverContent
+            side="top"
+            align="start"
+            className="w-auto p-0"
+            sideOffset={8}
+          >
+            <EmojiPicker
+              onEmojiSelect={(emoji) => {
+                onEmojiSelect?.(emoji);
+                setEmojiPickerOpen(false);
+              }}
+              showQuickReactions={false}
+            />
+          </PopoverContent>
+        </Popover>
       </div>
 
-      {/* Right group - Attachments (future) */}
-      <div className="flex items-center gap-1">
+      {/* Right group - Attachments + thread also-send toggle */}
+      <div className="flex items-center gap-2">
+        {alsoSendToParentEnabled && (
+          <label
+            className={cn(
+              'flex items-center gap-1.5 text-xs text-muted-foreground select-none',
+              disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
+            )}
+          >
+            <input
+              type="checkbox"
+              data-testid="also-send-to-parent"
+              checked={alsoSendToParent}
+              disabled={disabled}
+              onChange={(e) => onAlsoSendToParentChange?.(e.target.checked)}
+              className="h-3.5 w-3.5 rounded border-border accent-primary"
+            />
+            {alsoSendToParentLabel}
+          </label>
+        )}
         {attachmentsEnabled && (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -209,7 +286,7 @@ export function ChannelInputFooter({
                 className={cn(
                   'h-8 w-8 p-0',
                   'text-muted-foreground hover:text-foreground',
-                  'hover:bg-muted/50'
+                  'hover:bg-muted/50',
                 )}
               >
                 <Paperclip className="h-4 w-4" />
@@ -223,5 +300,3 @@ export function ChannelInputFooter({
     </div>
   );
 }
-
-export default ChannelInputFooter;

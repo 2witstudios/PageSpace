@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, PATCH, DELETE } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
-import type { DriveWithAccess, DriveAccessInfo } from '@pagespace/lib/server';
+import type { DriveWithAccess, DriveAccessInfo } from '@pagespace/lib/services/drive-service';
 
 // ============================================================================
 // Contract Tests for /api/drives/[driveId]
@@ -13,13 +13,20 @@ import type { DriveWithAccess, DriveAccessInfo } from '@pagespace/lib/server';
 // ============================================================================
 
 // Mock the service seam - this is the ONLY place we mock DB-related logic
-vi.mock('@pagespace/lib/server', () => ({
-  getDriveById: vi.fn(),
-  getDriveAccess: vi.fn(),
-  getDriveWithAccess: vi.fn(),
-  updateDrive: vi.fn(),
-  trashDrive: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/services/drive-service', () => ({
+    getDriveById: vi.fn(),
+    getDriveAccess: vi.fn(),
+    getDriveWithAccess: vi.fn(),
+    updateDrive: vi.fn(),
+    trashDrive: vi.fn(),
+    isValidDriveHomePage: vi.fn(),
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: vi.fn(),
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -27,6 +34,8 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -40,6 +49,19 @@ vi.mock('@/lib/auth', () => ({
   // MCP scope check - returns null (allowed) by default for session auth tests
   checkMCPDriveScope: vi.fn().mockReturnValue(null),
   isMCPAuthResult: vi.fn().mockReturnValue(false),
+  isScopedMCPAuth: vi.fn(() => false), // Session/unscoped fixtures by default
+  // Session auth falls through to user-level authority; derive it from the
+  // test's getDriveAccess fixture so existing fixtures keep driving 403/200.
+  isPrincipalDriveOwnerOrAdmin: vi.fn(async (auth: { userId: string }, driveId: string) => {
+    const { getDriveAccess } = await import('@pagespace/lib/services/drive-service');
+    const access = await getDriveAccess(driveId, credentialActor(auth.userId, null));
+    return Boolean(access && (access.isOwner || access.isAdmin));
+  }),
+}));
+
+vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
+  getAppDriveMembership: vi.fn(),
+  getAppDriveAccessLevel: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
@@ -47,20 +69,18 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   logDriveActivity: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => import('@/lib/auth/__tests__/lead-authority-fake'));
+
 vi.mock('@pagespace/lib/services/drive-member-service', () => ({
   getDriveRecipientUserIds: vi.fn().mockResolvedValue(['user-123', 'user-456']),
 }));
 
-import {
-  getDriveById,
-  getDriveAccess,
-  getDriveWithAccess,
-  updateDrive,
-  trashDrive,
-  loggers,
-} from '@pagespace/lib/server';
+import { getDriveById, getDriveAccess, getDriveWithAccess, updateDrive, trashDrive, isValidDriveHomePage } from '@pagespace/lib/services/drive-service'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { LEAD_ACTION_CASES, LEAD_ACTION_DRIVES, leadAuthority } from '@/lib/auth/__tests__/lead-authority-fake';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ============================================================================
 // Test Helpers
@@ -80,7 +100,7 @@ const mockAuthError = (status = 401): AuthError => ({
 });
 
 // Raw drive fixture (without access info)
-const createRawDriveFixture = (overrides: { id: string; name: string; ownerId?: string }) => ({
+const createRawDriveFixture = (overrides: { id: string; name: string; ownerId?: string; kind?: 'STANDARD' | 'HOME'; homePageId?: string | null }) => ({
   id: overrides.id,
   name: overrides.name,
   slug: overrides.name.toLowerCase().replace(/\s+/g, '-'),
@@ -90,6 +110,16 @@ const createRawDriveFixture = (overrides: { id: string; name: string; ownerId?: 
   isTrashed: false,
   trashedAt: null,
   drivePrompt: null,
+  kind: (overrides.kind ?? 'STANDARD') as 'STANDARD' | 'HOME',
+  publishSubdomain: null,
+  homePageId: overrides.homePageId ?? null,
+  publishDefaultOgImageUrl: null,
+  notFoundPageId: null,
+  publishFaviconUrl: null,
+  orgId: null,
+  orgVisibility: 'OPEN' as const,
+  avatarUrl: null,
+  color: null,
 });
 
 // Drive with access info fixture
@@ -100,6 +130,7 @@ const createDriveWithAccessFixture = (
   name: overrides.name,
   slug: overrides.slug ?? overrides.name.toLowerCase().replace(/\s+/g, '-'),
   ownerId: overrides.ownerId ?? 'user_123',
+  kind: overrides.kind ?? 'STANDARD',
   createdAt: overrides.createdAt ?? new Date('2024-01-01'),
   updatedAt: overrides.updatedAt ?? new Date('2024-01-01'),
   isTrashed: overrides.isTrashed ?? false,
@@ -107,7 +138,13 @@ const createDriveWithAccessFixture = (
   drivePrompt: overrides.drivePrompt ?? null,
   isOwned: overrides.isOwned ?? true,
   role: overrides.role ?? 'OWNER',
+  canCreatePages: overrides.canCreatePages ?? true,
   lastAccessedAt: overrides.lastAccessedAt ?? null,
+  homePageId: overrides.homePageId ?? null,
+  orgId: overrides.orgId ?? null,
+  orgVisibility: overrides.orgVisibility ?? 'OPEN',
+  avatarUrl: overrides.avatarUrl ?? null,
+  color: overrides.color ?? null,
   isMember: (overrides as { isMember?: boolean }).isMember ?? false,
 });
 
@@ -117,6 +154,7 @@ const createAccessFixture = (overrides: Partial<DriveAccessInfo> = {}): DriveAcc
   isAdmin: overrides.isAdmin ?? false,
   isMember: overrides.isMember ?? false,
   role: overrides.role ?? null,
+  customRoleId: overrides.customRoleId ?? null,
 });
 
 // Create mock context with async params (Next.js 15 pattern)
@@ -161,7 +199,7 @@ describe('GET /api/drives/[driveId]', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['session', 'mcp'], requireCSRF: false }
+        { allow: ['session', 'mcp', 'oauth'], requireCSRF: false }
       );
     });
   });
@@ -175,7 +213,7 @@ describe('GET /api/drives/[driveId]', () => {
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`);
       await GET(request, createContext(mockDriveId));
 
-      expect(getDriveWithAccess).toHaveBeenCalledWith(mockDriveId, mockUserId);
+      expect(getDriveWithAccess).toHaveBeenCalledWith(mockDriveId, expect.objectContaining({ userId: mockUserId }));
     });
 
     it('should call getDriveById when getDriveWithAccess returns null', async () => {
@@ -292,7 +330,7 @@ describe('GET /api/drives/[driveId]', () => {
 
   describe('error handling', () => {
     it('should return 500 when service throws', async () => {
-      vi.mocked(getDriveWithAccess).mockRejectedValue(new Error('Database error'));
+      vi.mocked(getDriveWithAccess).mockRejectedValueOnce(new Error('Database error'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`);
       const response = await GET(request, createContext(mockDriveId));
@@ -304,7 +342,7 @@ describe('GET /api/drives/[driveId]', () => {
 
     it('should log error when service throws', async () => {
       const error = new Error('Service failure');
-      vi.mocked(getDriveWithAccess).mockRejectedValue(error);
+      vi.mocked(getDriveWithAccess).mockRejectedValueOnce(error);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`);
       await GET(request, createContext(mockDriveId));
@@ -463,6 +501,242 @@ describe('PATCH /api/drives/[driveId]', () => {
     });
   });
 
+  describe('publishDefaultOgImageUrl', () => {
+    const ownerFixtures = () => {
+      vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
+      vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true, role: 'OWNER' }));
+    };
+
+    it('persists a valid default OG image URL', async () => {
+      ownerFixtures();
+      vi.mocked(updateDrive).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ publishDefaultOgImageUrl: 'https://img.example/og.png' }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+      expect(updateDrive).toHaveBeenCalledWith(
+        mockDriveId,
+        expect.objectContaining({ publishDefaultOgImageUrl: 'https://img.example/og.png' })
+      );
+    });
+
+    it('normalizes an empty string to null (clear)', async () => {
+      ownerFixtures();
+      vi.mocked(updateDrive).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ publishDefaultOgImageUrl: '' }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+      expect(updateDrive).toHaveBeenCalledWith(
+        mockDriveId,
+        expect.objectContaining({ publishDefaultOgImageUrl: null })
+      );
+    });
+
+    it('rejects a non-URL default OG image without touching the service', async () => {
+      ownerFixtures();
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ publishDefaultOgImageUrl: 'not-a-url' }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId));
+
+      expect(response.status).toBe(400);
+      expect(updateDrive).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('publishSubdomain', () => {
+    const ownerFixtures = () => {
+      vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
+      vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true, role: 'OWNER' }));
+    };
+
+    it('rejects publishSubdomain with a clear 400 instead of silently dropping it', async () => {
+      ownerFixtures();
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ publishSubdomain: 'my-new-subdomain' }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe(
+        'publishSubdomain cannot be changed via this endpoint. Use PATCH /api/drives/[driveId]/subdomain instead.'
+      );
+      expect(updateDrive).not.toHaveBeenCalled();
+    });
+
+    it('rejects a mixed body containing publishSubdomain alongside a valid field', async () => {
+      ownerFixtures();
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name: 'New Name', publishSubdomain: 'my-new-subdomain' }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe(
+        'publishSubdomain cannot be changed via this endpoint. Use PATCH /api/drives/[driveId]/subdomain instead.'
+      );
+      expect(updateDrive).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('color', () => {
+    beforeEach(() => {
+      vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
+      vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true, role: 'OWNER' }));
+      vi.mocked(updateDrive).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
+    });
+    const patch = (body: unknown) =>
+      PATCH(new Request(`https://example.com/api/drives/${mockDriveId}`, { method: 'PATCH', body: JSON.stringify(body) }), createContext(mockDriveId));
+
+    it('stores a mark palette key, or null to clear it, and broadcasts so every member\'s mark follows', async () => {
+      expect((await patch({ color: 'teal' })).status).toBe(200);
+      expect(updateDrive).toHaveBeenCalledWith(mockDriveId, expect.objectContaining({ color: 'teal' }));
+      expect(broadcastDriveEvent).toHaveBeenCalledTimes(1);
+      expect((await patch({ color: null })).status).toBe(200);
+      expect(updateDrive).toHaveBeenLastCalledWith(mockDriveId, expect.objectContaining({ color: null }));
+    });
+
+    it('refuses anything outside the palette, such as a raw hex or CSS', async () => {
+      for (const color of ['#ff0000', 'Teal', 'red; background:url(x)']) {
+        expect((await patch({ color })).status).toBe(400);
+      }
+      expect(updateDrive).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('homePageId', () => {
+    const ownerFixtures = () => {
+      vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
+      vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true, role: 'OWNER' }));
+    };
+
+    it('should persist a valid homePageId and broadcast', async () => {
+      ownerFixtures();
+      vi.mocked(isValidDriveHomePage).mockResolvedValue(true);
+      vi.mocked(updateDrive).mockResolvedValue(
+        createRawDriveFixture({ id: mockDriveId, name: 'Test', homePageId: 'page-1' })
+      );
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ homePageId: 'page-1' }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(isValidDriveHomePage).toHaveBeenCalledWith(mockDriveId, 'page-1');
+      expect(updateDrive).toHaveBeenCalledWith(mockDriveId, expect.objectContaining({ homePageId: 'page-1' }));
+      expect(broadcastDriveEvent).toHaveBeenCalledTimes(1);
+      expect(body.homePageId).toBe('page-1');
+    });
+
+    it('should return 400 and not update when validation rejects the page', async () => {
+      ownerFixtures();
+      vi.mocked(isValidDriveHomePage).mockResolvedValue(false);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ homePageId: 'page-other-drive' }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Home page must be a non-trashed page in this drive');
+      expect(updateDrive).not.toHaveBeenCalled();
+    });
+
+    it('should clear with null without validating, and still broadcast', async () => {
+      ownerFixtures();
+      vi.mocked(updateDrive).mockResolvedValue(
+        createRawDriveFixture({ id: mockDriveId, name: 'Test', homePageId: null })
+      );
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ homePageId: null }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+      expect(isValidDriveHomePage).not.toHaveBeenCalled();
+      expect(updateDrive).toHaveBeenCalledWith(mockDriveId, expect.objectContaining({ homePageId: null }));
+      expect(broadcastDriveEvent).toHaveBeenCalledTimes(1);
+    });
+
+    it('should return 403 for non-owner/admin without validating or updating', async () => {
+      vi.mocked(getDriveById).mockResolvedValue(
+        createRawDriveFixture({ id: mockDriveId, name: 'Other Drive', ownerId: 'other_user' })
+      );
+      vi.mocked(getDriveAccess).mockResolvedValue(
+        createAccessFixture({ isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER' })
+      );
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ homePageId: 'page-1' }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId));
+
+      expect(response.status).toBe(403);
+      expect(isValidDriveHomePage).not.toHaveBeenCalled();
+      expect(updateDrive).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['non-string', 123],
+      ['empty string', ''],
+    ])('should reject %s homePageId via zod without touching services', async (_label, value) => {
+      ownerFixtures();
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ homePageId: value }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Invalid request body');
+      expect(isValidDriveHomePage).not.toHaveBeenCalled();
+      expect(updateDrive).not.toHaveBeenCalled();
+    });
+
+    it('should leave homePageId untouched when the field is absent (regression)', async () => {
+      ownerFixtures();
+      vi.mocked(updateDrive).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'X' }));
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name: 'X' }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+      expect(isValidDriveHomePage).not.toHaveBeenCalled();
+      const updateInput = vi.mocked(updateDrive).mock.calls[0][1];
+      expect(updateInput.homePageId).toBeUndefined();
+    });
+  });
+
   describe('service integration', () => {
     it('should call updateDrive with name and drivePrompt', async () => {
       vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Old' }));
@@ -521,16 +795,17 @@ describe('PATCH /api/drives/[driveId]', () => {
         { name: 'New', slug: 'new' }
       );
       expect(broadcastDriveEvent).toHaveBeenCalledWith(
-        expect.objectContaining({ driveId: mockDriveId, event: 'updated' }),
+        { driveId: mockDriveId, event: 'updated', data: { name: 'New', slug: 'new' } },
         ['user-123', 'user-456']
       );
     });
 
-    it('should NOT broadcast event when only drivePrompt changes', async () => {
+    it('should broadcast drive updated event when only drivePrompt changes', async () => {
       const drive = createRawDriveFixture({ id: mockDriveId, name: 'Test' });
+      const updatedDrive = { ...drive, drivePrompt: 'New prompt' };
       vi.mocked(getDriveById).mockResolvedValue(drive);
       vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true }));
-      vi.mocked(updateDrive).mockResolvedValue({ ...drive, drivePrompt: 'New prompt' });
+      vi.mocked(updateDrive).mockResolvedValue(updatedDrive);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
         method: 'PATCH',
@@ -538,7 +813,15 @@ describe('PATCH /api/drives/[driveId]', () => {
       });
       await PATCH(request, createContext(mockDriveId));
 
-      expect(broadcastDriveEvent).not.toHaveBeenCalled();
+      expect(createDriveEventPayload).toHaveBeenCalledWith(
+        mockDriveId,
+        'updated',
+        { name: 'Test', slug: 'test' }
+      );
+      expect(broadcastDriveEvent).toHaveBeenCalledWith(
+        { driveId: mockDriveId, event: 'updated', data: { name: 'Test', slug: 'test' } },
+        ['user-123', 'user-456']
+      );
     });
   });
 
@@ -546,7 +829,7 @@ describe('PATCH /api/drives/[driveId]', () => {
     it('should return 500 when updateDrive throws', async () => {
       vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
       vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true }));
-      vi.mocked(updateDrive).mockRejectedValue(new Error('Update failed'));
+      vi.mocked(updateDrive).mockRejectedValueOnce(new Error('Update failed'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
         method: 'PATCH',
@@ -563,7 +846,7 @@ describe('PATCH /api/drives/[driveId]', () => {
       const error = new Error('Update failure');
       vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
       vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true }));
-      vi.mocked(updateDrive).mockRejectedValue(error);
+      vi.mocked(updateDrive).mockRejectedValueOnce(error);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
         method: 'PATCH',
@@ -733,7 +1016,7 @@ describe('DELETE /api/drives/[driveId]', () => {
         { name: 'Deleted Drive', slug: 'deleted-drive' }
       );
       expect(broadcastDriveEvent).toHaveBeenCalledWith(
-        expect.objectContaining({ driveId: mockDriveId, event: 'deleted' }),
+        { driveId: mockDriveId, event: 'deleted', data: { name: 'Deleted Drive', slug: 'deleted-drive' } },
         ['user-123', 'user-456']
       );
     });
@@ -743,7 +1026,7 @@ describe('DELETE /api/drives/[driveId]', () => {
     it('should return 500 when trashDrive throws', async () => {
       vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
       vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true }));
-      vi.mocked(trashDrive).mockRejectedValue(new Error('Delete failed'));
+      vi.mocked(trashDrive).mockRejectedValueOnce(new Error('Delete failed'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
         method: 'DELETE',
@@ -759,7 +1042,7 @@ describe('DELETE /api/drives/[driveId]', () => {
       const error = new Error('Delete failure');
       vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
       vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true }));
-      vi.mocked(trashDrive).mockRejectedValue(error);
+      vi.mocked(trashDrive).mockRejectedValueOnce(error);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
         method: 'DELETE',
@@ -768,5 +1051,173 @@ describe('DELETE /api/drives/[driveId]', () => {
 
       expect(loggers.api.error).toHaveBeenCalledWith('Error deleting drive:', error);
     });
+  });
+});
+
+// ============================================================================
+// Home Drive Guards
+// ============================================================================
+
+describe('PATCH /api/drives/[driveId] — Home drive guards', () => {
+  const mockUserId = 'user_123';
+  const mockDriveId = 'drive_home';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(isAuthError).mockReturnValue(false);
+  });
+
+  it('returns 403 when trying to rename a Home drive', async () => {
+    vi.mocked(getDriveById).mockResolvedValue(
+      createRawDriveFixture({ id: mockDriveId, name: 'Home', ownerId: mockUserId, kind: 'HOME' })
+    );
+    vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true, role: 'OWNER' }));
+
+    const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name: 'Renamed' }),
+    });
+    const response = await PATCH(request, createContext(mockDriveId));
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body.error).toBe('Your Home drive cannot be renamed.');
+    expect(updateDrive).not.toHaveBeenCalled();
+  });
+
+  it('returns 200 when updating only drivePrompt on a Home drive', async () => {
+    vi.mocked(getDriveById).mockResolvedValue(
+      createRawDriveFixture({ id: mockDriveId, name: 'Home', ownerId: mockUserId, kind: 'HOME' })
+    );
+    vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true, role: 'OWNER' }));
+    vi.mocked(updateDrive).mockResolvedValue(
+      createRawDriveFixture({ id: mockDriveId, name: 'Home', kind: 'HOME' })
+    );
+
+    const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ drivePrompt: 'New context' }),
+    });
+    const response = await PATCH(request, createContext(mockDriveId));
+
+    expect(response.status).toBe(200);
+    expect(updateDrive).toHaveBeenCalledWith(mockDriveId, { name: undefined, drivePrompt: 'New context' });
+  });
+
+  it('returns 400 when trying to rename any drive to a reserved name', async () => {
+    for (const reservedName of ['Home', 'home', 'Personal', 'personal']) {
+      vi.clearAllMocks();
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+      vi.mocked(isAuthError).mockReturnValue(false);
+      vi.mocked(getDriveById).mockResolvedValue(
+        createRawDriveFixture({ id: mockDriveId, name: 'My Work', ownerId: mockUserId })
+      );
+      vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true, role: 'OWNER' }));
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name: reservedName }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId));
+      expect(response.status).toBe(400);
+      expect(updateDrive).not.toHaveBeenCalled();
+    }
+  });
+});
+
+describe('DELETE /api/drives/[driveId] — Home drive guard', () => {
+  const mockUserId = 'user_123';
+  const mockDriveId = 'drive_home';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(isAuthError).mockReturnValue(false);
+  });
+
+  it('returns 403 when trying to trash a Home drive', async () => {
+    vi.mocked(getDriveById).mockResolvedValue(
+      createRawDriveFixture({ id: mockDriveId, name: 'Home', ownerId: mockUserId, kind: 'HOME' })
+    );
+    vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true, role: 'OWNER' }));
+
+    const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+      method: 'DELETE',
+    });
+    const response = await DELETE(request, createContext(mockDriveId));
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body.error).toBe('Your Home drive cannot be moved to trash or deleted.');
+    expect(trashDrive).not.toHaveBeenCalled();
+  });
+});
+
+describe('PATCH (rename) and DELETE (trash) /api/drives/[driveId]: org power is audited (point-guard ruling on #2689)', () => {
+  // The owner-or-admin gate reads the org-aware resolver: an org Owner or Admin is ADMIN on an org
+  // drive, an org MEMBER is a plain member, a non-member and a personal drive's non-owner are nothing.
+  const accessFor = (orgRole: string | null, drive: 'org' | 'personal', userId: string) => {
+    if (userId === LEAD_ACTION_DRIVES[drive].ownerId) return createAccessFixture({ isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' });
+    if (drive === 'org' && (orgRole === 'OWNER' || orgRole === 'ADMIN')) return createAccessFixture({ isAdmin: true, isMember: true, role: 'ADMIN' });
+    if (drive === 'org' && orgRole === 'MEMBER') return createAccessFixture({ isMember: true, role: 'MEMBER' });
+    return createAccessFixture();
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    leadAuthority.reset();
+    vi.mocked(isAuthError).mockReturnValue(false);
+  });
+
+  it.each(LEAD_ACTION_CASES)('ORG-4 (partial) rename by $who: allowed=$allowed, audited=$audited', async ({ userId, orgRole, drive, allowed, audited }) => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(userId));
+    if (orgRole) leadAuthority.orgRoles.set(userId, orgRole);
+    vi.mocked(getDriveById).mockResolvedValue({ ...createRawDriveFixture({ id: 'drive_abc', name: 'Finance' }), ...LEAD_ACTION_DRIVES[drive] } as never);
+    vi.mocked(getDriveAccess).mockResolvedValue(accessFor(orgRole, drive, userId));
+    vi.mocked(updateDrive).mockResolvedValue(createRawDriveFixture({ id: 'drive_abc', name: 'Renamed' }) as never);
+
+    const response = await PATCH(new Request('https://example.com/api/drives/drive_abc', { method: 'PATCH', body: JSON.stringify({ name: 'Renamed' }) }), createContext('drive_abc'));
+
+    expect(response.status).toBe(allowed ? 200 : 403);
+    expect(leadAuthority.audited).toEqual(audited ? [expect.objectContaining({ userId, driveId: 'drive_abc', action: 'rename' })] : []);
+  });
+
+  it('a drive ADMIN through an invited row (no org power) renames without an org-power audit event', async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth('omar'));
+    vi.mocked(getDriveById).mockResolvedValue({ ...createRawDriveFixture({ id: 'drive_abc', name: 'Finance' }), ...LEAD_ACTION_DRIVES.org } as never);
+    vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isAdmin: true, isMember: true, role: 'ADMIN' }));
+    vi.mocked(updateDrive).mockResolvedValue(createRawDriveFixture({ id: 'drive_abc', name: 'Renamed' }) as never);
+
+    const response = await PATCH(new Request('https://example.com/api/drives/drive_abc', { method: 'PATCH', body: JSON.stringify({ name: 'Renamed' }) }), createContext('drive_abc'));
+
+    expect(response.status).toBe(200);
+    expect(leadAuthority.audited).toEqual([]);
+  });
+
+  it('a settings change that is not a rename writes no rename event', async () => {
+    leadAuthority.orgRoles.set('priya', 'ADMIN');
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth('priya'));
+    vi.mocked(getDriveById).mockResolvedValue({ ...createRawDriveFixture({ id: 'drive_abc', name: 'Finance' }), ...LEAD_ACTION_DRIVES.org } as never);
+    vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isAdmin: true, isMember: true, role: 'ADMIN' }));
+    vi.mocked(updateDrive).mockResolvedValue(createRawDriveFixture({ id: 'drive_abc', name: 'Finance' }) as never);
+
+    await PATCH(new Request('https://example.com/api/drives/drive_abc', { method: 'PATCH', body: JSON.stringify({ drivePrompt: 'Be brief.' }) }), createContext('drive_abc'));
+
+    expect(leadAuthority.audited).toEqual([]);
+  });
+
+  it.each(LEAD_ACTION_CASES)('ORG-4 (partial) trash by $who: allowed=$allowed, audited=$audited', async ({ userId, orgRole, drive, allowed, audited }) => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(userId));
+    if (orgRole) leadAuthority.orgRoles.set(userId, orgRole);
+    vi.mocked(getDriveById).mockResolvedValue({ ...createRawDriveFixture({ id: 'drive_abc', name: 'Finance' }), ...LEAD_ACTION_DRIVES[drive] } as never);
+    vi.mocked(getDriveAccess).mockResolvedValue(accessFor(orgRole, drive, userId));
+    vi.mocked(trashDrive).mockResolvedValue(null);
+
+    const response = await DELETE(new Request('https://example.com/api/drives/drive_abc', { method: 'DELETE' }), createContext('drive_abc'));
+
+    expect(response.status).toBe(allowed ? 200 : 403);
+    expect(vi.mocked(trashDrive).mock.calls.length > 0).toBe(allowed);
+    expect(leadAuthority.audited).toEqual(audited ? [expect.objectContaining({ userId, driveId: 'drive_abc', action: 'trash' })] : []);
   });
 });

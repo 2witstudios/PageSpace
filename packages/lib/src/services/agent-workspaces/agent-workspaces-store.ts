@@ -1,0 +1,830 @@
+/**
+ * Agent Sessions store (IO, dependency-injected).
+ *
+ * DB-backed CRUD for `agent_workspaces` — one row per SESSION: a drive-level
+ * workspace that owns one sandbox and hosts many conversations plus shells
+ * (see `contract.ts` invariant 1). Kept separate from the lifecycle orchestration
+ * (`agent-workspaces.ts`, `agent-workspace-sprite.ts`) so that orchestration is
+ * testable against an in-memory fake with NO database and NO live Sprite, the
+ * same discipline `services/machines/agent-terminals-store.ts` established.
+ *
+ * Two things are deliberately NOT in this module:
+ *
+ *  - **No policy.** Every write this store performs is described by a verdict
+ *    from `plan-workspace-lifecycle.ts` — including WHICH columns to stamp, which
+ *    arrive as an `SpriteHolderRowStamps` object rather than being re-derived
+ *    per call site. The store's only judgement is how to express "leave this
+ *    column alone" versus "clear it" in SQL (see `stampColumns`).
+ *  - **No membership writes.** A thread belongs to a workspace by virtue of a
+ *    row in `agent_workspace_nodes` bound to it, written by exactly one funnel
+ *    (`applyWorkspaceMembershipWrite`). This store READS that binding
+ *    (`findByConversation` — how a chat turn resolves its working context) but
+ *    never writes it: a store that could bind threads would be a second,
+ *    unguarded way to move a thread's filesystem, which the model forbids
+ *    (moving a thread is a fork).
+ */
+
+import type { SQL } from 'drizzle-orm';
+import { planSessionReopen, type SpriteHolderRowStamps } from '../../agent-workspaces/plan-workspace-lifecycle';
+import { withWorkspaceLock } from './workspace-lock';
+import { MAX_ACTIVE_WORKSPACES_PER_OWNER } from '../../agent-workspaces/session-contract';
+
+/** One `agent_workspaces` row. `id` is the session's OWN identity (see `contract.ts`). */
+export interface AgentSessionRecord {
+  /** The session's own id — the PK, the Sprite-key fold, the `?session=` URL value. */
+  id: string;
+  ownerId: string;
+  /** null = a global-assistant session (user-scoped, outside any drive). */
+  driveId: string | null;
+  /** Display label only — no uniqueness, never an address. */
+  name: string | null;
+
+  /**
+   * The persistent ENVIRONMENT this session runs inside, or null for the
+   * default ephemeral session. Carried here because `findById` selects the
+   * WHOLE row and casts it to this interface: a field missing from this mirror
+   * is not absent at runtime, it is present and invisible to the type system,
+   * which is the drift this file would otherwise hand to its callers.
+   *
+   * Written by `spawnAgentSession` (which first proves the env exists and
+   * belongs to this session's drive) and READ by `ensureAgentSessionSandbox`,
+   * which routes an env-bound session's provisioning at the ENV row instead of
+   * this one. An env-bound session holds NO Sprite pointer of its own (it
+   * borrows the env's), which the database enforces via
+   * `agent_workspaces_env_no_sprite_check` — so every Sprite column below stays
+   * null for the row's whole life.
+   */
+  envId: string | null;
+
+  spriteKey: string | null;
+  sandboxId: string | null;
+  spriteInstanceId: string | null;
+  egressPolicyToken: string | null;
+  teardownRequestedAt: Date | null;
+  spriteTornDownAt: Date | null;
+
+  storageLastBilledAt: Date;
+  storageMeasuredBytes: number | null;
+  storageMeasuredAt: Date | null;
+
+  lastActiveAt: Date | null;
+  endedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface NewAgentSessionInput {
+  ownerId: string;
+  /**
+   * Never null: a global-assistant session is created in its owner's Home
+   * drive (`spawnAgentSession` resolves it), so no write path can mint a
+   * null-drive row. Existing null rows are still READ as global sessions until
+   * the backfill lands.
+   */
+  driveId: string;
+  name: string | null;
+  /**
+   * The environment to run inside, or null for the ordinary ephemeral session
+   * that owns its own Sprite. NOT validated here — that the env exists and
+   * belongs to `driveId` is `spawnAgentSession`'s check, and the database's
+   * `agent_workspaces_env_needs_drive_check` is the backstop under it.
+   */
+  envId: string | null;
+  now: Date;
+}
+
+/**
+ * The ENV Sprite pointers a session's listing carries alongside its own row.
+ *
+ * An env-bound session has no Sprite columns of its own (CHECK-enforced), so
+ * "does this session have a live sandbox" is a fact about the ENV's row. The
+ * listing LEFT JOINs it rather than making the DTO layer issue a lookup per
+ * row, and `deriveSandboxStatus` reads it — see that function for the mapping.
+ */
+export interface DriveEnvSpritePointers {
+  sandboxId: string | null;
+  spriteTornDownAt: Date | null;
+}
+
+/**
+ * A listed session: its own row, plus its env's Sprite pointers when it is
+ * env-bound (`null` for an ordinary session, and for an env-bound row whose env
+ * vanished mid-query — the FK makes that a race, not a state).
+ */
+export interface AgentSessionListRow extends AgentSessionRecord {
+  env: DriveEnvSpritePointers | null;
+}
+
+/**
+ * A list query. At least one narrowing key is required BY TYPE rather than by a
+ * runtime guard: an unfiltered enumeration of every session in the deployment is
+ * not a query any caller has a use for, and making it unrepresentable is
+ * cheaper than remembering to reject it.
+ *
+ * THREE variants, not two-with-an-optional-field — `ownerId` being present vs.
+ * absent on the drive-scoped shape is a real behavioral fork in `list()` (the
+ * owned shape additionally unions in the caller's own global sessions; the
+ * ownerless one is a plain drive-wide listing), so it earns its own variant
+ * rather than an optional property a caller could accidentally pass as
+ * `undefined` and silently land in either behavior (review: Codex P1 on
+ * #2325, where that exact ambiguity — a runtime presence-check standing in
+ * for a type-level distinction — let an ownerless drive listing return every
+ * user's global sessions).
+ */
+export type AgentSessionListFilter =
+  | { driveId: string; ownerId: string }
+  | { driveId: string }
+  | { ownerId: string };
+
+export interface AgentSessionStore {
+  findById(workspaceId: string): Promise<AgentSessionRecord | null>;
+  /**
+   * Resolve a conversation's session — how a chat turn finds its working
+   * context. Reads the node bound to the conversation and returns its
+   * workspace row, or null when the thread is a member of none (a plain chat,
+   * or one whose workspace was deleted — the node's `rootId` FK cascades).
+   * THE lookup the tool layer folds its Sprite key from:
+   * every conversation in one session resolves the same row, which is what
+   * makes sandbox sharing structural rather than wired.
+   */
+  findByConversation(conversationId: string): Promise<AgentSessionRecord | null>;
+  /**
+   * Create a session row. NOT idempotent and NOT keyed on anything external:
+   * a session's id is minted here (schema default), because spawning a session
+   * is an explicit act — the old ensure-by-conversation semantics died with
+   * the conflation (two first-touches of one conversation used to race to
+   * create "its" session; now a conversation is BORN into a session or has
+   * none).
+   */
+  create(input: NewAgentSessionInput): Promise<AgentSessionRecord>;
+  /**
+   * Mint a session row IFF this owner is under `maxActive` NOT-ENDED sessions
+   * — the spawn ceiling made STRUCTURAL rather than a pre-check (review
+   * #2261/2). A count-then-insert pre-check at the call site is TOCTOU-racy:
+   * N concurrent spawns can all read under the ceiling and all insert. This
+   * serializes the count-and-insert under a per-owner Postgres advisory lock
+   * (the same primitive `credit-gate.ts`'s billing-off ceiling uses), so two
+   * concurrent callers for the SAME owner cannot both win, while spawns for
+   * DIFFERENT owners never contend.
+   */
+  createIfUnderLimit(
+    input: NewAgentSessionInput & { maxActive: number },
+  ): Promise<{ ok: true; session: AgentSessionRecord } | { ok: false; reason: 'limit_reached' }>;
+  /**
+   * Relabel a session. `null` = no such row.
+   *
+   * NOT a lifecycle transition, and the only write in this store that carries
+   * no CAS and consults no planner. A name is a label with no addressing role
+   * (session-contract invariant 2): nothing looks a session up by it, so a
+   * rename cannot race a provision, cannot invalidate a teardown plan, and
+   * cannot break a connection. It is also deliberately UNGUARDED by
+   * `endedAt` — an ended row is retained as readable history, and relabelling
+   * history is exactly as useful as labelling it in the first place.
+   *
+   * No uniqueness arm, unlike `DriveEnvStore.rename`: session names carry no
+   * constraint at any level, so there is no conflict to report.
+   */
+  rename(input: { workspaceId: string; name: string; now: Date }): Promise<AgentSessionRecord | null>;
+  /**
+   * ACTIVE sessions only (`endedAt IS NULL`), newest activity first
+   * (`lastActiveAt DESC NULLS LAST, createdAt DESC`), capped at
+   * {@link MAX_ACTIVE_WORKSPACES_PER_OWNER} — the SAME constant the spawn
+   * ceiling enforces, so the cap never actually truncates an owner's real
+   * set. Ended rows are retained for lifecycle/billing but are not listings:
+   * the sidebar polls this every few seconds, and an unbounded, unordered
+   * enumeration that never forgets grew without limit and reshuffled between
+   * polls (review M3/M4).
+   */
+  list(filter: AgentSessionListFilter): Promise<AgentSessionListRow[]>;
+  /**
+   * Count this owner's ACTIVE (not-ended) sessions — the spawn ceiling's
+   * input. Distinct from `countLive`, which counts live SANDBOXES for the
+   * concurrency quota: a spawned-but-never-provisioned session is active
+   * without being live, and unbounded row minting is what this bounds
+   * (review M6/F4).
+   */
+  countActive(ownerId: string): Promise<number>;
+  /**
+   * Count this owner's LIVE sessions — `sandboxId IS NOT NULL AND
+   * spriteTornDownAt IS NULL` — for the agent-session concurrency quota
+   * (Phase 7, `quota.ts`'s `checkAgentSessionConcurrency`). Deliberately a
+   * COUNT, not `list(...).length`: a quota check on a hot path should not pull
+   * every column of every live row just to learn how many there are.
+   */
+  countLive(ownerId: string): Promise<number>;
+  /**
+   * Persist an opportunistic storage measurement (see
+   * `services/sandbox/sandbox-storage-measure.ts`). Not a lifecycle transition —
+   * a pure billing observation that must never disturb identity or teardown
+   * stamps — but it IS generation-scoped, so it carries a CAS of its own.
+   *
+   * The CAS is on `spriteInstanceId`, the id of the VM actually measured, and it
+   * has to be: `sandboxId` is the HMAC-derived NAME, identical across every
+   * generation of one session, so it cannot tell A from B. `SandboxHandle` says
+   * this outright — "anything that must act on THIS VM (a kill, a CAS against a
+   * tracking row) keys on this".
+   *
+   * A liveness guard alone (`spriteTornDownAt IS NULL`) does NOT cover it. The
+   * measurement is fire-and-forget, so a `du` against generation A can still be
+   * in flight when A is torn down and B provisioned — and B's own stamps clear
+   * `spriteTornDownAt` AND null the measurement columns
+   * (`plan-workspace-lifecycle.ts`), so the late write finds a live row, lands A's
+   * bytes on B, and stamps a fresh `storageMeasuredAt` that suppresses B's real
+   * measurement for the whole throttle window. The reconcile then bills B's
+   * interval against A's disk. The teardown-only guard is the one case where the
+   * row is never revived.
+   *
+   * A stale write is DROPPED, not retried: the next wake re-measures, and a
+   * billing observation is worth less than a wrong one.
+   */
+  recordStorageMeasurement(input: {
+    workspaceId: string;
+    /**
+     * The instance actually measured. Null when the driver reports none — then
+     * the row's own null matches and the CAS degrades to the liveness guard,
+     * which is the most any caller can know without a generation id.
+     */
+    spriteInstanceId: string | null;
+    measuredBytes: number;
+    measuredAt: Date;
+  }): Promise<void>;
+  /**
+   * Record a freshly-provisioned (or adopted) Sprite identity onto the row under
+   * a compare-and-swap on the CURRENT `sandboxId`, together with the verdict's
+   * stamps — ONE atomic write, so a row can never be seen carrying a new
+   * identity with the previous generation's teardown stamps still on it.
+   *
+   * `previousSandboxId` is `null` for a first provision, the vanished/replaced
+   * Sprite's name otherwise. Two concurrent provisions of the same unprovisioned
+   * session race here; the loser sees `false` and reconciles rather than
+   * orphaning its own live VM.
+   */
+  updateSpriteIdentity(input: {
+    workspaceId: string;
+    previousSandboxId: string | null;
+    spriteKey: string;
+    sandboxId: string;
+    spriteInstanceId: string | null;
+    egressPolicyToken: string | null;
+    stamps: SpriteHolderRowStamps;
+    now: Date;
+  }): Promise<boolean>;
+  /**
+   * Write a verdict's stamps — CAS-guarded whenever the verdict was planned
+   * from a read that a concurrent identity or lifecycle write could have
+   * since invalidated (review #2261/1). Two shapes of guard, matching the two
+   * ways a stale plan can corrupt the row:
+   *
+   *  - `cas.sandboxId` — for a plan computed from a `sandboxId` that could
+   *    have been claimed by a concurrent provision in between (the `end`
+   *    intent's never-provisioned noop): refuses if the row's CURRENT
+   *    `sandboxId` no longer matches, rather than stamping `endedAt` onto a
+   *    session a concurrent `ensure` just revived.
+   *  - `cas.endedAt` — for an "activity refresh" computed under the
+   *    assumption the row was NOT ended (the `resume`/`attach` arm's
+   *    `endedAt: null, teardownRequestedAt: null` stamps): refuses if the
+   *    row's CURRENT `endedAt` no longer matches, rather than silently
+   *    erasing a concurrent `end`'s teardown intent.
+   *
+   * Absent entirely for verdicts with nothing to race (an already-ended
+   * noop's empty stamps). Returns whether the write landed — `true` when no
+   * `cas` was given (nothing to have raced) or the CAS matched, `false` when
+   * a `cas` was given and refused.
+   */
+  applyStamps(input: {
+    workspaceId: string;
+    stamps: SpriteHolderRowStamps;
+    cas?: { sandboxId?: string | null; endedAt?: Date | null };
+  }): Promise<boolean>;
+  /**
+   * Withdraw an end-intent, but ONLY while the workspace still holds a tree —
+   * as ONE statement, which is the whole reason this is not `applyStamps` with
+   * a condition the caller checks first.
+   *
+   * The caller (`reopenEndedSessionListing`) runs after its own membership write
+   * has committed and released the workspace lock, because a reopen failure must
+   * never surface as a creation failure for a conversation that is already a
+   * member (review finding, PR #2336). That means a concurrent `endSession` can
+   * destroy the tree at any point — INCLUDING between a read of the node count
+   * and the stamp that follows it. Checking emptiness in the caller therefore
+   * decides on a snapshot the update can no longer vouch for, and the interleave
+   * read-nodes → destroy → stamp produces exactly the state the check exists to
+   * prevent: a LIVE workspace, in the sidebar, holding ZERO nodes.
+   *
+   * So the emptiness test is a `WHERE EXISTS` on the same UPDATE as the CAS,
+   * and the whole statement runs under the workspace's advisory lock. One
+   * statement alone is not sufficient: `EXISTS` takes no lock and reads this
+   * statement's snapshot, so an UNCOMMITTED destroy still looks like a
+   * populated tree. The lock is what makes the answer current, because the
+   * destroy holds it until it commits.
+   *
+   * Answers whether the withdrawal landed; `false` means the tree went, or a
+   * concurrent re-end moved `endedAt`, and both are states the caller must
+   * leave alone.
+   */
+  reopenListingIfPopulated(input: { workspaceId: string; endedAt: Date }): Promise<boolean>;
+  /**
+   * Record the durable teardown INTENT, BEFORE the kill. The one stamp written
+   * ahead of its IO: its entire job is to survive a crash between "we decided to
+   * kill" and "the kill was confirmed", so that the orphan reconciler can finish
+   * what this process started.
+   *
+   * CAS-guarded on the pointer the caller is about to kill, and that guard is
+   * load-bearing IN THE OTHER DIRECTION from the rest: if a concurrent ensure has
+   * already revived this session onto a NEW VM, an unguarded stamp would leave a
+   * LIVE session carrying a teardown request — and a teardown request is exactly
+   * what licenses the orphan reconciler to destroy a Sprite.
+   */
+  requestTeardown(input: {
+    workspaceId: string;
+    sandboxId: string;
+    spriteInstanceId: string | null;
+    at: Date;
+  }): Promise<void>;
+  /**
+   * Stamp the row after its Sprite is CONFIRMED killed, under a CAS on the
+   * INSTANCE. Keeps the row — a killed session is re-provisionable under the
+   * same key — and the CAS is what stops a concurrent re-provision's LIVE
+   * replacement from being marked dead (which would hide a billing VM from the
+   * reconciler forever). Reports whether it stamped.
+   */
+  stampSpriteTornDown(input: {
+    workspaceId: string;
+    sandboxId: string;
+    spriteInstanceId: string | null;
+    stamps: SpriteHolderRowStamps;
+  }): Promise<boolean>;
+  /**
+   * Re-read just the Sprite pointer AND INSTANCE, to reconcile a lost
+   * provisioning race against the winner BEFORE killing. `spriteInstanceId` is
+   * load-bearing: a genuine winner recorded OUR generation, whereas a
+   * vanished-heal that failed leaves the OLD stale instance behind.
+   */
+  reloadSpritePointer(workspaceId: string): Promise<{ sandboxId: string | null; spriteInstanceId: string | null } | null>;
+  /**
+   * Enqueue a Sprite pointer into the reclaim outbox (`machine_sprite_reclaims`,
+   * kept under its physical name) — for a Sprite that was PROVISIONED but never
+   * recorded on any row, so neither the AFTER-DELETE trigger nor a row-based
+   * cross-check could ever find it. Idempotent, mirroring the trigger's insert.
+   */
+  enqueueReclaim(input: { sandboxId: string; spriteInstanceId: string | null }): Promise<void>;
+}
+
+/**
+ * Translate a lifecycle verdict's stamps into columns to write (pure).
+ *
+ * The encoding this preserves: an ABSENT key means "leave this column alone",
+ * an explicit `null` means "clear it". Spreading the stamps object directly
+ * would collapse that distinction the moment a caller built one with an
+ * explicit `undefined`, so each key is copied only when present.
+ */
+export function stampColumns(stamps: SpriteHolderRowStamps): Partial<{
+  lastActiveAt: Date;
+  endedAt: Date | null;
+  teardownRequestedAt: Date | null;
+  spriteTornDownAt: Date | null;
+  storageMeasuredBytes: null;
+  storageMeasuredAt: null;
+}> {
+  const columns: Record<string, unknown> = {};
+  if (stamps.lastActiveAt !== undefined) columns.lastActiveAt = stamps.lastActiveAt;
+  if (stamps.endedAt !== undefined) columns.endedAt = stamps.endedAt;
+  if (stamps.teardownRequestedAt !== undefined) columns.teardownRequestedAt = stamps.teardownRequestedAt;
+  if (stamps.spriteTornDownAt !== undefined) columns.spriteTornDownAt = stamps.spriteTornDownAt;
+  if (stamps.storageMeasuredBytes !== undefined) columns.storageMeasuredBytes = stamps.storageMeasuredBytes;
+  if (stamps.storageMeasuredAt !== undefined) columns.storageMeasuredAt = stamps.storageMeasuredAt;
+  return columns;
+}
+
+/**
+ * What recording a live (re-)provisioned Sprite writes onto an `agent_workspaces`
+ * row (pure) — the session-tier twin of `revivedAgentTerminalColumns`.
+ *
+ * The identity, plus the verdict's stamps, plus a RESET storage watermark. The
+ * watermark reset is not in the stamps because it is not a lifecycle fact: a new
+ * Sprite generation is a fresh, empty filesystem, so billing the elapsed window
+ * against the dead generation's measured size would charge for a disk that no
+ * longer exists. (The planner clears the MEASUREMENT for the same reason; only
+ * the non-nullable watermark has to be advanced rather than cleared.)
+ */
+export function revivedAgentSessionColumns(input: {
+  spriteKey: string;
+  sandboxId: string;
+  spriteInstanceId: string | null;
+  egressPolicyToken: string | null;
+  stamps: SpriteHolderRowStamps;
+  now: Date;
+  /**
+   * The watermark to write — an `SQL` EXPRESSION, never a bare `Date`, and the
+   * type is the enforcement.
+   *
+   * The monotonic guarantee lives in the caller's `GREATEST(...)` because only
+   * the store has the table and `sql` in scope (this helper stays pure and free
+   * of the DB graph). That split is safe only if a caller cannot accidentally
+   * pass `now` and silently reopen the double-bill the guard closes — so the
+   * parameter refuses one. A future third caller gets a type error, not a
+   * production regression with no red test.
+   */
+  storageLastBilledAt: SQL;
+}) {
+  return {
+    spriteKey: input.spriteKey,
+    sandboxId: input.sandboxId,
+    spriteInstanceId: input.spriteInstanceId,
+    egressPolicyToken: input.egressPolicyToken,
+    // MONOTONIC, and supplied by the caller as an SQL expression rather than
+    // derived from `now` here.
+    // `input.now` is captured in `ensureSpriteHolderSandbox` BEFORE the provider
+    // IO, so by the time this write lands it can be tens of seconds stale — and a
+    // reconcile tick that charged through a LATER instant may already have
+    // advanced this column. Assigning `now` would drag the watermark backwards
+    // past what was just billed, and the next tick would re-bill the difference.
+    // The store passes a `GREATEST(...)` expression so the reset keeps its purpose
+    // (a new generation must not inherit the old one's window) without ever
+    // moving the watermark down. The parameter's type refuses a bare `Date`, so
+    // this cannot be reopened by a caller that forgets.
+    storageLastBilledAt: input.storageLastBilledAt,
+    updatedAt: input.now,
+    ...stampColumns(input.stamps),
+  };
+}
+
+/**
+ * Production DB-backed implementation. Lazily resolves the db client, schema
+ * tables and operators so callers that inject a fake (in tests) never load the
+ * DB module graph.
+ *
+ * `now` defaults to the wall clock — every OTHER write in this store takes its
+ * timestamp from a caller-supplied `now`, via the lifecycle planner; these two
+ * calls are the store's own bookkeeping touch (an `updatedAt` bump alongside a
+ * verdict that names no `lastActiveAt` of its own), which is why they were the
+ * one place still reaching for `new Date()` directly. Injectable so a test can
+ * pin it rather than asserting "some recent timestamp".
+ */
+export async function createDbAgentSessionStore(now: () => Date = () => new Date()): Promise<AgentSessionStore> {
+  const [
+    { db },
+    { eq, and, or, eqOrIsNull, isNotNull, isNull, sql, count, desc },
+    { agentWorkspaces },
+    { driveEnvs },
+    { machineSpriteReclaims },
+    // The membership table. `conversations` is no longer imported here at all:
+    // this store never read anything from it but the thread→workspace binding,
+    // and that binding is a node now.
+    { agentWorkspaceNodes },
+  ] = await Promise.all([
+    import('@pagespace/db/db'),
+    import('@pagespace/db/operators'),
+    import('@pagespace/db/schema/agent-workspaces'),
+    import('@pagespace/db/schema/drive-envs'),
+    import('@pagespace/db/schema/machine-sprite-reclaims'),
+    import('@pagespace/db/schema/agent-workspace-nodes'),
+  ]);
+
+  return {
+    async findById(workspaceId) {
+      const [row] = await db
+        .select()
+        .from(agentWorkspaces)
+        .where(eq(agentWorkspaces.id, workspaceId))
+        .limit(1);
+      return (row as AgentSessionRecord) ?? null;
+    },
+
+    async findByConversation(conversationId) {
+      // THE NODE is the binding. `agent_workspace_nodes_chat_target_idx` is
+      // UNIQUE on `targetId` where `targetKind = 'chat'` — globally — so this
+      // is a single-row lookup on a unique index and "a thread has one
+      // workspace" is the database's rule rather than a column two writers
+      // could disagree about.
+      //
+      // A thread with no node (a plain chat, or one whose workspace was
+      // deleted — the `rootId` FK cascades) resolves to null, never to some
+      // fallback session: the tool layer's no-session denial depends on that
+      // honesty, exactly as it did when the binding was a column.
+      const [row] = await db
+        .select({ session: agentWorkspaces })
+        .from(agentWorkspaceNodes)
+        .innerJoin(agentWorkspaces, eq(agentWorkspaces.id, agentWorkspaceNodes.rootId))
+        .where(
+          and(
+            eq(agentWorkspaceNodes.targetKind, 'chat'),
+            eq(agentWorkspaceNodes.targetId, conversationId),
+          ),
+        )
+        .limit(1);
+      return (row?.session as AgentSessionRecord) ?? null;
+    },
+
+    async create(input) {
+      const [row] = await db
+        .insert(agentWorkspaces)
+        .values({
+          ownerId: input.ownerId,
+          driveId: input.driveId,
+          name: input.name,
+          envId: input.envId,
+          createdAt: input.now,
+          updatedAt: input.now,
+        })
+        .returning();
+      return row as AgentSessionRecord;
+    },
+
+    async createIfUnderLimit({ ownerId, driveId, name, envId, now, maxActive }) {
+      return db.transaction(async (tx) => {
+        // Per-owner advisory lock, held for this transaction only — same
+        // primitive `credit-gate.ts`'s billing-off daily ceiling uses.
+        // Serializes concurrent spawns for THIS owner (so the count read
+        // below cannot go stale before the insert) without contending with
+        // any other owner's spawn at all.
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${'agent-session-spawn:' + ownerId}))`);
+        const [{ n }] = await tx
+          .select({ n: count() })
+          .from(agentWorkspaces)
+          .where(and(eq(agentWorkspaces.ownerId, ownerId), isNull(agentWorkspaces.endedAt)));
+        if (n >= maxActive) return { ok: false as const, reason: 'limit_reached' as const };
+        const [row] = await tx
+          .insert(agentWorkspaces)
+          .values({ ownerId, driveId, name, envId, createdAt: now, updatedAt: now })
+          .returning();
+        return { ok: true as const, session: row as AgentSessionRecord };
+      });
+    },
+
+    async rename({ workspaceId, name, now: at }) {
+      // No CAS and no `endedAt` guard — see the interface doc. The name has
+      // already been trimmed and bounded by `sessionNameSchema` at the request
+      // boundary; the store holds no policy of its own.
+      const [row] = await db
+        .update(agentWorkspaces)
+        .set({ name, updatedAt: at })
+        .where(eq(agentWorkspaces.id, workspaceId))
+        .returning();
+      return (row as AgentSessionRecord) ?? null;
+    },
+
+    async list(filter) {
+      const conditions = [];
+      // Normalized to a VALUE check, not just `'ownerId' in filter`: the `in`
+      // operator is true for `{ driveId, ownerId: undefined }` too (the key is
+      // present, just unset), which would otherwise both push a
+      // never-matching `ownerId = NULL` condition AND wrongly take the
+      // owner-scoped union branch below for what is, in effect, an ownerless
+      // filter (review: CodeRabbit, github.com/2witstudios/PageSpace/pull/2325).
+      const ownerId = 'ownerId' in filter ? filter.ownerId : undefined;
+      if (ownerId !== undefined) conditions.push(eq(agentWorkspaces.ownerId, ownerId));
+      if ('driveId' in filter) {
+        conditions.push(
+          ownerId !== undefined
+            ? // A drive-scoped listing ALSO named to an owner (the sidebar's
+              // shape, `{ driveId, ownerId }`) additionally includes that
+              // owner's own global-assistant sessions (driveId IS NULL) —
+              // those aren't drive data, they're the user's, and every drive
+              // shows them the same way the dashboard sidebar does (see
+              // session-groups.ts's ASSISTANT_GROUP_KEY). The ownerId
+              // condition above ANDs this whole clause down to that one caller.
+              or(eq(agentWorkspaces.driveId, filter.driveId), isNull(agentWorkspaces.driveId))!
+            : // An OWNERLESS `{ driveId }` listing — the admin "every session
+              // in this drive, any owner" shape `agent-sessions.test.ts`'s
+              // `listAgentSessions` "given a drive filter" case exercises —
+              // must NOT gain the OR above: with no owner to scope it,
+              // `driveId IS NULL` would return every user's global sessions
+              // across the whole deployment (review: Codex P1,
+              // github.com/2witstudios/PageSpace/pull/2325).
+              eq(agentWorkspaces.driveId, filter.driveId),
+        );
+      }
+      if (conditions.length === 0) {
+        // Unreachable through `AgentSessionListFilter`, which requires a
+        // narrowing key. Defensive only: an unfiltered enumeration would be a
+        // cross-tenant read, so it fails loudly rather than returning it.
+        throw new Error('listAgentSessions requires at least one filter');
+      }
+      conditions.push(isNull(agentWorkspaces.endedAt));
+      // LEFT JOIN, not a second query and not a per-row lookup: an env-bound
+      // session's own Sprite columns are CHECK-forbidden to be anything but
+      // null, so "does this session have a live sandbox" is a fact about the
+      // ENV's row. LEFT rather than INNER so an ordinary session (no `envId`)
+      // is still listed — an inner join would silently drop every session that
+      // is not in an environment, which is nearly all of them.
+      const rows = await db
+        .select({
+          session: agentWorkspaces,
+          envSandboxId: driveEnvs.sandboxId,
+          envSpriteTornDownAt: driveEnvs.spriteTornDownAt,
+        })
+        .from(agentWorkspaces)
+        .leftJoin(driveEnvs, eq(driveEnvs.id, agentWorkspaces.envId))
+        .where(and(...conditions))
+        .orderBy(sql`${agentWorkspaces.lastActiveAt} DESC NULLS LAST`, desc(agentWorkspaces.createdAt))
+        .limit(MAX_ACTIVE_WORKSPACES_PER_OWNER);
+      return rows.map((row) => ({
+        ...(row.session as AgentSessionRecord),
+        // Keyed on the SESSION's `envId`, not on the joined columns being
+        // non-null: an env that has never been provisioned has null pointers
+        // too, and reading that as "not env-bound" would send the DTO layer
+        // back to the session's own (permanently null) columns.
+        env:
+          row.session.envId === null
+            ? null
+            : { sandboxId: row.envSandboxId, spriteTornDownAt: row.envSpriteTornDownAt },
+      }));
+    },
+
+    async countActive(ownerId) {
+      const [row] = await db
+        .select({ n: count() })
+        .from(agentWorkspaces)
+        .where(and(eq(agentWorkspaces.ownerId, ownerId), isNull(agentWorkspaces.endedAt)));
+      return row?.n ?? 0;
+    },
+
+    async countLive(ownerId) {
+      const [row] = await db
+        .select({ n: count() })
+        .from(agentWorkspaces)
+        .where(
+          and(
+            eq(agentWorkspaces.ownerId, ownerId),
+            isNotNull(agentWorkspaces.sandboxId),
+            isNull(agentWorkspaces.spriteTornDownAt),
+          ),
+        );
+      return row?.n ?? 0;
+    },
+
+    async recordStorageMeasurement({ workspaceId, spriteInstanceId, measuredBytes, measuredAt }) {
+      await db
+        .update(agentWorkspaces)
+        .set({ storageMeasuredBytes: measuredBytes, storageMeasuredAt: measuredAt })
+        .where(
+          and(
+            eq(agentWorkspaces.id, workspaceId),
+            isNull(agentWorkspaces.spriteTornDownAt),
+            // CAS on the generation measured. `eqOrIsNull` so a driver that
+            // reports no instance id still matches its own null row rather than
+            // never persisting — plain `eq` never matches null in SQL.
+            eqOrIsNull(agentWorkspaces.spriteInstanceId, spriteInstanceId),
+          ),
+        );
+    },
+
+    async updateSpriteIdentity({
+      workspaceId,
+      previousSandboxId,
+      spriteKey,
+      sandboxId,
+      spriteInstanceId,
+      egressPolicyToken,
+      stamps,
+      now,
+    }) {
+      const updated = await db
+        .update(agentWorkspaces)
+        .set(
+          revivedAgentSessionColumns({
+            spriteKey,
+            sandboxId,
+            spriteInstanceId,
+            egressPolicyToken,
+            stamps,
+            now,
+            // The monotonic reset, built HERE because this is where the table and
+            // `sql` are in scope — the helper stays pure and free of the DB graph.
+            storageLastBilledAt: sql`GREATEST(${agentWorkspaces.storageLastBilledAt}, ${sql.param(now, agentWorkspaces.storageLastBilledAt)})`,
+          }),
+        )
+        .where(
+          and(
+            eq(agentWorkspaces.id, workspaceId),
+            // CAS on the CURRENT sandboxId: null for a first provision, the
+            // vanished/replaced name for a re-provision. `eqOrIsNull` matches
+            // the null case, which plain `eq` never does in SQL.
+            eqOrIsNull(agentWorkspaces.sandboxId, previousSandboxId),
+          ),
+        )
+        .returning({ id: agentWorkspaces.id });
+      return updated.length > 0;
+    },
+
+    async applyStamps({ workspaceId, stamps, cas }) {
+      const columns = stampColumns(stamps);
+      // Nothing to write is a legitimate verdict (a noop that stamps nothing);
+      // an empty `set` is a SQL error, so it is skipped rather than special-cased
+      // by every caller.
+      if (Object.keys(columns).length === 0) return true;
+      const conditions = [eq(agentWorkspaces.id, workspaceId)];
+      if (cas?.sandboxId !== undefined) conditions.push(eqOrIsNull(agentWorkspaces.sandboxId, cas.sandboxId));
+      if (cas?.endedAt !== undefined) conditions.push(eqOrIsNull(agentWorkspaces.endedAt, cas.endedAt));
+      const updated = await db
+        .update(agentWorkspaces)
+        .set({ ...columns, updatedAt: now() })
+        .where(and(...conditions))
+        .returning({ id: agentWorkspaces.id });
+      // No guard requested: the caller accepted whatever the row currently is
+      // (there was nothing this write could have raced), so a miss (e.g. the
+      // row was deleted) is not a refusal — matches the prior unconditional
+      // behavior.
+      if (!cas) return true;
+      return updated.length > 0;
+    },
+
+    async reopenListingIfPopulated({ workspaceId, endedAt }) {
+      // ONE statement, and see the interface doc for why that is the whole
+      // point: both conditions are evaluated against the row version this
+      // UPDATE locks, so a destroy cannot slip between the emptiness test and
+      // the stamp. Splitting it into a read plus `applyStamps` reintroduces
+      // exactly the interleave this exists to close.
+      //
+      // UNDER THE WORKSPACE LOCK, and one statement inside it. Both halves are
+      // needed and neither substitutes for the other:
+      //
+      //  * ONE STATEMENT, so the emptiness test and the stamp cannot be split
+      //    by anything at all.
+      //  * THE LOCK, because a lone `EXISTS` is not enough. It takes no lock on
+      //    `agent_workspace_nodes` and is evaluated against this statement's
+      //    snapshot, so a destroy that has deleted every node and NOT YET
+      //    COMMITTED is invisible to it — the rows still look present, the
+      //    UPDATE proceeds, the destroy commits, and the workspace is left LIVE
+      //    with ZERO nodes, which is the exact state this method exists to make
+      //    unreachable. `destroyWorkspaceTree` runs under
+      //    `pg_advisory_xact_lock`, released only at its commit, so acquiring
+      //    the same lock means the destroy has finished and its deletions are
+      //    visible to the snapshot taken after.
+      //
+      // WHICH columns are withdrawn stays the planner's decision
+      // (`planSessionReopen` — `endedAt` only, the confirmed-kill stamp
+      // survives, and its doc carries the reason). Only the CONDITION is new.
+      return withWorkspaceLock(workspaceId, async (tx) => {
+        const updated = await tx
+          .update(agentWorkspaces)
+          .set({ ...stampColumns(planSessionReopen()), updatedAt: now() })
+          .where(
+            and(
+              eq(agentWorkspaces.id, workspaceId),
+              eq(agentWorkspaces.endedAt, endedAt),
+              sql`EXISTS (SELECT 1 FROM ${agentWorkspaceNodes} WHERE ${agentWorkspaceNodes.rootId} = ${workspaceId})`,
+            ),
+          )
+          .returning({ id: agentWorkspaces.id });
+        return updated.length > 0;
+      });
+    },
+
+    async requestTeardown({ workspaceId, sandboxId, spriteInstanceId, at }) {
+      await db
+        .update(agentWorkspaces)
+        .set({ teardownRequestedAt: at, updatedAt: at })
+        .where(
+          and(
+            eq(agentWorkspaces.id, workspaceId),
+            eq(agentWorkspaces.sandboxId, sandboxId),
+            eqOrIsNull(agentWorkspaces.spriteInstanceId, spriteInstanceId),
+          ),
+        );
+    },
+
+    async stampSpriteTornDown({ workspaceId, sandboxId, spriteInstanceId, stamps }) {
+      const updated = await db
+        .update(agentWorkspaces)
+        .set({ ...stampColumns(stamps), updatedAt: now() })
+        // CAS on the INSTANCE, not just the name: a concurrent re-provision may
+        // have written a LIVE replacement into this row, and stamping that as
+        // torn down would hide a billing VM from the reconciler forever.
+        .where(
+          and(
+            eq(agentWorkspaces.id, workspaceId),
+            eq(agentWorkspaces.sandboxId, sandboxId),
+            eqOrIsNull(agentWorkspaces.spriteInstanceId, spriteInstanceId),
+          ),
+        )
+        .returning({ id: agentWorkspaces.id });
+      return updated.length > 0;
+    },
+
+    async reloadSpritePointer(workspaceId) {
+      const [row] = await db
+        .select({ sandboxId: agentWorkspaces.sandboxId, spriteInstanceId: agentWorkspaces.spriteInstanceId })
+        .from(agentWorkspaces)
+        .where(eq(agentWorkspaces.id, workspaceId))
+        .limit(1);
+      return row ?? null;
+    },
+
+    async enqueueReclaim({ sandboxId, spriteInstanceId }) {
+      // Mirrors the AFTER-DELETE trigger's own insert: idempotent on the
+      // sandboxId PK, chasing the NEWEST instance on conflict — a newer
+      // generation took this deterministic name, so the outbox pointer must
+      // follow the VM that is actually alive now, not the one a stale row
+      // remembers.
+      await db
+        .insert(machineSpriteReclaims)
+        .values({ sandboxId, spriteInstanceId })
+        .onConflictDoUpdate({
+          target: machineSpriteReclaims.sandboxId,
+          set: { spriteInstanceId: sql`coalesce(excluded."spriteInstanceId", ${machineSpriteReclaims.spriteInstanceId})` },
+        });
+    },
+  };
+}

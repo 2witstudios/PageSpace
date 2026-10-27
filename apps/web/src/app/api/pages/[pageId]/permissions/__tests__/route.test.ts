@@ -15,13 +15,16 @@ import type {
   GetPermissionsResult,
   PermissionEntry,
 } from '@/services/api';
-import type { GrantResult, RevokeResult } from '@pagespace/lib/server';
+import type { GrantResult, RevokeResult } from '@pagespace/lib/permissions/permission-mutations';
 
 // Mock service boundary for GET (still uses permissionManagementService)
 vi.mock('@/services/api', () => ({
   permissionManagementService: {
     canUserViewPermissions: vi.fn(),
     getPagePermissions: vi.fn(),
+  },
+  rolePermissionService: {
+    getPageRoleGrants: vi.fn().mockResolvedValue([]),
   },
 }));
 
@@ -33,13 +36,17 @@ vi.mock('@/lib/auth', () => ({
   isEnforcedAuthError: vi.fn((result) => 'error' in result),
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  createPermissionNotification: vi.fn(),
+vi.mock('@pagespace/lib/notifications/notifications', () => ({
+    createPermissionNotification: vi.fn(),
 }));
 
 // Mock zero-trust functions
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: vi.fn(),
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -47,11 +54,15 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  grantPagePermission: vi.fn(),
-  revokePagePermission: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/permissions/permission-mutations', () => ({
+    grantPagePermission: vi.fn(),
+    revokePagePermission: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       pages: {
@@ -59,20 +70,28 @@ vi.mock('@pagespace/db', () => ({
       },
     },
   },
-  pages: { id: 'id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
 }));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id' },
+}));
 
-// Mock websocket utilities for real-time permission revocation
+// Mock websocket utilities for broadcast. Revocation kicking is now
+// centralized inside revokePagePermission itself (#2158,
+// @pagespace/lib/permissions/revocation-kick) — the route no longer calls a
+// kick function directly, so revokePagePermission's own mock below is what
+// this route's kick behavior delegates to.
 vi.mock('@/lib/websocket', () => ({
-  kickUserFromPage: vi.fn().mockResolvedValue({ success: true, kickedCount: 0, rooms: [] }),
-  kickUserFromPageActivity: vi.fn().mockResolvedValue({ success: true, kickedCount: 0, rooms: [] }),
+  broadcastPageEvent: vi.fn().mockResolvedValue(undefined),
+  createPageEventPayload: vi.fn((driveId, pageId, operation) => ({ driveId, pageId, operation })),
 }));
 
 import { permissionManagementService } from '@/services/api';
 import { authenticateRequestWithOptions, authenticateWithEnforcedContext } from '@/lib/auth';
-import { createPermissionNotification } from '@pagespace/lib';
-import { grantPagePermission, revokePagePermission } from '@pagespace/lib/server';
+import { createPermissionNotification } from '@pagespace/lib/notifications/notifications';
+import { grantPagePermission, revokePagePermission } from '@pagespace/lib/permissions/permission-mutations';
 
 // Test helpers
 const mockUserId = 'cluser123456789012345';
@@ -197,8 +216,9 @@ describe('GET /api/pages/[pageId]/permissions', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.owner).toBeDefined();
       expect(body.owner.id).toBe('owner_123');
+      expect(body.owner.name).toBe('Owner');
+      expect(body.owner.email).toBe('owner@example.com');
       expect(body.permissions).toHaveLength(1);
     });
 
@@ -219,7 +239,7 @@ describe('GET /api/pages/[pageId]/permissions', () => {
 
   describe('error handling', () => {
     it('returns 500 when service throws', async () => {
-      vi.mocked(permissionManagementService.canUserViewPermissions).mockRejectedValue(new Error('Service error'));
+      vi.mocked(permissionManagementService.canUserViewPermissions).mockRejectedValueOnce(new Error('Service error'));
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -395,7 +415,7 @@ describe('POST /api/pages/[pageId]/permissions', () => {
         mockTargetUserId,
         mockPageId,
         'updated',
-        expect.any(Object),
+        { canView: true, canEdit: false, canShare: false, canDelete: false },
         mockUserId
       );
     });
@@ -415,7 +435,113 @@ describe('POST /api/pages/[pageId]/permissions', () => {
     });
   });
 
+  describe('the org guests policy', () => {
+    it('POL-2 (partial) X-6 (partial) guests OFF: 403 naming the policy, and no notification', async () => {
+      vi.mocked(grantPagePermission).mockResolvedValue({ ok: false, error: { code: 'GUEST_POLICY_OFF', message: 'no guests' } });
+
+      const response = await POST(createRequest({ userId: mockTargetUserId, canView: true }), { params: mockParams });
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({ error: 'no guests', code: 'org_policy', policy: 'guests' });
+      expect(createPermissionNotification).not.toHaveBeenCalled();
+    });
+
+    it('SEAT-9 (partial) [D-OW-33] a lapsed org: 402 org_lapsed with the lapse copy; nothing granted, nothing notified', async () => {
+      vi.mocked(grantPagePermission).mockResolvedValue({ ok: false, error: { code: 'ORG_LAPSED', message: 'lapsed copy' } });
+
+      const response = await POST(createRequest({ userId: mockTargetUserId, canView: true }), { params: mockParams });
+
+      expect(response.status).toBe(402);
+      expect(await response.json()).toEqual({ error: 'lapsed copy', code: 'org_lapsed' });
+      expect(createPermissionNotification).not.toHaveBeenCalled();
+    });
+
+    it('POL-2 (partial) guests APPROVE: 202 pending approval with the request id; nothing is granted, so nothing is notified', async () => {
+      vi.mocked(grantPagePermission).mockResolvedValue({ ok: false, error: { code: 'GUEST_APPROVAL_PENDING', holdId: 'hold_1', message: 'waiting' } });
+
+      const response = await POST(createRequest({ userId: mockTargetUserId, canView: true }), { params: mockParams });
+
+      expect(response.status).toBe(202);
+      expect(await response.json()).toEqual({ kind: 'pending_approval', holdId: 'hold_1', message: 'waiting' });
+      expect(createPermissionNotification).not.toHaveBeenCalled();
+    });
+  });
+
   describe('error handling', () => {
+    it('returns 400 for VALIDATION_FAILED error', async () => {
+      vi.mocked(grantPagePermission).mockResolvedValue({
+        ok: false,
+        // @ts-expect-error - partial mock data
+        error: { code: 'VALIDATION_FAILED', issues: [{ message: 'Invalid data' }] },
+      });
+
+      const response = await POST(
+        createRequest({ userId: mockTargetUserId, canView: true }),
+        { params: mockParams }
+      );
+
+      expect(response.status).toBe(400);
+    });
+
+    it('returns 400 for INVALID_PERMISSION_COMBINATION error', async () => {
+      vi.mocked(grantPagePermission).mockResolvedValue({
+        ok: false,
+        error: { code: 'INVALID_PERMISSION_COMBINATION', message: 'Cannot grant edit without view' },
+      });
+
+      const response = await POST(
+        createRequest({ userId: mockTargetUserId, canView: false, canEdit: true }),
+        { params: mockParams }
+      );
+
+      expect(response.status).toBe(400);
+    });
+
+    it('returns 400 for SELF_PERMISSION_DENIED error', async () => {
+      vi.mocked(grantPagePermission).mockResolvedValue({
+        ok: false,
+        error: { code: 'SELF_PERMISSION_DENIED', reason: 'Cannot modify own permissions' },
+      });
+
+      const response = await POST(
+        createRequest({ userId: mockUserId, canView: true }),
+        { params: mockParams }
+      );
+
+      expect(response.status).toBe(400);
+    });
+
+    it('returns 403 for INSUFFICIENT_PERMISSION error', async () => {
+      vi.mocked(grantPagePermission).mockResolvedValue({
+        ok: false,
+        // @ts-expect-error - partial mock data
+        error: { code: 'INSUFFICIENT_PERMISSION' },
+      });
+
+      const response = await POST(
+        createRequest({ userId: mockTargetUserId, canView: true }),
+        { params: mockParams }
+      );
+
+      expect(response.status).toBe(403);
+    });
+
+    it('returns 500 for unknown error code (default case)', async () => {
+      vi.mocked(grantPagePermission).mockResolvedValue({
+        ok: false,
+        error: { code: 'UNKNOWN_ERROR' },
+      } as never);
+
+      const response = await POST(
+        createRequest({ userId: mockTargetUserId, canView: true }),
+        { params: mockParams }
+      );
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('Permission operation failed');
+    });
+
     it('returns 404 when target user not found', async () => {
       vi.mocked(grantPagePermission).mockResolvedValue({
         ok: false,
@@ -431,7 +557,7 @@ describe('POST /api/pages/[pageId]/permissions', () => {
     });
 
     it('returns 500 when function throws', async () => {
-      vi.mocked(grantPagePermission).mockRejectedValue(new Error('Service error'));
+      vi.mocked(grantPagePermission).mockRejectedValueOnce(new Error('Service error'));
 
       const response = await POST(
         createRequest({ userId: mockTargetUserId, canView: true }),
@@ -591,8 +717,68 @@ describe('DELETE /api/pages/[pageId]/permissions', () => {
   });
 
   describe('error handling', () => {
+    it('returns 400 for VALIDATION_FAILED error', async () => {
+      vi.mocked(revokePagePermission).mockResolvedValue({
+        ok: false,
+        // @ts-expect-error - partial mock data
+        error: { code: 'VALIDATION_FAILED', issues: [{ message: 'Missing userId' }] },
+      });
+
+      const response = await DELETE(
+        createRequest({ userId: mockTargetUserId }),
+        { params: mockParams }
+      );
+
+      expect(response.status).toBe(400);
+    });
+
+    it('returns 400 for SELF_PERMISSION_DENIED error', async () => {
+      vi.mocked(revokePagePermission).mockResolvedValue({
+        ok: false,
+        error: { code: 'SELF_PERMISSION_DENIED', reason: 'Cannot revoke own permissions' },
+      });
+
+      const response = await DELETE(
+        createRequest({ userId: mockUserId }),
+        { params: mockParams }
+      );
+
+      expect(response.status).toBe(400);
+    });
+
+    it('returns 403 for INSUFFICIENT_PERMISSION error', async () => {
+      vi.mocked(revokePagePermission).mockResolvedValue({
+        ok: false,
+        // @ts-expect-error - partial mock data
+        error: { code: 'INSUFFICIENT_PERMISSION' },
+      });
+
+      const response = await DELETE(
+        createRequest({ userId: mockTargetUserId }),
+        { params: mockParams }
+      );
+
+      expect(response.status).toBe(403);
+    });
+
+    it('returns 500 for unknown error code (default case)', async () => {
+      vi.mocked(revokePagePermission).mockResolvedValue({
+        ok: false,
+        error: { code: 'UNKNOWN_ERROR' },
+      } as never);
+
+      const response = await DELETE(
+        createRequest({ userId: mockTargetUserId }),
+        { params: mockParams }
+      );
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('Permission operation failed');
+    });
+
     it('returns 500 when function throws', async () => {
-      vi.mocked(revokePagePermission).mockRejectedValue(new Error('Service error'));
+      vi.mocked(revokePagePermission).mockRejectedValueOnce(new Error('Service error'));
 
       const response = await DELETE(
         createRequest({ userId: mockTargetUserId }),

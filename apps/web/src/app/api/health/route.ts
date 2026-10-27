@@ -1,5 +1,6 @@
-import { db, sql } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { db, getPoolStats } from '@pagespace/db/db'
+import { sql } from '@pagespace/db/operators';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getMonitoringIngestStatus } from '@/middleware/monitoring';
 
 interface HealthResponse {
@@ -15,6 +16,11 @@ interface HealthResponse {
     heapUsed: number;
     heapTotal: number;
     rss: number;
+  };
+  pool: {
+    total: number;
+    idle: number;
+    waiting: number;
   };
   warnings?: string[];
   error?: string;
@@ -61,6 +67,7 @@ export async function GET(_request: Request): Promise<Response> {
         heapTotal: Math.round(memoryUsage.heapTotal / 1024 / 1024),
         rss: Math.round(memoryUsage.rss / 1024 / 1024),
       },
+      pool: getPoolStats(),
     };
 
     if (warnings.length > 0) {
@@ -80,10 +87,8 @@ export async function GET(_request: Request): Promise<Response> {
       });
     }
 
-    const statusCode = isHealthy ? 200 : 503;
-
     return Response.json(response, {
-      status: statusCode,
+      status: 200,
       headers: {
         'Cache-Control': 'no-store, no-cache, must-revalidate',
       },
@@ -105,11 +110,12 @@ export async function GET(_request: Request): Promise<Response> {
         heapTotal: 0,
         rss: 0,
       },
+      pool: getPoolStats(),
       error: 'Health check failed unexpectedly',
     };
 
     return Response.json(response, {
-      status: 503,
+      status: 200,
       headers: {
         'Cache-Control': 'no-store, no-cache, must-revalidate',
       },

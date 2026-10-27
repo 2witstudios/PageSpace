@@ -1,8 +1,14 @@
-import { db, files, eq } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/logger-config';
-import { getUserAccessLevel, getUserDrivePermissions } from '@pagespace/lib/permissions-cached';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { getUserAccessLevel, getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 import type { EnforcedAuthContext, ResourceBinding } from '../middleware/auth';
-import { getLinksForFile, type FileLink } from './file-links';
+import {
+  getLinksForFile,
+  getConversationLinksForFile,
+  getFileDriveId,
+  type ConversationFileLink,
+  type FileLink,
+} from './file-links';
 
 export type AccessRequirement = 'view' | 'edit';
 
@@ -26,7 +32,7 @@ export interface AuthorizationDecision {
 
   permission?: {
     required: AccessRequirement;
-    grantedVia: 'page_permission' | 'drive_permission' | null;
+    grantedVia: 'page_permission' | 'drive_permission' | 'conversation_participant' | null;
   };
 
   denial?: {
@@ -36,6 +42,7 @@ export interface AuthorizationDecision {
   context?: {
     pageId?: string;
     driveId?: string;
+    conversationId?: string;
   };
 }
 
@@ -78,8 +85,8 @@ function buildAllowedDecision(
   binding: ResourceBinding | null,
   matchType: BindingMatchType,
   requirement: AccessRequirement,
-  grantedVia: 'page_permission' | 'drive_permission',
-  context: { pageId?: string; driveId?: string }
+  grantedVia: 'page_permission' | 'drive_permission' | 'conversation_participant',
+  context: { pageId?: string; driveId?: string; conversationId?: string }
 ): AuthorizationDecision {
   return {
     allowed: true,
@@ -104,6 +111,7 @@ function determineBindingMatchType(
   binding: ResourceBinding | null,
   contentHash: string,
   links: FileLink[],
+  conversationLinks: ConversationFileLink[],
   fileDriveId?: string
 ): BindingMatchType {
   if (!binding) {
@@ -124,6 +132,8 @@ function determineBindingMatchType(
         return 'hierarchical';
       }
       return 'mismatch';
+    case 'conversation':
+      return conversationLinks.some(link => link.conversationId === binding.id) ? 'hierarchical' : 'mismatch';
     default:
       return 'mismatch';
   }
@@ -142,17 +152,36 @@ function getScopedLinks(links: FileLink[], binding: ResourceBinding | null): Fil
     case 'file':
       return links;
     default:
+      /* c8 ignore next */
+      return [];
+  }
+}
+
+function getScopedConversationLinks(
+  links: ConversationFileLink[],
+  binding: ResourceBinding | null
+): ConversationFileLink[] {
+  if (!binding) {
+    return links;
+  }
+
+  switch (binding.type) {
+    case 'conversation':
+      return links.filter(link => link.conversationId === binding.id);
+    case 'file':
+      return links;
+    default:
       return [];
   }
 }
 
 async function checkPagePermissions(
-  userId: string,
+  actor: AccessActor,
   links: FileLink[],
   requirement: AccessRequirement
 ): Promise<{ allowed: boolean; pageId?: string; driveId?: string }> {
   for (const link of links) {
-    const perms = await getUserAccessLevel(userId, link.pageId);
+    const perms = await getUserAccessLevel(actor, link.pageId);
     if (!perms) {
       continue;
     }
@@ -169,12 +198,30 @@ async function checkPagePermissions(
   return { allowed: false };
 }
 
-async function checkDrivePermissions(
+function checkConversationPermissions(
   userId: string,
+  links: ConversationFileLink[],
+  requirement: AccessRequirement
+): { allowed: boolean; conversationId?: string } {
+  if (requirement !== 'view') {
+    return { allowed: false };
+  }
+
+  for (const link of links) {
+    if (link.participant1Id === userId || link.participant2Id === userId) {
+      return { allowed: true, conversationId: link.conversationId };
+    }
+  }
+
+  return { allowed: false };
+}
+
+async function checkDrivePermissions(
+  actor: AccessActor,
   driveId: string,
   requirement: AccessRequirement
 ): Promise<boolean> {
-  const drivePerms = await getUserDrivePermissions(userId, driveId);
+  const drivePerms = await getUserDrivePermissions(actor, driveId);
   if (!drivePerms) {
     return false;
   }
@@ -208,18 +255,20 @@ export async function authorizeFileAccess(
   }
 
   // Step 2: Fetch file context
-  const [links, fileRecord] = await Promise.all([
+  const [links, conversationLinks, fileDriveId] = await Promise.all([
     getLinksForFile(normalizedHash),
-    db.query.files.findFirst({
-      where: eq(files.id, normalizedHash),
-      columns: { driveId: true },
-    }),
+    getConversationLinksForFile(normalizedHash),
+    getFileDriveId(normalizedHash),
   ]);
 
-  const fileDriveId = fileRecord?.driveId;
-
   // Step 3: Check binding
-  const matchType = determineBindingMatchType(binding, normalizedHash, links, fileDriveId);
+  const matchType = determineBindingMatchType(
+    binding,
+    normalizedHash,
+    links,
+    conversationLinks,
+    fileDriveId
+  );
 
   if (matchType === 'mismatch') {
     const decision = buildDeniedDecision('binding', binding, matchType, requirement);
@@ -230,12 +279,89 @@ export async function authorizeFileAccess(
       bindingType: binding?.type,
       bindingId: binding?.id,
       linksCount: links.length,
+      conversationLinksCount: conversationLinks.length,
       decision,
     });
     return decision;
   }
 
-  // Step 4: Handle orphan files (no links)
+  // Step 4: Check explicit page/conversation linkages before any fallback.
+  if (links.length > 0 || conversationLinks.length > 0) {
+    const scopedLinks = getScopedLinks(links, binding);
+    const scopedConversationLinks = getScopedConversationLinks(conversationLinks, binding);
+
+    if (scopedLinks.length === 0 && scopedConversationLinks.length === 0) {
+      const decision = buildDeniedDecision('binding', binding, matchType, requirement);
+      loggers.security.warn('file-access denied: no links within binding scope', {
+        userId: auth.userId,
+        contentHash: normalizedHash,
+        requirement,
+        bindingType: binding?.type,
+        bindingId: binding?.id,
+        totalLinks: links.length,
+        totalConversationLinks: conversationLinks.length,
+        scopedLinks: 0,
+        scopedConversationLinks: 0,
+        decision,
+      });
+      return decision;
+    }
+
+    const pageResult = await checkPagePermissions(auth.actor, scopedLinks, requirement);
+
+    if (pageResult.allowed) {
+      const decision = buildAllowedDecision(binding, matchType, requirement, 'page_permission', {
+        pageId: pageResult.pageId,
+        driveId: pageResult.driveId,
+      });
+      loggers.security.info('file-access granted: page permission', {
+        userId: auth.userId,
+        contentHash: normalizedHash,
+        requirement,
+        pageId: pageResult.pageId,
+        driveId: pageResult.driveId,
+        matchType,
+      });
+      return decision;
+    }
+
+    const conversationResult = checkConversationPermissions(
+      auth.userId,
+      scopedConversationLinks,
+      requirement
+    );
+
+    if (conversationResult.allowed) {
+      const decision = buildAllowedDecision(
+        binding,
+        matchType,
+        requirement,
+        'conversation_participant',
+        { conversationId: conversationResult.conversationId }
+      );
+      loggers.security.info('file-access granted: conversation participant', {
+        userId: auth.userId,
+        contentHash: normalizedHash,
+        requirement,
+        conversationId: conversationResult.conversationId,
+        matchType,
+      });
+      return decision;
+    }
+
+    const decision = buildDeniedDecision('permission', binding, matchType, requirement);
+    loggers.security.warn('file-access denied: no qualifying linked-resource permission', {
+      userId: auth.userId,
+      contentHash: normalizedHash,
+      requirement,
+      scopedLinksCount: scopedLinks.length,
+      scopedConversationLinksCount: scopedConversationLinks.length,
+      decision,
+    });
+    return decision;
+  }
+
+  // Step 5: Handle orphan files (no links)
   if (links.length === 0) {
     if (!fileDriveId) {
       const decision = buildDeniedDecision('not_found', binding, matchType, requirement);
@@ -249,7 +375,7 @@ export async function authorizeFileAccess(
     }
 
     // Check drive permissions for orphan file
-    const hasDriveAccess = await checkDrivePermissions(auth.userId, fileDriveId, requirement);
+    const hasDriveAccess = await checkDrivePermissions(auth.actor, fileDriveId, requirement);
 
     if (!hasDriveAccess) {
       const decision = buildDeniedDecision('permission', binding, matchType, requirement);
@@ -276,50 +402,14 @@ export async function authorizeFileAccess(
     return decision;
   }
 
-  // Step 5: Scope links and check page permissions
-  const scopedLinks = getScopedLinks(links, binding);
-
-  if (scopedLinks.length === 0) {
-    // File has links but none within token's scope
-    const decision = buildDeniedDecision('binding', binding, matchType, requirement);
-    loggers.security.warn('file-access denied: no links within binding scope', {
-      userId: auth.userId,
-      contentHash: normalizedHash,
-      requirement,
-      bindingType: binding?.type,
-      bindingId: binding?.id,
-      totalLinks: links.length,
-      scopedLinks: 0,
-      decision,
-    });
-    return decision;
-  }
-
-  const pageResult = await checkPagePermissions(auth.userId, scopedLinks, requirement);
-
-  if (!pageResult.allowed) {
-    const decision = buildDeniedDecision('permission', binding, matchType, requirement);
-    loggers.security.warn('file-access denied: no page permission', {
-      userId: auth.userId,
-      contentHash: normalizedHash,
-      requirement,
-      scopedLinksCount: scopedLinks.length,
-      decision,
-    });
-    return decision;
-  }
-
-  const decision = buildAllowedDecision(binding, matchType, requirement, 'page_permission', {
-    pageId: pageResult.pageId,
-    driveId: pageResult.driveId,
-  });
-  loggers.security.info('file-access granted: page permission', {
+  const decision = buildDeniedDecision('not_found', binding, matchType, requirement);
+  loggers.security.warn('file-access denied: unreachable file authorization state', {
     userId: auth.userId,
     contentHash: normalizedHash,
     requirement,
-    pageId: pageResult.pageId,
-    driveId: pageResult.driveId,
-    matchType,
+    linksCount: links.length,
+    conversationLinksCount: conversationLinks.length,
+    decision,
   });
   return decision;
 }

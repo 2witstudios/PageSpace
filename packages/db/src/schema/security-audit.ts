@@ -18,76 +18,163 @@ import {
   real,
   jsonb,
   index,
-  pgEnum,
+  bigserial,
+  type ExtraConfigColumn,
 } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
 
 /**
- * Security event type enum - categorizes all security-relevant events.
+ * Security event types. Stored as text in the DB (see migration 0105): the
+ * column was converted from a pg enum to text so that removing legacy values
+ * doesn't require DELETE / UPDATE on rows that participate in the
+ * tamper-evident hash chain (event_type is part of computeSecurityEventHash).
+ * Writer-side type safety lives here.
  */
-export const securityEventTypeEnum = pgEnum('security_event_type', [
-  // Authentication events
-  'auth.login.success',
-  'auth.login.failure',
-  'auth.logout',
-  'auth.token.created',
-  'auth.token.revoked',
-  'auth.token.refreshed',
-  'auth.password.changed',
-  'auth.password.reset.requested',
-  'auth.password.reset.completed',
-  'auth.mfa.enabled',
-  'auth.mfa.disabled',
-  'auth.mfa.challenged',
-  'auth.mfa.verified',
-  'auth.session.created',
-  'auth.session.revoked',
-  'auth.device.registered',
-  'auth.device.revoked',
-  // Authorization events
-  'authz.access.granted',
-  'authz.access.denied',
-  'authz.permission.granted',
-  'authz.permission.revoked',
-  'authz.role.assigned',
-  'authz.role.removed',
-  // Data access events
-  'data.read',
-  'data.write',
-  'data.delete',
-  'data.export',
-  'data.share',
-  // Admin events
-  'admin.user.created',
-  'admin.user.suspended',
-  'admin.user.reactivated',
-  'admin.user.deleted',
-  'admin.settings.changed',
-  // Security events
-  'security.anomaly.detected',
-  'security.rate.limited',
-  'security.brute.force.detected',
-  'security.suspicious.activity',
-]);
+export type SecurityEventType =
+  | 'auth.login.success'
+  | 'auth.login.failure'
+  | 'auth.logout'
+  | 'auth.token.created'
+  | 'auth.token.revoked'
+  | 'auth.token.refreshed'
+  | 'auth.token.updated'
+  | 'auth.mfa.enabled'
+  | 'auth.mfa.disabled'
+  | 'auth.mfa.challenged'
+  | 'auth.mfa.verified'
+  | 'auth.session.created'
+  | 'auth.session.revoked'
+  | 'auth.device.registered'
+  | 'auth.device.revoked'
+  | 'authz.access.granted'
+  | 'authz.access.denied'
+  | 'authz.permission.granted'
+  | 'authz.permission.revoked'
+  | 'authz.role.assigned'
+  | 'authz.role.removed'
+  | 'data.read'
+  | 'data.write'
+  | 'data.delete'
+  | 'data.export'
+  | 'data.share'
+  | 'admin.user.created'
+  | 'admin.user.suspended'
+  | 'admin.user.reactivated'
+  | 'admin.user.deleted'
+  | 'admin.settings.changed'
+  // Privileged operator read of another subject's personal data (#954, Art 32(1)(b)).
+  // Distinct from data.read so DSAR/admin reads are separable in forensic queries.
+  | 'admin.data.read'
+  // A drive owner/admin stopped ANOTHER member's running agent worker (#2413).
+  // The abort itself is filed under the worker's OWNER — `killWorker` aborts as
+  // the stream's owner so the `ai_stream_sessions` rows match — so this is the
+  // only record that can name who actually acted. Its own type rather than
+  // data.delete: nothing is deleted, and a cross-user administrative stop is
+  // what a dispute or incident review needs to query for. Split by outcome like
+  // the auth family, because the caller reports success either way: recording
+  // one type for both would let this log assert a termination that never
+  // happened, and recording nothing on failure would hide the attempt.
+  | 'admin.session.terminate.success'
+  | 'admin.session.terminate.failure'
+  | 'security.anomaly.detected'
+  | 'security.rate.limited'
+  | 'security.brute.force.detected'
+  | 'security.suspicious.activity'
+  // Personal-data breach / security incident recorded (#979, Art 33/34).
+  | 'security.incident.created'
+  // Agent-account credential brokering (L1·G1b, ADR 0004 §5). The `allowed`
+  // row is written and durably accepted BEFORE the operation runs, and the
+  // outcome row is keyed by the same grant id, so the chain carries both
+  // halves of every credentialed action. One type per AuditOutcome kind so a
+  // forensic query can separate "authorized" from "actually happened" —
+  // recording one type for both would let this log assert an execution that
+  // never occurred. `unknown` is a post-send timeout: upstream may have acted.
+  | 'credential.grant.allowed'
+  | 'credential.grant.denied'
+  | 'credential.operation.executed'
+  | 'credential.operation.failed'
+  | 'credential.operation.unknown'
+  // Org-scoped events (Spec AUD-1). details.orgId is the org dimension every query filters on; the
+  // family is defined in lib audit/org-audit.ts and catalogued by category in audit/org-audit-query-core.ts.
+  | 'org.created'
+  | 'org.updated'
+  | 'org.deleted'
+  | 'org.ownership.transferred'
+  | 'org.member.joined'
+  | 'org.member.role_changed'
+  | 'org.member.removed'
+  | 'org.member.left'
+  | 'org.invite.created'
+  | 'org.invite.resent'
+  | 'org.invite.revoked'
+  | 'org.seat.auto_add_changed'
+  | 'org.seat.quantity_changed'
+  | 'org.seat.refused'
+  | 'org.drive.created'
+  | 'org.drive.moved_in'
+  | 'org.drive.moved_out'
+  | 'org.drive.lead_changed'
+  | 'org.drive.visibility_changed'
+  | 'org.drive.join_requested'
+  | 'org.drive.join_approved'
+  | 'org.drive.join_declined'
+  | 'org.drive.join_withdrawn'
+  | 'org.wallet.allocation_changed'
+  | 'org.wallet.topped_up'
+  | 'org.wallet.donated'
+  | 'org.billing.subscription_changed'
+  | 'org.billing.pool_refilled'
+  | 'org.policy.changed'
+  | 'org.policy.suspended'
+  | 'org.policy.restored'
+  // POL-1: what a change newly forbids that is blocked where it is used rather than suspended (apps, envs,
+  // cross-drive agents, autonomous runs, models), listed so an Owner or Admin sees what the change reached.
+  | 'org.policy.blocked'
+  | 'org.guest.requested'
+  | 'org.guest.approved'
+  | 'org.guest.declined'
+  // [D-OW-28] A departing member's environment or published app handed to the drive lead's cap.
+  | 'org.compute.reattributed'
+  // A parked published app taken back to `stopped` by its creator, the drive lead or an org Owner/Admin.
+  | 'org.app.unparked'
+  // [D-OW-36] An org drive's automation disabled because its creator left; reassigned or deleted by an Owner/Admin.
+  | 'org.automation.owner_left'
+  | 'org.automation.reassigned'
+  | 'org.automation.deleted'
+  // Verified email domains and auto-join (SEC-1).
+  | 'org.domain.added'
+  | 'org.domain.verification_sent'
+  | 'org.domain.verified'
+  | 'org.domain.removed'
+  | 'org.member.auto_joined'
+  | 'org.member.auto_join_refused'
+  | 'org.member.suppression_cleared';
 
 /**
- * Security Audit Log table - tamper-evident security event tracking.
+ * Single source of truth for the security_audit_log table shape (#890 Phase 1).
  *
- * Uses a hash chain to ensure audit trail integrity:
- * - Each entry includes the hash of the previous entry
- * - Any modification breaks the chain and is detectable
- * - First entry in chain uses 'genesis' as previousHash
+ * The table exists in two planes during the trust-plane migration: the main
+ * app DB (current writer, FK to users intact) and the Admin PG trust plane
+ * (src/admin-schema.ts), where a FK to `users` is impossible — cross-database
+ * foreign keys don't exist, and the admin DB deliberately holds no app tables.
+ * drizzle-kit serializes inline FKs unconditionally, so the admin variant
+ * cannot be a plain re-export; this factory keeps columns and indexes defined
+ * exactly once so the two instances can never drift. Only `crossPlaneUserFk`
+ * differs between them.
  */
-export const securityAuditLog = pgTable('security_audit_log', {
+const securityAuditLogColumns = (opts: { crossPlaneUserFk: boolean }) => ({
   id: text('id').primaryKey().$defaultFn(() => createId()),
 
   // Event classification
-  eventType: securityEventTypeEnum('event_type').notNull(),
+  eventType: text('event_type').notNull().$type<SecurityEventType>(),
 
-  // Actor (who triggered the event)
-  userId: text('user_id').references(() => users.id, { onDelete: 'set null' }),
+  // Actor (who triggered the event). The FK exists only in the app plane —
+  // the Admin PG has no users table to reference.
+  userId: opts.crossPlaneUserFk
+    ? text('user_id').references(() => users.id, { onDelete: 'set null' })
+    : text('user_id'),
   sessionId: text('session_id'),
   serviceId: text('service_id'),
 
@@ -95,8 +182,15 @@ export const securityAuditLog = pgTable('security_audit_log', {
   resourceType: text('resource_type'),
   resourceId: text('resource_id'),
 
-  // Request context
+  // Request context. `ip_address` holds AES-256-GCM ciphertext for rows written
+  // while ENCRYPTION_KEY is configured (wired in SecurityAuditService.logEvent);
+  // `ip_bidx` is its deterministic blind index for equality forensics
+  // (idx_security_audit_ip_bidx, used by queryAuditEvents). This is FORWARD-ONLY:
+  // existing rows stay plaintext (event_hash EXCLUDES ip_address, so encrypting
+  // new rows is chain-safe and legacy plaintext rows still verify, match, and
+  // read). See docs/security/pii-encryption-design.md.
   ipAddress: text('ip_address'),
+  ipBidx: text('ip_bidx'),
   userAgent: text('user_agent'),
   geoLocation: text('geo_location'),
 
@@ -110,10 +204,32 @@ export const securityAuditLog = pgTable('security_audit_log', {
   // Timing
   timestamp: timestamp('timestamp', { mode: 'date' }).defaultNow().notNull(),
 
+  // BIGSERIAL for commit-order predecessor lookup — timestamps are pre-assigned before the advisory lock.
+  chainSeq: bigserial('chain_seq', { mode: 'number' }).notNull(),
+
   // Hash chain integrity
   previousHash: text('previous_hash').notNull(),
   eventHash: text('event_hash').notNull(),
-}, (table) => ({
+});
+
+/** The columns the shared index set touches — structural so both planes' tables fit. */
+type SecurityAuditLogIndexColumns = Record<
+  | 'timestamp'
+  | 'userId'
+  | 'eventType'
+  | 'resourceType'
+  | 'resourceId'
+  | 'ipAddress'
+  | 'ipBidx'
+  | 'eventHash'
+  | 'chainSeq'
+  | 'riskScore'
+  | 'sessionId'
+  | 'details',
+  Partial<ExtraConfigColumn>
+>;
+
+const securityAuditLogIndexes = (table: SecurityAuditLogIndexColumns) => ({
   // Time-based queries (most common access pattern)
   timestampIdx: index('idx_security_audit_timestamp').on(table.timestamp),
   // User activity forensics
@@ -124,13 +240,74 @@ export const securityAuditLog = pgTable('security_audit_log', {
   resourceIdx: index('idx_security_audit_resource').on(table.resourceType, table.resourceId, table.timestamp),
   // IP-based forensics
   ipTimestampIdx: index('idx_security_audit_ip').on(table.ipAddress, table.timestamp),
+  // IP-based forensics over encrypted rows (blind-index equality)
+  ipBidxTimestampIdx: index('idx_security_audit_ip_bidx').on(table.ipBidx, table.timestamp),
   // Hash chain verification
   eventHashIdx: index('idx_security_audit_event_hash').on(table.eventHash),
+  // Predecessor lookup (ORDER BY chain_seq DESC LIMIT 1 inside advisory lock)
+  chainSeqIdx: index('idx_security_audit_chain_seq').on(table.chainSeq),
   // High-risk event queries
   riskScoreIdx: index('idx_security_audit_risk_score').on(table.riskScore),
   // Session tracking
   sessionIdx: index('idx_security_audit_session').on(table.sessionId, table.timestamp),
-}));
+  // The org audit log (AUD-3): one org's rows, newest first by chain_seq (the keyset the log and its
+  // CSV export page by). Partial: only rows that carry an org dimension, a small slice of the log.
+  orgChainSeqIdx: index('idx_security_audit_org_chain_seq')
+    .on(sql`(${table.details} ->> 'orgId')`, table.chainSeq)
+    .where(sql`(${table.details} ->> 'orgId') IS NOT NULL`),
+  // The org audit log's time filter (AUD-1/AUD-3): an outbox-delivered event is dated by details.occurredAt, an ISO
+  // string (lexically ordered), so one org's rows in a time window are an index range.
+  orgOccurredAtIdx: index('idx_security_audit_org_occurred_at')
+    .on(sql`(${table.details} ->> 'orgId')`, sql`(${table.details} ->> 'occurredAt')`)
+    .where(sql`(${table.details} ->> 'orgId') IS NOT NULL`),
+  // At-least-once outbox delivery: the org log shows each outboxId once, looking up earlier copies by it.
+  outboxIdIdx: index('idx_security_audit_outbox_id')
+    .on(sql`(${table.details} ->> 'outboxId')`, table.chainSeq)
+    .where(sql`(${table.details} ->> 'outboxId') IS NOT NULL`),
+});
+
+export const defineSecurityAuditLogTable = (opts: { crossPlaneUserFk: boolean }) =>
+  pgTable('security_audit_log', securityAuditLogColumns(opts), securityAuditLogIndexes);
+
+/**
+ * Trust-plane (Admin PG) instance of security_audit_log (#890 Phase 2).
+ *
+ * Identical to the app-plane shape (columns + indexes come from the same
+ * builders above, so the planes cannot drift) with two deliberate deltas the
+ * shared factory cannot express:
+ *   - no cross-plane FK to `users` (the admin DB holds no app tables), and
+ *   - an extra NULLABLE `emission_hash` column: the chainer copies each
+ *     drained ingest row's emission hash here so verify-on-append can
+ *     recompute chainHash = H(emissionHash, prevHash) from storage. NULL
+ *     marks a legacy-era row (pre-cutover / backfilled) whose event_hash was
+ *     computed by the advisory-lock path. Verification reads walk chain_seq
+ *     (already indexed), so the column itself needs no index.
+ *
+ * This exists ONLY in src/admin-schema.ts / the drizzle-admin pipeline — the
+ * main-plane table above keeps its shape and main db:generate stays no-drift.
+ */
+export const defineAdminSecurityAuditLogTable = () =>
+  pgTable(
+    'security_audit_log',
+    {
+      ...securityAuditLogColumns({ crossPlaneUserFk: false }),
+      emissionHash: text('emission_hash'),
+    },
+    securityAuditLogIndexes,
+  );
+
+/**
+ * Security Audit Log table - tamper-evident security event tracking.
+ *
+ * Uses a hash chain to ensure audit trail integrity:
+ * - Each entry includes the hash of the previous entry
+ * - Any modification breaks the chain and is detectable
+ * - First entry in chain uses 'genesis' as previousHash
+ *
+ * This is the APP-PLANE instance (main DB, FK to users). The trust-plane
+ * instance lives in src/admin-schema.ts. Dropping the FK here is Phase 2+.
+ */
+export const securityAuditLog = defineSecurityAuditLogTable({ crossPlaneUserFk: true });
 
 /**
  * Relations for security audit log
@@ -141,11 +318,6 @@ export const securityAuditLogRelations = relations(securityAuditLog, ({ one }) =
     references: [users.id],
   }),
 }));
-
-/**
- * TypeScript type for security event types (for type-safe usage)
- */
-export type SecurityEventType = typeof securityEventTypeEnum.enumValues[number];
 
 /**
  * TypeScript type for inserting audit log entries

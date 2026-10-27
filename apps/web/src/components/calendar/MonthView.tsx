@@ -10,15 +10,17 @@ import {
   format,
   isSameMonth,
 } from 'date-fns';
+import { Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
   CalendarEvent,
   CalendarHandlers,
   TaskWithDueDate,
+  EventColorConfig,
   getEventsForDay,
   getTasksForDay,
   isToday,
-  getEventColors,
+  resolveEventColor,
   TASK_OVERLAY_STYLE,
 } from './calendar-types';
 
@@ -27,12 +29,14 @@ interface MonthViewProps {
   events: CalendarEvent[];
   tasks: TaskWithDueDate[];
   handlers: CalendarHandlers;
+  driveColorMap?: Map<string | null, EventColorConfig> | null;
+  context?: 'user' | 'drive';
 }
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MAX_VISIBLE_EVENTS = 3;
 
-export function MonthView({ currentDate, events, tasks, handlers }: MonthViewProps) {
+export function MonthView({ currentDate, events, tasks, handlers, driveColorMap, context = 'drive' }: MonthViewProps) {
   // Calculate the days to display
   const calendarDays = useMemo(() => {
     const monthStart = startOfMonth(currentDate);
@@ -127,8 +131,9 @@ export function MonthView({ currentDate, events, tasks, handlers }: MonthViewPro
                     {/* Events first (take precedence) */}
                     {dayEvents.slice(0, MAX_VISIBLE_EVENTS).map((event) => (
                       <EventPill
-                        key={event.id}
+                        key={`${event.id}-${event.startAt}`}
                         event={event}
+                        colors={resolveEventColor(event, context, driveColorMap ?? null)}
                         onClick={(e) => {
                           e.stopPropagation();
                           handlers.onEventClick(event);
@@ -177,12 +182,13 @@ export function MonthView({ currentDate, events, tasks, handlers }: MonthViewPro
 // Event pill component
 function EventPill({
   event,
+  colors,
   onClick,
 }: {
   event: CalendarEvent;
+  colors: EventColorConfig;
   onClick: (e: React.MouseEvent) => void;
 }) {
-  const colors = getEventColors(event.color);
   const isAllDay = event.allDay;
   const startTime = isAllDay ? '' : format(new Date(event.startAt), 'h:mm a');
 
@@ -196,6 +202,12 @@ function EventPill({
       )}
       onClick={onClick}
     >
+      {event.hasAgentTrigger && (
+        <>
+          <Zap className="inline-block h-3 w-3 mr-1 text-amber-500 align-text-top" aria-hidden="true" />
+          <span className="sr-only">Agent trigger configured. </span>
+        </>
+      )}
       {!isAllDay && <span className="font-medium mr-1">{startTime}</span>}
       {event.title}
     </button>

@@ -19,6 +19,7 @@ import { Switch } from '@/components/ui/switch';
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import type { AiUndoPreview, UndoMode } from '@/services/api';
 import { createClientLogger } from '@/lib/logging/client-logger';
+import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
 
 const logger = createClientLogger({ namespace: 'rollback', component: 'UndoAiChangesDialog' });
 
@@ -94,8 +95,12 @@ export const UndoAiChangesDialog: React.FC<UndoAiChangesDialogProps> = ({
     setError(null);
 
     try {
-      // post() returns parsed JSON and throws on errors
-      await post(`/api/ai/chat/messages/${messageId}/undo`, { mode, force });
+      // post() returns parsed JSON and throws on errors. X-Browser-Session-Id
+      // lets the server include the originator in the chat:undo_applied
+      // broadcast so the originator's other tabs can dedup.
+      await post(`/api/ai/chat/messages/${messageId}/undo`, { mode, force }, {
+        headers: { 'X-Browser-Session-Id': getBrowserSessionId() },
+      });
 
       logger.debug('[AiUndo:Execute] Undo completed successfully', { mode });
       onOpenChange(false);

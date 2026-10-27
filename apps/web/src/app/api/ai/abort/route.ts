@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { abortStream } from '@/lib/ai/core/stream-abort-registry';
-import { loggers } from '@pagespace/lib/server';
-import { checkRateLimit } from '@pagespace/lib/auth';
+import { abortStreamAnywhere } from '@/lib/ai/core/abort-stream-anywhere';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -24,14 +25,17 @@ export async function POST(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'ai_chat_stream', resourceId: 'abort', details: { reason: 'auth_failed', method: 'POST', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
       return auth.error;
     }
     const userId = auth.userId;
 
-    // Rate limiting to prevent brute-force streamId guessing
-    const rateLimit = checkRateLimit(`abort:${userId}`, ABORT_RATE_LIMIT);
+    // Rate limiting to prevent brute-force streamId guessing.
+    // Postgres-backed so the limit survives restarts and spans replicas (#977).
+    const rateLimit = await checkDistributedRateLimit(`abort:${userId}`, ABORT_RATE_LIMIT);
     if (!rateLimit.allowed) {
       loggers.api.warn('AI abort rate limited', { userId, retryAfter: rateLimit.retryAfter });
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_chat_stream', resourceId: 'abort', details: { reason: 'rate_limited', method: 'POST' }, riskScore: 0.5 });
       return NextResponse.json(
         { error: 'Too many requests. Please try again later.' },
         {
@@ -43,23 +47,62 @@ export async function POST(request: Request) {
       );
     }
 
-    const { streamId } = await request.json();
+    const body = await request.json();
+    const { streamId, messageId, conversationId } = body as {
+      streamId?: string;
+      messageId?: string;
+      conversationId?: string;
+    };
 
-    if (!streamId || typeof streamId !== 'string' || !streamId.trim()) {
+    const hasStreamId = streamId && typeof streamId === 'string' && streamId.trim();
+    const hasMessageId = messageId && typeof messageId === 'string' && messageId.trim();
+    // The one name the client holds from t=0. Both streamId and messageId are minted SERVER-side
+    // and are unknown until the response headers land — so a Stop pressed inside the 0.5-3s TTFB
+    // window (auth, rate limit, DB reads, context assembly, provider connect) had NOTHING to
+    // name. It cancelled the local fetch and returned; streams are deliberately server-owned and
+    // survive a client disconnect, so the generation kept running, kept calling write tools, and
+    // kept billing, while the button flipped back to Send. See abort-conversation-streams.ts.
+    const hasConversationId =
+      conversationId && typeof conversationId === 'string' && conversationId.trim();
+
+    if (!hasStreamId && !hasMessageId && !hasConversationId) {
       return NextResponse.json(
-        { error: 'streamId is required' },
+        { error: 'streamId, messageId or conversationId is required' },
         { status: 400 }
       );
     }
 
-    const result = abortStream({ streamId, userId });
+    // Tries this instance's registry first (instant), then — because streams are server-owned and
+    // the registry is in-process — asks whichever instance actually owns the stream to abort it,
+    // and waits to find out whether it did. Precedence is unchanged: messageId, then streamId,
+    // then conversationId (the only name the client holds during the TTFB window).
+    const result = await abortStreamAnywhere({
+      messageId: hasMessageId ? (messageId as string) : undefined,
+      streamId: hasStreamId ? (streamId as string) : undefined,
+      conversationId: hasConversationId ? (conversationId as string) : undefined,
+      userId,
+    });
+
+    const resourceId = hasMessageId
+      ? (messageId as string)
+      : hasStreamId
+        ? (streamId as string)
+        : (conversationId as string);
 
     loggers.api.info('AI stream abort requested', {
       streamId,
+      messageId,
       userId,
       aborted: result.aborted,
+      code: result.code,
       reason: result.reason,
     });
+
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'ai_chat_stream', resourceId, details: {
+      action: 'abort',
+      aborted: result.aborted,
+      code: result.code,
+    } });
 
     return NextResponse.json(result);
   } catch (error) {

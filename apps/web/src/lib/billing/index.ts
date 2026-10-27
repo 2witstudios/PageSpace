@@ -1,6 +1,8 @@
 export {
-  BILLING_PATHS,
-  shouldShowBilling,
-  isBillingPath,
   getBillingRedirect,
+  resolveBillingChannel,
+  shouldRedirectFromBillingSurface,
+  type BillingChannel,
+  type BillingChannelInput,
+  type BillingSurface,
 } from './billing-visibility';

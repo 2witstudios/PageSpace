@@ -1,15 +1,27 @@
+import { promises as dnsPromises } from 'dns';
 import { tool } from 'ai';
 import { z } from 'zod';
-import { type ToolExecutionContext } from '../core';
-import { loggers } from '@pagespace/lib/server';
+import TurndownService from 'turndown';
+import type { ToolExecutionContext } from '../core/types';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { maskIdentifier } from '@/lib/logging/mask';
+import { isPublicIp, isAllowedFetchTarget, isIpLiteral, PRIVATE_HOST_MESSAGE } from './web-fetch-ssrf';
 
 const webSearchLogger = loggers.ai.child({ module: 'web-search-tools' });
 
 const BRAVE_SEARCH_URL = 'https://api.search.brave.com/res/v1/web/search';
+const MAX_FETCH_BYTES = 5 * 1024 * 1024; // 5 MB hard cap on buffered response
+const MAX_REDIRECTS = 5; // cap on manually-followed redirect hops
+const FETCH_TIMEOUT_MS = 15000;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 function safeHostname(url: string): string {
   try { return new URL(url).hostname; } catch { return ''; }
+}
+
+/** Strips query string and fragment before logging to avoid leaking tokens in URL params. */
+function redactUrl(url: string): string {
+  try { const u = new URL(url); return u.origin + u.pathname; } catch { return '[unparseable url]'; }
 }
 
 /** Map internal recency filter values to Brave's freshness parameter */
@@ -117,10 +129,78 @@ async function performWebSearch({
   }
 }
 
+/**
+ * Resolves a hostname and rejects if ANY resolved address is non-public
+ * (DNS-rebinding mitigation), re-running immediately before each connect.
+ * IP literals are already validated by {@link isAllowedFetchTarget}, so they
+ * skip DNS. Throws on block or DNS failure (fail-closed).
+ *
+ * Note: connection-level IP pinning is intentionally omitted — Node's global
+ * `fetch` exposes no per-request `lookup`/dispatcher hook that survives the
+ * Next.js webpack build (a bare `undici` import is not resolvable in this bundle),
+ * so a small validate→connect TOCTOU window remains. Per-hop re-resolution keeps
+ * it narrow and is the standard mitigation.
+ */
+async function assertResolvesPublic(hostname: string): Promise<void> {
+  const bare = hostname.replace(/^\[|\]$/g, '');
+  if (isIpLiteral(bare)) return; // already validated as a public IP literal
+
+  let addresses: { address: string }[];
+  try {
+    addresses = await dnsPromises.lookup(hostname, { all: true });
+  } catch {
+    throw new Error('Unable to resolve hostname');
+  }
+  if (!addresses.length) throw new Error('Hostname resolved to no addresses');
+  for (const { address } of addresses) {
+    if (!isPublicIp(address)) throw new Error(PRIVATE_HOST_MESSAGE);
+  }
+}
+
+/**
+ * SSRF-safe fetch: follows redirects MANUALLY (redirect: 'manual'), revalidating
+ * scheme + host and re-resolving DNS on EVERY hop. This closes the M2 bypass
+ * where an allowed initial URL 302s to cloud-metadata/internal hosts. A single
+ * shared `signal` bounds total time across all hops (and the caller's body read),
+ * so a redirect chain cannot extend the deadline.
+ */
+async function ssrfSafeFetch(
+  initialUrl: string,
+  headers: Record<string, string>,
+  signal: AbortSignal,
+): Promise<Response> {
+  let currentUrl = initialUrl;
+
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const decision = isAllowedFetchTarget(currentUrl);
+    if (!decision.ok) throw new Error(decision.reason ?? PRIVATE_HOST_MESSAGE);
+
+    await assertResolvesPublic(new URL(currentUrl).hostname);
+
+    const response = await fetch(currentUrl, { headers, redirect: 'manual', signal });
+
+    if (!REDIRECT_STATUSES.has(response.status)) {
+      return response;
+    }
+
+    // Redirect: discard this hop's body, then validate the next target.
+    const location = response.headers.get('location');
+    await response.body?.cancel().catch(() => { /* ignore */ });
+
+    if (!location) throw new Error('Redirect response missing Location header');
+    let next: URL;
+    try {
+      next = new URL(location, currentUrl);
+    } catch {
+      throw new Error('Invalid redirect Location');
+    }
+    currentUrl = next.toString();
+  }
+
+  throw new Error('Too many redirects');
+}
+
 export const webSearchTools = {
-  /**
-   * Search the web for current information using Brave Search API
-   */
   web_search: tool({
     description: `Search the web for current information, news, documentation, and real-time data. Use this when:
 - User asks about current events, news, or recent developments
@@ -202,6 +282,137 @@ Returns structured search results with titles, links, summaries, and publication
             'Check if BRAVE_API_KEY environment variable is configured',
             'Try a different search query',
             'If the error persists, inform the user that web search is temporarily unavailable',
+          ],
+        };
+      }
+    },
+  }),
+
+  web_fetch: tool({
+    description: `Fetch and read the full content of a specific URL as clean markdown. Use this when:
+- You have a direct URL and need its full content (not just a snippet)
+- web_search returned a link you want to read in detail
+- User provides a URL they want you to read
+- Fetching documentation, articles, GitHub files, API references
+
+Returns the page content converted to readable markdown.`,
+    inputSchema: z.object({
+      url: z.string().url().describe('The full URL to fetch (must start with https://)'),
+      maxLength: z.number().min(1000).max(50000).optional().default(20000)
+        .describe('Max characters of markdown to return (default 20000)'),
+    }),
+    execute: async ({ url, maxLength = 20000 }, { experimental_context: context }) => {
+      const userId = (context as ToolExecutionContext)?.userId;
+      if (!userId) throw new Error('User authentication required');
+
+      // Pure scheme + literal-IP gate (no DNS, no network) before doing any work.
+      const targetDecision = isAllowedFetchTarget(url);
+      if (!targetDecision.ok) {
+        return {
+          success: false,
+          url,
+          error: targetDecision.reason ?? PRIVATE_HOST_MESSAGE,
+          content: '',
+          nextSteps: ['Provide a publicly accessible https:// URL'],
+        };
+      }
+
+      try {
+        webSearchLogger.debug('Fetching URL', { userId: maskIdentifier(userId), url: redactUrl(url) });
+
+        // Follows redirects manually, revalidating scheme/host + re-resolving DNS each hop (SSRF-safe).
+        // One shared deadline bounds the whole operation, including the body read below.
+        const signal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+        const response = await ssrfSafeFetch(url, { 'User-Agent': 'Mozilla/5.0 (compatible; PageSpace/1.0)' }, signal);
+
+        if (!response.ok) {
+          throw new Error(`Fetch failed: ${response.status} ${response.statusText}`);
+        }
+
+        const contentType = response.headers.get('content-type') ?? '';
+        if (!contentType.includes('text/html') && !contentType.includes('text/plain')) {
+          return {
+            success: false,
+            url,
+            error: `Unsupported content type: ${contentType}`,
+            content: '',
+            nextSteps: ['This URL returns non-HTML content. Try web_search for a different source.'],
+          };
+        }
+
+        const clHeader = response.headers.get('content-length');
+        if (clHeader && Number(clHeader) > MAX_FETCH_BYTES) {
+          return {
+            success: false,
+            url,
+            error: `Response too large (${Math.round(Number(clHeader) / 1024 / 1024)} MB, max 5 MB)`,
+            content: '',
+            nextSteps: ['Try web_search for a summary of this content'],
+          };
+        }
+
+        // Stream body with hard byte cap to avoid buffering large responses
+        const reader = response.body?.getReader();
+        if (!reader) throw new Error('Response body is not readable');
+        const chunks: Uint8Array[] = [];
+        let bytesRead = 0;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done || !value) break;
+          const remaining = MAX_FETCH_BYTES - bytesRead;
+          if (value.length >= remaining) {
+            chunks.push(value.subarray(0, remaining));
+            bytesRead += remaining;
+            await reader.cancel();
+            break;
+          }
+          chunks.push(value);
+          bytesRead += value.length;
+        }
+        const allBytes = new Uint8Array(bytesRead);
+        let offset = 0;
+        for (const chunk of chunks) { allBytes.set(chunk, offset); offset += chunk.length; }
+        const html = new TextDecoder().decode(allBytes);
+
+        const td = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
+        // Drop <script>/<style> via Turndown's HTML parser rather than regex, so
+        // malformed/nested tags can't smuggle content into the markdown.
+        td.remove(['script', 'style']);
+        const fullMarkdown = td.turndown(html);
+        const markdown = fullMarkdown.slice(0, maxLength);
+
+        webSearchLogger.info('URL fetch complete', {
+          userId: maskIdentifier(userId),
+          url: redactUrl(url),
+          markdownLength: markdown.length,
+          truncated: fullMarkdown.length > maxLength,
+        });
+
+        return {
+          success: true,
+          url,
+          contentLength: markdown.length,
+          truncated: fullMarkdown.length > maxLength,
+          content: markdown,
+          nextSteps: [
+            'Read and synthesize the fetched content',
+            'Cite the source URL when referencing this content',
+            'If content is truncated, focus on the most relevant sections',
+          ],
+        };
+      } catch (error) {
+        webSearchLogger.error('URL fetch failed', error as Error, {
+          userId: maskIdentifier(userId),
+          url: redactUrl(url),
+        });
+        return {
+          success: false,
+          url,
+          error: error instanceof Error ? error.message : 'Unknown error',
+          content: '',
+          nextSteps: [
+            'Check the URL is publicly accessible (not behind auth or paywall)',
+            'Try web_search to find an alternative source',
           ],
         };
       }

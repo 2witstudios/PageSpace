@@ -1,0 +1,1 @@
+ALTER TYPE "public"."tenant_status" ADD VALUE 'failed';

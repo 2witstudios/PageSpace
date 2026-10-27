@@ -1,16 +1,15 @@
 /**
- * Contract tests for GET/POST/PATCH/DELETE /api/ai/settings
+ * Contract tests for GET/POST/PATCH/DELETE /api/ai/settings.
  *
- * These tests verify the Request → Response contract and boundary obligations.
- * Database operations are mocked at the repository seam.
+ * Post-BYOK + OpenRouter consolidation: GET reports deployment-level provider
+ * availability for every vendor (all OpenRouter-backed in cloud), POST/DELETE
+ * return 410 Gone, PATCH updates the user's selected provider/model and rejects
+ * unavailable providers with 503 and non-allowlist models for free users with 403.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { NextResponse } from 'next/server';
-import { GET, POST, PATCH, DELETE } from '../route';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import type { SessionAuthResult } from '@/lib/auth';
 
-// Mock the repository seam (boundary)
 vi.mock('@/lib/repositories/ai-settings-repository', () => ({
   aiSettingsRepository: {
     getUserSettings: vi.fn(),
@@ -18,761 +17,521 @@ vi.mock('@/lib/repositories/ai-settings-repository', () => ({
   },
 }));
 
-// Mock auth (boundary)
+// No org sign-in policy holds the caller back here: a refusal stays the route's own (D-OW-45 is proven elsewhere).
+vi.mock('@pagespace/lib/permissions/permissions', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/permissions/permissions')>()),
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
+}));
+
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  getPrincipalDriveAccess: vi.fn(async () => true),
 }));
 
-// Mock logging (boundary)
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
-    ai: {
-      info: vi.fn(),
-      error: vi.fn(),
-      warn: vi.fn(),
-      debug: vi.fn(),
+vi.mock('@/lib/ai/core/org-model-policy', () => ({
+  offeredModels: vi.fn(async () => null),
+}));
+
+vi.mock('@pagespace/lib/logging/logger-config', () => {
+  const child = vi.fn(() => ({
+    info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(),
+    child: vi.fn(() => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() })),
+  }));
+  return {
+    loggers: {
+      ai: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), child },
     },
-  },
+    logger: { child },
+  };
+});
+
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  auditRequest: vi.fn(),
 }));
 
-// Mock AI provider settings functions (boundary)
-vi.mock('@/lib/ai/core', () => ({
-  getDefaultPageSpaceSettings: vi.fn(),
-  getUserOpenRouterSettings: vi.fn(),
-  createOpenRouterSettings: vi.fn(),
-  deleteOpenRouterSettings: vi.fn(),
-  getUserGoogleSettings: vi.fn(),
-  createGoogleSettings: vi.fn(),
-  deleteGoogleSettings: vi.fn(),
-  getUserOpenAISettings: vi.fn(),
-  createOpenAISettings: vi.fn(),
-  deleteOpenAISettings: vi.fn(),
-  getUserAnthropicSettings: vi.fn(),
-  createAnthropicSettings: vi.fn(),
-  deleteAnthropicSettings: vi.fn(),
-  getUserXAISettings: vi.fn(),
-  createXAISettings: vi.fn(),
-  deleteXAISettings: vi.fn(),
-  getUserOllamaSettings: vi.fn(),
-  createOllamaSettings: vi.fn(),
-  deleteOllamaSettings: vi.fn(),
-  getUserLMStudioSettings: vi.fn(),
-  createLMStudioSettings: vi.fn(),
-  deleteLMStudioSettings: vi.fn(),
-  getUserGLMSettings: vi.fn(),
-  createGLMSettings: vi.fn(),
-  deleteGLMSettings: vi.fn(),
-  getUserMiniMaxSettings: vi.fn(),
-  createMiniMaxSettings: vi.fn(),
-  deleteMiniMaxSettings: vi.fn(),
-  getUserAzureOpenAISettings: vi.fn(),
-  createAzureOpenAISettings: vi.fn(),
-  deleteAzureOpenAISettings: vi.fn(),
+vi.mock('@pagespace/lib/deployment-mode', () => ({
+  isOnPrem: vi.fn(() => false),
 }));
 
-// Mock subscription middleware (boundary)
 vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
-  requiresProSubscription: vi.fn(),
+  requiresProSubscription: vi.fn(() => false),
+  createAdminRestrictedResponse: vi.fn(() =>
+    new Response(
+      JSON.stringify({ error: 'Provider restricted', message: 'This provider is restricted to administrators.' }),
+      { status: 403, headers: { 'Content-Type': 'application/json' } }
+    )
+  ),
 }));
 
+import { GET, POST, PATCH, DELETE } from '../route';
 import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
-import {
-  getDefaultPageSpaceSettings,
-  getUserOpenRouterSettings,
-  createOpenRouterSettings,
-  deleteOpenRouterSettings,
-  getUserGoogleSettings,
-  createGoogleSettings,
-  deleteGoogleSettings,
-  getUserOpenAISettings,
-  createOpenAISettings,
-  deleteOpenAISettings,
-  getUserAnthropicSettings,
-  createAnthropicSettings,
-  deleteAnthropicSettings,
-  getUserXAISettings,
-  createXAISettings,
-  deleteXAISettings,
-  getUserOllamaSettings,
-  createOllamaSettings,
-  deleteOllamaSettings,
-  getUserLMStudioSettings,
-  createLMStudioSettings,
-  deleteLMStudioSettings,
-  getUserGLMSettings,
-  createGLMSettings,
-  deleteGLMSettings,
-  getUserMiniMaxSettings,
-  createMiniMaxSettings,
-  deleteMiniMaxSettings,
-} from '@/lib/ai/core';
-import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
+import { authenticateRequestWithOptions, getPrincipalDriveAccess, isAuthError } from '@/lib/auth';
+import { offeredModels } from '@/lib/ai/core/org-model-policy';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
+import { requiresProSubscription, createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
 
-// Test fixtures
+const ENV_KEYS = [
+  'OPENROUTER_DEFAULT_API_KEY',
+  'OPENAI_DEFAULT_API_KEY',
+  'OLLAMA_BASE_URL',
+  'LMSTUDIO_BASE_URL',
+  'AZURE_OPENAI_API_KEY',
+  'AZURE_OPENAI_ENDPOINT',
+  'GLM_CODER_DEFAULT_API_KEY',
+] as const;
+
 const mockUserId = 'user_123';
 
-const mockWebAuth = (userId: string): SessionAuthResult => ({
+const mockSession = (userId: string, role: 'user' | 'admin' = 'user'): SessionAuthResult => ({
   userId,
   tokenVersion: 0,
   tokenType: 'session',
   sessionId: 'test-session-id',
-  role: 'user',
+  role,
   adminRoleVersion: 0,
 });
 
-const mockAuthError = (status = 401): AuthError => ({
-  error: NextResponse.json({ error: 'Unauthorized' }, { status }),
-});
-
-const mockUserSettings = (overrides: Partial<{
-  id: string;
-  currentAiProvider: string | null;
-  currentAiModel: string | null;
-  subscriptionTier: string | null;
-}> = {}) => ({
-  id: overrides.id ?? mockUserId,
-  currentAiProvider: overrides.currentAiProvider ?? 'pagespace',
-  currentAiModel: overrides.currentAiModel ?? 'glm-4.5-air',
-  subscriptionTier: overrides.subscriptionTier ?? 'free',
-});
-
-const createGetRequest = () =>
-  new Request('https://example.com/api/ai/settings', { method: 'GET' });
-
-const createPostRequest = (body: Record<string, unknown>) =>
-  new Request('https://example.com/api/ai/settings', {
-    method: 'POST',
+function makeRequest(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', body?: unknown): Request {
+  return new Request('http://localhost:3000/api/ai/settings', {
+    method,
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: body ? JSON.stringify(body) : undefined,
   });
+}
 
-const createPatchRequest = (body: Record<string, unknown>) =>
-  new Request('https://example.com/api/ai/settings', {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-
-const createDeleteRequest = (body: Record<string, unknown>) =>
-  new Request('https://example.com/api/ai/settings', {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-
-describe('GET /api/ai/settings', () => {
+describe('AI settings route', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-
-    // Default: authenticated user
-    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSession(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
-
-    // Default: user exists
-    vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue(mockUserSettings());
-
-    // Default: no provider settings configured
-    vi.mocked(getDefaultPageSpaceSettings).mockResolvedValue(null);
-    vi.mocked(getUserOpenRouterSettings).mockResolvedValue(null);
-    vi.mocked(getUserGoogleSettings).mockResolvedValue(null);
-    vi.mocked(getUserOpenAISettings).mockResolvedValue(null);
-    vi.mocked(getUserAnthropicSettings).mockResolvedValue(null);
-    vi.mocked(getUserXAISettings).mockResolvedValue(null);
-    vi.mocked(getUserOllamaSettings).mockResolvedValue(null);
-    vi.mocked(getUserLMStudioSettings).mockResolvedValue(null);
-    vi.mocked(getUserGLMSettings).mockResolvedValue(null);
-    vi.mocked(getUserMiniMaxSettings).mockResolvedValue(null);
-  });
-
-  describe('authentication', () => {
-    it('should return 401 when not authenticated', async () => {
-      vi.mocked(isAuthError).mockReturnValue(true);
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
-
-      const request = createGetRequest();
-
-      const response = await GET(request);
-
-      expect(response.status).toBe(401);
+    vi.mocked(isOnPrem).mockReturnValue(false);
+    vi.mocked(requiresProSubscription).mockReturnValue(false);
+    vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue({
+      id: mockUserId,
+      currentAiProvider: 'openai',
+      currentAiModel: 'openai/gpt-5.4-nano',
+      subscriptionTier: 'pro',
+      imageGenerationModel: null,
     });
+    for (const key of ENV_KEYS) delete process.env[key];
   });
 
-  describe('successful retrieval', () => {
-    it('should return current AI settings for authenticated user', async () => {
-      const request = createGetRequest();
+  afterEach(() => {
+    for (const key of ENV_KEYS) delete process.env[key];
+  });
 
-      const response = await GET(request);
+  describe('GET', () => {
+    it('POL-8 (partial) with a driveId the caller can reach, returns the models that drive\'s org allows, as the server computed them', async () => {
+      vi.mocked(offeredModels).mockResolvedValueOnce({ openai: ['openai/gpt-5.4-nano'] });
+      const response = await GET(new Request('http://localhost:3000/api/ai/settings?driveId=drive-org'));
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.currentProvider).toBe('pagespace');
-      expect(body.currentModel).toBe('glm-4.5-air');
-      expect(body.userSubscriptionTier).toBe('free');
-      expect(body.providers).toBeDefined();
+      expect(getPrincipalDriveAccess).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), 'drive-org');
+      expect(offeredModels).toHaveBeenCalledWith('drive-org');
+      expect(body.allowedModels).toEqual({ openai: ['openai/gpt-5.4-nano'] });
+    });
+
+    it('POL-8 (partial) a drive the caller cannot reach is not found, and its policy is never read', async () => {
+      vi.mocked(getPrincipalDriveAccess).mockResolvedValueOnce(false);
+      const response = await GET(new Request('http://localhost:3000/api/ai/settings?driveId=drive-other'));
+
+      expect(response.status).toBe(404);
+      expect(offeredModels).not.toHaveBeenCalled();
+    });
+
+    it('POL-8 (partial) without a driveId nothing is restricted (allowedModels null)', async () => {
+      const body = await (await GET(makeRequest('GET'))).json();
+      expect(offeredModels).toHaveBeenCalledWith(null);
+      expect(body.allowedModels).toBeNull();
+    });
+
+    it('reports providers as unavailable when no env keys are set', async () => {
+      const response = await GET(makeRequest('GET'));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.providers.anthropic.isAvailable).toBe(false);
+      expect(body.providers.openai.isAvailable).toBe(false);
+      expect(body.providers.google.isAvailable).toBe(false);
       expect(body.isAnyProviderConfigured).toBe(false);
     });
 
-    it('should return provider configuration status', async () => {
-      vi.mocked(getDefaultPageSpaceSettings).mockResolvedValue({
-        isConfigured: true,
-        apiKey: 'test-key',
-        provider: 'glm',
-      });
-      vi.mocked(getUserOpenRouterSettings).mockResolvedValue({
-        isConfigured: true,
-        apiKey: 'openrouter-key',
-      });
+    it('reports all cloud vendors available once OPENROUTER_DEFAULT_API_KEY is set', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
 
-      const request = createGetRequest();
-
-      const response = await GET(request);
+      const response = await GET(makeRequest('GET'));
       const body = await response.json();
 
-      expect(response.status).toBe(200);
-      expect(body.providers.pagespace.isConfigured).toBe(true);
-      expect(body.providers.pagespace.hasApiKey).toBe(true);
-      expect(body.providers.openrouter.isConfigured).toBe(true);
-      expect(body.providers.openrouter.hasApiKey).toBe(true);
+      // Every cloud vendor is OpenRouter-backed, so the single key lights them all up.
+      expect(body.providers.openai.isAvailable).toBe(true);
+      expect(body.providers.anthropic.isAvailable).toBe(true);
+      expect(body.providers.google.isAvailable).toBe(true);
+      expect(body.providers.xai.isAvailable).toBe(true);
+      expect(body.providers.deepseek.isAvailable).toBe(true);
       expect(body.isAnyProviderConfigured).toBe(true);
     });
 
-    it('should return ollama and lmstudio with baseUrl check', async () => {
-      vi.mocked(getUserOllamaSettings).mockResolvedValue({
-        isConfigured: true,
-        baseUrl: 'http://localhost:11434',
-      });
-      vi.mocked(getUserLMStudioSettings).mockResolvedValue({
-        isConfigured: true,
-        baseUrl: 'http://localhost:1234',
-      });
+    it('does not return the retired pageSpaceBackend field', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
 
-      const request = createGetRequest();
-
-      const response = await GET(request);
+      const response = await GET(makeRequest('GET'));
       const body = await response.json();
 
-      expect(body.providers.ollama.isConfigured).toBe(true);
-      expect(body.providers.ollama.hasBaseUrl).toBe(true);
-      expect(body.providers.lmstudio.isConfigured).toBe(true);
-      expect(body.providers.lmstudio.hasBaseUrl).toBe(true);
+      expect(body.pageSpaceBackend).toBeUndefined();
     });
 
-    it('should call repository with userId', async () => {
-      const request = createGetRequest();
+    it('exposes all OpenRouter-backed vendor providers in cloud mode when configured', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
 
-      await GET(request);
-
-      expect(aiSettingsRepository.getUserSettings).toHaveBeenCalledWith(mockUserId);
-    });
-  });
-
-  describe('error handling', () => {
-    it('should return 500 when repository throws', async () => {
-      vi.mocked(aiSettingsRepository.getUserSettings).mockRejectedValue(
-        new Error('Database error')
-      );
-
-      const request = createGetRequest();
-
-      const response = await GET(request);
+      const response = await GET(makeRequest('GET'));
       const body = await response.json();
 
-      expect(response.status).toBe(500);
-      expect(body.error).toBe('Failed to retrieve settings');
-      expect(loggers.ai.error).toHaveBeenCalled();
+      // Cloud mode: every OpenRouter-backed vendor shows up once the key is set.
+      // GLM (direct/admin-only) has its own separate key gate.
+      expect(body.providers.anthropic.isAvailable).toBe(true);
+      expect(body.providers.openai.isAvailable).toBe(true);
+      expect(body.providers.google.isAvailable).toBe(true);
+      expect(body.providers.xai.isAvailable).toBe(true);
+      expect(body.providers.mistral.isAvailable).toBe(true);
     });
-  });
-});
 
-describe('POST /api/ai/settings', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+    it('returns isAdmin: false for regular users', async () => {
+      const response = await GET(makeRequest('GET'));
+      expect((await response.json()).isAdmin).toBe(false);
+    });
 
-    // Default: authenticated user
-    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
-    vi.mocked(isAuthError).mockReturnValue(false);
-  });
+    it('returns isAdmin: true for admin users', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSession(mockUserId, 'admin'));
 
-  describe('authentication', () => {
-    it('should return 401 when not authenticated', async () => {
+      const response = await GET(makeRequest('GET'));
+      expect((await response.json()).isAdmin).toBe(true);
+    });
+
+    it('reports glm unavailable when GLM_CODER_DEFAULT_API_KEY is unset', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+      const response = await GET(makeRequest('GET'));
+      expect((await response.json()).providers.glm.isAvailable).toBe(false);
+    });
+
+    it('reports glm available when GLM_CODER_DEFAULT_API_KEY is set', async () => {
+      process.env.GLM_CODER_DEFAULT_API_KEY = 'glm-key';
+      const response = await GET(makeRequest('GET'));
+      expect((await response.json()).providers.glm.isAvailable).toBe(true);
+    });
+
+    it('reports the public zai provider available when the OpenRouter key is set', async () => {
+      // zai is OpenRouter-backed; without it in ALL_PROVIDER_NAMES the availability
+      // map omits it and the picker/agent-config show "Setup Required".
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+      const response = await GET(makeRequest('GET'));
+      expect((await response.json()).providers.zai.isAvailable).toBe(true);
+    });
+
+    it('reports the public zai provider unavailable when the OpenRouter key is unset', async () => {
+      delete process.env.OPENROUTER_DEFAULT_API_KEY;
+      const response = await GET(makeRequest('GET'));
+      expect((await response.json()).providers.zai.isAvailable).toBe(false);
+    });
+
+    it('does not expose a paid `openrouter` or `pagespace` provider key', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+
+      const response = await GET(makeRequest('GET'));
+      const body = await response.json();
+
+      // The removed virtual providers no longer appear in the availability map.
+      expect(body.providers.openrouter).toBeUndefined();
+      expect(body.providers.openrouter_free).toBeUndefined();
+      expect(body.providers.pagespace).toBeUndefined();
+    });
+
+    it('reports ollama unavailable when OLLAMA_BASE_URL is unset', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+      const response = await GET(makeRequest('GET'));
+      expect((await response.json()).providers.ollama.isAvailable).toBe(false);
+    });
+
+    it('exposes configured local providers in onprem mode without masking', async () => {
+      vi.mocked(isOnPrem).mockReturnValue(true);
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'set';
+      process.env.OLLAMA_BASE_URL = 'http://localhost:11434';
+
+      const response = await GET(makeRequest('GET'));
+      const body = await response.json();
+
+      // On-prem: cloud providers still hidden (not in ONPREM_ALLOWED_PROVIDERS)
+      expect(body.providers.anthropic.isAvailable).toBe(false);
+      expect(body.providers.openai.isAvailable).toBe(false);
+      // On-prem: local providers are NOT masked — ollama shows up
+      expect(body.providers.ollama.isAvailable).toBe(true);
+    });
+
+    it('returns the selection and refuses a retired personal Business tier', async () => {
+      vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue({
+        id: mockUserId,
+        currentAiProvider: 'anthropic',
+        currentAiModel: 'anthropic/claude-sonnet-4.6',
+        subscriptionTier: 'business',
+        imageGenerationModel: null,
+      });
+
+      const response = await GET(makeRequest('GET'));
+      const body = await response.json();
+
+      expect(body.currentProvider).toBe('anthropic');
+      expect(body.currentModel).toBe('anthropic/claude-sonnet-4.6');
+      expect(body.userSubscriptionTier).toBe('free');
+    });
+
+    it('falls back to the default provider/model when the user has no selection', async () => {
+      vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue({
+        id: mockUserId,
+        currentAiProvider: null,
+        currentAiModel: null,
+        subscriptionTier: null,
+        imageGenerationModel: null,
+      });
+
+      const response = await GET(makeRequest('GET'));
+      const body = await response.json();
+
+      expect(body.currentProvider).toBe('openai');
+      expect(body.currentModel).toBe('openai/gpt-6-luna');
+      expect(body.userSubscriptionTier).toBe('free');
+    });
+
+    // Model retirements land with every catalog refresh, and the stored selection is
+    // never rewritten. Reporting a delisted id would put the selector in a state it
+    // can't represent, while the request path silently ran the substituted default.
+    it('resolves a stored model that has been delisted to the current default', async () => {
+      vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue({
+        id: mockUserId,
+        currentAiProvider: 'anthropic',
+        currentAiModel: 'anthropic/claude-3.5-haiku', // removed from the catalog
+        subscriptionTier: 'pro',
+        imageGenerationModel: null,
+      });
+
+      const response = await GET(makeRequest('GET'));
+      const body = await response.json();
+
+      expect(body.currentProvider).toBe('openai');
+      expect(body.currentModel).toBe('openai/gpt-6-luna');
+    });
+
+    it('leaves a runtime-discovered local model untouched', async () => {
+      vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue({
+        id: mockUserId,
+        currentAiProvider: 'ollama',
+        currentAiModel: 'some-locally-pulled-model',
+        subscriptionTier: 'free',
+        imageGenerationModel: null,
+      });
+
+      const response = await GET(makeRequest('GET'));
+      const body = await response.json();
+
+      expect(body.currentProvider).toBe('ollama');
+      expect(body.currentModel).toBe('some-locally-pulled-model');
+    });
+
+    it('returns auth error when not authenticated', async () => {
       vi.mocked(isAuthError).mockReturnValue(true);
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
+      const errorResponse = { error: new Response('Unauthorized', { status: 401 }) };
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(errorResponse as never);
 
-      const request = createPostRequest({ provider: 'openrouter', apiKey: 'test-key' });
-
-      const response = await POST(request);
-
+      const response = await GET(makeRequest('GET'));
       expect(response.status).toBe(401);
     });
   });
 
-  describe('validation', () => {
-    it('should reject invalid provider', async () => {
-      const request = createPostRequest({ provider: 'invalid-provider', apiKey: 'test-key' });
-
-      const response = await POST(request);
+  describe('POST', () => {
+    it('returns 410 Gone with retirement message', async () => {
+      const response = await POST();
       const body = await response.json();
 
-      expect(response.status).toBe(400);
-      expect(body.error).toContain('Invalid provider');
-    });
-
-    it('should reject missing API key for API-key providers', async () => {
-      const request = createPostRequest({ provider: 'openrouter', apiKey: '' });
-
-      const response = await POST(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(400);
-      expect(body.error).toBe('API key is required');
-    });
-
-    it('should reject missing base URL for Ollama', async () => {
-      const request = createPostRequest({ provider: 'ollama', baseUrl: '' });
-
-      const response = await POST(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(400);
-      expect(body.error).toBe('Base URL is required for Ollama');
-    });
-
-    it('should reject missing base URL for LM Studio', async () => {
-      const request = createPostRequest({ provider: 'lmstudio', baseUrl: '' });
-
-      const response = await POST(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(400);
-      expect(body.error).toBe('Base URL is required for LM Studio');
+      expect(response.status).toBe(410);
+      expect(body.error).toContain('retired');
     });
   });
 
-  describe('successful creation', () => {
-    it('should save OpenRouter API key successfully', async () => {
-      vi.mocked(createOpenRouterSettings).mockResolvedValue(undefined);
-
-      const request = createPostRequest({ provider: 'openrouter', apiKey: '  test-api-key  ' });
-
-      const response = await POST(request);
+  describe('DELETE', () => {
+    it('returns 410 Gone with retirement message', async () => {
+      const response = await DELETE();
       const body = await response.json();
 
-      expect(response.status).toBe(201);
+      expect(response.status).toBe(410);
+      expect(body.error).toContain('retired');
+    });
+  });
+
+  describe('PATCH', () => {
+    it('updates the user selection for a configured cloud vendor', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+
+      const response = await PATCH(makeRequest('PATCH', {
+        provider: 'openai',
+        model: 'openai/gpt-5.4-nano',
+      }));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
       expect(body.success).toBe(true);
-      expect(body.provider).toBe('openrouter');
-      expect(body.message).toContain('OpenRouter');
-      expect(createOpenRouterSettings).toHaveBeenCalledWith(mockUserId, 'test-api-key');
+      expect(aiSettingsRepository.updateProviderSettings).toHaveBeenCalledWith(mockUserId, {
+        provider: 'openai',
+        model: 'openai/gpt-5.4-nano',
+      });
     });
 
-    it('should save Google API key successfully', async () => {
-      vi.mocked(createGoogleSettings).mockResolvedValue(undefined);
+    it('allows selecting another configured vendor (anthropic) on a paid tier', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
 
-      const request = createPostRequest({ provider: 'google', apiKey: 'google-key' });
-
-      const response = await POST(request);
+      const response = await PATCH(makeRequest('PATCH', {
+        provider: 'anthropic',
+        model: 'anthropic/claude-opus-4.8',
+      }));
       const body = await response.json();
 
-      expect(response.status).toBe(201);
+      expect(response.status).toBe(200);
       expect(body.success).toBe(true);
-      expect(createGoogleSettings).toHaveBeenCalledWith(mockUserId, 'google-key');
+      expect(aiSettingsRepository.updateProviderSettings).toHaveBeenCalledWith(mockUserId, {
+        provider: 'anthropic',
+        model: 'anthropic/claude-opus-4.8',
+      });
     });
 
-    it('should save OpenAI API key successfully', async () => {
-      vi.mocked(createOpenAISettings).mockResolvedValue(undefined);
+    it('passes isAdmin=true to the subscription gate for admin callers', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSession(mockUserId, 'admin'));
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+      vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue({
+        id: mockUserId,
+        currentAiProvider: 'openai',
+        currentAiModel: 'openai/gpt-5.4-nano',
+        subscriptionTier: 'free',
+        imageGenerationModel: null,
+      });
 
-      const request = createPostRequest({ provider: 'openai', apiKey: 'openai-key' });
+      const response = await PATCH(makeRequest('PATCH', {
+        provider: 'anthropic',
+        model: 'anthropic/claude-opus-4.8',
+      }));
 
-      const response = await POST(request);
-
-      expect(response.status).toBe(201);
-      expect(createOpenAISettings).toHaveBeenCalledWith(mockUserId, 'openai-key');
+      expect(response.status).toBe(200);
+      // Admins bypass the subscription gate — it must be told the caller is an admin.
+      expect(requiresProSubscription).toHaveBeenCalledWith('anthropic', 'anthropic/claude-opus-4.8', 'free', true);
     });
 
-    it('should save Anthropic API key successfully', async () => {
-      vi.mocked(createAnthropicSettings).mockResolvedValue(undefined);
-
-      const request = createPostRequest({ provider: 'anthropic', apiKey: 'anthropic-key' });
-
-      const response = await POST(request);
-
-      expect(response.status).toBe(201);
-      expect(createAnthropicSettings).toHaveBeenCalledWith(mockUserId, 'anthropic-key');
-    });
-
-    it('should save xAI API key successfully', async () => {
-      vi.mocked(createXAISettings).mockResolvedValue(undefined);
-
-      const request = createPostRequest({ provider: 'xai', apiKey: 'xai-key' });
-
-      const response = await POST(request);
-
-      expect(response.status).toBe(201);
-      expect(createXAISettings).toHaveBeenCalledWith(mockUserId, 'xai-key');
-    });
-
-    it('should save Ollama base URL successfully', async () => {
-      vi.mocked(createOllamaSettings).mockResolvedValue(undefined);
-
-      const request = createPostRequest({ provider: 'ollama', baseUrl: 'http://localhost:11434' });
-
-      const response = await POST(request);
+    it('returns 503 for a cloud vendor when OPENROUTER_DEFAULT_API_KEY is not configured', async () => {
+      const response = await PATCH(makeRequest('PATCH', {
+        provider: 'anthropic',
+        model: 'anthropic/claude-sonnet-4.6',
+      }));
       const body = await response.json();
 
-      expect(response.status).toBe(201);
-      expect(body.success).toBe(true);
-      expect(createOllamaSettings).toHaveBeenCalledWith(mockUserId, 'http://localhost:11434');
+      expect(response.status).toBe(503);
+      expect(body.error).toContain('not configured');
+      expect(aiSettingsRepository.updateProviderSettings).not.toHaveBeenCalled();
     });
 
-    it('should save LM Studio base URL successfully', async () => {
-      vi.mocked(createLMStudioSettings).mockResolvedValue(undefined);
+    it('allows local providers in onprem mode when configured', async () => {
+      vi.mocked(isOnPrem).mockReturnValue(true);
+      process.env.OLLAMA_BASE_URL = 'http://localhost:11434';
 
-      const request = createPostRequest({ provider: 'lmstudio', baseUrl: 'http://localhost:1234/v1' });
+      const response = await PATCH(makeRequest('PATCH', { provider: 'ollama' }));
 
-      const response = await POST(request);
-
-      expect(response.status).toBe(201);
-      expect(createLMStudioSettings).toHaveBeenCalledWith(mockUserId, 'http://localhost:1234/v1');
+      expect(response.status).toBe(200);
     });
 
-    it('should save GLM API key successfully', async () => {
-      vi.mocked(createGLMSettings).mockResolvedValue(undefined);
+    it('returns 400 for an unknown provider', async () => {
+      const response = await PATCH(makeRequest('PATCH', {
+        provider: 'totally-not-real',
+        model: 'x',
+      }));
 
-      const request = createPostRequest({ provider: 'glm', apiKey: 'glm-key' });
-
-      const response = await POST(request);
-
-      expect(response.status).toBe(201);
-      expect(createGLMSettings).toHaveBeenCalledWith(mockUserId, 'glm-key');
+      expect(response.status).toBe(400);
     });
 
-    it('should save MiniMax API key successfully', async () => {
-      vi.mocked(createMiniMaxSettings).mockResolvedValue(undefined);
+    it('returns 400 when model is missing for a cloud vendor', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
 
-      const request = createPostRequest({ provider: 'minimax', apiKey: 'minimax-key' });
-
-      const response = await POST(request);
-
-      expect(response.status).toBe(201);
-      expect(createMiniMaxSettings).toHaveBeenCalledWith(mockUserId, 'minimax-key');
-    });
-  });
-
-  describe('error handling', () => {
-    it('should return 500 when save throws', async () => {
-      vi.mocked(createOpenRouterSettings).mockRejectedValue(new Error('Save failed'));
-
-      const request = createPostRequest({ provider: 'openrouter', apiKey: 'test-key' });
-
-      const response = await POST(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(500);
-      expect(body.error).toContain('Failed to save');
-      expect(loggers.ai.error).toHaveBeenCalled();
-    });
-  });
-});
-
-describe('PATCH /api/ai/settings', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-
-    // Default: authenticated user
-    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
-    vi.mocked(isAuthError).mockReturnValue(false);
-
-    // Default: user exists
-    vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue(mockUserSettings());
-
-    // Default: no subscription required
-    vi.mocked(requiresProSubscription).mockReturnValue(false);
-
-    // Default: update succeeds
-    vi.mocked(aiSettingsRepository.updateProviderSettings).mockResolvedValue(undefined);
-  });
-
-  describe('authentication', () => {
-    it('should return 401 when not authenticated', async () => {
-      vi.mocked(isAuthError).mockReturnValue(true);
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
-
-      const request = createPatchRequest({ provider: 'pagespace', model: 'glm-4.5-air' });
-
-      const response = await PATCH(request);
-
-      expect(response.status).toBe(401);
-    });
-  });
-
-  describe('validation', () => {
-    it('should reject invalid provider', async () => {
-      const request = createPatchRequest({ provider: 'invalid', model: 'test-model' });
-
-      const response = await PATCH(request);
+      const response = await PATCH(makeRequest('PATCH', { provider: 'openai' }));
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toContain('Invalid provider');
+      expect(body.error).toContain('Model is required');
     });
 
-    it('should reject missing model', async () => {
-      const request = createPatchRequest({ provider: 'pagespace' });
-
-      const response = await PATCH(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(400);
-      expect(body.error).toBe('Model is required');
-    });
-  });
-
-  describe('user not found', () => {
-    it('should return 404 when user not found', async () => {
-      vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue(null);
-
-      const request = createPatchRequest({ provider: 'pagespace', model: 'glm-4.5-air' });
-
-      const response = await PATCH(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(404);
-      expect(body.error).toBe('User not found');
-    });
-  });
-
-  describe('subscription checks', () => {
-    it('should reject pro model for free tier user', async () => {
-      vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue(
-        mockUserSettings({ subscriptionTier: 'free' })
-      );
+    it('returns 403 when a free user selects a non-allowlist model', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+      vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue({
+        id: mockUserId,
+        currentAiProvider: 'openai',
+        currentAiModel: 'openai/gpt-5.4-nano',
+        subscriptionTier: 'free',
+        imageGenerationModel: null,
+      });
       vi.mocked(requiresProSubscription).mockReturnValue(true);
 
-      const request = createPatchRequest({ provider: 'pagespace', model: 'pro-model' });
-
-      const response = await PATCH(request);
+      const response = await PATCH(makeRequest('PATCH', {
+        provider: 'anthropic',
+        model: 'anthropic/claude-opus-4.8',
+      }));
       const body = await response.json();
 
       expect(response.status).toBe(403);
-      expect(body.error).toBe('Subscription required');
-      expect(body.upgradeUrl).toBe('/settings/billing');
-      // Verify centralized subscription helper was called with correct arguments
-      expect(requiresProSubscription).toHaveBeenCalledWith('pagespace', 'pro-model', 'free');
-    });
-  });
-
-  describe('successful update', () => {
-    it('should update model selection successfully', async () => {
-      vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue(
-        mockUserSettings({ subscriptionTier: 'pro' })
-      );
-
-      const request = createPatchRequest({ provider: 'openrouter', model: 'anthropic/claude-3-opus' });
-
-      const response = await PATCH(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.success).toBe(true);
-      expect(body.provider).toBe('openrouter');
-      expect(body.model).toBe('anthropic/claude-3-opus');
+      expect(body.upgradeUrl).toBe('/settings/plan');
     });
 
-    it('should accept pagespace provider', async () => {
-      const request = createPatchRequest({ provider: 'pagespace', model: 'glm-4.5-air' });
+    it('lets a free user select an allowlist model (default model)', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+      vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue({
+        id: mockUserId,
+        currentAiProvider: 'openai',
+        currentAiModel: 'openai/gpt-5.4-nano',
+        subscriptionTier: 'free',
+        imageGenerationModel: null,
+      });
+      vi.mocked(requiresProSubscription).mockReturnValue(false);
 
-      const response = await PATCH(request);
+      const response = await PATCH(makeRequest('PATCH', {
+        provider: 'openai',
+        model: 'openai/gpt-5.4-nano',
+      }));
 
       expect(response.status).toBe(200);
     });
 
-    it('should accept openrouter_free provider', async () => {
-      const request = createPatchRequest({ provider: 'openrouter_free', model: 'meta-llama/llama-3.2-3b' });
+    it('returns 403 when a non-admin selects an admin-only provider (glm)', async () => {
+      process.env.GLM_CODER_DEFAULT_API_KEY = 'glm-key';
 
-      const response = await PATCH(request);
+      const response = await PATCH(makeRequest('PATCH', {
+        provider: 'glm',
+        model: 'glm-5.3-flash',
+      }));
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.message).toContain('restricted to administrators');
+      expect(createAdminRestrictedResponse).toHaveBeenCalled();
+      expect(aiSettingsRepository.updateProviderSettings).not.toHaveBeenCalled();
+    });
+
+    it('allows an admin to select an admin-only provider (glm)', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSession(mockUserId, 'admin'));
+      process.env.GLM_CODER_DEFAULT_API_KEY = 'glm-key';
+
+      const response = await PATCH(makeRequest('PATCH', {
+        provider: 'glm',
+        model: 'glm-5.3-flash',
+      }));
 
       expect(response.status).toBe(200);
-    });
-
-    it('should call repository with correct params', async () => {
-      const request = createPatchRequest({ provider: 'openrouter', model: 'test-model' });
-
-      await PATCH(request);
-
-      expect(aiSettingsRepository.updateProviderSettings).toHaveBeenCalledWith(
-        mockUserId,
-        { provider: 'openrouter', model: 'test-model' }
-      );
-    });
-  });
-
-  describe('error handling', () => {
-    it('should return 500 when update throws', async () => {
-      vi.mocked(aiSettingsRepository.updateProviderSettings).mockRejectedValue(
-        new Error('Update failed')
-      );
-
-      const request = createPatchRequest({ provider: 'pagespace', model: 'glm-4.5-air' });
-
-      const response = await PATCH(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(500);
-      expect(body.error).toBe('Failed to update model selection');
-      expect(loggers.ai.error).toHaveBeenCalled();
-    });
-  });
-});
-
-describe('DELETE /api/ai/settings', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-
-    // Default: authenticated user
-    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
-    vi.mocked(isAuthError).mockReturnValue(false);
-  });
-
-  describe('authentication', () => {
-    it('should return 401 when not authenticated', async () => {
-      vi.mocked(isAuthError).mockReturnValue(true);
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
-
-      const request = createDeleteRequest({ provider: 'openrouter' });
-
-      const response = await DELETE(request);
-
-      expect(response.status).toBe(401);
-    });
-  });
-
-  describe('validation', () => {
-    it('should reject invalid provider', async () => {
-      const request = createDeleteRequest({ provider: 'invalid' });
-
-      const response = await DELETE(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(400);
-      expect(body.error).toContain('Invalid provider');
-    });
-  });
-
-  describe('successful deletion', () => {
-    it('should delete OpenRouter settings successfully', async () => {
-      vi.mocked(deleteOpenRouterSettings).mockResolvedValue(undefined);
-
-      const request = createDeleteRequest({ provider: 'openrouter' });
-
-      const response = await DELETE(request);
-
-      expect(response.status).toBe(204);
-      expect(deleteOpenRouterSettings).toHaveBeenCalledWith(mockUserId);
-    });
-
-    it('should delete Google settings successfully', async () => {
-      vi.mocked(deleteGoogleSettings).mockResolvedValue(undefined);
-
-      const request = createDeleteRequest({ provider: 'google' });
-
-      const response = await DELETE(request);
-
-      expect(response.status).toBe(204);
-      expect(deleteGoogleSettings).toHaveBeenCalledWith(mockUserId);
-    });
-
-    it('should delete OpenAI settings successfully', async () => {
-      vi.mocked(deleteOpenAISettings).mockResolvedValue(undefined);
-
-      const request = createDeleteRequest({ provider: 'openai' });
-
-      const response = await DELETE(request);
-
-      expect(response.status).toBe(204);
-      expect(deleteOpenAISettings).toHaveBeenCalledWith(mockUserId);
-    });
-
-    it('should delete Anthropic settings successfully', async () => {
-      vi.mocked(deleteAnthropicSettings).mockResolvedValue(undefined);
-
-      const request = createDeleteRequest({ provider: 'anthropic' });
-
-      const response = await DELETE(request);
-
-      expect(response.status).toBe(204);
-      expect(deleteAnthropicSettings).toHaveBeenCalledWith(mockUserId);
-    });
-
-    it('should delete xAI settings successfully', async () => {
-      vi.mocked(deleteXAISettings).mockResolvedValue(undefined);
-
-      const request = createDeleteRequest({ provider: 'xai' });
-
-      const response = await DELETE(request);
-
-      expect(response.status).toBe(204);
-      expect(deleteXAISettings).toHaveBeenCalledWith(mockUserId);
-    });
-
-    it('should delete Ollama settings successfully', async () => {
-      vi.mocked(deleteOllamaSettings).mockResolvedValue(undefined);
-
-      const request = createDeleteRequest({ provider: 'ollama' });
-
-      const response = await DELETE(request);
-
-      expect(response.status).toBe(204);
-      expect(deleteOllamaSettings).toHaveBeenCalledWith(mockUserId);
-    });
-
-    it('should delete LM Studio settings successfully', async () => {
-      vi.mocked(deleteLMStudioSettings).mockResolvedValue(undefined);
-
-      const request = createDeleteRequest({ provider: 'lmstudio' });
-
-      const response = await DELETE(request);
-
-      expect(response.status).toBe(204);
-      expect(deleteLMStudioSettings).toHaveBeenCalledWith(mockUserId);
-    });
-
-    it('should delete GLM settings successfully', async () => {
-      vi.mocked(deleteGLMSettings).mockResolvedValue(undefined);
-
-      const request = createDeleteRequest({ provider: 'glm' });
-
-      const response = await DELETE(request);
-
-      expect(response.status).toBe(204);
-      expect(deleteGLMSettings).toHaveBeenCalledWith(mockUserId);
-    });
-
-    it('should delete MiniMax settings successfully', async () => {
-      vi.mocked(deleteMiniMaxSettings).mockResolvedValue(undefined);
-
-      const request = createDeleteRequest({ provider: 'minimax' });
-
-      const response = await DELETE(request);
-
-      expect(response.status).toBe(204);
-      expect(deleteMiniMaxSettings).toHaveBeenCalledWith(mockUserId);
-    });
-  });
-
-  describe('error handling', () => {
-    it('should return 500 when delete throws', async () => {
-      vi.mocked(deleteOpenRouterSettings).mockRejectedValue(new Error('Delete failed'));
-
-      const request = createDeleteRequest({ provider: 'openrouter' });
-
-      const response = await DELETE(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(500);
-      expect(body.error).toContain('Failed to delete');
-      expect(loggers.ai.error).toHaveBeenCalled();
+      expect(aiSettingsRepository.updateProviderSettings).toHaveBeenCalledWith(mockUserId, {
+        provider: 'glm',
+        model: 'glm-5.3-flash',
+      });
     });
   });
 });

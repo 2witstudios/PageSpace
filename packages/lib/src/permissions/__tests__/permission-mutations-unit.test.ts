@@ -1,0 +1,769 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+// The org sign-in gate (D-OW-45) reads policies through its own module; these tests are about the
+// resolvers behind it, so no org here sets a sign-in policy. Plain functions: a mock reset must not undo them.
+vi.mock('../actor-authentication', () => ({
+  checkActorDriveAuthentication: async () => ({ allowed: true }),
+  checkActorResourceAuthentication: async () => ({ allowed: true }),
+  filterDrivesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  filterResourcesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  explainOrgAuthenticationDenial: async () => null,
+}));
+import { createId } from '@paralleldrive/cuid2';
+
+// ---------------------------------------------------------------------------
+// Mocks
+// ---------------------------------------------------------------------------
+
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    select: vi.fn(),
+    transaction: vi.fn(),
+    delete: vi.fn(),
+  },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', driveId: 'driveId' },
+  drives: { id: 'id', ownerId: 'ownerId' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: { driveId: 'driveId', userId: 'userId', role: 'role', id: 'id' },
+  pagePermissions: {
+    pageId: 'pageId', userId: 'userId', canView: 'canView', canEdit: 'canEdit',
+    canShare: 'canShare', canDelete: 'canDelete', id: 'id', grantedBy: 'grantedBy',
+  },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((_a, _b) => 'eq'),
+  and: vi.fn((...args) => ({ and: args })),
+  isNotNull: vi.fn((a) => ({ isNotNull: a })),
+}));
+
+vi.mock('@paralleldrive/cuid2', () => ({
+  createId: vi.fn(() => 'new-perm-id'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
+  isCuid: vi.fn((id: string) => id.startsWith('cl') && id.length === 25),
+}));
+
+vi.mock('../enforced-context', () => ({
+  EnforcedAuthContext: class {
+    userId: string;
+    userRole: string;
+    actor: { via: 'credential'; userId: string; authentication: null };
+    constructor(userId: string, userRole: string) {
+      this.userId = userId;
+      this.userRole = userRole;
+      this.actor = { via: 'credential', userId, authentication: null };
+    }
+    static fromSession(claims: { userId: string; userRole: string; scopes: string[] }) {
+      const ctx = new (this as unknown as new(u: string, r: string) => { userId: string; userRole: string })(claims.userId, claims.userRole);
+      return ctx;
+    }
+  },
+}));
+
+vi.mock('../../monitoring/activity-logger', () => ({
+  logPermissionActivity: vi.fn().mockResolvedValue(undefined),
+  getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'actor@test.com', actorDisplayName: 'Actor' }),
+}));
+
+// Revocation→kick hook (#2158): revokePagePermission must trigger the kick
+// itself so no route can forget it. Mocked here to assert the wiring.
+vi.mock('../revocation-kick', () => ({
+  kickForPagePermissionRevocation: vi.fn().mockResolvedValue(undefined),
+}));
+
+// POL-2: a widening grant asks the org's guests policy. Default: a drive with no org, allowed.
+const decideOrgDriveAdmission = vi.hoisted(() => vi.fn());
+const requestGuestApproval = vi.hoisted(() => vi.fn());
+const stageAudit = vi.hoisted(() => vi.fn());
+vi.mock('../guest-admission', () => ({ decideOrgDriveAdmission }));
+vi.mock('../guest-holds', () => ({ requestGuestApproval }));
+// AUD-1: the grant's transaction carries its audit stage; the stage itself is a spy.
+vi.mock('../../audit/org-audit', async () => {
+  const { db } = await import('@pagespace/db/db');
+  return {
+    transactionWithOrgAudit: (run: (tx: unknown, audit: typeof stageAudit) => Promise<unknown>) => db.transaction((tx) => run(tx, stageAudit)),
+  };
+});
+
+// ---------------------------------------------------------------------------
+// Imports after mocks
+// ---------------------------------------------------------------------------
+
+import { grantPagePermission, revokePagePermission } from '../permission-mutations';
+import { kickForPagePermissionRevocation } from '../revocation-kick';
+import { db } from '@pagespace/db/db';
+import { EnforcedAuthContext } from '../enforced-context';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+// Generate valid CUID2-like IDs (25 chars starting with 'cl')
+const ACTOR_ID = 'clactorxxxxxxxxxxxxxxxxxx';
+const TARGET_ID = 'cltargetxxxxxxxxxxxxxxxxx';
+const PAGE_ID = 'clpagexxxxxxxxxxxxxxxxxx1';
+const DRIVE_ID = 'cldrivexxxxxxxxxxxxxxxxxx';
+
+function makeCtx(userId = ACTOR_ID): EnforcedAuthContext {
+  return EnforcedAuthContext.fromSession({
+    userId,
+    userRole: 'user',
+    scopes: ['*'],
+    sessionId: 'sess',
+    tokenVersion: 1,
+    adminRoleVersion: 0,
+    type: 'service',
+    expiresAt: new Date(Date.now() + 3600000),
+  } as Parameters<typeof EnforcedAuthContext.fromSession>[0]);
+}
+
+function validGrantInput() {
+  return {
+    pageId: PAGE_ID,
+    targetUserId: TARGET_ID,
+    permissions: { canView: true, canEdit: false, canShare: false, canDelete: false },
+  };
+}
+
+function validRevokeInput() {
+  return { pageId: PAGE_ID, targetUserId: TARGET_ID };
+}
+
+// Mock the page lookup for getPageIfCanShare (drive owner path)
+function mockPageAsOwner() {
+  vi.mocked(db.select)
+    .mockReturnValueOnce({
+      from: vi.fn().mockReturnValue({
+        leftJoin: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([{ id: PAGE_ID, driveId: DRIVE_ID, driveOwnerId: ACTOR_ID }]),
+          }),
+        }),
+      }),
+    } as unknown as ReturnType<typeof db.select>);
+}
+
+// Mock page not accessible
+function mockPageNotFound() {
+  vi.mocked(db.select)
+    .mockReturnValueOnce({
+      from: vi.fn().mockReturnValue({
+        leftJoin: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
+        }),
+      }),
+    } as unknown as ReturnType<typeof db.select>);
+}
+
+// Mock target user exists
+function mockUserExists(exists = true) {
+  vi.mocked(db.select)
+    .mockReturnValueOnce({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          limit: vi.fn().mockResolvedValue(exists ? [{ id: TARGET_ID }] : []),
+        }),
+      }),
+    } as unknown as ReturnType<typeof db.select>);
+}
+
+// The grant the target already holds on the page, read inside the transaction (none by default).
+const txSelect = (existing: unknown[] = []) => vi.fn().mockReturnValue({
+  from: vi.fn().mockReturnValue({ where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue(existing) }) }),
+});
+
+// Mock transaction for grant
+function mockTransactionInsert(newId: string) {
+  const tx = {
+    select: txSelect(),
+    insert: vi.fn().mockReturnValue({
+      values: vi.fn().mockReturnValue({
+        onConflictDoNothing: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue([{ id: newId }]),
+        }),
+      }),
+    }),
+    update: vi.fn(),
+  };
+  vi.mocked(db.transaction).mockImplementation(async (fn) => fn(tx as unknown as Parameters<typeof fn>[0]));
+  return tx;
+}
+
+function mockTransactionConflict(existingId: string) {
+  const tx = {
+    select: txSelect(),
+    insert: vi.fn().mockReturnValue({
+      values: vi.fn().mockReturnValue({
+        onConflictDoNothing: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue([]), // Empty = conflict
+        }),
+      }),
+    }),
+    update: vi.fn().mockReturnValue({
+      set: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue([{ id: existingId }]),
+        }),
+      }),
+    }),
+  };
+  vi.mocked(db.transaction).mockImplementation(async (fn) => fn(tx as unknown as Parameters<typeof fn>[0]));
+  return tx;
+}
+
+// ---------------------------------------------------------------------------
+// grantPagePermission
+// ---------------------------------------------------------------------------
+describe('grantPagePermission', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    decideOrgDriveAdmission.mockResolvedValue({ decision: 'allow', orgId: null });
+  });
+
+  it('returns VALIDATION_FAILED for invalid input (missing fields)', async () => {
+    const ctx = makeCtx();
+    const result = await grantPagePermission(ctx, { pageId: 'not-a-cuid' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('VALIDATION_FAILED');
+    }
+  });
+
+  it('returns VALIDATION_FAILED for non-CUID2 pageId', async () => {
+    const ctx = makeCtx();
+    const result = await grantPagePermission(ctx, {
+      pageId: 'invalid-page-id',
+      targetUserId: TARGET_ID,
+      permissions: { canView: true, canEdit: false, canShare: false, canDelete: false },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('VALIDATION_FAILED');
+    }
+  });
+
+  it('returns INVALID_PERMISSION_COMBINATION for edit without view', async () => {
+    const ctx = makeCtx();
+    const result = await grantPagePermission(ctx, {
+      pageId: PAGE_ID,
+      targetUserId: TARGET_ID,
+      permissions: { canView: false, canEdit: true, canShare: false, canDelete: false },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('INVALID_PERMISSION_COMBINATION');
+    }
+  });
+
+  it('returns INVALID_PERMISSION_COMBINATION for share without view', async () => {
+    const ctx = makeCtx();
+    const result = await grantPagePermission(ctx, {
+      pageId: PAGE_ID,
+      targetUserId: TARGET_ID,
+      permissions: { canView: false, canEdit: false, canShare: true, canDelete: false },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('INVALID_PERMISSION_COMBINATION');
+    }
+  });
+
+  it('returns INVALID_PERMISSION_COMBINATION for delete without view', async () => {
+    const ctx = makeCtx();
+    const result = await grantPagePermission(ctx, {
+      pageId: PAGE_ID,
+      targetUserId: TARGET_ID,
+      permissions: { canView: false, canEdit: false, canShare: false, canDelete: true },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('INVALID_PERMISSION_COMBINATION');
+    }
+  });
+
+  it('returns SELF_PERMISSION_DENIED when actor === target', async () => {
+    const ctx = makeCtx(ACTOR_ID);
+    const result = await grantPagePermission(ctx, {
+      pageId: PAGE_ID,
+      targetUserId: ACTOR_ID,
+      permissions: { canView: true, canEdit: false, canShare: false, canDelete: false },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('SELF_PERMISSION_DENIED');
+    }
+  });
+
+  it('returns PAGE_NOT_ACCESSIBLE when page not found', async () => {
+    const ctx = makeCtx();
+    mockPageNotFound();
+
+    const result = await grantPagePermission(ctx, validGrantInput());
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('PAGE_NOT_ACCESSIBLE');
+    }
+  });
+
+  it('returns USER_NOT_FOUND when target user does not exist', async () => {
+    const ctx = makeCtx();
+    mockPageAsOwner();
+    mockUserExists(false);
+
+    const result = await grantPagePermission(ctx, validGrantInput());
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('USER_NOT_FOUND');
+    }
+  });
+
+  it('returns ok=true with isUpdate=false on new insert', async () => {
+    const ctx = makeCtx();
+    mockPageAsOwner();
+    mockUserExists(true);
+    mockTransactionInsert('new-perm-id');
+
+    const result = await grantPagePermission(ctx, validGrantInput());
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.isUpdate).toBe(false);
+      expect(result.data.permissionId).toBe('new-perm-id');
+    }
+  });
+
+  it('returns ok=true with isUpdate=true on conflict (update path)', async () => {
+    const ctx = makeCtx();
+    mockPageAsOwner();
+    mockUserExists(true);
+    mockTransactionConflict('existing-perm-id');
+
+    const result = await grantPagePermission(ctx, validGrantInput());
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.isUpdate).toBe(true);
+      expect(result.data.permissionId).toBe('existing-perm-id');
+    }
+  });
+
+  it('allows view-only permission (valid combination)', async () => {
+    const ctx = makeCtx();
+    mockPageAsOwner();
+    mockUserExists(true);
+    mockTransactionInsert('perm-view-only');
+
+    const result = await grantPagePermission(ctx, {
+      pageId: PAGE_ID,
+      targetUserId: TARGET_ID,
+      permissions: { canView: true, canEdit: false, canShare: false, canDelete: false },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('allows all permissions (valid combination)', async () => {
+    const ctx = makeCtx();
+    mockPageAsOwner();
+    mockUserExists(true);
+    mockTransactionInsert('perm-all');
+
+    const result = await grantPagePermission(ctx, {
+      pageId: PAGE_ID,
+      targetUserId: TARGET_ID,
+      permissions: { canView: true, canEdit: true, canShare: true, canDelete: true },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('allows grant when actor is drive admin (not owner)', async () => {
+    const ADMIN_USER_ID = 'cladminxxxxxxxxxxxxxxxx1';
+    const ctx = makeCtx(ADMIN_USER_ID);
+
+    // Page exists but user is NOT the owner
+    vi.mocked(db.select)
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          leftJoin: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              limit: vi.fn().mockResolvedValue([{ id: PAGE_ID, driveId: DRIVE_ID, driveOwnerId: 'clotherxxxxxxxxxxxxxxxxxx' }]),
+            }),
+          }),
+        }),
+      } as unknown as ReturnType<typeof db.select>)
+      // Admin membership check returns match
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([{ role: 'ADMIN', customRoleId: null, source: 'invite' }]),
+          }),
+        }),
+      } as unknown as ReturnType<typeof db.select>);
+
+    mockUserExists(true);
+    mockTransactionInsert('admin-granted-perm');
+
+    const result = await grantPagePermission(ctx, {
+      pageId: PAGE_ID,
+      targetUserId: TARGET_ID,
+      permissions: { canView: true, canEdit: false, canShare: false, canDelete: false },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('allows grant when actor has explicit share permission', async () => {
+    const SHARER_USER_ID = 'clsharerxxxxxxxxxxxxxx1';
+    const ctx = makeCtx(SHARER_USER_ID);
+
+    // Page exists but user is NOT the owner
+    vi.mocked(db.select)
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          leftJoin: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              limit: vi.fn().mockResolvedValue([{ id: PAGE_ID, driveId: DRIVE_ID, driveOwnerId: 'clotherxxxxxxxxxxxxxxxxxx' }]),
+            }),
+          }),
+        }),
+      } as unknown as ReturnType<typeof db.select>)
+      // Admin membership check - NOT admin
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([]),
+          }),
+        }),
+      } as unknown as ReturnType<typeof db.select>)
+      // Share permission check - has canShare
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([{ canShare: true }]),
+          }),
+        }),
+      } as unknown as ReturnType<typeof db.select>);
+
+    mockUserExists(true);
+    mockTransactionInsert('share-perm-granted');
+
+    const result = await grantPagePermission(ctx, {
+      pageId: PAGE_ID,
+      targetUserId: TARGET_ID,
+      permissions: { canView: true, canEdit: false, canShare: false, canDelete: false },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('returns PAGE_NOT_ACCESSIBLE when actor has no share permission', async () => {
+    const NO_PERM_USER_ID = 'clnopermxxxxxxxxxxxxxxx1';
+    const ctx = makeCtx(NO_PERM_USER_ID);
+
+    // Page exists but user is NOT the owner
+    vi.mocked(db.select)
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          leftJoin: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              limit: vi.fn().mockResolvedValue([{ id: PAGE_ID, driveId: DRIVE_ID, driveOwnerId: 'clotherxxxxxxxxxxxxxxxxxx' }]),
+            }),
+          }),
+        }),
+      } as unknown as ReturnType<typeof db.select>)
+      // Admin membership check - NOT admin
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([]),
+          }),
+        }),
+      } as unknown as ReturnType<typeof db.select>)
+      // Share permission check - no canShare
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([{ canShare: false }]),
+          }),
+        }),
+      } as unknown as ReturnType<typeof db.select>);
+
+    const result = await grantPagePermission(ctx, {
+      pageId: PAGE_ID,
+      targetUserId: TARGET_ID,
+      permissions: { canView: true, canEdit: false, canShare: false, canDelete: false },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('PAGE_NOT_ACCESSIBLE');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// revokePagePermission
+// ---------------------------------------------------------------------------
+describe('revokePagePermission', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns VALIDATION_FAILED for invalid input', async () => {
+    const ctx = makeCtx();
+    const result = await revokePagePermission(ctx, { pageId: 'bad-id' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('VALIDATION_FAILED');
+    }
+  });
+
+  it('returns SELF_PERMISSION_DENIED when actor === target', async () => {
+    const ctx = makeCtx(ACTOR_ID);
+    const result = await revokePagePermission(ctx, {
+      pageId: PAGE_ID,
+      targetUserId: ACTOR_ID,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('SELF_PERMISSION_DENIED');
+    }
+  });
+
+  it('returns PAGE_NOT_ACCESSIBLE when page not found', async () => {
+    const ctx = makeCtx();
+    mockPageNotFound();
+
+    const result = await revokePagePermission(ctx, validRevokeInput());
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('PAGE_NOT_ACCESSIBLE');
+    }
+  });
+
+  it('returns ok=true with revoked=false when permission not found (idempotent)', async () => {
+    const ctx = makeCtx();
+    mockPageAsOwner();
+
+    // No existing permission found
+    vi.mocked(db.select).mockReturnValueOnce({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          limit: vi.fn().mockResolvedValue([]),
+        }),
+      }),
+    } as unknown as ReturnType<typeof db.select>);
+
+    const result = await revokePagePermission(ctx, validRevokeInput());
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.revoked).toBe(false);
+      expect((result.data as { revoked: false; reason: string }).reason).toBe('not_found');
+    }
+  });
+
+  it('returns ok=true with revoked=true when permission deleted', async () => {
+    const ctx = makeCtx();
+    mockPageAsOwner();
+
+    // Existing permission found
+    vi.mocked(db.select).mockReturnValueOnce({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          limit: vi.fn().mockResolvedValue([{
+            id: 'existing-perm-id',
+            canView: true,
+            canEdit: false,
+            canShare: false,
+            canDelete: false,
+            grantedBy: 'some-user',
+          }]),
+        }),
+      }),
+    } as unknown as ReturnType<typeof db.select>);
+
+    // Mock delete
+    const whereFn = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(db.delete).mockReturnValue({ where: whereFn } as unknown as ReturnType<typeof db.delete>);
+
+    const result = await revokePagePermission(ctx, validRevokeInput());
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.revoked).toBe(true);
+      expect((result.data as { revoked: true; permissionId: string }).permissionId).toBe('existing-perm-id');
+    }
+  });
+
+  it('kicks the target from the page rooms after a successful revoke (#2158 centralized hook)', async () => {
+    const ctx = makeCtx();
+    mockPageAsOwner();
+
+    vi.mocked(db.select).mockReturnValueOnce({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          limit: vi.fn().mockResolvedValue([{
+            id: 'existing-perm-id',
+            canView: true,
+            canEdit: false,
+            canShare: false,
+            canDelete: false,
+            grantedBy: 'some-user',
+          }]),
+        }),
+      }),
+    } as unknown as ReturnType<typeof db.select>);
+    vi.mocked(db.delete).mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) } as unknown as ReturnType<typeof db.delete>);
+
+    const result = await revokePagePermission(ctx, validRevokeInput());
+
+    expect(result.ok).toBe(true);
+    expect(kickForPagePermissionRevocation).toHaveBeenCalledWith({
+      userId: TARGET_ID,
+      pageId: PAGE_ID,
+      reason: 'permission_revoked',
+    });
+  });
+
+  it('does NOT kick when the permission did not exist (idempotent no-op)', async () => {
+    const ctx = makeCtx();
+    mockPageAsOwner();
+
+    vi.mocked(db.select).mockReturnValueOnce({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
+      }),
+    } as unknown as ReturnType<typeof db.select>);
+
+    const result = await revokePagePermission(ctx, validRevokeInput());
+
+    expect(result.ok).toBe(true);
+    expect(kickForPagePermissionRevocation).not.toHaveBeenCalled();
+  });
+
+  it('awaits the kick before resolving — does not return while the kick is still in flight', async () => {
+    // Regression test for a P1 review finding: a fire-and-forget kick call
+    // lets the HTTP response (and any broadcast sent right after it) go out
+    // before the kick request even starts, reopening the stale-delivery
+    // window centralizing the kick was meant to close.
+    const ctx = makeCtx();
+    mockPageAsOwner();
+
+    vi.mocked(db.select).mockReturnValueOnce({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          limit: vi.fn().mockResolvedValue([{
+            id: 'existing-perm-id',
+            canView: true,
+            canEdit: false,
+            canShare: false,
+            canDelete: false,
+            grantedBy: 'some-user',
+          }]),
+        }),
+      }),
+    } as unknown as ReturnType<typeof db.select>);
+    vi.mocked(db.delete).mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) } as unknown as ReturnType<typeof db.delete>);
+
+    let kickResolve: () => void;
+    const kickPromise = new Promise<void>((resolve) => { kickResolve = resolve; });
+    vi.mocked(kickForPagePermissionRevocation).mockReturnValueOnce(kickPromise);
+
+    let revokeResolved = false;
+    const revokePromise = revokePagePermission(ctx, validRevokeInput()).then((result) => {
+      revokeResolved = true;
+      return result;
+    });
+
+    // Drain the ENTIRE microtask queue (everything preceding the kick call —
+    // several awaited db calls each need their own tick) via a macrotask
+    // boundary, not a fixed number of Promise.resolve() hops: too few hops
+    // would pass this test even for a fire-and-forget kick, simply because
+    // revokePagePermission hadn't reached the kick statement yet. The kick
+    // promise itself is still unresolved, so if it's genuinely awaited,
+    // revokePagePermission must not have settled by the time every other
+    // microtask has run.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(revokeResolved).toBe(false);
+
+    kickResolve!();
+    const result = await revokePromise;
+
+    expect(revokeResolved).toBe(true);
+    expect(result.ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// grantPagePermission and the org's guests policy
+// ---------------------------------------------------------------------------
+describe('grantPagePermission and the guests policy', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    stageAudit.mockResolvedValue(undefined);
+  });
+
+  it('POL-2 (partial) a refused admission writes nothing and answers GUEST_POLICY_OFF', async () => {
+    mockPageAsOwner();
+    mockUserExists(true);
+    const tx = mockTransactionInsert('new-perm-id');
+    decideOrgDriveAdmission.mockResolvedValue({ decision: 'refuse', orgId: 'org_1' });
+
+    const result = await grantPagePermission(makeCtx(), validGrantInput());
+
+    expect(result).toMatchObject({ ok: false, error: { code: 'GUEST_POLICY_OFF' } });
+    expect(decideOrgDriveAdmission).toHaveBeenCalledWith({ driveId: DRIVE_ID, userId: TARGET_ID }, tx);
+    expect(tx.insert).not.toHaveBeenCalled();
+  });
+
+  it('POL-2 (partial) a held admission queues exactly the grant, writes no grant, and audits the request', async () => {
+    mockPageAsOwner();
+    mockUserExists(true);
+    const tx = mockTransactionInsert('new-perm-id');
+    decideOrgDriveAdmission.mockResolvedValue({ decision: 'hold', orgId: 'org_1' });
+    requestGuestApproval.mockResolvedValue({ holdId: 'hold_1' });
+
+    const result = await grantPagePermission(makeCtx(), validGrantInput());
+
+    expect(result).toMatchObject({ ok: false, error: { code: 'GUEST_APPROVAL_PENDING', holdId: 'hold_1' } });
+    expect(requestGuestApproval).toHaveBeenCalledWith({
+      orgId: 'org_1',
+      driveId: DRIVE_ID,
+      userId: TARGET_ID,
+      origin: 'page_grant',
+      request: { permissions: [{ pageId: PAGE_ID, ...validGrantInput().permissions }], invitedBy: ACTOR_ID },
+      requestedBy: ACTOR_ID,
+    }, tx);
+    expect(tx.insert).not.toHaveBeenCalled();
+    expect(stageAudit).toHaveBeenCalledWith(expect.objectContaining({ orgId: 'org_1', eventType: 'org.guest.requested' }));
+  });
+
+  it('POL-2 (partial) narrowing a grant the target already holds never asks the policy', async () => {
+    mockPageAsOwner();
+    mockUserExists(true);
+    const tx = mockTransactionConflict('existing-perm-id');
+    tx.select = txSelect([{ canView: true, canEdit: true, canShare: false, canDelete: false }]);
+
+    const result = await grantPagePermission(makeCtx(), validGrantInput());
+
+    expect(result).toMatchObject({ ok: true, data: { isUpdate: true } });
+    expect(decideOrgDriveAdmission).not.toHaveBeenCalled();
+  });
+});

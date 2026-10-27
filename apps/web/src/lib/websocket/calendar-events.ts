@@ -2,8 +2,8 @@
  * Socket.IO utilities for broadcasting calendar events
  */
 
-import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
-import { browserLoggers } from '@pagespace/lib/logger-browser';
+import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
+import { browserLoggers } from '@pagespace/lib/logging/logger-browser';
 import { isNodeEnvironment } from '@pagespace/lib/utils/environment';
 import { maskIdentifier } from '@/lib/logging/mask';
 
@@ -17,6 +17,7 @@ export interface CalendarEventPayload {
   operation: CalendarOperation;
   userId: string; // User who triggered this event
   attendeeIds: string[]; // Users who should be notified
+  extraDriveIds?: string[]; // Additional shared drives to notify beyond the home drive
 }
 
 const realtimeLogger = loggers.realtime.child({ module: 'calendar-events' });
@@ -74,6 +75,21 @@ export async function broadcastCalendarEvent(payload: CalendarEventPayload): Pro
       }
     }
 
+    // Broadcast to any additional shared drives
+    for (const extraDriveId of payload.extraDriveIds ?? []) {
+      const extraDriveRequestBody = JSON.stringify({
+        channelId: `drive:${extraDriveId}:calendar`,
+        event: `calendar:${payload.operation}`,
+        payload,
+      });
+
+      await fetch(`${realtimeUrl}/api/broadcast`, {
+        method: 'POST',
+        headers: createSignedBroadcastHeaders(extraDriveRequestBody),
+        body: extraDriveRequestBody,
+      });
+    }
+
     // Broadcast to individual attendee channels (for personal calendar views)
     for (const attendeeId of payload.attendeeIds) {
       const userRequestBody = JSON.stringify({
@@ -107,23 +123,4 @@ export async function broadcastCalendarEvent(payload: CalendarEventPayload): Pro
       }
     );
   }
-}
-
-/**
- * Helper to create a calendar event payload
- */
-export function createCalendarEventPayload(
-  eventId: string,
-  driveId: string | null,
-  operation: CalendarOperation,
-  userId: string,
-  attendeeIds: string[]
-): CalendarEventPayload {
-  return {
-    eventId,
-    driveId,
-    operation,
-    userId,
-    attendeeIds,
-  };
 }

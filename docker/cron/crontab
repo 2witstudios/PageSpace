@@ -5,32 +5,221 @@
 
 # Memory processing - Daily at 6am UTC
 # Discovers patterns from user conversations and updates personalization
-0 6 * * * cron-curl POST http://web:3000/api/memory/cron >> /var/log/cron/memory.log 2>&1
+0 6 * * * cron-curl POST __WEB_URL__/api/memory/cron >> /var/log/cron/memory.log 2>&1
 
 # Pulse summaries - Every 6 hours
 # Generates workspace activity summaries for active users
-0 */6 * * * cron-curl POST http://web:3000/api/pulse/cron >> /var/log/cron/pulse.log 2>&1
+0 */6 * * * cron-curl POST __WEB_URL__/api/pulse/cron >> /var/log/cron/pulse.log 2>&1
 
 # Token cleanup - Hourly
 # Removes expired device tokens from database
-0 * * * * cron-curl GET http://web:3000/api/cron/cleanup-tokens >> /var/log/cron/cleanup.log 2>&1
+0 * * * * cron-curl GET __WEB_URL__/api/cron/cleanup-tokens >> /var/log/cron/cleanup.log 2>&1
 
 # Calendar sync - Every 5 minutes
 # Syncs Google Calendar connections that are due based on their sync frequency
-*/5 * * * * cron-curl GET http://web:3000/api/cron/calendar-sync >> /var/log/cron/calendar-sync.log 2>&1
+*/5 * * * * cron-curl GET __WEB_URL__/api/cron/calendar-sync >> /var/log/cron/calendar-sync.log 2>&1
+
+# Retention cleanup - Daily at 1am UTC
+# Deletes expired rows from sessions, tokens, page versions, drive backups, permissions, monitoring data
+0 1 * * * cron-curl GET __WEB_URL__/api/cron/retention-cleanup >> /var/log/cron/retention-cleanup.log 2>&1
 
 # Security audit chain verification - Daily at 2am UTC
 # Verifies hash chain integrity of security audit log
-0 2 * * * cron-curl GET http://web:3000/api/cron/verify-audit-chain >> /var/log/cron/audit-chain.log 2>&1
+0 2 * * * cron-curl GET __WEB_URL__/api/cron/verify-audit-chain >> /var/log/cron/audit-chain.log 2>&1
+
+# Database backup freshness check - Daily at 2:45am UTC
+# Asserts a recent, non-empty, AES-256-encrypted pg_dump exists in Tigris under
+# db-backups/. The dump itself is produced by a Fly SCHEDULED MACHINE outside this
+# app (pagespace-db-backup, see PageSpace-Deploy fly/backup/), which fires around
+# 00:30 UTC — so 02:45 leaves ~2h of slack for a slow run before we check.
+# Alerts to Sentry (level fatal) and returns 503 when the newest object is older
+# than BACKUP_MAX_AGE_HOURS (default 36h, i.e. one missed run is tolerated).
+# Exists because that job died silently for 44 days (2026-06-26 → 2026-08-08):
+# a fail-closed BACKUP_ENCRYPTION_KEY gate with the secret never set, then a Fly
+# host migration that dropped the machine's schedule. A scheduled machine that
+# never fires is indistinguishable from a finished one by STATE alone, so the
+# bucket is the only trustworthy signal.
+# This image also runs in the tenant compose stack, which has no such backup job —
+# the route skips (200) unless DEPLOYMENT_MODE is cloud, so tenants are not paged
+# nightly for infrastructure they do not have.
+45 2 * * * cron-curl GET __WEB_URL__/api/cron/verify-db-backup-freshness >> /var/log/cron/verify-db-backup-freshness.log 2>&1
+
+# Activity log archival (hot→cold tier) - Daily at 2:30am UTC
+# Flips isArchived=true on activity_logs older than ACTIVITY_LOGS_ARCHIVE_DAYS (default 365)
+# so the active-view stays bounded. Flag-flip only: never deletes rows or touches the hash chain.
+30 2 * * * cron-curl GET __WEB_URL__/api/cron/archive-activity-logs >> /var/log/cron/archive-activity-logs.log 2>&1
 
 # AI usage log purge - Daily at 3am UTC
 # Anonymizes prompt/completion text >30 days, purges rows >90 days
-0 3 * * * cron-curl POST http://web:3000/api/cron/purge-ai-usage-logs >> /var/log/cron/purge-ai-usage.log 2>&1
+0 3 * * * cron-curl POST __WEB_URL__/api/cron/purge-ai-usage-logs >> /var/log/cron/purge-ai-usage.log 2>&1
 
 # Deleted message purge - Daily at 4am UTC
 # Hard-deletes soft-deleted messages and conversations older than 30 days
-0 4 * * * cron-curl POST http://web:3000/api/cron/purge-deleted-messages >> /var/log/cron/purge-messages.log 2>&1
+0 4 * * * cron-curl POST __WEB_URL__/api/cron/purge-deleted-messages >> /var/log/cron/purge-messages.log 2>&1
 
 # Workflow execution - Every 5 minutes
 # Checks for due scheduled workflows and executes them
-*/5 * * * * cron-curl POST http://web:3000/api/cron/workflows >> /var/log/cron/workflows.log 2>&1
+*/5 * * * * cron-curl POST __WEB_URL__/api/cron/workflows >> /var/log/cron/workflows.log 2>&1
+
+# Calendar trigger execution - Every 2 minutes
+# Fires scheduled agent work tied to calendar events
+*/2 * * * * cron-curl POST __WEB_URL__/api/cron/calendar-triggers >> /var/log/cron/calendar-triggers.log 2>&1
+
+# Trashed page purge - Daily at 5am UTC
+# Hard-deletes pages that have been in the trash for 30+ days (GDPR Art. 17 #909)
+0 5 * * * cron-curl GET __WEB_URL__/api/cron/purge-trashed-pages >> /var/log/cron/purge-trashed-pages.log 2>&1
+
+# Orphaned file cleanup - Weekly on Sundays at 6am UTC
+# Detects and deletes file records with zero references + physical files
+0 6 * * 0 cron-curl GET __WEB_URL__/api/cron/cleanup-orphaned-files >> /var/log/cron/orphan-cleanup.log 2>&1
+
+# Subscription tier reconcile - Every 30 minutes
+# Compares users.subscriptionTier (denormalized cache) against the
+# subscriptions table and repairs repairable drift; indeterminate drift
+# (an entitled subscription on an unmapped price id) is logged/audited for
+# a human, never auto-repaired. Backstop for missed/failed Stripe webhooks
+# (see subscription-tier-reconcile.ts in @pagespace/lib).
+*/30 * * * * cron-curl GET __WEB_URL__/api/cron/reconcile-subscription-tiers >> /var/log/cron/reconcile-subscription-tiers.log 2>&1
+
+# Credit reconcile - Every 10 minutes
+# Re-settles ledger rows stuck 'pending' and bills usage rows that never
+# decremented the prepaid balance, so every AI call is charged exactly once
+# across crashes/deploys. Local-only — makes no Stripe calls.
+*/10 * * * * cron-curl GET __WEB_URL__/api/cron/reconcile-credits >> /var/log/cron/reconcile-credits.log 2>&1
+
+# Wallet allocation reset - Hourly at :15
+# Resets each drive/agent wallet's allocation on its governing date (D-OW-12): an org
+# drive's on the org pool's refill date, a personal drive's on the owner's personal
+# renewal. Idempotent per period, so a repeated or overlapping tick resets once.
+15 * * * * cron-curl GET __WEB_URL__/api/cron/reset-wallet-allocations >> /var/log/cron/reset-wallet-allocations.log 2>&1
+
+# Org seat release - Every 15 minutes
+# Removing an org member frees their seat at PERIOD END (SEAT-5): nothing is written to Stripe
+# when they leave, so a re-add inside the period reuses the paid seat. This tick finds org
+# subscriptions whose period ends within the hour and sets the extra-seat quantity to the seats
+# actually held (lowered without proration, or restored when Stripe bills fewer than are held),
+# so the renewal invoice bills the right count. Four ticks fit the window, so one failed run is
+# retried before the boundary. Idempotent; a replayed write carries the same idempotency key.
+*/15 * * * * flock -n /run/release-org-seats.lock cron-curl GET __WEB_URL__/api/cron/release-org-seats >> /var/log/cron/release-org-seats.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/release-org-seats.log
+
+# Org audit outbox drain - Every minute
+# Every org change stages its audit event in the same transaction and publishes it right after
+# commit (AUD-1). An event that publish could not deliver (the audit chain refused it, or the
+# process stopped in between) stays queued; this tick appends every due one to the security
+# audit chain, retrying a refused append with a capped backoff. Nothing is ever dropped.
+* * * * * flock -n /run/drain-org-audit-outbox.lock cron-curl GET __WEB_URL__/api/cron/drain-org-audit-outbox >> /var/log/cron/drain-org-audit-outbox.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/drain-org-audit-outbox.log
+
+# Machine storage reconcile - Hourly
+# Bills each Terminal Machine's persistent storage from its last persisted
+# measurement (see machine-storage-reconcile.ts in @pagespace/lib); watermarks
+# make sequential reruns and missed runs self-correcting, but CONCURRENT runs
+# can double-bill. flock -n is a best-effort guard so this container's own
+# ticks never overlap (a skipped tick is caught up by the watermark next
+# hour); in-service serialization covering ALL callers is tracked follow-up.
+0 * * * * flock -n /run/reconcile-machine-storage.lock cron-curl GET __WEB_URL__/api/cron/reconcile-machine-storage >> /var/log/cron/reconcile-machine-storage.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/reconcile-machine-storage.log
+
+# Orphaned sprite reconcile - Every 30 minutes
+# Destroys Sprites (billing microVMs) that nothing in the product can reach any
+# more. Two sources — see machine-orphan-reconcile.ts in @pagespace/lib:
+#   (A) machine_sprite_reclaims, the outbox. AFTER DELETE triggers (migration
+#       0210) rescue a sandboxId out of machine_sessions/machine_branches as its
+#       row is cascaded away by ANY page/drive/user hard delete — the 30-day
+#       purge, "delete permanently", account erasure. The pointer outlives the
+#       resource, so no delete path can strand a VM, and none of them need a
+#       guard (erasure must never be blocked by a Sprite we failed to kill).
+#   (B) tracking rows under a trashed page whose teardown was REQUESTED but never
+#       confirmed — a deleteMachine whose kill failed.
+# A Machine merely dragged to the trash is left ALONE: its Sprite hibernates and
+# a restore is expected to hand the disk back (a kill is irreversible, a trash is
+# not). Every effect is safe under concurrency (the kill treats a 404 as success;
+# the release writes are compare-and-swaps), so unlike the storage reconcile this
+# needs no advisory lock — flock -n just keeps this container's own ticks from
+# doing redundant work.
+*/30 * * * * flock -n /run/reconcile-orphaned-sprites.lock cron-curl GET __WEB_URL__/api/cron/reconcile-orphaned-sprites >> /var/log/cron/reconcile-orphaned-sprites.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/reconcile-orphaned-sprites.log
+
+
+# Dev-preview backstop - Every 5 minutes
+# Converges previews a user switched OFF whose relay is somehow still up. A Stop
+# is durable the moment it is written, and the relay work is normally done by the
+# realtime detector's next ports/watch frame — but a holder nobody is watching
+# produces no frames, and a stop is exactly when a dev server goes quiet. This
+# sweep can only ever STOP a relay (it plans with no listener snapshot, which
+# makes any start a refusal) and never wakes a sprite. Dark deployments no-op.
+*/5 * * * * flock -n /run/reconcile-dev-previews.lock cron-curl GET __WEB_URL__/api/cron/reconcile-dev-previews >> /var/log/cron/reconcile-dev-previews.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/reconcile-dev-previews.log
+
+
+# Expired row sweep - Every 15 minutes
+# Reaps expired tombstones from append-with-TTL tables (revoked_service_tokens;
+# rate_limit_buckets in PR3; ai_pending_abort_intents). Short cadence matches the 5-minute default
+# service-token lifetime so the table never grows more than a few cycles deep.
+*/15 * * * * cron-curl GET __WEB_URL__/api/cron/sweep-expired >> /var/log/cron/sweep-expired.log 2>&1
+
+# Scheduled drive backups - Hourly
+# Fires automated drive backups for pro+ users whose nextRunAt is due
+0 * * * * cron-curl POST __WEB_URL__/api/cron/scheduled-backups >> /var/log/cron/scheduled-backups.log 2>&1
+
+# Storage reconcile - Every 15 minutes, offset 5 minutes off the hour
+# Rewrites users.storageUsedBytes from SUM(files.sizeBytes) wherever the cache
+# has drifted from the charge basis (#2155). Idempotent — a run that finds no
+# drift for a user makes no writes. The route itself holds a Postgres advisory
+# lock across ALL callers (any container, any manual trigger); flock -n here
+# is just this container's own defense-in-depth against overlapping ticks.
+# Deliberately offset from `*/15` (would tick at :00) so it never fires in the
+# same instant as the weekly orphan cleanup below (0 6 * * 0) — a files-row
+# delete observed as drift here, before the reaper's separate credit call
+# lands, would otherwise double-credit the same bytes every single week
+# (#2225 review — Codex round 6). The narrower, purely race-timed version of
+# this window (an orphan reaped mid-tick on any OTHER minute) remains an
+# accepted residual risk — see findStorageDriftCandidates's doc.
+5,20,35,50 * * * * flock -n /run/reconcile-storage.lock cron-curl GET __WEB_URL__/api/cron/reconcile-storage >> /var/log/cron/reconcile-storage.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/reconcile-storage.log
+
+# Published-app awake meter - Every 10 minutes
+# Heartbeat-settles awake-seconds for every published app whose machine is up, and
+# re-holds against the payer's balance on each tick. A published app's machine runs
+# with autostop off so that every awake boundary is an API call we made — but it can
+# stay up for weeks between those boundaries, and settling only at stop would leave
+# the whole of that time riding on one process not crashing. Ten minutes matches the
+# realtime shell handler's settle cadence and bounds the loss to one tick.
+# The re-hold is also what makes the credit gate keep binding on a long-lived app:
+# a payer who runs out mid-window has their machine stopped and PARKED rather than
+# staying awake for free (parking on the DAILY CAP stays with the idle reaper).
+# The route holds a Postgres advisory lock across ALL callers — trackUsage and the
+# watermark advance are two separate un-transactioned writes, so overlapping runs
+# could double-bill; flock -n is this container's own defense in depth.
+# Dark until APP_HOSTING_ENABLED=true, when it reports `disabled` and reads nothing.
+*/10 * * * * flock -n /run/meter-published-apps.lock cron-curl GET __WEB_URL__/api/cron/meter-published-apps >> /var/log/cron/meter-published-apps.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/meter-published-apps.log
+
+# Published-app idle reaper - Every 5 minutes
+# Stops published apps that have gone quiet. Their machines run with autostop off
+# (so every billing boundary is an API call we made, at an instant we know exactly),
+# which means NOTHING stops an app unless this does — without this tick, every app
+# anybody has ever visited bills awake-seconds forever. Idle is measured from the
+# router's throttled lastHitAt stamp, floored by lastWakeAt, against
+# PUBLISHED_APP_IDLE_STOP_SECONDS (default 900 = 15 min); 5 minutes is a third of
+# that, so an app is stopped within a third of a threshold of going quiet.
+# The stop IS the settle boundary: the reaper prices nothing, it hands each idle app
+# to stopPublishedApp, which stops the machine, mirrors the boundary and settles —
+# under the awake meter's own advisory lock, so a stop-settle can never double-price
+# the window a heartbeat is pricing. The route holds a separate advisory lock across
+# all callers for the fleet scan itself; flock -n is this container's defense in depth.
+# Dark until APP_HOSTING_ENABLED=true, when it reports `disabled` and reads nothing.
+*/5 * * * * flock -n /run/reap-idle-apps.lock cron-curl GET __WEB_URL__/api/cron/reap-idle-apps >> /var/log/cron/reap-idle-apps.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/reap-idle-apps.log
+
+# Published-app awake-seconds reconcile - Weekly on Mondays at 3:30am UTC
+# Compares the awake-seconds implied by our own mirrored start/stop boundaries
+# against Fly's managed Prometheus (fly_instance_up), which retains ~15 days. That
+# retention is what fixes the cadence: weekly leaves a full window of slack for one
+# missed run, where monthly would routinely ask about samples that no longer exist.
+# Fly's own machine event log keeps only the last 20 entries, so awake history is
+# NOT rebuildable after the fact — published_app_machine_events is the record, and
+# this is the check on it. It COMPARES AND ALERTS; it never moves money (a scraped
+# gauge is not evidence of a charge). Inert with no FLY_PROMETHEUS_ORG_SLUG.
+30 3 * * 1 flock -n /run/reconcile-app-awake-seconds.lock cron-curl GET __WEB_URL__/api/cron/reconcile-app-awake-seconds >> /var/log/cron/reconcile-app-awake-seconds.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/reconcile-app-awake-seconds.log
+
+# Published-site visibility reconcile - Every 10 minutes (POL-4)
+# An org can turn publishing or custom domains off; its published sites are then MOVED (not deleted) to a
+# non-public prefix in the publish bucket, and moved back when the policy is turned on. The move runs right
+# after the policy change; this sweep finishes whatever an object-store failure left behind, and re-parks anything
+# that reappeared. It reads the live policy, so a tick with nothing to do lists and changes nothing. Inert with no
+# PUBLISH_BUCKET.
+*/10 * * * * flock -n /run/reconcile-published-visibility.lock cron-curl GET __WEB_URL__/api/cron/reconcile-published-visibility >> /var/log/cron/reconcile-published-visibility.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/reconcile-published-visibility.log

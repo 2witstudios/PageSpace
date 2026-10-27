@@ -1,5 +1,16 @@
-import { db, users, pages, drives, storageEvents, eq, sql, and, isNull, inArray } from '@pagespace/db';
-import { getStorageConfigFromSubscription, getStorageTierFromSubscription, type SubscriptionTier } from './subscription-utils';
+import { toPersonalSubscriptionTier } from '../billing/subscription-tiers';
+import { getStorageConfigFromSubscription, STORAGE_TIERS, type SubscriptionTier } from './subscription-utils';
+import { storageRepository, type DrizzleTx } from './storage-repository';
+import { reserveUploadSlot } from './pending-uploads';
+import { getAdvisoryLockPool } from '@pagespace/db/db';
+import { throwIfLockLost, withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-lock';
+import { payerForDrive, type BillingPayer, type DriveBillingFacts } from '../billing/sandbox-payer';
+import { entitledStorageBlocks, storageAddonBytes } from '../billing/storage-addon';
+import { isBillingEnabled } from '../deployment-mode';
+import type { StorageAddonRecord } from './storage-repository';
+
+// Re-exported for existing consumers; the canonical table lives in subscription-utils.
+export { STORAGE_TIERS };
 
 export interface StorageQuota {
   userId: string;
@@ -7,79 +18,53 @@ export interface StorageQuota {
   usedBytes: number;
   availableBytes: number;
   utilizationPercent: number;
-  tier: 'free' | 'pro' | 'founder' | 'business';
+  tier: SubscriptionTier;
   warningLevel: 'none' | 'warning' | 'critical';
+  /** Bytes of quotaBytes that come from storage add-on blocks (0 when none). */
+  addonBytes?: number;
+  /** Storage add-on blocks the payer holds right now (paid-through grace included). */
+  addonBlocks?: number;
 }
 
-// Map subscription tiers to storage tiers (deprecated - use subscription-utils instead)
-export function mapSubscriptionToStorageTier(subscriptionTier: 'free' | 'pro' | 'founder' | 'business'): 'free' | 'pro' | 'founder' | 'business' {
-  const tier = getStorageTierFromSubscription(subscriptionTier);
-  return tier; // Return tier directly since we've removed enterprise
+/**
+ * An organization's storage quota (WAL-9, O-9). Every org is on Business (SEAT-8), and its
+ * usage is DERIVED — SUM(files.sizeBytes) over files in the org's drives — rather than cached,
+ * so a drive moving in or out changes the org's usage with no counter to keep in step.
+ */
+export interface OrgStorageQuota extends Omit<StorageQuota, 'userId'> {
+  orgId: string;
 }
 
-export interface StorageCheckResult {
+/** The quota an upload is checked against: the payer's — a person's, or the drive's org's. */
+export type AnyStorageQuota = StorageQuota | OrgStorageQuota;
+
+export interface StorageCheckResult<Q extends AnyStorageQuota = StorageQuota> {
   allowed: boolean;
   reason?: string;
-  quota?: StorageQuota;
+  quota?: Q;
   requiredBytes?: number;
 }
-
-export const STORAGE_TIERS = {
-  free: {
-    name: 'Free',
-    quotaBytes: 500 * 1024 * 1024,      // 500MB
-    maxFileSize: 20 * 1024 * 1024,      // 20MB
-    maxConcurrentUploads: 2,
-    maxFileCount: 100,
-    features: ['500MB storage', '20MB per file', 'Basic processing']
-  },
-  pro: {
-    name: 'Pro',
-    quotaBytes: 2 * 1024 * 1024 * 1024, // 2GB
-    maxFileSize: 50 * 1024 * 1024,      // 50MB
-    maxConcurrentUploads: 3,
-    maxFileCount: 500,
-    features: ['2GB storage', '50MB per file']
-  },
-  founder: {
-    name: 'Founder',
-    quotaBytes: 10 * 1024 * 1024 * 1024, // 10GB
-    maxFileSize: 50 * 1024 * 1024,       // 50MB
-    maxConcurrentUploads: 3,
-    maxFileCount: 500,
-    features: ['10GB storage', '50MB per file']
-  },
-  business: {
-    name: 'Business',
-    quotaBytes: 50 * 1024 * 1024 * 1024, // 50GB
-    maxFileSize: 100 * 1024 * 1024,      // 100MB
-    maxConcurrentUploads: 10,
-    maxFileCount: 5000,
-    features: ['50GB storage', '100MB per file']
-  }
-} as const;
 
 /**
  * Get user's current storage quota and usage
  * Computes quota from subscription tier for consistency
  */
 export async function getUserStorageQuota(userId: string): Promise<StorageQuota | null> {
-  const user = await db.query.users.findFirst({
-    where: eq(users.id, userId),
-    columns: {
-      id: true,
-      storageUsedBytes: true,
-      subscriptionTier: true
-    }
-  });
+  const user = await storageRepository.findUserForStorage(userId);
 
   if (!user) return null;
 
   // Compute storage config from subscription tier
-  const subscriptionTier = (user.subscriptionTier || 'free') as SubscriptionTier;
+  const subscriptionTier = toPersonalSubscriptionTier(user.subscriptionTier);
   const storageConfig = getStorageConfigFromSubscription(subscriptionTier);
 
-  const quotaBytes = storageConfig.quotaBytes;
+  // Storage add-on blocks ride on a paid plan only, and only where PageSpace bills
+  // (tenant/on-prem already resolve to Business limits above).
+  const addonBlocks = isBillingEnabled() && storageConfig.tier === 'pro'
+    ? addonBlocksOf(await storageRepository.findUserStorageAddon(userId))
+    : 0;
+  const addonBytes = storageAddonBytes(addonBlocks);
+  const quotaBytes = storageConfig.quotaBytes + addonBytes;
   const usedBytes = user.storageUsedBytes || 0;
   const availableBytes = Math.max(0, quotaBytes - usedBytes);
   const utilizationPercent = quotaBytes > 0 ? (usedBytes / quotaBytes) * 100 : 0;
@@ -91,8 +76,15 @@ export async function getUserStorageQuota(userId: string): Promise<StorageQuota 
     availableBytes,
     utilizationPercent,
     tier: storageConfig.tier,
-    warningLevel: getWarningLevel(utilizationPercent)
+    warningLevel: getWarningLevel(utilizationPercent),
+    addonBytes,
+    addonBlocks,
   };
+}
+
+/** Blocks a mirrored add-on entitles right now (0 when there is none). */
+export function addonBlocksOf(addon: StorageAddonRecord | null | undefined, now: Date = new Date()): number {
+  return addon ? entitledStorageBlocks(addon, now) : 0;
 }
 
 /**
@@ -113,7 +105,19 @@ export async function checkStorageQuota(
     };
   }
 
-  // Check tier file size limit
+  const bytes = decideStorageBytes({ quota, fileSize });
+  if (!bytes.allowed) return bytes;
+
+  // Counted only once the byte checks pass: the count is the expensive read.
+  return decideFileCount({ quota, fileCount: await getUserFileCount(userId) });
+}
+
+/**
+ * The byte half of a quota check (pure): the tier's per-file limit, then the bytes left.
+ * One rule for a person's quota and an org's.
+ */
+export function decideStorageBytes<Q extends AnyStorageQuota>(input: { quota: Q; fileSize: number }): StorageCheckResult<Q> {
+  const { quota, fileSize } = input;
   const tierConfig = STORAGE_TIERS[quota.tier];
   if (fileSize > tierConfig.maxFileSize) {
     return {
@@ -123,8 +127,6 @@ export async function checkStorageQuota(
       requiredBytes: fileSize
     };
   }
-
-  // Check available storage
   if (fileSize > quota.availableBytes) {
     return {
       allowed: false,
@@ -133,9 +135,13 @@ export async function checkStorageQuota(
       requiredBytes: fileSize
     };
   }
+  return { allowed: true, quota };
+}
 
-  // Check file count limit
-  const fileCount = await getUserFileCount(userId);
+/** The file-count half of a quota check (pure). A tier limit of 0 means unlimited. */
+export function decideFileCount<Q extends AnyStorageQuota>(input: { quota: Q; fileCount: number }): StorageCheckResult<Q> {
+  const { quota, fileCount } = input;
+  const tierConfig = STORAGE_TIERS[quota.tier];
   if (tierConfig.maxFileCount > 0 && fileCount >= tierConfig.maxFileCount) {
     return {
       allowed: false,
@@ -143,31 +149,248 @@ export async function checkStorageQuota(
       quota
     };
   }
+  return { allowed: true, quota };
+}
 
+/**
+ * An org's quota over its derived usage (pure). Every org is on Business (SEAT-8), so the
+ * Business storage limits apply; a lapsed org's restrictions are SEAT-9's, not storage's.
+ */
+export function buildOrgStorageQuota(input: { orgId: string; usedBytes: number; addonBlocks?: number }): OrgStorageQuota {
+  const storageConfig = getStorageConfigFromSubscription('business');
+  const addonBlocks = input.addonBlocks ?? 0;
+  const addonBytes = storageAddonBytes(addonBlocks);
+  const quotaBytes = storageConfig.quotaBytes + addonBytes;
+  const usedBytes = toByteCount(input.usedBytes);
+  const utilizationPercent = quotaBytes > 0 ? (usedBytes / quotaBytes) * 100 : 0;
   return {
-    allowed: true,
-    quota
+    orgId: input.orgId,
+    quotaBytes,
+    usedBytes,
+    availableBytes: Math.max(0, quotaBytes - usedBytes),
+    utilizationPercent,
+    tier: storageConfig.tier,
+    warningLevel: getWarningLevel(utilizationPercent),
+    addonBytes,
+    addonBlocks,
   };
 }
 
 /**
- * Check if user has available upload slots
+ * The org's storage quota over its derived usage (WAL-9): SUM(files.sizeBytes) across its drives,
+ * plus any storage add-on blocks on its live Business subscription (none while lapsed).
  */
-export async function checkConcurrentUploads(userId: string): Promise<boolean> {
-  const user = await db.query.users.findFirst({
-    where: eq(users.id, userId),
-    columns: {
-      activeUploads: true,
-      subscriptionTier: true
-    }
-  });
+export async function getOrgStorageQuota(orgId: string): Promise<OrgStorageQuota> {
+  const [usedBytes, addon] = await Promise.all([
+    storageRepository.sumOrgFileBytes(orgId),
+    isBillingEnabled() ? storageRepository.findOrgStorageAddon(orgId) : Promise.resolve(undefined),
+  ]);
+  return buildOrgStorageQuota({ orgId, usedBytes, addonBlocks: addonBlocksOf(addon) });
+}
 
+/**
+ * The billing facts (owner, org) of each of `driveIds`, for callers that attribute many files at
+ * once (the orphan reaper). A drive that no longer exists is absent: its files rows cascaded with it.
+ */
+export async function findDriveBillingFactsMap(driveIds: ReadonlyArray<string>): Promise<Map<string, DriveBillingFacts>> {
+  return storageRepository.findDriveBillingFactsMap([...new Set(driveIds)]);
+}
+
+/** FILE pages across the org's drives: the org's file count (WAL-9). */
+export async function getOrgFileCount(orgId: string): Promise<number> {
+  const driveIds = await storageRepository.findOrgDriveIds(orgId);
+  if (driveIds.length === 0) return 0;
+  return storageRepository.countFiles(driveIds);
+}
+
+/**
+ * Who an upload into `driveId` bills (WAL-9, O-9): the payer seam — the drive's org when it has
+ * one, else the drive's OWNER, whoever is uploading. A drive-less upload (a DM attachment) bills
+ * its uploader. A named drive that cannot be found is refused: null, never a substitute payer.
+ */
+export async function resolveUploadPayer(userId: string, driveId: string | null | undefined): Promise<BillingPayer | null> {
+  if (!driveId) return { kind: 'user', userId };
+  const drive = await storageRepository.findDriveBillingFacts(driveId);
+  return drive ? storagePayerForFile({ createdBy: userId, drive }) : null;
+}
+
+/**
+ * Who an upload into a drive bills, and the quota it is checked against, read ONCE (WAL-9).
+ * A caller that needs both the quota (its tier) and the check resolves this once and passes it
+ * to `checkUploadQuotaTarget`, so the org's derived usage (a SUM over every file in the org) is
+ * read once per request (#2719 review P2-2). Deliberately uncached: an undercounted usage lets
+ * an org exceed its quota.
+ */
+export interface UploadQuotaTarget {
+  payer: BillingPayer;
+  quota: AnyStorageQuota;
+}
+
+/**
+ * The payer and quota for an upload into `driveId`: the org's for an org drive, the drive
+ * owner's for a personal drive, the uploader's for a drive-less attachment. An upload never
+ * reads the quota of anyone but its payer. Null when the drive or the personal payer does not
+ * exist.
+ */
+export async function resolveUploadQuotaTarget(
+  userId: string,
+  driveId: string | null | undefined,
+): Promise<UploadQuotaTarget | null> {
+  const payer = await resolveUploadPayer(userId, driveId);
+  if (payer === null) return null;
+  if (payer.kind === 'org') return { payer, quota: await getOrgStorageQuota(payer.orgId) };
+  const quota = await getUserStorageQuota(payer.userId);
+  return quota ? { payer, quota } : null;
+}
+
+/**
+ * The upload quota check against an already-resolved target: the tier's per-file limit, the
+ * bytes left, then the payer's file count. Re-reads neither the payer nor the usage.
+ */
+export async function checkUploadQuotaTarget(
+  target: UploadQuotaTarget | null,
+  fileSize: number,
+): Promise<StorageCheckResult<AnyStorageQuota>> {
+  if (!target) return { allowed: false, reason: 'User not found' };
+  const { payer, quota } = target;
+  const bytes = decideStorageBytes({ quota, fileSize });
+  if (!bytes.allowed) return bytes;
+
+  // Counted only once the byte checks pass: the count is the expensive read.
+  const fileCount = payer.kind === 'org' ? await getOrgFileCount(payer.orgId) : await getUserFileCount(payer.userId);
+  return decideFileCount({ quota, fileCount });
+}
+
+/**
+ * The upload quota check for an upload into `driveId` (WAL-9): an org drive checks the org's
+ * bytes, per-file size and file count; anything else checks the uploader's.
+ */
+export async function checkStorageQuotaForDrive(
+  userId: string,
+  driveId: string | null | undefined,
+  fileSize: number,
+): Promise<StorageCheckResult<AnyStorageQuota>> {
+  return checkUploadQuotaTarget(await resolveUploadQuotaTarget(userId, driveId), fileSize);
+}
+
+/**
+ * Charge the first physical store of `deltaBytes` uploaded into `driveId` (WAL-9, O-9). A
+ * personal payer's counter moves — the drive OWNER's for a personal drive, the uploader's for a
+ * drive-less attachment; an org drive's usage is derived from its files rows, so an org-billed
+ * store writes no counter at all. A drive that no longer exists charges no one (its files rows
+ * cascade with it). Returns who the bytes bill.
+ */
+export async function chargeStorageForStore(
+  userId: string,
+  driveId: string | null | undefined,
+  deltaBytes: number,
+  context: { pageId?: string; eventType?: 'upload' | 'delete' | 'update' | 'reconcile' },
+): Promise<BillingPayer | null> {
+  const payer = await resolveUploadPayer(userId, driveId);
+  if (payer?.kind === 'user') {
+    await updateStorageUsage(payer.userId, deltaBytes, { ...context, driveId: driveId ?? undefined });
+  }
+  return payer;
+}
+
+/** What a drive move did to stored-byte attribution (O-9). */
+export interface StorageReattributionResult {
+  status: 'applied';
+  direction: DriveMoveDirection;
+  /** Bytes whose attribution moved between the drive owner's personal quota and the org. */
+  movedBytes: number;
+  deltas: StorageReattributionDelta[];
+}
+
+/**
+ * O-9 (D-OW-9): re-attribute a moving drive's stored bytes INSIDE the move's transaction, so
+ * drives.orgId and the owner's counter change together or not at all. Moving in takes all the
+ * drive's bytes off its owner's personal quota; moving out puts them on it. The org's usage is
+ * derived from its drives, so it follows drives.orgId with no write. One 'reattribute' storage
+ * event per changed counter.
+ */
+export async function reattributeDriveStorageInTx(
+  tx: DrizzleTx,
+  input: { driveId: string; ownerId: string; orgId: string; direction: DriveMoveDirection },
+): Promise<StorageReattributionResult> {
+  const files = await storageRepository.findDriveFileBytesInTx(tx, input.driveId);
+  const deltas = computeMoveReattribution({ ownerId: input.ownerId, files, direction: input.direction });
+  const events: Parameters<typeof storageRepository.insertStorageEventsInTx>[1] = [];
+  for (const { userId, deltaBytes } of deltas) {
+    const { newUsage } = await storageRepository.updateStorageInTx(tx, userId, deltaBytes);
+    events.push({
+      userId,
+      eventType: 'reattribute',
+      sizeDelta: deltaBytes,
+      totalSizeAfter: newUsage,
+      metadata: { driveId: input.driveId, orgId: input.orgId, direction: input.direction },
+    });
+  }
+  await storageRepository.insertStorageEventsInTx(tx, events);
+  return {
+    status: 'applied',
+    direction: input.direction,
+    movedBytes: deltas.reduce((sum, d) => sum + Math.abs(d.deltaBytes), 0),
+    deltas,
+  };
+}
+
+/**
+ * WAL-9: a personal drive handed to a new owner (account deletion's transfer) moves its stored
+ * bytes from the old owner's quota to the new owner's INSIDE the transfer's transaction, so
+ * drives.ownerId and both counters change together or not at all. An org drive's bytes bill the
+ * org whoever leads it, so a lead change moves nothing (callers never call this for one).
+ */
+export async function reattributeDriveOwnerStorageInTx(
+  tx: DrizzleTx,
+  input: { driveId: string; fromUserId: string; toUserId: string },
+): Promise<StorageReattributionDelta[]> {
+  const files = await storageRepository.findDriveFileBytesInTx(tx, input.driveId);
+  const deltas = computeOwnerTransferReattribution({ fromUserId: input.fromUserId, toUserId: input.toUserId, files });
+  const events: Parameters<typeof storageRepository.insertStorageEventsInTx>[1] = [];
+  for (const { userId, deltaBytes } of deltas) {
+    const { newUsage } = await storageRepository.updateStorageInTx(tx, userId, deltaBytes);
+    events.push({
+      userId,
+      eventType: 'reattribute',
+      sizeDelta: deltaBytes,
+      totalSizeAfter: newUsage,
+      metadata: { driveId: input.driveId, fromUserId: input.fromUserId, toUserId: input.toUserId, reason: 'owner_transfer' },
+    });
+  }
+  await storageRepository.insertStorageEventsInTx(tx, events);
+  return deltas;
+}
+
+/**
+ * Atomically check the user's live-upload count against their tier's
+ * concurrency limit AND reserve the slot (insert the `pending_uploads` row)
+ * in one step — the presign routes' cross-process concurrency gate (#2154).
+ *
+ * #2225 review: a separate "check the count" call followed later by a
+ * separate "insert the row" call is NOT safe under concurrency — two presigns
+ * for the same user landing on different web replicas can both read the same
+ * live count before either inserts, both pass, and both reserve, exceeding
+ * the tier limit by however many requests race. `reserveUploadSlot` closes
+ * that gap with a single transaction serialized per-user (see
+ * `pendingUploadsRepository.reserveIfUnderLimit`).
+ *
+ * Derived from live (unexpired) `pending_uploads` rows rather than the old
+ * `users.activeUploads` counter, which leaked +1 forever when a process died
+ * between presign and complete.
+ */
+export async function reserveConcurrentUploadSlot(
+  jobId: string,
+  userId: string,
+  fileSize: number,
+): Promise<boolean> {
+  const user = await storageRepository.findUserForStorage(userId);
   if (!user) return false;
 
-  const subscriptionTier = (user.subscriptionTier || 'free') as SubscriptionTier;
+  const subscriptionTier = toPersonalSubscriptionTier(user.subscriptionTier);
   const storageConfig = getStorageConfigFromSubscription(subscriptionTier);
 
-  return (user.activeUploads || 0) < storageConfig.maxConcurrentUploads;
+  return reserveUploadSlot(jobId, userId, fileSize, storageConfig.maxConcurrentUploads);
 }
 
 /**
@@ -183,30 +406,20 @@ export async function updateStorageUsage(
     driveId?: string;
     eventType?: 'upload' | 'delete' | 'update' | 'reconcile';
   },
-  existingTx?: Parameters<Parameters<typeof db.transaction>[0]>[0]
+  existingTx?: DrizzleTx
 ): Promise<void> {
-  const executeUpdate = async (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => {
-    // Lock user row and update storage
-    const [updatedUser] = await tx
-      .update(users)
-      .set({
-        storageUsedBytes: sql`GREATEST(0, COALESCE("storageUsedBytes", 0) + ${deltaBytes})`,
-        lastStorageCalculated: new Date()
-      })
-      .where(eq(users.id, userId))
-      .returning({
-        newUsage: users.storageUsedBytes
-      });
+  const executeUpdate = async (tx: DrizzleTx) => {
+    const { newUsage } = await storageRepository.updateStorageInTx(tx, userId, deltaBytes);
 
     // Log storage event for audit trail
     if (context) {
-      await tx.insert(storageEvents).values({
+      await storageRepository.insertStorageEvent(tx, {
         userId,
         pageId: context.pageId || null,
         eventType: context.eventType || 'update',
         sizeDelta: deltaBytes,
-        totalSizeAfter: updatedUser.newUsage || 0,
-        metadata: context.driveId ? { driveId: context.driveId } : null
+        totalSizeAfter: newUsage,
+        metadata: context.driveId ? { driveId: context.driveId } : null,
       });
     }
   };
@@ -215,125 +428,254 @@ export async function updateStorageUsage(
   if (existingTx) {
     await executeUpdate(existingTx);
   } else {
-    await db.transaction(async (tx) => {
+    await storageRepository.runTransaction(async (tx) => {
       await executeUpdate(tx);
     });
   }
 }
 
 /**
- * Increment/decrement active upload count
+ * Coerce a possibly-BIGINT-as-string / null / NaN byte value to a non-negative
+ * integer. Postgres returns BIGINT columns (e.g. files.sizeBytes) as strings.
  */
-export async function updateActiveUploads(
-  userId: string,
-  delta: number
-): Promise<void> {
-  await db
-    .update(users)
-    .set({
-      activeUploads: sql`GREATEST(0, COALESCE("activeUploads", 0) + ${delta})`
-    })
-    .where(eq(users.id, userId));
+export function toByteCount(value: number | string | null | undefined): number {
+  const n = typeof value === 'string' ? Number(value) : (value ?? 0);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.floor(n);
+}
+
+/**
+ * H4 — sum a reconcile population (pure). The charge path bills the file's PAYER (the
+ * personal drive's owner, or a drive-less attachment's uploader) and a `files` row is
+ * created on the first physical store of every page-file AND attachment. So the
+ * population that reconcile must re-sum to match the charge basis is exactly the
+ * `files` rows billed to the user — including trashed-but-not-yet-purged ones (the
+ * `files` row survives until the orphan reaper deletes it). This pure summation is
+ * integer-safe and ignores null/garbage so a single bad row can't poison the total.
+ */
+export function sumStorageBytes(
+  rows: ReadonlyArray<{ sizeBytes: number | string | null }>,
+): number {
+  let total = 0;
+  for (const row of rows) total += toByteCount(row.sizeBytes);
+  return total;
+}
+
+/**
+ * M8 (charge side) — only charge storage on the FIRST physical store of a blob.
+ *
+ * Storage is content-addressed: the second+ uploader of identical bytes hits
+ * `files` ON CONFLICT DO NOTHING, so no new bytes are stored and the row keeps
+ * its first drive. Charging every /complete (the old behaviour) meant N charges
+ * but the reaper only ever credits the row's payer once — a permanent quota leak.
+ * Charging only when the row was newly inserted keeps the charge symmetric with
+ * the single credit at unlink.
+ */
+export function shouldChargeForStore(fileRowNewlyInserted: boolean): boolean {
+  return fileRowNewlyInserted;
+}
+
+/**
+ * WAL-9, O-9 (D-OW-9) — who a stored file's bytes bill (pure): the payer seam ("org if
+ * drives.orgId, else owner", payerForDrive) on the file's drive — the org for an org drive, the
+ * drive's OWNER for a personal one, whoever uploaded it. A drive-less file (a DM attachment)
+ * bills its uploader (files.createdBy), or nobody once that user is gone. `drive` is the billing
+ * facts of files.driveId, null for a drive-less file.
+ *
+ * The attribution follows files.driveId: storage is content-addressed, so a blob has ONE files
+ * row, and its bytes stay where they were first stored even when a page in another drive links
+ * the same hash.
+ */
+export function storagePayerForFile(input: { createdBy: string | null; drive: DriveBillingFacts | null }): BillingPayer | null {
+  if (input.drive !== null) return payerForDrive(input.drive);
+  if (input.createdBy) return { kind: 'user', userId: input.createdBy };
+  return null;
+}
+
+export type DriveMoveDirection = 'into-org' | 'out-of-org';
+
+export interface StorageReattributionDelta {
+  userId: string;
+  /** Negative when the bytes leave the person's quota, positive when they land on it. */
+  deltaBytes: number;
+}
+
+/**
+ * O-9 (D-OW-9) — re-attribute a drive's stored bytes when it moves into or out of an org
+ * (pure). While personal, every byte in the drive bills its OWNER, whoever uploaded it; moving
+ * in takes exactly those bytes off the owner's quota (the org's usage is derived from its
+ * drives, so it rises by the same total with no write), and moving out puts exactly them on it.
+ * A move in then out nets zero: nothing is double-counted or orphaned. Integer bytes only.
+ */
+export function computeMoveReattribution(input: {
+  ownerId: string;
+  files: ReadonlyArray<{ createdBy: string | null; sizeBytes: number | string | null }>;
+  direction: DriveMoveDirection;
+}): StorageReattributionDelta[] {
+  const bytes = sumStorageBytes(input.files);
+  if (bytes === 0) return [];
+  return [{ userId: input.ownerId, deltaBytes: input.direction === 'into-org' ? -bytes : bytes }];
+}
+
+/**
+ * WAL-9 — re-attribute a personal drive's stored bytes when it is handed to a new owner (pure):
+ * all of them leave the old owner's quota and land on the new owner's. Sorted by userId so every
+ * transfer updates users rows in one order (no lock cycle between concurrent transfers).
+ */
+export function computeOwnerTransferReattribution(input: {
+  fromUserId: string;
+  toUserId: string;
+  files: ReadonlyArray<{ createdBy: string | null; sizeBytes: number | string | null }>;
+}): StorageReattributionDelta[] {
+  const bytes = sumStorageBytes(input.files);
+  if (bytes === 0 || input.fromUserId === input.toUserId) return [];
+  return [
+    { userId: input.fromUserId, deltaBytes: -bytes },
+    { userId: input.toUserId, deltaBytes: bytes },
+  ].sort((a, b) => (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0));
+}
+
+export interface UnlinkCreditInput {
+  /** files.createdBy — who uploaded it, the payer of a drive-less attachment. */
+  createdBy: string | null;
+  /**
+   * The billing facts of the file's drive at reap time; null for a drive-less file. A personal
+   * drive's bytes credit its owner; an org drive's bill the org, whose usage is derived from the
+   * rows themselves, so no personal quota is credited (WAL-9).
+   */
+  drive: DriveBillingFacts | null;
+  sizeBytes: number | string | null;
+  /** Whether THIS reap call actually deleted the row (race-safe credit gate). */
+  deletedByThisCall: boolean;
+  /** False for DB-only stubs whose bytes were never persisted (no credit owed). */
+  hadPhysicalBlob: boolean;
+}
+
+export interface StorageCredit {
+  userId: string;
+  /** Negative byte delta to apply to the payer's usage. */
+  deltaBytes: number;
+}
+
+/**
+ * M8 (credit side) — compute the storage credit owed when a content-addressed
+ * blob is unlinked/reaped (pure). Mirrors {@link shouldChargeForStore}: exactly
+ * one credit, to the payer the bytes bill (storagePayerForFile), and only when
+ * this call truly removed the row and real bytes existed. Returns null when no
+ * credit is owed. Integer bytes only.
+ */
+export function computeStorageCreditOnUnlink(input: UnlinkCreditInput): StorageCredit | null {
+  if (!input.deletedByThisCall) return null;
+  if (!input.hadPhysicalBlob) return null;
+  const payer = storagePayerForFile({ createdBy: input.createdBy, drive: input.drive });
+  if (payer?.kind !== 'user') return null;
+  const bytes = toByteCount(input.sizeBytes);
+  if (bytes === 0) return null;
+  return { userId: payer.userId, deltaBytes: -bytes };
 }
 
 /**
  * Calculate actual storage usage from database
  * Used for reconciliation and verification
+ *
+ * H4: sums the SAME population the charge path bills — the `files` rows billed to
+ * the user (their personal drives' files, whoever uploaded them, and their own
+ * drive-less attachments), including trashed-but-unpurged files — so
+ * `?reconcile=true` cannot reset usage downward (self-serve quota wipe).
  */
 export async function calculateActualStorageUsage(userId: string): Promise<number> {
-  // Get all drives owned by user
-  const userDrives = await db.query.drives.findMany({
-    where: eq(drives.ownerId, userId),
-    columns: { id: true }
-  });
+  const rows = await storageRepository.findFilesBilledToUser(userId);
+  return sumStorageBytes(rows);
+}
 
-  if (userDrives.length === 0) return 0;
-
-  const driveIds = userDrives.map(d => d.id);
-
-  // Calculate total file size across all user's drives
-  const result = await db
-    .select({
-      totalSize: sql<number>`COALESCE(SUM(CAST(${pages.fileSize} AS BIGINT)), 0)`
-    })
-    .from(pages)
-    .where(and(
-      inArray(pages.driveId, driveIds),
-      eq(pages.type, 'FILE'),
-      eq(pages.isTrashed, false)
-    ));
-
-  return Number(result[0]?.totalSize || 0);
+/**
+ * H3: whether the caller already legitimately references a content hash (so the
+ * dedup fast-path / linking a pre-existing object is safe for them). Delegates to
+ * the repository; the routes consume this through the service layer.
+ */
+export async function userReferencesContentHash(
+  userId: string,
+  contentHash: string,
+  driveId: string,
+): Promise<boolean> {
+  return storageRepository.userReferencesContentHash(userId, contentHash, driveId);
 }
 
 /**
  * Get count of user's files
  */
 export async function getUserFileCount(userId: string): Promise<number> {
-  // Get all drives owned by user
-  const userDrives = await db.query.drives.findMany({
-    where: eq(drives.ownerId, userId),
-    columns: { id: true }
-  });
-
-  if (userDrives.length === 0) return 0;
-
-  const driveIds = userDrives.map(d => d.id);
-
-  const result = await db
-    .select({
-      count: sql<number>`COUNT(*)`
-    })
-    .from(pages)
-    .where(and(
-      inArray(pages.driveId, driveIds),
-      eq(pages.type, 'FILE'),
-      eq(pages.isTrashed, false)
-    ));
-
-  return Number(result[0]?.count || 0);
+  const driveIds = await storageRepository.findUserDriveIds(userId);
+  if (driveIds.length === 0) return 0;
+  return storageRepository.countFiles(driveIds);
 }
 
 /**
- * Reconcile stored usage with actual usage
- * Should be run periodically to fix any drift
+ * Reconcile stored usage with actual usage. Should be run periodically to fix
+ * any drift.
+ *
+ * Applies the correction as a DELTA (via the same atomic `updateStorageInTx`
+ * the charge/credit paths use), not an absolute overwrite. `actualUsage` and
+ * `difference` are computed from a read taken before the correction runs, so
+ * a concurrent upload/delete can land its own delta in between; overwriting
+ * the counter with a stale absolute total would silently swallow that
+ * concurrent write. A delta commutes with concurrent deltas instead — it
+ * corrects the exact drift measured, whatever the counter's value is by the
+ * time the correction transaction actually runs. `actualUsage` in the return
+ * value reflects the counter's value immediately after the correction, which
+ * is the source of truth if a concurrent write did land.
+ *
+ * Unlocked — callers MUST serialize invocations for the same user (see the
+ * exported `reconcileStorageUsage`, which wraps this in the same advisory
+ * lock as the scheduled sweep). Two unserialized concurrent calls would each
+ * read the same drift and each apply the correction delta once, double
+ * counting it exactly like two overlapping cron ticks would (#2225 review).
  */
-export async function reconcileStorageUsage(userId: string): Promise<{
+async function reconcileStorageUsageUnlocked(userId: string, signal?: AbortSignal): Promise<{
   previousUsage: number;
   actualUsage: number;
   difference: number;
 }> {
   const quota = await getUserStorageQuota(userId);
-  const actualUsage = await calculateActualStorageUsage(userId);
-
   if (!quota) {
     throw new Error('User not found');
   }
 
-  const difference = actualUsage - quota.usedBytes;
+  const derivedUsage = await calculateActualStorageUsage(userId);
+  const difference = derivedUsage - quota.usedBytes;
+
+  let actualUsage = quota.usedBytes;
+
+  // #2225 review (Codex round 5) — upload/complete inserts the `files` row and
+  // calls `updateStorageUsage` as two separate, non-atomic steps. If the
+  // insert lands between the two reads above but its own storageUsedBytes
+  // update hasn't yet, derivedUsage already includes it while quota.usedBytes
+  // doesn't — applying that as drift here would double-count it once the
+  // upload's own pending update lands. Skip correcting (treat as a no-op this
+  // call) when this user's most recent files row is still within the same
+  // cooldown window the cron sweep uses for the identical race.
+  const lastFileCreatedAt = await storageRepository.findLastFileCreatedAtForUser(userId);
+  const withinCooldown = lastFileCreatedAt !== null
+    && Date.now() - lastFileCreatedAt.getTime() < STORAGE_DRIFT_COOLDOWN_SECONDS * 1000;
 
   // Update if there's a discrepancy
-  if (Math.abs(difference) > 1) { // Allow 1 byte tolerance for floating point
-    await db.transaction(async (tx) => {
-      await tx
-        .update(users)
-        .set({
-          storageUsedBytes: actualUsage,
-          lastStorageCalculated: new Date()
-        })
-        .where(eq(users.id, userId));
+  if (!withinCooldown && Math.abs(difference) > 1) { // Allow 1 byte tolerance for floating point
+    // The reconcile lock is what keeps a second run from applying this same delta again. If it
+    // was lost (the lock connection's backend died), skip: the drift is re-measured from scratch
+    // by the next reconcile, so nothing is lost by not applying it now.
+    throwIfLockLost(signal, `the storage correction for user ${JSON.stringify(userId)}`);
+    actualUsage = await storageRepository.runTransaction(async (tx) => {
+      const { newUsage } = await storageRepository.updateStorageInTx(tx, userId, difference);
 
-      await tx.insert(storageEvents).values({
+      await storageRepository.insertStorageEvent(tx, {
         userId,
         eventType: 'reconcile',
         sizeDelta: difference,
-        totalSizeAfter: actualUsage,
-        metadata: {
-          previousUsage: quota.usedBytes,
-          actualUsage,
-          difference
-        }
+        totalSizeAfter: newUsage,
+        metadata: { previousUsage: quota.usedBytes, derivedUsage, difference },
       });
+
+      return newUsage;
     });
   }
 
@@ -342,6 +684,182 @@ export async function reconcileStorageUsage(userId: string): Promise<{
     actualUsage,
     difference
   };
+}
+
+export interface StorageDriftInput {
+  /** The users.storageUsedBytes cache (REAL column — may be fractional). */
+  materializedBytes: number;
+  /** SUM(files.sizeBytes) over the user's files rows — the source of truth. */
+  derivedBytes: number;
+}
+
+export interface StorageDriftResult {
+  /** materialized − derived, as integer bytes. */
+  driftBytes: number;
+  /** True when |drift| exceeds the tolerance — the cache needs a rewrite. */
+  flagged: boolean;
+}
+
+/**
+ * #2155 — compare the materialized storage counter against what the `files`
+ * rows imply (pure; modeled on computeWalletDrift in wallet-ledger-core).
+ * Between a delete and the orphan-reaper cron the two legitimately disagree,
+ * so a small tolerance keeps the reconcile from thrashing on in-flight state;
+ * a flag means "rewrite the cache from the rows", not "data corruption".
+ */
+export function computeStorageDrift(input: StorageDriftInput, toleranceBytes: number): StorageDriftResult {
+  const driftBytes = Math.round(input.materializedBytes) - Math.round(input.derivedBytes);
+  const flagged = Math.abs(driftBytes) > Math.max(0, Math.round(toleranceBytes));
+  return { driftBytes, flagged };
+}
+
+/** Matches reconcileStorageUsage's historical 1-byte float tolerance. */
+const STORAGE_DRIFT_TOLERANCE_BYTES = 1;
+
+/**
+ * #2225 review — skip a user whose most recent `files` row is younger than
+ * this, so upload/complete's separate (deliberately non-atomic) files-row
+ * insert + storageUsedBytes update has time to fully land before this cron
+ * ever looks at that user. See findStorageDriftCandidates's doc for the race
+ * this closes. Generous relative to the actual window (a page-enqueue network
+ * call plus a DB write, normally milliseconds) and tiny relative to the
+ * 15-minute cron cadence, so it doesn't meaningfully delay real drift fixes.
+ */
+const STORAGE_DRIFT_COOLDOWN_SECONDS = 300;
+
+export interface StorageReconcileCorrection {
+  userId: string;
+  previousUsage: number;
+  actualUsage: number;
+  driftBytes: number;
+}
+
+/**
+ * #2155 — the scheduled reconcile behind api/cron/reconcile-storage. Finds
+ * every user whose storageUsedBytes cache has drifted from SUM(files.sizeBytes)
+ * and corrects it, logging a 'reconcile' storage event per correction.
+ *
+ * The correction is applied as a DELTA (`updateStorageInTx`, the same atomic
+ * increment the charge/credit paths use), not an absolute overwrite. This
+ * cron runs every 15 minutes across every user; `findStorageDriftCandidates`
+ * takes one snapshot read, and a concurrent upload/delete can land its own
+ * delta on the SAME user between that snapshot and this correction's write.
+ * Overwriting with the snapshot's absolute total would silently discard that
+ * concurrent write. Applying the drift as a delta instead commutes with it —
+ * whatever the counter's value is when the correction transaction actually
+ * runs, adding the measured drift lands it on the correct total. Per-user
+ * failures are isolated so one bad account can't block the sweep; callers
+ * alert on a non-empty `corrected`/`failed`.
+ */
+export async function reconcileAllStorageUsage(signal?: AbortSignal): Promise<{
+  corrected: StorageReconcileCorrection[];
+  failed: string[];
+}> {
+  const candidates = await storageRepository.findStorageDriftCandidates(STORAGE_DRIFT_TOLERANCE_BYTES, STORAGE_DRIFT_COOLDOWN_SECONDS);
+
+  const corrected: StorageReconcileCorrection[] = [];
+  const failed: string[] = [];
+
+  for (const candidate of candidates) {
+    // Losing the lock means another sweep can apply these same corrections (see
+    // RECONCILE_STORAGE_LOCK_KEY): stop, and let the next sweep re-measure every remaining drift.
+    if (signal?.aborted) break;
+    const drift = computeStorageDrift(candidate, STORAGE_DRIFT_TOLERANCE_BYTES);
+    if (!drift.flagged) continue;
+
+    const previousUsage = Math.round(candidate.materializedBytes);
+    // Move the cache toward the derived total: driftBytes = materialized − derived,
+    // so the correction that closes the gap is the negation of it.
+    const correctionDelta = -drift.driftBytes;
+
+    try {
+      const actualUsage = await storageRepository.runTransaction(async (tx) => {
+        const { newUsage } = await storageRepository.updateStorageInTx(tx, candidate.userId, correctionDelta);
+        await storageRepository.insertStorageEvent(tx, {
+          userId: candidate.userId,
+          eventType: 'reconcile',
+          sizeDelta: correctionDelta,
+          totalSizeAfter: newUsage,
+          metadata: { previousUsage, correctionDelta, actualUsage: newUsage, source: 'cron' },
+        });
+        return newUsage;
+      });
+      corrected.push({ userId: candidate.userId, previousUsage, actualUsage, driftBytes: drift.driftBytes });
+    } catch {
+      failed.push(candidate.userId);
+    }
+  }
+
+  return { corrected, failed };
+}
+
+/**
+ * Advisory-lock key serializing `reconcileAllStorageUsage` across EVERY
+ * caller — the crontab has no overlap guard (unlike reconcile-machine-storage's
+ * flock), and even a flock only protects one container's own scheduled ticks,
+ * not a second container or a manual/API trigger. Two overlapping runs can
+ * both read the same drift candidate (materialized=0, derived=100) and each
+ * independently apply the same +100 correctionDelta, landing the counter at
+ * 200 instead of 100 — the delta-based fix commutes with a DIFFERENT
+ * concurrent write (a real charge/credit), but not with ANOTHER COPY OF
+ * ITSELF applying the identical correction twice. Mirrors
+ * reconcileMachineStorageSerialized in machine-storage-billing.ts.
+ */
+const RECONCILE_STORAGE_LOCK_KEY = 'reconcile-storage';
+
+export type ReconcileAllStorageUsageRunResult =
+  | { outcome: 'lock_busy' }
+  | ({ outcome: 'reconciled' } & Awaited<ReturnType<typeof reconcileAllStorageUsage>>);
+
+/**
+ * Serializes `reconcileAllStorageUsage` with a Postgres session-level
+ * advisory try-lock: a run that cannot acquire it (another run — any
+ * process, any container — already holds it) is a clean no-op and never
+ * reads or writes any drift candidate. This is what api/cron/reconcile-storage
+ * actually calls.
+ */
+export async function reconcileAllStorageUsageSerialized(
+  pgPool: AdvisoryLockPool = getAdvisoryLockPool(),
+): Promise<ReconcileAllStorageUsageRunResult> {
+  const locked = await withAdvisoryLock(pgPool, RECONCILE_STORAGE_LOCK_KEY, (signal) =>
+    reconcileAllStorageUsage(signal),
+  );
+  if (locked.outcome === 'lock_busy') {
+    return { outcome: 'lock_busy' };
+  }
+  if (locked.outcome === 'connection_error') {
+    throw locked.error;
+  }
+  return { outcome: 'reconciled', ...locked.result };
+}
+
+export type ReconcileStorageUsageRunResult =
+  | { outcome: 'lock_busy' }
+  | ({ outcome: 'reconciled' } & Awaited<ReturnType<typeof reconcileStorageUsageUnlocked>>);
+
+/**
+ * The admin-triggered single-user reconcile (api/storage/info's
+ * `?reconcile=true`). Serializes against the SAME advisory lock as the
+ * scheduled sweep (#2225 review) — two overlapping admin triggers, or an
+ * admin trigger overlapping the cron, would otherwise both read the same
+ * drift and each apply the correction delta once, double-counting it. A run
+ * that loses the race is a clean no-op (returns `lock_busy`); the caller can
+ * retry or just rely on the next scheduled sweep.
+ */
+export async function reconcileStorageUsage(
+  userId: string,
+  pgPool: AdvisoryLockPool = getAdvisoryLockPool(),
+): Promise<ReconcileStorageUsageRunResult> {
+  const locked = await withAdvisoryLock(pgPool, RECONCILE_STORAGE_LOCK_KEY, (signal) =>
+    reconcileStorageUsageUnlocked(userId, signal),
+  );
+  if (locked.outcome === 'lock_busy') {
+    return { outcome: 'lock_busy' };
+  }
+  if (locked.outcome === 'connection_error') {
+    throw locked.error;
+  }
+  return { outcome: 'reconciled', ...locked.result };
 }
 
 /**
@@ -385,18 +903,4 @@ export function parseBytes(size: string): number {
 
   const [, value, unit] = match;
   return Math.floor(parseFloat(value) * (units[unit.toUpperCase()] || 1));
-}
-
-/**
- * @deprecated - Removed: Use subscription tier changes instead
- */
-export async function changeUserTier(): Promise<void> {
-  throw new Error('changeUserTier has been removed - storage tiers are computed from subscription tiers automatically');
-}
-
-/**
- * @deprecated - Removed: Storage tiers are computed dynamically
- */
-export async function updateStorageTierFromSubscription(): Promise<void> {
-  throw new Error('updateStorageTierFromSubscription has been removed - storage tiers are computed dynamically');
 }

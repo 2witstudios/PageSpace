@@ -1,0 +1,289 @@
+/**
+ * GDPR export formatting — pure transforms over collected user data.
+ *
+ * No I/O. Given an in-memory `AllUserData` snapshot, these functions build:
+ *  - the native per-section file inventory,
+ *  - a versioned `manifest.json` documenting the bundle (schema version + files),
+ *  - a documented, interoperable portable representation (schema.org), and
+ *  - the format selector for the `?format=` switch.
+ *
+ * The export route is a thin edge: it collects data, calls these, and streams
+ * the result into a ZIP via `archiver`.
+ */
+
+import type { AllUserData, ExportWithheld, ExportWithheldCategory } from './gdpr-export';
+
+/**
+ * Bump when the export bundle's structure/inventory changes.
+ *
+ * 1.1.0 adds `content-tags.json` (and the matching `contentTags` portable
+ * property). Additive: every 1.0.0 file is still present and unchanged, so a
+ * consumer written against 1.0.0 keeps working — but one keyed on the version
+ * can now tell a bundle that carries the subject's tags from one predating the
+ * category, which is the whole point of the field being in the manifest.
+ *
+ * 1.2.0 adds `organizations.json`, `org-membership.json` and `wallet.json`
+ * (and the matching portable properties). Spec X-2: orgs the subject owns,
+ * their org membership/seat/departures/requests, and their own wallet — their
+ * personal root balance and the funding legs they gave. Additive like 1.1.0.
+ *
+ * 1.3.0 adds `pulse-summaries.json` (and the matching portable property) and the manifest's `withheld` list: what the
+ * bundle left out because an org's sign-in policy refuses the credential that requested it (SEC-2/3, D-OW-62), with
+ * the code that unlocks it. Additive like 1.1.0.
+ */
+export const EXPORT_SCHEMA_VERSION = '1.3.0';
+
+export type ExportFormat = 'native' | 'portable';
+
+/** One serializable file in the export bundle. */
+export interface ExportFile {
+  name: string;
+  description: string;
+  recordCount: number;
+  data: unknown;
+}
+
+export interface ExportManifestFileEntry {
+  name: string;
+  description: string;
+  recordCount: number;
+}
+
+/** One kind of content the bundle left out under an org sign-in policy, and how to get it (SEC-2/3). */
+export interface ExportManifestWithheldEntry extends ExportWithheld {
+  /** Plain-language account of what was left out and what to do. */
+  note: string;
+}
+
+export interface ExportManifest {
+  schemaVersion: string;
+  generator: string;
+  exportedAt: string;
+  format: ExportFormat;
+  files: ExportManifestFileEntry[];
+  /** Empty when nothing was left out. */
+  withheld: ExportManifestWithheldEntry[];
+}
+
+const WITHHELD_WHAT: Record<ExportWithheldCategory, (count: number) => string> = {
+  orgDriveContent: (n) => `The pages, sheets and tags of ${n} organization drive${n === 1 ? '' : 's'}`,
+  orgDriveMessages: (n) => `${n} message${n === 1 ? '' : 's'} you wrote in organization drives`,
+  orgDriveFiles: (n) => `${n} file${n === 1 ? '' : 's'} you uploaded to organization drives`,
+  orgDriveTasks: (n) => `${n} task list${n === 1 ? '' : 's'} in organization drives`,
+  orgDriveActivity: (n) => `${n} activity entr${n === 1 ? 'y' : 'ies'} in organization drives`,
+  memoryPages: (n) => `${n} memory page${n === 1 ? '' : 's'} restating what the AI learned from organization content`,
+  pulseSummaries: (n) => `${n} Pulse summar${n === 1 ? 'y' : 'ies'} drawn from organization content`,
+  personalization: () => 'The AI memory in personalization.json (About You, Communication, Rules), drawn from organization content',
+  personalizationCandidates: (n) => `${n} AI inference${n === 1 ? '' : 's'} drawn from organization content`,
+};
+
+/** The note for one withheld entry: what was left out, why, and the sign-in that brings it back. */
+export function withheldNote(entry: ExportWithheld): string {
+  const action = entry.code === 'org_strong_sign_in_required'
+    ? 'Sign in with a passkey and export again to include it.'
+    : 'Sign in again and export again to include it.';
+  return `${WITHHELD_WHAT[entry.category](entry.count)} ${entry.count === 1 && entry.category !== 'orgDriveContent' ? 'was' : 'were'} left out because an organization's sign-in policy (${entry.code}) does not accept the sign-in this export was requested with. ${action}`;
+}
+
+/**
+ * Resolve the requested export format. Anything other than the documented
+ * `portable` value (including null/unknown) resolves to `native`.
+ */
+export function parseExportFormat(param: string | null | undefined): ExportFormat {
+  return param === 'portable' ? 'portable' : 'native';
+}
+
+/**
+ * The native bundle: one JSON file per data category. `recordCount` is the
+ * array length for collections and 1 for the singular profile/personalization.
+ * `personalization.json` is omitted entirely when the user has none.
+ */
+export function buildNativeExportFiles(data: AllUserData): ExportFile[] {
+  const files: ExportFile[] = [
+    { name: 'profile.json', description: 'User account profile', recordCount: 1, data: data.profile },
+    { name: 'drives.json', description: 'Drives owned or joined', recordCount: data.drives.length, data: data.drives },
+    { name: 'pages.json', description: 'Pages across your drives', recordCount: data.pages.length, data: data.pages },
+    { name: 'messages.json', description: 'Chat, channel, conversation and direct messages', recordCount: data.messages.length, data: data.messages },
+    { name: 'files-metadata.json', description: 'Uploaded file metadata', recordCount: data.files.length, data: data.files },
+    { name: 'activity.json', description: 'Activity / audit trail entries', recordCount: data.activity.length, data: data.activity },
+    { name: 'system-logs.json', description: 'System log entries associated with your account', recordCount: data.systemLogs.length, data: data.systemLogs },
+    { name: 'api-metrics.json', description: 'API request metrics associated with your account', recordCount: data.apiMetrics.length, data: data.apiMetrics },
+    { name: 'error-logs.json', description: 'Error log entries associated with your account', recordCount: data.errorLogs.length, data: data.errorLogs },
+    { name: 'ai-usage.json', description: 'AI usage records', recordCount: data.aiUsage.length, data: data.aiUsage },
+    { name: 'tasks.json', description: 'Task lists and items', recordCount: data.tasks.length, data: data.tasks },
+    { name: 'sessions.json', description: 'Authentication sessions', recordCount: data.sessions.length, data: data.sessions },
+    { name: 'notifications.json', description: 'Notifications', recordCount: data.notifications.length, data: data.notifications },
+    { name: 'display-preferences.json', description: 'Display preferences', recordCount: data.displayPreferences.length, data: data.displayPreferences },
+    // One file for the settings the subject owns — hotkeys, automation,
+    // toast level, per-type email opt-ins. Counted as the number of individual
+    // settings rows so an empty bundle reads as "none set", not "not carried".
+    { name: 'settings.json', description: 'Account settings', recordCount: data.settings.hotkeys.length + data.settings.emailNotifications.length + (data.settings.automation ? 1 : 0) + (data.settings.toastNotifications ? 1 : 0), data: data.settings },
+    // The epic "Agent-Session Single Source of Truth" moved a large amount of
+    // the subject's work into these two tables. They are first-class
+    // categories, not an appendix: the shells' scrollback and the streams'
+    // checkpointed `parts` are content nothing else in this bundle carries.
+    { name: 'sheets.json', description: 'Your spreadsheets — every tab, with each cell as you wrote it and as it evaluated', recordCount: data.sheets.length, data: data.sheets },
+    { name: 'agent-workspaces.json', description: 'Agent workspaces (working contexts) and the shells you opened in them', recordCount: data.agentWorkspaces.length, data: data.agentWorkspaces },
+    { name: 'agent-accounts.json', description: 'Agent accounts you own (names, sites, status — never the keys themselves) and the approvals, bindings and delegations you gave', recordCount: data.agentAccounts.accounts.length, data: data.agentAccounts },
+    { name: 'local-environments.json', description: 'Machines you enrolled as local environments: their labels, public keys and fingerprints, and when they connected', recordCount: data.localEnvironments.length, data: data.localEnvironments },
+    { name: 'stream-state.json', description: 'Checkpointed AI generation state, including content from generations that were interrupted', recordCount: data.streamState.length, data: data.streamState },
+    // Inferences the memory cron drew about the subject, with the quotes of
+    // their own messages it kept as justification. Shipped unconditionally
+    // (unlike personalization.json below) so an empty file reads as "nothing
+    // was inferred about you" rather than leaving the subject unable to tell
+    // the difference between that and the category not being carried.
+    // Digests the AI wrote for the subject from their workspace activity (Pulse).
+    { name: 'pulse-summaries.json', description: 'Pulse summaries the AI wrote for you from your workspace activity', recordCount: data.pulseSummaries.length, data: data.pulseSummaries },
+    { name: 'personalization-candidates.json', description: 'Inferences the AI drew about you from your conversations, including ones that were rejected or are still pending, with the quotes they were drawn from', recordCount: data.personalizationCandidates.length, data: data.personalizationCandidates },
+    // The subject's own acts of classification. For an anchored tag the row
+    // carries the quoted text they selected, which nothing else in the bundle
+    // holds.
+    { name: 'content-tags.json', description: 'Tags you applied to pages, passages, sheet cells and messages, with the text each one was anchored to', recordCount: data.contentTags.length, data: data.contentTags },
+    // Spec X-2: the subject's org life and their own money. The org categories
+    // carry the subject's OWN rows only — their memberships, their seat
+    // allowance, their departures and requests, the orgs they own; the org's
+    // roster, pool balance and ledger are the org's data and are carried in
+    // nobody's personal export. The wallet category carries their personal
+    // root balance and the funding legs THEY funded — never another person's
+    // spend (SPEND-9/D18).
+    { name: 'organizations.json', description: 'Organizations you own', recordCount: data.organizations.length, data: data.organizations },
+    { name: 'org-membership.json', description: 'Your organization memberships and seat allowances, the organizations you have left, your requests to join restricted drives, and any guest access an organization policy parked', recordCount: data.orgMembership.memberships.length + data.orgMembership.departures.length + data.orgMembership.joinRequests.length + data.orgMembership.guestHolds.length, data: data.orgMembership },
+    { name: 'wallet.json', description: 'Your personal wallet balance, every funding leg you paid into any wallet (including donations), and your per-drive spending switches', recordCount: data.wallet.fundingLegs.length + data.wallet.spendOverrides.length + (data.wallet.wallet ? 1 : 0), data: data.wallet },
+  ];
+  if (data.personalization) {
+    files.push({ name: 'personalization.json', description: 'Personalization settings', recordCount: 1, data: data.personalization });
+  }
+  return files;
+}
+
+/**
+ * Build the manifest from the actual file set being shipped. The manifest
+ * documents the schema version and the inventory so the recipient can interpret
+ * the bundle without out-of-band knowledge (GDPR Art 20 portability).
+ */
+export function buildExportManifest(
+  files: ExportFile[],
+  opts: { exportedAt: Date; format: ExportFormat; withheld: readonly ExportWithheld[] },
+): ExportManifest {
+  return {
+    schemaVersion: EXPORT_SCHEMA_VERSION,
+    generator: 'PageSpace GDPR export',
+    exportedAt: opts.exportedAt.toISOString(),
+    format: opts.format,
+    files: files.map((f) => ({ name: f.name, description: f.description, recordCount: f.recordCount })),
+    withheld: opts.withheld.map((entry) => ({ ...entry, note: withheldNote(entry) })),
+  };
+}
+
+function toIso(value: Date | null | undefined): string | null {
+  return value ? value.toISOString() : null;
+}
+
+/**
+ * Map the collected data onto a documented, interoperable schema.org structure
+ * (https://schema.org): the data subject as a `Person`, with drives/pages as
+ * `CreativeWork`, messages as `Message`, and files as `MediaObject`. The
+ * remaining operational categories (activity, system logs, API metrics, error
+ * logs, AI usage, tasks, sessions, notifications, display preferences,
+ * personalization, agent workspaces, stream state) are carried verbatim as
+ * `PropertyValue` entries so the portable bundle is **complete** — no data
+ * category is dropped (GDPR Art 20). Dates are ISO-8601 strings (mapped fields
+ * explicitly; values inside `additionalProperty` serialize to ISO-8601 via
+ * JSON). Empty sections become empty arrays rather than throwing.
+ */
+export function toPortableExport(data: AllUserData): Record<string, unknown> {
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'Person',
+    identifier: data.profile.id,
+    name: data.profile.name,
+    email: data.profile.email,
+    image: data.profile.image ?? null,
+    // Native field kept (no schema.org equivalent) so the portable export is
+    // field-for-field complete with the native export (GDPR Art 20).
+    timezone: data.profile.timezone ?? null,
+    dateCreated: toIso(data.profile.createdAt),
+    dateModified: toIso(data.profile.updatedAt),
+    owns: data.drives.map((d) => ({
+      '@type': 'CreativeWork',
+      identifier: d.id,
+      name: d.name,
+      roleName: d.role,
+      slug: d.slug,
+      dateCreated: toIso(d.createdAt),
+    })),
+    creativeWork: data.pages.map((p) => ({
+      '@type': 'CreativeWork',
+      identifier: p.id,
+      name: p.title,
+      additionalType: p.type,
+      text: p.content,
+      isPartOf: p.driveId,
+      dateCreated: toIso(p.createdAt),
+      dateModified: toIso(p.updatedAt),
+    })),
+    message: data.messages.map((m) => ({
+      '@type': 'Message',
+      identifier: m.id,
+      text: m.content,
+      messageAttachment: m.source,
+      // Native fields kept verbatim (no schema.org equivalents) for completeness.
+      direction: m.direction ?? null,
+      sender: m.role ?? null,
+      pageId: m.pageId ?? null,
+      conversationId: m.conversationId ?? null,
+      isActive: m.isActive ?? null,
+      dateDeleted: toIso(m.deletedAt ?? null),
+      dateSent: toIso(m.createdAt),
+    })),
+    subjectOf: data.files.map((f) => ({
+      '@type': 'MediaObject',
+      identifier: f.id,
+      encodingFormat: f.mimeType,
+      contentSize: f.sizeBytes,
+      contentUrl: f.storagePath,
+      isPartOf: f.driveId,
+      dateCreated: toIso(f.createdAt),
+    })),
+    // Complete-but-not-natively-typed categories, kept verbatim so the portable
+    // bundle loses nothing relative to the native export.
+    additionalProperty: [
+      { '@type': 'PropertyValue', name: 'activity', value: data.activity },
+      { '@type': 'PropertyValue', name: 'systemLogs', value: data.systemLogs },
+      { '@type': 'PropertyValue', name: 'apiMetrics', value: data.apiMetrics },
+      { '@type': 'PropertyValue', name: 'errorLogs', value: data.errorLogs },
+      { '@type': 'PropertyValue', name: 'aiUsage', value: data.aiUsage },
+      { '@type': 'PropertyValue', name: 'tasks', value: data.tasks },
+      { '@type': 'PropertyValue', name: 'sessions', value: data.sessions },
+      { '@type': 'PropertyValue', name: 'notifications', value: data.notifications },
+      { '@type': 'PropertyValue', name: 'displayPreferences', value: data.displayPreferences },
+      { '@type': 'PropertyValue', name: 'settings', value: data.settings },
+      { '@type': 'PropertyValue', name: 'personalization', value: data.personalization },
+      { '@type': 'PropertyValue', name: 'personalizationCandidates', value: data.personalizationCandidates },
+      { '@type': 'PropertyValue', name: 'pulseSummaries', value: data.pulseSummaries },
+      { '@type': 'PropertyValue', name: 'sheets', value: data.sheets },
+      { '@type': 'PropertyValue', name: 'agentWorkspaces', value: data.agentWorkspaces },
+      { '@type': 'PropertyValue', name: 'agentAccounts', value: data.agentAccounts },
+      { '@type': 'PropertyValue', name: 'streamState', value: data.streamState },
+      { '@type': 'PropertyValue', name: 'contentTags', value: data.contentTags },
+      { '@type': 'PropertyValue', name: 'localEnvironments', value: data.localEnvironments },
+      { '@type': 'PropertyValue', name: 'organizations', value: data.organizations },
+      { '@type': 'PropertyValue', name: 'orgMembership', value: data.orgMembership },
+      { '@type': 'PropertyValue', name: 'wallet', value: data.wallet },
+    ],
+  };
+}
+
+/**
+ * The portable bundle: a single self-describing `data.json` plus its manifest.
+ */
+export function buildPortableExportFiles(data: AllUserData): ExportFile[] {
+  return [
+    {
+      name: 'data.json',
+      description: 'All user data in schema.org portable format (https://schema.org)',
+      recordCount: 1,
+      data: toPortableExport(data),
+    },
+  ];
+}

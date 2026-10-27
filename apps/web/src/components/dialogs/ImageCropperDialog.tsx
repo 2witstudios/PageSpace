@@ -29,6 +29,8 @@ interface ImageCropperDialogProps {
 
 type CropShape = "circle" | "square";
 
+const MAX_AVATAR_SIZE = 512;
+
 function centerAspectCrop(
   mediaWidth: number,
   mediaHeight: number,
@@ -64,26 +66,28 @@ async function getCroppedImage(
   const scaleX = image.naturalWidth / image.width;
   const scaleY = image.naturalHeight / image.height;
 
-  const pixelRatio = window.devicePixelRatio || 1;
+  const naturalWidth = crop.width * scaleX;
+  const naturalHeight = crop.height * scaleY;
 
-  canvas.width = Math.floor(crop.width * scaleX * pixelRatio);
-  canvas.height = Math.floor(crop.height * scaleY * pixelRatio);
+  // Drop devicePixelRatio (display hint only) and cap to MAX_AVATAR_SIZE to prevent oversized PNG exports.
+  const downScale = Math.min(1, MAX_AVATAR_SIZE / Math.max(naturalWidth, naturalHeight));
 
-  ctx.scale(pixelRatio, pixelRatio);
+  canvas.width = Math.floor(naturalWidth * downScale);
+  canvas.height = Math.floor(naturalHeight * downScale);
+
+  ctx.scale(downScale, downScale);
   ctx.imageSmoothingQuality = "high";
 
   const cropX = crop.x * scaleX;
   const cropY = crop.y * scaleY;
-  const cropWidth = crop.width * scaleX;
-  const cropHeight = crop.height * scaleY;
 
   // Apply circular mask if shape is circle
   if (shape === "circle") {
     ctx.beginPath();
     ctx.arc(
-      (crop.width * scaleX) / 2,
-      (crop.height * scaleY) / 2,
-      Math.min(crop.width * scaleX, crop.height * scaleY) / 2,
+      naturalWidth / 2,
+      naturalHeight / 2,
+      Math.min(naturalWidth, naturalHeight) / 2,
       0,
       2 * Math.PI
     );
@@ -94,12 +98,12 @@ async function getCroppedImage(
     image,
     cropX,
     cropY,
-    cropWidth,
-    cropHeight,
+    naturalWidth,
+    naturalHeight,
     0,
     0,
-    crop.width * scaleX,
-    crop.height * scaleY
+    naturalWidth,
+    naturalHeight
   );
 
   return new Promise((resolve, reject) => {

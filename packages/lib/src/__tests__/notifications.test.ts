@@ -6,8 +6,10 @@ import {
   markAllNotificationsAsRead,
   deleteNotification,
   getUnreadCount
-} from '../notifications'
-import { db, users, eq } from '@pagespace/db'
+} from '../notifications/notifications'
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
 import { factories } from '@pagespace/db/test/factories'
 
 // Mock fetch for broadcast testing

@@ -1,0 +1,21 @@
+# Reference Traefik labels for tenant services.
+# TENANT_SLUG is a placeholder — replace with the actual tenant slug
+# when generating a tenant's docker-compose file.
+#
+# These labels are applied to tenant containers so Traefik
+# auto-discovers and routes traffic to them.
+
+web:
+  traefik.enable: "true"
+  traefik.http.routers.TENANT_SLUG-web.rule: "Host(`TENANT_SLUG.pagespace.ai`)"
+  traefik.http.routers.TENANT_SLUG-web.entrypoints: websecure
+  traefik.http.routers.TENANT_SLUG-web.tls.certresolver: le
+  traefik.http.services.TENANT_SLUG-web.loadbalancer.server.port: "3000"
+
+realtime:
+  traefik.enable: "true"
+  traefik.http.routers.TENANT_SLUG-realtime.rule: "Host(`TENANT_SLUG.pagespace.ai`) && PathPrefix(`/socket.io`)"
+  traefik.http.routers.TENANT_SLUG-realtime.entrypoints: websecure
+  traefik.http.routers.TENANT_SLUG-realtime.tls.certresolver: le
+  traefik.http.routers.TENANT_SLUG-realtime.priority: "100"
+  traefik.http.services.TENANT_SLUG-realtime.loadbalancer.server.port: "3001"

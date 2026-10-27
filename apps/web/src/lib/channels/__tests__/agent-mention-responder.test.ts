@@ -1,39 +1,64 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
-vi.mock('@pagespace/db', () => ({
+// POL-9: the responder asks the channel drive's org whether agents may reply on their own; no org in these tests.
+vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getDrivePolicies: vi.fn() }));
+
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       pages: { findMany: vi.fn() },
       channelMessages: { findMany: vi.fn() },
     },
   },
-  pages: { id: 'id', type: 'type', isTrashed: 'isTrashed' },
-  channelMessages: { pageId: 'pageId', isActive: 'isActive', createdAt: 'createdAt' },
+}));
+vi.mock('@pagespace/db/operators', async (importOriginal) => ({
+  // Keep the real re-exports so transitively imported lib modules (e.g.
+  // sheets/search-sql via services/preview) that use `sql` still load.
+  ...(await importOriginal<typeof import('@pagespace/db/operators')>()),
   and: vi.fn(),
   eq: vi.fn(),
   inArray: vi.fn(),
   desc: vi.fn(),
 }));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', type: 'type', isTrashed: 'isTrashed' },
+}));
+vi.mock('@pagespace/db/schema/chat', () => ({
+  channelMessages: { pageId: 'pageId', isActive: 'isActive', createdAt: 'createdAt' },
+}));
 
-vi.mock('@pagespace/lib/server', () => ({
-  canUserViewPage: vi.fn(),
-  loggers: {
+// The two gates added for member agents (see agent-mention-responder.ts):
+// membership in the channel's drive is the grant when the mentioner cannot
+// view the agent's home page, and the agent must be able to post in the
+// channel BEFORE any model call is spent on it.
+vi.mock('@pagespace/lib/permissions/agent-permissions', () => ({
+  hasAgentDriveMembership: vi.fn().mockResolvedValue(false),
+}));
+vi.mock('@/lib/ai/tools/actor-permissions', () => ({
+  toolActor: (ctx: { userId: string; accessActor?: unknown }) => ctx.accessActor ?? { via: 'credential', userId: ctx.userId, authentication: null },
+  canActorEditPage: vi.fn().mockResolvedValue(true),
+  canActorConsultAgent: vi.fn().mockResolvedValue(true),
+}));
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
+    canUserViewPage: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     ai: {
       debug: vi.fn(),
       child: vi.fn(() => ({
         warn: vi.fn(),
         error: vi.fn(),
-      })),
+      
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+})),
     },
   },
 }));
 
 vi.mock('@/lib/ai/tools/agent-communication-tools', () => ({
-  agentCommunicationTools: {
-    ask_agent: {
-      execute: vi.fn(),
-    },
-  },
+  executeAskAgent: vi.fn(),
 }));
 
 vi.mock('@/lib/ai/tools/channel-tools', () => ({
@@ -44,27 +69,66 @@ vi.mock('@/lib/ai/tools/channel-tools', () => ({
   },
 }));
 
-import { db } from '@pagespace/db';
-import { canUserViewPage } from '@pagespace/lib/server';
-import { agentCommunicationTools } from '@/lib/ai/tools/agent-communication-tools';
+const mockInsertChannelThreadReply = vi.fn();
+const mockLoadChannelMessageWithRelations = vi.fn();
+const mockListChannelThreadFollowers = vi.fn();
+vi.mock('@pagespace/lib/services/channel-message-repository', () => ({
+  channelMessageRepository: {
+    insertChannelThreadReply: (...args: unknown[]) => mockInsertChannelThreadReply(...args),
+    loadChannelMessageWithRelations: (...args: unknown[]) => mockLoadChannelMessageWithRelations(...args),
+    listChannelThreadFollowers: (...args: unknown[]) => mockListChannelThreadFollowers(...args),
+  },
+}));
+
+vi.mock('@pagespace/lib/auth/broadcast-auth', () => ({
+  createSignedBroadcastHeaders: vi.fn(() => ({ 'x-signed': 'yes' })),
+}));
+
+const mockNotifyMentionedUsers = vi.fn();
+vi.mock('@/lib/channels/notify-mentioned-users', () => ({
+  notifyMentionedUsers: (...args: unknown[]) => mockNotifyMentionedUsers(...args),
+}));
+
+const mockBroadcastInboxEvent = vi.fn();
+const mockBroadcastThreadReplyCountUpdated = vi.fn();
+vi.mock('@/lib/websocket/socket-utils', () => ({
+  broadcastInboxEvent: (...args: unknown[]) => mockBroadcastInboxEvent(...args),
+  broadcastThreadReplyCountUpdated: (...args: unknown[]) => mockBroadcastThreadReplyCountUpdated(...args),
+}));
+
+// SPEND-6: each mentioned agent's reply is gated on the channel's drive wallet
+// (mention-credit-gate, unit-tested on its own); here it is a recording fake.
+const mockAcquireMentionCreditHold = vi.fn();
+const mockReleaseMentionHold = vi.fn();
+vi.mock('@/lib/channels/mention-credit-gate', () => ({
+  acquireMentionCreditHold: (...args: unknown[]) => mockAcquireMentionCreditHold(...args),
+}));
+
+import { db } from '@pagespace/db/db';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { canActorEditPage, canActorConsultAgent } from '@/lib/ai/tools/actor-permissions';
+import { executeAskAgent } from '@/lib/ai/tools/agent-communication-tools';
 import { channelTools } from '@/lib/ai/tools/channel-tools';
 import {
+  isAskAgentResult,
   triggerMentionedAgentResponses,
   type TriggerMentionedAgentResponsesParams,
 } from '../agent-mention-responder';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockPagesFindMany = db.query.pages.findMany as unknown as Mock;
 const mockChannelMessagesFindMany = db.query.channelMessages.findMany as unknown as Mock;
 const mockCanUserViewPage = vi.mocked(canUserViewPage);
+const mockCanActorEditPage = vi.mocked(canActorEditPage);
+const mockCanActorConsultAgent = vi.mocked(canActorConsultAgent);
 
-const askAgentExecute = agentCommunicationTools.ask_agent.execute;
 const sendChannelExecute = channelTools.send_channel_message.execute;
 
-if (!askAgentExecute || !sendChannelExecute) {
+if (!sendChannelExecute) {
   throw new Error('Agent mention responder tool mocks are unavailable');
 }
 
-const mockAskAgentExecute = askAgentExecute as unknown as Mock;
+const mockAskAgentExecute = executeAskAgent as unknown as Mock;
 const mockSendChannelExecute = sendChannelExecute as unknown as Mock;
 
 const createAskAgentSuccess = (response: string) => ({
@@ -81,8 +145,8 @@ const createAskAgentSuccess = (response: string) => ({
     persistent: true,
     isNewConversation: false,
     callDepth: 1,
-    provider: 'PageSpace',
-    model: 'Default (Free)',
+    provider: 'openai',
+    model: 'openai/gpt-5.4-nano',
     toolsEnabled: 1,
     toolCalls: 0,
     steps: 1,
@@ -114,7 +178,7 @@ const createSendChannelSuccess = () => ({
 });
 
 const baseParams: TriggerMentionedAgentResponsesParams = {
-  userId: 'user-1',
+  sender: credentialActor('user-1', null),
   channelId: 'channel-1',
   channelTitle: 'General',
   channelType: 'CHANNEL',
@@ -131,11 +195,67 @@ describe('agent-mention-responder', () => {
     mockPagesFindMany.mockResolvedValue([]);
     mockChannelMessagesFindMany.mockResolvedValue([]);
     mockCanUserViewPage.mockResolvedValue(true);
+    mockCanActorEditPage.mockResolvedValue(true);
+    mockCanActorConsultAgent.mockResolvedValue(true);
     mockAskAgentExecute.mockResolvedValue(createAskAgentSuccess('Agent reply'));
     mockSendChannelExecute.mockResolvedValue(createSendChannelSuccess());
+    mockInsertChannelThreadReply.mockResolvedValue({
+      kind: 'ok',
+      reply: { id: 'agent-reply-1', createdAt: new Date('2026-05-05T12:00:00Z') },
+      mirror: null,
+      rootId: 'parent-thread',
+      replyCount: 2,
+      lastReplyAt: new Date('2026-05-05T12:00:00Z'),
+    });
+    mockLoadChannelMessageWithRelations.mockResolvedValue({
+      id: 'agent-reply-1',
+      parentId: 'parent-thread',
+      createdAt: new Date('2026-05-05T12:00:00Z').toISOString(),
+    });
+    mockListChannelThreadFollowers.mockResolvedValue([]);
+    mockBroadcastInboxEvent.mockResolvedValue(undefined);
+    mockBroadcastThreadReplyCountUpdated.mockResolvedValue(undefined);
+    mockAcquireMentionCreditHold.mockResolvedValue({
+      allowed: true,
+      creditSpend: { spend: { kind: 'automation', driveId: 'drive-1' }, walletId: 'w-drive-1' },
+      release: mockReleaseMentionHold,
+    });
   });
 
-  it('does nothing when no structured mentions are present', async () => {
+  it('SPEND-6 (partial) a mentioned agent\'s reply is gated on the channel\'s drive before its model call and settles on the drive wallet', async () => {
+    mockPagesFindMany.mockResolvedValue([{ id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] }]);
+
+    await triggerMentionedAgentResponses({ ...baseParams, content: 'Thoughts? @[Budget Agent](agent-1:page)' });
+
+    expect(mockAcquireMentionCreditHold).toHaveBeenCalledWith({ userId: 'user-1', driveId: 'drive-1' });
+    expect(mockAcquireMentionCreditHold.mock.invocationCallOrder[0]).toBeLessThan(mockAskAgentExecute.mock.invocationCallOrder[0]);
+    const askContext = mockAskAgentExecute.mock.calls[0][1].experimental_context;
+    expect(askContext.creditSpend).toEqual({ spend: { kind: 'automation', driveId: 'drive-1' }, walletId: 'w-drive-1' });
+    expect(mockReleaseMentionHold).toHaveBeenCalledTimes(1);
+    expect(mockAskAgentExecute.mock.invocationCallOrder[0]).toBeLessThan(mockReleaseMentionHold.mock.invocationCallOrder[0]);
+  });
+
+  it('SPEND-6 (partial) with only the sender funded and the drive wallet empty the agent reply is skipped: no model call, no message', async () => {
+    mockPagesFindMany.mockResolvedValue([{ id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] }]);
+    mockAcquireMentionCreditHold.mockResolvedValue({ allowed: false, error: 'AI credit gate denied: source_refused (drive_wallet_empty)' });
+
+    await triggerMentionedAgentResponses({ ...baseParams, content: 'Thoughts? @[Budget Agent](agent-1:page)' });
+
+    expect(mockAskAgentExecute).not.toHaveBeenCalled();
+    expect(mockSendChannelExecute).not.toHaveBeenCalled();
+    expect(mockInsertChannelThreadReply).not.toHaveBeenCalled();
+  });
+
+  it('SPEND-6 (partial) the reply hold is released even when the agent call throws', async () => {
+    mockPagesFindMany.mockResolvedValue([{ id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] }]);
+    mockAskAgentExecute.mockRejectedValue(new Error('provider down'));
+
+    await triggerMentionedAgentResponses({ ...baseParams, content: 'Thoughts? @[Budget Agent](agent-1:page)' });
+
+    expect(mockReleaseMentionHold).toHaveBeenCalledTimes(1);
+  });
+
+  it('given message with no mentions, should not query agents or post responses', async () => {
     await triggerMentionedAgentResponses({
       ...baseParams,
       content: 'No mentions here',
@@ -146,7 +266,7 @@ describe('agent-mention-responder', () => {
     expect(mockSendChannelExecute).not.toHaveBeenCalled();
   });
 
-  it('consults and posts response for mentioned AI agent', async () => {
+  it('given message mentioning an AI agent, should consult agent and post response to channel', async () => {
     mockPagesFindMany.mockResolvedValue([
       { id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] },
     ]);
@@ -168,42 +288,32 @@ describe('agent-mention-responder', () => {
     });
 
     expect(mockAskAgentExecute).toHaveBeenCalledTimes(1);
-    expect(mockAskAgentExecute).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: 'agent-1',
-        conversationId: 'channel:channel-1:agent:agent-1',
-      }),
-      expect.objectContaining({
-        experimental_context: expect.objectContaining({
-          userId: 'user-1',
-          locationContext: expect.objectContaining({
-            currentPage: expect.objectContaining({
-              id: 'channel-1',
-            }),
-          }),
-        }),
-      })
-    );
+    const askArgs = mockAskAgentExecute.mock.calls[0];
+    expect(askArgs[0].agentId).toBe('agent-1');
+    expect(askArgs[0].conversationId).toBe('channel:channel-1:agent:agent-1');
+    expect(askArgs[0].agentPath).toBe('/Budget Agent');
+    const askContext = askArgs[1].experimental_context;
+    expect(askContext.userId).toBe('user-1');
+    expect(askContext.conversationId).toBe('channel:channel-1:agent:agent-1');
+    expect(askContext.locationContext.currentPage.id).toBe('channel-1');
+    expect(askContext.requestOrigin).toBe('user');
 
     expect(mockSendChannelExecute).toHaveBeenCalledTimes(1);
-    expect(mockSendChannelExecute).toHaveBeenCalledWith(
-      {
-        channelId: 'channel-1',
-        content: 'I think this conversation is on track.',
-      },
-      expect.objectContaining({
-        experimental_context: expect.objectContaining({
-          chatSource: {
-            type: 'page',
-            agentPageId: 'agent-1',
-            agentTitle: 'Budget Agent',
-          },
-        }),
-      })
-    );
+    const sendArgs = mockSendChannelExecute.mock.calls[0];
+    expect(sendArgs[0]).toEqual({
+      channelId: 'channel-1',
+      content: 'I think this conversation is on track.',
+    });
+    const sendContext = sendArgs[1].experimental_context;
+    expect(sendContext.chatSource).toEqual({
+      type: 'page',
+      agentPageId: 'agent-1',
+      agentTitle: 'Budget Agent',
+    });
+    expect(sendContext.requestOrigin).toBe('agent');
   });
 
-  it('skips when structured mention does not resolve to an active AI agent', async () => {
+  it('given mention of non-existent agent, should skip without consulting or posting', async () => {
     mockPagesFindMany.mockResolvedValue([]);
 
     await triggerMentionedAgentResponses({
@@ -216,25 +326,39 @@ describe('agent-mention-responder', () => {
     expect(mockSendChannelExecute).not.toHaveBeenCalled();
   });
 
-  it('deduplicates repeated mentions and skips agents without view access', async () => {
+  it('given repeated mentions of same agent, should deduplicate and consult only once', async () => {
     mockPagesFindMany.mockResolvedValue([
       { id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] },
-      { id: 'agent-2', title: 'Ops Agent', enabledTools: ['send_channel_message'] },
     ]);
-    mockCanUserViewPage.mockImplementation(async (_userId, pageId) => pageId === 'agent-1');
 
     await triggerMentionedAgentResponses({
       ...baseParams,
       content:
-        'Ping @[Budget Agent](agent-1:page) and @[Budget Agent](agent-1:page) and @[Ops Agent](agent-2:page)',
+        'Ping @[Budget Agent](agent-1:page) and @[Budget Agent](agent-1:page)',
     });
 
-    expect(mockCanUserViewPage).toHaveBeenCalledTimes(2);
+    expect(mockCanActorConsultAgent).toHaveBeenCalledTimes(1);
     expect(mockAskAgentExecute).toHaveBeenCalledTimes(1);
-    expect(mockAskAgentExecute).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: 'agent-1' }),
-      expect.any(Object)
-    );
+    expect(mockAskAgentExecute.mock.calls[0][0].agentId).toBe('agent-1');
+    expect(mockSendChannelExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it('given mention of an agent the user may not consult, should skip that agent', async () => {
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] },
+      { id: 'agent-2', title: 'Ops Agent', enabledTools: ['send_channel_message'] },
+    ]);
+    mockCanActorConsultAgent.mockImplementation(async (_ctx, agentId) => agentId === 'agent-1');
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      content:
+        '@[Budget Agent](agent-1:page) and @[Ops Agent](agent-2:page)',
+    });
+
+    expect(mockCanActorConsultAgent).toHaveBeenCalledTimes(2);
+    expect(mockAskAgentExecute).toHaveBeenCalledTimes(1);
+    expect(mockAskAgentExecute.mock.calls[0][0].agentId).toBe('agent-1');
     expect(mockSendChannelExecute).toHaveBeenCalledTimes(1);
   });
 
@@ -265,5 +389,307 @@ describe('agent-mention-responder', () => {
 
     expect(mockAskAgentExecute).not.toHaveBeenCalled();
     expect(mockSendChannelExecute).not.toHaveBeenCalled();
+  });
+
+  it('given an agent with no tool allowlist (null = unrestricted), consults it and posts', async () => {
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Budget Agent', enabledTools: null },
+    ]);
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      content: 'Need input @[Budget Agent](agent-1:page)',
+    });
+
+    expect(mockAskAgentExecute).toHaveBeenCalledTimes(1);
+    expect(mockSendChannelExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it('given an agent with an empty allowlist (every tool blocked), skips it', async () => {
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Budget Agent', enabledTools: [] },
+    ]);
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      content: 'Need input @[Budget Agent](agent-1:page)',
+    });
+
+    expect(mockAskAgentExecute).not.toHaveBeenCalled();
+    expect(mockSendChannelExecute).not.toHaveBeenCalled();
+  });
+
+  it('asks the shared consult rule AS the mentioner, with the channel drive, so a guest agent member replies', async () => {
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Guest Agent', enabledTools: ['send_channel_message'] },
+    ]);
+    mockCanUserViewPage.mockResolvedValue(false); // home page not viewable — irrelevant now
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      content: 'Need input @[Guest Agent](agent-1:page)',
+    });
+
+    expect(mockCanActorConsultAgent).toHaveBeenCalledTimes(1);
+    const [consultCtx, consultAgentId, consultDriveId] = mockCanActorConsultAgent.mock.calls[0];
+    expect(consultAgentId).toBe('agent-1');
+    expect(consultDriveId).toBe('drive-1');
+    expect(consultCtx.userId).toBe('user-1');
+    expect(consultCtx.chatSource).toBeUndefined(); // the human asks, not the agent
+    expect(consultCtx.locationContext?.currentDrive?.id).toBe('drive-1');
+    // The consult itself runs under the SAME context shape, so executeAskAgent's
+    // own canActorConsultAgent check reaches the same answer.
+    const askContext = mockAskAgentExecute.mock.calls[0][1].experimental_context;
+    expect(askContext.locationContext?.currentDrive?.id).toBe('drive-1');
+    expect(mockSendChannelExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it('given no driveId, still asks the consult rule (with null) and skips when it denies', async () => {
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Guest Agent', enabledTools: ['send_channel_message'] },
+    ]);
+    mockCanActorConsultAgent.mockResolvedValue(false);
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      driveId: null,
+      content: 'Need input @[Guest Agent](agent-1:page)',
+    });
+
+    expect(mockCanActorConsultAgent.mock.calls[0][2]).toBeNull();
+    expect(mockAskAgentExecute).not.toHaveBeenCalled();
+    expect(mockSendChannelExecute).not.toHaveBeenCalled();
+  });
+
+  it('given an agent that cannot post in the channel, skips it before any model call', async () => {
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] },
+    ]);
+    mockCanActorEditPage.mockResolvedValue(false);
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      content: 'Need input @[Budget Agent](agent-1:page)',
+    });
+
+    // The gate is the same chokepoint send_channel_message uses, asked AS the agent.
+    expect(mockCanActorEditPage).toHaveBeenCalledTimes(1);
+    const [gateContext, gatePageId] = mockCanActorEditPage.mock.calls[0];
+    expect(gatePageId).toBe('channel-1');
+    expect(gateContext.userId).toBe('user-1');
+    expect(gateContext.chatSource).toEqual({ type: 'page', agentPageId: 'agent-1', agentTitle: 'Budget Agent' });
+    expect(mockAskAgentExecute).not.toHaveBeenCalled();
+    expect(mockSendChannelExecute).not.toHaveBeenCalled();
+  });
+
+  it('given parentId is set and the agent cannot post in the channel, skips the thread reply too', async () => {
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] },
+    ]);
+    mockCanActorEditPage.mockResolvedValue(false);
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      parentId: 'parent-thread',
+      content: 'Need input @[Budget Agent](agent-1:page)',
+    });
+
+    expect(mockAskAgentExecute).not.toHaveBeenCalled();
+    expect(mockInsertChannelThreadReply).not.toHaveBeenCalled();
+  });
+
+  it('given parentId is set, routes the agent reply via insertChannelThreadReply with aiMeta', async () => {
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] },
+    ]);
+    mockAskAgentExecute.mockResolvedValue(
+      createAskAgentSuccess('In-thread reply')
+    );
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      sourceMessageId: 'thread-reply-1',
+      parentId: 'parent-thread',
+      content: 'Hey @[Budget Agent](agent-1:page) what do you think?',
+    });
+
+    expect(mockInsertChannelThreadReply).toHaveBeenCalledTimes(1);
+    const insertArgs = mockInsertChannelThreadReply.mock.calls[0][0];
+    expect(insertArgs.parentId).toBe('parent-thread');
+    expect(insertArgs.pageId).toBe('channel-1');
+    expect(insertArgs.userId).toBe('user-1');
+    expect(insertArgs.content).toBe('In-thread reply');
+    expect(insertArgs.aiMeta).toEqual({
+      senderType: 'agent',
+      senderName: 'Budget Agent',
+      agentPageId: 'agent-1',
+    });
+
+    // Top-level path must NOT fire when parentId is set.
+    expect(mockSendChannelExecute).not.toHaveBeenCalled();
+    // Parent footer refresh must fire so the channel-stream view updates.
+    expect(mockBroadcastThreadReplyCountUpdated).toHaveBeenCalledWith(
+      'channel-1',
+      expect.objectContaining({ rootId: 'parent-thread' })
+    );
+  });
+
+  it('given parentId is set, fans out thread_updated to followers excluding the human user', async () => {
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] },
+    ]);
+    mockListChannelThreadFollowers.mockResolvedValue(['user-1', 'user-other', 'user-third']);
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      parentId: 'parent-thread',
+      content: 'Reply @[Budget Agent](agent-1:page)',
+    });
+
+    const recipients = mockBroadcastInboxEvent.mock.calls
+      .filter(([, payload]) => (payload as { operation: string }).operation === 'thread_updated')
+      .map(([userId]) => userId);
+    expect(recipients).toEqual(expect.arrayContaining(['user-other', 'user-third']));
+    expect(recipients).not.toContain('user-1');
+  });
+
+  it('given parentId is empty, falls back to the existing top-level send path', async () => {
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] },
+    ]);
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      parentId: '',
+      content: 'Reply @[Budget Agent](agent-1:page)',
+    });
+
+    expect(mockInsertChannelThreadReply).not.toHaveBeenCalled();
+    expect(mockSendChannelExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it('given askAgentExecute returns a malformed value, persists nothing and skips the agent reply', async () => {
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] },
+    ]);
+    // Boundary mock: simulate a future tool-shape change that no longer matches AskAgentResult.
+    mockAskAgentExecute.mockResolvedValueOnce({ unexpected: 'shape' });
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      parentId: 'parent-thread',
+      content: 'Reply @[Budget Agent](agent-1:page)',
+    });
+
+    expect(mockInsertChannelThreadReply).not.toHaveBeenCalled();
+    expect(mockSendChannelExecute).not.toHaveBeenCalled();
+    expect(mockBroadcastInboxEvent).not.toHaveBeenCalled();
+  });
+
+  it('given askAgentExecute returns a result with a wrong-typed success field, persists nothing and skips', async () => {
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] },
+    ]);
+    // Predicate must reject `success: 'true'` (string) — locks in the strict-type
+    // checks end-to-end, not just at the unit level.
+    mockAskAgentExecute.mockResolvedValueOnce({ success: 'true', response: 'ok' });
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      parentId: 'parent-thread',
+      content: 'Reply @[Budget Agent](agent-1:page)',
+    });
+
+    expect(mockInsertChannelThreadReply).not.toHaveBeenCalled();
+    expect(mockSendChannelExecute).not.toHaveBeenCalled();
+    expect(mockBroadcastInboxEvent).not.toHaveBeenCalled();
+  });
+
+  it('fires notifyMentionedUsers with agent title after a successful thread reply', async () => {
+    mockNotifyMentionedUsers.mockResolvedValue(undefined);
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] },
+    ]);
+    mockAskAgentExecute.mockResolvedValue(createAskAgentSuccess('Here is my analysis @[Alice](user-alice:user)'));
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      parentId: 'parent-thread',
+      content: 'Hey @[Budget Agent](agent-1:page) what do you think?',
+    });
+
+    // Flush microtasks for fire-and-forget
+    await Promise.resolve();
+
+    expect(mockNotifyMentionedUsers).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: 'Here is my analysis @[Alice](user-alice:user)',
+        pageId: 'channel-1',
+        driveId: 'drive-1',
+        triggeredByUserId: 'user-1',
+        mentionerNameOverride: 'Budget Agent',
+      })
+    );
+  });
+
+  it('skips notifyMentionedUsers when driveId is absent', async () => {
+    mockNotifyMentionedUsers.mockResolvedValue(undefined);
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] },
+    ]);
+    mockAskAgentExecute.mockResolvedValue(createAskAgentSuccess('Reply @[Alice](user-alice:user)'));
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      driveId: undefined,
+      parentId: 'parent-thread',
+      content: 'Hey @[Budget Agent](agent-1:page)',
+    });
+
+    await Promise.resolve();
+
+    expect(mockNotifyMentionedUsers).not.toHaveBeenCalled();
+  });
+});
+
+describe('isAskAgentResult', () => {
+  it('accepts the canonical success shape', () => {
+    expect(
+      isAskAgentResult({ success: true, response: 'hi', error: undefined })
+    ).toBe(true);
+  });
+
+  it('accepts a partial shape where only success is present', () => {
+    expect(isAskAgentResult({ success: false })).toBe(true);
+  });
+
+  it('accepts a partial shape where only error is present', () => {
+    expect(isAskAgentResult({ error: 'boom' })).toBe(true);
+  });
+
+  it('rejects an empty object — no recognizable AskAgentResult fields', () => {
+    expect(isAskAgentResult({})).toBe(false);
+  });
+
+  it('rejects null', () => {
+    expect(isAskAgentResult(null)).toBe(false);
+  });
+
+  it('rejects non-object primitives', () => {
+    expect(isAskAgentResult('ok')).toBe(false);
+    expect(isAskAgentResult(42)).toBe(false);
+    expect(isAskAgentResult(undefined)).toBe(false);
+  });
+
+  it('rejects when success is present but not boolean', () => {
+    expect(isAskAgentResult({ success: 'true' })).toBe(false);
+  });
+
+  it('rejects when response is present but not string', () => {
+    expect(isAskAgentResult({ success: true, response: 42 })).toBe(false);
+  });
+
+  it('rejects when error is present but not string', () => {
+    expect(isAskAgentResult({ success: false, error: { msg: 'x' } })).toBe(false);
   });
 });

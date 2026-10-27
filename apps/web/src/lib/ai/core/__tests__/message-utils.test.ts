@@ -4,6 +4,8 @@ import {
   extractMessageContent,
   extractToolCalls,
   extractToolResults,
+  convertDbMessageToUIMessage,
+  sanitizeMessagesForModel,
 } from '../message-utils';
 
 /** Helper to build a UIMessage with typed parts */
@@ -77,5 +79,190 @@ describe('extractToolResults', () => {
     // @ts-expect-error testing missing parts
     const msg: UIMessage = { id: 'x', role: 'assistant' };
     expect(extractToolResults(msg)).toEqual([]);
+  });
+
+  it('given an output-error tool part with errorText, should preserve errorText in the extracted result so a refresh can re-render the error', () => {
+    const errorPart = {
+      type: 'tool-list_pages',
+      toolCallId: 'tc1',
+      toolName: 'list_pages',
+      state: 'output-error',
+      input: { driveId: 'd1' },
+      errorText: 'drive permission denied',
+    } as unknown as UIMessage['parts'][number];
+    const msg = makeMessage([errorPart]);
+
+    expect(extractToolResults(msg)).toEqual([
+      {
+        toolCallId: 'tc1',
+        toolName: 'list_pages',
+        state: 'output-error',
+        output: undefined,
+        errorText: 'drive permission denied',
+      },
+    ]);
+  });
+});
+
+describe('convertDbMessageToUIMessage — output-error round-trip', () => {
+  it('given a persisted message whose toolResults state is output-error, should reconstruct a tool part with state=output-error and the original errorText', async () => {
+    const partsOrder = [{ index: 0, type: 'tool-list_pages', toolCallId: 'tc1' }];
+    const dbMessage = {
+      id: 'msg-err',
+      pageId: 'page-1',
+      userId: 'user-1',
+      role: 'assistant',
+      content: JSON.stringify({
+        textParts: [],
+        partsOrder,
+        originalContent: '',
+      }),
+      toolCalls: JSON.stringify([
+        {
+          toolCallId: 'tc1',
+          toolName: 'list_pages',
+          input: { driveId: 'd1' },
+          state: 'output-error',
+        },
+      ]),
+      toolResults: JSON.stringify([
+        {
+          toolCallId: 'tc1',
+          toolName: 'list_pages',
+          output: undefined,
+          state: 'output-error',
+          errorText: 'drive permission denied',
+        },
+      ]),
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+      isActive: true,
+    };
+
+    const reconstructed = await convertDbMessageToUIMessage(dbMessage);
+
+    expect(reconstructed.parts).toEqual([
+      {
+        type: 'tool-list_pages',
+        toolCallId: 'tc1',
+        toolName: 'list_pages',
+        input: { driveId: 'd1' },
+        state: 'output-error',
+        errorText: 'drive permission denied',
+      },
+    ]);
+  });
+
+  it('given a persisted message whose toolResults state is output-available, should reconstruct a tool part with state=output-available (no regression)', async () => {
+    const partsOrder = [{ index: 0, type: 'tool-list_pages', toolCallId: 'tc1' }];
+    const dbMessage = {
+      id: 'msg-ok',
+      pageId: 'page-1',
+      userId: 'user-1',
+      role: 'assistant',
+      content: JSON.stringify({ textParts: [], partsOrder, originalContent: '' }),
+      toolCalls: JSON.stringify([
+        { toolCallId: 'tc1', toolName: 'list_pages', input: { driveId: 'd1' }, state: 'output-available' },
+      ]),
+      toolResults: JSON.stringify([
+        { toolCallId: 'tc1', toolName: 'list_pages', output: { pages: [] }, state: 'output-available' },
+      ]),
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+      isActive: true,
+    };
+
+    const reconstructed = await convertDbMessageToUIMessage(dbMessage);
+
+    expect(reconstructed.parts).toEqual([
+      {
+        type: 'tool-list_pages',
+        toolCallId: 'tc1',
+        toolName: 'list_pages',
+        input: { driveId: 'd1' },
+        output: { pages: [] },
+        state: 'output-available',
+      },
+    ]);
+  });
+});
+
+describe('sanitizeMessagesForModel', () => {
+  it('drops system-role messages (system prompt belongs in the system: option)', () => {
+    const messages: UIMessage[] = [
+      { id: 's1', role: 'system', parts: [{ type: 'text' as const, text: 'You are a helpful assistant' }] },
+      makeMessage([{ type: 'text' as const, text: 'Hi' }], 'user'),
+      makeMessage([{ type: 'text' as const, text: 'Hello!' }], 'assistant'),
+    ];
+
+    const result = sanitizeMessagesForModel(messages);
+
+    expect(result.map(m => m.role)).toEqual(['user', 'assistant']);
+    expect(result.some(m => m.role === 'system')).toBe(false);
+  });
+
+  it('preserves user/assistant messages while still filtering tool parts without results', () => {
+    const messages: UIMessage[] = [
+      makeMessage(
+        [
+          { type: 'text' as const, text: 'done' },
+          // tool part lacking output should be dropped
+          {
+            type: 'tool-list_pages',
+            toolCallId: 'tc1',
+            input: { driveId: 'd1' },
+            state: 'input-available',
+          },
+        ],
+        'assistant'
+      ),
+    ];
+
+    const result = sanitizeMessagesForModel(messages);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].parts).toEqual([{ type: 'text', text: 'done' }]);
+  });
+});
+
+/**
+ * The transport a row was authored over has to survive the trip to the UI, or
+ * the mic glyph has nothing to read. `unifiedColumns` already SELECTs
+ * `messages.source`; this is the step where it either reaches the renderer or
+ * is silently dropped on the floor.
+ */
+describe('convertDbMessageToUIMessage — the authoring transport', () => {
+  const row = (source: string | null, content: string) => ({
+    id: 'm1',
+    pageId: 'p1',
+    userId: 'u1',
+    role: 'user',
+    content,
+    toolCalls: null,
+    toolResults: null,
+    createdAt: new Date('2026-01-01T00:00:00Z'),
+    isActive: true,
+    source,
+  });
+
+  it('should carry a spoken turn\'s source through to the UI message', async () => {
+    const converted = await convertDbMessageToUIMessage(row('voice', 'what is on this page'));
+    expect((converted as { source?: string | null }).source).toBe('voice');
+  });
+
+  it('should carry it through the STRUCTURED-content path too', async () => {
+    // Two code paths reconstruct a message; a field added to only one of them
+    // makes the glyph appear or vanish depending on whether the turn happened
+    // to have attachments or tool calls.
+    const structured = JSON.stringify({
+      textParts: ['what is on this page'],
+      partsOrder: [{ index: 0, type: 'text' }],
+      originalContent: 'what is on this page',
+    });
+    const converted = await convertDbMessageToUIMessage(row('voice', structured));
+    expect((converted as { source?: string | null }).source).toBe('voice');
+  });
+
+  it('should report a typed turn as null rather than undefined', async () => {
+    const converted = await convertDbMessageToUIMessage(row(null, 'typed'));
+    expect((converted as { source?: string | null }).source).toBeNull();
   });
 });

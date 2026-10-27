@@ -80,6 +80,30 @@ describe('fetch-with-timeout', () => {
       ).rejects.toThrow('Network error');
     });
 
+    it('given timeout exceeded, should throw TimeoutError', async () => {
+      vi.useFakeTimers();
+
+      const abortError = new Error('The operation was aborted');
+      abortError.name = 'AbortError';
+
+      global.fetch = vi.fn().mockImplementation((_url: string, opts: { signal: AbortSignal }) => {
+        return new Promise((_resolve, reject) => {
+          opts.signal.addEventListener('abort', () => reject(abortError));
+        });
+      });
+
+      const promise = fetchWithTimeout('https://api.example.com/data', {
+        timeout: 100,
+      });
+
+      vi.advanceTimersByTime(101);
+
+      await expect(promise).rejects.toThrow(TimeoutError);
+      await expect(promise).rejects.toThrow(/timed out after 100ms/);
+
+      vi.useRealTimers();
+    });
+
     it('given caller abort, should rethrow AbortError (not TimeoutError)', async () => {
       const callerController = new AbortController();
       const abortError = new Error('AbortError');

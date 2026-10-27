@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { maskEmail } from '../index';
+
+import { maskEmail } from '../mask-email';
 
 describe('maskEmail', () => {
   it('masks standard email addresses', () => {

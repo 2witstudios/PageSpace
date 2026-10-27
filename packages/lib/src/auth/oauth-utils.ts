@@ -6,13 +6,28 @@
  */
 
 import { OAuth2Client } from 'google-auth-library';
-import appleSignIn from 'apple-signin-auth';
-import { users, drives } from '@pagespace/db';
-import { db, eq, or, count } from '@pagespace/db';
+import { verifyAppleJwt } from './apple/apple-jwt';
+import { users } from '@pagespace/db/schema/auth';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
 import { createId } from '@paralleldrive/cuid2';
-import { slugify } from '../utils/utils';
 import { loggers } from '../logging/logger-config';
 import { OAuthProvider, type OAuthUserInfo, type OAuthVerificationResult } from './oauth-types';
+import { resolveOAuthMatch } from './oauth-account-match';
+import { userEmailMatch, prepareUserWrite, decryptUserRow } from './user-repository';
+
+type UserRecord = typeof users.$inferSelect;
+
+/**
+ * Result of reconciling an OAuth identity against existing accounts.
+ *
+ * `rejected` is the M5 takeover guard: an unverified provider email collided
+ * with an existing account, so the caller MUST deny the sign-in rather than
+ * authenticate as (or create) that account.
+ */
+export type OAuthLinkResult =
+  | { status: 'linked'; user: UserRecord }
+  | { status: 'rejected'; reason: 'unverified_email_conflict' };
 
 /**
  * Verify Google ID token and extract user information
@@ -93,14 +108,16 @@ export async function verifyAppleIdToken(idToken: string): Promise<OAuthVerifica
       };
     }
 
-    // Verify the ID token with Apple's public keys
-    // The library fetches Apple's public keys and validates the JWT
-    const payload = await appleSignIn.verifyIdToken(idToken, {
-      audience: validClientIds, // Accept tokens from both iOS app and web
-      ignoreExpiration: false,
-    });
+    // Verify the ID token against Apple's published keys (PageSpace-owned JWKS
+    // cache: timeout, single-flight, throttled refresh, never emptied).
+    const verification = await verifyAppleJwt(idToken, { audience: validClientIds });
+    if (!verification.ok) {
+      loggers.auth.warn('Apple ID token verification failed', { reason: verification.reason });
+      return { success: false, error: verification.reason };
+    }
+    const payload = verification.claims;
 
-    if (!payload || !payload.email) {
+    if (typeof payload.sub !== 'string' || typeof payload.email !== 'string' || !payload.email) {
       return {
         success: false,
         error: 'Invalid ID token: missing required claims',
@@ -124,6 +141,10 @@ export async function verifyAppleIdToken(idToken: string): Promise<OAuthVerifica
     return {
       success: true,
       userInfo,
+      // Single audience: `verifyIdToken` only accepted the token because `aud`
+      // is one of validClientIds. Apple's /auth/token and /auth/revoke must be
+      // called with this same client.
+      audience: typeof payload.aud === 'string' ? payload.aud : undefined,
     };
   } catch (error) {
     // SECURITY: Never log token values - only log error type
@@ -157,10 +178,18 @@ export async function verifyOAuthIdToken(
 }
 
 /**
- * Create new user or link OAuth provider to existing user
- * Returns the user record with updated OAuth information
+ * Create new user or link OAuth provider to existing user.
+ *
+ * SECURITY (M5): provider-subject and email lookups are performed SEPARATELY and
+ * reconciled through {@link resolveOAuthMatch}. An EXISTING account is matched by
+ * raw email only when the provider asserts the email is verified — an unverified
+ * email that collides with an existing account is rejected, never linked.
+ *
+ * Returns `{ status: 'linked', user }` on success, or
+ * `{ status: 'rejected', reason: 'unverified_email_conflict' }` when the caller
+ * must deny the sign-in.
  */
-export async function createOrLinkOAuthUser(userInfo: OAuthUserInfo) {
+export async function createOrLinkOAuthUser(userInfo: OAuthUserInfo): Promise<OAuthLinkResult> {
   const { providerId, email, emailVerified, name, picture, provider } = userInfo;
 
   // Create fallback name if provider doesn't provide one
@@ -171,17 +200,31 @@ export async function createOrLinkOAuthUser(userInfo: OAuthUserInfo) {
     : provider === OAuthProvider.APPLE ? 'apple'
     : 'email';
 
-  // Check if user exists by provider ID or email
-  let user = await db.query.users.findFirst({
-    where: or(
-      // For Google: check googleId
-      provider === OAuthProvider.GOOGLE ? eq(users.googleId, providerId) : undefined,
-      // For Apple: check appleId
-      provider === OAuthProvider.APPLE ? eq(users.appleId, providerId) : undefined,
-      // For all providers: check email
-      eq(users.email, email)
-    ),
+  // Look up the provider-subject match and the email match independently so the
+  // verified-email link rule can be enforced (never collapse them into one OR).
+  const subMatch = provider === OAuthProvider.GOOGLE
+    ? await db.query.users.findFirst({ where: eq(users.googleId, providerId) })
+    : provider === OAuthProvider.APPLE
+      ? await db.query.users.findFirst({ where: eq(users.appleId, providerId) })
+      : undefined;
+  const emailMatch = await db.query.users.findFirst({ where: userEmailMatch(email) });
+
+  const decision = resolveOAuthMatch({
+    providerSubMatch: !!subMatch,
+    emailMatch: !!emailMatch,
+    emailVerified: emailVerified === true,
   });
+
+  if (decision === 'reject') {
+    loggers.auth.warn('Blocked OAuth account link: unverified email matches existing account', {
+      provider: providerDbValue,
+    });
+    return { status: 'rejected', reason: 'unverified_email_conflict' };
+  }
+
+  let user = decision === 'use-sub' ? subMatch
+    : decision === 'use-email' ? emailMatch
+    : undefined;
 
   if (user) {
     // Update existing user with OAuth provider ID if not set
@@ -189,7 +232,7 @@ export async function createOrLinkOAuthUser(userInfo: OAuthUserInfo) {
       emailVerified: Date | null;
       googleId: string;
       appleId: string;
-      provider: 'email' | 'google' | 'apple' | 'both';
+      provider: 'email' | 'google' | 'apple';
       name: string;
       image: string;
     }> = {
@@ -204,10 +247,8 @@ export async function createOrLinkOAuthUser(userInfo: OAuthUserInfo) {
       updateData.appleId = providerId;
     }
 
-    // Update provider field
-    // If user has a password, they signed up with email, so mark as 'both'
-    // Otherwise, just use the OAuth provider
-    updateData.provider = user.password ? 'both' : providerDbValue;
+    // Update provider field to the OAuth provider
+    updateData.provider = providerDbValue;
 
     // Update name if missing
     if (!user.name) {
@@ -221,8 +262,10 @@ export async function createOrLinkOAuthUser(userInfo: OAuthUserInfo) {
 
     // Apply updates if there are any changes
     if (Object.keys(updateData).length > 0) {
+      // Encrypt PII (name) per the rollout flag before persisting. Email is not
+      // changed on link, so no emailBidx recompute is needed here.
       await db.update(users)
-        .set(updateData)
+        .set(await prepareUserWrite(updateData))
         .where(eq(users.id, user.id));
 
       // Refetch user to get updated data
@@ -238,7 +281,7 @@ export async function createOrLinkOAuthUser(userInfo: OAuthUserInfo) {
       email,
       emailVerified: emailVerified ? new Date() : null,
       image: picture || null,
-      provider: providerDbValue as 'email' | 'google' | 'apple' | 'both',
+      provider: providerDbValue as 'email' | 'google' | 'apple',
       tokenVersion: 0,
       role: 'user' as const,
       storageUsedBytes: 0,
@@ -253,30 +296,18 @@ export async function createOrLinkOAuthUser(userInfo: OAuthUserInfo) {
       : baseUserData;
 
     const [newUser] = await db.insert(users)
-      .values(newUserData)
+      .values(await prepareUserWrite(newUserData))
       .returning();
 
     user = newUser;
   }
 
-  // Check if user needs a personal drive
-  const userDriveCount = await db
-    .select({ count: count() })
-    .from(drives)
-    .where(eq(drives.ownerId, user.id));
+  // Decrypt PII at the edge so callers (and the returned row) see plaintext
+  // email/name regardless of whether the row is ciphertext or legacy plaintext.
+  const decryptedUser = await decryptUserRow(user);
 
-  if (userDriveCount[0]?.count === 0) {
-    // Create personal drive for new user
-    const driveName = `${user.name || userName}'s Drive`;
-    const driveSlug = slugify(driveName);
-
-    await db.insert(drives).values({
-      name: driveName,
-      slug: driveSlug,
-      ownerId: user.id,
-      updatedAt: new Date(),
-    });
-  }
-
-  return user;
+  // Drive provisioning is NOT done here. Callers provision the user's Home
+  // drive (provisionHomeDriveIfNeeded) so account creation/linking stays
+  // drive-agnostic and every signup path shares one provisioning invariant.
+  return { status: 'linked', user: decryptedUser };
 }

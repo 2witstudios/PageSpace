@@ -1,11 +1,20 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { checkDriveAccess } from '@pagespace/lib/server';
-import { db, workflows, eq, and, ne } from '@pagespace/db';
-import { executeWorkflow } from '@/lib/workflows/workflow-executor';
+import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { workflows } from '@pagespace/db/schema/workflows';
+import { executeWorkflow, type WorkflowExecutionInput } from '@/lib/workflows/workflow-executor';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';
+import { creditAdmission } from '@/lib/workflows/workflow-credit-gate';
+import type { GateReason } from '@pagespace/lib/billing/credit-core';
+import { creditGatePayload } from '@/lib/subscription/credit-gate-response';
+import { automationRunOwner } from '@pagespace/lib/permissions/automation-ownership';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
+const MANAGEABLE_TRIGGER_TYPE = 'cron' as const;
 
 // POST /api/workflows/[workflowId]/run - Manual trigger
 export async function POST(
@@ -22,57 +31,76 @@ export async function POST(
     .from(workflows)
     .where(eq(workflows.id, workflowId));
 
-  if (!workflow) {
+  // Backing workflows (those owned by task_triggers / calendar_triggers)
+  // share triggerType='cron' but have cronExpression=null. They are not
+  // user-runnable through this surface — fire them via their own trigger.
+  if (!workflow || workflow.triggerType !== MANAGEABLE_TRIGGER_TYPE || !workflow.cronExpression) {
     return NextResponse.json({ error: 'Workflow not found' }, { status: 404 });
   }
 
-  const access = await checkDriveAccess(workflow.driveId, auth.userId);
+  const access = await checkDriveAccess(workflow.driveId, actorFromAuth(auth));
   if (!access.drive) {
-    return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+    return deniedResponse(actorFromAuth(auth), workflow.driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
   }
   if (!access.isOwner && !access.isAdmin) {
-    return NextResponse.json({ error: 'Only drive owners and admins can manage workflows' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), workflow.driveId, NextResponse.json({ error: 'Only drive owners and admins can manage workflows' }, { status: 403 }));
   }
 
-  // Atomically claim: only mark as running if not already running
-  const [claimed] = await db
-    .update(workflows)
-    .set({ lastRunStatus: 'running', lastRunAt: new Date() })
-    .where(and(eq(workflows.id, workflowId), ne(workflows.lastRunStatus, 'running')))
-    .returning({ id: workflows.id });
+  // [D-OW-36] A workflow whose creator left runs as nobody, a Run included: an Owner or Admin reassigns or deletes it first.
+  const owner = automationRunOwner(workflow);
+  if (!owner.runs) {
+    return NextResponse.json({ error: owner.error, code: owner.reason }, { status: 409 });
+  }
 
-  if (!claimed) {
+  const executionInput: WorkflowExecutionInput = {
+    workflowId: workflow.id,
+    workflowName: workflow.name,
+    driveId: workflow.driveId,
+    createdBy: owner.ownerId,
+    agentPageId: workflow.agentPageId,
+    prompt: workflow.prompt,
+    steps: workflow.steps,
+    contextPageIds: (workflow.contextPageIds as string[] | null) ?? [],
+    instructionPageId: workflow.instructionPageId,
+    timezone: workflow.timezone,
+    source: { table: 'manual', id: null, triggerAt: null },
+    // Pressing Run is the CALLER acting: the run reads and writes as their credential, sign-in policy included (D-OW-62).
+    actingActor: actorFromAuth(auth),
+  };
+
+  // Atomic claim is enforced by the workflow_runs partial unique index inside
+  // the executor — any concurrent fire (cron / manual) for the same workflow
+  // returns claimConflict and we surface a 409. The credit gate runs inside
+  // that claim, before any model is built. Pressing Run is the CALLER's spend (the actor
+  // pays, as for a channel @mention): the gate admits it as them, so their per-consumer caps
+  // on the drive wallet bind (WAL-7). It still spends only the drive wallet. Usage is recorded
+  // under the workflow's creator, as for every run.
+  let deniedReason: GateReason | undefined;
+  const result = await executeWorkflow(executionInput, {
+    admit: creditAdmission(executionInput, 'interactive', (reason) => { deniedReason = reason; }, auth.userId),
+  });
+
+  if (result.claimConflict) {
     return NextResponse.json({ error: 'Workflow is already running' }, { status: 409 });
   }
 
-  // Execute
-  let result;
-  try {
-    result = await executeWorkflow(workflow);
-  } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error);
-    await db
-      .update(workflows)
-      .set({ lastRunStatus: 'error', lastRunError: errorMsg })
-      .where(eq(workflows.id, workflowId));
-    return NextResponse.json({ success: false, error: errorMsg }, { status: 500 });
+  // Refused by the gate: out_of_credits -> 402, a cap -> 429. The Run button
+  // toasts `error`, so it carries the readable message; `code` the reason. The
+  // schedule is not advanced — nothing ran.
+  if (result.skipped && deniedReason) {
+    const denied = creditGatePayload(deniedReason);
+    return NextResponse.json({ error: denied.message, code: denied.error }, { status: denied.status });
   }
 
-  // Update status — only compute nextRunAt for cron workflows
-  const nextRunAt = (workflow.triggerType === 'cron' && workflow.isEnabled && workflow.cronExpression)
-    ? getNextRunDate(workflow.cronExpression, workflow.timezone)
-    : null;
+  // Advance the schedule so the next cron tick doesn't re-fire immediately.
+  if (workflow.isEnabled && workflow.cronExpression) {
+    try {
+      const nextRunAt = getNextRunDate(workflow.cronExpression, workflow.timezone);
+      await db.update(workflows).set({ nextRunAt }).where(eq(workflows.id, workflowId));
+    } catch { /* invalid cron — leave nextRunAt as-is */ }
+  }
 
-  await db
-    .update(workflows)
-    .set({
-      lastRunAt: new Date(),
-      lastRunStatus: result.success ? 'success' : 'error',
-      lastRunError: result.error || null,
-      lastRunDurationMs: result.durationMs,
-      nextRunAt,
-    })
-    .where(eq(workflows.id, workflowId));
+  auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'workflow', resourceId: workflowId, details: { action: 'run', trigger: 'manual' } });
 
   return NextResponse.json({
     success: result.success,
@@ -80,5 +108,6 @@ export async function POST(
     toolCallCount: result.toolCallCount,
     durationMs: result.durationMs,
     error: result.error,
+    finalizeError: result.finalizeError,
   });
 }

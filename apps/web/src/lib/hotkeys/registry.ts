@@ -22,6 +22,13 @@ export const HOTKEY_CATEGORIES: Record<HotkeyCategory, { label: string; descript
 export const HOTKEY_REGISTRY: HotkeyDefinition[] = [
   // Navigation
   {
+    id: 'pages.quick-create',
+    label: 'Quick Create Page',
+    description: 'Open the quick-create palette to create a new page',
+    category: 'navigation',
+    defaultBinding: 'Alt+N',
+  },
+  {
     id: 'navigation.search',
     label: 'Open Search',
     description: 'Open the global search dialog',
@@ -34,6 +41,16 @@ export const HOTKEY_REGISTRY: HotkeyDefinition[] = [
     description: 'Show or hide the sidebar',
     category: 'navigation',
     defaultBinding: 'Meta+B',
+  },
+
+  // Editing
+  {
+    id: 'editing.find',
+    label: 'Find in Page',
+    description: 'Open the find bar to search within the current page',
+    category: 'editing',
+    defaultBinding: 'Meta+F',
+    allowInInputs: true,
   },
 
   // Tabs
@@ -59,6 +76,13 @@ export const HOTKEY_REGISTRY: HotkeyDefinition[] = [
     description: 'Close the current tab',
     category: 'tabs',
     defaultBinding: 'Meta+W',
+  },
+  {
+    id: 'tabs.new',
+    label: 'New Tab',
+    description: 'Open a new tab',
+    category: 'tabs',
+    defaultBinding: 'Alt+T',
   },
   {
     id: 'tabs.go-to-1',

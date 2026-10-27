@@ -1,11 +1,14 @@
 import { NextResponse } from 'next/server';
-import { pages, db, eq } from '@pagespace/db';
-import { canUserViewPage } from '@pagespace/lib/server';
-import { generateDOCX, sanitizeFilename } from '@pagespace/lib';
-import { loggers } from '@pagespace/lib/server';
-import { trackPageOperation } from '@pagespace/lib/activity-tracker';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core';
+import { generateDOCX, sanitizeFilename } from '@pagespace/lib/content/export-utils';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage } from '@/lib/auth';
 import { marked } from 'marked';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 
@@ -29,9 +32,9 @@ export async function GET(req: Request, context: { params: Promise<{ pageId: str
     if (scopeError) return scopeError;
 
     // Check user permissions
-    const canView = await canUserViewPage(userId, pageId);
+    const canView = await canPrincipalViewPage(auth, pageId);
     if (!canView) {
-      return new NextResponse("Forbidden", { status: 403 });
+      return deniedResponse(actorFromAuth(auth), pageId, new NextResponse("Forbidden", { status: 403 }));
     }
 
     // Fetch the page
@@ -70,6 +73,8 @@ export async function GET(req: Request, context: { params: Promise<{ pageId: str
       exportFormat: 'docx',
       pageTitle: page.title,
     });
+
+    auditRequest(req, { eventType: 'data.export', userId, resourceType: 'page', resourceId: pageId, details: { format: 'docx' } });
 
     // Return the DOCX as a downloadable file
     // Convert Buffer to Uint8Array for Next.js 15 compatibility

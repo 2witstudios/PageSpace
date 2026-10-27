@@ -44,9 +44,8 @@ const mockSelectWhere = vi.fn();
 const mockUpdateWhere = vi.fn();
 const mockUpdateSet = vi.fn();
 
-vi.mock('@pagespace/db', () => {
-  return {
-    db: {
+vi.mock('@pagespace/db/db', () => ({
+  db: {
       select: vi.fn(() => ({
         from: vi.fn(() => ({
           where: mockSelectWhere,
@@ -58,10 +57,13 @@ vi.mock('@pagespace/db', () => {
         }),
       })),
     },
-    users: {},
-    eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
-  };
-});
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: {},
+}));
 
 // Mock auth
 vi.mock('@/lib/auth', () => ({
@@ -69,9 +71,23 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
+    api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    security: { warn: vi.fn() },
+  },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
+}));
+
 // Import after mocks
 import { GET, PUT } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -400,20 +416,28 @@ describe('Billing Address API', () => {
     });
 
     it('should save customer ID to database when creating customer', async () => {
-      mockSelectWhere.mockResolvedValue([mockUser({ stripeCustomerId: null })]);
-      mockStripeCustomersCreate.mockResolvedValue(mockCustomer({ id: 'cus_new' }));
+      const frozenDate = new Date('2025-01-15T12:00:00.000Z');
+      vi.useFakeTimers();
+      vi.setSystemTime(frozenDate);
 
-      const request = new Request('https://example.com/api/stripe/billing-address', {
-        method: 'PUT',
-        body: JSON.stringify(validAddressBody),
-      }) as unknown as import('next/server').NextRequest;
+      try {
+        mockSelectWhere.mockResolvedValue([mockUser({ stripeCustomerId: null })]);
+        mockStripeCustomersCreate.mockResolvedValue(mockCustomer({ id: 'cus_new' }));
 
-      await PUT(request);
+        const request = new Request('https://example.com/api/stripe/billing-address', {
+          method: 'PUT',
+          body: JSON.stringify(validAddressBody),
+        }) as unknown as import('next/server').NextRequest;
 
-      expect(mockUpdateSet).toHaveBeenCalledWith({
-        stripeCustomerId: 'cus_new',
-        updatedAt: expect.any(Date),
-      });
+        await PUT(request);
+
+        expect(mockUpdateSet).toHaveBeenCalledWith({
+          stripeCustomerId: 'cus_new',
+          updatedAt: frozenDate,
+        });
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('should rollback and delete Stripe customer if DB update fails', async () => {
@@ -524,6 +548,74 @@ describe('Billing Address API', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to update billing address');
+    });
+  });
+
+  describe('Audit logging', () => {
+    it('should log audit event on GET billing address with customer', async () => {
+      const request = new Request('https://example.com/api/stripe/billing-address', {
+        method: 'GET',
+      }) as unknown as import('next/server').NextRequest;
+
+      await GET(request);
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ eventType: 'data.read', userId: 'user_123', resourceType: 'billing_address', resourceId: 'self', details: expect.objectContaining({ hasCustomer: true }) })
+      );
+    });
+
+    it('should log audit event on GET when user has no Stripe customer', async () => {
+      mockSelectWhere.mockResolvedValue([mockUser({ stripeCustomerId: null })]);
+
+      const request = new Request('https://example.com/api/stripe/billing-address', {
+        method: 'GET',
+      }) as unknown as import('next/server').NextRequest;
+
+      await GET(request);
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ eventType: 'data.read', userId: 'user_123', resourceType: 'billing_address', resourceId: 'self', details: expect.objectContaining({ hasCustomer: false }) })
+      );
+    });
+
+    it('should log audit event on GET when Stripe customer is deleted', async () => {
+      mockStripeCustomersRetrieve.mockResolvedValue(mockCustomer({ deleted: true }));
+
+      const request = new Request('https://example.com/api/stripe/billing-address', {
+        method: 'GET',
+      }) as unknown as import('next/server').NextRequest;
+
+      await GET(request);
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ eventType: 'data.read', userId: 'user_123', resourceType: 'billing_address', resourceId: 'self', details: expect.objectContaining({ hasCustomer: false }) })
+      );
+    });
+
+    it('should log audit event on PUT billing address', async () => {
+      mockStripeCustomersUpdate.mockResolvedValue({
+        id: 'cus_123',
+        address: mockAddress(),
+        name: 'Updated Name',
+      });
+
+      const request = new Request('https://example.com/api/stripe/billing-address', {
+        method: 'PUT',
+        body: JSON.stringify({
+          name: 'Updated Name',
+          address: { line1: '456 New St', city: 'Los Angeles', country: 'US' },
+        }),
+      }) as unknown as import('next/server').NextRequest;
+
+      await PUT(request);
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ eventType: 'data.write', userId: 'user_123', resourceType: 'billing_address', resourceId: 'cus_123', details: expect.objectContaining({ action: 'update' }) })
+      );
     });
   });
 });

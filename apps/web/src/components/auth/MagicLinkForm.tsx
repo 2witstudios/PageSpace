@@ -1,17 +1,39 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { MarketingLink } from '@/components/ui/MarketingLink';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Mail, ArrowLeft, Loader2, CheckCircle } from 'lucide-react';
+import { getMagicLinkPlatformFields } from '@/lib/auth/magic-link-platform-fields';
+import { useCapacitor } from '@/hooks/useCapacitor';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
 
 type FormState = 'input' | 'sending' | 'sent' | 'error';
 
-export function MagicLinkForm() {
+export interface MagicLinkFormProps {
+  // Same-origin redirect target the user originally aimed at. Caller
+  // (signin/page.tsx) is the source of truth for safety; the form just
+  // forwards it. Send route + verify route both re-validate.
+  nextPath?: string;
+  // Invite token to bind to the magic link. When set, the verify route
+  // consumes the invite atomically with authentication and redirects to
+  // /dashboard/<driveId>?invited=1 — no `next=` needed for invite flows.
+  inviteToken?: string;
+}
+
+export function MagicLinkForm({ nextPath, inviteToken }: MagicLinkFormProps = {}) {
+  // Resolved after mount, never during render — the shell is a `window` fact
+  // the server does not have.
+  const { isIOS } = useCapacitor();
+  // The v3 look is only applied when Imago is enabled; classic markup is unchanged.
+  const v3 = isV3AuthEnabled();
   const formRef = useRef<HTMLFormElement>(null);
   const [email, setEmail] = useState('');
+  const [acceptedTos, setAcceptedTos] = useState(false);
   const [formState, setFormState] = useState<FormState>('input');
   const [error, setError] = useState<string | null>(null);
   const [cooldownSeconds, setCooldownSeconds] = useState(0);
@@ -58,6 +80,14 @@ export function MagicLinkForm() {
 
     if (formState === 'sending') return;
     if (cooldownSeconds > 0) return;
+    // Submit-time guard: the button is disabled until acceptedTos, but a
+    // programmatic / Enter-key submit could still fire. Refuse to send a
+    // payload that would record consent without an actual checkbox tick.
+    if (!acceptedTos) {
+      setFormState('error');
+      setError('Please accept the Terms and Privacy Policy to continue.');
+      return;
+    }
 
     setFormState('sending');
     setError(null);
@@ -74,6 +104,8 @@ export function MagicLinkForm() {
 
       const { csrfToken } = (await csrfResponse.json()) as { csrfToken: string };
 
+      const platformFields = await getMagicLinkPlatformFields();
+
       // Send magic link request
       const response = await fetch('/api/auth/magic-link/send', {
         method: 'POST',
@@ -82,7 +114,13 @@ export function MagicLinkForm() {
           'X-Login-CSRF-Token': csrfToken,
         },
         credentials: 'include',
-        body: JSON.stringify({ email: email.trim() }),
+        body: JSON.stringify({
+          email: email.trim(),
+          tosAccepted: acceptedTos,
+          ...platformFields,
+          ...(nextPath && { next: nextPath }),
+          ...(inviteToken && { inviteToken }),
+        }),
       });
 
       if (response.status === 429) {
@@ -110,6 +148,31 @@ export function MagicLinkForm() {
         return;
       }
 
+      // Desktop shell only: mark an auth flow in progress (finding L9) BEFORE
+      // showing confirmation. The emailed link opens in the user's browser,
+      // outside this shell, so the pagespace:// deep link it fires cannot
+      // carry the flow state back — the main process accepts it via the
+      // in-progress-flow gate instead. A rejected bridge call or a null state
+      // (untrusted sender — the main process never records a flow) would leave
+      // that gate closed: the later deep link would be rejected and the
+      // desktop app would stay signed out. Surface a retryable error instead
+      // of a confirmation that promises a sign-in that cannot complete.
+      const beginExchange = window.electron?.auth?.beginExchange;
+      if (beginExchange) {
+        try {
+          const state = await beginExchange();
+          if (!state) {
+            throw new Error('Desktop auth bridge returned no flow state');
+          }
+        } catch {
+          setFormState('error');
+          setError(
+            'Your sign-in link was emailed, but the desktop app failed to prepare for sign-in. Please try again.'
+          );
+          return;
+        }
+      }
+
       // Success - show confirmation
       setFormState('sent');
       setCooldownSeconds(60); // 60 second cooldown before allowing resend
@@ -119,7 +182,7 @@ export function MagicLinkForm() {
       setFormState('error');
       setError('Network error. Please check your connection and try again.');
     }
-  }, [email, formState, cooldownSeconds]);
+  }, [email, formState, cooldownSeconds, nextPath, inviteToken, acceptedTos]);
 
   const handleResend = useCallback(async () => {
     if (cooldownSeconds > 0) return;
@@ -136,6 +199,7 @@ export function MagicLinkForm() {
     setFormState('input');
     setError(null);
     setEmail('');
+    setAcceptedTos(false);
     setCooldownSeconds(0);
     setRetryAfterSeconds(0);
   }, []);
@@ -149,7 +213,13 @@ export function MagicLinkForm() {
             <CheckCircle className="h-6 w-6 text-green-600 dark:text-green-400" />
           </div>
           <div className="text-center">
-            <h3 className="font-medium text-lg">Check your email</h3>
+            {v3 ? (
+              <h1 className="text-[28px] font-bold leading-[1.15] tracking-[-0.02em] text-[oklch(0.15_0.01_220)]">
+                Check your email
+              </h1>
+            ) : (
+              <h3 className="font-medium text-lg">Check your email</h3>
+            )}
             <p className="text-muted-foreground text-sm mt-1">
               We sent a sign-in link to{' '}
               <span className="font-medium text-foreground">{email}</span>
@@ -160,6 +230,15 @@ export function MagicLinkForm() {
         <p className="text-center text-xs text-muted-foreground">
           The link expires in 5 minutes. Check your spam folder if you don&apos;t see it.
         </p>
+        {/* iOS only, deliberately: the promise is true exactly where the app
+            can receive the link. Android registers no https intent-filter yet
+            (see apps/android/README.md), so its tap opens Chrome and signs
+            Chrome in — telling an Android user otherwise would be a lie. */}
+        {isIOS && (
+          <p className="text-center text-xs text-muted-foreground">
+            Open the link on this device and it will sign you in here.
+          </p>
+        )}
 
         <div className="flex flex-col gap-2">
           <Button
@@ -205,14 +284,39 @@ export function MagicLinkForm() {
             onChange={(e) => setEmail(e.target.value)}
             className="pl-10"
             disabled={formState === 'sending'}
-            autoComplete="email"
+            autoComplete="email webauthn"
             autoFocus
           />
         </div>
       </div>
 
+      <div className="flex items-start gap-2">
+        <Checkbox
+          id="magic-link-tos"
+          checked={acceptedTos}
+          onCheckedChange={(checked) => setAcceptedTos(checked === true)}
+          disabled={formState === 'sending'}
+          className="mt-0.5"
+        />
+        <Label
+          htmlFor="magic-link-tos"
+          className="text-xs font-normal leading-snug text-muted-foreground"
+        >
+          I agree to PageSpace&apos;s{' '}
+          <MarketingLink href="/terms" className="underline hover:text-foreground">
+            Terms
+          </MarketingLink>
+          {' '}and{' '}
+          <MarketingLink href="/privacy" className="underline hover:text-foreground">
+            Privacy Policy
+          </MarketingLink>
+          , and I&apos;m at least 16 years old. AI features send the content you use them with to
+          OpenRouter and the model provider you choose.
+        </Label>
+      </div>
+
       {error && (
-        <div className="text-sm text-red-500 dark:text-red-400">
+        <div role="alert" className="text-sm text-red-500 dark:text-red-400">
           {error}
           {retryAfterSeconds > 0 && (
             <span className="font-medium ml-1">
@@ -225,7 +329,7 @@ export function MagicLinkForm() {
       <Button
         type="submit"
         className="w-full"
-        disabled={formState === 'sending' || retryAfterSeconds > 0}
+        disabled={formState === 'sending' || retryAfterSeconds > 0 || !acceptedTos}
       >
         {formState === 'sending' ? (
           <div className="flex items-center gap-2">

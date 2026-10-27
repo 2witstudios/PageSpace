@@ -1,10 +1,14 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db, desc, integrationAuditLog } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db'
+import { desc } from '@pagespace/db/operators'
+import { integrationAuditLog } from '@pagespace/db/schema/integrations';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { format } from 'date-fns';
 import { buildAuditLogWhereClause, parseAuditFilterParams } from '../audit-filters';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 const CSV_HEADER = [
@@ -52,9 +56,9 @@ export async function GET(
   if (isAuthError(auth)) return auth.error;
 
   try {
-    const access = await getDriveAccess(driveId, auth.userId);
+    const access = await getDriveAccess(driveId, actorFromAuth(auth));
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Admin access required' }, { status: 403 }));
     }
 
     const { searchParams } = new URL(request.url);
@@ -87,6 +91,8 @@ export async function GET(
     });
 
     const csv = `${CSV_HEADER}\n${csvRows.join('\n')}`;
+
+    auditRequest(request, { eventType: 'data.export', userId: auth.userId, resourceType: 'drive', resourceId: driveId, details: { format: 'csv' } });
 
     return new Response(csv, {
       headers: {

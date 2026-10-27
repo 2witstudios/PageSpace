@@ -1,9 +1,12 @@
+import { canPrincipalViewPage } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
-import { channelMessages, channelMessageReactions, db, eq, and } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/server';
-import { loggers } from '@pagespace/lib/server';
-import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
+
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
+import { channelMessageRepository } from '@pagespace/lib/services/channel-message-repository';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -21,12 +24,12 @@ export async function POST(req: Request, { params }: RouteParams) {
   const userId = auth.userId;
 
   // Check if user has view permission (reactions require at least view access)
-  const canView = await canUserViewPage(userId, pageId);
+  const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
-    return NextResponse.json({
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({
       error: 'You need view permission to react to messages',
       details: 'Contact the channel owner to request access'
-    }, { status: 403 });
+    }, { status: 403 }));
   }
 
   const { emoji } = await req.json();
@@ -36,12 +39,7 @@ export async function POST(req: Request, { params }: RouteParams) {
   }
 
   // Verify message exists and belongs to this channel
-  const message = await db.query.channelMessages.findFirst({
-    where: and(
-      eq(channelMessages.id, messageId),
-      eq(channelMessages.pageId, pageId)
-    ),
-  });
+  const message = await channelMessageRepository.findChannelMessageInPage({ messageId, pageId });
 
   if (!message) {
     return NextResponse.json({ error: 'Message not found' }, { status: 404 });
@@ -49,26 +47,23 @@ export async function POST(req: Request, { params }: RouteParams) {
 
   // Insert reaction (unique constraint will prevent duplicates)
   try {
-    const [reaction] = await db.insert(channelMessageReactions).values({
+    const reaction = await channelMessageRepository.addChannelReaction({
       messageId,
       userId,
       emoji,
-    }).returning();
-
-    // Fetch with user info for broadcast
-    const reactionWithUser = await db.query.channelMessageReactions.findFirst({
-      where: eq(channelMessageReactions.id, reaction.id),
-      with: {
-        user: {
-          columns: {
-            id: true,
-            name: true,
-          },
-        },
-      },
     });
 
-    // Broadcast reaction to channel
+    auditRequest(req, { eventType: 'data.write', userId, resourceType: 'reaction', resourceId: messageId });
+
+    // Fetch with user info for broadcast
+    const reactionWithUser = await channelMessageRepository.loadChannelReactionWithUser(reaction.id);
+
+    // Broadcast reaction to channel.
+    // Reactions on a thread reply broadcast on the SAME channel room
+    // (`pageId`) — not a thread-specific room. PR 4's ThreadPanel will
+    // subscribe to the same room and pick up the event by matching `messageId`.
+    // Don't split this into a separate room without updating PR 4's panel
+    // subscription too.
     if (process.env.INTERNAL_REALTIME_URL) {
       try {
         const requestBody = JSON.stringify({
@@ -89,6 +84,8 @@ export async function POST(req: Request, { params }: RouteParams) {
         loggers.realtime.error('Failed to broadcast reaction:', error as Error);
       }
     }
+
+    auditRequest(req, { eventType: 'data.write', userId, resourceType: 'reaction', resourceId: messageId });
 
     return NextResponse.json(reactionWithUser, { status: 201 });
   } catch (error) {
@@ -112,11 +109,11 @@ export async function DELETE(req: Request, { params }: RouteParams) {
   const userId = auth.userId;
 
   // Check if user has view permission
-  const canView = await canUserViewPage(userId, pageId);
+  const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
-    return NextResponse.json({
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({
       error: 'You need view permission to manage reactions',
-    }, { status: 403 });
+    }, { status: 403 }));
   }
 
   const { emoji } = await req.json();
@@ -126,29 +123,20 @@ export async function DELETE(req: Request, { params }: RouteParams) {
   }
 
   // Verify message exists and belongs to this channel (same validation as POST)
-  const message = await db.query.channelMessages.findFirst({
-    where: and(
-      eq(channelMessages.id, messageId),
-      eq(channelMessages.pageId, pageId)
-    ),
-  });
+  const message = await channelMessageRepository.findChannelMessageInPage({ messageId, pageId });
 
   if (!message) {
     return NextResponse.json({ error: 'Message not found' }, { status: 404 });
   }
 
   // Delete the reaction (only the user's own reaction)
-  const result = await db.delete(channelMessageReactions)
-    .where(and(
-      eq(channelMessageReactions.messageId, messageId),
-      eq(channelMessageReactions.userId, userId),
-      eq(channelMessageReactions.emoji, emoji)
-    ))
-    .returning();
+  const removed = await channelMessageRepository.removeChannelReaction({ messageId, userId, emoji });
 
-  if (result.length === 0) {
+  if (removed === 0) {
     return NextResponse.json({ error: 'Reaction not found' }, { status: 404 });
   }
+
+  auditRequest(req, { eventType: 'data.delete', userId, resourceType: 'reaction', resourceId: messageId });
 
   // Broadcast reaction removal to channel
   if (process.env.INTERNAL_REALTIME_URL) {

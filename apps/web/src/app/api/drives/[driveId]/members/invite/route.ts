@@ -1,21 +1,44 @@
 import { NextResponse } from 'next/server';
-import { db, eq, and } from '@pagespace/db';
-import { driveMembers, drives, pagePermissions, pages, users } from '@pagespace/db';
+import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createDriveNotification, isEmailVerified } from '@pagespace/lib';
-import { loggers, invalidateUserPermissions, invalidateDrivePermissions } from '@pagespace/lib/server';
-import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
-import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
+import { isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
+import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
+import { canAdministerDrive } from '@pagespace/lib/permissions/drive-relationship';
+import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
+import { handleEmailPath, handleUserIdPath } from '@/lib/drive-invites/invite-handlers';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
-interface PermissionEntry {
-  pageId: string;
-  canView: boolean;
-  canEdit: boolean;
-  canShare: boolean;
-}
+const permissionEntrySchema = z.object({
+  pageId: z.string().min(1),
+  canView: z.boolean(),
+  canEdit: z.boolean(),
+  canShare: z.boolean(),
+});
+
+// Discriminated by which identity field is present. Role enum is enforced
+// here at the boundary — PR #1229 took the role through a TypeScript cast
+// and accepted 'OWNER' silently. Zod refuses it now.
+const inviteBodySchema = z.union([
+  z.object({
+    userId: z.string().min(1),
+    role: z.enum(['MEMBER', 'ADMIN']).default('MEMBER'),
+    customRoleId: z.string().nullable().optional(),
+    permissions: z.array(permissionEntrySchema).default([]),
+  }),
+  z.object({
+    email: z.string().trim().toLowerCase().pipe(z.string().email().max(254)),
+    role: z.enum(['MEMBER', 'ADMIN']).default('MEMBER'),
+    customRoleId: z.string().nullable().optional(),
+    permissions: z.array(permissionEntrySchema).default([]),
+    expiryDays: z.number().int().min(1).max(365).nullable().optional(),
+  }),
+]);
+
 
 export async function POST(
   request: Request,
@@ -24,201 +47,81 @@ export async function POST(
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
-    const userId = auth.userId;
+    const inviterUserId = auth.userId;
 
     const { driveId } = await context.params;
 
-    // Check email verification
-    const emailVerified = await isEmailVerified(userId);
+    const emailVerified = await isEmailVerified(inviterUserId);
     if (!emailVerified) {
       return NextResponse.json(
         {
           error: 'Email verification required. Please verify your email to perform this action.',
-          requiresEmailVerification: true
+          requiresEmailVerification: true,
         },
         { status: 403 }
       );
     }
 
-    const body = await request.json();
-    const { userId: invitedUserId, role = 'MEMBER', customRoleId, permissions } = body as {
-      userId: string;
-      role?: 'MEMBER' | 'ADMIN';
-      customRoleId?: string | null;
-      permissions: PermissionEntry[];
-    };
+    let rawBody: unknown;
+    try {
+      rawBody = await request.json();
+    } catch {
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+    }
 
-    // Check if user is drive owner or admin
-    const drive = await db.select()
-      .from(drives)
-      .where(eq(drives.id, driveId))
-      .limit(1);
+    const parsed = inviteBodySchema.safeParse(rawBody);
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: 'Invalid request body', issues: parsed.error.issues },
+        { status: 400 }
+      );
+    }
+    const body = parsed.data;
 
-    if (drive.length === 0) {
+    const drive = await driveInviteRepository.findDriveById(driveId);
+    if (!drive) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    const isOwner = drive[0].ownerId === userId;
-    let isAdmin = false;
-
-    if (!isOwner) {
-      const adminMembership = await db.select()
-        .from(driveMembers)
-        .where(and(
-          eq(driveMembers.driveId, driveId),
-          eq(driveMembers.userId, userId),
-          eq(driveMembers.role, 'ADMIN')
-        ))
-        .limit(1);
-
-      isAdmin = adminMembership.length > 0;
+    if (isHomeDrive(drive)) {
+      return NextResponse.json({ error: homeDriveActionError(drive, 'invite') }, { status: 403 });
     }
 
-    if (!isOwner && !isAdmin) {
-      return NextResponse.json({ error: 'Only drive owners and admins can add members' }, { status: 403 });
+    // The drive's lead or an effective ADMIN. The org-aware membership reads ACCEPTED rows only, so
+    // a pending admin cannot exercise admin powers; an org Owner/Admin invites as ADMIN.
+    if (!canAdministerDrive(await loadDriveRelationship(actorFromAuth(auth), drive))) {
+      auditRequest(request, {
+        eventType: 'authz.access.denied',
+        userId: inviterUserId,
+        resourceType: 'drive',
+        resourceId: driveId,
+        details: { operation: 'invite', reason: 'not_drive_admin' },
+      });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json(
+        { error: 'Only drive owners and admins can add members' },
+        { status: 403 }
+      ));
     }
 
-    // Check if member already exists
-    const existingMember = await db.select()
-      .from(driveMembers)
-      .where(and(
-        eq(driveMembers.driveId, driveId),
-        eq(driveMembers.userId, invitedUserId)
-      ))
-      .limit(1);
-
-    let memberId: string;
-    
-    if (existingMember.length === 0) {
-      // Add as drive member with specified role
-      const newMember = await db.insert(driveMembers)
-        .values({
-          driveId,
-          userId: invitedUserId,
-          role,
-          customRoleId: customRoleId || null,
-          invitedBy: userId,
-          acceptedAt: new Date(), // Auto-accept for now
-        })
-        .returning();
-
-      memberId = newMember[0].id;
-    } else {
-      // Update role if member exists
-      await db.update(driveMembers)
-        .set({ role, customRoleId: customRoleId || null })
-        .where(eq(driveMembers.id, existingMember[0].id));
-
-      memberId = existingMember[0].id;
+    if ('userId' in body) {
+      return await handleUserIdPath({
+        request,
+        body,
+        drive,
+        driveId,
+        inviterUserId,
+      });
     }
 
-    // Broadcast member added/updated event to the affected user
-    await broadcastDriveMemberEvent(
-      createDriveMemberEventPayload(driveId, invitedUserId, 'member_added', {
-        role,
-        driveName: drive[0].name
-      })
-    );
-
-    // Invalidate permission caches so user immediately sees their new access
-    await Promise.all([
-      invalidateUserPermissions(invitedUserId),
-      invalidateDrivePermissions(driveId),
-    ]);
-
-    // Validate that all pageIds belong to this drive
-    const validPages = await db.select({ id: pages.id })
-      .from(pages)
-      .where(eq(pages.driveId, driveId));
-
-    const validPageIds = new Set(validPages.map(p => p.id));
-
-    // Add permissions for each page
-    const permissionPromises = permissions.map(async (perm) => {
-      if (!validPageIds.has(perm.pageId)) {
-        loggers.api.warn(`Invalid page ID ${perm.pageId} for drive ${driveId}`);
-        return null;
-      }
-
-      // Check if permission already exists
-      const existing = await db.select()
-        .from(pagePermissions)
-        .where(and(
-          eq(pagePermissions.pageId, perm.pageId),
-          eq(pagePermissions.userId, invitedUserId)
-        ))
-        .limit(1);
-
-      if (existing.length > 0) {
-        // Update existing permission
-        return db.update(pagePermissions)
-          .set({
-            canView: perm.canView,
-            canEdit: perm.canEdit,
-            canShare: perm.canShare,
-            grantedBy: userId,
-            grantedAt: new Date(),
-          })
-          .where(eq(pagePermissions.id, existing[0].id))
-          .returning();
-      } else {
-        // Create new permission
-        return db.insert(pagePermissions)
-          .values({
-            pageId: perm.pageId,
-            userId: invitedUserId,
-            canView: perm.canView,
-            canEdit: perm.canEdit,
-            canShare: perm.canShare,
-            canDelete: false, // Never grant delete via invite
-            grantedBy: userId,
-          })
-          .returning();
-      }
-    });
-
-    const results = await Promise.all(permissionPromises);
-    const validResults = results.filter(r => r !== null);
-
-    // Send notification to added user
-    await createDriveNotification(
-      invitedUserId,
+    return await handleEmailPath({
+      request,
+      body,
+      drive,
       driveId,
-      'invited', // Always use 'invited' which now has "added" language
-      role,
-      userId
-    );
-
-    trackDriveOperation(userId, 'invite_member', driveId, {
-      invitedUserId,
-      role,
-      permissionsGranted: validResults.length,
-    });
-
-    // Log activity for audit trail
-    const actorInfo = await getActorInfo(userId);
-    const invitedUser = await db.query.users.findFirst({
-      where: eq(users.id, invitedUserId),
-      columns: { email: true },
-    });
-    logMemberActivity(userId, 'member_add', {
-      driveId,
-      driveName: drive[0].name,
-      targetUserId: invitedUserId,
-      targetUserEmail: invitedUser?.email,
-      role,
-    }, actorInfo);
-
-    return NextResponse.json({
-      memberId,
-      permissionsGranted: validResults.length,
-      message: `User added with ${validResults.length} page permissions`,
+      inviterUserId,
     });
   } catch (error) {
     loggers.api.error('Error adding member:', error as Error);
-    return NextResponse.json(
-      { error: 'Failed to add member' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to add member' }, { status: 500 });
   }
 }

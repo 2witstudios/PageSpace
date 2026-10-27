@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { convertDbMessageToUIMessage } from '@/lib/ai/core';
-import { loggers } from '@pagespace/lib/server';
-import { canUserViewPage } from '@pagespace/lib/server';
-import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage } from '@/lib/auth';
+import { convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { messageRepository } from '@/lib/repositories/message-repository';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 // Auth options: GET is read-only operation
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -15,36 +16,58 @@ const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: fal
 export async function GET(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'message', resourceId: 'list', details: { reason: 'auth_failed', method: 'GET', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
+      return auth.error;
+    }
+    const actor = actorFromAuth(auth);
 
     const { searchParams } = new URL(request.url);
     const pageId = searchParams.get('pageId');
     const conversationId = searchParams.get('conversationId'); // Optional filter
+    // Stale-tab rollout protection: clients deployed before this PR never send this param, so
+    // they never see 'streaming' placeholder rows — only updated clients that know how to
+    // dedup them against a live stream bubble opt in. See Server Stream Durability epic PR 2.
+    const includeStreaming = searchParams.get('includeStreaming') === '1';
 
     if (!pageId) {
       return NextResponse.json({ error: 'pageId is required' }, { status: 400 });
     }
 
     const mcpScopeError = await checkMCPPageScope(auth, pageId);
-    if (mcpScopeError) return mcpScopeError;
-
-    // Check if user has view permission for this page
-    const canView = await canUserViewPage(auth.userId, pageId);
-    if (!canView) {
-      return NextResponse.json({
-        error: 'You need view permission to access this page\'s chat messages',
-        details: 'Contact the page owner to request access'
-      }, { status: 403 });
+    if (mcpScopeError) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'message', resourceId: pageId, details: { reason: 'mcp_page_scope_denied', method: 'GET' }, riskScore: 0.5 });
+      return mcpScopeError;
     }
 
-    // Get messages from repository
-    const dbMessages = await chatMessageRepository.getMessagesForPage(
+    // Check if user has view permission for this page
+    const canView = await canPrincipalViewPage(auth, pageId);
+    if (!canView) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'message', resourceId: pageId, details: { reason: 'no_view_permission', method: 'GET' }, riskScore: 0.5 });
+      return deniedResponse(actor, pageId, NextResponse.json({
+        error: 'You need view permission to access this page\'s chat messages',
+        details: 'Contact the page owner to request access'
+      }, { status: 403 }));
+    }
+
+    // Get messages from the repository — the UNIFIED `messages` table since
+    // the message-table merge (epic "Agent-Session Single Source of Truth",
+    // Phase 4 / D6). Page scope is the join through `conversations.contextId`.
+    // `chat_messages` was DROPPED by migration 0253 — there is no dual write
+    // and no revert path.
+    const dbMessages = await messageRepository.getMessagesForPage(
       pageId,
-      conversationId || undefined
+      conversationId || undefined,
+      includeStreaming
     );
 
     // Convert to UIMessage format with tool calls and results
-    const messages = dbMessages.map(convertDbMessageToUIMessage);
+    const messages = await Promise.all(dbMessages.map(convertDbMessageToUIMessage));
+
+    auditRequest(request, { eventType: 'data.read', userId: auth.userId, resourceType: 'message', resourceId: pageId, details: {
+      source: 'ai-chat',
+      messageCount: messages.length,
+    } });
 
     return NextResponse.json(messages);
 

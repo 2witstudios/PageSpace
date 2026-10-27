@@ -6,10 +6,24 @@
  * Includes hash chain computation for tamper-evidence (SOC 2, HIPAA, GDPR compliance).
  */
 
-import { db, activityLogs, users, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
+import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { createId } from '@paralleldrive/cuid2';
 import { createHash, randomBytes } from 'crypto';
-import { desc, isNotNull } from 'drizzle-orm';
+import { desc, isNotNull, sql } from 'drizzle-orm';
+import { stableStringify } from '../utils/stable-stringify';
+import { classifyProcessing } from '../compliance/art30/classify-processing';
+import { decryptField } from '../encryption/field-crypto';
+import { isPageIdForeignKeyError } from './activity-log-errors';
+
+/**
+ * Advisory lock key for serializing activity log hash chain writes.
+ * Uses a different key than security audit (8370291546) to avoid contention.
+ * pg_advisory_xact_lock holds the lock until the transaction commits/rolls back.
+ */
+export const ACTIVITY_CHAIN_LOCK_KEY = 5829174063;
 
 /**
  * Actor info for audit logging - snapshotted at write time
@@ -23,10 +37,15 @@ export interface ActorInfo {
  * Fetch actor info from database for audit logging.
  * Returns email and display name for the given user ID.
  * Falls back to 'unknown@system' if user not found (shouldn't happen).
+ *
+ * Pass `client` when calling from inside a transaction: reading through the
+ * global pool there needs a second connection while the transaction holds one,
+ * which under pool pressure times out and writes the fallback actor into the
+ * hash-chained log.
  */
-export async function getActorInfo(userId: string): Promise<ActorInfo> {
+export async function getActorInfo(userId: string, client: typeof db = db): Promise<ActorInfo> {
   try {
-    const user = await db.query.users.findFirst({
+    const user = await client.query.users.findFirst({
       where: eq(users.id, userId),
       columns: { email: true, name: true },
     });
@@ -36,9 +55,20 @@ export async function getActorInfo(userId: string): Promise<ActorInfo> {
       return { actorEmail: 'unknown@system' };
     }
 
+    // Decrypt PII at the edge (GDPR #965): `activity_logs.actorEmail` /
+    // `actorDisplayName` are denormalized plaintext snapshots (NOT encrypted
+    // columns), so the actor email/name must be decrypted before being persisted
+    // here — otherwise a profile update during the cutover would write ciphertext
+    // blobs that activity views / Pulse summaries surface verbatim. Legacy
+    // plaintext passes through unchanged.
+    const [actorEmail, actorDisplayName] = await Promise.all([
+      decryptField(user.email),
+      decryptField(user.name),
+    ]);
+
     return {
-      actorEmail: user.email,
-      actorDisplayName: user.name ?? undefined,
+      actorEmail,
+      actorDisplayName: actorDisplayName ?? undefined,
     };
   } catch (error) {
     console.error('[ActivityLogger] Failed to fetch actor info:', error);
@@ -67,14 +97,13 @@ export interface HashChainData {
 }
 
 /**
- * Data used to compute the hash of a log entry.
- * Includes immutable fields that define the entry's content.
+ * Fields included in the tamper-evident hash chain.
+ * PII (userId, actorEmail) is deliberately excluded so the chain
+ * stays verifiable after GDPR right-to-erasure anonymization (#541).
  */
 interface HashableLogData {
   id: string;
   timestamp: Date;
-  userId: string;
-  actorEmail: string;
   operation: string;
   resourceType: string;
   resourceId: string;
@@ -111,32 +140,22 @@ export function computeHash(data: string, previousHash: string): string {
 
 /**
  * Serialize log entry data for hashing.
- * Creates a deterministic JSON string from the hashable fields.
- * Uses sorted keys to ensure consistent hash computation.
- *
- * @param data - Log entry data to serialize
- * @returns Deterministic JSON string
+ * Creates a deterministic canonical JSON string with sorted keys at every depth.
  */
 export function serializeLogDataForHash(data: HashableLogData): string {
-  // Create object with sorted keys for deterministic serialization
-  const hashableObject = {
-    id: data.id,
-    timestamp: data.timestamp.toISOString(),
-    userId: data.userId,
-    actorEmail: data.actorEmail,
-    operation: data.operation,
-    resourceType: data.resourceType,
-    resourceId: data.resourceId,
-    driveId: data.driveId,
-    pageId: data.pageId ?? null,
+  return stableStringify({
     contentSnapshot: data.contentSnapshot ?? null,
-    previousValues: data.previousValues ?? null,
-    newValues: data.newValues ?? null,
+    driveId: data.driveId,
+    id: data.id,
     metadata: data.metadata ?? null,
-  };
-
-  // JSON.stringify with sorted keys for deterministic output
-  return JSON.stringify(hashableObject, Object.keys(hashableObject).sort());
+    newValues: data.newValues ?? null,
+    operation: data.operation,
+    pageId: data.pageId ?? null,
+    previousValues: data.previousValues ?? null,
+    resourceId: data.resourceId,
+    resourceType: data.resourceType,
+    timestamp: data.timestamp.toISOString(),
+  });
 }
 
 /**
@@ -149,37 +168,6 @@ export function serializeLogDataForHash(data: HashableLogData): string {
 export function computeLogHash(data: HashableLogData, previousHash: string): string {
   const serialized = serializeLogDataForHash(data);
   return computeHash(serialized, previousHash);
-}
-
-/**
- * Get the latest log hash from the database.
- * Used to fetch the previous hash when inserting a new entry.
- * Returns null if no entries exist (starting a new chain).
- *
- * @returns Object containing the latest log hash and whether this is the first entry
- */
-export async function getLatestLogHash(): Promise<{
-  previousHash: string | null;
-  isFirstEntry: boolean;
-}> {
-  try {
-    const latestEntry = await db.query.activityLogs.findFirst({
-      where: isNotNull(activityLogs.logHash),
-      orderBy: [desc(activityLogs.timestamp)],
-      columns: { logHash: true },
-    });
-
-    if (!latestEntry?.logHash) {
-      return { previousHash: null, isFirstEntry: true };
-    }
-
-    return { previousHash: latestEntry.logHash, isFirstEntry: false };
-  } catch (error) {
-    console.error('[ActivityLogger] Failed to get latest log hash:', error);
-    // Return null on error - allows logging to continue without hash chain
-    // The hash chain can be repaired later if needed
-    return { previousHash: null, isFirstEntry: false };
-  }
 }
 
 /**
@@ -196,7 +184,7 @@ export async function getLatestLogHashWithTx(tx: typeof db): Promise<{
   try {
     const latestEntry = await tx.query.activityLogs.findFirst({
       where: isNotNull(activityLogs.logHash),
-      orderBy: [desc(activityLogs.timestamp)],
+      orderBy: [desc(activityLogs.chainSeq)],
       columns: { logHash: true },
     });
 
@@ -282,10 +270,10 @@ export type ActivityOperation =
   | 'login'
   | 'logout'
   | 'signup'
-  | 'password_change'
   | 'email_change'
   | 'token_create'
   | 'token_revoke'
+  | 'token_update'
   // File operations
   | 'upload'
   | 'convert'
@@ -304,7 +292,9 @@ export type ActivityOperation =
   | 'rollback'
   // AI conversation undo operations
   | 'conversation_undo'
-  | 'conversation_undo_with_changes';
+  | 'conversation_undo_with_changes'
+  // Agent code execution (sandbox runs)
+  | 'code_execution';
 
 export type ActivityResourceType =
   | 'page'
@@ -460,6 +450,12 @@ function prepareActivityInsert(input: ActivityLogInput) {
     };
   }
 
+  // GDPR Art 30 record-of-processing classification (#980). Derived from the
+  // operation + resourceType via a pure classifier. These fields are NOT part
+  // of the tamper-evident hash chain (serializeLogDataForHash excludes them),
+  // so stamping them here does not affect chain verification.
+  const art30 = classifyProcessing(input.operation, input.resourceType);
+
   return {
     id: createId(),
     timestamp: new Date(),
@@ -468,6 +464,10 @@ function prepareActivityInsert(input: ActivityLogInput) {
     actorDisplayName: input.actorDisplayName,
     operation: input.operation,
     resourceType: input.resourceType,
+    dataCategory: art30.dataCategory,
+    legalBasis: art30.legalBasis,
+    retentionPolicy: art30.retentionPolicy,
+    recipients: art30.recipients,
     resourceId: input.resourceId,
     resourceTitle: input.resourceTitle,
     driveId: input.driveId,
@@ -508,39 +508,45 @@ export async function logActivity(input: ActivityLogInput): Promise<void> {
   const insertActivityLog = async (pageId: string | undefined) => {
     const values = prepareActivityInsert({ ...input, pageId });
 
-    // Get the latest log hash to chain this entry
-    const { previousHash, isFirstEntry } = await getLatestLogHash();
+    // Wrap hash read + insert in a transaction with advisory lock to prevent chain forks
+    await db.transaction(async (tx) => {
+      // Acquire advisory lock scoped to this transaction.
+      // Blocks concurrent writers until this transaction completes.
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(${ACTIVITY_CHAIN_LOCK_KEY})`);
 
-    // Compute hash chain data for this entry
-    const hashChainData = computeHashChainData(
-      {
-        id: values.id,
-        timestamp: values.timestamp,
-        userId: values.userId,
-        actorEmail: values.actorEmail,
-        operation: values.operation,
-        resourceType: values.resourceType,
-        resourceId: values.resourceId,
-        driveId: values.driveId,
-        pageId: values.pageId,
-        contentSnapshot: values.contentSnapshot,
-        previousValues: values.previousValues,
-        newValues: values.newValues,
-        metadata: values.metadata,
-      },
-      previousHash,
-      isFirstEntry
-    );
+      // Read the latest log hash — safe from races under the advisory lock
+      const { previousHash, isFirstEntry } = await getLatestLogHashWithTx(tx);
 
-    // Insert with hash chain fields
-    await db.insert(activityLogs).values({
-      ...values,
-      previousLogHash: hashChainData.previousLogHash,
-      logHash: hashChainData.logHash,
-      chainSeed: hashChainData.chainSeed,
+      // Compute hash chain data for this entry
+      const hashChainData = computeHashChainData(
+        {
+          id: values.id,
+          timestamp: values.timestamp,
+          operation: values.operation,
+          resourceType: values.resourceType,
+          resourceId: values.resourceId,
+          driveId: values.driveId,
+          pageId: values.pageId,
+          contentSnapshot: values.contentSnapshot,
+          previousValues: values.previousValues,
+          newValues: values.newValues,
+          metadata: values.metadata,
+        },
+        previousHash,
+        isFirstEntry
+      );
+
+      // Insert with hash chain fields
+      await tx.insert(activityLogs).values({
+        ...values,
+        previousLogHash: hashChainData.previousLogHash,
+        logHash: hashChainData.logHash,
+        chainSeed: hashChainData.chainSeed,
+      });
     });
 
-    // Broadcast for real-time updates (fire and forget)
+    // Broadcast and workflow triggers fire OUTSIDE the transaction
+    // so they don't hold the advisory lock or risk emitting events for rolled-back writes
     if (activityBroadcastHook) {
       activityBroadcastHook({
         activityId: values.id,
@@ -562,15 +568,10 @@ export async function logActivity(input: ActivityLogInput): Promise<void> {
   try {
     await insertActivityLog(input.pageId);
   } catch (error) {
-    // Check for FK constraint violation on pageId (page was deleted during async logging)
-    const isPageIdFkError =
-      error instanceof Error &&
-      'code' in error &&
-      (error as { code: string }).code === '23503' &&
-      'constraint' in error &&
-      (error as { constraint: string }).constraint === 'activity_logs_pageId_pages_id_fk';
-
-    if (isPageIdFkError && input.pageId) {
+    // Check for FK constraint violation on pageId (page was deleted during async logging).
+    // Drizzle wraps the driver error, so the pg fields live under `.cause` - see
+    // isPageIdForeignKeyError.
+    if (isPageIdForeignKeyError(error) && input.pageId) {
       // Retry without pageId - the page was deleted but we still want to log the activity
       try {
         await insertActivityLog(undefined);
@@ -602,6 +603,9 @@ export async function logActivityWithTx(
 ): Promise<DeferredWorkflowTrigger | undefined> {
   const values = prepareActivityInsert(input);
 
+  // Acquire advisory lock to serialize hash chain writes within this transaction
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(${ACTIVITY_CHAIN_LOCK_KEY})`);
+
   // Get the latest log hash within the transaction for atomic chain computation
   const { previousHash, isFirstEntry } = await getLatestLogHashWithTx(tx);
 
@@ -610,8 +614,6 @@ export async function logActivityWithTx(
     {
       id: values.id,
       timestamp: values.timestamp,
-      userId: values.userId,
-      actorEmail: values.actorEmail,
       operation: values.operation,
       resourceType: values.resourceType,
       resourceId: values.resourceId,
@@ -958,6 +960,8 @@ export function logRoleActivity(
     driveName?: string;
     permissions?: Record<string, boolean>;
     previousPermissions?: Record<string, boolean>;
+    driveWidePermissions?: { canView: boolean; canEdit: boolean; canShare: boolean } | null;
+    previousDriveWidePermissions?: { canView: boolean; canEdit: boolean; canShare: boolean } | null;
     // For reorder operations
     previousOrder?: string[];
     newOrder?: string[];
@@ -975,10 +979,15 @@ export function logRoleActivity(
     previousValues = data.previousOrder ? { order: data.previousOrder } : undefined;
     newValues = data.newOrder ? { order: data.newOrder } : undefined;
   } else {
-    previousValues = data.previousPermissions
-      ? { permissions: data.previousPermissions }
-      : undefined;
-    newValues = data.permissions ? { permissions: data.permissions } : undefined;
+    const newValuesObj: Record<string, unknown> = {};
+    if (data.permissions !== undefined) newValuesObj.permissions = data.permissions;
+    if (data.driveWidePermissions !== undefined) newValuesObj.driveWidePermissions = data.driveWidePermissions;
+    newValues = Object.keys(newValuesObj).length > 0 ? newValuesObj : undefined;
+
+    const prevValuesObj: Record<string, unknown> = {};
+    if (data.previousPermissions !== undefined) prevValuesObj.permissions = data.previousPermissions;
+    if (data.previousDriveWidePermissions !== undefined) prevValuesObj.driveWidePermissions = data.previousDriveWidePermissions;
+    previousValues = Object.keys(prevValuesObj).length > 0 ? prevValuesObj : undefined;
   }
 
   logActivity({
@@ -1008,7 +1017,6 @@ export function logUserActivity(
     | 'signup'
     | 'login'
     | 'logout'
-    | 'password_change'
     | 'email_change'
     | 'profile_update'
     | 'avatar_update'
@@ -1055,7 +1063,7 @@ export function logUserActivity(
  */
 export function logTokenActivity(
   userId: string,
-  operation: 'token_create' | 'token_revoke',
+  operation: 'token_create' | 'token_revoke' | 'token_update',
   data: {
     tokenId: string;
     tokenType: 'device' | 'mcp' | 'api';
@@ -1101,7 +1109,7 @@ export function logFileActivity(
     fileName?: string;
     fileType?: string;
     fileSize?: number;
-    driveId: string;
+    driveId: string | null;
     pageId?: string;
   },
   options?: {
@@ -1137,7 +1145,7 @@ export function logMessageActivity(
   operation: 'create' | 'message_update' | 'message_delete',
   message: {
     id: string;
-    pageId: string;
+    pageId: string | null; // null for conversations that aren't page-backed (global assistant)
     driveId: string | null; // null for user-level conversations (global assistant)
     conversationType: 'ai_chat' | 'global' | 'channel';
   },
@@ -1160,7 +1168,7 @@ export function logMessageActivity(
     resourceType: 'message',
     resourceId: message.id,
     driveId: message.driveId,
-    pageId: message.pageId,
+    pageId: message.pageId ?? undefined,
     previousValues: options?.previousContent ? { content: options.previousContent } : undefined,
     newValues: options?.newContent ? { content: options.newContent } : undefined,
     isAiGenerated: options?.isAiGenerated ?? false,

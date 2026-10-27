@@ -1,9 +1,13 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db, count, desc, integrationAuditLog } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db'
+import { count, desc } from '@pagespace/db/operators'
+import { integrationAuditLog } from '@pagespace/db/schema/integrations';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { buildAuditLogWhereClause, parseAuditListParams } from './audit-filters';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 
@@ -22,9 +26,9 @@ export async function GET(
 
   try {
     // Require OWNER or ADMIN
-    const access = await getDriveAccess(driveId, auth.userId);
+    const access = await getDriveAccess(driveId, actorFromAuth(auth));
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Admin access required' }, { status: 403 }));
     }
 
     const { searchParams } = new URL(request.url);
@@ -47,6 +51,8 @@ export async function GET(
     ]);
 
     const total = Number(countResult[0]?.count ?? 0);
+
+    auditRequest(request, { eventType: 'data.read', userId: auth.userId, resourceType: 'integration_audit_log', resourceId: driveId, details: { action: 'view_integration_audit', count: logs.length } });
 
     return NextResponse.json({
       logs: logs.map((log) => ({

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { pages } from '@pagespace/db';
+import { pages } from '@pagespace/db/schema/core';
 
 describe('excludeFromSearch schema field', () => {
   it('existsOnPagesTable', () => {

@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { updateDriveLastAccessed } from '@pagespace/lib/services/drive-service';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -19,6 +20,7 @@ export async function POST(
     if (scopeError) return scopeError;
 
     await updateDriveLastAccessed(auth.userId, driveId);
+    auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'drive', resourceId: driveId, details: { action: 'update_last_accessed' } });
     return NextResponse.json({ success: true });
   } catch (error) {
     loggers.api.error('Failed to update drive access time', { error: error instanceof Error ? error.message : String(error) });

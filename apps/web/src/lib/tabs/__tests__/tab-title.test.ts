@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest';
 import {
   parseTabPath,
   getStaticTabMeta,
+  isDriveScopedPath,
 } from '../tab-title';
 
 describe('tab-title', () => {
@@ -70,30 +71,67 @@ describe('tab-title', () => {
       expect(result.driveId).toBe('drive-123');
     });
 
-    it('given inbox root, should return inbox type', () => {
-      const result = parseTabPath('/dashboard/inbox');
+    it('given drive files path, should return drive-files type', () => {
+      const result = parseTabPath('/dashboard/drive-123/files');
 
-      expect(result.type).toBe('inbox');
+      expect(result.type).toBe('drive-files');
+      expect(result.driveId).toBe('drive-123');
+      expect(result.pageId).toBeUndefined();
     });
 
-    it('given inbox dm conversation, should return inbox-dm type', () => {
-      const result = parseTabPath('/dashboard/inbox/dm/conv-123');
+    it('given drive workflows path, should return drive-workflows type', () => {
+      const result = parseTabPath('/dashboard/drive-123/workflows');
 
-      expect(result.type).toBe('inbox-dm');
+      expect(result.type).toBe('drive-workflows');
+      expect(result.driveId).toBe('drive-123');
+      expect(result.pageId).toBeUndefined();
+    });
+
+    it('given drive agents path, should return drive-agents type', () => {
+      const result = parseTabPath('/dashboard/drive-123/agents');
+
+      expect(result.type).toBe('drive-agents');
+      expect(result.driveId).toBe('drive-123');
+      expect(result.pageId).toBeUndefined();
+    });
+
+    it('given global agents path, should return dashboard-agents type', () => {
+      const result = parseTabPath('/dashboard/agents');
+
+      expect(result.type).toBe('dashboard-agents');
+      expect(result.driveId).toBeUndefined();
+    });
+
+    it('given dms root, should return dms type', () => {
+      const result = parseTabPath('/dashboard/dms');
+
+      expect(result.type).toBe('dms');
+    });
+
+    it('given dm conversation, should return dm type', () => {
+      const result = parseTabPath('/dashboard/dms/conv-123');
+
+      expect(result.type).toBe('dm');
       expect(result.conversationId).toBe('conv-123');
     });
 
-    it('given inbox channel, should return inbox-channel type', () => {
-      const result = parseTabPath('/dashboard/inbox/channel/page-123');
+    it('given dms new, should return dm-new type', () => {
+      const result = parseTabPath('/dashboard/dms/new');
 
-      expect(result.type).toBe('inbox-channel');
-      expect(result.pageId).toBe('page-123');
+      expect(result.type).toBe('dm-new');
     });
 
-    it('given inbox new, should return inbox-new type', () => {
-      const result = parseTabPath('/dashboard/inbox/new');
+    it('given channels root, should return channels type', () => {
+      const result = parseTabPath('/dashboard/channels');
 
-      expect(result.type).toBe('inbox-new');
+      expect(result.type).toBe('channels');
+    });
+
+    it('given channel page, should return channel type', () => {
+      const result = parseTabPath('/dashboard/channels/page-123');
+
+      expect(result.type).toBe('channel');
+      expect(result.pageId).toBe('page-123');
     });
 
     it('given settings root, should return settings type', () => {
@@ -167,10 +205,10 @@ describe('tab-title', () => {
       expect(result.driveId).toBe('drive-123');
     });
 
-    it('given drive inbox path, should return drive-inbox type', () => {
-      const result = parseTabPath('/dashboard/drive-123/inbox');
+    it('given drive channels path, should return drive-channels type', () => {
+      const result = parseTabPath('/dashboard/drive-123/channels');
 
-      expect(result.type).toBe('drive-inbox');
+      expect(result.type).toBe('drive-channels');
       expect(result.driveId).toBe('drive-123');
     });
 
@@ -298,27 +336,34 @@ describe('tab-title', () => {
       expect(meta!.iconName).toBe('Trash2');
     });
 
-    it('given inbox type, should return Inbox title', () => {
-      const meta = getStaticTabMeta({ type: 'inbox' });
+    it('given dms type, should return Direct Messages title', () => {
+      const meta = getStaticTabMeta({ type: 'dms' });
 
-      expect(meta!.title).toBe('Inbox');
-      expect(meta!.iconName).toBe('Inbox');
+      expect(meta!.title).toBe('Direct Messages');
+      expect(meta!.iconName).toBe('MessageSquare');
     });
 
-    it('given inbox-dm type, should return null (requires async lookup)', () => {
-      const meta = getStaticTabMeta({ type: 'inbox-dm', conversationId: 'conv-123' });
+    it('given channels type, should return Channels title', () => {
+      const meta = getStaticTabMeta({ type: 'channels' });
+
+      expect(meta!.title).toBe('Channels');
+      expect(meta!.iconName).toBe('Hash');
+    });
+
+    it('given dm type, should return null (requires async lookup)', () => {
+      const meta = getStaticTabMeta({ type: 'dm', conversationId: 'conv-123' });
 
       expect(meta).toBeNull();
     });
 
-    it('given inbox-channel type, should return null (requires async lookup)', () => {
-      const meta = getStaticTabMeta({ type: 'inbox-channel', pageId: 'page-123' });
+    it('given channel type, should return null (requires async lookup)', () => {
+      const meta = getStaticTabMeta({ type: 'channel', pageId: 'page-123' });
 
       expect(meta).toBeNull();
     });
 
-    it('given inbox-new type, should return New Message title', () => {
-      const meta = getStaticTabMeta({ type: 'inbox-new' });
+    it('given dm-new type, should return New Message title', () => {
+      const meta = getStaticTabMeta({ type: 'dm-new' });
 
       expect(meta!.title).toBe('New Message');
       expect(meta!.iconName).toBe('PenSquare');
@@ -399,10 +444,10 @@ describe('tab-title', () => {
       expect(meta!.iconName).toBe('Calendar');
     });
 
-    it('given dashboard-drives type, should return Drives title', () => {
+    it('given dashboard-drives type, should return the Files title, as the page is titled', () => {
       const meta = getStaticTabMeta({ type: 'dashboard-drives' });
 
-      expect(meta!.title).toBe('Drives');
+      expect(meta!.title).toBe('Files');
       expect(meta!.iconName).toBe('Folder');
     });
 
@@ -414,11 +459,39 @@ describe('tab-title', () => {
       expect(meta!.iconName).toBe('Calendar');
     });
 
-    it('given drive-inbox type, should return Inbox title', () => {
-      const meta = getStaticTabMeta({ type: 'drive-inbox', driveId: 'drive-123' });
+    it('given drive-channels type, should return Channels title', () => {
+      const meta = getStaticTabMeta({ type: 'drive-channels', driveId: 'drive-123' });
 
-      expect(meta!.title).toBe('Inbox');
-      expect(meta!.iconName).toBe('Inbox');
+      expect(meta!.title).toBe('Channels');
+      expect(meta!.iconName).toBe('Hash');
+    });
+
+    it('given drive-files type, should return Files title', () => {
+      const meta = getStaticTabMeta({ type: 'drive-files', driveId: 'drive-123' });
+
+      expect(meta!.title).toBe('Files');
+      expect(meta!.iconName).toBe('Folder');
+    });
+
+    it('given drive-workflows type, should return Workflows title', () => {
+      const meta = getStaticTabMeta({ type: 'drive-workflows', driveId: 'drive-123' });
+
+      expect(meta!.title).toBe('Workflows');
+      expect(meta!.iconName).toBe('Workflow');
+    });
+
+    it('given drive-agents type, should return Agents title', () => {
+      const meta = getStaticTabMeta({ type: 'drive-agents', driveId: 'drive-123' });
+
+      expect(meta!.title).toBe('Agents');
+      expect(meta!.iconName).toBe('Bot');
+    });
+
+    it('given dashboard-agents type, should return Agents title', () => {
+      const meta = getStaticTabMeta({ type: 'dashboard-agents' });
+
+      expect(meta!.title).toBe('Agents');
+      expect(meta!.iconName).toBe('Bot');
     });
 
     // Members sub-routes
@@ -512,5 +585,40 @@ describe('tab-title', () => {
 
       expect(meta!.title).toBe('Personalization');
     });
+  });
+});
+
+// isDriveScopedPath prefix-matches `drive-*`, so a future drive-level PathType
+// named something else would silently reintroduce the bug it was added to fix
+// (the assistant losing the workspace on drive sub-routes) with no compile
+// error. This sweeps every drive route shape parseTabPath can actually return
+// and asserts the predicate holds for all of them.
+describe('isDriveScopedPath', () => {
+  const DRIVE_SECTIONS = [
+    'tasks', 'activity', 'members', 'settings',
+    'trash', 'calendar', 'channels', 'files', 'workflows', 'agents',
+  ];
+
+  it('holds for the bare drive route and every drive section', () => {
+    const paths = ['/dashboard/drive-1', ...DRIVE_SECTIONS.map((s) => `/dashboard/drive-1/${s}`),
+      '/dashboard/drive-1/members/invite', '/dashboard/drive-1/members/user-9'];
+    for (const path of paths) {
+      const parsed = parseTabPath(path);
+      expect({ path, scoped: isDriveScopedPath(parsed) }).toEqual({ path, scoped: true });
+    }
+  });
+
+  // A page route also carries a driveId, but callers handle it separately (it
+  // resolves to routeType 'page', which already carries the drive).
+  it('does not claim page routes, global routes, or the drive list', () => {
+    for (const path of ['/dashboard/drives', '/dashboard/tasks', '/dashboard/calendar',
+      '/dashboard/agents', '/dashboard/channels/c1', '/settings/account', '/dashboard']) {
+      const parsed = parseTabPath(path);
+      expect({ path, scoped: isDriveScopedPath(parsed) }).toEqual({ path, scoped: false });
+    }
+  });
+
+  it('requires a driveId, not merely a drive-shaped type', () => {
+    expect(isDriveScopedPath({ type: 'drive-tasks' })).toBe(false);
   });
 });

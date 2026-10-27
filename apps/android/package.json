@@ -3,17 +3,19 @@
   "version": "1.0.0",
   "description": "PageSpace Android App - Native wrapper for PageSpace using Capacitor",
   "private": true,
-  "license": "AGPL-3.0",
+  "license": "UNLICENSED",
   "scripts": {
-    "build": "pnpm exec cap sync android",
-    "build:full": "pnpm --filter web build && pnpm exec cap sync android",
-    "dev": "pnpm exec cap open android",
-    "sync": "pnpm exec cap sync android",
-    "update": "pnpm exec cap update android",
-    "add-platform": "pnpm exec cap add android",
-    "run": "pnpm exec cap run android"
+    "build": "bun x cap sync android",
+    "build:full": "bun run --filter 'web' build && bun x cap sync android",
+    "dev": "bun x cap open android",
+    "sync": "bun x cap sync android",
+    "update": "bun x cap update android",
+    "add-platform": "bun x cap add android",
+    "run": "bun x cap run android",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@capawesome/capacitor-badge": "^7.0.0",
     "@capacitor/app": "^7.0.3",
     "@capacitor/browser": "^7.0.3",
     "@capacitor/core": "^7.4.5",

@@ -1,11 +1,17 @@
 import { NextResponse } from 'next/server';
-import { db, sql } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { sql } from '@pagespace/db/operators';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, getBatchPagePermissions } from '@pagespace/lib/server';
-import type { InboxItem, InboxResponse } from '@pagespace/lib';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { decryptFieldValuesOnce } from '@pagespace/lib/encryption/field-crypto';
+import type { InboxItem, InboxResponse } from '@pagespace/lib/types';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { toISOTimestamp } from '@/lib/utils/timestamp';
 import type { ChannelRow, DMRow } from '@/types/messaging';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 
@@ -14,6 +20,7 @@ export async function GET(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
+    const actor = actorFromAuth(auth);
     const userId = auth.userId;
 
     const { searchParams } = new URL(request.url);
@@ -24,11 +31,25 @@ export async function GET(request: Request) {
     });
     const cursor = searchParams.get('cursor'); // ISO timestamp or "id:<id>" for null timestamps
     const driveId = searchParams.get('driveId'); // Optional: filter to specific drive
+    const typeParam = searchParams.get('type');
+    const type: 'dm' | 'channel' | 'all' =
+      typeParam === 'dm' || typeParam === 'channel' ? typeParam : 'all';
+
+    if (type === 'dm' && driveId) {
+      return NextResponse.json(
+        { error: 'type=dm cannot be combined with driveId (DMs are user-scoped)' },
+        { status: 400 }
+      );
+    }
 
     // Fetch one extra row to determine if there are more results
     const fetchLimit = limit + 1;
 
     const items: InboxItem[] = [];
+
+    // Channel candidate drives: the ones the user is a member of, owned or joined (org-aware).
+    // getBatchPagePermissions below stays the access decision.
+    const memberDriveIds = type === 'dm' ? [] : await getMemberDriveIds(actor, { includeTrashed: true });
 
     if (driveId) {
       // Parse cursor - can be ISO timestamp or "id:<channelId>" for null timestamps
@@ -46,11 +67,24 @@ export async function GET(request: Request) {
             d.name as drive_name
           FROM pages p
           INNER JOIN drives d ON d.id = p."driveId"
-          LEFT JOIN drive_members dm ON dm."driveId" = d.id AND dm."userId" = ${userId}
+          -- Candidate filter only; getBatchPagePermissions below is the access
+          -- decision. An explicit grant beats membership there, so a channel
+          -- shared with someone outside the drive must survive to be asked
+          -- about. Expiry uses now() at time zone utc because expiresAt is a
+          -- UTC wall clock stored without a zone: a bare now() would compare it
+          -- against the session zone and be wrong in both directions.
+          LEFT JOIN page_permissions pp
+            ON pp."pageId" = p.id
+            AND pp."userId" = ${userId}
+            AND pp."canView" = true
+            AND (pp."expiresAt" IS NULL OR pp."expiresAt" > (now() at time zone 'utc'))
           WHERE p.type = 'CHANNEL'
             AND p."isTrashed" = false
             AND p."driveId" = ${driveId}
-            AND (d."ownerId" = ${userId} OR dm."userId" IS NOT NULL)
+            AND (
+              p."driveId" = ANY(${sql.param(memberDriveIds)}::text[])
+              OR pp."userId" IS NOT NULL
+            )
         ),
         channel_last_messages AS (
           SELECT DISTINCT ON (cm."pageId")
@@ -68,7 +102,8 @@ export async function GET(request: Request) {
           FROM channel_messages cm
           LEFT JOIN channel_read_status crs
             ON crs."channelId" = cm."pageId" AND crs."userId" = ${userId}
-          WHERE cm."createdAt" > COALESCE(crs."lastReadAt", '1970-01-01'::timestamp)
+          WHERE cm."isActive" = true
+            AND cm."createdAt" > COALESCE(crs."lastReadAt", '1970-01-01'::timestamp)
             AND (
               cm."userId" != ${userId}
               OR cm."aiMeta"->>'senderType' = 'agent'
@@ -97,14 +132,30 @@ export async function GET(request: Request) {
       `);
 
       const channelPermissions = await getBatchPagePermissions(
-        userId,
+        actor,
         channelResults.rows.map((row) => row.id)
       );
+      // Permission-filter BEFORE decrypting: a non-viewable channel's sender
+      // PII must never enter the decrypt batch (an undecryptable value there
+      // would otherwise fail the whole request, where it used to be skipped).
+      const visibleChannelRows = channelResults.rows.filter(
+        (row) => channelPermissions.get(row.id)?.canView
+      );
 
-      for (const row of channelResults.rows) {
-        const permissions = channelPermissions.get(row.id);
-        if (!permissions?.canView) continue;
+      // Paginate BEFORE decrypting so rows the page limit discards never
+      // enter the decrypt batch (the fetch reads limit + 1 rows).
+      const hasMore = visibleChannelRows.length > limit;
+      const pageRows = visibleChannelRows.slice(0, limit);
 
+      // Decrypt PII at the edge (GDPR #965): sender_name COALESCEs an AI senderName
+      // (plaintext) with users.name (ciphertext). The rows carry no user ids, so
+      // dedup is keyed by the stored value itself — the same user repeated across
+      // rows repeats the same stored ciphertext, which is exactly one decrypt.
+      const lookupSenderName = await decryptFieldValuesOnce(
+        pageRows.map((row) => row.sender_name)
+      );
+
+      for (const row of pageRows) {
         items.push({
           id: row.id,
           type: 'channel',
@@ -112,23 +163,22 @@ export async function GET(request: Request) {
           avatarUrl: null,
           lastMessageAt: toISOTimestamp(row.last_message_at),
           lastMessagePreview: row.last_message ? row.last_message.substring(0, 100) : null,
-          lastMessageSender: row.sender_name,
+          lastMessageSender: lookupSenderName(row.sender_name),
           unreadCount: parseInt(row.unread_count) || 0,
           driveId: row.drive_id,
           driveName: row.drive_name,
         });
       }
 
-      // Determine pagination for drive-specific query
-      const hasMore = items.length > limit;
-      const paginatedItems = items.slice(0, limit);
-      const lastItem = paginatedItems[paginatedItems.length - 1];
+      const lastItem = items[items.length - 1];
       const nextCursor = lastItem
         ? lastItem.lastMessageAt || `id:${lastItem.id}`
         : null;
 
+      auditRequest(request, { eventType: 'data.read', userId, resourceType: 'inbox', resourceId: 'self' });
+
       return NextResponse.json({
-        items: paginatedItems,
+        items,
         pagination: {
           hasMore,
           nextCursor,
@@ -142,172 +192,231 @@ export async function GET(request: Request) {
       const cursorId = isIdCursor ? cursor.slice(3) : null;
       const cursorTimestamp = !isIdCursor && cursor ? cursor : null;
 
-      // Fetch DM conversations with cursor filtering
-      const dmResults = await db.execute<DMRow>(sql`
-        WITH dm_data AS (
+      // Fetch DM conversations with cursor filtering (skipped when filter excludes DMs)
+      let dmRows: DMRow[] = [];
+      if (type !== 'channel') {
+        const dmResults = await db.execute<DMRow>(sql`
+          WITH dm_data AS (
+            SELECT
+              c.id,
+              c."lastMessageAt",
+              c."lastMessagePreview",
+              CASE
+                WHEN c."participant1Id" = ${userId} THEN c."participant2Id"
+                ELSE c."participant1Id"
+              END as other_user_id
+            FROM dm_conversations c
+            WHERE c."participant1Id" = ${userId} OR c."participant2Id" = ${userId}
+          ),
+          unread_counts AS (
+            SELECT
+              dm."conversationId",
+              COUNT(*) as unread_count
+            FROM direct_messages dm
+            INNER JOIN dm_data dd ON dm."conversationId" = dd.id
+            WHERE dm."senderId" = dd.other_user_id
+              AND dm."isRead" = false
+              AND dm."isActive" = true
+            GROUP BY dm."conversationId"
+          )
           SELECT
-            c.id,
-            c."lastMessageAt",
-            c."lastMessagePreview",
-            CASE
-              WHEN c."participant1Id" = ${userId} THEN c."participant2Id"
-              ELSE c."participant1Id"
-            END as other_user_id
-          FROM dm_conversations c
-          WHERE c."participant1Id" = ${userId} OR c."participant2Id" = ${userId}
-        ),
-        unread_counts AS (
-          SELECT
-            dm."conversationId",
-            COUNT(*) as unread_count
-          FROM direct_messages dm
-          INNER JOIN dm_data dd ON dm."conversationId" = dd.id
-          WHERE dm."senderId" = dd.other_user_id
-            AND dm."isRead" = false
-          GROUP BY dm."conversationId"
-        )
-        SELECT
-          dd.id,
-          dd."lastMessageAt" as last_message_at,
-          dd."lastMessagePreview" as last_message,
-          u.name as other_user_name,
-          up."displayName" as other_user_display_name,
-          up."avatarUrl" as other_user_avatar_url,
-          COALESCE(uc.unread_count, 0) as unread_count
-        FROM dm_data dd
-        LEFT JOIN users u ON u.id = dd.other_user_id
-        LEFT JOIN user_profiles up ON up."userId" = dd.other_user_id
-        LEFT JOIN unread_counts uc ON uc."conversationId" = dd.id
-        ${cursorTimestamp
-          ? sql`WHERE (dd."lastMessageAt" < ${cursorTimestamp} OR dd."lastMessageAt" IS NULL)`
-          : cursorId
-            ? sql`WHERE dd."lastMessageAt" IS NULL AND dd.id < ${cursorId}`
-            : sql``}
-        ORDER BY dd."lastMessageAt" DESC NULLS LAST
-        LIMIT ${fetchLimit}
-      `);
-
-      for (const row of dmResults.rows) {
-        items.push({
-          id: row.id,
-          type: 'dm',
-          name: row.other_user_display_name || row.other_user_name,
-          avatarUrl: row.other_user_avatar_url,
-          lastMessageAt: toISOTimestamp(row.last_message_at),
-          lastMessagePreview: row.last_message,
-          lastMessageSender: null,
-          unreadCount: parseInt(row.unread_count) || 0,
-        });
+            dd.id,
+            dd."lastMessageAt" as last_message_at,
+            dd."lastMessagePreview" as last_message,
+            u.name as other_user_name,
+            u.image as other_user_image,
+            up."displayName" as other_user_display_name,
+            up."avatarUrl" as other_user_avatar_url,
+            COALESCE(uc.unread_count, 0) as unread_count
+          FROM dm_data dd
+          LEFT JOIN users u ON u.id = dd.other_user_id
+          LEFT JOIN user_profiles up ON up."userId" = dd.other_user_id
+          LEFT JOIN unread_counts uc ON uc."conversationId" = dd.id
+          ${cursorTimestamp
+            ? sql`WHERE (dd."lastMessageAt" < ${cursorTimestamp} OR dd."lastMessageAt" IS NULL)`
+            : cursorId
+              ? sql`WHERE dd."lastMessageAt" IS NULL AND dd.id < ${cursorId}`
+              : sql``}
+          ORDER BY dd."lastMessageAt" DESC NULLS LAST
+          LIMIT ${fetchLimit}
+        `);
+        dmRows = dmResults.rows;
       }
 
-      // Fetch channels from all drives user is member of or owns
-      const channelResults = await db.execute<ChannelRow>(sql`
-        WITH user_channels AS (
+      // Fetch channels from all drives user is member of or owns (skipped when filter excludes channels)
+      let visibleChannelRows: ChannelRow[] = [];
+      if (type !== 'dm') {
+        const channelResults = await db.execute<ChannelRow>(sql`
+          WITH user_channels AS (
+            SELECT
+              p.id,
+              p.title,
+              p."driveId",
+              d.name as drive_name
+            FROM pages p
+            INNER JOIN drives d ON d.id = p."driveId"
+            -- Candidate filter only. Same member-drive set and predicate as the drive-scoped
+            -- query above and as countChannelUnread in
+            -- apps/web/src/app/api/sidebar/badges/route.ts, which is why the nav
+            -- badge and these pills agree about which channels exist; change one
+            -- and change all three.
+            LEFT JOIN page_permissions pp
+              ON pp."pageId" = p.id
+              AND pp."userId" = ${userId}
+              AND pp."canView" = true
+              AND (pp."expiresAt" IS NULL OR pp."expiresAt" > (now() at time zone 'utc'))
+            WHERE p.type = 'CHANNEL'
+              AND p."isTrashed" = false
+              AND (
+                p."driveId" = ANY(${sql.param(memberDriveIds)}::text[])
+                OR pp."userId" IS NOT NULL
+              )
+          ),
+          channel_last_messages AS (
+            SELECT DISTINCT ON (cm."pageId")
+              cm."pageId",
+              cm.content as last_message,
+              cm."createdAt" as last_message_at,
+              COALESCE(cm."aiMeta"->>'senderName', u.name) as sender_name
+            FROM channel_messages cm
+            INNER JOIN user_channels uc ON uc.id = cm."pageId"
+            LEFT JOIN users u ON u.id = cm."userId"
+            ORDER BY cm."pageId", cm."createdAt" DESC
+          ),
+          channel_unread AS (
+            SELECT cm."pageId", COUNT(*) as unread_count
+            FROM channel_messages cm
+            LEFT JOIN channel_read_status crs
+              ON crs."channelId" = cm."pageId" AND crs."userId" = ${userId}
+            WHERE cm."isActive" = true
+              AND cm."createdAt" > COALESCE(crs."lastReadAt", '1970-01-01'::timestamp)
+              AND (
+                cm."userId" != ${userId}
+                OR cm."aiMeta"->>'senderType' = 'agent'
+              )
+            GROUP BY cm."pageId"
+          )
           SELECT
-            p.id,
-            p.title,
-            p."driveId",
-            d.name as drive_name
-          FROM pages p
-          INNER JOIN drives d ON d.id = p."driveId"
-          LEFT JOIN drive_members dm ON dm."driveId" = d.id AND dm."userId" = ${userId}
-          WHERE p.type = 'CHANNEL'
-            AND p."isTrashed" = false
-            AND (d."ownerId" = ${userId} OR dm."userId" IS NOT NULL)
-        ),
-        channel_last_messages AS (
-          SELECT DISTINCT ON (cm."pageId")
-            cm."pageId",
-            cm.content as last_message,
-            cm."createdAt" as last_message_at,
-            COALESCE(cm."aiMeta"->>'senderName', u.name) as sender_name
-          FROM channel_messages cm
-          INNER JOIN user_channels uc ON uc.id = cm."pageId"
-          LEFT JOIN users u ON u.id = cm."userId"
-          ORDER BY cm."pageId", cm."createdAt" DESC
-        ),
-        channel_unread AS (
-          SELECT cm."pageId", COUNT(*) as unread_count
-          FROM channel_messages cm
-          LEFT JOIN channel_read_status crs
-            ON crs."channelId" = cm."pageId" AND crs."userId" = ${userId}
-          WHERE cm."createdAt" > COALESCE(crs."lastReadAt", '1970-01-01'::timestamp)
-            AND (
-              cm."userId" != ${userId}
-              OR cm."aiMeta"->>'senderType' = 'agent'
-            )
-          GROUP BY cm."pageId"
-        )
-        SELECT
-          uc.id,
-          uc.title as name,
-          uc."driveId" as drive_id,
-          uc.drive_name,
-          clm.last_message,
-          clm.last_message_at,
-          clm.sender_name,
-          COALESCE(cu.unread_count, 0) as unread_count
-        FROM user_channels uc
-        LEFT JOIN channel_last_messages clm ON clm."pageId" = uc.id
-        LEFT JOIN channel_unread cu ON cu."pageId" = uc.id
-        ${cursorTimestamp
-          ? sql`WHERE (clm.last_message_at < ${cursorTimestamp} OR clm.last_message_at IS NULL)`
-          : cursorId
-            ? sql`WHERE clm.last_message_at IS NULL AND uc.id < ${cursorId}`
-            : sql``}
-        ORDER BY clm.last_message_at DESC NULLS LAST
-        LIMIT ${fetchLimit}
-      `);
-
-      const channelPermissions = await getBatchPagePermissions(
-        userId,
-        channelResults.rows.map((row) => row.id)
-      );
-
-      for (const row of channelResults.rows) {
-        const permissions = channelPermissions.get(row.id);
-        if (!permissions?.canView) continue;
-
-        items.push({
-          id: row.id,
-          type: 'channel',
-          name: row.name,
-          avatarUrl: null,
-          lastMessageAt: toISOTimestamp(row.last_message_at),
-          lastMessagePreview: row.last_message ? row.last_message.substring(0, 100) : null,
-          lastMessageSender: row.sender_name,
-          unreadCount: parseInt(row.unread_count) || 0,
-          driveId: row.drive_id,
-          driveName: row.drive_name,
-        });
+            uc.id,
+            uc.title as name,
+            uc."driveId" as drive_id,
+            uc.drive_name,
+            clm.last_message,
+            clm.last_message_at,
+            clm.sender_name,
+            COALESCE(cu.unread_count, 0) as unread_count
+          FROM user_channels uc
+          LEFT JOIN channel_last_messages clm ON clm."pageId" = uc.id
+          LEFT JOIN channel_unread cu ON cu."pageId" = uc.id
+          ${cursorTimestamp
+            ? sql`WHERE (clm.last_message_at < ${cursorTimestamp} OR clm.last_message_at IS NULL)`
+            : cursorId
+              ? sql`WHERE clm.last_message_at IS NULL AND uc.id < ${cursorId}`
+              : sql``}
+          ORDER BY clm.last_message_at DESC NULLS LAST
+          LIMIT ${fetchLimit}
+        `);
+        const channelPermissions = await getBatchPagePermissions(
+          actor,
+          channelResults.rows.map((row) => row.id)
+        );
+        // Permission-filter BEFORE decrypting: a non-viewable channel's sender
+        // PII must never enter the decrypt batch (an undecryptable value there
+        // would otherwise fail the whole request, where it used to be skipped).
+        visibleChannelRows = channelResults.rows.filter(
+          (row) => channelPermissions.get(row.id)?.canView
+        );
       }
+
+      // Combine both feeds and sort/paginate BEFORE decrypting, so rows the
+      // page limit discards never enter the decrypt batch. DMs are appended
+      // first so equal/null-timestamp ordering (stable sort) matches the
+      // previous item insertion order byte for byte.
+      type PendingInboxRow =
+        | { kind: 'dm'; row: DMRow; lastMessageAt: string | null }
+        | { kind: 'channel'; row: ChannelRow; lastMessageAt: string | null };
+      const pendingRows: PendingInboxRow[] = [
+        ...dmRows.map((row) => ({
+          kind: 'dm' as const,
+          row,
+          lastMessageAt: toISOTimestamp(row.last_message_at),
+        })),
+        ...visibleChannelRows.map((row) => ({
+          kind: 'channel' as const,
+          row,
+          lastMessageAt: toISOTimestamp(row.last_message_at),
+        })),
+      ];
 
       // Sort combined results by lastMessageAt
-      items.sort((a, b) => {
+      pendingRows.sort((a, b) => {
         if (!a.lastMessageAt && !b.lastMessageAt) return 0;
         if (!a.lastMessageAt) return 1;
         if (!b.lastMessageAt) return -1;
         return new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime();
       });
+
+      const hasMore = pendingRows.length > limit;
+      const pageRows = pendingRows.slice(0, limit);
+
+      // Decrypt PII at the edge (GDPR #965): one batched decrypt for the rows
+      // that survive pagination. Profile displayName and AI senderName stay
+      // plaintext; users.name is ciphertext (the value-keyed lookup handles
+      // both). DM names whose profile displayName already wins are excluded,
+      // matching the previous short-circuit.
+      const lookupName = await decryptFieldValuesOnce(
+        pageRows.map((pending) =>
+          pending.kind === 'dm'
+            ? (pending.row.other_user_display_name ? null : pending.row.other_user_name)
+            : pending.row.sender_name
+        )
+      );
+
+      for (const pending of pageRows) {
+        if (pending.kind === 'dm') {
+          const { row } = pending;
+          items.push({
+            id: row.id,
+            type: 'dm',
+            name: (row.other_user_display_name || lookupName(row.other_user_name)) ?? '',
+            avatarUrl: row.other_user_image || row.other_user_avatar_url,
+            lastMessageAt: pending.lastMessageAt,
+            lastMessagePreview: row.last_message,
+            lastMessageSender: null,
+            unreadCount: parseInt(row.unread_count) || 0,
+          });
+        } else {
+          const { row } = pending;
+          items.push({
+            id: row.id,
+            type: 'channel',
+            name: row.name,
+            avatarUrl: null,
+            lastMessageAt: pending.lastMessageAt,
+            lastMessagePreview: row.last_message ? row.last_message.substring(0, 100) : null,
+            lastMessageSender: lookupName(row.sender_name),
+            unreadCount: parseInt(row.unread_count) || 0,
+            driveId: row.drive_id,
+            driveName: row.drive_name,
+          });
+        }
+      }
+
+      const lastItem = items[items.length - 1];
+      const nextCursor = lastItem
+        ? lastItem.lastMessageAt || `id:${lastItem.id}`
+        : null;
+
+      auditRequest(request, { eventType: 'data.read', userId, resourceType: 'inbox', resourceId: 'self' });
+
+      return NextResponse.json({
+        items,
+        pagination: {
+          hasMore,
+          nextCursor,
+        },
+      } satisfies InboxResponse);
     }
-
-    // Apply limit - cursor filtering is already done in SQL queries
-    const paginatedItems = items.slice(0, limit);
-
-    // Determine pagination info
-    const hasMore = items.length > limit;
-    const lastItem = paginatedItems[paginatedItems.length - 1];
-    const nextCursor = lastItem
-      ? lastItem.lastMessageAt || `id:${lastItem.id}`
-      : null;
-
-    return NextResponse.json({
-      items: paginatedItems,
-      pagination: {
-        hasMore,
-        nextCursor,
-      },
-    } satisfies InboxResponse);
   } catch (error) {
     loggers.api.error('Error fetching inbox:', error as Error);
     return NextResponse.json(

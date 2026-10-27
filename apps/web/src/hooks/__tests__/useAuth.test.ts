@@ -97,6 +97,35 @@ const {
 });
 
 // Mock dependencies with hoisted mocks
+const { mockClearNativeSession, mockGetStoredSession, bridgeState } = vi.hoisted(() => ({
+  mockClearNativeSession: vi.fn(async () => {}),
+  mockGetStoredSession: vi.fn(async () => null),
+  bridgeState: { failsToLoad: false },
+}));
+
+// The capability lookup is a dynamic import inside logout's `finally`. A getter
+// that throws stands in for a chunk that will not load: the destructure at the
+// call site raises exactly as a rejected import would.
+vi.mock('@/lib/capacitor-bridge', () => ({
+  get hasNativeCapability() {
+    if (bridgeState.failsToLoad) throw new Error('Loading chunk failed');
+    return (capability: string) => capability === 'secureStore' && isNativeMock;
+  },
+}));
+
+let isNativeMock = false;
+
+// Logout has to clear the native secure store on every platform that has one.
+// Android writes to the same keychain under the same key as iOS, so this is
+// mocked at the platform-storage seam rather than at the iOS module.
+vi.mock('@/lib/auth/platform-storage', () => ({
+  getPlatformStorage: () => ({
+    platform: 'android' as const,
+    clearSession: mockClearNativeSession,
+    getStoredSession: mockGetStoredSession,
+  }),
+}));
+
 vi.mock('next/navigation', () => ({
   useRouter: () => ({
     push: mockPush,
@@ -149,9 +178,6 @@ vi.mock('@/stores/useAuthStore', () => {
 // Import after mocks
 import { useAuth } from '../useAuth';
 
-type UseAuthReturn = ReturnType<typeof useAuth>;
-type LoginResult = Awaited<ReturnType<UseAuthReturn['actions']['login']>>;
-
 // Mock localStorage
 const mockLocalStorage = (() => {
   let store: Record<string, string> = {};
@@ -160,6 +186,8 @@ const mockLocalStorage = (() => {
     setItem: vi.fn((key: string, value: string) => { store[key] = value; }),
     removeItem: vi.fn((key: string) => { delete store[key]; }),
     clear: vi.fn(() => { store = {}; }),
+    key: vi.fn((index: number) => Object.keys(store)[index] ?? null),
+    get length() { return Object.keys(store).length; },
   };
 })();
 Object.defineProperty(global, 'localStorage', {
@@ -174,6 +202,10 @@ describe('useAuth', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockLocalStorage.clear();
+
+    // Seed deviceToken to prevent lazy device registration from firing
+    // (tests that need to verify registration behavior should clear this)
+    mockLocalStorage.setItem('deviceToken', 'ps_dev_existing_token');
 
     // Reset mock auth store state
     mockAuthStore.user = null;
@@ -223,116 +255,6 @@ describe('useAuth', () => {
     });
   });
 
-  describe('login', () => {
-    it('given valid credentials, should update store with user and return success', async () => {
-      const userData = { id: 'user-123', name: 'Test User', email: 'test@example.com' };
-      vi.mocked(global.fetch).mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve(userData),
-      } as Response);
-
-      const { result } = renderHook(() => useAuth());
-
-      let loginResult: LoginResult | undefined;
-      await act(async () => {
-        loginResult = await result.current.actions.login('test@example.com', 'password123');
-      });
-
-      // Primary: observable return value
-      expect(loginResult).toEqual({ success: true });
-      // Primary: observable state change - user is now set
-      expect(mockAuthStore.setUser).toHaveBeenCalledWith(userData);
-      // Verify state transition occurred
-      expect(mockAuthStore.user).toEqual(userData);
-      expect(mockAuthStore.isAuthenticated).toBe(true);
-    });
-
-    it('given invalid credentials, should return error without changing auth state', async () => {
-      vi.mocked(global.fetch).mockResolvedValue({
-        ok: false,
-        json: () => Promise.resolve({ error: 'Invalid credentials' }),
-      } as Response);
-
-      const { result } = renderHook(() => useAuth());
-
-      let loginResult: LoginResult | undefined;
-      await act(async () => {
-        loginResult = await result.current.actions.login('test@example.com', 'wrongpassword');
-      });
-
-      // Primary: observable error return
-      expect(loginResult).toEqual({ success: false, error: 'Invalid credentials' });
-      // Primary: state unchanged
-      expect(mockAuthStore.user).toBeNull();
-      expect(mockAuthStore.isAuthenticated).toBe(false);
-    });
-
-    it('given network error, should return generic error without changing auth state', async () => {
-      vi.mocked(global.fetch).mockRejectedValue(new Error('Network error'));
-      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => { });
-
-      const { result } = renderHook(() => useAuth());
-
-      let loginResult: LoginResult | undefined;
-      await act(async () => {
-        loginResult = await result.current.actions.login('test@example.com', 'password');
-      });
-
-      // Primary: observable error return
-      expect(loginResult).toEqual({ success: false, error: 'Network error. Please try again.' });
-      // Primary: state unchanged
-      expect(mockAuthStore.user).toBeNull();
-      consoleError.mockRestore();
-    });
-
-    it('given deviceToken in response, should persist to localStorage', async () => {
-      const userData = { id: 'user-123', deviceToken: 'device-token-abc' };
-      vi.mocked(global.fetch).mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve(userData),
-      } as Response);
-
-      const { result } = renderHook(() => useAuth());
-
-      await act(async () => {
-        await result.current.actions.login('test@example.com', 'password');
-      });
-
-      // Observable: deviceToken persisted
-      expect(mockLocalStorage.setItem).toHaveBeenCalledWith('deviceToken', 'device-token-abc');
-    });
-
-    it('should include device information in login request body', async () => {
-      // Mock both CSRF fetch (first call) and login fetch (second call)
-      vi.mocked(global.fetch)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({ csrfToken: 'test-csrf-token' }),
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({ id: 'user-123' }),
-        } as Response);
-
-      const { result } = renderHook(() => useAuth());
-
-      await act(async () => {
-        await result.current.actions.login('test@example.com', 'password');
-      });
-
-      // Observable: API called with correct payload (parse JSON for accurate assertion)
-      // Note: calls[0] is CSRF token fetch, calls[1] is the login call
-      expect(global.fetch).toHaveBeenCalledTimes(2);
-      const [, init] = vi.mocked(global.fetch).mock.calls[1] ?? [];
-      const body = JSON.parse(String((init as RequestInit | undefined)?.body ?? '{}')) as {
-        deviceId?: string;
-        deviceName?: string;
-      };
-      expect(body.deviceId).toBe('device-123');
-      expect(body.deviceName).toBe('Test Device');
-    });
-  });
-
   describe('logout', () => {
     it('should clear session and redirect to signin', async () => {
       // Setup authenticated state
@@ -373,6 +295,51 @@ describe('useAuth', () => {
       consoleError.mockRestore();
     });
 
+    it('clears the native secure-storage session on a native shell', async () => {
+      // Regression: an iOS-only branch here left a revoked session in the
+      // Android keychain for fetchWithAuth to keep presenting until a 401.
+      mockPost.mockResolvedValue({ ok: true });
+      isNativeMock = true;
+
+      const { result } = renderHook(() => useAuth());
+      await act(async () => {
+        await result.current.actions.logout();
+      });
+
+      expect(mockClearNativeSession).toHaveBeenCalled();
+      isNativeMock = false;
+    });
+
+    it('does not reach for a native store in a plain browser tab', async () => {
+      mockPost.mockResolvedValue({ ok: true });
+
+      const { result } = renderHook(() => useAuth());
+      await act(async () => {
+        await result.current.actions.logout();
+      });
+
+      expect(mockClearNativeSession).not.toHaveBeenCalled();
+    });
+
+    it('finishes the logout even if the capability lookup cannot load', async () => {
+      // This runs in logout's `finally`, so anything escaping here skips the
+      // localStorage clear, the store reset and the redirect — stranding the
+      // user in a half-logged-out shell over a chunk that would not load.
+      mockPost.mockResolvedValue({ ok: true });
+      bridgeState.failsToLoad = true;
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const { result } = renderHook(() => useAuth());
+      await act(async () => {
+        await result.current.actions.logout();
+      });
+
+      expect(mockLocalStorage.removeItem).toHaveBeenCalledWith('deviceToken');
+      expect(mockPush).toHaveBeenCalledWith('/auth/signin');
+      bridgeState.failsToLoad = false;
+      consoleError.mockRestore();
+    });
+
     it('should clear deviceToken from localStorage', async () => {
       mockPost.mockResolvedValue({ ok: true });
 
@@ -384,6 +351,23 @@ describe('useAuth', () => {
 
       // Observable: localStorage cleared
       expect(mockLocalStorage.removeItem).toHaveBeenCalledWith('deviceToken');
+    });
+
+    it('should purge every saved create-organization setup plan, and nothing else', async () => {
+      mockPost.mockResolvedValue({ ok: true });
+      mockLocalStorage.setItem('pagespace.orgSetup.u_a.org_1', '{"driveIds":["d1"],"invites":[],"selfEmail":"a@x.io","driveNames":{}}');
+      mockLocalStorage.setItem('pagespace.orgSetup.u_b.org_2', '{"driveIds":["d2"],"invites":[],"selfEmail":"b@x.io","driveNames":{}}');
+      mockLocalStorage.setItem('unrelated', 'kept');
+
+      const { result } = renderHook(() => useAuth());
+
+      await act(async () => {
+        await result.current.actions.logout();
+      });
+
+      expect(mockLocalStorage.getItem('pagespace.orgSetup.u_a.org_1')).toBeNull();
+      expect(mockLocalStorage.getItem('pagespace.orgSetup.u_b.org_2')).toBeNull();
+      expect(mockLocalStorage.getItem('unrelated')).toBe('kept');
     });
   });
 

@@ -20,7 +20,7 @@ describe('CanvasPageView save lifecycle', () => {
   describe('debounced save', () => {
     it('given a content update, should mark document as dirty immediately', () => {
       const store = useDocumentManagerStore.getState();
-      store.createDocument('page-1', 'initial', 'html');
+      store.upsertDocument('page-1', 'initial', 'html');
 
       store.updateDocument('page-1', {
         content: 'updated content',
@@ -35,7 +35,7 @@ describe('CanvasPageView save lifecycle', () => {
 
     it('given save completes with matching version, should clear isDirty', () => {
       const store = useDocumentManagerStore.getState();
-      store.createDocument('page-1', 'initial', 'html');
+      store.upsertDocument('page-1', 'initial', 'html');
 
       // Simulate: edit sets isDirty, then save succeeds and clears it
       store.updateDocument('page-1', { content: 'edited', isDirty: true });
@@ -47,7 +47,7 @@ describe('CanvasPageView save lifecycle', () => {
 
     it('given newer edits arrive during save, should keep isDirty true (version guard)', () => {
       const store = useDocumentManagerStore.getState();
-      store.createDocument('page-1', 'initial', 'html');
+      store.upsertDocument('page-1', 'initial', 'html');
 
       // Simulate: version 1 edit starts save
       store.updateDocument('page-1', { content: 'v1', isDirty: true });
@@ -67,7 +67,7 @@ describe('CanvasPageView save lifecycle', () => {
   describe('error propagation', () => {
     it('given save fails, should keep document dirty for retry', () => {
       const store = useDocumentManagerStore.getState();
-      store.createDocument('page-1', 'initial', 'html');
+      store.upsertDocument('page-1', 'initial', 'html');
 
       store.updateDocument('page-1', { content: 'unsaved edit', isDirty: true });
 
@@ -83,7 +83,7 @@ describe('CanvasPageView save lifecycle', () => {
   describe('unmount force-save', () => {
     it('given dirty document on unmount, should preserve document state until save completes', () => {
       const store = useDocumentManagerStore.getState();
-      store.createDocument('page-1', 'initial', 'html');
+      store.upsertDocument('page-1', 'initial', 'html');
       store.updateDocument('page-1', { content: 'dirty content', isDirty: true });
 
       // Simulate: unmount detects dirty doc — save is in-flight
@@ -96,7 +96,7 @@ describe('CanvasPageView save lifecycle', () => {
 
     it('given clean document on unmount, should clear document immediately', () => {
       const store = useDocumentManagerStore.getState();
-      store.createDocument('page-1', 'initial', 'html');
+      store.upsertDocument('page-1', 'initial', 'html');
 
       // Document is not dirty — clearDocument is safe immediately
       store.clearDocument('page-1');
@@ -107,7 +107,7 @@ describe('CanvasPageView save lifecycle', () => {
 
     it('given save succeeds after unmount, should clear document state', () => {
       const store = useDocumentManagerStore.getState();
-      store.createDocument('page-1', 'initial', 'html');
+      store.upsertDocument('page-1', 'initial', 'html');
       store.updateDocument('page-1', { content: 'dirty', isDirty: true });
 
       // Simulate: save succeeded in the .then() callback
@@ -119,7 +119,7 @@ describe('CanvasPageView save lifecycle', () => {
 
     it('given save fails after unmount, should keep document for recovery', () => {
       const store = useDocumentManagerStore.getState();
-      store.createDocument('page-1', 'initial', 'html');
+      store.upsertDocument('page-1', 'initial', 'html');
       store.updateDocument('page-1', { content: 'dirty', isDirty: true });
 
       // Simulate: save failed — .catch() handler runs, document NOT cleared
@@ -133,7 +133,7 @@ describe('CanvasPageView save lifecycle', () => {
   describe('updateContentFromServer guard', () => {
     it('given no pending local save, should accept server content', () => {
       const store = useDocumentManagerStore.getState();
-      store.createDocument('page-1', 'initial', 'html');
+      store.upsertDocument('page-1', 'initial', 'html');
 
       // Simulate: no saveTimeoutRef, so server update applies
       store.updateDocument('page-1', {
@@ -150,7 +150,7 @@ describe('CanvasPageView save lifecycle', () => {
 
     it('given pending local save, should preserve local content (not overwrite)', () => {
       const store = useDocumentManagerStore.getState();
-      store.createDocument('page-1', 'initial', 'html');
+      store.upsertDocument('page-1', 'initial', 'html');
 
       // Simulate: user edited locally, save is pending
       store.updateDocument('page-1', { content: 'local edit', isDirty: true });

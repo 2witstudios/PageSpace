@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
-import { builtinProviderList, listEnabledProviders } from '@pagespace/lib/integrations';
+import { db } from '@pagespace/db/db';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { builtinProviderList } from '@pagespace/lib/integrations/providers/builtin-providers';
+import { listEnabledProviders } from '@pagespace/lib/integrations/repositories/provider-repository';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 
@@ -26,6 +28,8 @@ export async function GET(request: Request) {
         description: b.description ?? null,
         documentationUrl: b.documentationUrl ?? null,
       }));
+
+    auditRequest(request, { eventType: 'data.read', userId: auth.userId, resourceType: 'available_providers', resourceId: 'list', details: { availableCount: available.length } });
 
     return NextResponse.json({ providers: available });
   } catch (error) {

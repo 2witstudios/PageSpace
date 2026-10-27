@@ -5,7 +5,7 @@ import { usePageNavigation } from '@/hooks/usePageNavigation';
 import { Search, ExternalLink, FileText, Hash } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { PageTypeIcon } from '@/components/common/PageTypeIcon';
-import { PageType } from '@pagespace/lib/client-safe';
+import { PageType } from '@pagespace/lib/utils/enums';
 
 interface SearchMatch {
   lineNumber?: number;

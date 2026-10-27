@@ -1,32 +1,34 @@
 import { Router, Request, Response } from 'express';
 import multer from 'multer';
-import { promises as fs } from 'fs';
-import path from 'path';
+import {
+  PutObjectCommand,
+  GetObjectCommand,
+  ListObjectsV2Command,
+  DeleteObjectsCommand,
+} from '@aws-sdk/client-s3';
 import { hasAuthScope } from '../middleware/auth';
-import { rateLimitUpload } from '../middleware/rate-limit';
+import { rateLimitUpload, rateLimitRead } from '../middleware/rate-limit';
 import { processorLogger } from '../logger';
+import { createS3Client, getS3Bucket } from '../s3-client';
 import {
   DEFAULT_IMAGE_EXTENSION,
   normalizeIdentifier,
-  resolvePathWithin,
   sanitizeExtension,
   IDENTIFIER_PATTERN,
 } from '../utils/security';
 
 const router: Router = Router();
 
-// Apply rate limiting to all avatar endpoints
 router.use(rateLimitUpload);
 
-// Configure multer for memory storage
 const storage = multer.memoryStorage();
 const upload = multer({
   storage,
   limits: {
     fileSize: 5 * 1024 * 1024, // 5MB limit
   },
+  /* c8 ignore next 8 -- callback invoked by multer internals, not reachable in unit tests */
   fileFilter: (req, file, cb) => {
-    // Allow only image files
     const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
     if (allowedTypes.includes(file.mimetype)) {
       cb(null, true);
@@ -36,12 +38,64 @@ const upload = multer({
   },
 });
 
-const STORAGE_ROOT = path.resolve(process.env.FILE_STORAGE_PATH || '/data/files');
-const AVATAR_ROOT = resolvePathWithin(STORAGE_ROOT, 'avatars');
-
-if (!AVATAR_ROOT) {
-  throw new Error('Invalid avatar storage configuration');
+let _s3: ReturnType<typeof createS3Client> | null = null;
+function s3() {
+  if (!_s3) _s3 = createS3Client();
+  return _s3;
 }
+
+const CONTENT_TYPE_MAP: Record<string, string> = {
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+};
+
+function avatarKey(userId: string, ext: string): string {
+  return `avatars/${userId}/avatar${ext}`;
+}
+
+export async function deleteUserAvatars(userId: string): Promise<void> {
+  const bucket = getS3Bucket();
+  const listed = await s3().send(new ListObjectsV2Command({ Bucket: bucket, Prefix: `avatars/${userId}/` }));
+  const objects = listed.Contents ?? [];
+  if (objects.length === 0) return;
+  await s3().send(new DeleteObjectsCommand({
+    Bucket: bucket,
+    Delete: { Objects: objects.flatMap(o => o.Key ? [{ Key: o.Key }] : []), Quiet: true },
+  }));
+}
+
+// Public read endpoint — serves avatar images directly.
+// No service auth required; avatars are public.
+router.get('/:userId/:filename', rateLimitRead, async (req: Request<{ userId: string; filename: string }>, res: Response) => {
+  const userId = normalizeIdentifier(req.params.userId, IDENTIFIER_PATTERN);
+  if (!userId) {
+    return res.status(400).json({ error: 'Invalid user ID format' });
+  }
+
+  const ext = sanitizeExtension(req.params.filename, DEFAULT_IMAGE_EXTENSION);
+  const key = avatarKey(userId, ext);
+
+  try {
+    const response = await s3().send(new GetObjectCommand({ Bucket: getS3Bucket(), Key: key }));
+    if (!response.Body) return res.status(404).end();
+    const bytes = await response.Body.transformToByteArray();
+    const extension = ext.slice(1).toLowerCase();
+    const contentType = CONTENT_TYPE_MAP[extension] || 'image/jpeg';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    return res.send(Buffer.from(bytes));
+  } catch (err) {
+    const isNotFound = err && typeof err === 'object' && ('$metadata' in err
+      ? (err as { $metadata: { httpStatusCode?: number } }).$metadata.httpStatusCode === 404
+      : (err as { name?: string }).name === 'NoSuchKey');
+    if (!isNotFound) processorLogger.warn('Avatar S3 read error', { key, err: String(err) });
+    return res.status(404).end();
+  }
+});
 
 // Avatar upload endpoint
 router.post('/upload', upload.single('file'), async (req: Request, res: Response) => {
@@ -60,7 +114,7 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
 
     if (!userId) {
       processorLogger.warn('Avatar upload rejected: invalid user ID', {
-        providedUserId: req.body?.userId
+        providedUserId: req.body?.userId,
       });
       return res.status(400).json({ error: 'Invalid user ID format' });
     }
@@ -73,46 +127,19 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
       return res.status(403).json({ error: 'Cannot modify avatar for another user' });
     }
 
-    const avatarsDir = resolvePathWithin(AVATAR_ROOT, userId);
-    if (!avatarsDir) {
-      processorLogger.warn('Avatar upload rejected: unsafe directory resolution', {
-        userId
-      });
-      return res.status(400).json({ error: 'Invalid avatar path' });
-    }
+    // Replace old avatar before writing new one (best-effort — don't fail the upload if cleanup fails)
+    try { await deleteUserAvatars(userId); } catch { /* non-fatal */ }
 
-    // Create user's avatar directory if it doesn't exist
-    await fs.mkdir(avatarsDir, { recursive: true });
-
-    // Delete old avatar if it exists
-    try {
-      const files = await fs.readdir(avatarsDir);
-      for (const oldFile of files) {
-        if (oldFile.startsWith('avatar.')) {
-          const safeOldPath = resolvePathWithin(avatarsDir, oldFile);
-          if (safeOldPath) {
-            await fs.unlink(safeOldPath);
-          }
-        }
-      }
-    } catch (error) {
-      // Directory might not exist yet, that's ok
-    }
-
-    // Save the new avatar
     const extension = sanitizeExtension(file.originalname, DEFAULT_IMAGE_EXTENSION);
     const filename = `avatar${extension}`;
-    const filepath = resolvePathWithin(avatarsDir, filename);
+    const key = avatarKey(userId, extension);
 
-    if (!filepath) {
-      processorLogger.warn('Avatar upload rejected: unsafe file path resolution', {
-        userId,
-        filename
-      });
-      return res.status(400).json({ error: 'Invalid avatar path' });
-    }
-
-    await fs.writeFile(filepath, file.buffer);
+    await s3().send(new PutObjectCommand({
+      Bucket: getS3Bucket(),
+      Key: key,
+      Body: file.buffer,
+      ContentType: file.mimetype,
+    }));
 
     res.json({
       success: true,
@@ -120,10 +147,10 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
       path: `/avatars/${userId}/${filename}`,
     });
   } catch (error) {
-    console.error('Avatar upload error:', error);
+    processorLogger.error('Avatar upload error', error instanceof Error ? error : null);
     res.status(500).json({
       error: 'Failed to upload avatar',
-      details: error instanceof Error ? error.message : 'Unknown error'
+      details: error instanceof Error ? error.message : 'Unknown error',
     });
   }
 });
@@ -140,7 +167,7 @@ router.delete('/:userId', async (req: Request, res: Response) => {
 
     if (!userId) {
       processorLogger.warn('Avatar delete rejected: invalid user ID', {
-        providedUserId: req.params?.userId
+        providedUserId: req.params?.userId,
       });
       return res.status(400).json({ error: 'Invalid user ID format' });
     }
@@ -153,42 +180,14 @@ router.delete('/:userId', async (req: Request, res: Response) => {
       return res.status(403).json({ error: 'Cannot delete avatar for another user' });
     }
 
-    const avatarsDir = resolvePathWithin(AVATAR_ROOT, userId);
+    await deleteUserAvatars(userId);
 
-    if (!avatarsDir) {
-      processorLogger.warn('Avatar delete rejected: unsafe directory resolution', {
-        userId
-      });
-      return res.status(400).json({ error: 'Invalid avatar path' });
-    }
-
-    // Delete all avatar files for this user
-    try {
-      const files = await fs.readdir(avatarsDir);
-      for (const file of files) {
-        if (file.startsWith('avatar.')) {
-          const filePath = resolvePathWithin(avatarsDir, file);
-          if (filePath) {
-            await fs.unlink(filePath);
-          }
-        }
-      }
-      // Optionally remove the empty directory
-      await fs.rmdir(avatarsDir);
-    } catch (error) {
-      // Directory or files might not exist, that's ok
-      console.log('Avatar deletion - directory not found or already empty');
-    }
-
-    res.json({
-      success: true,
-      message: 'Avatar deleted successfully',
-    });
+    res.json({ success: true, message: 'Avatar deleted successfully' });
   } catch (error) {
-    console.error('Avatar deletion error:', error);
+    processorLogger.error('Avatar deletion error', error instanceof Error ? error : null);
     res.status(500).json({
       error: 'Failed to delete avatar',
-      details: error instanceof Error ? error.message : 'Unknown error'
+      details: error instanceof Error ? error.message : 'Unknown error',
     });
   }
 });

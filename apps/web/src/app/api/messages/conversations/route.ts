@@ -1,8 +1,13 @@
 import { NextResponse } from 'next/server';
-import { db, dmConversations, connections, eq, and, or, sql } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, or, sql } from '@pagespace/db/operators'
+import { dmConversations, connections } from '@pagespace/db/schema/social';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
-import { isEmailVerified } from '@pagespace/lib';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
+import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
+import { usersShareDrive } from '@pagespace/lib/permissions/permissions';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { toISOTimestamp } from '@/lib/utils/timestamp';
 import type { ConversationRow } from '@/types/messaging';
@@ -63,6 +68,7 @@ export async function GET(request: Request) {
         INNER JOIN conversation_data cd ON dm."conversationId" = cd.id
         WHERE dm."senderId" = cd.other_user_id
           AND dm."isRead" = false
+          AND dm."isActive" = true
         GROUP BY dm."conversationId"
       )
       SELECT
@@ -90,7 +96,20 @@ export async function GET(request: Request) {
       ORDER BY cd."lastMessageAt" DESC NULLS LAST
     `);
 
+    // Decrypt PII at the edge so the DM list shows plaintext name/email —
+    // batched once per request per unique counterpart, not once per row.
+    const decryptedOtherUsersById = await decryptUsersByIdOnce(
+      conversationDetails.rows.map((row) =>
+        row.other_user_id
+          ? { id: row.other_user_id, name: row.other_user_name, email: row.other_user_email }
+          : null
+      )
+    );
+
     const conversations = conversationDetails.rows.map((row) => {
+      const decryptedOtherUser = row.other_user_id
+        ? decryptedOtherUsersById.get(row.other_user_id)
+        : undefined;
       return {
         id: row.id,
         participant1Id: row.participant1Id,
@@ -103,8 +122,10 @@ export async function GET(request: Request) {
         lastRead: toISOTimestamp(row.last_read),
         otherUser: {
           id: row.other_user_id,
-          name: row.other_user_name,
-          email: row.other_user_email,
+          // Fail closed: on a missing join row emit null, never the raw
+          // (potentially ciphertext) column value.
+          name: decryptedOtherUser?.name ?? null,
+          email: decryptedOtherUser?.email ?? null,
           image: row.other_user_image,
           username: row.other_user_username,
           displayName: row.other_user_display_name,
@@ -119,6 +140,8 @@ export async function GET(request: Request) {
     const nextCursor = conversations.length > 0
       ? conversations[conversations.length - 1].lastMessageAt
       : null;
+
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'conversation', resourceId: 'self', details: { count: conversations.length } });
 
     return NextResponse.json({
       conversations,
@@ -173,9 +196,11 @@ export async function POST(request: Request) {
       );
     }
 
-    // Check if users are connected
-    const [connection] = await db
-      .select()
+    // Block precedence: a BLOCKED relationship denies DMs even when the users
+    // share a drive. Otherwise, eligibility = accepted connection OR shared
+    // drive membership.
+    const [relationship] = await db
+      .select({ status: connections.status })
       .from(connections)
       .where(
         and(
@@ -189,14 +214,28 @@ export async function POST(request: Request) {
               eq(connections.user2Id, userId)
             )
           ),
-          eq(connections.status, 'ACCEPTED')
+          or(
+            eq(connections.status, 'ACCEPTED'),
+            eq(connections.status, 'BLOCKED')
+          )
         )
       )
       .limit(1);
 
-    if (!connection) {
+    if (relationship?.status === 'BLOCKED') {
       return NextResponse.json(
-        { error: 'You must be connected to start a conversation' },
+        { error: 'You can\'t message this user' },
+        { status: 403 }
+      );
+    }
+
+    const isEligible =
+      relationship?.status === 'ACCEPTED' ||
+      (await usersShareDrive(userId, recipientId));
+
+    if (!isEligible) {
+      return NextResponse.json(
+        { error: 'You can\'t message this user' },
         { status: 403 }
       );
     }

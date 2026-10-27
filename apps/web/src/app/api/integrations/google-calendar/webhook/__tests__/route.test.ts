@@ -9,14 +9,16 @@ vi.mock('@/lib/integrations/google-calendar/sync-service', () => ({
 }));
 
 // Mock loggers
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       warn: vi.fn(),
       error: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 // Mock next/server after() - it executes the callback synchronously in tests
@@ -324,7 +326,7 @@ describe('Google Calendar Webhook Route', () => {
 
   describe('logging', () => {
     it('given auth failure, should log with channel/resource IDs', async () => {
-      const { loggers } = await import('@pagespace/lib/server');
+      const { loggers } = await import('@pagespace/lib/logging/logger-config');
 
       const request = createWebhookRequest({
         channelId: 'log-test-channel',
@@ -346,7 +348,7 @@ describe('Google Calendar Webhook Route', () => {
     });
 
     it('given successful auth, should log sync trigger with userId', async () => {
-      const { loggers } = await import('@pagespace/lib/server');
+      const { loggers } = await import('@pagespace/lib/logging/logger-config');
       const userId = 'log-user-123';
       const token = generateWebhookToken(userId);
 

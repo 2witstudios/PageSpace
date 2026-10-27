@@ -10,6 +10,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { blogPosts, formatDate } from "./data";
 import { ShareButtons } from "./ShareButtons";
+import { FREE_STARTER_CREDITS_DISPLAY } from "@/lib/credits";
 import { APP_URL, SITE_URL } from "@/lib/metadata";
 import { JsonLd, createArticleSchema } from "@/lib/schema";
 
@@ -128,7 +129,7 @@ export default async function BlogPostPage(
             )}
 
             {/* Content */}
-            <div className="prose prose-lg prose-neutral dark:prose-invert max-w-none prose-headings:font-semibold prose-headings:tracking-tight prose-h2:text-2xl prose-h2:mt-12 prose-h2:mb-4 prose-p:leading-relaxed prose-p:text-muted-foreground prose-li:text-muted-foreground prose-strong:text-foreground prose-strong:font-semibold prose-a:text-primary prose-a:no-underline hover:prose-a:underline prose-code:text-sm prose-code:bg-muted prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded-md prose-code:before:content-none prose-code:after:content-none prose-pre:bg-muted/60 prose-pre:text-foreground prose-pre:border prose-pre:border-border/50 prose-pre:rounded-xl prose-pre:[&_code]:bg-transparent prose-blockquote:border-l-primary/50 prose-blockquote:text-muted-foreground prose-hr:border-border">
+            <div className="prose prose-lg prose-neutral dark:prose-invert max-w-none prose-headings:font-semibold prose-headings:tracking-tight prose-h2:text-2xl prose-h2:mt-12 prose-h2:mb-4 prose-p:leading-relaxed prose-p:text-muted-foreground prose-li:text-muted-foreground prose-strong:text-foreground prose-strong:font-semibold prose-a:text-primary prose-a:no-underline hover:prose-a:underline prose-code:text-sm prose-code:bg-muted prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded-md prose-code:before:content-none prose-code:after:content-none prose-pre:bg-muted/60 prose-pre:text-foreground prose-pre:border prose-pre:border-border/50 prose-pre:rounded-xl prose-pre:[&_code]:bg-transparent prose-blockquote:border-l-primary/50 prose-blockquote:text-muted-foreground prose-hr:border-border prose-img:rounded-xl prose-img:border prose-img:border-border prose-img:shadow-sm prose-em:text-muted-foreground/80 prose-em:text-sm">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
                 {post.content}
               </ReactMarkdown>
@@ -151,7 +152,8 @@ export default async function BlogPostPage(
           <div className="mx-auto max-w-2xl text-center">
             <h2 className="text-2xl font-bold mb-4">Ready to try PageSpace?</h2>
             <p className="text-muted-foreground mb-6">
-              Start free with generous limits. No credit card required.
+              Start free with {FREE_STARTER_CREDITS_DISPLAY} credits. No credit card
+              required.
             </p>
             <Button size="lg" asChild>
               <a href={`${APP_URL}/auth/signup`} rel="noopener">

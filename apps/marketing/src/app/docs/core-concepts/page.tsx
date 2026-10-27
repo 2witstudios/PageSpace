@@ -38,24 +38,24 @@ The tree hierarchy isn't just organization — it's **semantics**. Moving a page
 
 This spatial-semantic model drives three systems:
 
-- **Permissions**: Drive owners have full access; page permissions are per-user on specific pages
+- **Permissions**: Drive members see the drive's non-private pages by default; owners and admins see everything, and per-page grants or privacy handle the exceptions
 - **AI context**: An AI agent inside a project folder understands that project
 - **Navigation**: Breadcrumbs, tree views, and search all operate on the hierarchy
 
 ## 3. Context Flows Through the Tree
 
-**Permissions flow downward.** If you own a drive, you own every page in it. Page-level permissions grant specific access to specific users on specific pages.
+**Drive membership is open by default.** Members see every page in the drive that isn't marked private, so a teammate added to the drive can already navigate the whole tree — no per-page grants required. Mark a page private to drop it from that baseline. Explicit per-page grants (for private pages, or for people who aren't drive members) are per-page only and don't inherit from a parent to its children.
 
-**AI context flows upward.** An AI agent nested inside a folder can reference its sibling and parent pages. This means:
+**AI agents are location-aware.** An agent's system prompt is automatically populated with its drive, its breadcrumb path, and the page it lives on.
 
 \`\`\`
 📁 Marketing Campaign/
 ├── 📄 Brand Guidelines
 ├── 📄 Target Audience
-└── 🤖 Campaign AI          ← Can reference Brand Guidelines and Target Audience
+└── 🤖 Campaign AI          ← Knows its path is "Marketing Campaign / Campaign AI"
 \`\`\`
 
-The Campaign AI inherits context from its location. It knows about Brand Guidelines and Target Audience because they're siblings in the same folder. This context awareness is automatic — no configuration required.
+That path is the hook. To pull in Brand Guidelines or Target Audience, the agent calls workspace tools like \`list_pages\` or \`read_page\` — the tree tells it where to look; the tools fetch the content.
 
 ## 4. Drives Are the Root of Ownership
 
@@ -87,13 +87,7 @@ Benefits:
 - **Real-time sync**: Socket.IO broadcasts database changes to all connected users
 - **No data loss**: Messages are never stored only in memory
 
-## 7. Tags Are Orthogonal Context
-
-While the tree encodes **structural** meaning (this document belongs to this project), tags encode **cross-cutting** context (this document is a draft, high priority, or tagged "Q1").
-
-Tags are additive metadata — they never override structural meaning. Pages can be filtered, grouped, or surfaced across the tree using tags.
-
-## 8. Recursive UI Mirrors the Data Model
+## 7. Recursive UI Mirrors the Data Model
 
 The frontend isn't a set of disjoint apps — it's a recursive viewer of a recursive model. The same page tree powers:
 

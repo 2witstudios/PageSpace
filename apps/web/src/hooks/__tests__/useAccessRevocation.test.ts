@@ -56,10 +56,9 @@ describe('useAccessRevocation', () => {
   it('given socket connected, should register access_revoked listener', () => {
     renderHook(() => useAccessRevocation());
 
-    expect(mockSocket.on).toHaveBeenCalledWith(
-      'access_revoked',
-      expect.any(Function)
-    );
+    expect(mockSocket.on).toHaveBeenCalledTimes(1);
+    expect(mockSocket.on.mock.calls[0][0]).toBe('access_revoked');
+    expect(typeof mockSocket.on.mock.calls[0][1]).toBe('function');
   });
 
   it('given hook unmounts, should remove access_revoked listener', () => {
@@ -67,10 +66,9 @@ describe('useAccessRevocation', () => {
 
     unmount();
 
-    expect(mockSocket.off).toHaveBeenCalledWith(
-      'access_revoked',
-      expect.any(Function)
-    );
+    expect(mockSocket.off).toHaveBeenCalledTimes(1);
+    expect(mockSocket.off.mock.calls[0][0]).toBe('access_revoked');
+    expect(typeof mockSocket.off.mock.calls[0][1]).toBe('function');
   });
 
   describe('when access_revoked event received', () => {
@@ -83,7 +81,7 @@ describe('useAccessRevocation', () => {
       );
       const handler = handlerCall?.[1];
 
-      expect(handler).toBeDefined();
+      expect(typeof handler).toBe('function');
 
       // Simulate revocation event
       act(() => {

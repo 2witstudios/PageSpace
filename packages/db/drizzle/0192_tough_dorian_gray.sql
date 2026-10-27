@@ -1,0 +1,1 @@
+ALTER TABLE "custom_domains" ADD COLUMN "platform_owned" boolean DEFAULT false NOT NULL;

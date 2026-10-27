@@ -1,0 +1,603 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, GetObjectCommand, CopyObjectCommand } from '@aws-sdk/client-s3';
+import {
+  buildPublishedKey,
+  putPublishedArtifact,
+  buildSiteFileKey,
+  putPublishedSiteFile,
+  publishedArtifactExists,
+  deletePublishedArtifact,
+  copyPublishedArtifact,
+  isPublishConfigured,
+  buildAssetKey,
+  buildAssetUrl,
+  buildAssetUrlFromKey,
+  getPublishAssetBaseUrl,
+  copyAssetToPublishBucket,
+  copyObjectToPublishBucket,
+  clearPublishedPrefix,
+  copyPublishedSiteFileArtifact,
+  createPublishedObjectStore,
+} from '../published-storage';
+
+const send = vi.fn();
+const HASH = 'a'.repeat(64);
+
+vi.mock('server-only', () => ({}));
+
+// POL-4: every write into a published prefix asks the policy layer first. The default here is "writable"; the
+// refusal tests below make it reject.
+const assertPrefixWritable = vi.hoisted(() => vi.fn(async (_prefix: string) => {}));
+vi.mock('@pagespace/lib/organizations/published-visibility', () => ({ assertPrefixWritable }));
+
+// Mock only the S3Client constructor (capture .send); keep the real command
+// classes so `instanceof` checks below still hold.
+vi.mock('@aws-sdk/client-s3', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@aws-sdk/client-s3')>();
+  return { ...actual, S3Client: vi.fn(() => ({ send })) };
+});
+
+describe('buildPublishedKey', () => {
+  it('maps the root path to a single index.html with no double slash', () => {
+    expect(buildPublishedKey('acme', '')).toBe('published/acme/index.html');
+  });
+
+  it('maps a nested path under the subdomain prefix', () => {
+    expect(buildPublishedKey('acme', 'about/team')).toBe(
+      'published/acme/about/team/index.html',
+    );
+  });
+
+  it('lowercases path segments', () => {
+    expect(buildPublishedKey('acme', 'About/Team')).toBe(
+      'published/acme/about/team/index.html',
+    );
+  });
+
+  it('strips parent-traversal segments, collapsing to the root', () => {
+    const key = buildPublishedKey('acme', '../../etc');
+    expect(key).toBe('published/acme/etc/index.html');
+    expect(key).not.toContain('..');
+    expect(key.startsWith('published/acme/')).toBe(true);
+  });
+
+  it('keeps interleaved traversal attempts under the subdomain prefix', () => {
+    const key = buildPublishedKey('acme', 'a/../../b');
+    expect(key).toBe('published/acme/a/b/index.html');
+    expect(key).not.toContain('..');
+    expect(key.startsWith('published/acme/')).toBe(true);
+  });
+
+  it('treats a traversal-only path as root', () => {
+    expect(buildPublishedKey('acme', '../..')).toBe('published/acme/index.html');
+  });
+});
+
+describe('putPublishedArtifact', () => {
+  beforeEach(() => {
+    send.mockReset();
+    send.mockResolvedValue({});
+    process.env.PUBLISH_BUCKET = 'test-bucket';
+  });
+
+  it('sends a PutObjectCommand with the right bucket, key, body, and content type', async () => {
+    const result = await putPublishedArtifact({
+      subdomain: 'acme',
+      path: 'about/team',
+      html: '<!doctype html><html></html>',
+    });
+
+    expect(result).toEqual({ key: 'published/acme/about/team/index.html' });
+    expect(send).toHaveBeenCalledTimes(1);
+
+    const command = send.mock.calls[0][0];
+    expect(command).toBeInstanceOf(PutObjectCommand);
+    expect(command.input).toEqual({
+      Bucket: 'test-bucket',
+      Key: 'published/acme/about/team/index.html',
+      Body: '<!doctype html><html></html>',
+      ContentType: 'text/html; charset=utf-8',
+    });
+  });
+});
+
+describe('buildSiteFileKey', () => {
+  it('places site files at a literal key directly under the subdomain prefix', () => {
+    expect(buildSiteFileKey('acme', 'robots.txt')).toBe('published/acme/robots.txt');
+    expect(buildSiteFileKey('acme', 'sitemap.xml')).toBe('published/acme/sitemap.xml');
+    expect(buildSiteFileKey('acme', '404.html')).toBe('published/acme/404.html');
+  });
+});
+
+describe('putPublishedSiteFile', () => {
+  beforeEach(() => {
+    send.mockReset();
+    send.mockResolvedValue({});
+    process.env.PUBLISH_BUCKET = 'test-bucket';
+  });
+
+  it('writes robots.txt as text/plain at the subdomain-root key', async () => {
+    const result = await putPublishedSiteFile({ prefix: 'acme', file: 'robots.txt', body: 'User-agent: *' });
+
+    expect(result).toEqual({ key: 'published/acme/robots.txt' });
+    const command = send.mock.calls[0][0];
+    expect(command).toBeInstanceOf(PutObjectCommand);
+    expect(command.input).toEqual({
+      Bucket: 'test-bucket',
+      Key: 'published/acme/robots.txt',
+      Body: 'User-agent: *',
+      ContentType: 'text/plain; charset=utf-8',
+    });
+  });
+
+  it('writes sitemap.xml as application/xml', async () => {
+    await putPublishedSiteFile({ prefix: 'acme', file: 'sitemap.xml', body: '<urlset/>' });
+    expect(send.mock.calls[0][0].input.ContentType).toBe('application/xml; charset=utf-8');
+  });
+
+  it('writes 404.html as text/html', async () => {
+    await putPublishedSiteFile({ prefix: 'acme', file: '404.html', body: '<!doctype html>' });
+    expect(send.mock.calls[0][0].input.ContentType).toBe('text/html; charset=utf-8');
+  });
+});
+
+describe('publishedArtifactExists', () => {
+  beforeEach(() => {
+    send.mockReset();
+    process.env.PUBLISH_BUCKET = 'test-bucket';
+  });
+
+  it('returns true and sends a HeadObjectCommand when the object is present', async () => {
+    send.mockResolvedValue({});
+
+    const exists = await publishedArtifactExists('published/acme/index.html');
+
+    expect(exists).toBe(true);
+    const command = send.mock.calls[0][0];
+    expect(command).toBeInstanceOf(HeadObjectCommand);
+    expect(command.input).toEqual({ Bucket: 'test-bucket', Key: 'published/acme/index.html' });
+  });
+
+  it('returns false on a NotFound error', async () => {
+    send.mockRejectedValue(Object.assign(new Error('not found'), { name: 'NotFound' }));
+    await expect(publishedArtifactExists('published/acme/index.html')).resolves.toBe(false);
+  });
+
+  it('returns false on a 404 status', async () => {
+    send.mockRejectedValue(Object.assign(new Error('nope'), { $metadata: { httpStatusCode: 404 } }));
+    await expect(publishedArtifactExists('published/acme/index.html')).resolves.toBe(false);
+  });
+
+  it('propagates non-404 errors rather than reporting a false negative', async () => {
+    send.mockRejectedValue(Object.assign(new Error('access denied'), { $metadata: { httpStatusCode: 403 } }));
+    await expect(publishedArtifactExists('published/acme/index.html')).rejects.toThrow('access denied');
+  });
+});
+
+describe('deletePublishedArtifact', () => {
+  beforeEach(() => {
+    send.mockReset();
+    send.mockResolvedValue({});
+    process.env.PUBLISH_BUCKET = 'test-bucket';
+  });
+
+  it('sends a DeleteObjectCommand with the right bucket and key (and one for its paused twin, POL-4)', async () => {
+    await deletePublishedArtifact('published/acme/index.html');
+
+    expect(send).toHaveBeenCalledTimes(2);
+    const command = send.mock.calls[0][0];
+    expect(command).toBeInstanceOf(DeleteObjectCommand);
+    expect(command.input).toEqual({
+      Bucket: 'test-bucket',
+      Key: 'published/acme/index.html',
+    });
+    expect(send.mock.calls[1][0].input).toEqual({ Bucket: 'test-bucket', Key: 'suspended/acme/index.html' });
+  });
+
+  it('a key outside the public prefix has no paused twin: exactly one delete', async () => {
+    await deletePublishedArtifact('assets/abc');
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('copyPublishedArtifact', () => {
+  beforeEach(() => {
+    send.mockReset();
+    send.mockResolvedValue({});
+    process.env.PUBLISH_BUCKET = 'test-bucket';
+  });
+
+  it('sends a CopyObjectCommand within the publish bucket', async () => {
+    await copyPublishedArtifact(
+      'published/acme/about/index.html',
+      'published/acme/index.html',
+    );
+
+    expect(send).toHaveBeenCalledTimes(1);
+    const command = send.mock.calls[0][0];
+    expect(command).toBeInstanceOf(CopyObjectCommand);
+    expect(command.input).toMatchObject({
+      Bucket: 'test-bucket',
+      CopySource: 'test-bucket/published/acme/about/index.html',
+      Key: 'published/acme/index.html',
+      ContentType: 'text/html; charset=utf-8',
+      MetadataDirective: 'REPLACE',
+    });
+  });
+
+  it('uses the publish bucket for both source and destination', async () => {
+    process.env.PUBLISH_BUCKET = 'my-site-bucket';
+    await copyPublishedArtifact('published/sub/slug/index.html', 'published/sub/index.html');
+
+    const command = send.mock.calls[0][0];
+    expect(command.input.Bucket).toBe('my-site-bucket');
+    expect(command.input.CopySource).toContain('my-site-bucket/');
+  });
+});
+
+describe('publish bucket configuration', () => {
+  it('isPublishConfigured reflects PUBLISH_BUCKET presence', () => {
+    const prev = process.env.PUBLISH_BUCKET;
+    try {
+      delete process.env.PUBLISH_BUCKET;
+      expect(isPublishConfigured()).toBe(false);
+      process.env.PUBLISH_BUCKET = 'pagespace-published';
+      expect(isPublishConfigured()).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.PUBLISH_BUCKET;
+      else process.env.PUBLISH_BUCKET = prev;
+    }
+  });
+
+  it('putPublishedArtifact throws when PUBLISH_BUCKET is unset', async () => {
+    const prev = process.env.PUBLISH_BUCKET;
+    try {
+      send.mockReset();
+      delete process.env.PUBLISH_BUCKET;
+      await expect(
+        putPublishedArtifact({ subdomain: 'acme', path: '', html: '<html></html>' }),
+      ).rejects.toThrow(/PUBLISH_BUCKET/);
+      expect(send).not.toHaveBeenCalled();
+    } finally {
+      if (prev === undefined) delete process.env.PUBLISH_BUCKET;
+      else process.env.PUBLISH_BUCKET = prev;
+    }
+  });
+});
+
+describe('buildAssetKey', () => {
+  it('given a contentHash, should return assets/{contentHash}', () => {
+    expect(buildAssetKey(HASH)).toBe(`assets/${HASH}`);
+  });
+
+  it('given a 64-char SHA-256 hex hash, should return the correctly prefixed key', () => {
+    const hash = 'a'.repeat(64);
+    expect(buildAssetKey(hash)).toBe(`assets/${hash}`);
+  });
+
+  it('given a contentHash with path traversal, should reject it before building a public key', () => {
+    expect(() => buildAssetKey('../private-secret')).toThrow(/content hash/i);
+  });
+
+  it('given a contentHash with a slash, should reject it before building a public key', () => {
+    expect(() => buildAssetKey('abc123/original')).toThrow(/content hash/i);
+  });
+});
+
+describe('getPublishAssetBaseUrl', () => {
+  let origAssetUrl: string | undefined;
+  let origBucket: string | undefined;
+
+  beforeEach(() => {
+    origAssetUrl = process.env.PUBLISH_ASSET_BASE_URL;
+    origBucket = process.env.PUBLISH_BUCKET;
+  });
+
+  afterEach(() => {
+    if (origAssetUrl === undefined) delete process.env.PUBLISH_ASSET_BASE_URL;
+    else process.env.PUBLISH_ASSET_BASE_URL = origAssetUrl;
+    if (origBucket === undefined) delete process.env.PUBLISH_BUCKET;
+    else process.env.PUBLISH_BUCKET = origBucket;
+  });
+
+  it('given PUBLISH_ASSET_BASE_URL is set, should return it', () => {
+    process.env.PUBLISH_ASSET_BASE_URL = 'https://cdn.example.com';
+    expect(getPublishAssetBaseUrl()).toBe('https://cdn.example.com');
+  });
+
+  it('given PUBLISH_ASSET_BASE_URL unset but PUBLISH_BUCKET set, should derive Tigris public URL', () => {
+    delete process.env.PUBLISH_ASSET_BASE_URL;
+    process.env.PUBLISH_BUCKET = 'pagespace-published';
+    expect(getPublishAssetBaseUrl()).toBe('https://pagespace-published.t3.tigrisfiles.io');
+  });
+
+  it('given both PUBLISH_ASSET_BASE_URL and PUBLISH_BUCKET set, should prefer PUBLISH_ASSET_BASE_URL', () => {
+    process.env.PUBLISH_ASSET_BASE_URL = 'https://cdn.example.com';
+    process.env.PUBLISH_BUCKET = 'pagespace-published';
+    expect(getPublishAssetBaseUrl()).toBe('https://cdn.example.com');
+  });
+
+  it('given both unset, should throw a descriptive error', () => {
+    delete process.env.PUBLISH_ASSET_BASE_URL;
+    delete process.env.PUBLISH_BUCKET;
+    expect(() => getPublishAssetBaseUrl()).toThrow(/PUBLISH_BUCKET/);
+  });
+
+  it('given PUBLISH_ASSET_BASE_URL is not HTTPS, should reject the public asset origin', () => {
+    process.env.PUBLISH_ASSET_BASE_URL = 'http://cdn.example.com';
+    expect(() => getPublishAssetBaseUrl()).toThrow(/HTTPS/i);
+  });
+
+  it('given PUBLISH_ASSET_BASE_URL includes credentials, should reject the public asset origin', () => {
+    process.env.PUBLISH_ASSET_BASE_URL = 'https://user:pass@cdn.example.com';
+    expect(() => getPublishAssetBaseUrl()).toThrow(/origin/i);
+  });
+
+  it('given PUBLISH_ASSET_BASE_URL includes a path, should reject the public asset origin', () => {
+    process.env.PUBLISH_ASSET_BASE_URL = 'https://cdn.example.com/prefix';
+    expect(() => getPublishAssetBaseUrl()).toThrow(/path/i);
+  });
+
+  it('given PUBLISH_ASSET_BASE_URL has a trailing slash, should normalize to the origin only', () => {
+    process.env.PUBLISH_ASSET_BASE_URL = 'https://cdn.example.com/';
+    expect(getPublishAssetBaseUrl()).toBe('https://cdn.example.com');
+  });
+});
+
+describe('buildAssetUrl', () => {
+  let origAssetUrl: string | undefined;
+  let origBucket: string | undefined;
+
+  beforeEach(() => {
+    origAssetUrl = process.env.PUBLISH_ASSET_BASE_URL;
+    origBucket = process.env.PUBLISH_BUCKET;
+    process.env.PUBLISH_BUCKET = 'pagespace-published';
+    delete process.env.PUBLISH_ASSET_BASE_URL;
+  });
+
+  afterEach(() => {
+    if (origAssetUrl === undefined) delete process.env.PUBLISH_ASSET_BASE_URL;
+    else process.env.PUBLISH_ASSET_BASE_URL = origAssetUrl;
+    if (origBucket === undefined) delete process.env.PUBLISH_BUCKET;
+    else process.env.PUBLISH_BUCKET = origBucket;
+  });
+
+  it('given a contentHash, should return the full public asset URL', () => {
+    expect(buildAssetUrl(HASH)).toBe(`https://pagespace-published.t3.tigrisfiles.io/assets/${HASH}`);
+  });
+
+  it('given PUBLISH_ASSET_BASE_URL with trailing slash, should produce a clean URL without double slash', () => {
+    process.env.PUBLISH_ASSET_BASE_URL = 'https://cdn.example.com/';
+    expect(buildAssetUrl(HASH)).toBe(`https://cdn.example.com/assets/${HASH}`);
+  });
+});
+
+describe('buildAssetUrlFromKey', () => {
+  let origAssetUrl: string | undefined;
+  let origBucket: string | undefined;
+
+  beforeEach(() => {
+    origAssetUrl = process.env.PUBLISH_ASSET_BASE_URL;
+    origBucket = process.env.PUBLISH_BUCKET;
+    process.env.PUBLISH_BUCKET = 'pagespace-published';
+    delete process.env.PUBLISH_ASSET_BASE_URL;
+  });
+
+  afterEach(() => {
+    if (origAssetUrl === undefined) delete process.env.PUBLISH_ASSET_BASE_URL;
+    else process.env.PUBLISH_ASSET_BASE_URL = origAssetUrl;
+    if (origBucket === undefined) delete process.env.PUBLISH_BUCKET;
+    else process.env.PUBLISH_BUCKET = origBucket;
+  });
+
+  it('given a resolved asset key, should return the full public asset URL', () => {
+    expect(buildAssetUrlFromKey('assets/cache/abc123/thumbnail.webp')).toBe(
+      'https://pagespace-published.t3.tigrisfiles.io/assets/cache/abc123/thumbnail.webp',
+    );
+  });
+
+  it('given an asset key outside the assets prefix, should reject it before building a public URL', () => {
+    expect(() => buildAssetUrlFromKey('published/acme/index.html')).toThrow(/asset key/i);
+  });
+
+  it('given an asset key with traversal, should reject it before building a public URL', () => {
+    expect(() => buildAssetUrlFromKey('assets/../published/acme/index.html')).toThrow(/asset key/i);
+  });
+});
+
+describe('copyAssetToPublishBucket', () => {
+  beforeEach(() => {
+    send.mockReset();
+    process.env.PUBLISH_BUCKET = 'test-publish';
+    process.env.BUCKET_NAME = 'test-files';
+  });
+
+  it('given the asset already exists in the publish bucket (HeadObject 200), should skip GetObject and PutObject', async () => {
+    // HeadObject resolves → asset exists
+    send.mockResolvedValueOnce({});
+
+    await copyAssetToPublishBucket({ contentHash: HASH, mimeType: 'image/png' });
+
+    expect(send).toHaveBeenCalledTimes(1);
+    const cmd = send.mock.calls[0][0];
+    expect(cmd).toBeInstanceOf(HeadObjectCommand);
+    expect(cmd.input).toMatchObject({ Bucket: 'test-publish', Key: `assets/${HASH}` });
+  });
+
+  it('given the asset does not exist in the publish bucket (HeadObject 404), should GetObject from private bucket then PutObject to publish bucket', async () => {
+    const notFound = Object.assign(new Error('Not Found'), { name: 'NotFound' });
+    const fakeBody = { transformToByteArray: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3])) };
+
+    // HeadObject throws NotFound → GetObject succeeds → PutObject succeeds
+    send
+      .mockRejectedValueOnce(notFound)
+      .mockResolvedValueOnce({ Body: fakeBody })
+      .mockResolvedValueOnce({});
+
+    await copyAssetToPublishBucket({ contentHash: HASH, mimeType: 'image/png' });
+
+    expect(send).toHaveBeenCalledTimes(3);
+
+    const [headCmd, getCmd, putCmd] = send.mock.calls.map((c) => c[0]);
+
+    expect(headCmd).toBeInstanceOf(HeadObjectCommand);
+    expect(headCmd.input).toMatchObject({ Bucket: 'test-publish', Key: `assets/${HASH}` });
+
+    expect(getCmd).toBeInstanceOf(GetObjectCommand);
+    expect(getCmd.input).toMatchObject({ Bucket: 'test-files', Key: `files/${HASH}/original` });
+
+    expect(putCmd).toBeInstanceOf(PutObjectCommand);
+    expect(putCmd.input).toMatchObject({
+      Bucket: 'test-publish',
+      Key: `assets/${HASH}`,
+      ContentType: 'image/png',
+    });
+    expect(putCmd.input.Body).toBeInstanceOf(Uint8Array);
+  });
+
+  it('given HeadObject throws a non-404 error, should propagate the error without copying', async () => {
+    const serverError = Object.assign(new Error('Server Error'), { name: 'ServiceUnavailable' });
+    send.mockRejectedValueOnce(serverError);
+
+    await expect(copyAssetToPublishBucket({ contentHash: HASH, mimeType: 'image/png' })).rejects.toThrow('Server Error');
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('copyObjectToPublishBucket', () => {
+  beforeEach(() => {
+    send.mockReset();
+    process.env.PUBLISH_BUCKET = 'test-publish';
+    process.env.BUCKET_NAME = 'test-files';
+  });
+
+  it('given a source key outside the private file/cache prefixes, should reject before any S3 command', async () => {
+    await expect(copyObjectToPublishBucket({
+      sourceKey: 'published/acme/index.html',
+      assetKey: `assets/${HASH}`,
+      contentType: 'text/html',
+    })).rejects.toThrow(/source key/i);
+
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('given a public asset key with traversal, should reject before any S3 command', async () => {
+    await expect(copyObjectToPublishBucket({
+      sourceKey: `files/${HASH}/original`,
+      assetKey: 'assets/../published/acme/index.html',
+      contentType: 'image/png',
+    })).rejects.toThrow(/asset key/i);
+
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('given a thumbnail cache object, should copy it to the requested public asset key', async () => {
+    const notFound = Object.assign(new Error('Not Found'), { name: 'NotFound' });
+    const fakeBody = { transformToByteArray: vi.fn().mockResolvedValue(new Uint8Array([4, 5, 6])) };
+
+    send
+      .mockRejectedValueOnce(notFound)
+      .mockResolvedValueOnce({ Body: fakeBody })
+      .mockResolvedValueOnce({});
+
+    await copyObjectToPublishBucket({
+      sourceKey: 'cache/abc123/thumbnail.webp',
+      assetKey: 'assets/cache/abc123/thumbnail.webp',
+      contentType: 'image/webp',
+    });
+
+    expect(send).toHaveBeenCalledTimes(3);
+
+    const [headCmd, getCmd, putCmd] = send.mock.calls.map((c) => c[0]);
+
+    expect(headCmd).toBeInstanceOf(HeadObjectCommand);
+    expect(headCmd.input).toMatchObject({
+      Bucket: 'test-publish',
+      Key: 'assets/cache/abc123/thumbnail.webp',
+    });
+
+    expect(getCmd).toBeInstanceOf(GetObjectCommand);
+    expect(getCmd.input).toMatchObject({
+      Bucket: 'test-files',
+      Key: 'cache/abc123/thumbnail.webp',
+    });
+
+    expect(putCmd).toBeInstanceOf(PutObjectCommand);
+    expect(putCmd.input).toMatchObject({
+      Bucket: 'test-publish',
+      Key: 'assets/cache/abc123/thumbnail.webp',
+      ContentType: 'image/webp',
+    });
+  });
+});
+
+
+describe('the policy write guard', () => {
+  beforeEach(() => {
+    send.mockReset();
+    send.mockResolvedValue({});
+    assertPrefixWritable.mockReset();
+    assertPrefixWritable.mockResolvedValue(undefined);
+    process.env.PUBLISH_BUCKET = 'test-bucket';
+  });
+
+  it('POL-4 (partial) every writer into a published prefix asks first, and a refusal sends nothing to the bucket', async () => {
+    assertPrefixWritable.mockRejectedValue(new Error('hidden'));
+    await expect(putPublishedArtifact({ subdomain: 'acme', path: 'a', html: 'x' })).rejects.toThrow('hidden');
+    await expect(putPublishedSiteFile({ prefix: 'acme', file: 'robots.txt', body: 'x' })).rejects.toThrow('hidden');
+    await expect(copyPublishedArtifact('published/acme/a/index.html', 'published/acme/index.html')).rejects.toThrow('hidden');
+    await expect(copyPublishedSiteFileArtifact('published/acme/robots.txt', 'published/host.test/robots.txt')).rejects.toThrow('hidden');
+    expect(send).not.toHaveBeenCalled();
+    expect(assertPrefixWritable.mock.calls.map((c) => c[0])).toEqual(['acme', 'acme', 'acme', 'host.test']);
+  });
+
+  it('POL-4 (partial) a writable site is written exactly as before', async () => {
+    await putPublishedArtifact({ subdomain: 'acme', path: 'a', html: 'x' });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0]).toBeInstanceOf(PutObjectCommand);
+  });
+
+  it('POL-4 (partial) unpublishing deletes the paused copy under suspended/ too, so a restore cannot bring back a page its author took down', async () => {
+    await deletePublishedArtifact('published/acme/about/index.html');
+    const keys = send.mock.calls.map((c) => (c[0] as DeleteObjectCommand).input.Key);
+    expect(keys).toEqual(['published/acme/about/index.html', 'suspended/acme/about/index.html']);
+  });
+
+  it('POL-4 (partial) removing a host clears both its public and its paused prefix', async () => {
+    send.mockResolvedValue({ Contents: [{ Key: 'k1' }], IsTruncated: false });
+    await clearPublishedPrefix('docs.example.com');
+    const lists = send.mock.calls.map((c) => c[0]).filter((c) => c.constructor.name === 'ListObjectsV2Command').map((c) => c.input.Prefix);
+    expect(lists).toEqual(['published/docs.example.com/', 'suspended/docs.example.com/']);
+  });
+});
+
+describe('createPublishedObjectStore', () => {
+  beforeEach(() => {
+    send.mockReset();
+    process.env.PUBLISH_BUCKET = 'test-bucket';
+  });
+
+  it('POL-4 (partial) listKeys follows continuation tokens until the listing is complete', async () => {
+    send
+      .mockResolvedValueOnce({ Contents: [{ Key: 'a' }, { Key: 'b' }], IsTruncated: true, NextContinuationToken: 't1' })
+      .mockResolvedValueOnce({ Contents: [{ Key: 'c' }], IsTruncated: false });
+    expect(await createPublishedObjectStore().listKeys('published/x/')).toEqual(['a', 'b', 'c']);
+    expect(send.mock.calls[1][0].input.ContinuationToken).toBe('t1');
+  });
+
+  it('POL-4 (partial) listPrefixes returns the immediate sub-prefix names without the root or the trailing slash', async () => {
+    send.mockResolvedValueOnce({ CommonPrefixes: [{ Prefix: 'suspended/acme/' }, { Prefix: 'suspended/docs.example.com/' }], IsTruncated: false });
+    expect(await createPublishedObjectStore().listPrefixes('suspended/')).toEqual(['acme', 'docs.example.com']);
+    expect(send.mock.calls[0][0].input).toMatchObject({ Prefix: 'suspended/', Delimiter: '/' });
+  });
+
+  it('POL-4 (partial) copy keeps the stored content type (COPY, never REPLACE) within the publish bucket, and remove deletes one key', async () => {
+    send.mockResolvedValue({});
+    const store = createPublishedObjectStore();
+    await store.copy('published/acme/robots.txt', 'suspended/acme/robots.txt');
+    expect(send.mock.calls[0][0]).toBeInstanceOf(CopyObjectCommand);
+    expect(send.mock.calls[0][0].input).toMatchObject({ Bucket: 'test-bucket', CopySource: 'test-bucket/published/acme/robots.txt', Key: 'suspended/acme/robots.txt', MetadataDirective: 'COPY' });
+    await store.remove('published/acme/robots.txt');
+    expect(send.mock.calls[1][0]).toBeInstanceOf(DeleteObjectCommand);
+  });
+});

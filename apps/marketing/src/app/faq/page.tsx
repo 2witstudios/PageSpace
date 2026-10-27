@@ -1,172 +1,309 @@
+import { isValidElement, type ReactNode } from "react";
 import Link from "next/link";
 import { ChevronDown, ArrowRight, MessageCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata } from "@/lib/metadata";
+import { MONTHLY_CREDITS, FREE_STARTER_CREDITS_DISPLAY, creditPacksPhrase, formatDollars, planFacts } from "@/lib/credits";
+import { JsonLd, createFaqSchema } from "@/lib/schema";
+import { FAQHashOpener } from "./hash-opener";
+
+/** Flatten a ReactNode answer to plain text for the FAQPage schema. */
+function faqText(node: ReactNode): string {
+  if (node == null || typeof node === "boolean") return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(faqText).join("");
+  if (isValidElement(node)) return faqText((node.props as { children?: ReactNode }).children);
+  return "";
+}
 
 export const metadata = pageMetadata.faq;
 
+// Plan and seat prices come from the tier table via planFacts (SEAT-2), never typed in here.
+const PRO = planFacts("pro");
+const BUSINESS = planFacts("business");
+const BUSINESS_SEATS = BUSINESS.org?.includedSeats;
+const EXTRA_SEAT_PRICE = BUSINESS.org ? formatDollars(BUSINESS.org.extraSeatPriceCents) : "";
+
 interface FAQItem {
+  id: string;
   question: string;
   answer: React.ReactNode;
   category: string;
 }
 
+const docsLink = (href: string, label: string) => (
+  <Link href={href} className="text-primary hover:underline">
+    {label}
+  </Link>
+);
+
 const faqs: FAQItem[] = [
-  // Getting Started
+  // What is PageSpace?
   {
+    id: "what-is-pagespace",
     question: "What is PageSpace?",
     answer:
-      "PageSpace is an AI-powered workspace where you, your team, and AI work together. Write documents, manage tasks, chat in channels, and get AI help anywhere — all in one place.",
-    category: "Getting Started",
+      "PageSpace is a workspace for writing, tasks, and team communication — with AI built in as a collaborator, not a chatbot sidebar. Your documents, spreadsheets, chats, and code files all live in the same place, and AI agents can read and edit them the same way your teammates do.",
+    category: "What is PageSpace?",
   },
   {
-    question: "Can I try PageSpace for free?",
-    answer:
-      "Yes! The Free plan includes 500 MB of storage, 50 AI interactions per day, real-time collaboration, and access to all core features. No credit card required.",
-    category: "Getting Started",
-  },
-  {
-    question: "How do I get started?",
-    answer:
-      "Sign up at pagespace.ai, create a workspace, and start adding pages. You can invite teammates right away or explore on your own first. The AI assistant is available from your very first page.",
-    category: "Getting Started",
-  },
-  {
-    question: "Is there a desktop app?",
-    answer:
-      "Yes — PageSpace has desktop apps for macOS (Apple Silicon and Intel), Windows, and Linux. You can download them from the Downloads page. The desktop apps include offline support and deeper OS integration.",
-    category: "Getting Started",
-  },
-
-  // AI Features
-  {
-    question: "How does AI help me in PageSpace?",
-    answer:
-      "AI is woven into everything you do. It can help you draft and edit documents, summarize long threads, answer questions about your workspace, manage tasks, and more. You don't need to learn any special commands — just ask naturally.",
-    category: "AI Features",
-  },
-  {
-    question: "What are Page Agents?",
-    answer:
-      "Page Agents are specialized AI helpers that live in your workspace. You can create one with a role like 'Marketing Expert' or 'Project Manager' and it will tailor its responses to that area. They pick up context from where they sit in your file tree, so they get smarter the more you organize.",
-    category: "AI Features",
-  },
-  {
-    question: "What is the Global Assistant?",
-    answer:
-      "The Global Assistant is your personal AI that follows you across all your workspaces. It remembers your preferences and past conversations, so it gets more helpful over time. Think of it as your always-available coworker.",
-    category: "AI Features",
-  },
-  {
-    question: "Can I undo something AI changed?",
-    answer:
-      "Absolutely. Every AI edit is versioned, so you can roll back any change with one click. Feel free to experiment — you can always go back.",
-    category: "AI Features",
-  },
-
-  // Pricing and Plans
-  {
-    question: "What plans are available?",
-    answer:
-      "PageSpace offers Free, Pro, and Team plans. Free is great for getting started, Pro unlocks more AI power and storage for individuals, and Team adds collaboration features for groups. Visit the Pricing page for full details.",
-    category: "Pricing and Plans",
-  },
-  {
-    question: "What happens when I run out of daily AI interactions?",
-    answer:
-      "You can still use PageSpace normally — documents, tasks, channels, and collaboration all keep working. AI features pause until the next day when your limit resets. Upgrading your plan or adding your own AI keys gives you more interactions.",
-    category: "Pricing and Plans",
-  },
-  {
-    question: "Can I change my plan later?",
-    answer:
-      "Yes. You can upgrade or downgrade at any time. Upgrades take effect immediately with prorated billing, and downgrades apply at the end of your current billing period.",
-    category: "Pricing and Plans",
-  },
-
-  // Privacy and Data
-  {
-    question: "Is my data safe?",
-    answer:
-      "Yes. Your data is encrypted both in transit and at rest. We follow industry-standard security practices to keep your workspace secure.",
-    category: "Privacy and Data",
-  },
-  {
-    question: "Is my content used to train AI?",
-    answer:
-      "No. Your workspace content is never used to train AI models. When AI processes your content, it's handled through provider APIs with strict data policies — nothing is retained or used for training.",
-    category: "Privacy and Data",
-  },
-  {
-    question: "What happens to my data if I cancel?",
-    answer:
-      "After cancellation, your data is retained for 30 days so you can export or reactivate. After that, it's permanently deleted from our systems.",
-    category: "Privacy and Data",
-  },
-  {
-    question: "Can I export my data?",
-    answer:
-      "Yes. You can export your pages, files, and workspace data at any time from your account settings. Your data is yours.",
-    category: "Privacy and Data",
-  },
-
-  // Collaboration and Teams
-  {
-    question: "How do I share a workspace with my team?",
-    answer:
-      "Create a workspace and invite teammates by email. You can set roles and permissions so everyone has the right level of access. Team members can join instantly from their invite link.",
-    category: "Collaboration and Teams",
-  },
-  {
-    question: "Can multiple people edit at the same time?",
-    answer:
-      "Yes — PageSpace supports real-time collaboration. Multiple people can edit the same document simultaneously, and you'll see each other's changes and cursors live.",
-    category: "Collaboration and Teams",
-  },
-  {
-    question: "How do channels work?",
-    answer:
-      "Channels are team conversation spaces, similar to Slack or Discord. You can create channels for different topics, projects, or teams. AI is available in channels too, so you can ask questions or get summaries right in the conversation.",
-    category: "Collaboration and Teams",
-  },
-
-  // Mobile and Offline
-  {
-    question: "Can I use PageSpace on my phone?",
+    id: "how-is-it-different",
+    question: "How is it different from tools like Notion or Google Docs?",
     answer: (
       <>
-        The iOS app is available now through TestFlight — you can join from the{" "}
-        <Link href="/downloads" className="text-primary hover:underline">
-          Downloads page
-        </Link>
-        . Android is coming soon. In the meantime, PageSpace works great in your
-        phone&apos;s web browser.
+        In most tools, AI is a panel that talks about your content. In PageSpace,
+        AI agents are actual workspace participants — they can create pages,
+        rewrite sections, file GitHub issues, schedule meetings, and ask each
+        other for help. The content model is also unified: one search, one
+        permission system, one tree of pages regardless of type.
       </>
     ),
-    category: "Mobile and Offline",
+    category: "What is PageSpace?",
   },
   {
-    question: "Can I work offline?",
+    id: "solo-or-teams",
+    question: "Is it just for teams, or can I use it on my own?",
     answer:
-      "The desktop apps support offline mode. Your changes sync automatically when you reconnect. Web access requires an internet connection.",
-    category: "Mobile and Offline",
+      "Both. Individuals use it as a personal AI-powered notebook and task system. Teams use it for real-time collaboration. You can start solo and add people whenever.",
+    category: "What is PageSpace?",
   },
   {
-    question: "Does PageSpace work in my web browser?",
+    id: "when-not-the-fit",
+    question: "When is PageSpace not the right fit?",
     answer:
-      "Yes. PageSpace works in all modern browsers — Chrome, Firefox, Safari, and Edge. No installation required, just sign in and start working.",
-    category: "Mobile and Offline",
+      "If you want a purely offline notebook with no AI, or a single-purpose tool for one narrow job, PageSpace is more than you need. It's built for people and teams who want an AI coworker acting across their whole workspace — if you don't want AI touching your work, it isn't the right pick.",
+    category: "What is PageSpace?",
+  },
+
+  // Pricing and plans
+  {
+    id: "is-there-a-free-plan",
+    question: "Is there a free plan?",
+    answer: `Yes. The Free plan includes 500 MB of storage and ${FREE_STARTER_CREDITS_DISPLAY} credits to get started — a one-time grant that meters your AI usage. No credit card required.`,
+    category: "Pricing and plans",
+  },
+  {
+    id: "what-do-paid-plans-include",
+    question: "What do the paid plans include?",
+    answer: (
+      <>
+        More credits, access to Pro models, and more storage. Each plan
+        includes a monthly credit allowance — {MONTHLY_CREDITS.pro} credits a
+        month on Pro ({PRO.price}/month) and {MONTHLY_CREDITS.business} credits a month
+        on Business ({BUSINESS.price}/month, the plan for an organization with {BUSINESS_SEATS} seats
+        included and {EXTRA_SEAT_PRICE} per extra seat) — and you can buy more credits
+        anytime. All plans include real-time collaboration
+        and AI agents. Full comparison on the{" "}
+        {docsLink("/pricing", "Pricing page")}.
+      </>
+    ),
+    category: "Pricing and plans",
+  },
+  {
+    id: "how-ai-credits-work",
+    question: "How do credits work?",
+    answer: `Free accounts start with ${FREE_STARTER_CREDITS_DISPLAY} credits, once; paid plans include a monthly credit allowance. Each AI action draws down credits based on what the underlying model actually costs, so a quick reply with a lightweight model costs far less than a long answer from a frontier model. Credits never expire — on paid plans, unused monthly credits roll over and accumulate.`,
+    category: "Pricing and plans",
+  },
+  {
+    id: "hit-daily-ai-limit",
+    question: "What happens when I run out of credits?",
+    answer: `Everything else keeps working — your documents, tasks, channels, and collaboration are unaffected. AI features pause until you buy more credits (top-up packs come in ${creditPacksPhrase()}), upgrade to a paid plan, or — on paid plans — your next monthly allowance is added at your billing renewal.`,
+    category: "Pricing and plans",
+  },
+  // Getting started
+  {
+    id: "how-do-i-sign-up",
+    question: "How do I sign up?",
+    answer:
+      "With a passkey (Touch ID, Face ID, Windows Hello), a magic link emailed to you, or Google or Apple sign-in. There are no passwords to create or remember.",
+    category: "Getting started",
+  },
+  {
+    id: "how-do-i-get-my-team-in",
+    question: "How do I get my team in?",
+    answer:
+      "Invite teammates by email from your drive settings — even before they have an account — or share a join link. They set up their account (passkey or magic link) and land directly in your workspace. Members see everything in the drive except pages you've marked private; mark a page private to keep it to yourself or a chosen few.",
+    category: "Getting started",
+  },
+  {
+    id: "desktop-app",
+    question: "Is there a desktop app?",
+    answer: (
+      <>
+        Yes — macOS (Apple Silicon and Intel), Windows, and Linux. There&#39;s
+        also an iOS app via TestFlight, and PageSpace works in any web browser.
+        Android is in progress. See the{" "}
+        {docsLink("/downloads", "Downloads page")}.
+      </>
+    ),
+    category: "Getting started",
+  },
+
+  // Working with AI
+  {
+    id: "what-can-ai-do",
+    question: "What can the AI actually do?",
+    answer:
+      "It can draft and edit documents, build task lists from briefs, summarize threads, search your workspace, update spreadsheets, schedule meetings, file GitHub issues, and ask other agents for help. It makes changes — it doesn't just answer questions.",
+    category: "Working with AI",
+  },
+  {
+    id: "specialized-ai-assistant",
+    question: "Can I create a specialized AI assistant for a specific project or role?",
+    answer:
+      "Yes. You can place an AI agent anywhere in your workspace and give it a role — a marketing agent in your campaigns folder, a code reviewer in your engineering drive. It picks up context from where it sits, so it already knows what project it's working on.",
+    category: "Working with AI",
+  },
+  {
+    id: "which-models-available",
+    question: "Which AI models are available?",
+    answer:
+      "PageSpace gives you one catalogue of models from many vendors — OpenAI, Anthropic, Google, xAI, and more. Free accounts use a curated set of efficient models; paid plans unlock the full catalogue. Each agent in your workspace can use a different model.",
+    category: "Working with AI",
+  },
+  {
+    id: "ai-access-to-content",
+    question: "Will the AI touch content I haven't given it access to?",
+    answer:
+      "No. Each agent is a permission-scoped principal with its own drive membership and access level — bound the same way a person is. Agents only see and edit content they've been granted access to through their own role in the drive. If you want an agent to inherit your access instead, you can enable user-scoped access per agent, but that's opt-in; the default is stricter and more secure.",
+    category: "Working with AI",
+  },
+  {
+    id: "content-training",
+    question: "Is my content used to train AI models?",
+    answer:
+      "No. Your content goes to model providers through APIs under terms that prohibit training on customer data. We don't use it to train anything either.",
+    category: "Working with AI",
+  },
+
+  // Collaboration and sharing
+  {
+    id: "real-time-editing",
+    question: "Can multiple people edit the same document at the same time?",
+    answer:
+      "Yes — real-time editing with live cursors on documents, spreadsheets, and canvases. Messages in channels and AI chats appear instantly for everyone.",
+    category: "Collaboration and sharing",
+  },
+  {
+    id: "keep-a-page-private",
+    question: "Can I keep a page private from the rest of the drive?",
+    answer:
+      "Yes. Drive members see the drive's pages by default, so collaboration is the starting point — but you can mark any page (or folder) private, and then only the owner, admins, and the people or roles you explicitly grant access can see it. Marking a page private takes effect immediately.",
+    category: "Collaboration and sharing",
+  },
+  {
+    id: "share-with-a-link",
+    question: "Can I share a page or drive with a link?",
+    answer:
+      "Yes. Generate a share link for a single page or a whole drive. Opening either link adds the person to the drive — a drive link with the role you choose, a page link as a member with that page's permissions — so they'll also see the drive's other non-private pages; mark anything sensitive private first. Links are revocable and can carry an expiry. You can also invite someone by email before they even have an account — the invite waits for them and becomes access when they sign up.",
+    category: "Collaboration and sharing",
+  },
+  {
+    id: "publish-to-web",
+    question: "Can I publish a page to the public web?",
+    answer:
+      "Yes — Canvas pages can be published as standalone web pages at their own address on a separate public domain, away from your workspace. Hit Publish, share the link, and unpublish whenever you like.",
+    category: "Collaboration and sharing",
+  },
+  {
+    id: "how-channels-work",
+    question: "How do team chat channels work?",
+    answer: (
+      <>
+        Channels are message threads that live in your workspace just like any
+        other page — searchable, shareable, permissioned the same way. You can
+        @mention teammates or AI agents, attach files, and react with emoji.
+      </>
+    ),
+    category: "Collaboration and sharing",
+  },
+
+  // Privacy and security
+  {
+    id: "is-my-data-private",
+    question: "Is my data private?",
+    answer: (
+      <>
+        Yes. Content is encrypted at rest and in transit. Stored credentials
+        like integration tokens get an additional layer of encryption. More on the{" "}
+        {docsLink("/security", "Security page")}.
+      </>
+    ),
+    category: "Privacy and security",
+  },
+  {
+    id: "content-training-privacy",
+    question: "Is my content used to train AI models?",
+    answer:
+      "No — worth repeating since it comes up often. Your content is never used for training, by PageSpace or by the model providers we connect to.",
+    category: "Privacy and security",
+  },
+  {
+    id: "can-i-export-data",
+    question: "Can I export everything?",
+    answer:
+      "Yes. Documents export as Markdown or .docx, spreadsheets as CSV or XLSX, code files as source, and uploaded files as their originals.",
+    category: "Privacy and security",
+  },
+  {
+    id: "cancel-account",
+    question: "What happens if I cancel?",
+    answer: (
+      <>
+        Export anything you need before cancelling. For questions about data
+        deletion, {docsLink("/contact", "contact us")}.
+      </>
+    ),
+    category: "Privacy and security",
+  },
+
+  // Integrations
+  {
+    id: "what-integrations",
+    question: "What does PageSpace connect to?",
+    answer: (
+      <>
+        Google Calendar (two-way sync; agents can check your availability and
+        schedule meetings), GitHub (agents can browse repos, open issues, and
+        review PRs), and MCP (plug PageSpace into Claude, Cursor, or any other
+        AI client that supports Model Context Protocol). See the{" "}
+        {docsLink("/docs/integrations", "full list")}.
+      </>
+    ),
+    category: "Integrations",
+  },
+  {
+    id: "connect-to-claude-cursor",
+    question: "Can I connect PageSpace to Claude, Cursor, or other AI tools?",
+    answer: (
+      <>
+        Yes — via the PageSpace MCP server. Create a token in your settings,
+        point your client at the PageSpace MCP endpoint, and it can read and
+        write your workspace using the same tools the built-in agents use. The
+        same token doubles as an OpenAI-compatible API key, so you can call any
+        of your agents as a model from your own code.{" "}
+        {docsLink("/docs/integrations/mcp", "Setup guide")}.
+      </>
+    ),
+    category: "Integrations",
   },
 ];
 
 const categories = [...new Set(faqs.map((faq) => faq.category))];
 
+const faqSchema = createFaqSchema(
+  faqs.map((faq) => ({ q: faq.question, a: faqText(faq.answer).replace(/\s+/g, " ").trim() })),
+);
+
 export default function FAQPage() {
   return (
     <div className="min-h-screen bg-background">
+      <JsonLd data={faqSchema} />
       <SiteNavbar />
+      <FAQHashOpener />
 
       {/* Hero */}
       <section className="py-16 md:py-24">
@@ -176,8 +313,8 @@ export default function FAQPage() {
               Frequently Asked Questions
             </h1>
             <p className="text-lg text-muted-foreground">
-              Everything you need to know about PageSpace. Can&apos;t find what
-              you&apos;re looking for?{" "}
+              Everything you need to know about PageSpace. Can&#39;t find what
+              you&#39;re looking for?{" "}
               <Link href="/contact" className="text-primary hover:underline">
                 Contact us
               </Link>
@@ -197,19 +334,20 @@ export default function FAQPage() {
                 <div className="space-y-4">
                   {faqs
                     .filter((faq) => faq.category === category)
-                    .map((faq, index) => (
+                    .map((faq) => (
                       <details
-                        key={index}
-                        className="group rounded-xl border border-border bg-card"
+                        key={faq.id}
+                        id={faq.id}
+                        className="group rounded-xl border border-border bg-card scroll-mt-24"
                       >
                         <summary className="flex cursor-pointer items-center justify-between p-5 font-medium">
                           <span className="pr-4">{faq.question}</span>
                           <ChevronDown className="h-5 w-5 text-muted-foreground transition-transform group-open:rotate-180 flex-shrink-0" />
                         </summary>
                         <div className="px-5 pb-5 pt-0">
-                          <p className="text-muted-foreground leading-relaxed">
+                          <div className="text-muted-foreground leading-relaxed">
                             {faq.answer}
-                          </p>
+                          </div>
                         </div>
                       </details>
                     ))}
@@ -229,7 +367,7 @@ export default function FAQPage() {
             </div>
             <h2 className="text-2xl font-bold mb-4">Still have questions?</h2>
             <p className="text-muted-foreground mb-6">
-              Can&apos;t find the answer you&apos;re looking for? Our support
+              Can&#39;t find the answer you&#39;re looking for? Our support
               team is here to help.
             </p>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">

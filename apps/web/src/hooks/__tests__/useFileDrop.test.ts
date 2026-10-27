@@ -1,19 +1,18 @@
 /**
  * useFileDrop Hook Tests
- * Tests for file drag and drop with upload functionality
+ * Tests for file drag and drop with direct-to-S3 upload functionality
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import type { DragEvent } from 'react';
 
-// Create hoisted mocks for auth-fetch
-const { mockPost, mockFetchWithAuth } = vi.hoisted(() => ({
+// Hoisted mocks for the storage pre-check and the direct-to-S3 orchestrator
+const { mockPost, mockUpload } = vi.hoisted(() => ({
   mockPost: vi.fn(),
-  mockFetchWithAuth: vi.fn(),
+  mockUpload: vi.fn(),
 }));
 
-// Create hoisted mock for toast
 const { mockToast } = vi.hoisted(() => ({
   mockToast: {
     success: vi.fn(),
@@ -27,10 +26,12 @@ vi.mock('@pagespace/lib/services/storage-limits', () => ({
   formatBytes: (bytes: number) => `${bytes} bytes`,
 }));
 
-// Mock dependencies with hoisted mocks
 vi.mock('@/lib/auth/auth-fetch', () => ({
   post: (...args: unknown[]) => mockPost(...args),
-  fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args),
+}));
+
+vi.mock('@/lib/upload/orchestrator', () => ({
+  uploadFileToS3: (...args: unknown[]) => mockUpload(...args),
 }));
 
 vi.mock('sonner', () => ({
@@ -87,10 +88,7 @@ describe('useFileDrop', () => {
     // Mock environment variable
     process.env.NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB = '20';
     mockPost.mockResolvedValue({ ok: true });
-    mockFetchWithAuth.mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ page: { id: 'page-1' } }),
-    });
+    mockUpload.mockResolvedValue({ id: 'page-1' });
   });
 
   afterEach(() => {
@@ -212,9 +210,27 @@ describe('useFileDrop', () => {
         await result.current.handleFileDrop(event);
       });
 
-      expect(mockPost).toHaveBeenCalledWith('/api/storage/check', { fileSize: 100 });
-      expect(mockFetchWithAuth).toHaveBeenCalled();
+      // WAL-9 (partial), #2719 review P1-1: the pre-check names the drop's drive, so an org
+      // drive is checked against the org's quota, not the uploader's personal one.
+      expect(mockPost).toHaveBeenCalledWith('/api/storage/check', { fileSize: 100, driveId: 'drive-123' });
+      expect(mockUpload).toHaveBeenCalledTimes(1);
       expect(onUploadComplete).toHaveBeenCalled();
+    });
+
+    it('given valid file drop, should pass driveId and parentId target', async () => {
+      const { result } = renderHook(() =>
+        useFileDrop({ ...defaultOptions, parentId: 'drive-root' })
+      );
+
+      const event = createMockDragEvent([createMockFile('test.txt', 100)]);
+
+      await act(async () => {
+        await result.current.handleFileDrop(event);
+      });
+
+      const [fileArg, target] = mockUpload.mock.calls[0];
+      expect((fileArg as File).name).toBe('test.txt');
+      expect(target).toMatchObject({ driveId: 'drive-123', parentId: 'drive-root' });
     });
 
     it('given oversized file, should show error toast and not upload', async () => {
@@ -229,7 +245,7 @@ describe('useFileDrop', () => {
       });
 
       expect(toast.error).toHaveBeenCalled();
-      expect(mockFetchWithAuth).not.toHaveBeenCalled();
+      expect(mockUpload).not.toHaveBeenCalled();
     });
 
     it('given storage quota exceeded, should show error and not upload', async () => {
@@ -245,7 +261,7 @@ describe('useFileDrop', () => {
       });
 
       expect(toast.error).toHaveBeenCalled();
-      expect(mockFetchWithAuth).not.toHaveBeenCalled();
+      expect(mockUpload).not.toHaveBeenCalled();
     });
 
     it('given multiple files, should upload all and track progress', async () => {
@@ -262,27 +278,30 @@ describe('useFileDrop', () => {
         await result.current.handleFileDrop(event);
       });
 
-      expect(mockFetchWithAuth).toHaveBeenCalledTimes(3);
+      expect(mockUpload).toHaveBeenCalledTimes(3);
       expect(toast.success).toHaveBeenCalledWith(
         expect.stringContaining('3')
       );
     });
 
-    it('given upload failure, should call onUploadError', async () => {
-      const onUploadError = vi.fn();
-      mockFetchWithAuth.mockRejectedValue(new Error('Upload failed'));
+    it('given a per-file upload failure, should toast and continue the batch', async () => {
+      mockUpload
+        .mockRejectedValueOnce(new Error('Upload failed'))
+        .mockResolvedValueOnce({ id: 'page-2' });
 
-      const { result } = renderHook(() =>
-        useFileDrop({ ...defaultOptions, onUploadError })
-      );
+      const { result } = renderHook(() => useFileDrop(defaultOptions));
 
-      const event = createMockDragEvent([createMockFile('test.txt', 100)]);
+      const event = createMockDragEvent([
+        createMockFile('bad.txt', 100),
+        createMockFile('good.txt', 100),
+      ]);
 
       await act(async () => {
         await result.current.handleFileDrop(event);
       });
 
-      expect(onUploadError).toHaveBeenCalled();
+      expect(mockUpload).toHaveBeenCalledTimes(2);
+      expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('Upload failed'));
     });
 
     it('given custom parentId in drop, should use it instead of default', async () => {
@@ -294,8 +313,8 @@ describe('useFileDrop', () => {
         await result.current.handleFileDrop(event, 'custom-parent-123');
       });
 
-      const formData = mockFetchWithAuth.mock.calls[0][1].body as FormData;
-      expect(formData.get('parentId')).toBe('custom-parent-123');
+      const [, target] = mockUpload.mock.calls[0];
+      expect(target.parentId).toBe('custom-parent-123');
     });
 
     it('given non-file drag event, should not process', async () => {
@@ -351,7 +370,7 @@ describe('useFileDrop', () => {
   });
 
   describe('upload progress tracking', () => {
-    it('given multiple file upload, should track upload progress', async () => {
+    it('given multiple file upload, should reset progress when finished', async () => {
       const files = [
         createMockFile('file1.txt', 100),
         createMockFile('file2.txt', 100),
@@ -359,13 +378,6 @@ describe('useFileDrop', () => {
       const event = createMockDragEvent(files);
 
       const { result } = renderHook(() => useFileDrop(defaultOptions));
-
-      mockFetchWithAuth.mockImplementation(async () => {
-        return {
-          ok: true,
-          json: () => Promise.resolve({ page: { id: 'page-1' } }),
-        };
-      });
 
       await act(async () => {
         await result.current.handleFileDrop(event);
@@ -378,7 +390,7 @@ describe('useFileDrop', () => {
   });
 
   describe('position data handling', () => {
-    it('given position and afterNodeId, should include in upload', async () => {
+    it('given position and afterNodeId, should include them in the upload target', async () => {
       const { result } = renderHook(() => useFileDrop(defaultOptions));
       const event = createMockDragEvent([createMockFile('test.txt', 100)]);
 
@@ -386,30 +398,50 @@ describe('useFileDrop', () => {
         await result.current.handleFileDrop(event, 'parent-123', 'after', 'sibling-456');
       });
 
-      const formData = mockFetchWithAuth.mock.calls[0][1].body as FormData;
-      expect(formData.get('position')).toBe('after');
-      expect(formData.get('afterNodeId')).toBe('sibling-456');
+      const [, target] = mockUpload.mock.calls[0];
+      expect(target).toMatchObject({
+        parentId: 'parent-123',
+        position: 'after',
+        afterNodeId: 'sibling-456',
+      });
     });
   });
+});
 
-  describe('storage warnings', () => {
-    it('given storage over 80%, should show warning toast', async () => {
-      mockFetchWithAuth.mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({
-          page: { id: 'page-1' },
-          storageInfo: { used: 85, quota: 100 },
-        }),
-      });
+describe('quotaDenial', () => {
+  it('given a 413 on a personal quota, should surface the reason and point at the usage page', async () => {
+    const { quotaDenial } = await import('../useFileDrop');
+    expect(quotaDenial({ status: 413, body: { allowed: false, reason: 'Insufficient storage: need 2 GB, have 1 GB available', requiredBytes: 2, quota: { userId: 'u1', availableBytes: 1 } } }))
+      .toEqual({ reason: 'Insufficient storage: need 2 GB, have 1 GB available', manageHref: '/settings/usage' });
+  });
 
-      const { result } = renderHook(() => useFileDrop(defaultOptions));
-      const event = createMockDragEvent([createMockFile('test.txt', 100)]);
+  it('given a 413 on an org quota, should point at the org billing page', async () => {
+    const { quotaDenial } = await import('../useFileDrop');
+    expect(quotaDenial({ status: 413, body: { reason: 'Insufficient storage', requiredBytes: 2, quota: { orgId: 'org 1', availableBytes: 1 } } })?.manageHref)
+      .toBe('/orgs/org%201/settings/billing');
+  });
 
-      await act(async () => {
-        await result.current.handleFileDrop(event);
-      });
+  it('given a file over the per-file limit, should show the reason without offering storage', async () => {
+    const { quotaDenial } = await import('../useFileDrop');
+    expect(quotaDenial({ status: 413, body: { reason: 'File exceeds pro tier limit of 250MB', requiredBytes: 300, quota: { userId: 'u1', availableBytes: 1000, tier: 'pro' } } }))
+      .toEqual({ reason: 'File exceeds pro tier limit of 250MB', manageHref: null });
+  });
 
-      expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('85%'));
-    });
+  it('given a file over the per-file limit that is also larger than the space left, should still not offer storage', async () => {
+    const { quotaDenial } = await import('../useFileDrop');
+    expect(quotaDenial({ status: 413, body: { reason: 'File exceeds pro tier limit of 250MB', requiredBytes: 300, quota: { userId: 'u1', availableBytes: 100, tier: 'pro' } } })?.manageHref)
+      .toBeNull();
+  });
+
+  it('given the Free file-count cap, should point at the usage page to upgrade', async () => {
+    const { quotaDenial } = await import('../useFileDrop');
+    expect(quotaDenial({ status: 413, body: { reason: 'File count limit reached (100 files max for free tier)', requiredBytes: 1, quota: { userId: 'u1', availableBytes: 1000, tier: 'free' } } })?.manageHref)
+      .toBe('/settings/usage');
+  });
+
+  it('given any other error, should not treat it as a quota denial', async () => {
+    const { quotaDenial } = await import('../useFileDrop');
+    expect(quotaDenial(new Error('boom'))).toBeNull();
+    expect(quotaDenial({ status: 500, body: { reason: 'x' } })).toBeNull();
   });
 });

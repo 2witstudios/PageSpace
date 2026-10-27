@@ -1,0 +1,28 @@
+# PageSpace Tool Discovery Spec
+
+## System prompt rule
+
+The AI receives this instruction in every request:
+
+> Core tools are always ready: list/read drives and pages, search, create, edit content
+> For other tools (calendar, agents, channels, tasks, etc.): call tool_search("keyword") or
+> tool_search("select:tool_name") first to get the full parameter schema
+
+## Core tools (full schemas — call directly)
+
+list_drives, list_pages, read_page, get_page_details, create_page, replace_lines,
+regex_search, multi_drive_search
+
+## Extended tools (stub schemas — must call tool_search first)
+
+All other tools including: list_calendar_events, create_calendar_event,
+update_calendar_event, delete_calendar_event, update_task, list_agents,
+send_channel_message, get_activity, and others.
+
+## tool_search
+
+Always available. Query formats:
+- `tool_search("select:tool_name")` — get exact tool by name
+- `tool_search("calendar")` — find all calendar-related tools by keyword
+
+Returns: full parameter schemas for the matched tools.

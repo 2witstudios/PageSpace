@@ -2,8 +2,9 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { executeRollback, previewRollback, getActivityById } from '@/services/api';
-import type { RollbackContext } from '@pagespace/lib/permissions';
-import { loggers } from '@pagespace/lib/server';
+import type { RollbackContext } from '@pagespace/lib/permissions/rollback-permissions';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
 import {
   broadcastPageEvent,
@@ -12,14 +13,15 @@ import {
   createDriveEventPayload,
   broadcastDriveMemberEvent,
   createDriveMemberEventPayload,
-  kickUserFromDrive,
-  kickUserFromDriveActivity,
-  kickUserFromPage,
-  kickUserFromPageActivity,
 } from '@/lib/websocket';
-import { db } from '@pagespace/db';
-import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
+import {
+  kickForDriveMembershipRevocation,
+  kickForPagePermissionRevocation,
+} from '@pagespace/lib/permissions/revocation-kick';
+import { db } from '@pagespace/db/db';
+import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -84,7 +86,7 @@ export async function POST(
   // If dry run, just return the preview
   if (dryRun) {
     loggers.api.debug('[Rollback:Route] Dry run - fetching preview');
-    const preview = await previewRollback(activityId, userId, rollbackContext as RollbackContext, { force });
+    const preview = await previewRollback(activityId, actorFromAuth(auth), rollbackContext as RollbackContext, { force });
     loggers.api.debug('[Rollback:Route] Dry run complete', {
       canExecute: preview.canExecute,
       hasConflict: preview.hasConflict,
@@ -97,7 +99,7 @@ export async function POST(
   // Fix 9: Execute rollback within transaction for atomicity
   loggers.api.debug('[Rollback:Route] Executing rollback in transaction');
   const result = await db.transaction(async (tx) => {
-    return executeRollback(activityId, userId, rollbackContext as RollbackContext, { tx, force });
+    return executeRollback(activityId, actorFromAuth(auth), rollbackContext as RollbackContext, { tx, force });
   });
 
   // Fire deferred workflow trigger after transaction commit
@@ -116,6 +118,12 @@ export async function POST(
   loggers.api.debug('[Rollback:Route] Rollback succeeded', {
     rollbackActivityId: result.rollbackActivityId,
   });
+
+  auditRequest(request, { eventType: 'data.write', userId, resourceType: 'activity', resourceId: activityId, details: {
+    operation: 'rollback',
+    context: rollbackContext,
+    force,
+  } });
 
   // Broadcast real-time updates for affected resources
   const activity = await getActivityById(activityId);
@@ -171,12 +179,15 @@ export async function POST(
           })
         );
 
-        // CRITICAL: If member was removed via rollback, kick from real-time rooms
+        // If member was removed via rollback, kick from real-time rooms
+        // through the centralized hook (#2158) — best-effort, never throws.
         if (memberOperation === 'member_removed') {
-          await Promise.all([
-            kickUserFromDrive(activity.driveId, targetUserId, 'member_removed', activity.resourceTitle ?? undefined),
-            kickUserFromDriveActivity(activity.driveId, targetUserId, 'member_removed'),
-          ]);
+          await kickForDriveMembershipRevocation({
+            userId: targetUserId,
+            driveId: activity.driveId,
+            driveName: activity.resourceTitle ?? undefined,
+            reason: 'member_removed',
+          });
         }
       }
     } else if (activity.resourceType === 'permission' && activity.pageId) {
@@ -184,10 +195,11 @@ export async function POST(
       const targetUserId = (activity.metadata as Record<string, unknown>)?.targetUserId as string | undefined;
       if (targetUserId && activity.operation === 'permission_grant') {
         // Rolling back a permission grant = revoking access
-        await Promise.all([
-          kickUserFromPage(activity.pageId, targetUserId, 'permission_revoked'),
-          kickUserFromPageActivity(activity.pageId, targetUserId, 'permission_revoked'),
-        ]);
+        await kickForPagePermissionRevocation({
+          userId: targetUserId,
+          pageId: activity.pageId,
+          reason: 'permission_revoked',
+        });
       }
     } else if (activity.resourceType === 'role' && activity.driveId) {
       // Fix 16: Role changes affect all drive members - broadcast drive update

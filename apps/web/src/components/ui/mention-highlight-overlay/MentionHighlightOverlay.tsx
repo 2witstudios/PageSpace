@@ -2,13 +2,17 @@
 
 import React, { forwardRef } from 'react';
 import { cn } from '@/lib/utils';
-import type { TrackedMention } from '@/hooks/useMentionTracker';
+import { COMMAND_TOKEN_TYPE, type TrackedToken } from '@/lib/tokens/message-tokens';
 
 interface MentionHighlightOverlayProps {
   /** Display text (same as textarea value — no markdown IDs) */
   value: string;
-  /** Tracked mention positions within the display text */
-  mentions: TrackedMention[];
+  /**
+   * Tracked token positions within the display text. Accepts plain mentions
+   * (TrackedMention is assignable) and command chips alike; command tokens
+   * render as primary-tinted rounded chips, mentions as underlined spans.
+   */
+  mentions: TrackedToken[];
   /** Additional class names applied to the overlay container */
   className?: string;
 }
@@ -31,38 +35,45 @@ export const MentionHighlightOverlay = forwardRef<
 >(({ value, mentions, className }, ref) => {
   const renderFormattedText = (
     text: string,
-    trackedMentions: TrackedMention[]
+    trackedTokens: TrackedToken[]
   ): React.ReactNode[] => {
-    if (trackedMentions.length === 0) {
+    if (trackedTokens.length === 0) {
       return [<span key="text-0">{text || '\u200B'}</span>];
     }
 
     const elements: React.ReactNode[] = [];
     let lastIndex = 0;
 
-    for (const mention of trackedMentions) {
+    for (const token of trackedTokens) {
       // Add preceding plain text
-      if (mention.start > lastIndex) {
+      if (token.start > lastIndex) {
         elements.push(
           <span key={`text-${lastIndex}`}>
-            {text.slice(lastIndex, mention.start)}
+            {text.slice(lastIndex, token.start)}
           </span>
         );
       }
 
-      // Render the mention as a styled inline element
-      const mentionText = text.slice(mention.start, mention.end);
+      // Render the token as a styled inline element. Styles must never change
+      // glyph metrics (no padding/weight changes) \u2014 the overlay text has to
+      // stay aligned character-for-character with the transparent textarea.
+      const tokenText = text.slice(token.start, token.end);
+      const isCommand = token.type === COMMAND_TOKEN_TYPE;
 
       elements.push(
         <span
-          key={`mention-${mention.start}`}
-          className="text-primary underline decoration-primary/50"
+          key={`token-${token.start}`}
+          className={
+            isCommand
+              ? 'text-primary bg-primary/10 rounded'
+              : 'text-primary underline decoration-primary/50'
+          }
         >
-          {mentionText}
+          {tokenText}
         </span>
       );
 
-      lastIndex = mention.end;
+      lastIndex = token.end;
     }
 
     // Add any remaining plain text

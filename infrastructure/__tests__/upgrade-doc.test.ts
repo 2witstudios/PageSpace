@@ -1,0 +1,170 @@
+import { describe, it, expect } from 'vitest';
+import { existsSync, readFileSync } from 'fs';
+import { resolve } from 'path';
+
+const UPGRADE_PATH = resolve(__dirname, '../UPGRADE.md');
+const TEMPLATE_PATH = resolve(__dirname, '../env.tenant.template');
+
+/**
+ * infrastructure/UPGRADE.md is the operator-facing upgrade note for existing
+ * tenant/self-host deployments. The tenant compose's required-var errors
+ * (${ADMIN_POSTGRES_PASSWORD:?...}) point operators here, so the doc MUST
+ * exist and MUST carry the exact remediation: append the ADMIN_POSTGRES_*
+ * vars to the EXISTING .env — never regenerate it.
+ */
+describe('infrastructure/UPGRADE.md (operator upgrade note)', () => {
+  it('given the infrastructure directory, should contain UPGRADE.md', () => {
+    expect(existsSync(UPGRADE_PATH)).toBe(true);
+  });
+
+  const doc = existsSync(UPGRADE_PATH) ? readFileSync(UPGRADE_PATH, 'utf-8') : '';
+
+  it('given the Phase 1 section, should be dated', () => {
+    expect(doc).toMatch(/## .*2026-07/);
+  });
+
+  it('given the Phase 1 section, should show the exact ADMIN_POSTGRES_* lines to append', () => {
+    expect(doc).toContain('ADMIN_POSTGRES_DB=pagespace_admin');
+    expect(doc).toContain('ADMIN_POSTGRES_USER=pagespace');
+    expect(doc).toMatch(/ADMIN_POSTGRES_PASSWORD=/);
+  });
+
+  it('given the ADMIN_POSTGRES_DB/USER lines, should mirror env.tenant.template exactly', () => {
+    const template = readFileSync(TEMPLATE_PATH, 'utf-8');
+    for (const key of ['ADMIN_POSTGRES_DB', 'ADMIN_POSTGRES_USER'] as const) {
+      const templateLine = template.split('\n').find((l) => l.startsWith(`${key}=`));
+      expect(templateLine).toBeDefined();
+      expect(doc).toContain(templateLine as string);
+    }
+  });
+
+  it('given the remediation steps, should warn NEVER to re-run generate-tenant-env.sh on a live deployment', () => {
+    expect(doc).toContain('generate-tenant-env.sh');
+    expect(doc).toMatch(/never/i);
+    // The reason must be spelled out: regenerating rotates ALL secrets
+    // including ENCRYPTION_KEY, which makes existing encrypted data unreadable.
+    expect(doc).toContain('ENCRYPTION_KEY');
+  });
+
+  it('given the remediation steps, should instruct appending to the EXISTING .env', () => {
+    expect(doc).toMatch(/append/i);
+    expect(doc).toMatch(/existing/i);
+  });
+
+  // #890 Phase 2 (leaf 0): per-service Admin PG LOGIN users + the Fly/CI
+  // owner-credential scoping. Operators upgrading a live tenant need the new
+  // password vars; cloud ops needs the secret matrix.
+  describe('Phase 2 section (per-service admin login users)', () => {
+    it('given the Phase 2 section, should show the four per-service password lines to append', () => {
+      expect(doc).toMatch(/ADMIN_APP_PASSWORD=/);
+      expect(doc).toMatch(/ADMIN_PROCESSOR_PASSWORD=/);
+      expect(doc).toMatch(/ADMIN_READER_PASSWORD=/);
+      expect(doc).toMatch(/ADMIN_ERASER_PASSWORD=/);
+    });
+
+    it('given the Phase 2 section, should name the per-service login users and their role templates', () => {
+      for (const user of [
+        'admin_app_user',
+        'admin_processor_user',
+        'admin_reader_user',
+        'admin_gdpr_eraser_user',
+      ]) {
+        expect(doc).toContain(user);
+      }
+      for (const role of ['admin_app', 'admin_chainer', 'admin_siem', 'admin_reader', 'admin_gdpr_eraser']) {
+        expect(doc).toContain(role);
+      }
+    });
+
+    it('given the eraser identity (leaf 6), should document ADMIN_ERASER_DATABASE_URL for the web app', () => {
+      expect(doc).toContain('ADMIN_ERASER_DATABASE_URL');
+    });
+
+    it('given the Fly secret matrix, should map each app to its URL and reserve ADMIN_DATABASE_URL_MIGRATE for the migrate one-shot', () => {
+      for (const app of ['pagespace-web', 'pagespace-processor', 'pagespace-admin']) {
+        expect(doc).toContain(app);
+      }
+      expect(doc).toContain('ADMIN_DATABASE_URL_MIGRATE');
+      // The owner URL must be described as GitHub-secret-only, never a Fly runtime secret.
+      expect(doc).toMatch(/GitHub/);
+    });
+
+    it('given the provisioning mechanism, should document db:provision:admin-users', () => {
+      expect(doc).toContain('db:provision:admin-users');
+    });
+  });
+
+  /**
+   * Every migration this doc names by filename must actually exist.
+   *
+   * This guard exists because migrations DO get renumbered: when the
+   * "Agent-Session Single Source of Truth" epic was integrated with master,
+   * master had already shipped its own 0246, so the epic's eight migrations
+   * moved 0246–0253 → 0247–0254. The SQL files themselves keep their
+   * pre-renumber numbers in comments deliberately — the runner hashes the file,
+   * so the bodies had to stay byte-identical — but THIS file is a runbook, not
+   * an applied migration, and nothing forced its numbers to stay stale.
+   *
+   * The failure mode is worse than a dangling reference. A renumber SHIFTS the
+   * numbers, so a stale citation does not 404 — it silently lands on a
+   * different, real migration. After that shift `0253` stopped meaning the
+   * harmless `ALTER ... RENAME` this doc described and started meaning
+   * `0253_drop_chat_messages`, the one irreversible step in the epic. An
+   * operator reading "nothing is dropped" next to that number would have taken
+   * exactly the wrong snapshot decision.
+   */
+  // Closing review F5 (IMG-10.7): the IMG-4.4 backfill runbook must carry
+  // everything an operator needs to run it safely in production.
+  describe('Imago agents backfill runbook (IMG-4.3/IMG-4.4)', () => {
+    const start = doc.indexOf('## Home drives and Imago agents for existing users');
+    const section = start === -1 ? '' : doc.slice(start, doc.indexOf('\n---', start));
+
+    it('given the section, should exist', () => {
+      expect(section).not.toBe('');
+    });
+
+    it('given the run, should require DATABASE_URL and ENCRYPTION_KEY', () => {
+      expect(section).toContain('DATABASE_URL');
+      expect(section).toContain('ENCRYPTION_KEY');
+      expect(section).toMatch(/unknown@system/);
+    });
+
+    it('given the run, should do the --dry-run first, then the real run', () => {
+      const dry = section.indexOf('bun scripts/backfill-imago-agents.ts --dry-run');
+      const real = section.indexOf('bun scripts/backfill-imago-agents.ts --batch-size');
+      expect(dry).toBeGreaterThan(-1);
+      expect(real).toBeGreaterThan(dry);
+    });
+
+    it('given the summary, should require zero on both "still missing" counts', () => {
+      expect(section).toMatch(/still missing a Home drive:\s+0/);
+      expect(section).toMatch(/still missing an agent:\s+0/);
+    });
+
+    it('given the run, should say it grants the agents MEMBER on every owned STANDARD drive', () => {
+      expect(section).toMatch(/MEMBER/);
+      expect(section).toMatch(/STANDARD drive/);
+    });
+
+    it('given the activity chain lock, should warn about contention (off-peak, smaller --batch-size)', () => {
+      expect(section).toMatch(/advisory lock/);
+      expect(section).toMatch(/off-peak/);
+    });
+  });
+
+  describe('migration references', () => {
+    const MIGRATIONS_DIR = resolve(__dirname, '../../packages/db/drizzle');
+
+    it('given every migration named in the doc, should resolve to a real file in packages/db/drizzle', () => {
+      const referenced = [...doc.matchAll(/\b(\d{4}_[a-z0-9_]+)\b/g)].map((m) => m[1]);
+      // The doc is expected to cite migrations by name; a zero match would mean
+      // this guard silently stopped guarding anything.
+      expect(referenced.length).toBeGreaterThan(0);
+
+      const missing = [...new Set(referenced)].filter(
+        (name) => !existsSync(resolve(MIGRATIONS_DIR, `${name}.sql`)),
+      );
+      expect(missing).toEqual([]);
+    });
+  });
+});

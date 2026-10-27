@@ -1,24 +1,65 @@
 'use client';
 
-import React, { createContext, useContext, ReactNode, useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { DefaultChatTransport, UIMessage } from 'ai';
+import React, { createContext, useContext, ReactNode, useReducer, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { conversationState } from '@/lib/ai/core/conversation-state';
 import { getAgentId, getConversationId, setConversationId } from '@/lib/url-state';
-import { useChatTransport } from '@/lib/ai/shared';
+import {
+  conversationIdentityReducer,
+  conversationIdFrom,
+  isResolving,
+  type ConversationIdentityState,
+} from '@/lib/ai/shared';
+import { shouldRefreshOnReconnect } from '@/lib/ai/streams/shouldRefreshOnReconnect';
+import { shouldRefreshAfterUndo } from '@/lib/ai/streams/shouldRefreshAfterUndo';
+import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
+import { useSocketStore } from '@/stores/useSocketStore';
+import { useAuth } from '@/hooks/useAuth';
+import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
+import type { ChatGlobalConversationAddedPayload } from '@/lib/websocket/socket-utils';
+import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
+import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
+import { loadGlobalConversationMessages, refreshConversationSnapshot } from '@/hooks/conversationMessagesLoaders';
+import { buildConversationCacheHandlers } from '@/hooks/conversationCacheSocketHandlers';
+import { useConversationSubscription } from '@/hooks/useConversationSubscription';
+import { DerivedStreamingRegistrations } from '@/components/ai/shared/DerivedStreamingRegistrations';
+import { SessionDirectoryListener } from '@/lib/realtime/session-directory-listener';
+import { WorkspaceNodesListener } from '@/lib/realtime/workspace-nodes-listener';
 
 /**
- * Global Chat Context - Split into three tiers to minimize re-render noise:
+ * Global Chat Context — conversation identity + controls, and the app-wide listeners that
+ * must outlive every chat surface.
  *
- * 1. GlobalChatConversationContext — conversation controls, rarely changes
- * 2. GlobalChatStreamContext — messages, isStreaming, stopStreaming (changes during streaming)
- * 3. GlobalChatConfigContext — chatConfig, setMessages, setIsStreaming, setStopStreaming (stable)
+ * NO CONFIG TIER (client detach). `GlobalChatConfigContext` published a `chatConfig` — a
+ * `DefaultChatTransport` plus the stable `useChat` id both global-mode surfaces fed into
+ * their own `useChat`. It existed because the transport had to be built ONCE and shared: a
+ * `Chat` binds its transport in its constructor and every surface passed a constant id, so
+ * rebuilding one per surface produced instances that were constructed and thrown away.
  *
- * Components subscribe only to what they need:
- * - SidebarChatTab: config + stream (streaming indicators + chatConfig)
- * - GlobalAssistantView: config + stream (chatConfig + setters + streaming)
- * - History panel: conversation only
- * - Other UI: conversation only
+ * There is no transport object any more. `useChatSession` sends with `fetch`, so each surface
+ * builds its own send shell from values it already has, and nothing has to be hoisted into a
+ * context to be kept singular.
+ *
+ * NO MESSAGE TIER (PR 5B). `initialMessages`/`isMessagesLoading` used to live here as a
+ * fetched-messages slot the surfaces watched and copied into their useChat instances via
+ * setMessages — one refetch-and-replace writer among several, each of which could clobber a
+ * live stream and so each of which grew a clobber guard (#2061). Loads now commit to
+ * `useConversationMessagesStore` (the shared per-conversation cache) via
+ * `loadGlobalConversationMessages`, and surfaces render
+ * `selectRenderedMessages(cacheEntry, activeStreams)` through the `useRenderedMessages`
+ * facade — merge-at-render, so no effect ordering can blank a live stream, and the guards
+ * are deleted rather than arbitrated.
+ *
+ * NO refreshSignal (PR 5B, leaf 5.4). Remote events (reconnect, undo, cross-tab
+ * edits/deletes, stream completions) no longer signal surfaces to refetch-and-setMessages;
+ * each producer below writes the cache directly (targeted action) or triggers a cache
+ * reload (staleness-guarded by the store's loadGeneration).
+ *
+ * NO STREAM TIER (PR 5A). `isStreaming`/`stopStreaming` used to live here as a single shared
+ * SLOT, written by a claim protocol on this side and directly by GlobalAssistantView on the
+ * other, and read by SidebarChatTab. That fact now lives in `usePendingStreamsStore`, read
+ * via `useConversationActiveStream(channelId, conversationId)`. Selectors don't claim, so the
+ * whole class is gone by construction rather than by arbitration.
  */
 
 // ============================================
@@ -27,149 +68,91 @@ import { useChatTransport } from '@/lib/ai/shared';
 
 interface GlobalChatConversationContextValue {
   currentConversationId: string | null;
-  initialMessages: UIMessage[];
   isInitialized: boolean;
   setCurrentConversationId: (id: string | null) => void;
   loadConversation: (id: string) => Promise<void>;
   createNewConversation: () => Promise<void>;
-  refreshConversation: () => Promise<void>;
+  /** Re-runs the global channel bootstrap to rejoin any still-live own stream. */
+  rejoinGlobalStream: () => void;
+  /** Most-recently received global conversation-added event (own-tab included). History surfaces watch this to prepend without a refresh. */
+  latestGlobalConversationAdded: ChatGlobalConversationAddedPayload | null;
 }
-
-interface GlobalChatStreamContextValue {
-  messages: UIMessage[];
-  isStreaming: boolean;
-  stopStreaming: (() => void) | null;
-}
-
-interface GlobalChatConfigContextValue {
-  chatConfig: {
-    id: string | undefined;
-    messages: UIMessage[];
-    transport: DefaultChatTransport<UIMessage>;
-    onError: (error: Error) => void;
-  } | null;
-  setMessages: (messages: UIMessage[]) => void;
-  setIsStreaming: (streaming: boolean) => void;
-  setStopStreaming: (fn: (() => void) | null) => void;
-}
-
-// Legacy combined interface for backward compatibility
-interface GlobalChatContextValue extends GlobalChatConversationContextValue, GlobalChatStreamContextValue, GlobalChatConfigContextValue {}
 
 // ============================================
 // Contexts
 // ============================================
 
 const GlobalChatConversationContext = createContext<GlobalChatConversationContextValue | undefined>(undefined);
-const GlobalChatStreamContext = createContext<GlobalChatStreamContextValue | undefined>(undefined);
-const GlobalChatConfigContext = createContext<GlobalChatConfigContextValue | undefined>(undefined);
-// Legacy combined context — kept for backward compatibility
-const GlobalChatContext = createContext<GlobalChatContextValue | undefined>(undefined);
 
 // ============================================
 // Provider
 // ============================================
 
 export function GlobalChatProvider({ children }: { children: ReactNode }) {
-  // Conversation management state
-  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
-  const [initialMessages, setInitialMessages] = useState<UIMessage[]>([]);
-  const [isInitialized, setIsInitialized] = useState<boolean>(false);
-
-  // Global message state - THE single source of truth for messages
-  const [messages, setMessages] = useState<UIMessage[]>([]);
-
-  // Global streaming status
-  const [isStreaming, setIsStreaming] = useState<boolean>(false);
-
-  // Global stop function
-  const [stopStreaming, setStopStreaming] = useState<(() => void) | null>(null);
-
-  /**
-   * Load a conversation by ID
-   */
-  const loadConversation = useCallback(async (conversationId: string) => {
-    try {
-      setIsInitialized(false);
-
-      const messagesResponse = await fetchWithAuth(
-        `/api/ai/global/${conversationId}/messages?limit=50`
-      );
-
-      if (messagesResponse.ok) {
-        const messageData = await messagesResponse.json();
-        const loadedMessages = Array.isArray(messageData) ? messageData : messageData.messages || [];
-
-        setInitialMessages(loadedMessages);
-        setMessages(loadedMessages);
-        setCurrentConversationId(conversationId);
-        conversationState.setActiveConversationId(conversationId);
-
-        setIsInitialized(true);
-      } else {
-        console.error('Failed to load conversation:', conversationId);
-        setIsInitialized(true);
-      }
-    } catch (error) {
-      console.error('Error loading conversation:', error);
-      setInitialMessages([]);
-      setMessages([]);
-      setIsInitialized(true);
-    }
+  // Single source of truth for conversation identity — every transition goes
+  // through the shared pure reducer, so a stale in-flight load can never
+  // clobber a newer loadConversation/createNewConversation call (the reducer
+  // ignores RESOLVED/RESOLVE_FAILED once identity has moved past 'resolving',
+  // and IDENTITY_SET always wins regardless of current state).
+  //
+  // identityRef is updated synchronously by dispatchIdentity itself (not via
+  // a render-time effect) so async callbacks checking "is this result still
+  // current" right after a dispatch always see the latest value, even before
+  // React has committed the corresponding re-render.
+  const [identity, setIdentityState] = useReducer(conversationIdentityReducer, { status: 'idle' as const });
+  const identityRef = useRef<ConversationIdentityState>(identity);
+  const dispatchIdentity = useCallback((action: Parameters<typeof conversationIdentityReducer>[1]) => {
+    identityRef.current = conversationIdentityReducer(identityRef.current, action);
+    setIdentityState(action);
   }, []);
+  const currentConversationId = conversationIdFrom(identity);
 
-  /**
-   * Create a new global conversation
-   */
+  const isInitialized = !isResolving(identity) && identity.status !== 'idle';
+  const [latestGlobalConversationAdded, setLatestGlobalConversationAdded] = useState<ChatGlobalConversationAddedPayload | null>(null);
+
+
+  // The id is already known — adopt it synchronously, before the messages
+  // fetch even starts, so a send fired right after switching can't race.
+  // Messages land in the shared conversation cache; the loader's
+  // loadGeneration gate replaces the local stale-result check, and it carries
+  // includeStreaming=1 so a history-tab rejoin sees the in-flight placeholder
+  // row (selectRenderedMessages renders the live stream in its place).
+  const loadConversation = useCallback(async (conversationId: string) => {
+    dispatchIdentity({ type: 'IDENTITY_SET', conversationId });
+    conversationState.setActiveConversationId(conversationId);
+    await loadGlobalConversationMessages(conversationId);
+  }, [dispatchIdentity]);
+
   const createNewConversation = useCallback(async () => {
     try {
       const newConversation = await conversationState.createAndSetActiveConversation({
         type: 'global',
       });
-
       if (newConversation && newConversation.id) {
-        setCurrentConversationId(newConversation.id);
-        setInitialMessages([]);
-        setMessages([]);
+        dispatchIdentity({ type: 'IDENTITY_SET', conversationId: newConversation.id });
+        // A just-created conversation has no server rows — mark it loaded-empty
+        // in the cache so nothing fetches for it and no loading state shows.
+        conversationMessagesActions.seedConversation(newConversation.id);
         conversationState.setActiveConversationId(newConversation.id);
-
-        // Update URL to reflect new conversation (only if no agent selected)
         if (!getAgentId()) {
           setConversationId(newConversation.id, 'push');
         }
-
-        setIsInitialized(true);
       }
     } catch (error) {
       console.error('Failed to create new conversation:', error);
     }
-  }, []);
+  }, [dispatchIdentity]);
 
-  /**
-   * Refresh the current conversation
-   */
-  const refreshConversation = useCallback(async () => {
-    if (currentConversationId) {
-      await loadConversation(currentConversationId);
-    }
-  }, [currentConversationId, loadConversation]);
-
-  /**
-   * Initialize Global Assistant chat on mount
-   * Agent initialization is handled separately by usePageAgentDashboardStore
-   */
   useEffect(() => {
     const initializeGlobalChat = async () => {
+      dispatchIdentity({ type: 'RESOLVE_STARTED' });
       try {
         const urlConversationId = getConversationId();
         const urlAgentId = getAgentId();
         const cookieConversationId = conversationState.getActiveConversationId();
         const cookieAgentId = conversationState.getActiveAgentId();
-
-        // Determine if an agent is selected (from URL or cookie)
         const hasAgent = Boolean(urlAgentId || cookieAgentId);
 
-        // If no agent selected, try to load from URL or cookie
         if (!hasAgent && (urlConversationId || cookieConversationId)) {
           const conversationId = urlConversationId || cookieConversationId;
           if (conversationId) {
@@ -178,15 +161,19 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
           }
         }
 
-        // Always try to get the most recent global conversation
-        // This ensures sidebar has a conversation to display
         const response = await fetchWithAuth('/api/ai/global/active');
+        // CR2 (CodeRabbit round 2): everything below this await is a BOOTSTRAP
+        // result, and the user may have created/selected a conversation while it
+        // was in flight — their IDENTITY_SET moved the reducer past 'resolving',
+        // and a stale bootstrap must not overwrite it. (loadConversation itself
+        // keeps its unconditional IDENTITY_SET: a user-initiated select always
+        // wins; only these post-await bootstrap adoptions are guarded.)
+        if (!isResolving(identityRef.current)) return;
         if (response.ok) {
           const conversation = await response.json();
+          if (!isResolving(identityRef.current)) return;
           if (conversation && conversation.id) {
             await loadConversation(conversation.id);
-
-            // Only update URL if no agent is selected
             if (!hasAgent) {
               setConversationId(conversation.id, 'replace');
             }
@@ -194,113 +181,151 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
           }
         }
 
-        // No existing global conversation - create one
         await createNewConversation();
       } catch (error) {
         console.error('Failed to initialize global chat:', error);
-        setIsInitialized(true);
+        // Only takes effect if nothing above ever reached IDENTITY_SET —
+        // otherwise this is a no-op per the reducer's own guards.
+        dispatchIdentity({
+          type: 'RESOLVE_FAILED',
+          message: error instanceof Error ? error.message : 'Failed to initialize global chat',
+        });
       }
     };
 
     initializeGlobalChat();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Run once on mount
+  }, []);
 
-  // Track the previous conversation ID to detect conversation switches
-  const prevConversationIdRef = useRef<string | null>(null);
+  // ============================================
+  // Socket reconnect — reload the active conversation's cache entry (P1).
+  // The loadGeneration gate drops it if a newer load supersedes; merge-at-render
+  // means it cannot blank a live stream regardless of timing.
+  // ============================================
+  const connectionStatus = useSocketStore((s) => s.connectionStatus);
+  const hasInitialConnectRef = useRef(false);
+  const prevConnectionStatusRef = useRef<typeof connectionStatus | null>(null);
+  const isInitializedRef = useRef(false);
+  isInitializedRef.current = isInitialized;
+  const currentConversationIdRef = useRef(currentConversationId);
+  currentConversationIdRef.current = currentConversationId;
 
-  // Sync initialMessages with current messages ONLY when conversation ID changes
-  // This ensures useChat gets the correct messages when switching conversations from history
-  // without causing chatConfig to update on every message
   useEffect(() => {
-    const conversationJustSwitched = currentConversationId !== prevConversationIdRef.current;
+    const prevStatus = prevConnectionStatusRef.current;
+    prevConnectionStatusRef.current = connectionStatus;
 
-    if (conversationJustSwitched && currentConversationId) {
-      // On conversation switch, initialMessages is already set by loadConversation
-      // Just update our tracking ref
-      prevConversationIdRef.current = currentConversationId;
+    const refreshNow = shouldRefreshOnReconnect(
+      prevStatus,
+      connectionStatus,
+      hasInitialConnectRef.current,
+    );
+    if (refreshNow && isInitializedRef.current && currentConversationIdRef.current) {
+      void loadGlobalConversationMessages(currentConversationIdRef.current);
     }
-  }, [currentConversationId]);
 
-  // Stable transport that only recreates when conversation ID changes
-  const apiEndpoint = currentConversationId ? `/api/ai/global/${currentConversationId}/messages` : '';
-  const transport = useChatTransport(currentConversationId, apiEndpoint);
-
-  // Create stable chat config
-  // IMPORTANT: Uses initialMessages which is set by loadConversation when switching conversations.
-  // The chatConfig only changes when:
-  // 1. currentConversationId changes (switching conversations)
-  // 2. initialMessages changes (set during loadConversation)
-  const chatConfig = useMemo(() => {
-    if (!currentConversationId || !transport) return null;
-
-    return {
-      id: currentConversationId,
-      messages: initialMessages,
-      transport,
-      experimental_throttle: 100,
-      onError: (error: Error) => {
-        console.error('Global Chat Error:', error);
-        if (error.message?.includes('Unauthorized') || error.message?.includes('401')) {
-          console.error('Authentication failed - user may need to log in again');
-        }
-      },
-    };
-  }, [currentConversationId, transport, initialMessages]);
+    if (prevStatus !== 'connected' && connectionStatus === 'connected') {
+      hasInitialConnectRef.current = true;
+    }
+  }, [connectionStatus]);
 
   // ============================================
-  // Context Values — separate memo for each tier
+  // GLOBAL CHANNEL STREAM SOCKET
+  // ============================================
+  const { user } = useAuth();
+  const userId = user?.id ?? null;
+  const channelId = userId ? globalChannelId(userId) : null;
+
+  // THE STREAM PLANE ONLY (Agent-Session SSoT epic, Phase 2 / plan PR 3). This
+  // provider keeps the app-wide global-channel subscription because a stream must
+  // stay in the store even for a conversation no surface is currently showing —
+  // but it no longer handles the MESSAGE plane. `onUserMessage`/`onMessageEdited`/
+  // `onMessageDeleted` (the legacy `chat:*` fan-out) are superseded by the
+  // authoritative `conversation:message_*` events, which arrive on the
+  // conversation's own room and are applied — rev-gated — by
+  // `useConversationSubscription`. Only `onStreamComplete` is kept from the shared
+  // cache protocol: it is stream lifecycle, not message content, and it is what
+  // keeps a finished reply from flashing out when the mirror releases.
+  //
+  // NO useChat dual-write here: this provider cannot reach the surfaces'
+  // transport instances, and post-cutover their arrays are bookkeeping only — the
+  // surfaces re-seed the transport at the actions that need it (retry, ask_user).
+  const { onStreamComplete } = buildConversationCacheHandlers({
+    reloadConversation: loadGlobalConversationMessages,
+    refreshSnapshot: (conversationId) => refreshConversationSnapshot(null, conversationId),
+  });
+
+  const { rejoinActiveStreams: rejoinGlobalStream } = useChannelStreamSocket(channelId ?? undefined, {
+    onStreamComplete,
+    // P5: a remote tab's undo restructures the conversation wholesale — reload the
+    // cache entry. Guard kept as the pure fn (cross-conversation + own-tab).
+    onUndoApplied: (payload) => {
+      if (!shouldRefreshAfterUndo(payload, currentConversationId, getBrowserSessionId())) return;
+      void loadGlobalConversationMessages(payload.conversationId);
+    },
+    onGlobalConversationAdded: (payload) => {
+      setLatestGlobalConversationAdded(payload);
+    },
+  });
+
+  // The MESSAGE plane for whichever global conversation the app is currently on
+  // — the surfaces that render it in "global mode" (the dashboard assistant, the
+  // sidebar chat tab) read their conversation id from this provider and mount no
+  // subscription of their own, so this is theirs. Panes are different: each one
+  // subscribes to its own conversation through `useAssistantSessionChat` /
+  // `useAgentSessionChat`. Duplicate delivery across the two is harmless — every
+  // cache action is idempotent by construction.
+  useConversationSubscription(currentConversationId, { channelId: null, agentPageId: null });
+
+  // Kept for API compatibility (no current callers) — routes through the
+  // same synchronous IDENTITY_SET path as loadConversation/createNewConversation.
+  const setCurrentConversationId = useCallback((id: string | null) => {
+    if (id) dispatchIdentity({ type: 'IDENTITY_SET', conversationId: id });
+  }, [dispatchIdentity]);
+
+  // ============================================
+  // Context Values
   // ============================================
 
-  // Tier 1: Conversation controls — rarely changes
   const conversationContextValue: GlobalChatConversationContextValue = useMemo(() => ({
     currentConversationId,
-    initialMessages,
     isInitialized,
     setCurrentConversationId,
     loadConversation,
     createNewConversation,
-    refreshConversation,
+    rejoinGlobalStream,
+    latestGlobalConversationAdded,
   }), [
+    setCurrentConversationId,
     currentConversationId,
-    initialMessages,
     isInitialized,
     loadConversation,
     createNewConversation,
-    refreshConversation,
+    rejoinGlobalStream,
+    latestGlobalConversationAdded,
   ]);
-
-  // Tier 2: Stream state — changes during streaming (messages on every token, isStreaming on start/stop)
-  const streamContextValue: GlobalChatStreamContextValue = useMemo(() => ({
-    messages,
-    isStreaming,
-    stopStreaming,
-  }), [messages, isStreaming, stopStreaming]);
-
-  // Tier 3: Config — stable, only changes on conversation switch
-  const configContextValue: GlobalChatConfigContextValue = useMemo(() => ({
-    chatConfig,
-    setMessages,
-    setIsStreaming,
-    setStopStreaming,
-  }), [chatConfig]);
-
-  // Legacy combined value — for backward compatibility with useGlobalChat()
-  const legacyContextValue: GlobalChatContextValue = useMemo(() => ({
-    ...conversationContextValue,
-    ...streamContextValue,
-    ...configContextValue,
-  }), [conversationContextValue, streamContextValue, configContextValue]);
 
   return (
     <GlobalChatConversationContext.Provider value={conversationContextValue}>
-      <GlobalChatConfigContext.Provider value={configContextValue}>
-        <GlobalChatStreamContext.Provider value={streamContextValue}>
-          <GlobalChatContext.Provider value={legacyContextValue}>
-            {children}
-          </GlobalChatContext.Provider>
-        </GlobalChatStreamContext.Provider>
-      </GlobalChatConfigContext.Provider>
+      <>
+        {/* THE app-wide editing-store streaming registration (PR 5A, leaf 5.7) — replaces five
+            independent mount sites, this provider's included. Mounted here because this provider
+            wraps the entire Layout, so it outlives every chat surface and covers conversations no
+            surface is currently showing (a bootstrapped stream keeps its own SWR protection while
+            the user is on another page). */}
+        <DerivedStreamingRegistrations />
+        {/* THE app-wide session/conversation DIRECTORY listener (SSoT epic, Phase 2 /
+            plan PR 4) — mounted here for the same reason as the line above: this
+            provider wraps the whole Layout, so one mount covers every sidebar and
+            pane strip, and N mounts would mean N revalidations per event. */}
+        <SessionDirectoryListener />
+        {/* THE app-wide LAYOUT listener — a sibling of the line above, not a
+            branch inside it. The directory listener owns SWR surgery on the
+            conversation listings; this one owns the node tree in
+            `useAgentWorkspaceStore`, which is not in SWR at all. One mount for
+            the same reason: N copies would be N adoptions per event. */}
+        <WorkspaceNodesListener />
+        {children}
+      </>
     </GlobalChatConversationContext.Provider>
   );
 }
@@ -310,20 +335,9 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
 // ============================================
 
 /**
- * Hook to access the full global chat context (backward compatible).
- * Subscribes to ALL tiers — use selective hooks below to reduce re-renders.
- */
-export function useGlobalChat() {
-  const context = useContext(GlobalChatContext);
-  if (!context) {
-    throw new Error('useGlobalChat must be used within a GlobalChatProvider');
-  }
-  return context;
-}
-
-/**
- * Hook to access global conversation controls without subscribing to streaming state.
+ * Conversation identity + controls without subscribing to streaming state.
  * Best for: history panels, navigation, conversation management.
+ * Messages are NOT here (PR 5B): read them via useRenderedMessages(channelId, conversationId).
  */
 export function useGlobalChatConversation() {
   const context = useContext(GlobalChatConversationContext);
@@ -333,27 +347,3 @@ export function useGlobalChatConversation() {
   return context;
 }
 
-/**
- * Hook to access streaming state (messages, isStreaming, stopStreaming).
- * Re-renders on every streaming token — only use if you display messages from context.
- */
-export function useGlobalChatStream() {
-  const context = useContext(GlobalChatStreamContext);
-  if (!context) {
-    throw new Error('useGlobalChatStream must be used within a GlobalChatProvider');
-  }
-  return context;
-}
-
-/**
- * Hook to access chat configuration and setters.
- * Stable — only changes on conversation switch.
- * Best for: useChat consumers that need chatConfig + setters.
- */
-export function useGlobalChatConfig() {
-  const context = useContext(GlobalChatConfigContext);
-  if (!context) {
-    throw new Error('useGlobalChatConfig must be used within a GlobalChatProvider');
-  }
-  return context;
-}

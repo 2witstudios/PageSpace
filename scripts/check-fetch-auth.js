@@ -44,9 +44,6 @@ const AUTH_FLOW_FILES = [
 
 // Auth endpoints that don't require CSRF
 const AUTH_ENDPOINTS = [
-  '/api/auth/login',
-  '/api/auth/signup',
-  '/api/auth/refresh',
   '/api/auth/me',
   '/api/auth/google/signin',
   '/api/auth/google/callback',

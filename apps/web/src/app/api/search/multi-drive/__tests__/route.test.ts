@@ -4,18 +4,19 @@ import { GET } from '../route';
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
-  filterDrivesByMCPScope: vi.fn(),
+  getPrincipalDriveIds: vi.fn(),
+  getPrincipalBatchPagePermissions: vi.fn().mockResolvedValue(new Map()),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  getBatchPagePermissions: vi.fn().mockResolvedValue(new Map()),
-  getDriveIdsForUser: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: { info: vi.fn(), error: vi.fn() },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
@@ -25,20 +26,23 @@ vi.mock('@pagespace/db', () => ({
       }),
     }),
   },
-  pages: { id: 'id', driveId: 'driveId', title: 'title', content: 'content', type: 'type', isTrashed: 'isTrashed', updatedAt: 'updatedAt' },
-  drives: { id: 'id', name: 'name', slug: 'slug', isTrashed: 'isTrashed' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   sql: vi.fn(),
   inArray: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', driveId: 'driveId', title: 'title', content: 'content', type: 'type', isTrashed: 'isTrashed', updatedAt: 'updatedAt' },
+  drives: { id: 'id', name: 'name', slug: 'slug', isTrashed: 'isTrashed' },
 }));
 
 vi.mock('@/lib/utils/query-params', () => ({
   parseBoundedIntParam: vi.fn().mockReturnValue(20),
 }));
 
-import { authenticateRequestWithOptions, isAuthError, filterDrivesByMCPScope } from '@/lib/auth';
-import { getDriveIdsForUser } from '@pagespace/lib/server';
+import { authenticateRequestWithOptions, isAuthError, getPrincipalDriveIds } from '@/lib/auth';
 
 const mockSessionAuth = {
   userId: 'user_123',
@@ -59,55 +63,34 @@ const mockMCPAuthScoped = {
   tokenType: 'mcp' as const,
 };
 
-describe('GET /api/search/multi-drive - MCP Scope Enforcement', () => {
+describe('GET /api/search/multi-drive - principal drive universe', () => {
   beforeEach(() => {
     vi.resetAllMocks();
   });
 
-  describe('MCP drive scope enforcement', () => {
-    it('should call filterDrivesByMCPScope when MCP token is used', async () => {
-      const mockDriveIds = ['drive_abc', 'drive_def'];
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockMCPAuthScoped);
-      vi.mocked(isAuthError).mockReturnValue(false);
-      vi.mocked(getDriveIdsForUser).mockResolvedValue(mockDriveIds);
-      // Return empty array to trigger early return (no drives accessible)
-      vi.mocked(filterDrivesByMCPScope).mockReturnValue([]);
+  it('searches only the principal drive universe for a scoped MCP token', async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockMCPAuthScoped);
+    vi.mocked(isAuthError).mockReturnValue(false);
+    // Scoped token: getPrincipalDriveIds returns the token's own memberships.
+    // Empty here to trigger the early return (no drives accessible).
+    vi.mocked(getPrincipalDriveIds).mockResolvedValue([]);
 
-      const request = new Request('https://example.com/api/search/multi-drive?searchQuery=test');
-      const response = await GET(request);
+    const request = new Request('https://example.com/api/search/multi-drive?searchQuery=test');
+    const response = await GET(request);
 
-      expect(filterDrivesByMCPScope).toHaveBeenCalledWith(mockMCPAuthScoped, mockDriveIds);
-      expect(response.status).toBe(200); // Returns success with empty results
-    });
+    expect(getPrincipalDriveIds).toHaveBeenCalledWith(mockMCPAuthScoped);
+    expect(response.status).toBe(200); // Returns success with empty results
+  });
 
-    it('should filter to only scoped drives when MCP token has scope', async () => {
-      const mockDriveIds = ['drive_abc', 'drive_def', 'drive_ghi'];
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockMCPAuthScoped);
-      vi.mocked(isAuthError).mockReturnValue(false);
-      vi.mocked(getDriveIdsForUser).mockResolvedValue(mockDriveIds);
-      // Return empty array to trigger early return
-      vi.mocked(filterDrivesByMCPScope).mockReturnValue([]);
+  it('uses the principal universe for session auth too (user drives)', async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSessionAuth);
+    vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(getPrincipalDriveIds).mockResolvedValue([]);
 
-      const request = new Request('https://example.com/api/search/multi-drive?searchQuery=test');
-      const response = await GET(request);
+    const request = new Request('https://example.com/api/search/multi-drive?searchQuery=test');
+    const response = await GET(request);
 
-      expect(filterDrivesByMCPScope).toHaveBeenCalledWith(mockMCPAuthScoped, mockDriveIds);
-      expect(response.status).toBe(200);
-    });
-
-    it('should call filterDrivesByMCPScope for session auth (returns unfiltered drives)', async () => {
-      const mockDriveIds = ['drive_123', 'drive_456'];
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSessionAuth);
-      vi.mocked(isAuthError).mockReturnValue(false);
-      vi.mocked(getDriveIdsForUser).mockResolvedValue(mockDriveIds);
-      // Return empty array to trigger early return
-      vi.mocked(filterDrivesByMCPScope).mockReturnValue([]);
-
-      const request = new Request('https://example.com/api/search/multi-drive?searchQuery=test');
-      const response = await GET(request);
-
-      expect(filterDrivesByMCPScope).toHaveBeenCalledWith(mockSessionAuth, mockDriveIds);
-      expect(response.status).toBe(200);
-    });
+    expect(getPrincipalDriveIds).toHaveBeenCalledWith(mockSessionAuth);
+    expect(response.status).toBe(200);
   });
 });

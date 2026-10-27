@@ -62,11 +62,14 @@ export type BodyEncoding = 'json' | 'form' | 'multipart';
 export interface ParameterRef {
   $param: string;
   transform?: 'string' | 'number' | 'boolean' | 'json';
+  default?: unknown;
 }
 
 export interface HttpExecutionConfig {
   method: HttpMethod;
   pathTemplate: string;
+  /** Param names allowed to contain literal "/" segments (e.g. a nested file path); still rejects "." and ".." segments. */
+  rawPathParams?: string[];
   queryParams?: Record<string, string | ParameterRef>;
   headers?: Record<string, string | ParameterRef>;
   bodyTemplate?: Record<string, unknown> | string;
@@ -135,6 +138,20 @@ export interface ToolDefinition {
   retry?: RetryConfig;
 }
 
+/**
+ * A named, human-friendly preset of tools that an agent can be granted in one
+ * click. Bundles power both the per-agent grant UI (one-click presets) and
+ * token efficiency (an agent loads only the tools in its bundle). Every
+ * `toolIds` entry must reference a tool that exists on the provider.
+ */
+export interface ToolBundle {
+  id: string;
+  name: string;
+  description: string;
+  toolIds: string[];
+  recommended?: boolean;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // PROVIDER TYPES
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -156,6 +173,15 @@ export interface IntegrationProviderConfig {
   baseUrl: string;
   defaultHeaders?: Record<string, string>;
   tools: ToolDefinition[];
+  /** Named capability presets surfaced in the grant UI; see {@link ToolBundle}. */
+  toolBundles?: ToolBundle[];
+  /**
+   * Plain-English explanation of each OAuth scope, keyed by scope string.
+   * Surfaced in the connect dialog so users understand what access they grant.
+   */
+  oauthScopeDescriptions?: Record<string, string>;
+  /** Short identity/safety note shown before authorizing (e.g. "agents act as you"). */
+  connectNotes?: string;
   credentialSchema?: Record<string, unknown>;
   healthCheck?: HealthCheckConfig;
   rateLimit?: { requests: number; windowMs: number };
@@ -232,7 +258,8 @@ export type ToolCallErrorType =
   | 'http'
   | 'internal'
   | 'timeout'
-  | 'network';
+  | 'network'
+  | 'blocked_target';
 
 export interface ToolCallResult {
   success: boolean;

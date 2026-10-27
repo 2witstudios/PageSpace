@@ -86,6 +86,293 @@ const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🎉', '🔥
 const RECENT_EMOJIS_KEY = 'pagespace-recent-emojis';
 const MAX_RECENT = 24;
 
+// Searchable keywords for each emoji. Used to filter results in the search input.
+const EMOJI_KEYWORDS: Record<string, string[]> = {
+  // Smileys
+  '😀': ['grinning', 'smile', 'happy', 'face'],
+  '😃': ['smiley', 'smile', 'happy', 'joy', 'face'],
+  '😄': ['smile', 'happy', 'joy', 'laugh', 'face'],
+  '😁': ['grin', 'beaming', 'smile', 'happy', 'face'],
+  '😅': ['sweat', 'smile', 'nervous', 'laugh', 'face'],
+  '😂': ['joy', 'laugh', 'tears', 'lol', 'crying', 'face'],
+  '🤣': ['rofl', 'laugh', 'rolling', 'lol', 'face'],
+  '😊': ['blush', 'smile', 'happy', 'face'],
+  '😇': ['angel', 'halo', 'innocent', 'face'],
+  '🙂': ['slight', 'smile', 'face'],
+  '😉': ['wink', 'face'],
+  '😌': ['relieved', 'smile', 'face'],
+  '😍': ['heart', 'eyes', 'love', 'in', 'face'],
+  '🥰': ['hearts', 'smiling', 'love', 'face'],
+  '😘': ['kiss', 'blow', 'face'],
+  '😗': ['kissing', 'face'],
+  '😙': ['kissing', 'smile', 'face'],
+  '😚': ['kissing', 'closed', 'eyes', 'face'],
+  '😋': ['yum', 'savoring', 'tongue', 'food', 'face'],
+  '😛': ['tongue', 'stuck', 'out', 'face'],
+  '😜': ['winking', 'tongue', 'face'],
+  '🤪': ['zany', 'crazy', 'silly', 'face'],
+  '😝': ['squinting', 'tongue', 'face'],
+  '🤑': ['money', 'mouth', 'face'],
+  '🤗': ['hug', 'hugging', 'face'],
+  '🤭': ['hand', 'over', 'mouth', 'face'],
+  '🤫': ['shush', 'quiet', 'shh', 'face'],
+  '🤔': ['thinking', 'think', 'hmm', 'face'],
+  '🤐': ['zipper', 'mouth', 'quiet', 'face'],
+  '🤨': ['raised', 'eyebrow', 'face'],
+  '😐': ['neutral', 'face'],
+  '😑': ['expressionless', 'face'],
+  '😶': ['no', 'mouth', 'face'],
+  '😏': ['smirk', 'smirking', 'face'],
+  '😒': ['unamused', 'face'],
+  '🙄': ['eye', 'roll', 'eyeroll', 'rolling', 'face'],
+  '😬': ['grimace', 'grimacing', 'face'],
+  '🤯': ['mind', 'blown', 'exploding', 'head', 'face'],
+  '😴': ['sleep', 'sleeping', 'zzz', 'face'],
+  '🥱': ['yawning', 'yawn', 'tired', 'face'],
+  '😷': ['mask', 'sick', 'medical', 'face'],
+  '🤒': ['thermometer', 'sick', 'fever', 'ill', 'face'],
+  '🤕': ['bandage', 'hurt', 'injured', 'face'],
+  '🤢': ['nauseated', 'sick', 'green', 'face'],
+  '🤮': ['vomiting', 'puke', 'sick', 'face'],
+  '🤧': ['sneezing', 'sneeze', 'sick', 'face'],
+  '🥵': ['hot', 'sweat', 'heat', 'face'],
+  '🥶': ['cold', 'freezing', 'face'],
+  '🥴': ['woozy', 'drunk', 'face'],
+  '😵': ['dizzy', 'dead', 'face'],
+  '🤠': ['cowboy', 'hat', 'face'],
+  '🥳': ['partying', 'party', 'face'],
+  '🥺': ['pleading', 'puppy', 'face'],
+  '😎': ['cool', 'sunglasses', 'face'],
+  '🤓': ['nerd', 'glasses', 'face'],
+  '🧐': ['monocle', 'fancy', 'face'],
+  '😕': ['confused', 'face'],
+  '😟': ['worried', 'face'],
+  '🙁': ['frown', 'frowning', 'sad', 'face'],
+  '😮': ['open', 'mouth', 'surprised', 'wow', 'face'],
+  '😯': ['hushed', 'face'],
+  '😲': ['astonished', 'shocked', 'face'],
+  '😳': ['flushed', 'embarrassed', 'face'],
+  '😦': ['frowning', 'open', 'mouth', 'face'],
+  '😧': ['anguished', 'face'],
+  '😨': ['fearful', 'scared', 'face'],
+  '😰': ['anxious', 'sweat', 'face'],
+  '😥': ['sad', 'disappointed', 'face'],
+  '😢': ['cry', 'crying', 'sad', 'tear', 'face'],
+  '😭': ['sobbing', 'crying', 'loud', 'sad', 'face'],
+
+  // Gestures
+  '👍': ['thumbs', 'up', 'like', 'yes', 'good', 'approve'],
+  '👎': ['thumbs', 'down', 'dislike', 'no', 'bad'],
+  '👌': ['ok', 'okay', 'perfect', 'hand'],
+  '🤌': ['pinched', 'fingers', 'italian', 'hand'],
+  '✌️': ['peace', 'victory', 'hand'],
+  '🤞': ['fingers', 'crossed', 'hope', 'luck', 'hand'],
+  '🤟': ['love', 'you', 'hand'],
+  '🤘': ['rock', 'horns', 'hand', 'metal'],
+  '🤙': ['call', 'me', 'shaka', 'hand'],
+  '👈': ['point', 'left', 'finger', 'hand'],
+  '👉': ['point', 'right', 'finger', 'hand'],
+  '👆': ['point', 'up', 'finger', 'hand'],
+  '👇': ['point', 'down', 'finger', 'hand'],
+  '☝️': ['index', 'point', 'up', 'finger', 'hand'],
+  '👋': ['wave', 'waving', 'hi', 'hello', 'bye', 'hand'],
+  '🤚': ['raised', 'back', 'hand', 'stop'],
+  '🖐️': ['hand', 'splayed', 'five'],
+  '✋': ['stop', 'raised', 'hand', 'high', 'five'],
+  '🖖': ['vulcan', 'spock', 'hand', 'salute'],
+  '👏': ['clap', 'clapping', 'applause', 'hand'],
+  '🙌': ['raised', 'hands', 'praise', 'celebrate'],
+  '🤲': ['palms', 'together', 'hands'],
+  '🤝': ['handshake', 'shake', 'hands', 'deal'],
+  '🙏': ['pray', 'prayer', 'please', 'thanks', 'hands'],
+  '✍️': ['writing', 'hand', 'write'],
+  '💪': ['muscle', 'strong', 'flex', 'arm', 'biceps'],
+  '🦾': ['mechanical', 'arm', 'prosthetic'],
+  '🦿': ['mechanical', 'leg', 'prosthetic'],
+  '🦵': ['leg'],
+  '🦶': ['foot'],
+  '👂': ['ear', 'hear', 'listen'],
+  '🦻': ['ear', 'hearing', 'aid'],
+  '👃': ['nose', 'smell'],
+  '🧠': ['brain', 'mind', 'think'],
+  '👀': ['eyes', 'looking', 'look', 'watching', 'see'],
+  '👁️': ['eye', 'see', 'look'],
+  '👅': ['tongue'],
+  '👄': ['mouth', 'lips'],
+  '💋': ['kiss', 'lipstick', 'mark'],
+  '🫀': ['heart', 'anatomical', 'organ'],
+  '🫁': ['lungs', 'breath'],
+  '🦷': ['tooth', 'teeth'],
+  '🦴': ['bone'],
+  '💀': ['skull', 'death', 'dead'],
+  '👤': ['person', 'silhouette', 'user'],
+  '👥': ['people', 'silhouettes', 'users'],
+  '🫂': ['hug', 'hugging', 'people'],
+  '👣': ['footprints', 'feet'],
+
+  // Hearts
+  '❤️': ['red', 'heart', 'love'],
+  '🧡': ['orange', 'heart', 'love'],
+  '💛': ['yellow', 'heart', 'love'],
+  '💚': ['green', 'heart', 'love'],
+  '💙': ['blue', 'heart', 'love'],
+  '💜': ['purple', 'heart', 'love'],
+  '🖤': ['black', 'heart', 'love'],
+  '🤍': ['white', 'heart', 'love'],
+  '🤎': ['brown', 'heart', 'love'],
+  '💔': ['broken', 'heart', 'breakup'],
+  '❣️': ['heart', 'exclamation'],
+  '💕': ['two', 'hearts', 'love'],
+  '💞': ['revolving', 'hearts', 'love'],
+  '💓': ['beating', 'heart', 'love'],
+  '💗': ['growing', 'heart', 'love'],
+  '💖': ['sparkling', 'heart', 'love'],
+  '💘': ['heart', 'arrow', 'cupid', 'love'],
+  '💝': ['heart', 'ribbon', 'gift', 'love'],
+  '💟': ['heart', 'decoration'],
+  '♥️': ['heart', 'suit', 'love'],
+  '🫶': ['heart', 'hands', 'love'],
+  '🩷': ['pink', 'heart', 'love'],
+  '🩵': ['light', 'blue', 'heart', 'love'],
+  '🩶': ['grey', 'gray', 'heart', 'love'],
+
+  // Celebrations
+  '🎉': ['party', 'popper', 'celebration', 'tada', 'celebrate'],
+  '🎊': ['confetti', 'ball', 'celebration', 'celebrate'],
+  '🎈': ['balloon', 'party'],
+  '🎁': ['gift', 'present', 'box'],
+  '🎀': ['ribbon', 'bow'],
+  '🏆': ['trophy', 'win', 'winner', 'award'],
+  '🏅': ['medal', 'award'],
+  '🥇': ['first', 'gold', 'medal', 'award'],
+  '🥈': ['second', 'silver', 'medal', 'award'],
+  '🥉': ['third', 'bronze', 'medal', 'award'],
+  '⭐': ['star'],
+  '🌟': ['glowing', 'star', 'sparkle'],
+  '✨': ['sparkles', 'sparkle', 'stars'],
+  '💫': ['dizzy', 'swirl', 'star'],
+  '🔥': ['fire', 'hot', 'lit', 'flame'],
+  '💥': ['collision', 'boom', 'explosion'],
+  '💯': ['hundred', 'percent', 'perfect', '100'],
+  '🎯': ['target', 'dart', 'bullseye'],
+  '🎪': ['circus', 'tent'],
+  '🎭': ['theater', 'masks', 'performing', 'arts'],
+  '🎨': ['art', 'palette', 'paint'],
+  '🎬': ['clapper', 'movie', 'film'],
+  '🎤': ['microphone', 'mic', 'sing', 'karaoke'],
+  '🎧': ['headphones', 'music', 'audio'],
+  '🎵': ['musical', 'note', 'music'],
+  '🎶': ['musical', 'notes', 'music'],
+  '🎹': ['keyboard', 'piano', 'music'],
+  '🎸': ['guitar', 'music'],
+  '🎺': ['trumpet', 'music'],
+  '🎻': ['violin', 'music'],
+  '🥁': ['drum', 'music'],
+  '🎲': ['dice', 'game'],
+  '🎮': ['video', 'game', 'controller'],
+  '🕹️': ['joystick', 'game'],
+  '🎰': ['slot', 'machine', 'gambling'],
+  '🧩': ['puzzle', 'piece'],
+
+  // Objects
+  '💡': ['light', 'bulb', 'idea'],
+  '🔦': ['flashlight', 'torch'],
+  '🏮': ['lantern', 'lamp'],
+  '📱': ['phone', 'mobile', 'cell'],
+  '💻': ['laptop', 'computer'],
+  '🖥️': ['desktop', 'computer'],
+  '🖨️': ['printer'],
+  '⌨️': ['keyboard'],
+  '🖱️': ['computer', 'mouse'],
+  '💾': ['floppy', 'disk', 'save'],
+  '💿': ['cd', 'disc', 'optical'],
+  '📀': ['dvd', 'disc'],
+  '📷': ['camera', 'photo'],
+  '📸': ['camera', 'flash', 'photo'],
+  '📹': ['video', 'camera'],
+  '🎥': ['movie', 'camera', 'film'],
+  '📞': ['phone', 'telephone', 'call'],
+  '☎️': ['telephone', 'phone'],
+  '📺': ['tv', 'television'],
+  '📻': ['radio'],
+  '🎙️': ['microphone', 'studio', 'mic'],
+  '⏰': ['alarm', 'clock'],
+  '⏱️': ['stopwatch', 'timer'],
+  '⏲️': ['timer', 'clock'],
+  '🔋': ['battery'],
+  '🔌': ['plug', 'electric'],
+  '💎': ['gem', 'diamond', 'jewel'],
+  '💰': ['money', 'bag', 'cash'],
+  '💳': ['credit', 'card'],
+  '✉️': ['envelope', 'mail'],
+  '📧': ['email', 'mail'],
+  '📨': ['incoming', 'envelope', 'mail'],
+  '📩': ['envelope', 'arrow', 'mail'],
+  '📦': ['package', 'box', 'shipping'],
+  '📫': ['mailbox', 'closed', 'flag'],
+  '📬': ['mailbox', 'open', 'flag'],
+  '✏️': ['pencil', 'edit', 'write'],
+  '📝': ['memo', 'note', 'pencil'],
+  '📁': ['folder', 'file'],
+  '📂': ['open', 'folder', 'file'],
+  '📅': ['calendar', 'date'],
+  '📆': ['tear', 'off', 'calendar', 'date'],
+  '📌': ['pushpin', 'pin'],
+  '📍': ['round', 'pin', 'location'],
+  '🔍': ['magnifying', 'glass', 'search', 'find'],
+  '🔎': ['magnifying', 'glass', 'search', 'find'],
+  '🔐': ['lock', 'key', 'secure'],
+  '🔑': ['key', 'unlock'],
+
+  // Symbols
+  '✅': ['check', 'mark', 'yes', 'done', 'tick'],
+  '❌': ['cross', 'mark', 'no', 'x', 'wrong'],
+  '❓': ['question', 'mark'],
+  '❗': ['exclamation', 'mark'],
+  '‼️': ['double', 'exclamation', 'mark'],
+  '⁉️': ['exclamation', 'question', 'mark'],
+  '💤': ['sleep', 'zzz'],
+  '💢': ['anger', 'angry', 'mad'],
+  '💬': ['speech', 'chat', 'talk', 'bubble', 'message'],
+  '👁️‍🗨️': ['eye', 'speech', 'bubble'],
+  '🗨️': ['left', 'speech', 'bubble'],
+  '🗯️': ['right', 'anger', 'bubble'],
+  '💭': ['thought', 'bubble'],
+  '🔔': ['bell', 'notification'],
+  '🔕': ['bell', 'off', 'mute', 'silent'],
+  '➕': ['plus', 'add'],
+  '➖': ['minus', 'subtract'],
+  '➗': ['divide', 'division'],
+  '✖️': ['multiply', 'multiplication', 'x'],
+  '♾️': ['infinity'],
+  '💲': ['dollar', 'money'],
+  '💱': ['currency', 'exchange'],
+  '©️': ['copyright'],
+  '®️': ['registered'],
+  '™️': ['trademark'],
+  '🔴': ['red', 'circle'],
+  '🟠': ['orange', 'circle'],
+  '🟡': ['yellow', 'circle'],
+  '🟢': ['green', 'circle'],
+  '🔵': ['blue', 'circle'],
+  '🟣': ['purple', 'circle'],
+  '⚫': ['black', 'circle'],
+  '⚪': ['white', 'circle'],
+  '🟤': ['brown', 'circle'],
+  '🔺': ['red', 'triangle', 'up'],
+  '🔻': ['red', 'triangle', 'down'],
+  '🔸': ['orange', 'diamond', 'small'],
+  '🔹': ['blue', 'diamond', 'small'],
+  '🔶': ['orange', 'diamond', 'large'],
+  '🔷': ['blue', 'diamond', 'large'],
+  '▪️': ['black', 'square', 'small'],
+  '▫️': ['white', 'square', 'small'],
+  '◾': ['black', 'square', 'medium'],
+  '◽': ['white', 'square', 'medium'],
+  '◼️': ['black', 'square'],
+  '◻️': ['white', 'square'],
+};
+
 export interface EmojiPickerProps {
   /** Called when an emoji is selected */
   onEmojiSelect: (emoji: string) => void;
@@ -140,19 +427,25 @@ export function EmojiPicker({
 
   // Filter emojis based on search
   const filteredCategories = useMemo(() => {
-    if (!searchQuery.trim()) {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) {
       return EMOJI_CATEGORIES;
     }
 
-    // Simple search - show all emojis when searching
-    // (Full text search would require emoji name mapping)
+    const seen = new Set<string>();
     const results: string[] = [];
 
     Object.values(EMOJI_CATEGORIES).forEach((category) => {
-      results.push(...category.emojis);
+      category.emojis.forEach((emoji) => {
+        if (seen.has(emoji)) return;
+        const keywords = EMOJI_KEYWORDS[emoji];
+        if (keywords && keywords.some((kw) => kw.includes(query))) {
+          seen.add(emoji);
+          results.push(emoji);
+        }
+      });
     });
 
-    // Return a single "search results" category
     return {
       search: {
         icon: Search,
@@ -203,6 +496,11 @@ export function EmojiPicker({
       {searchQuery ? (
         // Search results
         <ScrollArea className="h-48">
+          {Object.values(filteredCategories)[0]?.emojis.length === 0 ? (
+            <div className="flex h-48 items-center justify-center px-4 text-center text-sm text-muted-foreground">
+              No emoji found for &ldquo;{searchQuery}&rdquo;
+            </div>
+          ) : (
           <div className="p-2 grid grid-cols-8 gap-0.5">
             {Object.values(filteredCategories)[0]?.emojis.map((emoji: string, idx: number) => (
               <button
@@ -218,6 +516,7 @@ export function EmojiPicker({
               </button>
             ))}
           </div>
+          )}
         </ScrollArea>
       ) : (
         // Category tabs

@@ -1,12 +1,19 @@
 'use client';
 
 import { useState, useRef, useEffect, useMemo } from 'react';
+import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import {
+  Bell,
   ExternalLink,
   Trash2,
   FileText,
+  Zap,
 } from 'lucide-react';
+import { Skeleton } from '@/components/ui/skeleton';
+import { usePageContent } from '@/hooks/usePageContent';
+
+const RichEditor = dynamic(() => import('@/components/editors/RichEditor'), { ssr: false });
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -28,6 +35,7 @@ import {
 import { cn } from '@/lib/utils';
 import { MultiAssigneeSelect } from '@/components/layout/middle-content/page-views/task-list/MultiAssigneeSelect';
 import { DueDatePicker } from '@/components/layout/middle-content/page-views/task-list/DueDatePicker';
+import { TaskAgentTriggersDialog } from '@/components/layout/middle-content/page-views/task-list/TaskAgentTriggersDialog';
 import {
   PRIORITY_CONFIG,
   buildStatusConfig,
@@ -35,11 +43,14 @@ import {
   type TaskPriority,
   type TaskStatusConfig,
 } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
+import { usePermissions } from '@/hooks/usePermissions';
 import type { Task } from './types';
 import { getStatusDisplay } from './task-helpers';
 
 export interface TaskDetailSheetProps {
   task: Task | null;
+  /** Drive to name before the list title; only in the All drives focus. */
+  driveName?: string;
   statusConfigs: TaskStatusConfig[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -51,10 +62,17 @@ export interface TaskDetailSheetProps {
   onSaveTitle: (task: Task, title: string) => void;
   onDelete: (task: Task) => void;
   onNavigate: (task: Task) => void;
+  onTriggersSaved?: () => void;
 }
+
+export const shouldFetchDescription = (
+  open: boolean,
+  pageId: string | null | undefined
+): boolean => open && !!pageId;
 
 export function TaskDetailSheet({
   task,
+  driveName,
   statusConfigs,
   open,
   onOpenChange,
@@ -66,15 +84,54 @@ export function TaskDetailSheet({
   onSaveTitle,
   onDelete,
   onNavigate,
+  onTriggersSaved,
 }: TaskDetailSheetProps) {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editingTitle, setEditingTitle] = useState('');
+  const [triggersDialogOpen, setTriggersDialogOpen] = useState(false);
   const cancelTriggeredRef = useRef(false);
+
+  const { content: descriptionContent, isLoading: descriptionLoading, save: saveDescription } =
+    usePageContent({
+      pageId: task?.pageId ?? null,
+      enabled: shouldFetchDescription(open, task?.pageId),
+    });
+
+  // Permission gate mirrors the row-level Task List badge: edit on the parent
+  // task list page is what authorizes configuring triggers on its tasks.
+  // Two answers, because the controls here divide into two kinds.
+  //
+  // The sheet is the first thing to ask about a list's permissions on the
+  // dashboard, so the request starts when it opens and the answer is unknown
+  // for a round trip. Greying every control out for that window and lighting
+  // them up a beat later reads as broken, so controls whose worst case is a
+  // refused click use the optimistic answer.
+  //
+  // Two controls do NOT get that benefit of the doubt, because acting early
+  // writes rather than merely failing. The description editor autosaves through
+  // usePageContent, which debounces a second and then PATCHes with no
+  // permission check of its own — and it PATCHes the TASK's page while the
+  // permission here is the parent LIST's, so an early save is not even guarded
+  // by the same resource. TaskAgentTriggersDialog likewise PUTs and DELETEs
+  // unguarded, and gating its mount on an optimistic answer would have let the
+  // dialog be unmounted under the user when the answer arrived. Both wait for a
+  // definite yes.
+  //
+  // The resource mismatch cuts the other way too, and is left standing: someone
+  // with edit on the task page but view-only on the list cannot edit the
+  // description here at all. That is the safe direction, but the real fix is a
+  // second permission read against task.pageId for the editor.
+  const { permissions, isLoading: permissionsLoading } = usePermissions(
+    task?.taskListPageId ?? null,
+  );
+  const canEditKnown = permissions?.canEdit ?? false;
+  const canEdit = permissionsLoading || canEditKnown;
 
   // Reset editing state when task changes
   useEffect(() => {
     setIsEditingTitle(false);
     setEditingTitle('');
+    setTriggersDialogOpen(false);
   }, [task?.id]);
 
   const statusConfigMap = useMemo(() => buildStatusConfig(statusConfigs), [statusConfigs]);
@@ -86,6 +143,10 @@ export function TaskDetailSheet({
   const isCompleted = statusDisplay.group === 'done';
   const hasLinkedPage = Boolean(task.pageId && task.driveId);
   const { label: statusLabel, color: statusColor } = statusDisplay;
+  const triggerCount = task.activeTriggerCount ?? 0;
+  // canEditKnown, not canEdit: this mounts a dialog that writes.
+  const canConfigureTriggers = canEditKnown && Boolean(task.taskListPageId && task.driveId);
+  const showTriggerBadge = canConfigureTriggers && triggerCount > 0;
 
   const startEditTitle = () => {
     setEditingTitle(task.title);
@@ -131,6 +192,8 @@ export function TaskDetailSheet({
               checked={isCompleted}
               onCheckedChange={() => onToggleComplete(task)}
               className="mt-1 h-5 w-5"
+              disabled={!canEdit}
+              aria-label={`${isCompleted ? 'Reopen' : 'Complete'} ${task.title}`}
             />
             <div className="flex-1 min-w-0">
               {isEditingTitle ? (
@@ -161,6 +224,7 @@ export function TaskDetailSheet({
                   type="button"
                   className="w-full text-left bg-transparent border-0 p-0"
                   onClick={startEditTitle}
+                  disabled={!canEdit}
                 >
                   <span
                     className={cn(
@@ -175,6 +239,22 @@ export function TaskDetailSheet({
             </div>
           </div>
 
+          {/* Trigger badge — opens dialog, mirrors row-level UX on the Task List page */}
+          {showTriggerBadge && (
+            <div className="flex">
+              <button
+                type="button"
+                onClick={() => setTriggersDialogOpen(true)}
+                title="Agent trigger configured — click to edit"
+                aria-label="Agent trigger configured — click to edit"
+                className="inline-flex h-7 items-center gap-1 rounded-md border border-amber-300/60 bg-amber-50 px-2 text-xs text-amber-700 hover:bg-amber-100 dark:border-amber-700/50 dark:bg-amber-950/40 dark:text-amber-300"
+              >
+                <Bell className="h-3 w-3" />
+                <span>Trigger</span>
+              </button>
+            </div>
+          )}
+
           {/* Status & Priority row */}
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
@@ -182,6 +262,7 @@ export function TaskDetailSheet({
               <Select
                 value={task.status}
                 onValueChange={(value) => onStatusChange(task, value)}
+                disabled={!canEdit}
               >
                 <SelectTrigger className="h-10 w-full">
                   <SelectValue>
@@ -210,6 +291,7 @@ export function TaskDetailSheet({
               <Select
                 value={task.priority}
                 onValueChange={(value) => onPriorityChange(task, value)}
+                disabled={!canEdit}
               >
                 <SelectTrigger className="h-10 w-full">
                   <SelectValue>
@@ -238,6 +320,7 @@ export function TaskDetailSheet({
               <DueDatePicker
                 currentDate={task.dueDate}
                 onSelect={(date) => onDueDateChange(task, date)}
+                disabled={!canEdit}
               />
             </div>
           </div>
@@ -251,6 +334,7 @@ export function TaskDetailSheet({
                   driveId={task.driveId}
                   assignees={task.assignees || []}
                   onUpdate={(assigneeIds) => onMultiAssigneeChange(task, assigneeIds)}
+                  disabled={!canEdit}
                 />
               </div>
             </div>
@@ -265,34 +349,86 @@ export function TaskDetailSheet({
                 onClick={() => onOpenChange(false)}
                 className="flex items-center gap-2 rounded-md border px-3 py-2.5 text-sm text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors"
               >
-                <span className="truncate">{task.taskListPageTitle}</span>
+                <span className="truncate">
+                  {driveName ? `${driveName} › ` : ''}
+                  {task.taskListPageTitle}
+                </span>
                 <ExternalLink className="h-3.5 w-3.5 flex-shrink-0" />
               </Link>
             </div>
           )}
 
+          {/* Inline description */}
+          {shouldFetchDescription(open, task.pageId) && (
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">Description</label>
+              <div className="min-h-[120px] max-h-[300px] overflow-y-auto border rounded-md p-1">
+                {descriptionLoading && descriptionContent === null ? (
+                  <Skeleton className="h-24 w-full" />
+                ) : (
+                  <RichEditor
+                    value={descriptionContent ?? ''}
+                    onChange={saveDescription}
+                    // canEditKnown, not canEdit: this autosaves.
+                    readOnly={!canEditKnown}
+                    contentMode="html"
+                  />
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Action buttons */}
           <div className="flex gap-2 pt-1">
-            {hasLinkedPage && (
+            {canConfigureTriggers && (
               <Button
                 variant="outline"
-                className="flex-1 h-11"
-                onClick={handleNavigate}
+                className="h-11"
+                onClick={() => setTriggersDialogOpen(true)}
+                title="Agent triggers"
+                aria-label="Agent triggers"
               >
-                <FileText className="h-4 w-4 mr-2" />
-                Open Page
+                <Zap className="h-4 w-4 mr-2" />
+                Triggers
+              </Button>
+            )}
+            {hasLinkedPage && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-11 text-muted-foreground"
+                onClick={handleNavigate}
+                title="Open full page"
+                aria-label="Open full page"
+              >
+                <FileText className="h-4 w-4" />
               </Button>
             )}
             <Button
               variant="outline"
               className="h-11 text-destructive hover:text-destructive hover:bg-destructive/10"
               onClick={handleDelete}
+              disabled={!canEdit}
+              aria-label="Delete task"
             >
               <Trash2 className="h-4 w-4" />
             </Button>
           </div>
         </div>
       </SheetContent>
+
+      {canConfigureTriggers && task.taskListPageId && task.driveId && (
+        <TaskAgentTriggersDialog
+          open={triggersDialogOpen}
+          onOpenChange={setTriggersDialogOpen}
+          taskId={task.id}
+          taskTitle={task.title}
+          pageId={task.taskListPageId}
+          driveId={task.driveId}
+          hasDueDate={!!task.dueDate}
+          onSaved={onTriggersSaved}
+        />
+      )}
     </Sheet>
   );
 }

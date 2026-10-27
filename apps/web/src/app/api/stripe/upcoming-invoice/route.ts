@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db, eq, and, inArray, desc, users, subscriptions } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, inArray, desc } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
-import { loggers } from '@pagespace/lib/server';
+import { personalPlanItems } from '@/lib/stripe/price-config';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
@@ -62,7 +67,8 @@ export async function GET(request: NextRequest) {
       const subscription = await stripe.subscriptions.retrieve(
         currentSubscription.stripeSubscriptionId
       );
-      const currentItemId = subscription.items.data[0]?.id;
+      // The plan item, never items[0]: a storage add-on item may ride along.
+      const currentItemId = personalPlanItems(subscription.items)?.planItem.id;
 
       if (currentItemId) {
         params.subscription_details = {
@@ -88,6 +94,8 @@ export async function GET(request: NextRequest) {
       (sum, item) => sum + item.amount,
       0
     );
+
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'invoice', resourceId: 'upcoming', details: { hasPricePreview: !!newPriceId } });
 
     return NextResponse.json({
       invoice: {

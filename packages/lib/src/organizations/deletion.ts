@@ -1,0 +1,308 @@
+/**
+ * Org deletion (Spec ORG-6): every org drive, including ones already in trash, is
+ * resolved before the org row goes, in ONE transaction, so nothing is orphaned and
+ * drives.orgId (ON DELETE RESTRICT) never blocks the delete half-way.
+ *
+ * - A live drive needs an explicit choice: transfer to a named org member (orgId
+ *   cleared, ownerId = that person) or trash.
+ * - A trashed-by-choice drive, and every drive already in trash, becomes a trashed
+ *   drive owned by the org Owner (orgId cleared, still in trash, restorable).
+ * - The former lead of a drive that changes hands loses their OWNER row with it.
+ * - Deleting the org is every member leaving it: what each minted on a drive they do
+ *   not end up owning (explicit key scopes, OAuth grants, share links, agent
+ *   memberships) is revoked with it, as leaveOrganization revokes a leaver's.
+ * - Everyone whose access the delete ends gets a member_removed drive-list event and is
+ *   kicked from the drive's realtime rooms after commit: the former lead, every org-materialized member, every org Owner or
+ *   Admin who reached it through their org role alone, and every member who reached an
+ *   Open drive implicitly. The drive's new owner, and
+ *   anyone still invited to it, never is.
+ * - Nothing moves silently: a live drive without a choice refuses the whole delete,
+ *   and the returned steps name every drive's destination for the confirmation and
+ *   for the per-drive audit event the caller writes.
+ */
+import { and, asc, eq, inArray, sql } from '@pagespace/db/operators';
+import { drives } from '@pagespace/db/schema/core';
+import { driveMembers } from '@pagespace/db/schema/members';
+import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
+import { isLiveOrgSubscriptionStatus, orgBillingLockKey } from '../billing/org-subscription-core';
+import { resolveOrgDeletionAccessLoss } from '../permissions/org-deletion-access';
+import { revokeOrgDriveGrantsForMembers } from './leave';
+import { publishDriveAccessEvents, type OrgMembershipSyncPorts } from '../services/org-membership-sync';
+import type { AffectedUser } from '../services/org-membership-sync-core';
+import { closeStaleDriveJoinRequests } from '../permissions/drive-join-request-closure';
+import { transactionWithOrgAudit } from '../audit/org-audit';
+import { reattributeDriveStorageInTx } from '../services/storage-limits';
+import { releaseDedicatedHostingInTx } from '../services/app-hosting/dedicated-release';
+import { rehomeDriveWalletInTx } from '../billing/drive-wallet-rehome';
+
+export type DriveDeletionChoice =
+  | { driveId: string; action: 'transfer'; toUserId: string }
+  | { driveId: string; action: 'trash' };
+
+export interface OrgDriveForDeletion {
+  id: string;
+  name: string;
+  isTrashed: boolean;
+}
+
+export interface OrgDeletionStep {
+  driveId: string;
+  driveName: string;
+  destination: 'transfer' | 'owner_trash';
+  ownerId: string;
+  trashed: boolean;
+}
+
+export type OrgDeletionRefusal =
+  | 'not_owner'
+  | 'missing_choice'
+  | 'unknown_drive'
+  | 'duplicate_choice'
+  | 'drive_already_trashed'
+  | 'transfer_target_not_member';
+
+export type OrgDeletionPlan =
+  | { ok: true; steps: OrgDeletionStep[] }
+  | { ok: false; reason: OrgDeletionRefusal; driveIds: string[] };
+
+export const planOrgDeletion = ({
+  actorId,
+  ownerId,
+  memberIds,
+  drives: orgDrives,
+  choices,
+}: {
+  /** The caller, re-checked against the Owner read under the org row lock. */
+  actorId: string;
+  ownerId: string;
+  memberIds: readonly string[];
+  drives: readonly OrgDriveForDeletion[];
+  choices: readonly DriveDeletionChoice[];
+}): OrgDeletionPlan => {
+  const byId = new Map(orgDrives.map((drive) => [drive.id, drive]));
+  const refuse = (reason: OrgDeletionRefusal, driveIds: string[]): OrgDeletionPlan => ({ ok: false, reason, driveIds });
+  if (actorId !== ownerId) return refuse('not_owner', []);
+
+  const unknown = choices.filter((choice) => !byId.has(choice.driveId)).map((choice) => choice.driveId);
+  if (unknown.length > 0) return refuse('unknown_drive', unknown);
+
+  const seen = new Set<string>();
+  const duplicates = choices.filter((choice) => (seen.has(choice.driveId) ? true : (seen.add(choice.driveId), false)));
+  if (duplicates.length > 0) return refuse('duplicate_choice', [...new Set(duplicates.map((c) => c.driveId))]);
+
+  const onTrashed = choices.filter((choice) => byId.get(choice.driveId)?.isTrashed).map((choice) => choice.driveId);
+  if (onTrashed.length > 0) return refuse('drive_already_trashed', onTrashed);
+
+  const members = new Set(memberIds);
+  const badTargets = choices
+    .filter((choice) => choice.action === 'transfer' && !members.has(choice.toUserId))
+    .map((choice) => choice.driveId);
+  if (badTargets.length > 0) return refuse('transfer_target_not_member', badTargets);
+
+  const choiceFor = new Map(choices.map((choice) => [choice.driveId, choice]));
+  const missing = orgDrives.filter((drive) => !drive.isTrashed && !choiceFor.has(drive.id)).map((drive) => drive.id);
+  if (missing.length > 0) return refuse('missing_choice', missing);
+
+  const steps = orgDrives.map((drive): OrgDeletionStep => {
+    const choice = choiceFor.get(drive.id);
+    if (choice?.action === 'transfer') {
+      return { driveId: drive.id, driveName: drive.name, destination: 'transfer', ownerId: choice.toUserId, trashed: false };
+    }
+    return { driveId: drive.id, driveName: drive.name, destination: 'owner_trash', ownerId, trashed: true };
+  });
+  return { ok: true, steps };
+};
+
+export type DeleteOrganizationResult =
+  | { ok: true; steps: OrgDeletionStep[] }
+  | { ok: false; status: 404; reason: 'not_found' }
+  | { ok: false; status: 403; reason: 'not_owner' }
+  | { ok: false; status: 409; reason: 'drive_wallet_calls_in_flight'; driveIds: string[] }
+  | { ok: false; status: 400; reason: Exclude<OrgDeletionRefusal, 'not_owner'>; driveIds: string[] };
+
+/** The org's live Business subscription, as the delete hands it to {@link DeleteOrganizationDeps.endSubscription}. */
+export interface EndedOrgSubscription {
+  orgId: string;
+  stripeSubscriptionId: string;
+}
+
+export interface DeleteOrganizationDeps {
+  /** Realtime ports for the post-commit events; defaults to the org-membership publisher's. */
+  ports?: OrgMembershipSyncPorts;
+  /**
+   * Ends the org's live Stripe subscription (SEAT-1). Called inside the delete's
+   * transaction, before the org row goes: a throw rolls the whole delete back, so an org
+   * is never deleted while Stripe keeps billing it. Without it, an org with a live
+   * subscription cannot be deleted at all.
+   */
+  endSubscription?: (subscription: EndedOrgSubscription) => Promise<void>;
+}
+
+type RevokedRow = { userId: string; driveId: string };
+
+/** A later wallet refusal must roll back every earlier transition in this closure. */
+class OrgDeletionWalletInUseError extends Error {
+  constructor(readonly driveId: string) {
+    super('A drive wallet has calls in flight');
+    this.name = 'OrgDeletionWalletInUseError';
+  }
+}
+
+export async function deleteOrganization(
+  input: {
+    actorId: string;
+    orgId: string;
+    choices: readonly DriveDeletionChoice[];
+    now: Date;
+  },
+  deps: DeleteOrganizationDeps = {},
+): Promise<DeleteOrganizationResult> {
+  const toKick: RevokedRow[] = [];
+  let subscriptionEnded = false;
+  const result = await transactionWithOrgAudit(async (tx, audit): Promise<DeleteOrganizationResult> => {
+    // The billing lock FIRST (before the org row lock, the order provisioning takes them
+    // in): a provisioning in flight finishes and its subscription is seen and ended
+    // below, or it starts after and finds the org gone. Never a live Stripe
+    // subscription left for a deleted org.
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${orgBillingLockKey(input.orgId)}, 0))`);
+    const [org] = await tx
+      .select({ ownerId: organizations.ownerId })
+      .from(organizations)
+      .where(eq(organizations.id, input.orgId))
+      .for('update');
+    if (!org) return { ok: false, status: 404, reason: 'not_found' } as const;
+
+    const orgDrives = await tx
+      .select({ id: drives.id, name: drives.name, isTrashed: drives.isTrashed, ownerId: drives.ownerId, orgVisibility: drives.orgVisibility })
+      .from(drives)
+      .where(eq(drives.orgId, input.orgId))
+      .orderBy(asc(drives.id))
+      .for('update');
+    const members = await tx
+      .select({ userId: orgMembers.userId, role: orgMembers.role })
+      .from(orgMembers)
+      .where(eq(orgMembers.orgId, input.orgId));
+
+    const plan = planOrgDeletion({
+      actorId: input.actorId,
+      ownerId: org.ownerId,
+      memberIds: members.map((member) => member.userId),
+      drives: orgDrives,
+      choices: input.choices,
+    });
+    if (!plan.ok) {
+      return plan.reason === 'not_owner'
+        ? ({ ok: false, status: 403, reason: 'not_owner' } as const)
+        : ({ ok: false, status: 400, reason: plan.reason, driveIds: plan.driveIds } as const);
+    }
+
+    for (const step of plan.steps) {
+      // Trashed drives remain restorable. Their wallet, contribution legs and ledger
+      // must travel with them exactly as on an ordinary move out of the org.
+      const rehomed = await rehomeDriveWalletInTx(tx, {
+        driveId: step.driveId,
+        actorId: input.actorId,
+        credential: 'session',
+        to: { kind: 'personal', leadUserId: step.ownerId },
+      });
+      if (!rehomed.ok) throw new OrgDeletionWalletInUseError(step.driveId);
+      const before = orgDrives.find((drive) => drive.id === step.driveId);
+      const alreadyTrashed = before?.isTrashed === true;
+      await tx
+        .update(drives)
+        .set({
+          orgId: null,
+          ownerId: step.ownerId,
+          ...(step.trashed && !alreadyTrashed ? { isTrashed: true, trashedAt: input.now } : {}),
+        })
+        .where(eq(drives.id, step.driveId));
+      // WAL-9, O-9 (D-OW-64): the drive is personal now, so its bytes bill its new owner — moved
+      // onto their counter in this same transaction, exactly as a move out of the org does.
+      await reattributeDriveStorageInTx(tx, { driveId: step.driveId, ownerId: step.ownerId, orgId: input.orgId, direction: 'out-of-org' });
+      // WAL-9 (D-OW-64): the deleted org stops paying for this drive's apps' dedicated hosting at period end.
+      await releaseDedicatedHostingInTx(tx, { driveId: step.driveId, formerPayer: { kind: 'org', orgId: input.orgId } });
+      // The former lead's OWNER row would keep them inside a drive that is no longer theirs, and
+      // come back with it on restore; drop it as reassignLedOrgDrives does.
+      if (before && before.ownerId !== step.ownerId) {
+        toKick.push(...(await tx.delete(driveMembers).where(and(
+          eq(driveMembers.driveId, step.driveId),
+          eq(driveMembers.userId, before.ownerId),
+          eq(driveMembers.role, 'OWNER'),
+        )).returning({ userId: driveMembers.userId, driveId: driveMembers.driveId })));
+      }
+    }
+
+    // An explicit key scope or OAuth drive grant is never re-checked against its holder, so
+    // it would outlive the org power that let them mint it (revokeOrgDriveGrants).
+    await revokeOrgDriveGrantsForMembers(tx, {
+      userIds: members.map((member) => member.userId),
+      driveIds: plan.steps.map((step) => step.driveId),
+      keep: plan.steps.map((step) => ({ userId: step.ownerId, driveId: step.driveId })),
+    });
+
+    const driveIds = plan.steps.map((step) => step.driveId);
+    // DRV-6: the drives have left the org, so no join request on them asks for anything.
+    await closeStaleDriveJoinRequests(tx, driveIds);
+    if (driveIds.length > 0) {
+      // Org-materialized access means nothing once the drive has left the org;
+      // leaving those rows would keep former org members inside a personal drive.
+      const orgRows = await tx
+        .delete(driveMembers)
+        .where(and(inArray(driveMembers.driveId, driveIds), eq(driveMembers.source, 'org')))
+        .returning({ userId: driveMembers.userId, driveId: driveMembers.driveId });
+      // Org access needs no row: an org Owner or Admin reaches every org drive, and every member
+      // reaches an Open one. All of it ends with the org, except for a drive's new owner and anyone
+      // still invited to it; who that leaves is the permissions layer's decision.
+      const openDrives = new Set(orgDrives.filter((drive) => drive.orgVisibility === 'OPEN').map((drive) => drive.id));
+      const lost = await resolveOrgDeletionAccessLoss(tx, {
+        outcomes: plan.steps.map((step) => ({ driveId: step.driveId, newOwnerId: step.ownerId, open: openDrives.has(step.driveId) })),
+        members,
+        removedRows: [...toKick, ...orgRows],
+      });
+      toKick.splice(0, toKick.length, ...lost);
+    }
+
+    // org_subscriptions.orgId RESTRICTS the org delete: the subscription ends first (SEAT-1).
+    const [subscription] = await tx
+      .delete(orgSubscriptions)
+      .where(eq(orgSubscriptions.orgId, input.orgId))
+      .returning({ stripeSubscriptionId: orgSubscriptions.stripeSubscriptionId, status: orgSubscriptions.status });
+    if (subscription && isLiveOrgSubscriptionStatus(subscription.status)) {
+      if (!deps.endSubscription) {
+        throw new Error(`Organization ${input.orgId} has a live subscription and no way to end it was given; refusing to delete`);
+      }
+      await deps.endSubscription({ orgId: input.orgId, stripeSubscriptionId: subscription.stripeSubscriptionId });
+      subscriptionEnded = true;
+    }
+
+    await tx.delete(organizations).where(eq(organizations.id, input.orgId));
+    // AUD-1: the last event under this org, naming where each drive went (ids only) and whether its
+    // subscription was ended, committed with the deletion.
+    await audit({
+      orgId: input.orgId,
+      eventType: 'org.deleted',
+      actorId: input.actorId,
+      resourceType: 'organization',
+      resourceId: input.orgId,
+      details: {
+        drives: plan.steps.map((step) => ({ driveId: step.driveId, destination: step.destination, ownerId: step.ownerId })),
+        subscriptionEnded,
+      },
+    });
+    return { ok: true, steps: plan.steps };
+  }).catch((error: unknown): DeleteOrganizationResult => {
+    if (error instanceof OrgDeletionWalletInUseError) {
+      return { ok: false, status: 409, reason: 'drive_wallet_calls_in_flight', driveIds: [error.driveId] };
+    }
+    throw error;
+  });
+  // Once committed, and best effort: each person gets one member_removed event naming the drives
+  // they lost (the sidebar and picker refresh on it) and a room kick per drive, 20 at a time.
+  if (result.ok && toKick.length > 0) {
+    const lost = new Map<string, string[]>();
+    for (const { userId, driveId } of toKick) lost.set(userId, [...(lost.get(userId) ?? []), driveId]);
+    const affectedUsers = [...lost].map(([userId, driveIds]): AffectedUser => ({ userId, operation: 'member_removed', driveIds }));
+    await publishDriveAccessEvents({ affectedUsers, revoked: toKick }, deps.ports);
+  }
+  return result;
+}

@@ -1,5 +1,9 @@
-// Simple in-memory rate limiter for local deployment
-// For production with multiple instances, consider Redis-based rate limiting
+// @deprecated In-memory rate limiter. Process-local state does NOT survive
+// restarts and does NOT span replicas, so it provides no real protection in a
+// multi-instance deployment (#977). All production auth/email/abort paths have
+// migrated to `checkDistributedRateLimit` from
+// `@pagespace/lib/security/distributed-rate-limit` (Postgres-backed, reuses the
+// `rate_limit_buckets` table). Do not import this module in new code.
 
 interface RateLimitAttempt {
   count: number;
@@ -182,12 +186,6 @@ export const RATE_LIMIT_CONFIGS = {
   SIGNUP: {
     maxAttempts: 3,
     windowMs: 60 * 60 * 1000, // 1 hour
-    blockDurationMs: 60 * 60 * 1000, // 1 hour
-    progressiveDelay: false
-  },
-  PASSWORD_RESET: {
-    maxAttempts: 3,
-    windowMs: 60 * 60 * 1000, // 1 hour  
     blockDurationMs: 60 * 60 * 1000, // 1 hour
     progressiveDelay: false
   },

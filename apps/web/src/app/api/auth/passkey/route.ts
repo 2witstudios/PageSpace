@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
-import { listUserPasskeys } from '@pagespace/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { listUserPasskeys } from '@pagespace/lib/auth/passkey-service';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { securityAudit } from '@pagespace/lib/audit/security-audit';
 import {
   authenticateSessionRequest,
   isAuthError,
@@ -40,6 +41,10 @@ export async function GET(req: Request) {
         { status: 500 }
       );
     }
+
+    securityAudit.logDataAccess(userId, 'read', 'passkey', userId).catch((error) => {
+      loggers.security.warn('[PasskeyList] audit logDataAccess failed', { error: error instanceof Error ? error.message : String(error), userId });
+    });
 
     return NextResponse.json({
       passkeys: result.data.passkeys,

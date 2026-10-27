@@ -20,7 +20,7 @@ export * from './content/page-types.config';
 export * from './content/page-type-validators';
 
 // Sheet utilities (safe - pure JavaScript functions)
-export * from './sheets';
+export * from './sheets/sheet';
 
 // Browser-safe format bytes utility
 export function formatBytes(bytes: number): string {
@@ -57,6 +57,9 @@ export function parseBytes(size: string): number {
 // Client-safe notification types and guards (no database dependencies)
 export * from './notifications/types';
 export * from './notifications/guards';
+
+// Passkey constants (numeric; no server deps)
+export * from './auth/passkey-client-constants';
 
 // Note: Server-side modules like permissions, auth-utils, logger-config, etc.
 // are NOT exported here to prevent Node.js dependencies in browser bundles.

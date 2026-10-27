@@ -1,0 +1,314 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { assert } from '@/test/riteway';
+
+// ============================================================================
+// Smoke tests for the ShareDialog off-platform invite branch.
+//
+// Validates that:
+//   1. A 404 from /api/users/find surfaces the invite-CTA button label.
+//   2. Clicking the invite CTA POSTs to /share-invite with the right payload.
+//   3. DELETE is excluded from the share-invite payload on the off-platform path.
+// ============================================================================
+
+vi.mock('sonner', () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+  },
+}));
+
+vi.mock('@/lib/auth/auth-fetch', () => ({
+  fetchWithAuth: vi.fn(),
+  post: vi.fn(),
+}));
+
+vi.mock('@/hooks/usePage', () => ({
+  usePageStore: vi.fn((selector: (s: { pageId: string }) => string) =>
+    selector({ pageId: 'page_abc' })
+  ),
+}));
+
+vi.mock('@/hooks/usePageTree', () => ({
+  usePageTree: vi.fn(() => ({
+    tree: [
+      {
+        id: 'page_abc',
+        title: 'Test Page',
+        children: [],
+        type: 'document',
+        driveId: 'drive_xyz',
+        isTrashed: false,
+        order: 0,
+        parentId: null,
+      },
+    ],
+  })),
+}));
+
+vi.mock('@/lib/tree/tree-utils', () => ({
+  findNodeAndParent: vi.fn(() => ({
+    node: {
+      id: 'page_abc',
+      title: 'Test Page',
+      children: [],
+      type: 'document',
+      driveId: 'drive_xyz',
+      isTrashed: false,
+      order: 0,
+      parentId: null,
+    },
+    parent: null,
+  })),
+}));
+
+vi.mock('next/navigation', () => ({
+  useParams: vi.fn(() => ({ driveId: 'drive_xyz' })),
+}));
+
+vi.mock('@/hooks/usePermissions', () => ({
+  usePermissions: vi.fn(() => ({
+    permissions: { canView: true, canEdit: true, canShare: true, canDelete: true },
+  })),
+  getPermissionErrorMessage: vi.fn(() => 'You need share permission'),
+}));
+
+vi.mock('@/hooks/useMobile', () => ({
+  useMobile: vi.fn(() => false),
+}));
+
+vi.mock(
+  '@/components/layout/middle-content/content-header/page-settings/PermissionsList',
+  () => ({
+    PermissionsList: () => <div data-testid="permissions-list" />,
+  }),
+);
+
+// [D-OW-33] the drive's org, lapsed or not, per test (default: paid).
+const orgLapsed = vi.hoisted(() => ({ current: false }));
+vi.mock('@/hooks/useMyOrganizations', () => ({
+  useMyOrganizations: () => ({ orgById: (id: string | null) => (id ? { id, name: 'Northwind Labs', lapsed: orgLapsed.current } : null) }),
+}));
+
+import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
+import { ShareDialog } from '../ShareDialog';
+import { useDriveStore } from '@/hooks/useDrive';
+
+const make404Response = () =>
+  new Response(JSON.stringify({ error: 'User not found' }), {
+    status: 404,
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+const make200UserResponse = () =>
+  new Response(JSON.stringify({ id: 'user_existing' }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+const makeInviteSuccess = () =>
+  new Response(JSON.stringify({ kind: 'invited', email: 'new@example.com' }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+const makeEmptyRolesResponse = () =>
+  new Response(JSON.stringify({ roles: [] }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+describe('ShareDialog — off-platform invite branch', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const openDialogAndFillEmail = async (
+    user: ReturnType<typeof userEvent.setup>,
+    email: string,
+  ) => {
+    const shareButton = screen.getByRole('button', { name: /share/i });
+    await user.click(shareButton);
+    const emailInput = screen.getByPlaceholderText(/add people by email/i);
+    await user.clear(emailInput);
+    await user.type(emailInput, email);
+  };
+
+  it('given /api/users/find returns 404, renders the invite-to-PageSpace CTA button', async () => {
+    vi.mocked(fetchWithAuth).mockResolvedValue(make404Response());
+
+    const user = userEvent.setup();
+    render(<ShareDialog />);
+
+    await openDialogAndFillEmail(user, 'new@example.com');
+
+    const grantButton = screen.getByRole('button', { name: /grant access/i });
+    await user.click(grantButton);
+
+    await waitFor(() => {
+      const inviteButton = screen.getByRole('button', {
+        name: /invite.*pagespace.*share this page/i,
+      });
+      assert({
+        given: 'a 404 from /api/users/find',
+        should: 'show invite-to-PageSpace CTA button',
+        actual: inviteButton !== null,
+        expected: true,
+      });
+    });
+  });
+
+  it('given user clicks invite CTA, POSTs to /share-invite with VIEW permission', async () => {
+    vi.mocked(fetchWithAuth)
+      .mockResolvedValueOnce(make404Response())   // /api/users/find
+      .mockResolvedValueOnce(makeInviteSuccess()); // /share-invite
+
+    const user = userEvent.setup();
+    render(<ShareDialog />);
+
+    await openDialogAndFillEmail(user, 'new@example.com');
+    const grantButton = screen.getByRole('button', { name: /grant access/i });
+    await user.click(grantButton);
+
+    await waitFor(() => {
+      screen.getByRole('button', { name: /invite.*pagespace.*share this page/i });
+    });
+
+    const inviteButton = screen.getByRole('button', { name: /invite.*pagespace.*share this page/i });
+    await user.click(inviteButton);
+
+    await waitFor(() => {
+      const calls = vi.mocked(fetchWithAuth).mock.calls;
+      const shareInviteCall = calls.find(([url]) =>
+        typeof url === 'string' && url.includes('/share-invite'),
+      );
+      assert({
+        given: 'user clicks the invite CTA',
+        should: 'POST to /share-invite',
+        actual: shareInviteCall !== undefined,
+        expected: true,
+      });
+
+      if (shareInviteCall) {
+        const options = shareInviteCall[1] as RequestInit;
+        const body = JSON.parse(options.body as string) as {
+          email: string;
+          permissions: string[];
+        };
+        assert({
+          given: 'only VIEW is selected',
+          should: 'send permissions: ["VIEW"]',
+          actual: body.permissions,
+          expected: ['VIEW'],
+        });
+      }
+    });
+  });
+
+  it('given DELETE is checked before 404, the share-invite payload does NOT include DELETE', async () => {
+    vi.mocked(fetchWithAuth)
+      .mockResolvedValueOnce(make404Response())
+      .mockResolvedValueOnce(makeInviteSuccess());
+
+    const user = userEvent.setup();
+    render(<ShareDialog />);
+
+    await openDialogAndFillEmail(user, 'new@example.com');
+
+    // Check the Delete checkbox before looking up the user
+    const deleteCheckbox = screen.getByRole('checkbox', { name: /delete/i });
+    await user.click(deleteCheckbox);
+
+    const grantButton = screen.getByRole('button', { name: /grant access/i });
+    await user.click(grantButton);
+
+    await waitFor(() => {
+      screen.getByRole('button', { name: /invite.*pagespace.*share this page/i });
+    });
+
+    const inviteButton = screen.getByRole('button', { name: /invite.*pagespace.*share this page/i });
+    await user.click(inviteButton);
+
+    await waitFor(() => {
+      const calls = vi.mocked(fetchWithAuth).mock.calls;
+      const shareInviteCall = calls.find(([url]) =>
+        typeof url === 'string' && url.includes('/share-invite'),
+      );
+      if (shareInviteCall) {
+        const options = shareInviteCall[1] as RequestInit;
+        const body = JSON.parse(options.body as string) as { permissions: string[] };
+        assert({
+          given: 'DELETE was checked before the 404',
+          should: 'not include DELETE in the share-invite payload',
+          actual: body.permissions.includes('DELETE'),
+          expected: false,
+        });
+      }
+    });
+  });
+
+  it('given /api/users/find returns 200, uses the direct grant path (not share-invite)', async () => {
+    // Dispatch on URL, not on call order. This used to be a positional queue
+    // that had to know dialog-open fires two calls ahead of /api/users/find;
+    // any component that later added a request shifted every entry by one and
+    // this test failed for a reason having nothing to do with what it asserts.
+    // (That is exactly what happened when the share-link section's GET moved
+    // from plain `fetch` onto `fetchWithAuth`.)
+    vi.mocked(fetchWithAuth).mockImplementation((input: unknown) => {
+      const url = String(input);
+      if (url.includes('/api/users/find')) return Promise.resolve(make200UserResponse());
+      return Promise.resolve(makeEmptyRolesResponse());
+    });
+    vi.mocked(post).mockResolvedValueOnce({ id: 'perm_1' });
+
+    const user = userEvent.setup();
+    render(<ShareDialog />);
+
+    await openDialogAndFillEmail(user, 'existing@example.com');
+    const grantButton = screen.getByRole('button', { name: /grant access/i });
+    await user.click(grantButton);
+
+    await waitFor(() => {
+      const shareInviteCall = vi.mocked(fetchWithAuth).mock.calls.find(([url]) =>
+        typeof url === 'string' && url.includes('/share-invite'),
+      );
+      assert({
+        given: '/api/users/find returns 200',
+        should: 'not call /share-invite',
+        actual: shareInviteCall,
+        expected: undefined,
+      });
+      expect(post).toHaveBeenCalledWith(
+        expect.stringContaining('/permissions'),
+        expect.objectContaining({ userId: 'user_existing' }),
+      );
+    });
+  });
+});
+
+describe('ShareDialog — [D-OW-33] a lapsed org only restricts', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    orgLapsed.current = false;
+    useDriveStore.setState({ drives: [{ id: 'drive_xyz', name: 'Product', slug: 'p', ownerId: 'u1', isTrashed: false, trashedAt: null, createdAt: '', updatedAt: '', isOwned: true, orgId: 'o-northwind' }], currentDriveId: null, isLoading: false, lastFetched: Date.now() });
+    vi.mocked(fetchWithAuth).mockResolvedValue(makeEmptyRolesResponse());
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] while the drive\'s org is lapsed Grant Access is disabled and the restrict-only note is shown; paid, it is enabled', async () => {
+    orgLapsed.current = true;
+    const user = userEvent.setup();
+    const { unmount } = render(<ShareDialog />);
+    await user.click(screen.getByRole('button', { name: /share/i }));
+    expect((screen.getByRole('button', { name: /grant access/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId('lapsed-loosen-note').textContent).toContain('Sharing more is paused');
+    unmount();
+
+    orgLapsed.current = false;
+    render(<ShareDialog />);
+    await user.click(screen.getByRole('button', { name: /share/i }));
+    expect((screen.getByRole('button', { name: /grant access/i }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByTestId('lapsed-loosen-note')).toBeNull();
+  });
+});

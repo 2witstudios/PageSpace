@@ -1,22 +1,40 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db, mcpTokens, mcpTokenDrives, drives, inArray } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { sessionRepository } from '@/lib/repositories/session-repository';
 import { z } from 'zod/v4';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { generateToken } from '@pagespace/lib/auth';
-import { getDriveAccess } from '@pagespace/lib/services/drive-service';
+import { generateToken } from '@pagespace/lib/auth/token-utils';
+import { validateDriveScopeAccess } from '@pagespace/lib/services/drive-service';
+import { rejectScopedOAuth } from './scope-guard';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
-const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
+// 'oauth' lets the pagespace CLI (which never holds a session cookie —
+// `pagespace keys list` authenticates with an OAuth access token from
+// `pagespace login`) call GET directly. CSRF is already skipped for
+// Bearer-token auth (`authenticateRequestWithOptions`), so this is not a
+// CSRF-relevant change. Minting (POST) is session-only — the CLI has no
+// session cookie and never reaches this route; it mints a new mcp_*
+// credential exclusively through the separate OAuth authorize/consent flow
+// (`/api/oauth/authorize`), which has its own step-up gate. This route only
+// serves the web UI's own already-authenticated "Create Token" button.
+const AUTH_OPTIONS_READ = { allow: ['session', 'oauth'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 // Schema for creating a new MCP token
 const createTokenSchema = z.object({
   name: z.string().min(1).max(100),
-  // Optional array of drive IDs to scope this token to
-  // If empty or not provided, token has access to all user's drives
+  // Legacy: plain drive IDs — scope only, role inherits from the owner
   driveIds: z.array(z.string()).optional(),
-});
+  // Preferred: per-drive scope. Omitted role = INHERIT (the key acts as its
+  // owner in that drive); an explicit role is an opt-in downgrade.
+  drives: z.array(z.object({
+    id: z.string(),
+    role: z.enum(['ADMIN', 'MEMBER']).nullish(),
+    customRoleId: z.string().optional(),
+  })).optional(),
+}).refine(d => !(d.drives && d.driveIds), { message: 'Provide drives or driveIds, not both' });
 
 // POST: Create a new MCP token
 export async function POST(req: NextRequest) {
@@ -26,23 +44,16 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { name, driveIds: rawDriveIds } = createTokenSchema.parse(body);
+    const { name, driveIds: rawDriveIds, drives: rawDrives } = createTokenSchema.parse(body);
 
-    // Deduplicate drive IDs to prevent unique constraint violations
-    const driveIds = rawDriveIds ? [...new Set(rawDriveIds)] : [];
+    const driveScopes = (rawDrives
+      ?? (rawDriveIds ?? []).map(id => ({ id, role: null, customRoleId: undefined }))
+    ).map(scope => ({ ...scope, role: scope.role ?? null }));
+    const uniqueDriveScopes = [...new Map(driveScopes.map(d => [d.id, d])).values()];
 
-    // Zero Trust: Validate that the user has access to each specified drive
-    // Users can scope tokens to any drive they have access to (owned OR member)
-    if (driveIds.length > 0) {
-      const invalidDriveIds: string[] = [];
-
-      for (const driveId of driveIds) {
-        const access = await getDriveAccess(driveId, userId);
-        // User must be owner, admin, or member to scope a token to this drive
-        if (!access.isOwner && !access.isMember) {
-          invalidDriveIds.push(driveId);
-        }
-      }
+    if (uniqueDriveScopes.length > 0) {
+      const { invalidDriveIds, unauthorizedRoles, invalidCustomRoles, unauthorizedCustomRoles, explicitRoleWithoutMembership } =
+        await validateDriveScopeAccess(uniqueDriveScopes, actorFromAuth(auth));
 
       if (invalidDriveIds.length > 0) {
         return NextResponse.json(
@@ -50,49 +61,53 @@ export async function POST(req: NextRequest) {
           { status: 403 }
         );
       }
+      if (explicitRoleWithoutMembership.length > 0) {
+        return NextResponse.json(
+          { error: 'You reach these organization drives through your organization role, so a key can only inherit your access there (leave the role unset): ' + explicitRoleWithoutMembership.join(', ') },
+          { status: 403 }
+        );
+      }
+      if (unauthorizedRoles.length > 0) {
+        return NextResponse.json(
+          { error: 'You do not have permission to grant ADMIN role in these drives: ' + unauthorizedRoles.join(', ') },
+          { status: 403 }
+        );
+      }
+      if (invalidCustomRoles.length > 0) {
+        return NextResponse.json(
+          { error: 'Custom role does not belong to the specified drive: ' + invalidCustomRoles.join(', ') },
+          { status: 400 }
+        );
+      }
+      if (unauthorizedCustomRoles.length > 0) {
+        return NextResponse.json(
+          { error: 'You may only mint tokens with your own assigned custom role in these drives: ' + unauthorizedCustomRoles.join(', ') },
+          { status: 403 }
+        );
+      }
     }
 
-    // P1-T3: Generate token with hash and prefix for secure storage
-    // SECURITY: Only the hash is stored - plaintext token is returned once and never persisted
     const { token: rawToken, hash: tokenHash, tokenPrefix } = generateToken('mcp');
 
     // Determine if this token is scoped (fail-closed security)
-    const isScoped = !!(driveIds && driveIds.length > 0);
+    const isScoped = uniqueDriveScopes.length > 0;
 
     // Use transaction to ensure token and drive scopes are created atomically
-    // If drive scope insertion fails, the token should not exist
-    const newToken = await db.transaction(async (tx) => {
-      // Store ONLY the hash in the database
-      // isScoped=true means if all scoped drives are deleted, deny access (not grant all)
-      const [token] = await tx.insert(mcpTokens).values({
-        userId,
-        tokenHash,
-        tokenPrefix,
-        name,
-        isScoped,
-      }).returning();
-
-      // If drive scopes are specified, create the junction table entries
-      if (driveIds.length > 0) {
-        await tx.insert(mcpTokenDrives).values(
-          driveIds.map(driveId => ({
-            tokenId: token.id,
-            driveId,
-          }))
-        );
-      }
-
-      return token;
+    const newToken = await sessionRepository.createMcpTokenWithDriveScopes({
+      authenticatedAt: auth.authentication ? new Date(auth.authentication.authenticatedAtMs) : null,
+      authenticationAssurance: auth.authentication?.assurance ?? null,
+      userId,
+      tokenHash,
+      tokenPrefix,
+      name,
+      isScoped,
+      drives: uniqueDriveScopes,
     });
 
     // Fetch drive names for consistent response format with GET
-    let driveScopes: { id: string; name: string }[] = [];
-    if (driveIds.length > 0) {
-      const driveRecords = await db.query.drives.findMany({
-        where: inArray(drives.id, driveIds),
-        columns: { id: true, name: true },
-      });
-      driveScopes = driveRecords.map(d => ({ id: d.id, name: d.name }));
+    let driveScopeNames: { id: string; name: string }[] = [];
+    if (uniqueDriveScopes.length > 0) {
+      driveScopeNames = await sessionRepository.findDrivesByIds(uniqueDriveScopes.map(d => d.id));
     }
 
     // Log activity for audit trail (token creation is a security event)
@@ -102,6 +117,7 @@ export async function POST(req: NextRequest) {
       tokenType: 'mcp',
       tokenName: newToken.name,
     }, actorInfo);
+    auditRequest(req, { eventType: 'auth.token.created', userId, details: { tokenType: 'mcp' } });
 
     // Return the raw token ONCE to the user - this is the only time they'll see it
     // Response format matches GET for consistency
@@ -111,7 +127,7 @@ export async function POST(req: NextRequest) {
       token: rawToken, // Return the actual token, not the hash
       createdAt: newToken.createdAt,
       lastUsed: null, // New token hasn't been used yet
-      driveScopes, // Consistent format with GET: { id, name }[]
+      driveScopes: driveScopeNames,
     });
   } catch (error) {
     loggers.auth.error('Error creating MCP token:', error as Error);
@@ -126,55 +142,13 @@ export async function POST(req: NextRequest) {
 export async function GET(req: NextRequest) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) return auth.error;
+  const scopeRejection = rejectScopedOAuth(auth);
+  if (scopeRejection) return scopeRejection;
   const userId = auth.userId;
 
   try {
-    // Fetch all non-revoked tokens for the user with their drive scopes
-    const tokens = await db.query.mcpTokens.findMany({
-      where: (tokens, { eq, isNull, and }) => and(
-        eq(tokens.userId, userId),
-        isNull(tokens.revokedAt)
-      ),
-      columns: {
-        id: true,
-        name: true,
-        lastUsed: true,
-        createdAt: true,
-        isScoped: true,
-      },
-      with: {
-        driveScopes: {
-          columns: {
-            driveId: true,
-          },
-          with: {
-            drive: {
-              columns: {
-                id: true,
-                name: true,
-              },
-            },
-          },
-        },
-      },
-    });
-
-    // Transform the response to include drive info
-    // Filter out any scopes where the drive may have been deleted
-    const tokensWithDrives = tokens.map(token => ({
-      id: token.id,
-      name: token.name,
-      lastUsed: token.lastUsed,
-      createdAt: token.createdAt,
-      isScoped: token.isScoped,
-      driveScopes: token.driveScopes
-        .filter(scope => scope.drive != null)
-        .map(scope => ({
-          id: scope.drive.id,
-          name: scope.drive.name,
-        })),
-    }));
-
+    const tokensWithDrives = await sessionRepository.findUserMcpTokensWithDrives(userId);
+    auditRequest(req, { eventType: 'data.read', userId, resourceType: 'mcp_token', resourceId: userId });
     return NextResponse.json(tokensWithDrives);
   } catch (error) {
     loggers.auth.error('Error fetching MCP tokens:', error as Error);

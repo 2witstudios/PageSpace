@@ -1,0 +1,2385 @@
+# Changelog
+
+All notable user-facing changes to PageSpace are documented here. Format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [Unreleased]
+
+- In Imago, the Files, Messages, Tasks, Calendar, Console and Activity sidebars have a switch beside their title: the drive you're in, or All drives. It works the same on every drive, not just Home, and each section remembers its choice on this device. Until you pick, Home's Messages, Calendar, Console and Activity show All drives. Files and Tasks always start on the drive you're in, so Home's own pages and task lists stay where they were. Other drives start on themselves. In All drives:
+  - **Files** shows your favorites and recent pages from every drive, each naming its drive, plus a list of your drives in place of the page tree. Pick a drive to open its Files.
+  - **Tasks** shows your views and Needs attention across every drive, plus a list of your drives in place of the task lists.
+  - **Messages** shows every drive's channels with your DMs. Set to one drive, it shows that drive's channels and your DMs, and the "Showing all drives" note under the inbox is gone.
+- In Imago, the chat now sits on the plain page background and the left sidebars (pages, messages, chat history and tool sidebars) take the light blue tint, the reverse of before. An open conversation, the page tree in Pages and the Console sessions list now follow the swap too, instead of keeping the old colours as a band inside their pane.
+- In Imago, the Files section is now called Pages: in the rail, the phone's bottom bar and header, its sidebar and tab, the folder browser, the chat's context chip and prompt ("Ask across Pages"), and the "Back to Pages" links.
+- Imago's billing and wallet screens now match the classic ones:
+  - The account menu and the account overview show your credits as whole credits. Before, they showed the balance in cents, ten times too high.
+  - Wallets (Account › Wallets) and a drive's Wallet settings use Imago's settings layout instead of the classic cards. Spending your own credits now shows a coins mark instead of a sparkle, here, in the credits button and in the organization's Usage link.
+  - Storage has Add storage and Change storage for extra 50 GB blocks where your plan allows them, and an upgrade link on Free. An organization's Plan & seats page shows its storage and, for the Owner, extra storage blocks.
+  - When an upload is refused because you are out of space, the message says why and offers Get more storage. Uploads to an organization drive are checked against the organization's storage, not yours.
+  - The Plan page says when your plan was bought in the App Store, and no longer offers to change, cancel or discount it here.
+- Your Home drive can no longer be funded. What you spend there is always your own credits, so its Wallet settings say so, and Fund a drive (in Imago and the classic interface) no longer lists it. No one can create, top up or donate to a wallet on a Home drive. A Home wallet made earlier is spent until it runs out, and its monthly allocation stops at the next renewal, so no credits already in it are lost.
+- In Imago, opening Calendar from the rail now shows the calendar beside its sidebar immediately.
+- Imago message filters now remove duplicate conversations from overlapping inbox pages so switching All, Channels and Direct does not leave stale rows behind. Segmented selectors fit their buttons without an empty tail.
+- Imago’s left sidebar content now resizes with its column across chat history, files, messages and tool sidebars, instead of being clipped or leaving blank space. Sidebar content also fills the narrower overlay sheets.
+
+- The Terms of Service and Privacy Policy now cover purchases made in the iOS app through Apple: subscriptions bought there are managed and cancelled in your App Store account settings, Apple handles their refunds, and Apple shares only the transaction details needed to provide what you bought. In the iOS app, the Terms, Privacy, Cookie and Subprocessors pages open without the website's navigation and footer.
+- Imago's ⌘K search has a new look. The search field no longer shows a blue focus outline that was cut off at the top. Results show an icon, the title with the matching letters highlighted and, when searching every workspace, the page's workspace underneath. Before you type, the palette lists the recently updated pages in the current workspace. The "All workspaces" checkbox is now a switch between the current workspace and all of them; press Tab to flip it.
+- In Imago you can resize the left sidebar and the Imago panel beside a page by dragging their inner edge, as you can in the classic interface. Double-click the edge to reset it. The widths are remembered on this device, and the sidebar keeps one width across sections. With the edge focused, the arrow keys also resize, by 64px with Shift. The middle always keeps at least 400px. On smaller windows, where the sidebar or Imago opens as a sheet over the page, they keep their usual width.
+- Paid plans now include their full price in credits each month (a dollar paid is ten credits), up from 60%. Pro, Business and extra seats all include more credits; plan cards, the comparison table and the pricing page show the new amounts, and each next renewal grants them.
+- Task lists in Imago have their own views again, in place of the classic table. Switch between Focus, Tree, Board and a new Roadmap from the list's toolbar, which also has All / Mine / Overdue filters with counts, a search box, Statuses, Workflows and + Task.
+  - **Tree** is an outline of the list. Each row shows subtask progress, priority, who's on it and its due date. Drag a row to reorder it, or use its ⋯ menu to move it up or down, open it or delete it. The list's description sits folded above the outline.
+  - **Board** lets you drag a card within a column as well as between columns. Cards open in place to show their subtasks. A column can have a WIP limit, which is a reminder only and never blocks a move, and any column can fold to a narrow strip. Lanes split the board by priority or by assignee; dropping a card into another lane changes that field too.
+  - **Focus** lists what you can start next, either in the open list or across every list in the drive, with a "Done today" section and a quick-add row.
+  - **Roadmap** puts the list on a timeline in weeks, months or quarters. Drag a bar's ends to change its start or due date, and pick up tasks with no date from the Unscheduled tray.
+  - Tasks now have an optional **start date**, which you can set from a task's detail or the Roadmap. In a task's detail, status, due date, start date, priority and assignees open proper pickers, and you can delete the task. If you can only view the list, the detail shows these fields as plain text instead. A due date set on the same day as a start time is kept rather than refused.
+  - On the Tasks home, you can tick tasks off straight from the list.
+  - Lists update live when someone else changes them.
+
+- Imago's Home drive is now your dashboard, as "All drives" is in the classic interface. On Home, Tasks lists your tasks from every drive with each one's drive named beside its list, Calendar shows every drive's events with your personal and Google ones, Console lists agent sessions from every drive and starts new ones in Home, and Activity shows your own changes across drives, naming the drive each was in. Messages already showed every drive's channels and your DMs. Imago's chat on Home now knows all your drives instead of assuming you mean Home. Every other drive stays scoped to itself, and Home's Files, Members, Workflows and Trash are still Home's own. The cross-drive Tasks, Calendar, Activity, Agents and Messages screens are gone from account settings; old links to them open Home's, keeping any date, view or filters in the link.
+- Drives can have their own look. Drive owners and admins can upload an image (JPEG, PNG, GIF or WebP, up to 5 MB) or pick a color for the drive's tile, in Imago's drive Settings under Appearance or in the classic drive settings under General. The drive shows that image or color at the top left of Imago's rail, in the phone header, in the drive switcher and in the classic header. A drive in an organization with neither shows the organization's avatar. Changes show up for everyone in the drive without a refresh. Like organization avatars, a drive image is stored by PageSpace and only shown to people who can open the drive.
+
+- Imago UI polish:
+  - The rail's first button is now Home, with a house icon, and the Agents tool is now Console, with a terminal icon.
+  - The Imago orb is larger in the chat header's agent picker and its list.
+  - The credits button no longer shows a sparkle when you are spending your own credits.
+- Imago tabs:
+  - + (New tab) opens a blank tab on the drive's home right away, as in a browser, instead of asking you to create a page. What you open next loads into it.
+  - Tool tabs such as Calendar and Console show their own icon.
+  - The active tab is clearer: it takes the color of the sheet below it and stands out from the tab strip in both light and dark mode.
+  - The browser's Back button returns to the tab you came from. Before, after opening a New tab or switching tabs, Back loaded the earlier page into the current tab and left two tabs showing it.
+  - Every navigation loads into the tab you're in, as in the classic interface, including the drive's chat and a section's index (Files, Messages, Tasks) from the rail. Before, those left the tab showing the last page you opened.
+- Imago's left rail shows its tooltips in full instead of clipping them, and no longer scrolls sideways.
+- Opening Calendar, Activity or Console, any other spot from the rail, or an agent page no longer folds Imago away. Imago stays open beside every screen and page until you collapse or close it yourself.
+- Imago's Console works like the classic Agents console again:
+  - Chats run inside the session's panes, so you can split the grid and talk to several agents side by side. Before, a chat pane only showed a button that moved the conversation into Imago's column.
+  - The Console sidebar is classic's: each environment with its sessions nested under it, sessions with their own sandbox beside them, and each session's conversations, pages and shells listed under it. Every row opens in a pane.
+  - With no session open, the Console sidebar sits beside Imago, which keeps the middle. Opening a session puts its panes there under one session bar (name, environment, start time, preview, Add pane, End session and Close).
+  - A session whose last pane was closed opens on the pane picker instead of an empty screen, and Add pane works there too.
+  - A terminal that can't reach the realtime server now says so instead of staying blank.
+  - On Home, the Console lists every drive's sessions, grouped by drive, as classic's All drives view does.
+
+- Sign-in, sign-up, invitations, share links and the other signed-out pages are back to the classic look on pagespace.ai, and finishing email verification or passkey setup lands you on your dashboard again instead of Imago. The Imago-styled versions now sit behind their own build flag (`NEXT_PUBLIC_IMAGO_V3_AUTH`), off by default, so trying Imago no longer changes how you sign in. Imago itself and the "Try Imago" link are unchanged.
+
+- You can now subscribe to Pro and buy credit packs inside the PageSpace iPhone and iPad app, paid through your Apple ID. Pro bought in the app includes exactly what Pro on the web does (the same monthly credits, storage and models) and shows up on every device you sign in on. App Store prices are set a little higher to cover Apple's fee. Manage or cancel an App Store subscription from the app's Plan page or your Apple ID settings, and use Restore Purchases after reinstalling. A plan bought on the web is still managed on the web, and organization (Business) plans are still managed by the organization's admin. Credit packs can be bought either way, whichever store your plan is on.
+- The chat composer in a docked Imago column is one row: the model name is a single button, and it opens a searchable list of every model, browsed by provider, so the composer no longer clips against Send in a narrow column.
+- Imago now has a face of its own: a living liquid-metal orb wherever Imago shows up, in place of the generic agent icon. It moves on Imago's empty chat, in the chat header, while Imago is thinking, and on the Ask buttons. It listens as you type, churns while it thinks and ripples as it replies. Elsewhere it is still and comes alive when you hover it: the Chat button on the rail, Imago's page in the sidebar, tabs, recents, favorites, search and the agent picker. Your other agents keep their usual icon.
+
+- Every spot on Imago's rail now works the same way. Clicking one opens its sidebar, and Imago's chat fills the rest of the screen. Picking something in that sidebar (a page, a task view, a calendar date, a setting, a workflow, a member group) opens it in the middle, and the chat moves to the right. Closing it with × brings back that same sidebar with the chat in the middle. It no longer sends you to Home. This now applies to Tasks, Calendar, Console, Workflows, Activity, Members, Trash, Drive settings and Account, as well as Files and Messages.
+  - Tasks' sidebar shows your overdue and due-this-week tasks at a glance, under the smart views. Picking a view opens its tasks in the middle.
+  - Calendar's sidebar is the filter again, as in the classic calendar. It has checkboxes to show or hide each calendar (on Home), user events, agent events and tasks. The row of filter pills across the top of Home's calendar is gone.
+  - Trash's sidebar filters by Pages or Files, and Activity's sidebar has an "All activity" row.
+  - The chat in the right column now has the same narrow layout everywhere. On Tasks it used to keep the wide full-screen layout.
+
+- Imago no longer draws a blue focus outline around a document when you click into it, and the ⌘K search palette and new-page palette no longer show a focus outline on their fields when they open. The highlighted result marks where the keyboard is.
+- Imago's Tasks and Messages sidebars have a proper header now. New list and New message sit in the header as + buttons beside Close sidebar, like New page in Files, and the "Create page" button is gone from both sidebars, which frees the space it took.
+- Imago's Files view no longer shows the "N pages in <drive> · Browse files" line above the chat. The Browse files link is still available from the Files section itself.
+- The drive picker in Imago opens centered and full-size, as it does in the classic interface, instead of as a narrow panel pinned beside the sidebar.
+
+- Imago's tabs now work like browser tabs, as in the classic interface: opening a page loads it into the tab you're in instead of adding a new tab every time. Each tab keeps its own Back and Forward history, and the browser's Back and Forward move within the tab you're in. To open a new tab, use + (New tab), or ⌘/Ctrl-click or middle-click a link, which opens it beside the current tab without leaving it.
+
+- The pricing page and Choose Your Plan page are easier to read: each plan's included credits, top-up rate, storage and models sit in a clear spec list, and Business's team terms (seats, extra-seat credits and checkout) have their own labeled panel instead of cramped small print. Choose Your Plan now centers its two personal plans side by side.
+
+- Credits are now a larger unit, so every balance, allowance, cap and pack shows one-tenth the number it did. What you have, and what things cost, is unchanged. A custom top-up must now be a whole number of credits; an amount that is not is refused rather than rounded.
+
+- Pro now includes 10 GB of storage (up from 2 GB) and no longer limits how many files you can store. Business organizations no longer have a file-count limit either. Free is unchanged at 500 MB and 100 files.
+
+- Need more room? Pro members and Business organization Owners can now add extra storage in 50 GB blocks for $5 a month each (Settings › Usage, or the organization's Plan & seats page). Added storage is charged right away for the rest of the billing period; removing it takes effect at the end of the period, and no files are ever deleted. When an upload is refused for lack of space, the message now says why and links to where you can get more.
+
+- Organizations and their settings are now available in both interfaces. A fresh assistant conversation shows its spending source before the first message, and choosing another source uses it for the first reply. Imago now applies organization sign-in requirements and keeps access-restricting changes available while an organization is unpaid.
+
+- Paid models and voice now follow whoever pays for the call. Inside an organization's drive, its plan applies to a member on the drive wallet or their seat; on someone's personal drive wallet, the drive owner's plan applies; on your own credits, your own plan applies. This now holds for agent consultations, the OpenAI-compatible API, workflows, @mentions, agents asking agents, text-to-speech and voice calls.
+
+- Text-to-speech and Global Assistant voice calls made inside a drive now spend from that drive's wallet, like a typed message there, instead of always using your personal credits. Speech or a call whose drive cannot be determined is refused and charges nothing.
+
+- An agent consulted from work in another drive (`agents.ask` with `sessionDriveId`, or `drive_context` on the OpenAI-compatible API) now spends and records its usage in that drive, not the agent's own. API threads spend in the drive they were opened in.
+
+- Storage in someone else's personal drive now counts against the drive owner's quota, not the member who uploaded it. Moving a drive into or out of an organization, or handing a personal drive to a new owner, moves its storage with it. Direct-message attachments still count against the sender.
+
+- Machine storage in an organization's drive never puts the organization's credits pool into debt: a paused pool is not charged, and a pool that can't cover the full amount is charged only what it has. An organization's Owner or Admin can now buy dedicated (always-on) hosting for an app in an organization drive; it is billed to the organization, not to a person's card.
+
+- The personal usage breakdown now shows only spend from your own credits. Compute you run in an organization's drive is the organization's spend and no longer appears there.
+
+- Organization Owners and Admins can pause the whole credits pool from Plan & seats: while paused, no seat and no drive wallet can spend from it. A paused pool's drive wallets show as paused.
+- Guests can no longer spend an organization drive's wallet by @mentioning an agent or pressing Run. An Admin can let a drive's guests spend its wallet (Drive Settings › Wallet › Guests); guests are then always held to spending caps (the default daily and monthly caps unless set lower).
+- The amount shown for a drive wallet in the "spending from" chip, strip and popover is now the wallet's own remaining amount, the same figure as the drive's Wallet page.
+- When an automation or mention is skipped because the person it runs as reached their cap, or is a guest the drive keeps off its wallet, the drive lead's notice now says so.
+- A donation to a drive wallet is now always kept whole as your gift; it no longer pays off the wallet's debt, and it can be spent right away even while the wallet is over.
+- Moving a drive into or out of an organization now moves its wallet with it: top-ups and donations stay, and the new owner sets its monthly allocation.
+- Zoom transcript summaries and action items spend the destination drive's wallet on personal drives too, never anyone's own credits; a drive without a wallet skips them.
+- On the Wallet page, each member's spend now shows how much was today and how much ran through their automations, with each automation listed by name under the person who created it.
+- Inside a drive with no chat open, the header chip now shows what a new conversation there would spend from.
+
+- A conversation in a drive now keeps the source it started on. If that drive wallet is empty, paused or at your cap, the call is refused, names the wallet and offers your other options; it moves only where the drive's fallback rule allows, and the move is shown. It no longer switches to your own credits without telling you. Asking another agent (ask_agent) now reserves credits before the agent runs and is refused when the wallet cannot cover it.
+
+- Organization sign-in rules now also cover: channel @mention replies and manual workflow Runs (they act with the sign-in of the person who sent or pressed them), org admin settings and drive join-request approvals for sessions and access keys (leaving an organization never needs a fresh sign-in), Pulse summaries, AI memory and the Memory pages that hold it when drawn from an org's content (withheld, with a prompt to sign in as the org requires, on Home and in Personalization settings; a data export or drive backup leaves them out and says why), conversation transcripts, calendar events, and live app logs. Scheduled automations (workflows, triggers, backups) now reach only the drive they live in. The Security page shows how many members and guests a rule would block, flags a damaged maximum age as invalid, and saves only what you changed; the CLI tells access-key users to create a new key rather than sign in again.
+
+- An organization's sign-in rules (require a passkey sign-in, maximum session age) now apply everywhere its content can be reached: pages, files, search, inbox, activity and Pulse, AI assistants and their tools, live collaboration (open documents and channels are closed when a session passes the maximum age), terminals and previews, uploads, and the CLI and MCP keys. A refused request answers `403` with `code: "org_strong_sign_in_required"` or `"org_reauthentication_required"` so you can sign in again; your personal drives and account settings stay reachable. Scheduled automations (workflows, triggers, scheduled backups, Pulse) keep running as their creator, since no one signs in for them, within the drives they belong to.
+
+- Organization capabilities now require a verified payment or supported gift for the current subscription. A zero-dollar non-gift invoice or balance left from a previous subscription cannot activate an unpaid organization.
+
+- Included credits now follow the published money model: each Pro or Business payment includes credits worth a set share of what it paid, rather than its full price, and the plan cards, pricing page and Plan & seats page show the new monthly figures. Top-up packs are unchanged. A gifted organization's pool is funded the same way from the list price; staff gift an organization from the admin console, on the organization's own subscription, for a fixed number of seats (inviting past them is refused until the gift changes), and can revoke the gift; gifting a lapsed organization cancels its unpaid renewal invoice and restores it at once.
+
+- Organization seats: re-adding someone in the last hour of a billing period no longer charges a proration, and a member who hits the seat limit is no longer told how many seats the organization has. On self-hosted and dedicated deployments every organization billing page and endpoint is absent for everyone.
+
+- Billing now recognizes paid plans only by their configured Stripe price IDs. Unknown and retired prices no longer gain paid access or credit grants by matching a plan amount.
+
+- Organization audit log: every org event is now saved together with the change it records, so an event can no longer go missing when the audit store is briefly unavailable; it is delivered as soon as the store recovers. Seat count changes made in Stripe (the customer portal or a support edit) now appear in the log too.
+
+- Organization model allowlists now apply everywhere: agent model changes, agent creation, copies and moves of agents into an org drive refuse disallowed models, the model picker in an org drive shows only allowed models, and Zoom summaries, compaction, memory and pulse respect each org's allowlist. Workflows, @mentions and agent-to-agent consults now check the model against the plan of whoever pays for the run.
+
+- Moving a team to a dedicated PageSpace instance now brings its organizations with it: org drives arrive
+  as org drives with their visibility, members, policies, verified domains and subscription record. Wallet
+  balances (including debt), donations and spending caps are copied across as records only: a dedicated
+  instance does not run PageSpace billing, so there they are not charged against or enforced, and every
+  organization counts as active. An organization that is only reached through a drive you were a guest in
+  comes along without its money, invitations or domains, but people who left it still cannot be
+  automatically re-added by email domain. Usage history stays on the original instance.
+
+- /btw side questions now work on every chat surface (dashboard assistant, right-sidebar chat, agent console) and /btw appears in the / command picker on all of them.
+
+### Added
+
+- **Organization Drives directory and join requests** — every
+  member, not only admins, can open the organization's Drives directory from the organization page or
+  "Browse … drives" in the drive picker: the drives they can open, and the Restricted drives they can ask
+  to join, with an optional note. The drive lead and organization Owners and Admins see pending requests
+  on the drive's Members page and approve or decline them.
+
+- **Unpaid-organization banner everywhere in the organization** (shown once organizations are switched
+  on) — the reactivate banner (Owner and Admins) and the read-only notice (members) now show on every
+  organization page and on every page of an organization drive, not only in organization settings.
+
+- **Who spends, today and via automations** — a drive wallet's "Spend this month" list shows, per
+  member, how much was spent today and how much came from automations run on their behalf. Settings ›
+  Usage › Wallets shows what you spent from each drive wallet this month.
+
+- **Organization changes update live** — renaming an organization, changing its avatar, deleting it, and
+  sending or revoking invitations update the drive picker, the header and organization pages for every
+  member without a refresh.
+
+- **Joining an organization from the invitation email** — the
+  invitation link now opens a page that lets you join: sign in or create an account with the invited
+  address (by any sign-in method) and you land in the organization; if you are already signed in, one click
+  joins. The page says plainly when the link has expired, is no longer valid, belongs to another account,
+  or you are already a member.
+
+- **Organization avatar upload** — Owners and Admins set the
+  organization's avatar in Organization settings › General by uploading an image (JPEG, PNG, GIF or WebP,
+  up to 5 MB). The avatar is stored by PageSpace and shown only to members; an avatar can no longer be a
+  link to an image on another site.
+
+- **Create drives in your organization from anywhere** — the
+  New drive dialog offers the organizations you may create drives in, preselecting the one you are working
+  in, and the AI assistant's create-drive tool and the MCP drive create accept an organization too. The
+  organization's "who can create drives" setting applies everywhere.
+
+- **Organization sign-in requirements** — an organization's
+  Security page can now require strong sign-in (a passkey confirmed on your device) and a maximum sign-in age
+  (15 minutes to 30 days) for everyone opening its drives, with a preview of how many members would have to
+  sign in again. Turning a requirement on first asks you to meet it yourself, so you never lock yourself out;
+  relaxing one needs a sign-in that meets the one in force. Someone who does not meet a requirement keeps their
+  account and personal drives: the app asks them to confirm it is them (passkey, or an emailed link for a
+  sign-in that is too old) without signing out, the Files page shows the organization's drives as locked
+  instead of hiding them, and the CLI and MCP tools say to run `pagespace login` (with a passkey when strong
+  sign-in is required). Every sign-in method now records how you signed in; sessions from before this change
+  must sign in again to open an organization's drives under these requirements. Single sign-on and SCIM are
+  out of scope and named as such on the Security page.
+
+- **Organizations in the CLI and on MCP keys** — `pagespace orgs
+  list|get|members|drives|policies` and the matching `organizations.*` MCP tools read what the web already
+  shows: your organizations and your role in each, the member roster, the drive directory (including
+  Restricted drives, with join standing), and the org's policies for Owners and Admins. The CLI and MCP now
+  also do what the web does with an organization, under the same roles: rename it, invite, resend and revoke
+  invitations, accept one, change roles, remove members, leave, change policies (including requiring a
+  passkey sign-in and a maximum sign-in age), manage verified domains, answer guest requests and owner-left
+  automations, read the audit log (and export it as CSV), trashed drives, drive usage and suspended items,
+  preview how many members a sign-in policy would refuse before saving it (`pagespace orgs sign-in-preview`);
+  create a drive in an organization, move drives in and out, change a drive's visibility or lead, and ask
+  to join, approve, deny or withdraw drive join requests (`pagespace orgs …`, `pagespace drives …`). Money
+  stays with a signed-in session: creating or deleting an organization, transferring ownership, seat caps,
+  the seat allowance and wallet fallback policies, buying another seat (an access key may invite only into
+  seats already paid for), billing, the credits pool and every wallet change refuse an access key by name,
+  and the CLI asks before a change that can remove or suspend access. An access key scoped to
+  specific drives is refused on organization actions and sees only its own drives in the directory, and
+  an organization's sign-in requirements now apply to its own settings and admin actions too, for access
+  keys and signed-in sessions alike.
+
+- **Organization settings** — Settings › Organizations lists the
+  organizations you belong to and lets you create one: name it, choose the drives you own to move in (Home
+  stays personal), invite people, see the price, and pay with a card; the organization is ready once that
+  first payment goes through. Each organization has a settings page for its Owner and Admins: Members &
+  seats (roles, invitations, guests, per-person seat caps), Drives, Policies, Security (verified domains),
+  Plan & seats (seats, the credits pool, drive wallets and invoices), an Audit log with CSV export, a
+  Needs your attention list (guest requests to approve, automations whose owner left), and the Owner's
+  Danger Zone. A member who is not an Admin sees only the option to leave. While an organization is
+  unpaid, every page says so, offers to reactivate it, and allows only changes that restrict access.
+
+### Changed
+
+- **Imago's new shell (C · Blue Spine)** — Imago now sits on a blue spine: the drive tile, Search (⌘K), Chat, Files, Messages and Tasks, then Calendar, Agents, Workflows, Activity, Members and Trash, with the notification bell, Drive settings and your avatar at the foot. Open pages live in a tab bar across the top (Back, Forward, tabs that remember themselves per drive, and a + for a new page); under it every column has the same 48px head. The left sidebar folds away with its panel button and comes back from "Show sidebar"; a page closes with ×; Imago docked beside a page folds into an "Ask" pill, and when no page is open Imago fills the middle and can be closed, leaving "Nothing open" with your recent pages and "Ask Imago". A page's head carries its path, who is viewing, Share and a "…" for page actions, and its tools sit in one strip beneath it. The Files pane gains a filter, Favorites and Recents; drive settings and your account each get a sidebar of their screens.
+
+- **Imago's chat column (C · Blue Spine)** — the Imago column's head now has the agent picker (Imago first), History, New chat and a collapse button. A "Spending from …" line above the compact composer shows which credits a reply draws on. Tool calls appear as short rows ("Read Page: Brief") instead of raw tool names. The Chats pane can be searched and groups your conversations by date, and a home greeting suggests where to pick up.
+
+- **Imago's pages (C · Blue Spine)** — each page type has one tool strip under its head:
+  - Documents: Formatting, plus an "Ask" button in the selection bubble that quotes your selection to Imago.
+  - Sheets: Cell and Formula.
+  - Code: Language.
+  - Files: file facts and Download.
+  - Channels: Webhooks, a "New messages" divider, and "Sending…" on pending posts.
+  - Canvases: Code, Preview and Settings tabs, with "Republish" when the published copy is out of date.
+  - Folders: their contents as a table with Name, Type and Modified.
+  - Agent pages: Chat, History and Settings views.
+  - Task lists: Table/Board, Active/Completed/All, and a progress line.
+
+  A public link that no longer works now says so.
+
+- **Imago's files browser (C · Blue Spine)** — a folder opens in a browser of its own, from its "Browse files" link: a Files strip with the breadcrumb, List and Grid views (your choice is remembered), and New Page. The list sorts by Name, Type and Last Modified. A row's "…" or right-click opens Open, Open in new tab, Rename, Favorite, Move to, Copy to and Trash. An empty folder says "No child pages" with Upload files and Create page, and files dragged over it show how many will go in.
+
+- **Imago's settings (C · Blue Spine)** — agent and canvas settings open with a category list beside the form, which you can fold away with "Close settings menu". Editing an agent's settings shows a bar with "Unsaved changes to …", Discard and Save. A published canvas's strip shows its URL, Settings (publish title, description, share image and search visibility), Copy link and Unpublish.
+
+- **Imago's messages (C · Blue Spine)** — the Messages index lists channels and direct messages together, newest first, with an All · Channels · Direct filter, and opens on your unread counts. Direct messages get their own pane with a filter and the people you can message. An open conversation has one head ("Direct messages › name", Conversation options), and New message groups people by how you know them. Channel composers say how to mention and send. The Webhooks button only appears for drive owners and admins. Account › Messages lists every channel across your drives, with search, a drive filter, an Unread toggle and Load older.
+
+- **Imago's tasks (C · Blue Spine)** — the Tasks pane has New list, views with counts (Assigned to me, Overdue, Due today, This week, Upcoming) and each list's progress. The ground shows the tasks assigned to you by due window, with Active · Completed · All. The board view has a column per status with counts and richer cards. An open task shows its list's other tasks in the pane, Previous / Next, its automations and its activity. The Agent triggers and Manage statuses dialogs match the new look. Account › Tasks groups your tasks by drive, with due chips and a drive filter.
+
+- **Imago's drive tools (C · Blue Spine)** — Calendar, Agents, Workflows, Activity, Members and Trash now open with a pane on the left that folds away like every other. Calendar has a mini month, calendars and event types beside a week toolbar, and event popovers with attendees and triggers. Agents lists sessions by environment, with the published app, a session toolbar and closable chat and shell panes. Workflows lists your workflows beside a detail you can enable, run, edit or delete. Activity filters by person, operation, resource and date, with Undo and Roll back on each change. Trash is a tree of trashed pages with Restore and Delete forever. Members has counts for each group, a profile with role and page permissions behind a save bar, and an invite flow with role and expiry. The Ask pill asks about the week, what changed, or why a workflow failed.
+
+- **Imago's settings and account (C · Blue Spine)** — every drive settings and account screen now uses one layout: a single heading with a short explanation, then plain sections, with the settings list in the pane on the left. Drive settings has an overview with live hints, General (name, home page, Imago access), Roles with an inline editor and access grid, Integrations with an audit log, Commands created inline, Context with a character counter, Backups, Domains with DNS records, and a Danger zone that deletes a drive only after you type its name. The account has an overview, your profile with passkeys, devices and connected apps, display, personalization, notifications, hotkeys, privacy, AI providers, agents, agent accounts, commands, plan, billing, usage, storage, drives, backups with snapshots, trash, activity, connections, integrations, Google Calendar, MCP, local MCP and your calendar. The Danger zone row shows only to a drive's owner, Privacy is hidden in the mobile app, and screens like Calendar and Activity open with Imago folded to its Ask pill.
+
+- **Imago's overlays and dialogs (C · Blue Spine)** — dialogs, popovers, menus and side sheets share one look. Toasts are dark pills, at most three at a time. A page's "…" opens its actions (open in new tab, add child page, rename, favorite, protect, permissions, home page, select multiple, move, copy, trash), and multi-select shows a toolbar to move, copy or trash several pages at once. Share, Page history (with undo and roll back), the create-page palette, find in page (⌘F), the drive switcher, ⌘K search with Pages and Users, the notifications popover and a full Notifications page, the account menu with your credits and Send feedback, an offline banner and the verify-email banner, the first-run onboarding, and DM report and block all match the new design.
+
+- **Signed-out pages in the Imago look (C · Blue Spine)** — when Imago is enabled, sign-in, sign-up, check your email, the cookie banner, status pages, passkey setup, device activation, OAuth consent, invitations, share links, provisioning, offline and unsubscribe pages use the new frame with the blue spine, and finishing them lands you in Imago instead of the classic dashboard. A "Cookie preferences" link on sign-in reopens the cookie banner. With Imago off, these pages look as before. In Imago, running out of credits shows an alert with Buy credits and the Pro upgrade.
+
+- **Imago on tablets, phones and the desktop app (C · Blue Spine)** — between 1024 and 1279 pixels wide, Imago opens as a sheet over the page instead of a third column; below 1024 the sidebar slides in as a sheet too. On a phone Imago shows one screen at a time with a bottom bar (Chat, Files, Messages, Tasks, More), a full-screen Files screen, a page view with an "open pages" sheet, and Ask opening Imago full-screen with Back. In the desktop app on macOS the spine leaves room for the window buttons and the top of the window can be dragged.
+
+- **Imago's avatar crop, account deletion and drive actions (C · Blue Spine)** — uploading an avatar opens Crop Avatar with a circle or square crop; deleting your account first asks you to hand off or delete drives you co-own, then asks you to type your email; each drive in Account › Drives has an actions menu to open, rename, favorite or move it to trash.
+
+- **Imago reuses the full PageSpace feature UI** — native editors and file viewers, page creation and sharing, rich chat controls and results, messaging, tasks, agent sessions and account/drive settings now stay inside the persistent Imago shell. Classic PageSpace and rollout defaults are preserved.
+
+- **Right-sidebar chat input is a single compact card** — attach, tools, model picker and one send/stop button now share one toolbar row under the text box instead of stacking a separate model selector above it. While a reply is streaming, a queue button appears next to Stop once you've typed something, so you can still queue a follow-up on phones.
+
+- Failed organization payments now pause organization spending and access expansion immediately. Stripe-side trials do not grant organization access. Existing pages remain readable, and security restrictions still work.
+
+- Reactivating an organization now only pays what is owed or starts a new paid subscription. If the subscription was changed outside PageSpace (for example a trial, a pause or invoice billing set up in Stripe), Reactivate no longer tries to repair it: Owners and Admins are told it needs support and can contact us from the banner, and the organization is never shown as active until it really is. An organization whose subscription is switched to invoice billing in Stripe is treated as unpaid until support restores automatic payment.
+
+- Personal accounts now offer Free and Pro only. Business belongs to organizations; retired personal Business pricing and access exceptions have been removed.
+
+- **A lapsed organization can no longer open things up** (organizations; off until organizations launch) —
+  while its plan is unpaid or canceled, an organization's drives cannot be made more open (Private to
+  Restricted or Open, Restricted to Open), a member cannot be made an Admin, and nobody from outside can be
+  added as a guest, by invitation, share link or page share, even with guests turned on. Making a drive less
+  open, making an Admin a Member and removing people still work. The settings pages only offer what is
+  allowed and say why the rest waits until the plan is paid.
+- **A lapsed organization can only restrict access, everywhere** (organizations; off until organizations
+  launch) — while its plan is unpaid, nothing in its drives can give anyone more access: no new members,
+  invitations (direct, by email, or to the organization), share links, page shares or wider page
+  permissions; no raising a member's role or widening a role people hold; no approving join requests,
+  changing a drive's lead, adding agents to a drive or letting an agent carry a drive's instructions; no
+  new custom domain; and no making a private page visible to the whole drive. Undo, redo and backup
+  restores that would give access back wait too. Invitations already sent stay open and work once the plan
+  is paid. Removing people, revoking links, lowering roles, narrowing permissions and making pages private
+  all still work, and each screen disables only what is paused and says so.
+- **A key never reaches further than the person who made it** — an MCP key or a connected app's access to
+  a drive now ends the moment its owner leaves that drive, and returns if they are added back: it no longer
+  lists the drive, its calendar events, tasks or search results, and a key's admin role counts only while
+  its owner is still an admin there.
+- **New conversations start on the drive's wallet** — if you have not chosen a default, a new conversation
+  in a drive with a wallet you can spend now uses that wallet, and elsewhere your own credits, instead of
+  asking you to choose first. Settings › Usage › Wallets shows this default as selected. In the right
+  sidebar and the dashboard assistant, a new conversation now shows its spending source as soon as it is
+  saved.
+- **Automations spend their drive's wallet only** — the Wallet settings, workflow details and the
+  organization's attention page now say so: a scheduled run counts against its creator's caps and never
+  falls back to anyone's own credits. A workflow whose owner left can no longer be run by hand.
+- **Organization pages show where you are** — the header names the organization on its settings pages,
+  the drive picker lists each organization's settings as an option you can reach by keyboard and screen
+  reader, and the organization hub's rows keep readable text on hover.
+- **Clearer guest invitations** — if you cannot see an organization's Guests policy, inviting someone from
+  outside says that it may need approval or may be turned off, and if guests are off the refusal says so
+  and switches you to giving them a seat. A failed "Move out of the organization" keeps its dialog open with
+  the reason. The Workflows list fits a phone screen.
+- **Pricing page and plan cards show the organization plan's terms** — the pricing page and the in-app
+  plan cards now show three tiers, Free, Pro and Business. Each card lists the price, the credits
+  included, and the top-up rate as separate lines. Business is the organization plan: $50 a month with
+  5 seats, $10 a month for each extra seat, and the credits each extra seat adds. There is no trial, and
+  a card is required at checkout. Credit amounts are plain counts and never carry a "$". All figures come
+  from the same billing model the app charges with.
+- **New organizations ask before letting outsiders in** — a new organization's "guests from outside"
+  setting now starts at "Admins approve" instead of "On": inviting or sharing with someone outside the
+  organization waits for an Owner or Admin to approve it. Owners can change the setting at any time.
+- **An organization's automations outlive the person who made them** — when someone leaves an
+  organization, is removed from it, or deletes their account, the workflows, task and calendar triggers
+  and page webhooks they set up in its drives are no longer deleted. They are switched off and marked
+  "owner left", and nothing runs under the missing person, including a manual Run. An Owner or Admin can
+  hand each one to another member who can reach its drive (it then runs as that person and counts against
+  their spending cap) or delete it; both are recorded in the organization's audit log. An automation whose
+  creator deleted their account keeps nothing that identifies them. Automations in personal drives still
+  go with the account, as before.
+- **A lapsed organization can still lock things down** — while an organization's plan is unpaid or
+  canceled, its Owner and Admins can still make any change that restricts: turn guests from outside off
+  or to approval (guests are removed from its drives at once, as when the plan is active), turn off share
+  links, publishing and other features, lower the seat allowance, narrow the allowed models or
+  integrations, remove members, revoke share links and invitations, decline guest requests, pause a
+  drive's wallet and lower a person's spending cap. Changes that open access or add spending — including
+  approving a guest request — still wait until the plan is paid again.
+- **Automations count against their creator's spending cap** — a workflow, a scheduled run or a trigger
+  now counts toward the per-person spending cap of the person who created it, on the drive wallet it
+  spends. Once that person's cap is reached the run is skipped and the run log says the cap was reached;
+  the wallet's funders get the same 80% and 100% alerts as for that person's own chats. People with no
+  cap set are unaffected. An automation stops running if the person who created it leaves the
+  organization (or, on a personal drive, the drive); its run log says why. A workflow you run by hand
+  counts against your own cap, not its creator's.
+- **Organization policies now hold everywhere they apply** — when an organization turns guests from
+  outside off, nobody outside it can be added to its drives by sharing a single page either (the Share
+  dialog, an email share or accepting a page invitation), and people outside it whose only access was a
+  shared page lose that access until guests are turned back on, as other guests already did. When guests
+  need approval, sharing a page with someone outside waits for an Owner or Admin just like a drive invite.
+  An organization's minimum default role for its Open drives is now enforced: a drive's default role, a
+  drive becoming Open, or a raise of the minimum is refused with a message naming the policy when the
+  role would fall below it. The minimum also holds when access is checked, not only when roles are saved:
+  every member of the organization in one of its Open drives can always view (or, under an edit minimum,
+  edit) its non-private pages, even if an older role or a page-specific setting says less. People invited
+  with a specific role, guests and other outsiders keep exactly the access they were given, and private
+  pages stay private. Pulse, the activity summary and opened pages follow exactly the same organization
+  access as everywhere else: a member who has lost access to a Restricted or Private drive no longer sees
+  its pages there, and an Owner or Admin opening a Private drive this way is recorded in the audit log.
+  A policy change that turns off published apps, environments, agents from
+  other drives, autonomous agents or some models lists what it affected in the organization's audit log,
+  and the log now also shows compute handed to a drive's lead, resumed apps, and a former member's
+  turned-away attempt to rejoin (without their email address).
+- **Your allowance of an organization's credits covers compute too** — sandbox runs, terminals and
+  browsers you use in an organization's drives count toward your monthly allowance of the organization's
+  credits, together with your AI use, whoever's session you are working in: compute is charged to the
+  person who runs it. In a shared terminal that is whoever is typing: joining a teammate's terminal to
+  watch costs you nothing, and once your allowance is used up your keystrokes there are refused with a
+  message saying so. When two people type at the same moment, each is charged for their own turn. Environments and published apps you create there count toward your allowance too
+  (their storage, wakes and running time). Once your allowance is used up, new compute is refused with a
+  message saying so, you cannot create a new environment or publish a new app, and your published apps
+  show visitors a "This app is paused" page. A paused app comes back by itself within the hour after your
+  allowance renews (a daily allowance at midnight UTC, a monthly one after the organization's credits
+  refill; the paused page shows when that refill is next due), and you, the drive's lead or an organization Owner or
+  Admin can resume it sooner from the app pane once there is room again (for example after an Owner or
+  Admin raises your allowance). If you leave the organization, your environments and apps keep running
+  and their costs move to the drive's lead; if you are removed from one drive, the same happens for that
+  drive's environments and apps within the hour.
+- **Complimentary paid plans refill on their renewal date** — an account on a paid plan with no Stripe
+  subscription behind it now gets its monthly credits on its renewal date (within the hour), instead of
+  at its next AI request after the date passed. The renewal date no longer drifts later each month.
+- **Imago reuses the full PageSpace feature UI** — native editors and file viewers, page creation and sharing, rich chat controls and results, messaging, tasks, agent sessions and account/drive settings now stay inside the persistent Imago shell. Classic PageSpace and rollout defaults are preserved.
+
+- **Right-sidebar chat input is a single compact card** — attach, tools, model picker and one send/stop button now share one toolbar row under the text box instead of stacking a separate model selector above it. While a reply is streaming, a queue button appears next to Stop once you've typed something, so you can still queue a follow-up on phones.
+
+### Added
+
+- **See what your AI usage spends from, before you send** (organizations; off until organizations
+  launch) — inside a drive with more than one source, the credit chip in the header shows which one a
+  conversation will spend (the drive's wallet, your seat allowance from the organization, or your own
+  credits) and how much is left, and lets you switch for that conversation. A new conversation names its
+  source above the message box. When the source cannot pay, the message is not sent and nothing is
+  charged: a card says what happened (the wallet is empty, paused, or you reached your cap) and who
+  controls that budget, and offers your other sources. When a drive's rule moves a reply to another
+  source, a note under the reply (and on side questions and voice calls) says so.
+- **Drive Settings › Wallet** — a drive's wallet in one place: what is left this month, and for its lead
+  and the organization's Owner and Admins the monthly allocation, top-ups, the pause switch, what spends
+  from it and what happens when it runs out, per-person daily and monthly caps, and spend this month by
+  person. Members see only what is left and their own cap, and can add credits from their own balance.
+- **Settings › Usage › Wallets** — everything you spend from (your credits, your seat allowance with what
+  is left, drive wallets, including paused or over-budget ones) and everything you fund, plus what a new
+  conversation starts on.
+- **Organizations in your drives** — an organization's drive shows the organization's mark in the header,
+  the drive picker groups drives under each organization and Personal, a drive's General settings show
+  who owns and pays for it, who in the organization can see it, its lead and moving it in or out, and its
+  Members page labels guests and where each person's access comes from, with the people who joined a
+  single page by link listed apart. Inviting someone from outside lets you choose: a guest of this drive
+  or a member of the organization.
+- **Spending cap alerts in your notifications** — when someone reaches 80% or 100% of a cap on a wallet
+  you fund, the notification opens that wallet's settings. Workflows and triggers show who they spend as
+  and why a run was skipped, and flag an automation whose creator left the organization.
+
+- **Spending caps per person, with alerts** — an organization Owner or Admin can set a daily and a
+  monthly spending cap for a person on an organization drive's wallet or on their organization seat, and
+  the owner of a personal drive can do the same on that drive's wallet. A person who reaches a cap is told
+  the wallet is capped for them and can pick another source; the wallet's funders get an in-app
+  notification when the person reaches 80% and again at 100% of a cap, once per day or month.
+- **A fallback to another wallet is always shown** — when a drive's rule moves a call off the wallet you
+  chose (for example onto your own credits because the drive's wallet is empty), the answer now says so on
+  every surface: API completions, side questions, agent consultations and voice calls, not only chat. A
+  tool or a later step of the same turn never moves to yet another wallet on its own, and any overspend on
+  such a call is charged where your chosen wallet would have put it, never to you.
+- **Drive Members shows guests** — members of an organization drive who are not in the organization are
+  marked as guests, each member shows whether they were invited or joined through the organization, and
+  the drive's lead and admins see people who joined through a page share link listed separately.
+
+- **Wallet debt notices, and who absorbs a drive's overspend** — when spending in an organization's drive
+  runs past what its wallet held, the organization's Owner and Admins get an in-app notification, at most
+  once per billing period, and the wallet shows as over until its debt is cleared. An Owner or Admin can
+  choose whether a drive wallet's overspend is absorbed by the organization's pool (the default) or carried
+  by the drive wallet and taken out of its next allocation. The person who was spending is never charged
+  for it.
+- **Organization audit log** — an organization Owner or Admin can read the organization's audit log:
+  membership and ownership changes, seats, invitations, policy changes, verified domains, drive
+  visibility, join requests, drives created in or moved into and out of the organization, lead changes,
+  an Owner or Admin opening a Private drive, drive wallet changes, top-ups, donations and billing events.
+  It filters by event type or category, by drive and by time, and exports to CSV (values that would run
+  as a spreadsheet formula are written as plain text). The log is part of the existing tamper-evident
+  security audit trail, and it only ever shows the organization's own events.
+- **Verified email domains for organizations** — an organization Owner or Admin can add the
+  organization's email domain and prove it is theirs, either with a DNS TXT record or with a link sent
+  to an administrative mailbox of the domain (admin@, postmaster@ and the like). Once verified, people
+  who create a PageSpace account with a verified address on that domain join the organization as members
+  automatically, taking a seat: if every seat is taken and automatic seat purchase is off they are not
+  added, and the Owner finds the refusal in the audit trail. Joining opens the organization's Open drives
+  only, never a Restricted or Private one. Only one organization can hold a domain, shared providers such
+  as gmail.com cannot be claimed, existing accounts and guests are never swept in, and someone who leaves
+  or is removed is not re-added, even after deleting their account and signing up again (the organization
+  keeps only a one-way fingerprint of the address, which an Owner or Admin can clear). Removing a domain stops future joins and removes nobody.
+- **Organization sharing policies** — an organization Owner or Admin can turn public share links,
+  publishing to the web, custom domains and guests from outside the organization off, or (for guests)
+  require approval. Turning one off pauses what already exists instead of deleting it: share links stop
+  working and read as if they never existed, published sites stop being served, and guests lose access
+  to the organization's drives, all listed for the Owner and Admins and all restored exactly when the
+  policy is turned back on. With guests set to require approval, a person invited from outside, or who
+  opens a share link, waits in an approval queue and holds no access until an Owner or Admin approves.
+  Policies take effect immediately and only ever apply to the organization's own drives.
+- **Organization policies for members, AI, compute and services** — an organization Owner or Admin can
+  choose who may invite members and create drives, which AI models and providers its drives may use, whether
+  agents may run on their own (mentions, schedules, triggers) or be added from other drives, whether cloud
+  sandboxes, persistent environments and published apps are allowed, and which services a drive may connect.
+  Each applies the moment it changes and only to the organization's own drives. Nothing is deleted when a
+  policy turns something off: agents, environments, apps and connections are paused and come back when it is
+  turned on again, and a model the organization does not allow is refused rather than replaced by another.
+- **Organization seats follow your members** — an organization's Business plan includes 5 seats, and
+  each accepted member or pending invitation takes one; guests, agents and apps never do. Inviting
+  past your purchased seats either adds a seat automatically (billed pro rata) when the Owner has
+  turned on automatic seat purchase, or is refused with a message saying how to free one. Removing
+  a member keeps their paid seat until the billing period ends, so adding someone back in the same
+  period costs nothing; at period end unused seats are released from the next invoice. Automatic
+  seat purchase is off until an Owner turns it on. No credits are added or removed by any seat change.
+- **Sandboxes, environments and published apps run in organization drives** — compute in a drive
+  that belongs to an organization is now billed to the organization's credit pool, not to the
+  person who started it or the drive's lead. Before, it was refused. If the organization's pool is
+  empty, paused, or not set up, the run is refused before anything starts and nothing is charged.
+  The message says which of the three it is and that an org Owner or Admin can fix it. A published
+  app parks the same way. Usage from before organization billing started is never charged. Buying
+  dedicated hosting for an organization's app is still unavailable.
+  Moving a drive into or out of an organization while a terminal is open changes who pays from the
+  next ten-minute settle, and the window the move fell in stays with whoever owed it. An
+  organization's app is no longer refused because the lead spent a lot on AI that day: daily and
+  in-flight limits count AI and organization compute separately.
+- **Imago preview at `/imago`** — a first look at PageSpace's new interface, served
+  beside classic PageSpace and signed in with the same account. Live on pagespace.ai since the
+  IMG-11.2 flip; self-hosted installs stay dark until they set `IMAGO_ENABLED=true` (and
+  `NEXT_PUBLIC_IMAGO_ENABLED=true` for the "Try Imago" link in the user menu); until then every
+  `/imago` address answers not found. One frame stays put as you move
+  around: a rail of sections, a drive switcher with your Home drive first, and an avatar menu with
+  theme, "Classic PageSpace" and sign out.
+  **Chat** talks to your agents. The header picks who you talk to: your Imago agents first, then the
+  agents you can use in the open drive; switching agent opens that agent's latest conversation, and
+  an agent you can no longer use hands the chat back to Imago with a note saying so. Replies stream
+  in as you watch, with one expandable line per tool the agent used and page citations as chips that
+  open the page in Files; Stop ends a reply and keeps what it had written so far. Whatever you open
+  elsewhere in the frame is what the agent answers about, and the draft in the composer waits for you
+  when you come back. The chat history lists the agent's conversations grouped by day, switches
+  between them in place, and starts a fresh one with New chat.
+  **Files** shows a drive's pages as a live tree: open a folder in place with its caret, filter by
+  name (the folders on the way to a match stay in view), and press + to create a document in the
+  open folder, which appears at once and opens. Opening a folder shows it Finder-style: the path back
+  up the drive, then each page in it with its type icon, kind and when it last changed; an empty
+  folder offers New page. Opening a document shows it in a centred column with the path of pages
+  above it; if you can edit it, you edit its title and text in place and it saves as you pause
+  ("Saving…", "Saved"). If someone else saved it while you were editing, your text stays put and you
+  choose "Keep my version" or "Use the saved version"; if you lose edit access, Imago says your
+  last changes were not saved. A sheet, canvas, code page, file or task list shows a card with an
+  "Open in classic" button; an agent page also offers "Chat with this agent".
+  **Messages** lists a drive's channels and your direct messages with unread counts, and opens a
+  channel or a direct message to read and post in, with new posts arriving live; the unread count on
+  the rail keeps up wherever you are. **Tasks** lists a drive's task lists with progress and opens one
+  in Tree or Focus view, where you can tick and add tasks, or open a task to edit its title, status,
+  priority, due date, assignees, description and subtasks. **Settings** shows a drive's name (owners
+  and admins can rename it), its members, and an "Imago access" switch that lets your Imago agents
+  work in that drive; your Home drive can't be renamed and your agents always have access to it.
+  Account links to your account, billing and connections settings in classic PageSpace.
+  Press ⌘K (Ctrl-K on Windows and Linux) anywhere to search the open drive's pages by name, or tick
+  "Include all workspaces" to search every drive you can open; move with the arrow keys, press Enter
+  to jump straight to a page, channel, task list or agent, and Escape to go back where you were. An
+  empty drive, a section that fails to load and an address that names nothing you can open each get
+  their own screen inside the frame: a note about what will show up, a "Try again" button, or "not
+  found" with a link back. Imago is a preview, and classic PageSpace is unchanged.
+
+- **Imago in your Home drive** — every account now gets Imago, the assistant that replaces the global
+  assistant: it works with your own access, the global assistant's tools and context, and its own
+  memory, everywhere except drives you keep it out of, in an `Imago` folder in your Home drive. It is
+  added when you sign in (including with a passkey), and if you delete it it comes back the next time
+  you sign in. Existing accounts get them (and a Home drive, if they lack one) from a
+  one-time backfill, without having to sign in.
+- **Imago agents can read the drives you own** — when your Imago agents are first set up, and
+  whenever you create a drive, they are added to each regular drive you own as members: they can
+  read its pages but not private ones, and cannot edit, share or delete. They are never added to
+  drives you only belong to. When you hand a drive to a new owner — or undo or redo that handover
+  from the drive's history — your Imago agents leave it; the new owner decides which agents get in.
+- **Turn Imago's access to a drive on or off** — drive owners and admins can switch their own Imago
+  agents into or out of a drive (`/api/drives/{driveId}/imago-access`). Your choice is saved for
+  each drive, so a drive you switch off stays off for good: through later sign-ins, when an Imago
+  agent you delete comes back, and even after all three are deleted permanently (emptied from the
+  trash). Older copies of your Imago agents left in the trash keep no access to other drives, so
+  restoring one cannot bring it back into a drive you switched off. In a drive you administer but do not own,
+  turning Imago on keeps all three agents in it, including any that come back after being deleted.
+  Your Home drive is where the agents live, so it cannot be switched off.
+- **Imago agents know where they can work** — each Imago agent is told which drives it has been
+  added to (by name and role) and, each turn, whether the drive or page you are looking at is one of
+  them. Asked to work somewhere it has not been added, it says so and tells you how to give it
+  access instead of trying and failing. It is never told about drives it has not been added to, and
+  a page you cannot open is never passed to it as your location.
+- **Imago agents can use your integrations** — Imago agents get the same connected integrations
+  your global assistant uses, following the same settings (which integrations are enabled, per-drive
+  overrides, visibility). A drive's own integrations are available only in your Home drive and in
+  drives the agent has been added to, never in a drive it has not been added to. Self-hosted
+  (on-prem) installs expose no external integrations to Imago agents.
+- **Imago agents never see more than you do** — an Imago agent can read, search, list or change
+  something only if it has been added to that drive AND you can still do the same yourself. If you
+  lose access to a drive while the agent is still in it (for example after a member change is
+  undone from the drive's history), the agent loses it too: it no longer finds, opens or even names
+  pages and drives you cannot see, and does not show their activity. If an Imago agent's setup
+  cannot be loaded, the chat fails with an error instead of running without its usual limits. An
+  Imago agent can manage a drive's scheduled workflows only where you are its owner or an admin.
+  The same limits hold wherever an Imago agent runs — chat, @-mentions in a channel, consulted
+  through the API, or a workflow: it never uses integrations from a drive it has not been added to,
+  and run by someone else it gets none of yours. When you leave a drive because a member change is
+  undone or redone from its history, or a backup is restored, your Imago agents leave it too. A
+  restore never removes the drive owner's own agents, even when the backup predates the owner's
+  first visit to the drive.
+- **Give an agent its own account** — in an agent's settings (Accounts), or in your personal
+  settings for your global assistant, add an API key for a site so the agent can call that site's
+  API for you. The agent refers to the account by name and never sees the key: PageSpace keeps it in
+  a separate credential vault and adds it to each request itself, only for the site address you
+  pinned — no other sites, other ports or redirects. New requests ask you to approve them in the
+  chat unless you let the agent use that site without asking. The dialog recommends creating a
+  dedicated account for the agent; sharing a personal login needs an explicit acknowledgment, which
+  the account list shows. Revoking stops PageSpace from using the key immediately; revoke it at the
+  site too to disable it everywhere.
+- **Agents can use a real browser (where an operator enables it)** — an agent with its sandbox
+  turned on can open public web pages, read them, click, type and fill in forms, take screenshots
+  and manage tabs in a browser that runs separately from its sandbox. The agent gets only those
+  actions: it cannot run scripts in the page or read cookies or stored data, and private or
+  internal addresses are refused. Browser time is billed like sandbox time. Off unless the server
+  is configured for it.
+
+- **Ask a detached side question with `/btw`** — while an agent is working, type `/btw` followed by a question to get a separate, temporary answer from the completed conversation context. It never interrupts the active run or becomes part of the chat history.
+
+- **Sign-up says where AI content goes** — the consent line on every sign-up screen now says AI
+  features send your content to OpenRouter and the model provider you choose, alongside the Terms
+  and Privacy Policy.
+- **Deleting your account disconnects Sign in with Apple** — if you sign in with Apple, PageSpace
+  now keeps a revocable Apple token and revokes it when you delete your account, so PageSpace no
+  longer stays listed under your Apple Account's Sign in with Apple apps. If PageSpace has no token
+  for you (you last signed in before this change, or Apple could not be reached), the delete dialog
+  and the page after deletion show how to stop using Sign in with Apple for PageSpace yourself.
+  Stopping Sign in with Apple for PageSpace from your Apple Account now also signs you out of
+  PageSpace everywhere.
+- **Report and block people** — a direct message conversation now has a menu to report the other
+  person (the report goes to the PageSpace team with what happened) or block them, and Connections
+  has a Block action plus a Blocked list to unblock. A block stops direct messages in both
+  directions, including in a conversation that already exists.
+- **The + button in a drive now matches what you can actually do** — a plain member of a drive,
+  who could always create pages through the command palette or the API, saw a lock on the +
+  button and could not click it. The button now reflects the server's effective create permission:
+  enabled for members and members whose custom role grants drive-wide edit, locked for view-only
+  custom roles and page-collaborator-only access. The same rule now also gates the API check that
+  backs it, so a view-only custom role is refused at the server too instead of silently
+  over-granted on the session path.
+
+- **Run shell commands in an agent workspace from the CLI and SDK** — a workspace's sandbox was
+  only reachable through an agent in chat. `pagespace workspaces exec <workspaceId> -- <command>`
+  (and `workspaces.exec` in the SDK and over `pagespace mcp`) now runs a command there with an
+  access key and exits with the command's own status; `pagespace workspaces list` finds the id. It
+  is held to the same rules as the agent's own `bash` tool — plan, quota, command policy, billing
+  and audit — and a key scoped to other drives cannot see or reach the workspace.
+- **Multi-question prompts from the assistant have Back and Next buttons** — when the assistant
+  asks several questions at once, you could only switch between them by tapping the small
+  numbered tabs or pressing the arrow keys, which is awkward on a phone. Each question now has a
+  Back / Next row with a "2 of 3" counter under it, sized for a finger, and it works on a card you
+  have already answered too. The tabs and arrow keys still work as before.
+- **The marketing site follows your system theme, and light mode has its own hero** — the site used
+  to open in dark mode for everyone, and its space hero only worked on a dark page. Light mode now
+  has a white version of the same scene with dark text over it, and the site starts in whatever
+  theme your device uses (a theme you picked with the toggle still wins), and the browser's
+  address and status bar match whichever theme is showing. Switching themes, or your
+  device switching on its own, fades one hero picture into the other instead of cutting. The
+  preview card shown when a site link is shared now carries the current headline.
+- **The Home screen now tells you what's actually waiting for you** — opening the dashboard used
+  to show a generic "How can I help you today?" with no sign of what changed across your drives,
+  and the only place that context lived (the sidebar's Pulse note) disappeared the moment you
+  collapsed the sidebar. Home now leads with one line above the composer naming the single most
+  important thing that needs you — someone mentioning you, an overdue task, invites waiting on an
+  RSVP, a finished agent session, or what changed since you were last here — with a couple of
+  quick prompts underneath that put the same thing straight into the composer without sending it.
+  Nothing is invented: the line only ever says what it can back up, and on a quiet day it just says
+  you're caught up. The line and its suggestions stay in the empty state, then give the conversation
+  the full pane once you begin. On desktop, collapse the left sidebar and a small drive switcher
+  stays next to the title, so you always know what the assistant can see; on a phone the sidebar
+  sheet's own switcher covers that, so the header row stays one row.
+- **Channels, Files, Tasks and Calendar are one page each, with a drive focus** — each of those
+  views used to exist twice: a dashboard version and a drive version, with different titles and a
+  sidebar that only ever linked to whichever one you were in. Now "All drives" is a focus like any
+  drive. The sidebar's drive switcher names the focus ("All drives" or the drive), and the drive
+  picker it opens lists All drives as its first row; choosing either keeps you in the section you
+  are in, so a drive's tasks become every drive's tasks and back. Page titles stop encoding scope
+  ("Tasks", not "My Tasks" and "Drive Tasks"); the line under each title names the focus and
+  opens the same picker, and on a phone it is the only control added to the row. Files across all
+  drives is the drives browser, and opening a drive there lands in its files. Tasks loses its
+  separate Drive filter and Back button (the focus is the drive, Home is one tap away), withholds
+  the per-list Status filter across all drives where it would merge unrelated lists, and names the
+  drive before the list on every row. The calendar's sidebar now labels the calendar new events go
+  to. The first navigation item is "Home" whichever focus you are in.
+- **AI agents can format spreadsheets** — two new workspace tools, **Format Sheet** and
+  **Conditional Formatting**, let an agent make a SHEET page presentable instead of leaving a grid
+  of bare numbers. An agent declares what a table *is* (its range, header rows, which columns are
+  money, percentages or dates, which rows are totals, an accent colour) and the sheet derives the
+  header band, number formats and total emphasis from that — so rows added later inherit the
+  formatting, and the agent never hand-picks colours. Conditional rules (highlight when a value
+  crosses a threshold, colour scales, data bars) follow the values as they change. Both tools are
+  write tools: a read-only agent does not get them. The chat shows a card for each call listing the
+  tables declared, ranges touched and rules added, with a swatch per colour, so you can see what
+  changed without opening the sheet. The spreadsheets skill now teaches all of this; the
+  workspace-tool count in the docs goes from 81 to 83.
+- **The SDK and CLI can now format a spreadsheet, not just fill it** — the AI agent tools could
+  already declare a table's structure and style it (that shipped just above); an SDK or CLI caller
+  could not, so a sheet built by a script stayed a grid of bare numbers with no call available to
+  change that. Two additions close it. `pagespace sheets formatting <pageId>` shows how a sheet is
+  styled today — the tables it declares, its conditional rules and their ids, frozen rows and
+  columns, column formats and widths, row heights, and (with `--ranges`) the formats on individual
+  cells. `pagespace sheets format <pageId>` applies changes: declare a table's range, header rows,
+  what each column means, where the totals are and an accent colour, and the presentation is derived
+  from that, so rows you add next week inherit it. Everything the grid itself can do is reachable —
+  cell and column formats, widths, heights, freezes, and conditional rules you can add, edit,
+  reorder or remove by id. In fact more than the agent tools can do: an agent can only add and
+  remove a rule, while a script can patch one in place. Changes apply in the order you send them,
+  in one transaction, all or nothing: one bad instruction refuses the whole call, tells you which
+  one was wrong, and writes nothing. The same two operations are available to the TypeScript SDK as
+  `client.sheets.readFormatting` / `client.sheets.applyFormat`, and to any MCP client
+  (ChatGPT, Codex, Claude Desktop) through `pagespace mcp`.
+- **iPhone and iPad: sign-in no longer tells you Google is blocked when it isn't, and an emailed
+  sign-in link now signs you in inside the app** — two things were wrong on the app's sign-in
+  screen. It showed a warning saying "Google sign-in is blocked in this app" and pushed you toward
+  an email link instead; that warning is meant for in-app browsers like Instagram's or Facebook's,
+  and the app's own window was being mistaken for one. Google sign-in has always worked in the
+  app, so the warning is gone there and the app no longer forces the email-link form open. A real
+  in-app browser still gets the warning, because there the advice is true. The email link was the
+  worse problem: it was the fallback the warning recommended, and it could not work at all. Tapping
+  it opened Safari, and the session it created stayed in Safari — the app never saw it and stayed
+  signed out. Ask for a sign-in link from the app now and the link opens **the app**, signs you in
+  there, and takes you where you were headed. The same link opened somewhere else — a laptop, a
+  friend's phone if you forwarded the mail — still signs that browser in as before, and hands out
+  nothing that would let it act as your phone. Links you request from a browser are unchanged. On
+  Android the link still opens Chrome and signs Chrome in; the app cannot receive links yet, which
+  needs a signed release build.
+
+- **Local Environments: create one from the app, get your enrollment code, and get a new one if
+  you lose it (opt-in)** — a local Environment (your own computer, reached through the bridge) is
+  now a choice in the ordinary "New environment" step rather than something only an API call could
+  make. On a deployment with `LOCAL_ENVS_ENABLED`, a drive owner or admin picks **This computer**,
+  names the machine, and is shown the one-time enrollment code beside the exact two commands to run
+  on it — `pagespace env enroll …` then `pagespace env connect …`, with this deployment's address
+  filled in — plus when the code expires and, in plain words, what enrolling agrees to: everything
+  runs as you, with no sandbox, and in `ask` mode one approval covers every later command of that
+  kind for that session. Closing that step used to be a dead end: the code was shown once and
+  could never be recovered, so the Environment had to be deleted and made again. Now the row reads
+  **Awaiting enrollment** and its menu offers **Show a new code**, which replaces the previous one;
+  the server refuses, for good, once a machine has enrolled, so a lost code can never let a second
+  machine take over an enrolled Environment. Local Environments show a laptop and the machine's
+  name in the sidebar and in the "where should it run?" list, so a computer is never mistaken for a
+  cloud sandbox. Creating a cloud Environment is unchanged. Still off by default.
+
+- **Android app: it can now ask for notification permission and register for push (not yet
+  distributed)** — the server has been able to send an Android push since the FCM sender landed, but
+  no Android build could receive one: the app declared no notification permission and the shared
+  registration code was gated to iOS. Android now declares `POST_NOTIFICATIONS`, asks for it at
+  runtime, and registers its FCM token the same way iOS does. If you say no, that is remembered —
+  the prompt does not come back on every launch — and if you later turn notifications on in system
+  settings, the next time you open the app it picks up where it left off. The app icon can also carry an unread badge on Android now, where the
+  launcher supports one (many do not, and those simply show nothing). **Nobody can see any of this
+  yet:** there is still no Android release build and no distribution, and none of it has been run on
+  a real device — this is the client half of the loop being closed, not a shipped feature.
+
+- **Android app: a failed load now offers a Retry instead of a dead end (not yet distributed)** —
+  the Android shell had no bundled error screen, so launching without connectivity left the WebView
+  on Chrome's own error page with nothing to do. It now falls back to a PageSpace screen with a
+  working Retry button, matching iOS. Nobody can see this yet: the Android app has no release build
+  and is not distributed, so this lands as groundwork for the build that will be. Opening a
+  `pagespace.ai` web link from elsewhere still opens your browser, unchanged.
+
+- **Dev-server preview: see the app you're building, live, from inside its session (ships dark)** —
+  when a dev server (Vite, Next, anything that binds a port) starts inside an agent session or a
+  drive Environment, PageSpace notices and shows one quiet line in that session's header or beneath
+  the Environment in the sidebar: "Dev server detected on :5173 — Preview". Nothing opens on its
+  own. Clicking Preview opens the running app in a pane beside the console, served through
+  PageSpace's own authenticated preview origin (only people with access to the session or drive can
+  load it, checked on every request), with an open-in-new-tab option, a Reload, and status chrome
+  that says exactly what is true — live, starting, down (with the relay's error), switched off,
+  "sandbox rebuilt since", or "port 8080 is in use by another process" with the process and how to
+  release it. A drive owner or admin (or the session's owner, from inside the session) can switch a
+  preview off and back on, and switching it off is remembered even if the sandbox notices the dev
+  server again a moment later. Reading the status never wakes a sleeping sandbox. One thing to know
+  about your own dev server: the preview reaches it through PageSpace's hostname, so a server that
+  checks the `Host` header (Vite 6 and newer do) needs that hostname allowed — for Vite, add the
+  preview domain to `server.allowedHosts`. **Sharing an unusual port is your call:** a server on a
+  usual dev-server port (Vite, Next, Astro, Django and friends) is previewed as soon as it is
+  detected, but anything else — an admin panel on :9000, a debug listener — is only *named*
+  ("Dev server detected on :9000 — not shared yet") until you open the pane, read who would be able
+  to reach it, and press Share. The port you press Share on is the port that gets shared: if the
+  server has moved since the screen was drawn, PageSpace says so rather than sharing the new one.
+  Approval is per port and per sandbox, so a rebuilt sandbox asks again. **Signing out ends the
+  preview:** the preview page is tied to the session that opened it, so signing out or revoking a
+  device cuts it off on its very next request instead of letting it linger. Off by default: the
+  whole surface is absent until `DEV_PREVIEW_ENABLED` is set with a dedicated `DEV_PREVIEW_APEX`,
+  which needs the preview-origin ops work (wildcard DNS, certificate, and the Caddy block) to land
+  first.
+- **Local Environments: an agent can now reach your own computer (opt-in groundwork)** — the two
+  ends built so far are joined. An agent session bound to a local Environment whose machine is
+  connected now runs its commands and reads and writes its files on that machine, through the same
+  tools it uses everywhere else — nothing about the agent changes. Two refusals are kept apart
+  where you will see them, because they have different owners: "no connected machine — run
+  `pagespace env connect`" is yours to fix in seconds, while "the machine owner's policy does not
+  allow you to run code here" can only be changed by whoever enrolled it, and retrying will not
+  help. What a local Environment cannot do, it now says plainly instead of pretending: terminal
+  panes, dev-server previews and filesystem checkpoints are refused with a reason rather than
+  quietly appearing empty — and because a checkpoint is the safety net taken before a destructive
+  batch of commands, a batch that would need one is refused outright rather than run without it.
+  Closing a session bound to a local Environment never touches the computer: nothing is shut down,
+  nothing is billed, and the machine's own `env disconnect` and Ctrl-C still win. Still off by
+  default (`LOCAL_ENVS_ENABLED`), and still no local terminals.
+- **Local Environments: the bridge daemon — `pagespace env connect` (opt-in groundwork)** — an
+  enrolled computer can now actually serve its Environment. Running `pagespace env connect` on it
+  keeps a live, outbound-only connection to PageSpace and answers requests to run a command or
+  read/write a file, but only after each request's server-signed grant verifies on the machine
+  and the machine owner's own local policy file allows it: who may drive the machine, which
+  operations, inside which directories, with which environment variables, and with what output
+  and time caps. Without a policy file the machine connects but denies everything. A prompt mode
+  asks the owner in their terminal before an unlisted operation runs. Every decision is written to
+  a local audit log carrying the same grant id PageSpace records, so the two sides can be
+  compared. Deleting the Environment revokes the machine: its key is deleted on the spot and it
+  stops reconnecting. Terminal (PTY) sessions on local machines are not served yet. Still off by
+  default (`LOCAL_ENVS_ENABLED`).
+- **Local Environments: your enrolled computer can now hold a live connection, and you can
+  revoke it (opt-in, groundwork)** — an enrolled machine connects to PageSpace over a socket
+  addressed to its Environment, proves it is the machine you enrolled with a signed hello
+  before anything else is accepted, and stays "connected" in the Environments list while its
+  heartbeat is fresh. Two of your machines can be connected at once; reconnecting a machine
+  replaces its old connection cleanly. Every command PageSpace will later send that machine
+  is individually signed and bound to exactly what was requested, and every answer the
+  machine sends is verified against the key pinned at enrollment before an agent ever sees
+  it. Deleting a local Environment now revokes the machine completely: its connection tokens
+  are cancelled, the machine is told to forget its key, and it can no longer mint new tokens.
+  Server signing keys can be rotated without stranding already-enrolled machines. Nothing runs
+  on the machine yet (the daemon lands next). Still off by default (`LOCAL_ENVS_ENABLED`).
+- **Local Environments: the server now refuses what the machine cannot do (hardening,
+  opt-in groundwork)** — before the bridge connection ships, every server path that could
+  provision, bind a session to, or rebuild an Environment now recognises a local machine and
+  answers with a typed refusal instead of trying to mint a cloud sandbox for it: a disconnected
+  or revoked machine is `not_connected` / `revoked`, a bind the machine's owner has not allowed
+  is `bind_policy`, and "rebuild" answers that a local Environment has no machine to rebuild.
+  Requesting a fresh connection challenge while one is still live now answers 429 with a
+  `Retry-After` instead of silently invalidating the machine's outstanding handshake, a
+  connection token can no longer survive a revocation that lands during its issue, and a
+  malformed authorization window (expiry before issue) is refused outright. Cloud Environments
+  behave exactly as before. Still off by default (`LOCAL_ENVS_ENABLED`).
+- **You can enroll your own computer as a drive Environment (opt-in, groundwork)** — a drive
+  owner or admin can now create an Environment with `substrate: "local"` and a machine label,
+  and receives a one-time enrollment code (shown once, valid for ten minutes). A machine that
+  presents the code with its own freshly generated key is pinned to that Environment, and from
+  then on proves it still holds the key every time it connects — the server never stores a
+  secret it could replay, and a used or expired code is worthless. Nothing runs on the machine
+  yet: this release ships the identity and enrollment half of the local-environment bridge; the
+  connection, the daemon and the sandbox host follow. Off by default (`LOCAL_ENVS_ENABLED`),
+  and a deployment that leaves it off answers exactly as before. Your data export
+  (`local-environments.json`) lists the machines you enrolled.
+
+- **The marketing home page is now "The AI for working"** — a full landing redesign that leads with
+  the real app as the hero, proves breadth with an interactive "Everything is a page" carousel across
+  all nine page types, and adds honest capability, automation ("Ask, or automate"), skills, and
+  trust ("Full access, safely") sections. The same pass fixes the on-page AI-visibility issues from
+  the AEO audit: exactly one `<h1>` (demo/mock titles are no longer headings), Review and
+  Organization structured data with a single consistent product description, and a `FAQPage`
+  schema added to the existing FAQ page so its answers are machine-readable.
+
+- **You can find friends and collaborators by name when inviting them to a drive** — the invite
+  member search now surfaces people you already have a relationship with — anyone you share a drive
+  with, or an accepted connection — by their display name or username, even when their profile is
+  private. Previously a private profile could only be reached by typing their exact email address.
+  Strangers with private profiles stay hidden, and no email is ever revealed by a name match, so this
+  opens no new way to discover people you don't already know.
+
+- **You can publish a drive Environment to a live URL** — the Environments UI now has a Publish
+  action, and the resulting app pane lives on the environment itself rather than in a separate
+  dashboard. Publishing snapshots the environment's filesystem, creates its hosting row and Fly app
+  the first time. A Dockerfile at the environment's root always wins; otherwise PageSpace generates
+  one for you — a `package.json` with a `start` script or a `main` entry becomes a Node Dockerfile
+  (running the `build` script first if there is one), and plain static content (an `index.html` with
+  no `package.json`) becomes a small nginx image. An environment with none of those is told so up
+  front, before anything is built, with what to add. Publishing then streams the
+  build to a running subdomain; publishing again is just a fresh build of the same app, so nothing
+  about the URL or its history changes underneath a re-deploy. The pane shows live status, the app's
+  usage drain, and per-app logs, plus stop / resume / unpublish controls that all go through the
+  existing lifecycle functions — never a direct status write. Unpublishing tears down the hosting row
+  and its Fly app but leaves the environment itself untouched, and if the app was on the flat-rate
+  always-on tier its subscription is cancelled through a Stripe-side reclaim outbox in the same
+  transaction as the delete, so a deleted app can never keep billing a card nobody can see anymore. A
+  parked app (out of credits, or over its daily running-time cap) now serves visitors a plain "paused"
+  page that also links back into PageSpace, where its owner sees exactly how to bring it back — top up
+  credits, or switch to the always-on tier, purchasable and cancellable right from the app pane. A
+  drive's custom domains can now be pointed at a published app instead of the drive's static site
+  (nullable per-domain, so nothing changes for a domain nobody touches) from the same Domains settings
+  page used for the static site today. The whole surface ships dark behind `APP_HOSTING_ENABLED` until
+  it's turned on for a deployment.
+
+- **New accounts get a short first-run walkthrough instead of a blank screen** — signing up now
+  opens a five-step introduction that explains what PageSpace is and ends by asking what you
+  actually want to get done, then hands that request straight to the assistant so your first
+  action is the real thing rather than a setup form. It starts by asking who the workspace is for
+  — just you, a small team, several teams, or a whole company — and everything after that is
+  written for the answer you gave: the example it shows you, the six things it demonstrates it can
+  do, how many assistants turn up when a job is too big for one, and the suggested requests at the
+  end. It configures nothing; your Home drive is already set up before the walkthrough appears.
+  What you type is saved to your About You memory page, so every assistant you work with from then
+  on already knows it. Any step can be skipped, and skipping is remembered. Self-hosted
+  installations are not shown suggestions that depend on services they do not have.
+
+- **An agent can default its sessions into one of its drive's Environments** — the Sandbox card in
+  an AI_CHAT agent's Settings screen now has an Environment picker alongside the existing on/off
+  switch. Pick one of the drive's persistent Environments (the same ones the Agents screen's spawn
+  palette already offers) and every new session started for that agent pre-selects it — visibly, with
+  a "Default" badge — instead of the ordinary ephemeral sandbox. It is a default, not a lock: "New
+  sandbox" and every other environment stay one arrow-key away, and any caller (the palette, a
+  claimed conversation, a programmatic spawn) that names an environment explicitly is always honored
+  over the agent's own preference. The default only ever applies while the agent's Sandbox switch is
+  on — turning it off leaves a previously chosen environment stored but inert, so nothing gets
+  spawned into a persistent, shared environment behind a switch that reads as off. Moving the agent's
+  page to a different drive clears the default automatically, since an Environment belongs to the
+  drive it was created in.
+
+- **The server can send an Android notification** — it has always accepted and stored Android push
+  tokens, then dropped every message aimed at one: the send path had an iOS branch and a stub. It
+  now delivers through Firebase Cloud Messaging. Nothing changes for anyone yet, because the app
+  still only registers for push on iOS (`usePushNotifications`, "Only supported on iOS for now") —
+  when that lands, a mention or a share will reach an Android device the same way it reaches an
+  iPhone, with no further server work. A background sync is sent as a data-only message, which
+  is what stops Android from putting a notification in the tray for something the app was only meant
+  to quietly act on. A token Firebase reports as unregistered — the app was uninstalled, or the
+  token was replaced — is deactivated on the spot rather than retried forever, matching how expired
+  Apple tokens are already handled. That only happens when Firebase says something is wrong with
+  *that token* — the registration is gone, or the token itself is malformed. A rejection aimed at
+  the request as a whole is retried instead — and is never counted against the phone either, no
+  matter how many times it happens: a message the server built badly, or a credential pointing at
+  the wrong Firebase project, would otherwise unregister every Android phone at once and leave
+  them dark until each app was next opened. If the Firebase credential is missing or
+  malformed the Android send fails with a message that says exactly which field is wrong, every
+  other device on the account still receives the notification, and no phone is penalised for a
+  problem on the server's side.
+
+- **A key can tell you what it is allowed to do** — `pagespace keys describe` reports the credential
+  the machine is using: which drives it reaches, the role it holds in each, and what that role
+  actually resolves to — can it read, write, share, delete. That answer comes from the same
+  permission code that decides real requests, so it cannot quietly disagree with them. Drive-level
+  and page-level are separate answers and both are shown: any member can create a page at a drive's
+  top level while still being read-only on a document inside it, so `--page <pageId>` asks about the
+  exact place you are about to write. The same
+  summary is printed at the end of `pagespace keys create` and the `pagespace keys` wizard, so a new
+  key never leaves you to find out by attempting a write and reading the refusal. Agents get it as
+  an MCP tool too. A key describes only itself — it still cannot see, list or revoke the other keys
+  you hold. `pagespace keys list` now also shows the role granted on each drive rather than the
+  drive name alone.
+
+- **A spreadsheet is readable by an agent, not just writable** — reading a sheet used to hand an
+  assistant the whole spreadsheet as its raw internal file: a 500-row sheet arrived as roughly
+  24,000 lines of cell-by-cell markup, with no way to ask for a range of rows or find the row you
+  wanted. Assistants ended up keeping a copy of your data somewhere else just to be able to read it.
+  Now an assistant reads rows: a range, or the rows matching a value in a column ("the row where the
+  member ID is 28605"), returning only the columns it asked for, with formulas and cell errors
+  intact. Opening a sheet gives its size and first rows rather than a wall of markup, and so does a
+  folder listing that includes page contents, and so does a command whose instructions live on a
+  sheet — that used to spend the command's whole budget on markup every time it ran. Cell edits also
+  have a stated limit now — 500 cells per call — instead of a size an assistant had to discover by
+  failing. And a sheet whose stored file cannot be read is reported as unreadable rather than as
+  empty, so an assistant is never invited to overwrite data that is still there — as is a page that
+  is a sheet in name but holds ordinary text. Reading a sheet never changes it, including in
+  read-only mode: on an older sheet that has not been converted to the new row storage yet, an
+  assistant can still read rows in order, and is told to do that rather than having the read quietly
+  convert the sheet — or being told to change a cell just to make searching work.
+
+- **Spreadsheets from the terminal and the SDK** — `pagespace sheets describe` shows a sheet's tabs
+  and size without reading a row; `query` filters and sorts server-side, so asking a 100,000-row
+  sheet for the twelve rows you want no longer means pulling the whole thing down first. `rows`
+  walks it in order, `append` adds rows, `update-cells` writes by address (and, unlike the older
+  `edit-cells`, can reach a second tab), and `delete-rows` removes a range. Filters match the values
+  you see, so a formula column compares as its result. Agents get the same six as MCP tools, and
+  they are on the SDK as `sheets.*` for anything building on top.
+
+- **Spreadsheets hold real data now** — a sheet used to be stored as one document that was rewritten
+  from scratch on every cell edit, so a sheet with tens of thousands of rows took seconds to accept a
+  single change and eventually stopped saving at all. Sheets are stored row by row, and editing one
+  cell costs the same whether the sheet has a thousand rows or a hundred thousand. Formulas that
+  depend on the cell you changed are recalculated, and nothing else is.
+- **Agents can query a spreadsheet instead of reading all of it** — filter, sort, page, append rows,
+  update cells and delete rows, without pulling the whole sheet into the conversation. Filters run
+  against the values you see, so a formula column compares as its result.
+- **Spreadsheets are findable by what is in them again** — search now matches the contents of a
+  sheet's cells, and a result quotes the row that actually matched, wherever in the sheet it is.
+- **Environments: a place in a drive that stays** — a drive can now hold named environments, and a
+  session can run inside one instead of in a sandbox that disappears when you close it. Everything
+  in an environment — your files, what you installed, what you configured — is still there the next
+  time anyone in the drive opens a session in it, because it is one machine with one filesystem that
+  everybody in the drive shares. Name them for what they are for: “dev”, “staging”, “data-import”.
+  Ephemeral sessions have not changed and are still the default; an environment is something you
+  deliberately make.
+- **Environments live in the sidebar beside your sessions, not inside them** — each one shows its
+  name and a dot for whether its machine is up, and the sessions running in it are listed
+  underneath, so you can see at a glance who is working on which filesystem. An environment with
+  nothing running in it still appears: it is infrastructure your drive keeps, not something that
+  vanishes on an idle afternoon. Starting a new session in a drive that has environments asks where
+  it should run — a fresh sandbox, or in one of them. Each environment carries its own “+” for
+  starting a session straight into it, which skips that question because the row already answered
+  it.
+- **Making an environment is part of the “new session” palette** — press ⌥N on the Agents screens,
+  or use the “+”, and the same keyboard-first selector that starts a session also offers “New
+  environment”: from the first step in any drive, and from the “where should it run?” step, where
+  the one you just made becomes the answer. There is no separate icon to find in the sidebar.
+- **Renaming, rebuilding and deleting an environment** — all three are for drive owners and
+  admins, and the two destructive ones say what they destroy before they do it. Deleting refuses
+  while sessions are still running inside and then offers to end them, naming both halves of what
+  that means; rebuilding says plainly that the environment comes back BLANK, with its name intact
+  and nothing else. Anyone else in the drive sees the environments and can work in them, without the
+  controls they could not use anyway.
+- **Environments have their own line on your usage page** — what a drive's environments cost to keep
+  is listed per environment, by name, separately from your agent sessions. It was previously folded
+  into a single "Unattributed agent" line, which named the wrong thing and skewed the share each
+  agent appeared to account for; both are now right.
+
+- **The spreadsheet has been rebuilt** — the grid was a plain table with a heavy border drawn on
+  every side of every cell, which is why it read as a picture of a spreadsheet rather than part of
+  PageSpace. It now uses the same hairline seams, header treatment, focus ring and glass toolbar as
+  the rest of the product, numbers right-align in aligned figures the way a spreadsheet should, and
+  the whole surface is windowed so a sheet with tens of thousands of rows scrolls and types without
+  lag.
+- **A formatting toolbar, and the controls to build a dashboard** — bold, italic, underline and
+  strikethrough; text and fill colour from the same twelve colours the rest of PageSpace uses, plus
+  any hex you like; alignment and text wrapping; font size; currency, percent, date and plain-number
+  formats with buttons to add or remove decimal places; and freeze for the first row or column.
+  Ctrl/Cmd+B, I and U work in the grid — previously every keyboard shortcut with a modifier was
+  swallowed before it could do anything.
+- **Column widths, row heights and frozen panes** — drag a column or row edge to resize it, or
+  double-click a column edge to fit it to its contents. Freeze the top row or first column and it
+  stays put while the rest scrolls. Row density (compact, normal, relaxed) is in the status bar.
+- **A filled cell stays readable when you switch to dark mode** — a cell's fill is a fixed colour,
+  so that a published page and an exported workbook look like what you built; its text colour was
+  not, so a pale fill applied in daylight turned into white-on-pale and the value vanished at night.
+  Filled cells now pick a readable text colour automatically, unless you chose one yourself.
+- **Selecting a range with shift-click** — dragging was previously the only way, which made
+  formatting a wide block of a large sheet impractical.
+- **Editing a cell survives scrolling away from it** — starting to type in a cell and then scrolling
+  used to discard what you had typed.
+- **The right-click menu is a real menu** — reachable from the keyboard, with copy, copy values,
+  paste, paste values, clear formatting and clear contents.
+- **Multi-tab workbooks show their tabs** — the other tabs were already preserved when saving; now
+  you can see they are there. Opening them is still to come.
+- **Spreadsheet cells can carry formatting** — number formats (currency, percent, decimals, dates),
+  bold and italic, text and fill colour, alignment, borders, column widths, and frozen rows and
+  columns are now stored with the sheet and survive saving, publishing and export. Clearing a
+  cell's contents keeps its formatting, as it does in Excel and Google Sheets. The controls for
+  setting these arrive with the redesigned spreadsheet view; this release puts the foundation in
+  place and makes anything already formatted display correctly everywhere.
+- **Exported spreadsheets contain real numbers** — an .xlsx export previously wrote every cell as
+  text, so nothing in Excel could sum, sort or chart it. Exports now carry the underlying numbers
+  along with their number formats, so the file reads the same as the sheet and behaves like a
+  spreadsheet.
+- **Spreadsheets with more than one tab keep all of them** — opening a multi-tab workbook and
+  editing it used to discard every tab after the first. The other tabs are now preserved untouched;
+  the editor still shows only the first.
+- **CSV exports show what the sheet shows** — a formatted cell exports as it appears (for example
+  `$1,234.50`), matching Excel's and Google Sheets' behaviour and the .xlsx export. Cells with no
+  formatting are unchanged. If you need the raw numbers for another system, use the .xlsx export,
+  which carries the underlying values.
+- **Agents can hand work to each other from anywhere, not just from a browser tab** — asking an
+  assistant to spawn or message a worker used to fail with "the calling request carries no session
+  credentials to dispatch with" whenever the request had not come from a logged-in browser. That
+  covered a spoken conversation, a scheduled run, and anything driven from an API key — so the same
+  sentence worked when typed and failed when spoken. It now works the same way from every one of
+  them, including from the SDK, the CLI, and other tools you have connected to your account.
+- **Agents in a shared drive can work with each other's shared agents** — a worker a teammate
+  deliberately shared can now be messaged and read, not merely seen in a list. Their private threads
+  stay private: a worker still shown as "(private thread)" is not addressable, and asking for it
+  answers exactly as if it did not exist. A message you send runs with YOUR permissions, never the
+  other person's, so reaching someone's worker never gives you their access. Stopping someone else's
+  running worker still needs owner or admin rights on the drive.
+- **A microphone in the top bar, on every page, that talks to whichever assistant you are already
+  looking at** — there is no separate voice screen and nothing to set up first. Press it on a page
+  and the assistant sidebar opens in voice mode, talking to the agent you had selected there; press
+  it on the dashboard and it talks to the assistant already in the middle of your screen. Nothing
+  connects until you press it.
+- **A spoken conversation is the same conversation you can read and type in** — voice is a way into
+  a thread that already existed and still exists after you hang up. What is said appears in that
+  thread as ordinary messages while the call is running, marked with a small microphone so you can
+  tell later what was spoken and what was typed. There is no separate voice history to go looking
+  for, and nothing to replay.
+- **The call survives you walking around the app** — moving between pages does not end it or move it
+  to a different assistant; it just tells the assistant where you now are. Closing the sidebar
+  minimizes the call rather than hanging up, and the top-bar microphone stays lit so you can get
+  back to it. Deliberately choosing a different agent in the sidebar's switcher does move the call,
+  because that is a different conversation. Ending a call is the End button on the call itself, and
+  refreshing the page ends it too.
+- **The assistant on the call is the one you picked, with the instructions and the tools its owner
+  gave it** — an agent you built to answer a particular way answers that way out loud too, and one
+  whose tools you restricted cannot reach past them just because the conversation is spoken.
+- **You can now delegate out loud, not just talk** — the assistant on a call now knows how to
+  operate your workspace the same way it does when you type at it: how tasks, agents, automations
+  and search work, which skills it can load, and the tools it does not list up front. Ask it about
+  your calendar, to file a task, or to set something running, and it goes and does it instead of
+  saying it cannot. It also stops asking permission first: say what you want and it acts, then tells
+  you what it did. Work that would take minutes gets handed to an agent or a task rather than
+  leaving you listening to silence, and it will say where it went. "This page" and "here" mean what
+  you are looking at, so it never asks you to read out an id.
+- **The assistant on a call can see whole answers, and you can see it working** — it was being handed
+  only the first 700 characters of everything it looked up, which is why it lost track of documents,
+  misread pages and fumbled edits: it was reading through a keyhole. It now gets what you get when
+  you type. And the work is no longer invisible — the call bar names what it is doing while it does
+  it ("Read Page: Roadmap") instead of going silent, and each tool call appears in the conversation
+  as it happens, spinner and all, exactly the way it does when you type. It is still there when you
+  come back to the thread later.
+- **A call you cannot have does not start** — running out of credit, or already having as many calls
+  open as your plan allows, now says so and stops, instead of connecting anyway and leaving you
+  talking to something nobody was counting.
+- **When voice cannot start, it says which problem you have** — a microphone you declined is
+  different from a microphone you do not have, and the two now get different advice and only the
+  fixable one offers to try again. If the call connects but the transcript service does not, the
+  call says so rather than letting you talk for ten minutes into something that was never going to
+  be saved.
+- **Sub-tasks are real rows you can work in place** — expanding a task used to show its sub-tasks as
+  a list of links with a circle beside each one. The circle looked like a checkbox and was inside
+  the link, so clicking it opened the sub-task instead of completing it; there was no way to finish
+  a sub-task without leaving the screen. Sub-tasks are now full rows in the same table, indented
+  under their parent and lined up with its columns, with a working checkbox, status, priority,
+  assignees and due date. They expand further if they have children of their own, and each level has
+  a "+ Add a sub-task" line so you never have to open a task just to put something under it — down
+  to four levels in, after which you open the task itself to keep going. A task with no sub-tasks
+  yet gets "Add sub-task" in its row menu, which creates the first one, opens it out and puts the
+  cursor in its title. This is the wide layout; on a narrow pane the cards still show the progress
+  count, and opening a task is how you reach what is under it.
+- **You can complete the task you are looking at** — opening a task shows the work underneath it, so
+  the task itself had no row and no controls. Finishing it meant navigating back out to the list it
+  came from, where completing it is blocked until its sub-tasks are done — the sub-tasks you were
+  just looking at. There is now a checkbox and a status dropdown at the top of the task's own
+  screen.
+- **Sub-task progress wherever a task appears** — a task with sub-tasks now shows how many are done
+  in the table, on kanban cards and on the narrow-screen cards. Previously none of them said, and
+  the only hint was a count inside the expanded row.
+
+### Changed
+
+- **Credits are counted, not priced** — every credit amount in the app, on the plan page, and on the
+  marketing site now reads as a whole-number count with thousands separators, never as a dollar
+  figure or a fraction, and a credit has one definition everywhere (the pricing page states the
+  rate). Nothing changes about what you are granted or charged; a balance that used to show as a
+  dollar-like amount now shows as the matching whole credit count. The included
+  allowance behind a paid plan is derived from the plan's price rather than kept in a separate
+  table, and the admin billing view lists it as included credits.
+- **Plans are Free, Pro, and Business; Founder is retired** — the pricing page and the in-app plan
+  page now show three plans. Pro stays $15 a month for a person. Business is now the plan for an
+  organization: $50 a month with 5 seats included and $10 a month for each extra seat, and it is not
+  offered to a single user. Every plan card states its price, its included credits (a plain count),
+  and the top-up rate as three separate facts. The Founder plan is no longer sold; its subscriber
+  moves to Pro at the end of the current billing period, and anyone already on the earlier $100
+  personal Business plan keeps Business features at the price they pay today.
+- **New global assistant sessions live in your Home drive** — a sandbox session started from the
+  global assistant (or by its first sandbox tool call) is now created in your Home drive, which is
+  set up for you if you do not have one yet, so it is listed under Home rather than under "Global
+  Assistant". Only you can open it, and it is billed to you and runs in the same sandbox as before.
+  Existing assistant sessions stay where they are.
+- **The privacy policy now describes AI routing as it actually works** — every cloud AI request
+  goes through OpenRouter to the provider of the model you picked, including Anthropic, OpenAI,
+  Google and xAI models. The policy previously described those four as direct and said OpenRouter
+  models were optional extras you had to select. The subprocessors page says the same, and both now
+  point to OpenRouter's per-model retention and training policies rather than implying one rule for
+  every model.
+- **Paid-feature prompts in the iOS app no longer send you to a purchase page** — the locked Memory
+  automation, automatic backups and custom subdomain settings linked to the plan page, which the
+  iOS app cannot sell. They now say the feature is available on paid plans; on the web the upgrade
+  links are unchanged. Out-of-credits and paid-model messages no longer tell you to buy or upgrade in
+  their text (the web still shows its Buy credits button beside them), and the Privacy & Cookies
+  settings entry is hidden in the native app, matching the cookie banner. The native app also no
+  longer sends usage analytics, even if analytics consent was saved in an earlier version.
+- **iOS app: legal pages, integrations and privacy tightened for App Review** — Settings now has
+  Privacy Policy and Terms of Service entries on every platform, and in the iOS app those pages (and
+  the Terms/Privacy links on sign-in and invite screens) open in a browser sheet instead of loading
+  the marketing site inside the app. Connecting Google Calendar or another integration from the iOS
+  app opens the sign-in screen in a browser sheet, where it can finish, instead of an error page
+  with no way back. The iOS app no longer shows buy, top-up or upgrade wording on credit balances,
+  storage and domain limits, or the image generator, and never offers the published-app always-on
+  checkout. The iOS app records no session replays. The Terms now set a minimum age of 16 (matching
+  sign-up) and an acceptable-use policy with zero tolerance for objectionable content and abusive
+  users; the privacy policy uses the same minimum age, and the subprocessors page discloses web
+  session replay.
+- **The header now says "Home", and the drive name next to it opens a proper drive picker** —
+  the way back out of a drive used to be a small house icon followed by a `/`, and nothing on
+  screen said where it went, so it was easy to miss entirely. It now reads **Home** in words, next
+  to the house, as the one outlined button in the header so it is clearly the place to go. Inside a
+  drive it is followed by the name of the drive you are standing in, and that name is now a button:
+  click it and a drive picker opens — a wide, searchable dialog with your favourite drives, the
+  ones you opened most recently, and everything else, plus **All drives** and **Create drive**
+  right under the search box. It replaces the narrow dropdown the sidebar used to open for the
+  same job, which had to squeeze search, sections and actions into one thin scrolling column; the
+  sidebar's drive button now opens this same dialog, and on a phone the dialog sits at the top of
+  the screen so the keyboard never covers the search box. On the dashboard itself the word stops
+  being a button, because you are already there. On a phone the header fits on one row again with
+  every control still present, including recent pages: the search button moves in with the other
+  actions, and the spacing tightens a little below tablet width.
+
+- **Android app: first internal-testing version identity, and the Android/iOS shell configs are now
+  checked in CI (still not distributed)** — the Android build now identifies itself as version 1.4
+  (build 2), matching the iOS version, instead of the 1.0 (build 1) left over from a debug build in
+  March. Nothing else about the app changes in this release, and **nothing is distributed**: there
+  is still no release signing key, no Play Console listing, and none of the Android work from the
+  last few releases has been run on a real device — the exact checklist for doing so is now in the
+  app's README, alongside what still blocks a public build. Behind the scenes, the two mobile shell
+  configuration files are type-checked on every pull request and a test now guards the rule that
+  the Android shell never hands its native bridge to a third-party site or a wildcard host.
+
+- **Free plan credits are now a one-time starter grant instead of a monthly allowance** — new
+  free accounts still get a starter grant of credits to try AI with, granted once on their first AI call, but
+  that grant no longer refills or accumulates month over month. Credits you already have never
+  expire, and nothing is taken away: free accounts that had built up a balance keep it. To keep
+  going after the starter credits are spent, buy a top-up pack (top-ups never expire) or upgrade
+  to a paid plan, which includes a monthly allowance that rolls over. The credits card, the plan
+  comparison, the out-of-credits message, and the pricing, FAQ, terms, and docs pages now say
+  that the Free grant is "to start" rather than "per month", and free accounts no longer show a
+  "Renews" date. Free accounts receive a one-time email explaining the change, quoting the
+  exact balance they keep and pointing to top-ups and the Pro plan; anyone who has turned
+  product-update email off is skipped, and the notice carries a one-click unsubscribe link.
+
+- **Dark mode is now a lighter charcoal instead of near-black** — every dark surface (page,
+  sidebar, cards, popovers, menus, borders, and the glass panels) moved up one step so text no
+  longer sits on a pure-black floor, which is easier to read and reduces halation. Hover
+  highlights in dark mode are now a quiet gray rather than saturated blue, and the *selected*
+  item (active channel, drive, sidebar entry, agent history row) gets a soft blue tint instead,
+  so "hovered" and "selected" no longer look the same. Sidebars, the AI panel and the header sit
+  one tone above the page, and the hairlines between regions are a touch stronger, so the lighter
+  surfaces read as layered rather than flat. Primary text is a touch whiter and secondary text
+  slightly brighter to
+  keep contrast comfortable on the lighter surfaces (the marketing site's secondary text is a hair
+  darker, matching the app). The admin app, the marketing site (including
+  the hero demo), the code editor and terminal fallbacks, and the iOS/Android status bar and
+  splash colors all use the same new floor so nothing looks darker than the page around it.
+
+- **The default AI model is now OpenAI's GPT-6 Luna** — cheap, a 1M-token context window, and on the
+  free-tier allowlist. New accounts pick it up automatically; anyone with an explicit model already
+  selected keeps that choice. The OpenRouter catalog was refreshed again: GPT-6 / GPT-6.1 (Luna, Sol,
+  Astra), Claude Opus 5.5 / Sonnet 5.5 / Fable 5.1, Gemini 3.8 Flash, Grok 4.7, DeepSeek V4.1 Flash,
+  Qwen3.8 Max, Muse Spark 1.3, GLM 5.3 Prime / FlashX and more are now selectable, and pricing was
+  re-synced with OpenRouter. The admin GLM Coder Plan list now shows only GLM-5.3 and GLM-5.3 Flash,
+  the models the plan currently offers.
+
+- **The default AI model is now Z.ai's GLM-5.3 Flash** — cheaper per token and a larger context
+  window than the previous default (OpenAI's GPT-5.6 Luna), and still on the free-tier allowlist.
+  New accounts pick it up automatically; anyone with an explicit model already selected keeps that
+  choice. Also refreshed the whole OpenRouter model catalog: many new models and providers are now
+  selectable (a lot more vendor choice), pricing and context-window figures were corrected against
+  OpenRouter's live data, and a handful of models OpenRouter no longer serves were removed.
+
+### Fixed
+
+- **Signing up at the same moment as someone else no longer fails to set up your Home drive** —
+  when several new accounts were created at once, all but one could end up without a Home drive
+  until their next sign-in.
+
+- **A dropped database connection no longer takes the server down** — if the database restarted,
+  failed over or closed an idle connection while PageSpace held a background lock (starting an AI
+  reply, storage usage corrections, sandbox storage billing, agent account credentials and usage
+  limits), the whole server process could crash. The lost connection is now logged and discarded
+  and the server keeps running; an affected request may fail and can be retried. Billing and
+  storage-correction runs that lose their lock part-way stop before their next charge or
+  correction and leave the rest to the next run instead of repeating it.
+- **Apodex 1.1 Mini (free) no longer reserves credits as if it were a paid model** — the free model was
+  missing from the price list, so each call held and counted a paid model's estimated cost against your
+  balance mid-reply. It is now priced as free.
+- **Memory now checks your AI credits before it learns** — the nightly Memory pass (learning
+  from your conversations and tidying your profile pages) used to run and charge you even when
+  your balance was used up, so you could go into debt without opening PageSpace. Now each step
+  checks your credits before the AI runs. When you're out of credits that night's learning is
+  skipped: nothing is charged, your profile pages stay exactly as they were, and anything Memory
+  was about to add waits for the next night.
+- **Every AI call now checks your credits before it runs** — conversation summarising (when a long chat
+  is condensed) and the nightly Memory update used to run first and charge afterwards, which could
+  push an out-of-credit balance into debt. They now reserve credits first like every other AI call;
+  with no credits they simply don't run, and nothing about your conversation or your Memory pages
+  changes. A live voice call with a page agent now spends from the same source as typing to that
+  agent in its drive, instead of always from your own credits — including images it makes during
+  the call. If the call cannot tell which drive pays for it, it does not start and you are not
+  charged. Voice calls with the global assistant still use your own credits.
+- **Published pricing figures match the plans** — the "Credits Replace Daily Limits" blog post no
+  longer lists per-plan credit amounts from before the credit count change, and no longer names the
+  retired Founder plan; it points to the pricing page for current amounts, packs and the top-up range.
+  The Business plan card no longer claims "20x more than Free".
+- **Admin billing counts organization credit** — "Included credit liability" and "Outstanding
+  liability" now include organization credit pools and credit moved into drive wallets, counted
+  once; a pool's allocation to a drive wallet is not counted twice. The free starter grant is shown
+  separately.
+- **Stripe plan detection by amount works again** — when an invoice carries a price the app does
+  not recognise, its amount is read as the cents Stripe sends, so a $15 or $50 price resolves to
+  Pro or Business instead of never matching.
+
+- **Agents answering an @mention in a channel now check credits first** — an agent's reply to a
+  channel mention used to run even when there were no credits to pay for it. Each reply is now
+  checked before the agent starts; if there is nothing to pay with, the agent does not reply and
+  you are not charged.
+
+- **A page share that has expired no longer lists its drive** — when someone shared a single page
+  with you for a limited time, the share stopped opening the page once it expired, but the drive
+  it lived in stayed in your drive picker and sidebar, where it opened to nothing. An expired
+  share now lists nothing, just as it opens nothing, so that drive disappears from your list
+  unless you still have another way in.
+
+- **Zoom summaries now check your AI credits first** — the AI summary and action items on a
+  recorded Zoom meeting's page used to run and charge you even when your balance was used up, so
+  you could go into debt. Now they check your credits before the AI runs. When you're out of
+  credits, the meeting still gets its page, just without the summary and action items.
+- **A page share link now opens only that page** — opening a link to one page used to make you a
+  full member of its drive, so you could read every other non-private page there and post in its
+  channels. Now you join as a guest: you see only the pages that were shared with you. Guests do
+  not appear on the drive's Members page, cannot message the drive's members through it, and do not
+  count as members when the owner deletes their account. Opening a page link no longer accepts a
+  pending drive invitation or changes an existing member's role. A drive link or an invitation
+  still makes a guest a full member.
+- **Workflows no longer run when you are out of AI credits** — pressing Run on a workflow,
+  a scheduled workflow, and a task's due-date or completion trigger now check your AI credit
+  balance before the agent starts, as calendar, Zoom and webhook triggers already did. Previously
+  they ran anyway and were charged afterwards. Pressing Run with no credits left now says so; a
+  scheduled or task-triggered run that is skipped shows in the workflow's run history as cancelled,
+  with the reason, and the schedule moves on to its next time.
+- **A stopped AI reply is charged for what it used** — pressing Stop, or running out of credits,
+  while the assistant was still answering used to charge nothing for the unfinished part of the reply,
+  and in a multi-step reply sometimes nothing for the finished steps either. Stopped replies are now
+  charged for the finished steps plus the part of the reply you already saw. The unfinished part is
+  never charged more than the amount set aside when the reply started.
+- **A queued message is no longer lost when it fails to send** — if a message you queued while a
+  response was streaming could not be sent (a network error, or not enough credits), it used to
+  disappear. It now stays at the front of the queue, you see an error, and it goes out after the
+  next response.
+- **`/btw` side questions use your AI credits like any other chat message** — a side question now
+  checks your balance before it runs (and says so when you are out of credits or have too many AI
+  requests running), and its usage shows up on your usage page.
+- **The workflow editor fits the screen again** — a workflow with a long AI prompt pushed the
+  Edit Workflow dialog's fields past its right edge and pushed Save below the fold. The dialog is
+  now wider on desktop, its fields scroll between a fixed header and a fixed Cancel/Save footer, and
+  long prompts wrap and scroll inside their own box.
+- **A pending drive invitation no longer reveals the drive's people** — someone invited to a drive
+  who had not yet accepted saw every member's name, email, bio and avatar in the New Conversation
+  picker and could start a direct message with them (and members could do the same to them). Until
+  the invitation is accepted, neither side appears in the other's picker and a new direct message
+  between them is refused, unless they are already connected.
+- **Pulse no longer surfaces pages you are denied** — the activity summaries built pages a person
+  can view from a database rule that ignored a custom role's "no view" setting and a per-page
+  "no view" grant, so a member could see those pages' activity in Pulse. Pulse now follows the same
+  rules as opening the page: those denies are honoured, a custom role's per-page grant on a private
+  page is included, and a time-limited grant expires at the right moment in every time zone.
+- **Workflows run by agents without the sandbox no longer fail** — a workflow whose agent has the
+  sandbox turned off failed every run, from any trigger (schedule, task, calendar or page webhook),
+  when saving its messages — often after its tools had already done their work. Every run now saves
+  into its own conversation on the agent, so it completes and its transcript can be opened like any
+  other chat.
+- **Agents can write to their own memory pages again** — every agent is instructed to keep notes
+  on an "Agent Memory" child page of its own, but the permission check behind the write tools
+  looked only at the agent's drive membership, which grants edit on no ordinary page — so every
+  create or edit of that page was refused with "Insufficient permissions to edit this document",
+  and scheduled workflow runs that journal to their memory failed at the write. An agent can now
+  always edit its own page and the pages under it; deleting them is still refused, and everything
+  beyond its own subtree stays governed by its membership exactly as before, including any API
+  token's drive scope.
+
+- **An unaccepted drive invitation no longer grants drive access** — a person invited to a drive but
+  who had not yet accepted could already, in four places, act as if they had joined: an invited
+  admin could view and edit the drive's custom roles, reorder and move its pages, and grant or
+  revoke page permissions, and any invitee saw every channel in the drive with its latest message
+  in their messages list. All four now require an accepted membership, like the rest of the app.
+
+- **A custom role's drive-wide access no longer opens private pages in search, badges and
+  notifications** — opening a private page already required a per-page entry, but the batch check
+  behind search, the inbox, sidebar badges and channel notifications let a role's drive-wide
+  default stand in for one, so a member with that role could see a private page's title and
+  unread counts and receive its channel events. It now applies the same rule as everywhere else.
+
+- **Sign-in emails no longer lock you out of your own account** — every email PageSpace sends to
+  the same address (a sign-in link, an invite, a notification) shared one rate-limit bucket capped
+  at 3 per hour, and a failed send still used up one of those 3 — so a couple of sign-in attempts,
+  or one flaky delivery, could leave you unable to get a new sign-in link for the rest of the hour.
+  The cap is now 10 per hour per recipient, the sign-in link's own limit goes from 3 to 5 attempts
+  per 15 minutes, and a send that fails no longer counts against the limit at all — only emails
+  that actually go out do.
+
+- **Agents you add to a drive can be @-mentioned in its channels, and they answer** — a drive
+  member can post in the drive's channels, but an agent added as a member could not: its
+  membership never granted posting rights in channels the way a person's or an app's does, so an
+  @-mentioned agent silently said nothing (or its reply was refused after the model call had
+  already been paid for). A freshly created agent with no tool restrictions was skipped as if
+  channel posting were switched off, and an agent added to a drive from another drive was neither
+  offered by the @ picker nor allowed to reply unless you could open its home page. Now a member
+  agent posts in non-private channels by default, the @ picker lists every agent that belongs to
+  the drive, and a mention gets a reply in the channel or in the thread it was made in. Agents
+  whose tool list deliberately leaves out channel posting stay silent, as before.
+- **The open-source licenses screen no longer references a private IP-sale disclosure** — the "Full
+  inventory" notice at Settings → Legal → Open-source licenses said the complete dependency
+  inventory was "maintained in the seller's IP disclosure and is available to recipients on
+  request" — language from a private acquisition process that never belonged in the product. The
+  notice now links directly to OSS-INVENTORY.md, the standalone sanitized inventory published in
+  the open-source PageSpace repository.
+- **The marketing site no longer goes down when a retina screen loads the home page** — the hero's
+  space backdrops were resized on the server the first time each size was asked for, and a
+  high-resolution screen asked for both the dark and light pictures at full 4K size at once, which ran
+  the site's server out of memory. It restarted, forgot every picture it had already made, and the
+  next visitor with a sharp screen took it down again. Every size of both pictures is now made once
+  when the site is built, so loading the page asks the server for nothing but files. The hero looks
+  and fades exactly as before.
+- **Sending several photos at once now makes one message with one gallery, and stops them appearing
+  twice** — attaching a batch of photos used to send them as separate messages, one per file: the
+  channel or DM filled with a column of single-photo bubbles, the typed text sat on the first one,
+  and until you refreshed the page each photo also appeared a second time. The doubling and the
+  splitting were the same bug. A batch is now a single message carrying every file, stacked into a
+  grid you can click into: the viewer opens on the photo you picked and pages through the rest with
+  the arrow keys or the on-screen arrows. Text and photos sent together stay in one bubble. Mixed
+  batches put the images in the grid and any videos or documents beneath it, a single photo looks
+  exactly as it did before, and a message sent before this change still renders the way it always
+  has. Channels and DMs both work this way, and the other person sees the batch arrive as one
+  message rather than as several. Thread replies display a batch as one gallery too, though
+  attaching a file while writing a thread reply is still not possible — that part has never worked
+  and is unchanged here. A message can carry up to ten files; the composer says so rather than
+  silently dropping the extras.
+
+- **Phone: opening a side panel no longer pops the keyboard** — on a phone or in the iOS and
+  Android apps, tapping the menu button to open the navigation panel (or the assistant panel)
+  immediately focused the search box inside it, so the keyboard slid up over the panel you had just
+  opened. The panel now opens with nothing focused; tap the search box when you want it.
+
+- **The account menu no longer labels free accounts "Billing (Business)"** — the plan name in the
+  avatar dropdown fell through to "Business" whenever the subscription lookup had not answered yet
+  (every first paint, and permanently if the request failed), so a brand-new free user saw a paid
+  plan the moment they signed in. It also mislabelled Founder accounts as Business. The label now
+  comes from the canonical tier table, starts from the tier your session already knows, and treats
+  anything unrecognised as Free. The subscription status endpoint returns the same normalised tier.
+
+- **Every pane in an AI page's split grid now offers Chat/History/Settings from its own bar** — the
+  "host" pane (the one showing the same conversation the page's own header already tracks) used to
+  collapse to a bare name label with no way to reach History or Settings from that pane, unlike
+  every other pane in the grid. It now carries the same tab strip. Deleting the page's own hosted
+  conversation from that newly-reachable History tab now correctly hands the page a replacement
+  conversation instead of leaving it silently pointed at one that no longer exists — including when
+  a session end happens to land at the same moment.
+- **An agent locked down by `update_agent_config` can be unlocked again, and `pagespace keys` tells
+  you the real fix** — restricting an agent's tools to an empty list had no way back through the
+  tool itself: the field that means "no restrictions" is `null`, and the schema only accepted an
+  array or nothing at all, so the agent stayed locked down until someone reached the settings UI.
+  Passing `enabledTools: null` now explicitly clears the restriction. Separately, `pagespace keys
+  list`/`revoke`/`use` and the key wizard refuse when run with a scoped access key instead of your
+  personal login — that message used to always say to remove "the key's `--token`/env credential,"
+  even when the key had actually come from `--key <name>` or a stored credential with no `--token`
+  in sight, pointing you at a flag you never passed. It now names the credential that actually
+  resolved.
+- **Pasting a formula no longer corrupts quoted text inside it** — copying a formula like
+  `=IF(A2>0,"q1","")` down a row used to also rewrite the quoted string, turning `"q1"` into
+  `"Q2"`: the reference-shifting logic behind paste and conditional-format rules didn't know the
+  difference between a cell reference and a letters-and-digits run sitting inside a string literal.
+  It now leaves anything inside quotes untouched, both on paste and when a conditional-format
+  formula rule is evaluated per cell. Separately, a sheet with a very large or pathological set of
+  conditional-format rules could make typing, saving, or rendering the sheet hang — evaluation work
+  is now capped in total across every rule and range combined, on top of the existing per-range
+  limit, and rule count itself is capped where a sheet is written. Saving a sheet also no longer
+  evaluates conditional formats at all, since the save format never reads that result — cutting
+  needless work on every keystroke.
+
+- **A charge that fails to record is retried instead of silently dropped** — usage metering used to
+  report success whether or not it had actually written anything. If the database write for a usage
+  record failed, the failure was logged and then swallowed: the meter above it saw a normal result,
+  moved its billing marker past the window it had just tried to charge for, and that spend was gone
+  for good — with no record left behind for the nightly reconciliation to find. It affected every
+  running meter: sandbox storage, terminal sessions, and published-app runtime. Metering now reports
+  whether the record was actually written, and a meter that hears "no" leaves its window open so the
+  next cycle bills the whole span again — safe precisely because nothing was written the first time.
+  The reverse case is handled just as deliberately: when the record IS written but the ledger entry
+  is deferred to the reconciliation job, the window closes normally, because reopening it would
+  charge you twice for the same span.
+
+- **A custom domain stuck on SSL now tells you which DNS record to add** — when a certificate is
+  waiting on an ownership record, domain settings name it outright: the `_fly-ownership` TXT record,
+  where it goes, and every value that satisfies it — Fly accepts an app-scoped or an org-scoped
+  value, and whichever ones it offers are the ones you are shown. Previously that domain simply sat at "provisioning"
+  indefinitely with nothing to act on, because through the certificate's status alone "the
+  certificate has not issued yet" and "you were never told to add a DNS record" look identical — and
+  only one of them ever resolves on its own. The domain also stays healthy while it waits instead of
+  being marked failed, so a site already being served keeps serving. "Check SSL" now does more than
+  re-read a cached answer: once the record is visible in DNS it asks the certificate authority to
+  look again, rather than leaving you to wait out its own polling schedule. And removing a domain
+  now detaches its certificate, which previously kept billing after the domain was gone. Deleting an
+  entire drive does not yet do this, so remove its domains individually first if you want their
+  certificates released.
+- **An older AI conversation keeps its controls** — opening an AI page on a past conversation could
+  drop the whole bar above the chat: no agent name, and no "+" to start a new conversation, so the
+  only way to begin one was to go to the History tab and find the button there. Which of the two the
+  page gave you was invisible — it depended on whether that conversation happened to be tied to a
+  workspace, which is decided when the conversation is created and never changes, so every
+  conversation from before workspaces existed lost the bar for good. Both now wear the same bar with
+  the same "+" in the same place; a conversation with no workspace behind it simply shows a hollow
+  dot instead of a lit one, rather than hiding its controls. Starting one twice in quick succession
+  no longer leaves you with two, and when starting one genuinely fails you are told, instead of the
+  button appearing to do nothing.
+
+- **Drive commands work in an agent's own chat** — opening an AI page and typing `/` listed only the
+  built-in commands and your personal ones; the drive's own commands were missing, and since a
+  command runs from the chip you pick out of that list, they simply could not be used there. That
+  composer never said which drive it was in, so the list was built as though there were none. It now
+  scopes to the agent's drive — the same drive the command actually runs against — in the agent page,
+  in agent panes, and in the assistant. The right-sidebar assistant had a subtler version of the same
+  fault: with an agent selected it offered the commands of whatever page you were looking at, so an
+  agent borrowed from another drive showed commands that failed the moment you sent them. It now
+  offers the agent's.
+
+- **An agent you configure with tools actually gets them, or says why not** — an agent set up
+  entirely through chat (`update_agent_config`) could be given the sandbox tools — `bash`,
+  `readFile`, `spawn_shell`, the git commands — have all of them confirmed back on every save, and
+  then run without a single one of them. The switch that offers an agent the sandbox at all was
+  only reachable from the settings screen, so a tool-configured agent was silently stuck with it
+  off, and every worker spawned under that agent quietly came up unable to do the work. Three
+  things changed: the sandbox switch can be set from chat like every other setting — and when
+  creating an agent, so a new agent is no longer born unable to use the tools it was given;
+  saving or creating a configuration now reports which tools the agent will ACTUALLY be able to
+  call, which ones are blocked and by what; and spawning a worker under an agent whose tool list
+  contradicts its own sandbox switch fails immediately, naming the tools and the one-line fix,
+  instead of starting a worker that cannot do the job. A spawn also warns when the workspace the
+  worker lands in will not run code for you at all — the reason the same agent could produce three
+  different tool sets on three tries and look random. The SDK and `pagespace agents config` can set
+  the switch and read the same answers.
+
+- **An agent's sandbox switch now means the same thing everywhere** — an agent whose sandbox
+  access was turned off still received the sandbox tools when someone @-mentioned it in a channel,
+  when consulted through the API, and on a voice call, while the same agent in a page chat
+  correctly had none of them. The ones
+  that run code were still refused when called, by a separate check — but the session tools
+  (spawning and messaging other agents) need no compute and simply worked, so the switch was not
+  the switch on those surfaces. One switch, every surface.
+
+- **Turning an agent's tools off no longer turns them all on** — asking an agent to set its own
+  enabled-tools list to nothing (an empty list, through `update_agent_config`) was stored as "no
+  restriction", so an agent someone was trying to lock down came back holding every tool there is.
+  The settings screen always read an empty list as "none"; now both doors agree. To leave the list
+  alone, don't send it at all.
+- **A long agent job no longer wedges itself partway through** — an agent working through a big
+  batch (reading thirty files and writing each one into a spreadsheet, say) would get several
+  chunks in and then fail every remaining step with the same cryptic complaint that its tool call
+  was missing a `tool_name` — which it had in fact sent. Retrying never helped, and only starting a
+  fresh agent got the work moving again. The tool call was not malformed: everything the agent read
+  and everything it wrote stayed in its working memory at full size for the rest of the job, so it
+  eventually had no room left to compose its next call, and the empty call it managed to send was
+  reported as a missing field. Large reads and writes from earlier in a run are now summarised once
+  the agent has moved past them — the most recent stay whole, and a summarised read says how to
+  fetch it again — so a long job no longer crowds itself out, on every surface that runs one: chat,
+  the agent API, agent-to-agent calls, and workflow steps. If a call does still arrive incomplete,
+  the agent is now told what actually happened and given the fix, instead of a complaint about a
+  field it did not omit.
+- **Editing a document by line number no longer lies about what it did** — a line edit reported a
+  line count taken before the document was stored, so replacing 89 lines with 91 answered "9 lines".
+  An agent that trusted that number addressed its next edit against a document shorter than the one
+  on disk: most of the new content landed, the tail of the old content survived, and the page was
+  left holding invalid JSON — reported as success. Both editing surfaces (the in-app AI tools and
+  the `/api/mcp/documents` endpoint the CLI and SDK use) now share one line-accounting rule, and the
+  count a write reports is measured on the content actually saved — it is the count the next read
+  returns. `replace-lines` also takes an optional `--expect-lines N`: pass the total you read, and
+  an edit addressed against a document that has since changed is refused rather than half-applied.
+- **A document laid out with line breaks is no longer reported as one line** — line numbering only
+  understood block elements, so an eighteen-line document written with `<br>` separators (what
+  pasting text into the editor produces) came back as `totalLines: 1` and could not be edited by
+  line at all. `<br>` and `<hr>` now count as the line breaks they are, and a blank line between two
+  paragraphs is no longer silently swallowed.
+- **Documents an agent creates default to markdown** — machine-written documents used to be created
+  in rich-text mode, where line numbers are computed from the underlying markup rather than the text
+  that was written. Documents created through the AI tools or an API key now default to markdown;
+  documents created in the app are unchanged, and an explicit choice always wins. A page whose mode
+  disagrees with its content (raw JSON or markdown stored in a rich-text page) now says so on every
+  read and every edit instead of leaving it to be discovered by corrupting the document — and that
+  content is left exactly as written, including any HTML tags inside it. Previously a page holding
+  JSON with a tag in one of its strings could have a line break inserted inside that string, leaving
+  the page holding invalid JSON.
+
+- **A working key is no longer reported as dead** — running `pagespace keys list` (or `revoke`,
+  `use`, or the wizard) with an `mcp_` key answered "Static token was invalidated and has no refresh
+  path", which reads as "your key was revoked" — while the very same key kept reading and writing
+  drive content perfectly. Managing keys was never something a key could do; only your personal
+  login can, and the refusal simply lost the server's own words on the way back. Those commands now
+  say what is actually true: the key is fine, key management needs `pagespace login`, and
+  `pagespace keys describe` is what a key can ask about itself. Nothing gets re-minted for nothing.
+
+- **Asking about a built-in role no longer dead-ends** — looking up `member` or `admin` among a
+  drive's roles answered "not found in this drive", which reads as though the role does not exist.
+  Those are built-in roles held per person on their drive membership, not entries in a drive's own
+  role list, so a lookup there can only ever miss. The answer now says so and points at where they
+  actually live — and at `pagespace keys describe` for what a specific credential resolves to.
+
+- **A sandbox is a development machine again** — a session's sandbox inherited the mode of the
+  server that opened it, so a sandbox opened from pagespace.ai reported itself as a production
+  environment. Under that, `npm install` quietly leaves out everything a project needs to be
+  *worked on* — its TypeScript compiler, its test runner, its dev scripts — so an install that
+  reported success left the toolchain missing and every later command failed with an error naming
+  nothing to do with the cause. A sandbox now describes itself as what it is, and a plain
+  `npm install` installs the whole toolchain. The terminal and the agent's own shell also report
+  the same environment as each other now; they used to disagree. This covers every machine an agent
+  works on, named environments included — an environment called “prod” is a name, not a deployment.
+  One consequence worth knowing: a build run on one of these machines now produces a development
+  build, so say `NODE_ENV=production npm run build` when you actually want a production bundle.
+- **A long job in a terminal no longer looks frozen** — a job piped through a filter
+  (`… | grep …`, and especially `… | tail -200`, which by design prints nothing until the job ends)
+  held its output back until it exited, so a healthy multi-minute build or scrape showed an agent
+  watching the terminal exactly nothing. The holding happens inside the programs themselves, not in
+  PageSpace, so the shell tools now explain it and say what to type instead of guessing that the job
+  died; Python programs, the commonest offender, flush as they go in every shell opened from here on,
+  without anyone having to ask. A shell that was already running when this shipped keeps the
+  environment it started with — close it and open a new one to pick up the change.
+- **Closing a shell closes its pane** — killing a shell in an agent session terminated the process
+  and removed the shell, and left its pane sitting on screen bound to a terminal that no longer
+  existed. The pane now goes with the shell, in the same write, so every browser watching the
+  session loses the tab at once instead of accumulating dead rectangles until somebody closes them
+  by hand.
+- **Panes fill the screen as a grid instead of marching sideways** — every pane an agent opened
+  split the screen beside the last one, so a session that started three shells ended up with three
+  ever-thinner columns. A pane that opens for you now takes the roomiest space on screen and divides
+  it along its longer edge: beside when there is width to spare, below when there is not. Four
+  shells and the conversation that opened them share the screen as a grid, with the smallest pane an
+  eighth of it instead of a sixteenth, and repeated opening no longer makes the layout deeper and
+  harder to drag. Panes you have resized are left alone — an opening pane never redistributes a
+  layout you set by hand — and the split buttons still divide only the pane you pointed at. Agents
+  are told how many panes their session is showing when they open or close a shell, so they can tidy
+  up after themselves.
+- **No more "Shell not found" when closing a shell pane** — closing the tab of a shell that was
+  already gone, or one whose session had expired, raised an error toast for a close that had in fact
+  succeeded. Closing something already closed is success and says nothing; a close that genuinely
+  failed still tells you, because the process may still be running.
+- **Dedicated deployments can run code again** — on a dedicated (tenant) deployment, code execution,
+  agent sandboxes and environments were all refused, because the gate asked which subscription plan
+  the account was on and a dedicated deployment has no plan to be on: the deployment itself is what
+  was bought. It now asks the question that fits — a dedicated deployment is entitled — while
+  keeping the same safety ceilings everyone else has, on how many things run at once and how many
+  environments a drive can hold, each adjustable by whoever runs the deployment. Nothing changes for
+  accounts on pagespace.ai; self-hosted installs still don't get cloud machines, and will get a
+  local option instead.
+- **Mentions in a document survive being read back in** — a page mention was written as a link the
+  editor could not recognise on the way back, so anything that re-read a document's HTML turned its
+  mentions into ordinary links and the page quietly dropped out of the mention list on the pages it
+  referenced. Mentions of every kind now come back intact, and a mention of a person is finally its
+  own thing rather than being filed as a mention of a page with the person's id on it.
+- **Editing a page larger than 1MB no longer fails to save** — every edit records the page's
+  previous contents for version history, storing large ones outside the main record and keeping a
+  note of how big they were. That size was being held to the same 1MB limit as content stored
+  inline, so once a page grew past a megabyte its next edit was rejected and rolled back, and the
+  change never landed. Spreadsheets hit it first, since they reach that size on ordinary use;
+  writes to affected pages retried and failed in a loop. Large pages now save normally, and their
+  history is recorded in full.
+
+- **Turning an uploaded file into a document no longer risks losing what you wrote in it** — file
+  text extraction runs in the background, and a file converted to a document while that extraction
+  was still queued could have the document you had started writing replaced by the raw extracted
+  text when the job finally finished. Extraction now checks what the page is at the moment it
+  writes, so a converted page keeps everything you wrote and simply stops showing as processing.
+- **Signing up can no longer leave you with two copies of the starter content** — the Getting
+  Started pages were seeded by four near-identical routines, and two signup paths arriving at once
+  for the same account could each lay down a full set. There is now one seeder, it runs once per
+  drive, and running it again does nothing.
+- **Clicking a task checkbox is instant** — the tick did not appear until the server had answered
+  and the whole list had been re-fetched twice, which on a long list was a visible pause on every
+  click. Worse, if you had anything else open and being edited anywhere in the app, the refresh was
+  suppressed and the checkbox never moved at all, even though the task really had been completed.
+  Status, priority, title and due date changes are all immediate now, and undo themselves if the
+  server refuses. Assignee changes still wait for the server, because the row shows the assignee's
+  name and picture and the request only sends an id.
+- **Failures say what went wrong** — a refused change used to read "Failed to update status" no
+  matter the cause. If a task cannot be completed because sub-tasks are still open, it now says how
+  many; if a status is not one the list allows, it says which ones are.
+- **A task's sub-lists use the same statuses as the list they came from** — if you had renamed or
+  added statuses on a task list, everything nested under it quietly fell back to the four built-in
+  ones. Now anything created under a list inherits that list's statuses.
+- **The expanded document is no longer cut off** — a task's notes were clamped to about three lines
+  behind a fade. They render in full.
+- **Editing a document at the same time as someone else no longer throws away what you typed** —
+  when a colleague or an AI agent saved the same document while you had unsaved text, PageSpace
+  used to quietly replace everything in your editor with their version and tell you your copy "has
+  been updated". Whatever you had written was gone, with no way to get it back. Your text now stays
+  exactly where it is. A banner appears saying someone else saved the document, autosaving pauses
+  so nothing is sent behind your back, and you choose: **Keep mine**, which saves your text over
+  theirs, or **Use theirs**, which loads their version and drops your unsaved changes. You can
+  expand the banner to read their version first, so the choice is not blind. Use theirs simply
+  loads their version and saves nothing; and if someone saves again while you are still deciding,
+  Keep mine re-prompts you with that newer version instead of failing.
+
+- **Browsing a session's files now requires permission to run code, as starting a shell always
+  did** — the file browser, the diff view and the "show this file at that commit" reader were
+  reachable by anyone who could see the session, even though the Shell button beside them was
+  already greyed out for those same people. They read AND wrote through the session's machine, so
+  the browser was a way around a control the interface was already showing as locked. They now
+  answer exactly as they do for a session with no machine yet, which is also what they answer for a
+  session you cannot see — no response distinguishes "not allowed" from "not there".
+
+  If your role in a drive does not let you run code, you will notice the file, diff and history
+  panes of a session go quiet where they previously loaded. That is the intended state and matches
+  what the Shell and reattach buttons have always shown you; ask a drive admin for a role that
+  permits running code if you need those panes back.
+- **A line break in a spreadsheet cell no longer wipes the whole sheet** — a value containing a
+  newline (or a tab, or certain invisible control characters) was written in a form the sheet could
+  not read back, so the next time the page loaded it came back completely empty: every cell, not
+  just the one that caused it. Nothing warned you, and the blank sheet was then saved over the real
+  one. This was reachable without typing anything — a public form response containing a line break
+  destroyed the sheet it fed. Such values are now stored correctly and survive a round trip, and a
+  sheet that genuinely cannot be read is shown with editing disabled and an explanation rather than
+  being silently replaced with an empty grid.
+- **Undo works in spreadsheets** — the undo history was being cleared after every single edit, so
+  Ctrl+Z had nothing to go back to for anything but the change you were part-way through making.
+- **People with view-only access can select cells in a spreadsheet again** — selecting a range to
+  read it, copy it, or see its total was blocked along with editing, even though selecting changes
+  nothing.
+
+- **Stop and Retry now react the moment you press them** — both were doing their work at roughly
+  the speed they always had, and both spent that time showing you nothing at all, which reads as a
+  hang.
+
+  Pressing Stop changed no pixel until the server confirmed the abort and the result came back over
+  the realtime connection — a wait that is deliberately allowed to run to several seconds when the
+  generation is running on another machine. The button now says **Stopping…** from the moment you
+  press it. It does not say *stopped*: the reply keeps streaming underneath until the generation
+  actually ends, because a Stop that has been requested and a Stop that has taken effect are
+  different things, and claiming the second one while an agent is still running tools and still
+  costing you money is worse than saying nothing. Pressing Stop a moment after the reply had already
+  finished used to produce no response whatsoever; now it acknowledges the press and settles.
+
+  Retry had no feedback at all. It quietly deleted the old answer, waited on the server, and only
+  then started regenerating — so the one visible change in the whole window was the previous reply
+  vanishing, which looks like a failure rather than like work in progress. Retry now behaves exactly
+  like sending a message: the composer locks and offers Stop from the click onward. Retry is also
+  disabled while it is running, so a double-click can no longer start (and bill for) two
+  regenerations — and that holds across surfaces, so the dashboard and the sidebar can no longer
+  each start one for the same conversation.
+
+  Because Retry now offers you a Stop, that Stop does what it says. Pressing it while the retry is
+  still clearing the old answer cancels the retry: no new reply is generated and you are not billed
+  for one. And if clearing the old answer fails, the retry does not start at all and tells you so,
+  rather than going ahead and handing the model its own previous answer to rewrite.
+
+- **The Channels count in the sidebar now counts unread messages, not just the ones that mention
+  you** — it only ever moved when somebody @-mentioned you, so a channel could fill up with messages
+  you had not read and the number beside **Channels** stayed at zero, disagreeing with the per-channel
+  counts on the Channels page. It now counts every message you have not read across the channels you
+  can see, in every drive you belong to, and it moves the moment a message arrives rather than
+  waiting for a page reload. A channel you do not have access to never contributes to it.
+
+- **A channel you are sitting in stops counting messages you just watched arrive** — the channel was
+  only ever marked read at the moment you opened it, so messages that landed while you sat reading
+  them still counted as unread and inflated the sidebar count until you navigated away and came
+  back. They now clear as they arrive, and a channel left open in a background tab still counts
+  them, so nothing marks itself read behind your back.
+
+- **Deleted messages no longer count as unread** — a message someone posted and then deleted still
+  counted towards the unread count on the Channels page, leaving a number next to a channel that had
+  nothing new to show you. It only cleared by opening the channel.
+
+- **Talking to one of your agents from outside PageSpace works again** — the OpenAI-compatible
+  endpoint (`/v1/chat/completions`, what the PageSpace CLI and any OpenAI-style client use) answered
+  every valid request to a page agent with a generic "Failed to process chat request. Please try
+  again," and trying again never helped. A call without a `conversation_id` is documented as
+  stateless — you send the messages, the agent replies, nothing is kept — but the endpoint was
+  trying to file both halves of it away regardless, under a thread that had never been opened. That
+  save failed every time, before the agent said a word. Those calls now keep nothing, as promised,
+  and answer normally. Passing a `conversation_id` is still what makes a thread durable, and that
+  path was never affected — nor was asking the same agent through the app.
+- **Confirming a CLI login by email now actually finishes the login** — running `pagespace login`
+  without a passkey sends a confirmation email, and clicking its link used to land on a page saying
+  "Confirmed | You can return to the tab where you started this action" while the tab you started in
+  sat there doing nothing until the CLI gave up five minutes later. The confirmation link now sends
+  you back to the consent screen you came from, which completes the login on its own. (The address
+  the CLI listens on was being carried inside the consent page's own URL, and an over-cautious
+  safety check mistook it for a redirect to somewhere else and quietly threw the return address
+  away.) The same check also stripped the destination when you opened a CLI login link while signed
+  out, so signing in dumped you on a blank sign-in screen instead of the consent page — that is
+  fixed too.
+- **You can send a message, open another chat, send a second one, and trust the first finishes** —
+  every chat surface shared one connection to the AI, so a second message could not be sent while
+  the first was still answering. What you got instead was one of two things: the first reply was
+  quietly cut off so the second could go, or the send was refused outright with "The previous
+  response is still wrapping up — please try again in a moment." Both conversations now answer at
+  the same time, each with its own Stop button, and switching between them shows whatever has
+  arrived so far with no gap and no waiting.
+- **Leaving a chat no longer abandons the reply** — closing the pane, navigating away, or switching
+  between the assistant and an agent used to stop the reply arriving, even though the work carried
+  on running (and billing) on the server. You came back to whatever had landed before you looked
+  away, frozen. Replies now keep arriving wherever you are in the app, and are complete when you
+  return — including the reasoning and command details, not just the text. Only pressing Stop stops
+  anything.
+- **Answering one of several questions no longer locks the chat** — when an assistant asked you
+  more than one thing at once, answering the first left the conversation stuck: the composer
+  showed only Stop, the box was greyed out, and the remaining question could not be answered
+  either. The only way out was to open a different conversation. The same thing happened if two
+  places showing the same chat — the sidebar and the main view, say — both tried to submit your
+  answer at once. Answering now behaves the same whether the assistant asked one question or five.
+- **Your own reply is yours in every tab and on every device** — a chat you started on your laptop
+  showed up on your phone, or in a second tab, as though a stranger had sent it: no Stop button, and
+  attributed to nobody. It is now recognised as yours wherever you are signed in, and Stop works
+  from any of them. A colleague's reply on a shared page is still correctly not yours to stop.
+- **A long reply interrupted by a restart comes back whole, beginning included** — when the server
+  that was writing a reply went away mid-sentence (a deploy, a crash, a machine moving), what you
+  got back afterwards was rebuilt from a periodic snapshot rather than from the reply itself. For
+  short answers that was close enough. For a long one it was not: the snapshot was assembled from a
+  buffer that discards its oldest content once a reply runs past a certain length, and because the
+  discarded part included the marker that opens a paragraph, everything after it was dropped too.
+  The reply did not come back shortened — the text disappeared entirely, leaving a stub that looked
+  like the assistant had barely started.
+
+  The reply is now written down as it is produced, so recovering one is a matter of reading it back
+  rather than reconstructing it: the beginning survives however long the answer ran, and what
+  returns is at most a fraction of a second behind what was on your screen instead of a second or
+  more. Tool calls and reasoning steps come back in the same shape they were rendered in. Nothing
+  changes for a reply that finishes normally — the record is deleted the moment the finished message
+  is safely saved, and a reply that never had a chance to save is the one case it is kept for.
+- **A reply that is still being written is no longer mistaken for an abandoned one** — if the
+  database stalled for a couple of minutes while the assistant was mid-answer, the cleanup that
+  tidies away replies orphaned by a crash could not tell the two apart, and tidied away a live one.
+  You watched the reply freeze, get replaced by a shortened version of itself, and the composer
+  flip back to Send — while the assistant carried on working, and billing, out of sight. It could
+  not be stopped, because as far as the app was concerned it had already finished.
+
+  Whether a reply is genuinely abandoned is now decided by the database at the moment of tidying
+  up, rather than by a judgement made moments earlier somewhere else — so a reply that is still
+  being written wins, and a cleanup that arrives late does nothing instead of doing damage. If the
+  stall clears and the assistant starts writing again mid-cleanup, the reply stays put, stays
+  joinable and stays stoppable.
+
+- **A keyboard shortcut you set yourself now actually fires** — recording a shortcut wrote down the
+  character the key produced rather than the key you pressed, so on a Mac an Option combination was
+  stored as the symbol Option makes (⌥P became "π"). Nothing could ever match it, and because your
+  choice replaces the built-in one, the old shortcut stopped working too. Recording and matching now
+  agree on what a key is called. Shortcuts already saved in a form that can never fire are detected
+  on load, put back to their default and named in Settings → Keyboard Shortcuts so you can set them
+  again — that covers an Option combination stored as the character Option makes, one saved with no
+  modifier at all, and one bound to a key that is only a modifier (Caps Lock, AltGr). The notice
+  stays until you set the shortcut again or dismiss it, so it is still there the next time you open
+  the page. Everything else you have saved — punctuation, Pause, Print Screen, media keys — keeps
+  working exactly as it did, untouched.
+- **Find in Page obeys the shortcut you gave it** — it was listed in Settings → Keyboard Shortcuts
+  but wired to a fixed Cmd/Ctrl+F, so rebinding it changed nothing.
+- **The shortcut you see is the shortcut you pressed** — bindings are shown with the usual ⌘⌥⇧⌃
+  symbols on a Mac, and the built-in defaults now use Ctrl on Windows and Linux instead of a Command
+  key those keyboards do not have.
+- **A shortcut that could never work is refused when you set it** — a bare letter with no modifier
+  would have fired while you were reading, and combinations your browser keeps for itself (like
+  Cmd+N) now save with a warning that they may never reach PageSpace. A key the app cannot record
+  at all — an accent key that waits for a second keystroke, say — now says so instead of looking
+  like it ignored you.
+- **Cmd+Delete and friends can be recorded** — pressing Backspace, Delete or Escape while setting a
+  shortcut always meant "clear this" or "never mind", even when you were holding a modifier, so a
+  combination like ⌘⌫ could not be set at all and trying to set it switched the shortcut off
+  instead. Those still do what they always did on their own; held with a modifier, they are now
+  recorded like any other key.
+- **A time you write as "7pm" is 7pm to you, wherever it is written** — a plain wall-clock time
+  ("2026-02-19T19:00:00", with no `Z` and no offset) was being read inconsistently across the app.
+  Creating a calendar event through an app or script without naming a timezone read it as UTC, so
+  "dinner at 7pm" was stored as 1pm for a US Central user, with no error and nothing to notice
+  until the reminder came at the wrong hour. Task due dates had the same gap in a different place:
+  the reminder timezone was resolved correctly but the due date itself was read in the server's
+  timezone, so a task and its own reminder could disagree — and because that server timezone
+  happens to match some of ours, it looked right in testing and drifted only in production. Cron
+  workflows created without a named timezone had it worst: "every day at 9am" meant 9am UTC, which
+  is 3am in Chicago.
+
+  All of these now follow one rule: a plain wall-clock time means whatever timezone the request
+  names, else the timezone on your profile, else UTC. Times that already carry a `Z` or an offset
+  are unaffected, as are dates with no time at all. Events and workflows remember the timezone they
+  were created in, so editing them later keeps the hour you meant, and asking an assistant to make
+  something now lands at the same instant as typing it in yourself.
+
+  Date *ranges* — the from/to on calendar views, activity history and exports — are unchanged in
+  what they return, but they no longer depend on where the server is running, so a boundary that
+  behaves one way in production behaves the same way on a developer's machine. Scheduled drive
+  backups deliberately keep their own timezone, which belongs to the drive rather than to whoever
+  last edited the setting.
+- **Your assistant's Conversation History is back to being just your assistant's, in the right
+  order** — the sidebar's history had filled up with chats belonging to page agents, hundreds of
+  them on a busy account, pushing the assistant's own threads down out of reach. The dates made no
+  sense either: the top of the list ran 28 days, 12 days, 11 days, a month, in no order at all.
+  Those page-agent chats carry no "last used" time, and the list was sorting by exactly that, so
+  they all landed at the top in whatever order the database happened to hand them over. Worst of
+  all, scrolling for more could step straight over conversations and never show them at all — the
+  reason history looked lost rather than merely untidy. The list now shows the assistant's own
+  conversations only (page agents keep their history on their own tab, where it always was), sorts
+  by when each one was genuinely last used, and reaches every conversation as you scroll. Nothing
+  was deleted at any point; every conversation that seemed missing was still there.
+- **A second agent in a session stays put instead of flashing up and vanishing** — opening a chat
+  pane for a global assistant or a page agent worked once per session; every one after it appeared
+  for a moment and then disappeared, with nothing said about why. The session had started placing a
+  new conversation into your pane itself, and the browser was still expecting to do that job — so it
+  read the pane arriving correctly as evidence that something else had claimed it, and quietly
+  deleted the conversation it had just made. Opening a terminal could lose its shell the same way.
+  Pages were never affected. Second, third and fourth panes now open and stay open.
+- **Whatever you open lands in the pane you opened it from** — with more than one empty pane on
+  screen, the session had no way of knowing which one you meant, so it filled whichever came first
+  and left yours blank. It applied to everything you can put in a pane: picking an agent, opening a
+  terminal, and reopening a past conversation from a pane's History. The pane you clicked is now
+  part of the request in all three cases.
+- **A conversation you started in a colleague's session is fully usable** — anyone in a drive can
+  work in that drive's sessions, so a conversation of yours can live in a session someone else
+  started. Opening one of those from your conversation list gave you a pane you could read and type
+  in, but with the agent switcher and New Conversation greyed out and the pane's close button doing
+  nothing, and no explanation for any of it. Those sessions never appear in your sidebar, so that
+  list was the only way back to the conversation and it led somewhere half-broken. The pane now
+  reads what the session contains the same way it reads everything else about it, so its controls
+  work exactly as they do in a session of your own. Nothing changes about whose sandbox the
+  conversation uses, or about which sessions appear in your sidebar.
+
+### Changed
+
+- **The agent now defaults to checking what it can do before saying a request is out of scope** —
+  it always documented the code sandbox, delegating to other agents, and scheduling recurring or
+  future work, but only as mechanical "how to call this tool" text easy to skim past. A new
+  unconditional disposition section nudges it to check its actual capabilities this conversation —
+  "write code," "process data," "get a second opinion" — before defaulting to the narrowest reading
+  of a request. The sandbox is now described as a general-purpose environment for open-ended work
+  (scripts, scrapers, data processing, calling external APIs) rather than only a place to edit an
+  existing repo, agents are told they can configure a new specialist rather than only discover
+  existing ones, and triggers now cover one-off future work, not only recurring schedules. Every
+  capability claim follows the tools the agent actually holds this turn (a per-agent allowlist, a
+  read-only conversation) so nothing is ever suggested that the agent can't back up.
+
+- **A tool call that gets a parameter name wrong now gets the answer back, not a lookup** — an
+  agent that guessed `pageId` where a tool wanted `id`, or `repoUrl` where it wanted `repo_url`,
+  used to be told only that the call was invalid and that it should go look the schema up. That
+  cost a wasted call and a second round trip on every first-use mistake. The rejection now carries
+  the tool's own parameter schema, so the next call is the right one. Naming a tool that does not
+  exist now suggests the closest names that do — but only when the match is a real one, like
+  `read_file` for `readFile`; where nothing genuinely matches it still says so rather than offering
+  a guess. Errors say the same thing whether the agent is typing or talking, and an unusually large
+  schema is summarised to its parameter list rather than dumped whole.
+
+- **Expanding a task now lists its sub-tasks instead of just counting them** — the drop-down under
+  a task used to say "3 sub-tasks" as plain text and leave you to go find them: open the task, look
+  at its children, come back out, and do it again for every level of a nested tree. The sub-tasks
+  are now listed there, each one a link straight to it, with completed ones ticked and struck
+  through, and a "Load more" for a task with a long list. Tasks with nothing beneath them are
+  untouched — nothing is fetched for them at all.
+- **Voice mode is now audio-native, and the old hands-free mic in the chat box is gone** — talking
+  to an assistant used to mean recording a clip, having it transcribed into text, and having the
+  reply read back to you. Everything about how you said it — pace, hesitation, the moment you cut
+  in — was thrown away before the assistant ever saw your words, and you had to wait for a whole
+  reply to be written before hearing any of it. The assistant now hears you directly and answers in
+  the same breath, so you can interrupt it and it stops. The way in is the microphone in the top
+  bar, on every page; the hands-free button that used to sit in the chat box next to the model
+  picker has been removed, along with its separate panel of voice settings for reading speed,
+  spoken voice and tap-to-speak.
+- **What the AI has learned about you is now a set of pages you can read and edit** — your
+  personalization lived in three text boxes in Settings that a nightly process also wrote to, with
+  no indication of what it had added or why. It is now three pages in a Memory folder in your Home
+  drive: About You, Communication and Rules. You can open them and edit them like any other page,
+  and if you edit one while the nightly process is running, your edit wins. Clearing a page stops
+  that content being sent to the AI. Settings keeps the on/off switch and links you to the pages.
+  The pages themselves cannot be deleted — they are part of your Home drive's structure, like the
+  drive itself. Nothing is lost by that: the switch already stops the AI using any of it, and
+  emptying a page erases what it says, so deleting one would only leave the AI's memory with
+  nowhere to live. They also stay in the Memory folder rather than being moved elsewhere, since a
+  page moved out of it can be swept up by another page's deletion. What they say stays yours to
+  edit either way.
+- **The AI stops recording things about you that do not change how it answers** — the nightly
+  process collected whatever it could infer, so profiles filled up with beliefs, hobbies, sports
+  teams, family details and the names of colleagues, none of which affects a reply. It now records
+  something only if knowing it would genuinely change how the AI responds, and never records
+  personal history, beliefs, hobbies, other people's names, or numbers you have claimed about
+  yourself.
+- **Something you mention once no longer becomes a permanent fact about you** — a single remark
+  could end up in your profile and stay there. A new observation now has to show up on at least two
+  separate days, from things you actually wrote on those days, before it is added to your profile —
+  and three days for anything describing who you are. Until then it is held aside as a pending
+  observation, which your data export includes. Observations that stop recurring are dropped after
+  a month.
+- **Your profile can now correct itself instead of only growing** — it could only ever have text
+  added, so a wrong guess stayed forever and the profile grew until it was trimmed at around 14,000
+  characters. It is now rewritten in place, superseded lines are removed, and each page is kept to
+  a size that reflects what is actually useful. A rewrite that would delete most of a page is
+  refused rather than applied.
+- **Your data export now includes what the AI inferred about you** — a subject access request
+  covered your profile but not the observations behind it. The export now contains every inference
+  drawn about you, including ones that were rejected or are still pending, along with the quote
+  from your own messages each was based on. Those quotes are removed 90 days after an observation
+  is settled.
+
+### Security
+
+- **Only administrators can add a custom integration provider** — the admin check on the
+  provider-creation endpoint compared the wrong thing, so any signed-in account could add a
+  global custom integration provider, and a browser session that failed the cross-site request
+  check was let through as well. Non-admins and failed cross-site checks are now refused, and
+  nothing is created. Installing a built-in provider was already checked correctly and is
+  unaffected.
+- **The AI's sandbox git tools can no longer be tricked into force-pushing your current branch** —
+  the `git_push` tool took its remote and branch names as free text and placed them straight
+  after `-u origin` on the command line. A branch value of `--force` (or a remote of `--mirror`)
+  was therefore read by git as an option rather than a name, which force-pushed whatever branch
+  the sandbox was on, including `main`, with your connected GitHub token and without tripping the
+  guard that refuses force-pushes to the default branch. The tool now refuses any remote or
+  branch that starts with a dash before it builds the command, then runs the default-branch guard
+  on the real destination, and the command itself carries an end-of-options marker so a name can
+  never be read as a flag. The same audit found and closed the same gap in `git_fetch`, `git_pull`
+  (remote and branch), `git_config` (key), and `git_diff` (base and head refs).
+- **Integration base URLs can no longer point inside the platform** — a custom base URL on an
+  integration connection (the field that lets a webhook or self-hosted API be reached) was only
+  checked for being a well-formed URL. It could name the server's own loopback address, a private
+  network range, or a cloud metadata address, and a tool call would then send the connection's
+  credentials there and hand the reply to the assistant. A base URL is now refused when it is
+  saved if it points at any of those, including a hostname that resolves there, and it is checked
+  again, with a fresh DNS lookup, immediately before every request is sent; the request then
+  connects to exactly the address that was checked, so a name that changes its answer between the
+  check and the connection gains nothing, and a check that stalls is cut off by the same time
+  limit as the request. The check covers every non-public range, not just the common private
+  ones (carrier-grade NAT, multicast, reserved ranges, and any IPv6 address that maps,
+  translates or tunnels to a private IPv4, however it is written). An IPv6 address is only
+  treated as public when it sits in a block the internet registries have actually handed out
+  (as published by IANA on 2025-10-10); a block allocated after that date cannot be fetched by
+  web fetch or by integrations until PageSpace is updated to include it. A base URL must
+  also use `https://` now: an `http://` base URL put the connection's credentials on the wire in
+  the clear for anyone on the network path to read, so it is refused when you save it and again
+  before every request, with a message saying so. Every built-in provider already used `https://`,
+  so only a hand-entered `http://` base URL is affected — change it to `https://`. Upstream
+  redirects are no longer followed automatically: a redirect to a different site is refused
+  outright, so a connection's credentials never travel to a site the integration was not set up
+  for.
+
+## [1.7.1] — 2026-08-10
+
+### Fixed
+
+- **A reply no longer disappears when you look away** — a stream was carried on two separate
+  channels: the one your browser tab was reading, and the one everything else used. They did not
+  carry the same thing, so the moment you stopped being the tab holding the connection — you
+  switched to another chat, flipped between the assistant and an agent, reloaded, or opened the
+  conversation on another device — the reply you came back to was missing its reasoning, its
+  sources, any files it had produced, and the chips showing which commands it had run. Worse, the
+  act of switching told everyone watching that the reply had FINISHED while it was still being
+  written: the Stop button stopped working, the recovery snapshot was thrown away, and the agent
+  carried on running tools and spending credits with nothing showing it. There is now one channel.
+  Whatever your tab sees is exactly what a reload, a second device, or a colleague watching a
+  shared conversation sees, and stepping away does not end anything.
+
+- **Opening a past conversation keeps you in Agents** — every row in the Agents conversation list
+  sent you out to the dashboard when you clicked it, including conversations that were already open
+  in a session. The session was right there and you were simply not taken to it. A conversation you
+  pick from that list now opens as a pane in Agents, whichever kind it is: one already in a session
+  opens in place, and a global-assistant or page-agent conversation that has never had a session
+  gets one and opens there. The dashboard is still where you land when a conversation genuinely
+  cannot be opened in Agents — you have run out of sandboxes, or it is an API-created conversation
+  with no in-app view.
+- **Agents takes you to your conversations again** — clicking Agents in the sidebar reopened
+  whichever session you last had open, and once you were inside a session there was no way back to
+  the list except ending the session. Your history was unreachable without destroying the work you
+  were in the middle of. Agents now means "my conversations" and always lands on the list, and a
+  session has an "All conversations" control that leaves it running: the panes, terminals and any
+  reply still streaming are all untouched, and the session is one click away in the sidebar.
+  Bookmarks, shared links, refresh and Back still restore a full selection exactly as before.
+- **A pane appears in the sidebar the moment it exists** — the sidebar and the pane layout used to
+  be two separate records of what a session contained, kept in step by convention, so a pane you or
+  an agent opened could take up to two minutes to show up in the list. They are now two views of
+  one thing, so there is nothing to fall out of step.
+- **A thread can no longer go missing from its own session** — a session's membership and its
+  layout were stored separately, and a thread that had no pane was simply absent from the list.
+  Sessions existed with more threads than the sidebar would show. Membership is now the same record
+  as placement, so a thread that is in a session is always visible in it, open or not.
+- **Opening a conversation that is already open in another session says so, instead of leaving a
+  dead pane behind** — a conversation lives in exactly one pane, and trying to show one that
+  another session already holds used to fail as a server error. The pane you had just opened stayed
+  on screen, showing nothing, until something else happened to refresh the layout. The attempt is
+  now refused properly and the layout corrects itself straight away.
+- **Closing a chat pane no longer shows "Could not close this conversation"** — closing sent two
+  requests that removed the same thing, and the second one arrived to find the first had already
+  done it. The pane closed correctly either way, so the error was pure noise; there is one request
+  now.
+- **Closing the last pane asks whether to end the session again** — it had started leaving you in an
+  empty grid with nothing to do, which was not what anyone wanted. You get the same confirm the
+  sidebar's "End session" uses, and Cancel leaves everything exactly as it was. Closing the last
+  conversation row in the sidebar now asks the same question, instead of quietly emptying the
+  session.
+- **A conversation removed from a session leaves the sidebar however it was removed** — closing a
+  pane, closing a sidebar row, an agent closing one on your behalf, or ending the session. Only one
+  of those used to tell the sidebar, so a thread you had just closed could sit in the list for up to
+  two minutes.
+- **A thread whose history was deleted can no longer get stuck in a session** — if the cleanup that
+  removes it from your session failed, every later attempt to close it reported success and did
+  nothing, leaving a pane that could not be closed. The close is attempted properly now.
+- **The MCP config you copy out of Settings > MCP now actually starts** — the "No install (npx)"
+  tab handed you a command `npx` cannot run, so the server failed to launch and your AI tool
+  showed no PageSpace tools at all. Copy it again and it works.
+- **The MCP config the CLI prints after minting a key no longer assumes a global install** — it
+  offered only the form that needs `pagespace` on your PATH, which isn't there if you minted the
+  key through `npx`, and which desktop AI apps often can't find even when it is. It now prints the
+  zero-install form that works either way, and mentions the shorter global-install form as an
+  option.
+- **Panes and sidebars no longer sit blank while the messages are right there in the database** —
+  every surface used to keep its own private copy of a conversation and its own theory of when to
+  refresh, so a message written from one surface could stay invisible in another until you
+  reloaded. Every surface is now a subscriber to one authoritative feed and can tell when it has
+  missed something, so it refetches instead of quietly showing you stale history.
+- **Workers you spawn appear immediately instead of up to 20 seconds later** — the sidebar polled
+  on a timer; it is now told.
+- **One chat history** — page chats and Global Assistant chats were stored in two different tables
+  with two different code paths, which is why a handful of features worked in one and not the
+  other. They are one now.
+- **A plan on a shared conversation is visible to the people it is shared with** — the plan chip
+  silently failed to load for anyone but the conversation's owner, so collaborators saw no plan on
+  a conversation whose agent was visibly working from one.
+- **Closing one pane no longer stops another from receiving live updates** — two views of the same
+  conversation (say the Global Assistant on your dashboard and a pane in the Agents console) shared
+  one subscription, so closing either one silently cut the other off until you reloaded.
+- **Layout changes no longer go missing on self-hosted deployments reached over plain HTTP** — in
+  that setup a reload could reuse ids from the previous page load, and a split or resize would be
+  mistaken for one already applied and quietly dropped.
+- **The Agents console's tab now shows "Agents" and remembers what was open when you switch away and back** —
+  the browser-style tab bar didn't recognize `/dashboard/agents` as a page at all, so its tab showed
+  "Drive" or "Untitled" instead of "Agents". Worse, the console keeps its selected session/conversation/panes
+  in the URL's query string (so clicking around never kills a live shell or streaming chat), but the tab bar
+  never carried that query string along — so switching to another tab and back always dropped the selection,
+  landing on "Select a session" even though the panes were still safely persisted underneath. Tabs now carry
+  their full address, the Agents route is registered with a proper title and icon, reactivating a different
+  tab pointing at the same Agents page now correctly re-reads its own selection, and the header's Back/Forward
+  buttons no longer get one step out of sync after the browser's own Back restores an earlier selection.
+- **Global Assistant is no longer unclickable right after splitting a pane in the Agents console** —
+  a short pane's empty-pane picker could crush its "Shell"/"Global Assistant" choices under the
+  "Agents" list below them, so the Global Assistant button visually collided with — and lost clicks
+  to — the section beneath it. The picker's sections no longer shrink below their own content.
+- **The Agents console's session list no longer shows a distracting scrollbar** — the sidebar's
+  left-hand session list now scrolls without ever painting a scrollbar, matching the rest of the
+  console's chrome-free feel.
+- **A Global Assistant conversation started from the global Agents dashboard now keeps the right
+  drive's context** — picking Global Assistant for a specific drive from `/dashboard/agents` (rather
+  than that drive's own Agents page) minted a session correctly scoped to that drive, but the
+  assistant itself had no way to know which drive it was in — it derived that from the current page,
+  and the Agents console never navigates as you click between sessions. It now reads the drive
+  straight from its own session instead.
+- **A database outage no longer takes the whole platform down with it** — when Postgres
+  became unreachable (as in the recent OOM stalls), the rate limiter denied every request
+  platform-wide, turning a database incident into a total outage. Production now degrades to
+  a conservative per-instance in-memory limit at half the configured threshold: legitimate
+  users keep working, attackers face a *stricter* limit than usual, and nothing ever fails
+  open. A 30-second circuit breaker stops requests from waiting on the stalled database
+  (a single probe rechecks it each cooldown), the fallback's memory is hard-capped so an
+  identifier flood can't exhaust the process, and distributed enforcement resumes
+  automatically the moment Postgres recovers.
+
+- **A machine-bound agent addressing its own project's default checkout as `branch: "main"`/`"master"` is no longer silently denied** —
+  a bound conversation's `target` only ever resolved against explicitly created branch worktrees, so a model reasoning in ordinary
+  git terms (where "main" means "my own checkout") got refused with a generic scope error even when addressing itself. The system
+  prompt now explains that "branch" here names a separately created worktree, not "whatever branch a project happens to be on," and
+  the denial message points at `list_sessions` to check real state instead of prescribing a specific retry.
+- **Permanently deleting a Terminal machine, its drive, or letting it age out of Trash no longer
+  leaves "Unknown machine" behind** — an agent or the global assistant's machine list kept a
+  reference to a Terminal after the machine page was gone for good, so it showed as "Unknown
+  machine" and any subsequent save of that config failed. Permanent delete, permanent drive
+  delete, and the daily trash-purge now clean up the stale reference; a machine that's merely in
+  Trash (not yet purged) is left alone since it can still be restored.
+- **Toast notifications now actually appear** — member management, role editing, drive AI
+  settings, drive deletion, invites, and version-history/activity rollback actions had been
+  silently logging success and error feedback to the browser console instead of showing a
+  toast, since December 2025. These flows now surface real toast notifications.
+- **Subscription renewals now set the correct billing period** — a renewal used to stamp your
+  account with the billing cycle that had just *ended* (Stripe reports the old cycle on the invoice
+  itself; the new one is on its line items), so every subscriber's period looked expired the moment
+  they renewed. Renewals and plan changes now record the service period actually paid for.
+- **Usage page no longer freezes on a stale billing period** — if your monthly period lapsed
+  without a renewal landing (comped accounts, or a delayed invoice), the usage breakdown silently
+  clamped to the old window and showed nothing you'd spent since. It now falls back to the trailing
+  30 days so current usage — including Terminal machine time — always shows.
+- **Comped paid accounts get their monthly credit allowance again** — accounts on a paid tier with
+  no live Stripe subscription (founder/comped) never received an `invoice.paid` refill, so their
+  allowance and billing window froze permanently. The credit gate now rolls their window and grants
+  the tier allowance, the same way free-tier accounts refill. Subscription-backed accounts are
+  unchanged (Stripe stays authoritative).
+- **Terminal sessions now bill in 10-minute heartbeats** — interactive machine sessions previously
+  settled their runtime cost only when the session ended, so a server restart mid-session (every
+  deploy) silently dropped the whole session's usage. Heartbeat settling bounds any loss to at most
+  one interval, and a payer who runs out of credits mid-session is disconnected instead of running
+  free.
+
+### Changed
+
+- **Closing the last pane no longer ends your session** — it leaves the session open with an empty
+  layout. Ending a session is now only the explicit action on the session row, so there is one way
+  to end one instead of two.
+- **Closing a thread takes it out of the session** — it stops being one of that session's threads
+  and leaves the list. Its history is untouched: you find it again in the agent's own conversation
+  list, and reopening it puts it back. An interim build briefly kept a closed thread in the list,
+  dimmed and off-screen; that is gone, because a thread sitting in a session with nowhere to be was
+  indistinguishable from one that had gone missing through a fault — the exact failure the rest of
+  this work exists to make impossible. Closing is one action with one meaning now, whether you close
+  a pane, close a thread, or end the whole session.
+
+### Added
+
+- **Agents can close a pane** — they could already open, move, resize and reorder them, but taking
+  one away was only possible as a side effect of moving it "nowhere". That is now its own action,
+  which means an agent tidying up its own layout does exactly what it says.
+- **Your agent workspaces now follow you between devices, and agents can arrange their own** —
+  the pane grid in the Agents console used to live partly in your browser's local storage, so the
+  same workspace looked different on your laptop and your phone, and a collaborator watching a
+  shared workspace saw nothing you did. The layout is now server-held: open, close, move, resize
+  and rearrange panes converge live for everyone looking at that workspace, on every device.
+  Agents can arrange their own workspaces too, through the same verbs you use — an agent can open
+  the page it is about to edit next to the conversation you are having about it.
+- **`list_sessions` can now see workspaces shared with you** — an agent could always be *told* to
+  work in a colleague's workspace in a drive you both belong to, but had no way to discover one.
+  It now lists them, with other members' private thread titles shown as "(private thread)" so the
+  workspace is discoverable without its contents being readable.
+- **`/plan` ships as an editable starter skill** — an agent can bind a conversation to a plan
+  document and keep working against it across reloads and context summaries, with the plan shown
+  as a chip on the conversation.
+
+- **Agent sessions and the sandbox are open to everyone — the sandbox itself is a Pro+ feature** —
+  sessions, chat, and the Agents screen's panes (splitting between agent conversations, a terminal,
+  and any page) are now available to every authenticated user, not just admins. Real cloud compute —
+  an agent session's sandbox, where it actually runs code and gives you a terminal — requires Pro
+  tier or above, billed to the session's payer (the drive owner, or the session's own owner for a
+  driveless Global Assistant session), so a free-tier member with edit access in a Pro-owned drive still gets sandbox
+  access. Sessions whose resolved payer is on the free tier get the same session/panes UI, with the
+  terminal affordance disabled and an upgrade prompt where the sandbox would run. Scheduled/triggered Workflows now honor the same
+  per-agent sandbox switch and payer-tier gate as interactive chat, closing a gap where a workflow
+  could reach code-execution tools regardless of an agent's own sandbox setting.
+- **Start a session with Global Assistant directly from a drive** — clicking "+" on a drive in the
+  Agents console now offers Global Assistant alongside that drive's own agents and Shell, first in
+  the list. The new session is filed under that drive, same as any agent session, rather than only
+  being reachable as a driveless global session. Its default name now also reads "Global Assistant"
+  (was "Assistant") everywhere a session or conversation goes unnamed.
+- **Rotate a webhook secret in place** — the Incoming Webhooks dialog (and
+  `POST /api/pages/[pageId]/webhooks/[id]/rotate`) now mints a fresh signing secret for the **same
+  webhook URL**, so replacing a lost or leaked secret no longer means deleting the webhook and
+  re-wiring the external sender to a new URL. The old secret stops verifying the moment the
+  rotation lands; the new one is shown exactly once, just like at creation. Owner/admin only,
+  audited, and concurrent rotations are serialized — the losing request gets a conflict instead of
+  silently minting a secret nobody can use.
+- **Incoming Webhooks** — mint a signed, page-scoped URL (owner/admin only, from the webhook icon
+  on a Channel or AI Chat page) so an external system — CI, monitoring, a script — can push events
+  into PageSpace without a full drive-scoped credential. A signed delivery to a Channel webhook
+  posts its `content` verbatim as a message; binding one or more workflows to a webhook (via the
+  new `/api/pages/[pageId]/webhooks/[id]/triggers` API) makes the same delivery also fire those
+  workflows with the full payload as context — the two actions compose rather than being mutually
+  exclusive. See [the Incoming Webhooks docs](https://pagespace.ai/docs/integrations/incoming-webhooks)
+  for the HMAC signing scheme and a working curl example. This is distinct from the existing
+  outbound "Generic Webhook" AI tool provider, which lets an agent call out to an arbitrary URL —
+  Incoming Webhooks is the opposite direction.
+- **`pagespace drives update-context` and a full `pagespace roles` command family** — the CLI can
+  now set a drive's AI context prompt (`drives update-context <driveId> <drivePrompt>`) and
+  manage custom drive roles end-to-end (`roles list|get|create|update|delete`,
+  `set-page-permissions`, `set-drive-wide-permissions`, `remove-page-permissions`) — previously
+  these were only reachable via the full MCP tool registry, not the `pagespace` CLI directly.
+- **Approve a device's active key in the browser** — the `pagespace` CLI's new
+  `pagespace keys use <name>` sets one of your access keys as a machine's ambient default, gated
+  by the same browser consent screen that mints keys. The consent page now narrates this
+  activation ceremony explicitly ("make *key* the active key on the device that sent you here");
+  nothing about the key or its access changes, and no secret is issued.
+- **Custom 404 pages for published Canvas sites** — pick any Canvas page in a drive's Domains &
+  Publishing settings to serve as the site's 404 page, instead of the generic branded fallback.
+- **Drive-wide favicon setting** — set a favicon for a published site (previously only settable by
+  hand-authoring a `<link rel="icon">` tag inside a canvas page).
+- **Pick an uploaded image for OG share image / favicon** — the Domains & Publishing settings and
+  the per-page publish dialog now offer a "browse uploaded files" picker as an alternative to
+  pasting a URL. Picking a file resolves it to a durable public link, fixing links to your own
+  uploaded files that previously required sign-in and silently failed to load for site visitors.
+- **Pick a GitHub repo when adding a Terminal project** — the Terminal Navigator's "Add project"
+  dialog now defaults to a searchable picker over your connected GitHub repos instead of requiring
+  a pasted clone URL, with a "Connect GitHub" prompt if you haven't connected yet and a manual URL
+  entry still available as a fallback.
+
+- **21 new sandbox git/GitHub tools** — agents with code execution can now edit PR titles and
+  descriptions (`gh_pr_edit`), leave top-level PR and issue comments, edit/close/reopen issues,
+  discover repositories (`gh_repo_view`/`gh_repo_list`), search GitHub code/issues/PRs/repos
+  (`gh_search`), list repo labels, inspect commits (`git_show`, `git_blame`), revert a commit,
+  recover from conflicted merges/rebases (`action: abort/continue`), re-run failed CI
+  (`gh_run_rerun`), list and dispatch workflows, list and resolve PR review threads, and fork or
+  create repositories.
+- **12 new GitHub integration tools** — agents without code execution get a full write path to
+  code: create branches, commit and delete files, open/update/merge pull requests, plus CI
+  visibility (check runs, workflow runs), commit listing, branch comparison, issue search, and
+  label listing. A new **Contributor** tool bundle covers the branch → commit → PR → merge flow.
+- The GitHub connection now requests the `workflow` scope so agents can commit changes to GitHub
+  Actions workflow files. Existing connections keep working; reconnect GitHub in Settings >
+  Integrations to pick up the new permission.
+
+- **`pagespace` CLI** — install `@pagespace/cli`, run `pagespace login`, and use verbs like
+  `pagespace drives list`, `pagespace pages read`, `pagespace search text`, and `pagespace tasks
+  create` without hand-minting a token first.
+- **CLI login** — `pagespace login` opens a browser for an OAuth login with PKCE; `pagespace login
+  --device` covers machines with no browser (CI, remote boxes). Both replace copying a token out of
+  Settings by hand as the primary way for a person to authenticate.
+- **`@pagespace/sdk`** — a typed TypeScript client (`PageSpaceClient`) for the PageSpace API,
+  covering drives, pages, roles, tasks, agents, conversations, exports, tokens, search, activity,
+  and channels.
+- **`pagespace mcp`** — a stdio MCP server generated from the same operation registry as the CLI
+  and SDK, so Claude Desktop, Claude Code, Cursor, and other MCP clients get a tool surface that
+  can't drift from what the CLI itself supports.
+- **Channel image attachments for @mentioned agents** — when you @mention an AI agent in a
+  channel or DM, recent image attachments in the conversation are now passed to vision-capable
+  agents as visual context (capped at 5 images per consultation, matching the per-message chat
+  limit). Agents without a vision-capable model get a text note instead, so they know an
+  attachment existed but couldn't be viewed.
+- **`pagespace keys`** — a guided terminal wizard to create, list, edit, and revoke your scoped
+  access keys — the same keys Settings > MCP already creates — without opening the web
+  Settings > MCP page. It's the fast path for minting content access now that `pagespace login` no
+  longer grants any on its own. `pagespace keys create`, `pagespace keys list [--json]`, and
+  `pagespace keys revoke <tokenId>` are flag-driven, scriptable equivalents of the same wizard
+  actions.
+- **`packages/cli/docs/agent-access.md`** — states plainly what a scoped `pagespace keys create`
+  credential does and doesn't protect against: it limits what a leaked/misused credential can do,
+  not who else on the same machine can use it. A process with real shell access reads whatever its
+  OS user can read, credential store included — no CLI feature changes that. The actual isolation
+  boundary is a dedicated OS user, container, or VM that receives only a scoped token via
+  `PAGESPACE_TOKEN`.
+- **Machine page Files tab** — browse, open, and edit files directly on a Machine's own root
+  filesystem or any branch checkout, with a PageTree-matched file tree (lazy-loaded directories,
+  sorted directories-first) and an editable pane with Monaco language detection, binary-file
+  detection, and Cmd/Ctrl-S save. Right-click or the "+" palette to create files/folders, rename,
+  move, copy, delete, upload (10 MiB cap), or download (50 MiB cap) — every mutation requires edit
+  access and is audited. A machine that hasn't been started yet shows an explicit "not started"
+  state instead of an empty tree.
+
+### Changed
+
+- **Agent settings are now a compact menu instead of one long scrolling form** — opening an
+  agent's settings (from the full agent page or from a pane) now shows a short list of categories
+  — Behavior, Access, Tools, and Integrations — instead of every option stacked on one
+  continuously scrolling page, and no longer shows an empty scrollable region when an agent has no
+  tools available. The full page and pane surfaces now share the same navigation, and
+  Integrations — previously only reachable from the full page — is available from panes too.
+  Unsaved edits are preserved when moving between the category menu and a configuration subpage,
+  and each pane tracks its own navigation state independently.
+- **Every Terminal agent session now runs in its own isolated sandbox** — previously only a
+  *branch* session got a separate Sprite, while machine- and project-scoped sessions shared the
+  owning Machine's single Sprite, so two agents spawned at the same location collapsed onto one
+  filesystem. Now each spawned session (machine, project, or branch scope) provisions and runs in
+  its **own** Sprite: two agents at the same location are two independent, isolated machines that
+  can never see or clobber each other's files, and each one's Claude Code login is copied in from
+  the Machine's own Sprite (where you run `claude login`). **Billing implication:** a Machine can
+  now hold several concurrent Sprites instead of one, so active runtime cost scales with how many
+  sessions you actually run at once; each session's persistent disk is metered per session and
+  billed to the owning Machine (a paused/hibernating session bills only for the bytes it has
+  stored, not RAM). Closing a session, deleting its project, or deleting the Machine tears down and
+  reclaims that session's Sprite, so nothing keeps billing once you're done with it. Sessions
+  spawned under a Machine that has already been moved to Trash are refused rather than silently
+  creating a hidden, unreclaimable sandbox.
+- **`pagespace login` is for you, personally; `pagespace keys create` (or the guided `pagespace
+  keys`) is for an agent** — the README, `docs/agent-access.md`, and the Settings > MCP page now
+  say this explicitly and point agent/MCP setups at `pagespace keys create --drive <id>
+  --save-as-profile agent` (paired with `--profile agent` / `PAGESPACE_PROFILE`) instead of
+  `pagespace login`, which now grants only a key-management credential with no content access of
+  its own (see "key-management-only login" below).
+- **`pagespace login` (and `--device`) now print the scope granted on success**, e.g. `Scope:
+  manage_keys offline_access — key-management access only, with zero content access; run
+  "pagespace keys create" to mint a scoped key for actual content access.`, bringing it to
+  parity with `whoami`, which already reported scope.
+- **`pagespace help` is grouped by resource** (Auth, Drives, Pages, Search, Tasks, Agents, Keys,
+  MCP, Other) with one runnable example per group, replacing the previous flat ~46-line list.
+
+### Deprecated
+
+- The standalone `pagespace-mcp` npm package is deprecated in favor of `pagespace mcp` (part of
+  `@pagespace/cli`). It keeps working exactly as before — same tools, same env vars — and now
+  prints a one-line migration notice to stderr. See the
+  [migration guide](packages/cli/docs/migrating-from-pagespace-mcp.md).
+
+### Security
+
+- **`drizzle-orm` bumped past a SQL-identifier-escaping vulnerability (CVE-2026-39356 /
+  GHSA-gpj5-g38j-94v9, CVSS 7.5)** — versions through 0.45.1 quoted SQL identifiers produced by
+  `sql.identifier()`/`.as()` without doubling embedded double-quotes, so a hostile identifier
+  reaching one of those call sites could break out of the quoted identifier and inject SQL. An
+  audit of every `sql.identifier()` call site in the codebase found none reachable with
+  attacker-controlled input today, but `drizzle-orm` is now pinned to `^0.45.2` (and
+  `drizzle-kit` to `^0.31.10`) everywhere it's declared, with a regression test guarding both the
+  escaping behavior and the version floor against a future re-pin.
+- **Settings > Account now lists and revokes connected apps** — every OAuth-authorized client
+  currently holding a grant on your account (including the `pagespace` CLI), with its scope in
+  plain language and when it was connected, is now visible from a "Connected Apps" section.
+  Previously the only way to revoke a `pagespace login` credential was `pagespace logout` from the
+  same machine that held it — if a laptop was lost or stolen, there was no way to shut off its
+  access from the web. Revoking a grant here immediately invalidates its refresh token and
+  requires a fresh step-up confirmation (passkey tap, or a confirmation email if you have no
+  passkey), the same as minting one.
+- **`pagespace keys create` now requires browser consent** — minting a scoped credential from
+  the CLI opens the same OAuth consent screen `pagespace login` uses, scoped to the requested
+  drive(s), instead of POSTing directly to the token-minting API with whatever ambient credential
+  was on hand. That direct-POST path let a script or agent with shell access mint itself a new
+  token unattended; it's gone. The resulting credential is stored locally under a named profile
+  (`--save-as-profile`, defaulting to the drive id) rather than printed, so it isn't a source for a
+  portable secret — mint one of those from **Settings → MCP** instead. As a consequence, `keys
+  create` no longer supports `--json` output — there's no portable token left to emit, and the
+  command now blocks on an interactive browser consent screen either way — while `keys list
+  --json` and `keys revoke` are unaffected.
+- **BREAKING: `pagespace mcp` no longer falls back to your personal login.** Previously, running
+  `pagespace mcp` with no `--token`/`PAGESPACE_TOKEN`/`--profile` silently authenticated as
+  whichever profile `pagespace login` had stored — so an MCP client config missing its intended
+  scoped token would unknowingly hand an automated agent your full personal account access instead
+  of failing loudly. `mcp` now refuses to start the stdio server at all unless the invocation
+  names a credential itself (`--token`, `PAGESPACE_TOKEN`, `--profile`, or `PAGESPACE_PROFILE`),
+  and exits with a message pointing at `pagespace keys create ... --save-as-profile <name>`. The
+  legacy `PAGESPACE_AUTH_TOKEN` env var (`npx pagespace-mcp`) still counts as explicit and is
+  unaffected. This no-ambient-fallback gate has since been generalized to every command — see
+  below.
+- **BREAKING: every `pagespace` command now requires an explicit credential, not just `mcp`.**
+  The fail-closed gate above was `pagespace mcp`-only at first; it now applies CLI-wide. Any
+  command that reads or writes your data — `drives list`, `pages read`, `search text`, and so on
+  — now fails with an actionable error instead of silently running as your personal
+  `pagespace login` if invoked with no `--token`, `PAGESPACE_TOKEN`, `--profile`, or
+  `PAGESPACE_PROFILE`. `login`, `logout`, `whoami`, `help`, and the whole `keys`
+  surface are exempt, since each of those either mints its own credential or only ever acts on
+  your own account/keys.
+- **BREAKING: `pagespace login` now grants a key-management-only credential (`manage_keys
+  offline_access`) by default, not full account access.** Combined with the change above, a fresh
+  `pagespace login` no longer gives you (or anything reading its stored credential) any content
+  access at all — it only lets you manage your own access keys, including through the new
+  `pagespace keys` wizard. Run `pagespace keys` (or `pagespace keys create --drive <id>
+  --save-as-profile <name>`) afterward to mint a credential that can actually read or write
+  content, and pass it with `--profile <name>` / `PAGESPACE_PROFILE`. **Nothing is revoked and no
+  one is logged out by this change**: a credential from an older `pagespace login` (scoped to
+  `account offline_access`) keeps working exactly as before, with its original full-account
+  access, until you explicitly run `pagespace logout && pagespace login` (or simply `pagespace
+  login --yes` to overwrite it) to pick up the new default.
+
+### Fixed
+
+- **Request middleware is now edge-safe and actually deployable** — registering the previously
+  dormant middleware took production down because its import graph reached Node-only code (the
+  database client and server logger) that the Edge runtime cannot execute. Middleware now uses
+  pure leaf modules (token prefixes, an edge-safe structured logger) and forwards API metrics to
+  the internal ingest route instead of writing to the database in-process; the build now fails
+  fast if a Node-only import ever reaches the middleware bundle again. Admin monitoring
+  dashboards begin receiving API request metrics once this deploys — the previous in-middleware
+  metrics writer had never actually run.
+- **GDPR data exports now include system logs, API metrics, and error logs** — the account data
+  export (`Settings > Privacy > Download my data`) previously omitted these three monitoring
+  tables even though they can carry your user ID until account deletion. They're now included in
+  both the native ZIP (`system-logs.json`, `api-metrics.json`, `error-logs.json`) and the portable
+  schema.org export, with raw stack traces, IP addresses, user agents, and internal admin fields
+  redacted.
+- **`pagespace login` no longer hangs after a successful login** — the post-login identity
+  lookup used to retry for up to 2 minutes before the CLI would return control to your terminal;
+  it's now bounded to a few seconds so the command finishes promptly. The browser callback page
+  shown at the end of the flow is also redesigned to match PageSpace's branding instead of
+  showing a bare, unstyled page.
+- **Drive role permission updates are now atomic** — granting or revoking a role's per-page
+  permission (via the share dialog, the roles API, or an AI agent tool) could previously race a
+  concurrent grant/revoke on the same role and silently drop it, because the update read the
+  role's permissions, merged in JS, and wrote the whole map back with no lock in between. Updates
+  now merge under a row lock inside a transaction, and setting a role as default no longer risks a
+  database deadlock or two roles ending up marked default at once.
+- **AI streams no longer lose mid-response content when the server process restarts** — an
+  in-progress AI reply's content is now checkpointed to the database as it streams, so reopening
+  the channel (or resuming on mobile) shows the restored partial answer instead of a stalled
+  "streaming" indicator with nothing behind it.
+- Builtin integrations (GitHub, Slack, Notion, generic webhook) now always use the current tool
+  definitions after a deploy. Previously a stale cached copy of the provider config could keep
+  agents on renamed tools or missing bundles until something happened to refresh it.
+- Custom integration providers can no longer register a slug reserved by a builtin provider
+  (the API now returns 409), and a custom provider whose slug already collides with a builtin
+  keeps its own configuration instead of being silently handed the builtin's tools and OAuth
+  settings.
+- On mobile, the app no longer loads in the wrong theme and switches after first paint — a race
+  that could leave the navbar "half stuck" in the previous theme's colors on iOS/Android WebKit.
+  The saved theme is now resolved server-side before the first render, and theme toggles force the
+  translucent "liquid glass" surfaces to repaint.

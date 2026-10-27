@@ -7,6 +7,8 @@ export interface PageTypeCapabilities {
   supportsRealtime: boolean;
   supportsVersioning: boolean;
   supportsAI: boolean;
+  /** Content lives in pages.content and can be rendered standalone at a public URL. */
+  publishable: boolean;
 }
 
 export interface PageTypeApiValidation {
@@ -19,13 +21,14 @@ export interface PageTypeConfig {
   type: PageType;
   displayName: string;
   description: string;
-  iconName: 'Folder' | 'FileText' | 'MessageSquare' | 'Sparkles' | 'Palette' | 'FileIcon' | 'Table' | 'CheckSquare' | 'Code';
+  iconName: 'Folder' | 'FileText' | 'MessagesSquare' | 'BotMessageSquare' | 'FileImage' | 'File' | 'FileSpreadsheet' | 'FileCheck2' | 'FileCode' | 'SquareCheckBig';
   emoji: string;
   capabilities: PageTypeCapabilities;
   defaultContent: () => string | Record<string, unknown>;
   apiValidation?: PageTypeApiValidation;
   uiComponent: string;
   layoutViewType: 'document' | 'folder' | 'channel' | 'ai' | 'canvas' | 'code';
+  experimental?: boolean;
 }
 
 export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
@@ -41,6 +44,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsRealtime: false,
       supportsVersioning: false,
       supportsAI: false,
+      publishable: false,
     },
     defaultContent: () => ({ children: [] }),
     uiComponent: 'FolderView',
@@ -58,6 +62,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsRealtime: true,
       supportsVersioning: true,
       supportsAI: false,
+      publishable: true,
     },
     defaultContent: () => '',
     uiComponent: 'DocumentView',
@@ -67,7 +72,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     type: PageType.CHANNEL,
     displayName: 'Channel',
     description: 'Team discussion channel',
-    iconName: 'MessageSquare',
+    iconName: 'MessagesSquare',
     emoji: '💬',
     capabilities: {
       canAcceptUploads: false,
@@ -75,6 +80,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsRealtime: true,
       supportsVersioning: false,
       supportsAI: false,
+      publishable: false,
     },
     defaultContent: () => ({ messages: [] }),
     uiComponent: 'ChannelView',
@@ -84,7 +90,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     type: PageType.AI_CHAT,
     displayName: 'AI Chat',
     description: 'AI-powered conversation space',
-    iconName: 'Sparkles',
+    iconName: 'BotMessageSquare',
     emoji: '🤖',
     capabilities: {
       canAcceptUploads: false,
@@ -92,19 +98,20 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsRealtime: true,
       supportsVersioning: false,
       supportsAI: true,
+      publishable: false,
     },
     defaultContent: () => ({ messages: [] }),
     apiValidation: {
       optionalFields: ['systemPrompt', 'enabledTools', 'aiProvider', 'aiModel'],
     },
-    uiComponent: 'AiChatView',
+    uiComponent: 'AgentPageView',
     layoutViewType: 'ai',
   },
   [PageType.CANVAS]: {
     type: PageType.CANVAS,
     displayName: 'Canvas',
     description: 'Custom HTML/CSS page',
-    iconName: 'Palette',
+    iconName: 'FileImage',
     emoji: '🎨',
     capabilities: {
       canAcceptUploads: false,
@@ -112,6 +119,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsRealtime: false,
       supportsVersioning: true,
       supportsAI: false,
+      publishable: true,
     },
     defaultContent: () => '',
     uiComponent: 'CanvasPageView',
@@ -121,7 +129,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     type: PageType.FILE,
     displayName: 'File',
     description: 'Uploaded file with metadata',
-    iconName: 'FileIcon',
+    iconName: 'File',
     emoji: '📎',
     capabilities: {
       canAcceptUploads: false,
@@ -129,6 +137,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsRealtime: false,
       supportsVersioning: false,
       supportsAI: false,
+      publishable: false,
     },
     defaultContent: () => '',
     uiComponent: 'FileViewer',
@@ -138,7 +147,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     type: PageType.SHEET,
     displayName: 'Sheet',
     description: 'Interactive spreadsheet with formulas',
-    iconName: 'Table',
+    iconName: 'FileSpreadsheet',
     emoji: '📊',
     capabilities: {
       canAcceptUploads: false,
@@ -146,6 +155,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsRealtime: true,
       supportsVersioning: true,
       supportsAI: true,
+      publishable: true,
     },
     defaultContent: () => serializeSheetContent(createEmptySheet()),
     uiComponent: 'SheetView',
@@ -155,7 +165,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     type: PageType.TASK_LIST,
     displayName: 'Task List',
     description: 'Table-based task management',
-    iconName: 'CheckSquare',
+    iconName: 'SquareCheckBig',
     emoji: '✅',
     capabilities: {
       canAcceptUploads: false,
@@ -163,8 +173,9 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsRealtime: true,
       supportsVersioning: false,
       supportsAI: true,
+      publishable: false,
     },
-    defaultContent: () => JSON.stringify({}),
+    defaultContent: () => '',
     uiComponent: 'TaskListView',
     layoutViewType: 'document',
   },
@@ -172,14 +183,15 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     type: PageType.CODE,
     displayName: 'Code',
     description: 'Code editor with syntax highlighting',
-    iconName: 'Code',
+    iconName: 'FileCode',
     emoji: '💻',
     capabilities: {
       canAcceptUploads: false,
       canBeConverted: false,
       supportsRealtime: true,
       supportsVersioning: true,
-      supportsAI: false,
+      supportsAI: true,
+      publishable: true,
     },
     defaultContent: () => '',
     uiComponent: 'CodePageView',
@@ -278,4 +290,27 @@ export function isTaskListPage(type: PageType): boolean {
 
 export function isCodePage(type: PageType): boolean {
   return type === PageType.CODE;
+}
+
+/**
+ * Can this page type be opened as an agent-session PANE (as opposed to only
+ * the main content area)? Excludes `FOLDER` (a tree browser, not content to
+ * edit) and `AI_CHAT` (would nest a chat conversation inside a chat pane) —
+ * every other type has a real standalone editor/viewer that makes sense
+ * beside a conversation.
+ */
+export function isPaneablePageType(type: PageType): boolean {
+  return type !== PageType.FOLDER && type !== PageType.AI_CHAT;
+}
+
+export function getCreatablePageTypes(): PageType[] {
+  return Object.values(PAGE_TYPE_CONFIGS).filter(c => !c.experimental).map(c => c.type);
+}
+
+export function isPublishablePageType(type: PageType): boolean {
+  return PAGE_TYPE_CONFIGS[type]?.capabilities.publishable || false;
+}
+
+export function getPublishablePageTypes(): PageType[] {
+  return Object.values(PAGE_TYPE_CONFIGS).filter(c => c.capabilities.publishable).map(c => c.type);
 }

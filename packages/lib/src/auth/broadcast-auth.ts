@@ -1,4 +1,5 @@
-import { createHmac, timingSafeEqual } from 'crypto';
+import { createHmac } from 'crypto';
+import { secureCompare } from './secure-compare';
 
 /**
  * Security utilities for Socket.IO broadcast endpoint authentication
@@ -92,15 +93,7 @@ export function verifyBroadcastSignature(signatureHeader: string, requestBody: s
     // Generate expected signature
     const { signature: expectedSignature } = generateBroadcastSignature(requestBody, timestamp);
 
-    // Timing-safe comparison
-    const expectedBuffer = Buffer.from(expectedSignature, 'hex');
-    const providedBuffer = Buffer.from(providedSignature, 'hex');
-
-    if (expectedBuffer.length !== providedBuffer.length) {
-      return false;
-    }
-
-    return timingSafeEqual(expectedBuffer, providedBuffer);
+    return secureCompare(providedSignature, expectedSignature);
   } catch (error) {
     console.error('Broadcast signature verification error:', error);
     return false;

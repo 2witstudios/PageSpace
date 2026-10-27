@@ -21,14 +21,14 @@ vi.mock('@/lib/repositories/auth-repository', () => ({
   },
 }));
 
-// Mock auth helpers (boundary)
-vi.mock('@/lib/auth/auth-helpers', () => ({
-  requireAuth: vi.fn(),
+// Mock auth (boundary)
+vi.mock('@/lib/auth', () => ({
+  authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
 }));
 
 import { authRepository } from '@/lib/repositories/auth-repository';
-import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 // Test fixtures
 const mockVerifiedDate = new Date('2024-01-15T10:00:00Z');
@@ -36,17 +36,18 @@ const mockUser: User = {
   id: 'test-user-id',
   name: 'Test User',
   email: 'test@example.com',
+  emailBidx: null,
   image: 'https://example.com/avatar.png',
   role: 'user',
   provider: 'email',
   googleId: null,
   appleId: null,
   emailVerified: mockVerifiedDate,
-  password: '$2a$12$hashedpassword',
   tokenVersion: 0,
   adminRoleVersion: 0,
-  currentAiProvider: 'pagespace',
-  currentAiModel: 'glm-4.5-air',
+  currentAiProvider: 'openai',
+  currentAiModel: 'openai/gpt-5.4-nano',
+  imageGenerationModel: null,
   storageUsedBytes: 0,
   activeUploads: 0,
   lastStorageCalculated: null,
@@ -58,6 +59,8 @@ const mockUser: User = {
   suspendedAt: null,
   suspendedReason: null,
   timezone: null,
+  starterSkillsInstalledAt: null,
+  onboardingCompletedAt: null,
   createdAt: new Date('2024-01-01T00:00:00Z'),
   updatedAt: new Date('2024-01-01T00:00:00Z'),
 };
@@ -84,7 +87,7 @@ describe('GET /api/auth/me', () => {
     vi.clearAllMocks();
 
     // Default: authenticated user
-    vi.mocked(requireAuth).mockResolvedValue(mockAuthSuccess as never);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthSuccess as never);
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(authRepository.findUserById).mockResolvedValue(mockUser);
   });
@@ -104,12 +107,10 @@ describe('GET /api/auth/me', () => {
       expect(body.emailVerified).toBe(mockVerifiedDate.toISOString());
     });
 
-    it('does not expose sensitive fields like password', async () => {
+    it('does not expose sensitive fields like tokenVersion', async () => {
       const response = await GET(createRequest());
       const body = await response.json();
 
-      // Security: password must never be in response
-      expect(body.password).toBeUndefined();
       expect(body.tokenVersion).toBeUndefined();
     });
 
@@ -118,7 +119,7 @@ describe('GET /api/auth/me', () => {
         ...mockUser,
         role: 'admin',
       });
-      vi.mocked(requireAuth).mockResolvedValue({
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
         ...mockAuthSuccess,
         role: 'admin',
       } as never);
@@ -133,7 +134,7 @@ describe('GET /api/auth/me', () => {
   describe('authentication', () => {
     it('returns 401 when not authenticated', async () => {
       const mockResponse = new Response('Unauthorized', { status: 401 });
-      vi.mocked(requireAuth).mockResolvedValue(mockResponse as never);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ error: mockResponse } as never);
       vi.mocked(isAuthError).mockReturnValue(true);
 
       const response = await GET(createRequest());
@@ -145,6 +146,45 @@ describe('GET /api/auth/me', () => {
       await GET(createRequest());
 
       expect(authRepository.findUserById).toHaveBeenCalledWith('test-user-id');
+    });
+
+    it('accepts an OAuth-authenticated identity (CLI `pagespace login`/`whoami`)', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+        userId: 'test-user-id',
+        role: 'user',
+        tokenVersion: 0,
+        adminRoleVersion: 0,
+        tokenType: 'oauth',
+        tokenId: 'oauth-token-id',
+        scopes: { account: true, offlineAccess: false, drives: new Map() },
+        driveScopes: [],
+        allowedDriveIds: [],
+      } as never);
+      vi.mocked(isAuthError).mockReturnValue(false);
+
+      const response = await GET(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.email).toBe(mockUser.email);
+      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(expect.anything(), { allow: ['session', 'oauth'], requireCSRF: false });
+    });
+
+    it('does not allow mcp bearer auth — a scoped agent credential must never resolve the personal owner\'s profile', async () => {
+      // `authenticateRequestWithOptions` is mocked at the boundary in this
+      // file, so this can't exercise the real allow-list rejection end to
+      // end — it pins the contract this route depends on: 'mcp' must be
+      // absent from AUTH_OPTIONS.allow, so the real (unmocked)
+      // authenticateRequestWithOptions rejects an mcp_* bearer token before
+      // this handler's own logic ever runs. `pagespace keys create` mints a
+      // scoped mcp_* token — its own `confirmIdentity` call against this
+      // route degrades to a caught, silently-absorbed failure
+      // (loopback-flow.ts), not a functional break: `keys create` never
+      // reads that result (only `login`/`login-device`/`whoami` do, and
+      // none of those authenticate with an mcp_* token).
+      await GET(createRequest());
+
+      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(expect.anything(), { allow: ['session', 'oauth'], requireCSRF: false });
     });
   });
 
@@ -197,6 +237,40 @@ describe('GET /api/auth/me', () => {
 
       // Date is serialized to ISO string
       expect(body.emailVerified).toBe(mockVerifiedDate.toISOString());
+    });
+  });
+
+  describe('image sanitization', () => {
+    it('returns local image path when image is not an external HTTP URL', async () => {
+      vi.mocked(authRepository.findUserById).mockResolvedValue({
+        ...mockUser,
+        image: '/uploads/avatars/user-123.jpg',
+      });
+
+      const response = await GET(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.image).toBe('/uploads/avatars/user-123.jpg');
+    });
+  });
+
+  describe('debug logging', () => {
+    it('logs user profile in development mode with DEBUG_AUTH enabled', async () => {
+      vi.stubEnv('NODE_ENV', 'development');
+      vi.stubEnv('DEBUG_AUTH', 'true');
+
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      const response = await GET(createRequest());
+
+      expect(response.status).toBe(200);
+      expect(consoleSpy).toHaveBeenCalledWith(
+        '[AUTH] User profile loaded: test@example.com (provider: email, id: test-user-id)'
+      );
+
+      consoleSpy.mockRestore();
+      vi.unstubAllEnvs();
     });
   });
 });

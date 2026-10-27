@@ -5,12 +5,9 @@
  * Each user has a single config row for their global assistant preferences.
  */
 
-import {
-  db as defaultDb,
-  eq,
-  globalAssistantConfig,
-  type GlobalAssistantConfig,
-} from '@pagespace/db';
+import { db as defaultDb } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { globalAssistantConfig, type GlobalAssistantConfig } from '@pagespace/db/schema/integrations';
 
 /**
  * Get or create a global assistant config for a user.
@@ -71,7 +68,14 @@ export const getConfig = async (
 export const updateConfig = async (
   database: typeof defaultDb,
   userId: string,
-  data: Partial<Pick<GlobalAssistantConfig, 'enabledUserIntegrations' | 'driveOverrides' | 'inheritDriveIntegrations'>>
+  data: Partial<
+    Pick<
+      GlobalAssistantConfig,
+      | 'enabledUserIntegrations'
+      | 'driveOverrides'
+      | 'inheritDriveIntegrations'
+    >
+  >
 ): Promise<GlobalAssistantConfig> => {
   // Ensure config exists (race-safe)
   await getOrCreateConfig(database, userId);

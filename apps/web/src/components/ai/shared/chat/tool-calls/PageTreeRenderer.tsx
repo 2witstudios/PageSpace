@@ -5,7 +5,8 @@ import { useRouter } from 'next/navigation';
 import { ChevronRight, FolderTree, ExternalLink } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { PageTypeIcon } from '@/components/common/PageTypeIcon';
-import { PageType, isFolderPage } from '@pagespace/lib/client-safe';
+import { PageType } from '@pagespace/lib/utils/enums';
+import { isFolderPage } from '@pagespace/lib/content/page-types.config';
 
 export interface TreeItem {
   path: string;

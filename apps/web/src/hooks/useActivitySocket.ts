@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useSocket } from './useSocket';
+import type { ActivityEventPayload } from '@/lib/websocket/socket-utils';
 
 export type ActivityContext = 'drive' | 'page';
 
@@ -7,6 +8,8 @@ interface UseActivitySocketOptions {
   context: ActivityContext;
   contextId: string | null;
   onActivityLogged: () => void;
+  driveId?: string | null;
+  pageId?: string | null;
 }
 
 /**
@@ -17,6 +20,8 @@ export function useActivitySocket({
   context,
   contextId,
   onActivityLogged,
+  driveId,
+  pageId,
 }: UseActivitySocketOptions) {
   const socket = useSocket();
   const hasJoinedRef = useRef(false);
@@ -60,8 +65,10 @@ export function useActivitySocket({
       currentContextRef.current = contextKey;
     }
 
-    // Listen for activity events
-    const handleActivityLogged = () => {
+    // Listen for activity events — validate payload context before refetching
+    const handleActivityLogged = (payload: ActivityEventPayload) => {
+      if (context === 'drive' && payload.driveId !== contextId) return;
+      if (context === 'page' && payload.pageId !== contextId) return;
       debouncedRefetch();
     };
 
@@ -71,6 +78,29 @@ export function useActivitySocket({
       socket.off('activity:logged', handleActivityLogged);
     };
   }, [socket, context, contextId, debouncedRefetch]);
+
+  // Subscribe to page-level events via the drive room as a reliable secondary trigger.
+  // page:content-updated fires synchronously after applyPageMutation commits, so by the
+  // time the client receives it the activity record is already queryable.
+  useEffect(() => {
+    if (!socket || !driveId) return;
+
+    socket.emit('join_drive', driveId);
+
+    const handlePageEvent = (event: { pageId?: string }) => {
+      // In page context, only react to events for this specific page
+      if (pageId && event.pageId && event.pageId !== pageId) return;
+      debouncedRefetch();
+    };
+
+    socket.on('page:content-updated', handlePageEvent);
+    socket.on('page:updated', handlePageEvent);
+
+    return () => {
+      socket.off('page:content-updated', handlePageEvent);
+      socket.off('page:updated', handlePageEvent);
+    };
+  }, [socket, driveId, pageId, debouncedRefetch]);
 
   // Cleanup on unmount
   useEffect(() => {

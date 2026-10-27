@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { authenticateSessionRequest, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
-import { getUserLMStudioSettings } from '@/lib/ai/core';
-import { validateLocalProviderURL } from '@pagespace/lib/security';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { getManagedProviderKey } from '@/lib/ai/core/ai-utils';
+import { validateLocalProviderURL } from '@pagespace/lib/security/url-validator';
 
 /**
  * GET /api/ai/lmstudio/models
@@ -14,42 +14,60 @@ export async function GET(request: Request) {
     if (isAuthError(auth)) return auth.error;
     const { userId } = auth;
 
-    // Get user's LM Studio settings
-    const lmstudioSettings = await getUserLMStudioSettings(userId);
+    // Get managed LM Studio base URL
+    const lmstudioSettings = getManagedProviderKey('lmstudio');
 
     if (!lmstudioSettings || !lmstudioSettings.baseUrl) {
       return NextResponse.json({
         success: false,
-        error: 'LM Studio not configured. Please configure your LM Studio base URL first.',
+        error: 'LM Studio is not configured on this deployment.',
+        models: {}
+      }, { status: 503 });
+    }
+
+    // Check if desktop bridge is available for local AI
+    const { isFetchBridgeInitialized, getFetchBridge } = await import('@/lib/fetch-bridge');
+    const useDesktopBridge = isFetchBridgeInitialized() && getFetchBridge().isUserConnected(userId);
+
+    // Basic URL format validation applies to both paths
+    try { new URL(lmstudioSettings.baseUrl); } catch {
+      return NextResponse.json({
+        success: false,
+        error: 'LM Studio base URL is not a valid URL.',
         models: {}
       }, { status: 400 });
     }
 
-    // SECURITY: Validate URL to prevent SSRF attacks
-    const urlValidation = await validateLocalProviderURL(lmstudioSettings.baseUrl);
-    if (!urlValidation.valid) {
-      loggers.ai.warn('SSRF protection: blocked LM Studio URL', {
-        userId,
-        baseUrl: lmstudioSettings.baseUrl,
-        error: urlValidation.error,
-      });
-      return NextResponse.json({
-        success: false,
-        error: 'Invalid URL: blocked for security reasons. Please use a valid, non-internal URL.',
-        models: {}
-      }, { status: 400 });
+    if (!useDesktopBridge) {
+      // SECURITY: Full SSRF validation for direct server fetch
+      const urlValidation = await validateLocalProviderURL(lmstudioSettings.baseUrl);
+      if (!urlValidation.valid) {
+        loggers.ai.warn('SSRF protection: blocked LM Studio URL', {
+          userId,
+          baseUrl: lmstudioSettings.baseUrl,
+          error: urlValidation.error,
+        });
+        return NextResponse.json({
+          success: false,
+          error: 'Invalid URL: blocked for security reasons. Please use a valid, non-internal URL.',
+          models: {}
+        }, { status: 400 });
+      }
     }
 
     try {
       // Connect to user's LM Studio instance and fetch available models
       // LM Studio uses OpenAI-compatible API at /v1/models
-      const lmstudioResponse = await fetch(`${lmstudioSettings.baseUrl}/models`, {
+      // When desktop bridge is connected, route through WebSocket to user's machine
+      const fetchFn = useDesktopBridge
+        ? (await import('@/lib/fetch-bridge/ws-proxy-fetch')).createWsProxyFetch(userId, getFetchBridge())
+        : fetch;
+      const lmstudioResponse = await fetchFn(`${lmstudioSettings.baseUrl}/models`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
         },
-        // Add timeout to prevent hanging
-        signal: AbortSignal.timeout(5000), // 5 second timeout
+        signal: AbortSignal.timeout(useDesktopBridge ? 10000 : 5000),
       });
 
       if (!lmstudioResponse.ok) {

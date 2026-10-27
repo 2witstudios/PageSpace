@@ -1,8 +1,15 @@
+import { getPrincipalAccessLevel } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db, aiUsageLogs, pages, eq, desc } from '@pagespace/db';
-import { getUserAccessLevel, loggers } from '@pagespace/lib/server';
-import { getContextWindow } from '@pagespace/lib/ai-monitoring';
+import { db } from '@pagespace/db/db'
+import { eq, desc } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core'
+import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
+
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { getContextWindow } from '@pagespace/lib/monitoring/ai-monitoring';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 
@@ -16,7 +23,8 @@ export async function GET(
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
-    const userId = auth.userId;
+    const { userId, role } = auth;
+    const isAdmin = role === 'admin';
 
     const { pageId } = await context.params;
 
@@ -33,11 +41,11 @@ export async function GET(
     }
 
     // Check permissions
-    const accessLevel = await getUserAccessLevel(userId, pageId);
+    const accessLevel = await getPrincipalAccessLevel(auth, pageId);
     if (!accessLevel || !accessLevel.canView) {
-      return NextResponse.json({
+      return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({
         error: 'Access denied'
-      }, { status: 403 });
+      }, { status: 403 }));
     }
 
     // Fetch all usage logs for this page
@@ -96,15 +104,20 @@ export async function GET(
       ? Math.round((currentContextSize / contextWindowSize) * 100)
       : 0;
 
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'ai_usage', resourceId: pageId, details: { action: 'view_ai_usage', logCount: logs.length } });
+
+    // Strip cost from logs for non-admins
+    const responseLogs = isAdmin ? logs : logs.map(log => ({ ...log, cost: null }));
+
     return NextResponse.json({
-      logs,
+      logs: responseLogs,
       summary: {
         // Billing metrics (cumulative across all calls)
         billing: {
           totalInputTokens,
           totalOutputTokens,
           totalTokens,
-          totalCost: Number(totalCost.toFixed(6)),
+          totalCost: isAdmin ? Number(totalCost.toFixed(6)) : 0,
         },
 
         // Context metrics (current conversation state)

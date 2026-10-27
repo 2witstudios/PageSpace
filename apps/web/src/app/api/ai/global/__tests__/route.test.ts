@@ -25,19 +25,36 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 // Mock logging (boundary)
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
       warn: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
+}));
+
+vi.mock('@/lib/websocket/socket-utils', () => ({
+  broadcastGlobalConversationAdded: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('@pagespace/lib/ai/global-channel-id', () => ({
+  globalChannelId: vi.fn((userId: string) => `user:${userId}:global`),
+}));
+
+vi.mock('@/lib/websocket/broadcast-triggered-by', () => ({
+  resolveTriggeredBy: vi.fn().mockResolvedValue({ userId: 'user_123', displayName: 'Test User', browserSessionId: '' }),
 }));
 
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 // Test fixtures
 const mockUserId = 'user_123';
@@ -163,7 +180,10 @@ describe('GET /api/ai/global', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to fetch conversations');
-      expect(loggers.api.error).toHaveBeenCalled();
+      const fetchErrorArgs = vi.mocked(loggers.api.error).mock.calls[0];
+      expect(fetchErrorArgs[0]).toBe('Error fetching conversations:');
+      expect(fetchErrorArgs[1]).toBeInstanceOf(Error);
+      expect((fetchErrorArgs[1] as Error).message).toBe('Database error');
     });
   });
 });
@@ -255,9 +275,11 @@ describe('POST /api/ai/global', () => {
 
       expect(globalConversationRepository.createConversation).toHaveBeenCalledWith(
         mockUserId,
-        expect.objectContaining({
+        {
+          title: undefined,
           type: 'global',
-        })
+          contextId: undefined,
+        }
       );
     });
   });
@@ -275,7 +297,10 @@ describe('POST /api/ai/global', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to create conversation');
-      expect(loggers.api.error).toHaveBeenCalled();
+      const createErrorArgs = vi.mocked(loggers.api.error).mock.calls[0];
+      expect(createErrorArgs[0]).toBe('Error creating conversation:');
+      expect(createErrorArgs[1]).toBeInstanceOf(Error);
+      expect((createErrorArgs[1] as Error).message).toBe('Database error');
     });
   });
 });

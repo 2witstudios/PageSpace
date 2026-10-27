@@ -12,7 +12,9 @@
  * the two to provide accurate before/after pairs for diffing.
  */
 
-import { db, pageVersions, eq, and, or, desc } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq, and, or, desc } from '@pagespace/db/operators';
+import { pageVersions } from '@pagespace/db/schema/versioning';
 
 /**
  * Content pair for generating diffs

@@ -1,12 +1,18 @@
+/**
+ * @scaffold - ORM chain mocks present (transaction mock with select().from().where()).
+ * Pending search-repository seam extraction for full rubric compliance.
+ */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockTransaction = vi.hoisted(() => vi.fn());
 const mockGetUserAccessLevel = vi.hoisted(() => vi.fn());
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     transaction: mockTransaction,
   },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   pages: {
     id: 'pages.id',
     title: 'pages.title',
@@ -21,6 +27,8 @@ vi.mock('@pagespace/db', () => ({
     slug: 'drives.slug',
     name: 'drives.name',
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
   and: vi.fn((...args) => ({ op: 'and', args })),
   inArray: vi.fn((a, b) => ({ op: 'inArray', a, b })),
@@ -36,6 +44,7 @@ vi.mock('../../permissions/permissions', () => ({
 }));
 
 import { regexSearchPages } from '../drive-search-service';
+import { credentialActor } from '../../permissions/access-actor';
 
 type SearchRow = {
   id: string;
@@ -78,7 +87,7 @@ describe('regexSearchPages security behavior', () => {
     ];
 
     const { execute } = setupTransactionResult(rows);
-    const response = await regexSearchPages('drive-1', 'user-1', 'hello', null, {
+    const response = await regexSearchPages('drive-1', credentialActor('user-1', null), 'hello', null, {
       searchIn: 'content',
       maxResults: 50,
     });
@@ -104,7 +113,7 @@ describe('regexSearchPages security behavior', () => {
     ];
 
     setupTransactionResult(rows);
-    const response = await regexSearchPages('drive-1', 'user-1', '(A+)+$', null, {
+    const response = await regexSearchPages('drive-1', credentialActor('user-1', null), '(A+)+$', null, {
       searchIn: 'content',
       maxResults: 50,
     });
@@ -120,7 +129,7 @@ describe('regexSearchPages security behavior', () => {
       message: 'canceling statement due to statement timeout',
     });
 
-    const response = await regexSearchPages('drive-1', 'user-1', '(A+)+$', null, {
+    const response = await regexSearchPages('drive-1', credentialActor('user-1', null), '(A+)+$', null, {
       searchIn: 'content',
       maxResults: 50,
     });

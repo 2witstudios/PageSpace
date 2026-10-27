@@ -40,8 +40,11 @@ import {
   FileText,
   GripVertical,
   Plus,
+  Zap,
+  Bell,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { compareByPagePosition } from '@/services/api/task-ordering';
 import {
   TaskItem,
   TaskStatusConfig,
@@ -51,6 +54,7 @@ import {
   isCompletedStatus,
   PRIORITY_CONFIG,
 } from './task-list-types';
+import { SubTaskProgress } from './SubTaskProgress';
 
 interface TaskKanbanViewProps {
   tasks: TaskItem[];
@@ -164,7 +168,7 @@ function TaskCard({
         isDragging && 'opacity-50 ring-2 ring-primary'
       )}
     >
-      <CardContent className="p-3">
+      <CardContent className="px-3 py-2">
         {/* Header: Drag handle + Checkbox + Title + Actions */}
         <div className="flex items-start gap-2">
           {canEdit && dragHandleProps && (
@@ -236,6 +240,15 @@ function TaskCard({
                 <Pencil className="h-4 w-4 mr-2" />
                 Rename
               </DropdownMenuItem>
+              {handlers.onConfigureTriggers && (
+                <DropdownMenuItem
+                  onClick={() => handlers.onConfigureTriggers?.(task)}
+                  disabled={!canEdit}
+                >
+                  <Zap className="h-4 w-4 mr-2" />
+                  Agent triggers…
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem
                 onClick={() => handlers.onDelete(task.id)}
                 className="text-destructive"
@@ -249,11 +262,16 @@ function TaskCard({
         </div>
 
         {/* Metadata row */}
-        <div className="flex flex-wrap items-center gap-1.5 mt-2 ml-6">
+        <div className="flex flex-wrap items-center gap-1.5 mt-1 ml-6">
           {/* Priority badge */}
           <Badge className={cn('text-xs px-1.5 py-0', PRIORITY_CONFIG[task.priority].color)}>
             {PRIORITY_CONFIG[task.priority].label}
           </Badge>
+
+          {/* Sub-task progress — parity with the table's rows. Without it a
+              parent card reads as a leaf, and "In Progress" on a container tells
+              you nothing about the work underneath it. */}
+          <SubTaskProgress task={task} className="text-xs text-muted-foreground tabular-nums" />
 
           {/* Assignee */}
           {(task.assignee || task.assigneeAgent) && (
@@ -267,6 +285,19 @@ function TaskCard({
             <span className="text-xs text-muted-foreground">
               {new Date(task.dueDate).toLocaleDateString()}
             </span>
+          )}
+
+          {canEdit && handlers.onConfigureTriggers && (task.activeTriggerCount ?? 0) > 0 && (
+            <button
+              type="button"
+              onClick={() => handlers.onConfigureTriggers?.(task)}
+              title="Agent trigger configured — click to edit"
+              aria-label="Agent trigger configured — click to edit"
+              className="inline-flex h-5 items-center gap-0.5 rounded-md border border-amber-300/60 bg-amber-50 px-1.5 text-[10px] text-amber-700 hover:bg-amber-100 dark:border-amber-700/50 dark:bg-amber-950/40 dark:text-amber-300"
+            >
+              <Bell className="h-2.5 w-2.5" />
+              <span>Trigger</span>
+            </button>
           )}
         </div>
       </CardContent>
@@ -403,13 +434,9 @@ export function TaskKanbanView({
       }
     }
 
-    // Sort each column by position
+    // Sort each column by the single ordering rail, pages.position (#2143)
     for (const status of statusOrder) {
-      grouped[status]?.sort((a, b) => {
-        const posA = a.page?.position ?? a.position;
-        const posB = b.page?.position ?? b.position;
-        return posA - posB;
-      });
+      grouped[status]?.sort((a, b) => compareByPagePosition(a, b));
     }
 
     return grouped;
@@ -466,7 +493,7 @@ export function TaskKanbanView({
 
     // If the status changed, update it
     if (activeTask.status !== targetStatus) {
-      handlers.onStatusChange(activeTask.id, targetStatus);
+      handlers.onStatusChange(activeTask, targetStatus);
     }
 
     // Handle reordering within or across columns
@@ -487,13 +514,13 @@ export function TaskKanbanView({
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
-      <div className="flex gap-4 p-4 h-full overflow-x-auto">
+      <div className="flex gap-4 p-4 h-full overflow-x-auto @container">
         {statusOrder.map((status) => {
           const cfg = statusConfigMap[status];
           return (
           <div
             key={status}
-            className="flex-shrink-0 w-72 flex flex-col"
+            className="flex-shrink-0 w-72 @max-[500px]:w-60 flex flex-col"
           >
             <ColumnHeader
               status={status}

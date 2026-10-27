@@ -9,7 +9,7 @@
  * "who is viewing what" with display metadata.
  */
 
-import type { PresenceViewer } from '@pagespace/lib/client-safe';
+import type { PresenceViewer } from '@pagespace/lib/types';
 
 // Re-export for convenience
 export type { PresenceViewer };

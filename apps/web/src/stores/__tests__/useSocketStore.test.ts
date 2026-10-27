@@ -161,6 +161,38 @@ describe('useSocketStore', () => {
     });
   });
 
+  describe('socket URL resolution', () => {
+    it('given NEXT_PUBLIC_REALTIME_URL is undefined, should pass undefined as first arg to io()', async () => {
+      delete process.env.NEXT_PUBLIC_REALTIME_URL;
+
+      const { connect } = useSocketStore.getState();
+      await connect();
+
+      const callArgs = vi.mocked(io).mock.calls[0];
+      expect(callArgs[0]).toBeUndefined();
+    });
+
+    it('given NEXT_PUBLIC_REALTIME_URL is set, should pass that URL as first arg to io()', async () => {
+      process.env.NEXT_PUBLIC_REALTIME_URL = 'https://rt.example.com';
+
+      const { connect } = useSocketStore.getState();
+      await connect();
+
+      const callArgs = vi.mocked(io).mock.calls[0];
+      expect(callArgs[0]).toBe('https://rt.example.com');
+    });
+
+    it('given NEXT_PUBLIC_REALTIME_URL is empty string, should pass undefined as first arg to io()', async () => {
+      process.env.NEXT_PUBLIC_REALTIME_URL = '';
+
+      const { connect } = useSocketStore.getState();
+      await connect();
+
+      const callArgs = vi.mocked(io).mock.calls[0];
+      expect(callArgs[0]).toBeUndefined();
+    });
+  });
+
   describe('connection creation', () => {
     it('given valid token available, should create Socket.IO client with auth.token', async () => {
       const mockToken = 'ps_sock_test-token';
@@ -233,18 +265,42 @@ describe('useSocketStore', () => {
       expect(mockSocket.io.opts.reconnection).toBe(false);
     });
 
-    it('given Authentication error, should attempt token refresh via unified auth-fetch after delay', async () => {
+    it('given Authentication error on web, should first try fetching a fresh socket token', async () => {
       vi.useFakeTimers();
 
       const { connect } = useSocketStore.getState();
       await connect();
+
+      // Clear initial fetch mock calls from connect()
+      vi.mocked(global.fetch).mockClear();
 
       mockSocket._trigger('connect_error', new Error('Authentication error: Invalid token'));
 
       // Fast-forward past the 2 second delay
       await vi.advanceTimersByTimeAsync(2100);
 
-      // Should use the unified refreshAuthSession instead of direct fetch
+      // Web path should try getSocketToken() first (session cookie may still be valid)
+      expect(global.fetch).toHaveBeenCalledWith('/api/auth/socket-token', { credentials: 'include' });
+      // Since fetch returns a valid token, refreshAuthSession should NOT be called
+      expect(mockRefreshAuthSession).not.toHaveBeenCalled();
+
+      vi.useRealTimers();
+    });
+
+    it('given socket token fetch fails after auth error, should fall back to refreshAuthSession', async () => {
+      vi.useFakeTimers();
+
+      const { connect } = useSocketStore.getState();
+      await connect();
+
+      // Make socket-token fetch fail after auth error so it falls through
+      global.fetch = mockSocketTokenFetch(null);
+
+      mockSocket._trigger('connect_error', new Error('Authentication error: Invalid token'));
+
+      await vi.advanceTimersByTimeAsync(2100);
+
+      // Should fall back to unified refreshAuthSession
       expect(mockRefreshAuthSession).toHaveBeenCalled();
 
       vi.useRealTimers();
@@ -259,16 +315,27 @@ describe('useSocketStore', () => {
       // Mock refreshAuthSession to return success
       mockRefreshAuthSession.mockResolvedValue({ success: true, shouldLogout: false });
 
-      // Mock fetch to return different tokens for different calls to socket-token endpoint
+      // Mock fetch: first call succeeds (initial connect), second fails (trigger fallback to refresh),
+      // third succeeds (post-refresh token fetch)
       let callCount = 0;
       global.fetch = vi.fn().mockImplementation((url: string) => {
         if (url === '/api/auth/socket-token') {
           callCount++;
-          // First call returns initial token, subsequent calls return new token
-          const token = callCount === 1 ? 'ps_sock_initial-token' : newToken;
+          if (callCount === 1) {
+            // Initial connect succeeds
+            return Promise.resolve({
+              ok: true,
+              json: () => Promise.resolve({ token: 'ps_sock_initial-token', expiresAt: new Date(Date.now() + 300000).toISOString() }),
+            });
+          }
+          if (callCount === 2) {
+            // First retry after auth error fails — triggers fallback to refreshAuthSession
+            return Promise.resolve({ ok: false, status: 401 });
+          }
+          // After refresh, return new token
           return Promise.resolve({
             ok: true,
-            json: () => Promise.resolve({ token, expiresAt: new Date(Date.now() + 300000).toISOString() }),
+            json: () => Promise.resolve({ token: newToken, expiresAt: new Date(Date.now() + 300000).toISOString() }),
           });
         }
         return Promise.resolve({ ok: true });
@@ -281,7 +348,7 @@ describe('useSocketStore', () => {
 
       await vi.advanceTimersByTimeAsync(2100);
 
-      // Verify unified refresh was called
+      // Verify unified refresh was called (because socket-token fetch failed)
       expect(mockRefreshAuthSession).toHaveBeenCalled();
       // Verify session cache was cleared
       expect(mockClearSessionCache).toHaveBeenCalled();
@@ -303,11 +370,14 @@ describe('useSocketStore', () => {
       const { connect } = useSocketStore.getState();
       await connect();
 
+      // Make socket-token fetch fail so it falls through to refreshAuthSession
+      global.fetch = mockSocketTokenFetch(null);
+
       mockSocket._trigger('connect_error', new Error('Authentication error: Invalid token'));
 
       await vi.advanceTimersByTimeAsync(2100);
 
-      // Verify unified refresh was attempted
+      // Verify unified refresh was attempted (after socket-token fetch failed)
       expect(mockRefreshAuthSession).toHaveBeenCalled();
       // Verify connection status is set to error
       const { connectionStatus } = useSocketStore.getState();
@@ -317,38 +387,42 @@ describe('useSocketStore', () => {
     });
   });
 
-  describe('proactive reconnect', () => {
-    it('given auth:refreshed event fires while connected, should force reconnect', async () => {
+  describe('auth:refreshed handling', () => {
+    it('given socket connected when auth:refreshed fires, should leave the live connection alone', async () => {
       const { connect } = useSocketStore.getState();
       await connect();
 
       mockSocket.connected = true;
       mockSocket._trigger('connect');
 
-      // Dispatch auth:refreshed event
+      const disconnectsBefore = mockSocket.disconnect.mock.calls.length;
+      vi.mocked(io).mockClear();
+
       const event = new Event('auth:refreshed');
       windowEventMock.dispatchEvent(event);
 
-      // The connect function should have been called again with forceReconnect
-      // Note: Since we're testing the store behavior, we verify the disconnect was called
-      expect(mockSocket.disconnect).toHaveBeenCalled();
+      // Token refresh on a healthy socket would cascade into chat refetches
+      // (GlobalChatContext, agent multiplayer) and snap message lists to the
+      // bottom mid-read. The token is consumed at handshake only, so a connected
+      // socket stays authenticated — no reconnect needed.
+      expect(mockSocket.disconnect.mock.calls.length).toBe(disconnectsBefore);
+      expect(io).not.toHaveBeenCalled();
     });
 
-    it('given socket not connected when auth:refreshed fires, should not attempt reconnect', async () => {
+    it('given socket disconnected when auth:refreshed fires, should reconnect with the fresh token', async () => {
       const { connect } = useSocketStore.getState();
       await connect();
 
-      // Socket is not connected
       mockSocket.connected = false;
+      const disconnectsBefore = mockSocket.disconnect.mock.calls.length;
 
-      const disconnectCallCount = mockSocket.disconnect.mock.calls.length;
-
-      // Dispatch auth:refreshed event
       const event = new Event('auth:refreshed');
       windowEventMock.dispatchEvent(event);
 
-      // Should not have called disconnect again
-      expect(mockSocket.disconnect.mock.calls.length).toBe(disconnectCallCount);
+      // Stalled socket: fresh token unblocks the next handshake. connect(true)
+      // synchronously calls disconnect on the existing socket before kicking
+      // off the async re-handshake.
+      expect(mockSocket.disconnect.mock.calls.length).toBe(disconnectsBefore + 1);
     });
   });
 
@@ -361,9 +435,11 @@ describe('useSocketStore', () => {
 
       disconnect();
 
+      // Called twice: once during connect() (dedupe cleanup) and once during disconnect()
+      expect(windowEventMock.removeEventListener).toHaveBeenCalledTimes(2);
       expect(windowEventMock.removeEventListener).toHaveBeenCalledWith(
         'auth:refreshed',
-        expect.any(Function)
+        expect.any(Function),
       );
     });
 
@@ -426,6 +502,103 @@ describe('useSocketStore', () => {
       await connect(false);
 
       expect(io).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * REGRESSION GATE — the mount storm.
+   *
+   * `connect()` awaits a token fetch before it can write the Socket into the store, and about
+   * thirty call sites reach this store through `useSocket()`. A dozen-plus of them mount in
+   * the same React commit, so they all called `connect()` in the same tick, all read
+   * `socket === null`, and all called `io()`. One landed in the store; the rest became live
+   * orphans holding long-poll connections on the app's own origin until the browser's
+   * six-per-origin budget was gone — at which point live delivery and ordinary `fetch` both
+   * stopped. Measured on the production-accurate e2e topology: NINE `io()` calls per pane
+   * open, eight of them inside the same millisecond, of which only two ever connected.
+   *
+   * These tests fail if a stable identity can ever mint more than one socket again.
+   */
+  describe('single-flight connect (the mount storm)', () => {
+    beforeEach(() => {
+      // Clears any in-flight guard left by an earlier test so each case starts cold.
+      useSocketStore.getState().disconnect();
+      vi.mocked(io).mockClear();
+    });
+
+    it('given many connect() calls in one tick, should create exactly one socket', async () => {
+      const { connect } = useSocketStore.getState();
+
+      // Twenty hooks mounting in one React commit. None of them awaits the others — that is
+      // the whole point, and is exactly how the real call sites behave.
+      await Promise.all(Array.from({ length: 20 }, () => connect()));
+
+      expect(io).toHaveBeenCalledTimes(1);
+    });
+
+    it('given many connect() calls in one tick, should fetch exactly one socket token', async () => {
+      const { connect } = useSocketStore.getState();
+
+      await Promise.all(Array.from({ length: 20 }, () => connect()));
+
+      const tokenCalls = vi
+        .mocked(global.fetch)
+        .mock.calls.filter(([url]) => url === '/api/auth/socket-token');
+      expect(tokenCalls).toHaveLength(1);
+    });
+
+    it('given a second connect() while the first is still fetching its token, should not mint a rival socket', async () => {
+      let releaseToken: () => void = () => {};
+      const tokenGate = new Promise<void>((resolve) => {
+        releaseToken = resolve;
+      });
+      global.fetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url === '/api/auth/socket-token') {
+          await tokenGate;
+          return { ok: true, json: async () => ({ token: 'ps_sock_gated' }) };
+        }
+        return { ok: true };
+      });
+
+      const { connect } = useSocketStore.getState();
+      const first = connect();
+      // The store still holds `socket: null` here — the ONLY thing that can stop this
+      // caller minting a second socket is the in-flight gate.
+      const second = connect();
+
+      expect(io).not.toHaveBeenCalled();
+      releaseToken();
+      await Promise.all([first, second]);
+
+      expect(io).toHaveBeenCalledTimes(1);
+    });
+
+    it('given disconnect() lands while a connect is mid-token-fetch, should not resurrect a socket', async () => {
+      let releaseToken: () => void = () => {};
+      const tokenGate = new Promise<void>((resolve) => {
+        releaseToken = resolve;
+      });
+      global.fetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url === '/api/auth/socket-token') {
+          await tokenGate;
+          return { ok: true, json: async () => ({ token: 'ps_sock_gated' }) };
+        }
+        return { ok: true };
+      });
+
+      const { connect, disconnect } = useSocketStore.getState();
+      const attempt = connect();
+
+      // The user logs out before the token comes back.
+      disconnect();
+
+      releaseToken();
+      await attempt;
+
+      // The superseded attempt must stand down: no socket in the store, and — the part that
+      // actually leaks — no live Socket created outside it either.
+      expect(io).not.toHaveBeenCalled();
+      expect(useSocketStore.getState().socket).toBeNull();
     });
   });
 });

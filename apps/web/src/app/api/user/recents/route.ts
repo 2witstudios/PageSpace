@@ -1,8 +1,11 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db, userPageViews, eq, desc } from '@pagespace/db';
-import { PageType } from '@pagespace/lib/client-safe';
-import { loggers } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db'
+import { eq, desc } from '@pagespace/db/operators'
+import { userPageViews } from '@pagespace/db/schema/page-views';
+import { PageType } from '@pagespace/lib/utils/enums';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 
@@ -44,6 +47,8 @@ export async function GET(req: Request) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
+
+  auditRequest(req, { eventType: 'data.read', userId, resourceType: 'recents', resourceId: 'self' });
 
   const { searchParams } = new URL(req.url);
   const limitParam = searchParams.get('limit');
@@ -97,6 +102,8 @@ export async function GET(req: Request) {
         driveName: view.page!.drive!.name,
         viewedAt: view.viewedAt.toISOString(),
       }));
+
+    auditRequest(req, { eventType: 'data.read', userId: auth.userId, resourceType: 'recent', resourceId: 'self' });
 
     return NextResponse.json({ recents });
   } catch (error) {

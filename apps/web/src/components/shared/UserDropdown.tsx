@@ -19,13 +19,17 @@ import {
   DropdownMenuPortal,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { LogOut, MessageSquareText, Settings, LayoutDashboard, Sun, Moon, Monitor, HardDrive, CreditCard, Sparkles } from 'lucide-react';
+import { LogOut, MessageSquareText, Settings, LayoutDashboard, Sun, Moon, Monitor, CreditCard, Sparkles, Coins, Telescope } from 'lucide-react';
 import { useTheme } from "next-themes";
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
+import { useCreditBalance } from '@/hooks/useCreditBalance';
 import { isOnPrem } from '@/lib/deployment-mode';
 import useSWR from 'swr';
-import { Progress } from "@/components/ui/progress";
 import { FeedbackDialog } from './FeedbackDialog';
+import { formatCreditCount } from '@/lib/subscription/credits';
+import { TIER_PLAN_LIMITS, toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+
+const LOW_BALANCE_THRESHOLD_PCT = 15;
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -42,32 +46,45 @@ export default function UserDropdown() {
   const { showBilling } = useBillingVisibility();
   const [feedbackOpen, setFeedbackOpen] = useState(false);
 
-  // Fetch storage info
-  const { data: storageInfo } = useSWR(
-    isAuthenticated ? '/api/storage/info' : null,
-    fetcher,
-    {
-      refreshInterval: 300000, // 5 minutes (reduced from 30 seconds)
-      revalidateOnFocus: false, // Don't revalidate on tab focus (prevents interruptions)
-    }
-  );
+  const { balance } = useCreditBalance();
 
-  // Fetch subscription status
+  // Imago rollout (DEC-10): the flag alone decides, in every deployment mode.
+  const showTryImago = process.env.NEXT_PUBLIC_IMAGO_ENABLED === 'true';
+
+  // Fetch subscription status (for tier label in Billing item)
   const { data: subscriptionInfo } = useSWR(
     isAuthenticated ? '/api/subscriptions/status' : null,
     fetcher,
     {
-      refreshInterval: 300000, // 5 minutes (reduced from 60 seconds)
-      revalidateOnFocus: false, // Don't revalidate on tab focus (prevents interruptions)
+      refreshInterval: 300000,
+      revalidateOnFocus: false,
     }
   );
+
+  // Tier label: prefer the fresh /api/subscriptions/status value, fall back to
+  // the tier /api/auth/me already gave us so the label is right on first paint,
+  // and coerce through the canonical vocabulary (unknown/missing => 'free').
+  const tierName = TIER_PLAN_LIMITS[
+    toPersonalSubscriptionTier(subscriptionInfo?.subscriptionTier ?? user?.subscriptionTier)
+  ].name;
+
+  // Derive credit balance display values
+  const spendable = balance?.spendable ?? 0;
+  const topupRemaining = balance?.topup?.remaining ?? 0;
+  const monthlyAllowance = balance?.monthly?.allowance ?? 0;
+  const netMonthly = spendable - topupRemaining;
+  const inDebt = spendable < 0;
+  const isLow = balance
+    ? inDebt || (monthlyAllowance > 0 && netMonthly / monthlyAllowance <= LOW_BALANCE_THRESHOLD_PCT / 100)
+    : false;
+  const netMonthlyStr = formatCreditCount(netMonthly);
+  const allowanceStr = formatCreditCount(monthlyAllowance);
 
   const handleSignOut = async () => {
     try {
       await actions.logout();
     } catch (error) {
       console.error('Logout failed:', error);
-      // Still redirect to signin even if logout fails
       router.push('/auth/signin');
     }
   };
@@ -108,30 +125,24 @@ export default function UserDropdown() {
             <Sparkles className="mr-2 h-4 w-4" />
             <span>Personalization</span>
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => router.push('/dashboard/storage')}>
-            <HardDrive className="mr-2 h-4 w-4" />
+          <DropdownMenuItem onClick={() => router.push('/settings/usage')}>
+            <Coins className={`mr-2 h-4 w-4 ${isLow ? 'text-amber-500' : ''}`} />
             <div className="flex-1">
               <div className="flex items-center justify-between">
-                <span>Storage</span>
-                {storageInfo?.quota && (
-                  <span className="text-xs text-muted-foreground ml-2">
-                    {storageInfo.quota.formattedUsed} / {storageInfo.quota.formattedQuota}
+                <span>Usage</span>
+                {balance && balance.billingEnabled && (
+                  <span className={`text-xs ml-2 ${isLow ? 'text-amber-500' : 'text-muted-foreground'}`}>
+                    {netMonthlyStr} / {allowanceStr}
                   </span>
                 )}
               </div>
-              {storageInfo?.quota && (
-                <Progress
-                  value={storageInfo.quota.utilizationPercent}
-                  className="h-1 mt-1"
-                />
-              )}
             </div>
           </DropdownMenuItem>
           {showBilling && (
             <DropdownMenuItem onClick={() => router.push('/settings/billing')}>
               <CreditCard className="mr-2 h-4 w-4" />
               <span>
-                Billing ({subscriptionInfo?.subscriptionTier === 'free' ? 'Free' : subscriptionInfo?.subscriptionTier === 'pro' ? 'Pro' : 'Business'})
+                Billing ({tierName})
               </span>
             </DropdownMenuItem>
           )}
@@ -145,6 +156,15 @@ export default function UserDropdown() {
             <Settings className="mr-2 h-4 w-4" />
             <span>Settings</span>
           </DropdownMenuItem>
+          {showTryImago && (
+            // A plain link: /imago is a separate app, so it needs a full page load.
+            <DropdownMenuItem asChild>
+              <a href="/imago" data-testid="user-menu-try-imago">
+                <Telescope className="mr-2 h-4 w-4" />
+                <span>Try Imago</span>
+              </a>
+            </DropdownMenuItem>
+          )}
           <DropdownMenuSeparator />
           <DropdownMenuSub>
             <DropdownMenuSubTrigger>

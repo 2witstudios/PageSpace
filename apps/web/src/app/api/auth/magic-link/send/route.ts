@@ -1,27 +1,36 @@
 import { z } from 'zod/v4';
 import { parse } from 'cookie';
-import React from 'react';
 import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
-} from '@pagespace/lib/security';
-import { createMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
-import { sendEmail } from '@pagespace/lib/services/email-service';
-import { MagicLinkEmail } from '@pagespace/lib/email-templates/MagicLinkEmail';
-import { loggers, logSecurityEvent } from '@pagespace/lib/server';
+} from '@pagespace/lib/security/distributed-rate-limit';
+import { isEmailMatch, requestMagicLink } from '@pagespace/lib/services/invites';
+import { buildMagicLinkPorts } from '@/lib/auth/magic-link-adapters';
+import { resolveInviteContext } from '@/lib/auth/invite-resolver';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { maskEmail } from '@pagespace/lib/audit/mask-email';
+import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
+import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/auth-helpers';
+import { INVITE_TOKEN_MAX_LENGTH } from '@/lib/auth/oauth-state';
 
 const sendMagicLinkSchema = z.object({
   email: z.email({ message: 'Please enter a valid email address' }),
-});
-
-/** Mask email to prevent PII in logs (e.g., john@example.com -> jo***@example.com) */
-function maskEmail(email: string): string {
-  const [local, domain] = email.split('@');
-  if (!local || !domain) return '***@***';
-  const visibleChars = Math.min(2, local.length);
-  return `${local.slice(0, visibleChars)}***@${domain}`;
-}
+  // A shell that redeems on a specific device (desktop, or the iOS / Android
+  // app via a universal link) binds the link to that device; a browser sends
+  // no platform and gets a cookie session.
+  platform: z.enum(['web', 'desktop', 'ios', 'android']).optional(),
+  deviceId: z.string().optional(),
+  deviceName: z.string().optional(),
+  next: z.string().min(1).max(2048).optional(),
+  inviteToken: z.string().min(1).max(INVITE_TOKEN_MAX_LENGTH).optional(),
+  tosAccepted: z.boolean(),
+}).refine(
+  (data) =>
+    data.platform === undefined || data.platform === 'web' || (data.deviceId && data.deviceName),
+  { message: 'deviceId and deviceName are required for a device-bound platform' }
+);
 
 export async function POST(req: Request) {
   try {
@@ -34,10 +43,10 @@ export async function POST(req: Request) {
     const csrfTokenCookie = cookies.login_csrf;
 
     if (!csrfTokenHeader || !csrfTokenCookie) {
-      logSecurityEvent('magic_link_csrf_missing', {
-        ip: clientIP,
-        hasHeader: !!csrfTokenHeader,
-        hasCookie: !!csrfTokenCookie,
+      auditRequest(req, {
+        eventType: 'security.suspicious.activity',
+        riskScore: 0.4,
+        details: { reason: 'magic_link_csrf_missing', hasHeader: !!csrfTokenHeader, hasCookie: !!csrfTokenCookie },
       });
       return Response.json(
         {
@@ -49,8 +58,12 @@ export async function POST(req: Request) {
       );
     }
 
-    if (csrfTokenHeader !== csrfTokenCookie) {
-      logSecurityEvent('magic_link_csrf_mismatch', { ip: clientIP });
+    if (!secureCompare(csrfTokenHeader, csrfTokenCookie)) {
+      auditRequest(req, {
+        eventType: 'security.suspicious.activity',
+        riskScore: 0.6,
+        details: { reason: 'magic_link_csrf_mismatch' },
+      });
       return Response.json(
         {
           error: 'Invalid CSRF token',
@@ -62,7 +75,11 @@ export async function POST(req: Request) {
     }
 
     if (!validateLoginCSRFToken(csrfTokenHeader)) {
-      logSecurityEvent('magic_link_csrf_invalid', { ip: clientIP });
+      auditRequest(req, {
+        eventType: 'security.suspicious.activity',
+        riskScore: 0.6,
+        details: { reason: 'magic_link_csrf_invalid' },
+      });
       return Response.json(
         {
           error: 'Invalid or expired CSRF token',
@@ -92,17 +109,48 @@ export async function POST(req: Request) {
       );
     }
 
-    const { email } = validation.data;
+    const { email, platform, deviceId, deviceName, next, inviteToken, tosAccepted } =
+      validation.data;
     const normalizedEmail = email.toLowerCase().trim();
 
-    // Rate limit by IP and email
+    // Defense in depth: the form's submit button is gated on the checkbox,
+    // but a tampered POST body must not bypass affirmative consent. Without
+    // tosAccepted we won't auto-create, and refusing here keeps the failure
+    // mode loud + auditable instead of silently sending a link.
+    if (tosAccepted !== true) {
+      auditRequest(req, {
+        eventType: 'security.suspicious.activity',
+        riskScore: 0.3,
+        details: { reason: 'magic_link_tos_not_accepted' },
+      });
+      return Response.json(
+        { code: 'tos_required', error: 'Terms of Service must be accepted' },
+        { status: 400 },
+      );
+    }
+
+    // Re-validate next against the same allowlist the signin page uses. Defense
+    // in depth: form already validated, but never trust the client across a
+    // boundary. Unsafe values fall through to the default (no next forwarded).
+    const safeNext =
+      next && isSafeNextPath({ path: next, allowedPrefixes: SIGNIN_NEXT_ALLOWED_PREFIXES })
+        ? next
+        : undefined;
+
+    // Rate limit by IP and email BEFORE doing any DB work — invite resolution
+    // hits pending_invites + users, so allowing it pre-rate-limit lets an
+    // attacker amplify load by spamming /send with invite-token guesses.
     const [ipRateLimit, emailRateLimit] = await Promise.all([
       checkDistributedRateLimit(`magic_link:ip:${clientIP}`, DISTRIBUTED_RATE_LIMITS.MAGIC_LINK),
       checkDistributedRateLimit(`magic_link:email:${normalizedEmail}`, DISTRIBUTED_RATE_LIMITS.MAGIC_LINK),
     ]);
 
     if (!ipRateLimit.allowed) {
-      logSecurityEvent('magic_link_rate_limit_ip', { ip: clientIP });
+      auditRequest(req, {
+        eventType: 'security.rate.limited',
+        riskScore: 0.5,
+        details: { reason: 'magic_link_rate_limit_ip' },
+      });
       return Response.json(
         {
           error: 'Too many requests. Please try again later.',
@@ -120,7 +168,11 @@ export async function POST(req: Request) {
     }
 
     if (!emailRateLimit.allowed) {
-      logSecurityEvent('magic_link_rate_limit_email', { email: maskEmail(normalizedEmail), ip: clientIP });
+      auditRequest(req, {
+        eventType: 'security.rate.limited',
+        riskScore: 0.5,
+        details: { reason: 'magic_link_rate_limit_email' },
+      });
       return Response.json(
         {
           error: 'Too many requests for this email. Please try again later.',
@@ -137,59 +189,98 @@ export async function POST(req: Request) {
       );
     }
 
-    // Create magic link token (handles both existing and new users)
-    const result = await createMagicLinkToken({ email: normalizedEmail });
-
-    // SECURITY: Always return same response to prevent email enumeration
-    // Even if user is suspended, we return success but don't send email
-    if (!result.ok) {
-      if (result.error.code === 'USER_SUSPENDED') {
-        logSecurityEvent('magic_link_suspended_user', { email: maskEmail(normalizedEmail), ip: clientIP });
-        // Return success to prevent enumeration, but don't send email
-        return Response.json({
-          message: 'If an account exists with this email, we have sent a sign-in link.',
+    // Validate inviteToken AFTER rate-limit checks so over-limit requests
+    // never reach pending_invites / users. Two gates protect against stolen-
+    // token replay: the invite must exist + not be consumed + not be expired
+    // AND its email must match the address we're emailing. A mismatch (or any
+    // failure) drops the inviteToken silently — we still send the magic link
+    // so an attacker who guesses someone else's invite token can't enumerate
+    // which addresses it belongs to. The user just signs in normally; the
+    // invite stays pending.
+    let safeInviteToken: string | undefined;
+    if (inviteToken) {
+      try {
+        const resolution = await resolveInviteContext({ token: inviteToken, now: new Date() });
+        if (
+          resolution.ok &&
+          isEmailMatch({ inviteEmail: resolution.data.email, userEmail: normalizedEmail })
+        ) {
+          safeInviteToken = inviteToken;
+        } else {
+          loggers.auth.info('Magic link invite binding rejected', {
+            email: maskEmail(normalizedEmail),
+            reason: resolution.ok ? 'EMAIL_MISMATCH' : resolution.error,
+          });
+        }
+      } catch (error) {
+        loggers.auth.warn('Invite resolution threw during magic link send', {
+          error: error instanceof Error ? error.message : String(error),
         });
       }
+    }
 
-      // Validation errors are safe to return
-      if (result.error.code === 'VALIDATION_FAILED') {
-        return Response.json(
-          { error: result.error.message },
-          { status: 400 }
-        );
-      }
-
-      // For other errors, log and return generic success
-      loggers.auth.error('Magic link creation failed', { error: result.error });
+    let result;
+    try {
+      result = await requestMagicLink(buildMagicLinkPorts())({
+        email: normalizedEmail,
+        now: new Date(),
+        tosAccepted,
+        ...(platform && { platform }),
+        ...(deviceId && { deviceId }),
+        ...(deviceName && { deviceName }),
+        ...(safeNext && { next: safeNext }),
+        ...(safeInviteToken && { inviteToken: safeInviteToken }),
+      });
+    } catch (error) {
+      // Email send (or any other adapter throw) failed AFTER the pipe minted
+      // a token. Log + return generic success: a 5xx here would distinguish
+      // "this email exists" from "doesn't exist" by triggering only on
+      // existing accounts, defeating the rate-limited enumeration resistance.
+      loggers.auth.error('Magic link pipe threw', error as Error, {
+        email: maskEmail(normalizedEmail),
+      });
       return Response.json({
         message: 'If an account exists with this email, we have sent a sign-in link.',
       });
     }
 
-    // Send magic link email
-    const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-    const magicLinkUrl = `${baseUrl}/api/auth/magic-link/verify?token=${result.data.token}`;
+    if (!result.ok) {
+      if (result.error === 'ACCOUNT_SUSPENDED') {
+        auditRequest(req, {
+          eventType: 'auth.login.failure',
+          riskScore: 0.5,
+          details: { reason: 'magic_link_user_suspended' },
+        });
+        // Generic success masks suspension state from the requester.
+        return Response.json({
+          message: 'If an account exists with this email, we have sent a sign-in link.',
+        });
+      }
 
-    try {
-      await sendEmail({
-        to: normalizedEmail,
-        subject: 'Sign in to PageSpace',
-        react: React.createElement(MagicLinkEmail, { magicLinkUrl }),
-      });
-
-      loggers.auth.info('Magic link email sent', {
-        email: maskEmail(normalizedEmail),
-        isNewUser: result.data.isNewUser,
-        ip: clientIP,
-      });
-    } catch (error) {
-      // Log but don't expose email sending errors
-      loggers.auth.error('Failed to send magic link email', error as Error, {
-        email: maskEmail(normalizedEmail),
+      // TOS_REQUIRED and VALIDATION_FAILED are upstream-impossible (the schema
+      // and the explicit tosAccepted guard above catch them first); surface as
+      // a generic 200 to preserve enumeration resistance.
+      loggers.auth.error(
+        'Magic link pipe returned unexpected error',
+        new Error(`MagicLinkErrorCode: ${result.error}`),
+      );
+      return Response.json({
+        message: 'If an account exists with this email, we have sent a sign-in link.',
       });
     }
 
-    // Always return same success message to prevent enumeration
+    // Pipe succeeded: token minted + email sent inside the adapter.
+    loggers.auth.info('Magic link email sent', {
+      email: maskEmail(normalizedEmail),
+      ip: clientIP,
+    });
+    auditRequest(req, {
+      eventType: 'auth.token.created',
+      details: {
+        tokenType: 'magic_link',
+      },
+    });
+
     return Response.json({
       message: 'If an account exists with this email, we have sent a sign-in link.',
     });

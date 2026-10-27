@@ -1,0 +1,533 @@
+/**
+ * Org-owned drives: move a drive into an org, move it out, create one in an org, change its
+ * visibility, hand it to a new lead (Spec DRV-1..DRV-4, O-7, O-9, O-10).
+ *
+ * The decisions are pure (organizations/org-drive-ownership.ts); this module is the IO edge.
+ * Each operation runs in one transaction: lock the drive, lock the org, read the actor's org
+ * role, decide, write drives.orgId, re-attribute the drive's stored bytes (O-9), re-home its wallet ([D-OW-60]), and run the
+ * org-membership sync, so a refused or failed move leaves the drive and every quota exactly as
+ * they were.
+ *
+ * A move rewrites drives.orgId (and, on move-in, the slug when it collides inside the org and
+ * the visibility). Members, custom roles, pages, envs, and publishSubdomain are keyed by
+ * driveId and are not touched (DRV-2).
+ */
+
+import { db } from '@pagespace/db/db';
+import { and, eq, like, sql } from '@pagespace/db/operators';
+import { drives, pages, type OrgDriveVisibility } from '@pagespace/db/schema/core';
+import { PageType } from '../utils/enums';
+import { getOrgPolicies } from '../organizations/policy-reader';
+import type { OrgPolicies } from '../organizations/policies-core';
+import { agentModelSaveDecision } from '../organizations/org-action-decisions';
+import type { PolicyRefusal } from '../organizations/sharing-decisions';
+import { organizations, type OrgRole } from '@pagespace/db/schema/organizations';
+import { slugify } from '../utils/utils';
+import { resolveUniqueSlug } from './drive-guards';
+import { allocatePublishSubdomain } from './drive-service';
+import {
+  decideChangeDriveVisibility,
+  decideChangeOrgDriveLead,
+  decideCreateDriveInOrg,
+  decideMoveDriveIntoOrg,
+  decideMoveDriveOutOfOrg,
+  orgDriveVisibilityForInsert,
+  retryOnOrgSlugConflict,
+  visibilityChangeOnlyRestricts,
+  type ImplicitMembersChoice,
+  type OrgDriveCreationPolicy,
+  type OrgDriveRefusal,
+} from '../organizations/org-drive-ownership';
+import { retryOnDeadlock } from '../organizations/repository';
+import { openDriveFloorRefusal } from '../organizations/open-role-floor';
+import { holdOrgGuestsUnderPolicy, kickSuspendedGuests } from '../permissions/guest-holds';
+import { listDriveAudience } from '../permissions/drive-audience';
+import { checkOrgActive, checkOrgMayLoosen, type OrgLapsedRefusal } from '../organizations/status';
+import { removeFormerLeadOwnerRow } from '../permissions/org-drive-membership';
+import { getActorInfo, logActivityWithTx } from '../monitoring/activity-logger';
+import { reattributeDriveStorageInTx, type StorageReattributionResult } from './storage-limits';
+import { transactionWithOrgAudit } from '../audit/org-audit';
+import { releaseDedicatedHostingInTx } from './app-hosting/dedicated-release';
+import { rehomeDriveWalletInTx } from '../billing/drive-wallet-rehome';
+import type { CredentialRefusal, WalletCredential } from '../permissions/wallet-access';
+import type { VerifiedAuthentication } from '../auth/authentication-evidence';
+import { decideOrgAuthentication } from '../organizations/authentication-policy-core';
+
+export type OrgDriveTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/** What the org-membership sync is asked to do for one drive (D-OW-6, D-OW-10). */
+export type OrgMembershipSyncCall =
+  | { kind: 'move-in'; driveId: string; orgId: string; audienceBefore?: readonly string[] }
+  | { kind: 'create'; driveId: string; orgId: string }
+  | { kind: 'move-out'; driveId: string; orgId: string; implicitMembers: ImplicitMembersChoice; audienceBefore?: readonly string[] }
+  | { kind: 'visibility'; driveId: string; orgId: string; audienceBefore?: readonly string[] }
+  | { kind: 'lead-change'; driveId: string; orgId: string; fromUserId: string; toUserId: string; audienceBefore?: readonly string[] };
+
+/** Best-effort realtime publish, run only after the membership change has committed. */
+export type PublishAfterCommit = () => Promise<void>;
+
+export interface OrgDriveServiceDeps {
+  /** The user's role in the org, or null when not a member. */
+  getOrgRole(tx: OrgDriveTx, orgId: string, userId: string): Promise<OrgRole | null>;
+  /**
+   * Materialize or retire org-sourced drive_members rows inside the move's transaction.
+   * Returns the realtime publish to run once the transaction has committed.
+   */
+  syncOrgMembership(tx: OrgDriveTx, call: OrgMembershipSyncCall): Promise<PublishAfterCommit>;
+  /** "Who can create org drives" (POL-5). */
+  getOrgDriveCreationPolicy(tx: OrgDriveTx, orgId: string): Promise<OrgDriveCreationPolicy>;
+}
+
+/** What the move did to stored-byte attribution (O-9, D-OW-9). */
+export type StorageReattribution = StorageReattributionResult;
+
+type DriveRow = typeof drives.$inferSelect;
+
+export type DriveNotFound = { ok: false; code: 'DRIVE_NOT_FOUND'; status: 404; message: string };
+
+export type MoveDriveResult =
+  /** `orgId` is the org the drive moved into, or out of. */
+  | { ok: true; drive: DriveRow; orgId: string; storageReattribution: StorageReattribution }
+  | OrgDriveRefusal
+  | OrgLapsedRefusal
+  | PolicyRefusal
+  | DriveNotFound
+  | ({ ok: false; status: 403 } & CredentialRefusal);
+
+/** A lapsed org (SEAT-9) refuses a new drive and a move in; moving a drive OUT stays open. */
+/** SEC-2/SEC-3: the org's sign-in policy refuses the credential that asked. */
+export interface OrgCredentialRefusal {
+  ok: false;
+  code: 'org_strong_sign_in_required' | 'org_reauthentication_required';
+  status: 403;
+  message: string;
+}
+
+export type CreateOrgDriveResult = { ok: true; drive: DriveRow } | OrgDriveRefusal | OrgLapsedRefusal | OrgCredentialRefusal;
+
+const driveNotFound = (): DriveNotFound => ({
+  ok: false,
+  code: 'DRIVE_NOT_FOUND',
+  status: 404,
+  message: 'Drive not found',
+});
+
+/** [D-OW-60] the drive's wallet has AI calls in flight: the move waits for them to settle. */
+const driveWalletInUse = (): OrgDriveRefusal => ({
+  ok: false,
+  code: 'drive_wallet_calls_in_flight',
+  status: 409,
+  message: "This drive's wallet has AI calls in progress. Try moving the drive again in a minute, once they finish.",
+});
+
+async function lockDrive(tx: OrgDriveTx, driveId: string): Promise<DriveRow | null> {
+  const [row] = await tx.select().from(drives).where(eq(drives.id, driveId)).for('update');
+  return row ?? null;
+}
+
+/**
+ * Share-lock the org row so the org cannot be deleted or change Owner under the decision
+ * (org deletion and ownership transfer lock it FOR UPDATE). The actor's membership is guarded
+ * separately: deps.getOrgRole locks their org_members row, which leave and account deletion
+ * delete. Returns false when the org does not exist.
+ */
+async function lockOrg(tx: OrgDriveTx, orgId: string): Promise<boolean> {
+  const [row] = await tx
+    .select({ id: organizations.id })
+    .from(organizations)
+    .where(eq(organizations.id, orgId))
+    .for('share');
+  return row !== undefined;
+}
+
+/** A slug free inside the org: org drive slugs are unique per org (D-OW-15). */
+async function freeOrgSlug(tx: OrgDriveTx, orgId: string, base: string): Promise<string> {
+  const rows = await tx
+    .select({ slug: drives.slug })
+    .from(drives)
+    .where(and(eq(drives.orgId, orgId), like(drives.slug, `${base}%`)));
+  return resolveUniqueSlug(rows.map((r) => r.slug), base);
+}
+
+/**
+ * POL-6: a drive about to be an Open drive of `orgId` whose default role (none, for a new drive) is below the org's
+ * Open-drive role floor is refused. Called with the org row locked.
+ */
+async function openFloorCheck(tx: OrgDriveTx, input: { driveId: string | null; orgId: string; visibilityAfter: OrgDriveVisibility }): Promise<OrgDriveRefusal | null> {
+  const refusal = await openDriveFloorRefusal(tx, input);
+  return refusal ? { ok: false, code: 'POLICY_OPEN_ROLE_FLOOR', status: 403, message: refusal.message } : null;
+}
+
+/** POL-8: the first agent page in the drive whose stored provider/model the org does not allow, as its refusal. */
+async function agentModelMoveInRefusal(tx: OrgDriveTx, driveId: string, policies: OrgPolicies): Promise<PolicyRefusal | null> {
+  const agents = await tx
+    .select({ aiProvider: pages.aiProvider, aiModel: pages.aiModel })
+    .from(pages)
+    .where(and(eq(pages.driveId, driveId), eq(pages.type, PageType.AI_CHAT)));
+  for (const agent of agents) {
+    const decision = agentModelSaveDecision(policies, { provider: agent.aiProvider, modelId: agent.aiModel });
+    if (!decision.ok) return decision;
+  }
+  return null;
+}
+
+export async function moveDriveToOrg(
+  actorId: string,
+  driveId: string,
+  input: { orgId: string; orgVisibility?: OrgDriveVisibility; credential: WalletCredential },
+  deps: OrgDriveServiceDeps
+): Promise<MoveDriveResult> {
+  // ARCH-2: who could reach the drive before the move, so the post-commit invalidation can
+  // close every held room the transition ends — rowless power and policy context included.
+  const audienceBefore = (await listDriveAudience(driveId)).map((member) => member.userId);
+  // Org, then membership, then drive: departures hold membership before reassigning drives.
+  const outcome = await retryOnOrgSlugConflict(() => retryOnDeadlock(() => transactionWithOrgAudit(async (tx, audit) => {
+    const orgExists = await lockOrg(tx, input.orgId);
+    const actorOrgRole = orgExists ? await deps.getOrgRole(tx, input.orgId, actorId) : null;
+    const drive = await lockDrive(tx, driveId);
+    if (!drive) return driveNotFound();
+    const verdict = decideMoveDriveIntoOrg({ drive, actorId, actorOrgRole });
+    if (!verdict.ok) return verdict;
+    // POL-5: moving a drive in makes it an org drive, so it is judged by the same who-can-create policy as creating one.
+    const creation = decideCreateDriveInOrg({ actorOrgRole, creationPolicy: await deps.getOrgDriveCreationPolicy(tx, input.orgId) });
+    if (!creation.ok) return creation;
+    // SEAT-9: judged after the permission verdict, so only someone who may move the drive in
+    // learns the org's billing state; read under the org row lock taken above.
+    const active = await checkOrgActive(input.orgId, { executor: tx });
+    if (!active.ok) return active;
+    // An unchosen visibility is the column default, Open.
+    const floor = await openFloorCheck(tx, { driveId, orgId: input.orgId, visibilityAfter: input.orgVisibility ?? 'OPEN' });
+    if (floor) return floor;
+    // POL-8: the drive's agent pages bring their stored provider/model into the org, which is a save there: refused
+    // when the org does not allow one, as moving or copying a page in is. Read under the org row lock taken above.
+    const modelRefusal = await agentModelMoveInRefusal(tx, driveId, await getOrgPolicies(input.orgId, tx));
+    if (modelRefusal) return modelRefusal;
+
+    // [D-OW-60] the drive's wallet becomes the org's, under its pool, in this same transaction — refused,
+    // before anything is written, while calls are in flight on it.
+    const rehomed = await rehomeDriveWalletInTx(tx, { driveId, actorId, credential: input.credential, to: { kind: 'org', orgId: input.orgId } });
+    if (!rehomed.ok) return rehomed.reason === 'calls_in_flight' ? driveWalletInUse() : { ok: false as const, status: 403 as const, ...rehomed.refusal };
+
+    const slug = await freeOrgSlug(tx, input.orgId, drive.slug);
+    const [moved] = await tx
+      .update(drives)
+      .set({
+        orgId: input.orgId,
+        slug,
+        // An unchosen visibility resets to the column default rather than keeping whatever
+        // an earlier stint in an org left behind (DRV-4).
+        orgVisibility: input.orgVisibility ?? sql`DEFAULT`,
+        updatedAt: new Date(),
+      })
+      .where(eq(drives.id, driveId))
+      .returning();
+
+    // O-9: the drive's bytes leave its owner's personal quota in the same transaction that makes
+    // them the org's; the org's usage is derived from its drives, so it follows orgId.
+    const storageReattribution = await reattributeDriveStorageInTx(tx, { driveId, ownerId: drive.ownerId, orgId: input.orgId, direction: 'into-org' });
+    // WAL-9 (D-OW-64, symmetric): the owner stops paying for this drive's apps' dedicated hosting at
+    // period end — the drive is the org's now, and the org buys its own.
+    await releaseDedicatedHostingInTx(tx, { driveId, formerPayer: { kind: 'user' } });
+    const publish = await deps.syncOrgMembership(tx, { kind: 'move-in', driveId, orgId: input.orgId, audienceBefore });
+    // POL-2 (Review #2762 P1-1): the drive brings its outsiders with it. Under the org row lock taken above, the
+    // org's guests policy decides them as it decides any admission: off parks them (restored when guests come back
+    // on), approve queues them for an Owner or Admin, on leaves them. The move itself is never refused for it.
+    const heldGuests = await holdOrgGuestsUnderPolicy(tx, { orgId: input.orgId, driveId });
+    await audit({ orgId: input.orgId, driveId, eventType: 'org.drive.moved_in', actorId, resourceType: 'drive', resourceId: driveId, details: { orgVisibility: moved.orgVisibility } });
+    return { ok: true as const, drive: moved, storageReattribution, publish, heldGuests };
+  })));
+
+  if (!outcome.ok) return outcome;
+  const { publish, heldGuests, ...moved } = outcome;
+  await publish();
+  await kickSuspendedGuests(heldGuests);
+  return { ...moved, orgId: input.orgId };
+}
+
+export async function moveDriveOutOfOrg(
+  actorId: string,
+  driveId: string,
+  input: { implicitMembers: ImplicitMembersChoice | null; credential: WalletCredential },
+  deps: OrgDriveServiceDeps
+): Promise<MoveDriveResult> {
+  // ARCH-2: the BEFORE audience, read before any lock or rewrite (see moveDriveToOrg).
+  const audienceBefore = (await listDriveAudience(driveId)).map((member) => member.userId);
+  const outcome = await retryOnDeadlock(() => transactionWithOrgAudit(async (tx, audit) => {
+    // The org row before the drive row: org deletion and joining an org lock in that order, and
+    // taking the drive first would close a lock cycle with either.
+    const [current] = await tx.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, driveId));
+    if (!current) return driveNotFound();
+    const orgLocked = current.orgId !== null && (await lockOrg(tx, current.orgId));
+    const lockedActorRole = orgLocked && current.orgId !== null ? await deps.getOrgRole(tx, current.orgId, actorId) : null;
+    const drive = await lockDrive(tx, driveId);
+    if (!drive) return driveNotFound();
+
+    const { orgId } = drive;
+    // A drive that changed org between the read and the lock is judged as outside the org locked.
+    const actorOrgRole =
+      orgId !== null && orgId === current.orgId && orgLocked ? lockedActorRole : null;
+    const verdict = decideMoveDriveOutOfOrg({ drive, actorOrgRole, implicitMembers: input.implicitMembers });
+    if (!verdict.ok) return verdict;
+    if (orgId === null) throw new Error('Unreachable: move-out admitted a drive with no org');
+
+    // [D-OW-60] the drive's wallet becomes its lead's, under their personal root, in this same transaction —
+    // refused, before anything is written, while calls are in flight on it.
+    const rehomed = await rehomeDriveWalletInTx(tx, { driveId, actorId, credential: input.credential, to: { kind: 'personal', leadUserId: drive.ownerId } });
+    if (!rehomed.ok) return rehomed.reason === 'calls_in_flight' ? driveWalletInUse() : { ok: false as const, status: 403 as const, ...rehomed.refusal };
+
+    // The lead (ownerId) stays; the drive becomes their personal drive. Personal slugs are
+    // not unique per owner, so the slug is kept as is.
+    const [moved] = await tx
+      .update(drives)
+      .set({ orgId: null, updatedAt: new Date() })
+      .where(eq(drives.id, driveId))
+      .returning();
+
+    // O-9: the drive's bytes land on its owner's (the lead's) personal quota, atomically with orgId.
+    const storageReattribution = await reattributeDriveStorageInTx(tx, { driveId, ownerId: moved.ownerId, orgId, direction: 'out-of-org' });
+    // WAL-9 (D-OW-64): the org stops paying for this drive's apps' dedicated hosting at period end.
+    await releaseDedicatedHostingInTx(tx, { driveId, formerPayer: { kind: 'org', orgId } });
+    const publish = await deps.syncOrgMembership(tx, {
+      kind: 'move-out',
+      driveId,
+      orgId,
+      implicitMembers: verdict.implicitMembers,
+      audienceBefore,
+    });
+    await audit({ orgId, driveId, eventType: 'org.drive.moved_out', actorId, resourceType: 'drive', resourceId: driveId, details: { implicitMembers: input.implicitMembers } });
+    return { ok: true as const, drive: moved, orgId, storageReattribution, publish };
+  }));
+
+  if (!outcome.ok) return outcome;
+  const { publish, ...rest } = outcome;
+  await publish();
+  return rest;
+}
+
+export async function createOrgDrive(
+  actorId: string,
+  input: {
+    name: string;
+    orgId: string;
+    orgVisibility?: OrgDriveVisibility;
+    drivePrompt?: string | null;
+    /** The asking credential's verified sign-in, judged against the org's sign-in policy (null: none on record). */
+    authentication: VerifiedAuthentication | null;
+  },
+  deps: OrgDriveServiceDeps
+): Promise<CreateOrgDriveResult> {
+  const outcome = await retryOnOrgSlugConflict(() => transactionWithOrgAudit(async (tx, audit) => {
+    const orgExists = await lockOrg(tx, input.orgId);
+    const actorOrgRole = orgExists ? await deps.getOrgRole(tx, input.orgId, actorId) : null;
+    const creationPolicy = orgExists ? await deps.getOrgDriveCreationPolicy(tx, input.orgId) : 'members';
+    const verdict = decideCreateDriveInOrg({ actorOrgRole, creationPolicy });
+    if (!verdict.ok) return verdict;
+    // SEC-2/SEC-3: the org's sign-in policy, judged only for a member (an outsider learns nothing about the org's
+    // policy, only that they are not a member) and under the same lock as the membership read.
+    const credential = decideOrgAuthentication({ policy: await getOrgPolicies(input.orgId, tx), authentication: input.authentication, nowMs: Date.now() });
+    if (!credential.allowed) {
+      return { ok: false, code: credential.code, status: 403, message: 'This organization requires a stronger or more recent sign-in.' } satisfies OrgCredentialRefusal;
+    }
+    // SEAT-9: creating org drives is an org-only capability (after the permission verdict, as above).
+    const active = await checkOrgActive(input.orgId, { executor: tx });
+    if (!active.ok) return active;
+    // A new drive has no default role yet, so it holds the plain MEMBER role: Open is refused under an edit floor.
+    const floor = await openFloorCheck(tx, { driveId: null, orgId: input.orgId, visibilityAfter: input.orgVisibility ?? 'OPEN' });
+    if (floor) return floor;
+
+    const slug = await freeOrgSlug(tx, input.orgId, slugify(input.name));
+    const [created] = await tx
+      .insert(drives)
+      .values({
+        name: input.name,
+        slug,
+        ownerId: actorId,
+        orgId: input.orgId,
+        drivePrompt: input.drivePrompt ?? null,
+        ...orgDriveVisibilityForInsert(input.orgVisibility),
+        updatedAt: new Date(),
+      })
+      .returning();
+    const publishSubdomain = await allocatePublishSubdomain(created.id, slug, tx);
+
+    const publish = await deps.syncOrgMembership(tx, { kind: 'create', driveId: created.id, orgId: input.orgId });
+    await audit({ orgId: input.orgId, driveId: created.id, eventType: 'org.drive.created', actorId, resourceType: 'drive', resourceId: created.id, details: { orgVisibility: created.orgVisibility } });
+    return { ok: true as const, drive: { ...created, publishSubdomain }, publish };
+  }));
+
+  if (!outcome.ok) return outcome;
+  const { publish, ...created } = outcome;
+  await publish();
+  return created;
+}
+
+/**
+ * Org, sorted memberships, then drive: departures/removals hold a membership before
+ * reassigning its led drives. Holding the drive while waiting for that membership
+ * would invert that order. A changed org is refused using the locked drive facts.
+ */
+async function lockDriveWithOrg(
+  tx: OrgDriveTx,
+  driveId: string,
+  actorId: string,
+  deps: OrgDriveServiceDeps,
+  targetId?: string,
+): Promise<{ drive: DriveRow; actorOrgRole: OrgRole | null; targetOrgRole: OrgRole | null } | null> {
+  const [current] = await tx.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, driveId));
+  if (!current) return null;
+  const orgLocked = current.orgId !== null && (await lockOrg(tx, current.orgId));
+  const roles = new Map<string, OrgRole | null>();
+  if (orgLocked && current.orgId !== null) {
+    for (const userId of [...new Set(targetId === undefined ? [actorId] : [actorId, targetId])].sort()) {
+      roles.set(userId, await deps.getOrgRole(tx, current.orgId, userId));
+    }
+  }
+  const drive = await lockDrive(tx, driveId);
+  if (!drive) return null;
+  const sameOrg = drive.orgId !== null && drive.orgId === current.orgId && orgLocked;
+  return {
+    drive,
+    actorOrgRole: sameOrg ? roles.get(actorId) ?? null : null,
+    targetOrgRole: sameOrg && targetId !== undefined ? roles.get(targetId) ?? null : null,
+  };
+}
+
+export type ChangeVisibilityResult =
+  | { ok: true; changed: boolean; drive: DriveRow; from: OrgDriveVisibility; to: OrgDriveVisibility }
+  | OrgDriveRefusal
+  | OrgLapsedRefusal
+  | DriveNotFound;
+
+/**
+ * Change an org drive's visibility (DRV-4): the drive lead or an org Owner/Admin. The org membership
+ * sync runs in the same transaction, so materialized rows follow at once: an Open drive gains a row
+ * for every org member, a Restricted or Private one loses every org-sourced row (direct rows, from
+ * an invitation or an approved join, stay). Events publish after commit.
+ */
+export async function changeDriveVisibility(
+  actorId: string,
+  driveId: string,
+  input: { orgVisibility: OrgDriveVisibility },
+  deps: OrgDriveServiceDeps
+): Promise<ChangeVisibilityResult> {
+  // ARCH-2: the BEFORE audience, read before any lock or rewrite (see moveDriveToOrg).
+  const audienceBefore = (await listDriveAudience(driveId)).map((member) => member.userId);
+  const outcome = await retryOnDeadlock(() => transactionWithOrgAudit(async (tx, audit) => {
+    const locked = await lockDriveWithOrg(tx, driveId, actorId, deps);
+    if (!locked) return driveNotFound();
+    const { drive, actorOrgRole } = locked;
+
+    const verdict = decideChangeDriveVisibility({ drive, actorId, actorOrgRole, visibility: input.orgVisibility });
+    if (!verdict.ok) return verdict;
+    if (drive.orgId === null) throw new Error('Unreachable: a visibility change was admitted for a drive with no org');
+    // [D-OW-33] a lapsed org may only make a drive less open: the one guard, reading the lapse under the org's share lock.
+    const lapsed = await checkOrgMayLoosen(tx, drive.orgId, !visibilityChangeOnlyRestricts(verdict.from, verdict.to));
+    if (lapsed) return lapsed;
+    if (!verdict.changed) {
+      return { ok: true as const, changed: false, drive, from: verdict.from, to: verdict.to, publish: async () => {} };
+    }
+    const floor = await openFloorCheck(tx, { driveId, orgId: drive.orgId, visibilityAfter: verdict.to });
+    if (floor) return floor;
+
+    const [updated] = await tx
+      .update(drives)
+      .set({ orgVisibility: verdict.to, updatedAt: new Date() })
+      .where(eq(drives.id, driveId))
+      .returning();
+    const publish = await deps.syncOrgMembership(tx, { kind: 'visibility', driveId, orgId: drive.orgId, audienceBefore });
+    await audit({ orgId: drive.orgId, driveId, eventType: 'org.drive.visibility_changed', actorId, resourceType: 'drive', resourceId: driveId, details: { from: verdict.from, to: verdict.to } });
+    return { ok: true as const, changed: true, drive: updated, from: verdict.from, to: verdict.to, publish };
+  }));
+
+  if (!outcome.ok) return outcome;
+  const { publish, ...changed } = outcome;
+  await publish();
+  return changed;
+}
+
+export type ChangeLeadResult =
+  | { ok: true; changed: boolean; drive: DriveRow; fromUserId: string; toUserId: string }
+  | OrgDriveRefusal
+  | OrgLapsedRefusal
+  | DriveNotFound;
+
+/**
+ * Hand an org drive to a new lead (DRV-1, D-OW-7): the current lead or an org Owner/Admin names an
+ * org member. In one transaction the former lead's OWNER row goes (demote) and drives.ownerId moves
+ * (promote), then the org membership sync puts both people where their own membership puts them:
+ * the new lead needs no row, the former lead keeps an Open drive through org membership and keeps a
+ * direct row they hold, and otherwise loses access. An activity event names both people.
+ */
+export async function changeOrgDriveLead(
+  actorId: string,
+  driveId: string,
+  input: { newLeadId: string },
+  deps: OrgDriveServiceDeps
+): Promise<ChangeLeadResult> {
+  // ARCH-2: the BEFORE audience, read before any lock or rewrite (see moveDriveToOrg).
+  const audienceBefore = (await listDriveAudience(driveId)).map((member) => member.userId);
+  const outcome = await retryOnDeadlock(() => transactionWithOrgAudit(async (tx, audit) => {
+    const locked = await lockDriveWithOrg(tx, driveId, actorId, deps, input.newLeadId);
+    if (!locked) return driveNotFound();
+    const { drive, actorOrgRole, targetOrgRole } = locked;
+
+    const verdict = decideChangeOrgDriveLead({ drive, actorId, actorOrgRole, targetId: input.newLeadId, targetOrgRole });
+    if (!verdict.ok) return verdict;
+    if (drive.orgId === null) throw new Error('Unreachable: a lead change was admitted for a drive with no org');
+    if (!verdict.changed) {
+      return { ok: true as const, changed: false, drive, fromUserId: verdict.fromUserId, toUserId: verdict.toUserId, publish: async () => {} };
+    }
+    // [D-OW-33] a new lead gains lead authority over the drive: refused while the org is lapsed, read under the org's
+    // share lock. A departing lead's drives still pass on (leave.ts reassignLedOrgDrives): billing never blocks that.
+    const lapsed = await checkOrgMayLoosen(tx, drive.orgId, true);
+    if (lapsed) return lapsed;
+
+    await removeFormerLeadOwnerRow(tx, driveId, verdict.fromUserId);
+    const [updated] = await tx
+      .update(drives)
+      .set({ ownerId: verdict.toUserId, updatedAt: new Date() })
+      .where(eq(drives.id, driveId))
+      .returning();
+
+    const actor = await getActorInfo(actorId);
+    await logActivityWithTx(
+      {
+        userId: actorId,
+        actorEmail: actor.actorEmail,
+        actorDisplayName: actor.actorDisplayName,
+        operation: 'ownership_transfer',
+        resourceType: 'drive',
+        resourceId: driveId,
+        driveId,
+        previousValues: { ownerId: verdict.fromUserId },
+        newValues: { ownerId: verdict.toUserId },
+        metadata: { orgId: drive.orgId, reason: 'lead_changed' },
+      },
+      tx as unknown as typeof db,
+    );
+
+    const publish = await deps.syncOrgMembership(tx, {
+      kind: 'lead-change',
+      driveId,
+      orgId: drive.orgId,
+      fromUserId: verdict.fromUserId,
+      toUserId: verdict.toUserId,
+      audienceBefore,
+    });
+    await audit({
+      orgId: drive.orgId,
+      driveId,
+      eventType: 'org.drive.lead_changed',
+      actorId,
+      resourceType: 'drive',
+      resourceId: driveId,
+      details: { fromUserId: verdict.fromUserId, toUserId: verdict.toUserId, reason: 'lead_changed' },
+    });
+    return { ok: true as const, changed: true, drive: updated, fromUserId: verdict.fromUserId, toUserId: verdict.toUserId, publish };
+  }));
+
+  if (!outcome.ok) return outcome;
+  const { publish, ...changed } = outcome;
+  await publish();
+  return changed;
+}

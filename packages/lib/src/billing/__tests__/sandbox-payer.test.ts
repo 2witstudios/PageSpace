@@ -1,0 +1,155 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const mockDb = vi.hoisted(() => ({ select: vi.fn() }));
+vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
+vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn((a, b) => ({ op: 'eq', a, b })) }));
+vi.mock('@pagespace/db/schema/core', () => ({
+  drives: { id: 'drives.id', ownerId: 'drives.ownerId', orgId: 'drives.orgId' },
+}));
+
+import {
+  payerForDrive,
+  resolveSessionPayer,
+  resolveEnvPayer,
+  resolveEnvCharge,
+  lookupDriveBillingFacts,
+  type DriveBillingFacts,
+} from '../sandbox-payer';
+
+const personal = (ownerId: string): DriveBillingFacts => ({ ownerId, orgId: null });
+const inOrg = (ownerId: string, orgId: string): DriveBillingFacts => ({ ownerId, orgId });
+
+describe('payerForDrive', () => {
+  it('WAL-9 (partial) an org drive bills the org, never its lead', () => {
+    expect(payerForDrive(inOrg('lead-marcus', 'org-northwind'))).toEqual({ kind: 'org', orgId: 'org-northwind' });
+  });
+
+  it('WAL-9 (partial) a personal drive bills its owner', () => {
+    expect(payerForDrive(personal('owner-1'))).toEqual({ kind: 'user', userId: 'owner-1' });
+  });
+});
+
+/**
+ * The ENV payer, tested directly rather than only through the reconcile.
+ *
+ * The rule is the whole of an env's billing correctness: the DRIVE's payer, or nobody.
+ * `drive_envs.createdBy` is audit only, and a future `?? createdBy` — or any other fallback
+ * added in sympathy with the session resolver next door — must fail HERE, at the seam that
+ * states the rule, not only somewhere downstream that happens to exercise it.
+ */
+describe('resolveEnvPayer', () => {
+  it('resolves the drive owner for a personal drive', async () => {
+    const payer = await resolveEnvPayer({
+      driveId: 'drive-1',
+      lookupDriveBillingFacts: async (driveId) => personal(`owner-of-${driveId}`),
+    });
+
+    expect(payer).toEqual({ kind: 'user', userId: 'owner-of-drive-1' });
+  });
+
+  it('WAL-9 (partial) an env in an org drive is billed to the org', async () => {
+    const payer = await resolveEnvPayer({
+      driveId: 'drive-1',
+      lookupDriveBillingFacts: async () => inOrg('lead-marcus', 'org-northwind'),
+    });
+
+    expect(payer).toEqual({ kind: 'org', orgId: 'org-northwind' });
+  });
+
+  it('returns NULL when the drive cannot be resolved — there is no fallback, by design', async () => {
+    // The same rule as `resolveSessionPayer`: an unresolvable drive has no payer, and inventing
+    // one would bill a drive-owned machine to somebody who does not own it. Callers SKIP the cycle.
+    const payer = await resolveEnvPayer({ driveId: 'drive-gone', lookupDriveBillingFacts: async () => null });
+
+    expect(payer).toBeNull();
+  });
+});
+
+describe('resolveEnvCharge', () => {
+  it("WAL-9 (partial) an env or app in an org drive charges the org pool, recorded under its CREATOR as an accrual — never anyone's wallet (D-OW-28)", async () => {
+    const charge = await resolveEnvCharge({ driveId: 'd1', costOwnerId: 'member-ana', lookupDriveBillingFacts: async () => inOrg('lead-marcus', 'org-northwind') });
+    expect(charge).toEqual({ kind: 'org', orgId: 'org-northwind', userId: 'member-ana', accrual: true });
+  });
+
+  it('with no cost owner (created before D-OW-28, or its creator left the org) it is recorded under the drive LEAD', async () => {
+    const charge = await resolveEnvCharge({ driveId: 'd1', costOwnerId: null, lookupDriveBillingFacts: async () => inOrg('lead-marcus', 'org-northwind') });
+    expect(charge).toEqual({ kind: 'org', orgId: 'org-northwind', userId: 'lead-marcus', accrual: true });
+  });
+
+  it('a personal drive charges its owner', async () => {
+    const charge = await resolveEnvCharge({ driveId: 'd1', costOwnerId: 'member-ana', lookupDriveBillingFacts: async () => personal('owner-1') });
+    expect(charge).toEqual({ kind: 'user', userId: 'owner-1' });
+  });
+
+  it('returns NULL when the drive cannot be resolved — callers skip, never substitute', async () => {
+    expect(await resolveEnvCharge({ driveId: 'gone', costOwnerId: null, lookupDriveBillingFacts: async () => null })).toBeNull();
+  });
+});
+
+describe('resolveSessionPayer', () => {
+  it('bills the session owner directly for a global-assistant session (driveId null), with no lookup', async () => {
+    const lookup = vi.fn();
+    await expect(
+      resolveSessionPayer({ driveId: null, ownerId: 'owner-1', lookupDriveBillingFacts: lookup }),
+    ).resolves.toEqual({ kind: 'user', userId: 'owner-1' });
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it("resolves to the session's ACTUAL drive owner when driveId is set — never the caller's surface tenant", async () => {
+    const lookup = vi.fn(async () => personal('real-drive-owner'));
+    await expect(
+      resolveSessionPayer({ driveId: 'session-drive-1', ownerId: 'session-owner-1', lookupDriveBillingFacts: lookup }),
+    ).resolves.toEqual({ kind: 'user', userId: 'real-drive-owner' });
+    expect(lookup).toHaveBeenCalledWith('session-drive-1');
+  });
+
+  it('WAL-9 (partial) a session in an org drive is billed to the org, not the drive lead or the session owner', async () => {
+    await expect(
+      resolveSessionPayer({
+        driveId: 'org-drive',
+        ownerId: 'session-owner-1',
+        lookupDriveBillingFacts: async () => inOrg('lead-marcus', 'org-northwind'),
+      }),
+    ).resolves.toEqual({ kind: 'org', orgId: 'org-northwind' });
+  });
+
+  it('WAL-9 (partial) a drive session whose drive cannot be resolved (a stale read mid-delete) has NO payer — never its owner, who may be a member of an org drive', async () => {
+    await expect(
+      resolveSessionPayer({ driveId: 'vanished-drive', ownerId: 'owner-1', lookupDriveBillingFacts: async () => null }),
+    ).resolves.toBeNull();
+  });
+
+  it('is not a passthrough — a resolved drive owner beats a different session ownerId', async () => {
+    const lookup = vi.fn(async () => personal('other-owner'));
+    const a = await resolveSessionPayer({ driveId: 'd', ownerId: 'a', lookupDriveBillingFacts: lookup });
+    const b = await resolveSessionPayer({ driveId: 'd', ownerId: 'b', lookupDriveBillingFacts: lookup });
+    expect(a).toEqual({ kind: 'user', userId: 'other-owner' });
+    expect(b).toEqual({ kind: 'user', userId: 'other-owner' });
+  });
+});
+
+describe('lookupDriveBillingFacts (real drives read)', () => {
+  beforeEach(() => mockDb.select.mockReset());
+
+  it("returns the drive's ownerId and orgId", async () => {
+    mockDb.select.mockReturnValue({
+      from: () => ({
+        where: () => ({
+          limit: async () => [{ ownerId: 'owner-42', orgId: 'org-7' }],
+        }),
+      }),
+    });
+    await expect(lookupDriveBillingFacts('drive-1')).resolves.toEqual({ ownerId: 'owner-42', orgId: 'org-7' });
+  });
+
+  it('returns null when the drive has no row', async () => {
+    mockDb.select.mockReturnValue({
+      from: () => ({
+        where: () => ({
+          limit: async () => [],
+        }),
+      }),
+    });
+    await expect(lookupDriveBillingFacts('missing')).resolves.toBeNull();
+  });
+});

@@ -1,8 +1,10 @@
 /**
  * Session Lifecycle Abuse Vector Tests
  *
- * Tests for abuse scenarios in the session management system.
- * These verify that sessions cannot be exploited after user status changes.
+ * @scaffold - ORM mocks present via vi.hoisted (db.query.sessions.findFirst,
+ * db.update, db.insert, db.delete). Should be migrated to mock
+ * ../session-repository instead, since SessionService now uses the repository
+ * seam. The ORM mocks work transitively but are fragile.
  *
  * Security properties tested:
  * 1. Suspended users have sessions revoked on validation
@@ -40,7 +42,7 @@ vi.mock('drizzle-orm', () => ({
   sql: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       users: { findFirst: (...args: unknown[]) => mockFindFirst(...args) },
@@ -59,6 +61,8 @@ vi.mock('@pagespace/db', () => ({
       where: mockDeleteWhere.mockResolvedValue({ rowCount: 0 }),
     })),
   },
+}));
+vi.mock('@pagespace/db/schema/sessions', () => ({
   sessions: {
     tokenHash: 'sessions.tokenHash',
     revokedAt: 'sessions.revokedAt',
@@ -66,7 +70,11 @@ vi.mock('@pagespace/db', () => ({
     userId: 'sessions.userId',
     lastUsedAt: 'sessions.lastUsedAt',
   },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'users.id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   isNull: vi.fn(),
@@ -132,7 +140,7 @@ describe('Session Abuse Vectors', () => {
 
       expect(result).toBeNull();
       // Verify the session was revoked (update with revokedAt was called)
-      expect(mockUpdateSetWhere).toHaveBeenCalled();
+      expect(mockUpdateSetWhere).toHaveBeenCalledTimes(1);
     });
 
     it('given a suspended admin user, should reject session regardless of admin role', async () => {
@@ -194,7 +202,7 @@ describe('Session Abuse Vectors', () => {
 
       expect(result).toBeNull();
       // Verify the session was revoked (update with revokedAt was called)
-      expect(mockUpdateSetWhere).toHaveBeenCalled();
+      expect(mockUpdateSetWhere).toHaveBeenCalledTimes(1);
     });
 
     it('given session with matching tokenVersion, should succeed', async () => {
@@ -269,6 +277,7 @@ describe('Session Abuse Vectors', () => {
   describe('session claims integrity', () => {
     it('given valid session, returned claims should include all required fields', async () => {
       const expiresAt = new Date(Date.now() + 3600000);
+      const authenticatedAt = new Date(Date.now() - 60_000);
       mockFindFirst.mockResolvedValue({
         id: 'session-full',
         tokenHash: 'hash-full',
@@ -281,6 +290,8 @@ describe('Session Abuse Vectors', () => {
         resourceType: 'page',
         resourceId: 'page-456',
         driveId: 'drive-789',
+        authenticatedAt,
+        authenticationAssurance: 'user_verified_passkey',
         revokedAt: null,
         user: {
           id: 'user-123',
@@ -305,6 +316,7 @@ describe('Session Abuse Vectors', () => {
         resourceType: 'page',
         resourceId: 'page-456',
         driveId: 'drive-789',
+        authentication: { authenticatedAtMs: authenticatedAt.getTime(), assurance: 'user_verified_passkey' },
       });
     });
 
@@ -370,7 +382,7 @@ describe('Session Abuse Vectors', () => {
       mockFindFirst.mockResolvedValue(null);
 
       await expect(
-        service.createSession({
+        service.createSession({ authentication: null,
           userId: 'user-nonexistent',
           type: 'user',
           scopes: ['*'],
@@ -388,7 +400,7 @@ describe('Session Abuse Vectors', () => {
     it('revokeAllUserSessions should return count of revoked sessions', async () => {
       mockUpdateSetWhere.mockResolvedValue({ rowCount: 5 });
 
-      const count = await service.revokeAllUserSessions('user-123', 'password_changed');
+      const count = await service.revokeAllUserSessions('user-123', 'admin_action');
 
       expect(count).toBe(5);
     });

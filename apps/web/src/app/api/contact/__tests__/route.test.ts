@@ -22,16 +22,18 @@ import { POST } from '../route';
  *   - Strict schema validation
  */
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     insert: vi.fn().mockReturnValue({
       values: vi.fn().mockResolvedValue(undefined),
     }),
   },
+}));
+vi.mock('@pagespace/db/schema/contact', () => ({
   contactSubmissions: {},
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: {
       info: vi.fn(),
@@ -40,9 +42,11 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
-vi.mock('@pagespace/lib/security', () => ({
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn(),
   DISTRIBUTED_RATE_LIMITS: {
     CONTACT_FORM: { maxAttempts: 10, windowMs: 60000 },
@@ -53,9 +57,9 @@ vi.mock('@/lib/auth/auth-helpers', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
 }));
 
-import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
-import { checkDistributedRateLimit } from '@pagespace/lib/security';
+import { db } from '@pagespace/db/db';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 
 const validPayload = {
   name: 'John Doe',
@@ -100,7 +104,7 @@ describe('/api/contact', () => {
       const request = createRequest(validPayload);
       await POST(request);
 
-      expect(db.insert).toHaveBeenCalled();
+      expect(db.insert).toHaveBeenCalledTimes(1);
       const valuesMock = (vi.mocked(db.insert).mock.results[0].value as { values: ReturnType<typeof vi.fn> }).values;
       expect(valuesMock).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -292,7 +296,7 @@ describe('/api/contact', () => {
 
       expect(loggers.api.error).toHaveBeenCalledWith(
         'Contact form error',
-        expect.any(Error)
+        expect.objectContaining({ message: 'DB connection failed' })
       );
     });
   });

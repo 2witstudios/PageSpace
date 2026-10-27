@@ -1,25 +1,37 @@
+import { parseVerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 import { NextResponse } from 'next/server';
-import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
-import {
-  verifySignedState,
-  exchangeOAuthCode,
-  encryptCredentials,
-  getProviderById,
-  createConnection,
-  findUserConnection,
-  findDriveConnection,
-  updateConnectionCredentials,
-  updateConnectionStatus,
-} from '@pagespace/lib/integrations';
-import type { IntegrationProviderConfig, OAuth2Config } from '@pagespace/lib/integrations';
+import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
+import { integrationDecision } from '@pagespace/lib/organizations/org-action-decisions';
+import { z } from 'zod';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
+import { db } from '@pagespace/db/db';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { verifySignedState } from '@pagespace/lib/integrations/oauth/oauth-state';
+import { exchangeOAuthCode } from '@pagespace/lib/integrations/oauth/oauth-handler';
+import { encryptCredentials } from '@pagespace/lib/integrations/credentials/encrypt-credentials';
+import { getProviderById } from '@pagespace/lib/integrations/repositories/provider-repository';
+import { resolveProviderConfig } from '@pagespace/lib/integrations/providers/builtin-providers';
+import { createConnection, findUserConnection, findDriveConnection, updateConnectionCredentials, updateConnectionStatus } from '@pagespace/lib/integrations/repositories/connection-repository';
+import type { OAuth2Config } from '@pagespace/lib/integrations/types';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
+import { isSafeReturnUrl } from '@/lib/auth';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
+
+const integrationCallbackSchema = z.object({
+  code: z.string().min(1, 'Authorization code is required').max(4096),
+  state: z.string().min(1, 'State parameter is required').max(4096),
+});
+
+const visibilityValues = ['private', 'owned_drives', 'all_drives'] as const;
+type ConnectionVisibility = typeof visibilityValues[number];
 
 /**
  * GET /api/user/integrations/callback
  * OAuth callback handler for integration connections.
  */
 export async function GET(request: Request) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   const baseUrl = process.env.WEB_APP_URL || process.env.NEXTAUTH_URL || 'http://localhost:3000';
   const defaultReturn = '/settings/integrations';
 
@@ -30,23 +42,29 @@ export async function GET(request: Request) {
     }
 
     const { searchParams } = new URL(request.url);
-    const code = searchParams.get('code');
-    const state = searchParams.get('state');
     const error = searchParams.get('error');
 
     if (error) {
-      loggers.auth.warn('OAuth integration error', { error });
+      loggers.auth.warn('OAuth integration error', { error: String(error).slice(0, 100) });
       const errorParam = error === 'access_denied' ? 'access_denied' : 'oauth_error';
       return NextResponse.redirect(new URL(`${defaultReturn}?error=${errorParam}`, baseUrl));
     }
 
-    if (!code || !state) {
+    const validation = integrationCallbackSchema.safeParse({
+      code: searchParams.get('code'),
+      state: searchParams.get('state'),
+    });
+
+    if (!validation.success) {
       return NextResponse.redirect(new URL(`${defaultReturn}?error=invalid_request`, baseUrl));
     }
+
+    const { code, state } = validation.data;
 
     // Verify and decode state
     const stateData = verifySignedState<{
       userId: string;
+      authentication?: unknown;
       providerId: string;
       name: string;
       visibility?: string;
@@ -54,12 +72,16 @@ export async function GET(request: Request) {
       returnUrl: string;
     }>(state, process.env.OAUTH_STATE_SECRET);
 
+    // codeql[js/user-controlled-bypass] stateData is HMAC-SHA256 verified via verifySignedState()
     if (!stateData) {
       loggers.auth.warn('Invalid or expired OAuth state for integration callback');
       return NextResponse.redirect(new URL(`${defaultReturn}?error=invalid_state`, baseUrl));
     }
 
-    const { userId, providerId, name, visibility, driveId, returnUrl } = stateData;
+    const { userId, providerId, name, driveId, returnUrl } = stateData;
+    const visibility: ConnectionVisibility = visibilityValues.includes(stateData.visibility as ConnectionVisibility)
+      ? (stateData.visibility as ConnectionVisibility)
+      : 'owned_drives';
 
     // Load provider
     const provider = await getProviderById(db, providerId);
@@ -67,8 +89,11 @@ export async function GET(request: Request) {
       return NextResponse.redirect(new URL(`${defaultReturn}?error=provider_not_found`, baseUrl));
     }
 
-    const config = provider.config as IntegrationProviderConfig;
-    if (config.authMethod.type !== 'oauth2') {
+    // Builtin providers may have changed shape (new token endpoint, renamed
+    // auth params) since this row was persisted — resolve to the canonical
+    // in-memory definition rather than trusting the possibly-stale DB copy.
+    const config = resolveProviderConfig(provider);
+    if (!config || config.authMethod.type !== 'oauth2') {
       return NextResponse.redirect(new URL(`${defaultReturn}?error=not_oauth`, baseUrl));
     }
 
@@ -113,10 +138,18 @@ export async function GET(request: Request) {
     // Upsert connection — drive-scoped or user-scoped
     if (driveId) {
       // Drive-scoped connection: verify user has admin access
-      const access = await getDriveAccess(driveId, userId);
+      // The initiating credential, re-parsed from the signed state: an org's sign-in policy applies to it here too.
+      const actor = credentialActor(userId, parseVerifiedAuthentication(stateData.authentication, Date.now()));
+      const access = await getDriveAccess(driveId, actor);
       if (!access.isOwner && !access.isAdmin) {
         loggers.auth.warn('OAuth callback: user lacks admin access to drive', { userId, driveId });
         return NextResponse.redirect(new URL(`${defaultReturn}?error=access_denied`, baseUrl));
+      }
+
+      // POL-11: the allowlist may have changed between the redirect and the callback; ask again where the
+      // connection is written (this also keeps a suspended connection from being re-activated through OAuth).
+      if (!integrationDecision((await getDrivePolicies(driveId))?.policies ?? null, provider.slug).ok) {
+        return NextResponse.redirect(new URL(`${defaultReturn}?error=org_policy`, baseUrl));
       }
 
       const existing = await findDriveConnection(db, driveId, providerId);
@@ -140,7 +173,7 @@ export async function GET(request: Request) {
       // User-scoped connection
       const existing = await findUserConnection(db, userId, providerId);
       if (existing) {
-        await updateConnectionCredentials(db, existing.id, encrypted);
+        await updateConnectionCredentials(db, existing.id, encrypted, visibility);
         await updateConnectionStatus(db, existing.id, 'active');
       } else {
         await createConnection(db, {
@@ -149,7 +182,7 @@ export async function GET(request: Request) {
           name,
           status: 'active',
           credentials: encrypted,
-          visibility: (visibility as 'private' | 'owned_drives' | 'all_drives') || 'owned_drives',
+          visibility,
           connectedBy: userId,
           connectedAt: new Date(),
         });
@@ -158,13 +191,9 @@ export async function GET(request: Request) {
       loggers.auth.info('Integration connected via OAuth', { userId, providerId, slug: provider.slug });
     }
 
-    // Validate returnUrl is a safe relative path (no scheme, no host, starts with /)
-    const isSafeReturn = returnUrl
-      && returnUrl.startsWith('/')
-      && !returnUrl.startsWith('//')
-      && !returnUrl.includes('\\')
-      && !/[\r\n]/.test(returnUrl);
-    const redirectPath = isSafeReturn ? returnUrl : defaultReturn;
+    auditRequest(request, { eventType: 'auth.token.created', userId, details: { tokenType: 'integration' } });
+
+    const redirectPath = returnUrl && isSafeReturnUrl(returnUrl) ? returnUrl : defaultReturn;
     const redirectUrl = new URL(redirectPath, baseUrl);
     redirectUrl.searchParams.set('connected', 'true');
 

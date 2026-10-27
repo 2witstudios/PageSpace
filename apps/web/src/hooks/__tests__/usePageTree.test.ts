@@ -13,6 +13,8 @@ const {
   mockCacheDelete,
   mockSWRState,
   mockIsAnyEditing,
+  mockIsAnyActive,
+  mockSubscribe,
 } = vi.hoisted(() => ({
   mockFetchWithAuth: vi.fn(),
   mockMutate: vi.fn(),
@@ -22,6 +24,8 @@ const {
     error: undefined as unknown,
   },
   mockIsAnyEditing: vi.fn(() => false),
+  mockIsAnyActive: vi.fn(() => false),
+  mockSubscribe: vi.fn((_cb: (state: { isAnyEditing: () => boolean }) => void): (() => void) => vi.fn()),
 }));
 
 // Mock dependencies with hoisted mocks
@@ -33,9 +37,11 @@ vi.mock('@/stores/useEditingStore', () => ({
   useEditingStore: {
     getState: () => ({
       isAnyEditing: mockIsAnyEditing,
+      isAnyActive: mockIsAnyActive,
     }),
+    subscribe: (cb: (state: { isAnyEditing: () => boolean }) => void) => mockSubscribe(cb),
   },
-  isEditingActive: () => mockIsAnyEditing(),
+  isEditingActive: () => mockIsAnyActive(),
 }));
 
 vi.mock('@/lib/tree/tree-utils', () => ({
@@ -70,7 +76,7 @@ import { usePageTree, type TreePage } from '../usePageTree';
 const createMockTreePage = (overrides: Partial<TreePage> = {}): TreePage => ({
   id: 'page-' + Math.random().toString(36).slice(2, 11),
   title: 'Test Page',
-  type: 'DOCUMENT' as import('@pagespace/lib/client').PageType,
+  type: 'DOCUMENT' as import('@pagespace/lib/utils/enums').PageType,
   parentId: null,
   originalParentId: null,
   driveId: 'drive-123',
@@ -92,6 +98,8 @@ describe('usePageTree', () => {
     mockSWRState.data = undefined;
     mockSWRState.error = undefined;
     mockIsAnyEditing.mockReturnValue(false);
+    mockIsAnyActive.mockReturnValue(false);
+    mockSubscribe.mockImplementation(() => vi.fn()); // noop unsubscribe
   });
 
   afterEach(() => {
@@ -146,7 +154,9 @@ describe('usePageTree', () => {
       });
 
       /** @boundary-contract Optimistic update: mutate with functional updater and revalidate=false */
-      expect(mockMutate).toHaveBeenCalledWith(expect.any(Function), { revalidate: false });
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+      expect(typeof mockMutate.mock.calls[0][0]).toBe('function');
+      expect(mockMutate.mock.calls[0][1]).toEqual({ revalidate: false });
 
       // Observable: verify the updater function produces correct tree
       const updaterFn = mockMutate.mock.calls[0][0];
@@ -173,7 +183,9 @@ describe('usePageTree', () => {
       });
 
       /** @boundary-contract Optimistic update: no refetch for nested updates */
-      expect(mockMutate).toHaveBeenCalledWith(expect.any(Function), { revalidate: false });
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+      expect(typeof mockMutate.mock.calls[0][0]).toBe('function');
+      expect(mockMutate.mock.calls[0][1]).toEqual({ revalidate: false });
 
       // Observable: verify the updater function produces correct nested tree
       const updaterFn = mockMutate.mock.calls[0][0];
@@ -194,7 +206,9 @@ describe('usePageTree', () => {
       }).not.toThrow();
 
       // mutate is called with functional updater, but the function returns unchanged data
-      expect(mockMutate).toHaveBeenCalledWith(expect.any(Function), { revalidate: false });
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+      expect(typeof mockMutate.mock.calls[0][0]).toBe('function');
+      expect(mockMutate.mock.calls[0][1]).toEqual({ revalidate: false });
       const updaterFn = mockMutate.mock.calls[0][0];
       const updatedTree = updaterFn(mockTree);
       expect(updatedTree).toBe(mockTree); // Same reference, unchanged
@@ -243,10 +257,14 @@ describe('usePageTree', () => {
       });
 
       // Observable: API was called to fetch children (with AbortController signal for timeout)
-      expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/pages/parent/children', expect.objectContaining({ signal: expect.any(AbortSignal) }));
+      expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
+      expect(mockFetchWithAuth.mock.calls[0][0]).toBe('/api/pages/parent/children');
+      expect(mockFetchWithAuth.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
 
       /** @boundary-contract Optimistic merge: update tree without refetch */
-      expect(mockMutate).toHaveBeenCalledWith(expect.any(Function), { revalidate: false });
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+      expect(typeof mockMutate.mock.calls[0][0]).toBe('function');
+      expect(mockMutate.mock.calls[0][1]).toEqual({ revalidate: false });
 
       // Observable: verify updater merges children using current cache data
       const updaterFn = mockMutate.mock.calls[0][0];
@@ -273,9 +291,9 @@ describe('usePageTree', () => {
   });
 
   describe('invalidateTree', () => {
-    it('given no active editing, should delete cache and mutate', () => {
+    it('given no active state, should mutate without deleting cache', () => {
       mockSWRState.data = [createMockTreePage()];
-      mockIsAnyEditing.mockReturnValue(false);
+      mockIsAnyActive.mockReturnValue(false);
 
       const { result } = renderHook(() => usePageTree('drive-123'));
 
@@ -283,11 +301,11 @@ describe('usePageTree', () => {
         result.current.invalidateTree();
       });
 
-      expect(mockCacheDelete).toHaveBeenCalledWith('/api/drives/drive-123/pages');
+      expect(mockCacheDelete).not.toHaveBeenCalled();
       expect(mockMutate).toHaveBeenCalled();
     });
 
-    it('given active editing, should skip invalidation', () => {
+    it('given active document editing, should skip invalidation', () => {
       mockSWRState.data = [createMockTreePage()];
       mockIsAnyEditing.mockReturnValue(true);
       const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => { });
@@ -298,11 +316,112 @@ describe('usePageTree', () => {
         result.current.invalidateTree();
       });
 
+      expect(mockMutate).not.toHaveBeenCalled();
       expect(mockCacheDelete).not.toHaveBeenCalled();
       expect(consoleLog).toHaveBeenCalledWith(
-        expect.stringContaining('Skipping tree revalidation')
+        '⏸️ Skipping tree revalidation - document or form editing in progress'
       );
       consoleLog.mockRestore();
+    });
+
+    it('given active AI streaming (but no document editing), should revalidate immediately', () => {
+      mockSWRState.data = [createMockTreePage()];
+      mockIsAnyEditing.mockReturnValue(false);
+      mockIsAnyActive.mockReturnValue(true); // streaming is active, but that no longer blocks
+
+      const { result } = renderHook(() => usePageTree('drive-123'));
+
+      act(() => {
+        result.current.invalidateTree();
+      });
+
+      // AI streaming must not block tree revalidation — users need live sidebar updates
+      expect(mockMutate).toHaveBeenCalled();
+      expect(mockCacheDelete).not.toHaveBeenCalled();
+    });
+
+    it('given skipped invalidation, should flush mutate once editing ends', () => {
+      mockSWRState.data = [createMockTreePage()];
+      mockIsAnyEditing.mockReturnValue(true);
+      const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => { });
+
+      // Capture the subscriber registered by the hook
+      let capturedSubscriber: ((state: { isAnyEditing: () => boolean }) => void) | null = null;
+      mockSubscribe.mockImplementation((cb: (state: { isAnyEditing: () => boolean }) => void) => {
+        capturedSubscriber = cb;
+        return vi.fn(); // unsubscribe noop
+      });
+
+      const { result } = renderHook(() => usePageTree('drive-123'));
+
+      // Invalidate during editing — deferred, not fired immediately
+      act(() => {
+        result.current.invalidateTree();
+      });
+      expect(mockMutate).not.toHaveBeenCalled();
+      expect(capturedSubscriber).not.toBeNull();
+
+      // Simulate store transitioning to no editing
+      mockIsAnyEditing.mockReturnValue(false);
+      act(() => {
+        capturedSubscriber!({ isAnyEditing: () => false });
+      });
+
+      // Pending invalidation should now be flushed
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+      consoleLog.mockRestore();
+    });
+
+    it('given multiple skipped invalidations, should flush mutate only once', () => {
+      mockSWRState.data = [createMockTreePage()];
+      mockIsAnyEditing.mockReturnValue(true);
+      const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => { });
+
+      let capturedSubscriber: ((state: { isAnyEditing: () => boolean }) => void) | null = null;
+      mockSubscribe.mockImplementation((cb: (state: { isAnyEditing: () => boolean }) => void) => {
+        capturedSubscriber = cb;
+        return vi.fn();
+      });
+
+      const { result } = renderHook(() => usePageTree('drive-123'));
+
+      // Multiple invalidations during editing — all coalesced
+      act(() => {
+        result.current.invalidateTree();
+        result.current.invalidateTree();
+        result.current.invalidateTree();
+      });
+      expect(mockMutate).not.toHaveBeenCalled();
+
+      // Editing ends
+      mockIsAnyEditing.mockReturnValue(false);
+      act(() => {
+        capturedSubscriber!({ isAnyEditing: () => false });
+      });
+
+      // Only one mutate despite three invalidateTree calls
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+      consoleLog.mockRestore();
+    });
+
+    it('given no skipped invalidation, should not flush when editing ends', () => {
+      mockSWRState.data = [createMockTreePage()];
+      mockIsAnyEditing.mockReturnValue(false);
+
+      let capturedSubscriber: ((state: { isAnyEditing: () => boolean }) => void) | null = null;
+      mockSubscribe.mockImplementation((cb: (state: { isAnyEditing: () => boolean }) => void) => {
+        capturedSubscriber = cb;
+        return vi.fn();
+      });
+
+      renderHook(() => usePageTree('drive-123'));
+
+      // No invalidateTree called — subscriber fires but nothing pending
+      act(() => {
+        capturedSubscriber!({ isAnyEditing: () => false });
+      });
+
+      expect(mockMutate).not.toHaveBeenCalled();
     });
   });
 

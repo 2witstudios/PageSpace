@@ -14,6 +14,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { AlertCircle, Cable, Plug2, Plus, Bot } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
+import { useAuth } from '@/hooks/useAuth';
 import { useDriveConnections, useProviders, useConnectionGrantCount } from '@/hooks/useIntegrations';
 import { IntegrationStatusBadge } from '@/components/integrations/IntegrationStatusBadge';
 import { ConnectIntegrationDialog } from '@/components/integrations/ConnectIntegrationDialog';
@@ -26,6 +27,8 @@ interface DriveIntegrationsProps {
 }
 
 export function DriveIntegrations({ driveId }: DriveIntegrationsProps) {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const { connections, isLoading: loadingConnections, error: connectionsError, mutate: mutateConnections } = useDriveConnections(driveId);
   const { providers, isLoading: loadingProviders, error: providersError, mutate: mutateProviders } = useProviders();
 
@@ -38,8 +41,8 @@ export function DriveIntegrations({ driveId }: DriveIntegrationsProps) {
     [connections]
   );
   const availableProviders = useMemo(
-    () => providers.filter((p) => !connectedProviderIds.has(p.id)),
-    [providers, connectedProviderIds]
+    () => providers.filter((p) => !connectedProviderIds.has(p.id) && (isAdmin || p.slug === 'github')),
+    [providers, connectedProviderIds, isAdmin]
   );
 
   const handleDisconnect = async () => {
@@ -69,7 +72,9 @@ export function DriveIntegrations({ driveId }: DriveIntegrationsProps) {
                 Drive Integrations
               </CardTitle>
               <CardDescription>
-                External services connected to this drive. Available to all AI agents in this drive.
+                External services connected to this drive. Each AI Chat then chooses which of a
+                connection&apos;s tools its agent can use — that per-agent choice is what caps what
+                an agent can do.
               </CardDescription>
             </div>
             <Button

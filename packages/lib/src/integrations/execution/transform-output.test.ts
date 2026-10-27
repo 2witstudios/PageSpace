@@ -179,6 +179,12 @@ describe('truncateStrings', () => {
 
     expect(result).toEqual(['short', 'this is a ...']);
   });
+
+  it('given non-string primitive values, should return unchanged', () => {
+    expect(truncateStrings(42, 10)).toBe(42);
+    expect(truncateStrings(true, 10)).toBe(true);
+    expect(truncateStrings(null, 10)).toBeNull();
+  });
 });
 
 describe('transformOutput', () => {
@@ -226,5 +232,33 @@ describe('transformOutput', () => {
   it('given null/undefined response, should return null gracefully', () => {
     expect(transformOutput(null, { extract: '$.data' })).toBeNull();
     expect(transformOutput(undefined, { extract: '$.data' })).toBeNull();
+  });
+
+  it('given maxLength transform, should truncate string values', () => {
+    const response = {
+      title: 'This is a very long title that should be truncated',
+      count: 42,
+    };
+
+    const result = transformOutput(response, { maxLength: 15 }) as Record<string, unknown>;
+
+    expect(result.title).toBe('This is a very ...');
+    expect(result.count).toBe(42);
+  });
+
+  it('given combined extract, mapping, and maxLength, should apply all in order', () => {
+    const response = {
+      data: {
+        user: { display_name: 'A very long display name value' },
+      },
+    };
+
+    const result = transformOutput(response, {
+      extract: '$.data.user',
+      mapping: { name: 'display_name' },
+      maxLength: 10,
+    }) as Record<string, unknown>;
+
+    expect(result.name).toBe('A very lon...');
   });
 });

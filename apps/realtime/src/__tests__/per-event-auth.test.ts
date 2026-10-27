@@ -9,17 +9,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { shouldReauthorize, isSensitiveEvent, reauthorizePageAccess, withPerEventAuth, type AuthSocket, SensitiveEventType } from '../per-event-auth';
 
-vi.mock('@pagespace/lib/logger-config', () => {
+vi.mock('@pagespace/lib/logging/logger-config', () => {
   const noop = vi.fn();
   const logger = { info: noop, warn: noop, error: noop, debug: noop, fatal: noop };
   return { loggers: { realtime: logger, api: logger, security: logger } };
 });
 
-vi.mock('@pagespace/lib/permissions-cached', () => ({
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getUserAccessLevel: vi.fn(),
 }));
 
-import { getUserAccessLevel } from '@pagespace/lib/permissions-cached';
+import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 describe('Per-Event Authorization', () => {
   describe('isSensitiveEvent', () => {
@@ -115,7 +116,7 @@ describe('reauthorizePageAccess', () => {
     mockedGetUserAccessLevel.mockReset();
   });
 
-  it('calls getUserAccessLevel with bypassCache: true', async () => {
+  it('calls getUserAccessLevel with userId and pageId', async () => {
     mockedGetUserAccessLevel.mockResolvedValue({
       canView: true,
       canEdit: true,
@@ -123,15 +124,15 @@ describe('reauthorizePageAccess', () => {
       canDelete: false,
     });
 
-    await reauthorizePageAccess('user-1', 'page-1', 'edit');
+    await reauthorizePageAccess(credentialActor('user-1', null), 'page-1', 'edit');
 
-    expect(mockedGetUserAccessLevel).toHaveBeenCalledWith('user-1', 'page-1', { bypassCache: true });
+    expect(mockedGetUserAccessLevel).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'page-1');
   });
 
   it('given revoked user (null permissions), should return authorized: false', async () => {
     mockedGetUserAccessLevel.mockResolvedValue(null);
 
-    const result = await reauthorizePageAccess('user-revoked', 'page-1', 'edit');
+    const result = await reauthorizePageAccess(credentialActor('user-revoked', null), 'page-1', 'edit');
 
     expect(result.authorized).toBe(false);
     expect(result.reason).toBe('No access to this page');
@@ -145,7 +146,7 @@ describe('reauthorizePageAccess', () => {
       canDelete: false,
     });
 
-    const result = await reauthorizePageAccess('user-viewer', 'page-1', 'edit');
+    const result = await reauthorizePageAccess(credentialActor('user-viewer', null), 'page-1', 'edit');
 
     expect(result.authorized).toBe(false);
     expect(result.reason).toBe('Requires edit permission');
@@ -159,9 +160,36 @@ describe('reauthorizePageAccess', () => {
       canDelete: false,
     });
 
-    const result = await reauthorizePageAccess('user-editor', 'page-1', 'edit');
+    const result = await reauthorizePageAccess(credentialActor('user-editor', null), 'page-1', 'edit');
 
     expect(result.authorized).toBe(true);
+  });
+
+  it('given requiredLevel=view and canView is true, should return authorized: true', async () => {
+    mockedGetUserAccessLevel.mockResolvedValue({
+      canView: true,
+      canEdit: false,
+      canShare: false,
+      canDelete: false,
+    });
+
+    const result = await reauthorizePageAccess(credentialActor('user-viewer', null), 'page-1', 'view');
+
+    expect(result.authorized).toBe(true);
+  });
+
+  it('given requiredLevel=view and canView is false, should return authorized: false', async () => {
+    mockedGetUserAccessLevel.mockResolvedValue({
+      canView: false,
+      canEdit: false,
+      canShare: false,
+      canDelete: false,
+    });
+
+    const result = await reauthorizePageAccess(credentialActor('user-no-access', null), 'page-1', 'view');
+
+    expect(result.authorized).toBe(false);
+    expect(result.reason).toBe('Requires view permission');
   });
 });
 
@@ -177,7 +205,7 @@ describe('withPerEventAuth', () => {
     const toFn = vi.fn().mockReturnValue({ emit: vi.fn() });
     return {
       socket: {
-        data: { user: userId ? { id: userId, name: 'Test', avatarUrl: null } : undefined },
+        data: { user: userId ? { id: userId, name: 'Test', avatarUrl: null } : undefined, actor: userId ? credentialActor(userId, null) : undefined },
         emit: emitFn,
         to: toFn,
       } as unknown as AuthSocket,
@@ -311,7 +339,7 @@ describe('withPerEventAuth', () => {
     await listener(payload);
 
     expect(handler).toHaveBeenCalledWith(socket, payload);
-    expect(mockedGetUserAccessLevel).toHaveBeenCalledWith('user-1', 'page-1', { bypassCache: true });
+    expect(mockedGetUserAccessLevel).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'page-1');
   });
 });
 
@@ -331,7 +359,7 @@ describe('Zero-Trust: Revoked-But-Connected Attack', () => {
     const toFn = vi.fn().mockReturnValue({ emit: vi.fn() });
     return {
       socket: {
-        data: { user: userId ? { id: userId, name: 'Test', avatarUrl: null } : undefined },
+        data: { user: userId ? { id: userId, name: 'Test', avatarUrl: null } : undefined, actor: userId ? credentialActor(userId, null) : undefined },
         emit: emitFn,
         to: toFn,
       } as unknown as AuthSocket,
@@ -435,7 +463,7 @@ describe('Zero-Trust: All Sensitive Events Require Re-Auth', () => {
     const emitFn = vi.fn();
     return {
       socket: {
-        data: { user: { id: userId, name: 'Test', avatarUrl: null } },
+        data: { user: { id: userId, name: 'Test', avatarUrl: null }, actor: credentialActor(userId, null) },
         emit: emitFn,
         to: vi.fn().mockReturnValue({ emit: vi.fn() }),
       } as unknown as AuthSocket,

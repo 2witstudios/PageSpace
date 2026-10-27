@@ -1,17 +1,25 @@
 import { z } from 'zod/v4';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
-} from '@pagespace/lib/security';
-import crypto from 'crypto';
+} from '@pagespace/lib/security/distributed-rate-limit';
+import { createSignedState } from '@pagespace/lib/integrations/oauth/oauth-state';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
+import { INVITE_TOKEN_MAX_LENGTH } from '@/lib/auth/oauth-state';
+import { DESKTOP_SHELLS } from '@/lib/auth/desktop-shell';
+import { generatePKCE } from '@pagespace/lib/auth/pkce';
 
+// Length bounds must match verifyOAuthState's oauthStateDataSchema — otherwise
+// the server can mint a signed state it will later reject at the callback,
+// bouncing users with oauth_error after they complete provider auth.
 const googleSigninSchema = z.object({
-  returnUrl: z.string().optional(),
-  platform: z.enum(['web', 'desktop', 'ios']).optional(),
-  deviceId: z.string().optional(), // For device tracking on all platforms
-  deviceName: z.string().optional(), // Human-readable device name
+  returnUrl: z.string().max(2048).optional(),
+  platform: z.enum(['web', 'desktop', 'ios', 'android']).optional(),
+  shell: z.enum(DESKTOP_SHELLS).optional(),
+  deviceId: z.string().min(1).max(128).optional(),
+  deviceName: z.string().max(255).optional(),
+  inviteToken: z.string().min(1).max(INVITE_TOKEN_MAX_LENGTH).optional(),
 });
 
 export async function POST(req: Request) {
@@ -36,7 +44,7 @@ export async function POST(req: Request) {
       return Response.json({ errors: validation.error.flatten().fieldErrors }, { status: 400 });
     }
 
-    const { returnUrl, platform, deviceId, deviceName } = validation.data;
+    const { returnUrl, platform, deviceId, deviceName, inviteToken, shell } = validation.data;
 
     // SECURITY: Validate returnUrl to prevent open redirect attacks
     // An attacker could set returnUrl to an external domain and capture the deviceToken
@@ -75,29 +83,23 @@ export async function POST(req: Request) {
       );
     }
 
-    // Create state object to preserve platform and deviceId through OAuth redirect
-    const stateData = {
-      returnUrl: returnUrl || '/dashboard',
-      platform: platform || 'web',
-      ...(deviceId && { deviceId }),
-      ...(deviceName && { deviceName }),
-    };
+    // Create signed state with HMAC-SHA256 + timestamp for tamper protection and expiration.
+    const stateParam = createSignedState(
+      {
+        returnUrl: returnUrl || '/dashboard',
+        platform: platform || 'web',
+        ...(shell && { shell }),
+        ...(deviceId && { deviceId }),
+        ...(deviceName && { deviceName }),
+        ...(inviteToken && { inviteToken }),
+      },
+      process.env.OAUTH_STATE_SECRET!
+    );
 
-    // Sign state parameter with HMAC-SHA256 to prevent tampering
-    const statePayload = JSON.stringify(stateData);
-    const signature = crypto
-      .createHmac('sha256', process.env.OAUTH_STATE_SECRET!)
-      .update(statePayload)
-      .digest('hex');
+    // Generate PKCE challenge (code_verifier stored server-side in Postgres via auth_handoff_tokens)
+    const pkce = await generatePKCE(stateParam);
 
-    const stateWithSignature = JSON.stringify({
-      data: stateData,
-      sig: signature,
-    });
-
-    const stateParam = Buffer.from(stateWithSignature).toString('base64');
-
-    // Generate OAuth URL
+    // Generate OAuth URL (PKCE is optional — fails open to null if the DB is unavailable)
     const params = new URLSearchParams({
       client_id: process.env.GOOGLE_OAUTH_CLIENT_ID!,
       redirect_uri: process.env.GOOGLE_OAUTH_REDIRECT_URI!,
@@ -106,6 +108,10 @@ export async function POST(req: Request) {
       access_type: 'offline',
       prompt: 'consent',
       state: stateParam,
+      ...(pkce && {
+        code_challenge: pkce.codeChallenge,
+        code_challenge_method: pkce.codeChallengeMethod,
+      }),
     });
 
     const oauthUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;

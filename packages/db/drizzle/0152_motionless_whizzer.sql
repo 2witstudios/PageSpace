@@ -1,0 +1,1 @@
+ALTER TABLE "drive_roles" ADD COLUMN "drive_wide_permissions" jsonb DEFAULT NULL;

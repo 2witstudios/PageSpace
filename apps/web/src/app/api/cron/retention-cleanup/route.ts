@@ -1,5 +1,7 @@
 import { runRetentionCleanup } from '@pagespace/lib/compliance/retention/retention-engine';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { audit } from '@pagespace/lib/audit/audit-log';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { NextResponse } from 'next/server';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 
@@ -9,7 +11,8 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
  * Deletes expired rows from: sessions, verification_tokens, socket_tokens,
  * email_unsubscribe_tokens, pulse_summaries, page_versions (unpinned),
  * drive_backups (unpinned), drive_invitations (pending), page_permissions,
- * and ai_usage_logs.
+ * and ai_usage_logs — plus the durable AI frame log's backstop
+ * (ai_stream_frames), which is aged rather than expiry-stamped.
  *
  * Authentication: HMAC-signed request with X-Cron-Timestamp, X-Cron-Nonce, X-Cron-Signature headers.
  */
@@ -30,6 +33,8 @@ export async function GET(request: Request) {
       }
     }
 
+    audit({ eventType: 'data.delete', resourceType: 'cron_job', resourceId: 'retention_cleanup', details: { totalDeleted, tables: results } });
+
     return NextResponse.json({
       success: true,
       totalDeleted,
@@ -37,7 +42,7 @@ export async function GET(request: Request) {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('[Cron] Error running retention cleanup:', error);
+    loggers.system.error('[Cron] Error running retention cleanup', error as Error);
     return NextResponse.json(
       {
         success: false,

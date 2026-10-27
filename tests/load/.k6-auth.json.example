@@ -1,0 +1,4 @@
+{
+  "sessionToken": "ps_sess_<base64url-32-bytes>",
+  "driveId": "<cuid2>"
+}

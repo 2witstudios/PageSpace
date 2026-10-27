@@ -1,12 +1,34 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { db, taskItems, taskLists, taskStatusConfigs, pages, eq, and, desc, count, gte, lt, lte, inArray, or, isNull, not, sql } from '@pagespace/db';
-import { DEFAULT_STATUS_CONFIG } from '@/lib/task-status-config';
-import { loggers } from '@pagespace/lib/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, filterDrivesByMCPScope } from '@/lib/auth';
-import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
+import { db } from '@pagespace/db/db'
+import { eq, and, asc, desc, count, gt, gte, lt, lte, inArray, or, isNull, not, sql } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core'
+import { taskItems, taskLists, taskStatusConfigs } from '@pagespace/db/schema/tasks';
+import { DEFAULT_STATUS_CONFIG, type TaskStatusGroup } from '@/lib/task-status-config';
+import { groupTaskListsByAllowedStatusSlugs } from './status-group-slugs';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { escapeLikePattern } from '@pagespace/lib/db/like-pattern';
+import {
+  authenticateRequestWithOptions,
+  isAuthError,
+  checkMCPDriveScope,
+  isScopedMCPAuth,
+  isPrincipalDriveMember,
+  getPrincipalDriveIds,
+  getPrincipalBatchPagePermissions,
+} from '@/lib/auth';
+import { decryptTaskUserRelations } from '@/lib/tasks/decrypt-task-relations';
+import { getSubTaskCountsByPageId } from '@/lib/tasks/subtask-counts';
+import { optionalAbsoluteInstant, exclusiveEndBound } from '@/lib/validation/date-params';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+
+// Page size for the cursor-paged task-list expansion: bounds each pages query
+// regardless of drive-universe size. The scoped-token permission filter runs
+// ONCE over the accumulated ids after the loop (see below), not per chunk.
+const TASK_LIST_PAGE_CHUNK = 500;
 
 // Query parameter schema
 const querySchema = z.object({
@@ -15,29 +37,24 @@ const querySchema = z.object({
   // Filter parameters - status accepts any string for custom statuses
   status: z.string().optional(),
   priority: z.enum(['low', 'medium', 'high']).optional(),
-  startDate: z.coerce.date().optional(),
-  endDate: z.coerce.date().optional(),
+  // Absolute instants, not wall-clock times — see optionalAbsoluteInstant.
+  startDate: optionalAbsoluteInstant,
+  endDate: optionalAbsoluteInstant,
   // New filter parameters
   search: z.string().optional(),
   assigneeId: z.string().optional(),
   assigneeAgentId: z.string().optional(),
   showAllAssignees: z.enum(['true', 'false']).transform(v => v === 'true').optional(),
+  includeCompleted: z.enum(['true', 'false']).transform(v => v === 'true').optional(),
   dueDateFilter: z.enum(['overdue', 'today', 'this_week', 'upcoming']).optional(),
+  // Group-level status filter: 'active' = todo + in_progress, 'completed' = done.
+  // Custom per-task-list status configs are honoured; fall back to DEFAULT_STATUS_CONFIG
+  // when a task list has no entries.
+  statusGroup: z.enum(['all', 'active', 'completed']).optional(),
   // Pagination
   limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().min(0).default(0),
 });
-
-/**
- * Escape SQL LIKE pattern special characters to prevent wildcard injection.
- * Must be used with ESCAPE '\\' clause in the query.
- */
-function escapeLikePattern(value: string): string {
-  return value
-    .replace(/\\/g, '\\\\')  // Escape backslashes first
-    .replace(/%/g, '\\%')    // Escape percent
-    .replace(/_/g, '\\_');   // Escape underscore
-}
 
 /**
  * GET /api/tasks
@@ -54,6 +71,8 @@ export async function GET(request: Request) {
 
   const userId = auth.userId;
   const { searchParams } = new URL(request.url);
+  // Kept raw: only exclusiveEndBound can tell a date-only bound from an instant.
+  const rawEndDate = searchParams.get('endDate');
 
   try {
     // Parse and validate query parameters
@@ -68,7 +87,9 @@ export async function GET(request: Request) {
       assigneeId: searchParams.get('assigneeId') ?? undefined,
       assigneeAgentId: searchParams.get('assigneeAgentId') ?? undefined,
       showAllAssignees: searchParams.get('showAllAssignees') ?? undefined,
+      includeCompleted: searchParams.get('includeCompleted') ?? undefined,
       dueDateFilter: searchParams.get('dueDateFilter') ?? undefined,
+      statusGroup: searchParams.get('statusGroup') ?? undefined,
       limit: searchParams.get('limit') ?? undefined,
       offset: searchParams.get('offset') ?? undefined,
     });
@@ -93,13 +114,13 @@ export async function GET(request: Request) {
         );
       }
 
-      // Verify user can view drive
-      const canViewDrive = await isUserDriveMember(userId, params.driveId);
+      // Verify the principal (user, or the token itself when drive-scoped) can view the drive
+      const canViewDrive = await isPrincipalDriveMember(auth, params.driveId);
       if (!canViewDrive) {
-        return NextResponse.json(
+        return deniedResponse(actorFromAuth(auth), params.driveId, NextResponse.json(
           { error: 'Unauthorized - you do not have access to this drive' },
           { status: 403 }
-        );
+        ));
       }
 
       const scopeError = checkMCPDriveScope(auth, params.driveId);
@@ -107,9 +128,8 @@ export async function GET(request: Request) {
 
       driveIds = [params.driveId];
     } else {
-      // User context: get all accessible drive IDs
-      driveIds = await getDriveIdsForUser(userId);
-      driveIds = filterDrivesByMCPScope(auth, driveIds);
+      // User context: the principal's drive universe (a scoped token's own memberships)
+      driveIds = await getPrincipalDriveIds(auth);
 
       // Optional drive filter for user context
       if (params.driveId) {
@@ -137,69 +157,64 @@ export async function GET(request: Request) {
       });
     }
 
-    // First, get all task list pages in the accessible drives
-    const taskListPages = await db.query.pages.findMany({
-      where: and(
+    // Expand the principal's task lists as bounded, cursor-paged, id-only
+    // chunks — the old single unbounded findMany materialized every task list
+    // in the drive universe (7,703 full rows for the 2026-07-28 OOM victim).
+    // Enrichment data (titles, drive ids, status configs) is fetched later, for
+    // only the task lists represented in the response page. Chunked reads are
+    // not one snapshot: a list created mid-request whose random cuid sorts
+    // before the cursor is missed for this request only (self-heals next call).
+    let taskListPageIds: string[] = [];
+    let taskListCursor: string | undefined;
+    for (;;) {
+      const chunk = await db.query.pages.findMany({
+        where: and(
+          eq(pages.type, 'TASK_LIST'),
+          eq(pages.isTrashed, false),
+          inArray(pages.driveId, driveIds),
+          taskListCursor ? gt(pages.id, taskListCursor) : undefined,
+        ),
+        columns: { id: true },
+        orderBy: [asc(pages.id)],
+        limit: TASK_LIST_PAGE_CHUNK,
+      });
+      if (chunk.length === 0) break;
+      taskListCursor = chunk[chunk.length - 1].id;
+      taskListPageIds.push(...chunk.map(p => p.id));
+      if (chunk.length < TASK_LIST_PAGE_CHUNK) break;
+    }
+
+    // Scoped tokens see only the task lists their own role grants view on —
+    // custom roles can restrict visibility per page, not just per drive. One
+    // batch call over all fetched ids: the helper enumerates the token's
+    // accessible pages per allowed drive on every invocation, so filtering per
+    // fetch-chunk would rescan the drive universe once per chunk.
+    if (isScopedMCPAuth(auth) && taskListPageIds.length > 0) {
+      const pagePerms = await getPrincipalBatchPagePermissions(auth, taskListPageIds);
+      taskListPageIds = taskListPageIds.filter(id => pagePerms.get(id)?.canView);
+    }
+
+    if (taskListPageIds.length === 0) {
+      return NextResponse.json({
+        tasks: [],
+        pagination: {
+          total: 0,
+          limit: params.limit,
+          offset: params.offset,
+          hasMore: false,
+        },
+      });
+    }
+
+    // Subquery: task pages that are non-trashed TASK_LIST children of accessible list pages
+    const validTaskPageSubquery = db
+      .select({ id: pages.id })
+      .from(pages)
+      .where(and(
+        inArray(pages.parentId, taskListPageIds),
         eq(pages.type, 'TASK_LIST'),
         eq(pages.isTrashed, false),
-        inArray(pages.driveId, driveIds)
-      ),
-      columns: { id: true, driveId: true, title: true },
-    });
-
-    if (taskListPages.length === 0) {
-      return NextResponse.json({
-        tasks: [],
-        pagination: {
-          total: 0,
-          limit: params.limit,
-          offset: params.offset,
-          hasMore: false,
-        },
-      });
-    }
-
-    const taskListPageIds = taskListPages.map(p => p.id);
-
-    // Get task lists linked to these pages
-    const taskListsData = await db.query.taskLists.findMany({
-      where: inArray(taskLists.pageId, taskListPageIds),
-      columns: { id: true, pageId: true },
-    });
-
-    if (taskListsData.length === 0) {
-      return NextResponse.json({
-        tasks: [],
-        pagination: {
-          total: 0,
-          limit: params.limit,
-          offset: params.offset,
-          hasMore: false,
-        },
-      });
-    }
-
-    const taskListIds = taskListsData.map(tl => tl.id);
-
-    // Build map of taskListId -> page info for enriching results
-    const taskListToPageMap = new Map<string, { pageId: string; driveId: string; taskListTitle: string }>();
-    for (const tl of taskListsData) {
-      const pageInfo = taskListPages.find(p => p.id === tl.pageId);
-      if (pageInfo) {
-        taskListToPageMap.set(tl.id, {
-          pageId: pageInfo.id,
-          driveId: pageInfo.driveId,
-          taskListTitle: pageInfo.title,
-        });
-      }
-    }
-
-    // Get trashed page IDs to exclude tasks referencing them
-    // This ensures pagination counts match the actual filtered results
-    const trashedPages = await db.select({ id: pages.id })
-      .from(pages)
-      .where(and(eq(pages.isTrashed, true), inArray(pages.driveId, driveIds)));
-    const trashedPageIds = trashedPages.map(p => p.id);
+      ));
 
     // Build assignee filter condition
     // Default: tasks assigned to current user
@@ -219,16 +234,17 @@ export async function GET(request: Request) {
 
     // Build filter conditions for tasks
     const filterConditions = [
-      inArray(taskItems.taskListId, taskListIds),
+      inArray(taskItems.pageId, validTaskPageSubquery),
       assigneeCondition,
-      // Exclude tasks whose linked page is trashed (pageId is null OR not in trashed list)
-      trashedPageIds.length > 0
-        ? or(isNull(taskItems.pageId), not(inArray(taskItems.pageId, trashedPageIds)))
-        : undefined,
     ].filter(Boolean);
 
     if (params.status) {
       filterConditions.push(eq(taskItems.status, params.status));
+    } else if (!params.includeCompleted && !params.statusGroup) {
+      // Exclude completed tasks by default, matching the internal get_assigned_tasks
+      // tool. Skipped when the caller already scopes completion via statusGroup
+      // (which may itself request 'completed') or explicitly opts in.
+      filterConditions.push(isNull(taskItems.completedAt));
     }
     if (params.priority) {
       filterConditions.push(eq(taskItems.priority, params.priority));
@@ -237,19 +253,21 @@ export async function GET(request: Request) {
       filterConditions.push(gte(taskItems.createdAt, params.startDate));
     }
     if (params.endDate) {
-      const endOfDay = new Date(params.endDate);
-      endOfDay.setDate(endOfDay.getDate() + 1);
-      filterConditions.push(lt(taskItems.createdAt, endOfDay));
+      // A date-only bound covers the whole day; an explicit instant means that
+      // instant. See exclusiveEndBound.
+      filterConditions.push(lt(taskItems.createdAt, exclusiveEndBound(rawEndDate, params.endDate)));
     }
-    // Search filter (case-insensitive title/description)
+    // Search filter (case-insensitive title/description). Title lives on pages,
+    // so match it via a subquery against pages.title.
     if (params.search) {
       const escapedSearch = escapeLikePattern(params.search);
       const searchPattern = `%${escapedSearch}%`;
+      const titleMatchSubquery = db
+        .select({ id: pages.id })
+        .from(pages)
+        .where(sql`${pages.title} ILIKE ${searchPattern} ESCAPE '\\'`);
       filterConditions.push(
-        or(
-          sql`${taskItems.title} ILIKE ${searchPattern} ESCAPE '\\'`,
-          sql`${taskItems.description} ILIKE ${searchPattern} ESCAPE '\\'`
-        )
+        inArray(taskItems.pageId, titleMatchSubquery)
       );
     }
     // Due date filter
@@ -298,20 +316,78 @@ export async function GET(request: Request) {
       }
     }
 
-    const whereCondition = and(...filterConditions);
+    // Group-level status filter. Convert the requested group into DISTINCT
+    // allowed-slug sets (custom configs first, defaults if none) and build an OR
+    // of one (pageId IN membership-subquery, status IN slugs) condition per set
+    // — typically ~2 conditions. One condition per task list, each carrying its
+    // own correlated subquery, is what OOM-killed Postgres on 2026-07-28 for a
+    // principal with 7,703 task lists.
+    if (params.statusGroup && params.statusGroup !== 'all') {
+      // Custom configs only — lists without rows fall back to defaults in the
+      // grouping helper, so this stays proportional to customized lists.
+      const customConfigRows = await db
+        .select({
+          listPageId: taskLists.pageId,
+          slug: taskStatusConfigs.slug,
+          group: taskStatusConfigs.group,
+        })
+        .from(taskStatusConfigs)
+        .innerJoin(taskLists, eq(taskStatusConfigs.taskListId, taskLists.id))
+        .where(inArray(taskLists.pageId, taskListPageIds));
+      const configsByListPageId = new Map<string, { slug: string; group: TaskStatusGroup }[]>();
+      for (const { listPageId, ...config } of customConfigRows) {
+        if (!listPageId) continue;
+        const existing = configsByListPageId.get(listPageId);
+        if (existing) existing.push(config);
+        else configsByListPageId.set(listPageId, [config]);
+      }
 
-    // Fetch status configs for all involved task lists
-    const statusConfigRows = await db.query.taskStatusConfigs.findMany({
-      where: inArray(taskStatusConfigs.taskListId, taskListIds),
-    });
+      const slugGroups = groupTaskListsByAllowedStatusSlugs(
+        taskListPageIds,
+        configsByListPageId,
+        params.statusGroup,
+      );
 
-    // Build map: taskListId -> status configs
-    const taskListStatusMap = new Map<string, typeof statusConfigRows>();
-    for (const config of statusConfigRows) {
-      const existing = taskListStatusMap.get(config.taskListId) || [];
-      existing.push(config);
-      taskListStatusMap.set(config.taskListId, existing);
+      if (slugGroups.length === 0) {
+        return NextResponse.json({
+          tasks: [],
+          statusConfigsByTaskList: {},
+          pagination: {
+            total: 0,
+            limit: params.limit,
+            offset: params.offset,
+            hasMore: false,
+          },
+        });
+      }
+
+      // One membership subquery per DISTINCT slug set (typically ~2) keeps the
+      // child-task-page relation in SQL. Same membership as the old per-list
+      // subqueries: parentId in the group's lists, type TASK_LIST, not trashed.
+      // Materializing child ids app-side would scale bind parameters with the
+      // number of TASKS (not lists) and can exceed Postgres's 65,535-parameter
+      // cap; per-LIST subqueries (the old shape) put thousands of subplans in
+      // one statement. Per-set subqueries avoid both. Binds still scale with
+      // the LIST count (~2 per list across validTaskPageSubquery + the groups),
+      // so the protocol cap is reached around ~32k task lists — 4x the largest
+      // observed universe — and the failure mode there is a closed 500, not an
+      // OOM.
+      const perSlugSetConditions = slugGroups.map(group => and(
+        inArray(taskItems.pageId, db
+          .select({ id: pages.id })
+          .from(pages)
+          .where(and(
+            inArray(pages.parentId, group.listPageIds),
+            eq(pages.type, 'TASK_LIST'),
+            eq(pages.isTrashed, false),
+          ))),
+        inArray(taskItems.status, group.slugs),
+      ));
+
+      filterConditions.push(or(...perSlugSetConditions));
     }
+
+    const whereCondition = and(...filterConditions);
 
     // Fetch tasks with relations (including multi-assignees)
     const tasks = await db.query.taskItems.findMany({
@@ -333,10 +409,7 @@ export async function GET(request: Request) {
           columns: { id: true, name: true, image: true },
         },
         page: {
-          columns: { id: true, title: true, isTrashed: true },
-        },
-        taskList: {
-          columns: { id: true, pageId: true, title: true },
+          columns: { id: true, title: true, isTrashed: true, parentId: true, position: true },
         },
       },
       orderBy: [desc(taskItems.updatedAt)],
@@ -344,22 +417,81 @@ export async function GET(request: Request) {
       offset: params.offset,
     });
 
+    const decryptedTasks = await decryptTaskUserRelations(tasks);
+
+    // Enrichment data (list page info + status configs) covers only the task
+    // lists represented in this page of results, keyed by the task list PAGE ID.
+    // Deliberate contract narrowing (was: every accessible list) — fetching all
+    // lists' configs is what this fix removes. Clients fall back to
+    // DEFAULT_STATUS_CONFIG for lists absent from the map (task-helpers.ts), so
+    // unrepresented lists' custom statuses don't appear in filter dropdowns
+    // until their tasks are in the page.
+    const representedListPageIds = [...new Set(
+      decryptedTasks
+        .map(task => task.page?.parentId)
+        .filter((id): id is string => !!id)
+    )];
+
+    const representedListPages = representedListPageIds.length > 0
+      ? await db
+          .select({ id: pages.id, driveId: pages.driveId, title: pages.title })
+          .from(pages)
+          .where(inArray(pages.id, representedListPageIds))
+      : [];
+    const taskListPageMap = new Map(representedListPages.map(p => [p.id, p]));
+
+    const representedConfigRows = representedListPageIds.length > 0
+      ? await db
+          .select({
+            listPageId: taskLists.pageId,
+            id: taskStatusConfigs.id,
+            taskListId: taskStatusConfigs.taskListId,
+            name: taskStatusConfigs.name,
+            slug: taskStatusConfigs.slug,
+            color: taskStatusConfigs.color,
+            group: taskStatusConfigs.group,
+            position: taskStatusConfigs.position,
+            wipLimit: taskStatusConfigs.wipLimit,
+          })
+          .from(taskStatusConfigs)
+          .innerJoin(taskLists, eq(taskStatusConfigs.taskListId, taskLists.id))
+          .where(inArray(taskLists.pageId, representedListPageIds))
+      : [];
+
+    const taskListStatusMap = new Map<string, Array<{
+      id: string; taskListId: string; name: string;
+      slug: string; color: string; group: TaskStatusGroup; position: number;
+      wipLimit: number | null;
+    }>>();
+    for (const { listPageId, ...config } of representedConfigRows) {
+      if (!listPageId) continue;
+      const existing = taskListStatusMap.get(listPageId);
+      if (existing) existing.push(config);
+      else taskListStatusMap.set(listPageId, [config]);
+    }
+    const serializedStatusConfigsByTaskList = Object.fromEntries(taskListStatusMap);
+
+    // Direct, untrashed sub-task counts for this page of results — one grouped
+    // query, shared with GET /api/pages/[pageId]/tasks.
+    const subTaskCountsByPageId = await getSubTaskCountsByPageId(
+      decryptedTasks.map(task => task.pageId).filter((id): id is string => !!id),
+    );
+
     // Enrich tasks with drive, task list page info, and status metadata
-    // Filter out orphaned tasks where pageInfo is missing to prevent undefined URLs
-    const enrichedTasks = tasks
+    // Filter out orphaned tasks where parent list is not accessible
+    const enrichedTasks = decryptedTasks
       .map(task => {
-        const pageInfo = taskListToPageMap.get(task.taskListId);
-        if (!pageInfo) {
-          loggers.api.warn('Task has orphaned taskListId - skipping', {
+        const listPageId = task.page?.parentId;
+        const pageInfo = listPageId ? taskListPageMap.get(listPageId) : undefined;
+        if (!listPageId || !pageInfo) {
+          loggers.api.warn('Task has no accessible parent task list - skipping', {
             taskId: task.id,
-            taskListId: task.taskListId,
+            listPageId,
           });
           return null;
         }
 
-        // Compute status metadata from custom configs or defaults.
-        // Note: DB configs use `.name` while DEFAULT_STATUS_CONFIG uses `.label` — both map to statusLabel.
-        const configs = taskListStatusMap.get(task.taskListId) || [];
+        const configs = taskListStatusMap.get(listPageId) || [];
         const matchingConfig = configs.find(c => c.slug === task.status);
         const defaultConfig = DEFAULT_STATUS_CONFIG[task.status];
 
@@ -369,12 +501,17 @@ export async function GET(request: Request) {
 
         return {
           ...task,
+          // Sourced from the linked page — the single ordering rail (#2143).
+          position: task.page?.position ?? 0,
+          title: task.page?.title ?? '',
           driveId: pageInfo.driveId,
-          taskListPageId: pageInfo.pageId,
-          taskListPageTitle: pageInfo.taskListTitle,
+          taskListPageId: listPageId,
+          taskListPageTitle: pageInfo.title,
           statusGroup,
           statusLabel,
           statusColor,
+          subTaskCount: subTaskCountsByPageId.get(task.pageId)?.total ?? 0,
+          subTaskCompletedCount: subTaskCountsByPageId.get(task.pageId)?.completed ?? 0,
         };
       })
       .filter((task): task is NonNullable<typeof task> => task !== null);
@@ -387,22 +524,11 @@ export async function GET(request: Request) {
 
     const total = countResult?.total ?? 0;
 
-    // Serialize status configs so the frontend can build per-task dropdowns
-    type StatusGroup = 'todo' | 'in_progress' | 'done';
-    const statusConfigsByTaskList: Record<string, Array<{
-      id: string; taskListId: string; name: string;
-      slug: string; color: string; group: StatusGroup; position: number;
-    }>> = {};
-    for (const [taskListId, configs] of taskListStatusMap) {
-      statusConfigsByTaskList[taskListId] = configs.map(c => ({
-        id: c.id, taskListId: c.taskListId, name: c.name,
-        slug: c.slug, color: c.color, group: c.group, position: c.position,
-      }));
-    }
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'tasks', resourceId: userId, details: { context: params.context } });
 
     return NextResponse.json({
       tasks: enrichedTasks,
-      statusConfigsByTaskList,
+      statusConfigsByTaskList: serializedStatusConfigsByTaskList,
       pagination: {
         total,
         limit: params.limit,

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useId } from 'react';
 import dynamic from 'next/dynamic';
 import { useDocument } from '@/hooks/useDocument';
 import { Editor } from '@tiptap/react';
@@ -14,8 +14,11 @@ import { useAuth } from '@/hooks/useAuth';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useDocumentManagerStore } from '@/stores/useDocumentManagerStore';
+import { useFindStore } from '@/stores/useFindStore';
+import { dispatchFind, getPluginMatches } from '@/lib/editor/find-plugin';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
+import DocumentConflictGate from './DocumentConflictGate';
 
 interface DocumentViewProps {
   pageId: string;
@@ -33,10 +36,14 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
   const [isEditorFocused, setIsEditorFocused] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const isDirtyRef = useRef(false);
-  const hasInitializedRef = useRef(false);
   const { user } = useAuth();
+  // Distinguishes this mount from any other simultaneous mount of the SAME
+  // page (e.g. the main center panel and an agent-session pane both showing
+  // it) — without this, both compute the identical `document-${pageId}` key
+  // and collide in useEditingStore's Map: whichever unmounts first calls
+  // endEditing and wipes the entry while the other is still dirty.
+  const instanceId = useId();
 
-  // Use the new document hook - will fetch content if not cached
   const {
     document: documentState,
     isLoading,
@@ -45,6 +52,9 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
     updateContentFromServer,
     saveWithDebounce,
     forceSave,
+    conflict,
+    resolveConflict,
+    isResolvingConflict,
   } = useDocument(pageId);
 
   // Track editor focus state for pull-to-refresh
@@ -93,22 +103,13 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
     forceSaveRef.current = forceSave;
   }, [forceSave]);
 
-  // Initialize document when component mounts (only once)
   useEffect(() => {
-    if (!hasInitializedRef.current) {
-      hasInitializedRef.current = true;
-      initializeAndActivate();
-    }
-  }, [pageId, initializeAndActivate]); // Re-initialize on pageId change
-
-  // Reset initialization flag when pageId changes
-  useEffect(() => {
-    hasInitializedRef.current = false;
-  }, [pageId]);
+    initializeAndActivate();
+  }, [initializeAndActivate]);
 
   // Register editing state when document is dirty
   useEffect(() => {
-    const componentId = `document-${pageId}`;
+    const componentId = `document-${pageId}-${instanceId}`;
 
     if (documentState?.isDirty && !isReadOnly) {
       useEditingStore.getState().startEditing(componentId, 'document', {
@@ -122,7 +123,7 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
     return () => {
       useEditingStore.getState().endEditing(componentId);
     };
-  }, [documentState?.isDirty, pageId, isReadOnly]);
+  }, [documentState?.isDirty, pageId, isReadOnly, instanceId]);
 
   // Check user permissions
   useEffect(() => {
@@ -156,24 +157,17 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
     return () => { abortController.abort(); };
   }, [user?.id, pageId]);
 
-  // Handle content updates from other sources (AI, other users)
-  // Uses usePageContentSocket to ensure we receive updates even when
-  // the page is in a different drive than the currently-viewed tree
+  // Live content updates from AI or other users while the document is open.
+  // contentMode is updated atomically with content to prevent mode/content mismatch
+  // if another user converts while we have unsaved edits.
   const handleContentUpdate = useCallback(async (_eventData: PageEventPayload) => {
-    // Note: pageId and socketId filtering is handled by usePageContentSocket
     try {
-      // Fetch the latest content from the server
       const response = await fetchWithAuth(`/api/pages/${pageId}`);
       if (response.ok) {
         const updatedPage = await response.json();
-
-        // Only update if content actually changed and we're not currently editing
-        // IMPORTANT: contentMode must be updated atomically with content to prevent
-        // mode/content mismatch when another user converts while we have unsaved edits
         if (!documentState?.isDirty) {
           const contentChanged = updatedPage.content !== documentState?.content;
           const modeChanged = updatedPage.contentMode && updatedPage.contentMode !== documentState?.contentMode;
-
           if (contentChanged || modeChanged) {
             useDocumentManagerStore.getState().updateDocument(pageId, {
               content: updatedPage.content,
@@ -191,11 +185,9 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
     }
   }, [pageId, documentState?.isDirty, documentState?.content, documentState?.contentMode]);
 
-  // Subscribe to page content updates via Socket.IO
-  // This ensures we receive updates even when the page is in a different drive
   usePageContentSocket(pageId, driveId, {
     onContentUpdated: handleContentUpdate,
-    enabled: !!driveId, // Only enable if driveId is provided
+    enabled: !!driveId,
   });
 
 
@@ -260,6 +252,44 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
     };
   }, []); // ✅ Empty deps - uses ref for latest forceSave
 
+  // Connect find store to TipTap find plugin
+  const isFindOpen = useFindStore((s) => s.isOpen);
+  const findQuery = useFindStore((s) => s.query);
+  const findIndex = useFindStore((s) => s.currentIndex);
+  const reportMatches = useFindStore((s) => s.reportMatches);
+
+  useEffect(() => {
+    if (!editor || editor.isDestroyed || activeView !== 'rich') {
+      reportMatches(0);
+      return;
+    }
+    if (!isFindOpen || !findQuery) {
+      dispatchFind(editor.view, '', 0);
+      reportMatches(0);
+      return;
+    }
+
+    // Initial sync: dispatch query/index to plugin and scroll to active match
+    dispatchFind(editor.view, findQuery, findIndex);
+    const initialMatches = getPluginMatches(editor.state);
+    reportMatches(initialMatches.length);
+    const initialMatch = initialMatches[Math.min(findIndex, Math.max(initialMatches.length - 1, 0))];
+    if (initialMatch) {
+      editor.commands.setTextSelection(initialMatch);
+      editor.commands.scrollIntoView();
+    }
+
+    // Re-read match count when document changes while find is open.
+    // The plugin auto-recomputes matches on docChanged — we only need to
+    // report the new count without re-dispatching (which would loop).
+    const handleDocUpdate = ({ transaction }: { transaction: { docChanged: boolean } }) => {
+      if (!transaction.docChanged) return;
+      reportMatches(getPluginMatches(editor.state).length);
+    };
+    editor.on('update', handleDocUpdate);
+    return () => { editor.off('update', handleDocUpdate); };
+  }, [isFindOpen, findQuery, findIndex, editor, activeView, reportMatches]);
+
   // Auto-save on window blur
   useEffect(() => {
     // Only run on client side with proper window API
@@ -305,6 +335,15 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
         )}
       </AnimatePresence>
 
+      {/* Save conflict — persistent until the user picks a side. The local
+          buffer is untouched and autosave is paused while this is shown. */}
+      <DocumentConflictGate
+        conflict={conflict}
+        onResolve={resolveConflict}
+        isResolving={isResolvingConflict}
+        previewMode={documentState?.contentMode === 'markdown' ? 'plain' : 'rich'}
+      />
+
       {/* Read-only indicator */}
       {isReadOnly && (
         <div className="bg-yellow-50 dark:bg-yellow-900/20 border-b border-yellow-200 dark:border-yellow-800 px-4 py-2">
@@ -321,7 +360,7 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
         disabled={isPullToRefreshDisabled}
         className="flex-1"
       >
-        <CustomScrollArea className={`h-full ${isReadOnly ? 'bg-gray-50/50 dark:bg-gray-900/20' : ''}`}>
+        <CustomScrollArea className={`h-full ${isReadOnly ? 'bg-muted/30 dark:bg-muted/20' : ''}`}>
           <div className={`flex justify-center items-start p-4 ${activeView === 'code' ? 'h-full' : ''}`}>
             <AnimatePresence mode="wait">
               {activeView === 'code' ? (

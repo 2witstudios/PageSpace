@@ -6,7 +6,9 @@ import { parseTabPath, getStaticTabMeta } from '@/lib/tabs/tab-title';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useTabsStore, type Tab } from '@/stores/useTabsStore';
-import { PageType } from '@pagespace/lib/client-safe';
+import { PageType } from '@pagespace/lib/utils/enums';
+import { parseAgentSelection } from '@/lib/agents/agent-selection';
+import { useSessionRecord } from '@/components/agents/useSessionRecord';
 
 interface PageMetaResponse {
   id: string;
@@ -66,9 +68,18 @@ export function useTabMeta(tab: Tab): UseTabMetaResult {
   const drives = useDriveStore((state) => state.drives);
   const updateTabMeta = useTabsStore((state) => state.updateTabMeta);
 
+  // Agents tab - the selected session lives in the query string, not the path,
+  // so it's read fresh from `tab.search` on every render rather than cached on
+  // the tab (search-only changes don't invalidate `tab.title` - see
+  // navigateInTab - which would otherwise freeze this on the first session
+  // ever viewed in the tab).
+  const isAgentsTab = parsed.type === 'dashboard-agents' || parsed.type === 'drive-agents';
+  const agentsSessionId = isAgentsTab ? parseAgentSelection(tab.search).sessionId : null;
+  const { data: agentsSessionData, isLoading: isAgentsSessionLoading } = useSessionRecord(agentsSessionId);
+
   // Check if tab already has cached metadata for a page, channel, or public-page
-  const isPageType = parsed.type === 'page' || parsed.type === 'inbox-channel' || parsed.type === 'public-page';
-  const pageId = (parsed.type === 'page' || parsed.type === 'inbox-channel' || parsed.type === 'public-page') ? parsed.pageId : undefined;
+  const isPageType = parsed.type === 'page' || parsed.type === 'channel' || parsed.type === 'public-page';
+  const pageId = (parsed.type === 'page' || parsed.type === 'channel' || parsed.type === 'public-page') ? parsed.pageId : undefined;
   const hasCachedPageMeta = isPageType && pageId && tab.title;
 
   // Only fetch if it's a page/channel without cached metadata
@@ -76,8 +87,8 @@ export function useTabMeta(tab: Tab): UseTabMetaResult {
   const pageKey = needsPageFetch ? `/api/pages/${pageId}` : null;
 
   // Check if tab needs DM conversation metadata
-  const hasCachedDmMeta = parsed.type === 'inbox-dm' && parsed.conversationId && tab.title;
-  const needsDmFetch = parsed.type === 'inbox-dm' && parsed.conversationId && !tab.title;
+  const hasCachedDmMeta = parsed.type === 'dm' && parsed.conversationId && tab.title;
+  const needsDmFetch = parsed.type === 'dm' && parsed.conversationId && !tab.title;
   const dmKey = needsDmFetch ? `/api/messages/conversations/${parsed.conversationId}` : null;
 
   const { data: pageData, isLoading: isPageLoading, error: pageError } = useSWR<PageMetaResponse>(
@@ -120,6 +131,30 @@ export function useTabMeta(tab: Tab): UseTabMetaResult {
       });
     }
   }, [dmData, parsed.conversationId, tab.id, updateTabMeta]);
+
+  // Agents tab with a session selected - show the session's own name instead
+  // of the generic "Agents" label. No session selected (list view) falls
+  // through to the static meta below, unchanged.
+  if (isAgentsTab && agentsSessionId) {
+    const agentsSession = agentsSessionData?.session;
+    if (agentsSession) {
+      // `name || 'Session'` matches AgentsSidebar's own fallback for a
+      // session with no label (a supported, non-error state) - an empty
+      // name must not read the same as "nothing resolved yet".
+      return {
+        title: agentsSession.name || 'Session',
+        iconName: 'Bot',
+        isLoading: false,
+      };
+    }
+    // Still resolving, or the session doesn't exist / access was denied -
+    // show the static list-view title rather than a "Loading..." flicker.
+    return {
+      title: staticMeta?.title ?? 'Agents',
+      iconName: 'Bot',
+      isLoading: isAgentsSessionLoading,
+    };
+  }
 
   // Static routes - return immediately
   if (staticMeta) {
@@ -179,7 +214,7 @@ export function useTabMeta(tab: Tab): UseTabMetaResult {
   }
 
   // Channel tab (from inbox) - similar to page, use cached or fetched data
-  if (parsed.type === 'inbox-channel' && parsed.pageId) {
+  if (parsed.type === 'channel' && parsed.pageId) {
     // Return cached metadata from tab if available
     if (hasCachedPageMeta) {
       return {
@@ -255,7 +290,7 @@ export function useTabMeta(tab: Tab): UseTabMetaResult {
   }
 
   // DM tab - use cached or fetched conversation data
-  if (parsed.type === 'inbox-dm' && parsed.conversationId) {
+  if (parsed.type === 'dm' && parsed.conversationId) {
     // Return cached metadata from tab if available
     if (hasCachedDmMeta) {
       return {

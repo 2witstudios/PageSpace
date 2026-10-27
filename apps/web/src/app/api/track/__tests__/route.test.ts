@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { POST, PUT } from '../route';
 
 /**
@@ -21,13 +21,13 @@ import { POST, PUT } from '../route';
  *   - Schema validation: only known event types accepted
  */
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackActivity: vi.fn(),
   trackFeature: vi.fn(),
   trackError: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/security', () => ({
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn(),
   DISTRIBUTED_RATE_LIMITS: {
     TRACKING: { maxAttempts: 100, windowMs: 60000 },
@@ -43,8 +43,8 @@ vi.mock('@/lib/auth/auth-helpers', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
 }));
 
-import { checkDistributedRateLimit } from '@pagespace/lib/security';
-import { trackActivity, trackFeature, trackError } from '@pagespace/lib/activity-tracker';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
+import { trackActivity, trackFeature, trackError } from '@pagespace/lib/monitoring/activity-tracker';
 
 const createRequest = (body: object, headers?: Record<string, string>) => {
   const bodyStr = JSON.stringify(body);
@@ -66,6 +66,17 @@ describe('/api/track', () => {
   });
 
   describe('successful tracking', () => {
+    const frozenDate = new Date('2025-01-15T12:00:00.000Z');
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(frozenDate);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
     it('POST_withValidPageView_returns200', async () => {
       const request = createRequest({ event: 'page_view', data: { path: '/home' } });
       const response = await POST(request);
@@ -82,7 +93,11 @@ describe('/api/track', () => {
       expect(trackActivity).toHaveBeenCalledWith(
         undefined,
         'page_view',
-        expect.objectContaining({ ip: '127.0.0.1' })
+        {
+          metadata: { path: '/home', timestamp: frozenDate.toISOString() },
+          ip: '127.0.0.1',
+          userAgent: 'unknown',
+        }
       );
     });
 
@@ -93,7 +108,7 @@ describe('/api/track', () => {
       expect(trackFeature).toHaveBeenCalledWith(
         undefined,
         'dark-mode',
-        expect.objectContaining({ feature: 'dark-mode' })
+        { feature: 'dark-mode', timestamp: frozenDate.toISOString() }
       );
     });
 
@@ -108,7 +123,7 @@ describe('/api/track', () => {
         undefined,
         'js',
         'Uncaught TypeError',
-        expect.any(Object)
+        { type: 'js', message: 'Uncaught TypeError', timestamp: frozenDate.toISOString() }
       );
     });
 
@@ -120,7 +135,11 @@ describe('/api/track', () => {
       expect(trackActivity).toHaveBeenCalledWith(
         undefined,
         'ui_click',
-        expect.any(Object)
+        {
+          metadata: { label: 'nav-button', timestamp: frozenDate.toISOString() },
+          ip: '127.0.0.1',
+          userAgent: 'unknown',
+        }
       );
     });
 
@@ -129,7 +148,15 @@ describe('/api/track', () => {
       const response = await POST(request);
 
       expect(response.status).toBe(200);
-      expect(trackActivity).toHaveBeenCalled();
+      expect(trackActivity).toHaveBeenCalledWith(
+        undefined,
+        'search',
+        {
+          metadata: { timestamp: frozenDate.toISOString() },
+          ip: '127.0.0.1',
+          userAgent: 'unknown',
+        }
+      );
     });
   });
 

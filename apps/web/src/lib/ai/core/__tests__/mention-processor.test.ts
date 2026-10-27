@@ -1,9 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     ai: { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 import {
@@ -40,6 +42,22 @@ describe('processMentionsInMessage', () => {
   describe('given a message with no mentions', () => {
     it('should return empty arrays', () => {
       const result = processMentionsInMessage('Hello world');
+      expect(result.pageIds).toEqual([]);
+      expect(result.mentions).toEqual([]);
+    });
+  });
+
+  describe('given a message with a leading command chip (the mention processor ignores it — command execution is handled separately by command-processor.ts)', () => {
+    it('should ignore the /[Label](commandId:command) token and process mentions normally', () => {
+      const result = processMentionsInMessage(
+        '/[release-checklist](cmd1:command) compare @[Doc A](id1:page)'
+      );
+      expect(result.pageIds).toEqual(['id1']);
+      expect(result.mentions).toEqual([{ id: 'id1', label: 'Doc A', type: 'page' }]);
+    });
+
+    it('should treat a command-only message as having no mentions', () => {
+      const result = processMentionsInMessage('/[release-checklist](cmd1:command) ship it');
       expect(result.pageIds).toEqual([]);
       expect(result.mentions).toEqual([]);
     });

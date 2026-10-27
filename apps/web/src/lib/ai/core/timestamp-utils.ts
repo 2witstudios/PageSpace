@@ -3,7 +3,20 @@
  * Provides current date/time context to AI models for temporal awareness
  */
 
+import * as chrono from 'chrono-node';
+import { TIMESTAMP_BUCKET_MS } from './ai-providers-config';
+
 const DEFAULT_TIMEZONE = 'UTC';
+
+/**
+ * Floor an epoch-millisecond instant down to a fixed bucket size. Pure and
+ * timezone-independent: because every IANA UTC offset is a whole multiple of
+ * 5 minutes, flooring the absolute instant to a 5-minute bucket also lands on a
+ * 5-minute wall-clock boundary in any timezone.
+ */
+export function floorToBucket(epochMs: number, bucketMs: number): number {
+  return epochMs - (epochMs % bucketMs);
+}
 
 export type TimeOfDay = 'morning' | 'afternoon' | 'evening';
 
@@ -111,11 +124,40 @@ export function parseNaiveDatetimeInTimezone(naiveDatetime: string, timezone: st
 }
 
 /**
+ * Turn a client-supplied ISO datetime string into an instant.
+ *
+ * Absolute values (carrying `Z` or an explicit offset) and date-only values
+ * already identify an instant and pass straight through `new Date`. Only a
+ * *naive* wall-clock datetime — the one form that means nothing without a zone
+ * — is read in `timezone`.
+ *
+ * This is the single definition of what a naive datetime means for every write
+ * that stores an instant (#2404). The alternative, a bare `new Date(value)`,
+ * reads it in the *server process's* local zone: UTC in deployment but the
+ * developer's zone under `next dev`, so the same request produces different
+ * instants in different environments and neither is the caller's intent.
+ *
+ * Callers resolve `timezone` first — `resolveTimezone` on a request path, the
+ * execution context's timezone on an AI tool path.
+ */
+export function parseDatetimeInTimezone(value: string, timezone: string): Date {
+  return isNaiveISODatetime(value)
+    ? parseNaiveDatetimeInTimezone(value, timezone)
+    : new Date(value);
+}
+
+/**
  * Get user's time-of-day based on their timezone
  * @param timezone - IANA timezone string (e.g., "America/New_York")
+ * @param now - Instant (epoch ms) to evaluate; defaults to the current clock.
+ *              Injected so the whole prompt can derive from a single instant
+ *              and so the function is testable without mocking the global clock.
  * @returns Object with hour and timeOfDay string
  */
-export function getUserTimeOfDay(timezone?: string | null): { hour: number; timeOfDay: TimeOfDay } {
+export function getUserTimeOfDay(
+  timezone?: string | null,
+  now: number = Date.now(),
+): { hour: number; timeOfDay: TimeOfDay } {
   const tz = normalizeTimezone(timezone);
 
   // Get the hour in the user's timezone
@@ -125,7 +167,9 @@ export function getUserTimeOfDay(timezone?: string | null): { hour: number; time
     hour12: false,
   });
 
-  const hour = parseInt(formatter.format(new Date()), 10);
+  // `% 24` guards the midnight edge: on some ICU builds en-US hour12:false
+  // renders 00:00 as "24" rather than "00", which would mislabel it as evening.
+  const hour = parseInt(formatter.format(new Date(now)), 10) % 24;
 
   let timeOfDay: TimeOfDay;
   if (hour < 12) timeOfDay = 'morning';
@@ -177,27 +221,105 @@ export function getStartOfTodayInTimezone(timezone?: string | null): Date {
 }
 
 /**
- * Build timestamp system prompt section
- * Provides current date and time context to AI models
- * @param timezone - Optional IANA timezone string (e.g., "America/New_York"). Defaults to UTC.
+ * Pure renderer for the timestamp system-prompt section.
+ *
+ * Deterministic: the same `{ now, timezone }` always produces a byte-identical
+ * string, with no internal clock read. The instant is floored to the cache
+ * bucket (TIMESTAMP_BUCKET_MS) so repeat requests inside one cache window yield
+ * an identical request body — the precondition for an OpenRouter cache HIT.
+ * Seconds are dropped; the date uses explicit Intl fields (not `dateStyle`,
+ * which throws when combined with `hour`/`minute`).
  */
-export function buildTimestampSystemPrompt(timezone?: string | null): string {
+export function formatTimestampContext(
+  { now, timezone }: { now: number; timezone?: string | null },
+): string {
   const tz = normalizeTimezone(timezone);
+  const bucketedNow = new Date(floorToBucket(now, TIMESTAMP_BUCKET_MS));
 
-  const currentTime = new Date().toLocaleString('en-US', {
+  const currentTime = bucketedNow.toLocaleString('en-US', {
     timeZone: tz,
-    dateStyle: 'full',
-    timeStyle: 'long'
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+    timeZoneName: 'short',
   });
 
-  const { timeOfDay } = getUserTimeOfDay(tz);
+  // Derive time-of-day from the bucketed instant too, so the whole block is
+  // stable across a cache window (not just the rendered clock line).
+  const { timeOfDay } = getUserTimeOfDay(tz, bucketedNow.getTime());
 
   return `
 
 CURRENT TIMESTAMP CONTEXT:
-• Current date and time (user's local time): ${currentTime}
+• Current date and time (user's local time, rounded down to the latest 5-minute mark): ${currentTime}
 • Time of day: ${timeOfDay}
 • User's timezone: ${tz}
 • When discussing schedules, deadlines, or time-sensitive matters, use this as your reference point
 • For relative time references (e.g., "today", "tomorrow", "this week"), calculate from the current timestamp above in the user's timezone`;
+}
+
+/**
+ * Build timestamp system prompt section
+ * Provides current date and time context to AI models.
+ *
+ * Thin impure shell: the only clock read (confined to the `now` default arg)
+ * delegates to the pure {@link formatTimestampContext}.
+ * @param timezone - Optional IANA timezone string (e.g., "America/New_York"). Defaults to UTC.
+ * @param now - Instant (epoch ms) to render; defaults to the current clock.
+ */
+export function buildTimestampSystemPrompt(
+  timezone?: string | null,
+  now: number = Date.now(),
+): string {
+  return formatTimestampContext({ now, timezone });
+}
+
+/**
+ * Parse a date string that can be either ISO 8601 or natural language.
+ * Uses chrono-node for natural language parsing with timezone awareness.
+ * @param input - Date string (ISO 8601 or natural language)
+ * @param referenceDate - Reference date for relative parsing (e.g., "tomorrow")
+ * @param timezone - IANA timezone string for interpreting times (e.g., "America/New_York")
+ */
+export function parseDateTime(input: string, referenceDate?: Date, timezone?: string): Date {
+  // Handle naive ISO datetimes first (no Z or offset) — interpret in the given timezone
+  if (timezone && isNaiveISODatetime(input)) {
+    return parseNaiveDatetimeInTimezone(input, timezone);
+  }
+
+  // Try strict ISO 8601 (with Z or offset, or date-only)
+  const isoDate = new Date(input);
+  if (!isNaN(isoDate.getTime())) {
+    return isoDate;
+  }
+
+  // Natural language parsing via chrono-node with timezone-aware reference
+  const ref: { instant: Date; timezone?: number } = {
+    instant: referenceDate ?? new Date(),
+  };
+  if (timezone) {
+    ref.timezone = getTimezoneOffsetMinutes(timezone, ref.instant);
+  }
+
+  const parsed = chrono.parseDate(input, ref, { forwardDate: true });
+  if (!parsed) {
+    throw new Error(`Could not parse date: "${input}". Use ISO 8601 format (e.g., "2024-01-15T10:00:00Z") or natural language (e.g., "tomorrow at 3pm", "next Monday 10am").`);
+  }
+
+  // Two-pass DST resolution: if the parsed date is in a different DST period
+  // than the reference, the offset may be wrong. Recompute and re-parse.
+  if (timezone) {
+    const newOffset = getTimezoneOffsetMinutes(timezone, parsed);
+    if (ref.timezone !== undefined && newOffset !== ref.timezone) {
+      ref.timezone = newOffset;
+      const corrected = chrono.parseDate(input, ref, { forwardDate: true });
+      if (corrected) return corrected;
+    }
+  }
+
+  return parsed;
 }

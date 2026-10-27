@@ -1,10 +1,18 @@
 import { NextResponse } from 'next/server';
-import { db, sql } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { sql } from '@pagespace/db/operators';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
+import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import type { ConversationRow, ChannelThreadRow } from '@/types/messaging';
+import { actorFromAuth } from '@/lib/auth/request-actor';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
+const PERMISSION_BATCH_SIZE = 200;
 
 // GET /api/messages/threads - Get user's unified message threads (DMs + channels)
 export async function GET(request: Request) {
@@ -16,8 +24,10 @@ export async function GET(request: Request) {
     // Fetch DMs and channels in parallel
     const [dmResults, channelResults] = await Promise.all([
       fetchDMConversations(userId),
-      fetchChannelsWithLastMessage(userId),
+      fetchChannelsWithLastMessage(actorFromAuth(auth)),
     ]);
+
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'message_threads', resourceId: 'self' });
 
     return NextResponse.json({
       dms: dmResults,
@@ -58,6 +68,11 @@ async function fetchDMConversations(userId: string) {
       ORDER BY c."lastMessageAt" DESC NULLS LAST
     ),
     unread_counts AS (
+      -- parentId IS NULL filter excludes thread replies from the inbox unread
+      -- count. Thread replies are panel-only by default; PR 5 will reintroduce
+      -- per-follower thread inbox bumps via thread_updated. Without this
+      -- filter, any new thread reply would inflate the conversation's unread
+      -- badge regardless of whether the user follows the thread.
       SELECT
         dm."conversationId",
         COUNT(*) as unread_count
@@ -65,6 +80,8 @@ async function fetchDMConversations(userId: string) {
       INNER JOIN conversation_data cd ON dm."conversationId" = cd.id
       WHERE dm."senderId" = cd.other_user_id
         AND dm."isRead" = false
+        AND dm."isActive" = true
+        AND dm."parentId" IS NULL
       GROUP BY dm."conversationId"
     )
     SELECT
@@ -92,7 +109,20 @@ async function fetchDMConversations(userId: string) {
     ORDER BY cd."lastMessageAt" DESC NULLS LAST
   `);
 
+  // Decrypt PII at the edge so the DM list shows plaintext name/email —
+  // batched once per request per unique counterpart, not once per row.
+  const decryptedOtherUsersById = await decryptUsersByIdOnce(
+    conversationDetails.rows.map((row) =>
+      row.other_user_id
+        ? { id: row.other_user_id, name: row.other_user_name, email: row.other_user_email }
+        : null
+    )
+  );
+
   return conversationDetails.rows.map((row) => {
+    const decryptedOtherUser = row.other_user_id
+      ? decryptedOtherUsersById.get(row.other_user_id)
+      : undefined;
     return {
       id: row.id,
       participant1Id: row.participant1Id,
@@ -106,8 +136,10 @@ async function fetchDMConversations(userId: string) {
       lastRead: row.last_read ? new Date(row.last_read).toISOString() : null,
       otherUser: {
         id: row.other_user_id,
-        name: row.other_user_name,
-        email: row.other_user_email,
+        // Fail closed: on a missing join row emit null, never the raw
+        // (potentially ciphertext) column value.
+        name: decryptedOtherUser?.name ?? null,
+        email: decryptedOtherUser?.email ?? null,
         image: row.other_user_image,
         username: row.other_user_username,
         displayName: row.other_user_display_name,
@@ -119,7 +151,10 @@ async function fetchDMConversations(userId: string) {
 }
 
 // Fetch channels user has access to with their last message
-async function fetchChannelsWithLastMessage(userId: string) {
+async function fetchChannelsWithLastMessage(actor: AccessActor) {
+  const userId = actor.userId;
+  // Candidate drives: the ones the user is a member of, owned or joined (org-aware).
+  const memberDriveIds = await getMemberDriveIds(actor, { includeTrashed: true });
   const channelDetails = await db.execute<ChannelThreadRow>(sql`
     WITH user_channels AS (
       SELECT DISTINCT
@@ -131,22 +166,26 @@ async function fetchChannelsWithLastMessage(userId: string) {
       FROM pages p
       INNER JOIN drives d ON p."driveId" = d.id
       LEFT JOIN page_permissions pp ON p.id = pp."pageId"
-      LEFT JOIN drive_members dm ON d.id = dm."driveId"
+      -- Candidate filter only; getBatchPagePermissions below is the access decision.
       WHERE p.type = 'CHANNEL'
         AND p."isTrashed" = false
         AND (
-          d."ownerId" = ${userId}
-          OR dm."userId" = ${userId}
+          p."driveId" = ANY(${sql.param(memberDriveIds)}::text[])
           OR (pp."userId" = ${userId} AND pp."canView" = true)
         )
     ),
     latest_messages AS (
+      -- parentId IS NULL excludes thread replies from "last message" in the
+      -- channel inbox row. A thread reply belongs to the panel, not the main
+      -- stream, so it must not become the visible "last message" on the
+      -- channel card.
       SELECT DISTINCT ON (cm."pageId")
         cm."pageId",
         cm.content as last_message,
         cm."createdAt" as last_message_at
       FROM channel_messages cm
       INNER JOIN user_channels uc ON cm."pageId" = uc.id
+      WHERE cm."parentId" IS NULL
       ORDER BY cm."pageId", cm."createdAt" DESC
     )
     SELECT
@@ -162,7 +201,16 @@ async function fetchChannelsWithLastMessage(userId: string) {
     ORDER BY COALESCE(lm.last_message_at, uc."updatedAt") DESC
   `);
 
-  return channelDetails.rows.map((row) => {
+  // Drive membership is not page access, and a pending invite is not membership: the
+  // centralized resolver decides, never the SQL above.
+  const visibleRows: ChannelThreadRow[] = [];
+  for (let i = 0; i < channelDetails.rows.length; i += PERMISSION_BATCH_SIZE) {
+    const chunk = channelDetails.rows.slice(i, i + PERMISSION_BATCH_SIZE);
+    const permissions = await getBatchPagePermissions(actor, chunk.map((row) => row.id));
+    visibleRows.push(...chunk.filter((row) => permissions.get(row.id)?.canView));
+  }
+
+  return visibleRows.map((row) => {
     return {
       id: row.id,
       title: row.title,

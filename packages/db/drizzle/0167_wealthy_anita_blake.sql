@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS "terminal_sessions_session_key_idx";

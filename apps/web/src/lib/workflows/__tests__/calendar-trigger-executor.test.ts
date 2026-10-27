@@ -1,0 +1,444 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// ============================================================================
+// Hoisted mocks
+// ============================================================================
+
+const {
+  mockExecuteWorkflow,
+  mockCanConsumeAI,
+  mockReleaseHold,
+  mockSelect,
+  mockSelectFrom,
+  mockSelectWhere,
+  mockUpdate,
+  mockUpdateSet,
+  mockUpdateWhere,
+  mockIsUserDriveMember,
+  mockInnerJoin,
+  mockInsert,
+  mockInsertValues,
+  makeChildLogger,
+} = vi.hoisted(() => {
+  const makeChildLogger = (): Record<string, unknown> => ({
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+    child: vi.fn(() => makeChildLogger()),
+  });
+  return {
+    mockExecuteWorkflow: vi.fn(),
+    mockCanConsumeAI: vi.fn(),
+    mockReleaseHold: vi.fn(),
+    mockSelect: vi.fn(),
+    mockSelectFrom: vi.fn(),
+    mockSelectWhere: vi.fn(),
+    mockUpdate: vi.fn(),
+    mockUpdateSet: vi.fn(),
+    mockUpdateWhere: vi.fn(),
+    mockIsUserDriveMember: vi.fn(),
+    mockInnerJoin: vi.fn(),
+    mockInsert: vi.fn(),
+    mockInsertValues: vi.fn(),
+    makeChildLogger,
+  };
+});
+
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    select: mockSelect,
+    update: mockUpdate,
+    insert: mockInsert,
+  },
+}));
+vi.mock('@pagespace/db/schema/workflow-runs', () => ({ workflowRuns: { id: 'id' } }));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn(),
+  sql: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: {
+    id: 'id',
+    name: 'name',
+    email: 'email',
+  },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: {
+    id: 'id',
+    title: 'title',
+    content: 'content',
+    driveId: 'driveId',
+    isTrashed: 'isTrashed',
+  },
+}));
+vi.mock('@pagespace/db/schema/calendar', () => ({
+  eventAttendees: {
+    eventId: 'eventId',
+    userId: 'userId',
+  },
+}));
+vi.mock('@pagespace/db/schema/calendar-triggers', () => ({
+  calendarTriggers: {
+    id: 'id',
+    calendarEventId: 'calendarEventId',
+    status: 'status',
+  },
+}));
+vi.mock('@pagespace/db/schema/workflows', () => ({
+  workflows: {
+    id: 'id',
+  },
+}));
+
+vi.mock('@/lib/workflows/workflow-executor', () => ({
+  executeWorkflow: mockExecuteWorkflow,
+}));
+
+vi.mock('@pagespace/lib/billing/credit-gate', () => ({
+  canConsumeAI: mockCanConsumeAI,
+}));
+
+vi.mock('@pagespace/lib/billing/credit-consume', () => ({
+  releaseHold: mockReleaseHold,
+}));
+
+vi.mock('@/lib/logging/mask', () => ({
+  maskIdentifier: vi.fn((id: string) => `***${id?.slice(-4) || ''}`),
+}));
+
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
+    isUserDriveMember: mockIsUserDriveMember,
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  logger: { child: vi.fn(() => makeChildLogger()) },
+  loggers: {
+    api: { child: vi.fn(() => makeChildLogger()), info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    ai: { child: vi.fn(() => makeChildLogger()), info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+  },
+}));
+
+import { executeCalendarTrigger } from '@/lib/workflows/calendar-trigger-executor';
+import type { CalendarEvent } from '@pagespace/db/schema/calendar'
+import type { CalendarTrigger } from '@pagespace/db/schema/calendar-triggers';
+
+// ============================================================================
+// Fixtures
+// ============================================================================
+
+const createTrigger = (overrides: Partial<CalendarTrigger> = {}): CalendarTrigger => ({
+  id: 'trg-1',
+  workflowId: 'wf-1',
+  calendarEventId: 'evt-1',
+  driveId: 'drive-1',
+  scheduledById: 'user-123',
+  triggerAt: new Date('2026-01-15T10:00:00Z'),
+  occurrenceDate: new Date(0),
+  createdAt: new Date(),
+  updatedAt: new Date(),
+  ...overrides,
+} as CalendarTrigger);
+
+const createWorkflowRow = (overrides: Record<string, unknown> = {}) => ({
+  id: 'wf-1',
+  driveId: 'drive-1',
+  createdBy: 'user-123',
+  name: 'wf-1',
+  agentPageId: 'agent-1',
+  prompt: 'Check deploy status',
+  contextPageIds: [],
+  cronExpression: null,
+  timezone: 'UTC',
+  triggerType: 'cron',
+  eventTriggers: null,
+  watchedFolderIds: null,
+  eventDebounceSecs: null,
+  instructionPageId: null,
+  isEnabled: true,
+  ownerLeftAt: null,
+  nextRunAt: null,
+  createdAt: new Date(),
+  updatedAt: new Date(),
+  ...overrides,
+});
+
+const createEvent = (overrides: Partial<CalendarEvent> = {}): CalendarEvent => ({
+  id: 'evt-1',
+  driveId: 'drive-1',
+  createdById: 'user-123',
+  title: 'Deploy check',
+  description: 'Auto-check deploy',
+  location: null,
+  startAt: new Date('2026-01-15T10:00:00Z'),
+  endAt: new Date('2026-01-15T10:15:00Z'),
+  allDay: false,
+  timezone: 'UTC',
+  visibility: 'DRIVE',
+  color: 'focus',
+  recurrenceRule: null,
+  metadata: null,
+  isTrashed: false,
+  trashedAt: null,
+  pageId: null,
+  syncSourceId: null,
+  syncExternalId: null,
+  syncExternalCalendarId: null,
+  lastSyncedAt: null,
+  updatedAt: new Date(),
+  createdAt: new Date(),
+  ...overrides,
+} as CalendarEvent);
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+describe('executeCalendarTrigger', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    mockIsUserDriveMember.mockResolvedValue(true);
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-1', reason: 'ok' });
+    mockReleaseHold.mockResolvedValue(undefined);
+
+    // Default select chain.
+    // Call order in executor: 1=workflow load, 2=agent preflight, 3=user tier, 4=attendees
+    mockSelect.mockReturnValue({ from: mockSelectFrom });
+    mockSelectFrom.mockReturnValue({
+      innerJoin: mockInnerJoin,
+      where: mockSelectWhere,
+    });
+    mockInnerJoin.mockReturnValue({ where: mockSelectWhere });
+    mockSelectWhere
+      .mockResolvedValueOnce([createWorkflowRow()])                    // workflow load
+      .mockResolvedValueOnce([{ id: 'agent-1', isTrashed: false }])    // agent preflight
+      .mockResolvedValueOnce([{ subscriptionTier: 'free' }])           // user tier for credit gate
+      .mockResolvedValue([]);                                           // attendees + anything else
+
+    mockUpdate.mockReturnValue({ set: mockUpdateSet });
+    mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
+    mockUpdateWhere.mockResolvedValue(undefined);
+    mockInsert.mockReturnValue({ values: mockInsertValues });
+    mockInsertValues.mockReturnValue({ onConflictDoNothing: vi.fn().mockResolvedValue(undefined) });
+
+    mockExecuteWorkflow.mockResolvedValue({
+      success: true,
+      durationMs: 500,
+      conversationId: 'conv-1',
+    });
+  });
+
+  describe('a trigger whose owner left ([D-OW-36])', () => {
+    const ownerLeftCases: Array<[string, CalendarTrigger, Record<string, unknown>]> = [
+      ['its workflow is flagged owner-left', createTrigger(), { ownerLeftAt: new Date() }],
+      ['the scheduler\'s account was deleted (no scheduler)', createTrigger({ scheduledById: null }), {}],
+      ['the workflow\'s creator account was deleted (no creator)', createTrigger(), { createdBy: null }],
+    ];
+
+    it.each(ownerLeftCases)('SPEND-6 (partial) when %s: skipped before the access check, the credit gate or any hold, with a cancelled run recording owner_left', async (_label, trigger, workflowOverrides) => {
+      mockSelectWhere.mockReset();
+      mockSelectWhere.mockResolvedValueOnce([createWorkflowRow(workflowOverrides)]).mockResolvedValue([]);
+
+      const result = await executeCalendarTrigger(trigger, createEvent());
+
+      expect(result).toMatchObject({ success: false, skipped: true });
+      expect(result.error).toContain('owner_left');
+      expect(mockIsUserDriveMember).not.toHaveBeenCalled();
+      expect(mockCanConsumeAI).not.toHaveBeenCalled();
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+      expect(mockInsertValues).toHaveBeenCalledWith(expect.objectContaining({
+        workflowId: 'wf-1', sourceTable: 'calendarTriggers', sourceId: 'trg-1', status: 'cancelled', error: expect.stringContaining('owner_left'),
+      }));
+    });
+  });
+
+  it('returns success when workflow executes successfully', async () => {
+    const result = await executeCalendarTrigger(createTrigger(), createEvent());
+
+    expect(result.success).toBe(true);
+    expect(result.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('passes a WorkflowExecutionInput composed from the linked workflow row', async () => {
+    const workflow = createWorkflowRow({ prompt: 'Do the thing', agentPageId: 'agent-9' });
+    mockSelectWhere.mockReset();
+    mockSelectWhere
+      .mockResolvedValueOnce([workflow])
+      .mockResolvedValueOnce([{ id: 'agent-9', isTrashed: false }])
+      .mockResolvedValueOnce([{ subscriptionTier: 'free' }])           // user tier
+      .mockResolvedValue([]);
+    const trigger = createTrigger();
+    const event = createEvent({ timezone: 'America/New_York' });
+
+    await executeCalendarTrigger(trigger, event);
+
+    expect(mockExecuteWorkflow).toHaveBeenCalledOnce();
+    const input = mockExecuteWorkflow.mock.calls[0][0];
+    expect(input.workflowId).toBe('wf-1');
+    expect(input.driveId).toBe(workflow.driveId);
+    expect(input.createdBy).toBe(trigger.scheduledById);
+    expect(input.agentPageId).toBe('agent-9');
+    expect(input.timezone).toBe('America/New_York');
+    expect(input.eventContext?.promptOverride).toContain('Do the thing');
+    expect(input.prompt).toBe('Do the thing');
+  });
+
+  it('includes event context in the prompt override', async () => {
+    const event = createEvent({
+      title: 'Weekly standup',
+      description: 'Team sync',
+      location: 'Room 42',
+    });
+
+    await executeCalendarTrigger(createTrigger(), event);
+
+    const input = mockExecuteWorkflow.mock.calls[0][0];
+    const promptOverride = input.eventContext?.promptOverride ?? '';
+    expect(promptOverride).toContain('Weekly standup');
+    expect(promptOverride).toContain('Team sync');
+    expect(promptOverride).toContain('Room 42');
+  });
+
+  it('includes attendees in the prompt override when present', async () => {
+    mockSelectWhere.mockReset();
+    mockSelectWhere
+      .mockResolvedValueOnce([createWorkflowRow()])
+      .mockResolvedValueOnce([{ id: 'agent-1', isTrashed: false }])
+      .mockResolvedValueOnce([{ subscriptionTier: 'free' }])           // user tier
+      .mockResolvedValueOnce([                                          // attendees
+        { name: 'Alice', email: 'alice@test.com' },
+        { name: null, email: 'bob@test.com' },
+      ])
+      .mockResolvedValue([]);
+
+    await executeCalendarTrigger(createTrigger(), createEvent());
+
+    const promptOverride = mockExecuteWorkflow.mock.calls[0][0].eventContext?.promptOverride ?? '';
+    expect(promptOverride).toContain('Alice');
+    expect(promptOverride).toContain('bob@test.com');
+  });
+
+  it('does not write per-fire state to calendar_triggers — executor handles workflow_runs', async () => {
+    await executeCalendarTrigger(createTrigger(), createEvent());
+
+    // Per-fire state lives on workflow_runs, written by the (mocked) executor.
+    // executeCalendarTrigger itself never updates calendar_triggers anymore.
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('passes calendar trigger coordinates as the source field to executeWorkflow', async () => {
+    const trigger = createTrigger({ id: 'trg-9', triggerAt: new Date('2026-01-15T10:00:00Z') });
+
+    await executeCalendarTrigger(trigger, createEvent());
+
+    const input = mockExecuteWorkflow.mock.calls[0][0];
+    expect(input.source).toEqual({
+      table: 'calendarTriggers',
+      id: 'trg-9',
+      triggerAt: trigger.triggerAt,
+    });
+  });
+
+  it('returns the failure result from executeWorkflow without touching the trigger row', async () => {
+    mockExecuteWorkflow.mockResolvedValue({
+      success: false,
+      durationMs: 100,
+      error: 'Agent crashed',
+    });
+
+    const result = await executeCalendarTrigger(createTrigger(), createEvent());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Agent crashed');
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('returns failure when executeWorkflow throws', async () => {
+    mockExecuteWorkflow.mockRejectedValue(new Error('Unexpected explosion'));
+
+    const result = await executeCalendarTrigger(createTrigger(), createEvent());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Unexpected explosion');
+  });
+
+  it('fails when scheduling user no longer has drive access', async () => {
+    mockIsUserDriveMember.mockResolvedValue(false);
+
+    const result = await executeCalendarTrigger(createTrigger(), createEvent());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('drive');
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('fails when the linked workflow row is missing', async () => {
+    mockSelectWhere.mockReset();
+    mockSelectWhere.mockResolvedValueOnce([]); // workflow load returns nothing
+
+    const result = await executeCalendarTrigger(createTrigger(), createEvent());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('workflow');
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('fails when agent page is missing', async () => {
+    mockSelectWhere.mockReset();
+    mockSelectWhere
+      .mockResolvedValueOnce([createWorkflowRow()])
+      .mockResolvedValueOnce([]); // agent preflight returns empty
+
+    const result = await executeCalendarTrigger(createTrigger(), createEvent());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('agent');
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('SPEND-6 (partial) the gate names the drive as consumer, never the scheduling user\'s credits', async () => {
+    await executeCalendarTrigger(createTrigger(), createEvent());
+
+    expect(mockCanConsumeAI).toHaveBeenCalledWith('user-123', 'free', {
+      spend: { kind: 'automation', driveId: 'drive-1' },
+      skipDailyCap: true,
+    });
+  });
+
+  it('SPEND-6 (partial) the run settles on the drive wallet the gate reserved on', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-1', reason: 'ok', walletId: 'w-drive' });
+
+    await executeCalendarTrigger(createTrigger(), createEvent());
+
+    expect(mockExecuteWorkflow.mock.calls[0][1]).toEqual({
+      creditSpend: { spend: { kind: 'automation', driveId: 'drive-1' }, walletId: 'w-drive' },
+    });
+  });
+
+  it('SPEND-6 (partial) with only the person funded and the drive wallet empty the run is skipped, naming why', async () => {
+    mockCanConsumeAI.mockResolvedValue({
+      allowed: false,
+      reason: 'source_refused',
+      refusal: { source: 'drive_wallet', reason: 'drive_wallet_empty', options: [] },
+    });
+
+    const result = await executeCalendarTrigger(createTrigger(), createEvent());
+
+    expect(result).toMatchObject({ success: false, error: 'AI credit gate denied: source_refused (drive_wallet_empty)' });
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockCanConsumeAI).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips execution and returns failure when credit gate denies', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
+
+    const result = await executeCalendarTrigger(createTrigger(), createEvent());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('credit gate denied');
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+});

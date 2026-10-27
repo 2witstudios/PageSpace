@@ -3,26 +3,32 @@
 import { memo } from 'react';
 import { usePathname } from 'next/navigation';
 import Sidebar, { type SidebarProps } from './index';
-import InboxSidebar from './InboxSidebar';
+import DMSidebar from './DMSidebar';
+import ChannelsSidebar from './ChannelsSidebar';
+import AgentsSidebar from './AgentsSidebar';
+import { resolveSidebarVariant } from './sidebar-routes';
 
 /**
- * Memoized version of Sidebar to prevent unnecessary re-renders
- * This helps avoid infinite loops in the layout system
- * Routes to appropriate sidebar based on current path
+ * Memoized version of Sidebar to prevent unnecessary re-renders.
+ * Each top-level nav item gets its own sidebar feed so the list is
+ * always visible (mirrors PageTree always-on behavior in drive view).
+ *
+ * Which feed a pathname gets is decided by `resolveSidebarVariant` — this
+ * component only maps that answer to a component.
  */
 const MemoizedSidebar = memo((props: SidebarProps) => {
-  const pathname = usePathname();
+  const pathname = usePathname() ?? '';
 
-  // Only show InboxSidebar when viewing a conversation (DM or channel)
-  // The inbox list view uses the regular dashboard sidebar
-  const isInboxConversation = pathname?.startsWith('/dashboard/inbox/dm/') ||
-                              pathname?.startsWith('/dashboard/inbox/channel/');
-
-  if (isInboxConversation) {
-    return <InboxSidebar {...props} />;
+  switch (resolveSidebarVariant(pathname)) {
+    case 'dms':
+      return <DMSidebar {...props} />;
+    case 'channels':
+      return <ChannelsSidebar {...props} />;
+    case 'agents':
+      return <AgentsSidebar {...props} />;
+    case 'default':
+      return <Sidebar {...props} />;
   }
-
-  return <Sidebar {...props} />;
 });
 
 MemoizedSidebar.displayName = 'MemoizedSidebar';

@@ -1,22 +1,30 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { db, userAiSettings } from '@pagespace/db';
-import {
-  verifySignupRegistration,
-  sessionService,
-  generateCSRFToken,
-  SESSION_DURATION_MS,
-} from '@pagespace/lib/auth';
-import { loggers, logAuthEvent, logSecurityEvent } from '@pagespace/lib/server';
-import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+import { verifySignupRegistration } from '@pagespace/lib/auth/passkey-service';
+import { markEmailVerified } from '@pagespace/lib/auth/verification-utils';
+import { sendVerificationEmail } from '@/lib/auth/send-verification-email';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
+import { SESSION_DURATION_MS } from '@pagespace/lib/auth/constants';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { maskEmail } from '@pagespace/lib/audit/mask-email';
+import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
-} from '@pagespace/lib/security';
-import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
+} from '@pagespace/lib/security/distributed-rate-limit';
+import { validateLoginCSRFToken, getClientIP, createDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
-import { provisionGettingStartedDriveIfNeeded, type ProvisionGettingStartedDriveResult } from '@/lib/onboarding/getting-started-drive';
+import { provisionHomeDriveIfNeeded, type ProvisionHomeDriveResult } from '@pagespace/lib/onboarding/home-drive';
+import {
+  consumeAllInvitesForEmail,
+  consumeAnyInviteIfPresent,
+  type InviteKind,
+} from '@/lib/auth/native-invite-acceptance';
+import { autoJoinVerifiedDomainAfterSignIn } from '@/lib/orgs/domain-auto-join';
+import { ceremonyAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 
 const verifySchema = z.object({
   email: z.email(),
@@ -28,6 +36,10 @@ const verifySchema = z.object({
   acceptedTos: z.boolean().refine((val) => val === true, {
     message: 'You must accept the Terms of Service',
   }),
+  inviteToken: z.string().min(1).optional(),
+  platform: z.enum(['web', 'desktop']).optional().default('web'),
+  deviceId: z.string().optional(),
+  deviceName: z.string().optional(),
 });
 
 /**
@@ -58,10 +70,10 @@ export async function POST(req: Request) {
     // Verify login CSRF token BEFORE rate limiting so stale tokens
     // don't burn rate limit attempts (cheap stateless HMAC check)
     if (!validateLoginCSRFToken(csrfToken)) {
-      logSecurityEvent('passkey_csrf_invalid', {
-        ip: clientIP,
-        email: email.substring(0, 3) + '***',
-        flow: 'signup',
+      auditRequest(req, {
+        eventType: 'security.suspicious.activity',
+        riskScore: 0.6,
+        details: { reason: 'passkey_csrf_invalid', flow: 'signup' },
       });
       return NextResponse.json(
         { error: 'Invalid CSRF token' },
@@ -77,9 +89,10 @@ export async function POST(req: Request) {
     );
 
     if (!ipRateLimitResult.allowed) {
-      logSecurityEvent('passkey_rate_limit_signup_ip', {
-        ip: clientIP,
-        retryAfter: ipRateLimitResult.retryAfter,
+      auditRequest(req, {
+        eventType: 'security.rate.limited',
+        riskScore: 0.5,
+        details: { reason: 'rate_limit_signup_ip' },
       });
       return NextResponse.json(
         { error: 'Too many requests from this IP', retryAfter: ipRateLimitResult.retryAfter },
@@ -95,9 +108,10 @@ export async function POST(req: Request) {
     );
 
     if (!emailRateLimitResult.allowed) {
-      logSecurityEvent('passkey_rate_limit_signup_email', {
-        email: email.substring(0, 3) + '***',
-        retryAfter: emailRateLimitResult.retryAfter,
+      auditRequest(req, {
+        eventType: 'security.rate.limited',
+        riskScore: 0.5,
+        details: { reason: 'rate_limit_signup_email' },
       });
       return NextResponse.json(
         { error: 'Too many signup attempts for this email', retryAfter: emailRateLimitResult.retryAfter },
@@ -130,7 +144,12 @@ export async function POST(req: Request) {
       loggers.auth.warn('Passkey signup failed', {
         error: result.error.code,
         ip: clientIP,
-        email: email.substring(0, 3) + '***',
+        email: maskEmail(email),
+      });
+      auditRequest(req, {
+        eventType: 'auth.login.failure',
+        riskScore: 0.3,
+        details: { reason: `passkey_signup_${result.error.code.toLowerCase()}` },
       });
 
       return NextResponse.json(
@@ -141,31 +160,17 @@ export async function POST(req: Request) {
 
     const { userId, passkeyId } = result.data;
 
-    // Provision getting started drive for new user
-    let provisionedDrive: ProvisionGettingStartedDriveResult | null = null;
+    // Provision the Home drive (idempotent)
+    let provisionedDrive: ProvisionHomeDriveResult | null = null;
     try {
-      provisionedDrive = await provisionGettingStartedDriveIfNeeded(userId);
+      provisionedDrive = await provisionHomeDriveIfNeeded(userId);
     } catch (error) {
-      loggers.auth.error('Failed to provision Getting Started drive', error as Error, {
+      loggers.auth.error('Failed to provision Home drive', error as Error, {
         userId,
       });
     }
 
-    // Add default 'ollama' provider for the new user
-    try {
-      await db.insert(userAiSettings).values({
-        userId,
-        provider: 'ollama',
-        baseUrl: 'http://host.docker.internal:11434',
-        updatedAt: new Date(),
-      });
-    } catch (error) {
-      loggers.auth.error('Failed to insert default AI settings', error as Error, { userId });
-    }
-
-    // Log auth events
-    logAuthEvent('signup', userId, email, clientIP);
-    loggers.auth.info('Passkey signup successful', { userId, email: email.substring(0, 3) + '***', name });
+    loggers.auth.info('Passkey signup successful', { userId, email: maskEmail(email) });
 
     // Reset rate limits on successful signup
     await Promise.allSettled([
@@ -173,12 +178,12 @@ export async function POST(req: Request) {
       resetDistributedRateLimit(emailRateLimitKey),
     ]);
 
-    // Track signup event (using 'signup' + passkey_registered for full event tracking)
-    // Mask PII to comply with data retention policies
-    const maskedEmail = email.substring(0, 3) + '***@' + (email.split('@')[1] || '***');
+    // Track signup event — use the shared maskEmail utility instead of an
+    // inline substring; the inline form leaks part of the domain into the
+    // local segment for short addresses (e.g. "a@x.io" → "a@x***@x.io").
     const maskedName = name.substring(0, 1) + '***';
     trackAuthEvent(userId, 'signup', {
-      email: maskedEmail,
+      email: maskEmail(email),
       name: maskedName,
       ip: clientIP,
       userAgent: req.headers.get('user-agent'),
@@ -189,12 +194,18 @@ export async function POST(req: Request) {
       ip: clientIP,
     });
 
+    const { platform, deviceId, deviceName: deviceNameField } = validation.data;
+
     // Create session
+    // D-OW-45: the ceremony this route just verified, recorded on every credential it mints.
+    const authentication = ceremonyAuthentication({ method: 'passkey', userVerified: result.data.userVerified }, Date.now());
     const sessionToken = await sessionService.createSession({
+      authentication,
       userId,
       type: 'user',
       scopes: ['*'],
       expiresInMs: SESSION_DURATION_MS,
+      deviceId,
       createdByIp: clientIP !== 'unknown' ? clientIP : undefined,
     });
 
@@ -211,6 +222,103 @@ export async function POST(req: Request) {
     // Generate CSRF token bound to session ID
     const newCsrfToken = generateCSRFToken(sessionClaims.sessionId);
 
+    // Targeted invite acceptance via the unified dispatcher. Failure is
+    // NON-FATAL — the signup still completes; the dashboard surfaces
+    // ?inviteError=<code> so the user can act on it.
+    let inviteAcceptedDriveId: string | null = null;
+    let inviteAcceptedPageId: string | null = null;
+    let inviteAcceptedKind: InviteKind | null = null;
+    let orgLandingPath: string | null = null;
+    let inviteAcceptError: string | null = null;
+    if (validation.data.inviteToken) {
+      const inviteResult = await consumeAnyInviteIfPresent({
+        request: req,
+        inviteToken: validation.data.inviteToken,
+        user: { id: userId, suspendedAt: null },
+        isNewUser: true,
+        email,
+      });
+      inviteAcceptedDriveId = inviteResult.invitedDriveId;
+      inviteAcceptedPageId = inviteResult.invitedPageId;
+      inviteAcceptedKind = inviteResult.kind;
+      orgLandingPath = inviteResult.orgLandingPath;
+      if (inviteResult.inviteError) {
+        inviteAcceptError = inviteResult.inviteError;
+      }
+    }
+
+    // Drain any other pending drive/page invites for this email; connection
+    // invites are also consumed but their `connections` row stays PENDING.
+    await consumeAllInvitesForEmail({
+      request: req,
+      email,
+      user: { id: userId, suspendedAt: null },
+      now: new Date(),
+    });
+
+    // Email verification. A passkey only proves authenticator control, not email
+    // ownership, so a fresh signup starts unverified. A successfully consumed
+    // BOUND invite token (delivered to this inbox and presented here) is the one
+    // exception — it proves the user accessed the address, so we mark verified.
+    // The broad consumeAllInvitesForEmail drain above is NOT proof: it matches
+    // pending invites by email without proving the user clicked an emailed link.
+    const inviteProvesEmailOwnership =
+      inviteAcceptedKind !== null && inviteAcceptError === null;
+    if (inviteProvesEmailOwnership) {
+      try {
+        await markEmailVerified(userId);
+      } catch (error) {
+        loggers.auth.warn('Failed to mark passkey-signup email verified via invite', {
+          userId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    } else {
+      // Best-effort verification email — must NOT fail the signup. The user can
+      // resend from the account banner if delivery fails.
+      try {
+        await sendVerificationEmail({ userId, email, userName: name });
+      } catch (error) {
+        loggers.auth.warn('Failed to send passkey-signup verification email', {
+          userId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    // SEC-1: a new account on an org's verified email domain joins it (seat permitting). Never throws.
+    await autoJoinVerifiedDomainAfterSignIn(userId);
+
+    let deviceTokenValue: string | undefined;
+    if (deviceId) {
+      try {
+        deviceTokenValue = await createDeviceToken({
+          authentication,
+          userId, deviceId,
+          tokenVersion: 1, // verifySignupRegistration creates users with tokenVersion: 1
+          platform: platform || 'web',
+          deviceName: deviceNameField || req.headers.get('user-agent') || (platform === 'desktop' ? 'Desktop App' : 'Web Browser'),
+          userAgent: req.headers.get('user-agent') || undefined,
+          ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
+        });
+      } catch (error) {
+        loggers.auth.warn('Failed to create device token', {
+          userId, error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    auditRequest(req, {
+      eventType: 'auth.login.success',
+      userId,
+      sessionId: sessionClaims.sessionId,
+      details: { signup: true, method: 'passkey' },
+    });
+    auditRequest(req, {
+      eventType: 'auth.token.created',
+      userId,
+      details: { tokenType: 'passkey' },
+    });
     loggers.auth.info('Passkey signup session created', {
       userId,
       ip: clientIP,
@@ -229,22 +337,44 @@ export async function POST(req: Request) {
       `csrf_token=${newCsrfToken}; Path=/; HttpOnly=false; SameSite=Lax; Max-Age=60${secureFlag}`
     );
 
-    // Determine redirect URL
-    const dashboardPath = provisionedDrive
-      ? `/dashboard/${provisionedDrive.driveId}`
-      : '/dashboard';
+    // Determine redirect URL. A successful invite acceptance overrides the
+    // getting-started provisioning path so the user lands directly inside the
+    // drive they were invited to. A failed invite acceptance still lets the
+    // user land on the dashboard but with an inviteError query param so the
+    // UI can surface what went wrong.
+    let redirectUrl: string;
+    if (orgLandingPath) {
+      // ORG-3: the org hub once joined; the invite page (which says why) when refused.
+      redirectUrl = orgLandingPath;
+    } else if (inviteAcceptedKind === 'page' && inviteAcceptedDriveId && inviteAcceptedPageId) {
+      redirectUrl = `/dashboard/${inviteAcceptedDriveId}/pages/${inviteAcceptedPageId}?welcome=true&invited=1`;
+    } else if (inviteAcceptedKind === 'connection') {
+      redirectUrl = `/dashboard/connections?welcome=true&connection_requested=1`;
+    } else if (inviteAcceptedDriveId) {
+      redirectUrl = `/dashboard/${inviteAcceptedDriveId}?welcome=true`;
+    } else if (inviteAcceptError) {
+      redirectUrl = `/dashboard?welcome=true&inviteError=${inviteAcceptError}`;
+    } else {
+      const dashboardPath = provisionedDrive
+        ? `/dashboard/${provisionedDrive.driveId}`
+        : '/dashboard';
+      redirectUrl = `${dashboardPath}?welcome=true`;
+    }
 
     return NextResponse.json(
       {
         success: true,
         userId,
-        redirectUrl: `${dashboardPath}?welcome=true`,
+        redirectUrl,
+        csrfToken: newCsrfToken,
+        ...(platform === 'desktop' && { sessionToken }),
+        ...(deviceTokenValue && { deviceToken: deviceTokenValue }),
       },
       { headers }
     );
 
   } catch (error) {
-    loggers.auth.error('Passkey signup verification error', error as Error, { email, clientIP });
+    loggers.auth.error('Passkey signup verification error', error as Error, { email: email ? maskEmail(email) : undefined, clientIP });
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }

@@ -1,10 +1,21 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { db, pages, drives, eq, and, driveMembers, pagePermissions, ne } from '@pagespace/db';
-import { slugify, logDriveActivity, getActorInfo, getDriveAccessWithDrive } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { drives } from '@pagespace/db/schema/core'
+import { slugify } from '@pagespace/lib/utils/utils';
+import { isReservedDriveName, isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
+import { logDriveActivity, getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
+import { getDriveAccessWithDrive, getDriveById, isValidDriveHomePage, updateDrive, listAccessibleDrives } from '@pagespace/lib/services/drive-service';
+import { createDriveForCaller } from '@/lib/drives/create-drive-for-caller';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
-import { type ToolExecutionContext } from '../core';
+import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
+import type { ToolExecutionContext } from '../core/types';
+import { resolveActingAgentId, filterDriveIdsByAppTokenScope, filterAgentDriveIdsByActorReach, driveDeniedByAppToken, isMcpScoped, canActorManageDrive, toolActor } from './actor-permissions';
+import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
+import { loadDriveLeadAuthority } from '@pagespace/lib/permissions/drive-relationship-loader';
+import { derivedCredentialEvidence } from '@pagespace/lib/permissions/access-actor';
 
 // Helper: Extract AI attribution context with actor info for activity logging
 async function getAiContextWithActor(context: ToolExecutionContext) {
@@ -40,54 +51,60 @@ export const driveTools = {
         throw new Error('User authentication required');
       }
 
+      // Page-agents are scoped to their explicit drive memberships (plus their
+      // home drive), so discovery matches where they can actually act — unless
+      // they've opted into user-scoped reach, which falls through to the
+      // user-scoped enumeration below (matching multi_drive_list_agents). The
+      // user / global assistant path (no agentPageId) stays user-scoped below.
+      const agentPageId = await resolveActingAgentId(context as ToolExecutionContext);
+      if (agentPageId) {
+        try {
+          const allAgentDrives = await listAgentDrives(agentPageId);
+          // Ceiling a scoped MCP token to its allowed drives + its own role's
+          // view access, and an Imago agent to the user's drives (no-op otherwise).
+          const scopedIds = new Set(
+            await filterAgentDriveIdsByActorReach(context as ToolExecutionContext, allAgentDrives.map((d) => d.driveId)),
+          );
+          const agentDrives = allAgentDrives.filter((d) => scopedIds.has(d.driveId));
+          return {
+            success: true,
+            drives: agentDrives.map((d) => ({
+              id: d.driveId,
+              slug: d.driveSlug,
+              title: d.driveName,
+              description: '',
+              isDefault: false,
+            })),
+            summary: `Found ${agentDrives.length} workspace${agentDrives.length === 1 ? '' : 's'} this agent can access`,
+            stats: {
+              totalDrives: agentDrives.length,
+              driveNames: agentDrives.map((d) => d.driveName),
+            },
+            nextSteps: agentDrives.length > 0 ? [
+              'Use list_pages with both driveSlug and driveId from above to explore the structure of any workspace',
+              'Use read_page to examine specific documents for context',
+            ] : ['This agent has not been added to any drives yet'],
+          };
+        } catch (error) {
+          console.error('Error reading agent drives:', error);
+          throw new Error('Failed to read drives');
+        }
+      }
+
       try {
-        // 1. Get user's own drives
-        const ownedDrives = await db
-          .select({
-            id: drives.id,
-            name: drives.name,
-            slug: drives.slug,
-            createdAt: drives.createdAt,
-            ownerId: drives.ownerId,
-          })
-          .from(drives)
-          .where(eq(drives.ownerId, userId));
+        // Full user-scoped reach: owned + member + page-permission drives,
+        // excluding trashed ones (same source multi_drive_list_agents uses).
+        const accessibleDrives = await listAccessibleDrives(toolActor(context as ToolExecutionContext));
 
-        // 2. Get drives where user is a member
-        const memberDrives = await db.selectDistinct({ 
-          id: drives.id,
-          name: drives.name,
-          slug: drives.slug,
-          createdAt: drives.createdAt,
-          ownerId: drives.ownerId,
-        })
-          .from(driveMembers)
-          .leftJoin(drives, eq(driveMembers.driveId, drives.id))
-          .where(and(
-            eq(driveMembers.userId, userId),
-            ne(drives.ownerId, userId) // Exclude owned drives
-          ));
-
-        // 3. Get drives where user has page permissions
-        const permissionDrives = await db.selectDistinct({
-          id: drives.id,
-          name: drives.name,
-          slug: drives.slug,
-          createdAt: drives.createdAt,
-          ownerId: drives.ownerId,
-        })
-          .from(pagePermissions)
-          .leftJoin(pages, eq(pagePermissions.pageId, pages.id))
-          .leftJoin(drives, eq(pages.driveId, drives.id))
-          .where(and(
-            eq(pagePermissions.userId, userId),
-            eq(pagePermissions.canView, true),
-            ne(drives.ownerId, userId) // Exclude owned drives
-          ));
-
-        // 4. Combine all drives and deduplicate
-        const allDrives = [...ownedDrives, ...memberDrives, ...permissionDrives];
-        const uniqueDrives = Array.from(new Map(allDrives.map(d => [d.id, d])).values());
+        // Ceiling a scoped MCP token to its allowed drives + its own role's
+        // view access (no-op otherwise).
+        const scopedIds = new Set(
+          await filterDriveIdsByAppTokenScope(
+            context as ToolExecutionContext,
+            accessibleDrives.map(d => d.id),
+          ),
+        );
+        const uniqueDrives = accessibleDrives.filter(d => scopedIds.has(d.id));
 
         return {
           success: true,
@@ -119,47 +136,40 @@ export const driveTools = {
    * Create a new workspace/drive
    */
   create_drive: tool({
-    description: 'Create a new workspace/drive. Use when user explicitly requests a new workspace or when their project clearly doesn\'t fit existing drives. Optionally set initial drive context to establish workspace memory.',
+    description: 'Create a new workspace/drive. Use when user explicitly requests a new workspace or when their project clearly doesn\'t fit existing drives — check existing drives (list_drives) first. Ask for confirmation before calling this unless the user was explicit about wanting a new workspace. Optionally set initial drive context to establish workspace memory. Pass orgId to create it in one of the user\'s organizations (it is then owned by that organization); omit it for a personal workspace.',
     inputSchema: z.object({
       name: z.string().describe('The name of the new drive/workspace'),
       context: z.string().max(10000).optional().describe('Optional initial drive context (workspace memory) - information about the project, conventions, or preferences'),
+      orgId: z.string().min(1).optional().describe('Optional organization id: create the workspace owned by this organization. The server checks the user may create drives there.'),
     }),
-    execute: async ({ name, context: driveContext }, { experimental_context: context }) => {
+    execute: async ({ name, context: driveContext, orgId }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
       }
 
+      // A drive-scoped MCP token is bound to specific drives and cannot create
+      // new ones (mirrors the /api/mcp/drives REST gate). No-op for unscoped callers.
+      if (isMcpScoped(context as ToolExecutionContext)) {
+        throw new Error('This token is scoped to specific drives and cannot create new drives');
+      }
+
+      // A brand-new drive is by definition outside a page-agent's existing
+      // memberships, so creating one is gated behind the same user-scoped-access
+      // opt-in that lets an agent reach beyond its explicit memberships
+      // (mirrors the list_drives / multi_drive_list_agents agent branch).
+      if (await resolveActingAgentId(context as ToolExecutionContext)) {
+        throw new Error('This agent is scoped to its own drive memberships and cannot create new drives. Enable user-scoped access in the agent settings to allow this.');
+      }
+
       try {
-        // Validate name
-        if (!name || name.trim().length === 0) {
-          throw new Error('Drive name is required');
-        }
-
-        if (name.toLowerCase() === 'personal') {
-          throw new Error('Cannot create a drive named "Personal"');
-        }
-
-        // Generate slug from name
-        const slug = name.toLowerCase()
-          .replace(/[^a-z0-9\s-]/g, '')
-          .trim()
-          .replace(/\s+/g, '-')
-          .replace(/-+/g, '-');
-
-        // Create the new drive with optional context
-        const [newDrive] = await db.insert(drives).values({
-          name: name.trim(),
-          slug,
-          ownerId: userId,
-          drivePrompt: driveContext || null,
-          updatedAt: new Date(),
-        }).returning({
-          id: drives.id,
-          name: drives.name,
-          slug: drives.slug,
-          drivePrompt: drives.drivePrompt,
-        });
+        // DRV-3: the one create every door uses — personal, or org-owned from creation when orgId
+        // names an org the user may create drives in (decided server-side by createOrgDrive). The
+        // org's sign-in policy is judged on the turn's credential evidence (D-OW-45); an automation
+        // carries none, so an org that demands a strong or recent sign-in refuses it (fail closed).
+        const created = await createDriveForCaller({ userId, name, orgId, drivePrompt: driveContext || null, authentication: derivedCredentialEvidence(toolActor(context as ToolExecutionContext)) });
+        if (!created.ok) throw new Error(created.error);
+        const newDrive = created.drive;
 
         // Broadcast drive creation event (only creator receives for new drives)
         await broadcastDriveEvent(
@@ -175,6 +185,16 @@ export const driveTools = {
           id: newDrive.id,
           name: newDrive.name,
         }, await getAiContextWithActor(context as ToolExecutionContext));
+
+        // Creating a workspace shifts the agent's focus into it for the rest of
+        // this turn — the same mutate-in-place pattern create_page uses for
+        // currentWorkingPage. Without this, a "create a workspace, then put these
+        // pages in it" turn either throws ("no workspace is currently in view")
+        // or, worse, silently fills the workspace the user happened to be in.
+        const rawContext = context as ToolExecutionContext | undefined;
+        if (rawContext) {
+          rawContext.currentWorkingDrive = { id: newDrive.id, name: newDrive.name };
+        }
 
         const contextMessage = driveContext ? ` with initial context (${driveContext.length} chars)` : '';
 
@@ -222,26 +242,32 @@ export const driveTools = {
         throw new Error('User authentication required');
       }
 
+      if (await driveDeniedByAppToken(context as ToolExecutionContext, driveId, 'manage')) {
+        throw new Error('This token does not have access to this drive');
+      }
+
       try {
         // Validate name
         if (!name || name.trim().length === 0) {
           throw new Error('Drive name is required');
         }
         
-        if (name.toLowerCase() === 'personal') {
-          throw new Error('Cannot rename a drive to "Personal"');
+        if (isReservedDriveName(name)) {
+          throw new Error(`Cannot rename a drive to "${name.trim()}"`);
         }
 
-        // Find the drive and verify ownership
-        const drive = await db.query.drives.findFirst({
-          where: and(
-            eq(drives.id, driveId),
-            eq(drives.ownerId, userId)
-          ),
+        // Renaming takes lead authority: the lead, or on an org drive an org Owner/Admin (audited)
+        const found = await db.query.drives.findFirst({
+          where: eq(drives.id, driveId),
         });
+        const drive = found && (await loadDriveLeadAuthority(toolActor(context as ToolExecutionContext), found, 'rename')).allowed ? found : undefined;
 
         if (!drive) {
           throw new Error('Drive not found or you do not have permission to rename it');
+        }
+
+        if (isHomeDrive(drive)) {
+          throw new Error(homeDriveActionError(drive, 'rename')!);
         }
 
         // Update the drive name and regenerate slug
@@ -336,9 +362,13 @@ This context persists across conversations and helps provide better assistance. 
         throw new Error('User authentication required');
       }
 
+      if (await driveDeniedByAppToken(execContext as ToolExecutionContext, driveId, 'manage')) {
+        throw new Error('This token does not have access to this drive');
+      }
+
       try {
         // Get drive and access info in a single operation (eliminates duplicate query)
-        const result = await getDriveAccessWithDrive(driveId, userId);
+        const result = await getDriveAccessWithDrive(driveId, toolActor(execContext as ToolExecutionContext));
 
         if (!result) {
           throw new Error('Drive not found');
@@ -413,6 +443,105 @@ This context persists across conversations and helps provide better assistance. 
       } catch (error) {
         console.error('Error updating drive context:', error);
         throw new Error(`Failed to update drive context for "${driveName}": ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+  }),
+
+  /**
+   * Set a page as the home/landing page for a drive
+   */
+  set_home_page: tool({
+    description: 'Set a page as the home/landing page of a drive. When users navigate to the drive, they land on this page instead of the default page tree. Pass null for pageId to clear the home page. Only drive owners and admins can set the home page.',
+    inputSchema: z.object({
+      driveId: z.string().describe('The unique ID of the drive'),
+      pageId: z.string().nullable().describe('The ID of the page to set as the home page, or null to clear it'),
+    }),
+    execute: async ({ driveId, pageId }, { experimental_context: context }) => {
+      const userId = (context as ToolExecutionContext)?.userId;
+      if (!userId) {
+        throw new Error('User authentication required');
+      }
+
+      try {
+        const drive = await getDriveById(driveId);
+        if (!drive) {
+          throw new Error('Drive not found');
+        }
+
+        if (!(await canActorManageDrive(context as ToolExecutionContext, driveId))) {
+          throw new Error('Only drive owners and admins can set the home page');
+        }
+
+        if (typeof pageId === 'string') {
+          const valid = await isValidDriveHomePage(driveId, pageId);
+          if (!valid) {
+            throw new Error('Home page must be a non-trashed page in this drive');
+          }
+        }
+
+        const previousHomePageId = drive.homePageId;
+
+        const updatedDrive = await updateDrive(driveId, { homePageId: pageId });
+        if (!updatedDrive) {
+          throw new Error('Drive update failed');
+        }
+
+        try {
+          const recipientUserIds = await getDriveRecipientUserIds(driveId);
+          await broadcastDriveEvent(
+            createDriveEventPayload(drive.id, 'updated', {
+              name: updatedDrive.name,
+              slug: updatedDrive.slug,
+            }),
+            recipientUserIds
+          );
+        } catch (sideEffectError) {
+          console.error('Home page updated, but drive broadcast failed:', sideEffectError);
+        }
+
+        try {
+          const aiContext = await getAiContextWithActor(context as ToolExecutionContext);
+          logDriveActivity(userId, 'update', {
+            id: driveId,
+            name: updatedDrive.name,
+          }, {
+            ...aiContext,
+            previousValues: { homePageId: previousHomePageId },
+            newValues: { homePageId: pageId },
+            metadata: {
+              ...aiContext.metadata,
+              updateType: 'homePageId',
+            },
+          });
+        } catch (sideEffectError) {
+          console.error('Home page updated, but activity logging failed:', sideEffectError);
+        }
+
+        // Sync the subdomain root so `/` immediately reflects the new home page
+        // without requiring a manual republish. Fire-and-forget: never blocks
+        // the tool response. An unpublished page set as home stays private.
+        void syncPublishedHomeRoot(driveId);
+
+        const message = pageId
+          ? `Successfully set home page for "${drive.name}"`
+          : `Successfully cleared home page for "${drive.name}"`;
+
+        return {
+          success: true,
+          drive: {
+            id: driveId,
+            name: drive.name,
+            homePageId: pageId,
+          },
+          message,
+          summary: message,
+          nextSteps: pageId
+            ? ['Navigating to this drive will now land on the specified page']
+            : ['Drive will now show the default page tree on navigation'],
+        };
+      } catch (error) {
+        console.error('Error setting home page:', error);
+        throw new Error(`Failed to set home page: ${error instanceof Error ? error.message : String(error)}`);
       }
     },
   }),

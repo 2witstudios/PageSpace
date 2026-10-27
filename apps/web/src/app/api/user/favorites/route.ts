@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db, favorites, pages, drives, eq, and, desc, asc } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db'
+import { eq, and, desc, asc } from '@pagespace/db/operators'
+import { favorites, pages, drives } from '@pagespace/db/schema/core';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
@@ -29,7 +32,10 @@ export async function GET(req: Request) {
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
 
+  auditRequest(req, { eventType: 'data.read', userId, resourceType: 'favorites', resourceId: 'self' });
+
   try {
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const userFavorites = await db.query.favorites.findMany({
       where: eq(favorites.userId, userId),
       orderBy: [asc(favorites.position), desc(favorites.createdAt)],
@@ -92,6 +98,8 @@ export async function GET(req: Request) {
           : {}),
       }));
 
+    auditRequest(req, { eventType: 'data.read', userId: auth.userId, resourceType: 'favorite', resourceId: 'self' });
+
     return NextResponse.json({ favorites: items });
   } catch (error) {
     loggers.api.error('Error fetching favorites:', error as Error);
@@ -103,6 +111,8 @@ export async function POST(req: Request) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
+
+  auditRequest(req, { eventType: 'data.write', userId, resourceType: 'favorites', resourceId: 'self' });
 
   try {
     const body = await req.json();

@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db, eq, users } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
 import { getUserFriendlyStripeError } from '@/lib/stripe-errors';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -132,6 +135,8 @@ export async function POST(request: NextRequest) {
     const discount = typeof discountItem === 'object' ? discountItem as Stripe.Discount : null;
     // In Stripe v20, coupon is nested under source.coupon
     const coupon = discount?.source?.coupon;
+
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'promo_code', resourceId: promotionCodeId, details: { action: 'apply', oldSubscriptionId: subscriptionId, newSubscriptionId: newSubscription.id } });
 
     return NextResponse.json({
       success: true,

@@ -2,19 +2,19 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Request, Response, NextFunction } from 'express';
 import { authenticateService, requireScope, AUTH_REQUIRED } from '../src/middleware/auth';
 
-vi.mock('@pagespace/lib/logger-config', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     security: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
   },
 }));
 
-vi.mock('@pagespace/lib/auth', () => ({
+vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
     validateSession: vi.fn(),
   },
 }));
 
-vi.mock('@pagespace/lib/permissions', () => ({
+vi.mock('@pagespace/lib/permissions/enforced-context', () => ({
   EnforcedAuthContext: {
     fromSession: vi.fn((claims) => ({
       userId: claims.userId,
@@ -35,7 +35,7 @@ vi.mock('@pagespace/lib/permissions', () => ({
   },
 }));
 
-import { sessionService } from '@pagespace/lib/auth';
+import { sessionService } from '@pagespace/lib/auth/session-service';
 
 function createMockRequest(overrides: Partial<Request> = {}): Request {
   return {
@@ -116,13 +116,12 @@ describe('authenticateService middleware', () => {
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('returns 403 when token is not a service token', async () => {
-    vi.mocked(sessionService.validateSession).mockResolvedValue({
-      userId: 'user-123',
-      userRole: 'user',
-      type: 'session', // Not a service token
-      scopes: ['files:read'],
-    } as any);
+  it('returns 401 when token is not a service token (type-scoping rejects it before middleware sees claims)', async () => {
+    // sessionService.validateSession(token, { expectedType: 'service' }) rejects
+    // a non-service session by returning null — the middleware no longer does
+    // its own post-hoc claims.type check, so this is now indistinguishable
+    // from "invalid or expired token" from the middleware's point of view.
+    vi.mocked(sessionService.validateSession).mockResolvedValue(null);
 
     const req = createMockRequest({
       headers: { authorization: 'Bearer user-token' },
@@ -132,8 +131,9 @@ describe('authenticateService middleware', () => {
 
     await authenticateService(req, res, next);
 
-    expect(res.statusCode).toBe(403);
-    expect(res.jsonData).toEqual({ error: 'Service token required' });
+    expect(sessionService.validateSession).toHaveBeenCalledWith('user-token', { expectedType: 'service' });
+    expect(res.statusCode).toBe(401);
+    expect(res.jsonData).toEqual({ error: 'Invalid or expired token' });
     expect(next).not.toHaveBeenCalled();
   });
 
@@ -153,7 +153,8 @@ describe('authenticateService middleware', () => {
 
     await authenticateService(req, res, next);
 
-    expect(next).toHaveBeenCalled();
+    expect(sessionService.validateSession).toHaveBeenCalledWith('valid-service-token', { expectedType: 'service' });
+    expect(next).toHaveBeenCalledTimes(1);
     expect(req.auth).toBeDefined();
     expect(req.auth?.userId).toBe('user-123');
   });
@@ -180,7 +181,7 @@ describe('authenticateService middleware', () => {
     await authenticateService(req, res, next);
 
     // Authentication passes - scope checking is separate
-    expect(next).toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
     expect(req.auth).toBeDefined();
   });
 });
@@ -241,7 +242,7 @@ describe('requireScope middleware', () => {
 
     middleware(req, res, next);
 
-    expect(next).toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
     expect(res.statusCode).toBe(200); // Not modified
   });
 
@@ -258,7 +259,7 @@ describe('requireScope middleware', () => {
 
     middleware(req, res, next);
 
-    expect(next).toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -310,7 +311,7 @@ describe('security: no URL-based scope bypass', () => {
 
     // authenticateService passes - it only validates the token
     // The route handler or catch-all will handle the 404
-    expect(next).toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
   });
 
   it('requireScope explicitly rejects tokens without the declared scope', () => {

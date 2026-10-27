@@ -11,11 +11,11 @@ import {
   builtinProviderList,
   getBuiltinProvider,
   isBuiltinProvider,
-  genericWebhookProvider,
-  githubProvider,
-  notionProvider,
-  slackProvider,
-} from './index';
+} from './builtin-providers';
+import { genericWebhookProvider } from './generic-webhook';
+import { githubProvider } from './github';
+import { notionProvider } from './notion';
+import { slackProvider } from './slack';
 
 const expectedProviderIds = ['generic-webhook', 'github', 'notion', 'slack'] as const;
 
@@ -81,14 +81,16 @@ describe('isBuiltinProvider', () => {
 describe('provider structural invariants', () => {
   it('given all providers, should each have at least one tool', () => {
     for (const provider of builtinProviderList) {
-      expect(provider.tools.length).toBeGreaterThan(0);
+      expect(provider.tools.length).toBeGreaterThanOrEqual(1);
     }
   });
 
   it('given all providers, should each have a non-empty id and name', () => {
     for (const provider of builtinProviderList) {
-      expect(provider.id).toBeTruthy();
-      expect(provider.name).toBeTruthy();
+      expect(typeof provider.id).toBe('string');
+      expect(provider.id.length).toBeGreaterThanOrEqual(1);
+      expect(typeof provider.name).toBe('string');
+      expect(provider.name.length).toBeGreaterThanOrEqual(1);
     }
   });
 

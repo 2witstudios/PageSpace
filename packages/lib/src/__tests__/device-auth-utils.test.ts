@@ -8,8 +8,12 @@ import {
   validateOrCreateDeviceToken,
 } from '../auth/device-auth-utils';
 import { isValidTokenFormat, getTokenType } from '../auth/opaque-tokens';
-import { db, deviceTokens, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { users, deviceTokens } from '@pagespace/db/schema/auth';
 import { createId } from '@paralleldrive/cuid2';
+import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
+import { hashToken, getTokenPrefix } from '../auth/token-utils';
 
 describe('device-auth-utils', () => {
   const testUserId = 'user_test123';
@@ -19,7 +23,6 @@ describe('device-auth-utils', () => {
 
   // Create test user before each test (required for foreign key constraint)
   beforeEach(async () => {
-    const { users } = await import('@pagespace/db');
     await db.insert(users).values({
       id: testUserId,
       name: 'Test User',
@@ -33,8 +36,29 @@ describe('device-auth-utils', () => {
   afterEach(async () => {
     await db.delete(deviceTokens).where(eq(deviceTokens.userId, testUserId));
     // Also clean up test user
-    const { users } = await import('@pagespace/db');
     await db.delete(users).where(eq(users.id, testUserId));
+  });
+
+  it('SEC-3 (partial) rotating a device credential preserves its original verified ceremony', async () => {
+    const authentication = { authenticatedAtMs: Date.now() - 3600000, assurance: 'user_verified_passkey' as const };
+    const first = await createDeviceTokenRecord(testUserId, testDeviceId, testPlatform, testTokenVersion, { authentication });
+    const rotated = await atomicDeviceTokenRotation(first.token, {}, hashToken, getTokenPrefix, generateDeviceToken);
+    expect(rotated.success).toBe(true);
+    const current = await validateDeviceToken(rotated.newToken!);
+    expect(current?.authenticatedAt?.getTime()).toBe(authentication.authenticatedAtMs);
+    expect(current?.authenticationAssurance).toBe(authentication.assurance);
+  });
+
+  it('SEC-2 (partial) fresh login replaces the device secret instead of upgrading the old credential', async () => {
+    const before = { authenticatedAtMs: Date.now() - 3600000, assurance: 'single_factor' as const };
+    const after = { authenticatedAtMs: Date.now(), assurance: 'user_verified_passkey' as const };
+    const first = await createDeviceTokenRecord(testUserId, testDeviceId, testPlatform, testTokenVersion, { authentication: before });
+    const replacement = await validateOrCreateDeviceToken({ providedDeviceToken: first.token, userId: testUserId, deviceId: testDeviceId, platform: testPlatform, tokenVersion: testTokenVersion, authentication: after });
+    expect(replacement.deviceToken).not.toBe(first.token);
+    expect(await validateDeviceToken(first.token)).toBeNull();
+    const current = await validateDeviceToken(replacement.deviceToken);
+    expect(current?.authenticatedAt?.getTime()).toBe(after.authenticatedAtMs);
+    expect(current?.authenticationAssurance).toBe(after.assurance);
   });
 
   describe('generateDeviceToken', () => {
@@ -71,7 +95,7 @@ describe('device-auth-utils', () => {
         testDeviceId,
         testPlatform,
         testTokenVersion,
-        {
+        { authentication: null,
           deviceName: 'Test iPhone',
           userAgent: 'PageSpace/1.0 iOS/17.0',
           ipAddress: '192.168.1.1',
@@ -102,7 +126,8 @@ describe('device-auth-utils', () => {
         testUserId,
         testDeviceId,
         testPlatform,
-        testTokenVersion
+        testTokenVersion,
+        { authentication: null }
       );
 
       const records = await db
@@ -120,7 +145,8 @@ describe('device-auth-utils', () => {
         testUserId,
         testDeviceId,
         testPlatform,
-        testTokenVersion
+        testTokenVersion,
+        { authentication: null }
       );
 
       const validated = await validateDeviceToken(token);
@@ -135,7 +161,8 @@ describe('device-auth-utils', () => {
         testUserId,
         testDeviceId,
         testPlatform,
-        testTokenVersion
+        testTokenVersion,
+        { authentication: null }
       );
 
       // Manually update expiration to past
@@ -154,7 +181,8 @@ describe('device-auth-utils', () => {
         testUserId,
         testDeviceId,
         testPlatform,
-        testTokenVersion
+        testTokenVersion,
+        { authentication: null }
       );
 
       // Revoke the token
@@ -170,7 +198,8 @@ describe('device-auth-utils', () => {
         testUserId,
         testDeviceId,
         testPlatform,
-        0 // version 0
+        0, // version 0
+        { authentication: null }
       );
 
       // Initially should validate successfully
@@ -180,7 +209,6 @@ describe('device-auth-utils', () => {
 
       // Simulate user's tokenVersion being bumped to 1
       // (e.g., after password change or refresh token reuse detection)
-      const { users } = await import('@pagespace/db');
       await db
         .update(users)
         .set({ tokenVersion: 1 })
@@ -214,7 +242,8 @@ describe('device-auth-utils', () => {
         testUserId,
         testDeviceId,
         testPlatform,
-        testTokenVersion
+        testTokenVersion,
+        { authentication: null }
       );
 
       // Wait a moment to ensure timestamp changes
@@ -236,7 +265,8 @@ describe('device-auth-utils', () => {
         testUserId,
         testDeviceId,
         testPlatform,
-        testTokenVersion
+        testTokenVersion,
+        { authentication: null }
       );
 
       await updateDeviceTokenActivity(id);
@@ -253,7 +283,7 @@ describe('device-auth-utils', () => {
 
   describe('validateOrCreateDeviceToken', () => {
     it('creates new token when none provided', async () => {
-      const result = await validateOrCreateDeviceToken({
+      const result = await validateOrCreateDeviceToken({ authentication: null,
         providedDeviceToken: null,
         userId: testUserId,
         deviceId: testDeviceId,
@@ -273,10 +303,11 @@ describe('device-auth-utils', () => {
         testUserId,
         testDeviceId,
         testPlatform,
-        testTokenVersion
+        testTokenVersion,
+        { authentication: null }
       );
 
-      const result = await validateOrCreateDeviceToken({
+      const result = await validateOrCreateDeviceToken({ authentication: null,
         providedDeviceToken: existingToken,
         userId: testUserId,
         deviceId: testDeviceId,
@@ -289,7 +320,7 @@ describe('device-auth-utils', () => {
     });
 
     it('creates new token when provided token is invalid', async () => {
-      const result = await validateOrCreateDeviceToken({
+      const result = await validateOrCreateDeviceToken({ authentication: null,
         providedDeviceToken: 'invalid.token.value',
         userId: testUserId,
         deviceId: testDeviceId,
@@ -307,11 +338,11 @@ describe('device-auth-utils', () => {
         testUserId,
         testDeviceId,
         testPlatform,
-        testTokenVersion
+        testTokenVersion,
+        { authentication: null }
       );
 
       // Create the different user that we're testing with
-      const { users } = await import('@pagespace/db');
       await db.insert(users).values({
         id: 'different_user',
         name: 'Different User',
@@ -320,7 +351,7 @@ describe('device-auth-utils', () => {
         role: 'user',
       });
 
-      const result = await validateOrCreateDeviceToken({
+      const result = await validateOrCreateDeviceToken({ authentication: null,
         providedDeviceToken: existingToken,
         userId: 'different_user',
         deviceId: testDeviceId,
@@ -340,10 +371,11 @@ describe('device-auth-utils', () => {
         testUserId,
         testDeviceId,
         testPlatform,
-        testTokenVersion
+        testTokenVersion,
+        { authentication: null }
       );
 
-      const result = await validateOrCreateDeviceToken({
+      const result = await validateOrCreateDeviceToken({ authentication: null,
         providedDeviceToken: existingToken,
         userId: testUserId,
         deviceId: 'different_device',
@@ -360,10 +392,11 @@ describe('device-auth-utils', () => {
         testUserId,
         testDeviceId,
         'ios' as const,
-        testTokenVersion
+        testTokenVersion,
+        { authentication: null }
       );
 
-      const result = await validateOrCreateDeviceToken({
+      const result = await validateOrCreateDeviceToken({ authentication: null,
         providedDeviceToken: existingToken,
         userId: testUserId,
         deviceId: testDeviceId,
@@ -381,12 +414,12 @@ describe('device-auth-utils', () => {
         testDeviceId,
         testPlatform,
         testTokenVersion,
-        { ipAddress: '192.168.1.1' }
+        { authentication: null, ipAddress: '192.168.1.1' }
       );
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      await validateOrCreateDeviceToken({
+      await validateOrCreateDeviceToken({ authentication: null,
         providedDeviceToken: existingToken,
         userId: testUserId,
         deviceId: testDeviceId,
@@ -411,7 +444,8 @@ describe('device-auth-utils', () => {
         testUserId,
         testDeviceId,
         testPlatform,
-        testTokenVersion
+        testTokenVersion,
+        { authentication: null }
       );
 
       await revokeDeviceToken(id, 'user_action');
@@ -430,7 +464,8 @@ describe('device-auth-utils', () => {
         testUserId,
         testDeviceId,
         testPlatform,
-        testTokenVersion
+        testTokenVersion,
+        { authentication: null }
       );
 
       await revokeDeviceToken(id, 'user_action');

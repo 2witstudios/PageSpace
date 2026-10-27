@@ -14,6 +14,13 @@ export interface ElectronAPI {
   removeAllListeners: (channel: string) => void;
   platform: NodeJS.Platform;
   version: string;
+  /**
+   * Which desktop app this is — `pagespace` or `coder`. One shell builds both,
+   * and each registers its own protocol scheme, so anything constructing a deep
+   * link back into the app must resolve the scheme from this rather than
+   * assuming `pagespace://`. Absent in older shells; treat that as `pagespace`.
+   */
+  appVariant?: string;
   auth: {
     /**
      * Gets the opaque session token from Electron's secure storage.
@@ -29,6 +36,14 @@ export interface ElectronAPI {
       csrfToken?: string | null;
       deviceToken?: string | null;
     } | null>;
+    /**
+     * Begins a desktop-initiated auth flow, recording a single-use state so the
+     * returning `pagespace://auth-exchange` deep link is bound to a login this
+     * instance actually started (CSRF / session-fixation protection). Call this
+     * immediately before triggering any desktop sign-in handoff.
+     * @returns The opaque state value, or null if not on desktop / untrusted.
+     */
+    beginExchange?: () => Promise<string | null>;
     /**
      * Persists the current authentication session in the native secure storage.
      */
@@ -52,6 +67,24 @@ export interface ElectronAPI {
       appVersion: string;
       userAgent: string;
     }>;
+    /**
+     * Opens an OAuth URL in the system browser (allowlisted hostnames only).
+     * Used for Google/Apple OAuth on desktop to support passkeys.
+     */
+    openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
+  };
+  /**
+   * Passkey lifecycle events emitted from the main process after a
+   * `pagespace://passkey-registered` deep link. The credential is already
+   * persisted server-side by the time the callback fires — renderers should
+   * use this to re-fetch their passkey list, not to mutate auth state.
+   */
+  passkey: {
+    /**
+     * Subscribe to `passkey:registered` IPC broadcasts.
+     * @returns Unsubscribe function that removes just this listener.
+     */
+    onRegistered: (callback: () => void) => () => void;
   };
   mcp: {
     getConfig: () => Promise<MCPConfig>;

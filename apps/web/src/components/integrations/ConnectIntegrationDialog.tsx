@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { startThirdPartyOAuth } from '@/lib/navigation/oauth-redirect';
 import {
   Dialog,
   DialogContent,
@@ -19,7 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Loader2 } from 'lucide-react';
+import { Loader2, ShieldCheck, UserCircle2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { post } from '@/lib/auth/auth-fetch';
 import type { SafeProvider } from './types';
@@ -31,6 +32,14 @@ interface ConnectIntegrationDialogProps {
   onConnected: () => void;
   scope?: 'user' | 'drive';
   driveId?: string;
+  /**
+   * Where to send the user after a successful OAuth connect (defaults to the
+   * relevant Settings > Integrations page). For OAuth providers this is a
+   * full-page redirect — `onConnected` never fires — so callers embedded in a
+   * page the user doesn't want to leave (e.g. a picker inside another dialog)
+   * should pass the current path here instead of losing the user to Settings.
+   */
+  returnUrl?: string;
 }
 
 export function ConnectIntegrationDialog({
@@ -40,6 +49,7 @@ export function ConnectIntegrationDialog({
   onConnected,
   scope = 'user',
   driveId,
+  returnUrl,
 }: ConnectIntegrationDialogProps) {
   const [name, setName] = useState('');
   const [visibility, setVisibility] = useState<string>('owned_drives');
@@ -48,6 +58,7 @@ export function ConnectIntegrationDialog({
 
   const isOAuth = provider?.providerType === 'builtin';
   const requiresApiKey = !isOAuth;
+  const scopeDescriptions = Object.entries(provider?.oauthScopeDescriptions ?? {});
 
   const handleConnect = async () => {
     if (!provider) return;
@@ -62,9 +73,9 @@ export function ConnectIntegrationDialog({
       const body: Record<string, unknown> = {
         providerId: provider.id,
         name: connectionName,
-        returnUrl: scope === 'drive' && driveId
-          ? `/dashboard/${driveId}/settings`
-          : '/settings/integrations',
+        returnUrl: returnUrl ?? (scope === 'drive' && driveId
+          ? `/dashboard/${driveId}/settings/integrations`
+          : '/settings/integrations'),
       };
 
       if (scope === 'user') {
@@ -78,7 +89,7 @@ export function ConnectIntegrationDialog({
       const result = await post<{ url?: string; connection?: { id: string } }>(endpoint, body);
 
       if (result.url) {
-        window.location.href = result.url;
+        await startThirdPartyOAuth(result.url);
         return;
       }
 
@@ -112,6 +123,27 @@ export function ConnectIntegrationDialog({
         </DialogHeader>
 
         <div className="space-y-4 py-4">
+          {provider?.connectNotes && (
+            <div className="flex gap-2 rounded-lg border bg-muted/40 p-3 text-xs text-muted-foreground">
+              <UserCircle2 className="h-4 w-4 flex-shrink-0 mt-0.5" />
+              <p>{provider.connectNotes}</p>
+            </div>
+          )}
+
+          {isOAuth && scopeDescriptions.length > 0 && (
+            <div className="space-y-2">
+              <Label>Access requested</Label>
+              <ul className="space-y-1.5">
+                {scopeDescriptions.map(([scope, description]) => (
+                  <li key={scope} className="flex gap-2 text-xs text-muted-foreground">
+                    <ShieldCheck className="h-3.5 w-3.5 flex-shrink-0 mt-0.5 text-muted-foreground" />
+                    <span>{description}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           <div className="space-y-2">
             <Label htmlFor="connection-name">Connection Name</Label>
             <Input
@@ -125,7 +157,7 @@ export function ConnectIntegrationDialog({
 
           {scope === 'user' && (
             <div className="space-y-2">
-              <Label htmlFor="visibility">Visibility</Label>
+              <Label htmlFor="visibility">Who can use this connection</Label>
               <Select value={visibility} onValueChange={setVisibility}>
                 <SelectTrigger id="visibility">
                   <SelectValue />
@@ -137,7 +169,8 @@ export function ConnectIntegrationDialog({
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                Controls which drives can use this connection.
+                Controls which drives can use this connection. You choose exactly which
+                tools each AI agent can use when you enable it on that agent.
               </p>
             </div>
           )}

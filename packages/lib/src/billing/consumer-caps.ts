@@ -1,0 +1,160 @@
+/**
+ * consumer-caps — the IO behind a person's per-consumer caps on a DRIVE-WALLET leg (Spec WAL-7).
+ * The seat leg on the org pool has its own reader (seat-allowance), because a seat's month is the
+ * pool period and its overshoot is absorbed per window; a drive wallet's windows are the UTC day
+ * and the UTC month, and an overshoot past a cap simply leaves the consumer at or past it.
+ *
+ * What a cap judges: the consumer's settled spend on THIS wallet in the window (usage plus
+ * reconcile corrections, each dated by its call, summed per call and never below zero) plus their
+ * live holds on it. The decision itself is wallet-core's `evaluateCaps`.
+ *
+ * Contract (identical to the seat cap, WAL-2): a cap bounds ADMISSION. A call is admitted
+ * against its reservation; its actual cost settles in full on the wallet even when that passes
+ * the cap (it cannot be refused after the model ran), the overshoot lands where WAL-6 says —
+ * never on the consumer — and every later call in the window is refused source_cap_reached.
+ * Page and global chat also bound each stream by what is left (netSpendableCents); v1, /btw,
+ * consult and voice have no stream budget, so there one call may pass the cap by its own cost.
+ */
+import type { db } from '@pagespace/db/db';
+import { and, eq, gt, gte, inArray, sql } from '@pagespace/db/operators';
+import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
+import { walletConsumerCaps, wallets } from '@pagespace/db/schema/wallets';
+import {
+  consumerCapsInForce,
+  evaluateCaps,
+  seatSpentCents,
+  userConsumerKey,
+  utcDayStartMs,
+  utcMonthStartMs,
+  type CapRemaining,
+  type CapUsage,
+  type CapsResult,
+  type ConsumerCaps,
+} from './wallet-core';
+
+type Reader = Pick<typeof db, 'select'>;
+
+/** A consumer's caps on one leg, or null when none are set (unlimited within the wallet). */
+export async function readConsumerCaps(executor: Reader, walletId: string, userId: string): Promise<ConsumerCaps | null> {
+  const [row] = await executor
+    .select({ dailyCents: walletConsumerCaps.dailyCapCents, monthlyCents: walletConsumerCaps.monthlyCapCents })
+    .from(walletConsumerCaps)
+    .where(and(eq(walletConsumerCaps.walletId, walletId), eq(walletConsumerCaps.consumerKey, userConsumerKey(userId))))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * Whether `userId` is a GUEST of the drive `walletId` funds (D-OW-4, DRV-8), decided [D-OW-60] from
+ * the drive's CURRENT org by the one rule resolution uses (spend-target `personActor` over the
+ * permissions module's `loadDriveSpendStanding`) — never from the wallet row, which can lag a drive
+ * move. A wallet with no drive subject has no guests; a drive that is gone fails closed (a guest).
+ * Read through `executor`, so the gate re-derives it in its own transaction, under its locks.
+ */
+/** The guest-standing modules, loaded once on first use (see isGuestOnDriveWallet). */
+let guestStandingModules: Promise<[typeof import('../permissions/spend-standing'), typeof import('./spend-target')]> | null = null;
+
+/**
+ * Load the modules isGuestOnDriveWallet reads standing through. The gate calls it BEFORE it takes its
+ * row locks, so a cold module load never runs while it holds a wallet locked.
+ */
+export function loadGuestStandingModules(): Promise<[typeof import('../permissions/spend-standing'), typeof import('./spend-target')]> {
+  // Loaded on use: the permissions loaders bring field crypto, which must stay out of credit-consume's
+  // static (client-reachable) import graph (wallet-cap-alerts imports this module).
+  guestStandingModules ??= Promise.all([import('../permissions/spend-standing'), import('./spend-target')]);
+  return guestStandingModules;
+}
+
+export async function isGuestOnDriveWallet(executor: Reader, walletId: string, userId: string): Promise<boolean> {
+  const [wallet] = await executor
+    .select({ subjectType: wallets.subjectType, subjectId: wallets.subjectId })
+    .from(wallets)
+    .where(eq(wallets.id, walletId))
+    .limit(1);
+  if (!wallet || wallet.subjectType !== 'drive' || wallet.subjectId === null) return false;
+  const [{ loadDriveSpendStanding }, { personActor }] = await loadGuestStandingModules();
+  const standing = await loadDriveSpendStanding(userId, wallet.subjectId, executor);
+  const actor = personActor(userId, {
+    orgId: standing?.orgId ?? null,
+    isDriveMember: standing?.isDriveMember ?? false,
+    isOrgMember: standing?.isOrgMember ?? false,
+  });
+  return actor.kind === 'person' && actor.isGuest;
+}
+
+/**
+ * The caps that bind `userId` on `walletId` (wallet-core consumerCapsInForce): their stored caps,
+ * and for a guest each unset window at its D-OW-31 default. Null: no cap (a member with no row).
+ * Every reader of a consumer's caps — the gate, resolution, the alerts, their own view — asks here,
+ * passing the guest standing it derived once (isGuestOnDriveWallet, or the resolved actor).
+ */
+export async function readEffectiveConsumerCaps(executor: Reader, walletId: string, userId: string, consumer: { isGuest: boolean }): Promise<ConsumerCaps | null> {
+  return consumerCapsInForce(await readConsumerCaps(executor, walletId, userId), consumer);
+}
+
+/** Settled spend per window, whole cents rounded up, of `userId` on `walletId`. */
+export async function consumerSettledCents(
+  executor: Reader,
+  input: { walletId: string; userId: string; dayStart: Date; monthStart: Date },
+): Promise<{ dailyCents: number; monthlyCents: number }> {
+  const rowsFrom = new Date(Math.min(input.dayStart.getTime(), input.monthStart.getTime()));
+  const callAt = sql`coalesce((SELECT u."createdAt" FROM ${creditLedger} u WHERE u."aiUsageLogId" = ${creditLedger.aiUsageLogId} AND u."entryType" = 'usage' LIMIT 1), ${creditLedger.createdAt})`;
+  const calls = executor
+    .select({
+      at: sql<Date>`min(${callAt})`.as('call_at'),
+      millicents: sql<string>`greatest(0, coalesce(sum(${creditLedger.chargeMillicents}), 0))`.as('call_millicents'),
+    })
+    .from(creditLedger)
+    .where(and(
+      eq(creditLedger.userId, input.userId),
+      eq(creditLedger.walletId, input.walletId),
+      inArray(creditLedger.entryType, ['usage', 'adjustment']),
+      gte(creditLedger.createdAt, rowsFrom),
+    ))
+    .groupBy(sql`coalesce(${creditLedger.aiUsageLogId}, ${creditLedger.id})`)
+    .as('calls');
+  const [sums] = await executor
+    .select({
+      day: sql<string>`coalesce(sum(${calls.millicents}) FILTER (WHERE ${calls.at} >= ${input.dayStart}), 0)`,
+      month: sql<string>`coalesce(sum(${calls.millicents}) FILTER (WHERE ${calls.at} >= ${input.monthStart}), 0)`,
+    })
+    .from(calls);
+  return { dailyCents: seatSpentCents(Number(sums?.day ?? 0)), monthlyCents: seatSpentCents(Number(sums?.month ?? 0)) };
+}
+
+export interface ConsumerCapFacts {
+  caps: ConsumerCaps;
+  usage: CapUsage;
+  /** What is left of each window for this consumer (null = no cap in that window). */
+  remaining: CapRemaining;
+}
+
+/**
+ * The caps facts for one person on one drive-wallet leg at `now`, or null when no cap binds them
+ * there (readEffectiveConsumerCaps: a guest is always capped). Run it inside the gate's
+ * transaction (under the wallet's row lock) for the decision.
+ */
+export async function loadConsumerCapFacts(
+  executor: Reader,
+  input: { walletId: string; userId: string; now: Date; isGuest: boolean },
+): Promise<ConsumerCapFacts | null> {
+  const caps = await readEffectiveConsumerCaps(executor, input.walletId, input.userId, { isGuest: input.isGuest });
+  if (!caps) return null;
+  const nowMs = input.now.getTime();
+  const dayStart = new Date(utcDayStartMs(nowMs));
+  const monthStart = new Date(utcMonthStartMs(nowMs));
+  const settled = await consumerSettledCents(executor, { walletId: input.walletId, userId: input.userId, dayStart, monthStart });
+  const [held] = await executor
+    .select({ cents: sql<string>`coalesce(sum(${creditHolds.estCents}), 0)` })
+    .from(creditHolds)
+    .where(and(eq(creditHolds.walletId, input.walletId), eq(creditHolds.userId, input.userId), gt(creditHolds.expiresAt, input.now)));
+  const reserved = Number(held?.cents ?? 0);
+  const usage: CapUsage = {
+    dailySpentCents: settled.dailyCents,
+    monthlySpentCents: settled.monthlyCents,
+    dailyReservedCents: reserved,
+    monthlyReservedCents: reserved,
+  };
+  const zero: CapsResult = evaluateCaps({ caps, usage, reservationCents: 0 });
+  return { caps, usage, remaining: { dailyRemainingCents: zero.dailyRemainingCents, monthlyRemainingCents: zero.monthlyRemainingCents } };
+}

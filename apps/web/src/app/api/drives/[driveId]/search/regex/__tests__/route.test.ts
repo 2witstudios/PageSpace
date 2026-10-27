@@ -3,8 +3,8 @@ import { NextResponse } from 'next/server';
 import { GET } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // Use inferred types to avoid export issues
-type DriveSearchInfo = NonNullable<Awaited<ReturnType<typeof import('@pagespace/lib/server').checkDriveAccessForSearch>>>;
-type RegexSearchResponse = Awaited<ReturnType<typeof import('@pagespace/lib/server').regexSearchPages>>;
+type DriveSearchInfo = NonNullable<Awaited<ReturnType<typeof import('@pagespace/lib/services/drive-search-service').checkDriveAccessForSearch>>>;
+type RegexSearchResponse = Awaited<ReturnType<typeof import('@pagespace/lib/services/drive-search-service').regexSearchPages>>;
 
 // ============================================================================
 // Contract Tests for /api/drives/[driveId]/search/regex
@@ -12,10 +12,15 @@ type RegexSearchResponse = Awaited<ReturnType<typeof import('@pagespace/lib/serv
 // These tests mock at the SERVICE SEAM level, NOT at the ORM/query-builder level.
 // ============================================================================
 
-vi.mock('@pagespace/lib/server', () => ({
-  checkDriveAccessForSearch: vi.fn(),
-  regexSearchPages: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/services/drive-search-service', () => ({
+    checkDriveAccessForSearch: vi.fn(),
+    regexSearchPages: vi.fn(),
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -23,15 +28,22 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
   checkMCPDriveScope: vi.fn(() => null), // Allow all drives by default
+  isScopedMCPAuth: vi.fn(() => false), // Session/unscoped fixtures by default
 }));
 
-import { checkDriveAccessForSearch, regexSearchPages } from '@pagespace/lib/server';
+vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
+  getAppDriveAccessLevel: vi.fn(),
+}));
+
+import { checkDriveAccessForSearch, regexSearchPages } from '@pagespace/lib/services/drive-search-service';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 // ============================================================================
@@ -113,7 +125,7 @@ describe('GET /api/drives/[driveId]/search/regex', () => {
       expect(response.status).toBe(401);
     });
 
-    it('should allow JWT authentication', async () => {
+    it('should allow session authentication', async () => {
       vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
       vi.mocked(regexSearchPages).mockResolvedValue(createRegexSearchResponse());
 
@@ -190,7 +202,7 @@ describe('GET /api/drives/[driveId]/search/regex', () => {
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/regex?pattern=test`);
       await GET(request, createContext(mockDriveId));
 
-      expect(checkDriveAccessForSearch).toHaveBeenCalledWith(mockDriveId, mockUserId);
+      expect(checkDriveAccessForSearch).toHaveBeenCalledWith(mockDriveId, expect.objectContaining({ userId: mockUserId }));
     });
 
     it('should call regexSearchPages with correct parameters', async () => {
@@ -202,7 +214,7 @@ describe('GET /api/drives/[driveId]/search/regex', () => {
 
       expect(regexSearchPages).toHaveBeenCalledWith(
         mockDriveId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         'test',
         'test-drive',
         { searchIn: 'content', maxResults: 25 }
@@ -218,7 +230,7 @@ describe('GET /api/drives/[driveId]/search/regex', () => {
 
       expect(regexSearchPages).toHaveBeenCalledWith(
         mockDriveId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         'test',
         'test-drive',
         { searchIn: 'content', maxResults: 50 }
@@ -234,7 +246,7 @@ describe('GET /api/drives/[driveId]/search/regex', () => {
 
       expect(regexSearchPages).toHaveBeenCalledWith(
         mockDriveId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         'Doc',
         'test-drive',
         { searchIn: 'title', maxResults: 50 }
@@ -250,7 +262,7 @@ describe('GET /api/drives/[driveId]/search/regex', () => {
 
       expect(regexSearchPages).toHaveBeenCalledWith(
         mockDriveId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         'test',
         'test-drive',
         { searchIn: 'both', maxResults: 50 }
@@ -266,7 +278,7 @@ describe('GET /api/drives/[driveId]/search/regex', () => {
 
       expect(regexSearchPages).toHaveBeenCalledWith(
         mockDriveId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         'test',
         'test-drive',
         { searchIn: 'content', maxResults: 100 }
@@ -363,12 +375,16 @@ describe('GET /api/drives/[driveId]/search/regex', () => {
       const response = await GET(request, createContext(mockDriveId));
       const body = await response.json();
 
-      expect(body.summary).toBeDefined();
-      expect(body.stats).toBeDefined();
-      expect(body.stats.pagesScanned).toBeDefined();
-      expect(body.stats.pagesWithAccess).toBeDefined();
-      expect(body.stats.documentTypes).toBeDefined();
-      expect(body.nextSteps).toBeDefined();
+      expect(body.summary).toBe('Found 1 page matching pattern "test"');
+      expect(body.stats).toEqual({
+        pagesScanned: 10,
+        pagesWithAccess: 1,
+        documentTypes: ['DOCUMENT'],
+      });
+      expect(body.stats.pagesScanned).toBe(10);
+      expect(body.stats.pagesWithAccess).toBe(1);
+      expect(body.stats.documentTypes).toEqual(['DOCUMENT']);
+      expect(body.nextSteps).toEqual(['Use read_page with the pageId to examine full content']);
     });
 
     it('should return empty results when no matches', async () => {
@@ -403,7 +419,7 @@ describe('GET /api/drives/[driveId]/search/regex', () => {
 
       expect(regexSearchPages).toHaveBeenCalledWith(
         mockDriveId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         '\\btest\\b',
         'test-drive',
         { searchIn: 'content', maxResults: 50 }
@@ -420,7 +436,7 @@ describe('GET /api/drives/[driveId]/search/regex', () => {
 
       expect(regexSearchPages).toHaveBeenCalledWith(
         mockDriveId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         pattern,
         'test-drive',
         { searchIn: 'content', maxResults: 50 }
@@ -430,7 +446,7 @@ describe('GET /api/drives/[driveId]/search/regex', () => {
 
   describe('error handling', () => {
     it('should return 500 when service throws unexpected error', async () => {
-      vi.mocked(checkDriveAccessForSearch).mockRejectedValue(new Error('Database error'));
+      vi.mocked(checkDriveAccessForSearch).mockRejectedValueOnce(new Error('Database error'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/regex?pattern=test`);
       const response = await GET(request, createContext(mockDriveId));
@@ -442,7 +458,7 @@ describe('GET /api/drives/[driveId]/search/regex', () => {
 
     it('should return 500 when regexSearchPages throws', async () => {
       vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
-      vi.mocked(regexSearchPages).mockRejectedValue(new Error('Invalid regex pattern'));
+      vi.mocked(regexSearchPages).mockRejectedValueOnce(new Error('Invalid regex pattern'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/regex?pattern=[invalid`);
       const response = await GET(request, createContext(mockDriveId));

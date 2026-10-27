@@ -34,7 +34,7 @@ let mockLogEntries: Array<{
 }> = [];
 
 // Mock database
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       activityLogs: {
@@ -127,6 +127,8 @@ vi.mock('@pagespace/db', () => ({
       }),
     }),
   },
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
   activityLogs: {
     id: 'id',
     timestamp: 'timestamp',
@@ -144,32 +146,42 @@ import {
   verifyEntry,
   type HashChainVerificationResult,
 } from '../hash-chain-verifier';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 /**
  * Helper to create a valid hash chain of log entries
  */
 function createValidHashChain(count: number): typeof mockLogEntries {
+  return createValidHashChainWithOperations(
+    Array.from({ length: count }, () => 'create')
+  );
+}
+
+// Builds a valid hash chain where each entry carries the caller-supplied
+// operation string. `operation` is hashed by computeLogHash, so legacy values
+// removed from the ActivityOperation TS union (e.g. 'password_change', dropped
+// with passwordless-only auth) must still chain-verify — the DB column is text
+// post-migration 0105, preserving stored values verbatim.
+function createValidHashChainWithOperations(operations: string[]): typeof mockLogEntries {
   const entries: typeof mockLogEntries = [];
   const chainSeed = generateChainSeed();
   let previousHash = chainSeed;
 
-  for (let i = 0; i < count; i++) {
+  operations.forEach((operation, i) => {
     const timestamp = new Date(Date.now() + i * 1000);
     const id = `log-${i + 1}`;
 
-    const entryData = {
+    const hashData = {
       id,
       timestamp,
-      userId: 'user-123',
-      actorEmail: 'test@example.com',
-      operation: 'create',
+      operation,
       resourceType: 'page',
       resourceId: `page-${i + 1}`,
       driveId: 'drive-1',
     };
 
-    const logHash = computeLogHash(entryData, previousHash);
+    const logHash = computeLogHash(hashData, previousHash);
+    const entryData = { ...hashData, userId: 'user-123', actorEmail: 'test@example.com' };
 
     entries.push({
       ...entryData,
@@ -184,7 +196,7 @@ function createValidHashChain(count: number): typeof mockLogEntries {
     });
 
     previousHash = logHash;
-  }
+  });
 
   return entries;
 }
@@ -268,8 +280,8 @@ describe('hash-chain-verifier', () => {
     it('should detect tampering when content is modified', async () => {
       // Arrange - create valid chain then modify content
       mockLogEntries = createValidHashChain(3);
-      // Modify the userId of the 2nd entry (which changes its hash)
-      mockLogEntries[1]!.userId = 'modified-user';
+      // Modify a non-PII field of the 2nd entry (which changes its hash)
+      mockLogEntries[1]!.operation = 'modified-operation';
 
       // Mock count query
       vi.mocked(db.select).mockReturnValue({
@@ -388,6 +400,55 @@ describe('hash-chain-verifier', () => {
       expect(result.verificationCompletedAt.getTime()).toBeGreaterThanOrEqual(
         result.verificationStartedAt.getTime()
       );
+    });
+
+    // Migration 0105 converted activity_logs.operation (and rollbackSourceOperation)
+    // from a pg enum to text. Legacy values dropped from the ActivityOperation TS
+    // union must keep chaining correctly; `operation` is part of computeLogHash,
+    // so DELETE / UPDATE on affected rows would invalidate the verifier. A text
+    // column lets stored values persist verbatim.
+    it('verifies a chain that includes legacy operation values (migration 0105 invariant)', async () => {
+      mockLogEntries = createValidHashChainWithOperations([
+        'create',
+        'password_change',
+        'update',
+      ]);
+
+      vi.mocked(db.select).mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([{ count: 3 }]),
+        }),
+      } as never);
+
+      const result = await verifyHashChain();
+
+      expect(result.isValid).toBe(true);
+      expect(result.entriesVerified).toBe(3);
+      expect(result.validEntries).toBe(3);
+      expect(result.invalidEntries).toBe(0);
+      expect(result.breakPoint).toBeNull();
+    });
+
+    it('verifies chain-link continuity across a legacy-operation row', async () => {
+      mockLogEntries = createValidHashChainWithOperations([
+        'create',
+        'password_change',
+        'update',
+      ]);
+
+      // Precondition: successor's previousLogHash equals predecessor's logHash.
+      expect(mockLogEntries[2]!.previousLogHash).toBe(mockLogEntries[1]!.logHash);
+
+      vi.mocked(db.select).mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([{ count: 3 }]),
+        }),
+      } as never);
+
+      const result = await verifyHashChain();
+
+      expect(result.isValid).toBe(true);
+      expect(result.breakPoint).toBeNull();
     });
   });
 

@@ -1,9 +1,14 @@
 import { NextResponse } from 'next/server';
-import { db, googleCalendarConnections } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
-import { encrypt } from '@pagespace/lib';
+import { db } from '@pagespace/db/db'
+import { googleCalendarConnections } from '@pagespace/db/schema/calendar';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { maskEmail } from '@pagespace/lib/audit/mask-email';
+import { encrypt } from '@pagespace/lib/encryption/encryption-utils';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { OAuth2Client } from 'google-auth-library';
 import crypto from 'crypto';
+import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 import {
   GOOGLE_CALENDAR_DEFAULT_RETURN_PATH,
   normalizeGoogleCalendarReturnPath,
@@ -17,6 +22,7 @@ const STATE_MAX_AGE_MS = 10 * 60 * 1000;
  * Exchanges authorization code for tokens and stores encrypted credentials.
  */
 export async function GET(req: Request) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   const baseUrl = process.env.WEB_APP_URL || process.env.NEXTAUTH_URL || 'http://localhost:3000';
 
   try {
@@ -67,9 +73,7 @@ export async function GET(req: Request) {
         .update(JSON.stringify(stateWithSignature.data))
         .digest('hex');
 
-      const sigBuffer = Buffer.from(stateWithSignature.sig, 'utf-8');
-      const expectedBuffer = Buffer.from(expectedSignature, 'utf-8');
-      if (sigBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
+      if (!secureCompare(String(stateWithSignature.sig), expectedSignature)) {
         loggers.auth.warn('Google Calendar OAuth state signature mismatch');
         return NextResponse.redirect(
           new URL('/settings/integrations/google-calendar?error=invalid_state', baseUrl)
@@ -144,7 +148,7 @@ export async function GET(req: Request) {
     }
 
     if (!emailVerified) {
-      loggers.auth.warn('Google account email is not verified', { googleEmail });
+      loggers.auth.warn('Google account email is not verified', { googleEmail: maskEmail(googleEmail) });
       return NextResponse.redirect(
         new URL('/settings/integrations/google-calendar?error=email_not_verified', baseUrl)
       );
@@ -196,6 +200,9 @@ export async function GET(req: Request) {
     loggers.auth.info('Google Calendar connected successfully', {
       userId,
     });
+
+    auditRequest(req, { eventType: 'auth.token.created', userId, details: { tokenType: 'google_calendar' } });
+    auditRequest(req, { eventType: 'data.write', userId, resourceType: 'calendar_oauth_callback', resourceId: 'self', details: { operation: 'oauth_complete' } });
 
     // Redirect back to settings with success
     const redirectPath = normalizeGoogleCalendarReturnPath(

@@ -1,0 +1,1543 @@
+/**
+ * Contract tests for POST /api/auth/apple/callback
+ *
+ * Coverage:
+ * - Apple OAuth error handling (user_cancelled_authorize, generic errors)
+ * - Missing id_token
+ * - State parameter parsing (valid signed, unsigned, malformed, missing)
+ * - Unsafe returnUrl fallback
+ * - Rate limiting
+ * - Apple ID token verification
+ * - Missing email from Apple
+ * - User JSON parsing (first authorization name)
+ * - User find or create
+ * - Drive provisioning
+ * - Session management (fixation prevention)
+ * - CSRF token generation
+ * - Rate limit reset
+ * - Desktop / iOS / Web platform redirects
+ * - Error handling
+ */
+
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import crypto from 'crypto';
+
+// Mock dependencies BEFORE imports
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserByAppleId: vi.fn(),
+    findUserByEmail: vi.fn(),
+    findUserById: vi.fn(),
+    createUser: vi.fn(),
+    updateUser: vi.fn(),
+  },
+}));
+
+vi.mock('@pagespace/lib/auth/session-service', () => ({
+  sessionService: {
+    createSession: vi.fn().mockResolvedValue('ps_sess_mock_token'),
+    validateSession: vi.fn().mockResolvedValue({
+      sessionId: 'mock-session-id',
+      userId: 'new-user-id',
+      userRole: 'user',
+      tokenVersion: 0,
+      type: 'user',
+      scopes: ['*'],
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    }),
+    revokeAllUserSessions: vi.fn().mockResolvedValue(0),
+    revokeSession: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
+  generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+}));
+vi.mock('@pagespace/lib/auth/exchange-codes', () => ({
+  createExchangeCode: vi.fn().mockResolvedValue('mock-exchange-code'),
+}));
+vi.mock('@pagespace/lib/auth/constants', () => ({
+  SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
+}));
+vi.mock('@pagespace/lib/auth/oauth-utils', () => ({
+  verifyAppleIdToken: vi.fn().mockResolvedValue({
+    success: true,
+    userInfo: {
+      providerId: 'apple-sub-123',
+      email: 'test@example.com',
+      emailVerified: true,
+    },
+  }),
+}));
+
+vi.mock('@paralleldrive/cuid2', () => ({
+  createId: vi.fn().mockReturnValue('mock-cuid'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
+}));
+
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
+      auth: {
+        error: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        debug: vi.fn(),
+      },
+      security: {
+        warn: vi.fn(),
+      },
+    },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
+  validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
+      deviceToken: 'mock-device-token',
+    }),
+}));
+
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
+  trackAuthEvent: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
+  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'new-drive-id', created: false }),
+}));
+
+vi.mock('@/lib/auth', () => ({
+  getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
+  isSafeReturnUrl: vi.fn().mockReturnValue(true),
+  revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
+  createWebDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
+}));
+
+vi.mock('@/lib/auth/cookie-config', () => ({
+  appendSessionCookie: vi.fn(),
+  createDeviceTokenHandoffCookie: vi.fn().mockReturnValue('ps_device_token=mock; Path=/; Max-Age=60'),
+}));
+
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+  checkDistributedRateLimit: vi.fn().mockResolvedValue({
+    allowed: true,
+    attemptsRemaining: 4,
+    retryAfter: undefined,
+  }),
+  resetDistributedRateLimit: vi.fn().mockResolvedValue(undefined),
+  DISTRIBUTED_RATE_LIMITS: {
+    LOGIN: { maxAttempts: 5, windowMs: 900000, progressiveDelay: true },
+  },
+}));
+
+vi.mock('@/lib/auth/invite-acceptance-adapters', () => ({
+  buildAcceptancePorts: vi.fn(() => ({})),
+}));
+
+vi.mock('@/lib/auth/native-invite-acceptance', () => ({
+  consumeAnyInviteIfPresent: vi.fn().mockResolvedValue({
+    kind: null,
+    invitedDriveId: null,
+    invitedPageId: null,
+    connectionId: null, invitedOrgId: null, orgLandingPath: null,
+  }),
+  consumeAllInvitesForEmail: vi.fn().mockResolvedValue({
+    drivesAccepted: 0,
+    pagesAccepted: 0,
+    connectionsCreated: 0,
+  }),
+}));
+
+vi.mock('@pagespace/lib/auth/apple/capture-apple-refresh-token', () => ({
+  captureAppleRefreshToken: vi.fn().mockResolvedValue('stored'),
+}));
+
+import { POST } from '../route';
+import { captureAppleRefreshToken } from '@pagespace/lib/auth/apple/capture-apple-refresh-token';
+import { authRepository } from '@/lib/repositories/auth-repository';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { verifyAppleIdToken } from '@pagespace/lib/auth/oauth-utils';
+import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
+import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
+import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
+import { appendSessionCookie } from '@/lib/auth/cookie-config';
+import {
+  consumeAnyInviteIfPresent,
+  consumeAllInvitesForEmail,
+} from '@/lib/auth/native-invite-acceptance';
+
+// Helper to create signed state
+function createSignedState(
+  data: Record<string, unknown>,
+  secret: string = 'test-oauth-state-secret'
+): string {
+  const withTimestamp = { timestamp: Date.now(), ...data };
+  const payload = JSON.stringify(withTimestamp);
+  const sig = crypto.createHmac('sha256', secret).update(payload).digest('hex');
+  return Buffer.from(JSON.stringify({ data: withTimestamp, sig })).toString('base64');
+}
+
+// Helper to create form data POST request
+function createCallbackRequest(fields: Record<string, string> = {}): Request {
+  const formBody = new URLSearchParams(fields).toString();
+  return new Request('http://localhost/api/auth/apple/callback', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'User-Agent': 'TestBrowser/1.0',
+    },
+    body: formBody,
+  });
+}
+
+const mockNewUser = {
+  id: 'new-user-id',
+  name: 'Test User',
+  email: 'test@example.com',
+  image: null,
+  emailVerified: new Date(),
+  tokenVersion: 0,
+  appleId: 'apple-sub-123',
+};
+
+describe('POST /api/auth/apple/callback', () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env = {
+      ...originalEnv,
+      NEXTAUTH_URL: 'https://example.com',
+      WEB_APP_URL: 'https://example.com',
+      OAUTH_STATE_SECRET: 'test-oauth-state-secret',
+    };
+    vi.mocked(getClientIP).mockReturnValue('127.0.0.1');
+    vi.mocked(isSafeReturnUrl).mockReturnValue(true);
+    vi.mocked(authRepository.findUserByAppleId).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserById).mockResolvedValue(null);
+    vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
+    vi.mocked(authRepository.updateUser).mockResolvedValue(undefined);
+    vi.mocked(checkDistributedRateLimit).mockResolvedValue({
+      allowed: true,
+      attemptsRemaining: 4,
+      retryAfter: undefined,
+    });
+    vi.mocked(verifyAppleIdToken).mockResolvedValue({
+      success: true,
+      // @ts-expect-error - partial mock data
+      userInfo: {
+        providerId: 'apple-sub-123',
+        email: 'test@example.com',
+        emailVerified: true,
+      },
+    });
+    vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(0);
+    // @ts-expect-error - partial mock data
+    vi.mocked(sessionService.validateSession).mockResolvedValue({
+      sessionId: 'mock-session-id',
+      userId: 'new-user-id',
+      userRole: 'user',
+      tokenVersion: 0,
+      type: 'user',
+      scopes: ['*'],
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    });
+    vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({ driveId: 'new-drive-id', created: false });
+
+    // vi.resetAllMocks() above wipes the vi.mock factory implementations of
+    // the dispatcher; re-prime them so the route's await-and-destructure
+    // doesn't trip into the catch block.
+    vi.mocked(consumeAnyInviteIfPresent).mockResolvedValue({
+      kind: null,
+      invitedDriveId: null,
+      invitedPageId: null,
+      connectionId: null, invitedOrgId: null, orgLandingPath: null,
+    });
+    vi.mocked(consumeAllInvitesForEmail).mockResolvedValue({
+      drivesAccepted: 0,
+      pagesAccepted: 0,
+      connectionsCreated: 0,
+    });
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  describe('Apple error handling', () => {
+    it('redirects with access_denied when user cancels', async () => {
+      const request = createCallbackRequest({ error: 'user_cancelled_authorize' });
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/auth/signin?error=access_denied');
+    });
+
+    it('redirects with oauth_error for other Apple errors', async () => {
+      const request = createCallbackRequest({ error: 'some_other_error' });
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/auth/signin?error=oauth_error');
+    });
+
+    it('truncates long error strings in logs', async () => {
+      const longError = 'a'.repeat(200);
+      const request = createCallbackRequest({ error: longError });
+      await POST(request);
+
+      expect(loggers.auth.warn).toHaveBeenCalledWith(
+        'Apple OAuth callback rejected',
+        expect.objectContaining({ errorHint: longError.slice(0, 100) })
+      );
+    });
+
+    it('uses request origin when no env URLs set', async () => {
+      delete process.env.NEXTAUTH_URL;
+      delete process.env.WEB_APP_URL;
+
+      const request = createCallbackRequest({ error: 'some_error' });
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/auth/signin');
+    });
+  });
+
+  describe('missing id_token', () => {
+    it('rejects when id_token is missing', async () => {
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({ state });
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/auth/signin?error=oauth_error');
+    });
+  });
+
+  describe('state parameter parsing', () => {
+    it('parses valid signed state', async () => {
+      const state = createSignedState({ returnUrl: '/settings', platform: 'web' });
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/settings');
+    });
+
+    it('rejects state with invalid signature', async () => {
+      const badState = Buffer.from(JSON.stringify({
+        data: { returnUrl: '/evil', platform: 'web' },
+        sig: 'invalid-signature',
+      })).toString('base64');
+
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state: badState,
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/auth/signin?error=oauth_error');
+    });
+
+    it('rejects unsigned state', async () => {
+      const unsignedState = Buffer.from(JSON.stringify({
+        data: { returnUrl: '/evil', platform: 'desktop' },
+      })).toString('base64');
+
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state: unsignedState,
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/auth/signin?error=oauth_error');
+    });
+
+    it('rejects malformed state', async () => {
+      const badState = Buffer.from('not-json').toString('base64');
+
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state: badState,
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/auth/signin?error=oauth_error');
+    });
+
+    it('rejects when state is not provided', async () => {
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/auth/signin?error=oauth_error');
+    });
+
+    it('extracts deviceId and deviceName from valid state', async () => {
+      const state = createSignedState({
+        returnUrl: '/dashboard',
+        platform: 'desktop',
+        deviceId: 'dev-abc',
+        deviceName: 'My Mac',
+      });
+
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      await POST(request);
+
+      // Desktop platform should use device info from state
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
+        expect.objectContaining({
+          authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
+          deviceId: 'dev-abc',
+          deviceName: 'My Mac',
+        })
+      );
+    });
+
+    it('uses safe default returnUrl when data.returnUrl is missing', async () => {
+      const state = createSignedState({ platform: 'web' });
+
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      const response = await POST(request);
+      const location = response.headers.get('Location')!;
+
+      expect(location).toContain('/dashboard');
+    });
+
+    it('SEC-2 (partial) an Apple callback records single-factor evidence on the session it creates (D-OW-45)', async () => {
+      const before = Date.now();
+      await POST(createCallbackRequest({ id_token: 'valid-token', state: createSignedState({ platform: 'web' }) }));
+
+      const [options] = vi.mocked(sessionService.createSession).mock.calls[0];
+      expect(options.authentication).toEqual({ authenticatedAtMs: expect.any(Number), assurance: 'single_factor' });
+      expect(options.authentication?.authenticatedAtMs).toBeGreaterThanOrEqual(before);
+    });
+  });
+
+  describe('unsafe returnUrl fallback', () => {
+    it('falls back to /dashboard when returnUrl is unsafe', async () => {
+      vi.mocked(isSafeReturnUrl).mockReturnValue(false);
+
+      const state = createSignedState({ returnUrl: 'https://evil.com', platform: 'web' });
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      const response = await POST(request);
+      const location = response.headers.get('Location')!;
+
+      expect(location).toContain('/dashboard');
+      expect(location).not.toContain('evil.com');
+    });
+  });
+
+  describe('rate limiting', () => {
+    it('redirects to signin with rate_limit error when rate limited', async () => {
+      vi.mocked(checkDistributedRateLimit).mockResolvedValue({
+        allowed: false,
+        attemptsRemaining: 0,
+        retryAfter: 900,
+      });
+
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/auth/signin?error=rate_limit');
+    });
+  });
+
+  describe('token verification', () => {
+    it('redirects with oauth_error when token verification fails', async () => {
+      vi.mocked(verifyAppleIdToken).mockResolvedValue({
+        success: false,
+        error: 'Invalid token',
+      });
+
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({
+        id_token: 'invalid-token',
+        state,
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/auth/signin?error=oauth_error');
+    });
+
+    it('redirects with oauth_error when email is missing from token', async () => {
+      vi.mocked(verifyAppleIdToken).mockResolvedValue({
+        success: true,
+        // @ts-expect-error - partial mock data
+        userInfo: {
+          providerId: 'apple-sub-123',
+          email: '',
+          emailVerified: true,
+        },
+      });
+
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/auth/signin?error=oauth_error');
+    });
+  });
+
+  describe('Apple user JSON parsing', () => {
+    it('parses user name from Apple user JSON', async () => {
+      const userJson = JSON.stringify({
+        name: { firstName: 'Jane', lastName: 'Smith' },
+        email: 'jane@example.com',
+      });
+
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+        user: userJson,
+      });
+
+      await POST(request);
+
+      // User should be created with the parsed name
+      expect(authRepository.createUser).toHaveBeenCalledTimes(1);
+    });
+
+    it('handles malformed user JSON gracefully', async () => {
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+        user: 'not-valid-json',
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+      expect(loggers.auth.warn).toHaveBeenCalledWith(
+        'Failed to parse Apple user JSON',
+        expect.objectContaining({ parseError: true })
+      );
+    });
+
+    it('handles user JSON without name field', async () => {
+      const userJson = JSON.stringify({ email: 'test@example.com' });
+
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+        user: userJson,
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+    });
+  });
+
+  describe('user find or create', () => {
+    it('creates a new user when none exists', async () => {
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      await POST(request);
+
+      expect(authRepository.createUser).toHaveBeenCalledTimes(1);
+    });
+
+    it('updates existing user missing appleId', async () => {
+      const existingUser = {
+        id: 'existing-id',
+        name: 'Existing',
+        email: 'test@example.com',
+        image: null,
+        emailVerified: new Date(),
+        tokenVersion: 0,
+              appleId: null,
+      };
+
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...existingUser, appleId: 'apple-sub-123' } as never);
+
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      await POST(request);
+
+      expect(authRepository.updateUser).toHaveBeenCalledWith('existing-id', expect.objectContaining({
+        appleId: 'apple-sub-123',
+      }));
+      expect(authRepository.createUser).not.toHaveBeenCalled();
+    });
+
+    // SECURITY (M5): an unverified Apple email must never link to / authenticate
+    // an existing account; only a subject-id (appleId) match may.
+    it('redirects to oauth_error and never links when email matches an existing account but is unverified', async () => {
+      vi.mocked(verifyAppleIdToken).mockResolvedValue({
+        success: true,
+        // @ts-expect-error - partial mock data
+        userInfo: {
+          providerId: 'attacker-apple-sub',
+          email: 'victim@example.com',
+          emailVerified: false,
+        },
+      });
+      // No appleId subject match; only the email collides with an existing account.
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValue(null);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue({
+        id: 'victim-id',
+        name: 'Victim',
+        email: 'victim@example.com',
+        image: null,
+        emailVerified: new Date(),
+        tokenVersion: 0,
+        appleId: null,
+      } as never);
+
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/auth/signin?error=oauth_error');
+      // No account was linked, created, or signed in.
+      expect(authRepository.updateUser).not.toHaveBeenCalled();
+      expect(authRepository.createUser).not.toHaveBeenCalled();
+      expect(sessionService.createSession).not.toHaveBeenCalled();
+    });
+
+    it('updates existing user missing name', async () => {
+      const existingUser = {
+        id: 'existing-id',
+        name: null,
+        email: 'test@example.com',
+        image: null,
+        emailVerified: new Date(),
+        tokenVersion: 0,
+              appleId: 'apple-sub-123',
+      };
+
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...existingUser, name: 'test' } as never);
+
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      await POST(request);
+
+      expect(authRepository.updateUser).toHaveBeenCalledWith('existing-id', expect.objectContaining({
+        name: 'test',
+      }));
+    });
+
+    it('does not update complete existing user', async () => {
+      const existingUser = {
+        id: 'existing-id',
+        name: 'Complete User',
+        email: 'test@example.com',
+        image: null,
+        emailVerified: new Date(),
+        tokenVersion: 0,
+              appleId: 'apple-sub-123',
+      };
+
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValue(existingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(existingUser as never);
+
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      await POST(request);
+
+      expect(authRepository.updateUser).not.toHaveBeenCalled();
+      expect(authRepository.createUser).not.toHaveBeenCalled();
+    });
+
+    it('handles re-fetch returning null after update', async () => {
+      const existingUser = {
+        id: 'existing-id',
+        name: 'Existing',
+        email: 'test@example.com',
+        image: null,
+        emailVerified: new Date(),
+        tokenVersion: 0,
+              appleId: null,
+      };
+
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce(null);
+
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      const response = await POST(request);
+
+      // Should fall back to original user
+      expect(response.status).toBe(307);
+    });
+  });
+
+  describe('drive provisioning', () => {
+    it('redirects to provisioned drive when newly created', async () => {
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
+        driveId: 'provisioned-drive-id',
+        created: true,
+      });
+
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      const response = await POST(request);
+      const location = response.headers.get('Location')!;
+
+      expect(location).toContain('/dashboard/provisioned-drive-id');
+    });
+
+    it('uses original returnUrl when drive already exists', async () => {
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
+        driveId: 'existing-drive-id',
+        created: false,
+      });
+
+      const state = createSignedState({ returnUrl: '/settings', platform: 'web' });
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      const response = await POST(request);
+      const location = response.headers.get('Location')!;
+
+      expect(location).toContain('/settings');
+    });
+
+    it('continues on drive provisioning error', async () => {
+      vi.mocked(provisionHomeDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
+
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+      expect(loggers.auth.error).toHaveBeenCalledWith(
+        'Failed to provision Home drive',
+        new Error('DB error'),
+        { userId: mockNewUser.id, provider: 'apple' }
+      );
+    });
+  });
+
+  describe('session management', () => {
+    it('revokes existing sessions before creating new one', async () => {
+      const { revokeSessionsForLogin } = await import('@/lib/auth');
+
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      await POST(request);
+
+      expect(revokeSessionsForLogin).toHaveBeenCalledWith('new-user-id', undefined, 'new_login', 'Apple OAuth');
+    });
+
+    it('redirects with oauth_error when session validation fails', async () => {
+      vi.mocked(sessionService.validateSession).mockResolvedValue(null as never);
+
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/auth/signin?error=oauth_error');
+    });
+  });
+
+  describe('rate limit reset', () => {
+    it('resets rate limit on successful callback', async () => {
+      vi.mocked(getClientIP).mockReturnValue('10.0.0.1');
+
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      await POST(request);
+
+      expect(resetDistributedRateLimit).toHaveBeenCalledWith('oauth:callback:ip:10.0.0.1');
+    });
+
+    it('logs warning when rate limit reset fails', async () => {
+      vi.mocked(resetDistributedRateLimit).mockRejectedValueOnce(new Error('Redis error'));
+
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+      expect(loggers.auth.warn).toHaveBeenCalledWith(
+        'Rate limit reset failed after successful Apple OAuth callback',
+        expect.objectContaining({ error: 'Redis error' })
+      );
+    });
+
+    it('handles non-Error rate limit reset failure', async () => {
+      vi.mocked(resetDistributedRateLimit).mockRejectedValueOnce('string-error');
+
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      await POST(request);
+
+      expect(loggers.auth.warn).toHaveBeenCalledWith(
+        'Rate limit reset failed after successful Apple OAuth callback',
+        expect.objectContaining({ error: 'string-error' })
+      );
+    });
+  });
+
+  describe('desktop platform redirect', () => {
+    it('returns handoff bridge HTML containing deep link with exchange code', async () => {
+      const state = createSignedState({
+        returnUrl: '/dashboard',
+        platform: 'desktop',
+        deviceId: 'desktop-dev-123',
+        deviceName: 'My Mac',
+      });
+
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Content-Type')).toContain('text/html');
+      const body = await response.text();
+      expect(body).toContain('pagespace://auth-exchange');
+      expect(body).toContain('code=mock-exchange-code');
+      expect(body).toContain('provider=apple');
+      expect(body).toContain('http-equiv="refresh"');
+    });
+
+    it('emits hardened security headers on the handoff bridge response', async () => {
+      const state = createSignedState({
+        returnUrl: '/dashboard',
+        platform: 'desktop',
+        deviceId: 'desktop-dev-123',
+        deviceName: 'My Mac',
+      });
+
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+      const response = await POST(request);
+
+      const csp = response.headers.get('Content-Security-Policy') ?? '';
+      expect(csp).toContain("default-src 'none'");
+      expect(csp).toContain("style-src 'unsafe-inline'");
+      expect(csp).toContain("base-uri 'none'");
+      expect(csp).toContain("form-action 'none'");
+      expect(csp).toContain("frame-ancestors 'none'");
+      expect(csp).not.toContain('img-src');
+      expect(response.headers.get('Cache-Control')).toBe('no-store');
+      expect(response.headers.get('X-Frame-Options')).toBe('DENY');
+      expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff');
+      expect(response.headers.get('Referrer-Policy')).toBe('no-referrer');
+    });
+
+    it('includes isNewUser flag in deep link for new users', async () => {
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
+        driveId: 'new-drive',
+        created: true,
+      });
+
+      const state = createSignedState({
+        returnUrl: '/dashboard',
+        platform: 'desktop',
+        deviceId: 'desktop-dev-123',
+      });
+
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      const response = await POST(request);
+      const body = await response.text();
+
+      expect(body).toContain('isNewUser=true');
+    });
+
+    it('redirects with error when desktop platform has no deviceId', async () => {
+      const state = createSignedState({
+        returnUrl: '/dashboard',
+        platform: 'desktop',
+      });
+
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/auth/signin?error=oauth_error');
+    });
+
+    it('uses user-agent as fallback device name for desktop', async () => {
+      const state = createSignedState({
+        returnUrl: '/dashboard',
+        platform: 'desktop',
+        deviceId: 'dev-123',
+      });
+
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      await POST(request);
+
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
+        expect.objectContaining({
+          authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
+          deviceName: 'TestBrowser/1.0',
+        })
+      );
+    });
+  });
+
+  describe('iOS platform redirect', () => {
+    it('redirects to deep link with exchange code', async () => {
+      const state = createSignedState({
+        returnUrl: '/dashboard',
+        platform: 'ios',
+        deviceId: 'ios-dev-123',
+      });
+
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('pagespace://auth-exchange');
+      expect(location).toContain('provider=apple');
+    });
+
+    it('generates deviceId when not provided for iOS', async () => {
+      const state = createSignedState({
+        returnUrl: '/dashboard',
+        platform: 'ios',
+      });
+
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      await POST(request);
+
+      // Should use createId() as fallback for deviceId
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
+        expect.objectContaining({
+          authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
+          deviceId: 'mock-cuid',
+          platform: 'ios',
+        })
+      );
+    });
+
+    it('includes isNewUser flag for newly provisioned iOS users', async () => {
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
+        driveId: 'new-drive',
+        created: true,
+      });
+
+      const state = createSignedState({
+        returnUrl: '/dashboard',
+        platform: 'ios',
+        deviceId: 'ios-dev',
+      });
+
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      const response = await POST(request);
+      const location = response.headers.get('Location')!;
+
+      expect(location).toContain('isNewUser=true');
+    });
+  });
+
+  describe('web platform redirect', () => {
+    it('redirects to returnUrl with auth success without CSRF token in URL', async () => {
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/dashboard');
+      expect(location).toContain('auth=success');
+      expect(location).not.toContain('csrfToken');
+    });
+
+    it('sets session cookie for web redirect', async () => {
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      await POST(request);
+
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      const [webHeaders, webToken] = vi.mocked(appendSessionCookie).mock.calls[0];
+      expect(webHeaders).toBeInstanceOf(Headers);
+      expect(webToken).toBe('ps_sess_mock_token');
+    });
+  });
+
+  describe('auth event logging', () => {
+    it('logs login event on successful callback', async () => {
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      await POST(request);
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'auth.login.success',
+          userId: 'new-user-id',
+          sessionId: 'mock-session-id',
+          details: { method: 'Apple OAuth' },
+        })
+      );
+      expect(trackAuthEvent).toHaveBeenCalledWith(
+        'new-user-id',
+        'login',
+        expect.objectContaining({
+          provider: 'apple',
+        })
+      );
+    });
+  });
+
+  describe('error handling', () => {
+    it('redirects with oauth_error on unexpected exception', async () => {
+      vi.mocked(verifyAppleIdToken).mockRejectedValueOnce(new Error('Network failure'));
+
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({
+        id_token: 'valid-token',
+        state,
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/auth/signin?error=oauth_error');
+      expect(loggers.auth.error).toHaveBeenCalledWith(
+        'Apple OAuth callback error',
+        new Error('Network failure')
+      );
+    });
+  });
+
+  describe('PII scrub in log metadata', () => {
+    const findInfoCall = (msg: string) =>
+      vi.mocked(loggers.auth.info).mock.calls.find(call => call[0] === msg);
+
+    it('masks email in "Creating new user via Apple OAuth" log', async () => {
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+      await POST(request);
+
+      const call = findInfoCall('Creating new user via Apple OAuth');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as { email?: string };
+      expect(meta.email).toBe('te***@example.com');
+    });
+
+    it('does not include name in "New user created via Apple OAuth" log', async () => {
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+      await POST(request);
+
+      const call = findInfoCall('New user created via Apple OAuth');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as Record<string, unknown>;
+      expect(meta).not.toHaveProperty('name');
+      expect(meta).toHaveProperty('userId');
+    });
+
+    it('masks email in "Updating existing user via Apple OAuth" log', async () => {
+      const existingUser = {
+        id: 'existing-id',
+        name: null,
+        email: 'test@example.com',
+        image: null,
+        emailVerified: new Date(),
+        tokenVersion: 0,
+        appleId: null,
+      };
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...existingUser, name: 'test', appleId: 'apple-sub-123' } as never);
+
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+      await POST(request);
+
+      const call = findInfoCall('Updating existing user via Apple OAuth');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as { email?: string };
+      expect(meta.email).toBe('te***@example.com');
+    });
+
+    it('does not include name in "User updated via Apple OAuth" log', async () => {
+      const existingUser = {
+        id: 'existing-id',
+        name: null,
+        email: 'test@example.com',
+        image: null,
+        emailVerified: new Date(),
+        tokenVersion: 0,
+        appleId: null,
+      };
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...existingUser, name: 'test', appleId: 'apple-sub-123' } as never);
+
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+      await POST(request);
+
+      const call = findInfoCall('User updated via Apple OAuth');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as Record<string, unknown>;
+      expect(meta).not.toHaveProperty('name');
+      expect(meta).toHaveProperty('userId');
+    });
+
+    it('masks email in desktop missing-deviceId error log', async () => {
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'desktop' });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+      await POST(request);
+
+      const errCall = vi.mocked(loggers.auth.error).mock.calls.find(
+        call => call[0] === 'Desktop OAuth callback missing deviceId'
+      );
+      expect(errCall).toBeDefined();
+      const meta = errCall?.[1] as { email?: string };
+      expect(meta.email).toBe('te***@example.com');
+    });
+  });
+
+  describe('invite acceptance via OAuth', () => {
+    const mockExistingUser = {
+      id: 'existing-user-id',
+      name: 'Existing User',
+      email: 'test@example.com',
+      appleId: 'apple-sub-123',
+      tokenVersion: 1,
+      role: 'user',
+      provider: 'apple',
+      image: null,
+      emailVerified: new Date(),
+    };
+
+    beforeEach(() => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValue({
+        kind: null,
+        invitedDriveId: null,
+        invitedPageId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
+      });
+      vi.mocked(consumeAllInvitesForEmail).mockResolvedValue({
+        drivesAccepted: 0,
+        pagesAccepted: 0,
+        connectionsCreated: 0,
+      });
+    });
+
+    it('calls consumeAnyInviteIfPresent with isNewUser=true for new users and redirects to /dashboard/<driveId>?invited=1', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'drive',
+        invitedDriveId: 'drive-apple-789',
+        invitedPageId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
+      });
+      const state = createSignedState({
+        returnUrl: '/dashboard',
+        platform: 'web',
+        inviteToken: 'ps_invite_apple_abc',
+      });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+      const response = await POST(request);
+
+      expect(consumeAnyInviteIfPresent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inviteToken: 'ps_invite_apple_abc',
+          isNewUser: true,
+          email: 'test@example.com',
+        }),
+      );
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/dashboard/drive-apple-789');
+      expect(location).toContain('invited=1');
+    });
+
+    it('calls consumeAnyInviteIfPresent with isNewUser=false for existing users when inviteToken is in state', async () => {
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValue(mockExistingUser as never);
+
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'drive',
+        invitedDriveId: 'drive-existing-apple',
+        invitedPageId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
+      });
+      const state = createSignedState({
+        returnUrl: '/dashboard',
+        platform: 'web',
+        inviteToken: 'ps_invite_existing',
+      });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+      const response = await POST(request);
+
+      expect(consumeAnyInviteIfPresent).toHaveBeenCalledWith(
+        expect.objectContaining({ isNewUser: false }),
+      );
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/dashboard/drive-existing-apple');
+      expect(location).toContain('invited=1');
+    });
+
+    it('passes inviteToken=undefined when inviteToken is absent from state', async () => {
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+      await POST(request);
+
+      expect(consumeAnyInviteIfPresent).toHaveBeenCalledWith(
+        expect.objectContaining({ inviteToken: undefined }),
+      );
+    });
+
+    // Apple private-relay regression guard: if the user signed up at the
+    // invite consent screen with their personal email but Apple returns a
+    // private-relay address, the dispatcher MUST surface EMAIL_MISMATCH and
+    // not silently join them to the drive.
+    it('appends inviteError=EMAIL_MISMATCH when Apple returns private-relay email mismatch', async () => {
+      vi.mocked(verifyAppleIdToken).mockResolvedValueOnce({
+        success: true,
+        // @ts-expect-error - partial mock data
+        userInfo: {
+          providerId: 'apple-sub-123',
+          email: 'abc123@privaterelay.appleid.com',
+          emailVerified: true,
+        },
+      });
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: null,
+        invitedDriveId: null,
+        invitedPageId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
+        inviteError: 'EMAIL_MISMATCH',
+      });
+
+      const state = createSignedState({
+        returnUrl: '/dashboard',
+        platform: 'web',
+        inviteToken: 'ps_invite_relay',
+      });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('inviteError=EMAIL_MISMATCH');
+      expect(location).toContain('auth=success');
+    });
+
+    it('appends inviteError to returnUrl on TOKEN_CONSUMED', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: null,
+        invitedDriveId: null,
+        invitedPageId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
+        inviteError: 'TOKEN_CONSUMED',
+      });
+
+      const state = createSignedState({
+        returnUrl: '/dashboard',
+        platform: 'web',
+        inviteToken: 'ps_invite_consumed',
+      });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+      const response = await POST(request);
+
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('inviteError=TOKEN_CONSUMED');
+    });
+
+    it('attaches invitedDriveId to desktop deep link when invite is consumed', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'drive',
+        invitedDriveId: 'drive-desktop-apple',
+        invitedPageId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
+      });
+
+      const state = createSignedState({
+        returnUrl: '/dashboard',
+        platform: 'desktop',
+        deviceId: 'desktop-dev-123',
+        deviceName: 'My Mac',
+        inviteToken: 'ps_invite_apple_desktop',
+      });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      const body = await response.text();
+      expect(body).toContain('invitedDriveId=drive-desktop-apple');
+    });
+
+    it('attaches invitedDriveId to iOS deep link when invite is consumed', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'drive',
+        invitedDriveId: 'drive-ios-apple',
+        invitedPageId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
+      });
+
+      const state = createSignedState({
+        returnUrl: '/dashboard',
+        platform: 'ios',
+        deviceId: 'ios-dev-123',
+        deviceName: 'iPhone',
+        inviteToken: 'ps_invite_apple_ios',
+      });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('pagespace://auth-exchange');
+      expect(location).toContain('invitedDriveId=drive-ios-apple');
+    });
+  });
+
+  describe('Apple refresh token capture (TN3194)', () => {
+    beforeEach(() => {
+      process.env.APPLE_REDIRECT_URI = 'https://example.com/api/auth/apple/callback';
+      vi.mocked(captureAppleRefreshToken).mockResolvedValue('stored');
+      vi.mocked(verifyAppleIdToken).mockResolvedValue({
+        success: true,
+        // @ts-expect-error - partial mock data
+        userInfo: { providerId: 'apple-sub-123', email: 'test@example.com', emailVerified: true },
+        audience: 'ai.pagespace.web',
+      });
+    });
+
+    const webRequest = (fields: Record<string, string> = {}) =>
+      createCallbackRequest({
+        id_token: 'valid-token',
+        state: createSignedState({ returnUrl: '/dashboard', platform: 'web' }),
+        ...fields,
+      });
+
+    it('given Apple posts a code, should capture the refresh token with the verified client and the flow\'s redirect_uri', async () => {
+      const response = await POST(webRequest({ code: 'apple-web-code' }));
+
+      expect(response.status).toBe(307);
+      expect(response.headers.get('location')).toContain('auth=success');
+      expect(captureAppleRefreshToken).toHaveBeenCalledWith({
+        userId: 'new-user-id',
+        code: 'apple-web-code',
+        clientId: 'ai.pagespace.web',
+        expectedSub: 'apple-sub-123',
+        redirectUri: 'https://example.com/api/auth/apple/callback',
+      });
+    });
+
+    it('given a slow Apple exchange, should redirect the signed-in user without waiting for it', async () => {
+      let finishExchange: (outcome: 'stored') => void = () => {};
+      vi.mocked(captureAppleRefreshToken).mockReturnValue(
+        new Promise((resolve) => {
+          finishExchange = resolve;
+        }),
+      );
+
+      const response = await POST(webRequest({ code: 'apple-web-code' }));
+
+      expect(captureAppleRefreshToken).toHaveBeenCalledTimes(1);
+      expect(response.headers.get('location')).toContain('auth=success');
+      finishExchange('stored');
+    });
+
+    it('given the capture rejects, should still complete the sign-in', async () => {
+      vi.mocked(captureAppleRefreshToken).mockRejectedValue(new Error('boom'));
+
+      const response = await POST(webRequest({ code: 'apple-web-code' }));
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(response.headers.get('location')).toContain('auth=success');
+      expect(loggers.auth.warn).toHaveBeenCalledWith(
+        'Apple refresh token capture threw',
+        expect.objectContaining({ userId: 'new-user-id' }),
+      );
+    });
+
+    it('given the desktop flow, should also capture the refresh token', async () => {
+      const response = await POST(
+        createCallbackRequest({
+          id_token: 'valid-token',
+          code: 'apple-desktop-code',
+          state: createSignedState({ returnUrl: '/dashboard', platform: 'desktop', deviceId: 'desktop-dev-1' }),
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      expect(captureAppleRefreshToken).toHaveBeenCalledWith(expect.objectContaining({ code: 'apple-desktop-code' }));
+    });
+
+    it('given the iOS web flow, should also capture the refresh token', async () => {
+      await POST(
+        createCallbackRequest({
+          id_token: 'valid-token',
+          code: 'apple-ios-code',
+          state: createSignedState({ returnUrl: '/dashboard', platform: 'ios', deviceId: 'ios-dev-1' }),
+        }),
+      );
+
+      expect(captureAppleRefreshToken).toHaveBeenCalledWith(expect.objectContaining({ code: 'apple-ios-code' }));
+    });
+
+    it('given no code in the post, should sign in without attempting a capture', async () => {
+      const response = await POST(webRequest());
+
+      expect(response.headers.get('location')).toContain('auth=success');
+      expect(captureAppleRefreshToken).not.toHaveBeenCalled();
+    });
+
+    it('given the sign-in fails verification, should never attempt a capture', async () => {
+      vi.mocked(verifyAppleIdToken).mockResolvedValue({ success: false, error: 'bad token' });
+
+      await POST(webRequest({ code: 'apple-web-code' }));
+
+      expect(captureAppleRefreshToken).not.toHaveBeenCalled();
+    });
+  });
+});

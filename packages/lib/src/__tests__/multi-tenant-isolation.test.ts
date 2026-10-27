@@ -21,6 +21,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EnforcedAuthContext } from '../permissions/enforced-context';
 import type { SessionClaims } from '../auth/session-service';
+import { credentialActor } from '../permissions/access-actor';
 
 // =============================================================================
 // Mocks
@@ -33,7 +34,7 @@ const mockPagePermFindFirst = vi.fn();
 const mockFileFindFirst = vi.fn();
 const mockDriveFindFirst = vi.fn();
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       pages: { findFirst: (...args: unknown[]) => mockPageFindFirst(...args) },
@@ -50,13 +51,22 @@ vi.mock('@pagespace/db', () => ({
       })),
     })),
   },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'pages.id', driveId: 'pages.driveId' },
+  drives: { id: 'drives.id' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
   driveMembers: { userId: 'driveMembers.userId', driveId: 'driveMembers.driveId' },
   pagePermissions: { userId: 'pagePermissions.userId', pageId: 'pagePermissions.pageId' },
+}));
+vi.mock('@pagespace/db/schema/storage', () => ({
   files: { id: 'files.id', driveId: 'files.driveId' },
-  drives: { id: 'drives.id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field: string, value: unknown) => ({ field, value })),
   and: vi.fn((...conditions: unknown[]) => ({ conditions })),
+  isNotNull: vi.fn((a: unknown) => ({ isNotNull: a })),
 }));
 
 // Mock permissions functions
@@ -66,19 +76,15 @@ const mockCanUserEditPage = vi.fn();
 const mockCanUserDeletePage = vi.fn();
 const mockGetUserDriveAccess = vi.fn();
 
+// Mock drive permission lookup
+const mockGetUserDrivePermissions = vi.fn();
+
 vi.mock('../permissions/permissions', () => ({
   getUserAccessLevel: (...args: unknown[]) => mockGetUserAccessLevel(...args),
   canUserViewPage: (...args: unknown[]) => mockCanUserViewPage(...args),
   canUserEditPage: (...args: unknown[]) => mockCanUserEditPage(...args),
   canUserDeletePage: (...args: unknown[]) => mockCanUserDeletePage(...args),
   getUserDriveAccess: (...args: unknown[]) => mockGetUserDriveAccess(...args),
-}));
-
-// Mock cached permissions
-const mockGetUserDrivePermissions = vi.fn();
-
-vi.mock('../permissions/permissions-cached', () => ({
-  getUserAccessLevel: (...args: unknown[]) => mockGetUserAccessLevel(...args),
   getUserDrivePermissions: (...args: unknown[]) => mockGetUserDrivePermissions(...args),
 }));
 
@@ -168,11 +174,11 @@ describe('Multi-Tenant Isolation', () => {
         // Tenant A owner tries to access Tenant B's page - should return null
         mockGetUserAccessLevel.mockResolvedValue(null);
 
-        const accessLevel = await getUserAccessLevel(TENANT_A.ownerId, TENANT_B.pageId);
+        const accessLevel = await getUserAccessLevel(credentialActor(TENANT_A.ownerId, null), TENANT_B.pageId);
 
         // SECURITY: Returns null - no access to cross-tenant data
         expect(accessLevel).toBeNull();
-        expect(mockGetUserAccessLevel).toHaveBeenCalledWith(TENANT_A.ownerId, TENANT_B.pageId);
+        expect(mockGetUserAccessLevel).toHaveBeenCalledWith(expect.objectContaining({ userId: TENANT_A.ownerId }), TENANT_B.pageId);
       });
 
       it('should not be able to view pages from that drive via canUserViewPage', async () => {
@@ -181,7 +187,7 @@ describe('Multi-Tenant Isolation', () => {
         // Cross-tenant access check should fail
         mockCanUserViewPage.mockResolvedValue(false);
 
-        const canView = await canUserViewPage(TENANT_A.ownerId, TENANT_B.pageId);
+        const canView = await canUserViewPage(credentialActor(TENANT_A.ownerId, null), TENANT_B.pageId);
 
         expect(canView).toBe(false);
       });
@@ -191,7 +197,7 @@ describe('Multi-Tenant Isolation', () => {
 
         mockCanUserEditPage.mockResolvedValue(false);
 
-        const canEdit = await canUserEditPage(TENANT_A.ownerId, TENANT_B.pageId);
+        const canEdit = await canUserEditPage(credentialActor(TENANT_A.ownerId, null), TENANT_B.pageId);
 
         expect(canEdit).toBe(false);
       });
@@ -201,7 +207,7 @@ describe('Multi-Tenant Isolation', () => {
 
         mockCanUserDeletePage.mockResolvedValue(false);
 
-        const canDelete = await canUserDeletePage(TENANT_A.ownerId, TENANT_B.pageId);
+        const canDelete = await canUserDeletePage(credentialActor(TENANT_A.ownerId, null), TENANT_B.pageId);
 
         expect(canDelete).toBe(false);
       });
@@ -221,7 +227,7 @@ describe('Multi-Tenant Isolation', () => {
 
         const accessInfo = await checkDriveAccessForSearch(
           TENANT_B.driveId,
-          TENANT_A.ownerId
+          credentialActor(TENANT_A.ownerId, null)
         );
 
         expect(accessInfo.hasAccess).toBe(false);
@@ -241,7 +247,7 @@ describe('Multi-Tenant Isolation', () => {
 
         const ownAccess = await checkDriveAccessForSearch(
           TENANT_A.driveId,
-          TENANT_A.ownerId
+          credentialActor(TENANT_A.ownerId, null)
         );
 
         expect(ownAccess.hasAccess).toBe(true);
@@ -255,7 +261,7 @@ describe('Multi-Tenant Isolation', () => {
 
         const otherAccess = await checkDriveAccessForSearch(
           TENANT_B.driveId,
-          TENANT_A.ownerId
+          credentialActor(TENANT_A.ownerId, null)
         );
 
         expect(otherAccess.hasAccess).toBe(false);
@@ -264,7 +270,6 @@ describe('Multi-Tenant Isolation', () => {
 
     describe('given a file stored in a drive', () => {
       it('should not allow user from tenant A to access files from tenant B', async () => {
-        // The EnforcedFileRepository checks permissions before returning files
         // A user from Tenant A should NOT be able to access Tenant B's files
 
         // Simulate permission check returning null (no access)
@@ -276,14 +281,12 @@ describe('Multi-Tenant Isolation', () => {
         });
         const context = EnforcedAuthContext.fromSession(claims);
 
-        // Context is created but when EnforcedFileRepository.getFile is called,
-        // it should check permissions and return null for cross-tenant access
         expect(context.userId).toBe(TENANT_A.ownerId);
         expect(context.hasScope('files:read')).toBe(true);
 
         // Verify the permission system would deny access
         const { getUserAccessLevel } = await import('../permissions/permissions');
-        const accessLevel = await getUserAccessLevel(TENANT_A.ownerId, TENANT_B.pageId);
+        const accessLevel = await getUserAccessLevel(credentialActor(TENANT_A.ownerId, null), TENANT_B.pageId);
         expect(accessLevel).toBeNull();
       });
 
@@ -305,7 +308,7 @@ describe('Multi-Tenant Isolation', () => {
         expect(context.userId).toBe(TENANT_A.ownerId);
 
         const { getUserAccessLevel } = await import('../permissions/permissions');
-        const accessLevel = await getUserAccessLevel(TENANT_A.ownerId, TENANT_A.pageId);
+        const accessLevel = await getUserAccessLevel(credentialActor(TENANT_A.ownerId, null), TENANT_A.pageId);
 
         expect(accessLevel).not.toBeNull();
         expect(accessLevel?.canView).toBe(true);
@@ -323,13 +326,13 @@ describe('Multi-Tenant Isolation', () => {
 
         // Existing file in other tenant
         const existingResult = await getUserAccessLevel(
-          TENANT_A.ownerId,
+          credentialActor(TENANT_A.ownerId, null),
           TENANT_B.pageId
         );
 
         // Non-existing file
         const nonExistingResult = await getUserAccessLevel(
-          TENANT_A.ownerId,
+          credentialActor(TENANT_A.ownerId, null),
           'non-existent-page-id'
         );
 
@@ -395,17 +398,16 @@ describe('Multi-Tenant Isolation', () => {
         mockGetUserDrivePermissions.mockResolvedValue(null);
 
         const { getUserDrivePermissions } = await import(
-          '../permissions/permissions-cached'
+          '../permissions/permissions'
         );
         const permissions = await getUserDrivePermissions(
-          TENANT_A.ownerId,
+          credentialActor(TENANT_A.ownerId, null),
           TENANT_B.driveId
         );
 
         // SECURITY: Permission check validates actual membership, not just token claims
         expect(permissions).toBeNull();
-        expect(mockGetUserDrivePermissions).toHaveBeenCalledWith(
-          TENANT_A.ownerId,
+        expect(mockGetUserDrivePermissions).toHaveBeenCalledWith(expect.objectContaining({ userId: TENANT_A.ownerId }),
           TENANT_B.driveId
         );
       });
@@ -440,7 +442,7 @@ describe('Multi-Tenant Isolation', () => {
 
         // Tenant A owner tries to create a token for Tenant B's page
         await expect(
-          createPageServiceToken(TENANT_A.ownerId, TENANT_B.pageId, ['files:read'])
+          createPageServiceToken(credentialActor(TENANT_A.ownerId, null), TENANT_B.pageId, ['files:read'])
         ).rejects.toThrow();
       });
 
@@ -459,7 +461,7 @@ describe('Multi-Tenant Isolation', () => {
 
         // Tenant A owner creates token for their own page
         const result = await createPageServiceToken(
-          TENANT_A.ownerId,
+          credentialActor(TENANT_A.ownerId, null),
           TENANT_A.pageId,
           ['files:read']
         );
@@ -482,7 +484,7 @@ describe('Multi-Tenant Isolation', () => {
         // Tenant A owner tries to join room for Tenant B's page
         mockGetUserAccessLevel.mockResolvedValue(null);
 
-        const accessLevel = await getUserAccessLevel(TENANT_A.ownerId, TENANT_B.pageId);
+        const accessLevel = await getUserAccessLevel(credentialActor(TENANT_A.ownerId, null), TENANT_B.pageId);
 
         // Should return null - no access means room join should be denied
         expect(accessLevel).toBeNull();
@@ -494,7 +496,7 @@ describe('Multi-Tenant Isolation', () => {
         // Tenant A owner tries to join Tenant B's drive room
         mockGetUserDriveAccess.mockResolvedValue(false);
 
-        const hasAccess = await getUserDriveAccess(TENANT_A.ownerId, TENANT_B.driveId);
+        const hasAccess = await getUserDriveAccess(credentialActor(TENANT_A.ownerId, null), TENANT_B.driveId);
 
         expect(hasAccess).toBe(false);
       });
@@ -505,7 +507,7 @@ describe('Multi-Tenant Isolation', () => {
         // Owner joins their own drive
         mockGetUserDriveAccess.mockResolvedValue(true);
 
-        const hasAccess = await getUserDriveAccess(TENANT_A.ownerId, TENANT_A.driveId);
+        const hasAccess = await getUserDriveAccess(credentialActor(TENANT_A.ownerId, null), TENANT_A.driveId);
 
         expect(hasAccess).toBe(true);
       });
@@ -525,7 +527,7 @@ describe('Multi-Tenant Isolation', () => {
         });
 
         const pageAccess = await getUserAccessLevel(
-          UNAUTHORIZED_USER.userId,
+          credentialActor(UNAUTHORIZED_USER.userId, null),
           TENANT_A.pageId
         );
         expect(pageAccess).not.toBeNull();
@@ -535,7 +537,7 @@ describe('Multi-Tenant Isolation', () => {
         mockGetUserDriveAccess.mockResolvedValue(false);
 
         const driveAccess = await getUserDriveAccess(
-          UNAUTHORIZED_USER.userId,
+          credentialActor(UNAUTHORIZED_USER.userId, null),
           TENANT_A.driveId
         );
         expect(driveAccess).toBe(false);
@@ -613,7 +615,7 @@ describe('Multi-Tenant Isolation', () => {
     describe('given a drive member trying to access another drive', () => {
       it('should not allow MEMBER role to access other drives', async () => {
         const { getUserDrivePermissions } = await import(
-          '../permissions/permissions-cached'
+          '../permissions/permissions'
         );
 
         // Member has permissions on Tenant A
@@ -626,7 +628,7 @@ describe('Multi-Tenant Isolation', () => {
         });
 
         const ownDrivePerms = await getUserDrivePermissions(
-          'tenant-a-member',
+          credentialActor('tenant-a-member', null),
           TENANT_A.driveId
         );
         expect(ownDrivePerms).not.toBeNull();
@@ -636,7 +638,7 @@ describe('Multi-Tenant Isolation', () => {
         mockGetUserDrivePermissions.mockResolvedValueOnce(null);
 
         const otherDrivePerms = await getUserDrivePermissions(
-          'tenant-a-member',
+          credentialActor('tenant-a-member', null),
           TENANT_B.driveId
         );
         expect(otherDrivePerms).toBeNull();
@@ -644,7 +646,7 @@ describe('Multi-Tenant Isolation', () => {
 
       it('should not allow ADMIN role from one drive to access another drive', async () => {
         const { getUserDrivePermissions } = await import(
-          '../permissions/permissions-cached'
+          '../permissions/permissions'
         );
 
         // Admin has full permissions on Tenant A
@@ -657,7 +659,7 @@ describe('Multi-Tenant Isolation', () => {
         });
 
         const ownDrivePerms = await getUserDrivePermissions(
-          'tenant-a-admin',
+          credentialActor('tenant-a-admin', null),
           TENANT_A.driveId
         );
         expect(ownDrivePerms).not.toBeNull();
@@ -667,7 +669,7 @@ describe('Multi-Tenant Isolation', () => {
         mockGetUserDrivePermissions.mockResolvedValueOnce(null);
 
         const otherDrivePerms = await getUserDrivePermissions(
-          'tenant-a-admin',
+          credentialActor('tenant-a-admin', null),
           TENANT_B.driveId
         );
         expect(otherDrivePerms).toBeNull();

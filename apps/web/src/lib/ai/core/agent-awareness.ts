@@ -3,15 +3,20 @@
  *
  * Builds a system prompt section that lists available AI agents
  * for the global assistant to be aware of and consult via ask_agent.
- *
- * Uses per-drive caching to reduce database queries. Cache is invalidated
- * when agents are created, edited, or deleted.
  */
 
-import { db, pages, drives, eq, and } from '@pagespace/db';
-import { getUserDriveAccess, canUserViewPage, agentAwarenessCache } from '@pagespace/lib/server';
-import { loggers } from '@pagespace/lib/server';
-import type { CachedAgent } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db'
+import { eq, and } from '@pagespace/db/operators'
+import { pages, drives } from '@pagespace/db/schema/core';
+import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
+
+interface DriveAgent {
+  id: string;
+  title: string;
+  definition: string | null;
+}
 
 interface VisibleAgent {
   id: string;
@@ -20,14 +25,7 @@ interface VisibleAgent {
   driveName: string;
 }
 
-/**
- * Query visible agents for a drive from the database
- * Returns agents that are:
- * - Type AI_CHAT
- * - Not trashed
- * - Visible to global assistant (not explicitly hidden)
- */
-async function queryDriveAgents(driveId: string): Promise<CachedAgent[]> {
+async function queryDriveAgents(driveId: string): Promise<DriveAgent[]> {
   const agents = await db
     .select({
       id: pages.id,
@@ -43,7 +41,6 @@ async function queryDriveAgents(driveId: string): Promise<CachedAgent[]> {
     ))
     .orderBy(pages.title);
 
-  // Filter to only visible agents and map to CachedAgent format
   return agents
     .filter(agent => agent.visibleToGlobalAssistant !== false)
     .map(agent => ({
@@ -59,28 +56,32 @@ async function queryDriveAgents(driveId: string): Promise<CachedAgent[]> {
  * Returns a formatted markdown section listing all visible AI agents
  * that the user has access to across all their drives.
  *
- * Uses per-drive caching to minimize database queries:
- * - Cache key: driveId -> list of visible agents
- * - Cache hit: Skip DB query for that drive
- * - Cache miss: Query DB and populate cache
- * - Per-user permission filtering still applied (uses cached permissions)
- *
- * @param userId - The authenticated user's ID
+ * @param actor - The authenticated caller (their credential decides org access)
+ * @param options.canDelegate - Whether `spawn_session` is actually IN the caller's
+ *   tool set. The chat-only session family registers regardless of the
+ *   CODE_EXECUTION kill-switch, but read-only mode strips `spawn_session` as a
+ *   write tool — and an unconditional "delegate with spawn_session" instruction
+ *   told the model to call a tool it does not have: it would confidently attempt
+ *   delegation and silently fail. Defaults to false: a prompt that never mentions
+ *   a tool is always safe, one that mentions a missing tool never is.
  * @returns A formatted string to append to the system prompt, or empty string if no agents
  */
-export async function buildAgentAwarenessPrompt(userId: string): Promise<string> {
+export async function buildAgentAwarenessPrompt(
+  actor: AccessActor,
+  options: { canDelegate?: boolean; excludedDriveIds?: ReadonlySet<string>; allowedDriveIds?: readonly string[] } = {},
+): Promise<string> {
   try {
-    // Get all non-trashed drives
-    const allDrives = await db
+    // Every live drive, minus any the caller's agent is kept out of (Imago).
+    const allDrives = (await db
       .select({ id: drives.id, name: drives.name })
       .from(drives)
-      .where(eq(drives.isTrashed, false));
+      .where(eq(drives.isTrashed, false)))
+      .filter((drive) => !options.excludedDriveIds?.has(drive.id) &&
+        (!options.allowedDriveIds?.length || options.allowedDriveIds.includes(drive.id)));
 
-    // Filter to drives the user has access to
-    // Note: getUserDriveAccess uses cached permissions
     const accessibleDrives: Array<{ id: string; name: string }> = [];
     for (const drive of allDrives) {
-      const hasAccess = await getUserDriveAccess(userId, drive.id);
+      const hasAccess = await getUserDriveAccess(actor, drive.id);
       if (hasAccess) {
         accessibleDrives.push(drive);
       }
@@ -90,32 +91,13 @@ export async function buildAgentAwarenessPrompt(userId: string): Promise<string>
       return '';
     }
 
-    // Collect all visible agents using per-drive caching
     const visibleAgents: VisibleAgent[] = [];
-    let cacheHits = 0;
-    let cacheMisses = 0;
 
     for (const drive of accessibleDrives) {
-      // Check cache first
-      const cached = await agentAwarenessCache.getDriveAgents(drive.id);
+      const driveAgents = await queryDriveAgents(drive.id);
 
-      let driveAgents: CachedAgent[];
-
-      if (cached) {
-        // Cache hit - use cached agent list
-        driveAgents = cached.agents;
-        cacheHits++;
-      } else {
-        // Cache miss - query DB and populate cache
-        driveAgents = await queryDriveAgents(drive.id);
-        await agentAwarenessCache.setDriveAgents(drive.id, drive.name, driveAgents);
-        cacheMisses++;
-      }
-
-      // Filter by user permissions (still needed per-user)
-      // Note: canUserViewPage uses cached permissions
       for (const agent of driveAgents) {
-        const canView = await canUserViewPage(userId, agent.id);
+        const canView = await canUserViewPage(actor, agent.id);
         if (canView) {
           visibleAgents.push({
             id: agent.id,
@@ -127,14 +109,14 @@ export async function buildAgentAwarenessPrompt(userId: string): Promise<string>
       }
     }
 
-    // If no visible agents, return empty string
     if (visibleAgents.length === 0) {
       return '';
     }
 
-    // Build the formatted prompt section
     let prompt = '## Available AI Agents\n\n';
-    prompt += 'You can consult these agents using `ask_agent`. If the user references an agent not listed here, use `list_agents` or `multi_drive_list_agents` to find it.\n\n';
+    prompt += options.canDelegate
+      ? 'You can delegate to these agents with `spawn_session` (pass their ID as `agent`; `wait: true` for a synchronous answer). If the user references an agent not listed here, use `list_agents` or `multi_drive_list_agents` to find it.\n\n'
+      : 'These agents exist in the workspace. If the user references an agent not listed here, use `list_agents` or `multi_drive_list_agents` to find it.\n\n';
 
     for (const agent of visibleAgents) {
       prompt += `- **${agent.title}** (ID: ${agent.id}) [${agent.driveName}]\n`;
@@ -145,18 +127,15 @@ export async function buildAgentAwarenessPrompt(userId: string): Promise<string>
     }
 
     loggers.ai.debug('Built agent awareness prompt', {
-      userId,
+      userId: actor.userId,
       agentCount: visibleAgents.length,
       driveCount: accessibleDrives.length,
-      cacheHits,
-      cacheMisses,
     });
 
     return prompt.trim();
 
   } catch (error) {
     loggers.ai.error('Failed to build agent awareness prompt:', error as Error);
-    // Return empty string on error - don't break the system prompt
     return '';
   }
 }

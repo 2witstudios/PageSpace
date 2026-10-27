@@ -1,0 +1,674 @@
+/**
+ * Prepaid credit-gate enforcement + usage-logging durability for
+ * POST /api/ai/global/[id]/messages.
+ *
+ * - The gate is consulted before the model is invoked: an out-of-credits user
+ *   gets a 402 and neither the stream nor the lifecycle is started.
+ * - R4: AIMonitoring.trackUsage is ALWAYS called from onFinish, even when the
+ *   provider returns no usage metadata, so the orphan-sweep has a row to bill.
+ */
+
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+const {
+  mockCreateStreamLifecycle,
+  mockLifecycleFinish,
+  mockBroadcastChatUserMessage,
+  mockSaveGlobalAssistantMessageToDatabase,
+} = vi.hoisted(() => ({
+  mockCreateStreamLifecycle: vi.fn(),
+  mockLifecycleFinish: vi.fn(),
+  mockBroadcastChatUserMessage: vi.fn().mockResolvedValue(undefined),
+  mockSaveGlobalAssistantMessageToDatabase: vi.fn().mockResolvedValue(undefined),
+}));
+
+interface MockUIStreamOptions {
+  execute?: (ctx: Record<string, unknown>) => Promise<void> | void;
+  onFinish?: (result: { responseMessage: unknown }) => Promise<void> | void;
+}
+interface MockStreamTextOptions {
+  onChunk?: (ctx: { chunk: Record<string, unknown> }) => void;
+  onAbort?: () => void;
+}
+const captured = vi.hoisted(() => ({
+  createUIMessageStreamOptions: {} as MockUIStreamOptions,
+  streamTextOptions: {} as MockStreamTextOptions,
+  totalUsage: undefined as unknown,
+  steps: [] as unknown,
+}));
+
+const { mockTakeOverConversationStreams } = vi.hoisted(() => ({
+  mockTakeOverConversationStreams: vi.fn().mockResolvedValue({ aborted: [], reconciled: [] }),
+}));
+
+// The payer-tier sandbox tool filter (review #2326) hits the real DB through
+// resolveSandboxToolEligibility; a DB-backed lookup is out of scope for this
+// suite, so the payer is always eligible (the filter is a pass-through).
+// The bound-session lookup for payer-derived sandbox eligibility (review
+// #2326) hits the real DB through the agent-sessions runtime; this suite's
+// conversations are unbound, so the eligibility path takes the userId branch.
+vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
+  findSessionForConversation: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock('@/lib/ai/core/sandbox-tool-eligibility', () => ({
+  resolveSandboxToolEligibility: vi.fn().mockResolvedValue(true),
+  resolveSandboxToolEligibilityForConversation: vi.fn().mockResolvedValue(true),
+}));
+
+vi.mock('@/lib/ai/core/stream-lifecycle', () => ({
+  createStreamLifecycle: mockCreateStreamLifecycle,
+}));
+
+vi.mock('@/lib/websocket', () => ({
+  broadcastCreditsEvent: vi.fn().mockResolvedValue(undefined),
+  broadcastChatUserMessage: mockBroadcastChatUserMessage,
+}));
+
+vi.mock('@/lib/websocket/socket-utils', () => ({
+  broadcastGlobalConversationAdded: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('@/lib/auth', () => ({
+  authenticateRequestWithOptions: vi.fn(),
+  isAuthError: vi.fn((result: unknown) => typeof result === 'object' && result !== null && 'error' in result),
+  // Session auth = unscoped, which is all this route accepts. Stubbed because
+  // the route passes the scope ceiling into the Home-drive hint.
+  getAllowedDriveIds: vi.fn(() => []),
+  authSessionIdOf: vi.fn<typeof import('@/lib/auth').authSessionIdOf>((result) => (result.tokenType === 'session' ? result.sessionId : undefined)),
+  // The turn's tool selection reads this; a session principal is never
+  // drive-scoped, so the account-level tools stay advertised.
+  isDriveScopedPrincipal: vi.fn(() => false),
+}));
+
+vi.mock('@/lib/ai/core/stream-takeover', () => ({
+  takeOverConversationStreams: mockTakeOverConversationStreams,
+}));
+
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
+    ai: {
+      info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn(),
+      child: vi.fn(() => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn() })),
+    },
+    api: {
+      info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn(),
+      child: vi.fn(() => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn() })),
+    },
+  },
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+  logPerformance: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
+
+const mockConversation = {
+  id: 'conv-1',
+  userId: 'user-1',
+  title: 'Test Conversation',
+  type: 'global',
+  contextId: null,
+  isActive: true,
+};
+const mockUserProfile = { displayName: 'Display User' };
+const mockAuthUser = { name: 'Auth User', subscriptionTier: 'free' };
+
+vi.mock('@pagespace/db/db', () => {
+  // Reused inside `transaction()`'s callback too — see the identical
+  // pattern (and its own doc) in stream-socket-events.test.ts's db mock.
+  const makeDbLike = () => {
+    const select = vi.fn(() => ({
+      from: vi.fn((table: unknown) => {
+        const tableLabel = table as { __label?: string } | undefined;
+        const isUsers = tableLabel?.__label === 'users';
+        const isConversations = tableLabel?.__label === 'conversations';
+        return {
+          where: vi.fn(() => ({
+            then: <T>(
+              resolve?: ((value: unknown[]) => T | PromiseLike<T>) | null,
+              reject?: ((reason: unknown) => T | PromiseLike<T>) | null,
+            ) => Promise.resolve(isUsers ? [mockAuthUser] : [mockConversation]).then(resolve, reject),
+            orderBy: vi.fn().mockResolvedValue([]),
+            limit: vi.fn().mockResolvedValue(isUsers ? [mockAuthUser] : [mockUserProfile]),
+            for: vi.fn(() => ({
+              limit: vi.fn().mockResolvedValue(isConversations ? [{ isActive: true }] : [mockConversation]),
+            })),
+          })),
+        };
+      }),
+    }));
+    const insert = vi.fn(() => ({
+      values: vi.fn(() => ({
+        onConflictDoUpdate: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([{ id: 'msg-1' }]) })),
+      })),
+    }));
+    const update = vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })) }));
+    return { select, insert, update };
+  };
+  const dbLike = makeDbLike();
+  const transaction = vi.fn(async (callback: (tx: ReturnType<typeof makeDbLike>) => Promise<unknown>) => {
+    return callback(makeDbLike());
+  });
+  // startGenerationExclusive's advisory lock: always free, so takeover+lifecycle-create run
+  // exactly as before. Its own retry/degrade behavior is covered by
+  // start-generation-exclusive.test.ts — this file only verifies this route wires it in.
+  const getAdvisoryLockPool = vi.fn(() => ({
+    connect: vi.fn(async () => ({
+      query: vi.fn().mockResolvedValue({ rows: [{ acquired: true }] }),
+      release: vi.fn(),
+    })),
+  }));
+  return { db: { ...dbLike, transaction }, getAdvisoryLockPool };
+});
+
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(), ne: vi.fn(), and: vi.fn(), desc: vi.fn(), gt: vi.fn(), lt: vi.fn(),
+  exists: vi.fn((sub) => ({ type: 'exists', sub })),
+}));
+
+vi.mock('@/lib/repositories/global-conversation-repository', () => ({
+  globalConversationRepository: {
+    autoTitleConversation: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
+// The repository choke point (SSoT Phase 2): forwards to the same spy the
+// route used to call directly, preserving this file's assertions.
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
+    saveGlobalMessage: vi.fn(async (args: Record<string, unknown>) => {
+      const { beforeSave: _b, triggeredBy: _t, ...rest } = args as { beforeSave?: unknown; triggeredBy?: unknown };
+      await mockSaveGlobalAssistantMessageToDatabase(rest);
+      return { saved: true, rev: 1 };
+    }),
+    insertGlobalStreamingPlaceholder: vi.fn().mockResolvedValue({ inserted: true }),
+      // The POST history load goes through the repository since the reader
+      // cutover (epic "Agent-Session Single Source of Truth", Phase 4 / D6,
+      // PR 12) — `messages` was always the global leg, so no rows moved; what
+      // changed is that the query is no longer spelled out in the route.
+      getMessagesByConversationId: vi.fn().mockResolvedValue([]),
+  },
+}));
+
+vi.mock('@/lib/repositories/resolve-or-create-conversation', () => ({
+  resolveOrCreateConversation: vi.fn().mockResolvedValue({
+    conversation: { id: 'conv-1', userId: 'user-1', title: 'Test Conversation', type: 'global', contextId: null, isActive: true, createdAt: new Date('2024-01-01') },
+    isNew: false,
+  }),
+  ConversationOwnershipError: class ConversationOwnershipError extends Error {},
+  ConversationHistoryDeletedError: class ConversationHistoryDeletedError extends Error {},
+}));
+vi.mock('@pagespace/db/schema/core', () => ({ drives: { id: 'id', drivePrompt: 'drivePrompt' } }));
+vi.mock('@pagespace/db/schema/auth', () => ({ users: { __label: 'users', id: 'id', name: 'name', subscriptionTier: 'subscriptionTier' } }));
+vi.mock('@pagespace/db/schema/conversations', () => ({
+  conversations: { __label: 'conversations', id: 'id', userId: 'userId', isActive: 'isActive', lastMessageAt: 'lastMessageAt', updatedAt: 'updatedAt', title: 'title' },
+  messages: { conversationId: 'conversationId', isActive: 'isActive', createdAt: 'createdAt', id: 'id' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  userProfiles: { __label: 'userProfiles', userId: 'userId', displayName: 'displayName' },
+}));
+
+vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
+  createAdminRestrictedResponse: vi.fn(),
+  requiresProSubscription: vi.fn().mockReturnValue(false),
+  createSubscriptionRequiredResponse: vi.fn(),
+}));
+
+// The server-side contextRef resolution (permission-checked). Only reached when the body
+// carries a contextRef; it resolves to a DIFFERENT drive than any the client claims, so a
+// test can tell a server-resolved drive from a client-supplied one.
+vi.mock('@/lib/ai/core/resolve-request-context', () => ({
+  resolveRequestContext: vi.fn().mockResolvedValue({
+    currentDrive: { id: 'drive-server-resolved', name: 'Resolved', slug: 'resolved' },
+  }),
+}));
+
+// The credit gate under test. Default: allowed. Individual tests override.
+vi.mock('@pagespace/lib/billing/credit-gate', () => ({
+  canConsumeAI: vi.fn().mockResolvedValue({ allowed: true, reason: 'unlimited' }),
+}));
+
+vi.mock('@/lib/ai/core/provider-factory', () => ({
+  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.4-nano' }),
+  updateUserProviderSettings: vi.fn(),
+  createProviderErrorResponse: vi.fn(),
+  isProviderError: vi.fn().mockReturnValue(false),
+}));
+vi.mock('@/lib/ai/core/ai-tools', () => ({
+  pageSpaceTools: {},
+  corePageSpaceTools: {},
+}));
+vi.mock('@/lib/ai/core/system-prompt', () => ({
+  TOOL_DISCOVERY_PROMPT: 'TOOLS: mock',
+  buildSystemPrompt: vi.fn().mockReturnValue(''),
+  buildNonCoreToolNamesPrompt: vi.fn().mockReturnValue(''),
+}));
+vi.mock('@/lib/ai/core/message-utils', () => ({
+  extractMessageContent: vi.fn().mockReturnValue('test content'),
+  extractToolCalls: vi.fn().mockReturnValue([]),
+  extractToolResults: vi.fn().mockReturnValue([]),
+  sanitizeMessagesForModel: vi.fn().mockReturnValue([]),
+  convertGlobalAssistantMessageToUIMessage: vi.fn(),
+}));
+vi.mock('@/lib/ai/core/mention-processor', () => ({
+  processMentionsInMessage: vi.fn().mockReturnValue({ mentions: [], pageIds: [] }),
+  buildMentionSystemPrompt: vi.fn().mockReturnValue(''),
+}));
+vi.mock('@/lib/ai/core/timestamp-utils', () => ({
+  buildTimestampSystemPrompt: vi.fn().mockReturnValue(''),
+}));
+vi.mock('@/lib/ai/core/agent-awareness', () => ({
+  buildAgentAwarenessPrompt: vi.fn().mockResolvedValue(''),
+}));
+vi.mock('@/lib/ai/core/tool-filtering', () => ({
+  filterToolsForSandboxEnablement: vi.fn((tools: unknown) => tools),
+  filterToolsForSandboxTier: vi.fn((tools: unknown) => tools),
+  filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
+  filterToolsForAgentAccounts: vi.fn((tools: unknown) => tools),
+  filterToolsForMcpScope: vi.fn((tools: unknown) => tools),
+  filterToolsForReadOnly: vi.fn().mockReturnValue({}),
+  filterToolsForWebSearch: vi.fn().mockReturnValue({}),
+  filterToolsForImageGen: vi.fn((t) => t),
+}));
+vi.mock('@/lib/ai/core/page-tree-context', () => ({
+  getPageTreeContext: vi.fn().mockResolvedValue(''),
+  getDriveListSummary: vi.fn().mockResolvedValue(''),
+}));
+vi.mock('@/lib/ai/core/mcp-tool-converter', () => ({
+  convertMCPToolsToAISDKSchemas: vi.fn(),
+  parseMCPToolName: vi.fn(),
+  sanitizeToolNamesForProvider: vi.fn((t: unknown) => t),
+}));
+vi.mock('@/lib/ai/core/personalization-utils', () => ({
+  getUserPersonalization: vi.fn().mockResolvedValue(null),
+  getUserTimezone: vi.fn().mockResolvedValue('UTC'),
+}));
+
+vi.mock('@/lib/ai/core/stub-tools', () => ({
+  CORE_TOOL_NAMES: new Set(['list_drives', 'list_pages', 'read_page', 'get_page_details', 'create_page', 'replace_lines', 'regex_search', 'multi_drive_search']),
+}));
+vi.mock('@/lib/ai/tools/execute-tool', () => ({ createExecuteTool: vi.fn().mockReturnValue({}) }));
+
+vi.mock('ai', () => ({
+  streamText: vi.fn().mockImplementation((options: MockStreamTextOptions) => {
+    captured.streamTextOptions = options;
+    return {
+      toUIMessageStream: () => (async function* () {})(),
+      get totalUsage() { return Promise.resolve(captured.totalUsage); },
+      get steps() { return Promise.resolve(captured.steps); },
+      finishReason: Promise.resolve('stop'),
+      response: Promise.resolve({ messages: [] }),
+    };
+  }),
+  convertToModelMessages: vi.fn().mockReturnValue([]),
+  stepCountIs: vi.fn(),
+  hasToolCall: vi.fn(() => () => false),
+  tool: vi.fn((config: unknown) => config),
+  createUIMessageStream: vi.fn().mockImplementation((options: MockUIStreamOptions) => {
+    captured.createUIMessageStreamOptions = options;
+    return {};
+  }),
+  createUIMessageStreamResponse: vi.fn().mockReturnValue(new Response('', { status: 200 })),
+}));
+
+vi.mock('@paralleldrive/cuid2', () => ({
+  createId: vi.fn().mockReturnValue('test-message-id'),
+}));
+vi.mock('@/lib/logging/mask', () => ({ maskIdentifier: vi.fn((id: string) => `***${id.slice(-3)}`) }));
+vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
+  AIMonitoring: { trackUsage: vi.fn(), trackToolUsage: vi.fn() },
+  extractOpenRouterCostDollars: vi.fn(() => undefined),
+  extractOpenRouterGenerationIds: vi.fn(() => []),
+}));
+vi.mock('@pagespace/lib/monitoring/ai-context-calculator', () => ({
+  calculateTotalContextSize: vi.fn().mockReturnValue({
+    totalTokens: 0, messageCount: 0, systemPromptTokens: 0, toolDefinitionTokens: 0,
+    conversationTokens: 0, wasTruncated: false, truncationStrategy: undefined, messageIds: [],
+  }),
+}));
+vi.mock('@pagespace/lib/services/drive-service', () => ({
+  getDriveAccess: vi.fn().mockResolvedValue({ isMember: false, role: null }),
+}));
+vi.mock('@/lib/utils/query-params', () => ({ parseBoundedIntParam: vi.fn().mockReturnValue(50) }));
+vi.mock('@/lib/mcp', () => ({ getMCPBridge: vi.fn() }));
+vi.mock('@/lib/ai/core/stream-abort-registry', () => ({
+  attachStreamFinisher: vi.fn(),
+  createStreamAbortController: vi.fn().mockReturnValue({ streamId: 'stream_123', signal: new AbortController().signal }),
+  removeStream: vi.fn(),
+  STREAM_ID_HEADER: 'x-stream-id',
+}));
+vi.mock('@/lib/ai/core/stream-pipe-utils', () => ({
+  pipeUIMessageStreamStrippingStart: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('@/lib/ai/core/validate-image-parts', () => ({
+  validateUserMessageFileParts: vi.fn().mockReturnValue({ valid: true }),
+  hasFileParts: vi.fn().mockReturnValue(false),
+}));
+vi.mock('@/lib/ai/core/model-capabilities', () => ({
+  getModelCapabilities: vi.fn().mockResolvedValue({}),
+  hasVisionCapability: vi.fn().mockReturnValue(true),
+  DEFAULT_IMAGE_MODEL: 'google/gemini-3.1-flash-image',
+}));
+vi.mock('@/lib/ai/core/ai-providers-config', () => ({
+  isModelAllowedForTier: vi.fn().mockReturnValue(true),
+  ADMIN_ONLY_PROVIDERS: new Set<string>([]),
+  resolveProviderModel: vi.fn((sp: string, sm: string) => ({
+    provider: sp && sm ? sp : 'openai',
+    model: sm || 'openai/gpt-5.4-nano',
+  })),
+}));
+vi.mock('@/lib/ai/core/tool-utils', () => ({
+  mergeToolSets: vi.fn((a: Record<string, unknown>, b: Record<string, unknown>) => ({ ...a, ...b })),
+}));
+vi.mock('@/lib/ai/tools/finish-tool', () => ({ finishTool: {}, FINISH_TOOL_NAME: 'finish' }));
+vi.mock('@/lib/ai/tools/tool-search-tool', () => ({ createToolSearchTool: vi.fn().mockReturnValue({}) }));
+vi.mock('@/lib/ai/core/compaction/prepare-context', () => ({
+  prepareConversationContext: vi.fn().mockImplementation(
+    ({ messages }: { messages: unknown[] }) =>
+      Promise.resolve({ messages, scheduleCompaction: () => {}, pendingCompaction: null }),
+  ),
+}));
+
+import { POST } from '../route';
+import { authenticateRequestWithOptions } from '@/lib/auth';
+import type { SessionAuthResult } from '@/lib/auth';
+import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { PERSONAL_SPEND, conversationSpend } from '@pagespace/lib/billing/spend-target';
+import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { streamText } from 'ai';
+import { resolveOrCreateConversation, ConversationOwnershipError } from '@/lib/repositories/resolve-or-create-conversation';
+
+const mockAuth = (): SessionAuthResult => ({
+  userId: 'user-1',
+  tokenVersion: 0,
+  tokenType: 'session',
+  sessionId: 'sess-1',
+  role: 'user',
+  adminRoleVersion: 0,
+});
+
+/**
+ * A stand-in for the lifecycle's frame channel.
+ *
+ * The turn strategies hand the SDK stream to the pump and serve the response by SUBSCRIBING
+ * to this — so a mocked lifecycle has to carry one or the route cannot build a response at
+ * all. Only the surface `pumpAndRespond` touches is modelled; the channel's real behaviour is
+ * covered in stream-channel.test.ts, and the reduction in foldChunksToParts.test.ts.
+ */
+const makeFakeChannel = () => {
+  const frames: unknown[] = [];
+  return {
+    messageId: 'msg-1',
+    get nextSeq() { return frames.length; },
+    firstAvailableSeq: 0,
+    finished: false,
+    aborted: false,
+    subscriberCount: 0,
+    append: (chunk: unknown) => { frames.push(chunk); },
+    finish: () => {},
+    getFrames: () => frames.slice(),
+    subscribe: () => () => {},
+    subscribeReadable: () => new ReadableStream({ start(c) { c.close(); } }),
+  } as never;
+};
+
+
+const makeRequest = (extraBody: Record<string, unknown> = {}) =>
+  new Request('https://example.com/api/ai/global/conv-1/messages', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'content-length': '200', 'X-Browser-Session-Id': 'session-1' },
+    body: JSON.stringify({
+      messages: [{ id: 'msg_1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] }],
+      selectedProvider: 'openai',
+      selectedModel: 'openai/gpt-5.4-nano',
+      ...extraBody,
+    }),
+  });
+
+/** A drive only the CLIENT claims, in the removed client-computed locationContext body field. */
+const CLIENT_CLAIMED_DRIVE = { currentDrive: { id: 'drive-client-claimed', name: 'Not mine', slug: 'not-mine' } };
+
+const makeContext = () => ({ params: Promise.resolve({ id: 'conv-1' }) });
+
+const mockResponseMessage = {
+  id: 'test-message-id',
+  role: 'assistant' as const,
+  parts: [{ type: 'text', text: 'Hello' }],
+};
+
+describe('POST /api/ai/global/[id]/messages — prepaid credit gate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    captured.createUIMessageStreamOptions = {};
+    captured.streamTextOptions = {};
+    captured.totalUsage = { inputTokens: 10, outputTokens: 5, totalTokens: 15 };
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
+    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'unlimited' });
+    mockCreateStreamLifecycle.mockResolvedValue({ channel: makeFakeChannel(), finish: mockLifecycleFinish, getParts: vi.fn().mockResolvedValue([]) });
+  });
+
+  it('returns 402 out_of_credits and never starts the stream when the gate denies', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
+
+    const response = await POST(makeRequest(), makeContext());
+
+    expect(response.status).toBe(402);
+    const body = await response.json();
+    expect(body.error).toBe('out_of_credits');
+    expect(streamText).not.toHaveBeenCalled();
+    expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
+  });
+
+  it('does NOT persist the user message when the gate denies (gate runs before save)', async () => {
+    // R3: the gate must precede the message save. Otherwise an out-of-credits prompt is
+    // written to the conversation and then 402s, leaving an orphaned message that
+    // duplicates on retry once the user tops up.
+    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
+
+    const response = await POST(makeRequest(), makeContext());
+
+    expect(response.status).toBe(402);
+    expect(mockSaveGlobalAssistantMessageToDatabase).not.toHaveBeenCalled();
+  });
+
+  it('does not block with a 402 when the gate allows', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'ok' });
+
+    const response = await POST(makeRequest(), makeContext());
+
+    expect(canConsumeAI).toHaveBeenCalled();
+    expect(response.status).not.toBe(402);
+  });
+
+  it('returns 404 when resolveOrCreateConversation throws ConversationOwnershipError and does not start stream', async () => {
+    vi.mocked(resolveOrCreateConversation).mockRejectedValueOnce(new ConversationOwnershipError());
+
+    const response = await POST(makeRequest(), makeContext());
+
+    expect(response.status).toBe(404);
+    expect(streamText).not.toHaveBeenCalled();
+    expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
+  });
+
+  it('does NOT create the conversation row when the gate denies (gate runs before create)', async () => {
+    // The other half of R3, and the reason `resolveOrCreateConversation` moved
+    // below the gate. It INSERTs on a first message and emits
+    // `conversation:created`, so gating afterwards left an out-of-credits first
+    // message with a durable empty conversation and a broadcast announcing it —
+    // the same orphan the message-save case above describes, one table over.
+    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
+
+    const response = await POST(makeRequest(), makeContext());
+
+    expect(response.status).toBe(402);
+    expect(resolveOrCreateConversation).not.toHaveBeenCalled();
+  });
+
+  it('POL-8 (partial) the provider factory is named the SERVER-resolved drive with a contextRef, and no drive at all without one', async () => {
+    const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    await POST(makeRequest({ contextRef: { routeType: 'drive', driveId: 'drive-client-claimed' } }), makeContext());
+    expect(vi.mocked(createAIProvider).mock.calls.at(-1)?.[2]).toEqual({ driveId: 'drive-server-resolved' });
+
+    await POST(makeRequest(), makeContext());
+    expect(vi.mocked(createAIProvider).mock.calls.at(-1)?.[2]).toEqual({ driveId: null });
+  });
+
+  it('SPEND-8 (partial) a request carrying the removed client-computed locationContext is refused (400) before any gate or spend: it never runs on personal credits inside a drive the server did not resolve', async () => {
+    for (const extra of [{ locationContext: CLIENT_CLAIMED_DRIVE }, { contextRef: { routeType: 'drive', driveId: 'drive-client-claimed' }, locationContext: CLIENT_CLAIMED_DRIVE }]) {
+      const response = await POST(makeRequest(extra), makeContext());
+      expect(response.status).toBe(400);
+    }
+    expect(canConsumeAI).not.toHaveBeenCalled();
+    expect(streamText).not.toHaveBeenCalled();
+  });
+
+  it('SPEND-8 (partial) a global-assistant turn with no drive (no contextRef) spends personal credits', async () => {
+    await POST(makeRequest(), makeContext());
+
+    expect(resolveRequestContext).not.toHaveBeenCalled();
+    expect(canConsumeAI).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(canConsumeAI).mock.calls[0][2].spend).toEqual(PERSONAL_SPEND);
+  });
+
+  it('SPEND-7 (partial) SPEND-3 (partial) with a contextRef the spend drive is the server-resolved drive, never the one the client claims, and the turn names its conversation', async () => {
+    await POST(makeRequest({ contextRef: { routeType: 'drive', driveId: 'drive-client-claimed' } }), makeContext());
+
+    expect(resolveRequestContext).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(canConsumeAI).mock.calls[0][2].spend).toEqual(conversationSpend('drive-server-resolved', 'conv-1'));
+  });
+
+});
+
+describe('POST /api/ai/global/[id]/messages — usage logging durability (R4)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    captured.createUIMessageStreamOptions = {};
+    captured.streamTextOptions = {};
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
+    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'unlimited' });
+    mockCreateStreamLifecycle.mockResolvedValue({ channel: makeFakeChannel(), finish: mockLifecycleFinish, getParts: vi.fn().mockResolvedValue([]) });
+  });
+
+  it('calls AIMonitoring.trackUsage even when the provider returns no usage metadata', async () => {
+    // Provider returns no usage — the orphan-sweep depends on a row still being written.
+    captured.totalUsage = undefined;
+
+    await POST(makeRequest(), makeContext());
+    await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+    await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+
+    expect(AIMonitoring.trackUsage).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(AIMonitoring.trackUsage).mock.calls[0][0];
+    expect(call.model).toBe('openai/gpt-5.4-nano');
+    expect(call.totalTokens).toBeUndefined();
+  });
+
+  it('still logs the resolved model with token counts when usage is present', async () => {
+    captured.totalUsage = { inputTokens: 12, outputTokens: 8, totalTokens: 20 };
+
+    await POST(makeRequest(), makeContext());
+    await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+    await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+
+    expect(AIMonitoring.trackUsage).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(AIMonitoring.trackUsage).mock.calls[0][0];
+    expect({ model: call.model, totalTokens: call.totalTokens }).toEqual({ model: 'openai/gpt-5.4-nano', totalTokens: 20 });
+  });
+
+  it('AWAITS trackUsage in onFinish (durable persistence, not fire-and-forget)', async () => {
+    captured.totalUsage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 };
+
+    // trackUsage returns a promise that NEVER resolves on its own. If onFinish
+    // awaits it (the durability guarantee), onFinish cannot settle no matter how
+    // many microtasks flush; a fire-and-forget call would let onFinish settle
+    // within a bounded number of flushes. This is what makes the guarantee testable
+    // — a synchronous mock + "was it called" assertion would pass either way.
+    let resolveTrack!: () => void;
+    vi.mocked(AIMonitoring.trackUsage).mockReturnValueOnce(
+      new Promise((res) => {
+        resolveTrack = () => res({ persisted: true, creditsSettled: true });
+      }),
+    );
+
+    await POST(makeRequest(), makeContext());
+    await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+
+    let settled = false;
+    const onFinishPromise = Promise.resolve(
+      captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage }),
+    ).then(() => { settled = true; });
+
+    for (let i = 0; i < 10; i++) await Promise.resolve(); // flush microtasks
+    expect(settled).toBe(false); // onFinish is still awaiting the pending trackUsage
+
+    resolveTrack();
+    await onFinishPromise;
+    expect(settled).toBe(true);
+    expect(AIMonitoring.trackUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it('settles the hold (trackUsage) even when no responseMessage is produced', async () => {
+    // Exhausted/no-content run: the retry shell gave up without a message. Settlement
+    // must still run — it's the only thing that releases the gate's hold. Skipping it
+    // here (the old `if (responseMessage)` gate) silently leaked the hold.
+    // (saveGlobalAssistantMessageToDatabase also persists the user message during POST,
+    // so we assert the *assistant* save is skipped by comparing counts across onFinish.)
+    captured.totalUsage = { inputTokens: 3, outputTokens: 0, totalTokens: 3 };
+
+    await POST(makeRequest(), makeContext());
+    await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+    const savesBeforeFinish = mockSaveGlobalAssistantMessageToDatabase.mock.calls.length;
+    await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: undefined });
+
+    // No assistant-message save (nothing to persist), but the hold is still settled.
+    expect(mockSaveGlobalAssistantMessageToDatabase.mock.calls.length).toBe(savesBeforeFinish);
+    expect(AIMonitoring.trackUsage).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(AIMonitoring.trackUsage).mock.calls[0][0];
+    expect(call.model).toBe('openai/gpt-5.4-nano');
+  });
+
+  it('WAL-5 (partial) the settle names the wallet the gate reserved on, with its hold', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValue({
+      allowed: true,
+      reason: 'ok',
+      holdId: 'hold-drive',
+      walletId: 'wallet-drive',
+      spendSource: 'drive_wallet',
+    });
+    captured.totalUsage = { inputTokens: 4, outputTokens: 6, totalTokens: 10 };
+    // Node 20's AbortSignal.any is missing under jsdom; a gated turn (a hold) combines the
+    // user's Stop with the credit ceiling through it.
+    const signalAny = (AbortSignal as { any?: unknown }).any;
+    (AbortSignal as unknown as { any: (signals: AbortSignal[]) => AbortSignal }).any = (signals) =>
+      signals.find((s) => s.aborted) ?? signals[0];
+    try {
+      await POST(makeRequest(), makeContext());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+    } finally {
+      (AbortSignal as { any?: unknown }).any = signalAny;
+    }
+
+    expect(AIMonitoring.trackUsage).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(AIMonitoring.trackUsage).mock.calls[0][0];
+    expect({ holdId: call.holdId, walletId: call.walletId }).toEqual({ holdId: 'hold-drive', walletId: 'wallet-drive' });
+  });
+
+  it('settles the hold (trackUsage) even when persisting the assistant message throws', async () => {
+    // A save failure must not skip settlement — otherwise a transient DB error leaks the
+    // hold. Settlement lives outside the save try/catch, so it runs regardless.
+    // Arm the rejection AFTER the user-message save in POST so only the assistant save
+    // (in onFinish) throws.
+    captured.totalUsage = { inputTokens: 4, outputTokens: 6, totalTokens: 10 };
+
+    await POST(makeRequest(), makeContext());
+    await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+    mockSaveGlobalAssistantMessageToDatabase.mockRejectedValueOnce(new Error('db down'));
+    await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+
+    expect(AIMonitoring.trackUsage).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(AIMonitoring.trackUsage).mock.calls[0][0];
+    expect(call.totalTokens).toBe(10);
+  });
+});

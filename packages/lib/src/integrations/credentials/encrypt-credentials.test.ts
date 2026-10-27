@@ -5,7 +5,7 @@
  * that encrypt/decrypt Record<string, string> credential objects.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { encryptCredentials, decryptCredentials } from './encrypt-credentials';
 
 // Mock the underlying encryption utilities
@@ -28,14 +28,17 @@ describe('encryptCredentials', () => {
   });
 
   it('given single credential, should encrypt the value', async () => {
+    const { encrypt } = await import('../../encryption/encryption-utils');
     const credentials = { token: 'secret-token-123' };
 
     const result = await encryptCredentials(credentials);
 
     expect(result).toEqual({ token: 'encrypted:secret-token-123' });
+    expect(encrypt).toHaveBeenCalledWith('secret-token-123');
   });
 
   it('given multiple credentials, should encrypt all values', async () => {
+    const { encrypt } = await import('../../encryption/encryption-utils');
     const credentials = {
       apiKey: 'key-abc',
       secret: 'secret-xyz',
@@ -49,6 +52,7 @@ describe('encryptCredentials', () => {
       secret: 'encrypted:secret-xyz',
       accessToken: 'encrypted:token-123',
     });
+    expect(encrypt).toHaveBeenCalledTimes(3);
   });
 
   it('given credentials with empty string value, should encrypt empty string', async () => {
@@ -117,38 +121,13 @@ describe('decryptCredentials', () => {
 });
 
 describe('encrypt/decrypt roundtrip', () => {
-  // Reset mocks to test real encryption/decryption behavior
   beforeEach(() => {
-    vi.resetModules();
     vi.clearAllMocks();
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   it('given credentials encrypted then decrypted, should return original values', async () => {
-    // Use a more realistic mock that simulates actual encryption behavior
-    const { encrypt, decrypt } = await import('../../encryption/encryption-utils');
-    const encryptMock = vi.mocked(encrypt);
-    const decryptMock = vi.mocked(decrypt);
-
-    // Setup mocks to track encrypted values
-    const encryptedMap = new Map<string, string>();
-    let counter = 0;
-
-    encryptMock.mockImplementation(async (text: string) => {
-      const encrypted = `enc_${counter++}_${Buffer.from(text).toString('base64')}`;
-      encryptedMap.set(encrypted, text);
-      return encrypted;
-    });
-
-    decryptMock.mockImplementation(async (encrypted: string) => {
-      const original = encryptedMap.get(encrypted);
-      if (!original && original !== '') throw new Error('Invalid encrypted value');
-      return original!;
-    });
-
+    // The default mocks (encrypt prefixes "encrypted:", decrypt strips it)
+    // already form a valid roundtrip pair
     const original = {
       apiKey: 'my-api-key',
       secret: 'my-secret',
@@ -156,6 +135,12 @@ describe('encrypt/decrypt roundtrip', () => {
     };
 
     const encrypted = await encryptCredentials(original);
+
+    // Verify intermediate encrypted form differs from original
+    expect(encrypted.apiKey).not.toBe(original.apiKey);
+    expect(encrypted.secret).not.toBe(original.secret);
+    expect(encrypted.token).not.toBe(original.token);
+
     const decrypted = await decryptCredentials(encrypted);
 
     expect(decrypted).toEqual(original);

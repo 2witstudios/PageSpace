@@ -1,22 +1,30 @@
 /**
  * Global Conversation Hard Delete Tests
  *
- * Tests for hard-delete and purge methods on globalConversationRepository:
- * - hardDeleteMessage: physical removal by ID
- * - purgeInactiveMessages: bulk removal of soft-deleted messages past retention
  * - purgeInactiveConversations: bulk removal of soft-deleted conversations past retention
+ *
+ * The MESSAGE purge and hard-delete that used to be pinned here moved to
+ * message-repository.ts with the message-table merge (epic "Agent-Session
+ * Single Source of Truth", Phase 4 / D6, PR 12) and are pinned by
+ * message-repository-last-message-recompute.test.ts. What is left here is what
+ * this repository still owns: `conversations` ROWS.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockReturning = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 const mockWhere = vi.hoisted(() => vi.fn().mockReturnValue({ returning: mockReturning }));
+// recomputeLastMessageAt (#2153) locks the conversation row and runs inside
+// its own transaction before reading the surviving messages — purge/delete
+// paths that touch a real conversationId now go through this.
+const mockTransaction = vi.hoisted(() => vi.fn());
 
-vi.mock('@pagespace/db', () => ({
-  db: {
+vi.mock('@pagespace/db/db', () => {
+  const dbShape = {
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockReturnValue({
+          for: vi.fn().mockResolvedValue([]),
           orderBy: vi.fn().mockReturnValue({
             limit: vi.fn().mockResolvedValue([]),
           }),
@@ -32,27 +40,20 @@ vi.mock('@pagespace/db', () => ({
       }),
     }),
     delete: vi.fn().mockReturnValue({ where: mockWhere }),
-  },
-  conversations: {
-    id: 'id',
-    userId: 'userId',
-    isActive: 'isActive',
-    updatedAt: 'updatedAt',
-    title: 'title',
-    type: 'type',
-    contextId: 'contextId',
-    lastMessageAt: 'lastMessageAt',
-    createdAt: 'createdAt',
-  },
-  messages: {
-    id: 'id',
-    conversationId: 'conversationId',
-    isActive: 'isActive',
-    createdAt: 'createdAt',
-    content: 'content',
-    role: 'role',
-    editedAt: 'editedAt',
-  },
+    transaction: mockTransaction,
+  };
+  mockTransaction.mockImplementation((cb: (tx: typeof dbShape) => unknown) => cb(dbShape));
+  return { db: dbShape };
+});
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((field, value) => ({ type: 'eq', field, value })),
+  and: vi.fn((...conditions) => ({ type: 'and', conditions })),
+  desc: vi.fn((field) => ({ type: 'desc', field })),
+  sql: vi.fn(),
+  lt: vi.fn((field, value) => ({ type: 'lt', field, value })),
+  exists: vi.fn((sub) => ({ type: 'exists', sub })),
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
   aiUsageLogs: {
     id: 'id',
     timestamp: 'timestamp',
@@ -73,19 +74,37 @@ vi.mock('@pagespace/db', () => ({
     messageCount: 'messageCount',
     wasTruncated: 'wasTruncated',
   },
-  eq: vi.fn((field, value) => ({ type: 'eq', field, value })),
-  and: vi.fn((...conditions) => ({ type: 'and', conditions })),
-  desc: vi.fn((field) => ({ type: 'desc', field })),
-  sql: vi.fn(),
-  lt: vi.fn((field, value) => ({ type: 'lt', field, value })),
+}));
+vi.mock('@pagespace/db/schema/conversations', () => ({
+  conversations: {
+    id: 'id',
+    userId: 'userId',
+    isActive: 'isActive',
+    updatedAt: 'updatedAt',
+    title: 'title',
+    type: 'type',
+    contextId: 'contextId',
+    lastMessageAt: 'lastMessageAt',
+    createdAt: 'createdAt',
+  },
+  messages: {
+    id: 'id',
+    conversationId: 'conversationId',
+    isActive: 'isActive',
+    createdAt: 'createdAt',
+    content: 'content',
+    role: 'role',
+    editedAt: 'editedAt',
+  },
 }));
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: () => 'mock-id',
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
 import { globalConversationRepository } from '../global-conversation-repository';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 describe('globalConversationRepository hard-delete', () => {
   beforeEach(() => {
@@ -93,35 +112,6 @@ describe('globalConversationRepository hard-delete', () => {
     mockReturning.mockResolvedValue([]);
     mockWhere.mockReturnValue({ returning: mockReturning });
     vi.mocked(db.delete).mockReturnValue({ where: mockWhere } as never);
-  });
-
-  describe('hardDeleteMessage', () => {
-    it('should call db.delete with the correct message ID', async () => {
-      await globalConversationRepository.hardDeleteMessage('msg-456');
-
-      expect(db.delete).toHaveBeenCalled();
-      expect(mockWhere).toHaveBeenCalled();
-    });
-  });
-
-  describe('purgeInactiveMessages', () => {
-    it('should delete inactive messages older than cutoff and return count', async () => {
-      mockReturning.mockResolvedValue([{ id: 'msg-1' }, { id: 'msg-2' }, { id: 'msg-3' }]);
-
-      const cutoff = new Date('2024-06-01');
-      const count = await globalConversationRepository.purgeInactiveMessages(cutoff);
-
-      expect(db.delete).toHaveBeenCalled();
-      expect(count).toBe(3);
-    });
-
-    it('should return 0 when no inactive messages match', async () => {
-      mockReturning.mockResolvedValue([]);
-
-      const count = await globalConversationRepository.purgeInactiveMessages(new Date());
-
-      expect(count).toBe(0);
-    });
   });
 
   describe('purgeInactiveConversations', () => {

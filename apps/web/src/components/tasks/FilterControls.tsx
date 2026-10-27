@@ -2,43 +2,43 @@
 
 import { useMemo } from 'react';
 import { Button } from '@/components/ui/button';
-import type { Drive, StatusConfigsByTaskList } from './types';
+import type { StatusConfigsByTaskList } from './types';
 import { aggregateStatuses } from './task-helpers';
 import {
   type DueDateFilter,
   type AssigneeFilter,
+  type StatusGroupFilter,
   type FilterValues,
-  DriveSelect,
   StatusSelect,
   PrioritySelect,
   DueDateSelect,
   AssigneeToggle,
+  StatusGroupToggle,
 } from './FilterComponents';
 
-export type { DueDateFilter, AssigneeFilter, FilterValues };
+export type { DueDateFilter, AssigneeFilter, StatusGroupFilter, FilterValues };
 
 export interface FilterControlsProps {
   layout: 'mobile' | 'desktop';
-  context: 'user' | 'drive';
-  drives: Drive[];
-  selectedDriveId: string | undefined;
+  /**
+   * In a drive, statuses come from that drive's lists and the slug-level
+   * Status filter makes sense. Across all drives it would merge unrelated
+   * lists' statuses in an arbitrary order, so only the status group is offered.
+   */
+  scopedToDrive: boolean;
   filters: FilterValues;
   hasActiveFilters: boolean;
   statusConfigsByTaskList?: StatusConfigsByTaskList;
-  onDriveChange: (driveId: string) => void;
   onFiltersChange: (filters: Partial<FilterValues>) => void;
   onClearFilters: () => void;
 }
 
 export function FilterControls({
   layout,
-  context,
-  drives,
-  selectedDriveId,
+  scopedToDrive,
   filters,
   hasActiveFilters,
   statusConfigsByTaskList,
-  onDriveChange,
   onFiltersChange,
   onClearFilters,
 }: FilterControlsProps) {
@@ -51,26 +51,26 @@ export function FilterControls({
   if (isMobile) {
     return (
       <>
+        <StatusGroupToggle
+          value={filters.statusGroup || 'active'}
+          onChange={(g) => onFiltersChange({ statusGroup: g })}
+          className="w-full"
+        />
+
         <div
           className="-mx-3 overflow-x-auto px-3 pb-1"
           role="region"
           aria-label="Filter options"
         >
           <div className="flex w-max min-w-full gap-2">
-            <DriveSelect
-              context={context}
-              drives={drives}
-              selectedDriveId={selectedDriveId}
-              driveFilterId={filters.driveId}
-              onDriveChange={onDriveChange}
-              triggerClassName="h-10 min-w-[170px]"
-            />
-            <StatusSelect
-              value={filters.status}
-              statuses={aggregatedStatuses}
-              onChange={(s) => onFiltersChange({ status: s })}
-              triggerClassName="h-10 min-w-[145px]"
-            />
+            {scopedToDrive && (
+              <StatusSelect
+                value={filters.status}
+                statuses={aggregatedStatuses}
+                onChange={(s) => onFiltersChange({ status: s })}
+                triggerClassName="h-10 min-w-[145px]"
+              />
+            )}
             <PrioritySelect
               value={filters.priority}
               onChange={(p) => onFiltersChange({ priority: p })}
@@ -107,20 +107,18 @@ export function FilterControls({
 
   return (
     <>
-      <DriveSelect
-        context={context}
-        drives={drives}
-        selectedDriveId={selectedDriveId}
-        driveFilterId={filters.driveId}
-        onDriveChange={onDriveChange}
-        triggerClassName="w-[180px]"
+      <StatusGroupToggle
+        value={filters.statusGroup || 'active'}
+        onChange={(g) => onFiltersChange({ statusGroup: g })}
       />
-      <StatusSelect
-        value={filters.status}
-        statuses={aggregatedStatuses}
-        onChange={(s) => onFiltersChange({ status: s })}
-        triggerClassName="w-[140px]"
-      />
+      {scopedToDrive && (
+        <StatusSelect
+          value={filters.status}
+          statuses={aggregatedStatuses}
+          onChange={(s) => onFiltersChange({ status: s })}
+          triggerClassName="w-[140px]"
+        />
+      )}
       <PrioritySelect
         value={filters.priority}
         onChange={(p) => onFiltersChange({ priority: p })}

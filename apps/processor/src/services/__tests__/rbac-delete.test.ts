@@ -5,6 +5,7 @@ const VALID_HASH = 'a'.repeat(64);
 const mockGetLinksForFile = vi.fn();
 const mockGetUserAccessLevel = vi.fn();
 const mockGetUserDrivePermissions = vi.fn();
+const mockIsFileOrphaned = vi.fn();
 const mockFilesFindFirst = vi.fn();
 const mockFilePagesFindFirst = vi.fn();
 const mockChannelMessagesFindFirst = vi.fn();
@@ -14,12 +15,16 @@ vi.mock('../file-links', () => ({
   getLinksForFile: (...args: unknown[]) => mockGetLinksForFile(...args),
 }));
 
-vi.mock('@pagespace/lib/permissions-cached', () => ({
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getUserAccessLevel: (...args: unknown[]) => mockGetUserAccessLevel(...args),
   getUserDrivePermissions: (...args: unknown[]) => mockGetUserDrivePermissions(...args),
 }));
 
-vi.mock('@pagespace/lib/logger-config', () => ({
+vi.mock('@pagespace/lib/compliance/file-cleanup/orphan-detector', () => ({
+  isFileOrphaned: (...args: unknown[]) => mockIsFileOrphaned(...args),
+}));
+
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     security: {
       warn: vi.fn(),
@@ -27,9 +32,11 @@ vi.mock('@pagespace/lib/logger-config', () => ({
       error: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       files: {
@@ -46,11 +53,19 @@ vi.mock('@pagespace/db', () => ({
       },
     },
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((field: string, value: string) => ({ field, value, op: 'eq' })),
+}));
+vi.mock('@pagespace/db/schema/storage', () => ({
   files: { id: 'files.id' },
   filePages: { fileId: 'filePages.fileId' },
+}));
+vi.mock('@pagespace/db/schema/chat', () => ({
   channelMessages: { fileId: 'channelMessages.fileId' },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   pages: { filePath: 'pages.filePath' },
-  eq: vi.fn((field: string, value: string) => ({ field, value, op: 'eq' })),
 }));
 
 import type { EnforcedAuthContext } from '../../middleware/auth';
@@ -90,6 +105,9 @@ describe('assertDeleteFileAccess', () => {
       isMember: true,
       canEdit: true,
     });
+    // Default: file is genuinely orphaned (no live linkages anywhere). Tests
+    // exercising the re-link race override this to false.
+    mockIsFileOrphaned.mockResolvedValue(true);
   });
 
   it('denies when auth is undefined', async () => {
@@ -181,6 +199,205 @@ describe('assertDeleteFileAccess', () => {
     const auth = createAuth({
       resourceBinding: { type: 'page', id: 'page-1' },
     });
+
+    await expect(assertDeleteFileAccess(auth, VALID_HASH)).rejects.toBeInstanceOf(DeleteFileReferencedError);
+  });
+
+  it('denies orphan file when drivePerms is null (lines 148-155)', async () => {
+    // No links, file has a drive, but getUserDrivePermissions returns null
+    mockGetLinksForFile.mockResolvedValue([]);
+    mockFilesFindFirst.mockResolvedValue({ driveId: 'drive-1' });
+    mockGetUserDrivePermissions.mockResolvedValue(null);
+
+    const auth = createAuth();
+
+    await expect(assertDeleteFileAccess(auth, VALID_HASH)).rejects.toBeInstanceOf(DeleteFileAuthorizationError);
+  });
+
+  it('denies orphan file when user has drive access but is not owner or admin (lines 148-155)', async () => {
+    mockGetLinksForFile.mockResolvedValue([]);
+    mockFilesFindFirst.mockResolvedValue({ driveId: 'drive-1' });
+    mockGetUserDrivePermissions.mockResolvedValue({
+      hasAccess: true,
+      isOwner: false,
+      isAdmin: false,
+      isMember: true,
+    });
+
+    const auth = createAuth();
+
+    await expect(assertDeleteFileAccess(auth, VALID_HASH)).rejects.toBeInstanceOf(DeleteFileAuthorizationError);
+  });
+
+  it('allows file-bound token matching the contentHash with linked page delete permission (lines 39-50)', async () => {
+    mockGetLinksForFile.mockResolvedValue([
+      { fileId: VALID_HASH, pageId: 'page-1', driveId: 'drive-1' },
+    ]);
+    mockGetUserAccessLevel.mockResolvedValue({
+      canView: true,
+      canEdit: true,
+      canShare: true,
+      canDelete: true,
+    });
+
+    const auth = createAuth({
+      resourceBinding: { type: 'file', id: VALID_HASH },
+    });
+
+    await expect(assertDeleteFileAccess(auth, VALID_HASH)).resolves.toBeUndefined();
+  });
+
+  it('denies file-bound token not matching the contentHash (lines 39-50)', async () => {
+    mockGetLinksForFile.mockResolvedValue([
+      { fileId: VALID_HASH, pageId: 'page-1', driveId: 'drive-1' },
+    ]);
+
+    const auth = createAuth({
+      resourceBinding: { type: 'file', id: 'b'.repeat(64) },
+    });
+
+    await expect(assertDeleteFileAccess(auth, VALID_HASH)).rejects.toBeInstanceOf(DeleteFileAuthorizationError);
+  });
+
+  it('allows drive-bound token when file links include the bound drive and user has delete permission (lines 39-50)', async () => {
+    mockGetLinksForFile.mockResolvedValue([
+      { fileId: VALID_HASH, pageId: 'page-1', driveId: 'drive-1' },
+    ]);
+    mockGetUserAccessLevel.mockResolvedValue({
+      canView: true,
+      canEdit: true,
+      canShare: true,
+      canDelete: true,
+    });
+
+    const auth = createAuth({
+      resourceBinding: { type: 'drive', id: 'drive-1' },
+    });
+
+    await expect(assertDeleteFileAccess(auth, VALID_HASH)).resolves.toBeUndefined();
+  });
+
+  it('getScopedLinks returns empty array for drive binding when links have different driveId (lines 52-67)', async () => {
+    // Drive binding to drive-1, but links are to drive-2 -> binding mismatch at isResourceBindingAllowed
+    mockGetLinksForFile.mockResolvedValue([
+      { fileId: VALID_HASH, pageId: 'page-1', driveId: 'drive-2' },
+    ]);
+
+    const auth = createAuth({
+      resourceBinding: { type: 'drive', id: 'drive-1' },
+    });
+
+    await expect(assertDeleteFileAccess(auth, VALID_HASH)).rejects.toBeInstanceOf(DeleteFileAuthorizationError);
+  });
+
+  it('denies when orphan file has no drive association (lines 138-144)', async () => {
+    // No links, file has no driveId
+    mockGetLinksForFile.mockResolvedValue([]);
+    mockFilesFindFirst.mockResolvedValue(undefined);
+
+    const auth = createAuth();
+
+    await expect(assertDeleteFileAccess(auth, VALID_HASH)).rejects.toBeInstanceOf(DeleteFileAuthorizationError);
+  });
+
+  it('rejects with DeleteFileReferencedError when only channelMessages references exist (lines 158-167)', async () => {
+    mockGetLinksForFile.mockResolvedValue([
+      { fileId: VALID_HASH, pageId: 'page-1', driveId: 'drive-1' },
+    ]);
+    mockGetUserAccessLevel.mockResolvedValue({
+      canView: true,
+      canEdit: true,
+      canShare: true,
+      canDelete: true,
+    });
+    mockChannelMessagesFindFirst.mockResolvedValue({ id: 'msg-1' });
+
+    const auth = createAuth();
+
+    await expect(assertDeleteFileAccess(auth, VALID_HASH)).rejects.toBeInstanceOf(DeleteFileReferencedError);
+  });
+
+  it('allows system file-bound token to reap a null-driveId orphan (DM-only attachment)', async () => {
+    // PR 7: conversation-only files have no drive association. The cleanup cron
+    // mints a system file-bound delete token (resourceBinding type=file, id=hash)
+    // and the rbac assertion must accept it without requiring drive perms.
+    mockGetLinksForFile.mockResolvedValue([]);
+    mockFilesFindFirst.mockResolvedValue({ driveId: null });
+
+    const auth = createAuth({
+      userId: 'system',
+      resourceBinding: { type: 'file', id: VALID_HASH },
+    });
+
+    await expect(assertDeleteFileAccess(auth, VALID_HASH)).resolves.toBeUndefined();
+    // Drive perms must NOT be consulted — there's no drive to consult against.
+    expect(mockGetUserDrivePermissions).not.toHaveBeenCalled();
+    // The system path MUST consult the canonical 5-way orphan predicate so a
+    // re-link via DM/conversation/channel between scan and delete is caught.
+    expect(mockIsFileOrphaned).toHaveBeenCalledWith(expect.anything(), VALID_HASH);
+  });
+
+  it('denies system file-bound delete when file was re-linked between scan and delete (TOCTOU defense)', async () => {
+    // The cron may scan, mint a 30s token, and dispatch — but in that window
+    // a new active DM, conversation linkage, or channel message could attach
+    // to the same blob. getLinksForFile only sees file_pages, so without the
+    // canonical isFileOrphaned re-check the file would be wrongly deleted.
+    mockGetLinksForFile.mockResolvedValue([]);
+    mockFilesFindFirst.mockResolvedValue({ driveId: null });
+    mockIsFileOrphaned.mockResolvedValue(false);
+
+    const auth = createAuth({
+      userId: 'system',
+      resourceBinding: { type: 'file', id: VALID_HASH },
+    });
+
+    await expect(assertDeleteFileAccess(auth, VALID_HASH)).rejects.toBeInstanceOf(DeleteFileReferencedError);
+  });
+
+  it('denies non-system caller using a file-bound token against a null-driveId orphan', async () => {
+    // The system orphan-reap path is gated on userId='system'. A normal user
+    // holding a file-bound token must NOT be able to reap a null-drive orphan
+    // — the existing "no drive association" guard still applies for them.
+    mockGetLinksForFile.mockResolvedValue([]);
+    mockFilesFindFirst.mockResolvedValue({ driveId: null });
+
+    const auth = createAuth({
+      userId: 'user-1',
+      resourceBinding: { type: 'file', id: VALID_HASH },
+    });
+
+    await expect(assertDeleteFileAccess(auth, VALID_HASH)).rejects.toBeInstanceOf(DeleteFileAuthorizationError);
+  });
+
+  it('denies system caller when token binding does not match the requested contentHash', async () => {
+    // Defense-in-depth: even with userId='system', the token must be bound to
+    // the exact contentHash being deleted — a system token cannot be reused
+    // to reap a different blob.
+    mockGetLinksForFile.mockResolvedValue([]);
+    mockFilesFindFirst.mockResolvedValue({ driveId: null });
+
+    const auth = createAuth({
+      userId: 'system',
+      resourceBinding: { type: 'file', id: 'b'.repeat(64) },
+    });
+
+    // The file-binding fast-fail in isResourceBindingAllowed catches the mismatch.
+    await expect(assertDeleteFileAccess(auth, VALID_HASH)).rejects.toBeInstanceOf(DeleteFileAuthorizationError);
+  });
+
+  it('rejects with DeleteFileReferencedError when only pagePathReferences exist (lines 158-167)', async () => {
+    mockGetLinksForFile.mockResolvedValue([
+      { fileId: VALID_HASH, pageId: 'page-1', driveId: 'drive-1' },
+    ]);
+    mockGetUserAccessLevel.mockResolvedValue({
+      canView: true,
+      canEdit: true,
+      canShare: true,
+      canDelete: true,
+    });
+    mockPagesFindFirst.mockResolvedValue({ id: 'page-path-1' });
+
+    const auth = createAuth();
 
     await expect(assertDeleteFileAccess(auth, VALID_HASH)).rejects.toBeInstanceOf(DeleteFileReferencedError);
   });

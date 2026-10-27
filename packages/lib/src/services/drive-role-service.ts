@@ -5,8 +5,30 @@
  * providing a clean seam for testing at the service level rather than the ORM level.
  */
 
-import { db, eq, and, asc } from '@pagespace/db';
-import { driveRoles, drives, driveMembers } from '@pagespace/db';
+import { checkActorDriveAuthentication } from '../permissions/actor-authentication';
+import { db } from '@pagespace/db/db';
+import { eq, and, asc } from '@pagespace/db/operators';
+import { drives } from '@pagespace/db/schema/core';
+import { driveRoles, driveMembers } from '@pagespace/db/schema/members';
+import type { PagePerm } from '../permissions/membership-queries';
+import { computeReorderPlan, lockedBatchReorder } from './reorder';
+import { loadEffectiveDriveMembership } from '../permissions/org-drive-membership';
+import { isDriveLead } from '../permissions/drive-relationship';
+import { guardOpenRoleFloor } from '../organizations/open-role-floor';
+import { guardDriveAccess, type DriveAccessScope } from '../permissions/org-lapse-guard';
+import type { AccessActor } from '../permissions/access-actor';
+
+/**
+ * [D-OW-33] what a role write can change: who holds which role (members and agents follow a default, a deleted role
+ * leaves its holders on the plain role). Page grants are untouched by role writes.
+ */
+const ROLE_WRITE_SCOPE: DriveAccessScope = { grants: false };
+
+// POL-6: a role write that leaves an Open org drive's default below the org floor throws this.
+export { OpenRoleFloorError } from '../organizations/open-role-floor';
+
+// Re-export canonical type so callers can import from one place
+export type { PagePerm };
 
 // ============================================================================
 // Types
@@ -20,6 +42,7 @@ export interface DriveRole {
   color: string | null;
   isDefault: boolean;
   permissions: RolePermissions;
+  driveWidePermissions: PagePerm | null;
   position: number;
   createdAt: Date;
   updatedAt: Date;
@@ -27,12 +50,17 @@ export interface DriveRole {
 
 export type RolePermissions = Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
 
+// Per-page permission patch: a value merges/overwrites that page's entry, `null` prunes it
+// (falls back to driveWidePermissions) rather than writing an explicit all-false entry.
+export type RolePermissionsPatch = Record<string, { canView: boolean; canEdit: boolean; canShare: boolean } | null>;
+
 export interface CreateRoleInput {
   name: string;
   description?: string | null;
   color?: string | null;
   isDefault?: boolean;
   permissions: RolePermissions;
+  driveWidePermissions?: PagePerm | null;
 }
 
 export interface UpdateRoleInput {
@@ -40,7 +68,12 @@ export interface UpdateRoleInput {
   description?: string | null;
   color?: string | null;
   isDefault?: boolean;
+  // Mutually exclusive with `permissionsPatch`: `permissions` replaces the whole
+  // map, `permissionsPatch` merges specific pages atomically against whatever is
+  // currently stored (see `updateDriveRole`).
   permissions?: RolePermissions;
+  permissionsPatch?: RolePermissionsPatch;
+  driveWidePermissions?: PagePerm | null;
 }
 
 export interface DriveRoleAccessInfo {
@@ -64,7 +97,7 @@ export interface DriveRoleAccessInfo {
  */
 export async function checkDriveAccessForRoles(
   driveId: string,
-  userId: string
+  actor: AccessActor
 ): Promise<DriveRoleAccessInfo> {
   const driveResult = await db
     .select()
@@ -82,7 +115,12 @@ export async function checkDriveAccessForRoles(
   }
 
   const drive = driveResult[0];
-  const isOwner = drive.ownerId === userId;
+  // SEC-2/3: a credential the drive's org refuses holds no role in it, lead or not.
+  if (!(await checkActorDriveAuthentication(actor, driveId)).allowed) {
+    return { isOwner: false, isAdmin: false, isMember: false, drive: { id: drive.id, name: drive.name, slug: drive.slug, ownerId: drive.ownerId } };
+  }
+  const { userId } = actor;
+  const isOwner = isDriveLead(userId, drive);
 
   if (isOwner) {
     return {
@@ -98,14 +136,12 @@ export async function checkDriveAccessForRoles(
     };
   }
 
-  // Check membership
-  const membership = await db.query.driveMembers.findFirst({
-    where: and(
-      eq(driveMembers.driveId, driveId),
-      eq(driveMembers.userId, userId)
-    ),
-  });
+  // The shared org-aware membership. It reads ACCEPTED rows only: a pending invite (acceptedAt IS
+  // NULL) grants nothing, and a pending ADMIN invitation manages no roles (#2672).
+  const membership = await loadEffectiveDriveMembership(userId, drive);
 
+  // A GUEST (redeemed page share link) is not a member and sees no roles: the effective
+  // membership reads a GUEST row as none (driveMembershipRow).
   if (!membership) {
     return {
       isOwner: false,
@@ -146,6 +182,45 @@ export async function listDriveRoles(driveId: string): Promise<DriveRole[]> {
 }
 
 /**
+ * The `MemberRole` enum values (`packages/db/src/schema/members.ts`), lowercased.
+ *
+ * These are NOT rows in `drive_roles` and have no role id, so every lookup here
+ * — `getRoleById`, `list_drive_roles`, `GET /api/drives/:id/roles/:roleId` —
+ * misses them by construction. An agent that reasonably tried
+ * `get_drive_role "member"` got "not found in this drive", which reads as "that
+ * role does not exist" when the truth is "that role lives somewhere else"
+ * (issue #2470). {@link roleNotFoundMessage} is what every one of those lookups
+ * answers with instead.
+ */
+const SYSTEM_ROLE_NAMES: ReadonlySet<string> = new Set(['owner', 'admin', 'member']);
+
+export function isSystemRoleName(value: string): boolean {
+  return SYSTEM_ROLE_NAMES.has(value.trim().toLowerCase());
+}
+
+/**
+ * The single not-found wording for a drive-role lookup, shared by the REST
+ * route and the AI tool so the two cannot drift.
+ *
+ * For a system-role name it says where those actually live and what to run to
+ * see them, because "not found in this drive" is a dead end the caller has no
+ * way to act on. For anything else it stays the plain not-found it always was.
+ */
+export function roleNotFoundMessage(roleId: string): string {
+  if (!isSystemRoleName(roleId)) {
+    return `Role "${roleId}" not found in this drive`;
+  }
+  return (
+    `"${roleId}" is a system role, not a custom role defined in this drive, so it has no role id and cannot be ` +
+    'fetched here. System roles (OWNER/ADMIN/MEMBER) are held per member on the drive membership itself — list ' +
+    'them with the drive members surface. To see what a specific credential resolves to, describe that credential ' +
+    '(with that credential in hand: "pagespace keys describe"), which reports the role and the effective ' +
+    'view/edit/share/delete it grants. ' +
+    'This endpoint lists only the custom roles defined in this drive.'
+  );
+}
+
+/**
  * Get a specific role by ID
  */
 export async function getRoleById(
@@ -162,90 +237,180 @@ export async function getRoleById(
   return role as DriveRole | null;
 }
 
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
 /**
- * Create a new role for a drive
+ * Lock every role row in the drive with `FOR UPDATE`, acquiring the locks in a
+ * consistent (id) order.
+ *
+ * Any mutation that writes drive-wide (unsetting other roles' `isDefault`,
+ * reordering positions) needs locks on all of the drive's role rows. If each
+ * writer locked rows in its own order, two concurrent writers could each hold
+ * a row the other needs — a Postgres deadlock. Funneling every drive-wide
+ * writer through this single id-ordered acquisition serializes them instead.
+ */
+async function lockDriveRolesInOrder(tx: Tx, driveId: string) {
+  return tx
+    .select()
+    .from(driveRoles)
+    .where(eq(driveRoles.driveId, driveId))
+    .orderBy(asc(driveRoles.id))
+    .for('update');
+}
+
+/**
+ * Unset `isDefault` on whichever role currently holds it in the drive.
+ * Filtering to `isDefault = true` keeps the write to at most one row instead
+ * of rewriting every role in the drive. Callers must already hold the ordered
+ * drive-wide lock (`lockDriveRolesInOrder`) before calling this.
+ */
+async function unsetOtherDefaultRoles(tx: Tx, driveId: string) {
+  await tx.update(driveRoles)
+    .set({ isDefault: false })
+    .where(and(
+      eq(driveRoles.driveId, driveId),
+      eq(driveRoles.isDefault, true)
+    ));
+}
+
+/**
+ * Create a new role for a drive.
+ *
+ * Runs inside a transaction: when `isDefault` is set, the drive-wide "unset
+ * other defaults" write takes the ordered drive-wide lock (see
+ * `lockDriveRolesInOrder`) so a create racing an `updateDriveRole` default
+ * switch can neither deadlock nor leave two default roles behind.
  */
 export async function createDriveRole(
   driveId: string,
   input: CreateRoleInput
 ): Promise<DriveRole> {
-  // Get the highest position to add new role at the end
-  const existingRoles = await db.query.driveRoles.findMany({
-    where: eq(driveRoles.driveId, driveId),
-    orderBy: [asc(driveRoles.position)],
-  });
-
-  const maxPosition = existingRoles.length > 0
-    ? Math.max(...existingRoles.map(r => r.position)) + 1
-    : 0;
-
-  // If setting as default, unset other defaults
-  if (input.isDefault) {
-    await db.update(driveRoles)
-      .set({ isDefault: false })
-      .where(eq(driveRoles.driveId, driveId));
+  if (!validateDriveWidePermissions(input.driveWidePermissions)) {
+    throw new Error('Invalid driveWidePermissions structure');
   }
 
-  const [newRole] = await db.insert(driveRoles).values({
-    driveId,
-    name: input.name.trim(),
-    description: input.description,
-    color: input.color,
-    isDefault: input.isDefault || false,
-    permissions: input.permissions,
-    position: maxPosition,
-    updatedAt: new Date(),
-  }).returning();
+  // POL-6: judged on the drive's state after the write (open-role-floor.ts). [D-OW-33] guardDriveAccess: while the
+  // drive's org is lapsed the write may not give a role's holders more (nor move them to a wider default).
+  return guardDriveAccess(db, driveId, ROLE_WRITE_SCOPE, (tx) => guardOpenRoleFloor(tx, driveId, async () => {
+    // Read existing roles for the position computation; when creating as
+    // default this doubles as the ordered drive-wide lock acquisition.
+    const existingRoles = input.isDefault
+      ? await lockDriveRolesInOrder(tx, driveId)
+      : await tx
+          .select()
+          .from(driveRoles)
+          .where(eq(driveRoles.driveId, driveId));
 
-  return newRole as DriveRole;
+    const maxPosition = existingRoles.length > 0
+      ? Math.max(...existingRoles.map(r => r.position)) + 1
+      : 0;
+
+    // If setting as default, unset other defaults
+    if (input.isDefault) {
+      await unsetOtherDefaultRoles(tx, driveId);
+    }
+
+    const [newRole] = await tx.insert(driveRoles).values({
+      driveId,
+      name: input.name.trim(),
+      description: input.description,
+      color: input.color,
+      isDefault: input.isDefault || false,
+      permissions: input.permissions,
+      driveWidePermissions: input.driveWidePermissions ?? null,
+      position: maxPosition,
+      updatedAt: new Date(),
+    }).returning();
+
+    return newRole as DriveRole;
+  }));
 }
 
 /**
- * Update an existing role
+ * Update an existing role.
+ *
+ * The read (existing permissions) + merge + write all happen inside a single
+ * transaction with the role row locked via `FOR UPDATE`. Without this, two
+ * concurrent callers merging different pages into `permissions` (or unsetting
+ * other roles' `isDefault`) could each read the same pre-update snapshot and
+ * the second writer would silently clobber the first writer's change — this
+ * is the classic JSONB read-modify-write race. Locking the row and re-reading
+ * it inside the transaction serializes concurrent updates so both merges
+ * survive.
+ *
+ * When `isDefault` is being set, the drive-wide "unset other defaults" write
+ * needs locks on every role row in the drive. Locking only the target row
+ * first would let two concurrent default-switches each hold their own target
+ * while waiting for the other's — a deadlock — so that path instead locks all
+ * of the drive's role rows up front in a consistent (id) order.
  */
 export async function updateDriveRole(
   driveId: string,
   roleId: string,
   input: UpdateRoleInput
 ): Promise<{ role: DriveRole; wasDefault: boolean }> {
-  // Get existing role
-  const existingRole = await db.query.driveRoles.findFirst({
-    where: and(
-      eq(driveRoles.id, roleId),
-      eq(driveRoles.driveId, driveId)
-    ),
-  });
-
-  if (!existingRole) {
-    throw new Error('Role not found');
+  if (input.driveWidePermissions !== undefined && !validateDriveWidePermissions(input.driveWidePermissions)) {
+    throw new Error('Invalid driveWidePermissions structure');
   }
 
-  // If setting as default and wasn't already, unset other defaults
-  if (input.isDefault && !existingRole.isDefault) {
-    await db.update(driveRoles)
-      .set({ isDefault: false })
-      .where(eq(driveRoles.driveId, driveId));
+  if (input.permissions !== undefined && input.permissionsPatch !== undefined) {
+    throw new Error('Cannot specify both permissions and permissionsPatch');
   }
 
-  const [updatedRole] = await db.update(driveRoles)
-    .set({
-      ...(input.name !== undefined && { name: input.name.trim() }),
-      ...(input.description !== undefined && { description: input.description }),
-      ...(input.color !== undefined && { color: input.color }),
-      ...(input.isDefault !== undefined && { isDefault: input.isDefault }),
-      ...(input.permissions !== undefined && { permissions: input.permissions }),
-      updatedAt: new Date(),
-    })
-    .where(and(
-      eq(driveRoles.id, roleId),
-      eq(driveRoles.driveId, driveId)
-    ))
-    .returning();
+  // POL-6: judged on the drive's state after the write (open-role-floor.ts). [D-OW-33] guardDriveAccess: while the
+  // drive's org is lapsed the write may not give a role's holders more (nor move them to a wider default).
+  return guardDriveAccess(db, driveId, ROLE_WRITE_SCOPE, (tx) => guardOpenRoleFloor(tx, driveId, async () => {
+    let existingRole: typeof driveRoles.$inferSelect | undefined;
+    if (input.isDefault) {
+      // Setting a default updates every role row in the drive, so acquire the
+      // ordered drive-wide lock (see lockDriveRolesInOrder).
+      const lockedRoles = await lockDriveRolesInOrder(tx, driveId);
+      existingRole = lockedRoles.find((role) => role.id === roleId);
+    } else {
+      [existingRole] = await tx
+        .select()
+        .from(driveRoles)
+        .where(and(
+          eq(driveRoles.id, roleId),
+          eq(driveRoles.driveId, driveId)
+        ))
+        .for('update');
+    }
 
-  return {
-    role: updatedRole as DriveRole,
-    wasDefault: existingRole.isDefault,
-  };
+    if (!existingRole) {
+      throw new Error('Role not found');
+    }
+
+    // If setting as default and wasn't already, unset other defaults
+    if (input.isDefault && !existingRole.isDefault) {
+      await unsetOtherDefaultRoles(tx, driveId);
+    }
+
+    const resolvedPermissions = input.permissionsPatch !== undefined
+      ? mergeRolePermissionsPatch(existingRole.permissions as RolePermissions, input.permissionsPatch)
+      : input.permissions;
+
+    const [updatedRole] = await tx.update(driveRoles)
+      .set({
+        ...(input.name !== undefined && { name: input.name.trim() }),
+        ...(input.description !== undefined && { description: input.description }),
+        ...(input.color !== undefined && { color: input.color }),
+        ...(input.isDefault !== undefined && { isDefault: input.isDefault }),
+        ...(resolvedPermissions !== undefined && { permissions: resolvedPermissions }),
+        ...(input.driveWidePermissions !== undefined && { driveWidePermissions: input.driveWidePermissions }),
+        updatedAt: new Date(),
+      })
+      .where(and(
+        eq(driveRoles.id, roleId),
+        eq(driveRoles.driveId, driveId)
+      ))
+      .returning();
+
+    return {
+      role: updatedRole as DriveRole,
+      wasDefault: existingRole.isDefault,
+    };
+  }));
 }
 
 /**
@@ -267,44 +432,66 @@ export async function deleteDriveRole(
     throw new Error('Role not found');
   }
 
-  await db.delete(driveRoles)
-    .where(and(
-      eq(driveRoles.id, roleId),
-      eq(driveRoles.driveId, driveId)
-    ));
+  // POL-6: deleting an Open org drive's default leaves its members on the plain MEMBER role, which is below an
+  // edit floor; judged on the state after the delete.
+  await guardDriveAccess(db, driveId, ROLE_WRITE_SCOPE, (tx) => guardOpenRoleFloor(tx, driveId, () =>
+    tx.delete(driveRoles).where(and(eq(driveRoles.id, roleId), eq(driveRoles.driveId, driveId)))));
 }
 
 /**
- * Reorder roles for a drive
+ * Reorder roles for a drive.
+ *
+ * Takes the ordered drive-wide lock before writing — via `lockDriveRolesInOrder`,
+ * not `lockedBatchReorder`'s own (narrower) lock — because this lock also
+ * serializes `reorderDriveRoles` against `createDriveRole`/`updateDriveRole`'s
+ * default-switch, both of which take the same drive-wide lock. Holding all the
+ * rows up front also makes the membership validation (`existingIds`/
+ * `invalidIds`) authoritative rather than a pre-transaction snapshot. The write
+ * itself is then a single batched statement via `lockedBatchReorder` instead of
+ * N sequential per-row updates.
  */
 export async function reorderDriveRoles(
   driveId: string,
   roleIds: string[]
 ): Promise<void> {
-  // Validate that all roleIds belong to this drive
-  const existingRoles = await db.query.driveRoles.findMany({
-    where: eq(driveRoles.driveId, driveId),
-    columns: { id: true },
-  });
-  const existingIds = new Set(existingRoles.map(r => r.id));
-  const invalidIds = roleIds.filter(id => !existingIds.has(id));
+  // POL-6: through the floor guard like every role write, so its locks come in the same order and the default it
+  // leaves (the lowest-positioned one wins) is judged against the org floor.
+  await guardDriveAccess(db, driveId, ROLE_WRITE_SCOPE, (tx) => guardOpenRoleFloor(tx, driveId, async () => {
+    const existingRoles = await lockDriveRolesInOrder(tx, driveId);
+    const existingIds = new Set(existingRoles.map(r => r.id));
+    const invalidIds = roleIds.filter(id => !existingIds.has(id));
 
-  if (invalidIds.length > 0) {
-    throw new Error('Invalid role IDs');
-  }
-
-  // Update positions in a transaction
-  await db.transaction(async (tx) => {
-    for (let index = 0; index < roleIds.length; index++) {
-      const roleId = roleIds[index];
-      await tx.update(driveRoles)
-        .set({ position: index, updatedAt: new Date() })
-        .where(and(
-          eq(driveRoles.id, roleId),
-          eq(driveRoles.driveId, driveId)
-        ));
+    if (invalidIds.length > 0) {
+      throw new Error('Invalid role IDs');
     }
-  });
+
+    const plan = computeReorderPlan(roleIds.map((id, index) => ({ id, position: index })));
+    if (plan.orderedIds.length > 0) {
+      await lockedBatchReorder(tx, {
+        table: driveRoles,
+        idColumn: driveRoles.id,
+        positionColumn: driveRoles.position,
+        scopeWhere: eq(driveRoles.driveId, driveId),
+        plan,
+        touchColumns: [driveRoles.updatedAt],
+      });
+    }
+  }));
+}
+
+/**
+ * Validate driveWidePermissions structure (null = clear, object = set)
+ */
+export function validateDriveWidePermissions(perms: unknown): perms is PagePerm | null {
+  if (perms === null || perms === undefined) return true;
+  if (typeof perms !== 'object' || Array.isArray(perms)) return false;
+  const p = perms as Record<string, unknown>;
+  return (
+    typeof p.canView === 'boolean' &&
+    typeof p.canEdit === 'boolean' &&
+    typeof p.canShare === 'boolean' &&
+    Object.keys(p).every(k => ['canView', 'canEdit', 'canShare'].includes(k))
+  );
 }
 
 /**
@@ -323,4 +510,46 @@ export function validateRolePermissions(permissions: unknown): permissions is Ro
   }
 
   return true;
+}
+
+/**
+ * Validate a per-page permissions patch structure (same as RolePermissions,
+ * except each entry may also be `null` to signal "prune this page's override").
+ */
+export function validateRolePermissionsPatch(patch: unknown): patch is RolePermissionsPatch {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return false;
+
+  for (const [pageId, perms] of Object.entries(patch)) {
+    if (typeof pageId !== 'string') return false;
+    if (perms === null) continue;
+    if (!perms || typeof perms !== 'object') return false;
+    const p = perms as Record<string, unknown>;
+    if (typeof p.canView !== 'boolean' ||
+        typeof p.canEdit !== 'boolean' ||
+        typeof p.canShare !== 'boolean') return false;
+  }
+
+  return true;
+}
+
+/**
+ * Merge a per-page permissions patch into an existing permissions map.
+ * Read-merge-write: pages not named in the patch are left untouched (unlike a
+ * full `permissions` replace, which wipes everything not in the payload).
+ * A `null` entry prunes the key so resolution falls back to
+ * driveWidePermissions, rather than persisting an explicit all-false entry.
+ */
+export function mergeRolePermissionsPatch(
+  existing: RolePermissions,
+  patch: RolePermissionsPatch,
+): RolePermissions {
+  const merged = { ...existing };
+  for (const [pageId, perms] of Object.entries(patch)) {
+    if (perms === null) {
+      delete merged[pageId];
+    } else {
+      merged[pageId] = perms;
+    }
+  }
+  return merged;
 }

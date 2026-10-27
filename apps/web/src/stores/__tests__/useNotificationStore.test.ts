@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import type { LegacyNotification } from '@pagespace/lib/client-safe';
+import type { LegacyNotification } from '@pagespace/lib/notifications/types';
 
 // Mock dependencies before importing the store
 vi.mock('../socketStore', () => ({
@@ -54,6 +54,7 @@ describe('useNotificationStore', () => {
       unreadCount: 0,
       isLoading: false,
       isDropdownOpen: false,
+      hasHydrated: false,
     });
     vi.clearAllMocks();
   });
@@ -224,6 +225,29 @@ describe('useNotificationStore', () => {
 
       expect(useNotificationStore.getState().unreadCount).toBe(0);
     });
+
+    it('regression: given a notification already marked read, calling markAsRead again should be a no-op (does not double-decrement unreadCount)', () => {
+      const notif = createMockNotification({ id: 'to-read', isRead: false });
+      useNotificationStore.setState({ notifications: [notif], unreadCount: 3 });
+      const { markAsRead } = useNotificationStore.getState();
+
+      // Two independent UI surfaces (e.g. an in-app toast and a native OS
+      // notification) can both call markAsRead for the same notification —
+      // the second call must not decrement unreadCount again.
+      markAsRead('to-read');
+      markAsRead('to-read');
+
+      expect(useNotificationStore.getState().unreadCount).toBe(2);
+    });
+
+    it('given an unknown notification ID, should not decrement unreadCount', () => {
+      useNotificationStore.setState({ notifications: [], unreadCount: 3 });
+      const { markAsRead } = useNotificationStore.getState();
+
+      markAsRead('does-not-exist');
+
+      expect(useNotificationStore.getState().unreadCount).toBe(3);
+    });
   });
 
   describe('markAllAsRead', () => {
@@ -297,9 +321,10 @@ describe('useNotificationStore', () => {
       expect(state.notifications).toEqual(mockNotifications);
       expect(state.unreadCount).toBe(5);
       expect(state.isLoading).toBe(false);
+      expect(state.hasHydrated).toBe(true);
     });
 
-    it('given API error, should set loading to false', async () => {
+    it('given API error, should set loading to false and not mark as hydrated', async () => {
       mockFetchWithAuth.mockResolvedValue({ ok: false });
       const consoleError = vi.spyOn(console, 'error').mockImplementation(() => { });
 
@@ -307,10 +332,11 @@ describe('useNotificationStore', () => {
       await fetchNotifications();
 
       expect(useNotificationStore.getState().isLoading).toBe(false);
+      expect(useNotificationStore.getState().hasHydrated).toBe(false);
       consoleError.mockRestore();
     });
 
-    it('given network error, should handle gracefully', async () => {
+    it('given network error, should handle gracefully and not mark as hydrated', async () => {
       mockFetchWithAuth.mockRejectedValue(new Error('Network error'));
       const consoleError = vi.spyOn(console, 'error').mockImplementation(() => { });
 
@@ -318,6 +344,7 @@ describe('useNotificationStore', () => {
       await fetchNotifications();
 
       expect(useNotificationStore.getState().isLoading).toBe(false);
+      expect(useNotificationStore.getState().hasHydrated).toBe(false);
       expect(consoleError).toHaveBeenCalled();
       consoleError.mockRestore();
     });
@@ -367,6 +394,49 @@ describe('useNotificationStore', () => {
       const state = useNotificationStore.getState();
       expect(state.notifications.every(n => n.isRead)).toBe(true);
       expect(state.unreadCount).toBe(0);
+    });
+  });
+
+  describe('updateNotification', () => {
+    it('given an id and updates, should merge updates into the matching notification', () => {
+      const notif = createMockNotification({ id: 'upd-1', isRead: false });
+      useNotificationStore.setState({ notifications: [notif], unreadCount: 1 });
+
+      const { updateNotification } = useNotificationStore.getState();
+      updateNotification('upd-1', { isRead: true });
+
+      const updated = useNotificationStore.getState().notifications.find(n => n.id === 'upd-1');
+      expect(updated?.isRead).toBe(true);
+    });
+
+    it('given isRead:true transition on unread notification, should decrement unreadCount', () => {
+      const notif = createMockNotification({ id: 'upd-2', isRead: false });
+      useNotificationStore.setState({ notifications: [notif], unreadCount: 1 });
+
+      const { updateNotification } = useNotificationStore.getState();
+      updateNotification('upd-2', { isRead: true });
+
+      expect(useNotificationStore.getState().unreadCount).toBe(0);
+    });
+
+    it('given isRead:true on already-read notification, should not change unreadCount', () => {
+      const notif = createMockNotification({ id: 'upd-3', isRead: true });
+      useNotificationStore.setState({ notifications: [notif], unreadCount: 0 });
+
+      const { updateNotification } = useNotificationStore.getState();
+      updateNotification('upd-3', { isRead: true });
+
+      expect(useNotificationStore.getState().unreadCount).toBe(0);
+    });
+
+    it('given metadata update without isRead change, should not affect unreadCount', () => {
+      const notif = createMockNotification({ id: 'upd-4', isRead: false });
+      useNotificationStore.setState({ notifications: [notif], unreadCount: 2 });
+
+      const { updateNotification } = useNotificationStore.getState();
+      updateNotification('upd-4', { metadata: { actioned: true, actionedStatus: 'accepted' } });
+
+      expect(useNotificationStore.getState().unreadCount).toBe(2);
     });
   });
 

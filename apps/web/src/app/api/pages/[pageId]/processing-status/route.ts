@@ -1,7 +1,13 @@
+import { canPrincipalViewPage } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
-import { db, pages, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createPageServiceToken, canUserViewPage } from '@pagespace/lib';
+import { createPageServiceToken } from '@pagespace/lib/services/validated-service-token'
+
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
@@ -19,9 +25,9 @@ export async function GET(
 
   try {
     // Verify user can view this page
-    const canView = await canUserViewPage(userId, pageId);
+    const canView = await canPrincipalViewPage(auth, pageId);
     if (!canView) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
     }
 
     // Get page status
@@ -45,6 +51,8 @@ export async function GET(
       );
     }
 
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'page_processing', resourceId: pageId, details: { action: 'check_processing_status', status: page.processingStatus } });
+
     // Return final status if processing is done
     if (page.processingStatus !== 'pending' && page.processingStatus !== 'processing') {
       return NextResponse.json({
@@ -59,7 +67,7 @@ export async function GET(
 
     // For pending/processing, check processor queue status
     const { token: serviceToken } = await createPageServiceToken(
-      userId,
+      actorFromAuth(auth),
       pageId,
       ['queue:read'],
       '2m'

@@ -7,6 +7,97 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Touch devices are stamped with data-pointer="coarse" on <html> pre-paint by
+   the inline script in layout.tsx (see lib/pointer-capability.ts). Use `touch:`
+   for any new code that needs a touch-only rule. */
+@custom-variant touch (&:where([data-pointer='coarse'] *));
+
+svg.lucide {
+  stroke-width: 1.5;
+}
+
+/* Backstop for xterm's containing blocks (the real sheet is imported by
+   XtermTerminal.tsx). xterm's selection/viewport/helper layers are
+   `position: absolute` against these two elements; if the vendor import is
+   ever lost again (it happened once, when its previous host component was
+   deleted), a text selection in one terminal pane paints its highlight into
+   whichever ancestor happens to be positioned — visually, a different pane. */
+.xterm,
+.xterm .xterm-screen {
+  position: relative;
+}
+
+/* ---------------------------------------------------------------------------
+   Hover-revealed controls on touch devices.
+
+   There is no hover on a touchscreen, so every `opacity-0 group-hover:opacity-100`
+   affordance (message retry/edit/copy, page-tree row actions, tab close buttons,
+   version-history and activity actions, …) is unreachable. Worse, the `sm:`/`md:`
+   -prefixed variants consult no pointer signal at all, so they break in iPad
+   Safari too — an iPad is wide enough to match `sm:`, but never hovers.
+
+   These rules are UNLAYERED (Tailwind utilities live in `@layer utilities`), so
+   they win without `!important` — same trick as `svg.lucide` above.
+
+   Attribute-substring matching is required: a plain `.group-hover\:opacity-100`
+   selector would miss both the named-group variants (`group-hover/msg:`,
+   `group-hover/pane:`, `group-hover/item:`, `group-hover/menu-item:`) and the
+   `sm:`/`md:`-prefixed forms.
+
+   `data-hover-only` opts an element out — for decoration (scrims, drag seams,
+   timestamps) as opposed to affordances.
+   --------------------------------------------------------------------------- */
+
+/* Reveal pair: a resting `opacity-0` that a group-hover restores to full.
+   `pointer-events: auto` is required — MessageHoverToolbar and prompt-input pair
+   their `opacity-0` with `pointer-events-none`, so opacity alone would leave the
+   buttons visible but dead.
+
+   The `group-hover:opacity-0` exclusion matters: an element that fades OUT on
+   hover (to expose a control beneath it) also carries the `opacity-0` substring.
+   Without the guard, adding any `:opacity-100` variant to such an element — a
+   `focus-within:opacity-100`, say — would drag it into this rule and pin the
+   fade-out permanently VISIBLE, hiding whatever it covers. We reveal controls;
+   we do not simulate a whole hover state. Elements that fade out are simply left
+   alone, at their natural resting opacity. */
+:where([data-pointer='coarse'])
+  [class*='opacity-0'][class*='group-hover'][class*=':opacity-100']:not([class*='group-hover:opacity-0']):not([data-hover-only]) {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Display-based reveals (`hidden group-hover:flex`), not opacity-based.
+
+   These have ZERO live matches today, and that is deliberate rather than an
+   oversight: the repo's only `hidden group-hover:inline` is TabItem's Cmd+N
+   shortcut hint, which is a keyboard affordance and is opted out. The rules stay
+   as the standing policy, so the next display-based control — `hidden
+   group-hover:flex` is the idiomatic way to hide a button row — is revealed on
+   touch instead of silently disappearing, which is the entire bug class this file
+   exists to close.
+
+   These match the exact class token (`~=`), NOT a substring. Substring matching
+   is correct for the opacity rules above — it is what catches `sm:` and
+   named-group variants — but here it would make `group-hover:flex` also match
+   `group-hover:flex-row` and force `display: flex` on an element that only asked
+   to change its flex-direction. For a display reveal there is nothing to catch:
+   the token is written out in full. */
+:where([data-pointer='coarse']) [class~='group-hover:inline']:not([data-hover-only]) {
+  display: inline;
+}
+:where([data-pointer='coarse']) [class~='group-hover:inline-flex']:not([data-hover-only]) {
+  display: inline-flex;
+}
+:where([data-pointer='coarse']) [class~='group-hover:flex']:not([data-hover-only]) {
+  display: flex;
+}
+:where([data-pointer='coarse']) [class~='group-hover:block']:not([data-hover-only]) {
+  display: block;
+}
+:where([data-pointer='coarse']) [class~='group-hover:grid']:not([data-hover-only]) {
+  display: grid;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -40,6 +131,7 @@
   --color-secondary: var(--secondary);
   --color-primary-foreground: var(--primary-foreground);
   --color-primary: var(--primary);
+  --color-primary-soft: var(--primary-soft);
   --color-popover-foreground: var(--popover-foreground);
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
@@ -51,6 +143,10 @@
 }
 
 :root {
+  /* Keep native UI (scrollbars, form controls, overscroll canvas) in step
+     with the theme from the very first server-rendered paint — next-themes
+     only sets an inline color-scheme once its script runs. */
+  color-scheme: light;
   --radius: 0.625rem;
 
   /* iOS Safe Area Support */
@@ -75,6 +171,7 @@
   /* Actions & Accents */
   --primary: oklch(0.50 0.16 235);
   --primary-foreground: oklch(0.98 0.005 235);
+  --primary-soft: oklch(0.50 0.16 235 / 0.10);
   --secondary: oklch(0.90 0.025 35);
   --secondary-foreground: oklch(0.15 0.01 220);
   --muted: oklch(0.94 0.003 230);
@@ -122,56 +219,58 @@
 }
 
 .dark {
+  color-scheme: dark;
   --radius: 0.625rem;
-  --background: oklch(0.15 0 0);
-  --foreground: oklch(0.94 0 0);
-  --card: oklch(0.19 0 0);
-  --card-foreground: oklch(0.94 0 0);
-  --popover: oklch(0.19 0 0);
-  --popover-foreground: oklch(0.94 0 0);
+  --background: oklch(0.17 0 0);
+  --foreground: oklch(0.97 0 0);
+  --card: oklch(0.23 0 0);
+  --card-foreground: oklch(0.97 0 0);
+  --popover: oklch(0.23 0 0);
+  --popover-foreground: oklch(0.97 0 0);
   --primary: oklch(0.62 0.16 235);
-  --primary-foreground: oklch(0.15 0 0);
-  --secondary: oklch(0.24 0 0);
-  --secondary-foreground: oklch(0.94 0 0);
-  --muted: oklch(0.24 0 0);
-  --muted-foreground: oklch(0.52 0 0);
-  --accent: oklch(0.48 0.12 235);
+  --primary-soft: oklch(0.62 0.16 235 / 0.18);
+  --primary-foreground: oklch(0.17 0 0);
+  --secondary: oklch(0.28 0 0);
+  --secondary-foreground: oklch(0.97 0 0);
+  --muted: oklch(0.28 0 0);
+  --muted-foreground: oklch(0.70 0 0);
+  --accent: oklch(0.31 0.02 235); /* Neutral hover; selected state uses --primary-soft */
   --accent-foreground: oklch(0.96 0 0);
   --destructive: oklch(0.6 0.2 15);
   --success: oklch(0.55 0.16 145);
   --warning: oklch(0.68 0.16 75);
   --info: oklch(0.60 0.16 235);
-  --border: oklch(0.25 0 0);
-  --input: oklch(0.25 0 0);
+  --border: oklch(0.32 0 0);
+  --input: oklch(0.32 0 0);
   --ring: oklch(0.62 0.16 235);
   --chart-1: oklch(0.7 0.2 30);
   --chart-2: oklch(0.6 0.25 90);
   --chart-3: oklch(0.75 0.2 180);
   --chart-4: oklch(0.65 0.22 240);
   --chart-5: oklch(0.8 0.2 300);
-  --sidebar: oklch(0.155 0 0); /* Minimal contrast with background */
-  --sidebar-foreground: oklch(0.94 0 0);
+  --sidebar: oklch(0.20 0 0); /* One tonal step above the canvas; hairlines via --separator */
+  --sidebar-foreground: oklch(0.97 0 0);
   --sidebar-primary: oklch(0.62 0.16 235);
-  --sidebar-primary-foreground: oklch(0.15 0 0);
-  --sidebar-accent: oklch(0.48 0.12 235);
+  --sidebar-primary-foreground: oklch(0.17 0 0);
+  --sidebar-accent: oklch(0.31 0.02 235);
   --sidebar-accent-foreground: oklch(0.96 0 0);
-  --sidebar-border: oklch(0.25 0 0);
+  --sidebar-border: oklch(0.32 0 0);
   --sidebar-ring: oklch(0.62 0.16 235);
 
   /* Liquid Glass Material System (Dark Mode) */
-  --material-thin: oklch(0.16 0 0 / 0.88);
-  --material-regular: oklch(0.165 0 0 / 0.85);
-  --material-thick: oklch(0.17 0 0 / 0.80);
+  --material-thin: oklch(0.20 0 0 / 0.88);
+  --material-regular: oklch(0.205 0 0 / 0.85);
+  --material-thick: oklch(0.21 0 0 / 0.80);
 
   /* Shadows (Dark Mode) */
   --shadow-ambient: 0 1px 3px rgb(0 0 0 / 0.12), 0 8px 24px rgb(0 0 0 / 0.18);
   --shadow-elevated: 0 2px 8px rgb(0 0 0 / 0.18), 0 16px 48px rgb(0 0 0 / 0.24);
 
   /* Separators (Dark Mode) */
-  --separator: oklch(0.94 0 0 / 0.08);
+  --separator: oklch(0.94 0 0 / 0.12);
 
   /* Sidebar section dividers - visible but soft */
-  --sidebar-divider: oklch(0.26 0 0);
+  --sidebar-divider: oklch(0.31 0 0);
   --sidebar-section-bg: oklch(1 0 0 / 0.035);
 }
 
@@ -237,6 +336,35 @@
   }
 }
 
+/* App shell entrance — one quiet fade as the boot spinner gives way to the real
+   shell, so the app arrives instead of popping.
+
+   Applied by `Layout` ONLY on a mount that actually rendered the boot screen.
+   Mounting is not the same thing as booting: three sibling layout clients
+   (DashboardLayoutClient, SettingsLayoutClient, NotificationsLayoutClient) each
+   mount their own `Layout`, so moving between /dashboard, /settings and
+   /notifications unmounts one and mounts another. Applied unconditionally, this
+   faded the entire shell out and back in on ordinary navigation. `Layout`
+   tracks the boot screen explicitly instead — see showedBootScreenRef.
+
+   The 15-minute background auth recheck is a separate hazard, already handled
+   upstream: shouldShowAuthLoadingScreen keeps a routine revalidation from
+   blanking this subtree at all, so it never reaches the boot screen and so
+   never re-arms this class.
+
+   Opacity only, on purpose: a transform here would make this element the
+   containing block for every `position: fixed` descendant below it. And
+   `backwards` rather than `forwards`, so once the fade is done the element
+   settles back to its own opacity: 1 and stops forming a stacking context.
+   The reduced-motion rule above neutralises it for free. */
+@keyframes app-shell-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.app-shell-enter {
+  animation: app-shell-enter 380ms cubic-bezier(0.4, 0, 0.2, 1) backwards;
+}
+
 /* Holographic sweep animation */
 @keyframes holographic-sweep {
   0% {
@@ -288,10 +416,23 @@
 
 @layer components {
   /* Liquid Glass Utilities */
+  /* `transform: translateZ(0)` promotes the surface to its own compositing
+     layer. Mobile WebKit has a long-standing bug where a `backdrop-filter`
+     element combined with `position: sticky` (the navbar and document header
+     — the surfaces users reported stuck in the old theme) doesn't repaint
+     its blurred background after an ancestor's `.dark` class toggles.
+     Layer promotion up front makes that repaint reliable; see also
+     GlassRepaintFix in ThemeProvider.tsx for a runtime nudge.
+     Deliberately scoped to `-thin` (the only sticky surfaces): promoting the
+     large non-sticky sidebars would cost permanent layer memory on mobile,
+     and `transform` turns each surface into a containing block for
+     `position: fixed` descendants — a layout hazard the sticky navbar
+     doesn't share. */
   .liquid-glass-thin {
     background: var(--material-thin);
     backdrop-filter: blur(20px) saturate(180%);
     -webkit-backdrop-filter: blur(20px) saturate(180%);
+    transform: translateZ(0);
   }
 
   /* Light Mode Glossy Gradient */
@@ -312,8 +453,8 @@
   .dark .liquid-glass-regular {
     background: linear-gradient(
       to bottom,
-      oklch(0.17 0 0 / 0.85),
-      oklch(0.155 0 0 / 0.85)
+      oklch(0.21 0 0 / 0.85),
+      oklch(0.20 0 0 / 0.85)
     );
     backdrop-filter: blur(24px) saturate(180%);
     -webkit-backdrop-filter: blur(24px) saturate(180%);
@@ -337,6 +478,9 @@
       backdrop-filter: none;
       -webkit-backdrop-filter: none;
       box-shadow: none;
+      /* No blur here, so no WebKit repaint bug — don't pay for a permanent
+         compositing layer on the devices most likely to use this setting. */
+      transform: none;
     }
   }
 
@@ -490,6 +634,12 @@
   @apply dark:hover:bg-green-900/30 dark:hover:border-green-600;
 }
 
+/* Group mention styles (@everyone, @role) */
+.mention--group {
+  @apply inline-block font-semibold rounded px-1 py-0.5 cursor-default;
+  @apply bg-indigo-100 text-indigo-700 border border-indigo-200;
+  @apply dark:bg-indigo-900/30 dark:text-indigo-300 dark:border-indigo-700;
+}
 
 /* Loading state */
 .mention-pill.is-loading {
@@ -614,6 +764,16 @@
 
   .scrollbar-thin::-webkit-scrollbar-thumb:hover {
     background-color: hsl(var(--accent));
+  }
+
+  /* Fully hidden scrollbar — scrolling still works, the bar never renders */
+  .scrollbar-none {
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* legacy Edge */
+  }
+
+  .scrollbar-none::-webkit-scrollbar {
+    display: none; /* Chrome/Safari/Electron */
   }
 
   /* SVG Color Utilities - for dark mode support in SVG elements */

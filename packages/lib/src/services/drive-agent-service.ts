@@ -1,0 +1,614 @@
+/**
+ * Drive Agent Service - membership of AI agents (AI_CHAT pages) in drives.
+ *
+ * An agent can be a member of drives other than its home drive. Membership is
+ * the sole mechanism that grants an agent's tools access to a drive's content
+ * (see `hasAgentDriveMembership` / `getAgentAccessLevel`). This service is the
+ * single seam for creating/removing those memberships, with authorization and
+ * role-capping applied consistently for both entry points (the agent's own
+ * settings, and the drive-side "invite agent" flow).
+ */
+
+import { checkActorDriveAuthentication } from '../permissions/actor-authentication';
+import { db } from '@pagespace/db/db';
+import { eq, and, ne, isNotNull, inArray } from '@pagespace/db/operators';
+import { drives, pages } from '@pagespace/db/schema/core';
+import { driveAgentMembers, driveMembers } from '@pagespace/db/schema/members';
+import { canUserEditPage, holdsDriveAccess, isDriveOwnerOrAdmin } from '../permissions/permissions';
+import { loadEffectiveDriveMembership } from '../permissions/org-drive-membership';
+import { customRoleBelongsToDrive, fetchCustomRolePermissions, holdsAcceptedGuestRow } from '../permissions/membership-queries';
+import type { CustomRolePerms } from '../permissions/membership-queries';
+import { isHomeDrive, homeDriveActionError } from './drive-guards';
+import { isDriveLead } from '../permissions/drive-relationship';
+import { getDrivePolicies } from '../organizations/policy-reader';
+import { crossDriveAgentsDecision } from '../organizations/org-action-decisions';
+import { checkDriveMayLoosen } from '../permissions/org-lapse-guard';
+import type { AccessActor } from '../permissions/access-actor';
+
+export type AgentDriveRole = 'MEMBER' | 'ADMIN';
+
+export interface AddAgentToDriveInput {
+  actor: AccessActor;
+  agentPageId: string;
+  driveId: string;
+  /** Explicit role request (drive-side invite). Omitted ⇒ inherit the granter's access. */
+  requestedRole?: AgentDriveRole;
+  /** Optional custom drive role to assign (owners/admins only). */
+  requestedCustomRoleId?: string | null;
+  /** Whether this drive's drivePrompt should be injected into the agent's system prompt. Defaults to false. */
+  includeContext?: boolean;
+}
+
+/** `code` is set for a refusal the UI keys on: `org_lapsed` ([D-OW-33], 402). */
+export type ServiceFailure = { ok: false; status: number; error: string; code?: string };
+
+export type AddAgentToDriveResult =
+  | { ok: true; status: 201; member: typeof driveAgentMembers.$inferSelect }
+  | ServiceFailure;
+
+export interface AgentDriveMembership {
+  driveId: string;
+  driveName: string;
+  driveSlug: string;
+  role: 'OWNER' | 'ADMIN' | 'MEMBER';
+  customRoleId: string | null;
+  isHome: boolean;
+  includeContext: boolean;
+}
+
+/**
+ * Resolve the acting user's access to a drive, used to cap what they may grant
+ * an agent. Owners/admins may grant up to ADMIN (or a custom role); plain
+ * members and page-level collaborators are capped at MEMBER.
+ */
+async function resolveGranterAccess(
+  actor: AccessActor,
+  driveId: string,
+): Promise<GranterAccess> {
+  // SEC-2/3: a credential the drive's org refuses grants nothing in it, lead or not.
+  if (!(await checkActorDriveAuthentication(actor, driveId)).allowed) return { canGrant: false, maxRole: 'MEMBER', customRoleId: null, driveKind: null };
+  return resolveGranterFacts(actor.userId, driveId);
+}
+
+type GranterAccess = { canGrant: boolean; maxRole: AgentDriveRole; customRoleId: string | null; driveKind: string | null };
+
+/**
+ * What `userId` could grant an agent in the drive, as membership facts with no credential in them: the actor path
+ * above asks the sign-in policy first; recapping what someone ALREADY granted (no one is signing in) reads this.
+ */
+async function resolveGranterFacts(userId: string, driveId: string): Promise<GranterAccess> {
+  const [drive] = await db
+    .select({ ownerId: drives.ownerId, kind: drives.kind, orgId: drives.orgId, orgVisibility: drives.orgVisibility })
+    .from(drives)
+    .where(eq(drives.id, driveId))
+    .limit(1);
+
+  if (!drive) return { canGrant: false, maxRole: 'MEMBER', customRoleId: null, driveKind: null };
+  const driveKind = drive.kind ?? null;
+  if (isDriveLead(userId, drive)) return { canGrant: true, maxRole: 'ADMIN', customRoleId: null, driveKind };
+
+  // The shared org-aware membership (an org Owner/Admin grants as ADMIN; an implicit Open member
+  // is capped to MEMBER with the drive's default role).
+  const membership = await loadEffectiveDriveMembership(userId, { id: driveId, ...drive });
+
+  if (membership) {
+    return {
+      canGrant: true,
+      maxRole: membership.role === 'ADMIN' ? 'ADMIN' : 'MEMBER',
+      customRoleId: membership.customRoleId ?? null,
+      driveKind,
+    };
+  }
+
+  // A GUEST (redeemed page share link) may not bind an agent to the drive at
+  // any role: an agent MEMBER reads the whole drive, which would turn one shared
+  // page back into the drive-wide access GUEST exists to withhold. The effective
+  // membership above reads a GUEST row as none, so the row itself is read here,
+  // before the page-collaborator fallback below admits the guest through its grant.
+  if (await holdsAcceptedGuestRow(driveId, userId)) {
+    return { canGrant: false, maxRole: 'MEMBER', customRoleId: null, driveKind };
+  }
+
+  // Page-level collaborator only (no drive membership): may grant, capped at MEMBER.
+  const hasAccess = await holdsDriveAccess(userId, driveId);
+  return { canGrant: hasAccess, maxRole: 'MEMBER', customRoleId: null, driveKind };
+}
+
+/**
+ * Add an agent (AI_CHAT page) as a member of a drive. The agent's home drive
+ * may differ from the target drive. The granted role never exceeds the acting
+ * user's own access to the drive.
+ */
+export async function addAgentToDrive(input: AddAgentToDriveInput): Promise<AddAgentToDriveResult> {
+  const authorized = await authorizeAgentDriveGrant(input);
+  if (!authorized.ok) return authorized;
+  // [D-OW-33] everyone who can run the agent reads this drive through it: adding it loosens the drive's access,
+  // refused while the drive's org is lapsed (checked in the insert's transaction).
+  return db.transaction((tx) => insertAgentDriveMembership(tx, authorized.grant));
+}
+
+/** A membership `authorizeAgentDriveGrant` allowed, ready to insert. */
+export interface AuthorizedAgentDriveGrant {
+  driveId: string;
+  agentPageId: string;
+  role: AgentDriveRole;
+  customRoleId: string | null;
+  includeContext: boolean;
+  addedBy: string;
+}
+
+/**
+ * `addAgentToDrive`'s checks, without the insert: whether the acting user may
+ * add this agent to the drive, and at which role. Lets a caller insert the
+ * membership later through its own transaction (`insertAgentDriveMembership`),
+ * after re-checking state under a lock it holds — the checks themselves read
+ * through the global pool and must not run inside that transaction.
+ */
+export async function authorizeAgentDriveGrant(
+  input: AddAgentToDriveInput,
+): Promise<{ ok: true; grant: AuthorizedAgentDriveGrant } | ServiceFailure> {
+  const { actor, agentPageId, driveId, requestedRole, requestedCustomRoleId, includeContext } = input;
+  const actingUserId = actor.userId;
+
+  const [agentPage] = await db
+    .select({ id: pages.id, type: pages.type, driveId: pages.driveId })
+    .from(pages)
+    .where(eq(pages.id, agentPageId))
+    .limit(1);
+
+  if (!agentPage) return { ok: false, status: 404, error: 'Agent page not found' };
+  if (agentPage.type !== 'AI_CHAT') {
+    return { ok: false, status: 400, error: 'agentPageId must reference an AI_CHAT page' };
+  }
+
+  // The acting user must *control* the agent (edit access), not merely view it.
+  // Membership is a property of the agent shared by everyone who can run it
+  // (running is gated by `canUserEditPage` in the chat route), so attaching the
+  // agent to a drive must require the same control. A view-only granter could
+  // otherwise bind a shared agent to a private drive and leak that drive's
+  // content to every user who can run the agent.
+  if (!(await canUserEditPage(actor, agentPageId))) {
+    return { ok: false, status: 403, error: 'You do not have permission to manage this agent' };
+  }
+
+  const granter = await resolveGranterAccess(actor, driveId);
+  if (!granter.canGrant) {
+    return { ok: false, status: 403, error: 'You do not have access to this drive' };
+  }
+
+  // Home drives never take agent memberships: an agent living in another
+  // (possibly shared) drive would let everyone who can run it read Home
+  // content. AI_CHAT pages inside Home keep their native access — this only
+  // blocks cross-drive membership grants. Enforced here so both entry points
+  // (drive-side invite and agent-side settings) share the guard.
+  if (isHomeDrive({ kind: granter.driveKind })) {
+    return { ok: false, status: 403, error: homeDriveActionError({ kind: granter.driveKind }, 'invite')! };
+  }
+
+  // POL-9: an agent from another drive needs the target drive's org to allow cross-drive agents.
+  if (agentPage.driveId !== driveId) {
+    const refusal = crossDriveAgentsDecision((await getDrivePolicies(driveId))?.policies ?? null);
+    if (!refusal.ok) return { ok: false, status: 403, error: refusal.message };
+  }
+
+  let effectiveRole: AgentDriveRole;
+  let effectiveCustomRoleId: string | null = null;
+
+  if (requestedCustomRoleId) {
+    if (granter.maxRole !== 'ADMIN') {
+      return { ok: false, status: 403, error: 'Only drive owners and admins can assign custom roles' };
+    }
+    if (!(await customRoleBelongsToDrive(requestedCustomRoleId, driveId))) {
+      return { ok: false, status: 404, error: 'Custom role not found in this drive' };
+    }
+    effectiveRole = 'MEMBER';
+    effectiveCustomRoleId = requestedCustomRoleId;
+  } else if (requestedRole) {
+    if (requestedRole === 'ADMIN' && granter.maxRole !== 'ADMIN') {
+      return { ok: false, status: 403, error: 'You cannot grant a role higher than your own access' };
+    }
+    effectiveRole = requestedRole;
+  } else {
+    // Inherit the granter's access (agent-side add).
+    effectiveRole = granter.maxRole;
+    effectiveCustomRoleId = granter.customRoleId;
+  }
+
+  return {
+    ok: true,
+    grant: {
+      driveId,
+      agentPageId,
+      role: effectiveRole,
+      customRoleId: effectiveCustomRoleId,
+      includeContext: includeContext ?? false,
+      addedBy: actingUserId,
+    },
+  };
+}
+
+/**
+ * Insert a membership `authorizeAgentDriveGrant` allowed. An existing
+ * membership is a 409, without raising: inside a transaction a unique
+ * violation would abort it.
+ */
+export async function insertAgentDriveMembership(
+  executor: Tx | typeof db,
+  grant: AuthorizedAgentDriveGrant,
+): Promise<AddAgentToDriveResult> {
+  // [D-OW-33] refused while the drive's org is lapsed, read in the same executor as the insert.
+  const lapsed = await checkDriveMayLoosen(executor, grant.driveId, true);
+  if (lapsed) return { ok: false, status: lapsed.status, error: lapsed.message, code: lapsed.code };
+  const [member] = await executor
+    .insert(driveAgentMembers)
+    .values(grant)
+    .onConflictDoNothing({ target: [driveAgentMembers.driveId, driveAgentMembers.agentPageId] })
+    .returning();
+  if (!member) return { ok: false, status: 409, error: 'Agent is already a member of this drive' };
+  return { ok: true, status: 201, member };
+}
+
+/**
+ * Remove an agent's membership from a drive. The agent's home drive cannot be
+ * removed. Allowed for users who control the agent or who own/admin the drive.
+ */
+export async function removeAgentFromDrive(input: {
+  actor: AccessActor;
+  agentPageId: string;
+  driveId: string;
+}): Promise<{ ok: true } | ServiceFailure> {
+  const { actor, agentPageId, driveId } = input;
+
+  const [agentPage] = await db
+    .select({ id: pages.id, driveId: pages.driveId })
+    .from(pages)
+    .where(eq(pages.id, agentPageId))
+    .limit(1);
+
+  if (!agentPage) return { ok: false, status: 404, error: 'Agent page not found' };
+  if (agentPage.driveId === driveId) {
+    return { ok: false, status: 400, error: 'Cannot remove an agent from its home drive' };
+  }
+
+  const canManage =
+    (await canUserEditPage(actor, agentPageId)) ||
+    (await isDriveOwnerOrAdmin(actor, driveId));
+  if (!canManage) {
+    return { ok: false, status: 403, error: 'You cannot manage this agent membership' };
+  }
+
+  const deleted = await db
+    .delete(driveAgentMembers)
+    .where(and(eq(driveAgentMembers.agentPageId, agentPageId), eq(driveAgentMembers.driveId, driveId)))
+    .returning({ id: driveAgentMembers.id });
+
+  if (deleted.length === 0) return { ok: false, status: 404, error: 'Membership not found' };
+  return { ok: true };
+}
+
+/**
+ * Toggle whether a non-home membership's drive carries its `drivePrompt` into
+ * the agent's system prompt. Shares removeAgentFromDrive's dual authorization
+ * (agent editor OR drive owner/admin) since either side may reasonably manage
+ * this. The home drive is excluded — its own prompt inclusion is governed by
+ * `pages.includeDrivePrompt`, not this per-membership flag.
+ */
+export async function setAgentDriveIncludeContext(input: {
+  actor: AccessActor;
+  agentPageId: string;
+  driveId: string;
+  includeContext: boolean;
+}): Promise<{ ok: true; member: typeof driveAgentMembers.$inferSelect } | ServiceFailure> {
+  const { actor, agentPageId, driveId, includeContext } = input;
+
+  const [agentPage] = await db
+    .select({ id: pages.id, driveId: pages.driveId })
+    .from(pages)
+    .where(eq(pages.id, agentPageId))
+    .limit(1);
+
+  if (!agentPage) return { ok: false, status: 404, error: 'Agent page not found' };
+  if (agentPage.driveId === driveId) {
+    return { ok: false, status: 400, error: 'Home drive context is controlled by includeDrivePrompt, not this flag' };
+  }
+
+  const canManage =
+    (await canUserEditPage(actor, agentPageId)) ||
+    (await isDriveOwnerOrAdmin(actor, driveId));
+  if (!canManage) {
+    return { ok: false, status: 403, error: 'You cannot manage this agent membership' };
+  }
+
+  return db.transaction(async (tx) => {
+    const [current] = await tx
+      .select({ includeContext: driveAgentMembers.includeContext })
+      .from(driveAgentMembers)
+      .where(and(eq(driveAgentMembers.agentPageId, agentPageId), eq(driveAgentMembers.driveId, driveId)))
+      .limit(1);
+    if (!current) return { ok: false as const, status: 404, error: 'Membership not found' };
+    // [D-OW-33] carrying the drive's prompt into the agent loosens what its users read; turning it off restricts.
+    const lapsed = await checkDriveMayLoosen(tx, driveId, includeContext && !current.includeContext);
+    if (lapsed) return { ok: false as const, status: lapsed.status, error: lapsed.message, code: lapsed.code };
+
+    const [updated] = await tx
+      .update(driveAgentMembers)
+      .set({ includeContext })
+      .where(and(eq(driveAgentMembers.agentPageId, agentPageId), eq(driveAgentMembers.driveId, driveId)))
+      .returning();
+
+    if (!updated) return { ok: false as const, status: 404, error: 'Membership not found' };
+    return { ok: true as const, member: updated };
+  });
+}
+
+/** A Drizzle transaction handle, accepted alongside the module-level `db`. */
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * Revoke every non-home agent membership in `driveId` that was granted by
+ * `userId`. Called when that user is removed from the drive: the grant's
+ * authorization basis (`addedBy`) is gone, so the agent loses the access it
+ * inherited too. The agent's home drive is never touched (it can't be removed,
+ * and a home-drive membership has `pages.driveId === driveAgentMembers.driveId`).
+ *
+ * Accepts a transaction so it can run atomically with the member removal.
+ * Returns the agentPageIds whose membership was revoked (for audit logging).
+ */
+export async function revokeAgentMembershipsGrantedBy(
+  executor: Tx | typeof db,
+  driveId: string,
+  userId: string,
+): Promise<string[]> {
+  const rows = await executor
+    .select({ id: driveAgentMembers.id, agentPageId: driveAgentMembers.agentPageId })
+    .from(driveAgentMembers)
+    .innerJoin(pages, eq(driveAgentMembers.agentPageId, pages.id))
+    .where(and(
+      eq(driveAgentMembers.driveId, driveId),
+      eq(driveAgentMembers.addedBy, userId),
+      ne(pages.driveId, driveId),
+    ));
+
+  if (rows.length === 0) return [];
+
+  await executor
+    .delete(driveAgentMembers)
+    .where(inArray(driveAgentMembers.id, rows.map((r) => r.id)));
+
+  return rows.map((r) => r.agentPageId);
+}
+
+/**
+ * True when every grant in `sub` is matched (≥) by `sup` — i.e. role `sub` can
+ * see/do nothing role `sup` cannot. Pages `sub` grants nothing on impose no
+ * constraint.
+ */
+function customRoleSubset(sub: CustomRolePerms, sup: CustomRolePerms): boolean {
+  for (const [pageId, p] of Object.entries(sub)) {
+    if (!p.canView && !p.canEdit && !p.canShare) continue;
+    const s = sup[pageId];
+    if (!s) return false;
+    if ((p.canView && !s.canView) || (p.canEdit && !s.canEdit) || (p.canShare && !s.canShare)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Whether an agent's MEMBER-level grant (`agentCustomRoleId`) is still within the
+ * granter's current cap (`capCustomRoleId`), both at MEMBER rank. Lets recap skip
+ * an agent on a lateral/widening custom-role change (the agent's old role is a
+ * subset of the granter's new role) instead of needlessly revoking it.
+ *
+ * Only the custom-role-vs-custom-role case is compared precisely (a cheap matrix
+ * subset). Cases involving plain MEMBER (null) on either side are conservatively
+ * treated as NOT within: plain MEMBER spans every non-private page in the drive —
+ * a scope not expressed as a per-page matrix — so we fail closed (revoke) rather
+ * than enumerate the drive's pages on a security path.
+ */
+async function memberGrantWithinCap(
+  agentCustomRoleId: string | null,
+  capCustomRoleId: string | null,
+  driveId: string,
+): Promise<boolean> {
+  // Only "both plain MEMBER" is provably within without comparing matrices.
+  if (agentCustomRoleId === null || capCustomRoleId === null) {
+    return agentCustomRoleId === capCustomRoleId;
+  }
+  const [agentPerms, capPerms] = await Promise.all([
+    fetchCustomRolePermissions(agentCustomRoleId, driveId),
+    fetchCustomRolePermissions(capCustomRoleId, driveId),
+  ]);
+  // An unresolvable custom role resolves as plain MEMBER (drive-wide), which is
+  // not a provable subset of a scoped cap ⇒ fail closed.
+  if (!agentPerms || !capPerms) return false;
+  // A role with driveWidePermissions spans all non-private pages — not expressible
+  // as a per-page matrix — so fail closed (same rationale as plain MEMBER above).
+  if (agentPerms.driveWidePermissions || capPerms.driveWidePermissions) return false;
+  return customRoleSubset(agentPerms.permissions, capPerms.permissions);
+}
+
+/**
+ * Re-cap the agent memberships in `driveId` granted by `userId` when the user's
+ * access is downgraded, bringing every agent they granted down to exactly what
+ * they could grant today. Only ever caps DOWN — never widens an agent's reach,
+ * never leaves it with more than the downgraded granter.
+ *
+ * Agent access is bottlenecked by the granting user's access: a plain MEMBER
+ * agent membership now resolves to the same view a plain MEMBER *user* gets
+ * (non-private pages only — see `agent-permissions.ts`). For each non-home
+ * membership the user granted, with the granter now capped at MEMBER:
+ *  - role ADMIN ⇒ REDUCE to `{ role: 'MEMBER', customRoleId: <granter's cap> }`.
+ *    ADMIN is full access ⊋ any MEMBER cap, so this strictly narrows.
+ *  - role MEMBER, customRoleId === the granter's ⇒ leave (already exactly what
+ *    the granter could grant today).
+ *  - role MEMBER, customRoleId differs ⇒ keep ONLY if the agent's grant is
+ *    provably ⊆ the granter's new grant (`memberGrantWithinCap`) — e.g. the
+ *    granter moved to a *broader* custom role, so the agent still sits under
+ *    them. Otherwise REVOKE. We never rewrite a member row to a different role
+ *    (that could widen — a custom-role matrix is incomparable to the cap), and
+ *    we never revoke an agent that's still within the granter (no false revoke
+ *    on a lateral/widening change).
+ *
+ * No-op when the user can still grant ADMIN. Excludes the agent's home drive.
+ * Returns the affected agentPageIds (both reduced and revoked).
+ */
+export async function recapAgentMembershipsGrantedBy(
+  driveId: string,
+  userId: string,
+  options: {
+    /** Run inside this transaction (an org demotion recaps in the role change's transaction). */
+    executor?: Tx;
+    /** The granter's cap, when the caller already knows it; resolved from the database otherwise. */
+    granter?: { maxRole: AgentDriveRole; customRoleId: string | null };
+  } = {},
+): Promise<string[]> {
+  const executor = options.executor ?? db;
+  const granter = options.granter ?? await resolveGranterFacts(userId, driveId);
+  // Still able to grant ADMIN ⇒ nothing to cap down (we only ever cap downward).
+  if (granter.maxRole === 'ADMIN') return [];
+
+  const capCustomRoleId = granter.customRoleId ?? null;
+
+  const rows = await executor
+    .select({
+      id: driveAgentMembers.id,
+      agentPageId: driveAgentMembers.agentPageId,
+      role: driveAgentMembers.role,
+      customRoleId: driveAgentMembers.customRoleId,
+    })
+    .from(driveAgentMembers)
+    .innerJoin(pages, eq(driveAgentMembers.agentPageId, pages.id))
+    .where(and(
+      eq(driveAgentMembers.driveId, driveId),
+      eq(driveAgentMembers.addedBy, userId),
+      ne(pages.driveId, driveId),
+    ));
+
+  // ADMIN agents always exceed a MEMBER cap ⇒ reduce them to the cap.
+  const toReduce = rows.filter((r) => r.role === 'ADMIN');
+  // MEMBER agents whose custom role differs from the cap: keep iff provably within.
+  const memberMismatch = rows.filter(
+    (r) => r.role !== 'ADMIN' && (r.customRoleId ?? null) !== capCustomRoleId,
+  );
+  const withinCap = await Promise.all(
+    memberMismatch.map((r) =>
+      // Custom roles are not written by the caller's transaction: reading them outside it is safe.
+      memberGrantWithinCap(r.customRoleId ?? null, capCustomRoleId, driveId),
+    ),
+  );
+  const toRevoke = memberMismatch.filter((_, i) => !withinCap[i]);
+
+  if (toReduce.length > 0) {
+    await executor
+      .update(driveAgentMembers)
+      .set({ role: 'MEMBER', customRoleId: capCustomRoleId })
+      .where(inArray(driveAgentMembers.id, toReduce.map((r) => r.id)));
+  }
+  if (toRevoke.length > 0) {
+    await executor
+      .delete(driveAgentMembers)
+      .where(inArray(driveAgentMembers.id, toRevoke.map((r) => r.id)));
+  }
+
+  return [...toReduce, ...toRevoke].map((r) => r.agentPageId);
+}
+
+/**
+ * List the drives an agent can access: its membership rows plus its home drive
+ * (the home drive is always included, even if a legacy agent lacks a membership
+ * row for it).
+ */
+export async function listAgentDrives(agentPageId: string): Promise<AgentDriveMembership[]> {
+  const [agentPage] = await db
+    .select({ driveId: pages.driveId })
+    .from(pages)
+    .where(eq(pages.id, agentPageId))
+    .limit(1);
+
+  if (!agentPage) return [];
+
+  const rows = await db
+    .select({
+      driveId: driveAgentMembers.driveId,
+      role: driveAgentMembers.role,
+      customRoleId: driveAgentMembers.customRoleId,
+      includeContext: driveAgentMembers.includeContext,
+      driveName: drives.name,
+      driveSlug: drives.slug,
+    })
+    .from(driveAgentMembers)
+    .innerJoin(drives, eq(driveAgentMembers.driveId, drives.id))
+    .where(eq(driveAgentMembers.agentPageId, agentPageId));
+
+  const result: AgentDriveMembership[] = rows.map((r) => ({
+    driveId: r.driveId,
+    driveName: r.driveName,
+    driveSlug: r.driveSlug,
+    role: r.role,
+    customRoleId: r.customRoleId ?? null,
+    isHome: r.driveId === agentPage.driveId,
+    includeContext: r.includeContext,
+  }));
+
+  if (!result.some((r) => r.isHome)) {
+    const [home] = await db
+      .select({ id: drives.id, name: drives.name, slug: drives.slug })
+      .from(drives)
+      .where(eq(drives.id, agentPage.driveId))
+      .limit(1);
+    if (home) {
+      result.unshift({
+        driveId: home.id,
+        driveName: home.name,
+        driveSlug: home.slug,
+        role: 'ADMIN',
+        customRoleId: null,
+        isHome: true,
+        // The home drive's own drivePrompt is handled separately by
+        // `pages.includeDrivePrompt`, not this per-membership flag.
+        includeContext: false,
+      });
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Non-home drives this agent should carry into its system prompt: every
+ * `driveAgentMembers` row with `includeContext = true`, paired with that
+ * drive's `drivePrompt`. Excludes the agent's home drive — its own prompt
+ * inclusion is governed by `pages.includeDrivePrompt`, not this flag.
+ * Rows with an empty/absent `drivePrompt` are dropped (nothing to inject).
+ */
+export async function getAgentContextDrives(
+  agentPageId: string,
+): Promise<Array<{ driveId: string; driveName: string; drivePrompt: string }>> {
+  const [agentPage] = await db
+    .select({ driveId: pages.driveId })
+    .from(pages)
+    .where(eq(pages.id, agentPageId))
+    .limit(1);
+
+  if (!agentPage) return [];
+
+  const rows = await db
+    .select({
+      driveId: driveAgentMembers.driveId,
+      driveName: drives.name,
+      drivePrompt: drives.drivePrompt,
+    })
+    .from(driveAgentMembers)
+    .innerJoin(drives, eq(driveAgentMembers.driveId, drives.id))
+    .where(and(
+      eq(driveAgentMembers.agentPageId, agentPageId),
+      eq(driveAgentMembers.includeContext, true),
+      ne(driveAgentMembers.driveId, agentPage.driveId),
+    ));
+
+  return rows
+    .filter((r): r is typeof r & { drivePrompt: string } => !!r.drivePrompt?.trim())
+    .map((r) => ({ driveId: r.driveId, driveName: r.driveName, drivePrompt: r.drivePrompt }));
+}

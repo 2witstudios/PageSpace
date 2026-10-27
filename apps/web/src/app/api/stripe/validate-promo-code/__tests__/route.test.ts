@@ -46,9 +46,23 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
+    api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    security: { warn: vi.fn() },
+  },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
+}));
+
 // Import after mocks
 import { POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -414,6 +428,20 @@ describe('POST /api/stripe/validate-promo-code', () => {
         duration: 'repeating',
         durationInMonths: 3,
       });
+    });
+
+    it('should log audit event on successful promo validation', async () => {
+      const request = new Request('https://example.com/api/stripe/validate-promo-code', {
+        method: 'POST',
+        body: JSON.stringify({ code: 'SAVE20', priceId: 'price_123' }),
+      }) as unknown as import('next/server').NextRequest;
+
+      await POST(request);
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ eventType: 'data.read', userId: 'user_123', resourceType: 'promo_code', resourceId: 'SAVE20' })
+      );
     });
   });
 });

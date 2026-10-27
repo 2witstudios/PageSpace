@@ -1,6 +1,4 @@
 /**
- * @scaffold - mocking ORM chains until repository seam is introduced
- *
  * Contract tests for rollback-service.ts
  *
  * Tests the rollback service's observable contracts:
@@ -8,10 +6,6 @@
  * - executeRollback: activity + user -> database mutation + audit log
  * - getPageVersionHistory: filters -> filtered activities
  * - getUserRetentionDays: user tier -> retention days
- *
- * Per rubric §4: Since this service uses Drizzle directly without a repository
- * abstraction, we mock at the db boundary. Consider refactoring to introduce
- * a repository seam for better testability.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
@@ -24,8 +18,9 @@ import {
   type ActivityLogForRollback,
 } from '../rollback-service';
 
-// Mock the database at the boundary
-vi.mock('@pagespace/db', () => {
+// @scaffold — ORM chain mock: rollback-service has no repository seam yet.
+// Replace with a rollback-repository seam when one is introduced.
+vi.mock('@pagespace/db/db', () => {
   const mockDb = {
     select: vi.fn(),
     update: vi.fn(),
@@ -63,46 +58,65 @@ vi.mock('@pagespace/db', () => {
     where: vi.fn().mockResolvedValue(undefined),
   };
   mockDb.delete.mockReturnValue(deleteChain);
-
   return {
     db: mockDb,
-    activityLogs: { id: 'id' },
-    pages: { id: 'id' },
-    drives: { id: 'id' },
-    driveMembers: { id: 'id' },
-    driveRoles: { id: 'id' },
-    pagePermissions: { id: 'id' },
-    users: { id: 'id', subscriptionTier: 'subscriptionTier' },
-    chatMessages: { id: 'id' },
-    eq: vi.fn((a, b) => ({ field: a, value: b })),
-    and: vi.fn((...args) => args),
-    desc: vi.fn((a) => ({ field: a, direction: 'desc' })),
-    gte: vi.fn((a, b) => ({ field: a, op: 'gte', value: b })),
-    lte: vi.fn((a, b) => ({ field: a, op: 'lte', value: b })),
-    count: vi.fn(() => 'count'),
   };
 });
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((a, b) => ({ field: a, value: b })),
+  and: vi.fn((...args) => args),
+  desc: vi.fn((a) => ({ field: a, direction: 'desc' })),
+  gte: vi.fn((a, b) => ({ field: a, op: 'gte', value: b })),
+  lte: vi.fn((a, b) => ({ field: a, op: 'lte', value: b })),
+  count: vi.fn(() => 'count'),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'id', subscriptionTier: 'subscriptionTier' },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id' },
+  drives: { id: 'id' },
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
+  activityLogs: { id: 'id' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: { id: 'id' },
+  driveRoles: { id: 'id' },
+  pagePermissions: { id: 'id' },
+}));
 
 // Mock permission checks
-vi.mock('@pagespace/lib/permissions', () => ({
-  canUserRollback: vi.fn(),
-  isRollbackableOperation: vi.fn(),
+// POL-2: a re-entering grant or member asks the org's guests policy (proven against real Postgres in
+// guest-policy-reentry.integration.test.ts); these tests are about drives with no org, which it admits.
+vi.mock('@pagespace/lib/permissions/guest-holds', () => ({ admitReentry: vi.fn(async () => ({ outcome: 'admit' })) }));
+// [D-OW-33] the lapse guard (proven against real Postgres in org-lapse-loosening.integration.test.ts): these drives
+// have no org, so it runs the write with the handle it is given.
+vi.mock('@pagespace/lib/permissions/org-lapse-guard', () => ({
+  guardDriveAccess: vi.fn(async (handle: unknown, _driveId: string, _scope: unknown, write: (tx: unknown) => Promise<unknown>) => write(handle)),
+}));
+
+vi.mock('@pagespace/lib/permissions/rollback-permissions', () => ({
+    canUserRollback: vi.fn(),
+    isRollbackableOperation: vi.fn(),
 }));
 
 // Mock activity logger
-vi.mock('@pagespace/lib/monitoring', () => ({
-  logRollbackActivity: vi.fn(),
-  getActorInfo: vi.fn().mockResolvedValue({
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+    logRollbackActivity: vi.fn(),
+    getActorInfo: vi.fn().mockResolvedValue({
     actorEmail: 'test@example.com',
     actorDisplayName: 'Test User',
   }),
-  createChangeGroupId: vi.fn(() => 'change-group-1'),
-  inferChangeGroupType: vi.fn(() => 'user'),
+}));
+vi.mock('@pagespace/lib/monitoring/change-group', () => ({
+    createChangeGroupId: vi.fn(() => 'change-group-1'),
+    inferChangeGroupType: vi.fn(() => 'user'),
 }));
 
 // Mock loggers
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -110,25 +124,35 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  readPageContent: vi.fn(),
-  computePageStateHash: vi.fn(() => 'state-hash'),
-  hashWithPrefix: vi.fn(() => 'content-ref'),
-  createPageVersion: vi.fn().mockResolvedValue({
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/services/page-content-store', () => ({
+    readPageContent: vi.fn(),
+}));
+vi.mock('@pagespace/lib/services/page-version-service', () => ({
+    computePageStateHash: vi.fn(() => 'state-hash'),
+    createPageVersion: vi.fn().mockResolvedValue({
     id: 'version-123',
     contentRef: 'content-ref',
     contentSize: 42,
   }),
+}));
+vi.mock('@pagespace/lib/utils/hash-utils', () => ({
+    hashWithPrefix: vi.fn(() => 'content-ref'),
 }));
 
 vi.mock('@/services/api/page-mention-service', () => ({
   syncMentions: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { db } from '@pagespace/db';
-import { canUserRollback, isRollbackableOperation } from '@pagespace/lib/permissions';
-import { logRollbackActivity } from '@pagespace/lib/monitoring';
+import { db } from '@pagespace/db/db';
+import { canUserRollback, isRollbackableOperation } from '@pagespace/lib/permissions/rollback-permissions';
+import { logRollbackActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { ORG_LAPSED_MESSAGE } from '@pagespace/lib/organizations/status-core';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
-/** Matches the mock shape defined in vi.mock('@pagespace/db') above */
+/** Matches the mock shape defined in vi.mock('@pagespace/db/db') above */
 type MockFn = ReturnType<typeof vi.fn>;
 interface MockDb {
   select: MockFn;
@@ -187,6 +211,8 @@ const createMockActivity = (overrides: Partial<ActivityLogForRollback> = {}): Ac
 describe('rollback-service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Grant and member rollbacks run in a transaction of their own when the caller passes none.
+    mockDb.transaction.mockImplementation(async (fn: (tx: typeof mockDb) => Promise<unknown>) => fn(mockDb));
   });
 
   // ============================================
@@ -271,7 +297,7 @@ describe('rollback-service', () => {
         }),
       });
 
-      const result = await previewRollback('nonexistent', mockUserId, 'page');
+      const result = await previewRollback('nonexistent', credentialActor(mockUserId, null), 'page');
 
       expect(result.canExecute).toBe(false);
       expect(result.reason).toBe('Activity not found');
@@ -289,7 +315,7 @@ describe('rollback-service', () => {
       });
       mockIsRollbackableOperation.mockReturnValue(false);
 
-      const result = await previewRollback(mockActivityId, mockUserId, 'page');
+      const result = await previewRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       expect(result.canExecute).toBe(false);
       expect(result.reason).toContain("Cannot rollback 'create'");
@@ -309,7 +335,7 @@ describe('rollback-service', () => {
       });
       mockIsRollbackableOperation.mockReturnValue(true);
 
-      const result = await previewRollback(mockActivityId, mockUserId, 'page');
+      const result = await previewRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       expect(result.canExecute).toBe(false);
       expect(result.reason).toBe('No values to restore');
@@ -330,7 +356,7 @@ describe('rollback-service', () => {
         reason: 'You need edit permission',
       });
 
-      const result = await previewRollback(mockActivityId, mockUserId, 'page');
+      const result = await previewRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       expect(result.canExecute).toBe(false);
       expect(result.reason).toBe('You need edit permission');
@@ -364,7 +390,7 @@ describe('rollback-service', () => {
       mockIsRollbackableOperation.mockReturnValue(true);
       mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
-      const result = await previewRollback(mockActivityId, mockUserId, 'page');
+      const result = await previewRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       expect(result.canExecute).toBe(true);
       expect(result.targetValues).toEqual(mockActivity.previousValues);
@@ -398,7 +424,7 @@ describe('rollback-service', () => {
       mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
       // Without force=true, conflict detection blocks rollback
-      const result = await previewRollback(mockActivityId, mockUserId, 'page');
+      const result = await previewRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       expect(result.canExecute).toBe(false);
       expect(result.hasConflict).toBe(true);
@@ -434,7 +460,7 @@ describe('rollback-service', () => {
       mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
       // With force=true, rollback proceeds with warning
-      const result = await previewRollback(mockActivityId, mockUserId, 'page', { force: true });
+      const result = await previewRollback(mockActivityId, credentialActor(mockUserId, null), 'page', { force: true });
 
       expect(result.canExecute).toBe(true);
       expect(result.hasConflict).toBe(true);
@@ -462,10 +488,62 @@ describe('rollback-service', () => {
       mockIsRollbackableOperation.mockReturnValue(true);
       mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
-      const result = await previewRollback(mockActivityId, mockUserId, 'page');
+      const result = await previewRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       expect(result.canExecute).toBe(false);
       expect(result.reason).toBe('Resource no longer exists');
+    });
+
+    it('does not flag a false conflict on userScopedAccess when nothing else changed (agent resourceType)', async () => {
+      // Regression: the 'agent' preview branch's currentAgent select used to omit
+      // includePageTree/pageTreeScope/toolExposureMode/userScopedAccess, so
+      // currentValues[field] was always undefined for them — getConflictFields
+      // compared activity.newValues.userScopedAccess (a real boolean) against
+      // that undefined and always flagged a conflict, even when the DB value
+      // matched exactly and nothing had changed since the activity.
+      const mockActivity = createMockActivity({
+        operation: 'agent_config_update',
+        resourceType: 'agent',
+        pageId: mockPageId,
+        previousValues: { userScopedAccess: false },
+        newValues: { userScopedAccess: true },
+        updatedFields: ['userScopedAccess'],
+      });
+      const mockCurrentAgent = {
+        systemPrompt: null,
+        enabledTools: null,
+        aiProvider: null,
+        aiModel: null,
+        includeDrivePrompt: false,
+        agentDefinition: null,
+        visibleToGlobalAssistant: true,
+        includePageTree: false,
+        pageTreeScope: 'children',
+        toolExposureMode: 'upfront',
+        userScopedAccess: true, // matches activity.newValues — no actual conflict
+      };
+
+      let callCount = 0;
+      mockDb.select.mockImplementation(() => ({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockImplementation(() => {
+              callCount++;
+              if (callCount === 1) return Promise.resolve([mockActivity]);
+              return Promise.resolve([mockCurrentAgent]);
+            }),
+          }),
+        }),
+      }));
+
+      mockIsRollbackableOperation.mockReturnValue(true);
+      mockCanUserRollback.mockResolvedValue({ canRollback: true });
+
+      const result = await previewRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
+
+      expect(result.hasConflict).toBe(false);
+      expect(result.conflictFields).toEqual([]);
+      expect(result.canExecute).toBe(true);
     });
   });
 
@@ -483,7 +561,7 @@ describe('rollback-service', () => {
         }),
       });
 
-      const result = await executeRollback(mockActivityId, mockUserId, 'page');
+      const result = await executeRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       expect(result.success).toBe(false);
       expect(result.message).toBe('Activity not found');
@@ -531,27 +609,65 @@ describe('rollback-service', () => {
       mockIsRollbackableOperation.mockReturnValue(true);
       mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
-      const result = await executeRollback(mockActivityId, mockUserId, 'page');
+      const result = await executeRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       expect(result.success).toBe(true);
       expect(result.message).toBe('Change undone');
       expect(result.restoredValues).toEqual({ title: 'Old Title' });
 
       // Verify audit log was called with correct payload
-      expect(logRollbackActivity).toHaveBeenCalledWith(
-        mockUserId,
-        mockActivityId,
-        expect.objectContaining({
-          resourceType: 'page',
-          resourceId: mockPageId,
-        }),
-        expect.objectContaining({
-          actorEmail: 'test@example.com',
-        }),
-        expect.objectContaining({
-          restoredValues: { title: 'Old Title' },
-        })
+      const logArgs = vi.mocked(logRollbackActivity).mock.calls[0];
+      expect(logArgs[0]).toBe(mockUserId);
+      expect(logArgs[1]).toBe(mockActivityId);
+      expect(logArgs[2].resourceType).toBe('page');
+      expect(logArgs[2].resourceId).toBe(mockPageId);
+      expect(logArgs[2].driveId).toBe(mockDriveId);
+      expect(logArgs[2].pageId).toBe(mockPageId);
+      expect(logArgs[3]).toEqual({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' });
+      expect((logArgs[4] as Record<string, unknown>).restoredValues).toEqual({ title: 'Old Title' });
+
+      // [D-OW-33] review P1-2: the page branch runs under the drive lapse guard with THIS page's privacy in scope.
+      const { guardDriveAccess } = await import('@pagespace/lib/permissions/org-lapse-guard');
+      expect(guardDriveAccess).toHaveBeenCalledWith(
+        expect.anything(),
+        mockDriveId,
+        { members: false, grants: false, agents: false, tokens: false, pages: [mockPageId] },
+        expect.any(Function),
       );
+    });
+
+    it('SEAT-9 (partial) [D-OW-33] review P1-2: a page undo the lapse guard refuses (e.g. making a private page public while lapsed) fails with the lapse copy and writes nothing', async () => {
+      // The guard (mocked to refuse here) judges the write; the activity's shape only has to pass the conflict check.
+      const mockActivity = createMockActivity({
+        previousValues: { title: 'Old Title' },
+        newValues: { title: 'New Title' },
+        updatedFields: ['title'],
+      });
+      let selectCallCount = 0;
+      mockDb.select.mockImplementation(() => ({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockImplementation(() => {
+              selectCallCount++;
+              if (selectCallCount === 1 || selectCallCount === 4) return Promise.resolve([mockActivity]);
+              if (selectCallCount === 2) return Promise.resolve([{ title: 'New Title', content: '<p>New content</p>', parentId: null, position: 0 }]);
+              return Promise.resolve([{ id: mockDriveId, isTrashed: false }]);
+            }),
+          }),
+        }),
+      }));
+      mockIsRollbackableOperation.mockReturnValue(true);
+      mockCanUserRollback.mockResolvedValue({ canRollback: true });
+      const { guardDriveAccess } = await import('@pagespace/lib/permissions/org-lapse-guard');
+      // OrgLapsedError carries the lapse copy as its message; the guard refuses BEFORE running the write here.
+      vi.mocked(guardDriveAccess).mockImplementationOnce(async () => { throw new Error(ORG_LAPSED_MESSAGE); });
+
+      const result = await executeRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
+
+      expect(result.success).toBe(false);
+      expect(result.message).toBe(ORG_LAPSED_MESSAGE);
+      expect(mockDb.update).not.toHaveBeenCalled();
+      expect(guardDriveAccess).toHaveBeenCalledWith(expect.anything(), mockDriveId, expect.objectContaining({ pages: [mockPageId] }), expect.any(Function));
     });
 
     it('uses contentSnapshot when available for page content', async () => {
@@ -598,14 +714,11 @@ describe('rollback-service', () => {
       mockIsRollbackableOperation.mockReturnValue(true);
       mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
-      const result = await executeRollback(mockActivityId, mockUserId, 'page');
+      const result = await executeRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       expect(result.success).toBe(true);
-      expect(mockUpdateSet).toHaveBeenCalledWith(
-        expect.objectContaining({
-          content: '<p>Snapshot content</p>',
-        })
-      );
+      const updateArg = mockUpdateSet.mock.calls[0][0] as Record<string, unknown>;
+      expect(updateArg.content).toBe('<p>Snapshot content</p>');
     });
 
     it('returns failure with error message on database error', async () => {
@@ -647,7 +760,7 @@ describe('rollback-service', () => {
       mockIsRollbackableOperation.mockReturnValue(true);
       mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
-      const result = await executeRollback(mockActivityId, mockUserId, 'page');
+      const result = await executeRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       expect(result.success).toBe(false);
       expect(result.message).toBe('Database connection failed');
@@ -688,7 +801,7 @@ describe('rollback-service', () => {
       mockIsRollbackableOperation.mockReturnValue(true);
       mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
-      const result = await executeRollback(mockActivityId, mockUserId, 'page');
+      const result = await executeRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       expect(result.success).toBe(false);
       expect(result.message).toBe('No values to restore');
@@ -738,13 +851,44 @@ describe('rollback-service', () => {
       mockIsRollbackableOperation.mockReturnValue(true);
       mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
-      const result = await executeRollback(mockActivityId, mockUserId, 'page');
+      const result = await executeRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       expect(result.success).toBe(true);
       expect(db.delete).toHaveBeenCalled();
-      expect(result.restoredValues).toEqual(
-        expect.objectContaining({ deleted: true })
-      );
+      expect((result.restoredValues as Record<string, unknown>).deleted).toBe(true);
+    });
+
+    it('SEAT-9 (partial) [D-OW-33] undoing a revoke runs under the drive lapse guard; a refusal (lapsed org) fails the rollback with the lapse copy', async () => {
+      const mockActivity = createMockActivity({
+        resourceType: 'permission',
+        operation: 'permission_revoke',
+        previousValues: { canView: true, canEdit: false, canShare: false, canDelete: false },
+        metadata: { targetUserId: 'target_user' },
+      });
+      let selectCallCount = 0;
+      mockDb.select.mockImplementation(() => ({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockImplementation(() => {
+              selectCallCount++;
+              return Promise.resolve(selectCallCount === 1 || selectCallCount === 3 ? [mockActivity] : []);
+            }),
+          }),
+        }),
+      }));
+      mockDb.insert.mockReturnValue({ values: vi.fn().mockResolvedValue(undefined) });
+      mockIsRollbackableOperation.mockReturnValue(true);
+      mockCanUserRollback.mockResolvedValue({ canRollback: true });
+      const { guardDriveAccess } = await import('@pagespace/lib/permissions/org-lapse-guard');
+      // OrgLapsedError carries the SEAT-9 copy as its message; the rollback reports that message.
+      vi.mocked(guardDriveAccess).mockImplementationOnce(async () => { throw new Error(ORG_LAPSED_MESSAGE); });
+
+      const result = await executeRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
+
+      // Scoped to the person the revoke was about (review P3).
+      expect(guardDriveAccess).toHaveBeenCalledWith(expect.anything(), mockDriveId, { users: ['target_user'] }, expect.any(Function));
+      expect(result.success).toBe(false);
+      expect(result.message).toBe(ORG_LAPSED_MESSAGE);
     });
 
     it('recreates permission on permission_revoke rollback', async () => {
@@ -783,18 +927,15 @@ describe('rollback-service', () => {
       mockIsRollbackableOperation.mockReturnValue(true);
       mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
-      const result = await executeRollback(mockActivityId, mockUserId, 'page');
+      const result = await executeRollback(mockActivityId, credentialActor(mockUserId, null), 'page');
 
       expect(result.success).toBe(true);
       expect(db.insert).toHaveBeenCalled();
-      expect(mockInsertValues).toHaveBeenCalledWith(
-        expect.objectContaining({
-          canView: true,
-          canEdit: true,
-          canShare: false,
-          canDelete: false,
-        })
-      );
+      const insertArg = mockInsertValues.mock.calls[0][0] as Record<string, unknown>;
+      expect(insertArg.canView).toBe(true);
+      expect(insertArg.canEdit).toBe(true);
+      expect(insertArg.canShare).toBe(false);
+      expect(insertArg.canDelete).toBe(false);
     });
   });
 
@@ -831,21 +972,7 @@ describe('rollback-service', () => {
       expect(result).toBe(30);
     });
 
-    it('returns 90 days for founder tier', async () => {
-      mockDb.select.mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            limit: vi.fn().mockResolvedValue([{ subscriptionTier: 'founder' }]),
-          }),
-        }),
-      });
-
-      const result = await getUserRetentionDays(mockUserId);
-
-      expect(result).toBe(90);
-    });
-
-    it('returns -1 (unlimited) for business tier', async () => {
+    it('rejects a retired personal Business cache as Free', async () => {
       mockDb.select.mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
@@ -856,7 +983,7 @@ describe('rollback-service', () => {
 
       const result = await getUserRetentionDays(mockUserId);
 
-      expect(result).toBe(-1);
+      expect(result).toBe(7);
     });
 
     it('returns free tier default when user not found', async () => {

@@ -1,33 +1,41 @@
-import React, { useState, useEffect } from 'react';
-import { CompactToolCallRenderer } from './tool-calls';
+import React from 'react';
+import { RotateCw } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { CompactToolCallRenderer, CompactToolRunGroup } from './tool-calls';
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { MessageActionButtons } from './MessageActionButtons';
 import { MessageEditor } from './MessageEditor';
 import { DeleteMessageDialog } from './DeleteMessageDialog';
 import { CompactTodoListMessage } from './CompactTodoListMessage';
-import { useSocket } from '@/hooks/useSocket';
 import { ErrorBoundary } from '@/components/ai/shared/ErrorBoundary';
-import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { useGroupedParts } from './useGroupedParts';
+import { useMessageRendererState } from './useMessageRendererState';
 import type { ConversationMessage, TextPart } from './message-types';
-import { isTextGroupPart, isProcessedToolPart, isFileGroupPart } from './message-types';
+import { isTextGroupPart, isProcessedToolPart, isFileGroupPart, isCommandExecutionPart, isSpendFallbackPart, isToolRunGroupPart } from './message-types';
+import { CommandExecutionIndicator } from '@/components/messages/CommandExecutionIndicator';
+import { SpendFallbackNotice } from '@/components/messages/SpendFallbackNotice';
 import { ImageMessageContent } from './ImageMessageContent';
+import { SpokenTurnGlyph, isSpokenTurn } from './SpokenTurnGlyph';
 import styles from './CompactMessageRenderer.module.css';
 
 interface CompactTextBlockProps {
   parts: TextPart[];
   role: 'user' | 'assistant' | 'system';
+  senderName?: string;
   createdAt?: Date;
   editedAt?: Date | null;
   onEdit?: () => void;
   onDelete?: () => void;
   onRetry?: () => void;
+  /** A retry is already in flight — see MessageActionButtons.retryDisabled. */
+  retryDisabled?: boolean;
   onUndoFromHere?: () => void;
   isEditing?: boolean;
   onSaveEdit?: (newContent: string) => Promise<void>;
   onCancelEdit?: () => void;
   /** Whether this message is currently being streamed (for progressive markdown rendering) */
   isStreaming?: boolean;
+  /** Turn was spoken into a live voice call, not typed. */
+  spoken?: boolean;
 }
 
 /**
@@ -37,16 +45,19 @@ interface CompactTextBlockProps {
 const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
   parts,
   role,
+  senderName,
   createdAt,
   editedAt,
   onEdit,
   onDelete,
   onRetry,
+  retryDisabled = false,
   onUndoFromHere,
   isEditing,
   onSaveEdit,
   onCancelEdit,
-  isStreaming = false
+  isStreaming = false,
+  spoken = false
 }) => {
   const content = parts.map(part => part.text).join('');
 
@@ -55,14 +66,14 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
   return (
     <div
       className={`group relative text-xs mb-1 min-w-0 max-w-full ${role === 'user'
-          ? 'p-2 rounded-md bg-primary/10 dark:bg-accent/20 ml-2'
+          ? 'p-2 rounded-md bg-primary-soft ml-2'
           : ''
         }`}
     >
       {role === 'user' && (
         <div className="flex items-center mb-0.5">
           <div className="text-xs font-medium text-primary dark:text-primary">
-            You
+            {senderName}
           </div>
         </div>
       )}
@@ -79,23 +90,29 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
       ) : (
         <>
           <div className={`text-gray-900 dark:text-gray-100 prose prose-xs dark:prose-invert min-w-0 max-w-full break-words ${styles.compactProseContent}`}>
-            <StreamingMarkdown content={content} isStreaming={isStreaming} />
+            <StreamingMarkdown
+              content={content}
+              isStreaming={isStreaming}
+              renderHtmlAsText={role === 'user'}
+            />
           </div>
           {/* Always show footer with buttons; timestamp only when createdAt exists */}
           <div className="flex items-center justify-between mt-1">
-            <div className="text-[10px] text-gray-500">
+            <div className="flex items-center gap-1 text-[10px] text-gray-500">
               {createdAt && (
                 <>
                   {new Date(createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   {editedAt && <span className="ml-1">(edited)</span>}
                 </>
               )}
+              {spoken && <SpokenTurnGlyph />}
             </div>
             {onEdit && onDelete && !isEditing && (
               <MessageActionButtons
                 onEdit={onEdit}
                 onDelete={onDelete}
                 onRetry={onRetry}
+                retryDisabled={retryDisabled}
                 onUndoFromHere={onUndoFromHere}
                 compact
               />
@@ -114,6 +131,11 @@ interface CompactMessageRendererProps {
   onEdit?: (messageId: string, newContent: string) => Promise<void>;
   onDelete?: (messageId: string) => Promise<void>;
   onRetry?: (messageId: string) => void;
+  /**
+   * A retry is already in flight for this conversation. Passed down to the retry affordances
+   * only — a second retry regenerates a second time and bills for it.
+   */
+  retryDisabled?: boolean;
   onUndoFromHere?: (messageId: string) => void;
   onTaskUpdate?: (taskId: string, newStatus: 'pending' | 'in_progress' | 'completed' | 'blocked') => void;
   isLastAssistantMessage?: boolean;
@@ -125,155 +147,55 @@ interface CompactMessageRendererProps {
 /**
  * Compact message renderer for sidebar - optimized for narrow width.
  * Supports both standard messages and todo_list messages with real-time socket updates.
+ *
+ * No find-in-conversation highlighting here by design — that feature only exists in
+ * the full MessageRenderer (main chat view); the sidebar has no find-in-conversation
+ * UI, so there is no isHighlighted/isCurrentMatch prop to plumb through.
  */
 export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = React.memo(({
   message,
   onEdit,
   onDelete,
   onRetry,
+  retryDisabled = false,
   onUndoFromHere,
   onTaskUpdate,
   isLastAssistantMessage = false,
   isLastUserMessage = false,
   isStreaming = false
 }) => {
-  const [isEditing, setIsEditing] = useState(false);
-  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
-  const canRetry = Boolean(onRetry) && (isLastAssistantMessage || isLastUserMessage);
-
-  // ============================================
-  // Todo List State & Socket (only for todo_list messages)
-  // ============================================
-  const [tasks, setTasks] = useState<Array<{
-    id: string;
-    title: string;
-    status: 'pending' | 'in_progress' | 'completed' | 'blocked';
-    priority: 'low' | 'medium' | 'high';
-    position: number;
-    updatedAt?: Date;
-  }>>([]);
-  const [taskList, setTaskList] = useState<{
-    id: string;
-    title: string;
-    description?: string;
-    status: string;
-    createdAt?: Date;
-    updatedAt?: Date;
-  } | null>(null);
-  const [isLoadingTasks, setIsLoadingTasks] = useState(false);
-
-  // Socket connection (singleton pattern) - only used for todo_list messages
-  const socket = useSocket();
-
-  const loadTasksForMessage = async (messageId: string) => {
-    setIsLoadingTasks(true);
-    try {
-      const response = await fetchWithAuth(`/api/ai/tasks/by-message/${messageId}`);
-      if (response.ok) {
-        const data = await response.json();
-        setTasks(data.tasks || []);
-        setTaskList(data.taskList);
-      } else {
-        console.error('Failed to load tasks for message:', messageId);
-      }
-    } catch (error) {
-      console.error('Error loading tasks:', error);
-    } finally {
-      setIsLoadingTasks(false);
-    }
-  };
-
-  // Load tasks for todo_list messages
-  useEffect(() => {
-    if (message.messageType === 'todo_list' && message.id) {
-      loadTasksForMessage(message.id);
-    }
-  }, [message.messageType, message.id]);
-
-  // Listen for real-time task updates
-  useEffect(() => {
-    if (!socket || message.messageType !== 'todo_list') return;
-
-    const handleTaskUpdate = (payload: {
-      taskId: string;
-      data: { newStatus: 'pending' | 'in_progress' | 'completed' | 'blocked' };
-    }) => {
-      const taskInOurMessage = tasks.find(task => task.id === payload.taskId);
-      if (taskInOurMessage) {
-        setTasks(prevTasks =>
-          prevTasks.map(task =>
-            task.id === payload.taskId
-              ? { ...task, status: payload.data.newStatus, updatedAt: new Date() }
-              : task
-          )
-        );
-      }
-    };
-
-    const handleTaskListUpdate = (payload: { taskListId: string }) => {
-      if (taskList && payload.taskListId === taskList.id) {
-        loadTasksForMessage(message.id);
-      }
-    };
-
-    socket.on('task:task_updated', handleTaskUpdate);
-    socket.on('task:task_list_created', handleTaskListUpdate);
-
-    return () => {
-      socket.off('task:task_updated', handleTaskUpdate);
-      socket.off('task:task_list_created', handleTaskListUpdate);
-    };
-  }, [socket, message.messageType, message.id, tasks, taskList]);
-
-  const handleTaskStatusUpdate = async (taskId: string, newStatus: 'pending' | 'in_progress' | 'completed' | 'blocked') => {
-    try {
-      await patch(`/api/ai/tasks/${taskId}/status`, { status: newStatus });
-      setTasks(prevTasks =>
-        prevTasks.map(task =>
-          task.id === taskId ? { ...task, status: newStatus, updatedAt: new Date() } : task
-        )
-      );
-      onTaskUpdate?.(taskId, newStatus);
-    } catch (error) {
-      console.error('Error updating task:', error);
-    }
-  };
-
-  // ============================================
-  // Standard Message Rendering
-  // ============================================
-  const groupedParts = useGroupedParts(message.parts);
-
-  const createdAt = message.createdAt;
-  const editedAt = message.editedAt;
-
-  const handleSaveEdit = async (newContent: string) => {
-    if (onEdit) {
-      await onEdit(message.id, newContent);
-      setIsEditing(false);
-    }
-  };
-
-  const handleDelete = async () => {
-    if (onDelete) {
-      setIsDeleting(true);
-      try {
-        await onDelete(message.id);
-        setShowDeleteDialog(false);
-      } catch (error) {
-        console.error('Failed to delete message:', error);
-      } finally {
-        setIsDeleting(false);
-      }
-    }
-  };
-
-  const handleRetry = () => {
-    if (onRetry && canRetry) {
-      onRetry(message.id);
-    }
-  };
+  const {
+    user,
+    isEditing,
+    setIsEditing,
+    showDeleteDialog,
+    setShowDeleteDialog,
+    isDeleting,
+    canRetry,
+    tasks,
+    taskList,
+    isLoadingTasks,
+    handleTaskStatusUpdate,
+    groupedParts,
+    getToolCallOpen,
+    setToolCallOpen,
+    hasToolCalls,
+    isInterrupted,
+    hasNonEmptyTextBlock,
+    createdAt,
+    editedAt,
+    handleSaveEdit,
+    handleDelete,
+    handleRetry,
+  } = useMessageRendererState({
+    message,
+    onEdit,
+    onDelete,
+    onRetry,
+    onTaskUpdate,
+    isLastAssistantMessage,
+    isLastUserMessage,
+  });
 
   // ============================================
   // Render todo_list messages
@@ -333,11 +255,9 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
   // ============================================
   // Render standard messages
   // ============================================
-  const hasToolCalls = groupedParts.some(g => isProcessedToolPart(g));
-
   return (
     <>
-      <div key={message.id} className="mb-1 min-w-0 max-w-full">
+      <div key={message.id} data-testid="chat-message" data-role={message.role} data-message-id={message.id} className="mb-1 min-w-0 max-w-full">
         {groupedParts.map((group, index) => {
           if (isTextGroupPart(group)) {
             const isLastTextBlock = index === groupedParts.length - 1;
@@ -347,20 +267,19 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
                 key={`${message.id}-text-${index}`}
                 parts={group.parts}
                 role={message.role as 'user' | 'assistant' | 'system'}
+                senderName={message.userName ?? user?.name ?? 'Unknown'}
                 createdAt={isLastTextBlock ? createdAt : undefined}
                 editedAt={isLastTextBlock ? editedAt : undefined}
                 onEdit={onEdit ? () => setIsEditing(true) : undefined}
                 onDelete={onDelete ? () => setShowDeleteDialog(true) : undefined}
                 onRetry={canRetry ? handleRetry : undefined}
-                onUndoFromHere={
-                  message.role === 'assistant' && hasToolCalls && onUndoFromHere
-                    ? () => onUndoFromHere(message.id)
-                    : undefined
-                }
+                retryDisabled={retryDisabled}
+                onUndoFromHere={hasToolCalls && onUndoFromHere ? () => onUndoFromHere(message.id) : undefined}
                 isEditing={isEditing}
                 onSaveEdit={handleSaveEdit}
                 onCancelEdit={() => setIsEditing(false)}
                 isStreaming={isStreaming}
+                spoken={isSpokenTurn(message)}
               />
             );
           } else if (isFileGroupPart(group)) {
@@ -370,6 +289,17 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
                 parts={group.parts}
                 compact
               />
+            );
+          } else if (isToolRunGroupPart(group)) {
+            return (
+              <div key={`${message.id}-toolrun-${group.runKey}`} className="mt-1">
+                <CompactToolRunGroup
+                  parts={group.parts}
+                  runKey={group.runKey}
+                  getToolCallOpen={getToolCallOpen}
+                  setToolCallOpen={setToolCallOpen}
+                />
+              </div>
             );
           } else if (isProcessedToolPart(group)) {
             return (
@@ -383,12 +313,53 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
                     output: group.output,
                     state: group.state,
                   }}
+                  expanded={getToolCallOpen(group.toolCallId)}
+                  onExpandedChange={(next) => setToolCallOpen(group.toolCallId, next)}
                 />
+              </div>
+            );
+          } else if (isCommandExecutionPart(group)) {
+            return (
+              <div key={`${message.id}-command-${index}`} className="mt-1">
+                <CommandExecutionIndicator data={group.data} />
+              </div>
+            );
+          } else if (isSpendFallbackPart(group)) {
+            return (
+              <div key={`${message.id}-spend-fallback-${index}`} className="mt-1">
+                <SpendFallbackNotice data={group.data} />
               </div>
             );
           }
           return null;
         })}
+        {isInterrupted && (
+          <div className="mt-1 flex items-center gap-1.5 text-[10px]" data-testid="interrupted-affordance">
+            <span className="rounded bg-amber-100 dark:bg-amber-950/40 px-1 py-0.5 font-medium uppercase tracking-wide text-amber-700 dark:text-amber-400">
+              Interrupted
+            </span>
+            {canRetry && (
+              <span className="text-gray-500 dark:text-gray-400">Cut short — retry to continue.</span>
+            )}
+            {/* CompactTextBlock is the only other place a retry button lives, and it only
+                renders for non-empty content — this is the sole retry control for an
+                empty/tool-only interrupted message. Gated on !hasNonEmptyTextBlock so a message
+                that DID stream real text doesn't show the button twice. */}
+            {canRetry && !hasNonEmptyTextBlock && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleRetry}
+                disabled={retryDisabled}
+                className="h-4 px-0.5"
+                title="Retry this message"
+                aria-label="Retry this message"
+              >
+                <RotateCw className="h-2 w-2" />
+              </Button>
+            )}
+          </div>
+        )}
       </div>
 
       {onDelete && (

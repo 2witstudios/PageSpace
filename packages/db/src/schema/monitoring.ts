@@ -10,9 +10,11 @@ import {
   boolean,
   jsonb,
   index,
+  uniqueIndex,
   real,
   pgEnum,
-  check
+  check,
+  bigserial,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
@@ -172,14 +174,34 @@ export const aiUsageLogs = pgTable('ai_usage_logs', {
   pageId: text('page_id'),
   driveId: text('drive_id'),
   
-  // Request/Response
-  prompt: text('prompt'), // Store first 1000 chars
-  completion: text('completion'), // Store first 1000 chars
-  
   // Status
   success: boolean('success').default(true),
   error: text('error'),
   
+  // Feature attribution — which product surface spent the credits (chat, pulse,
+  // memory, voice, page_agent, workflow, integration, tool, other). Drives the
+  // user-facing usage breakdown. Nullable for rows written before this column
+  // existed; the breakdown query folds null/unknown into 'other'.
+  source: text('source'),
+
+  // WAL-5: the wallet this call was charged to. A soft link (no FK), like every id on
+  // this table: usage logs are purged on retention and must never block a wallet delete.
+  // Null on rows written before wallets existed.
+  walletId: text('wallet_id'),
+
+  // SPEND-10: the automation this call ran for when no person was present (a cron, a trigger, a
+  // scheduled run, Zoom enrichment), a typed reference encoded only by lib billing/automation-attribution
+  // (`workflow:<id>` | `zoom:<connectionId>`), so the drive lead sees spend by automation apart from its
+  // creator. A soft link like walletId. Null for a person's own call, a channel mention or a manual Run.
+  automationRef: text('automation_ref'),
+
+  /**
+   * WAL-6b fail closed: when a billable call's charge was first found to name no wallet. Never
+   * charged; terminal for the backfill sweeps, and counted (partial index) on the admin billing
+   * panel for an operator to reconcile. Null for every row that was charged or owed nothing.
+   */
+  unattributedAt: timestamp('unattributed_at', { mode: 'date', withTimezone: true }),
+
   // Metadata
   metadata: jsonb('metadata'),
 
@@ -195,15 +217,35 @@ export const aiUsageLogs = pgTable('ai_usage_logs', {
   messageCount: integer('message_count'), // Number of messages in context
   wasTruncated: boolean('was_truncated').default(false), // Whether context was truncated
   truncationStrategy: text('truncation_strategy'), // 'none' | 'oldest_first' | 'smart'
+
+  // Async cost reconcile (OpenRouter only). Set to 'pending' at write time when the row
+  // carries OpenRouter generation id(s) in metadata.generationIds and was billed on the
+  // returned cost; the reconcile cron fetches the authoritative /generation cost, corrects
+  // billing drift, and marks the row 'reconciled' / 'unavailable' (generation never
+  // resolved) / 'skipped'. NULL = not an OpenRouter row, never reconciled. The other rows
+  // stay NULL so the partial index below only tracks the small reconcile backlog.
+  reconcileStatus: text('reconcile_status'), // null | 'pending' | 'reconciled' | 'unavailable' | 'skipped'
+  reconcileAttempts: integer('reconcile_attempts').default(0).notNull(),
+  reconciledAt: timestamp('reconciled_at', { mode: 'date' }),
 }, (table) => ({
   timestampIdx: index('idx_ai_usage_timestamp').on(table.timestamp),
   userIdIdx: index('idx_ai_usage_user_id').on(table.userId, table.timestamp),
+  userSourceIdx: index('idx_ai_usage_user_source').on(table.userId, table.source, table.timestamp),
   providerIdx: index('idx_ai_usage_provider').on(table.provider, table.model, table.timestamp),
   costIdx: index('idx_ai_usage_cost').on(table.cost),
   conversationIdx: index('idx_ai_usage_conversation').on(table.conversationId),
   conversationContextIdx: index('idx_ai_usage_context').on(table.conversationId, table.timestamp),
   contextSizeIdx: index('idx_ai_usage_context_size').on(table.contextSize),
   expiresAtIdx: index('idx_ai_usage_expires_at').on(table.expiresAt),
+  // Partial: only the small set of rows awaiting cost reconcile, so the cron's
+  // selection scan stays cheap as the table grows.
+  reconcileIdx: index('idx_ai_usage_reconcile')
+    .on(table.reconcileStatus, table.timestamp)
+    .where(sql`reconcile_status = 'pending'`),
+  // Partial: only the (rare) unattributed rows, so the admin panel's count never scans the log.
+  unattributedIdx: index('idx_ai_usage_unattributed')
+    .on(table.unattributedAt)
+    .where(sql`unattributed_at IS NOT NULL`),
 }));
 
 /**
@@ -248,51 +290,28 @@ export const errorLogs = pgTable('error_logs', {
   endpointIdx: index('idx_errors_endpoint').on(table.endpoint),
 }));
 
-// Activity logging enums
-export const activityOperationEnum = pgEnum('activity_operation', [
-  'create',
-  'update',
-  'delete',
-  'restore',
-  'reorder',
-  'permission_grant',
-  'permission_update',
-  'permission_revoke',
-  'trash',
-  'move',
-  'agent_config_update',
-  // Membership operations
-  'member_add',
-  'member_remove',
-  'member_role_change',
-  // Authentication/Security operations
-  'login',
-  'logout',
-  'signup',
-  'password_change',
-  'email_change',
-  'token_create',
-  'token_revoke',
-  // File operations
-  'upload',
-  'convert',
-  // Account operations
-  'account_delete',
-  'profile_update',
-  'avatar_update',
-  // Message operations (Tier 1)
-  'message_update',
-  'message_delete',
-  // Role operations (Tier 1)
-  'role_reorder',
-  // Drive ownership operations (Tier 1)
-  'ownership_transfer',
-  // Version history operations
-  'rollback',
-  // AI conversation undo operations
-  'conversation_undo',
-  'conversation_undo_with_changes'
-]);
+/**
+ * Error resolution workflow (#890 Phase 3). Post-cutover the error rows
+ * themselves live in immutable ClickHouse, so the mutable resolved-flag
+ * workflow is keyed off-row here in main PG by the error row's stable id
+ * (same id space for CH rows and legacy PG error_logs rows). Readers fetch
+ * error rows from their store and merge these rows in app code — the two
+ * stores are never SQL-joined; the resolve action writes only this table.
+ */
+export const errorResolutions = pgTable('error_resolutions', {
+  errorId: text('error_id').primaryKey(),
+  resolved: boolean('resolved').default(true).notNull(),
+  resolvedAt: timestamp('resolved_at', { mode: 'date' }).defaultNow().notNull(),
+  resolvedBy: text('resolved_by'),
+  resolution: text('resolution'),
+});
+
+// `activity_operation` is a text column, not an enum. The column stores values
+// constrained at the TS layer via the ActivityOperation string-literal union in
+// packages/lib/src/monitoring/activity-logger.ts. DB-level enum constraint was
+// dropped in migration 0105 to preserve the tamper-evident hash chain when
+// removing legacy values (any DELETE or UPDATE breaks computeLogHash / chain-link
+// verification).
 
 export const contentFormatEnum = pgEnum('content_format', ['text', 'html', 'json', 'tiptap']);
 export const activityChangeGroupTypeEnum = pgEnum('activity_change_group_type', [
@@ -343,7 +362,7 @@ export const activityLogs = pgTable('activity_logs', {
   aiConversationId: text('aiConversationId'),
 
   // Target resource
-  operation: activityOperationEnum('operation').notNull(),
+  operation: text('operation').notNull(),
   resourceType: activityResourceEnum('resourceType').notNull(),
   resourceId: text('resourceId').notNull(),
   resourceTitle: text('resourceTitle'),
@@ -364,7 +383,7 @@ export const activityLogs = pgTable('activity_logs', {
   // Note: rollbackFromActivityId intentionally has no FK constraint to allow rollback
   // provenance to survive source activity deletion (retention policies, compliance)
   rollbackFromActivityId: text('rollbackFromActivityId'),
-  rollbackSourceOperation: activityOperationEnum('rollbackSourceOperation'), // Snapshot of source activity operation
+  rollbackSourceOperation: text('rollbackSourceOperation'), // Snapshot of source activity operation
   rollbackSourceTimestamp: timestamp('rollbackSourceTimestamp', { mode: 'date' }), // Snapshot of source activity timestamp
   rollbackSourceTitle: text('rollbackSourceTitle'), // Snapshot of source resource title
 
@@ -382,15 +401,36 @@ export const activityLogs = pgTable('activity_logs', {
   stateHashBefore: text('stateHashBefore'),
   stateHashAfter: text('stateHashAfter'),
 
+  // GDPR Art 30 record-of-processing fields (nullable for backfill safety).
+  // Populated on write by the activity-log edge from a pure classifier
+  // (classifyProcessing) so each row carries its lawful-basis / category /
+  // retention / recipient metadata for the record of processing activities.
+  dataCategory: text('dataCategory'),        // e.g. 'content', 'identity', 'usage_metadata'
+  legalBasis: text('legalBasis'),            // e.g. 'contract', 'legitimate_interest', 'consent'
+  retentionPolicy: text('retentionPolicy'),  // human/policy ref e.g. 'account_lifetime', '90d'
+  recipients: jsonb('recipients').$type<string[]>(), // categories of recipients (Art 30(1)(d))
+
   // Retention management
   isArchived: boolean('isArchived').default(false).notNull(),
+
+  // BIGSERIAL for commit-order predecessor lookup — timestamps are pre-assigned before the advisory lock.
+  chainSeq: bigserial('chainSeq', { mode: 'number' }).notNull(),
 
   // Hash chain fields for tamper-evidence (Advanced Audit Logging)
   previousLogHash: text('previousLogHash'),  // Hash of previous log entry (null for first entry in chain)
   logHash: text('logHash'),  // SHA-256 hash of current entry
   chainSeed: text('chainSeed'),  // Initial seed for hash chain verification (only set on first entry)
 }, (table) => ({
-  contentSizeLimit: check('activity_logs_content_size_limit', sql`${table.contentSize} IS NULL OR ${table.contentSize} <= 1048576`),
+  // Bounds the INLINE snapshot only. When content is offloaded to the blob
+  // store, `contentRef` points at it and `contentSize` describes that external
+  // object, which is legitimately unbounded — a 1MB+ sheet doc would otherwise
+  // fail this CHECK and roll back the user's page write (the activity insert
+  // shares the mutation transaction). See prepareActivityInsert, which drops an
+  // oversized `contentSnapshot` app-side.
+  contentSizeLimit: check(
+    'activity_logs_content_size_limit',
+    sql`${table.contentRef} IS NOT NULL OR ${table.contentSize} IS NULL OR ${table.contentSize} <= 1048576`
+  ),
   streamPair: check('activity_logs_stream_pair', sql`(${table.streamId} IS NULL) = (${table.streamSeq} IS NULL)`),
   changeGroupPair: check('activity_logs_change_group_pair', sql`(${table.changeGroupId} IS NULL) = (${table.changeGroupType} IS NULL)`),
   timestampIdx: index('idx_activity_logs_timestamp').on(table.timestamp),
@@ -402,6 +442,8 @@ export const activityLogs = pgTable('activity_logs', {
   streamIdx: index('idx_activity_logs_stream').on(table.streamId, table.streamSeq).where(sql`${table.streamId} IS NOT NULL`),
   changeGroupIdx: index('idx_activity_logs_change_group').on(table.changeGroupId).where(sql`${table.changeGroupId} IS NOT NULL`),
   logHashIdx: index('idx_activity_logs_log_hash').on(table.logHash).where(sql`${table.logHash} IS NOT NULL`),
+  // Predecessor lookup (ORDER BY chainSeq DESC LIMIT 1 inside advisory lock)
+  chainSeqIdx: index('idx_activity_logs_chain_seq').on(table.chainSeq),
 }));
 
 /**
@@ -420,5 +462,68 @@ export const activityLogsRelations = relations(activityLogs, ({ one }) => ({
     fields: [activityLogs.pageId],
     references: [pages.id],
   }),
+}));
+
+/**
+ * SIEM delivery cursors - tracks the last audit event delivered per source
+ * Used by the processor's SIEM delivery worker for cursor-based polling
+ */
+export const siemDeliveryCursors = pgTable('siem_delivery_cursors', {
+  id: text('id').primaryKey(), // e.g. 'activity_logs', 'security_audit', 'integration_audit'
+  lastDeliveredId: text('lastDeliveredId'),
+  lastDeliveredAt: timestamp('lastDeliveredAt', { mode: 'date' }),
+  lastError: text('lastError'),
+  lastErrorAt: timestamp('lastErrorAt', { mode: 'date' }),
+  deliveryCount: integer('deliveryCount').default(0).notNull(),
+  updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+  deliveredCursorPair: check(
+    'siem_delivery_cursors_delivered_cursor_pair',
+    sql`(${table.lastDeliveredId} IS NULL) = (${table.lastDeliveredAt} IS NULL)`
+  ),
+}));
+
+/**
+ * SIEM delivery receipts — durable attestation that a given audit event was
+ * shipped to the configured SIEM in a specific delivery batch, with optional
+ * ack timestamp when the receiver echoed the X-PageSpace-Delivery-Id header
+ * back in X-PageSpace-Delivery-Ack.
+ *
+ * One row per (deliveryId, source). A single worker run generates a single
+ * deliveryId but can produce up to N receipts — one per source present in the
+ * delivered prefix — because the merged batch interleaves sources and each
+ * source has its own temporal range and count. `receiptId` is a surrogate row
+ * id so `deliveryId` can safely repeat across sources; the uniqueness invariant
+ * is enforced by siem_delivery_receipts_delivery_source_unique.
+ */
+export const siemDeliveryReceipts = pgTable('siem_delivery_receipts', {
+  receiptId: text('receiptId').primaryKey().$defaultFn(() => createId()),
+  deliveryId: text('deliveryId').notNull(),
+  source: text('source').notNull(), // 'activity_logs' | 'security_audit_log'
+  firstEntryId: text('firstEntryId').notNull(),
+  lastEntryId: text('lastEntryId').notNull(),
+  firstEntryTimestamp: timestamp('firstEntryTimestamp', { mode: 'date' }).notNull(),
+  lastEntryTimestamp: timestamp('lastEntryTimestamp', { mode: 'date' }).notNull(),
+  entryCount: integer('entryCount').notNull(),
+  deliveredAt: timestamp('deliveredAt', { mode: 'date' }).notNull(),
+  webhookStatus: integer('webhookStatus'),
+  webhookResponseHash: text('webhookResponseHash'),
+  ackReceivedAt: timestamp('ackReceivedAt', { mode: 'date' }),
+  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+  deliverySourceUnique: uniqueIndex('siem_delivery_receipts_delivery_source_unique').on(table.deliveryId, table.source),
+  deliveryIdIdx: index('idx_siem_receipts_delivery_id').on(table.deliveryId),
+  firstEntryIdx: index('idx_siem_receipts_first_entry').on(table.firstEntryId),
+  lastEntryIdx: index('idx_siem_receipts_last_entry').on(table.lastEntryId),
+  deliveredAtIdx: index('idx_siem_receipts_delivered_at').on(table.deliveredAt),
+  // Covers the /siem/receipts lookup: WHERE source = $1 AND
+  // firstEntryTimestamp <= $2 AND lastEntryTimestamp >= $2. The leading source
+  // column lets the index scan to the per-source slice immediately and the
+  // timestamp boundary scan walks only that slice.
+  entryRangeBySourceIdx: index('idx_siem_receipts_source_range').on(
+    table.source,
+    table.firstEntryTimestamp,
+    table.lastEntryTimestamp,
+  ),
 }));
 

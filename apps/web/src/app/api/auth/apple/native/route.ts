@@ -1,20 +1,38 @@
-import { users, db, eq, or } from '@pagespace/db';
-import { sessionService, generateCSRFToken, SESSION_DURATION_MS, verifyAppleIdToken } from '@pagespace/lib/auth';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
+import { SESSION_DURATION_MS } from '@pagespace/lib/auth/constants';
+import { verifyAppleIdToken } from '@pagespace/lib/auth/oauth-utils';
+import { captureAppleRefreshToken } from '@pagespace/lib/auth/apple/capture-apple-refresh-token';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers, logAuthEvent, validateOrCreateDeviceToken } from '@pagespace/lib/server';
-import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
+import { maskEmail } from '@pagespace/lib/audit/mask-email';
+import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { z } from 'zod/v4';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-import { getClientIP } from '@/lib/auth';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
+import { getClientIP, isSafeReturnUrl, revokeSessionsForLogin } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
-} from '@pagespace/lib/security';
+} from '@pagespace/lib/security/distributed-rate-limit';
+import { authRepository } from '@/lib/repositories/auth-repository';
+import { resolveOAuthAccount } from '@/lib/auth/oauth-account-resolver';
+import { INVITE_TOKEN_MAX_LENGTH } from '@/lib/auth/oauth-state';
+import {
+  consumeAllInvitesForEmail,
+  consumeAnyInviteIfPresent,
+} from '@/lib/auth/native-invite-acceptance';
+import { autoJoinVerifiedDomainAfterSignIn } from '@/lib/orgs/domain-auto-join';
+import { ceremonyAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 
 const nativeAuthSchema = z.object({
   idToken: z.string().min(1, 'ID token is required'),
+  // Apple's one-time authorization code (TN3194), exchanged server-side for a
+  // revocable refresh token. Optional: older clients send only the id token.
+  authorizationCode: z.string().min(1).max(2048).optional(),
   platform: z.enum(['ios', 'android']),
   deviceId: z.string().min(1, 'Device ID is required'),
   deviceName: z.string().optional(),
@@ -22,6 +40,8 @@ const nativeAuthSchema = z.object({
   // The client must pass it if available
   givenName: z.string().optional(),
   familyName: z.string().optional(),
+  inviteToken: z.string().min(1).max(INVITE_TOKEN_MAX_LENGTH).optional(),
+  returnUrl: z.string().max(2048).optional(),
 });
 
 /**
@@ -62,7 +82,8 @@ export async function POST(req: Request) {
       );
     }
 
-    const { idToken, platform, deviceId, deviceName, givenName, familyName } = validation.data;
+    const { idToken, authorizationCode, platform, deviceId, deviceName, givenName, familyName, inviteToken, returnUrl: rawReturnUrl } = validation.data;
+    const returnUrl = rawReturnUrl && isSafeReturnUrl(rawReturnUrl) ? rawReturnUrl : undefined;
 
     // Validate required environment variables
     if (!process.env.APPLE_CLIENT_ID) {
@@ -81,6 +102,11 @@ export async function POST(req: Request) {
         platform,
         error: verificationResult.error
       });
+      auditRequest(req, {
+        eventType: 'auth.login.failure',
+        riskScore: 0.3,
+        details: { reason: 'apple_native_invalid_token' },
+      });
       return Response.json({ error: verificationResult.error || 'Invalid token' }, { status: 401 });
     }
 
@@ -90,34 +116,56 @@ export async function POST(req: Request) {
     // Apple only sends the name on first authorization
     const name = [givenName, familyName].filter(Boolean).join(' ') || undefined;
 
-    // Find or create user
-    let user = await db.query.users.findFirst({
-      where: or(eq(users.appleId, appleId), eq(users.email, email)),
+    // Resolve the account match through the shared, security-critical decision.
+    // SECURITY (M5): match an EXISTING account by raw email only when Apple
+    // asserts the email is verified; the subject id (appleId) may always match.
+    const { decision: matchDecision, user: matchedUser, emailMatch } = await resolveOAuthAccount({
+      provider: 'apple',
+      providerId: appleId,
+      email,
+      emailVerified: emailVerified === true,
     });
+
+    if (matchDecision === 'reject') {
+      loggers.auth.warn('Blocked OAuth account link: unverified email matches existing account', {
+        email: maskEmail(email),
+        provider: 'apple-native',
+        platform,
+      });
+      auditRequest(req, {
+        eventType: 'auth.login.failure',
+        riskScore: 0.8,
+        userId: emailMatch?.id,
+        details: { reason: 'apple_native_unverified_email_link_blocked' },
+      });
+      return Response.json(
+        { error: 'Unable to sign in with this account. Please use your original sign-in method.' },
+        { status: 403 }
+      );
+    }
+
+    // Find or create user
+    let user = matchedUser;
 
     let isNewUser = false;
     if (user) {
       // Update existing user if needed
       const needsUpdate = !user.appleId || (!user.name && name);
       if (needsUpdate) {
-        loggers.auth.info('Updating existing user via native Apple OAuth', { email, platform });
-        await db.update(users)
-          .set({
-            appleId: user.appleId || appleId,
-            provider: user.password ? 'both' : 'apple',
-            name: user.name || name || email.split('@')[0],
-            emailVerified: emailVerified ? new Date() : user.emailVerified,
-          })
-          .where(eq(users.id, user.id));
+        loggers.auth.info('Updating existing user via native Apple OAuth', { email: maskEmail(email), platform });
+        await authRepository.updateUser(user.id, {
+          appleId: user.appleId || appleId,
+          provider: user.provider === 'email' ? 'apple' : user.provider,
+          name: user.name || name || email.split('@')[0],
+          emailVerified: emailVerified ? new Date() : user.emailVerified,
+        });
 
-        user = await db.query.users.findFirst({
-          where: eq(users.id, user.id),
-        }) || user;
+        user = await authRepository.findUserById(user.id) || user;
       }
     } else {
       isNewUser = true;
-      loggers.auth.info('Creating new user via native Apple OAuth', { email, platform });
-      const [newUser] = await db.insert(users).values({
+      loggers.auth.info('Creating new user via native Apple OAuth', { email: maskEmail(email), platform });
+      user = await authRepository.createUser({
         id: createId(),
         name: name || email.split('@')[0],
         email,
@@ -129,37 +177,36 @@ export async function POST(req: Request) {
         role: 'user',
         storageUsedBytes: 0,
         subscriptionTier: 'free',
-      }).returning();
-      user = newUser;
+      });
       loggers.auth.info('New user created via native Apple OAuth', { userId: user.id, platform });
     }
 
-    // Provision getting started drive for new users
-    if (isNewUser) {
-      await provisionGettingStartedDriveIfNeeded(user.id).catch((error) => {
-        loggers.auth.error('Failed to provision Getting Started drive', error as Error, {
-          userId: user.id,
-          provider: 'apple-native',
-        });
-      });
-    }
+    // SEC-1: a new account on an org's verified email domain joins it (seat permitting). Never throws.
+    await autoJoinVerifiedDomainAfterSignIn(user.id);
 
-    // SESSION FIXATION PREVENTION: Revoke all existing sessions before creating new one
-    const revokedCount = await sessionService.revokeAllUserSessions(user.id, 'new_login');
-    if (revokedCount > 0) {
-      loggers.auth.info('Revoked existing sessions on native Apple OAuth login', {
+    await provisionHomeDriveIfNeeded(user.id).catch((error) => {
+      loggers.auth.error('Failed to provision Home drive', error as Error, {
         userId: user.id,
-        count: revokedCount,
-        platform,
+        provider: 'apple-native',
       });
-    }
+    });
+
+    // SESSION FIXATION PREVENTION: Revoke prior sessions before creating a new
+    // one, scoped to THIS device (deviceId is required by the schema) so a native
+    // login no longer nukes the user's other devices. Admin-console sessions are
+    // scoped separately and left intact.
+    await revokeSessionsForLogin(user.id, deviceId, 'new_login', 'Apple native');
 
     // Create session
+    // D-OW-45: the ceremony this route just verified, recorded on every credential it mints.
+    const authentication = ceremonyAuthentication({ method: 'apple' }, Date.now());
     const sessionToken = await sessionService.createSession({
+      authentication,
       userId: user.id,
       type: 'user',
       scopes: ['*'],
       expiresInMs: SESSION_DURATION_MS,
+      deviceId,
       createdByIp: clientIP !== 'unknown' ? clientIP : undefined,
     });
 
@@ -174,6 +221,7 @@ export async function POST(req: Request) {
 
     // Create device token
     const { deviceToken } = await validateOrCreateDeviceToken({
+      authentication,
       providedDeviceToken: undefined,
       userId: user.id,
       deviceId,
@@ -193,9 +241,14 @@ export async function POST(req: Request) {
     });
 
     // Log auth events
-    logAuthEvent('login', user.id, email, clientIP, `Apple OAuth Native (${platform})`);
+    auditRequest(req, {
+      eventType: 'auth.login.success',
+      userId: user.id,
+      sessionId: sessionClaims.sessionId,
+      details: { method: `Apple OAuth Native (${platform})` },
+    });
     trackAuthEvent(user.id, 'login', {
-      email,
+      email: maskEmail(email),
       ip: clientIP,
       provider: 'apple-native',
       platform,
@@ -208,15 +261,39 @@ export async function POST(req: Request) {
       isNewUser,
     });
 
+    const inviteResult = await consumeAnyInviteIfPresent({
+      request: req,
+      inviteToken,
+      user,
+      isNewUser,
+      email,
+    });
+
+    await consumeAllInvitesForEmail({
+      request: req,
+      email,
+      user: { id: user.id, suspendedAt: user.suspendedAt },
+      now: new Date(),
+    });
+
     // Set session cookie so middleware recognizes the authenticated session
     const headers = new Headers();
     appendSessionCookie(headers, sessionToken);
 
-    return Response.json({
+    const response = Response.json({
       sessionToken,
       csrfToken,
       deviceToken,
       isNewUser,
+      // Surface every kind-specific id the dispatcher returned so native
+      // clients can route to the accepted surface (drive | page | connection).
+      invitedKind: inviteResult.kind,
+      invitedDriveId: inviteResult.invitedDriveId,
+      invitedPageId: inviteResult.invitedPageId,
+      invitedConnectionId: inviteResult.connectionId,
+      ...(inviteResult.inviteError && { inviteError: inviteResult.inviteError }),
+      // ORG-3: an org invitation lands on the org hub once joined, or back on its invite page when refused.
+      ...((inviteResult.orgLandingPath ?? returnUrl) && { returnUrl: inviteResult.orgLandingPath ?? returnUrl }),
       user: {
         id: user.id,
         name: user.name,
@@ -230,8 +307,36 @@ export async function POST(req: Request) {
         'Set-Cookie': headers.get('Set-Cookie') || '',
       },
     });
+
+    // TN3194: keep a revocable refresh token so account deletion can revoke the
+    // Apple authorization. Deliberately NOT awaited — sign-in latency must never
+    // depend on Apple, and a failed exchange must never fail a sign-in.
+    // iOS only: Android has no native Sign in with Apple — its code comes from
+    // Apple's web flow and can only be exchanged with that flow's redirect_uri,
+    // which this route does not have. Android users get the manual steps.
+    const appleClientId = verificationResult.audience;
+    if (platform === 'ios' && authorizationCode && appleClientId) {
+      void captureAppleRefreshToken({
+        userId: user.id,
+        code: authorizationCode,
+        clientId: appleClientId,
+        expectedSub: appleId,
+      }).catch((error: unknown) => {
+        loggers.auth.warn('Apple refresh token capture threw', {
+          userId: user.id,
+          reason: error instanceof Error ? error.name : 'unknown_error',
+        });
+      });
+    }
+
+    return response;
   } catch (error) {
     loggers.auth.error('Native Apple auth error', error as Error, { clientIP });
+    auditRequest(req, {
+      eventType: 'auth.login.failure',
+      riskScore: 0.3,
+      details: { reason: 'apple_native_error' },
+    });
 
     // Check if it's an Apple token verification error
     if (error instanceof Error && error.message.includes('expired')) {

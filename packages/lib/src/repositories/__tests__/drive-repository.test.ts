@@ -1,0 +1,183 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+// The org sign-in gate (D-OW-45) reads policies through its own module; these tests are about the
+// resolvers behind it, so no org here sets a sign-in policy. Plain functions: a mock reset must not undo them.
+vi.mock('../../permissions/actor-authentication', () => ({
+  checkActorDriveAuthentication: async () => ({ allowed: true }),
+  checkActorResourceAuthentication: async () => ({ allowed: true }),
+  filterDrivesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  filterResourcesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  explainOrgAuthenticationDenial: async () => null,
+}));
+
+// ---------------------------------------------------------------------------
+// Mocks
+// ---------------------------------------------------------------------------
+
+vi.mock('../../permissions/drive-relationship-loader', () => ({ loadDriveLeadAuthority: vi.fn() }));
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    query: {
+      drives: { findFirst: vi.fn() },
+    },
+    select: vi.fn(),
+    update: vi.fn(),
+  },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  drives: { id: 'id', name: 'name', slug: 'slug', ownerId: 'ownerId', isTrashed: 'isTrashed', trashedAt: 'trashedAt', updatedAt: 'updatedAt' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((_a, _b) => 'eq'),
+  and: vi.fn((...args) => ({ and: args })),
+}));
+
+// ---------------------------------------------------------------------------
+// Imports after mocks
+// ---------------------------------------------------------------------------
+
+import { driveRepository } from '../drive-repository';
+import { loadDriveLeadAuthority } from '../../permissions/drive-relationship-loader';
+import { db } from '@pagespace/db/db';
+import { credentialActor } from '../../permissions/access-actor';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const driveRecord = {
+  id: 'drive-1',
+  name: 'My Drive',
+  slug: 'my-drive',
+  ownerId: 'user-1',
+  isTrashed: false,
+  trashedAt: null,
+};
+
+function setupSelectChain(rows: unknown[]) {
+  // findByIdBasic uses array destructuring: const [drive] = await db.select()...where()
+  // So the .where() must resolve directly to the rows array (no .limit())
+  const whereFn = vi.fn().mockResolvedValue(rows);
+  const fromFn = vi.fn().mockReturnValue({ where: whereFn });
+  vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
+  return { whereFn };
+}
+
+function setupUpdateChain(returnValue: unknown[]) {
+  const returningFn = vi.fn().mockResolvedValue(returnValue);
+  const whereFn = vi.fn().mockReturnValue({ returning: returningFn });
+  const setFn = vi.fn().mockReturnValue({ where: whereFn });
+  vi.mocked(db.update).mockReturnValue({ set: setFn } as unknown as ReturnType<typeof db.update>);
+  return { setFn, whereFn, returningFn };
+}
+
+// ---------------------------------------------------------------------------
+// findById
+// ---------------------------------------------------------------------------
+describe('driveRepository.findById', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('returns drive record when found', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRecord as never);
+
+    const result = await driveRepository.findById('drive-1');
+    expect(result).toEqual(driveRecord);
+  });
+
+  it('returns null/undefined when drive not found', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(undefined as never);
+
+    const result = await driveRepository.findById('nonexistent');
+    // The repository casts undefined to DriveRecord | null; underlying value is undefined
+    expect(result).toBeFalsy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// findByIdBasic
+// ---------------------------------------------------------------------------
+describe('driveRepository.findByIdBasic', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('returns basic drive info when found', async () => {
+    const basicDrive = { id: 'drive-1', ownerId: 'user-1' };
+    setupSelectChain([basicDrive]);
+
+    const result = await driveRepository.findByIdBasic('drive-1');
+    expect(result).toEqual(basicDrive);
+  });
+
+  it('returns null when drive not found', async () => {
+    setupSelectChain([]);
+
+    const result = await driveRepository.findByIdBasic('nonexistent');
+    expect(result).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// findByIdForLeadAction
+// ---------------------------------------------------------------------------
+describe('driveRepository.findByIdForLeadAction', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('returns the drive when loadDriveLeadAuthority allows the action', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRecord as never);
+    vi.mocked(loadDriveLeadAuthority).mockResolvedValueOnce({ allowed: true, via: 'org-admin', orgId: 'org-1' });
+
+    expect(await driveRepository.findByIdForLeadAction('drive-1', credentialActor('priya', null), 'restore')).toEqual(driveRecord);
+    expect(loadDriveLeadAuthority).toHaveBeenCalledWith(expect.objectContaining({ userId: 'priya' }), driveRecord, 'restore');
+  });
+
+  it('returns null when the drive is missing or the authority refuses', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValueOnce(undefined as never);
+    expect(await driveRepository.findByIdForLeadAction('drive-1', credentialActor('u', null), 'restore')).toBeNull();
+    expect(loadDriveLeadAuthority).not.toHaveBeenCalled();
+
+    vi.mocked(db.query.drives.findFirst).mockResolvedValueOnce(driveRecord as never);
+    vi.mocked(loadDriveLeadAuthority).mockResolvedValueOnce({ allowed: false });
+    expect(await driveRepository.findByIdForLeadAction('drive-1', credentialActor('nina', null), 'restore')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// trash
+// ---------------------------------------------------------------------------
+describe('driveRepository.trash', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('sets isTrashed to true and trashedAt to a Date', async () => {
+    const setFn = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+    vi.mocked(db.update).mockReturnValue({ set: setFn } as unknown as ReturnType<typeof db.update>);
+
+    await driveRepository.trash('drive-1');
+
+    expect(setFn).toHaveBeenCalledWith(expect.objectContaining({ isTrashed: true }));
+    const payload = setFn.mock.calls[0][0] as { trashedAt: Date };
+    expect(payload.trashedAt).toBeInstanceOf(Date);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// restore
+// ---------------------------------------------------------------------------
+describe('driveRepository.restore', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('returns restored drive info', async () => {
+    const restored = { id: 'drive-1', name: 'My Drive', slug: 'my-drive' };
+    setupUpdateChain([restored]);
+
+    const result = await driveRepository.restore('drive-1');
+    expect(result).toEqual(restored);
+  });
+
+  it('calls update with isTrashed=false and null trashedAt', async () => {
+    const { setFn } = setupUpdateChain([{ id: 'drive-1', name: 'My Drive', slug: 'my-drive' }]);
+
+    await driveRepository.restore('drive-1');
+    expect(setFn).toHaveBeenCalledWith(expect.objectContaining({
+      isTrashed: false,
+      trashedAt: null,
+    }));
+  });
+});

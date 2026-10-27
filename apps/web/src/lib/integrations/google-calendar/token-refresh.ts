@@ -10,9 +10,11 @@
  * - Refresh happens server-side, never exposed to client
  */
 
-import { db, googleCalendarConnections, eq, type GoogleCalendarConnection } from '@pagespace/db';
-import { encrypt, decrypt } from '@pagespace/lib';
-import { loggers } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { googleCalendarConnections, type GoogleCalendarConnection } from '@pagespace/db/schema/calendar';
+import { encrypt, decrypt } from '@pagespace/lib/encryption/encryption-utils';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { OAuth2Client } from 'google-auth-library';
 
 // Buffer time before expiration to refresh (5 minutes)
@@ -27,22 +29,6 @@ export type TokenRefreshResult =
  */
 export const isTokenExpired = (expiresAt: Date, bufferMs: number = TOKEN_REFRESH_BUFFER_MS): boolean => {
   return Date.now() >= expiresAt.getTime() - bufferMs;
-};
-
-/**
- * Pure function: Build refresh request parameters
- */
-export const buildRefreshParams = (
-  refreshToken: string,
-  clientId: string,
-  clientSecret: string
-): URLSearchParams => {
-  return new URLSearchParams({
-    client_id: clientId,
-    client_secret: clientSecret,
-    refresh_token: refreshToken,
-    grant_type: 'refresh_token',
-  });
 };
 
 /**
@@ -184,45 +170,4 @@ export const updateConnectionStatus = async (
       updatedAt: new Date(),
     })
     .where(eq(googleCalendarConnections.userId, userId));
-};
-
-/**
- * IO function: Get connection status for a user
- */
-export const getConnectionStatus = async (
-  userId: string
-): Promise<{
-  connected: boolean;
-  status: GoogleCalendarConnection['status'] | null;
-  googleEmail: string | null;
-  lastSyncAt: Date | null;
-  lastSyncError: string | null;
-}> => {
-  const connection = await db.query.googleCalendarConnections.findFirst({
-    where: eq(googleCalendarConnections.userId, userId),
-    columns: {
-      status: true,
-      googleEmail: true,
-      lastSyncAt: true,
-      lastSyncError: true,
-    },
-  });
-
-  if (!connection) {
-    return {
-      connected: false,
-      status: null,
-      googleEmail: null,
-      lastSyncAt: null,
-      lastSyncError: null,
-    };
-  }
-
-  return {
-    connected: connection.status === 'active',
-    status: connection.status,
-    googleEmail: connection.googleEmail,
-    lastSyncAt: connection.lastSyncAt,
-    lastSyncError: connection.lastSyncError,
-  };
 };

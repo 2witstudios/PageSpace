@@ -59,6 +59,13 @@ export interface CalendarEvent {
     name: string;
     slug: string;
   } | null;
+  hasAgentTrigger?: boolean;
+  /** Present only on virtual occurrences produced by server-side expansion.
+   *  Stores the parent recurring event's original ISO startAt so the edit
+   *  modal can restore the series base date rather than the occurrence date,
+   *  preventing accidental anchor-shifting when saving without a date change. */
+  recurringBaseStartAt?: string;
+  recurringBaseEndAt?: string;
 }
 
 export interface RecurrenceRule {
@@ -79,6 +86,60 @@ export interface TaskWithDueDate {
   priority: 'low' | 'medium' | 'high';
   taskListPageId: string;
   driveId: string;
+}
+
+// Color config shape shared by event colors and drive calendar colors
+export type EventColorConfig = {
+  bg: string;
+  border: string;
+  text: string;
+  dot: string;
+};
+
+// Drive calendar color palette — visually distinct colors for sub-calendars
+export const DRIVE_CALENDAR_COLORS: EventColorConfig[] = [
+  { bg: 'bg-blue-500/10', border: 'border-l-blue-500', text: 'text-blue-600', dot: 'bg-blue-500' },
+  { bg: 'bg-emerald-500/10', border: 'border-l-emerald-500', text: 'text-emerald-600', dot: 'bg-emerald-500' },
+  { bg: 'bg-violet-500/10', border: 'border-l-violet-500', text: 'text-violet-600', dot: 'bg-violet-500' },
+  { bg: 'bg-amber-500/10', border: 'border-l-amber-500', text: 'text-amber-600', dot: 'bg-amber-500' },
+  { bg: 'bg-rose-500/10', border: 'border-l-rose-500', text: 'text-rose-600', dot: 'bg-rose-500' },
+  { bg: 'bg-cyan-500/10', border: 'border-l-cyan-500', text: 'text-cyan-600', dot: 'bg-cyan-500' },
+  { bg: 'bg-orange-500/10', border: 'border-l-orange-500', text: 'text-orange-600', dot: 'bg-orange-500' },
+  { bg: 'bg-pink-500/10', border: 'border-l-pink-500', text: 'text-pink-600', dot: 'bg-pink-500' },
+  { bg: 'bg-teal-500/10', border: 'border-l-teal-500', text: 'text-teal-600', dot: 'bg-teal-500' },
+  { bg: 'bg-indigo-500/10', border: 'border-l-indigo-500', text: 'text-indigo-600', dot: 'bg-indigo-500' },
+];
+
+// Dedicated color for personal (non-drive) events
+export const PERSONAL_CALENDAR_COLOR: EventColorConfig = {
+  bg: 'bg-slate-500/10',
+  border: 'border-l-slate-500',
+  text: 'text-slate-600',
+  dot: 'bg-slate-500',
+};
+
+// Deterministic drive-to-color assignment
+export function getDriveCalendarColor(
+  driveId: string | null,
+  driveIds: string[]
+): EventColorConfig {
+  if (driveId === null) return PERSONAL_CALENDAR_COLOR;
+  const sorted = [...driveIds].sort();
+  const index = sorted.indexOf(driveId);
+  if (index < 0) return DRIVE_CALENDAR_COLORS[0];
+  return DRIVE_CALENDAR_COLORS[index % DRIVE_CALENDAR_COLORS.length];
+}
+
+// Resolve an event's display color based on context
+export function resolveEventColor(
+  event: CalendarEvent,
+  context: 'user' | 'drive',
+  driveColorMap: Map<string | null, EventColorConfig> | null
+): EventColorConfig {
+  if (context === 'drive' || !driveColorMap) {
+    return getEventColors(event.color);
+  }
+  return driveColorMap.get(event.driveId) ?? getEventColors(event.color);
 }
 
 // Event color configurations
@@ -126,6 +187,7 @@ export const TASK_OVERLAY_STYLE = {
   bg: 'bg-muted/30',
   border: 'border-l-muted-foreground/50 border-dashed',
   text: 'text-muted-foreground italic',
+  dot: 'bg-muted-foreground/50',
   opacity: 'opacity-70',
 };
 
@@ -172,6 +234,26 @@ export function isSameDay(date1: Date, date2: Date): boolean {
   );
 }
 
+/**
+ * A horizontal swipe only counts when it clears a minimum distance AND dominates
+ * the vertical component -- otherwise a vertical scroll that drifts sideways
+ * silently changes the day mid-gesture.
+ */
+const MIN_SWIPE_DISTANCE = 50;
+const AXIS_DOMINANCE_RATIO = 1.5;
+
+export function resolveSwipeDirection({
+  dx,
+  dy,
+}: {
+  dx: number;
+  dy: number;
+}): 'next' | 'previous' | null {
+  if (Math.abs(dx) < MIN_SWIPE_DISTANCE) return null;
+  if (Math.abs(dx) <= Math.abs(dy) * AXIS_DOMINANCE_RATIO) return null;
+  return dx > 0 ? 'next' : 'previous';
+}
+
 // Helper to get events for a specific day
 export function getEventsForDay(events: CalendarEvent[], date: Date): CalendarEvent[] {
   return events.filter((event) => {
@@ -195,18 +277,3 @@ export function getTasksForDay(tasks: TaskWithDueDate[], date: Date): TaskWithDu
   });
 }
 
-// Format time for display
-export function formatEventTime(date: Date, allDay: boolean): string {
-  if (allDay) return 'All day';
-  return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-}
-
-// Get hour from date (0-23)
-export function getHour(date: Date): number {
-  return date.getHours();
-}
-
-// Get minutes from date (0-59)
-export function getMinutes(date: Date): number {
-  return date.getMinutes();
-}

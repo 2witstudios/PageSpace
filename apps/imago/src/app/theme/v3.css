@@ -1,0 +1,233 @@
+/* Imago C · Blue Spine v3 tokens (IMC-1.2; SPEC "Tokens", PageSpace page
+   af2yxq84m92tg6kf431pwxne). The boards are light only; each colour carries
+   a dark value through light-dark() so the theme switch keeps working
+   (DEC-C4). Geometry lives in frame.css beside the stage widths it feeds. */
+:root {
+  /* The spine: the blue column the stage sheet sits on. */
+  --spine: light-dark(oklch(0.35 0.08 235), oklch(0.26 0.05 235));
+  --spine-ink: light-dark(oklch(0.92 0.02 235), oklch(0.88 0.02 235));
+  /* On the spine: quiet and small icons, the hover and active fills, the
+     active marker and the divider (C-Files-Doc spine). */
+  --spine-quiet: light-dark(oklch(0.92 0.02 235 / 0.78), oklch(0.88 0.02 235 / 0.78));
+  --spine-dim: light-dark(oklch(0.92 0.02 235 / 0.62), oklch(0.88 0.02 235 / 0.62));
+  --spine-hover: light-dark(oklch(1 0 0 / 0.1), oklch(1 0 0 / 0.08));
+  --spine-active: light-dark(oklch(1 0 0 / 0.15), oklch(1 0 0 / 0.12));
+  --spine-marker: light-dark(oklch(0.8 0.12 235), oklch(0.8 0.12 235));
+  --spine-tile: light-dark(oklch(0.98 0.005 235), oklch(0.92 0.01 235));
+  --spine-on: light-dark(oklch(1 0 0), oklch(1 0 0));
+  /* Imago's column and the tab bar: a breath of blue over the sheet. */
+  --tint: light-dark(oklch(0.982 0.005 235), oklch(0.2 0.01 235));
+  /*
+   * The strip sits a step off the sheet in both themes, so the active tab, which takes the sheet's
+   * colour, reads as the sheet rising into it; no outline needed.
+   */
+  --tab-bar: light-dark(oklch(0.935 0.008 235), oklch(0.12 0.01 235));
+  /* Quiet fills: inputs, segmented tracks, hovered rows. */
+  --fill: light-dark(oklch(0.15 0.01 220 / 0.04), oklch(0.97 0 0 / 0.06));
+  /* Primary on text: links in chips, the selected row. */
+  --accent-deep: light-dark(oklch(0.38 0.16 235), oklch(0.78 0.12 235));
+  /* Status. Warning text uses the deeper step; the badge is the spine's amber. */
+  --status-success: light-dark(oklch(0.55 0.15 145), oklch(0.68 0.15 145));
+  --status-warning: light-dark(oklch(0.7 0.17 50), oklch(0.75 0.15 50));
+  --status-warning-ink: light-dark(oklch(0.55 0.17 50), oklch(0.8 0.13 50));
+  --status-danger: light-dark(oklch(0.577 0.245 27), oklch(0.66 0.2 27));
+  --notice: light-dark(oklch(0.7 0.17 50), oklch(0.75 0.15 50));
+  --notice-ink: light-dark(oklch(0.2 0.04 50), oklch(0.2 0.04 50));
+  /* Page-type hues (SPEC, as Spine.dc.html draws them). Documents use the primary. */
+  --type-doc: light-dark(oklch(0.5 0.16 235), oklch(0.66 0.14 235));
+  --type-tasks: light-dark(oklch(0.55 0.15 145), oklch(0.68 0.15 145));
+  --type-sheet: light-dark(oklch(0.52 0.13 160), oklch(0.66 0.12 160));
+  --type-channel: light-dark(oklch(0.55 0.14 300), oklch(0.7 0.12 300));
+  --type-folder: light-dark(oklch(0.62 0.12 75), oklch(0.74 0.12 75));
+  --type-agent: light-dark(oklch(0.55 0.15 25), oklch(0.7 0.14 25));
+  --type-canvas: light-dark(oklch(0.58 0.16 350), oklch(0.7 0.14 350));
+  --type-code: light-dark(oklch(0.45 0.03 250), oklch(0.72 0.03 250));
+  --type-file: light-dark(oklch(0.5 0.01 220), oklch(0.7 0.01 220));
+  --agent-soft: light-dark(oklch(0.55 0.15 25 / 0.12), oklch(0.7 0.14 25 / 0.18));
+  /* The drive mark palette (MARK_COLORS, lib avatars/avatar-core.ts): the tile a drive's initial
+     sits on when the drive picks a color. A saturated step under white reads in both themes, so
+     each carries the same value for dark; classic paints the same keys with Tailwind's 600 steps. */
+  --mark-slate: light-dark(oklch(0.446 0.043 257.281), oklch(0.446 0.043 257.281));
+  --mark-red: light-dark(oklch(0.577 0.245 27.325), oklch(0.577 0.245 27.325));
+  --mark-orange: light-dark(oklch(0.646 0.222 41.116), oklch(0.646 0.222 41.116));
+  --mark-amber: light-dark(oklch(0.666 0.179 58.318), oklch(0.666 0.179 58.318));
+  --mark-green: light-dark(oklch(0.627 0.194 149.214), oklch(0.627 0.194 149.214));
+  --mark-teal: light-dark(oklch(0.6 0.118 184.704), oklch(0.6 0.118 184.704));
+  --mark-blue: light-dark(oklch(0.546 0.245 262.881), oklch(0.546 0.245 262.881));
+  --mark-indigo: light-dark(oklch(0.511 0.262 276.966), oklch(0.511 0.262 276.966));
+  --mark-violet: light-dark(oklch(0.541 0.281 293.009), oklch(0.541 0.281 293.009));
+  --mark-pink: light-dark(oklch(0.592 0.249 0.584), oklch(0.592 0.249 0.584));
+  --mark-on: light-dark(oklch(1 0 0), oklch(1 0 0));
+}
+
+@theme inline {
+  --color-spine: var(--spine);
+  --color-spine-ink: var(--spine-ink);
+  --color-spine-quiet: var(--spine-quiet);
+  --color-spine-dim: var(--spine-dim);
+  --color-spine-hover: var(--spine-hover);
+  --color-spine-active: var(--spine-active);
+  --color-spine-marker: var(--spine-marker);
+  --color-spine-tile: var(--spine-tile);
+  --color-spine-on: var(--spine-on);
+  --color-tint: var(--tint);
+  --color-tab-bar: var(--tab-bar);
+  --color-fill: var(--fill);
+  --color-accent-deep: var(--accent-deep);
+  --color-status-success: var(--status-success);
+  --color-status-warning: var(--status-warning);
+  --color-status-warning-ink: var(--status-warning-ink);
+  --color-status-danger: var(--status-danger);
+  --color-notice: var(--notice);
+  --color-notice-ink: var(--notice-ink);
+  --color-type-doc: var(--type-doc);
+  --color-type-tasks: var(--type-tasks);
+  --color-type-sheet: var(--type-sheet);
+  --color-type-channel: var(--type-channel);
+  --color-type-folder: var(--type-folder);
+  --color-type-agent: var(--type-agent);
+  --color-type-canvas: var(--type-canvas);
+  --color-type-code: var(--type-code);
+  --color-type-file: var(--type-file);
+  --color-agent-soft: var(--agent-soft);
+  --color-mark-slate: var(--mark-slate);
+  --color-mark-red: var(--mark-red);
+  --color-mark-orange: var(--mark-orange);
+  --color-mark-amber: var(--mark-amber);
+  --color-mark-green: var(--mark-green);
+  --color-mark-teal: var(--mark-teal);
+  --color-mark-blue: var(--mark-blue);
+  --color-mark-indigo: var(--mark-indigo);
+  --color-mark-violet: var(--mark-violet);
+  --color-mark-pink: var(--mark-pink);
+  --color-mark-on: var(--mark-on);
+}
+
+/* The stage sheet's lift off the spine. */
+/* Body column caps: the folder table centres at 860px (C-Files-Folder), the
+   files browser at 1024px (C-Files-Browser). */
+@theme {
+  --container-folder: 860px;
+  --container-browser: 1024px;
+}
+
+/* Settings and account screens (C-Settings-*, C-Account-*): a 720px form column padded 40/48,
+   one 30px/700 h1, 15px section heads. */
+@theme {
+  --container-settings: 720px;
+  --spacing-settings-y: 40px;
+  --spacing-settings-x: 48px;
+  --text-settings-title: 1.875rem;
+  --text-settings-section: 0.9375rem;
+}
+
+/* Trash treegrid columns (C-Drive-Trash): Was in 160px, Trashed 96px, actions 224px. */
+@theme {
+  --spacing-trash-was-in: 160px;
+  --spacing-trash-when: 96px;
+  --spacing-trash-actions: 224px;
+}
+
+/* The in-middle settings sub-nav is 220px wide (C-Files-AiSettings). */
+@theme {
+  --spacing-settings-nav: 220px;
+}
+
+@theme {
+  --shadow-sheet: -8px 0 32px rgb(0 0 0 / 0.18);
+}
+
+/* Spine geometry (C-Files-Doc): 48px primary tiles radius 12, 40px tool tiles
+   radius 10, the 36px drive tile radius 11, the 34px avatar; the active marker
+   is a 4px bar at the spine's edge, 24px tall beside a primary tile and 20px
+   beside a tool. */
+@theme {
+  --radius-spine-tile: 12px;
+  --radius-spine-brand: 11px;
+  --spacing-spine-marker: 4px;
+  --spacing-spine-marker-tall: 24px;
+  --spacing-spine-marker-short: 20px;
+  --spacing-spine-divider: 28px;
+  --spacing-spine-count: 16px;
+}
+
+/* The avatar while the account is open: a spine-blue gap, then the marker blue (C-Account-*). */
+@utility spine-avatar-ring {
+  border-radius: 9999px;
+  box-shadow: 0 0 0 2px var(--spine), 0 0 0 4px var(--spine-marker);
+}
+
+/* The active tab merges into the columns below: sheet white, hairline on its
+   left, right and top, no bottom edge (SPEC v3.3). */
+@theme {
+  --spacing-tab-bar-top: 6px;
+  --spacing-tab-close: 16px;
+  --container-empty-middle: 380px;
+  --spacing-empty-row: 36px;
+  --spacing-ask-imago: 34px;
+  --spacing-ask-pill: 30px;
+  --spacing-pane-row: 30px;
+  --spacing-filter: 32px;
+  --spacing-agent-tile: 22px;
+  --spacing-agent-row-tile: 30px;
+  /* Imago's orb: the empty chat's hero, and the glyph it takes in lists and buttons. */
+  --spacing-orb-hero: 120px;
+  /*
+   * The engine draws the ball at about half its canvas (the rest is room for the bulges), so
+   * these canvases run large: the rail's fills its 48px spine tile, the chat head's picker
+   * and its rows sit beside 22px and 30px agent tiles. A row's canvas overhangs by 7px a side
+   * so it takes the 30px tile's place and its label lines up with the agents'.
+   */
+  --spacing-orb-rail: 48px;
+  --spacing-orb-tile: 36px;
+  --spacing-orb-row: 44px;
+  --spacing-orb-row-overhang: 7px;
+  --spacing-orb-glyph: 16px;
+  --spacing-agent-picker: 340px;
+  --spacing-context-chip: 22px;
+  --spacing-spend-strip: 28px;
+  /* Imago on the ground centres its thread and composer (C-Files-Doc asd-wide). */
+  --container-imago-ground: 760px;
+  --spacing-segment: 28px;
+  --spacing-history-row: 36px;
+}
+
+/* Share in the page head (SPEC v3: outlined, 30px, radius 8, identical everywhere). The trigger
+   is classic's ShareDialog button, re-skinned here rather than forked. */
+/* A page on a phone (C-Resp-Phone-Doc): the Formatting toolbar scrolls sideways and its tools are at least 38px. */
+@utility phone-doc-body {
+  & [role='toolbar'] {
+    overflow-x: auto;
+  }
+  & [role='toolbar'] button {
+    min-block-size: var(--spacing-phone-tap);
+    min-inline-size: var(--spacing-phone-tap);
+  }
+}
+
+@utility share-trigger {
+  & button {
+    height: 30px;
+    padding: 0 12px;
+    gap: 6px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 500;
+  }
+}
+
+/* Responsive tiers (C-Resp-Tablet-Doc, C-Resp-Phone-Tree): the pane docks at 236px and Imago is a
+   340px sheet between 1024 and 1279; a phone has a 52px head, a 64px bottom bar and 44px rows. */
+@theme {
+  --spacing-pane-overlay: 236px;
+  --spacing-chat-overlay: 340px;
+  --spacing-phone-head: 52px;
+  --spacing-phone-bar: 64px;
+  --spacing-phone-row: 44px;
+  --spacing-phone-ask-bottom: 80px;
+  --spacing-phone-tap: 38px;
+  --spacing-phone-sheet-row: 48px;
+}

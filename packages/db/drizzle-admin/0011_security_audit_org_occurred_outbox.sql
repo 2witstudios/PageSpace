@@ -1,0 +1,2 @@
+CREATE INDEX "idx_security_audit_org_occurred_at" ON "security_audit_log" USING btree (("details" ->> 'orgId'),("details" ->> 'occurredAt')) WHERE ("security_audit_log"."details" ->> 'orgId') IS NOT NULL;--> statement-breakpoint
+CREATE INDEX "idx_security_audit_outbox_id" ON "security_audit_log" USING btree (("details" ->> 'outboxId'),"chain_seq") WHERE ("security_audit_log"."details" ->> 'outboxId') IS NOT NULL;

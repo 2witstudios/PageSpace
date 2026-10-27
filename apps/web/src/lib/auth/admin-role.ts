@@ -1,4 +1,6 @@
-import { db, users, eq, sql } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, sql } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth';
 
 type UserRole = 'user' | 'admin';
 

@@ -1,0 +1,90 @@
+/**
+ * Security audit tests for /api/agents/[agentId]/integrations/[grantId]
+ * Verifies auditRequest is called for DELETE.
+ */
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+const mockGetGrantById = vi.hoisted(() => vi.fn());
+const mockDeleteGrant = vi.hoisted(() => vi.fn());
+
+vi.mock('@/lib/auth', () => ({
+  authenticateRequestWithOptions: vi.fn(),
+  isAuthError: vi.fn((result: unknown) => result && typeof result === 'object' && 'error' in result),
+}));
+
+vi.mock('@pagespace/db/db', () => ({
+  db: {},
+}));
+
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
+    api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+  },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
+    canUserEditPage: vi.fn().mockResolvedValue(true),
+}));
+
+vi.mock('@pagespace/lib/integrations/repositories/grant-repository', () => ({
+  getGrantById: mockGetGrantById,
+  updateGrant: vi.fn(),
+  deleteGrant: mockDeleteGrant,
+}));
+
+import { DELETE } from '../route';
+import { authenticateRequestWithOptions } from '@/lib/auth';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
+
+const mockUserId = 'user_123';
+const mockAgentId = 'agent-1';
+const mockGrantId = 'grant-1';
+
+const mockAuth = () => {
+  vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+    userId: mockUserId,
+    tokenVersion: 0,
+    tokenType: 'session' as const,
+    sessionId: 'test-session',
+    role: 'user' as const,
+    adminRoleVersion: 0,
+  });
+};
+
+describe('DELETE /api/agents/[agentId]/integrations/[grantId] audit', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAuth();
+    mockGetGrantById.mockResolvedValue({ id: mockGrantId, agentId: mockAgentId });
+    mockDeleteGrant.mockResolvedValue(undefined);
+  });
+
+  it('logs delete audit event on successful grant deletion', async () => {
+    await DELETE(
+      new Request('http://localhost/api/agents/agent-1/integrations/grant-1', { method: 'DELETE' }),
+      { params: Promise.resolve({ agentId: mockAgentId, grantId: mockGrantId }) }
+    );
+
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.any(Request),
+      expect.objectContaining({ eventType: 'data.delete', userId: mockUserId, resourceType: 'agent_grant', resourceId: mockGrantId })
+    );
+  });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    canPrincipalEditPage: (auth: { userId: string }, resourceId: string) => permissions.canUserEditPage(credentialActor(auth.userId, null), resourceId),
+  };
+});

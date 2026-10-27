@@ -2,50 +2,88 @@
  * Memory Cron Route
  *
  * Daily background process that discovers patterns from user conversations
- * and activity, then appends insights to their personalization profile.
+ * and updates their personalization profile (stored as pages in their Home drive).
  *
  * Pipeline:
  * 1. Get paying users with recent activity
  * 2. For each user:
- *    a. Run discovery passes (blind - doesn't see current profile)
- *    b. Run integration evaluator (sees profile, decides what to append)
- *    c. Apply approved changes
- *    d. Compact if needed
+ *    a. Run discovery passes (blind — never sees the current profile)
+ *    b. Stage the claims as candidates. Corroboration counts the days the
+ *       EVIDENCE was written on, not the days this cron ran: the discovery
+ *       window is reread in full every night, so cron-day counting would
+ *       promote a one-off after two or three runs.
+ *    c. Find candidates past the per-field day threshold AND first seen before
+ *       today, so nothing discovered today can land today
+ *    d. Evaluate them against the current pages; the evaluator reports which
+ *       candidates it used
+ *    e. Write the pages, subject to the rewrite guards
+ *    f. Settle each candidate on what actually landed — promoted only if it was
+ *       used AND its page write succeeded; declined ones rejected; anything
+ *       blocked stays pending for the next run. An evaluator that never
+ *       reached a decision settles nothing.
+ *    g. Compact any page over budget
+ *    h. Retention: drop candidates not re-observed in 30 days, and redact the
+ *       verbatim evidence of ones settled 90+ days ago. Runs on EVERY exit
+ *       path, including the failure ones.
  *
- * Paying users only: 'pro', 'founder', 'business' subscription tiers
+ * Credits: every discovery, evaluation and compaction model call reserves the
+ * user's own credits BEFORE it runs (see @/lib/memory/memory-credit), and
+ * settles that one hold once through AIMonitoring.trackUsage. A refused step
+ * runs no model, charges nothing and writes nothing; the user's pass carries on
+ * without it (candidates stay pending, pages stay as they are) and the refusal
+ * is reported in `creditSkipped`. One user's refusal never touches another's.
  *
- * Security: HMAC-signed cron requests (via cron-curl) + internal network origin check
+ * Paying personal users only — gated on the canonical personal tiers the
+ * settings UI uses, so the two cannot disagree about who gets Memory.
+ *
+ * Security: HMAC-signed cron requests via cron-curl (X-Cron-Timestamp/Nonce/Signature)
  * Trigger via: cron-curl POST http://web:3000/api/memory/cron
  */
 
 import { NextResponse } from 'next/server';
-import {
-  db,
-  users,
-  userPersonalization,
-  sessions,
-  eq,
-  and,
-  gte,
-  inArray,
-  isNull,
-} from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db';
+import { and, eq, gte, inArray, isNull } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
+import { sessions } from '@pagespace/db/schema/sessions';
+import { userPersonalization } from '@pagespace/db/schema/personalization';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
+import { personalTiers } from '@pagespace/lib/billing/subscription-tiers';
+import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
+import { isMemoryAvailable } from '@pagespace/lib/billing/automation-preferences';
 import { runDiscoveryPasses } from '@/lib/memory/discovery-service';
 import {
+  getCurrentPersonalizationPages,
   evaluateAndIntegrate,
   applyIntegrationDecisions,
-  getCurrentPersonalization,
 } from '@/lib/memory/integration-service';
 import { checkAndCompactIfNeeded } from '@/lib/memory/compaction-service';
+import type { MemoryGateRefusal } from '@/lib/memory/memory-credit';
+import {
+  upsertCandidates,
+  findPromotableCandidates,
+  markCandidatesPromoted,
+  recordMemoryOrgIds,
+  markCandidatesRejected,
+  pruneStaleCandidates,
+  redactSettledEvidence,
+  type MemoryField,
+} from '@/lib/memory/candidate-service';
+import { errorLogFields } from '@pagespace/lib/logging/error-cause';
 
-const PAYING_TIERS = ['pro', 'founder', 'business'];
+/**
+ * Reuses the constant the settings UI gates on rather than restating it.
+ *
+ * A local copy would let the cron and `isMemoryAvailable` drift: a tier added
+ * to one and not the other means users who are told Memory is available never
+ * have anything learned, or the reverse — learning for users the product says
+ * cannot have it. Neither failure is visible from either side alone.
+ */
+const memoryEligiblePersonalTiers = () => personalTiers().filter((tier) => isMemoryAvailable(resolvePersonalCapabilityTier(tier)));
 
 const DELAY_BETWEEN_USERS_MS = 1000;
 
 export async function POST(request: Request) {
-  // Validate cron secret + internal network origin
   const authError = validateSignedCronRequest(request);
   if (authError) {
     return authError;
@@ -67,7 +105,7 @@ export async function POST(request: Request) {
           eq(sessions.type, 'user'),
           isNull(sessions.revokedAt),
           gte(sessions.lastUsedAt, sevenDaysAgo),
-          inArray(users.subscriptionTier, PAYING_TIERS)
+          inArray(users.subscriptionTier, memoryEligiblePersonalTiers())
         )
       )
       .groupBy(sessions.userId, users.subscriptionTier);
@@ -109,10 +147,13 @@ export async function POST(request: Request) {
 
     const results = {
       processed: 0,
+      discovered: 0,
+      promoted: 0,
       updated: 0,
       compacted: 0,
-      skipped: 0,
+      pruned: 0,
       errors: [] as string[],
+      creditSkipped: [] as string[],
     };
 
     for (const userId of usersToProcess) {
@@ -120,34 +161,42 @@ export async function POST(request: Request) {
         const userResult = await processUserMemory(userId);
 
         results.processed++;
+        results.discovered += userResult.discovered;
+        results.promoted += userResult.promoted;
         if (userResult.updated) results.updated++;
         if (userResult.compacted) results.compacted++;
-        if (userResult.skipped) results.skipped++;
+        results.pruned += userResult.pruned;
+        results.creditSkipped.push(
+          ...userResult.creditRefusals.map((r) => `${userId}: ${r.step}: ${r.reason}`)
+        );
 
         if (usersToProcess.indexOf(userId) < usersToProcess.length - 1) {
           await new Promise((resolve) => setTimeout(resolve, DELAY_BETWEEN_USERS_MS));
         }
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
-        loggers.api.error(`Memory cron: Error processing user ${userId}`, {
-          error: errorMsg,
-        });
+        // The cause chain too: Drizzle wraps the driver error (e.g. a Postgres FATAL) on .cause.
+        loggers.api.error(`Memory cron: Error processing user ${userId}`, errorLogFields(error));
         results.errors.push(`${userId}: ${errorMsg}`);
       }
     }
 
     loggers.api.info('Memory cron: Complete', {
       processed: results.processed,
+      discovered: results.discovered,
+      promoted: results.promoted,
       updated: results.updated,
       compacted: results.compacted,
-      skipped: results.skipped,
+      pruned: results.pruned,
       errors: results.errors.length,
+      creditSkipped: results.creditSkipped.length,
     });
 
     return NextResponse.json({
       message: 'Memory processing complete',
       ...results,
       errors: results.errors.length > 0 ? results.errors : undefined,
+      creditSkipped: results.creditSkipped.length > 0 ? results.creditSkipped : undefined,
     });
   } catch (error) {
     loggers.api.error('Memory cron: Fatal error', { error });
@@ -155,56 +204,192 @@ export async function POST(request: Request) {
   }
 }
 
+/**
+ * Retention housekeeping, run on EVERY exit path.
+ *
+ * Forgetting must not be conditional on the happy path: a user whose evaluator
+ * is failing, or who has nothing promotable, still has stale candidates to drop
+ * and settled quotes past their retention window. Tying either to a successful
+ * run would leave the longest-neglected accounts the least cleaned up.
+ *
+ * Returns the pruned count; redaction is reported through logs, since it is a
+ * compliance action rather than a signal about this run's work.
+ */
+async function runRetention(userId: string): Promise<number> {
+  const [pruned] = await Promise.all([
+    pruneStaleCandidates(userId),
+    redactSettledEvidence(userId),
+  ]);
+  return pruned;
+}
+
+/** A memory step the credit gate refused, and why. */
+type CreditRefusal = { step: 'discovery' | 'evaluation' | 'compaction'; reason: MemoryGateRefusal };
+
 async function processUserMemory(
   userId: string
-): Promise<{ updated: boolean; compacted: boolean; skipped: boolean }> {
-  const insights = await runDiscoveryPasses(userId);
+): Promise<{
+  discovered: number;
+  promoted: number;
+  updated: boolean;
+  compacted: boolean;
+  pruned: number;
+  creditRefusals: CreditRefusal[];
+}> {
+  const creditRefusals: CreditRefusal[] = [];
 
-  const totalInsights =
-    insights.worldview.length +
-    insights.projects.length +
-    insights.communication.length +
-    insights.preferences.length;
+  // Step 1: Run discovery passes. A refused pass returns no claims, so it
+  // stages nothing; every later model call reserves for itself and refuses too.
+  const discoveryResult = await runDiscoveryPasses(userId);
+  if (discoveryResult.creditRefusal) {
+    creditRefusals.push({ step: 'discovery', reason: discoveryResult.creditRefusal });
+  }
+  const discovered = discoveryResult.claims.length;
 
-  if (totalInsights === 0) {
-    loggers.api.debug('Memory cron: No insights discovered for user', { userId });
-    return { updated: false, compacted: false, skipped: true };
+  // Step 2: Stage what was discovered. An empty discovery is NOT a reason to
+  // stop: candidates left pending by an earlier guard rejection or provider
+  // outage are already corroborated and still deserve evaluation, and a quiet
+  // week would otherwise strand them indefinitely.
+  if (discovered > 0) {
+    await upsertCandidates(userId, discoveryResult.claims, discoveryResult.orgIds);
   }
 
-  const currentPersonalization = await getCurrentPersonalization(userId);
+  // Step 3: Find candidates that have cleared the corroboration bar
+  const promotable = await findPromotableCandidates(userId);
 
-  const decisions = await evaluateAndIntegrate(
+  if (promotable.length === 0) {
+    loggers.api.debug('Memory cron: No candidates ready for promotion', { userId });
+    const pruned = await runRetention(userId);
+    return {
+      discovered,
+      promoted: 0,
+      updated: false,
+      compacted: false,
+      pruned,
+      creditRefusals,
+    };
+  }
+
+  // Step 4: Get current page content
+  const currentPages = await getCurrentPersonalizationPages(userId);
+
+  // Step 5: Evaluate
+  const evaluation = await evaluateAndIntegrate(userId, promotable, currentPages);
+
+  // The evaluator never reached a decision (provider down, generation error,
+  // unparseable response). Leave every candidate pending — settling them here
+  // would permanently retire a user's whole ready set over a transient outage.
+  if (!evaluation.ok) {
+    if (evaluation.creditRefusal) {
+      creditRefusals.push({ step: 'evaluation', reason: evaluation.creditRefusal });
+    }
+    loggers.api.warn('Memory cron: evaluation failed, candidates left pending', {
+      userId,
+      reason: evaluation.reason,
+      pending: promotable.length,
+    });
+    const pruned = await runRetention(userId);
+    return {
+      discovered,
+      promoted: 0,
+      updated: false,
+      compacted: false,
+      pruned,
+      creditRefusals,
+    };
+  }
+
+  // SEC-2/3 (D-OW-62): the evaluator saw every ready candidate, so any page it rewrites may restate any of them. The
+  // memory takes on all their orgs BEFORE a page is written, so no reader is ever served restated content its org
+  // has not yet been recorded against (a write that then fails only over-attributes, which withholds, never leaks).
+  if (Object.keys(evaluation.updates).length > 0) {
+    await recordMemoryOrgIds(userId, promotable.flatMap((candidate) => candidate.orgIds));
+  }
+
+  // Step 6: Apply updates with guards
+  const applyResult = await applyIntegrationDecisions(
     userId,
-    insights,
-    currentPersonalization
+    evaluation.updates,
+    currentPages
   );
 
-  const { updated, fields } = await applyIntegrationDecisions(
-    userId,
-    decisions,
-    currentPersonalization
-  );
+  // Step 6b: Settle each candidate INDIVIDUALLY.
+  //
+  // Field-level settling was wrong: several candidates can share a field, and
+  // the evaluator may incorporate one while declining another. Marking the
+  // whole field promoted retired claims that never reached the page. So a
+  // candidate is promoted only when the evaluator cited it AND the page write
+  // for its field actually landed.
+  //
+  // Declined claims are marked REJECTED rather than left pending: the evaluator
+  // saw them against the current profile and said no, and re-staging them would
+  // re-spend tokens re-deciding the same question every night. Anything blocked
+  // by a guard or a failed write stays pending so the next run can retry.
+  const written = new Set(applyResult.fields);
+  const blocked = new Set(applyResult.rejected.map((r) => r.field));
+  const used = new Set(evaluation.usedCandidateIds);
 
+  const promotedIds: string[] = [];
+  const rejectedIds: string[] = [];
+
+  for (const candidate of promotable) {
+    const field = candidate.field as MemoryField;
+
+    if (used.has(candidate.id)) {
+      // Cited by the evaluator — promoted only if the write landed.
+      if (written.has(field)) promotedIds.push(candidate.id);
+      // else: guard-rejected or write failed → stays pending.
+      continue;
+    }
+
+    // Not cited. Declined by the evaluator, unless its field never got a
+    // verdict at all (blocked write), in which case leave it pending.
+    if (!blocked.has(field)) rejectedIds.push(candidate.id);
+  }
+
+  await Promise.all([
+    markCandidatesPromoted(promotedIds),
+    markCandidatesRejected(rejectedIds),
+  ]);
+
+  // Step 7: Compact if needed
   let compacted = false;
-  if (updated) {
+  if (applyResult.updated) {
     const compactionResult = await checkAndCompactIfNeeded(userId);
     compacted = compactionResult.compacted;
+    if (compactionResult.creditRefusal) {
+      creditRefusals.push({ step: 'compaction', reason: compactionResult.creditRefusal });
+    }
   }
+
+  // Step 8: Prune stale candidates
+  const pruned = await runRetention(userId);
 
   loggers.api.info('Memory cron: User processed', {
     userId,
-    insightCounts: {
-      worldview: insights.worldview.length,
-      projects: insights.projects.length,
-      communication: insights.communication.length,
-      preferences: insights.preferences.length,
-    },
-    updated,
-    updatedFields: fields,
+    discovered,
+    // Counts settled outcomes, not the size of the ready set. Reporting
+    // `promotable.length` as "promoted" counted evaluator-declined and
+    // guard-pending candidates as though they had reached the profile.
+    eligible: promotable.length,
+    promoted: promotedIds.length,
+    declined: rejectedIds.length,
+    stillPending: promotable.length - promotedIds.length - rejectedIds.length,
+    updated: applyResult.updated,
+    updatedFields: applyResult.fields,
+    rejected: applyResult.rejected,
     compacted,
+    pruned,
   });
 
-  return { updated, compacted, skipped: false };
+  return {
+    discovered,
+    promoted: promotedIds.length,
+    updated: applyResult.updated,
+    compacted,
+    pruned,
+    creditRefusals,
+  };
 }
 
 export async function GET(request: Request) {

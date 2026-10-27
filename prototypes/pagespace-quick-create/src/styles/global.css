@@ -1,0 +1,62 @@
+/* Exact dark-mode CSS variables from apps/web/src/app/globals.css .dark block */
+:root {
+  --radius: 0.625rem;
+
+  --background:         oklch(0.15 0 0);
+  --foreground:         oklch(0.94 0 0);
+  --card:               oklch(0.19 0 0);
+  --card-foreground:    oklch(0.94 0 0);
+  --popover:            oklch(0.19 0 0);
+  --popover-foreground: oklch(0.94 0 0);
+  --primary:            oklch(0.62 0.16 235);
+  --primary-foreground: oklch(0.15 0 0);
+  --secondary:          oklch(0.24 0 0);
+  --secondary-foreground: oklch(0.94 0 0);
+  --muted:              oklch(0.24 0 0);
+  --muted-foreground:   oklch(0.64 0 0);
+  --accent:             oklch(0.48 0.12 235);
+  --accent-foreground:  oklch(0.96 0 0);
+  --destructive:        oklch(0.6 0.2 15);
+  --border:             oklch(0.25 0 0);
+  --input:              oklch(0.25 0 0);
+  --ring:               oklch(0.62 0.16 235);
+
+  --shadow-elevated: 0 2px 8px rgb(0 0 0 / 0.18), 0 16px 48px rgb(0 0 0 / 0.24);
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  /* Geist Sans isn't available as a web font; Inter is visually identical */
+  font-family: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+
+/* Match app's global lucide stroke-width */
+svg.lucide {
+  stroke-width: 1.5;
+}
+
+::selection {
+  background: color-mix(in oklch, var(--primary) 30%, transparent);
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+  font-family: inherit;
+  color: inherit;
+}
+
+input {
+  font-family: inherit;
+  color: inherit;
+}

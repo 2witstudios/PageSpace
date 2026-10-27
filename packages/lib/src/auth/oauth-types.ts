@@ -52,7 +52,7 @@ export interface MobileOAuthResponse {
     email: string;
     name: string;
     picture: string | null;
-    provider: 'email' | 'google' | 'apple' | 'both';
+    provider: 'email' | 'google' | 'apple';
     role: 'user' | 'admin';
     emailVerified: Date | null;
   };
@@ -74,4 +74,6 @@ export interface OAuthVerificationResult {
   userInfo?: OAuthUserInfo;
   /** Error message if verification failed */
   error?: string;
+  /** The verified token's `aud` — the client it was issued to (Apple: bundle id or Services ID) */
+  audience?: string;
 }

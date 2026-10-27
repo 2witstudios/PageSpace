@@ -1,0 +1,353 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { NextResponse } from 'next/server';
+import type { SessionAuthResult, AuthError } from '@/lib/auth';
+
+// ============================================================================
+// Contract Tests for /api/drives/[driveId]/trash
+//
+// Tests mock at the SERVICE SEAM level, not ORM level.
+// ============================================================================
+
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    query: {
+      drives: {
+        findFirst: vi.fn(),
+      },
+      pages: {
+        findMany: vi.fn(),
+      },
+    },
+    select: vi.fn(),
+  },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((a, b) => ({ field: a, value: b })),
+  and: vi.fn((...args: unknown[]) => args),
+  asc: vi.fn((col) => ({ column: col, direction: 'asc' })),
+  isNotNull: vi.fn((a) => ({ field: a, op: 'isNotNull' })),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  drives: { id: 'drives.id', ownerId: 'drives.ownerId' },
+  pages: { driveId: 'pages.driveId', isTrashed: 'pages.isTrashed' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: { driveId: 'driveMembers.driveId', userId: 'driveMembers.userId', role: 'driveMembers.role' },
+}));
+
+vi.mock('@pagespace/lib/content/tree-utils', () => ({
+    buildTree: vi.fn(),
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
+    api: {
+      info: vi.fn(),
+      error: vi.fn(),
+      warn: vi.fn(),
+      debug: vi.fn(),
+    },
+  },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+
+vi.mock('@/lib/auth', () => ({
+  authenticateRequestWithOptions: vi.fn(),
+  isAuthError: vi.fn(),
+  checkMCPDriveScope: vi.fn().mockReturnValue(null),
+  isScopedMCPAuth: vi.fn(() => false), // Session/unscoped fixtures by default
+}));
+
+vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
+  getAppDriveMembership: vi.fn(),
+}));
+
+// The org-aware relationship is the gate (its pure role decisions stay real).
+vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => ({
+  loadDriveRelationship: vi.fn(),
+}));
+
+import { GET } from '../route';
+import { db } from '@pagespace/db/db';
+import { buildTree } from '@pagespace/lib/content/tree-utils'
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import type { DriveRelationship } from '@pagespace/lib/permissions/drive-relationship';
+import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
+
+const LEAD: DriveRelationship = { isOwner: true, membership: null };
+const NONE: DriveRelationship = { isOwner: false, membership: null };
+const asMember = (role: 'ADMIN' | 'MEMBER'): DriveRelationship => ({
+  isOwner: false,
+  membership: { role, customRoleId: null, source: 'invite', auditOrgAdminPrivateAccess: false, openDriveFloor: null },
+});
+
+// ============================================================================
+// Test Helpers
+// ============================================================================
+
+const mockWebAuth = (userId: string): SessionAuthResult => ({
+  userId,
+  tokenVersion: 0,
+  tokenType: 'session',
+  sessionId: 'test-session-id',
+  role: 'user',
+  adminRoleVersion: 0,
+});
+
+const mockAuthError = (status = 401): AuthError => ({
+  error: NextResponse.json({ error: 'Unauthorized' }, { status }),
+});
+
+const createContext = (driveId: string) => ({
+  params: Promise.resolve({ driveId }),
+});
+
+const createDriveFixture = (overrides: { id: string; name?: string; ownerId?: string }) => ({
+  id: overrides.id,
+  name: overrides.name ?? 'Test Drive',
+  slug: 'test-drive',
+  ownerId: overrides.ownerId ?? 'user_123',
+  isTrashed: false,
+  trashedAt: null,
+  createdAt: new Date('2024-01-01'),
+  updatedAt: new Date('2024-01-01'),
+  drivePrompt: null,
+  kind: 'STANDARD' as const,
+  publishSubdomain: null,
+  homePageId: null,
+  publishDefaultOgImageUrl: null,
+  notFoundPageId: null,
+  publishFaviconUrl: null,
+  avatarUrl: null,
+  color: null,
+  orgId: null,
+  orgVisibility: 'OPEN' as const,
+});
+
+// ============================================================================
+// GET /api/drives/[driveId]/trash - Contract Tests
+// ============================================================================
+
+describe('GET /api/drives/[driveId]/trash', () => {
+  const mockUserId = 'user_123';
+  const mockDriveId = 'drive_abc';
+  const mockFromFn = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(checkMCPDriveScope).mockReturnValue(null);
+    vi.mocked(buildTree).mockReturnValue([]);
+    vi.mocked(db.select).mockReturnValue({ from: mockFromFn } as never);
+    vi.mocked(loadDriveRelationship).mockResolvedValue(LEAD);
+  });
+
+  describe('authentication', () => {
+    it('should return 401 when not authenticated', async () => {
+      vi.mocked(isAuthError).mockReturnValue(true);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/trash`);
+      const response = await GET(request, createContext(mockDriveId));
+
+      expect(response.status).toBe(401);
+      const body = await response.json();
+      expect(body.error).toBe('Unauthorized');
+    });
+
+    it('should call authenticateRequestWithOptions with read options (no CSRF)', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue(
+        createDriveFixture({ id: mockDriveId, ownerId: mockUserId })
+      );
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([]);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/trash`);
+      await GET(request, createContext(mockDriveId));
+
+      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
+        request,
+        { allow: ['session', 'mcp'] }
+      );
+    });
+  });
+
+  describe('authorization', () => {
+    it('should return 404 when drive not found', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue(undefined);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/trash`);
+      const response = await GET(request, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(response.status).toBe(404);
+      expect(body.error).toBe('Drive not found');
+    });
+
+    it('should return scope error when MCP scope check fails', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue(
+        createDriveFixture({ id: mockDriveId, ownerId: mockUserId })
+      );
+      const scopeErrorResponse = NextResponse.json({ error: 'Scope denied' }, { status: 403 });
+      vi.mocked(checkMCPDriveScope).mockReturnValue(scopeErrorResponse);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/trash`);
+      const response = await GET(request, createContext(mockDriveId));
+
+      expect(response.status).toBe(403);
+    });
+
+    it('should allow owner to view trash', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue(
+        createDriveFixture({ id: mockDriveId, ownerId: mockUserId })
+      );
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([]);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/trash`);
+      const response = await GET(request, createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+    });
+
+    it('should allow admin to view trash', async () => {
+      // Drive owned by another user
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue(
+        createDriveFixture({ id: mockDriveId, ownerId: 'other_user' })
+      );
+      // User is an admin member
+      vi.mocked(loadDriveRelationship).mockResolvedValue(asMember('ADMIN'));
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([]);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/trash`);
+      const response = await GET(request, createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+      expect(loadDriveRelationship).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), expect.objectContaining({ id: mockDriveId, ownerId: 'other_user' }));
+    });
+
+    it('ORG-4 (partial) an org Admin with no drive_members row views an org drive\'s trash, because the org-aware relationship makes them ADMIN', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue({
+        ...createDriveFixture({ id: mockDriveId, ownerId: 'other_user' }),
+        orgId: 'org_1',
+        orgVisibility: 'PRIVATE' as const,
+      });
+      vi.mocked(loadDriveRelationship).mockResolvedValue(asMember('ADMIN'));
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([]);
+
+      const response = await GET(new Request(`https://example.com/api/drives/${mockDriveId}/trash`), createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+      expect(loadDriveRelationship).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), expect.objectContaining({ orgId: 'org_1', orgVisibility: 'PRIVATE' }));
+    });
+
+    it('X-6 (partial) a stale source=org ADMIN row opens nothing: the route never reads drive_members, the relationship refuses', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue({
+        ...createDriveFixture({ id: mockDriveId, ownerId: 'other_user' }),
+        orgId: 'org_1',
+      });
+      // The row the old inline gate would have honoured.
+      mockFromFn.mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          limit: vi.fn().mockResolvedValue([{ userId: mockUserId, role: 'ADMIN', source: 'org' }]),
+        }),
+      });
+      vi.mocked(loadDriveRelationship).mockResolvedValue(NONE);
+
+      const response = await GET(new Request(`https://example.com/api/drives/${mockDriveId}/trash`), createContext(mockDriveId));
+
+      expect(response.status).toBe(403);
+      expect(db.select).not.toHaveBeenCalled();
+    });
+
+    it('a plain member (not ADMIN) cannot view trash', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue(
+        createDriveFixture({ id: mockDriveId, ownerId: 'other_user' })
+      );
+      vi.mocked(loadDriveRelationship).mockResolvedValue(asMember('MEMBER'));
+
+      const response = await GET(new Request(`https://example.com/api/drives/${mockDriveId}/trash`), createContext(mockDriveId));
+
+      expect(response.status).toBe(403);
+    });
+
+    it('should return 403 when user is not owner or admin', async () => {
+      // Drive owned by another user
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue(
+        createDriveFixture({ id: mockDriveId, ownerId: 'other_user' })
+      );
+      // User has no admin membership
+      vi.mocked(loadDriveRelationship).mockResolvedValue(NONE);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/trash`);
+      const response = await GET(request, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toBe('Only drive owners and admins can view trash');
+    });
+  });
+
+  describe('response contract', () => {
+    it('should return tree of trashed pages', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue(
+        createDriveFixture({ id: mockDriveId, ownerId: mockUserId })
+      );
+      const trashedPages = [
+        { id: 'page_1', name: 'Trashed Page', parentId: null, driveId: mockDriveId, isTrashed: true, children: [] },
+      ];
+      vi.mocked(db.query.pages.findMany).mockResolvedValue(trashedPages as never);
+      const tree = [{ id: 'page_1', name: 'Trashed Page', children: [] }];
+      vi.mocked(buildTree).mockReturnValue(tree as never);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/trash`);
+      const response = await GET(request, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body).toEqual(tree);
+      expect(buildTree).toHaveBeenCalledWith(trashedPages);
+    });
+
+    it('should return empty array when no trashed pages', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue(
+        createDriveFixture({ id: mockDriveId, ownerId: mockUserId })
+      );
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([]);
+      vi.mocked(buildTree).mockReturnValue([]);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/trash`);
+      const response = await GET(request, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body).toEqual([]);
+    });
+  });
+
+  describe('error handling', () => {
+    it('should return 500 when database throws', async () => {
+      vi.mocked(db.query.drives.findFirst).mockRejectedValueOnce(new Error('Database error'));
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/trash`);
+      const response = await GET(request, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('Failed to fetch trashed pages');
+    });
+
+    it('should log error when database throws', async () => {
+      const error = new Error('Fetch failure');
+      vi.mocked(db.query.drives.findFirst).mockRejectedValueOnce(error);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/trash`);
+      await GET(request, createContext(mockDriveId));
+
+      expect(loggers.api.error).toHaveBeenCalledWith('Failed to fetch trashed pages:', error);
+    });
+  });
+});

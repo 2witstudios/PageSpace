@@ -24,19 +24,24 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 // Mock logging (boundary)
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
       warn: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 // Test fixtures
 const mockUserId = 'user_123';
@@ -61,6 +66,7 @@ const mockConversationSummary = (overrides: Partial<{
   contextId: string | null;
   lastMessageAt: Date;
   createdAt: Date;
+  workspaceId: string | null;
 }> = {}) => ({
   id: overrides.id ?? 'conv_123',
   title: overrides.title ?? 'Test Conversation',
@@ -68,6 +74,7 @@ const mockConversationSummary = (overrides: Partial<{
   contextId: overrides.contextId ?? null,
   lastMessageAt: overrides.lastMessageAt ?? new Date(),
   createdAt: overrides.createdAt ?? new Date(),
+  workspaceId: overrides.workspaceId ?? null,
 });
 
 const createRequest = () =>
@@ -152,7 +159,10 @@ describe('GET /api/ai/global/active', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to fetch global conversation');
-      expect(loggers.api.error).toHaveBeenCalled();
+      const errorArg = vi.mocked(loggers.api.error).mock.calls[0];
+      expect(errorArg[0]).toBe('Error fetching global conversation:');
+      expect(errorArg[1]).toBeInstanceOf(Error);
+      expect((errorArg[1] as Error).message).toBe('Database error');
     });
   });
 });

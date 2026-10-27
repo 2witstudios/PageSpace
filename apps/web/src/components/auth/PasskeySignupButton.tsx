@@ -3,15 +3,19 @@
 import { useState, useCallback, useEffect } from 'react';
 import { startRegistration } from '@simplewebauthn/browser';
 import { AnimatePresence, motion } from 'motion/react';
+import { MarketingLink } from '@/components/ui/MarketingLink';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Fingerprint, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { persistCsrfToken } from '@/lib/utils/persist-csrf-token';
 import { useWebAuthnSupport } from '@/hooks/useWebAuthnSupport';
 import { useAuthStore } from '@/stores/useAuthStore';
+import { getDevicePlatformFields, handleDesktopAuthResponse } from '@/lib/desktop-auth';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
 
 interface PasskeySignupButtonProps {
   csrfToken: string;
@@ -21,6 +25,12 @@ interface PasskeySignupButtonProps {
   onLoadingChange?: (isLoading: boolean) => void;
   className?: string;
   disabled?: boolean;
+  /** Pre-fills + disables the email input — used when arriving from /invite/[token]. */
+  lockedEmail?: string;
+  /** Forwarded to /api/auth/signup-passkey so the server can attach the new user to the invite. */
+  inviteToken?: string;
+  /** If set, overrides the server redirect after successful registration (e.g. share link return). */
+  nextPath?: string;
 }
 
 export function PasskeySignupButton({
@@ -31,12 +41,16 @@ export function PasskeySignupButton({
   onLoadingChange,
   className,
   disabled = false,
+  lockedEmail,
+  inviteToken,
+  nextPath,
 }: PasskeySignupButtonProps) {
   const isSupported = useWebAuthnSupport();
   const [isRegistering, setIsRegistering] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(lockedEmail ?? '');
+  const [acceptedTos, setAcceptedTos] = useState(false);
 
   useEffect(() => {
     onLoadingChange?.(isRegistering);
@@ -58,11 +72,18 @@ export function PasskeySignupButton({
       return;
     }
 
+    if (!acceptedTos) {
+      toast.error('Please agree to the Terms of Service and Privacy Policy');
+      return;
+    }
+
     setIsRegistering(true);
 
     try {
       // Refresh CSRF token to avoid expiry after sitting on the page
       const freshToken = refreshToken ? (await refreshToken() ?? csrfToken) : csrfToken;
+
+      const platformFields = await getDevicePlatformFields();
 
       // Get registration options
       const optionsRes = await fetch('/api/auth/signup-passkey/options', {
@@ -105,7 +126,9 @@ export function PasskeySignupButton({
           response: regResponse,
           expectedChallenge: options.challenge,
           csrfToken: freshToken,
-          acceptedTos: true,
+          acceptedTos,
+          ...(inviteToken ? { inviteToken } : {}),
+          ...platformFields,
         }),
       });
 
@@ -124,17 +147,22 @@ export function PasskeySignupButton({
         return;
       }
 
-      const { redirectUrl } = await verifyRes.json();
+      const verifyData = await verifyRes.json();
 
       persistCsrfToken();
       useAuthStore.getState().setAuthFailedPermanently(false);
 
+      if (await handleDesktopAuthResponse(verifyData, '/dashboard?welcome=true')) {
+        toast.success('Account created successfully!');
+        return;
+      }
+
       toast.success('Account created successfully!');
 
       if (onSuccess) {
-        onSuccess(redirectUrl);
+        onSuccess(nextPath ?? verifyData.redirectUrl);
       } else {
-        window.location.href = redirectUrl;
+        window.location.href = nextPath ?? verifyData.redirectUrl;
       }
     } catch (err) {
       if (err instanceof Error) {
@@ -153,14 +181,20 @@ export function PasskeySignupButton({
     } finally {
       setIsRegistering(false);
     }
-  }, [csrfToken, refreshToken, email, name, onSuccess, onEmailExists]);
+  }, [csrfToken, refreshToken, email, name, acceptedTos, inviteToken, nextPath, onSuccess, onEmailExists]);
 
   // Don't render if browser doesn't support WebAuthn
   if (isSupported === false) {
     return null;
   }
 
-  const isButtonDisabled = disabled || isRegistering || isSupported === null;
+  // The collapsed CTA must NOT block on `acceptedTos` — the ToS checkbox only
+  // renders inside the expanded form, so blocking the trigger would make
+  // signup unreachable. The submit button (inside the expanded form) gates on
+  // `acceptedTos` separately below.
+  const isExpandTriggerDisabled =
+    disabled || isRegistering || isSupported === null;
+  const isSubmitDisabled = isExpandTriggerDisabled || !acceptedTos;
 
   return (
     <div className={cn('w-full', className)}>
@@ -174,7 +208,7 @@ export function PasskeySignupButton({
           >
             <Button
               onClick={() => setIsExpanded(true)}
-              disabled={isButtonDisabled}
+              disabled={isExpandTriggerDisabled}
               className="w-full"
             >
               <Fingerprint className="mr-2 h-4 w-4" />
@@ -212,8 +246,37 @@ export function PasskeySignupButton({
                 placeholder="you@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                disabled={isRegistering}
+                disabled={isRegistering || !!lockedEmail}
               />
+              {lockedEmail && isV3AuthEnabled() && (
+                <p className="text-xs text-[oklch(0.48_0.015_220)]">
+                  Locked to the address the invitation was sent to.
+                </p>
+              )}
+            </div>
+            <div className="flex items-start gap-2">
+              <Checkbox
+                id="passkey-tos"
+                checked={acceptedTos}
+                onCheckedChange={(checked) => setAcceptedTos(checked === true)}
+                disabled={isRegistering}
+                className="mt-0.5"
+              />
+              <Label
+                htmlFor="passkey-tos"
+                className="text-xs font-normal leading-snug text-muted-foreground"
+              >
+                I agree to PageSpace&apos;s{' '}
+                <MarketingLink href="/terms" className="underline hover:text-foreground">
+                  Terms
+                </MarketingLink>
+                {' '}and{' '}
+                <MarketingLink href="/privacy" className="underline hover:text-foreground">
+                  Privacy Policy
+                </MarketingLink>
+                , and I&apos;m at least 16 years old. AI features send the content you use them with to
+          OpenRouter and the model provider you choose.
+              </Label>
             </div>
             <div className="flex gap-2">
               <Button
@@ -226,7 +289,7 @@ export function PasskeySignupButton({
               </Button>
               <Button
                 onClick={handleSignup}
-                disabled={isButtonDisabled || !name.trim() || !email.trim()}
+                disabled={isSubmitDisabled || !name.trim() || !email.trim()}
                 className="flex-1"
               >
                 {isRegistering ? (

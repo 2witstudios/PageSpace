@@ -1,0 +1,247 @@
+/**
+ * Tests for desktop platform handling in GET /api/auth/magic-link/verify
+ *
+ * Desktop magic links always create a web session (cookies) as a fallback,
+ * then additionally generate an exchange code for desktop token handoff.
+ * This means the link works in any browser, not just on the desktop device.
+ */
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+vi.mock('next/server', () => ({
+  NextResponse: {
+    redirect: vi.fn((url: string, init?: { status?: number; headers?: Headers }) => {
+      const headers = init?.headers ?? new Headers();
+      return new Response(null, {
+        status: init?.status ?? 302,
+        headers: { ...Object.fromEntries(headers.entries()), Location: url },
+      });
+    }),
+    json: (body: unknown, init?: ResponseInit) => new Response(JSON.stringify(body), {
+      status: init?.status ?? 200,
+      headers: init?.headers ?? new Headers({ 'Content-Type': 'application/json' }),
+    }),
+  },
+}));
+
+vi.mock('@pagespace/lib/auth/session-service', () => ({
+  sessionService: {
+    createSession: vi.fn().mockResolvedValue('ps_sess_mock'),
+    validateSession: vi.fn().mockResolvedValue({
+      sessionId: 'mock-sid',
+      userId: 'user-1',
+      type: 'user',
+      scopes: ['*'],
+      userRole: 'user',
+      tokenVersion: 0,
+      adminRoleVersion: 0,
+      expiresAt: new Date(Date.now() + 86400000),
+    }),
+    revokeAllUserSessions: vi.fn().mockResolvedValue(0),
+    revokeWebUserSessions: vi.fn().mockResolvedValue(0),
+    revokeAdminUserSessions: vi.fn().mockResolvedValue(0),
+  },
+}));
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
+  generateCSRFToken: vi.fn().mockReturnValue('mock-csrf'),
+}));
+vi.mock('@pagespace/lib/auth/constants', () => ({
+  SESSION_DURATION_MS: 604800000,
+}));
+vi.mock('@pagespace/lib/auth/exchange-codes', () => ({
+  createExchangeCode: vi.fn().mockResolvedValue('exchange-code-abc'),
+}));
+vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
+  validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
+    deviceToken: 'ps_dev_desktop',
+    deviceTokenRecordId: 'dt-1',
+    isNew: true,
+  }),
+}));
+
+vi.mock('@pagespace/lib/auth/magic-link-service', () => ({
+  verifyMagicLinkToken: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/auth/account-lockout', () => ({
+  resetFailedLoginAttempts: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('@pagespace/lib/auth/verification-utils', () => ({
+  markEmailVerified: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
+    auth: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    security: {
+      warn: vi.fn(),
+    },
+  },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  auditRequest: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
+  trackAuthEvent: vi.fn(),
+}));
+
+vi.mock('@/lib/auth', () => ({
+  getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
+  revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
+}));
+
+vi.mock('@/lib/auth/cookie-config', () => ({
+  appendSessionCookie: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
+  // Shape matters: the route reads `.created`, so a bare null would make every
+  // test here take the provisioning catch instead of the real path.
+  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'home-drive', created: false }),
+}));
+
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserById: vi.fn().mockResolvedValue({
+      id: 'user-1',
+      tokenVersion: 7,
+    }),
+  },
+}));
+
+vi.mock('@/lib/repositories/drive-invite-repository', () => ({
+  driveInviteRepository: {
+    findUserVerificationStatusById: vi
+      .fn()
+      .mockResolvedValue({ email: 'user@example.com', emailVerified: null, suspendedAt: null }),
+  },
+}));
+
+vi.mock('@/lib/auth/native-invite-acceptance', () => ({
+  consumeAnyInviteIfPresent: vi.fn().mockResolvedValue({ kind: null, invitedDriveId: null, invitedPageId: null, connectionId: null }),
+  consumeAllInvitesForEmail: vi.fn().mockResolvedValue({ drivesAccepted: 0, pagesAccepted: 0, connectionsCreated: 0 }),
+}));
+
+import { GET } from '../route';
+import { verifyMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
+import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';
+import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
+import { appendSessionCookie } from '@/lib/auth/cookie-config';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
+
+const desktopMetadata = JSON.stringify({
+  platform: 'desktop',
+  deviceId: 'dev-123',
+  deviceName: 'My Mac',
+});
+
+const createVerifyRequest = (token = 'ps_magic_validtoken') =>
+  new Request(`http://localhost/api/auth/magic-link/verify?token=${token}`, {
+    method: 'GET',
+  });
+
+describe('GET /api/auth/magic-link/verify - desktop platform', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(verifyMagicLinkToken).mockResolvedValue({
+      ok: true,
+      data: { userId: 'user-1', isNewUser: false, metadata: desktopMetadata },
+    });
+  });
+
+  it('redirects to dashboard (not deep link) with desktopExchange param', async () => {
+    const response = await GET(createVerifyRequest());
+
+    expect(response.status).toBe(302);
+    const location = response.headers.get('Location') || '';
+    expect(location).toContain('/dashboard');
+    expect(location).toContain('desktopExchange=exchange-code-abc');
+    expect(location).not.toContain('pagespace://');
+  });
+
+  it('sets session cookies for browser fallback', async () => {
+    await GET(createVerifyRequest());
+
+    expect(appendSessionCookie).toHaveBeenCalled();
+  });
+
+  it('mints the device token for desktop — the platform the link was bound to', async () => {
+    await GET(createVerifyRequest());
+
+    expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
+      expect.objectContaining({ platform: 'desktop', deviceId: 'dev-123', deviceName: 'My Mac' }),
+    );
+  });
+
+  it('creates exchange code with correct session token', async () => {
+    await GET(createVerifyRequest());
+
+    expect(createExchangeCode).toHaveBeenCalledWith(expect.objectContaining({
+      sessionToken: 'ps_sess_mock',
+      provider: 'magic-link',
+      userId: 'user-1',
+    }));
+  });
+
+  it('provisions Getting Started drive for new desktop users', async () => {
+    vi.mocked(verifyMagicLinkToken).mockResolvedValue({
+      ok: true,
+      data: { userId: 'user-1', isNewUser: true, metadata: desktopMetadata },
+    });
+
+    await GET(createVerifyRequest());
+
+    expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('user-1');
+  });
+
+  it('provisions Home drive for existing desktop users (lazy idempotent)', async () => {
+    await GET(createVerifyRequest());
+
+    expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('user-1');
+  });
+
+  it('falls through to web flow when no desktop metadata', async () => {
+    vi.mocked(verifyMagicLinkToken).mockResolvedValue({
+      ok: true,
+      data: { userId: 'user-1', isNewUser: false, metadata: null },
+    });
+
+    const response = await GET(createVerifyRequest());
+
+    const location = response.headers.get('Location') || '';
+    expect(location).not.toContain('desktopExchange');
+    expect(createExchangeCode).not.toHaveBeenCalled();
+  });
+
+  it('includes welcome param for new users', async () => {
+    vi.mocked(verifyMagicLinkToken).mockResolvedValue({
+      ok: true,
+      data: { userId: 'user-1', isNewUser: true, metadata: desktopMetadata },
+    });
+
+    const response = await GET(createVerifyRequest());
+
+    const location = response.headers.get('Location') || '';
+    expect(location).toContain('welcome=true');
+  });
+
+  it('honors a safe next= on the desktop redirect URL', async () => {
+    const url = `http://localhost/api/auth/magic-link/verify?token=ps_magic_validtoken&next=${encodeURIComponent('/dashboard/drive_abc')}`;
+    const response = await GET(new Request(url, { method: 'GET' }));
+
+    const location = response.headers.get('Location') || '';
+    expect(location).toContain('/dashboard/drive_abc');
+    expect(location).toContain('desktopExchange=exchange-code-abc');
+    expect(location).toContain('auth=success');
+  });
+
+  it('falls back to /dashboard when desktop next= is unsafe', async () => {
+    const url = `http://localhost/api/auth/magic-link/verify?token=ps_magic_validtoken&next=${encodeURIComponent('//evil.com/phish')}`;
+    const response = await GET(new Request(url, { method: 'GET' }));
+
+    const location = response.headers.get('Location') || '';
+    expect(location).toContain('/dashboard');
+    expect(location).not.toContain('evil.com');
+    expect(location).toContain('desktopExchange=exchange-code-abc');
+  });
+});

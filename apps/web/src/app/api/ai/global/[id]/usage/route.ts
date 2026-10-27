@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
-import { getContextWindow } from '@pagespace/lib/ai-monitoring';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { getContextWindow } from '@pagespace/lib/monitoring/ai-monitoring';
 import {
   globalConversationRepository,
   calculateUsageSummary,
@@ -18,8 +19,12 @@ export async function GET(
 ) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
-    if (isAuthError(auth)) return auth.error;
-    const userId = auth.userId;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'global_chat_usage', resourceId: 'get', details: { reason: 'auth_failed', method: 'GET', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
+      return auth.error;
+    }
+    const { userId, role } = auth;
+    const isAdmin = role === 'admin';
 
     const { id } = await context.params;
 
@@ -37,9 +42,19 @@ export async function GET(
     // Calculate summary statistics (pure function)
     const summary = calculateUsageSummary(logs, getContextWindow);
 
+    // Strip cost data from non-admin responses
+    const responseLogs = isAdmin ? logs : logs.map(log => ({ ...log, cost: null }));
+    const responseSummary = isAdmin
+      ? summary
+      : { ...summary, billing: { ...summary.billing, totalCost: 0 } };
+
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'global_chat_usage', resourceId: id, details: {
+      action: 'view_usage',
+    } });
+
     return NextResponse.json({
-      logs,
-      summary,
+      logs: responseLogs,
+      summary: responseSummary,
     });
   } catch (error) {
     loggers.api.error('Error fetching AI usage:', error as Error);

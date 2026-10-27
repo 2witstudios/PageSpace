@@ -1,0 +1,588 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+// ============================================================================
+// Contract Tests for /api/users/search
+//
+// Mock at the SERVICE SEAM level: auth, db queries, and query-params utility
+// ============================================================================
+
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
+    api: {
+      info: vi.fn(),
+      error: vi.fn(),
+      warn: vi.fn(),
+      debug: vi.fn(),
+    },
+  },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
+}));
+
+vi.mock('@/lib/auth', () => ({
+  verifyAuth: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+  checkDistributedRateLimit: vi.fn(),
+  DISTRIBUTED_RATE_LIMITS: { API: { maxAttempts: 100, windowMs: 60000 } },
+}));
+
+// Track all chained query builder calls
+const mockLimit = vi.fn();
+const mockWhere = vi.fn();
+const mockLeftJoin = vi.fn();
+const mockFrom = vi.fn();
+const mockSelect = vi.fn();
+
+// Reset chains before each call
+function _setupSelectChain(result: unknown[]) {
+  mockLimit.mockResolvedValue(result);
+  mockWhere.mockReturnValue({ limit: mockLimit });
+  mockLeftJoin.mockReturnValue({ where: mockWhere });
+  mockFrom.mockReturnValue({ leftJoin: mockLeftJoin, where: mockWhere });
+  mockSelect.mockReturnValue({ from: mockFrom });
+}
+
+// We need separate chains for the three select calls
+const profileSelectChain = {
+  limit: vi.fn(),
+  where: vi.fn(),
+  leftJoin: vi.fn(),
+  from: vi.fn(),
+};
+
+const emailSelectChain = {
+  limit: vi.fn(),
+  where: vi.fn(),
+  from: vi.fn(),
+};
+
+const profileLookupChain = {
+  limit: vi.fn(),
+  where: vi.fn(),
+  from: vi.fn(),
+};
+
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    select: vi.fn(),
+  },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((col: unknown, val: unknown) => ({ _eq: true, col, val })),
+  and: vi.fn((...args: unknown[]) => ({ _and: true, args })),
+  or: vi.fn((...args: unknown[]) => ({ _or: true, args })),
+  ilike: vi.fn((col: unknown, val: unknown) => ({ _ilike: true, col, val })),
+  isNotNull: vi.fn((col: unknown) => ({ _isNotNull: true, col })),
+  inArray: vi.fn((col: unknown, vals: unknown) => ({ _inArray: true, col, vals })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: {
+    id: 'users.id',
+    email: 'users.email',
+    name: 'users.name',
+    emailVerified: 'users.emailVerified',
+  },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  userProfiles: {
+    userId: 'userProfiles.userId',
+    username: 'userProfiles.username',
+    displayName: 'userProfiles.displayName',
+    bio: 'userProfiles.bio',
+    avatarUrl: 'userProfiles.avatarUrl',
+    isPublic: 'userProfiles.isPublic',
+  },
+}));
+
+vi.mock('@/lib/utils/query-params', () => ({
+  parseBoundedIntParam: vi.fn((_raw: string | null, opts: { defaultValue: number }) => opts.defaultValue),
+}));
+
+vi.mock('@/lib/users/visibility', () => ({
+  searchRelatedProfilesByName: vi.fn(),
+}));
+
+import { GET } from '../route';
+import { searchRelatedProfilesByName } from '@/lib/users/visibility';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { verifyAuth } from '@/lib/auth';
+import { db } from '@pagespace/db/db';
+import { and, isNotNull } from '@pagespace/db/operators';
+import { parseBoundedIntParam } from '@/lib/utils/query-params';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
+
+// ============================================================================
+// Test Helpers
+// ============================================================================
+
+function setupDbChains(
+  profileResults: unknown[] = [],
+  emailResults: unknown[] = [],
+  profileLookupResults: unknown[] = [],
+) {
+  let selectCallCount = 0;
+
+  // Profile query chain
+  profileSelectChain.limit.mockResolvedValue(profileResults);
+  profileSelectChain.where.mockReturnValue({ limit: profileSelectChain.limit });
+  profileSelectChain.leftJoin.mockReturnValue({ where: profileSelectChain.where });
+  profileSelectChain.from.mockReturnValue({ leftJoin: profileSelectChain.leftJoin });
+
+  // Email query chain
+  emailSelectChain.limit.mockResolvedValue(emailResults);
+  emailSelectChain.where.mockReturnValue({ limit: emailSelectChain.limit });
+  emailSelectChain.from.mockReturnValue({ where: emailSelectChain.where });
+
+  // Profile lookup chain (for email results without existing profile match)
+  profileLookupChain.limit.mockResolvedValue(profileLookupResults);
+  profileLookupChain.where.mockReturnValue({ limit: profileLookupChain.limit });
+  profileLookupChain.from.mockReturnValue({ where: profileLookupChain.where });
+
+  vi.mocked(db.select).mockImplementation((..._args: unknown[]) => {
+    selectCallCount++;
+    if (selectCallCount === 1) {
+      return { from: profileSelectChain.from } as never;
+    } else if (selectCallCount === 2) {
+      return { from: emailSelectChain.from } as never;
+    } else {
+      return { from: profileLookupChain.from } as never;
+    }
+  });
+}
+
+// The related-profiles branch is delegated to `searchRelatedProfilesByName`
+// (mocked here), so it issues no `db.select` of its own — the route's own select
+// order stays: 1. public profiles  2. email  3. profile lookup.
+
+// ============================================================================
+// GET /api/users/search
+// ============================================================================
+
+describe('GET /api/users/search', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(verifyAuth).mockResolvedValue({
+      id: 'user_123',
+      // @ts-expect-error - test mock with extra properties
+      hasSessionBearerToken: false,
+    });
+    vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true });
+    // Default: no related matches; tests that exercise the related branch set a
+    // return value on this mock. It never issues a db.select of its own.
+    vi.mocked(searchRelatedProfilesByName).mockResolvedValue([]);
+    setupDbChains();
+  });
+
+  describe('authentication', () => {
+    it('should return 401 when not authenticated', async () => {
+      vi.mocked(verifyAuth).mockResolvedValue(null);
+
+      const request = new Request('https://example.com/api/users/search?q=test');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(401);
+      expect(body.error).toBe('Unauthorized');
+    });
+  });
+
+  describe('validation', () => {
+    it('should return empty users array when query is missing', async () => {
+      const request = new Request('https://example.com/api/users/search');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body).toEqual({ users: [] });
+    });
+
+    it('should return empty users array when query is too short (1 char)', async () => {
+      const request = new Request('https://example.com/api/users/search?q=a');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body).toEqual({ users: [] });
+    });
+
+    it('should return empty users array when query is empty string', async () => {
+      const request = new Request('https://example.com/api/users/search?q=');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body).toEqual({ users: [] });
+    });
+  });
+
+  describe('profile search results', () => {
+    it('should return profile results WITHOUT an email (M3 — email harvest)', async () => {
+      // The DB row deliberately still carries an email to prove the route drops
+      // it: a 2-char substring match must never surface a public profile's email.
+      const profileResults = [
+        {
+          userId: 'user_456',
+          username: 'testuser',
+          displayName: 'Test User',
+          bio: 'A bio',
+          avatarUrl: 'https://example.com/avatar.png',
+          email: 'test@example.com',
+        },
+      ];
+      setupDbChains(profileResults, []);
+
+      const request = new Request('https://example.com/api/users/search?q=test');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.users).toHaveLength(1);
+      expect(body.users[0]).toEqual({
+        userId: 'user_456',
+        username: 'testuser',
+        displayName: 'Test User',
+        bio: 'A bio',
+        avatarUrl: 'https://example.com/avatar.png',
+      });
+      expect(body.users[0]).not.toHaveProperty('email');
+    });
+  });
+
+  describe('rate limiting (M3)', () => {
+    it('should return 429 when the per-user rate limit is exceeded', async () => {
+      vi.mocked(checkDistributedRateLimit).mockResolvedValue({
+        allowed: false,
+        retryAfter: 42,
+      });
+
+      const request = new Request('https://example.com/api/users/search?q=test');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(429);
+      expect(response.headers.get('Retry-After')).toBe('42');
+      expect(body.error).toBe('Too many requests');
+    });
+
+    it('should NOT count too-short queries against the rate limit', async () => {
+      const request = new Request('https://example.com/api/users/search?q=a');
+      await GET(request);
+      expect(checkDistributedRateLimit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('email search results', () => {
+    it('should add email result with existing profile when user not already in map', async () => {
+      const emailResults = [
+        { userId: 'user_789', email: 'exact@example.com', name: 'Email User' },
+      ];
+      const profileLookupResults = [
+        {
+          userId: 'user_789',
+          username: 'emailuser',
+          displayName: 'Email Display',
+          bio: 'Email bio',
+          avatarUrl: 'https://example.com/email-avatar.png',
+          isPublic: true,
+        },
+      ];
+      setupDbChains([], emailResults, profileLookupResults);
+
+      const request = new Request('https://example.com/api/users/search?q=exact@example.com');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.users).toHaveLength(1);
+      expect(body.users[0]).toEqual({
+        userId: 'user_789',
+        username: 'emailuser',
+        displayName: 'Email Display',
+        bio: 'Email bio',
+        avatarUrl: 'https://example.com/email-avatar.png',
+        email: 'exact@example.com',
+      });
+    });
+
+    it('should add email result without profile (fallback display name from users.name)', async () => {
+      const emailResults = [
+        { userId: 'user_no_profile', email: 'noprofile@example.com', name: 'No Profile User' },
+      ];
+      setupDbChains([], emailResults, []);
+
+      const request = new Request('https://example.com/api/users/search?q=noprofile@example.com');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.users).toHaveLength(1);
+      expect(body.users[0]).toEqual({
+        userId: 'user_no_profile',
+        username: null,
+        displayName: 'No Profile User',
+        bio: null,
+        avatarUrl: null,
+        email: 'noprofile@example.com',
+      });
+    });
+
+    it('should use "Unknown User" when email result has no profile and no name', async () => {
+      const emailResults = [
+        { userId: 'user_anon', email: 'anon@example.com', name: null },
+      ];
+      setupDbChains([], emailResults, []);
+
+      const request = new Request('https://example.com/api/users/search?q=anon@example.com');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.users[0].displayName).toBe('Unknown User');
+    });
+
+    it('should not duplicate when email result user already exists in profile results', async () => {
+      const profileResults = [
+        {
+          userId: 'user_dup',
+          username: 'dupuser',
+          displayName: 'Dup User',
+          bio: null,
+          avatarUrl: null,
+          email: 'dup@example.com',
+        },
+      ];
+      const emailResults = [
+        { userId: 'user_dup', email: 'dup@example.com', name: 'Dup User' },
+      ];
+      setupDbChains(profileResults, emailResults);
+
+      const request = new Request('https://example.com/api/users/search?q=dup@example.com');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.users).toHaveLength(1);
+    });
+  });
+
+  describe('combined results', () => {
+    it('should combine profile and email results without duplicates', async () => {
+      const profileResults = [
+        {
+          userId: 'user_1',
+          username: 'profileuser',
+          displayName: 'Profile User',
+          bio: 'bio1',
+          avatarUrl: null,
+          email: 'profile@example.com',
+        },
+      ];
+      const emailResults = [
+        { userId: 'user_2', email: 'email@example.com', name: 'Email User' },
+      ];
+      setupDbChains(profileResults, emailResults, []);
+
+      const request = new Request('https://example.com/api/users/search?q=email@example.com');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.users).toHaveLength(2);
+    });
+  });
+
+  describe('related profiles (find friends/collaborators by name)', () => {
+    it('finds a PRIVATE friend/collaborator by name via the related branch', async () => {
+      // searchRelatedProfilesByName returns a row that would NOT appear in the
+      // public profile query (isPublic = false). It must still surface by name.
+      vi.mocked(searchRelatedProfilesByName).mockResolvedValue([
+        {
+          userId: 'friend_1',
+          username: 'privfriend',
+          displayName: 'Private Friend',
+          bio: 'hidden bio',
+          avatarUrl: null,
+        },
+      ]);
+      setupDbChains([], []);
+
+      const request = new Request('https://example.com/api/users/search?q=priv');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.users).toHaveLength(1);
+      expect(body.users[0]).toEqual({
+        userId: 'friend_1',
+        username: 'privfriend',
+        displayName: 'Private Friend',
+        bio: 'hidden bio',
+        avatarUrl: null,
+      });
+      // Same public-profile shape — the related branch NEVER carries an email.
+      expect(body.users[0]).not.toHaveProperty('email');
+      // The route delegates the relationship scoping to the helper, passing the
+      // caller id, an escaped LIKE pattern, and the result limit.
+      expect(searchRelatedProfilesByName).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_123' }), '%priv%', 10);
+    });
+
+    it('passes a LIKE-escaped pattern to the related branch so wildcards are literal', async () => {
+      vi.mocked(searchRelatedProfilesByName).mockResolvedValue([]);
+      setupDbChains([], []);
+
+      const request = new Request('https://example.com/api/users/search?q=' + encodeURIComponent('%%'));
+      await GET(request);
+
+      // `%%` must be escaped to `\%\%`, not passed through as a match-all wildcard.
+      expect(searchRelatedProfilesByName).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_123' }), '%\\%\\%%', 10);
+    });
+
+    it('de-dupes a user who is both a public match and a related match', async () => {
+      vi.mocked(searchRelatedProfilesByName).mockResolvedValue([
+        { userId: 'shared_1', username: 'shared', displayName: 'Shared User', bio: null, avatarUrl: null },
+      ]);
+      const profileResults = [
+        { userId: 'shared_1', username: 'shared', displayName: 'Shared User', bio: null, avatarUrl: null, email: 'x@y.com' },
+      ];
+      setupDbChains(profileResults, []);
+
+      const request = new Request('https://example.com/api/users/search?q=shared');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.users).toHaveLength(1);
+      expect(body.users[0].userId).toBe('shared_1');
+      expect(body.users[0]).not.toHaveProperty('email');
+    });
+
+    it('preserves the exact-email match ahead of name matches (email-first, survives the limit)', async () => {
+      // A related and a public name match, plus an exact-email match for a THIRD
+      // user. With limit=1 the email match must win (highest intent).
+      vi.mocked(parseBoundedIntParam).mockReturnValueOnce(1);
+      vi.mocked(searchRelatedProfilesByName).mockResolvedValue([
+        { userId: 'rel', username: 'rel', displayName: 'Related One', bio: null, avatarUrl: null },
+      ]);
+      const profileResults = [
+        { userId: 'pub', username: 'pub', displayName: 'Public One', bio: null, avatarUrl: null },
+      ];
+      const emailResults = [
+        { userId: 'mail', email: 'exact@example.com', name: 'Exact Mail' },
+      ];
+      setupDbChains(profileResults, emailResults, []);
+
+      const request = new Request('https://example.com/api/users/search?q=exact@example.com');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.users).toHaveLength(1);
+      expect(body.users[0].userId).toBe('mail');
+      expect(body.users[0].email).toBe('exact@example.com');
+    });
+  });
+
+  describe('emailVerified gate (Review C1: temp-user-via-search re-invite path)', () => {
+    it('given an email-shaped query, the email-match where-clause MUST compose isNotNull(users.emailVerified) so temp users (emailVerified IS NULL) cannot surface in search results', async () => {
+      const request = new Request('https://example.com/api/users/search?q=temp@example.com');
+      await GET(request);
+
+      // The route's email lookup must restrict to verified users — otherwise an
+      // admin can pick a temp user (created by a prior pending invite) and
+      // fall through to the userId-path which auto-accepts. See Review 1
+      // finding C1 / Review 2 §1.
+      expect(isNotNull).toHaveBeenCalledWith('users.emailVerified');
+      // The email arg now flows through the encryption-aware dual-lookup edge
+      // (`userEmailMatch`), so it is an opaque Drizzle SQL condition rather than a
+      // mock-inspectable `eq`. Anchor on the verified-gate marker instead: the
+      // email lookup's and(...) MUST still compose isNotNull(emailVerified).
+      const emailWhereCall = vi.mocked(and).mock.calls.find((args) =>
+        args.some((a) => (a as { _isNotNull?: true; col?: unknown }).col === 'users.emailVerified')
+      );
+      expect(emailWhereCall, 'email lookup should compose isNotNull(emailVerified)').toBeDefined();
+      expect(emailWhereCall).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ _isNotNull: true, col: 'users.emailVerified' }),
+        ])
+      );
+    });
+
+    it('given a temp-user record (emailVerified: null) returned by the DB, the route must NOT include it in results (defense in depth)', async () => {
+      // Even if the DB layer somehow returned a temp user, the route should not
+      // surface them. This is belt-and-suspenders against future regressions.
+      const tempUserResults = [
+        { userId: 'temp_user', email: 'temp@example.com', name: 'Temp', emailVerified: null },
+      ];
+      setupDbChains([], tempUserResults, []);
+
+      const request = new Request('https://example.com/api/users/search?q=temp@example.com');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.users.find((u: { userId: string }) => u.userId === 'temp_user')).toBeUndefined();
+    });
+  });
+
+  describe('security audit', () => {
+    it('should log audit event on successful search', async () => {
+      const request = new Request('https://example.com/api/users/search?q=test');
+      await GET(request);
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        request,
+        { eventType: 'data.read', userId: 'user_123', resourceType: 'user_search', resourceId: 'user_123', details: { queryLength: 4, resultCount: 0 } }
+      );
+    });
+
+    it('should not log audit event when query too short', async () => {
+      const request = new Request('https://example.com/api/users/search?q=a');
+      await GET(request);
+
+      expect(auditRequest).not.toHaveBeenCalled();
+    });
+
+    it('should not log audit event when auth fails', async () => {
+      vi.mocked(verifyAuth).mockResolvedValue(null);
+
+      const request = new Request('https://example.com/api/users/search?q=test');
+      await GET(request);
+
+      expect(auditRequest).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('error handling', () => {
+    it('should return 500 when database throws', async () => {
+      vi.mocked(db.select).mockImplementation(() => {
+        throw new Error('Database connection lost');
+      });
+
+      const request = new Request('https://example.com/api/users/search?q=test');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('Failed to search users');
+    });
+
+    it('should log error when database throws', async () => {
+      const error = new Error('Query failed');
+      vi.mocked(db.select).mockImplementation(() => {
+        throw error;
+      });
+
+      const request = new Request('https://example.com/api/users/search?q=test');
+      await GET(request);
+
+      expect(loggers.api.error).toHaveBeenCalledWith('Error searching users:', error);
+    });
+  });
+});

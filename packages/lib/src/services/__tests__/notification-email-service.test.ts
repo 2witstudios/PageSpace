@@ -1,0 +1,494 @@
+/**
+ * @scaffold - ORM query mocks present (db.query.users.findFirst, db.insert).
+ * Pending notification-repository seam extraction for full rubric compliance.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    query: {
+      users: { findFirst: vi.fn() },
+      emailNotificationPreferences: { findFirst: vi.fn() },
+    },
+    insert: vi.fn(() => ({
+      values: vi.fn().mockResolvedValue(undefined),
+    })),
+  },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'users.id', email: 'users.email', name: 'users.name' },
+  emailUnsubscribeTokens: { tokenHash: 'eut.tokenHash' },
+}));
+vi.mock('@pagespace/db/schema/email-notifications', () => ({
+  emailNotificationPreferences: { userId: 'enp.userId', notificationType: 'enp.notificationType', emailEnabled: 'enp.emailEnabled' },
+  emailNotificationLog: { userId: 'enl.userId' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
+  and: vi.fn((...args: unknown[]) => ({ op: 'and', args })),
+}));
+
+vi.mock('../email-service', () => ({
+  sendEmail: vi.fn().mockResolvedValue(undefined),
+  resolveAppUrl: vi.fn().mockReturnValue('https://pagespace.ai'),
+}));
+
+// Mock all email templates
+vi.mock('../../email-templates/DriveInvitationEmail', () => ({ DriveInvitationEmail: vi.fn(() => 'DriveInvitationEmail') }));
+vi.mock('../../email-templates/DirectMessageEmail', () => ({ DirectMessageEmail: vi.fn(() => 'DirectMessageEmail') }));
+vi.mock('../../email-templates/ConnectionRequestEmail', () => ({ ConnectionRequestEmail: vi.fn(() => 'ConnectionRequestEmail') }));
+vi.mock('../../email-templates/PageSharedEmail', () => ({ PageSharedEmail: vi.fn(() => 'PageSharedEmail') }));
+vi.mock('../../email-templates/CollaboratorAddedEmail', () => ({ CollaboratorAddedEmail: vi.fn(() => 'CollaboratorAddedEmail') }));
+vi.mock('../../email-templates/ConnectionAcceptedEmail', () => ({ ConnectionAcceptedEmail: vi.fn(() => 'ConnectionAcceptedEmail') }));
+vi.mock('../../email-templates/ConnectionRejectedEmail', () => ({ ConnectionRejectedEmail: vi.fn(() => 'ConnectionRejectedEmail') }));
+vi.mock('../../email-templates/PermissionRevokedEmail', () => ({ PermissionRevokedEmail: vi.fn(() => 'PermissionRevokedEmail') }));
+vi.mock('../../email-templates/PermissionUpdatedEmail', () => ({ PermissionUpdatedEmail: vi.fn(() => 'PermissionUpdatedEmail') }));
+vi.mock('../../email-templates/DriveJoinedEmail', () => ({ DriveJoinedEmail: vi.fn(() => 'DriveJoinedEmail') }));
+vi.mock('../../email-templates/DriveRoleChangedEmail', () => ({ DriveRoleChangedEmail: vi.fn(() => 'DriveRoleChangedEmail') }));
+
+vi.mock('../../auth/token-utils', () => ({
+  hashToken: vi.fn((t: string) => `hashed_${t}`),
+  getTokenPrefix: vi.fn((t: string) => t.substring(0, 12)),
+}));
+
+import { db } from '@pagespace/db/db';
+import { sendEmail } from '../email-service';
+import { DirectMessageEmail } from '../../email-templates/DirectMessageEmail';
+import { sendNotificationEmail, sendOrgInvitationEmail, sendPendingDriveInvitationEmail } from '../notification-email-service';
+
+import { DriveInvitationEmail } from '../../email-templates/DriveInvitationEmail';
+import { ConnectionRequestEmail } from '../../email-templates/ConnectionRequestEmail';
+import { PageSharedEmail } from '../../email-templates/PageSharedEmail';
+import { CollaboratorAddedEmail } from '../../email-templates/CollaboratorAddedEmail';
+import { ConnectionAcceptedEmail } from '../../email-templates/ConnectionAcceptedEmail';
+import { ConnectionRejectedEmail } from '../../email-templates/ConnectionRejectedEmail';
+import { PermissionRevokedEmail } from '../../email-templates/PermissionRevokedEmail';
+import { PermissionUpdatedEmail } from '../../email-templates/PermissionUpdatedEmail';
+import { DriveJoinedEmail } from '../../email-templates/DriveJoinedEmail';
+import { DriveRoleChangedEmail } from '../../email-templates/DriveRoleChangedEmail';
+type MockFn = ReturnType<typeof vi.fn>;
+type MockDb = {
+  query: {
+    users: { findFirst: MockFn };
+    emailNotificationPreferences: { findFirst: MockFn };
+  };
+  insert: MockFn;
+};
+const mockDb = db as unknown as MockDb;
+
+describe('notification-email-service', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    // Default: notifications enabled, user has email
+    mockDb.query.emailNotificationPreferences.findFirst.mockResolvedValue(null); // default enabled
+    mockDb.query.users.findFirst.mockResolvedValue({ name: 'Test User', email: 'test@example.com' });
+    mockDb.insert.mockReturnValue({ values: vi.fn().mockResolvedValue(undefined) });
+  });
+
+  it.each([
+    ['DRIVE_INVITED', DriveInvitationEmail, { inviterName: 'Someone', driveName: 'a workspace' }],
+    ['NEW_DIRECT_MESSAGE', DirectMessageEmail, { senderName: 'Someone', messagePreview: 'New message received' }],
+    ['CONNECTION_REQUEST', ConnectionRequestEmail, { requesterName: 'Someone' }],
+    ['PAGE_SHARED', PageSharedEmail, { sharerName: 'Someone', pageTitle: 'a page', permissions: ['view'] }],
+    ['PERMISSION_GRANTED', PageSharedEmail, { sharerName: 'Someone', pageTitle: 'a page', permissions: ['view'] }],
+    ['CONNECTION_ACCEPTED', ConnectionAcceptedEmail, { accepterName: 'Someone' }],
+    ['CONNECTION_REJECTED', ConnectionRejectedEmail, { rejecterName: 'Someone' }],
+    ['PERMISSION_REVOKED', PermissionRevokedEmail, { pageTitle: 'a page' }],
+    ['PERMISSION_UPDATED', PermissionUpdatedEmail, { pageTitle: 'a page', permissions: ['view'] }],
+    ['DRIVE_JOINED', DriveJoinedEmail, { driveName: 'a workspace' }],
+    ['DRIVE_ROLE_CHANGED', DriveRoleChangedEmail, { driveName: 'a workspace', newRole: 'member' }],
+  ] as const)('renders safe template defaults for %s with missing metadata', async (type, template, defaults) => {
+    await sendNotificationEmail({ userId: 'user-1', type, metadata: {} });
+    expect(template).toHaveBeenCalledWith(expect.objectContaining({
+      ...defaults, userName: 'Test User',
+      unsubscribeUrl: expect.stringMatching(/^https:\/\/pagespace.ai\/api\/notifications\/unsubscribe\/ps_unsub_/),
+    }));
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: 'test@example.com' }));
+  });
+
+  it('uses safe defaults when edit access is granted without display metadata', async () => {
+    await sendNotificationEmail({ userId: 'user-1', type: 'PERMISSION_GRANTED', metadata: { permissions: { canEdit: true } } });
+    expect(CollaboratorAddedEmail).toHaveBeenCalledWith(expect.objectContaining({ adderName: 'Someone', pageTitle: 'a page' }));
+    expect(sendEmail).toHaveBeenCalledOnce();
+  });
+
+  it('records non-Error delivery failures even when the recipient disappeared', async () => {
+    vi.mocked(sendEmail).mockRejectedValueOnce('delivery unavailable');
+    mockDb.query.users.findFirst.mockResolvedValueOnce({ name: 'Test User', email: 'test@example.com' }).mockResolvedValueOnce(null);
+    const values = vi.fn().mockResolvedValue(undefined);
+    mockDb.insert.mockReturnValue({ values });
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(sendNotificationEmail({ userId: 'user-1', type: 'DRIVE_JOINED', metadata: {} })).resolves.toBeUndefined();
+      expect(values).toHaveBeenCalledWith(expect.objectContaining({ success: false, recipientEmail: 'unknown', errorMessage: 'Unknown error' }));
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it('should skip when user has notifications disabled', async () => {
+    mockDb.query.emailNotificationPreferences.findFirst.mockResolvedValueOnce({ emailEnabled: false });
+
+    await sendNotificationEmail({
+      userId: 'user-1',
+      type: 'DRIVE_INVITED',
+      metadata: { driveName: 'Test Drive' },
+    });
+
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('should skip when user has no email', async () => {
+    mockDb.query.users.findFirst.mockResolvedValueOnce(null);
+
+    await sendNotificationEmail({
+      userId: 'user-1',
+      type: 'DRIVE_INVITED',
+      metadata: {},
+    });
+
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('should skip for unsupported notification types', async () => {
+    await sendNotificationEmail({
+      userId: 'user-1',
+      type: 'MENTION' as never,
+      metadata: {},
+    });
+
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  // Every type the template switch leaves without an email is named there, and its default
+  // is a compile-time `never`: a new type cannot fall silently into "no email".
+  it.each([
+    'EMAIL_VERIFICATION_REQUIRED',
+    'TOS_PRIVACY_UPDATED',
+    'MENTION',
+    'TASK_ASSIGNED',
+    'PRODUCT_UPDATE',
+    'AUTOMATION_SKIPPED',
+    'WALLET_DEBT',
+  ] as const)('sends no per-event email for %s (named silent in the template switch)', async (type) => {
+    await sendNotificationEmail({ userId: 'user-1', type, metadata: {} });
+
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('SPEND-6 (partial) the lead\'s automation-skip notice is in-app only: no email', async () => {
+    await sendNotificationEmail({ userId: 'user-1', type: 'AUTOMATION_SKIPPED', metadata: { reason: 'drive_wallet_empty' } });
+
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('should send DRIVE_INVITED email', async () => {
+    await sendNotificationEmail({
+      userId: 'user-1',
+      type: 'DRIVE_INVITED',
+      metadata: { driveName: 'Test Drive', inviterName: 'Alice', driveId: 'd1' },
+    });
+
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'test@example.com',
+      subject: expect.stringContaining('Test Drive'),
+    }));
+  });
+
+  it('should send NEW_DIRECT_MESSAGE email', async () => {
+    await sendNotificationEmail({
+      userId: 'user-1',
+      type: 'NEW_DIRECT_MESSAGE',
+      metadata: { senderName: 'Bob', messagePreview: 'Hello', conversationId: 'c1' },
+    });
+
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      subject: expect.stringContaining('Bob'),
+    }));
+    expect(DirectMessageEmail).toHaveBeenCalledWith(expect.objectContaining({
+      viewUrl: expect.stringContaining('/dashboard/dms/c1'),
+    }));
+  });
+
+  it('should send CONNECTION_REQUEST email', async () => {
+    await sendNotificationEmail({
+      userId: 'user-1',
+      type: 'CONNECTION_REQUEST',
+      metadata: { requesterName: 'Charlie' },
+    });
+
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      subject: expect.stringContaining('Charlie'),
+    }));
+  });
+
+  it('should send PAGE_SHARED email with page title in subject', async () => {
+    await sendNotificationEmail({
+      userId: 'user-1',
+      type: 'PAGE_SHARED',
+      metadata: { sharerName: 'Dave', pageTitle: 'My Page', driveId: 'd1', pageId: 'p1' },
+    });
+
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'test@example.com',
+      subject: expect.stringContaining('My Page'),
+    }));
+  });
+
+  it('should send PERMISSION_GRANTED with edit as CollaboratorAdded', async () => {
+    await sendNotificationEmail({
+      userId: 'user-1',
+      type: 'PERMISSION_GRANTED',
+      metadata: {
+        permissions: { canEdit: true },
+        adderName: 'Eve',
+        pageTitle: 'Doc',
+        driveId: 'd1',
+        pageId: 'p1',
+      },
+    });
+
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      subject: expect.stringContaining('edit'),
+    }));
+  });
+
+  it('should send PERMISSION_GRANTED without edit as PageShared with sharer in subject', async () => {
+    await sendNotificationEmail({
+      userId: 'user-1',
+      type: 'PERMISSION_GRANTED',
+      metadata: {
+        permissions: { canView: true },
+        sharerName: 'Eve',
+        pageTitle: 'Doc',
+        driveId: 'd1',
+        pageId: 'p1',
+      },
+    });
+
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'test@example.com',
+      subject: expect.stringContaining('Eve'),
+    }));
+  });
+
+  it('should send CONNECTION_ACCEPTED email with accepter name', async () => {
+    await sendNotificationEmail({
+      userId: 'user-1',
+      type: 'CONNECTION_ACCEPTED',
+      metadata: { accepterName: 'Frank' },
+    });
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'test@example.com',
+      subject: expect.stringContaining('Frank'),
+    }));
+  });
+
+  it('should send CONNECTION_REJECTED email', async () => {
+    await sendNotificationEmail({
+      userId: 'user-1',
+      type: 'CONNECTION_REJECTED',
+      metadata: { rejecterName: 'Grace' },
+    });
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'test@example.com',
+      subject: 'Connection request declined',
+    }));
+  });
+
+  it('should send PERMISSION_REVOKED email with page title', async () => {
+    await sendNotificationEmail({
+      userId: 'user-1',
+      type: 'PERMISSION_REVOKED',
+      metadata: { pageTitle: 'Lost Page' },
+    });
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'test@example.com',
+      subject: expect.stringContaining('Lost Page'),
+    }));
+  });
+
+  it('should send PERMISSION_UPDATED email with page title', async () => {
+    await sendNotificationEmail({
+      userId: 'user-1',
+      type: 'PERMISSION_UPDATED',
+      metadata: { pageTitle: 'Updated Page', driveId: 'd1', pageId: 'p1' },
+    });
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'test@example.com',
+      subject: expect.stringContaining('Updated Page'),
+    }));
+  });
+
+  it('should send DRIVE_JOINED email with drive name', async () => {
+    await sendNotificationEmail({
+      userId: 'user-1',
+      type: 'DRIVE_JOINED',
+      metadata: { driveName: 'Workspace', driveId: 'd1' },
+    });
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'test@example.com',
+      subject: expect.stringContaining('Workspace'),
+    }));
+  });
+
+  it('should send DRIVE_ROLE_CHANGED email with drive name', async () => {
+    await sendNotificationEmail({
+      userId: 'user-1',
+      type: 'DRIVE_ROLE_CHANGED',
+      metadata: { driveName: 'Workspace', role: 'admin', driveId: 'd1' },
+    });
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'test@example.com',
+      subject: expect.stringContaining('Workspace'),
+    }));
+  });
+
+  it('should handle sendEmail errors gracefully without throwing', async () => {
+    vi.mocked(sendEmail).mockRejectedValueOnce(new Error('SMTP error'));
+
+    // Contract: sendNotificationEmail never throws, even on SMTP failure
+    await expect(sendNotificationEmail({
+      userId: 'user-1',
+      type: 'DRIVE_INVITED',
+      metadata: { driveName: 'Test' },
+    })).resolves.toBeUndefined();
+  });
+
+  it('should handle preference check errors gracefully', async () => {
+    mockDb.query.emailNotificationPreferences.findFirst.mockRejectedValueOnce(new Error('DB error'));
+
+    // Should still send (defaults to enabled on error)
+    await sendNotificationEmail({
+      userId: 'user-1',
+      type: 'DRIVE_INVITED',
+      metadata: { driveName: 'Test' },
+    });
+
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: 'test@example.com' }));
+  });
+});
+
+describe('sendPendingDriveInvitationEmail', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('renders subject from inviterName, driveName and recipient address', async () => {
+    await sendPendingDriveInvitationEmail({
+      recipientEmail: 'invitee@example.com',
+      inviterName: 'Alice',
+      driveName: 'Test Drive',
+      inviteUrl: 'https://app.example.com/invite/ps_invite_xyz',
+    });
+
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'invitee@example.com',
+      subject: expect.stringContaining('Test Drive'),
+    }));
+    const call = vi.mocked(sendEmail).mock.calls[0][0];
+    expect(call.subject).toContain('Alice');
+  });
+
+  it('strips CR/LF/control chars from inviterName before interpolating into subject', async () => {
+    await sendPendingDriveInvitationEmail({
+      recipientEmail: 'invitee@example.com',
+      inviterName: 'Eve\r\nBcc: attacker@evil.com',
+      driveName: 'Drive',
+      inviteUrl: 'https://app.example.com/invite/ps_invite_xyz',
+    });
+
+    const call = vi.mocked(sendEmail).mock.calls[0][0];
+    expect(call.subject).not.toContain('\r');
+    expect(call.subject).not.toContain('\n');
+  });
+
+  it('strips CR/LF/control chars from driveName before interpolating into subject', async () => {
+    await sendPendingDriveInvitationEmail({
+      recipientEmail: 'invitee@example.com',
+      inviterName: 'Alice',
+      driveName: 'Drive\nX-Header: pwn',
+      inviteUrl: 'https://app.example.com/invite/ps_invite_xyz',
+    });
+
+    const call = vi.mocked(sendEmail).mock.calls[0][0];
+    expect(call.subject).not.toContain('\n');
+    expect(call.subject).not.toContain('\r');
+  });
+
+  it('strips ASCII control characters (0x00-0x1F, 0x7F) from interpolated values', async () => {
+    await sendPendingDriveInvitationEmail({
+      recipientEmail: 'invitee@example.com',
+      inviterName: 'Alice\x00\x07\x1b',
+      driveName: 'Drive\x7f',
+      inviteUrl: 'https://app.example.com/invite/ps_invite_xyz',
+    });
+
+    const call = vi.mocked(sendEmail).mock.calls[0][0];
+    // eslint-disable-next-line no-control-regex
+    expect(call.subject).not.toMatch(/[\x00-\x1f\x7f]/);
+  });
+
+  it('propagates sendEmail errors so callers can surface 5xx', async () => {
+    vi.mocked(sendEmail).mockRejectedValueOnce(new Error('SMTP unavailable'));
+
+    await expect(
+      sendPendingDriveInvitationEmail({
+        recipientEmail: 'invitee@example.com',
+        inviterName: 'Alice',
+        driveName: 'Drive',
+        inviteUrl: 'https://app.example.com/invite/ps_invite_xyz',
+      })
+    ).rejects.toThrow('SMTP unavailable');
+  });
+
+  it('uses the invite URL as the email accept link', async () => {
+    const inviteUrl = 'https://app.example.com/invite/ps_invite_abc';
+    await sendPendingDriveInvitationEmail({
+      recipientEmail: 'invitee@example.com',
+      inviterName: 'Alice',
+      driveName: 'Drive',
+      inviteUrl,
+    });
+
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'invitee@example.com',
+    }));
+  });
+});
+
+describe('sendOrgInvitationEmail', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('ORG-3 (partial) sends the invite link to the invited address with the org and inviter in the subject', async () => {
+    await sendOrgInvitationEmail({
+      recipientEmail: 'marcus@northwind.test',
+      inviterName: 'Priya Nair',
+      orgName: 'Northwind Labs',
+      role: 'MEMBER',
+      expiresInDays: 7,
+      inviteUrl: 'https://app.example.com/invite/ps_orginv_xyz',
+    });
+
+    const call = vi.mocked(sendEmail).mock.calls[0][0];
+    expect(call.to).toBe('marcus@northwind.test');
+    expect(call.subject).toBe('Priya Nair invited you to join Northwind Labs on PageSpace');
+  });
+
+  it('strips CR/LF from the org and inviter names before interpolating into subject', async () => {
+    await sendOrgInvitationEmail({
+      recipientEmail: 'marcus@northwind.test',
+      inviterName: 'Eve\r\nBcc: attacker@evil.com',
+      orgName: 'Org\nX-Header: pwn',
+      role: 'ADMIN',
+      expiresInDays: 7,
+      inviteUrl: 'https://app.example.com/invite/ps_orginv_xyz',
+    });
+
+    const call = vi.mocked(sendEmail).mock.calls[0][0];
+    expect(call.subject).not.toMatch(/[\r\n]/);
+  });
+});

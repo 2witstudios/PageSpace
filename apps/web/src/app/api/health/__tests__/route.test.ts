@@ -1,16 +1,20 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GET } from '../route';
 const mockExecute = vi.hoisted(() => vi.fn());
+const mockGetPoolStats = vi.hoisted(() => vi.fn());
 const mockGetMonitoringIngestStatus = vi.hoisted(() => vi.fn());
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     execute: mockExecute,
   },
+  getPoolStats: mockGetPoolStats,
+}));
+vi.mock('@pagespace/db/operators', () => ({
   sql: (strings: TemplateStringsArray) => strings.join(''),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: {
       info: vi.fn(),
@@ -18,6 +22,8 @@ vi.mock('@pagespace/lib/server', () => ({
       error: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('@/middleware/monitoring', () => ({
@@ -28,6 +34,7 @@ describe('GET /api/health', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetMonitoringIngestStatus.mockReturnValue('active');
+    mockGetPoolStats.mockReturnValue({ total: 0, idle: 0, waiting: 0 });
   });
 
   describe('healthy system', () => {
@@ -88,6 +95,20 @@ describe('GET /api/health', () => {
       expect(typeof body.memory.heapUsed).toBe('number');
       expect(typeof body.memory.heapTotal).toBe('number');
     });
+
+    it('given healthy state, should include pool stats', async () => {
+      mockExecute.mockResolvedValue([{ '1': 1 }]);
+      mockGetPoolStats.mockReturnValue({ total: 5, idle: 3, waiting: 1 });
+
+      const request = new Request('https://example.com/api/health', { method: 'GET' });
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(body.pool).toBeDefined();
+      expect(body.pool.total).toBe(5);
+      expect(body.pool.idle).toBe(3);
+      expect(body.pool.waiting).toBe(1);
+    });
   });
 
   describe('database failures', () => {
@@ -101,7 +122,7 @@ describe('GET /api/health', () => {
       const response = await GET(request);
       const body = await response.json();
 
-      expect(response.status).toBe(503);
+      expect(response.status).toBe(200);
       expect(body.status).toBe('degraded');
       expect(body.checks.database).toBe('disconnected');
     });
@@ -116,7 +137,7 @@ describe('GET /api/health', () => {
       const response = await GET(request);
       const body = await response.json();
 
-      expect(response.status).toBe(503);
+      expect(response.status).toBe(200);
       expect(body.status).toBe('degraded');
       expect(body.error).toContain('Database');
     });
@@ -158,7 +179,7 @@ describe('GET /api/health', () => {
       const response = await GET(request);
       const body = await response.json();
 
-      expect(response.status).toBe(503);
+      expect(response.status).toBe(200);
       expect(body.status).toBe('degraded');
       expect(body.checks.monitoring).toBe('misconfigured');
       expect(body.warnings).toBeDefined();

@@ -7,6 +7,7 @@ const STATUS_CONFIG = {
   success: { label: 'Success', variant: 'default' as const },
   error: { label: 'Error', variant: 'destructive' as const },
   running: { label: 'Running', variant: 'outline' as const },
+  cancelled: { label: 'Cancelled', variant: 'secondary' as const },
 } as const;
 
 export function WorkflowStatusBadge({ status }: { status: string }) {

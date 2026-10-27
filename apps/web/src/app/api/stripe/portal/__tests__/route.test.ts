@@ -21,22 +21,28 @@ vi.mock('@/lib/stripe', () => ({
   },
 }));
 
+vi.mock('@/lib/stripe-config', () => ({
+  stripeConfig: { portalConfigurationIds: { personal: 'bpc_personal_test', organization: 'bpc_org_test' } },
+}));
+
 // Mock database
 const mockSelectWhere = vi.fn();
 
-vi.mock('@pagespace/db', () => {
-  return {
-    db: {
+vi.mock('@pagespace/db/db', () => ({
+  db: {
       select: vi.fn(() => ({
         from: vi.fn(() => ({
           where: mockSelectWhere,
         })),
       })),
     },
-    users: {},
-    eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
-  };
-});
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: {},
+}));
 
 // Mock auth
 vi.mock('@/lib/auth', () => ({
@@ -44,9 +50,23 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
+    api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    security: { warn: vi.fn() },
+  },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
+}));
+
 // Import after mocks
 import { POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -158,6 +178,7 @@ describe('Portal API', () => {
       expect(mockStripeBillingPortalSessionsCreate).toHaveBeenCalledWith({
         customer: 'cus_123',
         return_url: 'https://app.example.com/settings/billing',
+        configuration: 'bpc_personal_test',
       });
     });
 
@@ -173,6 +194,30 @@ describe('Portal API', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to create portal session');
+    });
+
+    it('should log audit event on POST portal session', async () => {
+      const request = new Request('https://example.com/api/stripe/portal', {
+        method: 'POST',
+      }) as unknown as import('next/server').NextRequest;
+
+      await POST(request);
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ eventType: 'data.read', userId: 'user_123', resourceType: 'billing_portal', resourceId: 'portal_session' })
+      );
+    });
+
+    it('should not include customerId in audit details (GDPR: details field is in hash chain)', async () => {
+      const request = new Request('https://example.com/api/stripe/portal', {
+        method: 'POST',
+      }) as unknown as import('next/server').NextRequest;
+
+      await POST(request);
+
+      const eventArg = vi.mocked(auditRequest).mock.calls[0]?.[1];
+      expect(eventArg?.details).not.toHaveProperty('customerId');
     });
   });
 });

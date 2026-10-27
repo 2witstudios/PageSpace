@@ -1,0 +1,200 @@
+/**
+ * THE canonical subscription-tier vocabulary and plan-limits table.
+ *
+ * Every tier union, validator, ordering, and plan-limit number in the monorepo
+ * derives from this module — apps/web plans + routes, apps/admin tier types,
+ * apps/marketing pricing copy, apps/control-plane tenant validation, apps/e2e
+ * seeding, and the lib storage/billing enforcement paths. Do NOT re-declare
+ * `'free' | 'pro' | 'business'` (or any limit number below) anywhere else;
+ * import from here instead.
+ *
+ * SEAT-2 / A-9: Free and Pro are personal; Business belongs to an organization.
+ * Founder and personal Business are retired by the verified one-time cutover.
+ */
+
+/** Canonical tier vocabulary, in ascending plan order (lowest → highest). */
+export const TIERS = ['free', 'pro', 'business'] as const;
+
+export type SubscriptionTier = (typeof TIERS)[number];
+
+/** Resolve a paid plan only from an unambiguous configured price identity. */
+export function tierFromConfiguredPrice(
+  priceId: string,
+  prices: Readonly<Record<Exclude<SubscriptionTier, 'free'>, string>>,
+): SubscriptionTier {
+  if (!priceId) return 'free';
+  const matches = TIERS.filter((tier) => tier !== 'free').filter((tier) => prices[tier] === priceId);
+  return matches.length === 1 ? matches[0] : 'free';
+}
+
+export function isSubscriptionTier(value: unknown): value is SubscriptionTier {
+  return typeof value === 'string' && (TIERS as readonly string[]).includes(value);
+}
+
+/**
+ * Coerce an untrusted/stored value (e.g. the untyped users.subscriptionTier
+ * text column) to a member of the vocabulary, falling back to 'free'.
+ */
+export function toSubscriptionTier(value: string | null | undefined): SubscriptionTier {
+  return isSubscriptionTier(value) ? value : 'free';
+}
+
+export type PersonalSubscriptionTier = Exclude<SubscriptionTier, 'business'>;
+
+/** Stored personal accounts cannot acquire organization Business entitlement. */
+export function toPersonalSubscriptionTier(value: string | null | undefined): PersonalSubscriptionTier {
+  return value === 'pro' ? 'pro' : 'free';
+}
+
+/**
+ * Position of a tier in TIERS — higher rank = higher plan. TIERS doubles as
+ * the upgrade/downgrade ordering since the vocabulary is declared in rank
+ * order (the plan UIs historically called this "PLAN_ORDER"; apps/web's
+ * plans.ts still exports that name for its own callers).
+ */
+export function tierRank(tier: SubscriptionTier): number {
+  return TIERS.indexOf(tier);
+}
+
+/**
+ * Compile-time exhaustiveness guard: `default: assertNeverTier(tier)` in a
+ * switch over SubscriptionTier fails `tsc` the moment TIERS gains a member the
+ * switch doesn't handle (e.g. at the web→control-plane provisioning bridge).
+ */
+export function assertNeverTier(tier: never): never {
+  throw new Error(`Unhandled subscription tier: ${String(tier)}`);
+}
+
+const MB = 1024 * 1024;
+const GB = 1024 * MB;
+
+export interface TierPlanLimits {
+  /** Display name ("Free", "Pro", …). */
+  name: string;
+  /** Monthly list price in whole USD. Display only — Stripe prices are authoritative for billing. */
+  priceMonthlyUsd: number;
+  /** Total storage quota in bytes. */
+  quotaBytes: number;
+  /** Per-file upload ceiling in bytes. */
+  maxFileSize: number;
+  /** Concurrent upload slots. */
+  maxConcurrentUploads: number;
+  /** Total stored-file count ceiling (0 = unlimited). */
+  maxFileCount: number;
+  /** Custom domains per drive (0 = feature unavailable). */
+  maxCustomDomains: number;
+  /** Whether the user may pick a custom published-site subdomain. */
+  canChooseSubdomain: boolean;
+  /** Whether the tier can use premium "Pro" AI models. */
+  proModels: boolean;
+  /**
+   * Whether this tier is bought by an ORGANIZATION rather than a person (SEAT-2).
+   * An org plan is never offered to a lone user in a plan UI: buying it creates
+   * the org. Personal plan pickers filter on this flag (see personalTiers()).
+   */
+  isOrgPlan: boolean;
+  /** Seats bundled into the monthly price (0 for a personal plan). */
+  includedSeats: number;
+  /** Monthly list price in whole USD per seat beyond includedSeats (0 for a personal plan). */
+  extraSeatUsd: number;
+}
+
+/**
+ * The ONE plan-limits table. Enforcement (storage quota, upload validation,
+ * custom domains), in-app plan copy, and the marketing pricing page all derive
+ * from these rows — previously three hand-synced copies that had already
+ * diverged once (see the reconciliation note that used to live on
+ * STORAGE_TIERS: "limits reflect the higher of the previously-divergent
+ * tables").
+ */
+export const TIER_PLAN_LIMITS: Record<SubscriptionTier, TierPlanLimits> = {
+  free: {
+    name: 'Free',
+    priceMonthlyUsd: 0,
+    quotaBytes: 500 * MB,
+    maxFileSize: 50 * MB,
+    maxConcurrentUploads: 3,
+    maxFileCount: 100,
+    maxCustomDomains: 0,
+    canChooseSubdomain: false,
+    proModels: false,
+    isOrgPlan: false,
+    includedSeats: 0,
+    extraSeatUsd: 0,
+  },
+  pro: {
+    name: 'Pro',
+    priceMonthlyUsd: 15,
+    quotaBytes: 10 * GB,
+    maxFileSize: 250 * MB,
+    maxConcurrentUploads: 5,
+    maxFileCount: 0,
+    maxCustomDomains: 1,
+    canChooseSubdomain: true,
+    proModels: true,
+    isOrgPlan: false,
+    includedSeats: 0,
+    extraSeatUsd: 0,
+  },
+  // The organization plan (SEAT-2, A-5, A-8): $50 a month with 5 seats
+  // included and $10 per extra seat. Not sold to a lone user.
+  business: {
+    name: 'Business',
+    priceMonthlyUsd: 50,
+    quotaBytes: 50 * GB,
+    maxFileSize: 1 * GB,
+    maxConcurrentUploads: 10,
+    maxFileCount: 0,
+    maxCustomDomains: 10,
+    canChooseSubdomain: true,
+    proModels: true,
+    isOrgPlan: true,
+    includedSeats: 5,
+    extraSeatUsd: 10,
+  },
+};
+
+/**
+ * The stackable storage add-on: extra quota bought in fixed blocks on top of a
+ * paid plan (Pro or an org's Business). Blocks add bytes only — paid plans have
+ * no file-count ceiling — and never change the per-file limit. Display price only;
+ * the configured Stripe price is authoritative for billing.
+ */
+export const STORAGE_ADDON = {
+  /** Bytes one block adds to the payer's quota. */
+  blockBytes: 50 * GB,
+  /** Monthly list price of one block in whole USD. */
+  priceMonthlyUsd: 5,
+  /** Most blocks one payer may hold (abuse backstop; beyond it, contact us). */
+  maxBlocks: 20,
+} as const;
+
+/** Tiers a storage add-on may be bought on. */
+export function tierAllowsStorageAddon(tier: SubscriptionTier): boolean {
+  return tier !== 'free';
+}
+
+/** Whether `tier` is bought by an organization rather than a person (SEAT-2). */
+export function isOrgPlanTier(tier: SubscriptionTier): boolean {
+  return TIER_PLAN_LIMITS[tier].isOrgPlan;
+}
+
+/** Personal plans in rank order; organization tiers never appear here. */
+export function personalTiers(): PersonalSubscriptionTier[] {
+  return TIERS.filter((tier) => tier !== 'business');
+}
+
+/**
+ * Format a tier limit byte value the way plan copy displays it ("500MB",
+ * "2GB", "1.5GB"). `separator` inserts a space for marketing style ("500 MB").
+ * Values ≥ 1GB render in GB, below that in MB — matching every existing plan
+ * surface. Not a general byte formatter; see formatBytes in storage-limits for
+ * arbitrary usage numbers.
+ */
+export function formatTierBytes(bytes: number, separator = ''): string {
+  const inGb = bytes / GB;
+  const value = inGb >= 1 ? inGb : bytes / MB;
+  const unit = inGb >= 1 ? 'GB' : 'MB';
+  const rounded = Math.round(value * 100) / 100;
+  return `${rounded}${separator}${unit}`;
+}

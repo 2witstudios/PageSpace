@@ -1,0 +1,59 @@
+import { describe, it, expect } from 'vitest';
+import { appendPart } from '../appendPart';
+
+describe('appendPart', () => {
+  it('given a text part and parts ending in text, should concat into the last text part', () => {
+    const initial = [{ type: 'text' as const, text: 'hel' }];
+    const next = { type: 'text' as const, text: 'lo' };
+    expect(appendPart(initial, next)).toEqual([{ type: 'text', text: 'hello' }]);
+  });
+
+  it('given a tool part with a toolCallId not yet in parts, should append it', () => {
+    const initial = [{ type: 'text' as const, text: 'thinking' }];
+    const tool = {
+      type: 'tool-list_pages' as const,
+      toolCallId: 'tc1',
+      state: 'input-available' as const,
+      input: { driveId: 'd1' },
+    };
+    expect(appendPart(initial, tool)).toEqual([...initial, tool]);
+  });
+
+  it('given a tool part whose toolCallId is already present, should replace the existing entry in place', () => {
+    const initial = [
+      { type: 'text' as const, text: 'before' },
+      {
+        type: 'tool-list_pages' as const,
+        toolCallId: 'tc1',
+        state: 'input-available' as const,
+        input: { driveId: 'd1' },
+      },
+      { type: 'text' as const, text: 'after' },
+    ];
+    const completed = {
+      type: 'tool-list_pages' as const,
+      toolCallId: 'tc1',
+      state: 'output-available' as const,
+      input: { driveId: 'd1' },
+      output: { pages: [{ id: 'p1' }] },
+    };
+    expect(appendPart(initial, completed)).toEqual([
+      { type: 'text', text: 'before' },
+      completed,
+      { type: 'text', text: 'after' },
+    ]);
+  });
+
+  it('given the same final tool part applied twice, should converge to a single entry (idempotent)', () => {
+    const completed = {
+      type: 'tool-list_pages' as const,
+      toolCallId: 'tc1',
+      state: 'output-available' as const,
+      input: { driveId: 'd1' },
+      output: { pages: [] },
+    };
+    const once = appendPart([], completed);
+    const twice = appendPart(once, completed);
+    expect(twice).toEqual([completed]);
+  });
+});

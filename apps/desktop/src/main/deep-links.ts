@@ -3,18 +3,26 @@ import * as path from 'path';
 import { saveAuthSession, type StoredAuthSession } from './auth-storage';
 import { mainWindow } from './state';
 import { setCachedSession } from './state';
-import { getAppUrl } from './app-url';
+import { getAppOrigin, getStartUrl } from './app-url';
+import { APP_IDENTITY } from '../shared/current-app-identity';
 import { logger } from './logger';
+import { handlePasskeyRegistered as handlePasskeyRegisteredPure } from './passkey-deep-link';
+import { createWindow } from './window';
+import {
+  evaluateAuthExchangeBinding,
+  peekAuthExchangeState,
+  clearAuthExchangeState,
+} from './auth-exchange-state';
 
 export function setupProtocolClient(): void {
   if (process.defaultApp) {
     if (process.argv.length >= 2) {
-      app.setAsDefaultProtocolClient('pagespace', process.execPath, [
+      app.setAsDefaultProtocolClient(APP_IDENTITY.protocolScheme, process.execPath, [
         path.resolve(process.argv[1]),
       ]);
     }
   } else {
-    app.setAsDefaultProtocolClient('pagespace');
+    app.setAsDefaultProtocolClient(APP_IDENTITY.protocolScheme);
   }
 }
 
@@ -29,6 +37,7 @@ async function handleAuthExchange(url: string): Promise<boolean> {
     const code = urlObj.searchParams.get('code');
     const provider = urlObj.searchParams.get('provider') || 'unknown';
     const isNewUser = urlObj.searchParams.get('isNewUser') === 'true';
+    const receivedState = urlObj.searchParams.get('state');
 
     if (!code) {
       logger.error('[Auth Exchange] Missing code in deep link');
@@ -36,9 +45,28 @@ async function handleAuthExchange(url: string): Promise<boolean> {
       return true;
     }
 
+    // CSRF / session-fixation guard (security finding L9): only honor an
+    // exchange that this app instance actually started. An unsolicited deep
+    // link (no auth flow in progress) — or one whose state does not match the
+    // in-progress flow — is rejected before any token-bearing request is made.
+    const expectedState = peekAuthExchangeState();
+    const decision = evaluateAuthExchangeBinding(receivedState, expectedState);
+    if (!decision.accepted) {
+      logger.warn('[Auth Exchange] Rejected unbound exchange deep link', {
+        provider,
+        reason: decision.reason,
+      });
+      mainWindow?.webContents.send('auth-error', {
+        error: 'Unexpected sign-in request was blocked',
+      });
+      return true;
+    }
+    // Single-use: consume the in-progress flow now that it is accepted.
+    clearAuthExchangeState();
+
     logger.info('[Auth Exchange] Processing OAuth exchange', { provider });
 
-    const baseUrl = getAppUrl().replace('/dashboard', '');
+    const baseUrl = getAppOrigin();
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000);
@@ -106,15 +134,15 @@ async function handleAuthExchange(url: string): Promise<boolean> {
     await saveAuthSession(sessionData);
     setCachedSession(sessionData);
 
-    const appUrl = new URL(getAppUrl());
+    const appOrigin = getAppOrigin();
     try {
       await session.defaultSession.cookies.set({
-        url: appUrl.origin,
+        url: appOrigin,
         name: 'session',
         value: tokens.sessionToken,
         path: '/',
         httpOnly: true,
-        secure: !appUrl.origin.includes('localhost') && !appUrl.origin.includes('127.0.0.1'),
+        secure: !appOrigin.includes('localhost') && !appOrigin.includes('127.0.0.1'),
         sameSite: 'strict' as const,
         expirationDate: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60,
       });
@@ -124,12 +152,12 @@ async function handleAuthExchange(url: string): Promise<boolean> {
 
     logger.info('[Auth Exchange] OAuth exchange successful', { provider });
 
-    const dashboardUrl = new URL(getAppUrl());
-    dashboardUrl.searchParams.set('auth', 'success');
+    const landingUrl = new URL(getStartUrl());
+    landingUrl.searchParams.set('auth', 'success');
     if (isNewUser) {
-      dashboardUrl.searchParams.set('isNewUser', 'true');
+      landingUrl.searchParams.set('isNewUser', 'true');
     }
-    mainWindow?.loadURL(dashboardUrl.toString());
+    mainWindow?.loadURL(landingUrl.toString());
 
     return true;
   } catch (error) {
@@ -141,11 +169,56 @@ async function handleAuthExchange(url: string): Promise<boolean> {
   }
 }
 
-export async function handleDeepLink(url: string): Promise<void> {
-  const handled = await handleAuthExchange(url);
-  if (handled) {
-    return;
+function handlePasskeyRegistered(url: string): boolean {
+  return handlePasskeyRegisteredPure(url, {
+    focusWindow: () => {
+      if (mainWindow) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+        return;
+      }
+      // macOS: all windows closed while app lives in dock. Spawn one so the
+      // renderer can receive the broadcast — otherwise the deep link would be
+      // silently consumed.
+      createWindow();
+    },
+    sendToRenderer: (channel) => {
+      const target = mainWindow;
+      if (!target) {
+        logger.error('[Passkey Deep Link] No main window available after focus');
+        return;
+      }
+      if (target.webContents.isLoading()) {
+        target.webContents.once('did-finish-load', () => {
+          target.webContents.send(channel);
+        });
+        return;
+      }
+      target.webContents.send(channel);
+    },
+    logger,
+  });
+}
+
+function handleAuthError(url: string): boolean {
+  try {
+    const urlObj = new URL(url);
+    if (urlObj.host !== 'auth-error') return false;
+
+    const error = urlObj.searchParams.get('error') || 'Authentication failed';
+    logger.warn('[Auth Error] OAuth error received via deep link', { error });
+    mainWindow?.webContents.send('auth-error', { error });
+    return true;
+  } catch {
+    return false;
   }
+}
+
+export async function handleDeepLink(url: string): Promise<void> {
+  if (await handleAuthExchange(url)) return;
+  if (handleAuthError(url)) return;
+  if (handlePasskeyRegistered(url)) return;
 
   if (mainWindow) {
     mainWindow.webContents.send('deep-link', url);

@@ -1,10 +1,12 @@
 import { BrowserWindow, shell } from 'electron';
 import * as path from 'path';
 import { store } from './store';
-import { getAppUrl } from './app-url';
+import { getAppOrigin, getStartUrl } from './app-url';
 import { mainWindow, setMainWindow, isQuitting } from './state';
 import { injectDesktopStyles, injectDoubleClickHandler } from './window-injections';
 import { setupAutoUpdater } from './updater';
+import { classifyNavigation, guardsRedirect } from '../shared/navigation-guard';
+import { APP_IDENTITY } from '../shared/current-app-identity';
 
 const storeAny = store as any;
 
@@ -44,8 +46,7 @@ export function createWindow(): void {
   const window = new BrowserWindow(windowOptions);
   setMainWindow(window);
 
-  const appUrl = getAppUrl();
-  window.loadURL(appUrl);
+  window.loadURL(getStartUrl());
 
   window.webContents.on('did-finish-load', () => {
     injectDesktopStyles();
@@ -65,8 +66,7 @@ export function createWindow(): void {
       console.log(`Network error (${errorCode}): ${errorDescription} for ${validatedURL}`);
 
       const offlinePath = path.join(__dirname, '../../src/offline.html');
-      const appUrl = getAppUrl();
-      window.loadFile(offlinePath, { hash: encodeURIComponent(appUrl) });
+      window.loadFile(offlinePath, { hash: encodeURIComponent(getStartUrl()) });
     }
   });
 
@@ -89,12 +89,62 @@ export function createWindow(): void {
     setMainWindow(null);
   });
 
+  // Hard-block any renderer-initiated navigation away from the configured app
+  // origin (security finding H5). An XSS in the web app must not be able to
+  // point the privileged renderer at an attacker origin (which would then have
+  // the preload bridge: raw session token + MCP exec). Off-origin http(s) links
+  // are opened in the system browser instead; everything else is dropped.
+  const guardNavigation = (event: Electron.Event, url: string): void => {
+    // getAppOrigin() is documented never to fail, but this is a security
+    // branch — do not delete it on the strength of an invariant that lives in
+    // another module.
+    const appOrigin = getAppOrigin();
+    if (!appOrigin) {
+      event.preventDefault();
+      console.warn('[Navigation] Blocked navigation; app origin unresolved for URL:', url);
+      return;
+    }
+    switch (classifyNavigation(url, appOrigin, APP_IDENTITY.deepLinkScheme)) {
+      case 'allow':
+        // Same-origin app navigation — let it proceed.
+        return;
+      case 'deep-link':
+        // The app's own scheme must reach the OS deep-link handler; blocking it
+        // would break the magic-link exchange handoff (already CSRF-bound, L9).
+        return;
+      case 'open-external':
+        // Off-origin web link — keep it out of the privileged renderer, open in
+        // the system browser instead.
+        event.preventDefault();
+        void shell.openExternal(url);
+        return;
+      case 'block':
+      default:
+        event.preventDefault();
+        console.warn('[Navigation] Blocked navigation to non-app URL:', url);
+        return;
+    }
+  };
+
+  window.webContents.on('will-navigate', guardNavigation);
+  // `will-redirect` fires for subframes too (unlike `will-navigate`), and a
+  // subframe holds no preload bridge — see `guardsRedirect`. Without this the
+  // preview iframe's own redirect to its preview host was cancelled and
+  // opened as a system-browser tab on every Refresh.
+  window.webContents.on('will-redirect', (event, url, _isInPlace, isMainFrame) => {
+    if (!guardsRedirect(isMainFrame)) return;
+    guardNavigation(event, url);
+  });
+
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('http://') || url.startsWith('https://')) {
-      shell.openExternal(url);
-      return { action: 'deny' };
+      void shell.openExternal(url);
+    } else {
+      console.warn('[Navigation] Blocked window.open for non-http(s) URL:', url);
     }
-    return { action: 'allow' };
+    // Never let the renderer spawn a new privileged window; external links open
+    // in the system browser, all other schemes are denied.
+    return { action: 'deny' };
   });
 
   if (process.env.NODE_ENV !== 'development') {
@@ -104,8 +154,7 @@ export function createWindow(): void {
 
 export function reloadMainWindow(): void {
   if (mainWindow) {
-    const appUrl = getAppUrl();
-    mainWindow.loadURL(appUrl);
+    mainWindow.loadURL(getStartUrl());
   }
 }
 

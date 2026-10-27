@@ -1,0 +1,492 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { assert } from '@/test/riteway';
+import type { ToolExecutionContext } from '@/lib/ai/core/types';
+
+// --- module mocks (no real billing / OpenRouter / S3 / DB) ---
+const canConsumeAI = vi.fn<(...a: unknown[]) => unknown>();
+const releaseHold = vi.fn<(...a: unknown[]) => Promise<void>>(async () => {});
+// `trackUsage` reports whether the usage row landed (`UsageTrackingOutcome`); a
+// stub resolving with nothing would claim a LOST charge on every image call.
+const PERSISTED_SETTLE = { persisted: true, creditsSettled: true } as const;
+const trackUsage = vi.fn<(...a: unknown[]) => Promise<typeof PERSISTED_SETTLE>>(
+  async () => PERSISTED_SETTLE,
+);
+const generateImageBytes = vi.fn<(...a: unknown[]) => unknown>();
+const createImageFilePage = vi.fn<(...a: unknown[]) => unknown>();
+
+vi.mock('@pagespace/lib/billing/credit-gate', () => ({ canConsumeAI: (...a: unknown[]) => canConsumeAI(...a) }));
+vi.mock('@pagespace/lib/billing/credit-consume', () => ({ releaseHold: (...a: unknown[]) => releaseHold(...a) }));
+vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({ AIMonitoring: { trackUsage: (...a: unknown[]) => trackUsage(...a) } }));
+vi.mock('../../core/image-generation', async (orig) => ({
+  ...(await orig<typeof import('../../core/image-generation')>()),
+  generateImageBytes: (...a: unknown[]) => generateImageBytes(...a),
+}));
+// POL-8: the image client comes from the provider factory, which judges the org allowlists. Default: allowed.
+const IMAGE_CLIENT = { chat: vi.fn() };
+const createImageProvider = vi.fn<(...a: unknown[]) => Promise<unknown>>();
+vi.mock('../../core/provider-factory', () => ({
+  createImageProvider: (...a: unknown[]) => createImageProvider(...a),
+  isProviderError: (r: object) => 'error' in r,
+}));
+vi.mock('@/lib/upload/create-file-page', () => ({
+  createImageFilePage: (...a: unknown[]) => createImageFilePage(...a),
+  ImageStorageQuotaError: class ImageStorageQuotaError extends Error {},
+}));
+
+// The tool falls back to a DB read of users.role when `isAdmin` isn't threaded via
+// experimental_context (v1 completions / consult / ask_agent). Mock that read.
+const dbState = vi.hoisted(() => ({ role: 'user' as string, tier: 'pro' as string }));
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    select: () => ({
+      from: () => ({
+        where: () => ({
+          limit: async () => [{ role: dbState.role, tier: dbState.tier }],
+        }),
+      }),
+    }),
+  },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn(),
+  ne: vi.fn(),
+  sql: vi.fn(),
+  gt: vi.fn(),
+  lt: vi.fn(),
+  desc: vi.fn(),
+  exists: vi.fn(),
+  isNull: vi.fn(),
+  isNotNull: vi.fn(),
+  inArray: vi.fn(),
+}));
+
+// Destination resolution: the tool authorizes the target itself (create-file-page
+// deliberately does not), so both seams it uses are mocked here.
+const canActorEditPage = vi.fn<(...a: unknown[]) => Promise<boolean>>(async () => true);
+const findPageById = vi.fn<(...a: unknown[]) => unknown>();
+// Partial mocks: the test also imports the full tool registry, which pulls in
+// every other export of these modules.
+vi.mock('../actor-permissions', async (orig) => ({
+  ...(await orig<typeof import('../actor-permissions')>()),
+  canActorEditPage: (...a: unknown[]) => canActorEditPage(...a),
+}));
+vi.mock('@pagespace/lib/repositories/page-repository', async (orig) => {
+  const actual = await orig<typeof import('@pagespace/lib/repositories/page-repository')>();
+  return {
+    ...actual,
+    pageRepository: { ...actual.pageRepository, findById: (...a: unknown[]) => findPageById(...a) },
+  };
+});
+vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'id', role: 'role', subscriptionTier: 'subscriptionTier' } }));
+
+import { imageGenerationTools } from '../image-generation-tools';
+import { ImageGenerationError } from '@/lib/ai/core/image-generation';
+import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
+import { filterToolsForReadOnly, isWriteTool } from '@/lib/ai/core/tool-filtering';
+import { buildVoiceToolContext } from '@/lib/ai/realtime/tool-dispatch';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
+
+const run = (input: Record<string, unknown>, ctx: Partial<ToolExecutionContext>) =>
+  imageGenerationTools.generate_image.execute!(input as never, {
+    toolCallId: 't1',
+    messages: [],
+    experimental_context: ctx as ToolExecutionContext,
+  });
+
+beforeEach(() => {
+  createImageProvider.mockReset();
+  createImageProvider.mockResolvedValue({ client: IMAGE_CLIENT, provider: 'google', modelName: 'google/gemini-3.1-flash-image' });
+  canConsumeAI.mockReset();
+  releaseHold.mockReset();
+  releaseHold.mockResolvedValue(undefined);
+  trackUsage.mockReset();
+  trackUsage.mockResolvedValue(PERSISTED_SETTLE);
+  generateImageBytes.mockReset();
+  createImageFilePage.mockReset();
+  dbState.role = 'user';
+  dbState.tier = 'pro';
+  canActorEditPage.mockReset();
+  canActorEditPage.mockResolvedValue(true);
+  findPageById.mockReset();
+});
+
+// --- destination targeting -------------------------------------------------
+//
+// Generated images used to land in the user's Home drive unconditionally, which
+// stranded them: the workspace the user was actually working in never got the
+// file, and no agent tool could move it there.
+describe('generate_image destination', () => {
+  const okGeneration = () => {
+    canConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-1' });
+    generateImageBytes.mockResolvedValue({
+      bytes: new Uint8Array([1, 2, 3]),
+      mediaType: 'image/png',
+      providerCostDollars: 0.01,
+      generationIds: ['gen-1'],
+    });
+    createImageFilePage.mockResolvedValue({ pageId: 'page-9', driveId: 'drive-work', parentId: 'gallery-1' });
+  };
+
+  const admin = (extra: Partial<ToolExecutionContext> = {}) => ({
+    userId: 'u1', isAdmin: true, subscriptionTier: 'pro', ...extra,
+  });
+
+  const inDrive = (id: string) => ({
+    locationContext: { currentDrive: { id, name: 'Work', slug: 'work' } },
+  }) as Partial<ToolExecutionContext>;
+
+  it('SPEND-1 (partial) an image made during an in-drive voice call reserves on the call\'s drive source, never the person\'s own credits', async () => {
+    okGeneration();
+    const voice = buildVoiceToolContext(
+      { name: 'generate_image', argumentsJson: '{}', userId: 'u1', callId: 'rtc_1', conversationId: 'conv1', spend: { driveId: 'drive-work', chosen: 'drive_wallet' } },
+      'gpt-realtime-2.1',
+    );
+
+    await run({ prompt: 'a diagram' }, { ...voice, isAdmin: true, subscriptionTier: 'pro' });
+
+    expect(canConsumeAI).toHaveBeenCalledOnce();
+    const opts = canConsumeAI.mock.calls[0][2] as { spend: unknown };
+    expect(opts.spend).toEqual({ kind: 'drive', driveId: 'drive-work', chosen: 'drive_wallet', conversationId: 'conv1', followOn: true });
+  });
+
+  it('SPEND-6 (partial) WAL-7 (partial) an image made inside a manual Run is gated and settled as the person who pressed Run, on the run\'s wallet, not as the workflow\'s creator (review #2817 P3-A)', async () => {
+    okGeneration();
+    const creditSpend = { spend: { kind: 'automation', driveId: 'drive-work' }, walletId: 'w-drive-work', userId: 'u-presser' , accessActor: credentialActor('u-presser', null)} as ToolExecutionContext['creditSpend'];
+
+    await run({ prompt: 'a diagram' }, { ...admin({ creditSpend }), ...inDrive('drive-work') });
+
+    expect(canConsumeAI).toHaveBeenCalledOnce();
+    expect(canConsumeAI.mock.calls[0][0]).toBe('u-presser');
+    expect((canConsumeAI.mock.calls[0][2] as { spend: unknown }).spend).toEqual({ kind: 'automation', driveId: 'drive-work' });
+    expect(trackUsage).toHaveBeenCalledOnce();
+    expect(trackUsage.mock.calls[0][0]).toMatchObject({ userId: 'u-presser', source: 'image_generation' });
+  });
+
+  it('files into the workspace currently in view', async () => {
+    okGeneration();
+
+    const res = (await run({ prompt: 'a diagram' }, admin(inDrive('drive-work')))) as { savedTo: string };
+
+    expect(createImageFilePage).toHaveBeenCalledWith(
+      expect.objectContaining({ targetDriveId: 'drive-work', targetParentId: undefined }),
+    );
+    expect(res.savedTo).toBe('current_drive');
+  });
+
+  it('falls back to the Home gallery when no workspace is in view, and says so', async () => {
+    okGeneration();
+
+    const res = (await run({ prompt: 'a diagram' }, admin())) as { savedTo: string; nextSteps?: string[] };
+
+    expect(createImageFilePage).toHaveBeenCalledWith(
+      expect.objectContaining({ targetDriveId: undefined, targetParentId: undefined }),
+    );
+    expect(res.savedTo).toBe('home_no_location');
+    // The relocate hint is what closes the loop for the model.
+    expect(res.nextSteps?.[0]).toContain('move_page');
+    expect(res.nextSteps?.[0]).toContain('no workspace was in view');
+  });
+
+  it('degrades to the Home gallery when the drive in view is view-only', async () => {
+    okGeneration();
+    canActorEditPage.mockResolvedValue(false);
+
+    const res = (await run({ prompt: 'a diagram' }, admin(inDrive('drive-readonly')))) as { savedTo: string };
+
+    expect(res.savedTo).toBe('home_unwritable_location');
+  });
+
+  // The two Home outcomes must stay distinguishable: reporting "no workspace was
+  // in view" when the real cause was a read-only workspace makes the assistant
+  // explain the wrong thing, and buries a permissions problem under a
+  // navigation one that navigating cannot fix.
+  it('reports a read-only workspace as the reason, not an absent one', async () => {
+    okGeneration();
+    canActorEditPage.mockResolvedValue(false);
+
+    const res = (await run({ prompt: 'a diagram' }, admin(inDrive('drive-readonly')))) as
+      { savedTo: string; nextSteps?: string[]; summary: string };
+
+    expect(res.nextSteps?.[0]).toContain('read-only');
+    expect(res.nextSteps?.[0]).not.toContain('no workspace was in view');
+    // Both Home outcomes still tell the user where the file actually is.
+    expect(res.summary).toContain('Home workspace gallery');
+  });
+
+  // An explicitly named destination must fail loudly rather than silently
+  // redirecting to Home — and it must fail BEFORE any spend.
+  it('POL-8 (partial) builds the image model through the provider factory for the turn\'s drive and the destination drive; a refusal reserves nothing and calls no model', async () => {
+    const creditSpend = { spend: { kind: 'automation', driveId: 'drive-work' }, walletId: 'w-drive-work' } as ToolExecutionContext['creditSpend'];
+    createImageProvider.mockResolvedValueOnce({ error: "This organization doesn't allow that AI model.", status: 403, code: 'org_policy', policy: 'modelAllowlist' });
+
+    const res = (await run({ prompt: 'a diagram' }, { ...admin({ creditSpend }), ...inDrive('drive-work') })) as { success: boolean; error?: string };
+
+    expect(createImageProvider).toHaveBeenCalledWith({ model: expect.any(String) }, { driveId: 'drive-work', contentDriveIds: ['drive-work'] });
+    expect(res).toMatchObject({ success: false, error: expect.stringContaining("doesn't allow that AI model") });
+    expect(canConsumeAI).not.toHaveBeenCalled();
+    expect(generateImageBytes).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unwritable explicit driveId without reserving credits or calling the provider', async () => {
+    okGeneration();
+    canActorEditPage.mockResolvedValue(false);
+
+    const res = (await run({ prompt: 'a diagram', driveId: 'drive-forbidden' }, admin())) as
+      { success: boolean; error: string };
+
+    expect(res.success).toBe(false);
+    expect(res.error).toContain('Insufficient permissions');
+    expect(canConsumeAI).not.toHaveBeenCalled();
+    expect(generateImageBytes).not.toHaveBeenCalled();
+    expect(releaseHold).not.toHaveBeenCalled();
+    expect(trackUsage).not.toHaveBeenCalled();
+    expect(createImageFilePage).not.toHaveBeenCalled();
+  });
+
+  it('files under an explicit parent, forwarding the parent\'s own drive', async () => {
+    okGeneration();
+    findPageById.mockResolvedValue({ id: 'folder-1', driveId: 'drive-work', isTrashed: false });
+
+    const res = (await run({ prompt: 'a diagram', parentId: 'folder-1' }, admin())) as { savedTo: string };
+
+    expect(createImageFilePage).toHaveBeenCalledWith(
+      expect.objectContaining({ targetDriveId: 'drive-work', targetParentId: 'folder-1' }),
+    );
+    expect(res.savedTo).toBe('requested');
+  });
+
+  it('rejects a parent that is not in the named drive, with no spend', async () => {
+    okGeneration();
+    findPageById.mockResolvedValue({ id: 'folder-1', driveId: 'drive-other', isTrashed: false });
+
+    const res = (await run(
+      { prompt: 'a diagram', parentId: 'folder-1', driveId: 'drive-work' },
+      admin(),
+    )) as { success: boolean; error: string };
+
+    expect(res.success).toBe(false);
+    expect(res.error).toContain('is not in drive');
+    expect(canConsumeAI).not.toHaveBeenCalled();
+  });
+
+  it('rejects a trashed parent', async () => {
+    okGeneration();
+    findPageById.mockResolvedValue({ id: 'folder-1', driveId: 'drive-work', isTrashed: true });
+
+    const res = (await run({ prompt: 'a diagram', parentId: 'folder-1' }, admin())) as
+      { success: boolean; error: string };
+
+    expect(res.success).toBe(false);
+    expect(res.error).toContain('was not found');
+  });
+});
+
+describe('generate_image registration', () => {
+  it('is registered, is a write tool, and is excluded in read-only mode', () => {
+    expect(Object.keys(pageSpaceTools)).toContain('generate_image');
+    expect(isWriteTool('generate_image')).toBe(true);
+    const readOnly = filterToolsForReadOnly(pageSpaceTools, true);
+    expect(Object.keys(readOnly)).not.toContain('generate_image');
+  });
+});
+
+describe('generate_image execute', () => {
+  it('generates, files into the drive, settles the hold, and returns a viewUrl', async () => {
+    canConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-1' });
+    generateImageBytes.mockResolvedValue({
+      bytes: new Uint8Array([1, 2, 3]),
+      mediaType: 'image/jpeg',
+      providerCostDollars: 0.068,
+      generationIds: ['gen-1'],
+    });
+    createImageFilePage.mockResolvedValue({ pageId: 'page-9', driveId: 'home-1', parentId: 'gallery-1' });
+
+    const res = (await run(
+      { prompt: 'a red panda astronaut' },
+      { userId: 'u1', isAdmin: true, subscriptionTier: 'pro', imageGenerationModel: 'google/gemini-3.1-flash-image-preview' },
+    )) as { success: boolean; pageId: string; driveId: string; viewUrl: string };
+
+    assert({
+      given: 'an admin user and a working model',
+      should: 'return success with the file view URL and drive ID',
+      actual: { success: res.success, viewUrl: res.viewUrl, driveId: res.driveId },
+      expected: { success: true, viewUrl: '/api/files/page-9/view', driveId: 'home-1' },
+    });
+    expect(trackUsage).toHaveBeenCalledOnce();
+    const usage = trackUsage.mock.calls[0][0] as { holdId: string; providerCostDollars: number; source: string };
+    expect(usage).toMatchObject({ holdId: 'hold-1', providerCostDollars: 0.068, source: 'image_generation' });
+    // The post-settle hold delete is an idempotent no-op (consumeCredits already removed it).
+    expect(releaseHold).toHaveBeenCalledWith('hold-1');
+  });
+
+  it('denies a non-admin user without any OpenRouter call or hold', async () => {
+    const res = (await run({ prompt: 'x' }, { userId: 'u1', isAdmin: false, subscriptionTier: 'pro' })) as { success: boolean };
+    expect(res.success).toBe(false);
+    expect(canConsumeAI).not.toHaveBeenCalled();
+    expect(generateImageBytes).not.toHaveBeenCalled();
+  });
+
+  it('releases the hold and fails softly when generation errors', async () => {
+    canConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-2' });
+    generateImageBytes.mockRejectedValue(new Error('model down'));
+
+    const res = (await run({ prompt: 'x' }, { userId: 'u1', isAdmin: true, subscriptionTier: 'pro' })) as { success: boolean };
+    expect(res.success).toBe(false);
+    // The call never reached the provider, so we must NOT bill it — this (not the
+    // releaseHold call, which now happens on every path) is the meaningful assertion.
+    expect(trackUsage).not.toHaveBeenCalled();
+    expect(releaseHold).toHaveBeenCalledWith('hold-2');
+    expect(createImageFilePage).not.toHaveBeenCalled();
+  });
+
+  it('SETTLES the spend when saving the image fails — OpenRouter was already billed', async () => {
+    canConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-store' });
+    generateImageBytes.mockResolvedValue({
+      bytes: new Uint8Array([1]),
+      mediaType: 'image/png',
+      providerCostDollars: 0.07,
+      generationIds: ['gen-x'],
+    });
+    createImageFilePage.mockRejectedValue(new Error('s3 down'));
+
+    const res = (await run({ prompt: 'x' }, { userId: 'u1', isAdmin: true, subscriptionTier: 'pro' })) as {
+      success: boolean;
+    };
+
+    expect(res.success).toBe(false);
+    // The spend MUST be recorded — releasing here would leave real provider cost unbilled.
+    expect(trackUsage).toHaveBeenCalledOnce();
+    const usage = trackUsage.mock.calls[0][0] as { holdId: string; providerCostDollars: number; error?: string };
+    expect(usage).toMatchObject({ holdId: 'hold-store', providerCostDollars: 0.07, error: 'store_failed' });
+  });
+
+  it('SETTLES an empty-but-billed generation, releases when the call never reached the provider', async () => {
+    // billable: completed round-trip, no image → settle the real cost
+    canConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-empty' });
+    const billable = new ImageGenerationError('Image model returned no image for the given prompt.', {
+      billable: true,
+      providerCostDollars: 0.02,
+      generationIds: ['gen-e'],
+    });
+    generateImageBytes.mockRejectedValue(billable);
+
+    let res = (await run({ prompt: 'x' }, { userId: 'u1', isAdmin: true, subscriptionTier: 'pro' })) as {
+      success: boolean;
+    };
+    expect(res.success).toBe(false);
+    expect(trackUsage).toHaveBeenCalledOnce();
+    expect(trackUsage.mock.calls[0][0]).toMatchObject({
+      holdId: 'hold-empty',
+      providerCostDollars: 0.02,
+      error: 'no_image_returned',
+    });
+
+    // non-billable: transport failure, never reached the provider → release
+    trackUsage.mockClear();
+    releaseHold.mockClear();
+    canConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-net' });
+    generateImageBytes.mockRejectedValue(new Error('ECONNRESET'));
+
+    res = (await run({ prompt: 'x' }, { userId: 'u1', isAdmin: true, subscriptionTier: 'pro' })) as {
+      success: boolean;
+    };
+    expect(res.success).toBe(false);
+    expect(releaseHold).toHaveBeenCalledWith('hold-net');
+    expect(trackUsage).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a DB role read when isAdmin is absent from context (non-chat callers)', async () => {
+    // v1 completions / consult / ask_agent omit isAdmin — the tool must self-defend.
+    dbState.role = 'user';
+    let res = (await run({ prompt: 'x' }, { userId: 'u1' })) as { success: boolean };
+    expect(res.success).toBe(false);
+    expect(canConsumeAI).not.toHaveBeenCalled();
+    expect(generateImageBytes).not.toHaveBeenCalled();
+
+    dbState.role = 'admin';
+    canConsumeAI.mockResolvedValue({ allowed: true, holdId: 'h' });
+    generateImageBytes.mockResolvedValue({
+      bytes: new Uint8Array([1]),
+      mediaType: 'image/png',
+      providerCostDollars: 0.01,
+      generationIds: [],
+    });
+    createImageFilePage.mockResolvedValue({ pageId: 'p', driveId: 'd', parentId: 'g' });
+    res = (await run({ prompt: 'x' }, { userId: 'u1' })) as { success: boolean };
+    expect(res.success).toBe(true);
+  });
+
+  it('SETTLES an empty generation at $0 when the model is free (cost 0 is authoritative)', async () => {
+    // cost === 0 is a REAL price from a free image model, not "no cost". It must settle
+    // (billing $0, which consumeCredits records as a 'skipped' ledger row) — not release.
+    canConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-free' });
+    generateImageBytes.mockRejectedValue(
+      new ImageGenerationError('Image model returned no image for the given prompt.', {
+        billable: true,
+        providerCostDollars: 0,
+        generationIds: ['gen-free'],
+      }),
+    );
+
+    const res = (await run({ prompt: 'x' }, { userId: 'u1', isAdmin: true, subscriptionTier: 'pro' })) as {
+      success: boolean;
+    };
+
+    expect(res.success).toBe(false);
+    expect(trackUsage).toHaveBeenCalledOnce();
+    expect(trackUsage.mock.calls[0][0]).toMatchObject({ holdId: 'hold-free', providerCostDollars: 0 });
+  });
+
+  it('RELEASES an empty generation that has a generation id but no cost (an id alone is not reconcilable)', async () => {
+    // reconcileStatus is set only when hasRealCost && ids.length > 0, and the cron picks up
+    // only 'pending' rows — so settling this at the flat estimate would be a permanent,
+    // unreconcilable overcharge for a generation that produced nothing.
+    canConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-idonly' });
+    generateImageBytes.mockRejectedValue(
+      new ImageGenerationError('Image model returned no image for the given prompt.', {
+        billable: true,
+        providerCostDollars: undefined,
+        generationIds: ['gen-id-only'],
+      }),
+    );
+
+    const res = (await run({ prompt: 'x' }, { userId: 'u1', isAdmin: true, subscriptionTier: 'pro' })) as {
+      success: boolean;
+    };
+
+    expect(res.success).toBe(false);
+    expect(trackUsage).not.toHaveBeenCalled();
+    expect(releaseHold).toHaveBeenCalledWith('hold-idonly');
+  });
+
+  it('does NOT bill an empty generation with no evidence of spend (nothing could ever reconcile it)', async () => {
+    canConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-noev' });
+    // Completed round-trip, no image, but OpenRouter returned neither a cost nor a
+    // generation id — charging the flat estimate here would be a permanent overcharge.
+    generateImageBytes.mockRejectedValue(
+      new ImageGenerationError('Image model returned no image for the given prompt.', {
+        billable: true,
+        providerCostDollars: undefined,
+        generationIds: [],
+      }),
+    );
+
+    const res = (await run({ prompt: 'x' }, { userId: 'u1', isAdmin: true, subscriptionTier: 'pro' })) as {
+      success: boolean;
+    };
+
+    expect(res.success).toBe(false);
+    expect(trackUsage).not.toHaveBeenCalled();
+    expect(releaseHold).toHaveBeenCalledWith('hold-noev');
+  });
+
+  it('fails softly when credits are exhausted', async () => {
+    canConsumeAI.mockResolvedValue({ allowed: false });
+    const res = (await run({ prompt: 'x' }, { userId: 'u1', isAdmin: true, subscriptionTier: 'pro' })) as { success: boolean; error: string };
+    expect(res.success).toBe(false);
+    expect(generateImageBytes).not.toHaveBeenCalled();
+    // Rendered verbatim in chat and repeated by the model — including in the iOS app (3.1.1).
+    expect(res.error).not.toMatch(/\b(buy|purchase|upgrade|top.?up|add credits)\b/i);
+  });
+});

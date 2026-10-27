@@ -152,7 +152,7 @@ describe('useDocumentStore', () => {
       // Allow promise rejection to be caught
       await vi.advanceTimersByTimeAsync(10);
 
-      expect(consoleError).toHaveBeenCalledWith('Failed to save document:', expect.any(Error));
+      expect(consoleError).toHaveBeenCalledWith('Failed to save document:', new Error('Save failed'));
       consoleError.mockRestore();
     });
   });

@@ -1,7 +1,12 @@
-import { db, pages, drives, driveMembers, eq, and } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { pages, drives } from '@pagespace/db/schema/core'
+import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
-import { getActorInfo } from '@pagespace/lib/server';
+import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation } from './page-mutation-service';
+import { syncTaskItemOnMove } from './task-sync-service';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * Result types for page reorder operations
@@ -24,7 +29,7 @@ export interface ReorderParams {
   pageId: string;
   newParentId: string | null;
   newPosition: number;
-  userId: string;
+  actor: AccessActor;
   metadata?: Record<string, unknown>;
 }
 
@@ -45,7 +50,8 @@ export const pageReorderService = {
    * Handles authorization, validation, and the actual move in a transaction
    */
   async reorderPage(params: ReorderParams): Promise<ReorderResult> {
-    const { pageId, newParentId, newPosition, userId } = params;
+    const { pageId, newParentId, newPosition, actor } = params;
+    const userId = actor.userId;
 
     let driveId: string | null = null;
     let pageTitle: string | null = null;
@@ -58,6 +64,8 @@ export const pageReorderService = {
           title: pages.title,
           ownerId: drives.ownerId,
           revision: pages.revision,
+          type: pages.type,
+          parentId: pages.parentId,
         })
         .from(pages)
         .leftJoin(drives, eq(pages.driveId, drives.id))
@@ -75,25 +83,11 @@ export const pageReorderService = {
         return { success: false, error: 'Drive not found for page.', status: 404 };
       }
 
-      // Check authorization: user must be owner or admin
-      const isOwner = pageInfo.ownerId === userId;
-      let isAdmin = false;
+      // Check authorization: user must be owner or ACCEPTED admin — a pending
+      // ADMIN invite grants nothing.
+      const isOwnerOrAdmin = await isDriveOwnerOrAdmin(actor, driveId);
 
-      if (!isOwner && driveId) {
-        const adminMembership = await db
-          .select()
-          .from(driveMembers)
-          .where(and(
-            eq(driveMembers.driveId, driveId),
-            eq(driveMembers.userId, userId),
-            eq(driveMembers.role, 'ADMIN')
-          ))
-          .limit(1);
-
-        isAdmin = adminMembership.length > 0;
-      }
-
-      if (!isOwner && !isAdmin) {
+      if (!isOwnerOrAdmin) {
         return { success: false, error: 'Only drive owners and admins can reorder pages.', status: 403 };
       }
 
@@ -115,22 +109,36 @@ export const pageReorderService = {
       }
 
       const actorInfo = await getActorInfo(userId);
-      await applyPageMutation({
-        pageId,
-        operation: 'move',
-        updates: {
-          parentId: newParentId,
-          position: newPosition,
-        },
-        updatedFields: ['parentId', 'position'],
-        expectedRevision: pageInfo.revision,
-        context: {
+      let deferredTrigger: (() => void) | undefined;
+      await db.transaction(async (tx) => {
+        const mutResult = await applyPageMutation({
+          pageId,
+          operation: 'move',
+          updates: {
+            parentId: newParentId,
+            position: newPosition,
+          },
+          updatedFields: ['parentId', 'position'],
+          expectedRevision: pageInfo.revision,
+          context: {
+            userId,
+            actorEmail: actorInfo.actorEmail,
+            actorDisplayName: actorInfo.actorDisplayName,
+            metadata: params.metadata,
+          },
+          tx,
+        });
+        deferredTrigger = mutResult.deferredTrigger;
+
+        await syncTaskItemOnMove(tx, {
+          movedPageId: pageId,
+          movedPageType: pageInfo.type,
+          oldParentId: pageInfo.parentId,
+          newParentId,
           userId,
-          actorEmail: actorInfo.actorEmail,
-          actorDisplayName: actorInfo.actorDisplayName,
-          metadata: params.metadata,
-        },
+        });
       });
+      deferredTrigger?.();
 
       return {
         success: true,
@@ -153,5 +161,3 @@ export const pageReorderService = {
     }
   },
 };
-
-export type PageReorderService = typeof pageReorderService;

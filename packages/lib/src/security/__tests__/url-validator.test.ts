@@ -404,6 +404,18 @@ describe('URL Validator - SSRF Prevention', () => {
     it('allows http://localhost:11434', async () => {
       const result = await validateLocalProviderURL('http://localhost:11434');
       expect(result.valid).toBe(true);
+      // Should skip DNS resolution — localhost is in /etc/hosts, not DNS
+      expect(dns.resolve4).not.toHaveBeenCalled();
+      expect(dns.resolve6).not.toHaveBeenCalled();
+    });
+
+    it('allows localhost even when DNS resolution would fail', async () => {
+      // Regression: dns.resolve4/6 bypass /etc/hosts in Docker containers.
+      // localhost must pass without DNS, same as host.docker.internal.
+      vi.mocked(dns.resolve4).mockResolvedValue([]);
+      vi.mocked(dns.resolve6).mockResolvedValue([]);
+      const result = await validateLocalProviderURL('http://localhost:1234/v1');
+      expect(result.valid).toBe(true);
     });
 
     it('allows http://127.0.0.1:11434', async () => {
@@ -459,16 +471,26 @@ describe('URL Validator - SSRF Prevention', () => {
     });
 
     it('allows http://host.docker.internal:11434 for Ollama in Docker', async () => {
-      vi.mocked(dns.resolve4).mockResolvedValue(['192.168.65.254']);
-      vi.mocked(dns.resolve6).mockResolvedValue([]);
       const result = await validateLocalProviderURL('http://host.docker.internal:11434');
       expect(result.valid).toBe(true);
+      // Should skip DNS resolution entirely — host.docker.internal is in /etc/hosts, not DNS
+      expect(dns.resolve4).not.toHaveBeenCalled();
+      expect(dns.resolve6).not.toHaveBeenCalled();
     });
 
     it('allows http://host.docker.internal:1234/v1 for LM Studio in Docker', async () => {
-      vi.mocked(dns.resolve4).mockResolvedValue(['192.168.65.254']);
-      vi.mocked(dns.resolve6).mockResolvedValue([]);
       const result = await validateLocalProviderURL('http://host.docker.internal:1234/v1');
+      expect(result.valid).toBe(true);
+      expect(dns.resolve4).not.toHaveBeenCalled();
+      expect(dns.resolve6).not.toHaveBeenCalled();
+    });
+
+    it('allows host.docker.internal even when DNS resolution would fail', async () => {
+      // Regression: dns.resolve4/6 bypass /etc/hosts where Docker registers this hostname.
+      // Validation must not depend on DNS for this hostname.
+      vi.mocked(dns.resolve4).mockResolvedValue([]);
+      vi.mocked(dns.resolve6).mockResolvedValue([]);
+      const result = await validateLocalProviderURL('http://host.docker.internal:11434');
       expect(result.valid).toBe(true);
     });
   });

@@ -11,14 +11,16 @@ import {
   setHours,
   setMinutes,
 } from 'date-fns';
+import { Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
   CalendarEvent,
   CalendarHandlers,
   TaskWithDueDate,
+  EventColorConfig,
   getTasksForDay,
   isToday,
-  getEventColors,
+  resolveEventColor,
   TASK_OVERLAY_STYLE,
 } from './calendar-types';
 
@@ -27,12 +29,14 @@ interface WeekViewProps {
   events: CalendarEvent[];
   tasks: TaskWithDueDate[];
   handlers: CalendarHandlers;
+  driveColorMap?: Map<string | null, EventColorConfig> | null;
+  context?: 'user' | 'drive';
 }
 
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
 const HOUR_HEIGHT = 48; // pixels per hour
 
-export function WeekView({ currentDate, events, tasks, handlers }: WeekViewProps) {
+export function WeekView({ currentDate, events, tasks, handlers, driveColorMap, context = 'drive' }: WeekViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Calculate the days of the current week
@@ -134,8 +138,9 @@ export function WeekView({ currentDate, events, tasks, handlers }: WeekViewProps
                 <div className="px-1 py-1 border-t bg-muted/20 space-y-0.5 max-h-20 overflow-y-auto">
                   {dayAllDayEvents.map((event) => (
                     <AllDayEventPill
-                      key={event.id}
+                      key={`${event.id}-${event.startAt}`}
                       event={event}
+                      colors={resolveEventColor(event, context, driveColorMap ?? null)}
                       onClick={() => handlers.onEventClick(event)}
                     />
                   ))}
@@ -202,11 +207,11 @@ export function WeekView({ currentDate, events, tasks, handlers }: WeekViewProps
                 {/* Timed events */}
                 {dayTimedEvents.map((event) => {
                   const { top, height } = getEventStyle(event, day);
-                  const colors = getEventColors(event.color);
+                  const colors = resolveEventColor(event, context, driveColorMap ?? null);
 
                   return (
                     <button
-                      key={event.id}
+                      key={`${event.id}-${event.startAt}`}
                       className={cn(
                         'absolute left-1 right-1 px-1.5 py-0.5 rounded text-xs overflow-hidden border-l-2',
                         colors.bg,
@@ -219,7 +224,15 @@ export function WeekView({ currentDate, events, tasks, handlers }: WeekViewProps
                         handlers.onEventClick(event);
                       }}
                     >
-                      <div className="font-medium truncate">{event.title}</div>
+                      <div className="font-medium truncate">
+                        {event.hasAgentTrigger && (
+                          <>
+                            <Zap className="inline-block h-3 w-3 mr-1 text-amber-500 align-text-top" aria-hidden="true" />
+                            <span className="sr-only">Agent trigger configured. </span>
+                          </>
+                        )}
+                        {event.title}
+                      </div>
                       {height > 30 && (
                         <div className="text-muted-foreground truncate">
                           {format(new Date(event.startAt), 'h:mm a')}
@@ -259,12 +272,13 @@ function CurrentTimeIndicator() {
 // All-day event pill
 function AllDayEventPill({
   event,
+  colors,
   onClick,
 }: {
   event: CalendarEvent;
+  colors: EventColorConfig;
   onClick: () => void;
 }) {
-  const colors = getEventColors(event.color);
 
   return (
     <button
@@ -276,6 +290,12 @@ function AllDayEventPill({
       )}
       onClick={onClick}
     >
+      {event.hasAgentTrigger && (
+        <>
+          <Zap className="inline-block h-3 w-3 mr-1 text-amber-500 align-text-top" aria-hidden="true" />
+          <span className="sr-only">Agent trigger configured. </span>
+        </>
+      )}
       {event.title}
     </button>
   );

@@ -1,46 +1,68 @@
+/**
+ * @scaffold — monitoring-retention uses a module-level `db` import with
+ * no injected seam. The ORM delete chain mock and mockReturnValueOnce
+ * ladders are structural necessities. Assertions verify the observable
+ * return contract (table name + deleted count).
+ *
+ * REVIEW: refactor cleanup functions to accept `db` as a parameter so
+ * tests can mock at the injection boundary without reproducing the chain.
+ */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-// Mock drizzle-orm before any imports that use it
 vi.mock('drizzle-orm', () => ({
-  lt: vi.fn((col, val) => ({ operator: 'lt', column: col, value: val })),
+  lt: (col: unknown, val: unknown) => ({ _op: 'lt', col, val }),
 }));
 
-// Mock @pagespace/db
 const mockReturning = vi.fn();
+const mockDeleteTable = vi.fn();
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
-    delete: vi.fn(() => ({
-      where: vi.fn(() => ({
-        returning: mockReturning,
-      })),
-    })),
+    delete: (table: unknown) => {
+      mockDeleteTable(table);
+      return {
+        where: vi.fn(() => ({
+          returning: mockReturning,
+        })),
+      };
+    },
   },
-  apiMetrics: { id: 'id', timestamp: 'timestamp' },
-  systemLogs: { id: 'id', timestamp: 'timestamp' },
-  securityAuditLog: { id: 'id', timestamp: 'timestamp' },
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
+  apiMetrics: { id: 'apiMetrics.id', timestamp: 'apiMetrics.timestamp' },
+  systemLogs: { id: 'systemLogs.id', timestamp: 'systemLogs.timestamp' },
+  errorLogs: { id: 'errorLogs.id', timestamp: 'errorLogs.timestamp' },
+  userActivities: { id: 'userActivities.id', timestamp: 'userActivities.timestamp' },
+}));
+vi.mock('../../observability/clickhouse-client', () => ({
+  isClickHouseEnabled: vi.fn(() => false),
 }));
 
 import {
   getRetentionConfig,
   getRetentionCutoff,
+  getAiUsageLogsRetentionDays,
   cleanupApiMetrics,
   cleanupSystemLogs,
-  cleanupSecurityAuditLog,
+  cleanupErrorLogs,
+  cleanupUserActivities,
   runMonitoringRetentionCleanup,
 } from './monitoring-retention';
-import { db } from '@pagespace/db';
+import { apiMetrics, systemLogs, errorLogs, userActivities } from '@pagespace/db/schema/monitoring';
+import { isClickHouseEnabled } from '../../observability/clickhouse-client';
 
-// Mock environment
 const originalEnv = process.env;
 
 beforeEach(() => {
   process.env = { ...originalEnv };
   delete process.env.RETENTION_API_METRICS_DAYS;
   delete process.env.RETENTION_SYSTEM_LOGS_DAYS;
-  delete process.env.RETENTION_SECURITY_AUDIT_DAYS;
+  delete process.env.RETENTION_ERROR_LOGS_DAYS;
+  delete process.env.RETENTION_USER_ACTIVITIES_DAYS;
+  delete process.env.RETENTION_AI_USAGE_LOGS_DAYS;
   vi.clearAllMocks();
   mockReturning.mockResolvedValue([]);
+  vi.mocked(isClickHouseEnabled).mockReturnValue(false);
 });
 
 afterEach(() => {
@@ -48,116 +70,233 @@ afterEach(() => {
 });
 
 describe('getRetentionConfig', () => {
-  it('returns default retention periods when no env vars set', () => {
+  it('given_noEnvVars_returnsDefaultRetentionPeriods', () => {
     const config = getRetentionConfig();
-    expect(config.apiMetricsDays).toBe(90);
-    expect(config.systemLogsDays).toBe(30);
-    expect(config.securityAuditDays).toBe(365);
+
+    expect(config).toEqual({
+      apiMetricsDays: 90,
+      systemLogsDays: 30,
+      errorLogsDays: 90,
+      userActivitiesDays: 180,
+    });
   });
 
-  it('uses env vars when set', () => {
+  it('given_validEnvVars_usesCustomValues', () => {
     process.env.RETENTION_API_METRICS_DAYS = '60';
     process.env.RETENTION_SYSTEM_LOGS_DAYS = '14';
-    process.env.RETENTION_SECURITY_AUDIT_DAYS = '730';
+    process.env.RETENTION_ERROR_LOGS_DAYS = '45';
+    process.env.RETENTION_USER_ACTIVITIES_DAYS = '90';
 
     const config = getRetentionConfig();
-    expect(config.apiMetricsDays).toBe(60);
-    expect(config.systemLogsDays).toBe(14);
-    expect(config.securityAuditDays).toBe(730);
+
+    expect(config).toEqual({
+      apiMetricsDays: 60,
+      systemLogsDays: 14,
+      errorLogsDays: 45,
+      userActivitiesDays: 90,
+    });
   });
 
-  it('falls back to defaults for invalid env vars', () => {
+  it('given_invalidEnvVars_fallsBackToDefaults', () => {
     process.env.RETENTION_API_METRICS_DAYS = 'not-a-number';
     process.env.RETENTION_SYSTEM_LOGS_DAYS = '-5';
-    process.env.RETENTION_SECURITY_AUDIT_DAYS = '0';
+    process.env.RETENTION_ERROR_LOGS_DAYS = '0';
+    process.env.RETENTION_USER_ACTIVITIES_DAYS = 'oops';
 
     const config = getRetentionConfig();
+
+    expect(config).toEqual({
+      apiMetricsDays: 90,
+      systemLogsDays: 30,
+      errorLogsDays: 90,
+      userActivitiesDays: 180,
+    });
+  });
+
+  it('given_emptyStringEnvVars_fallsBackToDefaults', () => {
+    process.env.RETENTION_API_METRICS_DAYS = '';
+    process.env.RETENTION_ERROR_LOGS_DAYS = '';
+
+    const config = getRetentionConfig();
+
     expect(config.apiMetricsDays).toBe(90);
-    expect(config.systemLogsDays).toBe(30);
-    expect(config.securityAuditDays).toBe(365);
+    expect(config.errorLogsDays).toBe(90);
+  });
+});
+
+describe('getAiUsageLogsRetentionDays', () => {
+  it('given_noEnvVar_returnsDefaultOf90', () => {
+    expect(getAiUsageLogsRetentionDays()).toBe(90);
+  });
+
+  it('given_validPositiveInt_returnsThatValue', () => {
+    process.env.RETENTION_AI_USAGE_LOGS_DAYS = '30';
+    expect(getAiUsageLogsRetentionDays()).toBe(30);
+  });
+
+  it('given_zeroNegativeOrNonNumeric_fallsBackTo90', () => {
+    process.env.RETENTION_AI_USAGE_LOGS_DAYS = '0';
+    expect(getAiUsageLogsRetentionDays()).toBe(90);
+    process.env.RETENTION_AI_USAGE_LOGS_DAYS = '-7';
+    expect(getAiUsageLogsRetentionDays()).toBe(90);
+    process.env.RETENTION_AI_USAGE_LOGS_DAYS = 'nope';
+    expect(getAiUsageLogsRetentionDays()).toBe(90);
+  });
+
+  it('given_emptyString_fallsBackTo90', () => {
+    process.env.RETENTION_AI_USAGE_LOGS_DAYS = '';
+    expect(getAiUsageLogsRetentionDays()).toBe(90);
   });
 });
 
 describe('getRetentionCutoff', () => {
-  it('returns a date N days in the past', () => {
+  it('given_dayCount_returnsDateThatManyDaysAgo', () => {
     const now = Date.now();
     const cutoff = getRetentionCutoff(30);
     const expectedMs = 30 * 24 * 60 * 60 * 1000;
     const diff = now - cutoff.getTime();
-    // Allow 1 second tolerance
+
     expect(Math.abs(diff - expectedMs)).toBeLessThan(1000);
+  });
+
+  it('given_zeroDays_returnsApproximatelyNow', () => {
+    const before = Date.now();
+    const cutoff = getRetentionCutoff(0);
+    const after = Date.now();
+
+    // 0 days retention → cutoff is approximately now (within 50ms test execution window)
+    expect(cutoff.getTime()).toBeGreaterThanOrEqual(before - 1);
+    expect(cutoff.getTime()).toBeLessThanOrEqual(after + 1);
   });
 });
 
 describe('cleanupApiMetrics', () => {
-  it('calls delete on api_metrics table', async () => {
+  it('given_noExpiredRows_returnsZeroDeleted', async () => {
     const result = await cleanupApiMetrics({ retentionDays: 90 });
-    expect(result.table).toBe('api_metrics');
-    expect(result.deleted).toBe(0);
-    expect(db.delete).toHaveBeenCalled();
+
+    expect(result).toEqual({ table: 'api_metrics', deleted: 0 });
+    expect(mockDeleteTable).toHaveBeenCalledWith(apiMetrics);
   });
 
-  it('returns count of deleted rows', async () => {
+  it('given_expiredRows_returnsDeletedCount', async () => {
     mockReturning.mockResolvedValueOnce([{ id: '1' }, { id: '2' }]);
+
     const result = await cleanupApiMetrics({ retentionDays: 90 });
-    expect(result.deleted).toBe(2);
+
+    expect(result).toEqual({ table: 'api_metrics', deleted: 2 });
+  });
+
+  it('given_databaseError_propagates', async () => {
+    mockReturning.mockRejectedValueOnce(new Error('connection lost'));
+
+    await expect(cleanupApiMetrics({ retentionDays: 90 })).rejects.toThrow('connection lost');
   });
 });
 
 describe('cleanupSystemLogs', () => {
-  it('calls delete on system_logs table', async () => {
+  it('given_noExpiredRows_returnsZeroDeleted', async () => {
     const result = await cleanupSystemLogs({ retentionDays: 30 });
-    expect(result.table).toBe('system_logs');
-    expect(result.deleted).toBe(0);
-    expect(db.delete).toHaveBeenCalled();
+
+    expect(result).toEqual({ table: 'system_logs', deleted: 0 });
+    expect(mockDeleteTable).toHaveBeenCalledWith(systemLogs);
   });
 
-  it('returns count of deleted rows', async () => {
+  it('given_expiredRows_returnsDeletedCount', async () => {
     mockReturning.mockResolvedValueOnce([{ id: '1' }, { id: '2' }, { id: '3' }]);
+
     const result = await cleanupSystemLogs({ retentionDays: 30 });
-    expect(result.deleted).toBe(3);
+
+    expect(result).toEqual({ table: 'system_logs', deleted: 3 });
   });
 });
 
-describe('cleanupSecurityAuditLog', () => {
-  it('calls delete on security_audit_log table', async () => {
-    const result = await cleanupSecurityAuditLog({ retentionDays: 365 });
-    expect(result.table).toBe('security_audit_log');
-    expect(result.deleted).toBe(0);
-    expect(db.delete).toHaveBeenCalled();
+describe('cleanupErrorLogs', () => {
+  it('given_noExpiredRows_returnsZeroDeleted', async () => {
+    const result = await cleanupErrorLogs({ retentionDays: 90 });
+
+    expect(result).toEqual({ table: 'error_logs', deleted: 0 });
+    expect(mockDeleteTable).toHaveBeenCalledWith(errorLogs);
   });
 
-  it('returns count of deleted rows', async () => {
-    mockReturning.mockResolvedValueOnce([{ id: '1' }]);
-    const result = await cleanupSecurityAuditLog({ retentionDays: 365 });
-    expect(result.deleted).toBe(1);
+  it('given_expiredRows_returnsDeletedCount', async () => {
+    mockReturning.mockResolvedValueOnce([{ id: '1' }, { id: '2' }]);
+
+    const result = await cleanupErrorLogs({ retentionDays: 90 });
+
+    expect(result).toEqual({ table: 'error_logs', deleted: 2 });
+  });
+
+  it('given_databaseError_propagates', async () => {
+    mockReturning.mockRejectedValueOnce(new Error('connection lost'));
+
+    await expect(cleanupErrorLogs({ retentionDays: 90 })).rejects.toThrow('connection lost');
+  });
+});
+
+describe('cleanupUserActivities', () => {
+  it('given_noExpiredRows_returnsZeroDeleted', async () => {
+    const result = await cleanupUserActivities({ retentionDays: 180 });
+
+    expect(result).toEqual({ table: 'user_activities', deleted: 0 });
+    expect(mockDeleteTable).toHaveBeenCalledWith(userActivities);
+  });
+
+  it('given_expiredRows_returnsDeletedCount', async () => {
+    mockReturning.mockResolvedValueOnce([{ id: '1' }, { id: '2' }, { id: '3' }, { id: '4' }]);
+
+    const result = await cleanupUserActivities({ retentionDays: 180 });
+
+    expect(result).toEqual({ table: 'user_activities', deleted: 4 });
   });
 });
 
 describe('runMonitoringRetentionCleanup', () => {
-  it('cleans up all three monitoring tables', async () => {
+  it('given_defaultConfig_cleansAllFourMonitoringTables', async () => {
     const results = await runMonitoringRetentionCleanup();
-    expect(results).toHaveLength(3);
     const tables = results.map(r => r.table).sort();
-    expect(tables).toEqual(['api_metrics', 'security_audit_log', 'system_logs']);
+
+    expect(tables).toEqual(['api_metrics', 'error_logs', 'system_logs', 'user_activities']);
   });
 
-  it('uses default retention config', async () => {
+  it('given_customEnvConfig_stillCleansAllTables', async () => {
+    process.env.RETENTION_API_METRICS_DAYS = '45';
+    process.env.RETENTION_SYSTEM_LOGS_DAYS = '7';
+    process.env.RETENTION_ERROR_LOGS_DAYS = '60';
+    process.env.RETENTION_USER_ACTIVITIES_DAYS = '120';
+
     const results = await runMonitoringRetentionCleanup();
-    expect(results).toHaveLength(3);
+
+    expect(results).toHaveLength(4);
     for (const result of results) {
-      expect(result).toHaveProperty('table');
-      expect(result).toHaveProperty('deleted');
+      expect(typeof result.table).toBe('string');
       expect(typeof result.deleted).toBe('number');
     }
   });
 
-  it('uses custom retention config from env vars', async () => {
-    process.env.RETENTION_API_METRICS_DAYS = '45';
-    process.env.RETENTION_SYSTEM_LOGS_DAYS = '7';
-    process.env.RETENTION_SECURITY_AUDIT_DAYS = '180';
+  it('given_databaseError_rejectsWithOriginalError', async () => {
+    mockReturning.mockRejectedValue(new Error('disk full'));
+
+    await expect(runMonitoringRetentionCleanup()).rejects.toThrow('disk full');
+  });
+
+  it('given_clickhouseEnabled_isANoOpForTheFourAnalyticsTables', async () => {
+    // Post-cutover, retention for the 4 tables is enforced by CH table TTLs
+    // (clickhouse-ddl.ts). Running the PG purges too would double-handle;
+    // the frozen pre-cutover PG rows are removed by the Phase 6 drop.
+    vi.mocked(isClickHouseEnabled).mockReturnValue(true);
 
     const results = await runMonitoringRetentionCleanup();
-    expect(results).toHaveLength(3);
+
+    expect(results).toEqual([]);
+    expect(mockDeleteTable).not.toHaveBeenCalled();
+  });
+
+  it('given_clickhouseDisabled_pgPurgesRunExactlyAsBefore', async () => {
+    vi.mocked(isClickHouseEnabled).mockReturnValue(false);
+
+    const results = await runMonitoringRetentionCleanup();
+
+    expect(results).toHaveLength(4);
+    expect(mockDeleteTable).toHaveBeenCalledTimes(4);
   });
 });

@@ -1,11 +1,19 @@
 import { NextResponse } from 'next/server';
-import { db, connections, users, userProfiles, eq, and, or, desc, inArray } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, or, desc, inArray } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { userProfiles } from '@pagespace/db/schema/members'
+import { connections } from '@pagespace/db/schema/social';
+import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
-import { createNotification, isEmailVerified } from '@pagespace/lib';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { createNotification } from '@pagespace/lib/notifications/notifications';
+import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 
-const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 // GET /api/connections - Get user's connections
 export async function GET(request: Request) {
@@ -13,6 +21,8 @@ export async function GET(request: Request) {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
+
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'connections', resourceId: 'self' });
 
     const { searchParams } = new URL(request.url);
     const status = searchParams.get('status') || 'ACCEPTED';
@@ -28,6 +38,7 @@ export async function GET(request: Request) {
         user1Id: connections.user1Id,
         user2Id: connections.user2Id,
         requestedBy: connections.requestedBy,
+        blockedBy: connections.blockedBy,
       })
       .from(connections)
       .where(
@@ -63,7 +74,9 @@ export async function GET(request: Request) {
           .where(inArray(users.id, otherUserIds))
       : [];
 
-    const userMap = new Map(otherUsers.map(u => [u.id, u]));
+    // Decrypt each unique connected user's PII once for the whole request —
+    // the returned id-keyed map is exactly the lookup the rows re-attach by.
+    const userMap = await decryptUsersByIdOnce(otherUsers);
 
     const validConnections = userConnections
       .filter(conn => conn.user1Id && conn.user2Id)
@@ -78,6 +91,8 @@ export async function GET(request: Request) {
         };
       })
       .filter(conn => conn !== null);
+
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'connection', resourceId: '*', details: { count: validConnections.length } });
 
     return NextResponse.json({ connections: validConnections });
   } catch (error) {
@@ -95,6 +110,8 @@ export async function POST(request: Request) {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
+
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'connection', resourceId: 'self' });
 
     // Check email verification
     const emailVerified = await isEmailVerified(userId);
@@ -189,7 +206,9 @@ export async function POST(request: Request) {
       .where(eq(users.id, userId))
       .limit(1);
 
-    const senderName = sender?.displayName || sender?.name || 'Someone';
+    // Decrypt the sender's name PII at the edge (GDPR #965) — it is embedded in
+    // the notification message + email metadata (legacy plaintext passes through).
+    const senderName = sender?.displayName || (await decryptField(sender?.name)) || 'Someone';
 
     // Send notification to target user (broadcasts via Socket.IO)
     await createNotification({

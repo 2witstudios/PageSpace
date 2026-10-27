@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
-import { db, contactSubmissions } from '@pagespace/db';
-import { secureCompare } from '@pagespace/lib';
+import { db } from '@pagespace/db/db'
+import { contactSubmissions } from '@pagespace/db/schema/contact';
+import { isValidEmail } from '@pagespace/lib/validators/email';
+import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 
 export async function POST(request: Request) {
   const secret = process.env.INTERNAL_API_SECRET;
@@ -34,7 +36,7 @@ export async function POST(request: Request) {
   if (!name || typeof name !== 'string' || name.trim().length === 0 || name.length > 100) {
     return NextResponse.json({ error: 'Valid name is required (max 100 characters)' }, { status: 400 });
   }
-  if (!email || typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+  if (!email || typeof email !== 'string' || !isValidEmail(email)) {
     return NextResponse.json({ error: 'Valid email is required' }, { status: 400 });
   }
   if (!subject || typeof subject !== 'string' || subject.trim().length === 0 || subject.length > 200) {

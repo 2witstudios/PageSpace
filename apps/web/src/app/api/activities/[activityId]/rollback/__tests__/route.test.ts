@@ -28,7 +28,7 @@ vi.mock('../../../../../../lib/auth', () => ({
 }));
 
 // Mock database for idempotency check
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
@@ -39,18 +39,30 @@ vi.mock('@pagespace/db', () => ({
     }),
     transaction: vi.fn((callback: (tx: object) => Promise<unknown>) => callback({})),
   },
-  activityLogs: { id: 'id', operation: 'operation', rollbackFromActivityId: 'rollbackFromActivityId' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
 }));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
+  activityLogs: { id: 'id', operation: 'operation', rollbackFromActivityId: 'rollbackFromActivityId' },
+}));
 
 // Mock loggers
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       debug: vi.fn(),
     },
+    security: {
+      warn: vi.fn(),
+    },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
 // Mock websocket broadcasts
@@ -70,6 +82,7 @@ vi.mock('../../../../../../lib/logging/mask', () => ({
 
 import { executeRollback, previewRollback } from '../../../../../../services/api';
 import { authenticateRequestWithOptions } from '../../../../../../lib/auth';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 // Test helpers
 const mockUserId = 'user_123';
@@ -145,10 +158,9 @@ describe('POST /api/activities/[activityId]/rollback', () => {
       // Verify auth was called with CSRF requirement
       await POST(createRequest({ context: 'page' }), { params: mockParams });
 
-      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
-        expect.any(Request),
-        expect.objectContaining({ requireCSRF: true })
-      );
+      const callArgs = vi.mocked(authenticateRequestWithOptions).mock.calls[0];
+      expect(callArgs[0]).toBeInstanceOf(Request);
+      expect(callArgs[1]).toEqual({ allow: ['session'], requireCSRF: true });
     });
   });
 
@@ -176,7 +188,7 @@ describe('POST /api/activities/[activityId]/rollback', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(typeof body.error).toBe('string');
     });
 
     it('returns 400 for invalid context value', async () => {
@@ -184,7 +196,7 @@ describe('POST /api/activities/[activityId]/rollback', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(typeof body.error).toBe('string');
     });
 
     it('accepts valid context values', async () => {
@@ -324,9 +336,29 @@ describe('POST /api/activities/[activityId]/rollback', () => {
       // Route now wraps executeRollback in transaction and passes options
       expect(executeRollback).toHaveBeenCalledWith(
         mockActivityId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         'drive',
-        expect.objectContaining({ tx: expect.any(Object), force: false })
+        { tx: {}, force: false }
+      );
+    });
+  });
+
+  // ── Security audit ────────────────────────────────────────────
+
+  describe('security audit', () => {
+    it('logs write audit event with rollback action', async () => {
+      vi.mocked(previewRollback).mockResolvedValue(createMockPreview());
+      vi.mocked(executeRollback).mockResolvedValue({
+        success: true,
+        message: 'OK',
+        warnings: [],
+      } as never);
+
+      await POST(createRequest({ context: 'page' }), { params: mockParams });
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({ eventType: 'data.write', userId: mockUserId, resourceType: 'activity', resourceId: mockActivityId, details: { operation: 'rollback', context: 'page', force: false } })
       );
     });
   });

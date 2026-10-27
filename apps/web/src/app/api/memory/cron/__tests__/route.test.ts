@@ -1,5 +1,6 @@
-import { describe, it, vi, beforeEach } from 'vitest';
+import { describe, it, vi, beforeEach, afterEach } from 'vitest';
 import { assert } from '@/test/riteway';
+import { computeCronSignature } from '@/lib/auth/cron-auth';
 
 /**
  * Memory Cron Route Tests
@@ -11,8 +12,8 @@ import { assert } from '@/test/riteway';
  * 4. Compacts fields if needed
  *
  * Key behaviors to test:
- * 1. Only accessible from internal network (CRON_SECRET + network origin check)
- * 2. Only processes paying users (pro, founder, business)
+ * 1. Authentication via HMAC-SHA256 + nonce (see cron-auth.ts)
+ * 2. Only processes paying users (pro, business)
  * 3. Skips users with personalization disabled
  * 4. Handles errors for individual users without failing entire job
  * 5. Returns summary of processed/updated/errors
@@ -21,7 +22,7 @@ import { assert } from '@/test/riteway';
 // Mock database
 const mockDbSelect = vi.fn();
 const mockDbQuery = vi.fn();
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: () => mockDbSelect(),
     query: {
@@ -30,14 +31,22 @@ vi.mock('@pagespace/db', () => ({
       },
     },
   },
-  users: { id: 'id', subscriptionTier: 'subscriptionTier' },
-  userPersonalization: { userId: 'userId', enabled: 'enabled' },
-  sessions: { userId: 'userId', type: 'type', revokedAt: 'revokedAt', lastUsedAt: 'lastUsedAt' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   gte: vi.fn(),
   inArray: vi.fn(),
   isNull: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'id', subscriptionTier: 'subscriptionTier' },
+}));
+vi.mock('@pagespace/db/schema/sessions', () => ({
+  sessions: { userId: 'userId', type: 'type', revokedAt: 'revokedAt', lastUsedAt: 'lastUsedAt' },
+}));
+vi.mock('@pagespace/db/schema/personalization', () => ({
+  userPersonalization: { userId: 'userId', enabled: 'enabled' },
 }));
 
 // Mock memory services
@@ -48,21 +57,42 @@ const mockGetCurrentPersonalization = vi.fn();
 const mockCheckAndCompactIfNeeded = vi.fn();
 
 vi.mock('@/lib/memory/discovery-service', () => ({
-  runDiscoveryPasses: () => mockRunDiscoveryPasses(),
+  runDiscoveryPasses: (...args: unknown[]) => mockRunDiscoveryPasses(...args),
 }));
 
 vi.mock('@/lib/memory/integration-service', () => ({
   evaluateAndIntegrate: (...args: unknown[]) => mockEvaluateAndIntegrate(...args),
   applyIntegrationDecisions: (...args: unknown[]) => mockApplyIntegrationDecisions(...args),
-  getCurrentPersonalization: () => mockGetCurrentPersonalization(),
+  getCurrentPersonalizationPages: () => mockGetCurrentPersonalization(),
 }));
 
 vi.mock('@/lib/memory/compaction-service', () => ({
-  checkAndCompactIfNeeded: () => mockCheckAndCompactIfNeeded(),
+  checkAndCompactIfNeeded: (...args: unknown[]) => mockCheckAndCompactIfNeeded(...args),
+}));
+
+// Candidate lifecycle. These record WHICH ids were settled, which is the whole
+// point of the settlement tests below: the P1 defects in review were all cases
+// where the wrong candidates were retired.
+const mockUpsertCandidates = vi.fn();
+const mockFindPromotableCandidates = vi.fn();
+const mockMarkCandidatesPromoted = vi.fn();
+const mockMarkCandidatesRejected = vi.fn();
+const mockPruneStaleCandidates = vi.fn();
+const mockRedactSettledEvidence = vi.fn();
+const mockRecordMemoryOrgIds = vi.fn();
+
+vi.mock('@/lib/memory/candidate-service', () => ({
+  upsertCandidates: (...args: unknown[]) => mockUpsertCandidates(...args),
+  findPromotableCandidates: (...args: unknown[]) => mockFindPromotableCandidates(...args),
+  markCandidatesPromoted: (...args: unknown[]) => mockMarkCandidatesPromoted(...args),
+  markCandidatesRejected: (...args: unknown[]) => mockMarkCandidatesRejected(...args),
+  pruneStaleCandidates: (...args: unknown[]) => mockPruneStaleCandidates(...args),
+  redactSettledEvidence: (...args: unknown[]) => mockRedactSettledEvidence(...args),
+  recordMemoryOrgIds: (...args: unknown[]) => mockRecordMemoryOrgIds(...args),
 }));
 
 // Mock loggers
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: {
       info: vi.fn(),
@@ -71,12 +101,48 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
+// Helper that creates a properly HMAC-signed cron request.
+// The route validates HMAC-SHA256 signatures; tests that exercise non-auth
+// behavior must send signed requests when CRON_SECRET is set in the env.
+const TEST_SECRET = 'test-route-cron-secret';
+
+function createSignedCronRequest(opts: {
+  method?: string;
+  url?: string;
+  extraHeaders?: Record<string, string>;
+} = {}): Request {
+  const method = opts.method ?? 'POST';
+  const url = opts.url ?? 'http://web:3000/api/memory/cron';
+  const parsed = new URL(url);
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const nonce = `nonce-${Math.random()}`;
+  const signature = computeCronSignature(TEST_SECRET, timestamp, nonce, method, parsed.pathname);
+  return new Request(url, {
+    method,
+    headers: {
+      host: parsed.host,
+      'x-cron-timestamp': timestamp,
+      'x-cron-nonce': nonce,
+      'x-cron-signature': signature,
+      ...opts.extraHeaders,
+    },
+  });
+}
+
 describe('memory cron route', () => {
+  let savedCronSecret: string | undefined;
+
   beforeEach(() => {
     vi.clearAllMocks();
     vi.resetModules();
+    // Normalise CRON_SECRET so all tests run against a known secret state.
+    // Tests that need no-secret (dev bypass) must clear it themselves.
+    savedCronSecret = process.env.CRON_SECRET;
+    process.env.CRON_SECRET = TEST_SECRET;
     // Setup default mocks
     mockDbSelect.mockReturnValue({
       from: vi.fn().mockReturnValue({
@@ -90,8 +156,17 @@ describe('memory cron route', () => {
     });
   });
 
-  describe('localhost authentication (zero trust)', () => {
-    it('should return 403 when request comes from external host', async () => {
+  afterEach(() => {
+    if (savedCronSecret !== undefined) {
+      process.env.CRON_SECRET = savedCronSecret;
+    } else {
+      delete process.env.CRON_SECRET;
+    }
+  });
+
+  describe('cron authentication', () => {
+    it('should return 403 when cron signature headers are missing', async () => {
+      // CRON_SECRET is set by outer beforeEach; omitting HMAC headers must be rejected.
       const { POST } = await import('../route');
       const request = new Request('https://pagespace.ai/api/memory/cron', {
         method: 'POST',
@@ -102,68 +177,48 @@ describe('memory cron route', () => {
       const data = await response.json();
 
       assert({
-        given: 'request from external host',
+        given: 'request with CRON_SECRET set but no HMAC headers',
         should: 'return 403 status',
         actual: response.status,
         expected: 403,
       });
 
       assert({
-        given: 'request from external host',
-        should: 'return forbidden error mentioning internal network',
-        actual: data.error.includes('internal network'),
+        given: 'request with CRON_SECRET set but no HMAC headers',
+        should: 'return forbidden error mentioning missing headers',
+        actual: data.error.includes('missing cron authentication headers'),
         expected: true,
       });
     });
 
-    it('should return 403 when x-forwarded-for header is present', async () => {
+    it('should pass a valid signed request with x-forwarded-for set (Next.js 15 regression)', async () => {
+      // Next.js 15 unconditionally injects x-forwarded-for; the HMAC auth layer
+      // must not be affected by its presence — only the signature headers matter.
       const { POST } = await import('../route');
-      const request = new Request('http://localhost:3000/api/memory/cron', {
-        method: 'POST',
-        headers: {
-          host: 'localhost:3000',
-          'x-forwarded-for': '203.0.113.195',
-        },
+      const request = createSignedCronRequest({
+        extraHeaders: { 'x-forwarded-for': '172.18.0.1' },
       });
 
       const response = await POST(request);
 
       assert({
-        given: 'request with x-forwarded-for header (proxied)',
-        should: 'return 403 status',
-        actual: response.status,
-        expected: 403,
-      });
-    });
-
-    it('should proceed when request is from localhost', async () => {
-      const { POST } = await import('../route');
-      const request = new Request('http://localhost:3000/api/memory/cron', {
-        method: 'POST',
-        headers: { host: 'localhost:3000' },
-      });
-
-      const response = await POST(request);
-
-      assert({
-        given: 'request from localhost',
-        should: 'not return 403',
+        given: 'valid signed request with x-forwarded-for header injected',
+        should: 'not return 403 (x-forwarded-for is irrelevant to HMAC auth)',
         actual: response.status !== 403,
         expected: true,
       });
     });
 
-    it('should proceed when request is from 127.0.0.1', async () => {
+    it('should accept a validly signed request from any origin', async () => {
+      // Origin / host is not part of the HMAC message — only timestamp, nonce,
+      // method, and path are signed.
       const { POST } = await import('../route');
-      const request = new Request('http://127.0.0.1:3000/api/memory/cron', {
-        method: 'POST',
-        headers: { host: '127.0.0.1:3000' },
-      });
+      const request = createSignedCronRequest();
 
       const response = await POST(request);
 
       assert({
-        given: 'request from 127.0.0.1',
+        given: 'validly signed cron request',
         should: 'not return 403',
         actual: response.status !== 403,
         expected: true,
@@ -184,10 +239,7 @@ describe('memory cron route', () => {
       });
 
       const { POST } = await import('../route');
-      const request = new Request('http://localhost:3000/api/memory/cron', {
-        method: 'POST',
-        headers: { host: 'localhost:3000' },
-      });
+      const request = createSignedCronRequest();
 
       const response = await POST(request);
       const data = await response.json();
@@ -222,10 +274,7 @@ describe('memory cron route', () => {
         });
 
       const { POST } = await import('../route');
-      const request = new Request('http://localhost:3000/api/memory/cron', {
-        method: 'POST',
-        headers: { host: 'localhost:3000' },
-      });
+      const request = createSignedCronRequest();
 
       const response = await POST(request);
       const data = await response.json();
@@ -249,18 +298,348 @@ describe('memory cron route', () => {
   describe('GET support', () => {
     it('should support GET requests for cron services', async () => {
       const { GET } = await import('../route');
-      const request = new Request('http://localhost:3000/api/memory/cron', {
-        method: 'GET',
-        headers: { host: 'localhost:3000' },
-      });
+      const request = createSignedCronRequest({ method: 'GET' });
 
       const response = await GET(request);
 
       assert({
-        given: 'GET request from localhost',
+        given: 'valid signed GET request',
         should: 'return 200 status',
         actual: response.status,
         expected: 200,
+      });
+    });
+  });
+
+  /**
+   * Candidate settlement — where every P1 in review lived.
+   *
+   * Settling the wrong candidate is silent and permanent: a retired claim is
+   * never re-staged, so a preference the user keeps expressing simply stops
+   * being learned, with nothing in the profile to show it was ever considered.
+   */
+  describe('candidate settlement', () => {
+    const candidate = (id: string, field = 'rules', orgIds: string[] = []) => ({
+      id,
+      userId: 'user-1',
+      field,
+      claim: `claim ${id}`,
+      claimKey: `claim ${id}`,
+      evidence: 'e',
+      orgIds,
+      occurrences: 2,
+      firstSeenAt: new Date('2026-03-01T00:00:00.000Z'),
+      lastSeenAt: new Date('2026-03-02T00:00:00.000Z'),
+      promotedAt: null,
+      rejectedAt: null,
+    });
+
+    /** One active paying user with personalization on. */
+    function setupOneUser() {
+      mockDbSelect.mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          innerJoin: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              groupBy: vi.fn().mockResolvedValue([
+                { userId: 'user-1', subscriptionTier: 'pro' },
+              ]),
+            }),
+          }),
+          where: vi.fn().mockResolvedValue([{ userId: 'user-1', enabled: true }]),
+        }),
+      });
+      mockRunDiscoveryPasses.mockResolvedValue({ claims: [] });
+      mockGetCurrentPersonalization.mockResolvedValue({});
+      mockCheckAndCompactIfNeeded.mockResolvedValue({ compacted: false, fields: [] });
+      mockPruneStaleCandidates.mockResolvedValue(0);
+      mockRedactSettledEvidence.mockResolvedValue(0);
+    }
+
+    beforeEach(setupOneUser);
+
+    it('pk862snl: a user that fails on a Postgres FATAL logs the driver error Drizzle wrapped, not only "Failed query"', async () => {
+      const fatal = Object.assign(new Error('sorry, too many clients already'), { code: '53300' });
+      mockRunDiscoveryPasses.mockRejectedValue(Object.assign(new Error('Failed query: select "id" from "credit_holds"'), { cause: fatal }));
+      const { loggers } = await import('@pagespace/lib/logging/logger-config');
+
+      const { POST } = await import('../route');
+      await POST(createSignedCronRequest());
+
+      assert({
+        given: 'a Drizzle error whose cause is a Postgres FATAL',
+        should: 'log the cause chain with its SQLSTATE beside the outer message',
+        actual: vi.mocked(loggers.api.error).mock.calls.find(([message]) => String(message).startsWith('Memory cron: Error processing user'))?.[1],
+        expected: {
+          error: 'Failed query: select "id" from "credit_holds"',
+          cause: [{ name: 'Error', message: 'sorry, too many clients already', code: '53300' }],
+        },
+      });
+    });
+
+    it('leaves every candidate pending when evaluation never reached a decision', async () => {
+      // A provider outage must not retire a user's whole ready set. Before the
+      // fix, an empty update object was indistinguishable from "declined all".
+      mockFindPromotableCandidates.mockResolvedValue([candidate('c1'), candidate('c2')]);
+      mockEvaluateAndIntegrate.mockResolvedValue({ ok: false, reason: 'provider error' });
+
+      const { POST } = await import('../route');
+      await POST(createSignedCronRequest());
+
+      assert({
+        given: 'an evaluator failure',
+        should: 'settle nothing, so the next run can retry',
+        actual: {
+          promoted: mockMarkCandidatesPromoted.mock.calls.length,
+          rejected: mockMarkCandidatesRejected.mock.calls.length,
+          applied: mockApplyIntegrationDecisions.mock.calls.length,
+        },
+        expected: { promoted: 0, rejected: 0, applied: 0 },
+      });
+    });
+
+    it('promotes only the candidates the evaluator actually used', async () => {
+      // Two candidates share a field. The evaluator uses one. Settling by field
+      // promoted both — retiring a claim that never reached the page.
+      mockFindPromotableCandidates.mockResolvedValue([candidate('c1'), candidate('c2')]);
+      mockEvaluateAndIntegrate.mockResolvedValue({
+        ok: true,
+        updates: { rules: 'new rules content' },
+        usedCandidateIds: ['c1'],
+      });
+      mockApplyIntegrationDecisions.mockResolvedValue({
+        updated: true,
+        fields: ['rules'],
+        rejected: [],
+      });
+
+      const { POST } = await import('../route');
+      await POST(createSignedCronRequest());
+
+      assert({
+        given: 'two candidates in one field where the evaluator used one',
+        should: 'promote the used one and reject the other, not promote both',
+        actual: {
+          promoted: mockMarkCandidatesPromoted.mock.calls[0]?.[0],
+          rejected: mockMarkCandidatesRejected.mock.calls[0]?.[0],
+        },
+        expected: { promoted: ['c1'], rejected: ['c2'] },
+      });
+    });
+
+    it('SEC-2 (partial) records every ready candidate\'s orgs on the memory before any page is rewritten', async () => {
+      // The evaluator saw both candidates, so the rewritten page may restate either: the memory takes both orgs, and
+      // takes them first, so no reader is served restated content its org was not yet recorded against.
+      mockFindPromotableCandidates.mockResolvedValue([candidate('c1', 'rules', ['org-a']), candidate('c2', 'rules', ['org-b'])]);
+      mockEvaluateAndIntegrate.mockResolvedValue({ ok: true, updates: { rules: 'new rules content' }, usedCandidateIds: ['c1'] });
+      const order: string[] = [];
+      mockRecordMemoryOrgIds.mockImplementation(async () => { order.push('record'); });
+      mockApplyIntegrationDecisions.mockImplementation(async () => {
+        order.push('write');
+        return { updated: true, fields: ['rules'], rejected: [] };
+      });
+
+      const { POST } = await import('../route');
+      await POST(createSignedCronRequest());
+
+      assert({
+        given: 'two ready candidates from different orgs, one cited, and a page rewrite',
+        should: 'record both orgs on the memory, before the write',
+        actual: { recorded: mockRecordMemoryOrgIds.mock.calls[0], order },
+        expected: { recorded: ['user-1', ['org-a', 'org-b']], order: ['record', 'write'] },
+      });
+    });
+
+    it('leaves a cited candidate pending when its page write was blocked', async () => {
+      // The evaluator wanted it, but a guard or a missing pointer stopped the
+      // write. Promoting here would retire a claim with nothing in the profile.
+      mockFindPromotableCandidates.mockResolvedValue([candidate('c1')]);
+      mockEvaluateAndIntegrate.mockResolvedValue({
+        ok: true,
+        updates: { rules: 'x' },
+        usedCandidateIds: ['c1'],
+      });
+      mockApplyIntegrationDecisions.mockResolvedValue({
+        updated: false,
+        fields: [],
+        rejected: [{ field: 'rules', reason: 'page is trashed or no longer exists' }],
+      });
+
+      const { POST } = await import('../route');
+      await POST(createSignedCronRequest());
+
+      assert({
+        given: 'a cited candidate whose field write was blocked',
+        should: 'settle it neither way, so the next run retries',
+        actual: {
+          promoted: mockMarkCandidatesPromoted.mock.calls[0]?.[0],
+          rejected: mockMarkCandidatesRejected.mock.calls[0]?.[0],
+        },
+        expected: { promoted: [], rejected: [] },
+      });
+    });
+
+    it('evaluates pending candidates even when discovery found nothing', async () => {
+      // A candidate left pending by an earlier guard rejection is already
+      // corroborated. Returning early on empty discovery stranded it until an
+      // unrelated future run happened to discover at least one claim.
+      mockRunDiscoveryPasses.mockResolvedValue({ claims: [] });
+      mockFindPromotableCandidates.mockResolvedValue([candidate('c1')]);
+      mockEvaluateAndIntegrate.mockResolvedValue({
+        ok: true,
+        updates: { rules: 'x' },
+        usedCandidateIds: ['c1'],
+      });
+      mockApplyIntegrationDecisions.mockResolvedValue({
+        updated: true,
+        fields: ['rules'],
+        rejected: [],
+      });
+
+      const { POST } = await import('../route');
+      await POST(createSignedCronRequest());
+
+      assert({
+        given: 'a quiet week with a pending corroborated candidate',
+        should: 'still evaluate and promote it',
+        actual: {
+          evaluated: mockEvaluateAndIntegrate.mock.calls.length,
+          promoted: mockMarkCandidatesPromoted.mock.calls[0]?.[0],
+        },
+        expected: { evaluated: 1, promoted: ['c1'] },
+      });
+    });
+
+    it('runs retention even when there is nothing to promote', async () => {
+      // Forgetting must not be conditional on the happy path, or the accounts
+      // whose runs fail most are the least cleaned up.
+      mockFindPromotableCandidates.mockResolvedValue([]);
+
+      const { POST } = await import('../route');
+      await POST(createSignedCronRequest());
+
+      assert({
+        given: 'a run with no promotable candidates',
+        should: 'still prune stale rows and redact settled evidence',
+        actual: {
+          pruned: mockPruneStaleCandidates.mock.calls.length,
+          redacted: mockRedactSettledEvidence.mock.calls.length,
+        },
+        expected: { pruned: 1, redacted: 1 },
+      });
+    });
+  });
+
+  describe('credit refusals', () => {
+    const candidate = (id: string, userId: string) => ({
+      id,
+      userId,
+      field: 'rules',
+      claim: `claim ${id}`,
+      claimKey: `claim ${id}`,
+      evidence: 'e',
+      orgIds: [],
+      occurrences: 2,
+      firstSeenAt: new Date('2026-03-01T00:00:00.000Z'),
+      lastSeenAt: new Date('2026-03-02T00:00:00.000Z'),
+      promotedAt: null,
+      rejectedAt: null,
+    });
+
+    it("records one user's refusal and still runs every other user's pass", async () => {
+      // user-broke is first, so a refusal that threw or returned early would
+      // stop user-funded from ever being reached.
+      mockDbSelect.mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          innerJoin: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              groupBy: vi.fn().mockResolvedValue([
+                { userId: 'user-broke', subscriptionTier: 'pro' },
+                { userId: 'user-funded', subscriptionTier: 'pro' },
+              ]),
+            }),
+          }),
+          where: vi.fn().mockResolvedValue([]),
+        }),
+      });
+      mockRunDiscoveryPasses.mockImplementation(async (userId: string) =>
+        userId === 'user-broke' ? { claims: [], creditRefusal: 'out_of_credits' } : { claims: [] }
+      );
+      mockFindPromotableCandidates.mockImplementation(async (userId: string) => [candidate(`${userId}-c1`, userId)]);
+      mockEvaluateAndIntegrate.mockImplementation(async (userId: string) =>
+        userId === 'user-broke'
+          ? { ok: false, reason: 'credit gate refused: out_of_credits', creditRefusal: 'out_of_credits' }
+          : { ok: true, updates: { rules: 'new rules' }, usedCandidateIds: ['user-funded-c1'] }
+      );
+      mockGetCurrentPersonalization.mockResolvedValue({});
+      mockApplyIntegrationDecisions.mockResolvedValue({ updated: true, fields: ['rules'], rejected: [] });
+      mockCheckAndCompactIfNeeded.mockResolvedValue({ compacted: false, fields: [] });
+      mockPruneStaleCandidates.mockResolvedValue(0);
+      mockRedactSettledEvidence.mockResolvedValue(0);
+
+      const { POST } = await import('../route');
+      const response = await POST(createSignedCronRequest());
+      const body = await response.json();
+
+      assert({
+        given: 'one user out of credits and one funded user',
+        should: "record the refusal, leave the refused user's candidates pending, and complete the funded pass",
+        actual: {
+          status: response.status,
+          processed: body.processed,
+          errors: body.errors,
+          creditSkipped: body.creditSkipped,
+          applied: mockApplyIntegrationDecisions.mock.calls.map(([userId]) => userId),
+          promoted: mockMarkCandidatesPromoted.mock.calls,
+          retention: mockPruneStaleCandidates.mock.calls.map(([userId]) => userId),
+        },
+        expected: {
+          status: 200,
+          processed: 2,
+          errors: undefined,
+          creditSkipped: ['user-broke: discovery: out_of_credits', 'user-broke: evaluation: out_of_credits'],
+          applied: ['user-funded'],
+          promoted: [[['user-funded-c1']]],
+          retention: ['user-broke', 'user-funded'],
+        },
+      });
+    });
+
+    it('records a refused compaction without undoing the landed page write', async () => {
+      mockDbSelect.mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          innerJoin: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              groupBy: vi.fn().mockResolvedValue([{ userId: 'user-1', subscriptionTier: 'pro' }]),
+            }),
+          }),
+          where: vi.fn().mockResolvedValue([]),
+        }),
+      });
+      mockRunDiscoveryPasses.mockResolvedValue({ claims: [] });
+      mockFindPromotableCandidates.mockResolvedValue([candidate('c1', 'user-1')]);
+      mockEvaluateAndIntegrate.mockResolvedValue({ ok: true, updates: { rules: 'r' }, usedCandidateIds: ['c1'] });
+      mockGetCurrentPersonalization.mockResolvedValue({});
+      mockApplyIntegrationDecisions.mockResolvedValue({ updated: true, fields: ['rules'], rejected: [] });
+      mockCheckAndCompactIfNeeded.mockResolvedValue({ compacted: false, fields: [], creditRefusal: 'out_of_credits' });
+      mockPruneStaleCandidates.mockResolvedValue(0);
+      mockRedactSettledEvidence.mockResolvedValue(0);
+
+      const { POST } = await import('../route');
+      const body = await (await POST(createSignedCronRequest())).json();
+
+      assert({
+        given: 'an evaluator write that landed and a compaction the gate refused',
+        should: 'keep the promotion, report no compaction, and name the refused step',
+        actual: {
+          promoted: mockMarkCandidatesPromoted.mock.calls,
+          compacted: body.compacted,
+          creditSkipped: body.creditSkipped,
+        },
+        expected: {
+          promoted: [[['c1']]],
+          compacted: 0,
+          creditSkipped: ['user-1: compaction: out_of_credits'],
+        },
       });
     });
   });

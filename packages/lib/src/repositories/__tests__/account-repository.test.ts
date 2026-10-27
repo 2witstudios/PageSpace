@@ -1,0 +1,377 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// ---------------------------------------------------------------------------
+// Mocks
+// ---------------------------------------------------------------------------
+
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    query: {
+      users: { findFirst: vi.fn() },
+      drives: { findMany: vi.fn() },
+    },
+    select: vi.fn(),
+    delete: vi.fn(),
+    transaction: vi.fn(),
+  },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'id', email: 'email', image: 'image' },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  drives: { id: 'id', name: 'name', ownerId: 'ownerId' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: { driveId: 'driveId' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  and: vi.fn((..._parts) => 'and'),
+  isNull: vi.fn((_a) => 'isNull'),
+  eq: vi.fn((_a, _b) => 'eq'),
+  sql: Object.assign(
+    vi.fn((parts: TemplateStringsArray) => ({ sql: parts.join('') })),
+    { placeholder: vi.fn() }
+  ),
+}));
+// A collaborator, not this unit's job. Every drive delete here must take the
+// drive's chat history with it (the `chat_messages.pageId` cascade that used
+// to do that automatically went with the table in migration 0253), but WHAT
+// that cleanup selects is pinned against a real database in
+// `apps/web/src/lib/repositories/__tests__/chat-mutation-matrix.integration.test.ts`.
+// Here we only assert that it is called, and called BEFORE the drive row goes.
+// The leave cascade is proven against Postgres in
+// `organizations/__tests__/leave.integration.test.ts`; here only its place in deleteUser.
+vi.mock('../../organizations/leave', () => ({
+  leaveAllOrganizations: vi.fn().mockResolvedValue([]),
+  reassignLedOrgDrives: vi.fn().mockResolvedValue([]),
+  computeReattributionAuditEvents: vi.fn(() => []),
+}));
+// AUD-1: deleteUser's org events are staged in its own transaction; the stage is a spy.
+const stageAudit = vi.hoisted(() => vi.fn());
+vi.mock('../../audit/org-audit', async () => {
+  const { db } = await import('@pagespace/db/db');
+  return {
+    transactionWithOrgAudit: (run: (tx: unknown, audit: typeof stageAudit) => Promise<unknown>) => db.transaction((tx) => run(tx, stageAudit)),
+  };
+});
+// [D-OW-27] The suppression write is proven against Postgres in organizations/__tests__/
+// departure-suppression.integration.test.ts; here only its place in deleteUser.
+vi.mock('../../organizations/departure-suppression', () => ({
+  recordDepartureSuppressions: vi.fn().mockResolvedValue(0),
+}));
+// [D-OW-36] The automation step is proven against Postgres in organizations/__tests__/
+// automation-ownership.integration.test.ts; here only its place in deleteUser.
+vi.mock('../../organizations/automation-ownership', () => ({
+  prepareAutomationsForAccountDeletion: vi.fn().mockResolvedValue([]),
+  ownerLeftAutomationAuditEvents: vi.fn((items: Array<{ id: string }>) => items.map((i) => ({ eventType: 'org.automation.owner_left', resourceId: i.id }))),
+}));
+vi.mock('../conversation-cleanup', () => ({
+  deleteConversationsForDrive: vi.fn().mockResolvedValue({ conversations: 0, messages: 0 }),
+}));
+
+// ---------------------------------------------------------------------------
+// Imports after mocks
+// ---------------------------------------------------------------------------
+
+import { accountRepository } from '../account-repository';
+import { db } from '@pagespace/db/db';
+import { deleteConversationsForDrive } from '../conversation-cleanup';
+import { ownerLeftAutomationAuditEvents, prepareAutomationsForAccountDeletion } from '../../organizations/automation-ownership';
+import { leaveAllOrganizations, reassignLedOrgDrives } from '../../organizations/leave';
+import { recordDepartureSuppressions } from '../../organizations/departure-suppression';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function setupSelectChain(result: unknown[]) {
+  const whereFn = vi.fn().mockResolvedValue(result);
+  const fromFn = vi.fn().mockReturnValue({ where: whereFn });
+  vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
+  return { whereFn, fromFn };
+}
+
+// ---------------------------------------------------------------------------
+// findById
+// ---------------------------------------------------------------------------
+describe('accountRepository.findById', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('returns user when found', async () => {
+    const user = { id: 'user-1', email: 'test@example.com', image: null };
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(user as never);
+
+    const result = await accountRepository.findById('user-1');
+    expect(result).toEqual(user);
+  });
+
+  it('given a lookup, should select appleId so deletion can tell a Sign in with Apple user what to do', async () => {
+    vi.mocked(db.query.users.findFirst).mockResolvedValue({ id: 'user-1', email: 'e', image: null, stripeCustomerId: null, appleId: 'apple-sub' } as never);
+
+    await accountRepository.findById('user-1');
+
+    expect(vi.mocked(db.query.users.findFirst).mock.calls[0][0]).toEqual(
+      expect.objectContaining({ columns: expect.objectContaining({ appleId: true }) }),
+    );
+  });
+
+  it('returns null when user not found', async () => {
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(undefined as never);
+
+    const result = await accountRepository.findById('nonexistent');
+    expect(result).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getOwnedDrives
+// ---------------------------------------------------------------------------
+describe('accountRepository.getOwnedDrives', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('returns owned drives', async () => {
+    const drives = [{ id: 'drive-1', name: 'My Drive' }];
+    vi.mocked(db.query.drives.findMany).mockResolvedValue(drives as never);
+
+    const result = await accountRepository.getOwnedDrives('user-1');
+    expect(result).toEqual(drives);
+  });
+
+  it('returns empty array when no owned drives', async () => {
+    vi.mocked(db.query.drives.findMany).mockResolvedValue([] as never);
+
+    const result = await accountRepository.getOwnedDrives('user-1');
+    expect(result).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getDriveMemberCount
+// ---------------------------------------------------------------------------
+describe('accountRepository.getDriveMemberCount', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('returns member count', async () => {
+    setupSelectChain([{ count: '3' }]);
+
+    const result = await accountRepository.getDriveMemberCount('drive-1');
+    expect(result).toBe(3);
+  });
+
+  it('returns 0 when no members', async () => {
+    setupSelectChain([{ count: '0' }]);
+
+    const result = await accountRepository.getDriveMemberCount('drive-1');
+    expect(result).toBe(0);
+  });
+
+  it('returns 0 when result is empty', async () => {
+    setupSelectChain([]);
+
+    const result = await accountRepository.getDriveMemberCount('drive-1');
+    expect(result).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// deleteDrive
+// ---------------------------------------------------------------------------
+describe('accountRepository.deleteDrive', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  /** Runs the callback with a tx whose `delete` chain resolves as given. */
+  function setupTransaction(deleteResult: Promise<unknown>) {
+    const whereFn = vi.fn().mockReturnValue(deleteResult);
+    const deleteFn = vi.fn().mockReturnValue({ where: whereFn });
+    vi.mocked(db.transaction).mockImplementation(async (fn) =>
+      fn({ delete: deleteFn } as unknown as Parameters<typeof fn>[0]),
+    );
+    return { deleteFn, whereFn };
+  }
+
+  it('resolves without error when DB succeeds', async () => {
+    setupTransaction(Promise.resolve(undefined));
+
+    await expect(accountRepository.deleteDrive('drive-1')).resolves.toBeUndefined();
+  });
+
+  it('takes the drive chat history with it, before the drive row', async () => {
+    const { deleteFn } = setupTransaction(Promise.resolve(undefined));
+
+    await accountRepository.deleteDrive('drive-1');
+
+    // Ordering is load-bearing: `pages.driveId` cascades, so once the drive is
+    // gone its pages are gone and the page-scoped conversations can no longer
+    // be traced. Cleanup must therefore precede the drive DELETE.
+    expect(deleteConversationsForDrive).toHaveBeenCalledWith(expect.anything(), 'drive-1');
+    const cleanupOrder = vi.mocked(deleteConversationsForDrive).mock.invocationCallOrder[0];
+    expect(cleanupOrder).toBeLessThan(deleteFn.mock.invocationCallOrder[0]);
+  });
+
+  it('propagates DB errors', async () => {
+    setupTransaction(Promise.reject(new Error('FK constraint')));
+
+    await expect(accountRepository.deleteDrive('drive-1')).rejects.toThrow('FK constraint');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// deleteUser
+// ---------------------------------------------------------------------------
+describe('accountRepository.deleteUser', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  function setupTxDelete(where: ReturnType<typeof vi.fn>) {
+    const tx = { delete: vi.fn().mockReturnValue({ where }) };
+    vi.mocked(db.transaction).mockImplementation(async (fn) => fn(tx as unknown as Parameters<typeof fn>[0]));
+    return tx;
+  }
+
+  it('resolves without error when DB succeeds', async () => {
+    setupTxDelete(vi.fn().mockResolvedValue(undefined));
+
+    await expect(accountRepository.deleteUser('user-1')).resolves.toBeUndefined();
+  });
+
+  it('propagates DB errors', async () => {
+    setupTxDelete(vi.fn().mockRejectedValue(new Error('FK constraint')));
+
+    await expect(accountRepository.deleteUser('user-1')).rejects.toThrow('FK constraint');
+  });
+
+  it('O-7 leaves every org and reassigns led org drives in the same transaction, before the users row goes', async () => {
+    const where = vi.fn().mockResolvedValue(undefined);
+    const tx = setupTxDelete(where);
+
+    await accountRepository.deleteUser('user-1');
+
+    expect(leaveAllOrganizations).toHaveBeenCalledWith('user-1', tx, expect.objectContaining({ reason: 'account_deleted' }));
+    expect(reassignLedOrgDrives).toHaveBeenCalledWith('user-1', tx, expect.objectContaining({ reason: 'account_deleted' }));
+    const deleteOrder = tx.delete.mock.invocationCallOrder[0];
+    expect(vi.mocked(leaveAllOrganizations).mock.invocationCallOrder[0]).toBeLessThan(deleteOrder);
+    expect(vi.mocked(reassignLedOrgDrives).mock.invocationCallOrder[0]).toBeLessThan(deleteOrder);
+    // [D-OW-27] the suppression is written in the same transaction, after leaving, before the row goes.
+    expect(recordDepartureSuppressions).toHaveBeenCalledWith(tx, 'user-1');
+    expect(vi.mocked(leaveAllOrganizations).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(recordDepartureSuppressions).mock.invocationCallOrder[0]);
+    expect(vi.mocked(recordDepartureSuppressions).mock.invocationCallOrder[0]).toBeLessThan(deleteOrder);
+  });
+
+  it('SPEND-6 (partial) the org automations are flagged in the same transaction, after leaving and reassigning, before the users row goes; audited in that transaction ([D-OW-36], AUD-1)', async () => {
+    const tx = setupTxDelete(vi.fn().mockResolvedValue(undefined));
+    const flagged = [{ orgId: 'org-1', kind: 'workflow' as const, id: 'wf-1', driveId: 'drive-1', formerOwnerId: 'user-1', reason: 'account_deleted' as const }];
+    vi.mocked(prepareAutomationsForAccountDeletion).mockResolvedValueOnce(flagged);
+
+    await accountRepository.deleteUser('user-1');
+
+    expect(prepareAutomationsForAccountDeletion).toHaveBeenCalledWith(tx, 'user-1');
+    const prepareOrder = vi.mocked(prepareAutomationsForAccountDeletion).mock.invocationCallOrder[0];
+    expect(vi.mocked(reassignLedOrgDrives).mock.invocationCallOrder[0]).toBeLessThan(prepareOrder);
+    expect(prepareOrder).toBeLessThan(tx.delete.mock.invocationCallOrder[0]);
+    expect(ownerLeftAutomationAuditEvents).toHaveBeenCalledWith(flagged);
+    expect(stageAudit).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'org.automation.owner_left', resourceId: 'wf-1' }));
+    expect(stageAudit.mock.invocationCallOrder[0]).toBeGreaterThan(tx.delete.mock.invocationCallOrder[0]);
+  });
+
+  it('O-7 does not delete the users row when leaving an org is refused', async () => {
+    const tx = setupTxDelete(vi.fn().mockResolvedValue(undefined));
+    vi.mocked(leaveAllOrganizations).mockRejectedValueOnce(new Error('OWNER_MUST_TRANSFER'));
+
+    await expect(accountRepository.deleteUser('user-1')).rejects.toThrow('OWNER_MUST_TRANSFER');
+    expect(tx.delete).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// checkAndDeleteSoloDrives
+// ---------------------------------------------------------------------------
+describe('accountRepository.checkAndDeleteSoloDrives', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('returns empty multiMemberDriveNames when user has no owned drives', async () => {
+    vi.mocked(db.transaction).mockImplementation(async (fn) => {
+      const tx = {
+        query: { drives: { findMany: vi.fn().mockResolvedValue([]) } },
+        select: vi.fn(),
+        delete: vi.fn(),
+      };
+      return fn(tx as unknown as Parameters<typeof fn>[0]);
+    });
+
+    const result = await accountRepository.checkAndDeleteSoloDrives('user-1');
+    expect(result).toEqual({ multiMemberDriveNames: [] });
+  });
+
+  it('deletes solo drives and returns empty when all are solo', async () => {
+    const deleteFn = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+
+    vi.mocked(db.transaction).mockImplementation(async (fn) => {
+      const tx = {
+        query: {
+          drives: { findMany: vi.fn().mockResolvedValue([{ id: 'drive-1', name: 'Solo Drive' }]) },
+        },
+        select: vi.fn().mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([{ count: '1' }]), // 1 member = solo
+          }),
+        }),
+        delete: deleteFn,
+      };
+      return fn(tx as unknown as Parameters<typeof fn>[0]);
+    });
+
+    const result = await accountRepository.checkAndDeleteSoloDrives('user-1');
+    expect(result).toEqual({ multiMemberDriveNames: [] });
+  });
+
+  it('returns multiMemberDriveNames when drives have multiple members', async () => {
+    vi.mocked(db.transaction).mockImplementation(async (fn) => {
+      const tx = {
+        query: {
+          drives: { findMany: vi.fn().mockResolvedValue([{ id: 'drive-1', name: 'Team Drive' }]) },
+        },
+        select: vi.fn().mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([{ count: '3' }]), // 3 members = multi
+          }),
+        }),
+        delete: vi.fn(),
+      };
+      return fn(tx as unknown as Parameters<typeof fn>[0]);
+    });
+
+    const result = await accountRepository.checkAndDeleteSoloDrives('user-1');
+    expect(result).toEqual({ multiMemberDriveNames: ['Team Drive'] });
+  });
+
+  it('handles mix of solo and multi-member drives - returns multi names and does not delete', async () => {
+    vi.mocked(db.transaction).mockImplementation(async (fn) => {
+      const tx = {
+        query: {
+          drives: {
+            findMany: vi.fn().mockResolvedValue([
+              { id: 'drive-1', name: 'Solo Drive' },
+              { id: 'drive-2', name: 'Team Drive' },
+            ]),
+          },
+        },
+        select: vi.fn()
+          .mockReturnValueOnce({
+            from: vi.fn().mockReturnValue({
+              where: vi.fn().mockResolvedValue([{ count: '1' }]),
+            }),
+          })
+          .mockReturnValueOnce({
+            from: vi.fn().mockReturnValue({
+              where: vi.fn().mockResolvedValue([{ count: '5' }]),
+            }),
+          }),
+        delete: vi.fn(),
+      };
+      return fn(tx as unknown as Parameters<typeof fn>[0]);
+    });
+
+    const result = await accountRepository.checkAndDeleteSoloDrives('user-1');
+    expect(result.multiMemberDriveNames).toContain('Team Drive');
+    expect(result.multiMemberDriveNames).not.toContain('Solo Drive');
+  });
+});

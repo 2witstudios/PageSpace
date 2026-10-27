@@ -1,9 +1,30 @@
-import { users, db, eq } from '@pagespace/db';
-import { loggers, accountRepository, activityLogRepository } from '@pagespace/lib/server';
+import { LeaveOrganizationRefusedError } from '@pagespace/lib/organizations/leave';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth';
+import { userEmailMatch, prepareUserWrite, decryptUserRow } from '@pagespace/lib/auth/user-repository';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
+import { z } from 'zod';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { accountRepository } from '@pagespace/lib/repositories/account-repository';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createUserServiceToken, deleteAiUsageLogsForUser, type ServiceScope } from '@pagespace/lib';
-import { createAnonymizedActorEmail } from '@pagespace/lib/compliance/anonymize';
+import { isValidEmail } from '@pagespace/lib/validators/email';
 import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { planDriveDisposition } from '@pagespace/lib/compliance/erasure/drive-disposition';
+import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
+import { sendVerificationEmail } from '@/lib/auth/send-verification-email';
+import { lodgeAndEnqueueErasure } from '@/lib/erasure/request-erasure';
+import { actorFromAuth } from '@/lib/auth/request-actor';
+
+const patchBodySchema = z
+  .object({
+    name: z.string().trim().min(1).optional(),
+    email: z.string().trim().optional(),
+  })
+  .refine((data) => data.name !== undefined || data.email !== undefined, {
+    message: 'At least one of name or email is required',
+  });
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -23,7 +44,6 @@ export async function GET(req: Request) {
       name: true,
       email: true,
       image: true,
-      password: true,
       tokenVersion: true,
     },
   });
@@ -32,12 +52,14 @@ export async function GET(req: Request) {
     return Response.json({ error: 'Invalid token version' }, { status: 401 });
   }
 
+  // Decrypt PII at the edge so the account view shows plaintext email/name.
+  const decrypted = await decryptUserRow(user);
+
   return Response.json({
-    id: user.id,
-    name: user.name,
-    email: user.email,
-    image: user.image,
-    hasPassword: !!user.password,
+    id: decrypted.id,
+    name: decrypted.name,
+    email: decrypted.email,
+    image: decrypted.image,
   });
 }
 
@@ -50,37 +72,56 @@ export async function PATCH(req: Request) {
 
   try {
     const body = await req.json();
-    const { name, email } = body;
+    const parsed = patchBodySchema.safeParse(body);
 
-    // Validate inputs
-    if (!name || !email) {
-      return Response.json({ error: 'Name and email are required' }, { status: 400 });
+    if (!parsed.success) {
+      return Response.json({ error: 'At least one of name or email is required' }, { status: 400 });
     }
 
-    // Email validation - use a linear-time regex that prevents ReDoS
-    const emailRegex = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
-    if (!emailRegex.test(email)) {
+    const { name, email } = parsed.data;
+
+    if (email !== undefined && !isValidEmail(email)) {
       return Response.json({ error: 'Invalid email format' }, { status: 400 });
     }
 
-    // Check if email is already taken by another user
-    if (email) {
-      const existingUser = await db.query.users.findFirst({
-        where: eq(users.email, email),
+    const normalizedEmail = email !== undefined ? email.toLowerCase().trim() : undefined;
+    let emailChanged = false;
+    if (normalizedEmail !== undefined) {
+      // Decide "changed" by comparing against the caller's CURRENT stored
+      // address (case-insensitively). Inferring it from a uniqueness miss is
+      // unsound: emails are not guaranteed lowercase at rest (OAuth stores the
+      // provider value verbatim), so a case-sensitive lookup would miss the
+      // user's own row and spuriously de-verify them on a no-op resubmit.
+      const current = await db.query.users.findFirst({
+        where: eq(users.id, userId),
+        columns: { email: true },
       });
+      // Decrypt the stored email before the case-insensitive comparison so a
+      // ciphertext value is compared as plaintext (legacy plaintext passes through).
+      const currentEmailPlain = current ? await decryptField(current.email) : '';
+      emailChanged = (currentEmailPlain ?? '').toLowerCase() !== normalizedEmail;
 
-      if (existingUser && existingUser.id !== userId) {
-        return Response.json({ error: 'Email is already in use' }, { status: 400 });
+      if (emailChanged) {
+        const existingUser = await db.query.users.findFirst({
+          where: userEmailMatch(normalizedEmail),
+        });
+        if (existingUser && existingUser.id !== userId) {
+          return Response.json({ error: 'Email is already in use' }, { status: 400 });
+        }
       }
     }
 
-    // Update user
-    const [updatedUser] = await db
+    const updates: { name?: string; email?: string; emailVerified?: Date | null } = {};
+    if (name !== undefined) updates.name = name;
+    if (normalizedEmail !== undefined) updates.email = normalizedEmail;
+    // A new address must be re-verified — the old verification proved ownership
+    // of a different inbox. Verification is re-issued via the email below.
+    if (emailChanged) updates.emailVerified = null;
+
+    const [updatedRow] = await db
       .update(users)
-      .set({
-        name: name.trim(),
-        email: email.trim().toLowerCase(),
-      })
+      // Encrypt email/name + recompute emailBidx (when email present) per the flag.
+      .set(await prepareUserWrite(updates))
       .where(eq(users.id, userId))
       .returning({
         id: users.id,
@@ -89,20 +130,44 @@ export async function PATCH(req: Request) {
         image: users.image,
       });
 
-    if (!updatedUser) {
+    if (!updatedRow) {
       return Response.json({ error: 'Failed to update user' }, { status: 500 });
+    }
+
+    // Decrypt PII at the edge so the response, verification email, and activity
+    // log all see plaintext email/name.
+    const updatedUser = await decryptUserRow(updatedRow);
+
+    // Send a verification email to the NEW address. Best-effort: a delivery
+    // failure must not fail the profile update — the user can resend from the
+    // account banner.
+    if (emailChanged) {
+      try {
+        await sendVerificationEmail({
+          userId,
+          email: updatedUser.email,
+          userName: updatedUser.name,
+        });
+      } catch (error) {
+        loggers.auth.warn('Failed to send verification email after email change', {
+          userId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
 
     // Log activity for audit trail (profile updates may be security-relevant)
     const actorInfo = await getActorInfo(userId);
     const updatedFields: string[] = [];
-    if (name) updatedFields.push('name');
-    if (email) updatedFields.push('email');
+    if (name !== undefined) updatedFields.push('name');
+    if (email !== undefined) updatedFields.push('email');
     logUserActivity(userId, 'profile_update', {
       targetUserId: userId,
       targetUserEmail: updatedUser.email,
       updatedFields,
     }, actorInfo);
+
+    auditRequest(req, { eventType: 'data.write', userId, resourceType: 'account', resourceId: userId, details: { operation: 'profile_update', updatedFields } });
 
     return Response.json({
       id: updatedUser.id,
@@ -116,29 +181,12 @@ export async function PATCH(req: Request) {
   }
 }
 
-// Processor service URL
-const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
-
-const REQUIRED_AVATAR_SCOPES: ServiceScope[] = ['avatars:write'];
-
-async function createAvatarServiceToken(
-  userId: string,
-  expirationTime: string
-): Promise<{ token: string }> {
-  // createUserServiceToken validates that the user is accessing their own resources
-  const { token } = await createUserServiceToken(
-    userId,
-    REQUIRED_AVATAR_SCOPES,
-    expirationTime
-  );
-  return { token };
-}
-
 export async function DELETE(req: Request) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) {
     return auth.error;
   }
+  const actor = actorFromAuth(auth);
   const userId = auth.userId;
 
   try {
@@ -157,108 +205,89 @@ export async function DELETE(req: Request) {
       return Response.json({ error: 'Email confirmation does not match your account email' }, { status: 400 });
     }
 
-    // Check and categorize owned drives via repository seam
-    const ownedDrives = await accountRepository.getOwnedDrives(userId);
-
-    if (ownedDrives.length > 0) {
-      const driveIds = ownedDrives.map(d => d.id);
-
-      // Count members for each drive via repository seam
-      const memberCounts = await Promise.all(
-        driveIds.map(async (driveId) => ({
-          driveId,
-          memberCount: await accountRepository.getDriveMemberCount(driveId),
-        }))
+    // Idempotency: surface an in-flight erasure rather than enqueuing a second.
+    const existing = await dataSubjectRequestRepository.findActiveErasureForUser(userId);
+    if (existing) {
+      return Response.json(
+        {
+          message: 'Account erasure already in progress',
+          requestId: existing.id,
+          status: existing.status,
+          slaDeadline: existing.slaDeadline,
+          // The first request's revocation outcome isn't re-derivable here; the
+          // manual steps are harmless if it did revoke, and required if not.
+          appleSignIn: user.appleId !== null ? 'manual' : 'none',
+        },
+        { status: 202 }
       );
-
-      // Categorize into solo and multi-member drives
-      const soloDriveIds = [];
-      const multiMemberDrives = [];
-
-      for (const drive of ownedDrives) {
-        const memberCountData = memberCounts.find(mc => mc.driveId === drive.id);
-        const memberCount = memberCountData?.memberCount || 0;
-
-        if (memberCount <= 1) {
-          soloDriveIds.push(drive.id);
-        } else {
-          multiMemberDrives.push(drive);
-        }
-      }
-
-      // Block deletion if multi-member drives still exist
-      if (multiMemberDrives.length > 0) {
-        return Response.json(
-          {
-            error: 'You must transfer ownership or delete all drives with other members before deleting your account',
-            multiMemberDrives: multiMemberDrives.map(d => d.name),
-          },
-          { status: 400 }
-        );
-      }
-
-      // Auto-delete solo drives via repository seam
-      if (soloDriveIds.length > 0) {
-        for (const driveId of soloDriveIds) {
-          await accountRepository.deleteDrive(driveId);
-        }
-        loggers.auth.info(`Auto-deleted ${soloDriveIds.length} solo drives for user ${userId}`);
-      }
     }
 
-    // Delete user's avatar if it exists and is a local file
-    if (user.image && !user.image.startsWith('http://') && !user.image.startsWith('https://')) {
-      try {
-        const { token: serviceToken } = await createAvatarServiceToken(userId, '2m');
-
-        await fetch(`${PROCESSOR_URL}/api/avatar/${userId}`, {
-          method: 'DELETE',
-          headers: {
-            'Authorization': `Bearer ${serviceToken}`
-          }
-        });
-      } catch (error) {
-        // Log error but don't fail the deletion
-        loggers.auth.error('Could not delete user avatar during account deletion:', error as Error);
-      }
+    // An org Owner cannot delete their account (ORG-6); refuse before queueing anything.
+    const ownedOrganizations = await accountRepository.getOwnedOrganizationNames(userId);
+    if (ownedOrganizations.length > 0) {
+      return Response.json(
+        {
+          error: 'Transfer ownership of your organizations or delete them before deleting your account',
+          ownedOrganizations,
+        },
+        { status: 400 }
+      );
     }
 
-    // CRITICAL: Log account deletion BEFORE anonymization (required for GDPR compliance)
-    // This ensures we have an audit record of who deleted their account and when
-    const actorInfo = await getActorInfo(userId);
-    logUserActivity(userId, 'account_delete', {
-      targetUserId: userId,
-      targetUserEmail: user.email,
-    }, actorInfo);
-
-    // Anonymize activity logs before user deletion (GDPR compliance + SOX audit trail)
-    // This preserves the audit trail while removing PII
-    const anonymizeResult = await activityLogRepository.anonymizeForUser(
-      userId,
-      createAnonymizedActorEmail(userId)
+    // Self-service cannot orphan co-owned drives. Multi-member ownership blocks
+    // with guidance; the admin force-delete route is the escalation path (#908).
+    const ownedDrives = await accountRepository.getOwnedDrives(userId);
+    const drivesWithMembers = await Promise.all(
+      ownedDrives.map(async (drive) => ({
+        id: drive.id,
+        name: drive.name,
+        memberCount: await accountRepository.getDriveMemberCount(drive.id),
+      }))
     );
-    if (anonymizeResult.success) {
-      loggers.auth.info(`Anonymized activity logs for user ${userId}`);
-    } else {
-      // Log error but don't fail the deletion - user has right to delete their account
-      loggers.auth.error('Could not anonymize activity logs during account deletion:', new Error(anonymizeResult.error));
+    const disposition = planDriveDisposition(drivesWithMembers, { forceDelete: false });
+    if (disposition.blocked) {
+      return Response.json(
+        {
+          error:
+            'You must transfer ownership or delete all drives with other members before deleting your account',
+          multiMemberDrives: disposition.multiMemberDriveNames,
+        },
+        { status: 400 }
+      );
     }
 
-    // Clean up AI usage logs (no FK cascade exists for this table)
-    try {
-      await deleteAiUsageLogsForUser(userId);
-    } catch (error) {
-      loggers.auth.error('Could not delete AI usage logs during account deletion:', error as Error);
-    }
+    // Evidence the request receipt (best-effort) — the SLA clock starts now.
+    auditRequest(req, {
+      eventType: 'data.delete',
+      userId,
+      resourceType: 'account',
+      resourceId: userId,
+      details: { operation: 'erasure_request', requestedByType: 'self' },
+    });
 
-    // Delete the user via repository seam (FK set null will preserve activity logs with userId = null)
-    await accountRepository.deleteUser(userId);
+    const { requestId, slaDeadline, appleSignIn } = await lodgeAndEnqueueErasure({
+      subjectUserId: userId,
+      subjectEmail: user.email,
+      stripeCustomerId: user.stripeCustomerId,
+      caller: actor,
+      requestedByType: 'self',
+      forceDelete: false,
+      subjectAppleLinked: user.appleId !== null,
+    });
 
-    loggers.auth.info(`User account deleted: ${userId}`);
+    loggers.auth.info(`Account erasure queued for user ${userId} (request ${requestId})`);
 
-    return Response.json({ message: 'Account deleted successfully' }, { status: 200 });
+    return Response.json(
+      // appleSignIn: 'manual' means the client must show the "Stop Using Sign in
+      // with Apple" steps (TN3194) — no token on file, or revocation failed.
+      { message: 'Account erasure queued', requestId, status: 'queued', slaDeadline, appleSignIn },
+      { status: 202 }
+    );
   } catch (error) {
-    loggers.auth.error('Account deletion error:', error as Error);
-    return Response.json({ error: 'Failed to delete account' }, { status: 500 });
+    if (error instanceof LeaveOrganizationRefusedError) {
+      return Response.json({ error: 'Transfer ownership of your organizations or delete them before deleting your account', code: 'org_owner_must_transfer', ownedOrganizations: await accountRepository.getOwnedOrganizationNames(userId) }, { status: 400 });
+    }
+    loggers.auth.error('Account erasure request error:', error as Error);
+    return Response.json({ error: 'Failed to queue account erasure' }, { status: 500 });
   }
 }

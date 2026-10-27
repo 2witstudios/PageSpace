@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import Link from 'next/link';
+import { GuestBadge, MemberSourceBadge } from './PageLinkGuestsSection';
 
 interface MemberRowProps {
   member: {
@@ -12,7 +13,7 @@ interface MemberRowProps {
     userId: string;
     role: string;
     invitedAt: string;
-    acceptedAt?: string;
+    acceptedAt: string | null;
     user: {
       id: string;
       email: string;
@@ -33,14 +34,21 @@ interface MemberRowProps {
       edit: number;
       share: number;
     };
+    /** UI-5: where this member's access comes from (org drives only). */
+    source?: 'invite' | 'org' | 'lead';
+    /** DRV-8: a member of an org drive who is not in its org. */
+    isGuest?: boolean;
   };
   driveId: string;
+  /** Show the org drive labels (source, Guest): the drive belongs to an org. */
+  orgLabels?: boolean;
   currentUserRole: 'OWNER' | 'ADMIN' | 'MEMBER';
   onRemove: () => void;
 }
 
-export function MemberRow({ member, driveId, currentUserRole, onRemove }: MemberRowProps) {
-  const displayName = member.profile?.displayName || member.user.name || 'Unknown User';
+export function MemberRow({ member, driveId, orgLabels = false, currentUserRole, onRemove }: MemberRowProps) {
+  const canManage = currentUserRole === 'OWNER' || currentUserRole === 'ADMIN';
+  const displayName = member.profile?.displayName || member.user.name || member.user.email || 'Unknown User';
   const initials = displayName
     .split(' ')
     .map(n => n[0])
@@ -48,7 +56,6 @@ export function MemberRow({ member, driveId, currentUserRole, onRemove }: Member
     .toUpperCase()
     .slice(0, 2);
 
-  // Get color classes for custom role badges
   const getCustomRoleColorClasses = (color?: string | null) => {
     switch (color) {
       case 'blue':
@@ -72,8 +79,6 @@ export function MemberRow({ member, driveId, currentUserRole, onRemove }: Member
     }
   };
 
-  // Unified role badge - shows role name based on priority:
-  // Owner > Admin > Custom Role > Member (fallback)
   const getRoleBadge = () => {
     if (member.role === 'OWNER') {
       return (
@@ -96,7 +101,6 @@ export function MemberRow({ member, driveId, currentUserRole, onRemove }: Member
         </Badge>
       );
     }
-    // Fallback for members without a custom role assigned
     return (
       <Badge className="bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300">
         Member
@@ -107,13 +111,11 @@ export function MemberRow({ member, driveId, currentUserRole, onRemove }: Member
   return (
     <div className="p-4 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
       <div className="flex items-center space-x-4">
-        {/* Avatar */}
         <Avatar>
           <AvatarImage src={member.profile?.avatarUrl} alt={displayName} />
           <AvatarFallback>{initials}</AvatarFallback>
         </Avatar>
 
-        {/* User Info */}
         <div>
           <div className="flex items-center space-x-2">
             <p className="font-medium">{displayName}</p>
@@ -121,10 +123,11 @@ export function MemberRow({ member, driveId, currentUserRole, onRemove }: Member
               <span className="text-sm text-gray-500 dark:text-gray-400">@{member.profile.username}</span>
             )}
             {getRoleBadge()}
+            {orgLabels && member.isGuest && <GuestBadge />}
+            {orgLabels && member.source && <MemberSourceBadge source={member.source} />}
           </div>
           <p className="text-sm text-gray-600 dark:text-gray-400">{member.user.email}</p>
-          
-          {/* Permission Summary */}
+
           <div className="flex items-center space-x-4 mt-1">
             {member.permissionCounts.view > 0 && (
               <div className="flex items-center space-x-1 text-xs text-gray-500 dark:text-gray-400">
@@ -148,9 +151,8 @@ export function MemberRow({ member, driveId, currentUserRole, onRemove }: Member
         </div>
       </div>
 
-      {/* Actions */}
       <div className="flex items-center space-x-2">
-        {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
+        {canManage && (
           <Link href={`/dashboard/${driveId}/members/${member.userId}`}>
             <Button
               variant="ghost"
@@ -161,7 +163,7 @@ export function MemberRow({ member, driveId, currentUserRole, onRemove }: Member
             </Button>
           </Link>
         )}
-        {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && member.role !== 'OWNER' && (
+        {canManage && member.role !== 'OWNER' && (
           <Button
             variant="ghost"
             size="sm"

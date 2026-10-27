@@ -5,7 +5,7 @@
  * - Request validation → appropriate error responses
  * - Service delegation → correct parameters passed
  * - Response mapping → service results mapped to HTTP responses
- * - Side effects → broadcasts/cache with correct payload essentials
+ * - Side effects → broadcasts with correct payload essentials
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
@@ -26,6 +26,8 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result) => 'error' in result),
   checkMCPCreateScope: vi.fn(() => null), // Allow all creates by default
   isMCPAuthResult: vi.fn().mockReturnValue(false),
+  isScopedMCPAuth: vi.fn().mockReturnValue(false),
+  canPrincipalEditPage: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -38,14 +40,17 @@ vi.mock('@/lib/websocket', () => ({
   })),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  agentAwarenessCache: {
-    invalidateDriveAgents: vi.fn().mockResolvedValue(undefined),
+// The route's own enabledTools scope-filter validation only needs tool names;
+// mock this to avoid pulling in the full real AI tool registry's heavy import graph.
+vi.mock('@/lib/ai/core/ai-tools', () => ({
+  pageSpaceTools: {
+    read_page: { description: 'Read a page' },
+    create_drive: { description: 'Create a drive' },
   },
-  pageTreeCache: {
-    invalidateDriveTree: vi.fn().mockResolvedValue(undefined),
-  },
-  loggers: {
+}));
+
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -53,21 +58,31 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' }),
-}));
 
-vi.mock('@pagespace/lib', () => ({
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+  getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' }),
   logPageActivity: vi.fn(),
 }));
+vi.mock('@pagespace/lib/content/page-types.config', () => ({
+    getCreatablePageTypes: vi.fn(() => ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET', 'TASK_LIST', 'CODE']),
+    isDocumentPage: vi.fn((type: string) => type === 'DOCUMENT'),
+}));
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackPageOperation: vi.fn(),
 }));
 
 import { pageService } from '@/services/api';
-import { authenticateRequestWithOptions, isMCPAuthResult } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPCreateScope } from '@/lib/auth';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { agentAwarenessCache, pageTreeCache } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
+import { isDocumentPage } from '@pagespace/lib/content/page-types.config';
 
 // Test helpers
 const mockUserId = 'user_123';
@@ -126,9 +141,17 @@ describe('POST /api/pages', () => {
   };
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(isAuthError).mockImplementation((result: unknown) => result != null && typeof result === 'object' && 'error' in result);
+    vi.mocked(checkMCPCreateScope).mockReturnValue(null);
+    vi.mocked(isMCPAuthResult).mockReturnValue(false);
     vi.mocked(pageService.createPage).mockResolvedValue(successResult);
+    vi.mocked(auditRequest).mockReturnValue(undefined);
+    // @ts-expect-error - partial mock data
+    vi.mocked(createPageEventPayload).mockImplementation((driveId: string, pageId: string, type: string, data: Record<string, unknown>) => ({
+      driveId, pageId, type, ...data,
+    }));
   });
 
   describe('authentication', () => {
@@ -156,7 +179,7 @@ describe('POST /api/pages', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Invalid input: expected string, received undefined');
       expect(pageService.createPage).not.toHaveBeenCalled();
     });
 
@@ -169,7 +192,7 @@ describe('POST /api/pages', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toContain('Invalid option');
       expect(pageService.createPage).not.toHaveBeenCalled();
     });
 
@@ -182,7 +205,7 @@ describe('POST /api/pages', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Invalid input: expected string, received undefined');
       expect(pageService.createPage).not.toHaveBeenCalled();
     });
 
@@ -201,7 +224,7 @@ describe('POST /api/pages', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Title too long. Invalid characters in title');
     });
 
     it('returns 400 when AI chat tool validation fails', async () => {
@@ -243,10 +266,10 @@ describe('POST /api/pages', () => {
       expect(body.error).toMatch(/not found/i);
     });
 
-    it('returns 403 when user is not owner or admin', async () => {
+    it('returns 403 when user is not a drive member (root level)', async () => {
       vi.mocked(pageService.createPage).mockResolvedValue({
         success: false,
-        error: 'Only drive owners and admins can create pages',
+        error: 'You must be a drive member to create pages',
         status: 403,
       });
 
@@ -258,7 +281,56 @@ describe('POST /api/pages', () => {
       const body = await response.json();
 
       expect(response.status).toBe(403);
-      expect(body.error).toMatch(/owner|admin/i);
+      expect(body.error).toMatch(/member/i);
+    });
+
+    it('returns 403 when user lacks edit permission on parent page', async () => {
+      vi.mocked(pageService.createPage).mockResolvedValue({
+        success: false,
+        error: 'Insufficient permissions to create pages in this folder',
+        status: 403,
+      });
+
+      const response = await POST(createRequest({
+        title: 'Test Page',
+        type: 'DOCUMENT',
+        driveId: mockDriveId,
+        parentId: 'parent_456',
+      }));
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toMatch(/permission/i);
+    });
+
+    it('returns 400 when parent page belongs to a different drive', async () => {
+      vi.mocked(pageService.createPage).mockResolvedValue({
+        success: false,
+        error: 'Parent page not found in this drive',
+        status: 400,
+      });
+
+      const response = await POST(createRequest({
+        title: 'Test Page',
+        type: 'DOCUMENT',
+        driveId: mockDriveId,
+        parentId: 'parent_other_drive',
+      }));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toMatch(/not found/i);
+    });
+
+    it('rejects MACHINE as an unknown page type (the Machine page type is gone)', async () => {
+      const response = await POST(createRequest({
+        title: 'Prod Shell',
+        type: 'MACHINE',
+        driveId: mockDriveId,
+      }));
+
+      expect(response.status).toBe(400);
+      expect(pageService.createPage).not.toHaveBeenCalled();
     });
   });
 
@@ -273,7 +345,7 @@ describe('POST /api/pages', () => {
       }));
 
       expect(pageService.createPage).toHaveBeenCalledWith(
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         expect.objectContaining({
           title: 'New Document',
           type: 'DOCUMENT',
@@ -281,7 +353,7 @@ describe('POST /api/pages', () => {
           parentId: 'parent_123',
           content: '<p>Custom content</p>',
         }),
-        undefined,
+        expect.objectContaining({ authorizeEdit: expect.any(Function) }),
       );
     });
 
@@ -303,15 +375,115 @@ describe('POST /api/pages', () => {
       }));
 
       expect(pageService.createPage).toHaveBeenCalledWith(
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         expect.objectContaining({
           systemPrompt: 'You are a helpful assistant',
           enabledTools: ['read_page'],
           aiProvider: 'anthropic',
           aiModel: 'claude-3',
         }),
-        undefined,
+        expect.objectContaining({ authorizeEdit: expect.any(Function) }),
       );
+    });
+
+    // #2463: a machine-written DOCUMENT defaults to markdown, whose line numbers
+    // are the document's own newlines. html mode stores TipTap markup and numbers
+    // lines against a normalized projection of it — the mode an agent writing raw
+    // JSON or markdown should never land in by accident.
+    describe('contentMode default', () => {
+      // The suite's beforeEach resets every mock implementation, including the
+      // module factory's, so restore this one per test.
+      beforeEach(() => {
+        vi.mocked(isDocumentPage).mockImplementation((type: unknown) => type === 'DOCUMENT');
+      });
+
+      it('defaults an MCP-created DOCUMENT to markdown', async () => {
+        vi.mocked(isMCPAuthResult).mockReturnValue(true);
+
+        await POST(createRequest({ title: 'Agent Doc', type: 'DOCUMENT', driveId: mockDriveId }));
+
+        expect(pageService.createPage).toHaveBeenCalledWith(
+          expect.objectContaining({ userId: mockUserId }),
+          expect.objectContaining({ contentMode: 'markdown' }),
+          expect.anything(),
+        );
+      });
+
+      it('leaves a browser-session DOCUMENT on the editor default', async () => {
+        // The rich-text editor IS html; flipping the UI's default would change
+        // what every human-created document stores.
+        await POST(createRequest({ title: 'Human Doc', type: 'DOCUMENT', driveId: mockDriveId }));
+
+        expect(pageService.createPage).toHaveBeenCalledWith(
+          expect.objectContaining({ userId: mockUserId }),
+          expect.objectContaining({ contentMode: undefined }),
+          expect.anything(),
+        );
+      });
+
+      // Finding from review: the route takes a `content` body too. An existing
+      // API-key client that POSTs Tiptap HTML and no contentMode would have
+      // landed in markdown mode, where that whole blob is ONE line and line
+      // editing is unusable — #2463 inverted, and silent.
+      it('does not force markdown onto a body that is actually HTML', async () => {
+        vi.mocked(isMCPAuthResult).mockReturnValue(true);
+
+        await POST(createRequest({
+          title: 'Agent Doc',
+          type: 'DOCUMENT',
+          driveId: mockDriveId,
+          content: '<h1>Title</h1><p>Body</p>',
+        }));
+
+        expect(pageService.createPage).toHaveBeenCalledWith(
+          expect.objectContaining({ userId: mockUserId }),
+          expect.objectContaining({ contentMode: undefined }),
+          expect.anything(),
+        );
+      });
+
+      it('still defaults to markdown when the body is markdown or JSON', async () => {
+        vi.mocked(isMCPAuthResult).mockReturnValue(true);
+
+        await POST(createRequest({
+          title: 'Agent Doc',
+          type: 'DOCUMENT',
+          driveId: mockDriveId,
+          content: '# Title\n\n- one\n- two',
+        }));
+
+        expect(pageService.createPage).toHaveBeenCalledWith(
+          expect.objectContaining({ userId: mockUserId }),
+          expect.objectContaining({ contentMode: 'markdown' }),
+          expect.anything(),
+        );
+      });
+
+      it('honours an explicit contentMode from either caller', async () => {
+        vi.mocked(isMCPAuthResult).mockReturnValue(true);
+
+        await POST(createRequest({
+          title: 'Agent Doc', type: 'DOCUMENT', driveId: mockDriveId, contentMode: 'html',
+        }));
+
+        expect(pageService.createPage).toHaveBeenCalledWith(
+          expect.objectContaining({ userId: mockUserId }),
+          expect.objectContaining({ contentMode: 'html' }),
+          expect.anything(),
+        );
+      });
+
+      it('does not touch non-document types', async () => {
+        vi.mocked(isMCPAuthResult).mockReturnValue(true);
+
+        await POST(createRequest({ title: 'Agent Folder', type: 'FOLDER', driveId: mockDriveId }));
+
+        expect(pageService.createPage).toHaveBeenCalledWith(
+          expect.objectContaining({ userId: mockUserId }),
+          expect.objectContaining({ contentMode: undefined }),
+          expect.anything(),
+        );
+      });
     });
 
     it('passes MCP context when authenticated via MCP', async () => {
@@ -324,9 +496,12 @@ describe('POST /api/pages', () => {
       }));
 
       expect(pageService.createPage).toHaveBeenCalledWith(
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         expect.objectContaining({ title: 'MCP Page' }),
-        { context: { metadata: { source: 'mcp' } } },
+        expect.objectContaining({
+          context: { metadata: { source: 'mcp' } },
+          authorizeEdit: expect.any(Function),
+        }),
       );
     });
   });
@@ -409,45 +584,10 @@ describe('POST /api/pages', () => {
           parentId: 'parent_123',  // From result.page.parentId
         })
       );
-      expect(broadcastPageEvent).toHaveBeenCalled();
+      expect(broadcastPageEvent).toHaveBeenCalledTimes(1);
     });
 
-    it('invalidates page tree cache', async () => {
-      await POST(createRequest({
-        title: 'Test Page',
-        type: 'DOCUMENT',
-        driveId: mockDriveId,
-      }));
-
-      expect(pageTreeCache.invalidateDriveTree).toHaveBeenCalledWith(mockDriveId);
-    });
-
-    it('invalidates agent awareness cache for AI_CHAT pages', async () => {
-      vi.mocked(pageService.createPage).mockResolvedValue({
-        ...successResult,
-        isAIChatPage: true,
-      });
-
-      await POST(createRequest({
-        title: 'AI Chat',
-        type: 'AI_CHAT',
-        driveId: mockDriveId,
-      }));
-
-      expect(agentAwarenessCache.invalidateDriveAgents).toHaveBeenCalledWith(mockDriveId);
-    });
-
-    it('does not invalidate agent cache for non-AI pages', async () => {
-      await POST(createRequest({
-        title: 'Document',
-        type: 'DOCUMENT',
-        driveId: mockDriveId,
-      }));
-
-      expect(agentAwarenessCache.invalidateDriveAgents).not.toHaveBeenCalled();
-    });
-
-    it('does NOT broadcast or invalidate cache on service failure', async () => {
+    it('does NOT broadcast on service failure', async () => {
       vi.mocked(pageService.createPage).mockResolvedValue({
         success: false,
         error: 'Drive not found',
@@ -461,13 +601,93 @@ describe('POST /api/pages', () => {
       }));
 
       expect(broadcastPageEvent).not.toHaveBeenCalled();
-      expect(pageTreeCache.invalidateDriveTree).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('MCP scope check', () => {
+    it('returns scope error when MCP create scope check fails', async () => {
+      const scopeErrorResponse = NextResponse.json(
+        { error: 'Scoped token cannot create in this drive' },
+        { status: 403 }
+      );
+      vi.mocked(checkMCPCreateScope).mockReturnValue(scopeErrorResponse);
+
+      const response = await POST(createRequest({
+        title: 'Test Page',
+        type: 'DOCUMENT',
+        driveId: mockDriveId,
+      }));
+
+      expect(response.status).toBe(403);
+      expect(pageService.createPage).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('validation (invalid type)', () => {
+    it('returns 400 for invalid page type', async () => {
+      const response = await POST(createRequest({
+        title: 'Test Page',
+        type: 'INVALID_TYPE',
+        driveId: mockDriveId,
+      }));
+
+      expect(response.status).toBe(400);
+      expect(pageService.createPage).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 for empty title', async () => {
+      const response = await POST(createRequest({
+        title: '',
+        type: 'DOCUMENT',
+        driveId: mockDriveId,
+      }));
+
+      expect(response.status).toBe(400);
+      expect(pageService.createPage).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('service delegation (contentMode)', () => {
+    it('passes contentMode when provided', async () => {
+      await POST(createRequest({
+        title: 'MD Doc',
+        type: 'DOCUMENT',
+        driveId: mockDriveId,
+        contentMode: 'markdown',
+      }));
+
+      expect(pageService.createPage).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: mockUserId }),
+        expect.objectContaining({ contentMode: 'markdown' }),
+        expect.objectContaining({ authorizeEdit: expect.any(Function) }),
+      );
+    });
+  });
+
+  describe('activity tracking', () => {
+    it('tracks page creation operation with result values', async () => {
+      await POST(createRequest({
+        title: 'Tracked Page',
+        type: 'DOCUMENT',
+        driveId: mockDriveId,
+      }));
+
+      expect(trackPageOperation).toHaveBeenCalledWith(
+        mockUserId,
+        'create',
+        mockPageId,
+        expect.objectContaining({
+          title: 'New Page',
+          type: 'DOCUMENT',
+          driveId: mockDriveId,
+        })
+      );
     });
   });
 
   describe('error handling', () => {
     it('returns 500 when service throws', async () => {
-      vi.mocked(pageService.createPage).mockRejectedValue(new Error('Database error'));
+      vi.mocked(pageService.createPage).mockRejectedValueOnce(new Error('Database error'));
 
       const response = await POST(createRequest({
         title: 'Test Page',
@@ -480,4 +700,5 @@ describe('POST /api/pages', () => {
       expect(body.error).toMatch(/failed/i);
     });
   });
+
 });

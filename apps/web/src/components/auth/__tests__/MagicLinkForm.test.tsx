@@ -1,0 +1,296 @@
+/**
+ * Contract tests for MagicLinkForm.
+ *
+ * The form is the unified signin/signup entry point: typing an email + ticking
+ * the ToS checkbox + clicking submit triggers a magic-link email. Auto-create
+ * for unknown emails happens server-side; the form's contract is just to
+ * collect (email, tosAccepted) and forward `next` from the signin page.
+ */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, act, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+
+// Radix UI Checkbox renders an indicator that calls into @radix-ui/react-use-size,
+// which constructs a ResizeObserver. jsdom doesn't implement it, so stub a no-op.
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+(globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver =
+  ResizeObserverStub as unknown as typeof ResizeObserver;
+
+vi.mock('sonner', () => ({
+  toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
+}));
+
+const { mockGetMagicLinkPlatformFields } = vi.hoisted(() => ({
+  mockGetMagicLinkPlatformFields: vi.fn(),
+}));
+
+vi.mock('@/lib/auth/magic-link-platform-fields', () => ({
+  getMagicLinkPlatformFields: () => mockGetMagicLinkPlatformFields(),
+}));
+
+vi.mock('@/lib/capacitor-bridge', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/capacitor-bridge')>()),
+  isCapacitorApp: () => false,
+}));
+
+import { MagicLinkForm } from '../MagicLinkForm';
+
+const setupFetchMock = () => {
+  const fetchSpy = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
+    void _init;
+    const u = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
+    if (u.includes('/api/auth/login-csrf')) {
+      return new Response(JSON.stringify({ csrfToken: 'csrf-token' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    if (u.includes('/api/auth/magic-link/send')) {
+      return new Response(JSON.stringify({ message: 'sent' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    throw new Error(`Unexpected fetch: ${u}`);
+  });
+  global.fetch = fetchSpy as unknown as typeof fetch;
+  return fetchSpy;
+};
+
+describe('MagicLinkForm', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetMagicLinkPlatformFields.mockResolvedValue({});
+  });
+
+  describe('ToS gate', () => {
+    it('disables the submit button until the ToS checkbox is ticked', async () => {
+      setupFetchMock();
+      render(<MagicLinkForm />);
+
+      await userEvent.type(screen.getByLabelText(/email/i), 'user@example.com');
+      const submit = screen.getByRole('button', { name: /sign-in link/i });
+      expect(submit).toBeDisabled();
+
+      await userEvent.click(screen.getByLabelText(/i agree/i));
+      expect(submit).toBeEnabled();
+    });
+
+    it('sends tosAccepted: true in the POST body once the checkbox is ticked', async () => {
+      const fetchSpy = setupFetchMock();
+      render(<MagicLinkForm />);
+
+      await userEvent.type(screen.getByLabelText(/email/i), 'user@example.com');
+      await userEvent.click(screen.getByLabelText(/i agree/i));
+      await userEvent.click(screen.getByRole('button', { name: /sign-in link/i }));
+
+      const sendCall = fetchSpy.mock.calls.find(([url]) =>
+        typeof url === 'string' && url.includes('/api/auth/magic-link/send'),
+      );
+      expect(sendCall).toBeDefined();
+      const body = JSON.parse((sendCall![1] as RequestInit).body as string) as Record<string, unknown>;
+      expect(body.tosAccepted).toBe(true);
+      expect(body.email).toBe('user@example.com');
+    });
+
+    it('refuses to POST if a programmatic submit fires while the checkbox is unchecked (defense-in-depth: payload binds to state, not literal true)', async () => {
+      const fetchSpy = setupFetchMock();
+      render(<MagicLinkForm />);
+
+      // Type a valid email but DO NOT tick the ToS checkbox.
+      const input = screen.getByLabelText(/email/i) as HTMLInputElement;
+      await userEvent.type(input, 'user@example.com');
+
+      // Bypass the disabled submit button by triggering a programmatic submit
+      // on the form element itself (simulates Enter / scripted submit).
+      const form = input.closest('form')!;
+      await act(async () => {
+        form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+      });
+
+      // The handler must short-circuit BEFORE the send-route POST is issued.
+      // waitFor lets any queued promise microtasks settle without flake.
+      await waitFor(() => {
+        const sendCalls = fetchSpy.mock.calls.filter(([url]) =>
+          typeof url === 'string' && url.includes('/api/auth/magic-link/send'),
+        );
+        expect(sendCalls).toHaveLength(0);
+      });
+    });
+  });
+
+  describe('next= forwarding', () => {
+    it('given a nextPath prop, forwards it as `next` in the send-route POST body', async () => {
+      const fetchSpy = setupFetchMock();
+      render(<MagicLinkForm nextPath="/dashboard/drive_abc" />);
+
+      await userEvent.type(screen.getByLabelText(/email/i), 'user@example.com');
+      await userEvent.click(screen.getByLabelText(/i agree/i));
+      await userEvent.click(screen.getByRole('button', { name: /sign-in link/i }));
+
+      const sendCall = fetchSpy.mock.calls.find(([url]) =>
+        typeof url === 'string' && url.includes('/api/auth/magic-link/send'),
+      );
+      expect(sendCall).toBeDefined();
+      const init = sendCall![1] as RequestInit;
+      const body = JSON.parse(init.body as string) as Record<string, unknown>;
+      expect(body.next).toBe('/dashboard/drive_abc');
+      expect(body.email).toBe('user@example.com');
+    });
+
+    it('given no nextPath prop, omits `next` from the send-route POST body', async () => {
+      const fetchSpy = setupFetchMock();
+      render(<MagicLinkForm />);
+
+      await userEvent.type(screen.getByLabelText(/email/i), 'user@example.com');
+      await userEvent.click(screen.getByLabelText(/i agree/i));
+      await userEvent.click(screen.getByRole('button', { name: /sign-in link/i }));
+
+      const sendCall = fetchSpy.mock.calls.find(([url]) =>
+        typeof url === 'string' && url.includes('/api/auth/magic-link/send'),
+      );
+      expect(sendCall).toBeDefined();
+      const init = sendCall![1] as RequestInit;
+      const body = JSON.parse(init.body as string) as Record<string, unknown>;
+      expect(body).not.toHaveProperty('next');
+    });
+
+    it('given the native shell reports a device, sends platform + device fields so the link binds to this app', async () => {
+      mockGetMagicLinkPlatformFields.mockResolvedValue({
+        platform: 'ios',
+        deviceId: 'dev_ios_1',
+        deviceName: 'iOS App',
+      });
+      const fetchSpy = setupFetchMock();
+      render(<MagicLinkForm />);
+
+      await userEvent.type(screen.getByLabelText(/email/i), 'user@example.com');
+      await userEvent.click(screen.getByLabelText(/i agree/i));
+      await userEvent.click(screen.getByRole('button', { name: /sign-in link/i }));
+
+      const sendCall = fetchSpy.mock.calls.find(([url]) =>
+        typeof url === 'string' && url.includes('/api/auth/magic-link/send'),
+      );
+      expect(sendCall).toBeDefined();
+      const init = sendCall![1] as RequestInit;
+      const body = JSON.parse(init.body as string) as Record<string, unknown>;
+      expect(body).toEqual(
+        expect.objectContaining({ platform: 'ios', deviceId: 'dev_ios_1', deviceName: 'iOS App' }),
+      );
+    });
+  });
+
+  describe('desktop exchange flow', () => {
+    type ElectronBridge = {
+      isDesktop: boolean;
+      auth: {
+        beginExchange: ReturnType<typeof vi.fn>;
+      };
+    };
+
+    let beginExchangeMock: ReturnType<typeof vi.fn>;
+
+    const submitForm = async () => {
+      await userEvent.type(screen.getByLabelText(/email/i), 'user@example.com');
+      await userEvent.click(screen.getByLabelText(/i agree/i));
+      await userEvent.click(screen.getByRole('button', { name: /sign-in link/i }));
+    };
+
+    beforeEach(() => {
+      beginExchangeMock = vi.fn().mockResolvedValue('flow-state');
+    });
+
+    afterEach(() => {
+      delete (window as unknown as { electron?: ElectronBridge }).electron;
+    });
+
+    it('shows success only after the desktop flow has begun, so the browser-fired deep link is accepted (L9)', async () => {
+      setupFetchMock();
+      // Deferred: the flow is "recording" until we resolve the promise.
+      let resolveBegin: (state: string) => void = () => {};
+      beginExchangeMock.mockReturnValue(
+        new Promise<string>((resolve) => {
+          resolveBegin = resolve;
+        }),
+      );
+      (window as unknown as { electron: ElectronBridge }).electron = {
+        isDesktop: true,
+        auth: { beginExchange: beginExchangeMock },
+      };
+      render(<MagicLinkForm />);
+
+      await submitForm();
+
+      await waitFor(() => expect(beginExchangeMock).toHaveBeenCalledTimes(1));
+      // The bridge call is still pending — no confirmation may be promised yet.
+      expect(screen.queryByText(/check your email/i)).not.toBeInTheDocument();
+
+      await act(async () => {
+        resolveBegin('flow-state');
+      });
+
+      // Only once the flow is recorded does the confirmation appear.
+      expect(screen.getByText(/check your email/i)).toBeInTheDocument();
+    });
+
+    it.each([
+      ['rejects', () => Promise.reject(new Error('ipc failure'))],
+      ['resolves null (untrusted sender — no flow recorded)', () => Promise.resolve(null)],
+    ])('treats a bridge call that %s as a retryable desktop error instead of success', async (_name, begin) => {
+      setupFetchMock();
+      beginExchangeMock.mockImplementation(begin);
+      (window as unknown as { electron: ElectronBridge }).electron = {
+        isDesktop: true,
+        auth: { beginExchange: beginExchangeMock },
+      };
+      render(<MagicLinkForm />);
+
+      await submitForm();
+
+      // Back on the input form with a retryable error — not a confirmation
+      // that would send the user to an email link the desktop will reject.
+      expect(screen.queryByText(/check your email/i)).not.toBeInTheDocument();
+      expect(screen.getByText(/failed to prepare for sign-in/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /sign-in link/i })).toBeEnabled();
+    });
+
+    it('does not mark a flow when the send fails', async () => {
+      global.fetch = vi.fn(async (url: string | URL | Request) => {
+        const u = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
+        if (u.includes('/api/auth/login-csrf')) {
+          return new Response(JSON.stringify({ csrfToken: 'csrf-token' }), { status: 200 });
+        }
+        return new Response(JSON.stringify({}), { status: 500 });
+      }) as unknown as typeof fetch;
+      (window as unknown as { electron: ElectronBridge }).electron = {
+        isDesktop: true,
+        auth: { beginExchange: beginExchangeMock },
+      };
+      render(<MagicLinkForm />);
+
+      await submitForm();
+
+      expect(screen.getByText(/failed to send magic link/i)).toBeInTheDocument();
+      // A small delay would surface a stray call if the form began the flow
+      // unconditionally instead of after a successful send.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(beginExchangeMock).not.toHaveBeenCalled();
+    });
+
+    it('does nothing special on web — no electron bridge, no flow, normal success', async () => {
+      setupFetchMock();
+      render(<MagicLinkForm />);
+
+      await submitForm();
+
+      expect(screen.getByText(/check your email/i)).toBeInTheDocument();
+    });
+  });
+});

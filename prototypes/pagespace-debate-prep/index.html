@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PageSpace — The Debate Prep & Research Workspace</title>
+<meta name="description" content="Research, brief, and rehearse in one AI-native workspace. PageSpace auto-researches the motion, drafts your case file, builds rebuttals, and stress-tests your arguments before you ever take the floor." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #07070c;
+    --s1: #0e0e16;
+    --s2: #14141f;
+    --s3: #1c1c2b;
+    --border: #26263a;
+    --border2: #34344c;
+    --blue: #4d8eff;
+    --green: #3dd68c;
+    --red: #ff4d6a;
+    --amber: #ffb84d;
+    --violet: #a78bfa;
+    --cyan: #22d3ee;
+    --text: #e6e6f2;
+    --mid: #9494ab;
+    --dim: #5f5f78;
+    --sans: "Plus Jakarta Sans", system-ui, sans-serif;
+    --mono: "JetBrains Mono", monospace;
+    --maxw: 1140px;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+  ::selection { background: rgba(77,142,255,0.28); }
+  a { color: inherit; text-decoration: none; }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 28px; }
+
+  /* ---------- NAV ---------- */
+  nav {
+    position: sticky; top: 0; z-index: 50;
+    backdrop-filter: blur(14px);
+    background: rgba(7,7,12,0.72);
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 64px; }
+  .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px; letter-spacing: -0.3px; }
+  .logo .mark {
+    width: 26px; height: 26px; border-radius: 7px;
+    background: linear-gradient(140deg, var(--blue), var(--violet));
+    display: grid; place-items: center; font-size: 13px; font-weight: 800; color: #fff;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.08), 0 4px 16px rgba(77,142,255,0.35);
+  }
+  .nav-links { display: flex; align-items: center; gap: 30px; }
+  .nav-links a { font-size: 13.5px; color: var(--mid); transition: color .15s; }
+  .nav-links a:hover { color: var(--text); }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--sans); font-weight: 600; font-size: 13.5px;
+    padding: 10px 18px; border-radius: 9px; cursor: pointer; border: none;
+    transition: transform .12s, box-shadow .2s, background .2s;
+  }
+  .btn-primary {
+    background: linear-gradient(140deg, var(--blue), #6d6dff);
+    color: #fff; box-shadow: 0 6px 22px rgba(77,142,255,0.35);
+  }
+  .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 10px 30px rgba(77,142,255,0.5); }
+  .btn-ghost { background: var(--s2); color: var(--text); border: 1px solid var(--border2); }
+  .btn-ghost:hover { background: var(--s3); border-color: var(--blue); }
+  .btn-lg { padding: 14px 26px; font-size: 15px; border-radius: 11px; }
+  @media (max-width: 760px) { .nav-links a:not(.btn) { display: none; } }
+
+  /* ---------- HERO ---------- */
+  .hero { position: relative; padding: 100px 0 70px; text-align: center; }
+  .hero::before {
+    content: ""; position: absolute; inset: 0; z-index: -1;
+    background:
+      radial-gradient(640px 380px at 50% -8%, rgba(77,142,255,0.20), transparent 70%),
+      radial-gradient(540px 360px at 82% 14%, rgba(167,139,250,0.16), transparent 70%),
+      radial-gradient(520px 340px at 14% 26%, rgba(34,211,238,0.10), transparent 70%);
+  }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 12px; font-weight: 600; letter-spacing: 0.4px;
+    color: var(--blue); background: rgba(77,142,255,0.10);
+    border: 1px solid rgba(77,142,255,0.30); padding: 6px 14px; border-radius: 999px;
+    margin-bottom: 28px;
+  }
+  .eyebrow .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); }
+  h1 {
+    font-size: clamp(38px, 6.2vw, 68px); font-weight: 800;
+    letter-spacing: -1.8px; line-height: 1.04; margin-bottom: 24px;
+  }
+  h1 .grad {
+    background: linear-gradient(110deg, var(--blue) 10%, var(--violet) 55%, var(--cyan) 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .sub {
+    font-size: clamp(16px, 2vw, 19px); color: var(--mid); line-height: 1.65;
+    max-width: 660px; margin: 0 auto 38px;
+  }
+  .hero-cta { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-bottom: 22px; }
+  .micro { font-size: 12.5px; color: var(--dim); }
+  .micro strong { color: var(--mid); font-weight: 600; }
+
+  /* ---------- HERO MOCK ---------- */
+  .mock {
+    max-width: 1000px; margin: 64px auto 0; text-align: left;
+    border: 1px solid var(--border2); border-radius: 16px; overflow: hidden;
+    background: var(--s1);
+    box-shadow: 0 40px 120px -30px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.03);
+  }
+  .mock-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+    background: var(--s2);
+  }
+  .mock-bar .d { width: 11px; height: 11px; border-radius: 50%; }
+  .mock-bar .d:nth-child(1){ background:#ff5f57; } .mock-bar .d:nth-child(2){ background:#febc2e; } .mock-bar .d:nth-child(3){ background:#28c840; }
+  .mock-bar .tab { margin-left: 14px; font-family: var(--mono); font-size: 11.5px; color: var(--dim); }
+  .mock-body { display: grid; grid-template-columns: 188px 1fr 230px; min-height: 420px; }
+  .mock-side { border-right: 1px solid var(--border); padding: 16px 12px; background: var(--s1); }
+  .mock-side .grp { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--dim); margin: 14px 8px 8px; }
+  .tree-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px; font-size: 12.5px; color: var(--mid); }
+  .tree-item.active { background: rgba(77,142,255,0.12); color: var(--text); }
+  .tree-item .ic { font-size: 13px; }
+  .mock-main { padding: 24px 26px; border-right: 1px solid var(--border); }
+  .doc-h { font-size: 19px; font-weight: 700; letter-spacing: -0.4px; margin-bottom: 4px; }
+  .doc-meta { font-family: var(--mono); font-size: 11px; color: var(--dim); margin-bottom: 18px; }
+  .doc-line { height: 9px; border-radius: 5px; background: var(--s3); margin-bottom: 11px; }
+  .doc-line.w1 { width: 96%; } .doc-line.w2 { width: 82%; } .doc-line.w3 { width: 90%; } .doc-line.w4 { width: 68%; }
+  .doc-cite {
+    font-size: 11.5px; font-family: var(--mono); color: var(--cyan);
+    background: rgba(34,211,238,0.08); border: 1px solid rgba(34,211,238,0.2);
+    border-radius: 6px; padding: 4px 8px; display: inline-block; margin: 6px 6px 0 0;
+  }
+  .doc-block {
+    margin-top: 18px; border-left: 2px solid var(--violet); padding: 10px 14px;
+    background: rgba(167,139,250,0.06); border-radius: 0 8px 8px 0;
+  }
+  .doc-block .lbl { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--violet); font-weight: 600; margin-bottom: 6px; }
+  .doc-block p { font-size: 12.5px; line-height: 1.6; color: var(--mid); }
+  .mock-ai { padding: 16px 16px; background: var(--s1); display: flex; flex-direction: column; gap: 12px; }
+  .ai-head { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--text); }
+  .ai-head .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); animation: pulse 1.6s infinite; }
+  @keyframes pulse { 0%,100%{ opacity: 1; } 50%{ opacity: .35; } }
+  .ai-msg { font-size: 12px; line-height: 1.55; border-radius: 10px; padding: 10px 12px; }
+  .ai-msg.bot { background: var(--s2); color: var(--mid); border: 1px solid var(--border); }
+  .ai-msg.bot b { color: var(--text); }
+  .ai-tool {
+    font-family: var(--mono); font-size: 10.5px; color: var(--green);
+    background: rgba(61,214,140,0.07); border: 1px solid rgba(61,214,140,0.22);
+    border-radius: 7px; padding: 7px 10px; display: flex; align-items: center; gap: 7px;
+  }
+  .ai-tool .sp { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: pulse 1s infinite; }
+  @media (max-width: 880px){ .mock-body { grid-template-columns: 1fr; } .mock-side, .mock-ai { display: none; } .mock-main { border-right: none; } }
+
+  /* ---------- LOGO STRIP ---------- */
+  .strip { padding: 40px 0 10px; text-align: center; }
+  .strip p { font-size: 11.5px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--dim); margin-bottom: 22px; }
+  .strip-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 14px 40px; opacity: .7; }
+  .strip-row span { font-size: 15px; font-weight: 700; color: var(--mid); letter-spacing: -0.3px; }
+
+  /* ---------- SECTION SHELL ---------- */
+  section { padding: 90px 0; }
+  .sec-head { text-align: center; max-width: 680px; margin: 0 auto 56px; }
+  .kicker { font-size: 12px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; color: var(--blue); margin-bottom: 16px; }
+  h2 { font-size: clamp(28px, 4vw, 42px); font-weight: 800; letter-spacing: -1px; line-height: 1.12; margin-bottom: 18px; }
+  h2 .hl { background: linear-gradient(110deg, var(--blue), var(--violet)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .sec-head p { font-size: 16.5px; color: var(--mid); line-height: 1.65; }
+
+  /* ---------- PROBLEM ---------- */
+  .prob-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .prob-card { background: var(--s1); border: 1px solid var(--border); border-radius: 14px; padding: 26px; }
+  .prob-card .x { color: var(--red); font-size: 22px; margin-bottom: 14px; }
+  .prob-card h3 { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+  .prob-card p { font-size: 13.5px; color: var(--mid); line-height: 1.6; }
+  @media (max-width: 820px){ .prob-grid { grid-template-columns: 1fr; } }
+
+  /* ---------- WORKFLOW ---------- */
+  .flow { display: flex; flex-direction: column; gap: 0; max-width: 920px; margin: 0 auto; }
+  .step { display: grid; grid-template-columns: 56px 1fr; gap: 24px; position: relative; padding-bottom: 44px; }
+  .step:last-child { padding-bottom: 0; }
+  .step::before { content: ""; position: absolute; left: 27px; top: 56px; bottom: 0; width: 2px; background: linear-gradient(var(--border2), transparent); }
+  .step:last-child::before { display: none; }
+  .step-num {
+    width: 56px; height: 56px; border-radius: 14px; display: grid; place-items: center;
+    font-weight: 800; font-size: 20px; color: #fff;
+    background: linear-gradient(140deg, var(--blue), var(--violet));
+    box-shadow: 0 8px 24px rgba(77,142,255,0.3); z-index: 1;
+  }
+  .step-body { padding-top: 4px; }
+  .step-body h3 { font-size: 19px; font-weight: 700; margin-bottom: 8px; letter-spacing: -0.3px; }
+  .step-body p { font-size: 14.5px; color: var(--mid); line-height: 1.65; max-width: 620px; }
+  .step-body .tags { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .tag {
+    font-family: var(--mono); font-size: 11px; color: var(--cyan);
+    background: rgba(34,211,238,0.07); border: 1px solid rgba(34,211,238,0.2);
+    border-radius: 999px; padding: 4px 11px;
+  }
+
+  /* ---------- FEATURES ---------- */
+  .feat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .feat {
+    background: var(--s1); border: 1px solid var(--border); border-radius: 14px; padding: 26px;
+    transition: transform .15s, border-color .2s, background .2s;
+  }
+  .feat:hover { transform: translateY(-3px); border-color: var(--border2); background: var(--s2); }
+  .feat .ic {
+    width: 44px; height: 44px; border-radius: 11px; display: grid; place-items: center;
+    font-size: 21px; margin-bottom: 16px; background: var(--s3); border: 1px solid var(--border2);
+  }
+  .feat h3 { font-size: 16.5px; font-weight: 700; margin-bottom: 8px; }
+  .feat p { font-size: 13.5px; color: var(--mid); line-height: 1.6; }
+  .ttag { font-family: var(--mono); font-size: 0.86em; color: var(--cyan); }
+  @media (max-width: 880px){ .feat-grid { grid-template-columns: 1fr; } }
+
+  /* ---------- SPLIT / BRIEF ---------- */
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: center; }
+  .split h2 { text-align: left; }
+  .split .lead { font-size: 16px; color: var(--mid); line-height: 1.7; margin-bottom: 24px; }
+  .check-list { display: flex; flex-direction: column; gap: 16px; }
+  .check { display: grid; grid-template-columns: 26px 1fr; gap: 12px; }
+  .check .c { width: 22px; height: 22px; border-radius: 7px; background: rgba(61,214,140,0.12); border: 1px solid rgba(61,214,140,0.35); color: var(--green); display: grid; place-items: center; font-size: 12px; font-weight: 700; }
+  .check h4 { font-size: 14.5px; font-weight: 600; margin-bottom: 3px; }
+  .check p { font-size: 13px; color: var(--mid); line-height: 1.55; }
+  .brief-card {
+    background: var(--s1); border: 1px solid var(--border2); border-radius: 16px; overflow: hidden;
+    box-shadow: 0 30px 80px -30px rgba(0,0,0,0.8);
+  }
+  .brief-card .bh { padding: 16px 20px; border-bottom: 1px solid var(--border); background: var(--s2); display: flex; align-items: center; justify-content: space-between; }
+  .brief-card .bh .t { font-weight: 700; font-size: 14px; }
+  .brief-card .bh .m { font-family: var(--mono); font-size: 10.5px; color: var(--dim); }
+  .brief-card .bb { padding: 20px; }
+  .arg-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .arg-col h5 { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 10px; }
+  .arg-col.pro h5 { color: var(--green); } .arg-col.con h5 { color: var(--red); }
+  .arg-item { font-size: 12px; color: var(--mid); line-height: 1.5; padding: 10px 12px; border-radius: 9px; background: var(--s2); border: 1px solid var(--border); margin-bottom: 10px; }
+  .arg-item b { color: var(--text); font-weight: 600; }
+  .arg-item .src { display: block; margin-top: 5px; font-family: var(--mono); font-size: 10px; color: var(--cyan); }
+  @media (max-width: 880px){ .split { grid-template-columns: 1fr; gap: 36px; } }
+
+  /* ---------- STATS ---------- */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
+  .stat { text-align: center; padding: 28px 18px; background: var(--s1); border: 1px solid var(--border); border-radius: 14px; }
+  .stat .n { font-size: 38px; font-weight: 800; letter-spacing: -1.5px; background: linear-gradient(120deg, var(--blue), var(--violet)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .stat .l { font-size: 13px; color: var(--mid); margin-top: 6px; }
+  @media (max-width: 820px){ .stats { grid-template-columns: 1fr 1fr; } }
+
+  /* ---------- USE CASES ---------- */
+  .uc-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+  .uc { background: var(--s1); border: 1px solid var(--border); border-radius: 14px; padding: 26px; }
+  .uc .ic { font-size: 24px; margin-bottom: 14px; }
+  .uc h3 { font-size: 16.5px; font-weight: 700; margin-bottom: 8px; }
+  .uc p { font-size: 13.5px; color: var(--mid); line-height: 1.6; }
+  @media (max-width: 820px){ .uc-grid { grid-template-columns: 1fr; } }
+
+  /* ---------- QUOTE ---------- */
+  .quote-wrap { text-align: center; max-width: 780px; margin: 0 auto; }
+  .quote-wrap .q { font-size: clamp(22px, 3.2vw, 30px); font-weight: 600; line-height: 1.4; letter-spacing: -0.6px; margin-bottom: 24px; }
+  .quote-wrap .q .hl { color: var(--violet); }
+  .quote-wrap .by { font-size: 14px; color: var(--mid); }
+  .quote-wrap .by b { color: var(--text); }
+
+  /* ---------- CTA ---------- */
+  .cta {
+    position: relative; text-align: center; border-radius: 24px; overflow: hidden;
+    padding: 72px 32px; border: 1px solid var(--border2); background: var(--s1);
+  }
+  .cta::before {
+    content: ""; position: absolute; inset: 0; z-index: 0;
+    background: radial-gradient(600px 300px at 50% -20%, rgba(77,142,255,0.28), transparent 70%),
+                radial-gradient(500px 300px at 80% 120%, rgba(167,139,250,0.22), transparent 70%);
+  }
+  .cta > * { position: relative; z-index: 1; }
+  .cta h2 { font-size: clamp(28px, 4vw, 44px); }
+  .cta p { font-size: 17px; color: var(--mid); max-width: 540px; margin: 0 auto 32px; line-height: 1.6; }
+
+  /* ---------- FOOTER ---------- */
+  footer { border-top: 1px solid var(--border); padding: 48px 0 40px; }
+  .foot-inner { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 32px; }
+  .foot-brand { max-width: 280px; }
+  .foot-brand p { font-size: 13px; color: var(--dim); line-height: 1.6; margin-top: 14px; }
+  .foot-cols { display: flex; gap: 56px; flex-wrap: wrap; }
+  .foot-col h5 { font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--mid); margin-bottom: 14px; }
+  .foot-col a { display: block; font-size: 13px; color: var(--dim); margin-bottom: 10px; transition: color .15s; }
+  .foot-col a:hover { color: var(--text); }
+  .foot-bottom { margin-top: 40px; padding-top: 24px; border-top: 1px solid var(--border); font-size: 12px; color: var(--dim); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+
+  .fade { opacity: 0; transform: translateY(24px); transition: opacity .7s ease, transform .7s ease; }
+  .fade.in { opacity: 1; transform: none; }
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <div class="wrap nav-inner">
+    <div class="logo"><span class="mark">P</span> PageSpace</div>
+    <div class="nav-links">
+      <a href="#how">How it works</a>
+      <a href="#features">Features</a>
+      <a href="#brief">Case files</a>
+      <a href="#usecases">Use cases</a>
+      <a href="#cta" class="btn btn-primary">Start prepping free</a>
+    </div>
+  </div>
+</nav>
+
+<!-- HERO -->
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow"><span class="dot"></span> The AI-native debate workspace</div>
+    <h1>Win the round before<br>you walk into it.<br><span class="grad">PageSpace preps the whole case.</span></h1>
+    <p class="sub">Drop the motion into a drive. PageSpace agents research the web, draft a sourced case file in the editor, build your evidence and rebuttal sheets, and spar against an opposition agent — all in one workspace you and your team actually work inside.</p>
+    <div class="hero-cta">
+      <a href="#cta" class="btn btn-primary btn-lg">Prep your first motion free</a>
+      <a href="#how" class="btn btn-ghost btn-lg">See how it works</a>
+    </div>
+    <p class="micro">No credit card · <strong>33+ real AI tools</strong> · 100+ models · Self-host or cloud</p>
+
+    <!-- HERO MOCK -->
+    <div class="mock fade">
+      <div class="mock-bar">
+        <span class="d"></span><span class="d"></span><span class="d"></span>
+        <span class="tab">pagespace.ai / drives / debate-prep / "This house would ban facial recognition"</span>
+      </div>
+      <div class="mock-body">
+        <aside class="mock-side">
+          <div class="grp">Case file</div>
+          <div class="tree-item active"><span class="ic">📄</span> Motion brief</div>
+          <div class="tree-item"><span class="ic">⚖️</span> Gov / Opp arguments</div>
+          <div class="tree-item"><span class="ic">🛡️</span> Rebuttal matrix</div>
+          <div class="tree-item"><span class="ic">📊</span> Evidence sheet</div>
+          <div class="grp">Research</div>
+          <div class="tree-item"><span class="ic">🔎</span> Sources (42)</div>
+          <div class="tree-item"><span class="ic">🗂️</span> Definitions</div>
+          <div class="tree-item"><span class="ic">💬</span> Sparring log</div>
+        </aside>
+        <main class="mock-main">
+          <div class="doc-h">Government Case — Opening</div>
+          <div class="doc-meta">auto-drafted · 42 sources · last edited 2m ago</div>
+          <div class="doc-line w1"></div>
+          <div class="doc-line w3"></div>
+          <div class="doc-line w2"></div>
+          <span class="doc-cite">[1] EFF 2024</span>
+          <span class="doc-cite">[2] MIT Media Lab</span>
+          <span class="doc-cite">[3] GDPR Art. 9</span>
+          <div class="doc-block">
+            <div class="lbl">⚠ Anticipated rebuttal</div>
+            <p>Opp will argue public safety gains. Counter with false-positive rates from Gender Shades study (34.7% for darker-skinned women) → reframe as discriminatory tooling, not safety.</p>
+          </div>
+        </main>
+        <aside class="mock-ai">
+          <div class="ai-head"><span class="pulse"></span> Research Agent</div>
+          <div class="ai-tool"><span class="sp"></span> web_search · "facial recognition bans 2024"</div>
+          <div class="ai-tool"><span class="sp"></span> web_fetch · eff.org/deeplinks</div>
+          <div class="ai-tool"><span class="sp"></span> edit_sheet_cells · Evidence sheet</div>
+          <div class="ai-msg bot">Pulled <b>42 sources</b> with summaries and publish dates into your evidence sheet, drafted the gov case with source links, and flagged <b>3 weak links</b> the opp will attack. Want me to set up an opposition agent to spar?</div>
+          <div class="ai-msg bot">I'll build the <b>rebuttal matrix</b> as a sheet — every opp argument mapped to your best response + source.</div>
+        </aside>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- STRIP -->
+<div class="strip wrap">
+  <p>Built for debaters, researchers, analysts & policy teams</p>
+  <div class="strip-row">
+    <span>Competitive debate</span>
+    <span>Mock trial</span>
+    <span>Policy research</span>
+    <span>Litigation prep</span>
+    <span>Consulting</span>
+    <span>Journalism</span>
+  </div>
+</div>
+
+<!-- PROBLEM -->
+<section>
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">The old way is broken</div>
+      <h2>Prep shouldn't mean <span class="hl">30 tabs and a panic the night before.</span></h2>
+      <p>Research lives in your browser. Notes live in a doc. The case file lives in someone's head. Nothing talks to each other — and the round starts in twelve hours.</p>
+    </div>
+    <div class="prob-grid">
+      <div class="prob-card fade">
+        <div class="x">✕</div>
+        <h3>Research is scattered</h3>
+        <p>Forty open tabs, half-copied quotes, and sources you can't relocate when the judge asks where the stat came from.</p>
+      </div>
+      <div class="prob-card fade">
+        <div class="x">✕</div>
+        <h3>Writing the brief is slow</h3>
+        <p>You spend the prep window formatting and citing instead of thinking about strategy and the actual clash points.</p>
+      </div>
+      <div class="prob-card fade">
+        <div class="x">✕</div>
+        <h3>You never see the counter</h3>
+        <p>You walk in having only argued your own side. The opponent's best line lands cold — and you've got nothing rehearsed.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section id="how" style="background: var(--s1); border-block: 1px solid var(--border);">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">How it works</div>
+      <h2>From a one-line motion to a <span class="hl">round-ready case file</span></h2>
+      <p>PageSpace isn't a chatbot you copy answers out of. It's a workspace where AI agents do the research and drafting <em>inside</em> your documents, using real tools.</p>
+    </div>
+    <div class="flow">
+      <div class="step fade">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <h3>Drop the motion into a drive</h3>
+          <p>Paste the resolution, the brief, or the research question into a page. Ask your agent to define the terms, scope the clash, and outline what you need to win both sides — it reads everything already in the drive for context.</p>
+          <div class="tags"><span class="tag">create_page</span><span class="tag">read_page</span><span class="tag">multi_drive_search</span></div>
+        </div>
+      </div>
+      <div class="step fade">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <h3>The agent researches the web</h3>
+          <p>It runs live web searches, fetches the full text of the strongest sources as clean markdown, and writes them into a structured evidence sheet — titles, summaries, and publish dates, every claim traceable to a link.</p>
+          <div class="tags"><span class="tag">web_search</span><span class="tag">web_fetch</span><span class="tag">edit_sheet_cells</span></div>
+        </div>
+      </div>
+      <div class="step fade">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <h3>Your brief drafts in the editor — then you sharpen it</h3>
+          <p>The case file writes straight into a Document page: opening, contentions, evidence, and anticipated rebuttals, with source links inline. You edit live; refresh protection means the AI never clobbers the line you're working on.</p>
+          <div class="tags"><span class="tag">create_page</span><span class="tag">replace_lines</span></div>
+        </div>
+      </div>
+      <div class="step fade">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <h3>Spar against an opposition agent</h3>
+          <p>Spin up a second AI_CHAT agent, brief it to argue the other side, and consult it with <span style="font-family:var(--mono);font-size:0.85em;color:var(--cyan)">ask_agent</span>. It attacks your weakest links; you map every counter into a rebuttal matrix sheet before the round.</p>
+          <div class="tags"><span class="tag">update_agent_config</span><span class="tag">ask_agent</span><span class="tag">edit_sheet_cells</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">The toolkit</div>
+      <h2>Everything prep needs, <span class="hl">in one workspace</span></h2>
+      <p>Nine page types, 33+ AI tools, and 100+ models — composed for the way researchers and debaters actually work.</p>
+    </div>
+    <div class="feat-grid">
+      <div class="feat fade">
+        <div class="ic">🔎</div>
+        <h3>Web research, built in</h3>
+        <p>Agents run live <span class="ttag">web_search</span> and pull full source text with <span class="ttag">web_fetch</span> — then search across your own drives with glob, regex, and multi-drive search.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">📝</div>
+        <h3>Brief writing in the editor</h3>
+        <p>Agents draft cases and memos straight into Document pages with source links inline, and make precise line-level edits with <span class="ttag">replace_lines</span>.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">🥊</div>
+        <h3>Opposition agents</h3>
+        <p>Every AI Chat page is a configurable agent. Brief one to argue the other side and consult it with <span class="ttag">ask_agent</span> — your case sparred before the round.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">🗂️</div>
+        <h3>One drive, the whole case</h3>
+        <p>Documents, sheets, code, task lists, channels, and files live together in a drive — your case stays connected, searchable, and shared.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">📊</div>
+        <h3>Evidence & rebuttal sheets</h3>
+        <p>Sheet pages the AI reads and writes via <span class="ttag">edit_sheet_cells</span> — quotes, stats, sources, and your counter to every opposition line, query-ready.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">👥</div>
+        <h3>Team in real time</h3>
+        <p>Your partner, coach, or research team works alongside the agents in the same drive — real-time collaboration plus channels for the back-and-forth.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">🧠</div>
+        <h3>100+ models</h3>
+        <p>Route to Anthropic, OpenAI, Google, xAI, OpenRouter, or a local Ollama model per task — the right brain for research, drafting, or sparring.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">🔌</div>
+        <h3>MCP & integrations</h3>
+        <p>PageSpace speaks the Model Context Protocol, and connects calendar and drive integrations so prep slots into the rest of your workflow.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">🔒</div>
+        <h3>Yours to keep</h3>
+        <p>Cloud, self-hosted on-prem, desktop, or mobile. Passwordless passkey auth and on-prem mode keep sensitive research under your control.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- BRIEF SPLIT -->
+<section id="brief" style="background: var(--s1); border-block: 1px solid var(--border);">
+  <div class="wrap split">
+    <div class="fade">
+      <div class="kicker">Case files</div>
+      <h2>Both sides of the motion, <span class="hl">argued for you.</span></h2>
+      <p class="lead">PageSpace never builds a one-sided brief. It researches the government and opposition cases in parallel, maps every clash, and hands you a matrix of attacks and the best response to each — so you're ready no matter which side you draw.</p>
+      <div class="check-list">
+        <div class="check"><span class="c">✓</span><div><h4>Sourced from the live web</h4><p>Claims come from <span class="ttag">web_search</span> + <span class="ttag">web_fetch</span> with links back to the original, so you can verify and cite on the floor.</p></div></div>
+        <div class="check"><span class="c">✓</span><div><h4>Rebuttals in a sheet</h4><p>The AI fills a Sheet page pairing each opposition argument with your strongest counter and the evidence behind it.</p></div></div>
+        <div class="check"><span class="c">✓</span><div><h4>You stay the author</h4><p>Edit anything live — refresh protection means the AI never overwrites the line you're working on.</p></div></div>
+      </div>
+    </div>
+    <div class="brief-card fade">
+      <div class="bh">
+        <span class="t">Rebuttal Matrix</span>
+        <span class="m">Sheet page · 16 clashes</span>
+      </div>
+      <div class="bb">
+        <div class="arg-row">
+          <div class="arg-col pro">
+            <h5>Our line</h5>
+            <div class="arg-item"><b>Bans protect civil liberties</b> from mass surveillance creep.<span class="src">[1] EFF 2024</span></div>
+            <div class="arg-item"><b>Tech is provably biased</b> — high false-positive rates on minorities.<span class="src">[7] Gender Shades</span></div>
+            <div class="arg-item"><b>No consent framework</b> exists for public biometric capture.<span class="src">[3] GDPR Art. 9</span></div>
+          </div>
+          <div class="arg-col con">
+            <h5>Their attack → our counter</h5>
+            <div class="arg-item"><b>"It stops crime"</b> → reframe: accuracy too low to be just; harms outweigh.<span class="src">[12] NIST FRVT</span></div>
+            <div class="arg-item"><b>"Opt-in is enough"</b> → public space = no meaningful opt-out.<span class="src">[3] GDPR Art. 9</span></div>
+            <div class="arg-item"><b>"Regulate, don't ban"</b> → regulation hasn't curbed deployment to date.<span class="src">[9] AINow 2023</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- STATS -->
+<section>
+  <div class="wrap">
+    <div class="stats">
+      <div class="stat fade"><div class="n">9</div><div class="l">Page types — docs, sheets, chat & more</div></div>
+      <div class="stat fade"><div class="n">33+</div><div class="l">Real AI tools, not just chat</div></div>
+      <div class="stat fade"><div class="n">100+</div><div class="l">Models across 6 providers</div></div>
+      <div class="stat fade"><div class="n">1</div><div class="l">Drive that holds the whole case</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- USE CASES -->
+<section id="usecases" style="background: var(--s1); border-block: 1px solid var(--border);">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">Who it's for</div>
+      <h2>One workspace, <span class="hl">many kinds of clash</span></h2>
+      <p>If your work is winning an argument with evidence, PageSpace was built for you.</p>
+    </div>
+    <div class="uc-grid">
+      <div class="uc fade"><div class="ic">🏆</div><h3>Competitive debaters</h3><p>Prep both sides of any motion in an evening — definitions, contentions, evidence, and a rebuttal matrix ready for the round.</p></div>
+      <div class="uc fade"><div class="ic">⚖️</div><h3>Mock trial & litigation</h3><p>Build case theory, marshal exhibits, and rehearse cross-examination against an AI that argues the other side.</p></div>
+      <div class="uc fade"><div class="ic">📑</div><h3>Policy & think tanks</h3><p>Auto-research a question, draft a cited brief, and pressure-test the recommendation before it reaches a decision-maker.</p></div>
+      <div class="uc fade"><div class="ic">📰</div><h3>Researchers & journalists</h3><p>Chase a story across dozens of sources, keep every claim traceable, and write the piece in the same place you gathered it.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- QUOTE -->
+<section>
+  <div class="wrap quote-wrap fade">
+    <div class="q">"I used to spend the night before a round drowning in tabs. Now I spend it <span class="hl">sparring against the case</span> — because PageSpace already built it."</div>
+    <div class="by"><b>Maya R.</b> · National circuit debater</div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section id="cta">
+  <div class="wrap">
+    <div class="cta fade">
+      <h2>Prep your first motion tonight.</h2>
+      <p>Drop in a resolution and watch PageSpace research it, brief it, and spar with you — free, no card required.</p>
+      <div class="hero-cta" style="margin-bottom: 14px;">
+        <a href="#" class="btn btn-primary btn-lg">Start prepping free</a>
+        <a href="#" class="btn btn-ghost btn-lg">Book a walkthrough</a>
+      </div>
+      <p class="micro">Cloud · self-hosted · desktop · mobile — your research, your infrastructure.</p>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="wrap">
+    <div class="foot-inner">
+      <div class="foot-brand">
+        <div class="logo"><span class="mark">P</span> PageSpace</div>
+        <p>The AI-native knowledge workspace where humans and agents research, write, and argue — together.</p>
+      </div>
+      <div class="foot-cols">
+        <div class="foot-col">
+          <h5>Product</h5>
+          <a href="#how">How it works</a>
+          <a href="#features">Features</a>
+          <a href="#brief">Case files</a>
+          <a href="#usecases">Use cases</a>
+        </div>
+        <div class="foot-col">
+          <h5>Workspace</h5>
+          <a href="#">Documents</a>
+          <a href="#">Sheets & canvas</a>
+          <a href="#">AI agents</a>
+          <a href="#">MCP integrations</a>
+        </div>
+        <div class="foot-col">
+          <h5>Deploy</h5>
+          <a href="#">Cloud</a>
+          <a href="#">Self-hosted</a>
+          <a href="#">Desktop</a>
+          <a href="#">Mobile</a>
+        </div>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <span>© 2026 PageSpace · pagespace.ai</span>
+      <span>Prototype · debate-prep landing</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // scroll reveal
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach((e) => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
+  }, { threshold: 0.12 });
+  document.querySelectorAll('.fade').forEach((el) => io.observe(el));
+</script>
+</body>
+</html>

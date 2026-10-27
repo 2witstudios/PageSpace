@@ -1,0 +1,183 @@
+import { describe, it, expect } from 'vitest';
+import { adaptSandboxHandleToExecutableSandbox, createExecClientFromSandboxHost } from '../sandbox-host-adapter';
+import { SPRITE_SANDBOX_CAPABILITIES, type SandboxHandle, type SandboxHost } from '../../sandbox-host';
+import { SANDBOX_EGRESS_ALLOWLIST } from '../../execution-policy';
+
+const options = { egressAllowlist: SANDBOX_EGRESS_ALLOWLIST };
+const substrate = { kind: 'sprite' as const };
+
+function fakeHandle(over: Partial<SandboxHandle> = {}): SandboxHandle {
+  return {
+    capabilities: SPRITE_SANDBOX_CAPABILITIES,
+    sandboxId: 'm1',
+    spriteInstanceId: null,
+    exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    writeFiles: async () => {},
+    readFile: async () => null,
+    createCheckpoint: async () => {},
+    stream: async () => {
+      throw new Error('not used by this adapter');
+    },
+    listStreams: async () => [],
+    killSession: async () => {},
+    services: {
+      create: async () => {},
+      list: async () => [],
+      get: async () => null,
+      start: async () => {},
+      stop: async () => {},
+      remove: async () => {},
+    },
+    urlInfo: async () => ({ url: null, auth: 'unknown' }),
+    setUrlAuth: async () => {},
+    powerState: async () => 'unknown' as const,
+    ...over,
+  };
+}
+
+function makeHost(over: Partial<SandboxHost> = {}): { host: SandboxHost; calls: Record<string, unknown[]> } {
+  const calls: Record<string, unknown[]> = { provision: [], attach: [], kill: [] };
+  const host: SandboxHost = {
+    provision: async (args) => {
+      calls.provision.push(args);
+      return fakeHandle();
+    },
+    attach: async (args) => {
+      calls.attach.push(args);
+      return fakeHandle();
+    },
+    kill: async (args) => {
+      calls.kill.push(args);
+    },
+    ...over,
+  };
+  return { host, calls };
+}
+
+describe('createExecClientFromSandboxHost', () => {
+  it('given getOrCreate, should call host.provision with the given substrate and adapt the returned handle', async () => {
+    const { host, calls } = makeHost();
+    const client = createExecClientFromSandboxHost(host, substrate);
+
+    const handle = await client.getOrCreate({ name: 'k', options });
+    expect(calls.provision).toEqual([{ name: 'k', substrate, options }]);
+    expect(handle.sandboxId).toBe('m1');
+  });
+
+  it('given get on a live machine, should call host.attach and adapt the returned handle', async () => {
+    const { host, calls } = makeHost();
+    const client = createExecClientFromSandboxHost(host, substrate);
+
+    const handle = await client.get({ sandboxId: 'm1' });
+    expect(calls.attach).toEqual([{ sandboxId: 'm1' }]);
+    expect(handle?.sandboxId).toBe('m1');
+  });
+
+  it('given get on a vanished machine, should return null', async () => {
+    const { host } = makeHost({ attach: async () => null });
+    const client = createExecClientFromSandboxHost(host, substrate);
+
+    const handle = await client.get({ sandboxId: 'gone' });
+    expect(handle).toBeNull();
+  });
+
+  it('given stop, should call host.kill with the sandboxId', async () => {
+    const { host, calls } = makeHost();
+    const client = createExecClientFromSandboxHost(host, substrate);
+
+    await client.stop({ sandboxId: 'm1' });
+    expect(calls.kill).toEqual([{ sandboxId: 'm1' }]);
+  });
+
+  it('given the adapted handle, should delegate runCommand/writeFiles/readFileToBuffer to exec/writeFiles/readFile', async () => {
+    const seen: { exec: unknown[]; writeFiles: unknown[]; readFile: unknown[] } = {
+      exec: [],
+      writeFiles: [],
+      readFile: [],
+    };
+    const { host } = makeHost({
+      provision: async () =>
+        fakeHandle({
+          exec: async (args) => {
+            seen.exec.push(args);
+            return { exitCode: 0, stdout: 'ok', stderr: '' };
+          },
+          writeFiles: async (files) => {
+            seen.writeFiles.push(files);
+          },
+          readFile: async (args) => {
+            seen.readFile.push(args);
+            return Buffer.from('contents');
+          },
+        }),
+    });
+    const client = createExecClientFromSandboxHost(host, substrate);
+    const handle = await client.getOrCreate({ name: 'k', options });
+
+    const result = await handle.runCommand({ cmd: 'echo', args: ['hi'] });
+    await handle.writeFiles([{ path: '/a', content: 'x' }]);
+    const buf = await handle.readFileToBuffer({ path: '/a' });
+
+    expect(result.stdout).toBe('ok');
+    expect(seen.exec).toEqual([{ cmd: 'echo', args: ['hi'] }]);
+    expect(seen.writeFiles).toEqual([[{ path: '/a', content: 'x' }]]);
+    expect(seen.readFile).toEqual([{ path: '/a' }]);
+    expect(buf?.toString('utf8')).toBe('contents');
+  });
+
+  it('given the adapted handle, should delegate createCheckpoint to the underlying handle', async () => {
+    const seen: Array<string> = [];
+    const { host } = makeHost({
+      provision: async () =>
+        fakeHandle({
+          createCheckpoint: async (comment) => {
+            seen.push(comment);
+          },
+        }),
+    });
+    const client = createExecClientFromSandboxHost(host, substrate);
+    const handle = await client.getOrCreate({ name: 'k', options });
+
+    await handle.createCheckpoint('pagespace-pre-agent-turn-1');
+    expect(seen).toEqual(['pagespace-pre-agent-turn-1']);
+  });
+});
+
+describe('adaptSandboxHandleToExecutableSandbox — the Sprite INSTANCE id must survive the round-trip', () => {
+  it('carries spriteInstanceId through, because dropping it silently disables every identity guard', () => {
+    // This adapter IS the production session client (`createProductionSpritesSandboxClient`),
+    // so anything it drops never reaches `machine_sessions`. It used to drop this
+    // one, which meant every session row stored NULL, every compare-and-swap fell
+    // back to comparing the (REUSED) sprite name, and the ABA protection was inert
+    // — while the whole codebase typechecked and every test passed. `sandboxId` is
+    // a name, not an identity; only this field says WHICH VM.
+    const sandbox = adaptSandboxHandleToExecutableSandbox(fakeHandle({ spriteInstanceId: 'inst-42' }));
+
+    expect(sandbox.spriteInstanceId).toBe('inst-42');
+  });
+
+  it('reports null (never undefined) when the platform gave no instance id', () => {
+    const sandbox = adaptSandboxHandleToExecutableSandbox(fakeHandle({ spriteInstanceId: null }));
+
+    expect(sandbox.spriteInstanceId).toBeNull();
+  });
+});
+
+/**
+ * The capability the CHECKPOINT gate reads (`tool-runners.ts`) arrives on the
+ * `ExecutableSandbox` only because this adapter carries it across. Dropping it
+ * here is invisible in exactly the way dropping `spriteInstanceId` used to be:
+ * every call still works while the gate loses its only structural signal that
+ * a substrate cannot snapshot its filesystem (invariant 12), and a destructive
+ * agent batch then runs unprotected.
+ */
+describe('adaptSandboxHandleToExecutableSandbox — advertised capabilities', () => {
+  it("should carry the handle's capabilities through, verbatim", () => {
+    const local = { exec: true, fs: true, stream: false, checkpoint: false, preview: false, services: false } as const;
+    expect(adaptSandboxHandleToExecutableSandbox(fakeHandle({ capabilities: local })).capabilities).toEqual(local);
+  });
+
+  it('should carry a Sprite handle\'s full set too — not a hard-coded default that would mask a narrower substrate', () => {
+    expect(adaptSandboxHandleToExecutableSandbox(fakeHandle()).capabilities).toEqual(SPRITE_SANDBOX_CAPABILITIES);
+  });
+});

@@ -1,8 +1,14 @@
 import { NextResponse } from 'next/server';
-import { db, connections, users, userProfiles, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { userProfiles } from '@pagespace/db/schema/members'
+import { connections } from '@pagespace/db/schema/social';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
-import { createNotification } from '@pagespace/lib';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
+import { createNotification, markConnectionRequestActioned } from '@pagespace/lib/notifications/notifications';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -19,6 +25,8 @@ export async function PATCH(
     const { connectionId } = await context.params;
     const body = await request.json();
     const { action } = body;
+
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'connection', resourceId: connectionId, details: { action } });
 
     if (!['accept', 'reject', 'block', 'unblock'].includes(action)) {
       return NextResponse.json(
@@ -104,7 +112,9 @@ export async function PATCH(
           .where(eq(users.id, userId))
           .limit(1);
 
-        const rejectUserName = rejectUser?.displayName || rejectUser?.name || 'Someone';
+        // Decrypt PII at the edge (GDPR #965): the actor name is snapshotted into
+        // the notification message/metadata. Profile displayName stays plaintext.
+        const rejectUserName = rejectUser?.displayName || (await decryptField(rejectUser?.name)) || 'Someone';
 
         // Send rejection notification (broadcast via Socket.IO)
         await createNotification({
@@ -117,6 +127,10 @@ export async function PATCH(
           },
           triggeredByUserId: userId,
         });
+
+        await markConnectionRequestActioned(connectionId, userId, 'rejected');
+
+        auditRequest(request, { eventType: 'data.write', userId, resourceType: 'connection', resourceId: connectionId, details: { action: 'reject' } });
 
         return NextResponse.json({ success: true });
 
@@ -143,6 +157,9 @@ export async function PATCH(
         }
         // Reset to pending or delete based on your preference
         await db.delete(connections).where(eq(connections.id, connectionId));
+
+        auditRequest(request, { eventType: 'data.write', userId, resourceType: 'connection', resourceId: connectionId, details: { action: 'unblock' } });
+
         return NextResponse.json({ success: true });
     }
 
@@ -152,6 +169,11 @@ export async function PATCH(
       .set(updateData)
       .where(eq(connections.id, connectionId))
       .returning();
+
+    // Mark the CONNECTION_REQUEST notification as actioned for the accepting user
+    if (action === 'accept') {
+      await markConnectionRequestActioned(connectionId, userId, 'accepted');
+    }
 
     // Send notification if needed
     if (notificationType && notifyUserId) {
@@ -166,7 +188,9 @@ export async function PATCH(
         .where(eq(users.id, userId))
         .limit(1);
 
-      const actionUserName = actionUser?.displayName || actionUser?.name || 'Someone';
+      // Decrypt PII at the edge (GDPR #965): the actor name is snapshotted into
+      // the notification message/metadata. Profile displayName stays plaintext.
+      const actionUserName = actionUser?.displayName || (await decryptField(actionUser?.name)) || 'Someone';
 
       await createNotification({
         userId: notifyUserId!,
@@ -184,6 +208,8 @@ export async function PATCH(
         triggeredByUserId: userId,
       });
     }
+
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'connection', resourceId: connectionId, details: { action } });
 
     return NextResponse.json({ connection: updatedConnection });
   } catch (error) {
@@ -206,6 +232,8 @@ export async function DELETE(
     const userId = auth.userId;
 
     const { connectionId } = await context.params;
+
+    auditRequest(request, { eventType: 'data.delete', userId, resourceType: 'connection', resourceId: connectionId });
 
     // Get the connection
     const [connection] = await db
@@ -231,6 +259,8 @@ export async function DELETE(
 
     // Delete the connection
     await db.delete(connections).where(eq(connections.id, connectionId));
+
+    auditRequest(request, { eventType: 'data.delete', userId, resourceType: 'connection', resourceId: connectionId });
 
     return NextResponse.json({ success: true });
   } catch (error) {

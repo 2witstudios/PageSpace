@@ -1,19 +1,18 @@
-import { users, db, eq } from '@pagespace/db';
+import { parseVerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
+import { authRepository } from '@/lib/repositories/auth-repository';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
-import {
-  validateDeviceToken,
-  updateDeviceTokenActivity,
-  generateDeviceToken,
-  generateCSRFToken,
-} from '@pagespace/lib/server';
+import { validateDeviceToken, updateDeviceTokenActivity, generateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
-} from '@pagespace/lib/security';
-import { hashToken, getTokenPrefix, sessionService } from '@pagespace/lib/auth';
+} from '@pagespace/lib/security/distributed-rate-limit';
+import { hashToken, getTokenPrefix } from '@pagespace/lib/auth/token-utils';
+import { sessionService } from '@pagespace/lib/auth/session-service';
 import { z } from 'zod/v4';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { securityAudit } from '@pagespace/lib/audit/security-audit';
 import { getClientIP, appendSessionCookie } from '@/lib/auth';
 
 const refreshSchema = z.object({
@@ -75,10 +74,7 @@ export async function POST(req: Request) {
     }
 
     // Fetch user
-    const user = await db.query.users.findFirst({
-      where: eq(users.id, deviceRecord.userId),
-      columns: { id: true, tokenVersion: true, role: true }, // Only needed fields
-    });
+    const user = await authRepository.findUserById(deviceRecord.userId);
 
     if (!user) {
       return Response.json({ error: 'Invalid or expired device token.' }, { status: 401 });
@@ -134,10 +130,15 @@ export async function POST(req: Request) {
 
     // Create new session token (opaque, stored in DB)
     const sessionToken = await sessionService.createSession({
+      authentication: parseVerifiedAuthentication({
+        authenticatedAtMs: deviceRecord.authenticatedAt?.getTime(),
+        assurance: deviceRecord.authenticationAssurance,
+      }, Date.now()),
       userId: user.id,
       type: 'user',
       scopes: ['*'],
       expiresInMs: 90 * 24 * 60 * 60 * 1000, // 90 days for mobile
+      deviceId,
       createdByService: 'mobile-refresh',
       createdByIp: normalizedIP,
     });
@@ -150,6 +151,9 @@ export async function POST(req: Request) {
     }
 
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
+    securityAudit.logTokenCreated(user.id, 'mobile_refresh', normalizedIP ?? 'unknown').catch((error) => {
+      loggers.security.warn('[MobileRefresh] audit logTokenCreated failed', { error: error instanceof Error ? error.message : String(error), userId: user.id });
+    });
 
     // Reset rate limit on successful refresh
     try {

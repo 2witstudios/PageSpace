@@ -11,13 +11,24 @@ import { PATCH, DELETE } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 // Mock the repository seam (boundary)
-vi.mock('@/lib/repositories/chat-message-repository', () => ({
-  chatMessageRepository: {
+// The reader cutover (Phase 4 PR 12) folded `chat-message-repository` into
+// this module, so the read seam (`getMessageById`) and the pure
+// `processMessageContentUpdate` are mocked here alongside the writes.
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
     getMessageById: vi.fn(),
-    updateMessageContent: vi.fn(),
-    softDeleteMessage: vi.fn(),
+    editPageMessage: vi.fn().mockResolvedValue(undefined),
+    softDeletePageMessage: vi.fn().mockResolvedValue(undefined),
+    editGlobalMessage: vi.fn().mockResolvedValue(undefined),
+    softDeleteGlobalMessage: vi.fn().mockResolvedValue(undefined),
   },
   processMessageContentUpdate: vi.fn((existing, newContent) => newContent),
+}));
+
+vi.mock('@/lib/websocket/broadcast-triggered-by', () => ({
+  resolveTriggeredBy: vi
+    .fn()
+    .mockResolvedValue({ userId: 'user_123', displayName: 'Tester', browserSessionId: '' }),
 }));
 
 // Mock auth (boundary)
@@ -25,26 +36,26 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
   checkMCPPageScope: vi.fn(),
-}));
-
-// Hoisted mocks for cache invalidation testing
-const { mockInvalidateConversation } = vi.hoisted(() => ({
-  mockInvalidateConversation: vi.fn().mockResolvedValue(undefined),
+  canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
+    const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
+    return canUserEditPage(credentialActor(auth.userId, null), pageId);
+  }),
 }));
 
 // Mock permissions (boundary)
-vi.mock('@pagespace/lib/server', () => ({
-  canUserEditPage: vi.fn(),
-  conversationCache: {
-    invalidateConversation: mockInvalidateConversation,
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
+    canUserEditPage: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
+    api: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
   },
-  loggers: {
-    api: {
-      info: vi.fn(),
-      error: vi.fn(),
-      warn: vi.fn(),
-    },
-  },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
 // Mock logging mask (boundary)
@@ -59,7 +70,7 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 }));
 
 // Mock database for page lookup (boundary)
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       pages: {
@@ -67,15 +78,21 @@ vi.mock('@pagespace/db', () => ({
       },
     },
   },
-  pages: {},
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
 }));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: {},
+}));
 
-import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage, loggers } from '@pagespace/lib/server';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // Type for page lookup mock (matches Drizzle schema)
 type PageType = 'DOCUMENT' | 'FOLDER' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'FILE' | 'SHEET' | 'TASK_LIST' | 'CODE';
@@ -105,6 +122,12 @@ type PageLookupResult = {
   visibleToGlobalAssistant: boolean;
   includePageTree: boolean;
   pageTreeScope: PageTreeScope | null;
+  toolExposureMode: 'upfront' | 'search';
+  userScopedAccess: boolean;
+  sandboxEnabled: boolean;
+  defaultEnvId: string | null;
+  siteMode: boolean;
+  description: string | null;
   fileSize: number | null;
   mimeType: string | null;
   originalFileName: string | null;
@@ -120,6 +143,8 @@ type PageLookupResult = {
   originalParentId: string | null;
   contentMode: 'html' | 'markdown';
   excludeFromSearch: boolean;
+  isPrivate: boolean;
+  createdBy: string | null;
 };
 
 const mockPageLookup = (overrides: Partial<PageLookupResult> = {}): PageLookupResult => ({
@@ -145,6 +170,12 @@ const mockPageLookup = (overrides: Partial<PageLookupResult> = {}): PageLookupRe
   visibleToGlobalAssistant: true,
   includePageTree: false,
   pageTreeScope: 'children',
+  toolExposureMode: 'upfront',
+  userScopedAccess: false,
+  sandboxEnabled: false,
+  defaultEnvId: null,
+  siteMode: false,
+  description: null,
   fileSize: null,
   mimeType: null,
   originalFileName: null,
@@ -160,6 +191,8 @@ const mockPageLookup = (overrides: Partial<PageLookupResult> = {}): PageLookupRe
   originalParentId: null,
   contentMode: 'html',
   excludeFromSearch: false,
+  isPrivate: false,
+  createdBy: null,
   ...overrides,
 });
 
@@ -187,6 +220,7 @@ const mockChatMessage = (overrides: Partial<{
   content: string;
   userId: string | null;
   messageType: 'standard' | 'todo_list';
+  status: 'streaming' | 'complete' | 'interrupted';
 }> = {}) => ({
   id: overrides.id || mockMessageId,
   pageId: overrides.pageId || mockPageId,
@@ -200,6 +234,8 @@ const mockChatMessage = (overrides: Partial<{
   editedAt: null,
   toolCalls: null,
   toolResults: null,
+  source: null,
+  status: overrides.status || 'complete' as const,
 });
 
 const createContext = (messageId: string) => ({
@@ -227,10 +263,10 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
     vi.mocked(canUserEditPage).mockResolvedValue(true);
 
     // Default: message exists
-    vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(mockChatMessage());
+    vi.mocked(messageRepository.getMessageById).mockResolvedValue(mockChatMessage());
 
     // Default: update succeeds
-    vi.mocked(chatMessageRepository.updateMessageContent).mockResolvedValue(undefined);
+    vi.mocked(messageRepository.editPageMessage).mockResolvedValue(undefined);
 
     // Default: page lookup for driveId
     vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPageLookup());
@@ -293,7 +329,7 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
 
   describe('resource not found', () => {
     it('should return 404 when message does not exist', async () => {
-      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(null);
+      vi.mocked(messageRepository.getMessageById).mockResolvedValue(null);
 
       const request = createPatchRequest(mockMessageId, { content: 'Updated' });
       const context = createContext(mockMessageId);
@@ -303,6 +339,20 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
 
       expect(response.status).toBe(404);
       expect(body.error).toBe('Message not found');
+    });
+
+    it('should return 409 when the message is a still-streaming placeholder', async () => {
+      vi.mocked(messageRepository.getMessageById).mockResolvedValue(mockChatMessage({ status: 'streaming' }));
+
+      const request = createPatchRequest(mockMessageId, { content: 'Updated' });
+      const context = createContext(mockMessageId);
+
+      const response = await PATCH(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(409);
+      expect(body.error).toMatch(/still generating/i);
+      expect(messageRepository.editPageMessage).not.toHaveBeenCalled();
     });
   });
 
@@ -326,7 +376,7 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
 
       await PATCH(request, context);
 
-      expect(canUserEditPage).toHaveBeenCalledWith(mockUserId, mockPageId);
+      expect(canUserEditPage).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), mockPageId);
     });
 
     it('should log warning when permission denied', async () => {
@@ -339,7 +389,10 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
 
       expect(loggers.api.warn).toHaveBeenCalledWith(
         'Edit message permission denied',
-        expect.any(Object)
+        expect.objectContaining({
+          messageId: '***_123',
+          userId: '***_123',
+        })
       );
     });
   });
@@ -363,16 +416,15 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
 
       await PATCH(request, context);
 
-      expect(chatMessageRepository.updateMessageContent).toHaveBeenCalledWith(
-        mockMessageId,
-        'Updated content'
+      expect(messageRepository.editPageMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: mockMessageId, updatedContent: 'Updated content' })
       );
     });
 
     it('should call processMessageContentUpdate with existing and new content', async () => {
-      const { processMessageContentUpdate } = await import('@/lib/repositories/chat-message-repository');
+      const { processMessageContentUpdate } = await import('@/lib/repositories/message-repository');
       const existingMessage = mockChatMessage({ content: 'Existing content' });
-      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(existingMessage);
+      vi.mocked(messageRepository.getMessageById).mockResolvedValue(existingMessage);
 
       const request = createPatchRequest(mockMessageId, { content: 'New content' });
       const context = createContext(mockMessageId);
@@ -390,101 +442,17 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
 
       expect(loggers.api.info).toHaveBeenCalledWith(
         'Message edited successfully',
-        expect.any(Object)
+        expect.objectContaining({
+          messageId: '***_123',
+          userId: '***_123',
+        })
       );
-    });
-  });
-
-  describe('cache invalidation', () => {
-    it('should invalidate conversation cache after successful edit', async () => {
-      const message = mockChatMessage();
-      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(message);
-
-      const request = createPatchRequest(mockMessageId, { content: 'Updated content' });
-      const context = createContext(mockMessageId);
-
-      await PATCH(request, context);
-
-      expect(mockInvalidateConversation).toHaveBeenCalledWith(
-        message.pageId,
-        message.conversationId
-      );
-    });
-
-    it('should invalidate cache with correct pageId and conversationId', async () => {
-      const specificMessage = mockChatMessage({
-        pageId: 'specific_page_123',
-      });
-      // Override conversationId via full mock
-      const fullMessage = { ...specificMessage, conversationId: 'specific_conv_456' };
-      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(fullMessage);
-
-      const request = createPatchRequest(mockMessageId, { content: 'Updated' });
-      const context = createContext(mockMessageId);
-
-      await PATCH(request, context);
-
-      expect(mockInvalidateConversation).toHaveBeenCalledWith(
-        'specific_page_123',
-        'specific_conv_456'
-      );
-    });
-
-    it('should NOT invalidate cache when authentication fails', async () => {
-      vi.mocked(isAuthError).mockReturnValue(true);
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
-
-      const request = createPatchRequest(mockMessageId, { content: 'Updated' });
-      const context = createContext(mockMessageId);
-
-      await PATCH(request, context);
-
-      expect(mockInvalidateConversation).not.toHaveBeenCalled();
-    });
-
-    it('should NOT invalidate cache when message not found', async () => {
-      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(null);
-
-      const request = createPatchRequest(mockMessageId, { content: 'Updated' });
-      const context = createContext(mockMessageId);
-
-      await PATCH(request, context);
-
-      expect(mockInvalidateConversation).not.toHaveBeenCalled();
-    });
-
-    it('should NOT invalidate cache when permission denied', async () => {
-      vi.mocked(canUserEditPage).mockResolvedValue(false);
-
-      const request = createPatchRequest(mockMessageId, { content: 'Updated' });
-      const context = createContext(mockMessageId);
-
-      await PATCH(request, context);
-
-      expect(mockInvalidateConversation).not.toHaveBeenCalled();
-    });
-
-    it('should invalidate cache before activity logging', async () => {
-      const callOrder: string[] = [];
-      mockInvalidateConversation.mockImplementation(async () => {
-        callOrder.push('invalidate');
-      });
-      vi.mocked(logMessageActivity).mockImplementation(() => {
-        callOrder.push('logActivity');
-      });
-
-      const request = createPatchRequest(mockMessageId, { content: 'Updated' });
-      const context = createContext(mockMessageId);
-
-      await PATCH(request, context);
-
-      expect(callOrder).toEqual(['invalidate', 'logActivity']);
     });
   });
 
   describe('error handling', () => {
     it('should return 500 when repository throws', async () => {
-      vi.mocked(chatMessageRepository.updateMessageContent).mockRejectedValue(
+      vi.mocked(messageRepository.editPageMessage).mockRejectedValue(
         new Error('Database error')
       );
 
@@ -496,14 +464,14 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to edit message');
-      expect(loggers.api.error).toHaveBeenCalled();
+      expect(loggers.api.error).toHaveBeenCalledWith('Error editing message', expect.objectContaining({ message: 'Database error' }));
     });
   });
 
   describe('activity logging boundary', () => {
     it('should log message_update with content diff on successful PATCH', async () => {
       const existingMessage = mockChatMessage({ content: 'Original content' });
-      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(existingMessage);
+      vi.mocked(messageRepository.getMessageById).mockResolvedValue(existingMessage);
 
       const request = createPatchRequest(mockMessageId, { content: 'Updated content' });
       const context = createContext(mockMessageId);
@@ -551,7 +519,7 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
     });
 
     it('should NOT log activity when message not found', async () => {
-      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(null);
+      vi.mocked(messageRepository.getMessageById).mockResolvedValue(null);
 
       const request = createPatchRequest(mockMessageId, { content: 'Updated' });
       const context = createContext(mockMessageId);
@@ -586,8 +554,13 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
         expect.objectContaining({
           driveId: null,
         }),
-        expect.any(Object),
-        expect.any(Object)
+        expect.objectContaining({
+          actorEmail: 'test@example.com',
+        }),
+        expect.objectContaining({
+          previousContent: 'Hello, AI!',
+          newContent: 'Updated',
+        })
       );
     });
   });
@@ -613,10 +586,10 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
     vi.mocked(canUserEditPage).mockResolvedValue(true);
 
     // Default: message exists
-    vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(mockChatMessage());
+    vi.mocked(messageRepository.getMessageById).mockResolvedValue(mockChatMessage());
 
     // Default: delete succeeds
-    vi.mocked(chatMessageRepository.softDeleteMessage).mockResolvedValue(undefined);
+    vi.mocked(messageRepository.softDeletePageMessage).mockResolvedValue(undefined);
 
     // Default: page lookup for driveId
     vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPageLookup());
@@ -644,7 +617,7 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
 
   describe('resource not found', () => {
     it('should return 404 when message does not exist', async () => {
-      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(null);
+      vi.mocked(messageRepository.getMessageById).mockResolvedValue(null);
 
       const request = createDeleteRequest(mockMessageId);
       const context = createContext(mockMessageId);
@@ -654,6 +627,20 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
 
       expect(response.status).toBe(404);
       expect(body.error).toBe('Message not found');
+    });
+
+    it('should return 409 when the message is a still-streaming placeholder', async () => {
+      vi.mocked(messageRepository.getMessageById).mockResolvedValue(mockChatMessage({ status: 'streaming' }));
+
+      const request = createDeleteRequest(mockMessageId);
+      const context = createContext(mockMessageId);
+
+      const response = await DELETE(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(409);
+      expect(body.error).toMatch(/still generating/i);
+      expect(messageRepository.softDeletePageMessage).not.toHaveBeenCalled();
     });
   });
 
@@ -681,7 +668,10 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
 
       expect(loggers.api.warn).toHaveBeenCalledWith(
         'Delete message permission denied',
-        expect.any(Object)
+        expect.objectContaining({
+          messageId: '***_123',
+          userId: '***_123',
+        })
       );
     });
   });
@@ -705,7 +695,9 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
 
       await DELETE(request, context);
 
-      expect(chatMessageRepository.softDeleteMessage).toHaveBeenCalledWith(mockMessageId);
+      expect(messageRepository.softDeletePageMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: mockMessageId })
+      );
     });
 
     it('should log successful deletion', async () => {
@@ -716,100 +708,17 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
 
       expect(loggers.api.info).toHaveBeenCalledWith(
         'Message deleted successfully',
-        expect.any(Object)
+        expect.objectContaining({
+          messageId: '***_123',
+          userId: '***_123',
+        })
       );
-    });
-  });
-
-  describe('cache invalidation', () => {
-    it('should invalidate conversation cache after successful deletion', async () => {
-      const message = mockChatMessage();
-      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(message);
-
-      const request = createDeleteRequest(mockMessageId);
-      const context = createContext(mockMessageId);
-
-      await DELETE(request, context);
-
-      expect(mockInvalidateConversation).toHaveBeenCalledWith(
-        message.pageId,
-        message.conversationId
-      );
-    });
-
-    it('should invalidate cache with correct pageId and conversationId', async () => {
-      const specificMessage = mockChatMessage({
-        pageId: 'delete_page_123',
-      });
-      const fullMessage = { ...specificMessage, conversationId: 'delete_conv_456' };
-      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(fullMessage);
-
-      const request = createDeleteRequest(mockMessageId);
-      const context = createContext(mockMessageId);
-
-      await DELETE(request, context);
-
-      expect(mockInvalidateConversation).toHaveBeenCalledWith(
-        'delete_page_123',
-        'delete_conv_456'
-      );
-    });
-
-    it('should NOT invalidate cache when authentication fails', async () => {
-      vi.mocked(isAuthError).mockReturnValue(true);
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
-
-      const request = createDeleteRequest(mockMessageId);
-      const context = createContext(mockMessageId);
-
-      await DELETE(request, context);
-
-      expect(mockInvalidateConversation).not.toHaveBeenCalled();
-    });
-
-    it('should NOT invalidate cache when message not found', async () => {
-      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(null);
-
-      const request = createDeleteRequest(mockMessageId);
-      const context = createContext(mockMessageId);
-
-      await DELETE(request, context);
-
-      expect(mockInvalidateConversation).not.toHaveBeenCalled();
-    });
-
-    it('should NOT invalidate cache when permission denied', async () => {
-      vi.mocked(canUserEditPage).mockResolvedValue(false);
-
-      const request = createDeleteRequest(mockMessageId);
-      const context = createContext(mockMessageId);
-
-      await DELETE(request, context);
-
-      expect(mockInvalidateConversation).not.toHaveBeenCalled();
-    });
-
-    it('should invalidate cache before activity logging', async () => {
-      const callOrder: string[] = [];
-      mockInvalidateConversation.mockImplementation(async () => {
-        callOrder.push('invalidate');
-      });
-      vi.mocked(logMessageActivity).mockImplementation(() => {
-        callOrder.push('logActivity');
-      });
-
-      const request = createDeleteRequest(mockMessageId);
-      const context = createContext(mockMessageId);
-
-      await DELETE(request, context);
-
-      expect(callOrder).toEqual(['invalidate', 'logActivity']);
     });
   });
 
   describe('error handling', () => {
     it('should return 500 when repository throws', async () => {
-      vi.mocked(chatMessageRepository.softDeleteMessage).mockRejectedValue(
+      vi.mocked(messageRepository.softDeletePageMessage).mockRejectedValue(
         new Error('Database error')
       );
 
@@ -821,14 +730,14 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to delete message');
-      expect(loggers.api.error).toHaveBeenCalled();
+      expect(loggers.api.error).toHaveBeenCalledWith('Error deleting message', expect.objectContaining({ message: 'Database error' }));
     });
   });
 
   describe('activity logging boundary', () => {
     it('should log message_delete with previous content on successful DELETE', async () => {
       const existingMessage = mockChatMessage({ content: 'Content to be deleted' });
-      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(existingMessage);
+      vi.mocked(messageRepository.getMessageById).mockResolvedValue(existingMessage);
 
       const request = createDeleteRequest(mockMessageId);
       const context = createContext(mockMessageId);
@@ -875,7 +784,7 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
     });
 
     it('should NOT log activity when message not found', async () => {
-      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(null);
+      vi.mocked(messageRepository.getMessageById).mockResolvedValue(null);
 
       const request = createDeleteRequest(mockMessageId);
       const context = createContext(mockMessageId);
@@ -910,8 +819,12 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
         expect.objectContaining({
           driveId: null,
         }),
-        expect.any(Object),
-        expect.any(Object)
+        expect.objectContaining({
+          actorEmail: 'test@example.com',
+        }),
+        expect.objectContaining({
+          previousContent: 'Hello, AI!',
+        })
       );
     });
   });
@@ -920,8 +833,8 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
 describe('processMessageContentUpdate (pure function)', () => {
   it('should return new content for plain text messages', async () => {
     const actualModule = await vi.importActual<
-      typeof import('@/lib/repositories/chat-message-repository')
-    >('@/lib/repositories/chat-message-repository');
+      typeof import('@/lib/repositories/message-repository')
+    >('@/lib/repositories/message-repository');
     const { processMessageContentUpdate } = actualModule;
 
     const result = processMessageContentUpdate('Old text', 'New text');
@@ -931,8 +844,8 @@ describe('processMessageContentUpdate (pure function)', () => {
 
   it('should return new content for invalid JSON', async () => {
     const actualModule = await vi.importActual<
-      typeof import('@/lib/repositories/chat-message-repository')
-    >('@/lib/repositories/chat-message-repository');
+      typeof import('@/lib/repositories/message-repository')
+    >('@/lib/repositories/message-repository');
     const { processMessageContentUpdate } = actualModule;
 
     const result = processMessageContentUpdate('not json', 'New text');
@@ -942,8 +855,8 @@ describe('processMessageContentUpdate (pure function)', () => {
 
   it('should preserve structure for messages with textParts', async () => {
     const actualModule = await vi.importActual<
-      typeof import('@/lib/repositories/chat-message-repository')
-    >('@/lib/repositories/chat-message-repository');
+      typeof import('@/lib/repositories/message-repository')
+    >('@/lib/repositories/message-repository');
     const { processMessageContentUpdate } = actualModule;
 
     const structured = JSON.stringify({
@@ -962,8 +875,8 @@ describe('processMessageContentUpdate (pure function)', () => {
 
   it('should return new content when JSON lacks textParts', async () => {
     const actualModule = await vi.importActual<
-      typeof import('@/lib/repositories/chat-message-repository')
-    >('@/lib/repositories/chat-message-repository');
+      typeof import('@/lib/repositories/message-repository')
+    >('@/lib/repositories/message-repository');
     const { processMessageContentUpdate } = actualModule;
 
     const jsonWithoutTextParts = JSON.stringify({ other: 'data' });
