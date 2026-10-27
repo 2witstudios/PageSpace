@@ -1,21 +1,24 @@
-import { toolOf, type DriveTool, type Stage } from '../stage/stage';
+import { toolOf, type Stage } from '../stage/stage';
+import { NO_SCOPES, resolveScope, type SectionScopes } from './section-scope';
 
 /**
- * Home is the dashboard (ADR 0007 D4, amended; useIsHome in home-drive-context.tsx tells a screen
- * whether its drive is Home): on the viewer's Home drive the
- * chat, Messages, Tasks, Calendar, Console and Activity read across every
- * drive the viewer can reach, as classic's All drives did. Files, Workflows,
- * Members, Trash and the drive settings stay Home's own.
+ * Every drive's view (ADR 0007 D4, amended): Messages, Tasks, Files, Calendar, Console and
+ * Activity each carry a scope switch in their head, this drive or All drives, held per section
+ * (section-scope.ts). Until the viewer picks, Home opens Messages, Calendar, Console and Activity
+ * on All drives; Files and Tasks, whose All drives is a list of drives, open on Home itself. The chat on Home
+ * still reads every drive. Workflows, Members, Trash and the drive settings are always the
+ * drive's own.
+ *
+ * Whether the stage claims no drive for the chat: Home's chat, or Messages, Tasks or a drive
+ * tool switched to All drives. Files' All drives is a list of drives, so the chat stays in the
+ * drive the viewer is standing in.
  */
-const dashboardTools: readonly DriveTool[] = ['calendar', 'agents', 'activity'];
-
-/** Whether a drive tool reads across every drive when it is opened on Home. */
-export const isDashboardTool = (tool: DriveTool): boolean => dashboardTools.includes(tool);
-
-/** Whether the stage shows the all-drives view: one of Home's aggregate sections. */
-export const isDashboard = (stage: Stage, homeDriveId: string | null): boolean => {
-  if (homeDriveId === null || stage.driveId !== homeDriveId) return false;
-  if (stage.section === 'chat' || stage.section === 'messages' || stage.section === 'tasks') return true;
+export const isDashboard = (stage: Stage, homeDriveId: string | null, scopes: SectionScopes = NO_SCOPES): boolean => {
+  if (stage.driveId === null) return false;
+  const isHome = homeDriveId !== null && stage.driveId === homeDriveId;
+  if (stage.section === 'chat') return isHome;
+  if (stage.section === 'messages' || stage.section === 'tasks') return resolveScope(scopes, stage.section, isHome) === 'all';
   const tool = toolOf(stage);
-  return tool !== null && isDashboardTool(tool);
+  if (tool === 'calendar' || tool === 'agents' || tool === 'activity') return resolveScope(scopes, tool, isHome) === 'all';
+  return false;
 };

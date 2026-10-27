@@ -18,6 +18,7 @@ import {
 } from '@/retained/components/ai/ui/conversation';
 import { useDriveStore } from '@/retained/hooks/useDrive';
 import { useHomeDriveId } from '@/ui/frame/drives/home-drive-context';
+import { useSectionScopes } from '@/ui/frame/drives/use-section-scope';
 import { useAssistantSettingsStore } from '@/retained/stores/useAssistantSettingsStore';
 import { useGlobalChatConversation } from '@/retained/contexts/GlobalChatContext';
 import { usePageAgentSidebarState, type SidebarAgentInfo } from '@/retained/hooks/page-agents';
@@ -519,6 +520,7 @@ const SidebarChatTab: React.FC = () => {
   // populates (drive labels would otherwise stay null until the next nav).
   const drives = useDriveStore((state) => state.drives);
   const homeDriveId = useHomeDriveId();
+  const sectionScopes = useSectionScopes();
 
   useEffect(() => {
     fetchDrives();
@@ -548,8 +550,8 @@ const SidebarChatTab: React.FC = () => {
   }, [pathname, drives]);
 
   const buildFreshContextRef = useCallback(
-    () => buildContextRef(pathname, homeDriveId),
-    [pathname, homeDriveId],
+    () => buildContextRef(pathname, homeDriveId, sectionScopes),
+    [pathname, homeDriveId, sectionScopes],
   );
 
   // ============================================

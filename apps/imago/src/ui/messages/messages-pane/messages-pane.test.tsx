@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act } from 'react';
-import { afterEach, describe, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { ImagoSWRProvider } from '@/api/swr-provider';
 import { RealtimeProvider } from '@/realtime/realtime-provider';
@@ -16,11 +16,13 @@ import { setUiState } from '../../store/store';
 import { createInitialState } from '../../store/state';
 import { COLLAPSED_GROUPS_KEY } from './message-groups';
 import { MessagesPane, type MessagesPaneProps } from './messages-pane';
+import { setSectionScope } from '@/ui/frame/drives/use-section-scope';
 
 afterEach(() => {
   unmountAll();
   setUiState(createInitialState());
   window.localStorage.clear();
+  setSectionScope('messages', 'drive');
 });
 
 const CHANNELS = `GET ${messagePaths.driveChannels('d1')}`;
@@ -167,6 +169,9 @@ describe('MessagesPane in a drive', () => {
 });
 
 describe('MessagesPane across every drive', () => {
+  // Home's default, set here because the stored choice outlives each test.
+  beforeEach(() => setSectionScope('messages', 'all'));
+
   const everyDrive = () =>
     inbox(() => [
       inboxChannel('c3', { name: 'other', driveId: 'd2', unreadCount: 1 }),
@@ -238,6 +243,49 @@ describe('MessagesPane across every drive', () => {
       expected: [
         ['Channels', 'No channels yet.'],
         ['Direct messages', 'No direct messages yet.'],
+      ],
+    });
+  });
+
+  test('a drive switched to All drives', async () => {
+    const { container, web } = show(
+      { [ALL_CHANNELS]: everyDrive(), [CONVERSATIONS]: dms(() => [conversation('m1')]) },
+      { selectedPageId: 'c1' },
+    );
+    await settle(() => {
+      if (!container.querySelector('section[aria-label="Alpha"]')) throw new Error('drive names not loaded');
+    });
+    await rowsLoaded(container, 4);
+
+    assert({
+      given: 'a drive whose Messages switch says All drives, with a channel open',
+      should: 'group every drive’s channels as Home does, without loading the drive’s own channel list',
+      actual: [sections(container).map(([label]) => label), web.count(CHANNELS)],
+      expected: [['Alpha', 'Beta', 'Direct messages'], 0],
+    });
+  });
+
+  test('Home switched to its own drive', async () => {
+    setSectionScope('messages', 'drive');
+    const { container, web } = show(
+      {
+        [`GET ${messagePaths.driveChannels('home')}`]: channels(() => [inboxChannel('h1', { name: 'notes', driveId: 'home' })]),
+        [CONVERSATIONS]: dms(() => [conversation('m1')]),
+      },
+      { driveId: 'home' },
+    );
+    await rowsLoaded(container, 2);
+
+    assert({
+      given: 'the Home drive with its Messages switch set to the drive',
+      should: 'list only Home’s channels under Channels, then the DMs, without loading every drive’s channels',
+      actual: [sections(container), web.count(ALL_CHANNELS)],
+      expected: [
+        [
+          ['Channels', [['notes', '/home/messages/h1', null, null]], null],
+          ['Direct messages', [['Grace', '/dm/m1', null, null]], null],
+        ],
+        0,
       ],
     });
   });

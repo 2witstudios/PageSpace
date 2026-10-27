@@ -743,7 +743,7 @@ describe('Shell', () => {
           'Switch drive: Alpha',
           'Search',
           'Home',
-          'Files',
+          'Pages',
           'Messages',
           'Tasks',
           'Calendar',
@@ -765,7 +765,7 @@ describe('Shell', () => {
     navigation.pathname = '/drive-1/files/page-1';
     render();
     click('[data-slot="list"] button[aria-label="Close sidebar"]');
-    click('[data-slot="rail"] a[aria-label="Files"]');
+    click('[data-slot="rail"] a[aria-label="Pages"]');
 
     assert({
       given: 'the files tree hidden, then Files clicked on the rail',

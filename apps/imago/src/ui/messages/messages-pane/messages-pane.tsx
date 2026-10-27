@@ -2,7 +2,7 @@
 
 import type { ChannelThread, DirectThread } from '../message-model/message';
 import { useAllChannels, useDirectThreads, useDriveChannels } from '../use-messages/use-messages';
-import { useIsHome } from '../../frame/drives/home-drive-context';
+import { useAllDrives } from '../../frame/drives/use-section-scope';
 import { useDriveNames } from '../../frame/drives/use-drive-names';
 import { channelsByDrive, DIRECT_GROUP, driveGroup } from './message-groups';
 import {
@@ -99,12 +99,13 @@ function useAllDriveGroups(selectedPageId: string | null, fold: Fold): readonly 
 
 /**
  * The Messages section's list pane, the same on every Messages route: a
- * drive's channels (every drive's on Home and the user-level /dm routes),
- * then the viewer's DMs. Opening a thread only marks its row; folding a group
+ * drive's channels (every drive's when the head's switch says All drives, as
+ * it does by default on Home, and on the user-level /dm routes), then the
+ * viewer's DMs. Opening a thread only marks its row; folding a group
  * holds across routes.
  */
 export function MessagesPane({ driveId, selectedPageId, selectedConversationId }: MessagesPaneProps) {
-  const allDrives = useIsHome(driveId) || driveId === null;
+  const allDrives = useAllDrives('messages', driveId) || driveId === null;
   return allDrives ? (
     <AllDrivesPane selectedPageId={selectedPageId} selectedConversationId={selectedConversationId} />
   ) : (

@@ -175,8 +175,8 @@ describe('chat pane classes', () => {
         chatNoticeClass,
       ],
       expected: [
-        'flex h-full w-full min-w-0 flex-col bg-tint',
-        'flex h-full w-full min-w-0 flex-col border-l border-hairline bg-tint',
+        'flex h-full w-full min-w-0 flex-col bg-background',
+        'flex h-full w-full min-w-0 flex-col border-l border-hairline bg-background',
         'mx-auto flex w-full max-w-thread flex-col gap-4 px-6 py-8',
         'flex w-full flex-col gap-3 p-4',
         'min-h-0 flex-1 overflow-y-auto',

@@ -93,16 +93,16 @@ describe('Rail', () => {
     });
   });
 
-  test('the Files and Tasks counts from /api/sidebar/badges', async () => {
+  test('the Pages and Tasks counts from /api/sidebar/badges', async () => {
     const { container } = railAt('/drive-1', { dms: 0, channels: 0, files: 9, tasks: 1, calendar: 0 });
     await settle(() => {
-      control(container, 'Files, 9 unread');
+      control(container, 'Pages, 9 unread');
     });
 
     assert({
       given: 'nine file mentions and one assigned task',
-      should: 'show 9 on Files and 1 on Tasks',
-      actual: [control(container, 'Files, 9 unread').textContent?.includes('9'), control(container, 'Tasks, 1 unread') !== null],
+      should: 'show 9 on Pages and 1 on Tasks',
+      actual: [control(container, 'Pages, 9 unread').textContent?.includes('9'), control(container, 'Tasks, 1 unread') !== null],
       expected: [true, true],
     });
   });
@@ -159,7 +159,7 @@ describe('Rail', () => {
 
   test('links to the current drive', () => {
     const { container } = railAt('/drive-1/tasks/list-1');
-    const hrefs = ['Home', 'Files', 'Messages', 'Tasks', 'Calendar', 'Drive settings'].map((name) =>
+    const hrefs = ['Home', 'Pages', 'Messages', 'Tasks', 'Calendar', 'Drive settings'].map((name) =>
       control(container, name).getAttribute('href'),
     );
 
@@ -188,7 +188,7 @@ describe('Rail', () => {
     assert({
       given: 'a DM, which names no drive',
       should: 'link into the Home drive and keep Messages the current section',
-      actual: [control(container, 'Files').getAttribute('href'), control(container, 'Messages').getAttribute('aria-current')],
+      actual: [control(container, 'Pages').getAttribute('href'), control(container, 'Messages').getAttribute('aria-current')],
       expected: ['/home-1/files', 'true'],
     });
   });
@@ -198,15 +198,15 @@ describe('Rail', () => {
 
     assert({
       given: 'the files list open',
-      should: 'mark Files as the current page',
-      actual: control(container, 'Files').getAttribute('aria-current'),
+      should: 'mark Pages as the current page',
+      actual: control(container, 'Pages').getAttribute('aria-current'),
       expected: 'page',
     });
   });
 
   test('the active item with its list showing', () => {
     const { container } = railAt('/drive-1/files/page-1');
-    const files = control(container, 'Files');
+    const files = control(container, 'Pages');
     const expand = vi.spyOn(transactions, 'expandSection');
     // jsdom has no app router: stop Next's Link at the anchor. Link still
     // calls the rail's onClick first, so a reopen handler would still run.
@@ -217,7 +217,7 @@ describe('Rail', () => {
     expand.mockRestore();
 
     assert({
-      given: 'the files tree visible beside a page, and the active Files clicked',
+      given: 'the files tree visible beside a page, and the active Pages clicked',
       should: 'leave it to the link: no reopen transaction and the store untouched',
       actual: [clicks.mock.calls.length, reopened, getUiState().resources.collapsedSections],
       expected: [1, 0, []],
@@ -227,10 +227,10 @@ describe('Rail', () => {
   test('clicking the active item of a collapsed section', () => {
     dispatch(transactions.collapseSection, 'files');
     const { container } = railAt('/drive-1/files/page-1');
-    act(() => control(container, 'Files').click());
+    act(() => control(container, 'Pages').click());
 
     assert({
-      given: 'the files tree hidden beside an open page, and Files clicked',
+      given: 'the files tree hidden beside an open page, and Pages clicked',
       should: 'reopen the files list through the store',
       actual: getUiState().resources.collapsedSections,
       expected: [],

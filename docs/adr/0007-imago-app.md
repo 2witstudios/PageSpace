@@ -25,7 +25,7 @@ From the decision record (2026-09-20 … 2026-09-29):
 | D1 | The brand keeps the existing blue `--primary` (`oklch(0.50 0.16 235)`); the violet→cyan gradient is retired. |
 | D2 | "Imago" is the assistant family. The chat-header selector picks an **agent**, not a model: Imago Planner, Imago Researcher, plus the user's own `AI_CHAT` agents. (Planner and Researcher retired by the owner on 2026-10-06 — see §5.) |
 | D3 | Chat replaces Home as a rail destination. |
-| D4 | No global/dashboard level above the drives: Home is the dashboard. Every drive is scoped to itself except Home, whose chat, Messages, Tasks, Calendar, Console and Activity read across every drive the viewer can reach (amended 2026-10; `apps/imago/src/ui/frame/drives/home-scope.ts`). |
+| D4 | No global/dashboard level above the drives. Files, Messages, Tasks, Calendar, Console and Activity each carry a scope switch in their head: this drive, or All drives. The choice is held per section on the device and applies on every drive. An unset section reads All drives on Home and the drive itself elsewhere, so Home is still the dashboard by default. The exceptions are Files and Tasks: their All drives replaces the drive's tree, so they open on the drive itself, even on Home. Where a section is a tree (Files, Tasks' lists), All drives lists the drives to pick from rather than merging their trees. Home's chat reads every drive (amended 2026-10; `apps/imago/src/ui/frame/drives/section-scope.ts`, `home-scope.ts`). |
 | D5 | A `⋯` overflow in the rail below Plugins holds Workflows, Activity, Connections and similar. (Departed from by DEC-6, §6.) |
 | D6 | Rewrite the app layer, not the platform; web + native rather than web only. |
 
@@ -87,7 +87,7 @@ Every leaf PR targets `pu/imago` (DEC-1). The orchestrator merges a leaf into `p
 
 D5 puts the `⋯` overflow on the rail **below Plugins**. DEC-6 changes that for this epic:
 
-- The rail is Chat, Files, Messages (channels + DMs), Tasks, Settings.
+- The rail is Chat, Pages, Messages (channels + DMs), Tasks, Settings. (The Pages route and section id stay `files`.)
 - **Plugins is not on the rail this epic** (neither Plugins nor Console is built), so the `⋯` overflow sits **below Tasks**.
 - The overflow holds Calendar, Agents, Connections, Activity and Trash as deep links into classic for the current drive.
 

@@ -6,6 +6,7 @@
 
 import type { Stage } from '../../frame/stage/stage';
 import { isDashboard } from '../../frame/drives/home-scope';
+import { NO_SCOPES, type SectionScopes } from '../../frame/drives/section-scope';
 
 export type ContextRefRouteType = 'page' | 'channel' | 'drive' | 'dm' | 'other';
 
@@ -19,10 +20,10 @@ export type ContextRef = {
 
 /**
  * The context ref for a stage: the open object, else the drive, else nothing.
- * Home's aggregate sections are the dashboard, so they claim no drive and the
+ * Home's chat and the sections switched to All drives claim no drive, and the
  * server answers with every drive the viewer can reach, as classic's did.
  */
-export const contextRefFor = (stage: Stage, homeDriveId: string | null = null): ContextRef => {
+export const contextRefFor = (stage: Stage, homeDriveId: string | null = null, scopes: SectionScopes = NO_SCOPES): ContextRef => {
   const { driveId, section, object } = stage;
   if (object?.kind === 'conversation') return { routeType: 'dm', dmConversationId: object.conversationId };
   if (driveId === null) return { routeType: 'other' };
@@ -32,6 +33,6 @@ export const contextRefFor = (stage: Stage, homeDriveId: string | null = null): 
       ? { routeType: 'channel', pageId: object.pageId }
       : { routeType: 'page', pageId: object.pageId, driveId };
   }
-  if (isDashboard(stage, homeDriveId)) return { routeType: 'other' };
+  if (isDashboard(stage, homeDriveId, scopes)) return { routeType: 'other' };
   return { routeType: 'drive', driveId };
 };

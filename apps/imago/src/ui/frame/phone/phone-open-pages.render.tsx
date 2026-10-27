@@ -16,7 +16,7 @@ import {
   phoneSheetTitleClass,
 } from './phone-doc-class';
 
-export const EMPTY_OPEN_PAGES = 'No open pages — pick one in Files or ask Imago.';
+export const EMPTY_OPEN_PAGES = 'No open pages — pick one in Pages or ask Imago.';
 
 export type OpenPageRowProps = {
   readonly path: string;

@@ -70,7 +70,7 @@ export function PageObject({ driveId, pageId, children }: PageObjectProps) {
     return renderNotFound({
       ...PAGE_NOT_FOUND,
       homeHref: `/${encodeURIComponent(driveId)}/files`,
-      linkLabel: 'Back to Files',
+      linkLabel: 'Back to Pages',
     });
   }
   if (edge === 'error') return renderErrorState({ title: 'Could not load this page', retry: () => void mutate() });

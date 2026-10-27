@@ -69,20 +69,21 @@ describe('contextRefFor()', () => {
 
   test('Home, the dashboard', () => {
     assert({
-      given: 'the Home drive’s chat, Tasks and Calendar',
+      given: 'the Home drive’s chat, Messages and Calendar',
       should: 'claim no drive, so the server answers across every drive',
-      actual: [refAt('/imago/home1', 'home1'), refAt('/imago/home1/tasks', 'home1'), refAt('/imago/home1/calendar', 'home1')],
+      actual: [refAt('/imago/home1', 'home1'), refAt('/imago/home1/messages', 'home1'), refAt('/imago/home1/calendar', 'home1')],
       expected: [{ routeType: 'other' }, { routeType: 'other' }, { routeType: 'other' }],
     });
   });
 
   test('Home’s own pages and settings', () => {
     assert({
-      given: 'a page open in Home, Home’s Files and Home’s settings',
+      given: 'a page open in Home, Home’s Files, Home’s Tasks (never switched) and Home’s settings',
       should: 'name the page or the Home drive',
-      actual: [refAt('/imago/home1/files/p1', 'home1'), refAt('/imago/home1/files', 'home1'), refAt('/imago/home1/settings', 'home1')],
+      actual: [refAt('/imago/home1/files/p1', 'home1'), refAt('/imago/home1/files', 'home1'), refAt('/imago/home1/tasks', 'home1'), refAt('/imago/home1/settings', 'home1')],
       expected: [
         { routeType: 'page', pageId: 'p1', driveId: 'home1' },
+        { routeType: 'drive', driveId: 'home1' },
         { routeType: 'drive', driveId: 'home1' },
         { routeType: 'drive', driveId: 'home1' },
       ],

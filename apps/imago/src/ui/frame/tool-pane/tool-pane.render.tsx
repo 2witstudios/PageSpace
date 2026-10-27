@@ -9,13 +9,17 @@ import type { ListPane } from '../stage/stage';
 export type ToolPaneProps = {
   readonly driveId: string;
   readonly close: ReactNode;
+  /** The head's scope switch, for a tool that reads this drive or every drive. */
+  readonly scope?: ReactNode;
   /** Wide beside the chat alone, narrow beside the tool's open screen. */
   readonly variant?: Exclude<ListPane, 'closed'>;
 };
 
 /** The pane chrome a tool pane sits in: the 48px head with its title, actions and Close sidebar, then the body. */
-export function renderToolPane({ title, label, actions, close, variant = 'tree', children }: {
+export function renderToolPane({ title, label, actions, close, scope = null, variant = 'tree', children }: {
   readonly title: string;
+  /** The tool's scope switch beside the title: this drive or All drives. */
+  readonly scope?: ReactNode;
   readonly label?: string;
   readonly actions?: ReactNode;
   readonly close: ReactNode;
@@ -24,7 +28,7 @@ export function renderToolPane({ title, label, actions, close, variant = 'tree',
 }): ReactNode {
   return (
     <section className={listPaneClass(variant)} aria-label={label ?? title}>
-      {renderPaneHeader({ title, actions: <>{actions}{close}</> })}
+      {renderPaneHeader({ title, scope, actions: <>{actions}{close}</> })}
       <div className={listBodyClass}>{children}</div>
     </section>
   );
