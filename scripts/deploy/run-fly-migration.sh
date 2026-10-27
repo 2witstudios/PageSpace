@@ -76,6 +76,16 @@ MACHINE_ID=$(grep -o 'Machine ID: [0-9a-f]*' "$OUTPUT_FILE" | head -1 | sed 's/M
 if [ -z "$MACHINE_ID" ]; then
   echo "ERROR: could not parse machine ID from flyctl output" >&2
   cat "$OUTPUT_FILE" >&2
+  # flyctl's human-readable output can change under us (setup-flyctl is unpinned).
+  # Find the machine by its unique name so the EXIT trap still destroys it instead
+  # of leaving an orphaned one-shot machine behind.
+  MACHINE_ID=$(curl --connect-timeout 10 --max-time 30 -s \
+    -H "Authorization: Bearer $FLY_API_TOKEN" \
+    "https://api.machines.dev/v1/apps/$FLY_APP/machines" 2>/dev/null |
+    jq -r --arg name "$MACHINE_NAME" '[.[]? | select(.name == $name) | .id] | first // empty' 2>/dev/null || true)
+  if [ -n "$MACHINE_ID" ]; then
+    echo "Found migration machine $MACHINE_ID by name $MACHINE_NAME; cleaning it up" >&2
+  fi
   exit 1
 fi
 echo "Migration machine: $MACHINE_ID"

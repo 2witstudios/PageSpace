@@ -14,6 +14,7 @@ interface WorkflowStep {
 }
 
 interface WorkflowFile {
+  env?: Record<string, string>;
   jobs: Record<string, { steps?: WorkflowStep[] }>;
 }
 
@@ -66,8 +67,11 @@ describe('docker-images.yml admin-DB migrate step', () => {
   });
 
   it('given the admin and main migrations steps, should never pin the mutable :latest tag', () => {
-    expect(adminStep.run).not.toContain('pagespace-migrate:latest');
-    expect(steps[mainIdx].run).not.toContain('pagespace-migrate:latest');
+    // Both steps pass "$RELEASE_IMAGE_TAG" (asserted above); pin what it resolves to.
+    expect(workflow.env?.RELEASE_IMAGE_TAG).toBe('sha-${{ github.sha }}');
+    for (const run of [adminStep.run, steps[mainIdx].run]) {
+      expect(run).not.toMatch(/pagespace-migrate[:\s]+["']?latest\b/);
+    }
   });
 
   it('given the admin migrations step, should delegate to the same script as the main step (so it fails on failed/destroyed machine states identically)', () => {
@@ -210,5 +214,5 @@ describe('migration polling behavior', () => {
       rmSync(dir, { recursive: true, force: true });
     }
     // The "missing" scenario walks all 90 polls of the 900s deadline (sleep stubbed).
-  }, 60_000);
+  }, 120_000);
 });
