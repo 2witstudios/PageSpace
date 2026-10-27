@@ -155,6 +155,9 @@ const mockClearAttachment = vi.fn(() => {
 const mockRemoveAttachment = vi.fn((_id: string) => {
   mockAttachment = null;
 });
+const mockRestoreAttachments = vi.fn((restored: FileAttachment[]) => {
+  mockAttachment = restored[0] ?? null;
+});
 vi.mock('@/hooks/useAttachmentUpload', async () => {
   const actual =
     await vi.importActual<typeof import('@/hooks/useAttachmentUpload')>(
@@ -175,6 +178,7 @@ vi.mock('@/hooks/useAttachmentUpload', async () => {
         uploadFiles: mockUploadFiles,
         clearAttachment: mockClearAttachment,
         removeAttachment: mockRemoveAttachment,
+        restoreAttachments: mockRestoreAttachments,
       };
     },
   };

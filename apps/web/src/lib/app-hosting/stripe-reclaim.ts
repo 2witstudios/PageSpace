@@ -19,7 +19,7 @@
 
 import { and, asc, eq, lt } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
-import { appHostingStripeReclaims } from '@pagespace/db/schema/app-hosting-stripe-reclaims';
+import { appHostingStripeReclaims, type AppHostingStripeReclaim } from '@pagespace/db/schema/app-hosting-stripe-reclaims';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { stripe, Stripe } from '@/lib/stripe';
 import * as Sentry from '@sentry/nextjs';
@@ -55,6 +55,81 @@ export interface DrainStripeReclaimsResult {
   capped: boolean;
 }
 
+type StopOutcome = { kind: 'stopped'; alreadyGone: boolean } | { kind: 'failed' };
+
+/**
+ * One attempt to stop one queued subscription as its row asks: cancel it now, or (`period_end`,
+ * WAL-9, D-OW-64: its drive left the org paying for it) let it end with the period already paid
+ * for. A failure is recorded on the row (CAS on `attempts`) and retried on a later tick.
+ */
+async function stopOnce(row: AppHostingStripeReclaim): Promise<StopOutcome> {
+  try {
+    const stop = row.cancelAt === 'period_end'
+      ? stripe.subscriptions.update(row.stripeSubscriptionId, { cancel_at_period_end: true })
+      : stripe.subscriptions.cancel(row.stripeSubscriptionId);
+    const subscription = await stop.catch((error: unknown) => {
+      // Already gone at Stripe (deleted account, or a prior tick's cancel that
+      // committed there but crashed before this row could be removed) is the
+      // success case, not a failure — the invariant this table protects
+      // ("nobody keeps paying") already holds.
+      if (error instanceof Stripe.errors.StripeInvalidRequestError && error.code === 'resource_missing') {
+        return null;
+      }
+      throw error;
+    });
+
+    if (subscription === null) return { kind: 'stopped', alreadyGone: true };
+    if (subscription.status === 'canceled' || (row.cancelAt === 'period_end' && subscription.cancel_at_period_end === true)) {
+      return { kind: 'stopped', alreadyGone: false };
+    }
+
+    // Stripe answered without the subscription being stopped (unexpected, but Stripe's response
+    // is the fact here, not our assumption) — leave the row so the next tick tries again.
+    await recordFailedAttempt(row, `cancel returned status "${subscription.status}"`);
+    return { kind: 'failed' };
+  } catch (error) {
+    loggers.system.error(
+      `[app-hosting-stripe-reclaim] cancel failed for subscription ${row.stripeSubscriptionId}`,
+      error as Error,
+    );
+    await recordFailedAttempt(row, error instanceof Error ? error.message : 'unknown Stripe error');
+    return { kind: 'failed' };
+  }
+}
+
+/**
+ * Count one failed attempt, CAS-guarded on `attempts`. Alert ONLY when THIS call's CAS actually
+ * matched (won the race) AND pushed the row past the threshold — a lost race means some other
+ * process already advanced (or reset) the row, and alerting on our own stale, unapplied
+ * computation would be alerting on a write that never happened.
+ */
+async function recordFailedAttempt(row: AppHostingStripeReclaim, lastError: string): Promise<void> {
+  const nextAttempts = row.attempts + 1;
+  const [updatedRow] = await db
+    .update(appHostingStripeReclaims)
+    .set({ attempts: nextAttempts, lastAttemptAt: new Date(), lastError })
+    .where(
+      and(
+        eq(appHostingStripeReclaims.stripeSubscriptionId, row.stripeSubscriptionId),
+        eq(appHostingStripeReclaims.attempts, row.attempts),
+      ),
+    )
+    .returning();
+  if (updatedRow && nextAttempts >= STRIPE_RECLAIM_MAX_ATTEMPTS) {
+    alertReclaimExhausted(row.stripeSubscriptionId, nextAttempts, lastError);
+  }
+}
+
+/** The reclaim row as it is NOW, or null once it is gone. */
+async function rereadReclaim(stripeSubscriptionId: string): Promise<AppHostingStripeReclaim | null> {
+  const [fresh] = await db
+    .select()
+    .from(appHostingStripeReclaims)
+    .where(eq(appHostingStripeReclaims.stripeSubscriptionId, stripeSubscriptionId))
+    .limit(1);
+  return fresh ?? null;
+}
+
 export async function drainAppHostingStripeReclaims(): Promise<DrainStripeReclaimsResult> {
   const rows = await db
     .select()
@@ -70,72 +145,30 @@ export async function drainAppHostingStripeReclaims(): Promise<DrainStripeReclai
   let alreadyCanceled = 0;
   let failed = 0;
 
-  for (const row of batch) {
-    try {
-      const subscription = await stripe.subscriptions.cancel(row.stripeSubscriptionId).catch((error: unknown) => {
-        // Already gone at Stripe (deleted account, or a prior tick's cancel that
-        // committed there but crashed before this row could be removed) is the
-        // success case, not a failure — the invariant this table protects
-        // ("nobody keeps paying") already holds.
-        if (error instanceof Stripe.errors.StripeInvalidRequestError && error.code === 'resource_missing') {
-          return null;
-        }
-        throw error;
-      });
-
-      if (subscription === null || subscription.status === 'canceled') {
-        alreadyCanceled += subscription === null ? 1 : 0;
-        canceled += subscription === null ? 0 : 1;
-        await db.delete(appHostingStripeReclaims).where(eq(appHostingStripeReclaims.stripeSubscriptionId, row.stripeSubscriptionId));
-        continue;
-      }
-
-      // Cancel returned without reaching `canceled` (unexpected, but Stripe's
-      // response is the fact here, not our assumption) — leave the row so the
-      // next tick tries again rather than assuming success.
-      failed += 1;
-      const unexpectedStatusError = `cancel returned status "${subscription.status}"`;
-      const nextAttempts = row.attempts + 1;
-      const [updatedRow] = await db
-        .update(appHostingStripeReclaims)
-        .set({ attempts: nextAttempts, lastAttemptAt: new Date(), lastError: unexpectedStatusError })
-        .where(
-          and(
-            eq(appHostingStripeReclaims.stripeSubscriptionId, row.stripeSubscriptionId),
-            eq(appHostingStripeReclaims.attempts, row.attempts),
-          ),
-        )
-        .returning();
-      // Alert ONLY when THIS call's CAS actually matched (won the race) AND
-      // pushed the row past the threshold — a lost race means some other
-      // process already advanced (or reset) the row, and alerting on our own
-      // stale, unapplied computation would be alerting on a write that never
-      // happened.
-      if (updatedRow && nextAttempts >= STRIPE_RECLAIM_MAX_ATTEMPTS) {
-        alertReclaimExhausted(row.stripeSubscriptionId, nextAttempts, unexpectedStatusError);
-      }
-    } catch (error) {
-      failed += 1;
-      const message = error instanceof Error ? error.message : 'unknown Stripe error';
-      loggers.system.error(
-        `[app-hosting-stripe-reclaim] cancel failed for subscription ${row.stripeSubscriptionId}`,
-        error as Error,
-      );
-      const nextAttempts = row.attempts + 1;
-      const [updatedRow] = await db
-        .update(appHostingStripeReclaims)
-        .set({ attempts: nextAttempts, lastAttemptAt: new Date(), lastError: message })
-        .where(
-          and(
-            eq(appHostingStripeReclaims.stripeSubscriptionId, row.stripeSubscriptionId),
-            eq(appHostingStripeReclaims.attempts, row.attempts),
-          ),
-        )
-        .returning();
-      if (updatedRow && nextAttempts >= STRIPE_RECLAIM_MAX_ATTEMPTS) {
-        alertReclaimExhausted(row.stripeSubscriptionId, nextAttempts, message);
-      }
+  for (const queued of batch) {
+    // A row is re-processed at most once more: the only change it can take while it is being
+    // processed is a period-end release upgraded to an immediate cancel (the app was destroyed).
+    let row: AppHostingStripeReclaim | null = queued;
+    let outcome: StopOutcome = { kind: 'failed' };
+    for (let pass = 0; row !== null && pass < 2; pass += 1) {
+      const current: AppHostingStripeReclaim = row;
+      outcome = await stopOnce(current);
+      if (outcome.kind === 'failed') break;
+      // COMPARE-AND-DELETE on the mode this pass acted on (D-OW-64): a concurrent upgrade of a
+      // period-end release to an immediate cancel must not be discarded with it. If the row
+      // changed, read it again and act on what it says now.
+      const deleted: Array<{ stripeSubscriptionId: string }> = await db
+        .delete(appHostingStripeReclaims)
+        .where(and(
+          eq(appHostingStripeReclaims.stripeSubscriptionId, current.stripeSubscriptionId),
+          eq(appHostingStripeReclaims.cancelAt, current.cancelAt),
+        ))
+        .returning({ stripeSubscriptionId: appHostingStripeReclaims.stripeSubscriptionId });
+      row = deleted.length > 0 ? null : await rereadReclaim(current.stripeSubscriptionId);
     }
+    if (outcome.kind === 'failed') failed += 1;
+    else if (outcome.alreadyGone) alreadyCanceled += 1;
+    else canceled += 1;
   }
 
   return { processed: batch.length, canceled, alreadyCanceled, failed, capped };

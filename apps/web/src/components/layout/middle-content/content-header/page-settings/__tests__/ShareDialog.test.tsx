@@ -86,8 +86,15 @@ vi.mock(
   }),
 );
 
+// [D-OW-33] the drive's org, lapsed or not, per test (default: paid).
+const orgLapsed = vi.hoisted(() => ({ current: false }));
+vi.mock('@/hooks/useMyOrganizations', () => ({
+  useMyOrganizations: () => ({ orgById: (id: string | null) => (id ? { id, name: 'Northwind Labs', lapsed: orgLapsed.current } : null) }),
+}));
+
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import { ShareDialog } from '../ShareDialog';
+import { useDriveStore } from '@/hooks/useDrive';
 
 const make404Response = () =>
   new Response(JSON.stringify({ error: 'User not found' }), {
@@ -278,5 +285,30 @@ describe('ShareDialog — off-platform invite branch', () => {
         expect.objectContaining({ userId: 'user_existing' }),
       );
     });
+  });
+});
+
+describe('ShareDialog — [D-OW-33] a lapsed org only restricts', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    orgLapsed.current = false;
+    useDriveStore.setState({ drives: [{ id: 'drive_xyz', name: 'Product', slug: 'p', ownerId: 'u1', isTrashed: false, trashedAt: null, createdAt: '', updatedAt: '', isOwned: true, orgId: 'o-northwind' }], currentDriveId: null, isLoading: false, lastFetched: Date.now() });
+    vi.mocked(fetchWithAuth).mockResolvedValue(makeEmptyRolesResponse());
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] while the drive\'s org is lapsed Grant Access is disabled and the restrict-only note is shown; paid, it is enabled', async () => {
+    orgLapsed.current = true;
+    const user = userEvent.setup();
+    const { unmount } = render(<ShareDialog />);
+    await user.click(screen.getByRole('button', { name: /share/i }));
+    expect((screen.getByRole('button', { name: /grant access/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId('lapsed-loosen-note').textContent).toContain('Sharing more is paused');
+    unmount();
+
+    orgLapsed.current = false;
+    render(<ShareDialog />);
+    await user.click(screen.getByRole('button', { name: /share/i }));
+    expect((screen.getByRole('button', { name: /grant access/i }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByTestId('lapsed-loosen-note')).toBeNull();
   });
 });

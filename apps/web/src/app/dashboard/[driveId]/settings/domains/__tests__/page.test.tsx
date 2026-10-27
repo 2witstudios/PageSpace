@@ -57,6 +57,9 @@ vi.mock('@/hooks/useDrive', () => ({
 
 vi.mock('@/hooks/useAuth', () => ({ useAuth: () => ({ user: { id: 'u1', role: 'user' } }) }));
 
+const { visibility } = vi.hoisted(() => ({ visibility: { showBilling: true } }));
+vi.mock('@/hooks/useBillingVisibility', () => ({ useBillingVisibility: () => visibility }));
+
 vi.mock('@/components/common/PagePickerPopover', () => ({
   PagePickerPopover: () => <div data-testid="page-picker" />,
 }));
@@ -142,5 +145,40 @@ describe('DomainsSettingsPage — a stuck certificate names the record it is wai
 
     expect(screen.queryByText(/_fly-ownership/)).not.toBeInTheDocument();
     expect(screen.queryByText(/waiting on a DNS record/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('DomainsSettingsPage — locked custom subdomain', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    visibility.showBilling = true;
+  });
+
+  it('given a free user on the web, should link to upgrade', async () => {
+    serve(null);
+    renderPage();
+    expect(await screen.findByText(/Pro feature/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /upgrade/i })).toBeInTheDocument();
+  });
+
+  it('given a free user in the iOS app, should name the plan with no purchase link', async () => {
+    visibility.showBilling = false;
+    serve(null);
+    renderPage();
+    expect(await screen.findByText(/Pro feature/)).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /upgrade/i })).not.toBeInTheDocument();
+  });
+
+  it('given a drive at its custom domain limit, should not tell the user to upgrade', async () => {
+    mockFetchWithAuth.mockImplementation((url: string) =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve(url.includes('/subdomain') ? { subdomain: null } : { ...domainsPayload(null), limit: 1 }),
+      }),
+    );
+    renderPage();
+    const note = await screen.findByText(/Domain limit reached/);
+    expect(note.textContent).not.toMatch(/upgrad/i);
   });
 });

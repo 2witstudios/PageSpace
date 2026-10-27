@@ -8,6 +8,7 @@ import { and, eq, inArray } from '@pagespace/db/operators';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { buildAssetKey, buildAssetUrlFromKey, copyObjectToPublishBucket } from './published-storage';
 import { extractInterPageLinks, rewriteInterPageLinks } from './file-view-links';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 type FileReferenceKind = 'view' | 'thumbnail';
 
@@ -252,10 +253,10 @@ function resolvePublishAsset(row: FilePageRow, kind: FileReferenceKind): Publish
 export async function resolveUploadedImageAssetUrl(params: {
   fileId: string;
   driveId: string;
-  userId: string;
+  actor: AccessActor;
   db: Pick<typeof DbType, 'query'>;
 }): Promise<string | null> {
-  const { fileId, driveId, userId, db } = params;
+  const { fileId, driveId, actor, db } = params;
 
   const row = (await db.query.pages.findFirst({
     where: and(eq(pages.id, fileId), eq(pages.isTrashed, false)),
@@ -269,7 +270,7 @@ export async function resolveUploadedImageAssetUrl(params: {
   // another drive's OG image/favicon — view access isn't consent to publish.
   if (row.driveId !== driveId) return null;
 
-  const canView = await canUserViewPage(userId, fileId).catch(() => false);
+  const canView = await canUserViewPage(actor, fileId).catch(() => false);
   if (!canView) return null;
 
   const asset = resolvePublishAsset(row, 'view');
@@ -279,11 +280,11 @@ export async function resolveUploadedImageAssetUrl(params: {
   return buildAssetUrlFromKey(asset.assetKey);
 }
 
-async function filterViewableRows(userId: string, rows: FilePageRow[]): Promise<FilePageRow[]> {
+async function filterViewableRows(actor: AccessActor, rows: FilePageRow[]): Promise<FilePageRow[]> {
   const checks = await Promise.all(
     rows.map(async (row) => ({
       row,
-      canView: await canUserViewPage(userId, row.id).catch((err) => {
+      canView: await canUserViewPage(actor, row.id).catch((err) => {
         loggers.api.warn('asset-pipeline: failed to authorize referenced asset', {
           fileId: row.id,
           error: err instanceof Error ? err.message : String(err),
@@ -308,10 +309,10 @@ async function filterViewableRows(userId: string, rows: FilePageRow[]): Promise<
  */
 export async function rewriteCanvasAssets(params: {
   html: string;
-  userId: string;
+  actor: AccessActor;
   db: Pick<typeof DbType, 'query'>;
 }): Promise<{ html: string }> {
-  const { html, userId, db } = params;
+  const { html, actor, db } = params;
 
   const references = extractFileReferences(html);
   const fileIds = Array.from(new Set(references.map(({ id }) => id)));
@@ -324,7 +325,7 @@ export async function rewriteCanvasAssets(params: {
     columns: { id: true, driveId: true, contentHash: true, mimeType: true, extractionMetadata: true },
   })) as FilePageRow[];
 
-  const rowsById = new Map((await filterViewableRows(userId, rows)).map((row) => [row.id, row]));
+  const rowsById = new Map((await filterViewableRows(actor, rows)).map((row) => [row.id, row]));
   const resolved = new Map<string, PublishAsset>();
   const uniqueAssets = new Map<string, PublishAsset>();
 

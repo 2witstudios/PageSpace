@@ -85,17 +85,20 @@ vi.mock('@/lib/auth', () => ({
     (result): result is import('@/lib/auth').ServiceAuthResult =>
       !('error' in result) && 'tokenType' in result && result.tokenType === 'service',
   ),
+  // G2 agent accounts: the real rule, so a session fixture yields its session id.
+  authSessionIdOf: vi.fn<typeof import('@/lib/auth').authSessionIdOf>((result) => (result.tokenType === 'session' ? result.sessionId : undefined)),
   canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserViewPage(auth.userId, pageId);
+    return canUserViewPage(credentialActor(auth.userId, null), pageId);
   }),
   canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserEditPage(auth.userId, pageId);
+    return canUserEditPage(credentialActor(auth.userId, null), pageId);
   }),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn().mockResolvedValue(true),
   canUserEditPage: vi.fn().mockResolvedValue(true),
 }));
@@ -348,10 +351,18 @@ vi.mock('@/lib/ai/core/tool-filtering', () => ({
   filterToolsForEphemeralWorkspace: vi.fn((tools: unknown) => tools),
   filterToolsForSandboxEnablement: vi.fn((tools: unknown) => tools),
   filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
+  // G2 agent accounts: identity passthrough (the credential plane is not configured in these fixtures).
+  filterToolsForAgentAccounts: vi.fn((tools: unknown) => tools),
   filterToolsForReadOnly: vi.fn().mockReturnValue({}),
   filterToolsForWebSearch: vi.fn().mockReturnValue({}),
   filterToolsForMcpScope: vi.fn().mockReturnValue({}),
   buildPageAITools: vi.fn().mockReturnValue({}),
+}));
+// Not a built-in Imago agent: the route's Imago context load fails the turn
+// closed if it throws, so it must not reach this file's partial db mock.
+vi.mock('@/lib/ai/core/imago-agent-context', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/ai/core/imago-agent-context')>()),
+  loadImagoAgentContext: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('@/lib/ai/core/page-tree-context', () => ({
   getPageTreeContext: vi.fn(),
@@ -411,6 +422,16 @@ vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: { trackUsage: vi.fn(), trackToolUsage: vi.fn() },
   extractOpenRouterCostDollars: vi.fn(() => undefined),
   extractOpenRouterGenerationIds: vi.fn(() => []),
+  // $2 / $10 per million input / output tokens, and 4 chars per token.
+  calculateCost: vi.fn((_model: string, input = 0, output = 0) => (input * 2 + output * 10) / 1e6),
+  estimateTokens: vi.fn((text: string) => Math.ceil(text.length / 4)),
+}));
+
+// Deterministic hold: 3 cents reserved per chat call.
+vi.mock('@pagespace/lib/monitoring/chat-pricing', () => ({
+  estimateChatHoldCentsForModel: vi.fn(() => 3),
+  calcStepCostDollars: vi.fn(() => 0),
+  shouldAbortAfterStep: vi.fn(() => false),
 }));
 
 vi.mock('@/lib/mcp', () => ({ getMCPBridge: vi.fn() }));
@@ -475,6 +496,11 @@ import type { SessionAuthResult } from '@/lib/auth';
 import { MAX_BROWSER_SESSION_ID_LENGTH } from '@/lib/ai/core/browser-session-id-validation';
 import { createStreamAbortController } from '@/lib/ai/core/stream-abort-registry';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { streamText, type UIMessageChunk } from 'ai';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { createAIProvider } from '@/lib/ai/core/provider-factory';
+import { pipeUIMessageStreamStrippingStart } from '@/lib/ai/core/stream-pipe-utils';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 /** A signal that reports aborted=true — simulates onAbort having already fired. */
 const abortedSignal = (): AbortSignal => {
@@ -1108,7 +1134,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       expect(response).toBe(await mockRespondWithHelpAnswer.mock.results[0].value);
       expect(mockCanConsumeAI).not.toHaveBeenCalled();
       expect(mockRespondWithHelpAnswer).toHaveBeenCalledWith(
-        expect.objectContaining({ senderId: 'user-1', driveId: 'drive-1' })
+        expect.objectContaining({ sender: expect.objectContaining({ userId: 'user-1' }), driveId: 'drive-1' })
       );
     });
 
@@ -1606,5 +1632,149 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       const assistantSave = mockSaveMessageToDatabase.mock.calls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
       expect(assistantSave).toBeUndefined();
     });
+
+    it('WAL-5 (partial) given a gated turn that fails after the gate, settles on the wallet its hold was placed on', async () => {
+      mockCanConsumeAI.mockResolvedValueOnce({ allowed: true, holdId: 'hold-err', walletId: 'wallet-drive' });
+      mockTakeOverConversationStreams.mockRejectedValue(new Error('takeover boom'));
+
+      await POST(makeRequest());
+
+      const calls = vi.mocked(AIMonitoring.trackUsage).mock.calls;
+      expect(calls).toHaveLength(1);
+      expect({ success: calls[0][0].success, holdId: calls[0][0].holdId, walletId: calls[0][0].walletId })
+        .toEqual({ success: false, holdId: 'hold-err', walletId: 'wallet-drive' });
+    });
   });
+
+  // A Stop (or the credit ceiling) aborting the step that is still streaming. ai@6 then
+  // rejects `steps` and `totalUsage` for a single-step turn, which used to settle at $0.
+  describe('billing a turn aborted mid-step', () => {
+    const streamAbortedMidStep = () => {
+      vi.mocked(streamText).mockImplementationOnce(((options: MockStreamTextOptions) => {
+        captured.streamTextOptions = options;
+        const aborted = Promise.reject(new DOMException('This operation was aborted', 'AbortError'));
+        aborted.catch(() => {});
+        return {
+          toUIMessageStream: () => (async function* () {})(),
+          totalUsage: aborted,
+          steps: aborted,
+          finishReason: aborted,
+          response: aborted,
+        };
+      }) as unknown as typeof streamText);
+      vi.mocked(pipeUIMessageStreamStrippingStart).mockImplementationOnce(async (_result, _writer, options) => {
+        const chunks: UIMessageChunk[] = [
+          { type: 'start-step' },
+          { type: 'text-start', id: 't' },
+          { type: 'text-delta', id: 't', delta: 'o'.repeat(200) },
+        ];
+        for (const chunk of chunks) options?.onChunk?.(chunk);
+        options?.onContent?.();
+      });
+    };
+
+    it('given a Stop during the only step, settles the hold ONCE and bills the prompt plus the streamed output', async () => {
+      // Node 20's AbortSignal.any is missing under jsdom; the gated route combines signals with it.
+      const signalAny = (AbortSignal as { any?: unknown }).any;
+      (AbortSignal as unknown as { any: (signals: AbortSignal[]) => AbortSignal }).any = (signals) =>
+        signals.find((s) => s.aborted) ?? signals[0];
+      try {
+        mockCanConsumeAI.mockResolvedValueOnce({
+          allowed: true,
+          holdId: 'hold-1',
+          walletId: 'wallet-drive',
+          balanceSnapshot: { netSpendableCents: 1000 },
+        });
+        vi.mocked(createAIProvider).mockResolvedValueOnce({
+          model: {},
+          modelName: 'anthropic/claude-sonnet-5',
+          provider: 'openrouter',
+        } as unknown as Awaited<ReturnType<typeof createAIProvider>>);
+        vi.mocked(createStreamAbortController).mockReturnValueOnce({ streamId: 'stream_123', signal: abortedSignal(), controller: new AbortController() });
+        streamAbortedMidStep();
+
+        await POST(makeRequest());
+        await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+        await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+      } finally {
+        (AbortSignal as { any?: unknown }).any = signalAny;
+      }
+
+      const calls = vi.mocked(AIMonitoring.trackUsage).mock.calls;
+      expect(calls).toHaveLength(1);
+      const settled = calls[0][0];
+      expect(settled.holdId).toBe('hold-1');
+      // WAL-5: the interrupted turn settles on the wallet its hold was placed on.
+      expect(settled.walletId).toBe('wallet-drive');
+      // 50 output tokens were streamed (200 chars); the prompt is estimated, never zero.
+      expect(settled.outputTokens).toBe(50);
+      expect(settled.inputTokens).toBeGreaterThan(0);
+      expect(settled.providerCostDollars).toBeGreaterThan(0);
+      // Never above the 3-cent hold (at the 1.5x markup).
+      expect(settled.providerCostDollars).toBeLessThanOrEqual(0.03 / 1.5);
+      expect(settled.metadata).toMatchObject({ abortedStep: { outputTokens: 50, capped: false } });
+    });
+  });
+  describe('turn timing marks', () => {
+    it('persists the preflight marks on the usage row, in the order the steps complete', async () => {
+      await POST(makeRequest());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+
+      const calls = vi.mocked(AIMonitoring.trackUsage).mock.calls;
+      expect(calls).toHaveLength(1);
+      const timing = (calls[0][0].metadata as { timing?: { marks: Record<string, number> } }).timing;
+      expect(timing).toBeDefined();
+      const names = Object.keys(timing!.marks);
+      const inOrder = [
+        'location_resolved',
+        'mcp_scope_checked',
+        'view_permission_checked',
+        'permissions',
+        'page_row_loaded',
+        'page_loaded',
+        'conversation_authorized',
+        'user_loaded',
+        'credit_gate',
+        'conversation_ensured',
+        'user_message_persisted',
+        'message_saved',
+        'subscription_module_loaded',
+        'provider_ready',
+        'provider_settings_updated',
+        'sandbox_eligibility',
+        'command_catalog_loaded',
+        'integrations_import',
+        'integrations_ready',
+        'tools_ready',
+        'personalization',
+        'home_drive_resolved',
+        'active_plan_loaded',
+        'system_prompt',
+        'ask_user_synced',
+        'history_loaded',
+        'history_converted',
+        'history_compacted',
+        'history_prepared',
+        'display_name_ready',
+        'generation_started',
+      ].filter((name) => names.includes(name));
+      // Steps that ran in this fixture must appear in completion order; conditional steps
+      // (sandbox, command catalog) may be absent, but never out of place.
+      expect(names.filter((name) => inOrder.includes(name))).toEqual(inOrder);
+      for (const required of ['permissions', 'page_loaded', 'credit_gate', 'message_saved', 'provider_ready', 'tools_ready', 'system_prompt', 'history_prepared', 'generation_started']) {
+        expect(names).toContain(required);
+      }
+    });
+  });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(credentialActor(auth.userId, null), resourceId),
+    canPrincipalEditPage: (auth: { userId: string }, resourceId: string) => permissions.canUserEditPage(credentialActor(auth.userId, null), resourceId),
+  };
 });

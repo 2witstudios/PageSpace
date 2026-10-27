@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useStripe, useElements, PaymentElement } from '@stripe/react-stripe-js';
-import Link from 'next/link';
+import { MarketingLink } from '@/components/ui/MarketingLink';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -10,6 +10,7 @@ import { Loader2, AlertCircle, Tag } from 'lucide-react';
 import type { PlanDefinition } from '@/lib/subscription/plans';
 import { PromoCodeInput, type AppliedPromo } from './PromoCodeInput';
 import { post } from '@/lib/auth/auth-fetch';
+import { centsFromDollars, dollarsFromCents } from '@/lib/subscription/credits';
 
 interface ApplyPromoResponse {
   success: boolean;
@@ -59,11 +60,11 @@ export function EmbeddedCheckoutForm({
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: 'USD',
-    }).format(cents / 100);
+    }).format(dollarsFromCents(cents));
   };
 
   // Calculate discounted price if promo is applied
-  const originalPriceCents = plan.price.monthly * 100;
+  const originalPriceCents = centsFromDollars(plan.price.monthly);
   const discountedPriceCents = appliedPromo
     ? appliedPromo.discount.discountedAmount
     : originalPriceCents;
@@ -252,13 +253,13 @@ export function EmbeddedCheckoutForm({
       <p className="text-xs text-muted-foreground text-center">
         By subscribing, you agree to our terms of service. You can cancel anytime. Payment is
         processed by Stripe. See our{' '}
-        <Link href="/privacy" className="underline hover:text-foreground">
+        <MarketingLink href="/privacy" className="underline hover:text-foreground">
           Privacy Policy
-        </Link>{' '}
+        </MarketingLink>{' '}
         and{' '}
-        <Link href="/subprocessors" className="underline hover:text-foreground">
+        <MarketingLink href="/subprocessors" className="underline hover:text-foreground">
           Subprocessors
-        </Link>{' '}
+        </MarketingLink>{' '}
         page.
       </p>
     </form>

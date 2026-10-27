@@ -7,6 +7,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:db": "vitest run --config vitest.security.config.ts",
+    "credential-plane": "bun src/agent-accounts/executor/plane-main.ts",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:coverage": "vitest run --coverage",
     "email:dev": "email dev --dir emails",
@@ -22,6 +23,16 @@
       "types": "./dist/client-safe.d.ts",
       "import": "./dist/client-safe.js",
       "default": "./dist/client-safe.js"
+    },
+    "./home-signals/types": {
+      "types": "./dist/home-signals/types.d.ts",
+      "import": "./dist/home-signals/types.js",
+      "require": "./dist/home-signals/types.js"
+    },
+    "./home-signals/composer": {
+      "types": "./dist/home-signals/composer.d.ts",
+      "import": "./dist/home-signals/composer.js",
+      "require": "./dist/home-signals/composer.js"
     },
     "./commands/command-core": {
       "types": "./dist/commands/command-core.d.ts",
@@ -88,6 +99,26 @@
       "import": "./dist/ai/global-channel-id.js",
       "require": "./dist/ai/global-channel-id.js"
     },
+    "./agents/builtin-agents": {
+      "types": "./dist/agents/builtin-agents.d.ts",
+      "import": "./dist/agents/builtin-agents.js",
+      "require": "./dist/agents/builtin-agents.js"
+    },
+    "./agents/imago-reach": {
+      "types": "./dist/agents/imago-reach.d.ts",
+      "import": "./dist/agents/imago-reach.js",
+      "require": "./dist/agents/imago-reach.js"
+    },
+    "./agents/imago-drive-access": {
+      "types": "./dist/agents/imago-drive-access.d.ts",
+      "import": "./dist/agents/imago-drive-access.js",
+      "require": "./dist/agents/imago-drive-access.js"
+    },
+    "./agents/provision-imago-agents": {
+      "types": "./dist/agents/provision-imago-agents.d.ts",
+      "import": "./dist/agents/provision-imago-agents.js",
+      "require": "./dist/agents/provision-imago-agents.js"
+    },
     "./agent-workspaces/workspace-fractions": {
       "types": "./dist/agent-workspaces/workspace-fractions.d.ts",
       "import": "./dist/agent-workspaces/workspace-fractions.js",
@@ -122,6 +153,101 @@
       "types": "./dist/drive-envs/plan-env-delete.d.ts",
       "import": "./dist/drive-envs/plan-env-delete.js",
       "require": "./dist/drive-envs/plan-env-delete.js"
+    },
+    "./organizations/api-error-codes": {
+      "types": "./dist/organizations/api-error-codes.d.ts",
+      "import": "./dist/organizations/api-error-codes.js",
+      "require": "./dist/organizations/api-error-codes.js"
+    },
+    "./organizations/authorize": {
+      "types": "./dist/organizations/authorize.d.ts",
+      "import": "./dist/organizations/authorize.js",
+      "require": "./dist/organizations/authorize.js"
+    },
+    "./organizations/deletion": {
+      "types": "./dist/organizations/deletion.d.ts",
+      "import": "./dist/organizations/deletion.js",
+      "require": "./dist/organizations/deletion.js"
+    },
+    "./organizations/invitations": {
+      "types": "./dist/organizations/invitations.d.ts",
+      "import": "./dist/organizations/invitations.js",
+      "require": "./dist/organizations/invitations.js"
+    },
+    "./avatars/avatar-core": {
+      "types": "./dist/avatars/avatar-core.d.ts",
+      "import": "./dist/avatars/avatar-core.js",
+      "require": "./dist/avatars/avatar-core.js"
+    },
+    "./organizations/org-avatar-core": {
+      "types": "./dist/organizations/org-avatar-core.d.ts",
+      "import": "./dist/organizations/org-avatar-core.js",
+      "require": "./dist/organizations/org-avatar-core.js"
+    },
+    "./organizations/invite-view-core": {
+      "types": "./dist/organizations/invite-view-core.d.ts",
+      "import": "./dist/organizations/invite-view-core.js",
+      "require": "./dist/organizations/invite-view-core.js"
+    },
+    "./organizations/domains": {
+      "types": "./dist/organizations/domains.d.ts",
+      "import": "./dist/organizations/domains.js",
+      "require": "./dist/organizations/domains.js"
+    },
+    "./organizations/domains-core": {
+      "types": "./dist/organizations/domains-core.d.ts",
+      "import": "./dist/organizations/domains-core.js",
+      "require": "./dist/organizations/domains-core.js"
+    },
+    "./audit/org-audit-query": {
+      "types": "./dist/audit/org-audit-query.d.ts",
+      "import": "./dist/audit/org-audit-query.js",
+      "require": "./dist/audit/org-audit-query.js"
+    },
+    "./audit/org-audit-query-core": {
+      "types": "./dist/audit/org-audit-query-core.d.ts",
+      "import": "./dist/audit/org-audit-query-core.js",
+      "require": "./dist/audit/org-audit-query-core.js"
+    },
+    "./organizations/departure-suppression": {
+      "types": "./dist/organizations/departure-suppression.d.ts",
+      "import": "./dist/organizations/departure-suppression.js",
+      "require": "./dist/organizations/departure-suppression.js"
+    },
+    "./audit/audit-db-binding": {
+      "types": "./dist/audit/audit-db-binding.d.ts",
+      "import": "./dist/audit/audit-db-binding.js",
+      "require": "./dist/audit/audit-db-binding.js"
+    },
+    "./organizations/seats": {
+      "types": "./dist/organizations/seats.d.ts",
+      "import": "./dist/organizations/seats.js",
+      "require": "./dist/organizations/seats.js"
+    },
+    "./organizations/seat-service": {
+      "types": "./dist/organizations/seat-service.d.ts",
+      "import": "./dist/organizations/seat-service.js",
+      "require": "./dist/organizations/seat-service.js"
+    },
+    "./organizations/membership": {
+      "types": "./dist/organizations/membership.d.ts",
+      "import": "./dist/organizations/membership.js",
+      "require": "./dist/organizations/membership.js"
+    },
+    "./organizations/drive-picker-groups": {
+      "types": "./dist/organizations/drive-picker-groups.d.ts",
+      "import": "./dist/organizations/drive-picker-groups.js",
+      "require": "./dist/organizations/drive-picker-groups.js"
+    },
+    "./organizations/invite-choice": {
+      "types": "./dist/organizations/invite-choice.d.ts",
+      "import": "./dist/organizations/invite-choice.js",
+      "require": "./dist/organizations/invite-choice.js"
+    },
+    "./organizations/repository": {
+      "types": "./dist/organizations/repository.d.ts",
+      "import": "./dist/organizations/repository.js",
+      "require": "./dist/organizations/repository.js"
     },
     "./services/drive-envs/local-env-revoke": {
       "types": "./dist/services/drive-envs/local-env-revoke.d.ts",
@@ -167,6 +293,186 @@
       "types": "./dist/env-bridge/grant.d.ts",
       "import": "./dist/env-bridge/grant.js",
       "require": "./dist/env-bridge/grant.js"
+    },
+    "./agent-accounts/grant": {
+      "types": "./dist/agent-accounts/grant.d.ts",
+      "import": "./dist/agent-accounts/grant.js",
+      "require": "./dist/agent-accounts/grant.js"
+    },
+    "./agent-accounts/canonical-request": {
+      "types": "./dist/agent-accounts/canonical-request.d.ts",
+      "import": "./dist/agent-accounts/canonical-request.js",
+      "require": "./dist/agent-accounts/canonical-request.js"
+    },
+    "./agent-accounts/approval": {
+      "types": "./dist/agent-accounts/approval.d.ts",
+      "import": "./dist/agent-accounts/approval.js",
+      "require": "./dist/agent-accounts/approval.js"
+    },
+    "./agent-accounts/audit": {
+      "types": "./dist/agent-accounts/audit.d.ts",
+      "import": "./dist/agent-accounts/audit.js",
+      "require": "./dist/agent-accounts/audit.js"
+    },
+    "./agent-accounts/store/store-adapter": {
+      "types": "./dist/agent-accounts/store/store-adapter.d.ts",
+      "import": "./dist/agent-accounts/store/store-adapter.js",
+      "require": "./dist/agent-accounts/store/store-adapter.js"
+    },
+    "./agent-accounts/canonicalize-request": {
+      "types": "./dist/agent-accounts/canonicalize-request.d.ts",
+      "import": "./dist/agent-accounts/canonicalize-request.js",
+      "require": "./dist/agent-accounts/canonicalize-request.js"
+    },
+    "./agent-accounts/digest-request": {
+      "types": "./dist/agent-accounts/digest-request.d.ts",
+      "import": "./dist/agent-accounts/digest-request.js",
+      "require": "./dist/agent-accounts/digest-request.js"
+    },
+    "./agent-accounts/render-approval-subject": {
+      "types": "./dist/agent-accounts/render-approval-subject.d.ts",
+      "import": "./dist/agent-accounts/render-approval-subject.js",
+      "require": "./dist/agent-accounts/render-approval-subject.js"
+    },
+    "./agent-accounts/decide-replay": {
+      "types": "./dist/agent-accounts/decide-replay.d.ts",
+      "import": "./dist/agent-accounts/decide-replay.js",
+      "require": "./dist/agent-accounts/decide-replay.js"
+    },
+    "./agent-accounts/decide-retry": {
+      "types": "./dist/agent-accounts/decide-retry.d.ts",
+      "import": "./dist/agent-accounts/decide-retry.js",
+      "require": "./dist/agent-accounts/decide-retry.js"
+    },
+    "./agent-accounts/replay-store-repository": {
+      "types": "./dist/agent-accounts/replay-store-repository.d.ts",
+      "import": "./dist/agent-accounts/replay-store-repository.js",
+      "require": "./dist/agent-accounts/replay-store-repository.js"
+    },
+    "./agent-accounts/grant-constants": {
+      "types": "./dist/agent-accounts/grant-constants.d.ts",
+      "import": "./dist/agent-accounts/grant-constants.js",
+      "require": "./dist/agent-accounts/grant-constants.js"
+    },
+    "./agent-accounts/encode-grant": {
+      "types": "./dist/agent-accounts/encode-grant.d.ts",
+      "import": "./dist/agent-accounts/encode-grant.js",
+      "require": "./dist/agent-accounts/encode-grant.js"
+    },
+    "./agent-accounts/parse-grant": {
+      "types": "./dist/agent-accounts/parse-grant.d.ts",
+      "import": "./dist/agent-accounts/parse-grant.js",
+      "require": "./dist/agent-accounts/parse-grant.js"
+    },
+    "./agent-accounts/verify-grant": {
+      "types": "./dist/agent-accounts/verify-grant.d.ts",
+      "import": "./dist/agent-accounts/verify-grant.js",
+      "require": "./dist/agent-accounts/verify-grant.js"
+    },
+    "./agent-accounts/decide-sandbox-binding": {
+      "types": "./dist/agent-accounts/decide-sandbox-binding.d.ts",
+      "import": "./dist/agent-accounts/decide-sandbox-binding.js",
+      "require": "./dist/agent-accounts/decide-sandbox-binding.js"
+    },
+    "./agent-accounts/collapse-verdict": {
+      "types": "./dist/agent-accounts/collapse-verdict.d.ts",
+      "import": "./dist/agent-accounts/collapse-verdict.js",
+      "require": "./dist/agent-accounts/collapse-verdict.js"
+    },
+    "./agent-accounts/grant-gate-executor": {
+      "types": "./dist/agent-accounts/grant-gate-executor.d.ts",
+      "import": "./dist/agent-accounts/grant-gate-executor.js",
+      "require": "./dist/agent-accounts/grant-gate-executor.js"
+    },
+    "./agent-accounts/decide-approval": {
+      "types": "./dist/agent-accounts/decide-approval.d.ts",
+      "import": "./dist/agent-accounts/decide-approval.js",
+      "require": "./dist/agent-accounts/decide-approval.js"
+    },
+    "./agent-accounts/bind-approval": {
+      "types": "./dist/agent-accounts/bind-approval.d.ts",
+      "import": "./dist/agent-accounts/bind-approval.js",
+      "require": "./dist/agent-accounts/bind-approval.js"
+    },
+    "./agent-accounts/build-audit-record": {
+      "types": "./dist/agent-accounts/build-audit-record.d.ts",
+      "import": "./dist/agent-accounts/build-audit-record.js",
+      "require": "./dist/agent-accounts/build-audit-record.js"
+    },
+    "./agent-accounts/decide-audit-gate": {
+      "types": "./dist/agent-accounts/decide-audit-gate.d.ts",
+      "import": "./dist/agent-accounts/decide-audit-gate.js",
+      "require": "./dist/agent-accounts/decide-audit-gate.js"
+    },
+    "./agent-accounts/redact-known-values": {
+      "types": "./dist/agent-accounts/redact-known-values.d.ts",
+      "import": "./dist/agent-accounts/redact-known-values.js",
+      "require": "./dist/agent-accounts/redact-known-values.js"
+    },
+    "./agent-accounts/audit-repository": {
+      "types": "./dist/agent-accounts/audit-repository.d.ts",
+      "import": "./dist/agent-accounts/audit-repository.js",
+      "require": "./dist/agent-accounts/audit-repository.js"
+    },
+    "./agent-accounts/lookup-operation": {
+      "types": "./dist/agent-accounts/lookup-operation.d.ts",
+      "import": "./dist/agent-accounts/lookup-operation.js",
+      "require": "./dist/agent-accounts/lookup-operation.js"
+    },
+    "./agent-accounts/find-operation-registry-conflicts": {
+      "types": "./dist/agent-accounts/find-operation-registry-conflicts.d.ts",
+      "import": "./dist/agent-accounts/find-operation-registry-conflicts.js",
+      "require": "./dist/agent-accounts/find-operation-registry-conflicts.js"
+    },
+    "./agent-accounts/find-duplicate-resource-slots": {
+      "types": "./dist/agent-accounts/find-duplicate-resource-slots.d.ts",
+      "import": "./dist/agent-accounts/find-duplicate-resource-slots.js",
+      "require": "./dist/agent-accounts/find-duplicate-resource-slots.js"
+    },
+    "./agent-accounts/denial-audit-record": {
+      "types": "./dist/agent-accounts/denial-audit-record.d.ts",
+      "import": "./dist/agent-accounts/denial-audit-record.js",
+      "require": "./dist/agent-accounts/denial-audit-record.js"
+    },
+    "./agent-accounts/build-denial-record": {
+      "types": "./dist/agent-accounts/build-denial-record.d.ts",
+      "import": "./dist/agent-accounts/build-denial-record.js",
+      "require": "./dist/agent-accounts/build-denial-record.js"
+    },
+    "./agent-accounts/audit-gate-executor": {
+      "types": "./dist/agent-accounts/audit-gate-executor.d.ts",
+      "import": "./dist/agent-accounts/audit-gate-executor.js",
+      "require": "./dist/agent-accounts/audit-gate-executor.js"
+    },
+    "./agent-accounts/account-authority-key": {
+      "types": "./dist/agent-accounts/account-authority-key.d.ts",
+      "import": "./dist/agent-accounts/account-authority-key.js",
+      "require": "./dist/agent-accounts/account-authority-key.js"
+    },
+    "./agent-accounts/sign-grant": {
+      "types": "./dist/agent-accounts/sign-grant.d.ts",
+      "import": "./dist/agent-accounts/sign-grant.js",
+      "require": "./dist/agent-accounts/sign-grant.js"
+    },
+    "./auth/account-authority-signing-key": {
+      "types": "./dist/auth/account-authority-signing-key.d.ts",
+      "import": "./dist/auth/account-authority-signing-key.js",
+      "require": "./dist/auth/account-authority-signing-key.js"
+    },
+    "./agent-accounts/always-allowed-by-class": {
+      "types": "./dist/agent-accounts/always-allowed-by-class.d.ts",
+      "import": "./dist/agent-accounts/always-allowed-by-class.js",
+      "require": "./dist/agent-accounts/always-allowed-by-class.js"
+    },
+    "./permissions/decide-account-access": {
+      "types": "./dist/permissions/decide-account-access.d.ts",
+      "import": "./dist/permissions/decide-account-access.js",
+      "require": "./dist/permissions/decide-account-access.js"
+    },
+    "./permissions/account-permissions": {
+      "types": "./dist/permissions/account-permissions.d.ts",
+      "import": "./dist/permissions/account-permissions.js",
+      "require": "./dist/permissions/account-permissions.js"
     },
     "./env-bridge/policy-types": {
       "types": "./dist/env-bridge/policy-types.d.ts",
@@ -303,6 +609,11 @@
       "import": "./dist/logging/logger-config.js",
       "require": "./dist/logging/logger-config.js"
     },
+    "./logging/error-cause": {
+      "types": "./dist/logging/error-cause.d.ts",
+      "import": "./dist/logging/error-cause.js",
+      "require": "./dist/logging/error-cause.js"
+    },
     "./logging/logger-database": {
       "types": "./dist/logging/logger-database.d.ts",
       "import": "./dist/logging/logger-database.js",
@@ -378,10 +689,50 @@
       "import": "./dist/observability/error-resolutions.js",
       "require": "./dist/observability/error-resolutions.js"
     },
+    "./billing/deployment-capability": {
+      "types": "./dist/billing/deployment-capability.d.ts",
+      "import": "./dist/billing/deployment-capability.js",
+      "require": "./dist/billing/deployment-capability.js"
+    },
+    "./billing/apple/apple-products": {
+      "types": "./dist/billing/apple/apple-products.d.ts",
+      "import": "./dist/billing/apple/apple-products.js",
+      "require": "./dist/billing/apple/apple-products.js"
+    },
+    "./billing/apple/apple-core": {
+      "types": "./dist/billing/apple/apple-core.d.ts",
+      "import": "./dist/billing/apple/apple-core.js",
+      "require": "./dist/billing/apple/apple-core.js"
+    },
+    "./billing/apple/apple-verify": {
+      "types": "./dist/billing/apple/apple-verify.d.ts",
+      "import": "./dist/billing/apple/apple-verify.js",
+      "require": "./dist/billing/apple/apple-verify.js"
+    },
+    "./billing/apple/apple-funding": {
+      "types": "./dist/billing/apple/apple-funding.d.ts",
+      "import": "./dist/billing/apple/apple-funding.js",
+      "require": "./dist/billing/apple/apple-funding.js"
+    },
+    "./billing/apple/apple-account": {
+      "types": "./dist/billing/apple/apple-account.d.ts",
+      "import": "./dist/billing/apple/apple-account.js",
+      "require": "./dist/billing/apple/apple-account.js"
+    },
+    "./billing/apple/apple-entitlement": {
+      "types": "./dist/billing/apple/apple-entitlement.d.ts",
+      "import": "./dist/billing/apple/apple-entitlement.js",
+      "require": "./dist/billing/apple/apple-entitlement.js"
+    },
     "./billing/subscription-tiers": {
       "types": "./dist/billing/subscription-tiers.d.ts",
       "import": "./dist/billing/subscription-tiers.js",
       "require": "./dist/billing/subscription-tiers.js"
+    },
+    "./billing/storage-addon": {
+      "types": "./dist/billing/storage-addon.d.ts",
+      "import": "./dist/billing/storage-addon.js",
+      "require": "./dist/billing/storage-addon.js"
     },
     "./billing/subscription-tier-sync": {
       "types": "./dist/billing/subscription-tier-sync.d.ts",
@@ -398,10 +749,85 @@
       "import": "./dist/billing/credit-pricing.js",
       "require": "./dist/billing/credit-pricing.js"
     },
+    "./billing/money-model": {
+      "types": "./dist/billing/money-model.d.ts",
+      "import": "./dist/billing/money-model.js",
+      "require": "./dist/billing/money-model.js"
+    },
+    "./billing/credit-liability": {
+      "types": "./dist/billing/credit-liability.d.ts",
+      "import": "./dist/billing/credit-liability.js",
+      "require": "./dist/billing/credit-liability.js"
+    },
+    "./billing/credit-liability-query": {
+      "types": "./dist/billing/credit-liability-query.d.ts",
+      "import": "./dist/billing/credit-liability-query.js",
+      "require": "./dist/billing/credit-liability-query.js"
+    },
+    "./billing/credit-copy": {
+      "types": "./dist/billing/credit-copy.d.ts",
+      "import": "./dist/billing/credit-copy.js",
+      "require": "./dist/billing/credit-copy.js"
+    },
     "./billing/credit-gate": {
       "types": "./dist/billing/credit-gate.d.ts",
       "import": "./dist/billing/credit-gate.js",
       "require": "./dist/billing/credit-gate.js"
+    },
+    "./billing/spend-fallback": {
+      "types": "./dist/billing/spend-fallback.d.ts",
+      "import": "./dist/billing/spend-fallback.js",
+      "require": "./dist/billing/spend-fallback.js"
+    },
+    "./billing/spend-refusal-copy": {
+      "types": "./dist/billing/spend-refusal-copy.d.ts",
+      "import": "./dist/billing/spend-refusal-copy.js",
+      "require": "./dist/billing/spend-refusal-copy.js"
+    },
+    "./billing/spend-surface": {
+      "types": "./dist/billing/spend-surface.d.ts",
+      "import": "./dist/billing/spend-surface.js",
+      "require": "./dist/billing/spend-surface.js"
+    },
+    "./billing/automation-run-record": {
+      "types": "./dist/billing/automation-run-record.d.ts",
+      "import": "./dist/billing/automation-run-record.js",
+      "require": "./dist/billing/automation-run-record.js"
+    },
+    "./billing/wallet-surface": {
+      "types": "./dist/billing/wallet-surface.d.ts",
+      "import": "./dist/billing/wallet-surface.js",
+      "require": "./dist/billing/wallet-surface.js"
+    },
+    "./billing/automation-attribution": {
+      "types": "./dist/billing/automation-attribution.d.ts",
+      "import": "./dist/billing/automation-attribution.js",
+      "require": "./dist/billing/automation-attribution.js"
+    },
+    "./billing/spend-target": {
+      "types": "./dist/billing/spend-target.d.ts",
+      "import": "./dist/billing/spend-target.js",
+      "require": "./dist/billing/spend-target.js"
+    },
+    "./billing/wallet-reconcile": {
+      "types": "./dist/billing/wallet-reconcile.d.ts",
+      "import": "./dist/billing/wallet-reconcile.js",
+      "require": "./dist/billing/wallet-reconcile.js"
+    },
+    "./billing/spend-resolution": {
+      "types": "./dist/billing/spend-resolution.d.ts",
+      "import": "./dist/billing/spend-resolution.js",
+      "require": "./dist/billing/spend-resolution.js"
+    },
+    "./billing/call-admission": {
+      "types": "./dist/billing/call-admission.d.ts",
+      "import": "./dist/billing/call-admission.js",
+      "require": "./dist/billing/call-admission.js"
+    },
+    "./billing/wallet-views": {
+      "types": "./dist/billing/wallet-views.d.ts",
+      "import": "./dist/billing/wallet-views.js",
+      "require": "./dist/billing/wallet-views.js"
     },
     "./billing/credit-backfill": {
       "types": "./dist/billing/credit-backfill.d.ts",
@@ -412,6 +838,16 @@
       "types": "./dist/billing/credit-funding.d.ts",
       "import": "./dist/billing/credit-funding.js",
       "require": "./dist/billing/credit-funding.js"
+    },
+    "./billing/invoice-grant": {
+      "types": "./dist/billing/invoice-grant.d.ts",
+      "import": "./dist/billing/invoice-grant.js",
+      "require": "./dist/billing/invoice-grant.js"
+    },
+    "./billing/missed-grant-reconcile": {
+      "types": "./dist/billing/missed-grant-reconcile.d.ts",
+      "import": "./dist/billing/missed-grant-reconcile.js",
+      "require": "./dist/billing/missed-grant-reconcile.js"
     },
     "./billing/cost-reconcile": {
       "types": "./dist/billing/cost-reconcile.d.ts",
@@ -448,6 +884,16 @@
       "import": "./dist/billing/sandbox-payer.js",
       "require": "./dist/billing/sandbox-payer.js"
     },
+    "./billing/compute-charge": {
+      "types": "./dist/billing/compute-charge.d.ts",
+      "import": "./dist/billing/compute-charge.js",
+      "require": "./dist/billing/compute-charge.js"
+    },
+    "./billing/compute-gate": {
+      "types": "./dist/billing/compute-gate.d.ts",
+      "import": "./dist/billing/compute-gate.js",
+      "require": "./dist/billing/compute-gate.js"
+    },
     "./billing/sandbox-eligibility": {
       "types": "./dist/billing/sandbox-eligibility.d.ts",
       "import": "./dist/billing/sandbox-eligibility.js",
@@ -457,6 +903,71 @@
       "types": "./dist/billing/live-concurrency-query.d.ts",
       "import": "./dist/billing/live-concurrency-query.js",
       "require": "./dist/billing/live-concurrency-query.js"
+    },
+    "./billing/wallet-core": {
+      "types": "./dist/billing/wallet-core.d.ts",
+      "import": "./dist/billing/wallet-core.js",
+      "require": "./dist/billing/wallet-core.js"
+    },
+    "./billing/wallet-funding": {
+      "types": "./dist/billing/wallet-funding.d.ts",
+      "import": "./dist/billing/wallet-funding.js",
+      "require": "./dist/billing/wallet-funding.js"
+    },
+    "./billing/org-subscription-core": {
+      "types": "./dist/billing/org-subscription-core.d.ts",
+      "import": "./dist/billing/org-subscription-core.js",
+      "require": "./dist/billing/org-subscription-core.js"
+    },
+    "./billing/org-gift-core": {
+      "types": "./dist/billing/org-gift-core.d.ts",
+      "import": "./dist/billing/org-gift-core.js",
+      "require": "./dist/billing/org-gift-core.js"
+    },
+    "./billing/org-gift": {
+      "types": "./dist/billing/org-gift.d.ts",
+      "import": "./dist/billing/org-gift.js",
+      "require": "./dist/billing/org-gift.js"
+    },
+    "./billing/org-plan-quote": {
+      "types": "./dist/billing/org-plan-quote.d.ts",
+      "import": "./dist/billing/org-plan-quote.js",
+      "require": "./dist/billing/org-plan-quote.js"
+    },
+    "./billing/wallet-admin": {
+      "types": "./dist/billing/wallet-admin.d.ts",
+      "import": "./dist/billing/wallet-admin.js",
+      "require": "./dist/billing/wallet-admin.js"
+    },
+    "./test/wallet-leg-invariant": {
+      "types": "./dist/test/wallet-leg-invariant.d.ts",
+      "import": "./dist/test/wallet-leg-invariant.js",
+      "require": "./dist/test/wallet-leg-invariant.js"
+    },
+    "./organizations/status": {
+      "types": "./dist/organizations/status.d.ts",
+      "import": "./dist/organizations/status.js",
+      "require": "./dist/organizations/status.js"
+    },
+    "./organizations/status-core": {
+      "types": "./dist/organizations/status-core.d.ts",
+      "import": "./dist/organizations/status-core.js",
+      "require": "./dist/organizations/status-core.js"
+    },
+    "./organizations/loosening-core": {
+      "types": "./dist/organizations/loosening-core.d.ts",
+      "import": "./dist/organizations/loosening-core.js",
+      "require": "./dist/organizations/loosening-core.js"
+    },
+    "./billing/org-webhook-core": {
+      "types": "./dist/billing/org-webhook-core.d.ts",
+      "import": "./dist/billing/org-webhook-core.js",
+      "require": "./dist/billing/org-webhook-core.js"
+    },
+    "./billing/wallet-funding-shell": {
+      "types": "./dist/billing/wallet-funding-shell.d.ts",
+      "import": "./dist/billing/wallet-funding-shell.js",
+      "require": "./dist/billing/wallet-funding-shell.js"
     },
     "./logging/siem-error-hook": {
       "types": "./dist/logging/siem-error-hook.d.ts",
@@ -477,6 +988,11 @@
       "types": "./dist/monitoring/ai-monitoring.d.ts",
       "import": "./dist/monitoring/ai-monitoring.js",
       "require": "./dist/monitoring/ai-monitoring.js"
+    },
+    "./monitoring/machine-pricing": {
+      "types": "./dist/monitoring/machine-pricing.d.ts",
+      "import": "./dist/monitoring/machine-pricing.js",
+      "require": "./dist/monitoring/machine-pricing.js"
     },
     "./monitoring/usage-source": {
       "types": "./dist/monitoring/usage-source.d.ts",
@@ -742,6 +1258,16 @@
       "types": "./dist/services/app-hosting/app-lifecycle-metering.d.ts",
       "import": "./dist/services/app-hosting/app-lifecycle-metering.js",
       "require": "./dist/services/app-hosting/app-lifecycle-metering.js"
+    },
+    "./organizations/creator-reattribution": {
+      "types": "./dist/organizations/creator-reattribution.d.ts",
+      "import": "./dist/organizations/creator-reattribution.js",
+      "require": "./dist/organizations/creator-reattribution.js"
+    },
+    "./services/app-hosting/app-unpark": {
+      "types": "./dist/services/app-hosting/app-unpark.d.ts",
+      "import": "./dist/services/app-hosting/app-unpark.js",
+      "require": "./dist/services/app-hosting/app-unpark.js"
     },
     "./services/app-hosting/app-machine-events": {
       "types": "./dist/services/app-hosting/app-machine-events.d.ts",
@@ -1163,6 +1689,31 @@
       "import": "./dist/services/subdomain-allocation.js",
       "require": "./dist/services/subdomain-allocation.js"
     },
+    "./services/org-drive-service": {
+      "types": "./dist/services/org-drive-service.d.ts",
+      "import": "./dist/services/org-drive-service.js",
+      "require": "./dist/services/org-drive-service.js"
+    },
+    "./services/drive-wallet-service": {
+      "types": "./dist/services/drive-wallet-service.d.ts",
+      "import": "./dist/services/drive-wallet-service.js",
+      "require": "./dist/services/drive-wallet-service.js"
+    },
+    "./services/drive-join-request-service": {
+      "types": "./dist/services/drive-join-request-service.d.ts",
+      "import": "./dist/services/drive-join-request-service.js",
+      "require": "./dist/services/drive-join-request-service.js"
+    },
+    "./services/org-drive-service-deps": {
+      "types": "./dist/services/org-drive-service-deps.d.ts",
+      "import": "./dist/services/org-drive-service-deps.js",
+      "require": "./dist/services/org-drive-service-deps.js"
+    },
+    "./organizations/org-drive-ownership": {
+      "types": "./dist/organizations/org-drive-ownership.d.ts",
+      "import": "./dist/organizations/org-drive-ownership.js",
+      "require": "./dist/organizations/org-drive-ownership.js"
+    },
     "./services/drive-guards": {
       "types": "./dist/services/drive-guards.d.ts",
       "import": "./dist/services/drive-guards.js",
@@ -1172,6 +1723,21 @@
       "types": "./dist/services/drive-member-service.d.ts",
       "import": "./dist/services/drive-member-service.js",
       "require": "./dist/services/drive-member-service.js"
+    },
+    "./services/org-membership-sync": {
+      "types": "./dist/services/org-membership-sync.d.ts",
+      "import": "./dist/services/org-membership-sync.js",
+      "require": "./dist/services/org-membership-sync.js"
+    },
+    "./services/drive-transition-invalidation": {
+      "types": "./dist/services/drive-transition-invalidation.d.ts",
+      "import": "./dist/services/drive-transition-invalidation.js",
+      "require": "./dist/services/drive-transition-invalidation.js"
+    },
+    "./services/org-membership-sync-core": {
+      "types": "./dist/services/org-membership-sync-core.d.ts",
+      "import": "./dist/services/org-membership-sync-core.js",
+      "require": "./dist/services/org-membership-sync-core.js"
     },
     "./services/calendar-event-drive-service": {
       "types": "./dist/services/calendar-event-drive-service.d.ts",
@@ -1598,6 +2164,16 @@
       "import": "./dist/publish/render-sheet-page.js",
       "require": "./dist/publish/render-sheet-page.js"
     },
+    "./organizations/automation-ownership": {
+      "types": "./dist/organizations/automation-ownership.d.ts",
+      "import": "./dist/organizations/automation-ownership.js",
+      "require": "./dist/organizations/automation-ownership.js"
+    },
+    "./organizations/leave": {
+      "types": "./dist/organizations/leave.d.ts",
+      "import": "./dist/organizations/leave.js",
+      "require": "./dist/organizations/leave.js"
+    },
     "./notifications/types": {
       "types": "./dist/notifications/types.d.ts",
       "import": "./dist/notifications/types.js",
@@ -1773,6 +2349,11 @@
       "import": "./dist/integrations/converter/ai-sdk.js",
       "require": "./dist/integrations/converter/ai-sdk.js"
     },
+    "./integrations/validation/validate-base-url": {
+      "types": "./dist/integrations/validation/validate-base-url.d.ts",
+      "import": "./dist/integrations/validation/validate-base-url.js",
+      "require": "./dist/integrations/validation/validate-base-url.js"
+    },
     "./integrations/saga/execute-tool": {
       "types": "./dist/integrations/saga/execute-tool.d.ts",
       "import": "./dist/integrations/saga/execute-tool.js",
@@ -1837,6 +2418,11 @@
       "types": "./dist/security/auth-handoff-sweep.d.ts",
       "import": "./dist/security/auth-handoff-sweep.js",
       "require": "./dist/security/auth-handoff-sweep.js"
+    },
+    "./security/web-fetch-ssrf": {
+      "types": "./dist/security/web-fetch-ssrf.d.ts",
+      "import": "./dist/security/web-fetch-ssrf.js",
+      "require": "./dist/security/web-fetch-ssrf.js"
     },
     "./security/url-validator": {
       "types": "./dist/security/url-validator.d.ts",
@@ -1938,6 +2524,46 @@
       "import": "./dist/auth/oauth-utils.js",
       "require": "./dist/auth/oauth-utils.js"
     },
+    "./auth/apple/apple-client-secret": {
+      "types": "./dist/auth/apple/apple-client-secret.d.ts",
+      "import": "./dist/auth/apple/apple-client-secret.js",
+      "require": "./dist/auth/apple/apple-client-secret.js"
+    },
+    "./auth/apple/apple-jwks": {
+      "types": "./dist/auth/apple/apple-jwks.d.ts",
+      "import": "./dist/auth/apple/apple-jwks.js",
+      "require": "./dist/auth/apple/apple-jwks.js"
+    },
+    "./auth/apple/apple-jwt": {
+      "types": "./dist/auth/apple/apple-jwt.d.ts",
+      "import": "./dist/auth/apple/apple-jwt.js",
+      "require": "./dist/auth/apple/apple-jwt.js"
+    },
+    "./auth/apple/apple-token-api": {
+      "types": "./dist/auth/apple/apple-token-api.d.ts",
+      "import": "./dist/auth/apple/apple-token-api.js",
+      "require": "./dist/auth/apple/apple-token-api.js"
+    },
+    "./auth/apple/apple-token-store": {
+      "types": "./dist/auth/apple/apple-token-store.d.ts",
+      "import": "./dist/auth/apple/apple-token-store.js",
+      "require": "./dist/auth/apple/apple-token-store.js"
+    },
+    "./auth/apple/apple-notifications": {
+      "types": "./dist/auth/apple/apple-notifications.d.ts",
+      "import": "./dist/auth/apple/apple-notifications.js",
+      "require": "./dist/auth/apple/apple-notifications.js"
+    },
+    "./auth/apple/capture-apple-refresh-token": {
+      "types": "./dist/auth/apple/capture-apple-refresh-token.d.ts",
+      "import": "./dist/auth/apple/capture-apple-refresh-token.js",
+      "require": "./dist/auth/apple/capture-apple-refresh-token.js"
+    },
+    "./auth/apple/revoke-apple-tokens": {
+      "types": "./dist/auth/apple/revoke-apple-tokens.d.ts",
+      "import": "./dist/auth/apple/revoke-apple-tokens.js",
+      "require": "./dist/auth/apple/revoke-apple-tokens.js"
+    },
     "./auth/opaque-tokens": {
       "types": "./dist/auth/opaque-tokens.d.ts",
       "import": "./dist/auth/opaque-tokens.js",
@@ -1947,6 +2573,16 @@
       "types": "./dist/auth/rate-limit-utils.d.ts",
       "import": "./dist/auth/rate-limit-utils.js",
       "require": "./dist/auth/rate-limit-utils.js"
+    },
+    "./auth/authentication-evidence": {
+      "types": "./dist/auth/authentication-evidence.d.ts",
+      "import": "./dist/auth/authentication-evidence.js",
+      "require": "./dist/auth/authentication-evidence.js"
+    },
+    "./auth/reauthentication": {
+      "types": "./dist/auth/reauthentication.d.ts",
+      "import": "./dist/auth/reauthentication.js",
+      "require": "./dist/auth/reauthentication.js"
     },
     "./auth/session-service": {
       "types": "./dist/auth/session-service.d.ts",
@@ -2022,6 +2658,41 @@
       "types": "./dist/permissions/permissions.d.ts",
       "import": "./dist/permissions/permissions.js",
       "require": "./dist/permissions/permissions.js"
+    },
+    "./permissions/open-drive-floor": {
+      "types": "./dist/permissions/open-drive-floor.d.ts",
+      "import": "./dist/permissions/open-drive-floor.js",
+      "require": "./dist/permissions/open-drive-floor.js"
+    },
+    "./permissions/app-unpark-authority": {
+      "types": "./dist/permissions/app-unpark-authority.d.ts",
+      "import": "./dist/permissions/app-unpark-authority.js",
+      "require": "./dist/permissions/app-unpark-authority.js"
+    },
+    "./permissions/drive-relationship": {
+      "types": "./dist/permissions/drive-relationship.d.ts",
+      "import": "./dist/permissions/drive-relationship.js",
+      "require": "./dist/permissions/drive-relationship.js"
+    },
+    "./permissions/drive-relationship-loader": {
+      "types": "./dist/permissions/drive-relationship-loader.d.ts",
+      "import": "./dist/permissions/drive-relationship-loader.js",
+      "require": "./dist/permissions/drive-relationship-loader.js"
+    },
+    "./permissions/org-drive-directory": {
+      "types": "./dist/permissions/org-drive-directory.d.ts",
+      "import": "./dist/permissions/org-drive-directory.js",
+      "require": "./dist/permissions/org-drive-directory.js"
+    },
+    "./permissions/org-read-models": {
+      "types": "./dist/permissions/org-read-models.d.ts",
+      "import": "./dist/permissions/org-read-models.js",
+      "require": "./dist/permissions/org-read-models.js"
+    },
+    "./permissions/member-drives": {
+      "types": "./dist/permissions/member-drives.d.ts",
+      "import": "./dist/permissions/member-drives.js",
+      "require": "./dist/permissions/member-drives.js"
     },
     "./permissions/rollback-permissions": {
       "types": "./dist/permissions/rollback-permissions.d.ts",
@@ -2108,6 +2779,11 @@
       "import": "./dist/permissions/app-permissions.js",
       "require": "./dist/permissions/app-permissions.js"
     },
+    "./permissions/guest-role": {
+      "types": "./dist/permissions/guest-role.d.ts",
+      "import": "./dist/permissions/guest-role.js",
+      "require": "./dist/permissions/guest-role.js"
+    },
     "./permissions/membership-queries": {
       "types": "./dist/permissions/membership-queries.d.ts",
       "import": "./dist/permissions/membership-queries.js",
@@ -2117,6 +2793,31 @@
       "types": "./dist/permissions/resolve-role-permissions.d.ts",
       "import": "./dist/permissions/resolve-role-permissions.js",
       "require": "./dist/permissions/resolve-role-permissions.js"
+    },
+    "./permissions/org-access": {
+      "types": "./dist/permissions/org-access.d.ts",
+      "import": "./dist/permissions/org-access.js",
+      "require": "./dist/permissions/org-access.js"
+    },
+    "./permissions/drive-member-labels": {
+      "types": "./dist/permissions/drive-member-labels.d.ts",
+      "import": "./dist/permissions/drive-member-labels.js",
+      "require": "./dist/permissions/drive-member-labels.js"
+    },
+    "./permissions/automation-ownership": {
+      "types": "./dist/permissions/automation-ownership.d.ts",
+      "import": "./dist/permissions/automation-ownership.js",
+      "require": "./dist/permissions/automation-ownership.js"
+    },
+    "./permissions/spend-standing": {
+      "types": "./dist/permissions/spend-standing.d.ts",
+      "import": "./dist/permissions/spend-standing.js",
+      "require": "./dist/permissions/spend-standing.js"
+    },
+    "./permissions/wallet-access": {
+      "types": "./dist/permissions/wallet-access.d.ts",
+      "import": "./dist/permissions/wallet-access.js",
+      "require": "./dist/permissions/wallet-access.js"
     },
     "./compliance/retention/retention-engine": {
       "types": "./dist/compliance/retention/retention-engine.d.ts",
@@ -2142,6 +2843,11 @@
       "types": "./dist/compliance/export/gdpr-export.d.ts",
       "import": "./dist/compliance/export/gdpr-export.js",
       "require": "./dist/compliance/export/gdpr-export.js"
+    },
+    "./compliance/export/export-sign-in-gate": {
+      "types": "./dist/compliance/export/export-sign-in-gate.d.ts",
+      "import": "./dist/compliance/export/export-sign-in-gate.js",
+      "require": "./dist/compliance/export/export-sign-in-gate.js"
     },
     "./compliance/export/export-format": {
       "types": "./dist/compliance/export/export-format.d.ts",
@@ -2327,6 +3033,161 @@
       "types": "./dist/validators/fly-ownership.d.ts",
       "import": "./dist/validators/fly-ownership.js",
       "require": "./dist/validators/fly-ownership.js"
+    },
+    "./agent-accounts/account-authority-executor": {
+      "types": "./dist/agent-accounts/account-authority-executor.d.ts",
+      "import": "./dist/agent-accounts/account-authority-executor.js",
+      "require": "./dist/agent-accounts/account-authority-executor.js"
+    },
+    "./agent-accounts/account-facts-repository": {
+      "types": "./dist/agent-accounts/account-facts-repository.d.ts",
+      "import": "./dist/agent-accounts/account-facts-repository.js",
+      "require": "./dist/agent-accounts/account-facts-repository.js"
+    },
+    "./agent-accounts/agent-account-repository": {
+      "types": "./dist/agent-accounts/agent-account-repository.d.ts",
+      "import": "./dist/agent-accounts/agent-account-repository.js",
+      "require": "./dist/agent-accounts/agent-account-repository.js"
+    },
+    "./agent-accounts/plane-client": {
+      "types": "./dist/agent-accounts/plane-client.d.ts",
+      "import": "./dist/agent-accounts/plane-client.js",
+      "require": "./dist/agent-accounts/plane-client.js"
+    },
+    "./agent-accounts/to-safe-account": {
+      "types": "./dist/agent-accounts/to-safe-account.d.ts",
+      "import": "./dist/agent-accounts/to-safe-account.js",
+      "require": "./dist/agent-accounts/to-safe-account.js"
+    },
+    "./agent-accounts/decide-account-creation": {
+      "types": "./dist/agent-accounts/decide-account-creation.d.ts",
+      "import": "./dist/agent-accounts/decide-account-creation.js",
+      "require": "./dist/agent-accounts/decide-account-creation.js"
+    },
+    "./agent-accounts/decide-acknowledgment": {
+      "types": "./dist/agent-accounts/decide-acknowledgment.d.ts",
+      "import": "./dist/agent-accounts/decide-acknowledgment.js",
+      "require": "./dist/agent-accounts/decide-acknowledgment.js"
+    },
+    "./agent-accounts/to-http-request-tool-result": {
+      "types": "./dist/agent-accounts/to-http-request-tool-result.d.ts",
+      "import": "./dist/agent-accounts/to-http-request-tool-result.js",
+      "require": "./dist/agent-accounts/to-http-request-tool-result.js"
+    },
+    "./organizations/policies": {
+      "types": "./dist/organizations/policies.d.ts",
+      "import": "./dist/organizations/policies.js",
+      "require": "./dist/organizations/policies.js"
+    },
+    "./organizations/policies-core": {
+      "types": "./dist/organizations/policies-core.d.ts",
+      "import": "./dist/organizations/policies-core.js",
+      "require": "./dist/organizations/policies-core.js"
+    },
+    "./organizations/org-change-events": {
+      "types": "./dist/organizations/org-change-events.d.ts",
+      "import": "./dist/organizations/org-change-events.js",
+      "require": "./dist/organizations/org-change-events.js"
+    },
+    "./realtime/org-wallet-events": {
+      "types": "./dist/realtime/org-wallet-events.d.ts",
+      "import": "./dist/realtime/org-wallet-events.js",
+      "require": "./dist/realtime/org-wallet-events.js"
+    },
+    "./organizations/policy-suspension-names": {
+      "types": "./dist/organizations/policy-suspension-names.d.ts",
+      "import": "./dist/organizations/policy-suspension-names.js",
+      "require": "./dist/organizations/policy-suspension-names.js"
+    },
+    "./organizations/policy-suspension": {
+      "types": "./dist/organizations/policy-suspension.d.ts",
+      "import": "./dist/organizations/policy-suspension.js",
+      "require": "./dist/organizations/policy-suspension.js"
+    },
+    "./audit/org-audit": {
+      "types": "./dist/audit/org-audit.d.ts",
+      "import": "./dist/audit/org-audit.js",
+      "require": "./dist/audit/org-audit.js"
+    },
+    "./organizations/org-action-decisions": {
+      "types": "./dist/organizations/org-action-decisions.d.ts",
+      "import": "./dist/organizations/org-action-decisions.js",
+      "require": "./dist/organizations/org-action-decisions.js"
+    },
+    "./organizations/org-roles": {
+      "types": "./dist/organizations/org-roles.d.ts",
+      "import": "./dist/organizations/org-roles.js",
+      "require": "./dist/organizations/org-roles.js"
+    },
+    "./organizations/sharing-decisions": {
+      "types": "./dist/organizations/sharing-decisions.d.ts",
+      "import": "./dist/organizations/sharing-decisions.js",
+      "require": "./dist/organizations/sharing-decisions.js"
+    },
+    "./permissions/access-actor": {
+      "types": "./dist/permissions/access-actor.d.ts",
+      "import": "./dist/permissions/access-actor.js",
+      "require": "./dist/permissions/access-actor.js"
+    },
+    "./permissions/actor-authentication": {
+      "types": "./dist/permissions/actor-authentication.d.ts",
+      "import": "./dist/permissions/actor-authentication.js",
+      "require": "./dist/permissions/actor-authentication.js"
+    },
+    "./permissions/org-derived-content": {
+      "types": "./dist/permissions/org-derived-content.d.ts",
+      "import": "./dist/permissions/org-derived-content.js",
+      "require": "./dist/permissions/org-derived-content.js"
+    },
+    "./organizations/authentication-policy-core": {
+      "types": "./dist/organizations/authentication-policy-core.d.ts",
+      "import": "./dist/organizations/authentication-policy-core.js",
+      "require": "./dist/organizations/authentication-policy-core.js"
+    },
+    "./organizations/sign-in-blocked": {
+      "types": "./dist/organizations/sign-in-blocked.d.ts",
+      "import": "./dist/organizations/sign-in-blocked.js",
+      "require": "./dist/organizations/sign-in-blocked.js"
+    },
+    "./organizations/policy-reader": {
+      "types": "./dist/organizations/policy-reader.d.ts",
+      "import": "./dist/organizations/policy-reader.js",
+      "require": "./dist/organizations/policy-reader.js"
+    },
+    "./organizations/published-visibility": {
+      "types": "./dist/organizations/published-visibility.d.ts",
+      "import": "./dist/organizations/published-visibility.js",
+      "require": "./dist/organizations/published-visibility.js"
+    },
+    "./organizations/published-visibility-core": {
+      "types": "./dist/organizations/published-visibility-core.d.ts",
+      "import": "./dist/organizations/published-visibility-core.js",
+      "require": "./dist/organizations/published-visibility-core.js"
+    },
+    "./permissions/guest-holds": {
+      "types": "./dist/permissions/guest-holds.d.ts",
+      "import": "./dist/permissions/guest-holds.js",
+      "require": "./dist/permissions/guest-holds.js"
+    },
+    "./permissions/guest-admission": {
+      "types": "./dist/permissions/guest-admission.d.ts",
+      "import": "./dist/permissions/guest-admission.js",
+      "require": "./dist/permissions/guest-admission.js"
+    },
+    "./permissions/org-lapse-guard": {
+      "types": "./dist/permissions/org-lapse-guard.d.ts",
+      "import": "./dist/permissions/org-lapse-guard.js",
+      "require": "./dist/permissions/org-lapse-guard.js"
+    },
+    "./permissions/page-grant-admission": {
+      "types": "./dist/permissions/page-grant-admission.d.ts",
+      "import": "./dist/permissions/page-grant-admission.js",
+      "require": "./dist/permissions/page-grant-admission.js"
+    },
+    "./organizations/open-role-floor": {
+      "types": "./dist/organizations/open-role-floor.d.ts",
+      "import": "./dist/organizations/open-role-floor.js",
+      "require": "./dist/organizations/open-role-floor.js"
     }
   },
   "typesVersions": {
@@ -2364,6 +3225,9 @@
       "logging/logger-config": [
         "./dist/logging/logger-config.d.ts"
       ],
+      "logging/error-cause": [
+        "./dist/logging/error-cause.d.ts"
+      ],
       "logging/logger-database": [
         "./dist/logging/logger-database.d.ts"
       ],
@@ -2394,14 +3258,62 @@
       "billing/credit-gate": [
         "./dist/billing/credit-gate.d.ts"
       ],
+      "billing/spend-target": [
+        "./dist/billing/spend-target.d.ts"
+      ],
+      "billing/call-admission": [
+        "./dist/billing/call-admission.d.ts"
+      ],
       "billing/credit-backfill": [
         "./dist/billing/credit-backfill.d.ts"
       ],
       "billing/credit-funding": [
         "./dist/billing/credit-funding.d.ts"
       ],
+      "billing/money-model": [
+        "./dist/billing/money-model.d.ts"
+      ],
+      "billing/invoice-grant": [
+        "./dist/billing/invoice-grant.d.ts"
+      ],
+      "billing/missed-grant-reconcile": [
+        "./dist/billing/missed-grant-reconcile.d.ts"
+      ],
       "billing/live-concurrency-query": [
         "./dist/billing/live-concurrency-query.d.ts"
+      ],
+      "billing/wallet-core": [
+        "./dist/billing/wallet-core.d.ts"
+      ],
+      "billing/wallet-funding": [
+        "./dist/billing/wallet-funding.d.ts"
+      ],
+      "billing/org-subscription-core": [
+        "./dist/billing/org-subscription-core.d.ts"
+      ],
+      "billing/org-gift-core": [
+        "./dist/billing/org-gift-core.d.ts"
+      ],
+      "billing/org-gift": [
+        "./dist/billing/org-gift.d.ts"
+      ],
+      "billing/org-plan-quote": [
+        "./dist/billing/org-plan-quote.d.ts"
+      ],
+      "test/wallet-leg-invariant": [
+        "./dist/test/wallet-leg-invariant.d.ts"
+      ],
+      "organizations/status": [
+        "./dist/organizations/status.d.ts"
+      ],
+      "organizations/status-core": [
+        "./dist/organizations/status-core.d.ts"
+      ],
+      "billing/org-webhook-core": [
+        "./dist/billing/org-webhook-core.d.ts"
+      ],
+      "billing/wallet-funding-shell": [
+        "./dist/billing/wallet-funding-shell.d.ts"
       ],
       "logging/siem-error-hook": [
         "./dist/logging/siem-error-hook.d.ts"
@@ -2414,6 +3326,9 @@
       ],
       "monitoring/ai-monitoring": [
         "./dist/monitoring/ai-monitoring.d.ts"
+      ],
+      "monitoring/machine-pricing": [
+        "./dist/monitoring/machine-pricing.d.ts"
       ],
       "monitoring/usage-source": [
         "./dist/monitoring/usage-source.d.ts"
@@ -2655,6 +3570,9 @@
       "sheets/sheet": [
         "./dist/sheets/sheet.d.ts"
       ],
+      "sheets/store": [
+        "./dist/sheets/store.d.ts"
+      ],
       "tags/tag-core": [
         "./dist/tags/tag-core.d.ts"
       ],
@@ -2819,6 +3737,9 @@
       ],
       "publish/render-sheet-page": [
         "./dist/publish/render-sheet-page.d.ts"
+      ],
+      "organizations/leave": [
+        "./dist/organizations/leave.d.ts"
       ],
       "notifications/types": [
         "./dist/notifications/types.d.ts"
@@ -2988,6 +3909,12 @@
       "auth/rate-limit-utils": [
         "./dist/auth/rate-limit-utils.d.ts"
       ],
+      "auth/authentication-evidence": [
+        "./dist/auth/authentication-evidence.d.ts"
+      ],
+      "auth/reauthentication": [
+        "./dist/auth/reauthentication.d.ts"
+      ],
       "auth/session-service": [
         "./dist/auth/session-service.d.ts"
       ],
@@ -3033,6 +3960,15 @@
       "permissions/file-access": [
         "./dist/permissions/file-access.d.ts"
       ],
+      "permissions/drive-relationship": [
+        "./dist/permissions/drive-relationship.d.ts"
+      ],
+      "permissions/drive-relationship-loader": [
+        "./dist/permissions/drive-relationship-loader.d.ts"
+      ],
+      "permissions/member-drives": [
+        "./dist/permissions/member-drives.d.ts"
+      ],
       "permissions/permission-mutations": [
         "./dist/permissions/permission-mutations.d.ts"
       ],
@@ -3050,6 +3986,9 @@
       ],
       "permissions/app-permissions": [
         "./dist/permissions/app-permissions.d.ts"
+      ],
+      "permissions/guest-role": [
+        "./dist/permissions/guest-role.d.ts"
       ],
       "permissions/membership-queries": [
         "./dist/permissions/membership-queries.d.ts"
@@ -3071,6 +4010,9 @@
       ],
       "compliance/export/gdpr-export": [
         "./dist/compliance/export/gdpr-export.d.ts"
+      ],
+      "compliance/export/export-sign-in-gate": [
+        "./dist/compliance/export/export-sign-in-gate.d.ts"
       ],
       "compliance/export/export-format": [
         "./dist/compliance/export/export-format.d.ts"
@@ -3113,10 +4055,68 @@
       ],
       "validators/fly-ownership": [
         "./dist/validators/fly-ownership.d.ts"
+      ],
+      "organizations/policies": [
+        "./dist/organizations/policies.d.ts"
+      ],
+      "organizations/policies-core": [
+        "./dist/organizations/policies-core.d.ts"
+      ],
+      "organizations/policy-suspension": [
+        "./dist/organizations/policy-suspension.d.ts"
+      ],
+      "audit/org-audit": [
+        "./dist/audit/org-audit.d.ts"
+      ],
+      "organizations/org-action-decisions": [
+        "./dist/organizations/org-action-decisions.d.ts"
+      ],
+      "organizations/org-roles": [
+        "./dist/organizations/org-roles.d.ts"
+      ],
+      "organizations/sharing-decisions": [
+        "./dist/organizations/sharing-decisions.d.ts"
+      ],
+      "permissions/access-actor": [
+        "./dist/permissions/access-actor.d.ts"
+      ],
+      "permissions/actor-authentication": [
+        "./dist/permissions/actor-authentication.d.ts"
+      ],
+      "permissions/org-derived-content": [
+        "./dist/permissions/org-derived-content.d.ts"
+      ],
+      "organizations/authentication-policy-core": [
+        "./dist/organizations/authentication-policy-core.d.ts"
+      ],
+      "organizations/sign-in-blocked": [
+        "./dist/organizations/sign-in-blocked.d.ts"
+      ],
+      "organizations/policy-reader": [
+        "./dist/organizations/policy-reader.d.ts"
+      ],
+      "organizations/published-visibility": [
+        "./dist/organizations/published-visibility.d.ts"
+      ],
+      "organizations/published-visibility-core": [
+        "./dist/organizations/published-visibility-core.d.ts"
+      ],
+      "permissions/guest-holds": [
+        "./dist/permissions/guest-holds.d.ts"
+      ],
+      "permissions/guest-admission": [
+        "./dist/permissions/guest-admission.d.ts"
+      ],
+      "permissions/page-grant-admission": [
+        "./dist/permissions/page-grant-admission.d.ts"
+      ],
+      "organizations/open-role-floor": [
+        "./dist/organizations/open-role-floor.d.ts"
       ]
     }
   },
   "dependencies": {
+    "@apple/app-store-server-library": "3.1.0",
     "@aws-sdk/client-s3": "^3.1045.0",
     "@clickhouse/client": "^1.23.1",
     "@fly/sprites": "0.0.1-rc37",
@@ -3125,9 +4125,9 @@
     "@paralleldrive/cuid2": "^2.2.2",
     "@react-email/components": "^0.5.5",
     "@simplewebauthn/server": "^13.2.2",
-    "apple-signin-auth": "^2.0.0",
     "diff-match-patch": "^1.0.5",
     "drizzle-orm": "^0.45.2",
+    "free-email-domains": "1.12.18",
     "google-auth-library": "^10.3.0",
     "html-to-docx": "^1.8.0",
     "marked": "^17.0.1",

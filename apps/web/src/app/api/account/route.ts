@@ -1,3 +1,4 @@
+import { LeaveOrganizationRefusedError } from '@pagespace/lib/organizations/leave';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth';
@@ -14,6 +15,7 @@ import { planDriveDisposition } from '@pagespace/lib/compliance/erasure/drive-di
 import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
 import { sendVerificationEmail } from '@/lib/auth/send-verification-email';
 import { lodgeAndEnqueueErasure } from '@/lib/erasure/request-erasure';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const patchBodySchema = z
   .object({
@@ -184,6 +186,7 @@ export async function DELETE(req: Request) {
   if (isAuthError(auth)) {
     return auth.error;
   }
+  const actor = actorFromAuth(auth);
   const userId = auth.userId;
 
   try {
@@ -211,8 +214,23 @@ export async function DELETE(req: Request) {
           requestId: existing.id,
           status: existing.status,
           slaDeadline: existing.slaDeadline,
+          // The first request's revocation outcome isn't re-derivable here; the
+          // manual steps are harmless if it did revoke, and required if not.
+          appleSignIn: user.appleId !== null ? 'manual' : 'none',
         },
         { status: 202 }
+      );
+    }
+
+    // An org Owner cannot delete their account (ORG-6); refuse before queueing anything.
+    const ownedOrganizations = await accountRepository.getOwnedOrganizationNames(userId);
+    if (ownedOrganizations.length > 0) {
+      return Response.json(
+        {
+          error: 'Transfer ownership of your organizations or delete them before deleting your account',
+          ownedOrganizations,
+        },
+        { status: 400 }
       );
     }
 
@@ -247,22 +265,28 @@ export async function DELETE(req: Request) {
       details: { operation: 'erasure_request', requestedByType: 'self' },
     });
 
-    const { requestId, slaDeadline } = await lodgeAndEnqueueErasure({
+    const { requestId, slaDeadline, appleSignIn } = await lodgeAndEnqueueErasure({
       subjectUserId: userId,
       subjectEmail: user.email,
       stripeCustomerId: user.stripeCustomerId,
-      callerUserId: userId,
+      caller: actor,
       requestedByType: 'self',
       forceDelete: false,
+      subjectAppleLinked: user.appleId !== null,
     });
 
     loggers.auth.info(`Account erasure queued for user ${userId} (request ${requestId})`);
 
     return Response.json(
-      { message: 'Account erasure queued', requestId, status: 'queued', slaDeadline },
+      // appleSignIn: 'manual' means the client must show the "Stop Using Sign in
+      // with Apple" steps (TN3194) — no token on file, or revocation failed.
+      { message: 'Account erasure queued', requestId, status: 'queued', slaDeadline, appleSignIn },
       { status: 202 }
     );
   } catch (error) {
+    if (error instanceof LeaveOrganizationRefusedError) {
+      return Response.json({ error: 'Transfer ownership of your organizations or delete them before deleting your account', code: 'org_owner_must_transfer', ownedOrganizations: await accountRepository.getOwnedOrganizationNames(userId) }, { status: 400 });
+    }
     loggers.auth.error('Account erasure request error:', error as Error);
     return Response.json({ error: 'Failed to queue account erasure' }, { status: 500 });
   }

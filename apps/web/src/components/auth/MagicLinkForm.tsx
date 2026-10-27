@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import Link from 'next/link';
+import { MarketingLink } from '@/components/ui/MarketingLink';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -10,6 +10,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Mail, ArrowLeft, Loader2, CheckCircle } from 'lucide-react';
 import { getMagicLinkPlatformFields } from '@/lib/auth/magic-link-platform-fields';
 import { useCapacitor } from '@/hooks/useCapacitor';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
 
 type FormState = 'input' | 'sending' | 'sent' | 'error';
 
@@ -28,6 +29,8 @@ export function MagicLinkForm({ nextPath, inviteToken }: MagicLinkFormProps = {}
   // Resolved after mount, never during render — the shell is a `window` fact
   // the server does not have.
   const { isIOS } = useCapacitor();
+  // The v3 look is only applied when Imago is enabled; classic markup is unchanged.
+  const v3 = isV3AuthEnabled();
   const formRef = useRef<HTMLFormElement>(null);
   const [email, setEmail] = useState('');
   const [acceptedTos, setAcceptedTos] = useState(false);
@@ -145,6 +148,31 @@ export function MagicLinkForm({ nextPath, inviteToken }: MagicLinkFormProps = {}
         return;
       }
 
+      // Desktop shell only: mark an auth flow in progress (finding L9) BEFORE
+      // showing confirmation. The emailed link opens in the user's browser,
+      // outside this shell, so the pagespace:// deep link it fires cannot
+      // carry the flow state back — the main process accepts it via the
+      // in-progress-flow gate instead. A rejected bridge call or a null state
+      // (untrusted sender — the main process never records a flow) would leave
+      // that gate closed: the later deep link would be rejected and the
+      // desktop app would stay signed out. Surface a retryable error instead
+      // of a confirmation that promises a sign-in that cannot complete.
+      const beginExchange = window.electron?.auth?.beginExchange;
+      if (beginExchange) {
+        try {
+          const state = await beginExchange();
+          if (!state) {
+            throw new Error('Desktop auth bridge returned no flow state');
+          }
+        } catch {
+          setFormState('error');
+          setError(
+            'Your sign-in link was emailed, but the desktop app failed to prepare for sign-in. Please try again.'
+          );
+          return;
+        }
+      }
+
       // Success - show confirmation
       setFormState('sent');
       setCooldownSeconds(60); // 60 second cooldown before allowing resend
@@ -185,7 +213,13 @@ export function MagicLinkForm({ nextPath, inviteToken }: MagicLinkFormProps = {}
             <CheckCircle className="h-6 w-6 text-green-600 dark:text-green-400" />
           </div>
           <div className="text-center">
-            <h3 className="font-medium text-lg">Check your email</h3>
+            {v3 ? (
+              <h1 className="text-[28px] font-bold leading-[1.15] tracking-[-0.02em] text-[oklch(0.15_0.01_220)]">
+                Check your email
+              </h1>
+            ) : (
+              <h3 className="font-medium text-lg">Check your email</h3>
+            )}
             <p className="text-muted-foreground text-sm mt-1">
               We sent a sign-in link to{' '}
               <span className="font-medium text-foreground">{email}</span>
@@ -269,19 +303,20 @@ export function MagicLinkForm({ nextPath, inviteToken }: MagicLinkFormProps = {}
           className="text-xs font-normal leading-snug text-muted-foreground"
         >
           I agree to PageSpace&apos;s{' '}
-          <Link href="/terms" className="underline hover:text-foreground">
+          <MarketingLink href="/terms" className="underline hover:text-foreground">
             Terms
-          </Link>
+          </MarketingLink>
           {' '}and{' '}
-          <Link href="/privacy" className="underline hover:text-foreground">
+          <MarketingLink href="/privacy" className="underline hover:text-foreground">
             Privacy Policy
-          </Link>
-          , and I&apos;m at least 16 years old.
+          </MarketingLink>
+          , and I&apos;m at least 16 years old. AI features send the content you use them with to
+          OpenRouter and the model provider you choose.
         </Label>
       </div>
 
       {error && (
-        <div className="text-sm text-red-500 dark:text-red-400">
+        <div role="alert" className="text-sm text-red-500 dark:text-red-400">
           {error}
           {retryAfterSeconds > 0 && (
             <span className="font-medium ml-1">

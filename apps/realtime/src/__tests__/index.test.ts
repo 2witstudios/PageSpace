@@ -74,12 +74,23 @@ vi.mock('@pagespace/lib/encryption/field-crypto', () => ({
 }));
 
 // permissions mock
+// SEC-2/3 seam: explainSignInRefusal names an org sign-in denial (the per-socket org-room watch is unit-tested on its own).
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getUserAccessLevel: vi.fn(),
   getUserDriveAccess: vi.fn(),
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
+}));
+const mockOrgRoomWatch = { track: vi.fn().mockResolvedValue(undefined), untrack: vi.fn(), recheck: vi.fn().mockResolvedValue(undefined), dispose: vi.fn() };
+vi.mock('../org-room-watch', () => ({
+  ORG_REAUTHENTICATION_REQUIRED_EVENT: 'org:reauthentication_required',
+  createOrgRoomWatch: vi.fn(() => mockOrgRoomWatch),
+  createPolicyChangeFanout: vi.fn(() => vi.fn()),
 }));
 
 // conversation-access predicate mock (join_conversation authz — SSoT Phase 2)
+vi.mock('@pagespace/lib/permissions/spend-standing', () => ({
+  canViewDriveWallet: vi.fn().mockResolvedValue(false),
+}));
 vi.mock('@pagespace/lib/permissions/conversation-access', () => ({
   canAccessConversation: vi.fn(),
 }));
@@ -363,7 +374,8 @@ vi.mock('socket.io', () => ({
 // ---------------------------------------------------------------------------
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { verifyBroadcastSignature } from '@pagespace/lib/auth/broadcast-auth';
-import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
+import { explainSignInRefusal, getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
+import { canViewDriveWallet } from '@pagespace/lib/permissions/spend-standing';
 import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
@@ -379,9 +391,11 @@ const { resolveActorEmail } = await import('../index');
 // Helper factories
 // ---------------------------------------------------------------------------
 
+const TEST_EVIDENCE = { authenticatedAtMs: Date.parse('2026-10-12T00:00:00Z'), assurance: 'single_factor' as const };
+
 function createMockSocket(overrides: Partial<{
   id: string;
-  data: { user?: { id: string; name: string; avatarUrl: string | null } };
+  data: { user?: { id: string; name: string; avatarUrl: string | null }; actor?: { via: 'credential'; userId: string; authentication: { authenticatedAtMs: number; assurance: 'single_factor' | 'user_verified_passkey' } | null } };
   handshake: {
     auth: { token?: string };
     headers: { origin?: string; cookie?: string; 'user-agent'?: string };
@@ -402,7 +416,10 @@ function createMockSocket(overrides: Partial<{
 
   const socket = {
     id: 'test-socket-id',
-    data: { user: { id: 'user-1', name: 'Test User', avatarUrl: null } },
+    data: {
+      user: { id: 'user-1', name: 'Test User', avatarUrl: null },
+      actor: { via: 'credential' as const, userId: 'user-1', authentication: TEST_EVIDENCE },
+    } as { user?: { id: string; name: string; avatarUrl: string | null }; actor?: { via: 'credential'; userId: string; authentication: typeof TEST_EVIDENCE | null } },
     handshake: {
       auth: { token: 'ps_sess_test' },
       headers: { origin: undefined as string | undefined, cookie: undefined as string | undefined, 'user-agent': 'TestAgent/1.0' },
@@ -423,6 +440,10 @@ function createMockSocket(overrides: Partial<{
     _handlers: eventHandlers,
     ...overrides,
   };
+  // An authenticated socket carries its credential (the connect middleware sets both together).
+  if (socket.data.user && !socket.data.actor) {
+    socket.data = { ...socket.data, actor: { via: 'credential', userId: socket.data.user.id, authentication: TEST_EVIDENCE } };
+  }
 
   return socket;
 }
@@ -940,6 +961,25 @@ describe('Socket.IO middleware - auth', () => {
     expect(next.mock.calls[0]).toHaveLength(0);
   });
 
+  it('SEC-2 (partial) the socket keeps its credential\'s ceremony evidence as its access actor at connect', async () => {
+    const authentication = { authenticatedAtMs: Date.parse('2026-10-12T00:00:00Z'), assurance: 'user_verified_passkey' as const };
+    vi.mocked(sessionService.validateSession).mockResolvedValue({
+      userId: 'user-from-sock-token',
+      sessionId: 'sock-1',
+      expiresAt: new Date(),
+      authentication,
+    } as unknown as Awaited<ReturnType<typeof sessionService.validateSession>>);
+    mockDbLimit.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    const socket = createMockSocket({
+      data: { user: undefined, actor: undefined },
+      handshake: { auth: { token: 'ps_sock_validtoken123' }, headers: { origin: undefined }, address: '127.0.0.1' },
+    });
+
+    await capturedIoUseCallback!(socket, vi.fn());
+
+    expect(socket.data.actor).toEqual({ via: 'credential', userId: 'user-from-sock-token', authentication });
+  });
+
   it('given ps_sock_* token that fails validation, should reject with error', async () => {
     vi.mocked(sessionService.validateSession).mockResolvedValue(null);
 
@@ -1308,6 +1348,33 @@ describe('Socket.IO connection handler', () => {
       expect(socket.join).toHaveBeenCalledWith('athmieqpwr4ax1t2e0i4lmor');
     });
 
+    it('SEC-2 (partial) a realtime join with a credential the org refuses is denied, and the socket is told to sign in again rather than disconnected', async () => {
+      vi.mocked(getUserAccessLevel).mockResolvedValue(null);
+      vi.mocked(explainSignInRefusal).mockResolvedValueOnce('org_strong_sign_in_required');
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      await socket._trigger('join_channel', 'athmieqpwr4ax1t2e0i4lmor');
+
+      expect(getUserAccessLevel).toHaveBeenCalledWith(
+        { via: 'credential', userId: 'user-1', authentication: TEST_EVIDENCE },
+        'athmieqpwr4ax1t2e0i4lmor',
+      );
+      expect(socket.join).not.toHaveBeenCalledWith('athmieqpwr4ax1t2e0i4lmor');
+      expect(socket.emit).toHaveBeenCalledWith('org:reauthentication_required', { code: 'org_strong_sign_in_required', resourceId: 'athmieqpwr4ax1t2e0i4lmor' });
+      expect(socket.disconnect).not.toHaveBeenCalled();
+    });
+
+    it('SEC-3 (partial) a joined page room is handed to the socket\'s org-room watch for maximum-age eviction', async () => {
+      vi.mocked(getUserAccessLevel).mockResolvedValue({ canView: true, canEdit: false, canShare: false, canDelete: false });
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      await socket._trigger('join_channel', 'athmieqpwr4ax1t2e0i4lmor');
+
+      expect(mockOrgRoomWatch.track).toHaveBeenCalledWith('athmieqpwr4ax1t2e0i4lmor', 'athmieqpwr4ax1t2e0i4lmor');
+    });
+
     it('given no access, should disconnect socket', async () => {
       vi.mocked(getUserAccessLevel).mockResolvedValue(null);
 
@@ -1351,6 +1418,23 @@ describe('Socket.IO connection handler', () => {
 
       expect(socket.join).toHaveBeenCalledWith('drive:athmieqpwr4ax1t2e0i4lmor');
       expect(socket.join).toHaveBeenCalledWith('drive:athmieqpwr4ax1t2e0i4lmor:calendar');
+    });
+
+    it('X-4 (partial) only a person with a wallet view of the drive joins its wallet room; a page-share collaborator with drive access does not', async () => {
+      vi.mocked(getUserDriveAccess).mockResolvedValue(true);
+      vi.mocked(canViewDriveWallet).mockResolvedValueOnce(true);
+      const viewer = createMockSocket({ id: 'socket-v', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(viewer);
+      await viewer._trigger('join_drive', 'athmieqpwr4ax1t2e0i4lmor');
+      expect(viewer.join).toHaveBeenCalledWith('drive:athmieqpwr4ax1t2e0i4lmor:wallet');
+      expect(canViewDriveWallet).toHaveBeenLastCalledWith(expect.objectContaining({ via: 'credential', userId: 'user-1' }), 'athmieqpwr4ax1t2e0i4lmor');
+
+      vi.mocked(canViewDriveWallet).mockResolvedValueOnce(false);
+      const collaborator = createMockSocket({ id: 'socket-c', data: { user: { id: 'user-2', name: 'C', avatarUrl: null } } });
+      capturedIoConnectionCallback!(collaborator);
+      await collaborator._trigger('join_drive', 'athmieqpwr4ax1t2e0i4lmor');
+      expect(collaborator.join).toHaveBeenCalledWith('drive:athmieqpwr4ax1t2e0i4lmor');
+      expect(collaborator.join).not.toHaveBeenCalledWith('drive:athmieqpwr4ax1t2e0i4lmor:wallet');
     });
 
     it('given no access, should not join drive rooms', async () => {
@@ -1447,7 +1531,7 @@ describe('Socket.IO connection handler', () => {
 
       await socket._trigger('join_conversation', CONV);
 
-      expect(canAccessConversation).toHaveBeenCalledWith('owner-1', row);
+      expect(canAccessConversation).toHaveBeenCalledWith(expect.objectContaining({ via: 'credential', userId: 'owner-1' }), row);
       expect(socket.join).toHaveBeenCalledWith(`conv:${CONV}`);
       expect(mockSocketRegistry.trackRoomJoin).toHaveBeenCalledWith('socket-1', `conv:${CONV}`);
     });
@@ -1476,7 +1560,7 @@ describe('Socket.IO connection handler', () => {
 
       await socket._trigger('join_conversation', CONV);
 
-      expect(canAccessConversation).toHaveBeenCalledWith('collab-1', sharedRow);
+      expect(canAccessConversation).toHaveBeenCalledWith(expect.objectContaining({ via: 'credential', userId: 'collab-1' }), sharedRow);
       expect(socket.join).toHaveBeenCalledWith(`conv:${CONV}`);
     });
 
@@ -2194,7 +2278,7 @@ describe('populateUserMetadata', () => {
     expect((socket.data.user as { name: string }).name).toBe('Unknown');
   });
 
-  it('given a validated session with an empty-string userId, should skip the DB lookup entirely rather than querying with an empty id', async () => {
+  it('given a validated session with an empty-string userId, should refuse the connection (no credential without a user) and skip the DB lookup', async () => {
     vi.mocked(sessionService.validateSession).mockResolvedValue({
       userId: '',
     } as Awaited<ReturnType<typeof sessionService.validateSession>>);
@@ -2211,9 +2295,8 @@ describe('populateUserMetadata', () => {
 
     await capturedIoUseCallback!(socket, next);
 
-    expect(next).toHaveBeenCalledWith(/* no error */);
+    expect(next).toHaveBeenCalledWith(expect.any(Error));
     expect(mockDbSelect).not.toHaveBeenCalled();
-    expect((socket.data.user as { id: string }).id).toBe('');
   });
 });
 

@@ -22,6 +22,7 @@ import {
   stepCountIs,
   hasToolCall,
   createUIMessageStream,
+  type ModelMessage,
   type TextUIPart,
   type ToolSet,
 } from 'ai';
@@ -44,15 +45,19 @@ import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pr
 import { makeOnStepFinishHandler } from '@/lib/ai/core/step-finish-handler';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { conversationSpend } from '@pagespace/lib/billing/spend-target';
+import { UNGATED_TURN_CREDIT, personalTurnTiers, turnCreditAfterGate, type TurnCredit } from './turn-credit';
+import { pinConversationSource } from '@pagespace/lib/billing/spend-resolution';
+import { writeTurnPreamble } from './turn-preamble';
 import { broadcastChatUserMessage } from '@/lib/websocket';
 import { type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
-import { pumpAndRespond } from '@/lib/ai/chat-pipeline/pump-and-respond';
+import { pumpAndRespond, type TurnTimer } from '@/lib/ai/chat-pipeline/pump-and-respond';
 import { startChatGeneration } from './start-chat-generation';
 import { takeOverConversationStreams } from '@/lib/ai/core/stream-takeover';
 import { startGenerationExclusive } from '@/lib/ai/core/start-generation-exclusive';
 import { resolveMessageId } from '@/lib/ai/streams/resolveMessageId';
-import { isMCPAuthResult, isServiceAuthResult, checkMCPPageScope, getAllowedDriveIds, isDriveScopedPrincipal, canPrincipalViewPage, canPrincipalEditPage, type AuthResult } from '@/lib/auth';
+import { isMCPAuthResult, isServiceAuthResult, authSessionIdOf, checkMCPPageScope, getAllowedDriveIds, isDriveScopedPrincipal, canPrincipalViewPage, canPrincipalEditPage, type AuthResult } from '@/lib/auth';
+import { actorFromAuth } from '../../auth/request-actor';
 
 /**
  * Thrown when the conversation was still active at the ownership check far
@@ -67,9 +72,8 @@ import { isMCPAuthResult, isServiceAuthResult, checkMCPPageScope, getAllowedDriv
  * other.
  */
 import { ConversationHistoryDeletedError } from '@/lib/repositories/resolve-or-create-conversation';
-// canUserViewPage stays user-level here: it gates mention-notification RECIPIENTS
-// (other users), not the requesting principal.
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+// Mention-notification RECIPIENTS are an audience (third parties), so they resolve through getUsersWhoCanViewPage.
+import { getUsersWhoCanViewPage } from '@pagespace/lib/permissions/permissions';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { createAIProvider, updateUserProviderSettings, createProviderErrorResponse, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
@@ -79,12 +83,12 @@ import { buildAssistantPersistencePayload } from '@/lib/ai/core/persistAssistant
 import { processMentionsInMessage, buildMentionSystemPrompt } from '@/lib/ai/core/mention-processor';
 import {
   buildCommandPromptSection,
-  commandExecutionDataFromPlan,
-  COMMAND_EXECUTION_PART_TYPE,
   isSoloBuiltinCommand,
   type CommandExecutionPlan,
 } from '@/lib/ai/core/command-processor';
 import { planCommandExecutions } from '@/lib/ai/core/command-resolver';
+import { toolModelContext } from '@/lib/ai/core/tool-model-context';
+import { commandsForModel } from '@/lib/ai/core/command-model-policy';
 import { respondWithHelpAnswer } from '@/lib/ai/core/help-responder';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
@@ -92,11 +96,21 @@ import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
 import { buildActivePlanPrompt, getActivePlan } from '@/lib/ai/core/plan-binding';
 import { resolveHomeDriveHint } from '@/lib/ai/core/home-drive-hint';
 import {
+  findBuiltinAgentOwner,
+  loadImagoAgentContext,
+  resolveImagoDriveInView,
+  type ImagoAgentContext,
+} from '@/lib/ai/core/imago-agent-context';
+import { buildAssistantContext, selectAssistantTools, type AssistantContext } from '@/lib/ai/chat-pipeline/assistant-surface';
+import { pageDeniedForActor } from '@/lib/ai/tools/actor-permissions';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
+import {
   filterToolsForReadOnly,
   filterToolsForMcpScope,
   filterToolsForAgentAllowlist,
   filterToolsForSandboxEnablement,
   filterToolsForSandboxTier,
+  filterToolsForAgentAccounts,
 } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibilityForConversation } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { shouldExposeImageGen } from '@/lib/ai/core/image-gen-access';
@@ -108,7 +122,9 @@ import { convertMCPToolsToAISDKSchemas, parseMCPToolName, sanitizeToolNamesForPr
 import { getUserPersonalization } from '@/lib/ai/core/personalization-utils';
 import { applyToolExposureMode, ALWAYS_UPFRONT_TOOLS } from '@/lib/ai/tools/tool-exposure';
 import { buildBuiltinSkillCatalog, listEligibleSkills } from '@/lib/ai/core/skill-catalog';
-import { loadUserCommandCatalog } from '@/lib/commands/command-catalog-loader';
+import { buildNonCoreToolNamesPrompt } from '@/lib/ai/core/system-prompt';
+import { getBuiltinAgent } from '@pagespace/lib/agents/builtin-agents';
+import { loadUserCommandCatalog, type UserCommandCatalog } from '@/lib/commands/command-catalog-loader';
 import {
   buildAgentSystemPrompt,
   buildVolatileTurnContext,
@@ -129,7 +145,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { trackFeature } from '@pagespace/lib/monitoring/activity-tracker';
-import { AIMonitoring, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import type { MCPTool } from '@/types/mcp';
 import { getMCPBridge } from '@/lib/mcp';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
@@ -141,6 +157,8 @@ import {
   removeStream,
 } from '@/lib/ai/core/stream-abort-registry';
 import { runAgentWithRetry, AGENT_MAX_STEPS, isRunAborted, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
+import { agentRunBillingFields } from '@/lib/ai/core/agent-run-billing';
+import { estimateSystemPromptTokens, estimateToolDefinitionTokens } from '@pagespace/lib/monitoring/ai-context-calculator';
 import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
 import { locationContextToPageContext, pageContextToLocationContext } from '@/lib/ai/shared/buildPageContext';
 import type { LocationContext } from '@/lib/ai/shared/chat-types';
@@ -162,6 +180,8 @@ export interface PageChatTurnContext {
   browserSessionId: string;
   /** The parsed JSON body, narrowed by this strategy to `PageChatRequestBody`. */
   body: unknown;
+  /** Time-to-first-token instrumentation, started when the request arrived. */
+  timer: TurnTimer;
 }
 
 
@@ -202,6 +222,7 @@ interface PageChatRequestBody {
 
 export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Response> {
   const startTime = Date.now();
+  const turnTimer = ctx.timer;
   let userId: string | undefined;
   let chatId: string | undefined;
   let conversationId: string | undefined;
@@ -215,6 +236,9 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
   // summed usage/steps for billing plus the success flag, abort detection, and retry
   // observability — so no separate usage/steps promises are needed.
   let agentRun: RunAgentWithRetryResult | undefined;
+  // System prompt + tool definition tokens sent with every step — prices the prompt of
+  // a step interrupted by an abort (see agentRunBillingFields). Only called on that path.
+  let promptOverheadTokens = (): number => 0;
   // Hoisted to outer scope so the catch-path trackUsage call bills on the real
   // backend model id rather than the client-supplied alias (selectedModel).
   let resolvedModelName: string | undefined;
@@ -338,6 +362,8 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
   let bufferedPartsAtStreamError: Awaited<ReturnType<StreamLifecycleHandle['getParts']>> | undefined;
   // The credit-gate reservation for this request, released when usage is billed.
   let holdId: string | undefined;
+  // What the gate named: the wallet, the source and the funding tier (see turn-credit).
+  let credit: TurnCredit = UNGATED_TURN_CREDIT;
   // True once the stream/error handler owns the hold's release. Any earlier
   // return/throw must release the hold (a pre-generation exit doesn't invoke the
   // model, so the reservation would otherwise sit until the reconcile cron sweeps it).
@@ -354,6 +380,8 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     const { request, auth: authResult } = ctx;
     browserSessionId = ctx.browserSessionId;
     userId = authResult.userId;
+    // The turn's driver as the permission layer's actor: the request credential with its ceremony evidence (SEC-2/3).
+    const turnActor = actorFromAuth(authResult);
     loggers.ai.debug('AI Chat API: Authentication successful', { userId });
 
     // The parsed body, narrowed to the shape this strategy reads. The entry
@@ -420,6 +448,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
           });
         })
       : null;
+    turnTimer.mark('location_resolved');
     const pageContext = contextRef
       ? locationContextToPageContext(resolvedLocation)
       : legacyPageContext;
@@ -434,6 +463,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       : pageContextToLocationContext(legacyPageContext);
 
     const mcpScopeError = await checkMCPPageScope(authResult, chatId);
+    turnTimer.mark('mcp_scope_checked');
     if (mcpScopeError) {
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_chat', resourceId: chatId, details: { reason: 'mcp_page_scope_denied', method: 'POST' }, riskScore: 0.5 });
       return mcpScopeError;
@@ -477,6 +507,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       chatId: maskedChatId,
     });
     const canView = await canPrincipalViewPage(authResult, chatId);
+    turnTimer.mark('view_permission_checked');
     permissionLogger.debug('Page AI view permission evaluated', {
       userId: maskedUserId,
       chatId: maskedChatId,
@@ -518,8 +549,11 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       chatId 
     });
 
+    turnTimer.mark('permissions');
+
     // Get page configuration for custom agent settings (needed early for message saving)
     const [page] = await db.select().from(pages).where(eq(pages.id, chatId));
+    turnTimer.mark('page_row_loaded');
     if (!page) {
       loggers.ai.warn('AI Chat API: Page not found', { chatId });
       return NextResponse.json({ error: 'Page not found' }, { status: 404 });
@@ -568,6 +602,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
         loggers.ai.error('AI Page Chat API: Failed to fetch drive prompt', error as Error);
         // Continue without drive prompt on error
       }
+      turnTimer.mark('drive_prompt_loaded');
     }
 
     // Fetch context from any other drives this agent is a member of with
@@ -595,6 +630,18 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       loggers.ai.error('AI Page Chat API: Failed to fetch member-drive context', error as Error);
       // Continue without member-drive context on error
     }
+    turnTimer.mark('member_drive_context_loaded');
+
+    // A built-in Imago agent replaces the Global Assistant one for one
+    // (IMG-10.10): run by its owner, this turn hands it the Global Assistant's
+    // tools and context (`assistant-surface.ts`) minus the drives the owner
+    // keeps it out of; run by anyone else it gets no tools at all. Null for
+    // every other agent, whose turn this leaves unchanged. Fails closed: a
+    // failed load fails the turn rather than running Imago as an ordinary
+    // agent with per-agent integration grants (IMG-4.9).
+    const imagoContext: ImagoAgentContext | null = await loadImagoAgentContext({ userId, agentPageId: chatId });
+    const foreignImago = imagoContext === null && (await findBuiltinAgentOwner(chatId)) !== null;
+    turnTimer.mark('imago_context_loaded');
 
     loggers.ai.debug('AI Page Chat API: Using custom agent configuration', {
       hasCustomSystemPrompt: !!customSystemPrompt,
@@ -621,6 +668,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     //     Without this, `${pageId}-default` is a guessable id (it is derived from the
     //     page id) that any member with edit access could use to read a co-member's
     //     private conversation. Conversations are private by default.
+    turnTimer.mark('page_loaded');
     let existingConversation: Awaited<ReturnType<typeof conversationRepository.getConversation>> = null;
     if (requestConversationId) {
       // Deliberately un-caught. A DB error here must not degrade into "no row exists",
@@ -690,6 +738,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
         }
       }
     }
+    turnTimer.mark('conversation_authorized');
 
     // Auto-generate conversationId if not provided (seamless UX)
     conversationId = requestConversationId || createId();
@@ -719,6 +768,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // request leaves an orphaned conversation/message that the client never receives
     // back and that reappears (duplicated) once the user tops up and retries.
     const [user] = await db.select().from(users).where(eq(users.id, userId));
+    turnTimer.mark('user_loaded');
 
     // Prepaid credit gate: block out-of-credits users before persisting their
     // message or invoking any model. Safe in billing-disabled deployments (returns
@@ -739,15 +789,26 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // A solo /help never reaches streamText (see isSoloHelpRequest below), so
     // it costs nothing — skip the gate entirely rather than take a hold that
     // would need special-cased release on the short-circuit path.
+    // The turn runs in a session of this page's conversation, in the page's drive
+    // (SPEND-7). The conversation (its id vetted above) carries its stored source, which the
+    // gate resolves or refuses (SPEND-3, SPEND-4); the turn never writes it.
+    const pageSpend = conversationSpend(page.driveId, conversationId);
+    credit = { spend: pageSpend };
+    // SPEND-3: the source the gate preselected for a conversation with none stored. A first turn
+    // gates before its row exists, so it is pinned right after the row is created (below).
+    let conversationSourceWalletId: string | undefined;
     if (!isMeteringExempt(gateProvider) && !isSoloHelpRequest) {
-      const creditGate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier, {
+      const creditGate = await canConsumeAI(userId, personalTurnTiers(user?.subscriptionTier).gate, {
+        spend: pageSpend,
         estCostCents: estimateChatHoldCentsForModel(selectedModel),
         maxInFlight: MAX_CHAT_INFLIGHT,
       });
       if (!creditGate.allowed) {
         loggers.ai.warn('AI Chat API: AI credit gate denied', { userId, reason: creditGate.reason });
-        return creditGateErrorResponse(creditGate.reason);
+        return creditGateErrorResponse(creditGate.reason, creditGate.refusal);
       }
+      credit = turnCreditAfterGate(pageSpend, creditGate);
+      conversationSourceWalletId = creditGate.conversationSourceWalletId;
       holdId = creditGate.holdId;
       availableBalanceCents =
         holdId && creditGate.balanceSnapshot
@@ -756,6 +817,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     }
 
     const creditAbortController = holdId ? new AbortController() : null;
+    turnTimer.mark('credit_gate');
 
     // Eagerly ensure a conversations row exists so the creator can always see
     // their own conversation. isShared defaults to false (private). Idempotent
@@ -788,6 +850,9 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
           userId,
         });
       }
+      if (created === 'created' && conversationSourceWalletId) {
+        await pinConversationSource({ userId: userId!, conversationId, driveId: page.driveId, walletId: conversationSourceWalletId });
+      }
     } catch (error) {
       loggers.ai.error('AI Chat API: Failed to ensure conversation row', error as Error, {
         conversationId,
@@ -801,6 +866,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
         { status: 500 },
       );
     }
+    turnTimer.mark('conversation_ensured');
 
     // Save user's message immediately to database (database-first approach)
     const userMessage = messages[messages.length - 1]; // Last message is the new user message
@@ -843,9 +909,10 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
         // never sends to a model — respondWithHelpAnswer builds its own
         // "used" pill directly and does its own (single) command-list read.
         if (!isSoloHelpRequest) {
-          commandPlans = await planCommandExecutions(messageContent, userId!, {
+          commandPlans = await planCommandExecutions(messageContent, turnActor, {
             driveId: page.driveId,
           });
+          turnTimer.mark('commands_planned');
           if (commandPlans.length > 0) {
             commandSystemPrompt = buildCommandPromptSection(commandPlans);
             for (const plan of commandPlans) {
@@ -947,6 +1014,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
             return { proceed: true };
           },
         });
+        turnTimer.mark('user_message_persisted');
 
         // Fire-and-forget: title derivation must never fail or delay the chat
         // response, matching how createConversation above is treated as
@@ -979,9 +1047,8 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
             .then(async (notifyIds) => {
               const candidates = notifyIds.filter((id) => id !== userId);
               if (candidates.length === 0) return;
-              const viewChecks = await Promise.all(
-                candidates.map(async (id) => ({ id, canView: await canUserViewPage(id, chatId!) }))
-              );
+              const viewers = await getUsersWhoCanViewPage(chatId!, candidates);
+              const viewChecks = candidates.map((id) => ({ id, canView: viewers.has(id) }));
               await Promise.allSettled(
                 viewChecks
                   .filter((e) => e.canView)
@@ -1070,7 +1137,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       }
 
       return await respondWithHelpAnswer({
-        senderId: userId!,
+        sender: turnActor,
         driveId: page.driveId,
         originalMessages: messages,
         persist: (payload, messageId) =>
@@ -1100,8 +1167,11 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       .limit(1)
       .catch(() => [] as { displayName: string | null }[]);
 
+    turnTimer.mark('message_saved');
+
     // Subscription gate: free users are limited to the free-model allowlist.
     const { requiresProSubscription, createSubscriptionRequiredResponse, createAdminRestrictedResponse } = await import('@/lib/subscription/rate-limit-middleware');
+    turnTimer.mark('subscription_module_loaded');
 
     const isAdminUser = user?.role === 'admin';
 
@@ -1112,7 +1182,8 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     const admission = resolveGenerationAdmission({
       provider: currentProvider,
       model: currentModel,
-      subscriptionTier: user?.subscriptionTier ?? undefined,
+      // WAL-8: the tier of whoever funds this call, as the gate resolved it.
+      subscriptionTier: credit.entitlementTier ?? personalTurnTiers(user?.subscriptionTier).capability,
       isAdmin: isAdminUser,
       requiresProSubscription,
     });
@@ -1122,7 +1193,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
         userId,
         provider: currentProvider,
         model: currentModel,
-        subscriptionTier: user?.subscriptionTier
+        subscriptionTier: personalTurnTiers(user?.subscriptionTier).capability
       });
       return createSubscriptionRequiredResponse();
     }
@@ -1196,11 +1267,16 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     };
 
     // Thread the already-loaded user row through the factory so it skips redundant DB selects.
-    const providerResult = await createAIProvider(userId, providerRequest, { user: user ?? null });
+    const providerResult = await createAIProvider(userId, providerRequest, { user: user ?? null, driveId: page.driveId });
 
+
+    // POL-8: a command's pages reach this turn's model only when their org allows the model it resolved.
+    // After the error check, so the context names the model that will actually run.
     if (isProviderError(providerResult)) {
       return createProviderErrorResponse(providerResult);
     }
+    ({ plans: commandPlans, prompt: commandSystemPrompt } = await commandsForModel(commandPlans, toolModelContext(providerResult)));
+    turnTimer.mark('provider_ready');
 
     // Use the resolved (provider, model) for billing. providerResult carries the
     // real backend provider/model after the factory's catalog substitution.
@@ -1215,6 +1291,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
 
     // Update user's current provider/model if changed (thread the loaded row to skip a DB select).
     await updateUserProviderSettings(userId, selectedProvider, selectedModel, { user: user ?? null });
+    turnTimer.mark('provider_settings_updated');
 
     // Parse read-only mode (defaults to false for full access)
     const readOnlyMode = isReadOnly === true;
@@ -1222,123 +1299,170 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     const webSearchMode = webSearchEnabled === true;
     loggers.ai.debug('AI Page Chat API: Tool modes', { isReadOnly: readOnlyMode, webSearchEnabled: webSearchMode });
 
-    // Step 1: Apply isReadOnly filter, and hide account-level-only tools
-    // (e.g. create_drive) from drive-scoped MCP tokens' tool list. The session
-    // + shell families ride `pageSpaceTools` itself (registered behind the
-    // CODE_EXECUTION kill-switch alongside bash/git — see buildPageSpaceTools),
-    // so no per-request registration happens here anymore: a conversation IS a
-    // session, there is no binding to compose by.
-    const baseTools = filterToolsForReadOnly(
-      // Drive-scoped in the general sense, not "is an MCP result": a dispatched
-      // worker runs under service auth carrying an inherited ceiling and must
-      // get the same narrowed tool set the token that spawned it would.
-      filterToolsForMcpScope(pageSpaceTools, isDriveScopedPrincipal(authResult)),
-      readOnlyMode
-    );
-
-    // Step 2: Extract web_search + generate_image so they can be handled as
-    // runtime-toggle overrides independently of the per-agent allowlist.
-    const {
-      web_search: webSearchToolDef,
-      generate_image: imageGenToolDef,
-      ...baseToolsWithoutOverrides
-    } = baseTools as Record<string, ToolSet[string]>;
-
-    // Step 3: Apply per-agent PageSpace tool allowlist.
     // null/undefined = unconfigured page — no restriction (backwards compat).
     // []            = zero tools selected — block all PageSpace tools.
     // ['tool1', …]  = only those tools.
-    const agentEnabledTools = page.enabledTools as string[] | null;
-    let filteredTools = filterToolsForAgentAllowlist(
-      baseToolsWithoutOverrides,
-      agentEnabledTools
-    ) as ToolSet;
+    // Imago is unrestricted, as the Global Assistant is: its owner's turn gets
+    // that assistant's tool set below, and execute_tool must not re-narrow it.
+    const agentEnabledTools = imagoContext ? null : page.enabledTools as string[] | null;
+    let filteredTools: ToolSet;
+    let toolExposureMode: 'upfront' | 'search';
+    let allowedToolNames: string[];
+    let preExposureTools: ToolSet;
+    let userCommandCatalog: UserCommandCatalog;
+    let toolDiscoveryPrompt: string;
+    // The deferred-tool catalog, for Imago's Global-Assistant-shaped prompt.
+    let imagoNonCoreToolNames: string[] = [];
 
-    // Step 3b: the per-agent sandbox switch AND the payer's tier eligibility.
-    // An agent with sandboxEnabled off never sees the sandbox families
-    // (bash/files, git+gh, sessions/shells) — independent of the allowlist,
-    // which cannot re-grant them. A free-tier payer doesn't either: showing
-    // tools that would hard-fail with tier_ineligible the moment they're
-    // called is a UX bug, not a security concern (the env kill-switch and
-    // per-call canRunCode remain the real security boundaries underneath;
-    // this is agent configuration + UX, not authz). Short-circuited on
-    // sandboxEnabled first — most agents never touch the sandbox at all, so
-    // this skips the payer-tier DB round trip for the common case.
-    const sandboxEnabled = Boolean(page.sandboxEnabled);
-    // Bound-session first (review #2326): a page conversation hosted in a
-    // driveless Global session is paid for by the SESSION's owner, not the
-    // agent's drive owner — gate exposure on the payer provisioning will use.
-    // An UNBOUND page conversation is not eligible at all (codex round 14):
-    // the acquire path never lazily mints page conversations a session.
-    const sandboxTierEligible = sandboxEnabled
-      ? await resolveSandboxToolEligibilityForConversation(conversationId, 'page', userId)
-      : false;
-    filteredTools = filterToolsForSandboxEnablement(filteredTools, sandboxEnabled) as ToolSet;
-    // The tier gate strips only the COMPUTE tools — a free payer keeps the
-    // chat-only session family (sessions/chat are free on every plan).
-    filteredTools = filterToolsForSandboxTier(filteredTools, sandboxTierEligible) as ToolSet;
-    // spawn_session/send_session used to be stripped for MCP-authenticated
-    // requests, because dispatch worked by forwarding the caller's browser
-    // session cookie and an MCP request has none — so advertising them could
-    // only ever produce a refusal (codex round 9). Dispatch signs its own hop
-    // now (`session-tools-runtime.ts`), so a credential the caller does not have
-    // is no longer a precondition, and an SDK/CLI/MCP turn can drive a worker
-    // like any other. The ceiling that DID matter rides the dispatch instead:
-    // `mcpAllowedDriveIds` below flows into the signed payload and back out as
-    // service auth's `allowedDriveIds`.
-
-    // Step 4: webSearchEnabled is a runtime input toggle that overrides the allowlist.
-    // If the user toggled web search on in the composer, they get web_search regardless of enabledTools.
-    if (webSearchMode && webSearchToolDef) {
-      filteredTools = { ...filteredTools, web_search: webSearchToolDef };
-    }
-
-    // Step 4b: image generation is an ADMIN-ONLY runtime toggle (same override pattern as
-    // web_search). Only exposed when the composer toggle is on AND the user is an app admin.
-    if (
-      shouldExposeImageGen({
-        imageGenEnabled: imageGenEnabled === true,
+    if (imagoContext) {
+      // The owner's Imago: the Global Assistant's tools for this user and these
+      // toggles, from the ONE selection both turns run — the registry through
+      // the sandbox tier gate, agent-account, read-only, web_search and
+      // image-generation filters, split behind tool_search/execute_tool. The
+      // payer is the owner's Home-drive session (`resolveOrProvisionSession`).
+      const sandboxTierEligible = await resolveSandboxToolEligibilityForConversation(
+        conversationId,
+        { imagoHomeDriveId: imagoContext.homeDriveId },
+        turnActor,
+      );
+      turnTimer.mark('sandbox_eligibility');
+      const selection = await selectAssistantTools({
+        actor: turnActor,
+        readOnly: readOnlyMode,
+        webSearch: webSearchMode,
+        imageGen: imageGenEnabled === true,
         isAdmin: isAdminUser,
-        hasToolDef: !!imageGenToolDef,
-      }) &&
-      imageGenToolDef
-    ) {
-      filteredTools = { ...filteredTools, generate_image: imageGenToolDef };
-    }
+        sandboxTierEligible,
+        driveScoped: isDriveScopedPrincipal(authResult),
+        commandDriveId: resolveImagoDriveInView(turnLocation, imagoContext),
+        timer: turnTimer,
+      });
+      filteredTools = selection.tools;
+      toolExposureMode = 'search';
+      allowedToolNames = Object.keys(selection.allTools);
+      preExposureTools = selection.allTools;
+      userCommandCatalog = selection.userCommandCatalog;
+      toolDiscoveryPrompt = '';
+      imagoNonCoreToolNames = selection.nonCoreToolNames;
+    } else {
+      // Step 1: Apply isReadOnly filter, and hide account-level-only tools
+      // (e.g. create_drive) from drive-scoped MCP tokens' tool list. The session
+      // + shell families ride `pageSpaceTools` itself (registered behind the
+      // CODE_EXECUTION kill-switch alongside bash/git — see buildPageSpaceTools),
+      // so no per-request registration happens here anymore: a conversation IS a
+      // session, there is no binding to compose by.
+      const baseTools = filterToolsForReadOnly(
+        // Drive-scoped in the general sense, not "is an MCP result": a dispatched
+        // worker runs under service auth carrying an inherited ceiling and must
+        // get the same narrowed tool set the token that spawned it would.
+        filterToolsForMcpScope(pageSpaceTools, isDriveScopedPrincipal(authResult)),
+        readOnlyMode
+      );
 
-    // Step 5: Tool exposure mode. 'upfront' (default) sends every allowed tool
-    // schema directly. 'search' mirrors the Global Assistant — only core tools go
-    // upfront; the rest are reached via tool_search/execute_tool. The allowlist has
-    // already been applied above, so search mode can never discover a blocked tool.
-    // web_search is a runtime override (added by the webSearchEnabled toggle above,
-    // independent of the saved allowlist), so it must stay directly callable in
-    // search mode too — routing it through execute_tool would hit that tool's
-    // allowlist check and be rejected whenever the agent's saved enabledTools omit it.
-    const toolExposureMode = (page.toolExposureMode as 'upfront' | 'search' | null) ?? 'upfront';
-    // Capture BEFORE exposure so capability sections (TASK_MANAGEMENT, AGENTS, etc.) are
-    // correctly included in search mode where non-core tools become callable via execute_tool
-    // and disappear from filteredTools.
-    const allowedToolNames = Object.keys(filteredTools);
-    // Captured before exposure-mode transforms filteredTools below — 'search' mode
-    // moves non-core tools (including all sandbox git/gh tools) behind execute_tool,
-    // hiding their names from a top-level key scan. Integration-tool suppression
-    // needs the pre-exposure set to correctly detect an active sandbox toolkit.
-    const preExposureTools = filteredTools;
-    // Capability catalog: built-in skills (stable, appended to the system prompt
-    // below) + the per-viewer user/drive command list (volatile, appended to the
-    // last user message). Both gated on the agent actually having load_skill —
-    // without the loader, advertising loadable capabilities is noise.
-    const eligibleSkills = listEligibleSkills(allowedToolNames);
-    const userCommandCatalog =
-      eligibleSkills.length > 0 || allowedToolNames.includes('load_skill')
-        ? await loadUserCommandCatalog(userId!, page.driveId ?? null, allowedToolNames)
-        : { catalogPrompt: '', searchEntries: [] };
-    const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS, [
-      ...eligibleSkills,
-      ...userCommandCatalog.searchEntries,
-    ]);
-    filteredTools = exposure.tools;
-    const toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
+      // Step 2: Extract web_search + generate_image so they can be handled as
+      // runtime-toggle overrides independently of the per-agent allowlist.
+      const {
+        web_search: webSearchToolDef,
+        generate_image: imageGenToolDef,
+        ...baseToolsWithoutOverrides
+      } = baseTools as Record<string, ToolSet[string]>;
+
+      // Step 3: Apply per-agent PageSpace tool allowlist.
+      // null/undefined = unconfigured page — no restriction (backwards compat).
+      // []            = zero tools selected — block all PageSpace tools.
+      // ['tool1', …]  = only those tools.
+      filteredTools = filterToolsForAgentAccounts(
+        filterToolsForAgentAllowlist(baseToolsWithoutOverrides, agentEnabledTools),
+      ) as ToolSet;
+
+      // Step 3b: the per-agent sandbox switch AND the payer's tier eligibility.
+      // An agent with sandboxEnabled off never sees the sandbox families
+      // (bash/files, git+gh, sessions/shells) — independent of the allowlist,
+      // which cannot re-grant them. A free-tier payer doesn't either: showing
+      // tools that would hard-fail with tier_ineligible the moment they're
+      // called is a UX bug, not a security concern (the env kill-switch and
+      // per-call canRunCode remain the real security boundaries underneath;
+      // this is agent configuration + UX, not authz). Short-circuited on
+      // sandboxEnabled first — most agents never touch the sandbox at all, so
+      // this skips the payer-tier DB round trip for the common case.
+      const sandboxEnabled = Boolean(page.sandboxEnabled);
+      // Bound-session first (review #2326): a page conversation hosted in a
+      // driveless Global session is paid for by the SESSION's owner, not the
+      // agent's drive owner — gate exposure on the payer provisioning will use.
+      // An UNBOUND page conversation is not eligible at all (codex round 14):
+      // the acquire path never lazily mints page conversations a session.
+      const sandboxTierEligible = sandboxEnabled
+        ? await resolveSandboxToolEligibilityForConversation(conversationId, 'page', turnActor)
+        : false;
+      turnTimer.mark('sandbox_eligibility');
+      filteredTools = filterToolsForSandboxEnablement(filteredTools, sandboxEnabled) as ToolSet;
+      // The tier gate strips only the COMPUTE tools — a free payer keeps the
+      // chat-only session family (sessions/chat are free on every plan).
+      filteredTools = filterToolsForSandboxTier(filteredTools, sandboxTierEligible) as ToolSet;
+      // spawn_session/send_session used to be stripped for MCP-authenticated
+      // requests, because dispatch worked by forwarding the caller's browser
+      // session cookie and an MCP request has none — so advertising them could
+      // only ever produce a refusal (codex round 9). Dispatch signs its own hop
+      // now (`session-tools-runtime.ts`), so a credential the caller does not have
+      // is no longer a precondition, and an SDK/CLI/MCP turn can drive a worker
+      // like any other. The ceiling that DID matter rides the dispatch instead:
+      // `mcpAllowedDriveIds` below flows into the signed payload and back out as
+      // service auth's `allowedDriveIds`.
+
+      // Step 4: webSearchEnabled is a runtime input toggle that overrides the allowlist.
+      // If the user toggled web search on in the composer, they get web_search regardless of enabledTools.
+      if (webSearchMode && webSearchToolDef) {
+        filteredTools = { ...filteredTools, web_search: webSearchToolDef };
+      }
+
+      // Step 4b: image generation is an ADMIN-ONLY runtime toggle (same override pattern as
+      // web_search). Only exposed when the composer toggle is on AND the user is an app admin.
+      if (
+        shouldExposeImageGen({
+          imageGenEnabled: imageGenEnabled === true,
+          isAdmin: isAdminUser,
+          hasToolDef: !!imageGenToolDef,
+        }) &&
+        imageGenToolDef
+      ) {
+        filteredTools = { ...filteredTools, generate_image: imageGenToolDef };
+      }
+
+      // Step 5: Tool exposure mode. 'upfront' (default) sends every allowed tool
+      // schema directly. 'search' mirrors the Global Assistant — only core tools go
+      // upfront; the rest are reached via tool_search/execute_tool. The allowlist has
+      // already been applied above, so search mode can never discover a blocked tool.
+      // web_search is a runtime override (added by the webSearchEnabled toggle above,
+      // independent of the saved allowlist), so it must stay directly callable in
+      // search mode too — routing it through execute_tool would hit that tool's
+      // allowlist check and be rejected whenever the agent's saved enabledTools omit it.
+      toolExposureMode = (page.toolExposureMode as 'upfront' | 'search' | null) ?? 'upfront';
+      // Capture BEFORE exposure so capability sections (TASK_MANAGEMENT, AGENTS, etc.) are
+      // correctly included in search mode where non-core tools become callable via execute_tool
+      // and disappear from filteredTools.
+      allowedToolNames = Object.keys(filteredTools);
+      // Captured before exposure-mode transforms filteredTools below — 'search' mode
+      // moves non-core tools (including all sandbox git/gh tools) behind execute_tool,
+      // hiding their names from a top-level key scan. Integration-tool suppression
+      // needs the pre-exposure set to correctly detect an active sandbox toolkit.
+      preExposureTools = filteredTools;
+      // Capability catalog: built-in skills (stable, appended to the system prompt
+      // below) + the per-viewer user/drive command list (volatile, appended to the
+      // last user message). Both gated on the agent actually having load_skill —
+      // without the loader, advertising loadable capabilities is noise.
+      const eligibleSkills = listEligibleSkills(allowedToolNames);
+      userCommandCatalog =
+        eligibleSkills.length > 0 || allowedToolNames.includes('load_skill')
+          ? await loadUserCommandCatalog(turnActor, page.driveId ?? null, allowedToolNames)
+          : { catalogPrompt: '', searchEntries: [] };
+      turnTimer.mark('commands_loaded');
+      const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS, [
+        ...eligibleSkills,
+        ...userCommandCatalog.searchEntries,
+      ]);
+      filteredTools = exposure.tools;
+      toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
+    }
 
     loggers.ai.debug('AI Page Chat API: Tools built from baseline + runtime toggles', {
       totalTools: Object.keys(pageSpaceTools).length,
@@ -1349,15 +1473,29 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       enabledToolsAllowlist: agentEnabledTools?.length ?? 'unrestricted',
     });
 
-    // INTEGRATION TOOLS: Resolve and merge integration tools for this agent
+    // INTEGRATION TOOLS: Resolve and merge integration tools for this agent.
+    // The owner's Imago gets the Global Assistant's — the one shared resolver —
+    // with drive integrations only from a drive in view it is not kept out of.
+    // Onprem exposes no external integration to it at all.
     try {
-      const { resolvePageAgentIntegrationTools } = await import('@/lib/ai/core/integration-tool-resolver');
-      const integrationTools = await resolvePageAgentIntegrationTools({
-        agentId: chatId,
-        userId,
-        driveId: page.driveId,
-        currentTools: preExposureTools,
-      });
+      const resolver = await import('@/lib/ai/core/integration-tool-resolver');
+      turnTimer.mark('integrations_import');
+      const integrationTools = imagoContext
+        ? isOnPrem()
+          ? {}
+          : await resolver.resolveAssistantIntegrationTools({
+            actor: turnActor,
+            agentId: chatId,
+            driveInView: resolveImagoDriveInView(turnLocation, imagoContext),
+            currentTools: preExposureTools,
+          })
+        : await resolver.resolvePageAgentIntegrationTools({
+          agentId: chatId,
+          actor: turnActor,
+          driveId: page.driveId,
+          currentTools: preExposureTools,
+        });
+      turnTimer.mark('integrations_ready');
       if (Object.keys(integrationTools).length > 0) {
         filteredTools = mergeToolSets(filteredTools, integrationTools);
         loggers.ai.info('AI Chat API: Merged integration tools', {
@@ -1368,6 +1506,8 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     } catch (error) {
       loggers.ai.error('AI Chat API: Failed to resolve integration tools', error as Error);
     }
+
+    turnTimer.mark('tools_ready');
 
     // DESKTOP MCP INTEGRATION: Merge MCP tools from client if provided
     if (mcpTools && mcpTools.length > 0) {
@@ -1480,6 +1620,14 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       });
     }
 
+    // Someone else's Imago acts for its owner alone: whoever else runs it gets
+    // no tool at all (IMG-4.9, kept by IMG-10.10) — not the invoker's reach,
+    // which every PageSpace tool would otherwise fall back to.
+    if (foreignImago) {
+      filteredTools = {};
+      allowedToolNames.length = 0;
+    }
+
     // Always inject the finish tool so the model can signal task completion
     filteredTools = { ...filteredTools, ...finishTool } as ToolSet;
 
@@ -1505,31 +1653,60 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // Build system prompt BEFORE history loading so its token estimate is
     // available for prepareConversationContext's context-window budget math.
 
-    // Fetch user personalization for AI system prompt injection
-    const personalization = await getUserPersonalization(userId);
-    if (personalization) {
-      loggers.ai.debug('AI Chat API: User personalization loaded', {
-        hasPersonalization: true,
-        hasBio: !!personalization.bio,
-        hasWritingStyle: !!personalization.writingStyle,
-        hasRules: !!personalization.rules,
+    const userTimezone = user?.timezone ?? undefined;
+    let personalization: Awaited<ReturnType<typeof getUserPersonalization>>;
+    let locationPrompt: string;
+    let timestampSystemPrompt: string;
+    // The owner's Imago: the Global Assistant's context — location with the
+    // Home-drive hint, drive prompt, the drive tree or all-drives summary,
+    // personalization and timezone, the agents it can consult — from the ONE
+    // builder both turns run, minus the drives its owner keeps it out of.
+    let assistantContext: AssistantContext | null = null;
+    if (imagoContext) {
+      assistantContext = await buildAssistantContext({
+        actor: turnActor,
+        location: turnLocation,
+        readOnly: readOnlyMode,
+        showPageTree: page.includePageTree === true,
+        allowedDriveIds: getAllowedDriveIds(authResult),
+        excludedDriveIds: imagoContext.excludedDriveIds,
+        timer: turnTimer,
       });
+      personalization = assistantContext.personalization;
+      locationPrompt = assistantContext.locationPrompt;
+      timestampSystemPrompt = assistantContext.timestampPrompt;
+    } else {
+      // Fetch user personalization for AI system prompt injection
+      personalization = await getUserPersonalization(turnActor);
+      turnTimer.mark('personalization');
+      if (personalization) {
+        loggers.ai.debug('AI Chat API: User personalization loaded', {
+          hasPersonalization: true,
+          hasBio: !!personalization.bio,
+          hasWritingStyle: !!personalization.writingStyle,
+          hasRules: !!personalization.rules,
+        });
+      }
+
+      // The system prompt itself is assembled once, below, by
+      // `buildAgentSystemPrompt` — every input it needs is gathered first. Note
+      // that "current page/drive" is turn-volatile: it is built separately as
+      // `locationPrompt` and injected via buildVolatileTurnContext, NOT baked
+      // into the system prompt, so that string stays byte-identical across turns.
+      const hasTurnLocation = Boolean(turnLocation?.currentPage || turnLocation?.currentDrive);
+      const locationHomeDriveId = await resolveHomeDriveHint(turnActor.userId, hasTurnLocation, getAllowedDriveIds(authResult));
+      turnTimer.mark('home_drive_resolved');
+
+      locationPrompt = buildLocationTurnPrompt(turnLocation ? {
+        currentPage: turnLocation.currentPage,
+        currentDrive: turnLocation.currentDrive,
+        breadcrumbs: turnLocation.breadcrumbs,
+        homeDriveId: locationHomeDriveId,
+      } : { homeDriveId: locationHomeDriveId });
+
+      // Build timestamp system prompt for temporal awareness
+      timestampSystemPrompt = buildTimestampSystemPrompt(userTimezone);
     }
-
-    // The system prompt itself is assembled once, below, by
-    // `buildAgentSystemPrompt` — every input it needs is gathered first. Note
-    // that "current page/drive" is turn-volatile: it is built separately as
-    // `locationPrompt` and injected via buildVolatileTurnContext, NOT baked
-    // into the system prompt, so that string stays byte-identical across turns.
-    const hasTurnLocation = Boolean(turnLocation?.currentPage || turnLocation?.currentDrive);
-    const locationHomeDriveId = await resolveHomeDriveHint(userId, hasTurnLocation, getAllowedDriveIds(authResult));
-
-    const locationPrompt = buildLocationTurnPrompt(turnLocation ? {
-      currentPage: turnLocation.currentPage,
-      currentDrive: turnLocation.currentDrive,
-      breadcrumbs: turnLocation.breadcrumbs,
-      homeDriveId: locationHomeDriveId,
-    } : { homeDriveId: locationHomeDriveId });
 
     // Skill catalog applies uniformly — including to custom-systemPrompt
     // agents, which opt out of buildInlineInstructions and would otherwise
@@ -1550,25 +1727,25 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // page in ANOTHER drive — so the principal-aware check is required here. A
     // user-level check would leak an out-of-scope plan's title and id to a token
     // that may not reach that drive.
-    const activePlanPrompt = buildActivePlanPrompt(
-      await getActivePlan(conversationId, userId, (pageId) =>
-        canPrincipalViewPage(authResult, pageId),
-      ),
+    // For Imago, also not a page in a drive its owner keeps it out of.
+    const imagoActor = { userId, accessActor: turnActor, chatSource: { type: 'page' as const, agentPageId: chatId } };
+    const planPointer = await getActivePlan(conversationId, turnActor, async (pageId) =>
+      (await canPrincipalViewPage(authResult, pageId)) &&
+      !(imagoContext && await pageDeniedForActor(imagoActor, pageId)),
     );
+    turnTimer.mark('active_plan_loaded');
+    const activePlanPrompt = buildActivePlanPrompt(planPointer);
 
 
-    // Build timestamp system prompt for temporal awareness
-    const userTimezone = user?.timezone ?? undefined;
-    const timestampSystemPrompt = buildTimestampSystemPrompt(userTimezone);
-
-    // Build page tree context if enabled
-    let pageTreePrompt = '';
-    if (page.includePageTree && page.driveId) {
-      const pageTreeContext = await getPageTreeContext(userId, {
+    // Build page tree context if enabled (Imago's came with its context above).
+    let pageTreePrompt = assistantContext?.pageTreePrompt ?? '';
+    if (!assistantContext && page.includePageTree && page.driveId) {
+      const pageTreeContext = await getPageTreeContext(turnActor, {
         scope: (page.pageTreeScope as 'children' | 'drive') || 'children',
         pageId: chatId,
         driveId: page.driveId,
       });
+      turnTimer.mark('page_tree_loaded');
       if (pageTreeContext) {
         pageTreePrompt = `\n\n## WORKSPACE STRUCTURE\n\nHere is the ${page.pageTreeScope === 'drive' ? 'complete workspace' : 'page subtree'} structure:\n\n${pageTreeContext}`;
         loggers.ai.debug('AI Chat API: Page tree context included', {
@@ -1584,28 +1761,56 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // the page, so it lives in the STABLE system section (not the volatile block).
     let agentMemoryPrompt = '';
     if (page.type === 'AI_CHAT') {
-      const memoryContent = await getAgentMemoryContext(chatId, userId);
+      const memoryContent = await getAgentMemoryContext(chatId, turnActor);
+      turnTimer.mark('agent_memory_loaded');
       agentMemoryPrompt = buildAgentMemorySection(memoryContent);
     }
 
-    // One assembly, shared with the Global Assistant and with voice — see
-    // `buildAgentSystemPrompt`. A custom systemPrompt is a blank slate: it
-    // skips the default persona and the workspace-knowledge block, but not the
-    // capability metadata.
-    const systemPrompt = buildAgentSystemPrompt({
-      surface: 'page',
-      readOnly: readOnlyMode,
-      personalization,
-      allowedToolNames,
-      skillCatalog: skillCatalogPrompt,
-      activePlan: activePlanPrompt,
-      pageTree: pageTreePrompt,
-      customSystemPrompt,
-      drivePromptPrefix,
-      memberDriveContextPrefix,
-      agentMemory: agentMemoryPrompt,
-      toolDiscovery: toolDiscoveryPrompt,
-    });
+    // Imago: the Global Assistant's prompt, with Imago's persona in place of
+    // that assistant's own line, plus its Agent Memory. Everyone else: the
+    // page agent's.
+    let systemPrompt: string;
+    if (assistantContext) {
+      const imagoToolNames = Object.keys(preExposureTools);
+      systemPrompt = buildAgentSystemPrompt({
+        surface: 'global',
+        readOnly: readOnlyMode,
+        personalization,
+        allowedToolNames: imagoToolNames,
+        skillCatalog: buildBuiltinSkillCatalog(imagoToolNames),
+        activePlan: activePlanPrompt,
+        pageTree: pageTreePrompt,
+        conversationType: 'page',
+        conversationContextId: chatId,
+        includeAskUser: true,
+        drivePromptSection: assistantContext.drivePromptSection,
+        agentAwareness: assistantContext.agentAwarenessPrompt,
+        nonCoreToolNames: buildNonCoreToolNamesPrompt(imagoNonCoreToolNames),
+        persona: getBuiltinAgent('imago').systemPrompt,
+        agentMemory: agentMemoryPrompt,
+      });
+    } else {
+      // One assembly, shared with the Global Assistant and with voice — see
+      // `buildAgentSystemPrompt`. A custom systemPrompt is a blank slate: it
+      // skips the default persona and the workspace-knowledge block, but not the
+      // capability metadata.
+      systemPrompt = buildAgentSystemPrompt({
+        surface: 'page',
+        readOnly: readOnlyMode,
+        personalization,
+        allowedToolNames,
+        skillCatalog: skillCatalogPrompt,
+        activePlan: activePlanPrompt,
+        pageTree: pageTreePrompt,
+        customSystemPrompt,
+        drivePromptPrefix,
+        memberDriveContextPrefix,
+        agentMemory: agentMemoryPrompt,
+        toolDiscovery: toolDiscoveryPrompt,
+      });
+    }
+
+    turnTimer.mark('system_prompt');
 
     loggers.ai.debug('AI Chat API: Loading conversation history', {
       pageId: chatId
@@ -1615,6 +1820,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // so this turn's model context reflects it — fired early above to
     // overlap with the independent setup between there and here.
     if (askUserSyncPromise) await askUserSyncPromise;
+    turnTimer.mark('ask_user_synced');
 
     const pageId = chatId as string;
     // Reads the UNIFIED `messages` table (epic "Agent-Session Single Source of
@@ -1630,6 +1836,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // summarized into a durable compaction. 'interrupted' rows stay included — they are
     // terminal, real partial output. See Server Stream Durability epic PR 2.
     const dbMessages = await messageRepository.getPageConversationMessages(pageId, conversationId);
+    turnTimer.mark('history_loaded');
 
     const conversationHistory: UIMessage[] = await Promise.all(dbMessages.map(msg =>
       convertDbMessageToUIMessage({
@@ -1647,6 +1854,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
         status: msg.status,
       })
     ));
+    turnTimer.mark('history_converted');
 
     loggers.ai.debug('AI Chat API: Loaded conversation from database', {
       messageCount: conversationHistory.length,
@@ -1666,12 +1874,15 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       systemPrompt: systemPrompt,
       tools: filteredTools as Record<string, unknown>,
       user: user ? { id: user.id, role: user.role } : null,
+      spend: credit.spend,
     });
+    turnTimer.mark('history_compacted');
     const { scheduleCompaction } = prepared;
     const { modelMessages, stableBoundaryIndex } = await finishModelRequest({
       prepared,
       tools: filteredTools,
     });
+    turnTimer.mark('history_prepared');
 
     // Intentional second sanitize (prepareHistoryForModel already sanitized once):
     // createUIMessageStream must receive the FULL conversation history for the UI
@@ -1690,6 +1901,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     activeStreamId = streamId;
 
     const [userProfile] = await userProfilePromise;
+    turnTimer.mark('display_name_ready');
     const displayName = userProfile?.displayName ?? user?.name ?? 'Someone';
 
     // Reuse the row the conversationId validation above already fetched. A conversation
@@ -1737,6 +1949,13 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       isShared: isConversationShared,
       scope: { kind: 'page', pageId: chatId! },
     });
+    turnTimer.mark('generation_started');
+    turnTimer.annotate({
+      conversationId,
+      messageId: serverAssistantMessageId,
+      provider: resolvedProvider ?? currentProvider,
+      model: resolvedModelName ?? currentModel,
+    });
 
     // Bind the terminal write to the abort itself. onAbort (below) already calls finish(true),
     // but it only fires while a streamText is live — and a cross-instance abort now WAITS for
@@ -1761,24 +1980,34 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
           // already-aborted signal to short-circuit streamText's underlying fetch.
           if (lifecycle!.preAborted) return;
 
-          // Execution feedback (UX spec §7): announce one command indicator
-          // per resolved plan ("Using /foo" / "Skipped /foo — reason") as
-          // the first parts of the assistant message, in the same order the
-          // chips appeared in the user's message. Persisted with the message
-          // via onFinish so transcripts keep showing which commands informed
-          // the answer.
-          commandPlans.forEach((plan, index) => {
-            writer.write({
-              type: COMMAND_EXECUTION_PART_TYPE,
-              id: `${serverAssistantMessageId}-command-${index}`,
-              data: commandExecutionDataFromPlan(plan),
-            });
-          });
+          // SPEND-4 fallback part, then the command execution indicators (UX spec §7):
+          // the preamble both turns write before the model runs (turn-preamble.ts).
+          writeTurnPreamble(writer, { messageId: serverAssistantMessageId!, credit, commandPlans });
           // Resolve once outside the per-attempt factory (the factory is synchronous).
           // Gate tools on the CONCRETE backend model id (resolvedModelName), not the
           // PageSpace alias in currentModel — vision/tool detection pattern-matches the
           // model string, so an alias yields wrong capability flags.
           const modelCapabilitiesForTools = await getModelCapabilities(resolvedModelName!, currentProvider);
+          promptOverheadTokens = () =>
+            estimateSystemPromptTokens(systemPrompt) +
+            estimateToolDefinitionTokens(filteredTools as Record<string, unknown>);
+          // Prompt size drives provider prefill, the part of TTFT that is not network.
+          turnTimer.annotate({ promptOverheadTokens: promptOverheadTokens() });
+          // Volatile per-turn data (timestamp/location/mention/command) is appended to the
+          // last user message so the system prefix stays byte-stable and provider prefix
+          // caches survive. One definition, so the abort-billing prompt estimate prices
+          // exactly what the provider was sent.
+          const toSentMessages = (messages: ModelMessage[]): ModelMessage[] =>
+            appendTurnContextToLastUserMessage(
+              messages,
+              buildVolatileTurnContext({
+                timestampPrompt: timestampSystemPrompt,
+                locationPrompt,
+                mentionPrompt: mentionSystemPrompt,
+                commandCatalogPrompt: userCommandCatalog.catalogPrompt,
+                commandPrompt: commandSystemPrompt,
+              }),
+            );
           // Server-side, in-request retry: if an attempt drops mid-loop (OpenRouter
           // disconnect) or ends mid-tool without the finish tool, transparently
           // re-drive the loop under one message envelope. The loop lives inside
@@ -1799,20 +2028,10 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
             maxSteps: AGENT_MAX_STEPS,
             startTimeMs: startTime,
             logger: loggers.ai,
+            toSentMessages,
             buildStreamText: (messages) => {
-              // Volatile per-turn data (timestamp/location/mention/command) is
-              // appended to the last user message so the system prefix stays
-              // byte-stable and provider prefix caches (Anthropic/OpenAI/Gemini)
-              // are not invalidated on every turn — including turns where only
-              // the user's current page/drive changed.
-              const turnContext = buildVolatileTurnContext({
-                timestampPrompt: timestampSystemPrompt,
-                locationPrompt,
-                mentionPrompt: mentionSystemPrompt,
-                commandCatalogPrompt: userCommandCatalog.catalogPrompt,
-                commandPrompt: commandSystemPrompt,
-              });
-              const messagesWithContext = appendTurnContextToLastUserMessage(messages, turnContext);
+              turnTimer.modelRequest();
+              const messagesWithContext = toSentMessages(messages);
               // Apply cache breakpoints:
               //   A) last message — covers system+tools+history every step after step 1.
               //   B) stableBoundaryIndex — the first tail message after the compaction
@@ -1839,9 +2058,10 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
                 : undefined,
               experimental_context: {
                 userId,
+                accessActor: turnActor,
                 timezone: userTimezone,
-                aiProvider: currentProvider,
-                aiModel: currentModel,
+                // POL-8: the tools are judged by the model this turn resolved, not the raw selection.
+                ...toolModelContext(providerResult),
                 conversationId,
                 // Same normalized location the model prompt was built from, so
                 // the two can never disagree about which workspace is in view.
@@ -1863,7 +2083,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
                 } : undefined,
                 modelCapabilities: modelCapabilitiesForTools,
                 isAdmin: isAdminUser,
-                subscriptionTier: user?.subscriptionTier,
+                subscriptionTier: personalTurnTiers(user?.subscriptionTier).capability,
                 imageGenerationModel: user?.imageGenerationModel ?? DEFAULT_IMAGE_MODEL,
                 chatSource: {
                   type: 'page' as const,
@@ -1871,6 +2091,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
                   agentTitle: page.title,
                 },
                 enabledTools: agentEnabledTools ?? null,
+                authSessionId: authSessionIdOf(authResult),
                 // Bind tool execution to the MCP token's drive scope and RBAC role
                 // so a scoped token cannot reach drives outside its scope — or
                 // exceed its own membership role — via the agent's broader ACL.
@@ -2072,13 +2293,13 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
             // hold and feeds unit-economics observability.
             const duration = Date.now() - startTime;
 
-            const usage = agentRun?.accumulatedUsage;
-            const steps = agentRun?.accumulatedSteps;
-            const inputTokens = usage?.inputTokens ?? undefined;
-            const outputTokens = usage?.outputTokens ?? undefined;
-            const totalTokens =
-              usage?.totalTokens ??
-              ((usage?.inputTokens || 0) + (usage?.outputTokens || 0) || undefined);
+            // Provider usage + cost, plus the step an abort interrupted (which the
+            // provider charged for but reports no usage on) — see agentRunBillingFields.
+            const { abortedStep, ...billing } = agentRunBillingFields({
+              agentRun,
+              model: resolvedModelName!,
+              promptOverheadTokens,
+            });
 
             // Use enhanced AI monitoring with token usage from SDK
             await AIMonitoring.trackUsage({
@@ -2086,13 +2307,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
               provider: resolvedProvider ?? currentProvider,
               model: resolvedModelName!,
               source: 'chat',
-              inputTokens,
-              outputTokens,
-              totalTokens,
-              cachedInputTokens: usage?.cachedInputTokens,
-              reasoningTokens: usage?.reasoningTokens,
-              providerCostDollars: extractOpenRouterCostDollars(steps),
-              openrouterGenerationIds: extractOpenRouterGenerationIds(steps),
+              ...billing,
               duration,
               conversationId, // Use actual conversation ID instead of pageId
               messageId,
@@ -2108,16 +2323,19 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
               // completion. Cost still settles regardless (the provider charged us).
               success: agentRun?.finalOutcome !== 'exhausted',
               holdId,
+              walletId: credit.walletId,
               metadata: {
                 pageName: page.title,
                 toolCallsCount: extractedToolCalls.length,
                 toolResultsCount: extractedToolResults.length,
                 hasTools: extractedToolCalls.length > 0 || extractedToolResults.length > 0,
-                reasoningTokens: usage?.reasoningTokens,
-                cachedInputTokens: usage?.cachedInputTokens,
+                reasoningTokens: billing.reasoningTokens,
+                cachedInputTokens: billing.cachedInputTokens,
+                ...(abortedStep ? { abortedStep } : {}),
                 retryAttempts: agentRun?.attempts,
                 retryOutcome: agentRun?.finalOutcome,
                 retryTerminalReason: agentRun?.terminalReason,
+                timing: turnTimer.summary(),
               }
             });
 
@@ -2168,7 +2386,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
 
       result = {
         toUIMessageStreamResponse: () =>
-          pumpAndRespond({ sdkStream, lifecycle: lifecycle!, streamId, request, channelId: chatId!, conversationId: conversationId! }),
+          pumpAndRespond({ sdkStream, lifecycle: lifecycle!, streamId, request, channelId: chatId!, conversationId: conversationId!, timer: turnTimer }),
       };
     } catch (streamError) {
       removeStream({ streamId });
@@ -2246,36 +2464,34 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       responseTime: Date.now() - startTime
     });
 
-    const usage = agentRun?.accumulatedUsage;
-    const steps = agentRun?.accumulatedSteps;
+    const billingModel = resolvedModelName ?? selectedModel ?? 'unknown';
+    const { abortedStep, ...billing } = agentRunBillingFields({
+      agentRun,
+      model: billingModel,
+      promptOverheadTokens,
+    });
 
     // Track AI usage even for errors using enhanced monitoring
     // Note: conversationId might not be available in error path, use chatId as fallback
     await AIMonitoring.trackUsage({
       userId: userId || 'unknown',
       provider: (resolvedProvider ?? selectedProvider) || 'unknown',
-      model: resolvedModelName ?? selectedModel ?? 'unknown',
+      model: billingModel,
       source: 'chat',
-      inputTokens: usage?.inputTokens ?? undefined,
-      outputTokens: usage?.outputTokens ?? undefined,
-      totalTokens:
-        usage?.totalTokens ??
-        ((usage?.inputTokens || 0) + (usage?.outputTokens || 0) || undefined),
-      cachedInputTokens: usage?.cachedInputTokens,
-      reasoningTokens: usage?.reasoningTokens,
-      providerCostDollars: extractOpenRouterCostDollars(steps),
-      openrouterGenerationIds: extractOpenRouterGenerationIds(steps),
+      ...billing,
       duration: Date.now() - startTime,
       conversationId: conversationId || chatId, // Use conversationId if available, fallback to chatId
       pageId: chatId,
       driveId: undefined,
       success: false,
       holdId,
+      walletId: credit.walletId,
       error: error instanceof Error ? error.message : 'Unknown error',
       metadata: {
         errorType: error instanceof Error ? error.name : 'UnknownError',
-        reasoningTokens: usage?.reasoningTokens,
-        cachedInputTokens: usage?.cachedInputTokens,
+        reasoningTokens: billing.reasoningTokens,
+        cachedInputTokens: billing.cachedInputTokens,
+        ...(abortedStep ? { abortedStep } : {}),
       }
     });
     // The error-path trackUsage above released the hold; don't double-release.

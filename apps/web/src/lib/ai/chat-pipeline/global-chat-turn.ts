@@ -13,15 +13,13 @@
  */
 
 import { NextResponse } from 'next/server';
-import { streamText, stepCountIs, hasToolCall, UIMessage, createUIMessageStream, type ToolSet } from 'ai';
+import { streamText, stepCountIs, hasToolCall, UIMessage, createUIMessageStream, type ModelMessage, type ToolSet } from 'ai';
 import type { convertToModelMessages } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { askUserTools, ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
 import { resolveMessageId } from '@/lib/ai/streams/resolveMessageId';
 import { readAgentDispatchDepth } from '@/lib/ai/core/agent-dispatch-depth';
-import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
 import { buildActivePlanPrompt, getActivePlan } from '@/lib/ai/core/plan-binding';
-import { resolveHomeDriveHint } from '@/lib/ai/core/home-drive-hint';
 import {
   extractClientAskUserResults,
   applyAskUserResultsToGlobalMessage,
@@ -32,50 +30,43 @@ import { requiresProSubscription, createSubscriptionRequiredResponse, createAdmi
 import { resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { conversationSpend } from '@pagespace/lib/billing/spend-target';
+import { UNGATED_TURN_CREDIT, personalTurnTiers, turnCreditAfterGate, type TurnCredit } from './turn-credit';
+import { writeTurnPreamble } from './turn-preamble';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { broadcastChatUserMessage } from '@/lib/websocket';
 import { broadcastGlobalConversationAdded } from '@/lib/websocket/socket-utils';
 import { type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
-import { pumpAndRespond } from '@/lib/ai/chat-pipeline/pump-and-respond';
+import { pumpAndRespond, type TurnTimer } from '@/lib/ai/chat-pipeline/pump-and-respond';
 import { startChatGeneration } from './start-chat-generation';
 import { takeOverConversationStreams } from '@/lib/ai/core/stream-takeover';
 import { startGenerationExclusive } from '@/lib/ai/core/start-generation-exclusive';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
-import { getAllowedDriveIds, type AuthResult } from '@/lib/auth';
+import { getAllowedDriveIds, authSessionIdOf, isDriveScopedPrincipal, type AuthResult } from '@/lib/auth';
+import { buildAssistantContext, selectAssistantTools } from '@/lib/ai/chat-pipeline/assistant-surface';
 import { createAIProvider, updateUserProviderSettings, createProviderErrorResponse, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
-import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
+import { toolModelContext } from '@/lib/ai/core/tool-model-context';
+import { commandsForModel } from '@/lib/ai/core/command-model-policy';
 import { extractMessageContent, extractToolCalls, extractToolResults, sanitizeMessagesForModel, convertGlobalAssistantMessageToUIMessage } from '@/lib/ai/core/message-utils';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import { buildAssistantPersistencePayload } from '@/lib/ai/core/persistAssistantParts';
 import { processMentionsInMessage, buildMentionSystemPrompt } from '@/lib/ai/core/mention-processor';
 import {
   buildCommandPromptSection,
-  commandExecutionDataFromPlan,
-  COMMAND_EXECUTION_PART_TYPE,
   isSoloBuiltinCommand,
   type CommandExecutionPlan,
 } from '@/lib/ai/core/command-processor';
 import { planCommandExecutions } from '@/lib/ai/core/command-resolver';
 import { respondWithHelpAnswer } from '@/lib/ai/core/help-responder';
-import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { buildNonCoreToolNamesPrompt } from '@/lib/ai/core/system-prompt';
-import { buildAgentAwarenessPrompt } from '@/lib/ai/core/agent-awareness';
-import { filterToolsForReadOnly, filterToolsForWebSearch, filterToolsForImageGen, filterToolsForSandboxTier } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibilityForConversation } from '@/lib/ai/core/sandbox-tool-eligibility';
-import { shouldExposeImageGen } from '@/lib/ai/core/image-gen-access';
-import { getPageTreeContext, getDriveListSummary } from '@/lib/ai/core/page-tree-context';
 import { getModelCapabilities, DEFAULT_IMAGE_MODEL } from '@/lib/ai/core/model-capabilities';
 import { convertMCPToolsToAISDKSchemas, parseMCPToolName, sanitizeToolNamesForProvider } from '@/lib/ai/core/mcp-tool-converter';
-import { getUserPersonalization, getUserTimezone } from '@/lib/ai/core/personalization-utils';
-import { splitToolsForExposure, excludeAlwaysUpfront, ALWAYS_UPFRONT_TOOLS } from '@/lib/ai/tools/tool-exposure';
-import { createExecuteTool } from '@/lib/ai/tools/execute-tool';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
-import { drives } from '@pagespace/db/schema/core'
 import { users } from '@pagespace/db/schema/auth';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { conversations } from '@pagespace/db/schema/conversations';
@@ -88,24 +79,22 @@ import { maskIdentifier } from '@/lib/logging/mask';
 import type { MCPTool } from '@/types/mcp';
 import type { LocationContext } from '@/lib/ai/shared/chat-types';
 import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
-import { AIMonitoring, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { calculateTotalContextSize } from '@pagespace/lib/monitoring/ai-context-calculator';
-import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import {
   attachStreamFinisher,
   createStreamAbortController,
   removeStream,
 } from '@/lib/ai/core/stream-abort-registry';
 import { runAgentWithRetry, AGENT_MAX_STEPS, isRunAborted, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
+import { agentRunBillingFields } from '@/lib/ai/core/agent-run-billing';
 import { resolveGenerationAdmission } from '@/lib/ai/core/generation-admission';
 import { makeOnStepFinishHandler } from '@/lib/ai/core/step-finish-handler';
 import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
-import { createToolSearchTool } from '@/lib/ai/tools/tool-search-tool';
-import { buildBuiltinSkillCatalog, listEligibleSkills } from '@/lib/ai/core/skill-catalog';
-import { loadUserCommandCatalog } from '@/lib/commands/command-catalog-loader';
+import { buildBuiltinSkillCatalog } from '@/lib/ai/core/skill-catalog';
 import {
   buildAgentSystemPrompt,
   buildVolatileTurnContext,
@@ -120,6 +109,7 @@ import {
 } from '@/lib/repositories/resolve-or-create-conversation';
 import { deriveConversationTitle } from '@/lib/repositories/derive-conversation-title';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 
 /**
@@ -145,6 +135,8 @@ export interface GlobalChatTurnContext {
    * on the `/api/ai/chat` surface, where the body is the only source.
    */
   urlConversationId?: string;
+  /** Time-to-first-token instrumentation, started when the request arrived. */
+  timer: TurnTimer;
 }
 
 /**
@@ -180,8 +172,10 @@ interface GlobalChatRequestBody {
   conversationId?: string;
   selectedProvider?: string;
   selectedModel?: string;
-  /** Deprecated: server-resolved from contextRef when present, kept 1+ release for old clients. */
-  locationContext?: LocationContext | null;
+  /**
+   * Where the person is, as a reference the SERVER resolves and permission-checks. The only way a
+   * global-assistant turn is inside a drive: without it the turn has no drive (SPEND-8).
+   */
   contextRef?: ContextRef;
   isReadOnly?: boolean;
   webSearchEnabled?: boolean;
@@ -192,6 +186,7 @@ interface GlobalChatRequestBody {
 
 export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Response> {
   const startTime = Date.now();
+  const turnTimer = ctx.timer;
   let lifecycle: StreamLifecycleHandle | undefined;
   let activeStreamId: string | undefined;
   // Set once the assistant placeholder row has received a terminal write (onFinish). The outer
@@ -211,6 +206,8 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
   let browserSessionId = '';
   // The credit-gate reservation for this request, released when usage is billed.
   let holdId: string | undefined;
+  // What the gate named: the wallet, the source and the funding tier (see turn-credit).
+  let credit: TurnCredit = UNGATED_TURN_CREDIT;
   // Becomes true once the stream owns the hold (its onFinish will release it via
   // trackUsage). Until then, any early return/throw below must release the hold so a
   // pre-generation exit (auth/permission/provider/save failure) doesn't strand the
@@ -268,6 +265,9 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     const { request, auth } = ctx;
     browserSessionId = ctx.browserSessionId;
     const userId = auth.userId;
+    // Who drives this global turn (D-OW-45): the request's credential and its ceremony evidence, asked by every
+    // org sign-in policy (SEC-2/3) the turn's reads and tools meet.
+    const driver = actorFromAuth(auth);
     const urlConversationId = ctx.urlConversationId;
     loggers.api.debug('Global Assistant Chat API: Authentication successful', { userId });
 
@@ -306,14 +306,13 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       conversationId,
       selectedProvider: requestBody.selectedProvider,
       selectedModel: requestBody.selectedModel,
-      hasLocationContext: !!requestBody.locationContext
+      hasContextRef: !!requestBody.contextRef
     });
 
     const {
       messages: requestMessages, // Used ONLY to extract new user message, NOT for conversation history
       selectedProvider,
       selectedModel,
-      locationContext: legacyLocationContext, // Deprecated: server-resolved from contextRef when present, kept 1+ release for old clients
       contextRef,
       isReadOnly,
       webSearchEnabled,
@@ -328,15 +327,22 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       return NextResponse.json({ error: 'messages are required' }, { status: 400 });
     }
 
+    // The client-computed `locationContext` body is gone (full cutover): a turn inside a drive
+    // names it by `contextRef`, which the server resolves. A body still carrying the old field
+    // claims a drive the server cannot verify, so it is refused rather than run as a no-drive
+    // turn on the person's own credits (SPEND-8 is only for a turn with NO drive).
+    if ('locationContext' in (ctx.body as object)) {
+      return NextResponse.json({ error: 'locationContext is no longer accepted; send contextRef' }, { status: 400 });
+    }
+
     loggers.api.debug('Global Assistant Chat API: Validation passed', { messageCount: requestMessages.length, conversationId });
 
-    // Server-resolved (and permission-checked) from contextRef when the client sent
-    // one — a contextRef pointing at a page/drive the caller cannot view resolves to
-    // null here rather than trusting whatever the client claimed. Falls back to the
-    // legacy client-computed locationContext only for old clients that never sent a
-    // contextRef at all. Deferred until after the required-field check above so an
-    // invalid request (no messages) fails fast without an extra DB round-trip.
-    const locationContext = contextRef
+    // Server-resolved (and permission-checked) from contextRef — a contextRef pointing at a
+    // page/drive the caller cannot view resolves to null here rather than trusting whatever the
+    // client claimed. No contextRef: no location, no drive. Deferred until after the
+    // required-field check above so an invalid request (no messages) fails fast without an
+    // extra DB round-trip.
+    const locationContext: LocationContext | null = contextRef
       ? await resolveRequestContext(auth, contextRef, (denied) => {
           auditRequest(request, {
             eventType: 'authz.access.denied',
@@ -347,7 +353,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
             riskScore: 0.3,
           });
         })
-      : legacyLocationContext;
+      : null;
 
     const userMessageForValidation = requestMessages[requestMessages.length - 1];
 
@@ -419,7 +425,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         })
         .from(users)
         .where(eq(users.id, userId));
-      userSubscriptionTier = gateUser?.subscriptionTier ?? undefined;
+      userSubscriptionTier = personalTurnTiers(gateUser?.subscriptionTier).capability;
       userImageGenerationModel = gateUser?.imageGenerationModel ?? null;
       // Metering-exempt providers (admin Z.ai Coder Plan) bill on a flat-rate external
       // subscription, so skip the credit gate entirely — no hold, no balance check —
@@ -431,8 +437,16 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       // A solo /help never reaches streamText (see isSoloHelpRequest below), so
       // it costs nothing — skip the gate entirely rather than take a hold that
       // would need special-cased release on the short-circuit path.
+      // The global assistant spends in the drive the person is in (SPEND-7) — only a drive
+      // the SERVER resolved from contextRef, which is permission-checked. With no drive the
+      // call spends personal credits (SPEND-8). The conversation's stored source (SPEND-3) is
+      // read only if the caller owns it (the gate's shell filters on owner), since this runs
+      // before the conversation is resolved.
+      const locationSpend = conversationSpend(locationContext?.currentDrive?.id, conversationId);
+      credit = { spend: locationSpend };
       if (!isMeteringExempt(gateProvider) && !isSoloHelpRequest) {
-        const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {
+        const creditGate = await canConsumeAI(userId, personalTurnTiers(gateUser?.subscriptionTier).gate, {
+          spend: locationSpend,
           estCostCents: estimateChatHoldCentsForModel(selectedModel),
           maxInFlight: MAX_CHAT_INFLIGHT,
         });
@@ -442,9 +456,10 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
             reason: creditGate.reason,
             conversationId,
           });
-          return creditGateErrorResponse(creditGate.reason);
+          return creditGateErrorResponse(creditGate.reason, creditGate.refusal);
         }
         holdId = creditGate.holdId;
+        credit = turnCreditAfterGate(locationSpend, creditGate);
         availableBalanceCents = creditGate.balanceSnapshot?.netSpendableCents ?? null;
       }
     }
@@ -456,6 +471,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     // `abortSignal.aborted` before deciding to retry, so an abort raised here
     // terminates the run rather than being read as a transient failure.
     const creditAbortController = holdId ? new AbortController() : null;
+    turnTimer.mark('credit_gate');
 
 
     // Resolve existing conversation or auto-create on first message (lazy creation).
@@ -523,7 +539,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         // Skipped for a solo /help — see the equivalent comment in
         // apps/web/src/app/api/ai/chat/route.ts.
         if (!isSoloHelpRequest) {
-          commandPlans = await planCommandExecutions(messageContent, userId, {
+          commandPlans = await planCommandExecutions(messageContent, driver, {
             driveId: locationContext?.currentDrive?.id ?? null,
           });
           if (commandPlans.length > 0) {
@@ -659,7 +675,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       });
 
       return await respondWithHelpAnswer({
-        senderId: userId,
+        sender: driver, // the /help list is the driver's own, asked through their credential
         driveId: locationContext?.currentDrive?.id ?? null,
         originalMessages: requestMessages,
         persist: (payload, messageId) =>
@@ -680,11 +696,16 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       selectedModel,
     };
 
-    const providerResult = await createAIProvider(userId, providerRequest);
+    // POL-8: the org of the drive the turn runs in (the same server-resolved drive the spend uses).
+    const providerResult = await createAIProvider(userId, providerRequest, { driveId: locationContext?.currentDrive?.id ?? null });
 
     if (isProviderError(providerResult)) {
       return createProviderErrorResponse(providerResult);
     }
+    turnTimer.mark('provider_ready');
+
+    // POL-8: a command's pages reach this turn's model only when their org allows the model it resolved.
+    ({ plans: commandPlans, prompt: commandSystemPrompt } = await commandsForModel(commandPlans, toolModelContext(providerResult)));
 
     const { model, provider: currentProvider, modelName: currentModel } = providerResult;
 
@@ -706,7 +727,8 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     const admission = resolveGenerationAdmission({
       provider: currentProvider,
       model: currentModel,
-      subscriptionTier: userSubscriptionTier,
+      // WAL-8: the tier of whoever funds this call, as the gate resolved it.
+      subscriptionTier: credit.entitlementTier ?? userSubscriptionTier,
       isAdmin: auth.role === 'admin',
       requiresProSubscription,
     });
@@ -751,6 +773,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     // reader for durable messages is now the same seam the page chat uses, and
     // the query stops being spelled out a second time here.
     const dbMessages = await messageRepository.getMessagesByConversationId(conversationId);
+    turnTimer.mark('history_loaded');
 
     // Convert database messages to UI format
     const conversationHistory = await Promise.all(dbMessages.map(msg =>
@@ -768,6 +791,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         status: msg.status,
       })
     ));
+    turnTimer.mark('history_converted');
 
     loggers.api.debug('Global Assistant Chat API: Loaded conversation history from database', {
       messageCount: conversationHistory.length,
@@ -814,82 +838,11 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         return msg;
       });
 
-    // Fetch user personalization and timezone for AI system prompt injection
-    const [personalization, userTimezone] = await Promise.all([
-      getUserPersonalization(userId),
-      getUserTimezone(userId),
-    ]);
-    if (personalization) {
-      loggers.api.debug('Global Assistant: User personalization loaded', {
-        hasPersonalization: true,
-        hasBio: !!personalization.bio,
-        hasWritingStyle: !!personalization.writingStyle,
-        hasRules: !!personalization.rules,
-      });
-    }
-
-    // The system prompt itself is assembled once, below, by
-    // `buildAgentSystemPrompt` — every input it needs is gathered first. Note
-    // that "current page/drive" is turn-volatile: it is built separately as
-    // `locationPrompt` and injected via buildVolatileTurnContext, NOT baked
-    // into the system prompt, so that string stays byte-identical across turns
-    // regardless of where the user navigates.
-    const hasLocation = Boolean(locationContext?.currentPage || locationContext?.currentDrive);
-    // Session-only surface (AUTH_OPTIONS_WRITE allows 'session' only), so the scope
-    // ceiling is always empty here. Passed explicitly anyway so this stays correct
-    // by construction if the allowed auth methods ever widen.
-    const locationHomeDriveId = await resolveHomeDriveHint(userId, hasLocation, getAllowedDriveIds(auth));
-
-    const locationPrompt = buildLocationTurnPrompt(locationContext ? {
-      currentPage: locationContext.currentPage,
-      currentDrive: locationContext.currentDrive,
-      breadcrumbs: locationContext.breadcrumbs,
-      homeDriveId: locationHomeDriveId,
-    } : { homeDriveId: locationHomeDriveId });
-
-    // Build timestamp system prompt for temporal awareness (using user's timezone)
-    const timestampSystemPrompt = buildTimestampSystemPrompt(userTimezone);
-
-    // Fetch drive prompt if user is within a drive
-    let drivePromptSection = '';
-    if (locationContext?.currentDrive?.id) {
-      try {
-        const [drive] = await db
-          .select({ drivePrompt: drives.drivePrompt })
-          .from(drives)
-          .where(eq(drives.id, locationContext.currentDrive.id))
-          .limit(1);
-
-        if (drive?.drivePrompt?.trim()) {
-          drivePromptSection = `\n\n## DRIVE INSTRUCTIONS\n\nThe following custom instructions have been set for this drive by the drive owner:\n\n${drive.drivePrompt}`;
-          loggers.api.debug('Global Assistant Chat API: Including drive prompt', {
-            driveId: locationContext.currentDrive.id,
-            promptLength: drive.drivePrompt.length
-          });
-        }
-      } catch (error) {
-        loggers.api.error('Global Assistant Chat API: Failed to fetch drive prompt', error as Error);
-        // Continue without drive prompt on error
-      }
-    }
-
-    // The Global Assistant's own guidance — the exploration rules and the
-    // conversation-type report — now lives beside the page surface's assembly in
-    // `buildAgentSystemPrompt`, so the two can be read against each other.
-    // Workspace knowledge (page types, tasks, agents, automation, search,
-    // mentions) comes from the SHARED inline-instructions sections: this route
-    // previously carried a bespoke copy that drifted (it claimed tasks create
-    // linked DOCUMENT pages; they create TASK_LIST children), which is the
-    // reason there is one assembly now rather than three.
-
-    // The PAYER's sandbox eligibility for this Global Assistant turn —
-    // derived from the conversation's BOUND SESSION, never the location
-    // drive (review #2326, two rounds): an unbound global conversation gets
-    // a DRIVELESS session on its first tool call (`ensureGlobalSandboxSession`
-    // spawns `driveId: null` unconditionally), so this user is the payer
-    // regardless of which drive they happen to be visiting — keying on the
-    // location drive both advertised tools a free visitor's own session
-    // could never fund AND hid tools a paid visitor's driveless session
+    // Sandbox-tier eligibility for this conversation (the payer's plan and the
+    // drive's own tier) — computed BEFORE any tool filtering reads it. The
+    // tier question is per-conversation, not per-person: a free-tier user in a
+    // paid drive's session gets the drive's tools, and a paid user in a drive
+    // they could never fund AND hid tools a paid visitor's driveless session
     // funds fine. A conversation already bound to a session uses that
     // session's own coordinates, exactly as provisioning will. Without this,
     // a free-tier assistant advertised bash/git tools that always answer
@@ -898,85 +851,52 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     const sandboxTierEligible = await resolveSandboxToolEligibilityForConversation(
       conversation.id,
       'global',
-      userId,
+      driver,
     );
+    turnTimer.mark('sandbox_eligibility');
 
-    // Build agent awareness prompt - lists visible AI agents for consultation
-    // `canDelegate` mirrors the session-tool gate: spawn_session registers
-    // regardless of the CODE_EXECUTION kill-switch (the chat-only session
-    // family is free conversation orchestration, see `buildPageSpaceTools`),
-    // but `filterToolsForReadOnly` strips it as a write tool — and a prompt
-    // that names a tool the model does not have makes it attempt delegation
-    // that silently fails. The payer-tier filter does NOT remove the
-    // chat-only session family (sessions are free on every plan), so tier is
-    // deliberately not weighed here.
-    const agentAwarenessPrompt = await buildAgentAwarenessPrompt(userId, {
-      canDelegate: !readOnlyMode,
+    // Location, drive prompt, personalization and timezone, agent awareness and
+    // the drive tree: the ONE assembly Imago's turn runs too
+    // (`assistant-surface.ts`). Session-only surface (AUTH_OPTIONS_WRITE allows
+    // 'session' only), so the scope ceiling is always empty here; passed
+    // explicitly anyway so this stays correct if the auth methods ever widen.
+    const assistantContext = await buildAssistantContext({
+      actor: driver,
+      location: locationContext ?? null,
+      readOnly: readOnlyMode,
+      showPageTree: showPageTree === true,
+      allowedDriveIds: getAllowedDriveIds(auth),
+      timer: turnTimer,
     });
+    const { personalization, locationPrompt, drivePromptSection, agentAwarenessPrompt, pageTreePrompt } = assistantContext;
+    const timestampSystemPrompt = assistantContext.timestampPrompt;
+    const userTimezone = assistantContext.timezone;
 
-    // Build page tree context if enabled
-    let pageTreePrompt = '';
-    if (showPageTree) {
-      if (locationContext?.currentDrive?.id) {
-        // In drive context: show full drive tree
-        const treeContext = await getPageTreeContext(userId, {
-          scope: 'drive',
-          driveId: locationContext.currentDrive.id,
-        });
-        if (treeContext) {
-          pageTreePrompt = `\n\n## WORKSPACE STRUCTURE\n\nHere is the complete workspace structure:\n\n${treeContext}`;
-          loggers.api.debug('Global Assistant: Page tree context included', {
-            driveId: locationContext.currentDrive.id,
-            contextLength: treeContext.length
-          });
-        }
-      } else {
-        // Dashboard context: show drive list summary
-        const driveSummary = await getDriveListSummary(userId);
-        if (driveSummary) {
-          pageTreePrompt = `\n\n## ACCESSIBLE WORKSPACES\n\n${driveSummary}`;
-          loggers.api.debug('Global Assistant: Drive list summary included', {
-            summaryLength: driveSummary.length
-          });
-        }
-      }
-    }
+    // The Global Assistant's own guidance — the exploration rules and the
+    // conversation-type report — lives beside the page surface's assembly in
+    // `buildAgentSystemPrompt`, so the two can be read against each other.
 
-    // Full filtered tool set. NOT sent to model directly; used as dispatch map for
-    // execute_tool and as tool_search catalog. The COMPUTE tools (bash/files,
-    // git+gh, PTY shells — not the free chat-session family) are stripped for a tier-ineligible payer BEFORE
-    // anything reads this set — including `resolveGlobalAssistantIntegrationTools`
-    // below, whose sandbox-git-overlap suppression keys on these tool NAMES.
-    const filteredAllTools = filterToolsForImageGen(
-      filterToolsForWebSearch(
-        filterToolsForReadOnly(
-          filterToolsForSandboxTier(pageSpaceTools, sandboxTierEligible),
-          readOnlyMode
-        ),
-        webSearchMode
-      ),
-      shouldExposeImageGen({
-        imageGenEnabled: imageGenEnabled === true,
-        isAdmin: auth.role === 'admin',
-        hasToolDef: true,
-      })
-    ) as ToolSet;
-
-    // Core tools (plus the always-upfront runtime toggles) go to the model with full
-    // schemas; everything else is hidden from the model and reachable only via
-    // execute_tool.
-    const { coreTools, nonCoreTools } = splitToolsForExposure(filteredAllTools, ALWAYS_UPFRONT_TOOLS);
-
-    // Capability catalog: built-in skills join the stable prompt; the
-    // per-viewer command list rides the volatile turn context below. Both
-    // feed tool_search's corpus so discovery has one search surface.
+    // The Global Assistant's tools — the selection Imago's turn shares
+    // (`selectAssistantTools`): core tools up front, the rest behind
+    // tool_search/execute_tool, the payer-tier compute gate applied before
+    // anything (integration suppression included) reads the set.
+    const toolSelection = await selectAssistantTools({
+      actor: driver,
+      readOnly: readOnlyMode,
+      webSearch: webSearchMode,
+      imageGen: imageGenEnabled === true,
+      isAdmin: auth.role === 'admin',
+      sandboxTierEligible,
+      // Session-only surface (AUTH_OPTIONS_WRITE allows 'session' only), so
+      // this is always false today; passed explicitly like allowedDriveIds
+      // above so the surface stays correct if the auth methods ever widen.
+      driveScoped: isDriveScopedPrincipal(auth),
+      commandDriveId: locationContext?.currentDrive?.id ?? null,
+      timer: turnTimer,
+    });
+    const filteredAllTools = toolSelection.allTools;
+    const userCommandCatalog = toolSelection.userCommandCatalog;
     const availableToolNames = Object.keys(filteredAllTools);
-    const eligibleSkills = listEligibleSkills(availableToolNames);
-    const userCommandCatalog = await loadUserCommandCatalog(
-      userId,
-      locationContext?.currentDrive?.id ?? null,
-      availableToolNames
-    );
     const skillCatalogPrompt = buildBuiltinSkillCatalog(availableToolNames);
 
     // Active plan pointer. Same volatility class as the skill catalog: it
@@ -984,9 +904,11 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     // navigation, so it is cache-stable per conversation. It has to be here
     // rather than in the volatile block — the compaction summary is lossy, and
     // this pointer is precisely what the agent needs after a summary.
-    const activePlanPrompt = buildActivePlanPrompt(await getActivePlan(conversationId, userId));
+    const activePlan = await getActivePlan(conversationId, driver);
+    turnTimer.mark('active_plan_loaded');
+    const activePlanPrompt = buildActivePlanPrompt(activePlan);
 
-    const nonCoreToolNamesPrompt = buildNonCoreToolNamesPrompt(Object.keys(nonCoreTools));
+    const nonCoreToolNamesPrompt = buildNonCoreToolNamesPrompt(toolSelection.nonCoreToolNames);
     const finalSystemPrompt = buildAgentSystemPrompt({
       surface: 'global',
       readOnly: readOnlyMode,
@@ -1003,14 +925,9 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       nonCoreToolNames: nonCoreToolNamesPrompt,
     });
 
-    let finalTools: ToolSet = {
-      ...coreTools,
-      tool_search: createToolSearchTool(
-        excludeAlwaysUpfront(filteredAllTools, ALWAYS_UPFRONT_TOOLS),
-        [...eligibleSkills, ...userCommandCatalog.searchEntries]
-      ),
-      execute_tool: createExecuteTool(nonCoreTools),
-    };
+    turnTimer.mark('system_prompt');
+
+    let finalTools: ToolSet = toolSelection.tools;
 
     // Guard against a stale read_page tool-result (image bytes delivered on an
     // earlier turn when the model had vision) being re-embedded as an image when
@@ -1028,29 +945,21 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       totalTools: Object.keys(finalTools).length
     });
 
-    // INTEGRATION TOOLS: Resolve and merge integration tools for global assistant
+    // INTEGRATION TOOLS: the shared assistant resolver (Imago runs it too);
+    // the drive-in-view scope is asked through the driver (org sign-in policy included).
     try {
-      const { resolveGlobalAssistantIntegrationTools } = await import('@/lib/ai/core/integration-tool-resolver');
-      let currentDriveId = locationContext?.currentDrive?.id || null;
-      let userDriveRole: 'OWNER' | 'ADMIN' | 'MEMBER' | null = null;
-      if (currentDriveId) {
-        const access = await getDriveAccess(currentDriveId, userId);
-        if (!access.isMember) {
-          // User is not a member of this drive — do not resolve drive-scoped integrations
-          currentDriveId = null;
-        } else {
-          userDriveRole = access.role;
-        }
-      }
-      const integrationTools = await resolveGlobalAssistantIntegrationTools({
-        userId,
-        driveId: currentDriveId,
-        userDriveRole,
+      const integrationResolver = await import('@/lib/ai/core/integration-tool-resolver');
+      turnTimer.mark('integrations_import');
+      const integrationTools = await integrationResolver.resolveAssistantIntegrationTools({
+        actor: driver,
+        agentId: null,
+        driveInView: locationContext?.currentDrive?.id || null,
         // filteredAllTools (not finalTools) carries raw tool names as top-level
         // keys — finalTools is always { ...coreTools, tool_search, execute_tool },
         // which never contains sandbox git/gh tool names directly.
         currentTools: filteredAllTools,
       });
+      turnTimer.mark('integrations_ready');
       if (Object.keys(integrationTools).length > 0) {
         finalTools = mergeToolSets(finalTools, integrationTools);
         loggers.api.info('Global Assistant: Merged integration tools', {
@@ -1151,7 +1060,9 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
           systemPrompt: finalSystemPrompt,
           tools: finalTools as Record<string, unknown>,
           user: { id: userId, role: auth.role ?? null },
+          spend: credit.spend,
         });
+        turnTimer.mark('history_compacted');
 
         // Limit visual-content injection to the last MAX_MESSAGES_WITH_IMAGES items;
         // the earlier head is kept intact so the full prepared context reaches the model.
@@ -1179,6 +1090,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
           tail: processedTail,
           tools: finalTools,
         });
+        turnTimer.mark('model_messages_built');
 
         return {
           modelMessages,
@@ -1209,6 +1121,13 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       wasTruncated: contextCalculation.wasTruncated,
     });
 
+    turnTimer.mark('history_prepared');
+    turnTimer.annotate({
+      contextTokens: contextCalculation.totalTokens,
+      systemPromptTokens: contextCalculation.systemPromptTokens,
+      toolDefinitionTokens: contextCalculation.toolDefinitionTokens,
+    });
+
     const serverAssistantMessageId = createId();
     cleanupContext = { conversationId, serverAssistantMessageId, userId };
 
@@ -1221,6 +1140,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
 
     const channelId = globalChannelId(userId);
     const displayName = await resolveDisplayName(userId);
+    turnTimer.mark('display_name_ready');
 
     if (conversationIsNew) {
       broadcastGlobalConversationAdded(channelId, {
@@ -1260,6 +1180,8 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       isShared: conversation.isShared === true,
       scope: { kind: 'global', userId },
     });
+    turnTimer.mark('generation_started');
+    turnTimer.annotate({ conversationId, messageId: serverAssistantMessageId, provider: currentProvider, model: currentModel });
 
     // Bind the terminal write to the abort itself. onAbort (below) already calls finish(true),
     // but it only fires while a streamText is live — and a cross-instance abort now WAITS for
@@ -1288,18 +1210,26 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         // already-aborted signal to short-circuit streamText's underlying fetch.
         if (lifecycle!.preAborted) return;
 
-        // Execution feedback (UX spec §7): announce one command indicator
-        // per resolved plan as the first parts of the assistant message, in
-        // the order the chips appeared; persisted via onFinish.
-        commandPlans.forEach((plan, index) => {
-          writer.write({
-            type: COMMAND_EXECUTION_PART_TYPE,
-            id: `${serverAssistantMessageId}-command-${index}`,
-            data: commandExecutionDataFromPlan(plan),
-          });
-        });
+        // SPEND-4 fallback part, then the command execution indicators (UX spec §7):
+        // the preamble both turns write before the model runs (turn-preamble.ts).
+        writeTurnPreamble(writer, { messageId: serverAssistantMessageId!, credit, commandPlans });
         // Resolve once outside the per-attempt factory (the factory is synchronous).
         const modelCapabilitiesForTools = await getModelCapabilities(currentModel, currentProvider);
+        // Volatile per-turn data (timestamp/location/mention/command) is appended to the
+        // last user message so the system prefix stays byte-stable and provider prefix
+        // caches survive. One definition, so the abort-billing prompt estimate prices
+        // exactly what the provider was sent.
+        const toSentMessages = (messages: ModelMessage[]): ModelMessage[] =>
+          appendTurnContextToLastUserMessage(
+            messages,
+            buildVolatileTurnContext({
+              timestampPrompt: timestampSystemPrompt,
+              locationPrompt,
+              mentionPrompt: mentionSystemPrompt,
+              commandCatalogPrompt: userCommandCatalog.catalogPrompt,
+              commandPrompt: commandSystemPrompt,
+            }),
+          );
         // Server-side, in-request retry: transparently re-drive the loop under one
         // message envelope when an attempt drops mid-loop or ends without finishing.
         // The loop lives inside execute(), so onFinish still fires exactly once below.
@@ -1315,19 +1245,10 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
           maxSteps: AGENT_MAX_STEPS,
           startTimeMs: startTime,
           logger: loggers.api,
+          toSentMessages,
           buildStreamText: (messages) => {
-            // Volatile per-turn data (timestamp/location/mention/command) is
-            // appended to the last user message so the stable system prefix
-            // stays byte-identical across turns and provider prefix caches
-            // survive — including turns where only the user's page changed.
-            const turnContext = buildVolatileTurnContext({
-              timestampPrompt: timestampSystemPrompt,
-              locationPrompt,
-              mentionPrompt: mentionSystemPrompt,
-              commandCatalogPrompt: userCommandCatalog.catalogPrompt,
-              commandPrompt: commandSystemPrompt,
-            });
-            const messagesWithContext = appendTurnContextToLastUserMessage(messages, turnContext);
+            turnTimer.modelRequest();
+            const messagesWithContext = toSentMessages(messages);
             // Apply cache breakpoints: A) last message, B) summary/elision boundary.
             const cachedMessages = withCacheBreakpoints(messagesWithContext, stableBoundaryIndex);
             return streamText({
@@ -1348,9 +1269,10 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
               : undefined,
             experimental_context: {
               userId,
+              accessActor: driver, // tools ask org sign-in policy of the global turn's driver
               timezone: userTimezone,
-              aiProvider: currentProvider,
-              aiModel: currentModel,
+              // POL-8: the tools are judged by the model this turn resolved.
+              ...toolModelContext(providerResult),
               conversationId,
               locationContext,
               // Turn-start snapshot of the agent's working page — tools that
@@ -1366,7 +1288,9 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
               isAdmin: auth.role === 'admin',
               subscriptionTier: userSubscriptionTier,
               imageGenerationModel: userImageGenerationModel ?? DEFAULT_IMAGE_MODEL,
+              creditSpend: credit,
               chatSource: { type: 'global' as const },
+              authSessionId: authSessionIdOf(auth),
               // Worker-dispatch chain depth (spawn_session/send_session) — the
               // X-Agent-Dispatch-Depth header is how depth survives the HTTP
               // hop; forging it low is the default, forging it high only
@@ -1498,22 +1422,21 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         // so the orphan-sweep can recover/bill it. Missing tokens mean a $0 cost
         // row, not a skipped one (which would silently front the spend).
         try {
-          const usage = agentRun?.accumulatedUsage;
-          const steps = agentRun?.accumulatedSteps;
           const duration = Date.now() - startTime;
+          // Provider usage + cost, plus the step an abort interrupted (which the
+          // provider charged for but reports no usage on) — see agentRunBillingFields.
+          const { abortedStep, ...billing } = agentRunBillingFields({
+            agentRun,
+            model: currentModel,
+            promptOverheadTokens: () => contextCalculation.systemPromptTokens + contextCalculation.toolDefinitionTokens,
+          });
 
           await AIMonitoring.trackUsage({
             userId: userId!,
             provider: currentProvider,
             model: currentModel,
             source: 'chat',
-            inputTokens: usage?.inputTokens,
-            outputTokens: usage?.outputTokens,
-            totalTokens: usage?.totalTokens,
-            cachedInputTokens: usage?.cachedInputTokens,
-            reasoningTokens: usage?.reasoningTokens,
-            providerCostDollars: extractOpenRouterCostDollars(steps),
-            openrouterGenerationIds: extractOpenRouterGenerationIds(steps),
+            ...billing,
             duration,
             conversationId,
             messageId,
@@ -1521,6 +1444,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
             // completion. Cost still settles regardless (the provider charged us).
             success: agentRun?.finalOutcome !== 'exhausted',
             holdId,
+            walletId: credit.walletId,
             contextMessages: contextCalculation.messageIds,
             contextSize: contextCalculation.totalTokens,
             systemPromptTokens: contextCalculation.systemPromptTokens,
@@ -1533,9 +1457,11 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
               toolCallsCount: extractedToolCalls.length,
               toolResultsCount: extractedToolResults.length,
               isReadOnly: readOnlyMode,
+              ...(abortedStep ? { abortedStep } : {}),
               retryAttempts: agentRun?.attempts,
               retryOutcome: agentRun?.finalOutcome,
               retryTerminalReason: agentRun?.terminalReason,
+              timing: turnTimer.summary(),
             }
           });
         } catch (trackingError) {
@@ -1572,7 +1498,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     holdHandedOff = true;
 
 
-    return pumpAndRespond({ sdkStream, lifecycle: lifecycle!, streamId, request, channelId, conversationId });
+    return pumpAndRespond({ sdkStream, lifecycle: lifecycle!, streamId, request, channelId, conversationId, timer: turnTimer });
 
   } catch (error) {
     if (activeStreamId !== undefined) {

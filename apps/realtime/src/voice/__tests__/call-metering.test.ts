@@ -166,7 +166,8 @@ describe('startCallMeter — the opening hold', () => {
     expect(h.gate).toHaveBeenCalledWith(
       'u1',
       'pro',
-      expect.objectContaining({ maxInFlight: expect.any(Number), estCostCents: expect.any(Number) }),
+      // A realtime voice call is not a drive session: personal credits (SPEND-8).
+      expect.objectContaining({ spend: { kind: 'personal' }, maxInFlight: expect.any(Number), estCostCents: expect.any(Number) }),
     );
   });
 });
@@ -571,5 +572,108 @@ describe('startCallMeter — stopping', () => {
     await meter.settle();
 
     expect(h.track).not.toHaveBeenCalled();
+  });
+});
+
+describe('startCallMeter — the source a call spends', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const DRIVE_TARGET = { kind: 'drive' as const, driveId: 'drive-1', chosen: null, conversationId: 'conv1' };
+
+  /** A gate that resolves the drive wallet for every hold, numbering the holds. */
+  function driveGate() {
+    let n = 0;
+    return vi.fn(async () => ({ allowed: true, reason: 'ok' as const, holdId: `hold-${++n}`, walletId: 'w-drive', spendSource: 'drive_wallet' as const }));
+  }
+
+  it('SPEND-1 (partial) a call bound to a drive reserves its opening hold on that drive\'s target', async () => {
+    const gate = driveGate();
+    const { options } = harness({ spend: DRIVE_TARGET, gate: gate as unknown as CallMeterOptions['gate'] });
+    await startedMeter(options);
+
+    expect(gate).toHaveBeenCalledWith('u1', 'pro', expect.objectContaining({ spend: DRIVE_TARGET }));
+  });
+
+  it('SPEND-4 (partial) every later window reserves on the source the opening hold resolved, never another', async () => {
+    const gate = driveGate();
+    const { options } = harness({ spend: DRIVE_TARGET, gate: gate as unknown as CallMeterOptions['gate'] });
+    const meter = await startedMeter(options);
+
+    meter.record(usage());
+    await meter.settle();
+
+    expect(gate).toHaveBeenCalledTimes(2);
+    expect((gate.mock.calls[1] as unknown[])[2]).toEqual(expect.objectContaining({ spend: { ...DRIVE_TARGET, chosen: 'drive_wallet', followOn: true } }));
+  });
+
+  it('SPEND-4 (partial) an opening gate that fell back is reported with the started meter, from and to; one that did not reports none', async () => {
+    const fellBack = vi.fn(async () => ({
+      allowed: true, reason: 'ok' as const, holdId: 'hold-1', walletId: 'w-own', spendSource: 'own_credits' as const,
+      fallback: { from: 'drive_wallet' as const, to: 'own_credits' as const },
+    }));
+    const started = await startCallMeter(harness({ spend: DRIVE_TARGET, gate: fellBack as unknown as CallMeterOptions['gate'] }).options);
+    expect(started).toMatchObject({ ok: true, spendFallback: { from: 'drive_wallet', to: 'own_credits', walletId: 'w-own' } });
+
+    const plain = await startCallMeter(harness({ spend: DRIVE_TARGET, gate: driveGate() as unknown as CallMeterOptions['gate'] }).options);
+    expect(plain).toMatchObject({ ok: true, spendFallback: null });
+  });
+
+  it('SPEND-1 (partial) each window settles once, on the hold and wallet its own reservation named', async () => {
+    const gate = driveGate();
+    const { options, h } = harness({ spend: DRIVE_TARGET, gate: gate as unknown as CallMeterOptions['gate'] });
+    const meter = await startedMeter(options);
+
+    meter.record(usage());
+    await meter.settle();
+    meter.record(usage());
+    await meter.stop('call_ended');
+
+    expect(h.track).toHaveBeenCalledTimes(2);
+    expect(h.track.mock.calls[0][0]).toMatchObject({ holdId: 'hold-1', walletId: 'w-drive' });
+    expect(h.track.mock.calls[1][0]).toMatchObject({ holdId: 'hold-2', walletId: 'w-drive' });
+  });
+
+  it('SPEND-1 (partial) a drive whose wallet cannot cover the opening hold starts nothing and charges nothing', async () => {
+    const gate = vi.fn(async () => ({ allowed: false, reason: 'source_refused' as const, refusal: { source: 'drive_wallet', reason: 'source_empty', options: ['own_credits'] } }));
+    const { options, h } = harness({ spend: DRIVE_TARGET, gate: gate as unknown as CallMeterOptions['gate'] });
+
+    expect(await startCallMeter(options)).toEqual({ ok: false, reason: 'source_refused' });
+    expect(gate).toHaveBeenCalledOnce();
+    expect(h.track).not.toHaveBeenCalled();
+    expect(h.intervals).toHaveLength(0);
+  });
+
+  it('SPEND-4 (partial) a drive wallet that runs dry mid-call ends the call; it never falls back to the caller\'s own credits', async () => {
+    let n = 0;
+    const gate = vi.fn(async () => (++n === 1
+      ? { allowed: true, reason: 'ok' as const, holdId: 'hold-1', walletId: 'w-drive', spendSource: 'drive_wallet' as const }
+      : { allowed: false, reason: 'source_refused' as const, refusal: { source: 'drive_wallet', reason: 'source_empty', options: ['own_credits'] } }));
+    const { options, h } = harness({ spend: DRIVE_TARGET, gate: gate as unknown as CallMeterOptions['gate'] });
+    const meter = await startedMeter(options);
+
+    meter.record(usage());
+    await meter.settle();
+
+    expect(h.limits).toEqual([{ reason: 'credit_exhausted', message: expect.any(String) }]);
+    expect(gate).toHaveBeenCalledTimes(2);
+    for (const call of gate.mock.calls as unknown[][]) {
+      expect((call[2] as { spend: { kind: string } }).spend.kind).toBe('drive');
+    }
+    // The window already spoken was settled on the drive wallet's hold, once.
+    expect(h.track).toHaveBeenCalledTimes(1);
+    expect(h.track.mock.calls[0][0]).toMatchObject({ holdId: 'hold-1', walletId: 'w-drive' });
+  });
+
+  it('SPEND-4 (partial) the meter exposes the pinned source every window spends, for the call\'s tools to inherit', async () => {
+    const gate = driveGate();
+    const { options } = harness({ spend: DRIVE_TARGET, gate: gate as unknown as CallMeterOptions['gate'] });
+    const meter = await startedMeter(options);
+    expect(meter.spend).toEqual({ ...DRIVE_TARGET, chosen: 'drive_wallet', followOn: true });
+  });
+
+  it('SPEND-8 (partial) a call with no drive spends personal credits', async () => {
+    const { options, h } = harness();
+    await startedMeter(options);
+    expect(h.gate).toHaveBeenCalledWith('u1', 'pro', expect.objectContaining({ spend: { kind: 'personal' } }));
   });
 });

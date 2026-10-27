@@ -28,6 +28,8 @@ const {
   mockResolveDriveMembership,
   mockGetConversation,
   mockGetAiAgent,
+  mockFindSessionRecord,
+  mockRenameSession,
 } = vi.hoisted(() => ({
   mockFindSessionForConversation: vi.fn(),
   mockEnsureGlobalSandboxSession: vi.fn(),
@@ -44,6 +46,8 @@ const {
   mockResolveDriveMembership: vi.fn(),
   mockGetConversation: vi.fn(),
   mockGetAiAgent: vi.fn(),
+  mockFindSessionRecord: vi.fn(),
+  mockRenameSession: vi.fn(),
 }));
 
 vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
@@ -59,8 +63,11 @@ vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   listSessionConversationsBulk: mockListSessionConversationsBulk,
   provisionSessionSandbox: vi.fn(),
   getAgentSessionStore: vi.fn(),
+  findSessionRecord: mockFindSessionRecord,
+  renameSession: mockRenameSession,
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: mockCanUserViewPage,
   getDriveIdsForUser: mockGetDriveIdsForUser,
 }));
@@ -97,8 +104,11 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 import { resolveCallerSessionForWorker, buildSessionToolsDeps } from '../session-tools-runtime';
 import { audit } from '@pagespace/lib/audit/audit-log';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const sessionRow = { id: 'ses-1', ownerId: 'user-1', endedAt: null };
+/** The caller's credential (D-OW-45): every access gate is asked of it. */
+const USER_1 = credentialActor('user-1', null);
 const globalConversation = { id: 'conv-g', type: 'global', userId: 'user-1', isActive: true, contextId: null };
 const pageConversation = { id: 'conv-p', type: 'page', userId: 'user-1', isActive: true, contextId: 'agent-1' };
 
@@ -109,13 +119,16 @@ beforeEach(() => {
   // `undefined` and every unrelated test would fail on the access read rather
   // than on what it is actually asserting. Tests about revocation override it.
   mockCheckSessionAccess.mockResolvedValue({ allowed: true });
+  mockListSessions.mockResolvedValue([]);
+  mockFindSessionRecord.mockResolvedValue({ id: 'ses-1', ownerId: 'user-1', driveId: 'drive-1' });
+  mockRenameSession.mockResolvedValue({ workspaceId: 'ses-1', name: 'Renamed' });
 });
 
 describe('resolveCallerSessionForWorker', () => {
   test('a conversation already bound to a session resolves it directly — no auto-bind attempted', async () => {
     mockFindSessionForConversation.mockResolvedValue(sessionRow);
 
-    const resolved = await resolveCallerSessionForWorker('conv-1', 'user-1');
+    const resolved = await resolveCallerSessionForWorker('conv-1', USER_1);
 
     expect(resolved).toEqual({ ok: true, session: sessionRow });
     expect(mockGetConversation).not.toHaveBeenCalled();
@@ -126,7 +139,7 @@ describe('resolveCallerSessionForWorker', () => {
     const ended = { ...sessionRow, endedAt: new Date() };
     mockFindSessionForConversation.mockResolvedValue(ended);
 
-    const resolved = await resolveCallerSessionForWorker('conv-1', 'user-1');
+    const resolved = await resolveCallerSessionForWorker('conv-1', USER_1);
 
     expect(resolved).toEqual({ ok: true, session: ended });
     expect(mockEnsureGlobalSandboxSession).not.toHaveBeenCalled();
@@ -141,10 +154,10 @@ describe('resolveCallerSessionForWorker', () => {
     mockFindSessionForConversation.mockResolvedValue(sessionRow);
     mockCheckSessionAccess.mockResolvedValue({ allowed: false, reason: 'drive_access_denied' });
 
-    const resolved = await resolveCallerSessionForWorker('conv-1', 'user-1');
+    const resolved = await resolveCallerSessionForWorker('conv-1', USER_1);
 
     expect(resolved).toEqual({ ok: false, reason: 'not_permitted' });
-    expect(mockCheckSessionAccess).toHaveBeenCalledWith('user-1', 'ses-1');
+    expect(mockCheckSessionAccess).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'ses-1');
     // Refused on permission, not by falling through to the minting path — a
     // fallthrough would quietly start a SECOND workspace for a revoked caller.
     expect(mockGetConversation).not.toHaveBeenCalled();
@@ -156,7 +169,7 @@ describe('resolveCallerSessionForWorker', () => {
     mockFindSessionForConversation.mockResolvedValue(ended);
     mockCheckSessionAccess.mockResolvedValue({ allowed: true });
 
-    await expect(resolveCallerSessionForWorker('conv-1', 'user-1')).resolves.toEqual({
+    await expect(resolveCallerSessionForWorker('conv-1', USER_1)).resolves.toEqual({
       ok: true,
       session: ended,
     });
@@ -167,10 +180,10 @@ describe('resolveCallerSessionForWorker', () => {
     mockGetConversation.mockResolvedValue(globalConversation);
     mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: true, session: sessionRow });
 
-    const resolved = await resolveCallerSessionForWorker('conv-g', 'user-1');
+    const resolved = await resolveCallerSessionForWorker('conv-g', USER_1);
 
     expect(resolved).toEqual({ ok: true, session: sessionRow });
-    expect(mockEnsureGlobalSandboxSession).toHaveBeenCalledWith('conv-g', 'user-1');
+    expect(mockEnsureGlobalSandboxSession).toHaveBeenCalledWith('conv-g', expect.objectContaining({ userId: 'user-1' }));
   });
 
   test('an unbound PAGE conversation mints a session in ITS AGENT\'S drive when the caller passes the agent view check and the drive access check', async () => {
@@ -181,14 +194,18 @@ describe('resolveCallerSessionForWorker', () => {
     mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
     mockEnsureDriveSessionForConversation.mockResolvedValue({ ok: true, session: sessionRow });
 
-    const resolved = await resolveCallerSessionForWorker('conv-p', 'user-1');
+    const resolved = await resolveCallerSessionForWorker('conv-p', USER_1);
 
     expect(resolved).toEqual({ ok: true, session: sessionRow });
-    expect(mockCheckAccessForSubject).toHaveBeenCalledWith('user-1', {
+    expect(mockCheckAccessForSubject).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), {
       ownerId: 'user-1',
       driveId: 'drive-1',
     });
-    expect(mockEnsureDriveSessionForConversation).toHaveBeenCalledWith('conv-p', 'user-1', 'drive-1');
+    // The agent's TITLE rides along so the lazily minted workspace is labelled
+    // with the agent rather than the generic fallback. This is the DEFAULT
+    // placement — the most travelled minting path, and the one that went on
+    // producing nameless "Session" rows after the other two were fixed.
+    expect(mockEnsureDriveSessionForConversation).toHaveBeenCalledWith('conv-p', expect.objectContaining({ userId: 'user-1' }), 'drive-1', 'Agent');
   });
 
   test('a PAGE conversation whose agent the caller cannot view refuses with not_permitted — RBAC is the gate, not binding state', async () => {
@@ -197,7 +214,7 @@ describe('resolveCallerSessionForWorker', () => {
     mockGetAiAgent.mockResolvedValue({ id: 'agent-1', driveId: 'drive-1', title: 'Agent', type: 'AI_CHAT' });
     mockCanUserViewPage.mockResolvedValue(false);
 
-    const resolved = await resolveCallerSessionForWorker('conv-p', 'user-1');
+    const resolved = await resolveCallerSessionForWorker('conv-p', USER_1);
 
     expect(resolved).toEqual({ ok: false, reason: 'not_permitted' });
     expect(mockEnsureDriveSessionForConversation).not.toHaveBeenCalled();
@@ -210,7 +227,7 @@ describe('resolveCallerSessionForWorker', () => {
     mockCanUserViewPage.mockResolvedValue(true);
     mockCheckAccessForSubject.mockResolvedValue({ allowed: false, reason: 'not_a_member' });
 
-    const resolved = await resolveCallerSessionForWorker('conv-p', 'user-1');
+    const resolved = await resolveCallerSessionForWorker('conv-p', USER_1);
 
     expect(resolved).toEqual({ ok: false, reason: 'not_permitted' });
     expect(mockEnsureDriveSessionForConversation).not.toHaveBeenCalled();
@@ -220,7 +237,7 @@ describe('resolveCallerSessionForWorker', () => {
     mockFindSessionForConversation.mockResolvedValue(null);
     mockGetConversation.mockResolvedValue({ ...globalConversation, userId: 'someone-else' });
 
-    const resolved = await resolveCallerSessionForWorker('conv-g', 'user-1');
+    const resolved = await resolveCallerSessionForWorker('conv-g', USER_1);
 
     expect(resolved).toEqual({ ok: false, reason: 'no_session' });
     expect(mockEnsureGlobalSandboxSession).not.toHaveBeenCalled();
@@ -230,7 +247,7 @@ describe('resolveCallerSessionForWorker', () => {
     mockFindSessionForConversation.mockResolvedValue(null);
     mockGetConversation.mockResolvedValue({ id: 'conv-c', type: 'client', userId: 'user-1', isActive: true, contextId: null });
 
-    const resolved = await resolveCallerSessionForWorker('conv-c', 'user-1');
+    const resolved = await resolveCallerSessionForWorker('conv-c', USER_1);
 
     expect(resolved).toEqual({ ok: false, reason: 'no_session' });
     expect(mockEnsureGlobalSandboxSession).not.toHaveBeenCalled();
@@ -241,7 +258,7 @@ describe('resolveCallerSessionForWorker', () => {
     mockGetConversation.mockResolvedValue(globalConversation);
     mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'session_limit_reached' });
 
-    const resolved = await resolveCallerSessionForWorker('conv-g', 'user-1');
+    const resolved = await resolveCallerSessionForWorker('conv-g', USER_1);
 
     expect(resolved).toEqual({ ok: false, reason: 'session_limit_reached' });
   });
@@ -251,7 +268,7 @@ describe('resolveCallerSessionForWorker', () => {
     mockGetConversation.mockResolvedValue(globalConversation);
     mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'spawn_failed' });
 
-    const resolved = await resolveCallerSessionForWorker('conv-g', 'user-1');
+    const resolved = await resolveCallerSessionForWorker('conv-g', USER_1);
 
     expect(resolved).toEqual({ ok: false, reason: 'no_session' });
   });
@@ -270,7 +287,7 @@ describe('createWorkerSession — placement', () => {
   const baseInput = {
     conversationId: 'worker-conv-new',
     callerConversationId: 'conv-caller',
-    ownerId: 'user-1',
+    actor: USER_1,
     agentPageId: null as string | null,
     name: 'worker',
     allowedDriveIds: [] as string[],
@@ -292,7 +309,7 @@ describe('createWorkerSession — placement', () => {
     // session-access decision as an explicit workspaceId target. This used to
     // assert the opposite (`not.toHaveBeenCalled`), pinning the gap where a
     // permanent binding outlived the drive membership that justified it.
-    expect(mockCheckSessionAccess).toHaveBeenCalledWith('user-1', 'ses-caller');
+    expect(mockCheckSessionAccess).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'ses-caller');
   });
 
   test('workspace omitted, but the caller LOST the drive: refused, and no worker is created', async () => {
@@ -317,11 +334,105 @@ describe('createWorkerSession — placement', () => {
       const result = await deps.createWorkerSession({ ...baseInput, workspace: 'new' });
 
       expect(result).toEqual({ ok: true, workspaceId: 'ses-fresh' });
-      expect(mockSpawnSession).toHaveBeenCalledWith({ userId: 'user-1', driveId: null, envId: null });
+      expect(mockSpawnSession).toHaveBeenCalledWith(
+        expect.objectContaining({ actor: expect.objectContaining({ userId: 'user-1' }), driveId: null, envId: null }),
+      );
       expect(mockCreateConversationInSession).toHaveBeenCalledWith(
         expect.objectContaining({ workspaceId: 'ses-fresh' }),
       );
       expect(mockEndSession).not.toHaveBeenCalled();
+    });
+
+    /**
+     * THE BUG THIS EPIC OPENED WITH. This path used to call `spawnSession`
+     * with no `name` at all, so every workspace an agent minted was born
+     * `null` and rendered in its owner's sidebar as the literal fallback
+     * "Session" — permanently, because nothing could rename it either.
+     */
+    test('never mints a NAMELESS workspace: a global spawn is auto-labelled', async () => {
+      mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockCreateConversationInSession.mockResolvedValue(undefined);
+
+      const deps = buildSessionToolsDeps();
+      await deps.createWorkerSession({ ...baseInput, workspace: 'new' });
+
+      expect(mockSpawnSession).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Global Assistant' }),
+      );
+    });
+
+    test('auto-labels from the AGENT when spawning for a page agent', async () => {
+      mockGetAiAgent.mockResolvedValue({ id: 'agent-1', driveId: 'drive-1', title: 'Release Bot' });
+      mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockCreateConversationInSession.mockResolvedValue(undefined);
+
+      const deps = buildSessionToolsDeps();
+      await deps.createWorkerSession({ ...baseInput, agentPageId: 'agent-1', workspace: 'new' });
+
+      expect(mockSpawnSession).toHaveBeenCalledWith(expect.objectContaining({ name: 'Release Bot' }));
+    });
+
+    test('scans past an existing label rather than colliding with it', async () => {
+      // Cosmetic uniqueness only — names carry no constraint — but a sidebar
+      // of five identical rows is unreadable.
+      mockListSessions.mockResolvedValue([{ name: 'Global Assistant' }, { name: 'Global Assistant 2' }]);
+      mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockCreateConversationInSession.mockResolvedValue(undefined);
+
+      const deps = buildSessionToolsDeps();
+      await deps.createWorkerSession({ ...baseInput, workspace: 'new' });
+
+      expect(mockSpawnSession).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Global Assistant 3' }),
+      );
+    });
+
+    test('given the uniqueness read failing, still spawns — with the bare label', async () => {
+      // A cosmetic suffix must never be the reason a spawn fails. Degrading
+      // costs at most a duplicate name (they carry no uniqueness constraint);
+      // refusing would cost the whole workspace.
+      mockListSessions.mockRejectedValue(new Error('database unavailable'));
+      mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockCreateConversationInSession.mockResolvedValue(undefined);
+
+      const deps = buildSessionToolsDeps();
+      const result = await deps.createWorkerSession({ ...baseInput, workspace: 'new' });
+
+      expect(result).toEqual(expect.objectContaining({ ok: true }));
+      expect(mockSpawnSession).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Global Assistant' }),
+      );
+    });
+
+    test("the model's own workspaceName wins, trimmed", async () => {
+      mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockCreateConversationInSession.mockResolvedValue(undefined);
+
+      const deps = buildSessionToolsDeps();
+      await deps.createWorkerSession({ ...baseInput, workspace: 'new', workspaceName: '  Migration run  ' });
+
+      expect(mockSpawnSession).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Migration run' }),
+      );
+      // The derivation is skipped entirely when the model supplied a label.
+      expect(mockListSessions).not.toHaveBeenCalled();
+    });
+
+    test('bounds an over-long workspaceName rather than refusing the spawn', async () => {
+      mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockCreateConversationInSession.mockResolvedValue(undefined);
+
+      const deps = buildSessionToolsDeps();
+      await deps.createWorkerSession({ ...baseInput, workspace: 'new', workspaceName: 'x'.repeat(500) });
+
+      const name = mockSpawnSession.mock.calls[0][0].name as string;
+      expect(name).toHaveLength(120);
     });
 
     test('derives the drive from the target agent when spawning for a page agent, and denies without checking spawnSession if the drive refuses', async () => {
@@ -332,7 +443,7 @@ describe('createWorkerSession — placement', () => {
       const result = await deps.createWorkerSession({ ...baseInput, agentPageId: 'agent-1', workspace: 'new' });
 
       expect(result).toEqual(expect.objectContaining({ ok: false, reason: 'not_permitted' }));
-      expect(mockCheckAccessForSubject).toHaveBeenCalledWith('user-1', expect.objectContaining({ driveId: 'drive-1' }));
+      expect(mockCheckAccessForSubject).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), expect.objectContaining({ driveId: 'drive-1' }));
       expect(mockSpawnSession).not.toHaveBeenCalled();
     });
 
@@ -345,7 +456,9 @@ describe('createWorkerSession — placement', () => {
       const deps = buildSessionToolsDeps();
       await deps.createWorkerSession({ ...baseInput, agentPageId: 'agent-1', workspace: 'new' });
 
-      expect(mockSpawnSession).toHaveBeenCalledWith({ userId: 'user-1', driveId: 'drive-1', envId: 'env-default' });
+      expect(mockSpawnSession).toHaveBeenCalledWith(
+        expect.objectContaining({ actor: expect.objectContaining({ userId: 'user-1' }), driveId: 'drive-1', envId: 'env-default' }),
+      );
     });
 
     test('does NOT apply defaultEnvId while the agent\'s Sandbox switch is off — the stored default stays inert', async () => {
@@ -357,7 +470,9 @@ describe('createWorkerSession — placement', () => {
       const deps = buildSessionToolsDeps();
       await deps.createWorkerSession({ ...baseInput, agentPageId: 'agent-1', workspace: 'new' });
 
-      expect(mockSpawnSession).toHaveBeenCalledWith({ userId: 'user-1', driveId: 'drive-1', envId: null });
+      expect(mockSpawnSession).toHaveBeenCalledWith(
+        expect.objectContaining({ actor: expect.objectContaining({ userId: 'user-1' }), driveId: 'drive-1', envId: null }),
+      );
     });
 
     test('a spawnSession cap refusal propagates as session_limit_reached', async () => {
@@ -427,7 +542,7 @@ describe('createWorkerSession — placement', () => {
       const result = await deps.createWorkerSession({ ...baseInput, workspace: 'ses-target' });
 
       expect(result).toEqual({ ok: true, workspaceId: 'ses-target' });
-      expect(mockCheckSessionAccess).toHaveBeenCalledWith('user-1', 'ses-target');
+      expect(mockCheckSessionAccess).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'ses-target');
       expect(mockCreateConversationInSession).toHaveBeenCalledWith(
         expect.objectContaining({ workspaceId: 'ses-target' }),
       );
@@ -615,7 +730,7 @@ describe('listSharedWorkspaces — member-visible discovery, gated by the one se
     mockListSessionConversationsBulk.mockResolvedValue(new Map());
 
     const deps = buildSessionToolsDeps();
-    const shared = await deps.listSharedWorkspaces({ userId: VIEWER, excludeWorkspaceId: 'ses-current' });
+    const shared = await deps.listSharedWorkspaces({ actor: credentialActor(VIEWER, null), excludeWorkspaceId: 'ses-current' });
 
     expect(shared.map((w) => w.workspaceId)).toEqual(['ses-shared']);
     expect(shared[0]).toEqual(
@@ -631,7 +746,7 @@ describe('listSharedWorkspaces — member-visible discovery, gated by the one se
     mockResolveDriveMembership.mockResolvedValue('none');
 
     const deps = buildSessionToolsDeps();
-    const shared = await deps.listSharedWorkspaces({ userId: VIEWER });
+    const shared = await deps.listSharedWorkspaces({ actor: credentialActor(VIEWER, null) });
 
     expect(shared).toEqual([]);
     expect(mockListSessions).not.toHaveBeenCalled();
@@ -655,7 +770,7 @@ describe('listSharedWorkspaces — member-visible discovery, gated by the one se
     );
 
     const deps = buildSessionToolsDeps();
-    const shared = await deps.listSharedWorkspaces({ userId: VIEWER });
+    const shared = await deps.listSharedWorkspaces({ actor: credentialActor(VIEWER, null) });
 
     expect(shared).toHaveLength(1);
     // The COUNT is honest — every row survives redaction.
@@ -699,7 +814,7 @@ describe('listSharedWorkspaces — member-visible discovery, gated by the one se
     mockListSessionConversationsBulk.mockResolvedValue(new Map());
 
     const deps = buildSessionToolsDeps();
-    const shared = await deps.listSharedWorkspaces({ userId: VIEWER });
+    const shared = await deps.listSharedWorkspaces({ actor: credentialActor(VIEWER, null) });
 
     // MAX_MEMBER_VISIBLE_WORKSPACES — the documented member-visible bound.
     expect(shared).toHaveLength(100);
@@ -746,7 +861,7 @@ describe('listOwnWorkspaces — owned, and separately still accessible', () => {
     mockListSessionConversationsBulk.mockResolvedValue(new Map());
 
     const deps = buildSessionToolsDeps();
-    const own = await deps.listOwnWorkspaces({ userId: OWNER });
+    const own = await deps.listOwnWorkspaces({ actor: credentialActor(OWNER, null) });
 
     expect(own).toEqual([]);
     // Nothing downstream of the gate is even asked — no worker ids fetched for
@@ -764,7 +879,7 @@ describe('listOwnWorkspaces — owned, and separately still accessible', () => {
     mockListSessionConversationsBulk.mockResolvedValue(new Map());
 
     const deps = buildSessionToolsDeps();
-    const own = await deps.listOwnWorkspaces({ userId: OWNER });
+    const own = await deps.listOwnWorkspaces({ actor: credentialActor(OWNER, null) });
 
     expect(own.map((w) => w.workspaceId)).toEqual(['ses-mine', 'ses-mine-2', 'ses-other-drive']);
     expect(mockResolveDriveMembership).toHaveBeenCalledTimes(2);
@@ -777,7 +892,7 @@ describe('listOwnWorkspaces — owned, and separately still accessible', () => {
     mockListSessionConversationsBulk.mockResolvedValue(new Map());
 
     const deps = buildSessionToolsDeps();
-    const own = await deps.listOwnWorkspaces({ userId: OWNER });
+    const own = await deps.listOwnWorkspaces({ actor: credentialActor(OWNER, null) });
 
     // Owner-only by construction — there is no drive to derive access from,
     // and asking for membership in `null` would be a denial, not a question.
@@ -796,7 +911,7 @@ describe('listOwnWorkspaces — owned, and separately still accessible', () => {
     mockListSessionConversationsBulk.mockResolvedValue(new Map());
 
     const deps = buildSessionToolsDeps();
-    const own = await deps.listOwnWorkspaces({ userId: OWNER });
+    const own = await deps.listOwnWorkspaces({ actor: credentialActor(OWNER, null) });
 
     expect(own.map((w) => w.workspaceId)).toEqual(['ses-kept']);
     expect(mockListSessionConversationsBulk).toHaveBeenCalledWith(['ses-kept']);
@@ -811,8 +926,101 @@ describe('listOwnWorkspaces — owned, and separately still accessible', () => {
     mockListSessionConversationsBulk.mockResolvedValue(new Map());
 
     const deps = buildSessionToolsDeps();
-    const own = await deps.listOwnWorkspaces({ userId: OWNER, excludeWorkspaceId: 'ses-current' });
+    const own = await deps.listOwnWorkspaces({ actor: credentialActor(OWNER, null), excludeWorkspaceId: 'ses-current' });
 
     expect(own.map((w) => w.workspaceId)).toEqual(['ses-mine']);
+  });
+});
+
+/**
+ * `renameWorkspace` — where the rename's authorization actually lives.
+ *
+ * The tool factory routes; this dep decides, because deciding needs the
+ * workspace ROW. It applies the same two gates, in the same order, as
+ * `PATCH /api/agent-workspaces/[workspaceId]`, and collapses every denial to
+ * one reason so the refusals cannot be used to enumerate workspace ids.
+ */
+describe('renameWorkspace — the tool surface must not be wider than the HTTP one', () => {
+  const rename = (over: Record<string, unknown> = {}) =>
+    buildSessionToolsDeps().renameWorkspace({
+      actor: USER_1,
+      workspaceId: 'ses-1',
+      name: 'Deploy work',
+      allowedDriveIds: [],
+      ...over,
+    });
+
+  test('an owner with access renames, and gets the STORED name back', async () => {
+    const result = await rename();
+
+    expect(result).toEqual({ ok: true, name: 'Renamed' });
+    expect(mockRenameSession).toHaveBeenCalledWith({ workspaceId: 'ses-1', name: 'Deploy work' });
+  });
+
+  test('a workspace that does not exist is refused without a write', async () => {
+    mockFindSessionRecord.mockResolvedValue(null);
+
+    expect(await rename()).toEqual({ ok: false, reason: 'not_found_or_denied' });
+    expect(mockRenameSession).not.toHaveBeenCalled();
+  });
+
+  test("someone else's workspace is refused without a write", async () => {
+    mockFindSessionRecord.mockResolvedValue({ id: 'ses-1', ownerId: 'user-2', driveId: 'drive-1' });
+
+    expect(await rename()).toEqual({ ok: false, reason: 'not_found_or_denied' });
+    expect(mockRenameSession).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The gate that is NOT redundant with ownership: `decideAgentSessionAccess`
+   * denies the OWNER too once they lose the workspace's drive. Without this
+   * check a revoked owner could still rename through the tool while every HTTP
+   * route 404s them — the exact asymmetry the layout-authz suite exists for.
+   */
+  test('an owner whose drive access was revoked is refused', async () => {
+    mockCheckSessionAccess.mockResolvedValue({ allowed: false, reason: 'drive_access_denied' });
+
+    expect(await rename()).toEqual({ ok: false, reason: 'not_found_or_denied' });
+    expect(mockRenameSession).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A rename IS A WRITE, so the calling credential's ceiling applies exactly as
+   * it does to spawn placement: a drive-scoped token must not write to a
+   * workspace in a drive it was never granted, however freely its owner may
+   * reach it.
+   */
+  test('a drive-scoped credential cannot rename outside its drives', async () => {
+    expect(await rename({ allowedDriveIds: ['drive-other'] })).toEqual({
+      ok: false,
+      reason: 'not_found_or_denied',
+    });
+    expect(mockRenameSession).not.toHaveBeenCalled();
+  });
+
+  test('a drive-scoped credential CAN rename inside its drives', async () => {
+    expect(await rename({ allowedDriveIds: ['drive-1'] })).toEqual({ ok: true, name: 'Renamed' });
+  });
+
+  test('every refusal is the same refusal', async () => {
+    // Asserted rather than assumed: a distinguishing reason added later would
+    // turn these into an oracle over which workspace ids are real.
+    mockFindSessionRecord.mockResolvedValue(null);
+    const missing = await rename();
+
+    mockFindSessionRecord.mockResolvedValue({ id: 'ses-1', ownerId: 'user-2', driveId: 'drive-1' });
+    const foreign = await rename();
+
+    mockFindSessionRecord.mockResolvedValue({ id: 'ses-1', ownerId: 'user-1', driveId: 'drive-1' });
+    const outOfScope = await rename({ allowedDriveIds: ['drive-other'] });
+
+    expect(missing).toEqual(foreign);
+    expect(foreign).toEqual(outOfScope);
+  });
+
+  test('a row that vanishes between the read and the write is refused, not reported as done', async () => {
+    mockRenameSession.mockResolvedValue(null);
+
+    expect(await rename()).toEqual({ ok: false, reason: 'not_found_or_denied' });
   });
 });

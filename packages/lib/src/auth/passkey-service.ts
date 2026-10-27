@@ -129,7 +129,7 @@ export type GenerateAuthOptionsResult =
   | { ok: false; error: PasskeyError };
 
 export type VerifyAuthResult =
-  | { ok: true; data: { userId: string; isNewSession: boolean } }
+  | { ok: true; data: { userId: string; isNewSession: boolean; userVerified: boolean } }
   | { ok: false; error: PasskeyError };
 
 export type ListPasskeysResult =
@@ -149,7 +149,7 @@ export type GenerateSignupRegOptionsResult =
   | { ok: false; error: PasskeyError };
 
 export type VerifySignupRegistrationResult =
-  | { ok: true; data: { userId: string; passkeyId: string } }
+  | { ok: true; data: { userId: string; passkeyId: string; userVerified: boolean } }
   | { ok: false; error: PasskeyError };
 
 export interface PasskeyInfo {
@@ -638,7 +638,7 @@ export async function verifyAuthentication(input: unknown): Promise<VerifyAuthRe
 
   return {
     ok: true,
-    data: { userId: passkey.userId, isNewSession: true },
+    data: { userId: passkey.userId, isNewSession: true, userVerified: verification.authenticationInfo.userVerified === true },
   };
 }
 
@@ -916,7 +916,7 @@ export async function verifySignupRegistration(input: unknown): Promise<VerifySi
     return { ok: false, error: { code: 'VERIFICATION_FAILED', message: 'Verification failed' } };
   }
 
-  const { credential, credentialDeviceType, credentialBackedUp } = verification.registrationInfo;
+  const { credential, credentialDeviceType, credentialBackedUp, userVerified } = verification.registrationInfo;
 
   // Create user and passkey atomically
   const userId = createId();
@@ -936,6 +936,7 @@ export async function verifySignupRegistration(input: unknown): Promise<VerifySi
         provider: 'email',
         role: 'user',
         tokenVersion: 1,
+        subscriptionTier: 'free',
         // Passkey registration proves control of an authenticator, NOT ownership
         // of the typed email. Leave the address unverified; verification happens
         // out-of-band — the signup route either marks it verified when a trusted
@@ -972,5 +973,5 @@ export async function verifySignupRegistration(input: unknown): Promise<VerifySi
     throw error;
   }
 
-  return { ok: true, data: { userId, passkeyId } };
+  return { ok: true, data: { userId, passkeyId, userVerified: userVerified === true } };
 }

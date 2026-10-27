@@ -5,15 +5,6 @@ const mockDb = vi.hoisted(() => ({ select: vi.fn(), insert: vi.fn(), update: vi.
 
 vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
 vi.mock('@pagespace/db/schema/credits', () => ({
-  creditBalances: {
-    userId: 'cb.userId',
-    monthlyRemainingCents: 'cb.monthly',
-    topupRemainingCents: 'cb.topup',
-    monthlyAllowanceCents: 'cb.allowance',
-    debtCents: 'cb.debt',
-    monthlyPeriodStart: 'cb.periodStart',
-    monthlyPeriodEnd: 'cb.periodEnd',
-  },
   creditHolds: { id: 'ch.id', userId: 'ch.userId', estCents: 'ch.estCents', expiresAt: 'ch.expiresAt' },
   creditLedger: {
     userId: 'cl.userId',
@@ -43,8 +34,11 @@ vi.mock('@pagespace/db/schema/monitoring', () => ({
 }));
 const mockEmitCreditsUpdated = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('../credit-emit', () => ({ emitCreditsUpdated: mockEmitCreditsUpdated }));
+const mockEnsurePersonalRootWalletId = vi.hoisted(() => vi.fn().mockResolvedValue('w_root'));
+vi.mock('../personal-wallet', () => ({ ensurePersonalRootWalletId: mockEnsurePersonalRootWalletId }));
 
 import { canConsumeAI, addOneMonth } from '../credit-gate';
+import { PERSONAL_SPEND } from '../spend-target';
 
 // Default pricing (unmocked credit-pricing): RESERVE_FLOOR_CENTS = 25,
 // CREDIT_HOLD_ESTIMATE_CENTS = 25 (defaults to the floor), MAX_FREE_INFLIGHT = 2.
@@ -102,71 +96,13 @@ function mockLazyInitTransaction(
             return {
               onConflictDoNothing: () => ({
                 returning: () => Promise.resolve(
-                  callNum === 1 && balanceCreated ? [{ userId: 'u1' }] : [],
+                  callNum === 1 && balanceCreated ? [{ id: 'w_new' }] : [],
                 ),
               }),
             };
           },
         };
       }),
-    };
-    return cb(tx);
-  });
-}
-
-/**
- * Mock the reset transaction (first db.transaction call when the period has expired).
- * The fixed transaction re-reads the balance under `FOR UPDATE` INSIDE the txn and
- * computes the refill from THAT locked row — never from the unlocked pre-read. The
- * `lockedRow` argument is what that in-transaction `select(...).for('update')`
- * resolves to; it is the source of truth for the refill arithmetic, so a test can
- * make it diverge from the pre-read snapshot to prove the ordering. A null/empty
- * `lockedRow` (or one whose window is no longer expired) models a concurrent reset
- * that already rolled the window forward: the fix must skip the UPDATE + ledger write.
- * Captures the set payload and ledger values.
- */
-function mockResetTransaction(
-  sink: { set?: Record<string, unknown>; ledgerValues?: Record<string, unknown>; updateCalled?: boolean } = {},
-  lockedRow: Record<string, unknown> | null = null,
-  // Rows the IN-TRANSACTION subscription re-check resolves to (paid tiers only;
-  // `.limit()` chain). Non-empty models a subscription that appeared between the
-  // unlocked pre-check and the grant — the reset must abort.
-  txSubscriptionRows: Record<string, unknown>[] = [],
-) {
-  mockDb.transaction.mockImplementationOnce(async (cb: (tx: unknown) => Promise<unknown>) => {
-    const tx = {
-      select: vi.fn(() => ({
-        from: () => ({
-          where: () => ({
-            for: () => Promise.resolve(lockedRow ? [lockedRow] : []),
-            limit: () => Promise.resolve(txSubscriptionRows),
-          }),
-        }),
-      })),
-      update: vi.fn(() => {
-        sink.updateCalled = true;
-        return {
-          set: (v: Record<string, unknown>) => {
-            sink.set = v;
-            // The fixed UPDATE targets by userId only (the row lock + post-lock predicate
-            // recheck handle the race), so it is awaited directly. Expose a thenable that
-            // also answers .returning() so a pre-fix implementation calling .returning()
-            // surfaces a clean assertion mismatch rather than a TypeError.
-            return {
-              where: () => ({
-                returning: () => Promise.resolve([{ userId: 'ignored' }]),
-                then: (resolve: (v: unknown) => unknown) => resolve(undefined),
-              }),
-            };
-          },
-        };
-      }),
-      insert: vi.fn(() => ({
-        values: (v: Record<string, unknown>) => {
-          sink.ledgerValues = v;
-          return { onConflictDoNothing: () => Promise.resolve(undefined) };
-        },
-      })),
     };
     return cb(tx);
   });
@@ -215,7 +151,10 @@ function mockStarterGrantTransaction(
  */
 function mockTransaction(
   balRow: Record<string, unknown> | null,
-  holds: { reserved: number; inFlight: number },
+  // `reserved` is held against the personal root wallet; `userReserved` is the caller's
+  // own holds on any wallet (the daily-cap burst term). On a personal-only account they
+  // are the same holds, so it defaults to `reserved`.
+  holds: { reserved: number; inFlight: number; userReserved?: number },
   sink: { holdValues?: Record<string, unknown>; insertCalled?: boolean } = {},
   holdId = 'hold_1',
 ) {
@@ -225,7 +164,7 @@ function mockTransaction(
         // 1st select: balance row lock -> .for('update')
         .mockReturnValueOnce({ from: () => ({ where: () => ({ for: () => Promise.resolve(balRow ? [balRow] : []) }) }) })
         // 2nd select: hold aggregate -> resolves at .where
-        .mockReturnValueOnce({ from: () => ({ where: () => Promise.resolve([{ reserved: holds.reserved, inFlight: holds.inFlight }]) }) }),
+        .mockReturnValueOnce({ from: () => ({ where: () => Promise.resolve([{ reserved: holds.reserved, inFlight: holds.inFlight, userReserved: holds.userReserved ?? holds.reserved }]) }) }),
       insert: vi.fn(() => {
         sink.insertCalled = true;
         return {
@@ -247,7 +186,10 @@ function mockTransaction(
  */
 function mockTransactionWithDailyCharge(
   balRow: Record<string, unknown> | null,
-  holds: { reserved: number; inFlight: number },
+  // `reserved` is held against the personal root wallet; `userReserved` is the caller's
+  // own holds on any wallet (the daily-cap burst term). On a personal-only account they
+  // are the same holds, so it defaults to `reserved`.
+  holds: { reserved: number; inFlight: number; userReserved?: number },
   chargedMc: number,
   sink: { holdValues?: Record<string, unknown>; insertCalled?: boolean } = {},
   holdId = 'hold_1',
@@ -256,7 +198,7 @@ function mockTransactionWithDailyCharge(
     const tx = {
       select: vi.fn()
         .mockReturnValueOnce({ from: () => ({ where: () => ({ for: () => Promise.resolve(balRow ? [balRow] : []) }) }) })
-        .mockReturnValueOnce({ from: () => ({ where: () => Promise.resolve([{ reserved: holds.reserved, inFlight: holds.inFlight }]) }) })
+        .mockReturnValueOnce({ from: () => ({ where: () => Promise.resolve([{ reserved: holds.reserved, inFlight: holds.inFlight, userReserved: holds.userReserved ?? holds.reserved }]) }) })
         .mockReturnValueOnce({ from: () => ({ where: () => Promise.resolve([{ chargedMc }]) }) }),
       insert: vi.fn(() => {
         sink.insertCalled = true;
@@ -284,7 +226,7 @@ describe('canConsumeAI', () => {
 
   it('allows unconditionally when billing is disabled (tenant/onprem)', async () => {
     mockIsBillingEnabled.mockReturnValue(false);
-    const r = await canConsumeAI('u1', 'free');
+    const r = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
     expect(r).toEqual({ allowed: true, reason: 'unlimited' });
     expect(mockDb.select).not.toHaveBeenCalled();
     expect(mockDb.transaction).not.toHaveBeenCalled();
@@ -293,15 +235,16 @@ describe('canConsumeAI', () => {
   it('allows a user with spendable credits and returns a holdId', async () => {
     mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 100, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
     const sink: { holdValues?: Record<string, unknown> } = {};
-    mockTransaction({ monthlyRemainingCents: 100, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 }, sink);
+    mockTransaction({ id: 'w_root', monthlyRemainingCents: 100, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 }, sink);
 
-    const r = await canConsumeAI('u1', 'pro');
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
 
     expect(r.allowed).toBe(true);
     expect(r.reason).toBe('ok');
     expect(r.holdId).toBe('hold_1');
-    // The hold reserves this call's estimate and is scoped to the user.
-    expect(sink.holdValues).toMatchObject({ userId: 'u1', estCents: EST });
+    // The hold reserves this call's estimate and is scoped to the user and (WAL-5) to
+    // the personal root wallet the locked balance read returned.
+    expect(sink.holdValues).toMatchObject({ userId: 'u1', walletId: 'w_root', estCents: EST });
     expect(sink.holdValues?.expiresAt).toBeInstanceOf(Date);
     // Placing the hold must NOT push a balance update: holds are hidden from the
     // displayed balance, and the navbar updates only when the call settles (real
@@ -316,7 +259,7 @@ describe('canConsumeAI', () => {
     const sink: { insertCalled?: boolean } = {};
     mockTransaction({ monthlyRemainingCents: 100000, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 8, inFlight: 4 }, sink);
 
-    const r = await canConsumeAI('u1', 'pro', { estCostCents: 2, maxInFlight: 4 });
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND, estCostCents: 2, maxInFlight: 4 });
 
     expect(r).toMatchObject({ allowed: false, reason: 'too_many_in_flight' });
     expect(sink.insertCalled).toBeFalsy();
@@ -329,7 +272,7 @@ describe('canConsumeAI', () => {
     const sink: { holdValues?: Record<string, unknown> } = {};
     mockTransaction({ monthlyRemainingCents: 100, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 }, sink);
 
-    const r = await canConsumeAI('u1', 'pro', { estCostCents: 2 });
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND, estCostCents: 2 });
 
     expect(r.allowed).toBe(true);
     expect(sink.holdValues).toMatchObject({ userId: 'u1', estCents: 2 });
@@ -340,7 +283,7 @@ describe('canConsumeAI', () => {
     const sink: { insertCalled?: boolean } = {};
     mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 }, sink);
 
-    const r = await canConsumeAI('u1', 'pro');
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
 
     expect(r).toMatchObject({ allowed: false, reason: 'out_of_credits' });
     expect(r.holdId).toBeUndefined();
@@ -355,7 +298,7 @@ describe('canConsumeAI', () => {
     const sink: { insertCalled?: boolean } = {};
     mockTransaction({ monthlyRemainingCents: 100, topupRemainingCents: 0, debtCents: 100, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 }, sink);
 
-    const r = await canConsumeAI('u1', 'pro');
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
 
     expect(r).toMatchObject({ allowed: false, reason: 'out_of_credits' });
     expect(sink.insertCalled).toBeFalsy();
@@ -366,25 +309,7 @@ describe('canConsumeAI', () => {
     mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 200, topupRemainingCents: 0, debtCents: 100, monthlyPeriodEnd: FUTURE }]));
     mockTransaction({ monthlyRemainingCents: 200, topupRemainingCents: 0, debtCents: 100, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
 
-    const r = await canConsumeAI('u1', 'pro');
-    expect(r.allowed).toBe(true);
-    expect(r.reason).toBe('ok');
-  });
-
-  it('nets outstanding debt against carry at a gate-driven reset (comped pro, debt absorbed into monthly balance)', async () => {
-    // 0¢ remaining, 300¢ debt, 1500¢ pro allowance → net = (0 − 300) + 1500 = 1200¢.
-    mockDb.select
-      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, debtCents: 300, monthlyPeriodEnd: PAST }]))
-      .mockReturnValueOnce(selectReturning([])) // subscription lookup: none (comped)
-      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 1200, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: FUTURE }]));
-    const sink: { set?: Record<string, unknown> } = {};
-    mockResetTransaction(sink, { monthlyRemainingCents: 0, debtCents: 300, monthlyPeriodEnd: PAST });
-    mockTransaction({ monthlyRemainingCents: 1200, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
-
-    const r = await canConsumeAI('u1', 'pro');
-
-    // Debt absorbed: net = 0 − 300 + 1500 = 1200; debtCents zeroed in the UPDATE.
-    expect(sink.set).toMatchObject({ monthlyRemainingCents: 1200, monthlyAllowanceCents: 1500, debtCents: 0 });
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
     expect(r.allowed).toBe(true);
     expect(r.reason).toBe('ok');
   });
@@ -395,7 +320,7 @@ describe('canConsumeAI', () => {
     // 2 holds already in flight == MAX_FREE_INFLIGHT.
     mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 50, inFlight: 2 }, sink);
 
-    const r = await canConsumeAI('u1', 'free');
+    const r = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
 
     expect(r).toMatchObject({ allowed: false, reason: 'too_many_in_flight' });
     expect(sink.insertCalled).toBeFalsy();
@@ -405,7 +330,7 @@ describe('canConsumeAI', () => {
     mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 10000, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
     mockTransaction({ monthlyRemainingCents: 10000, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 250, inFlight: 10 });
 
-    const r = await canConsumeAI('u1', 'pro');
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
     expect(r.allowed).toBe(true);
   });
 
@@ -415,7 +340,7 @@ describe('canConsumeAI', () => {
     mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 80, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
     mockTransaction({ monthlyRemainingCents: 80, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 50, inFlight: 1 });
 
-    const r = await canConsumeAI('u1', 'pro');
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
     expect(r).toMatchObject({ allowed: false, reason: 'out_of_credits' });
   });
 
@@ -427,7 +352,7 @@ describe('canConsumeAI', () => {
     mockLazyInitTransaction(initSink);
     mockTransaction({ monthlyRemainingCents: 1500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
 
-    const r = await canConsumeAI('u1', 'pro');
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
 
     expect(initSink.balanceValues?.monthlyPeriodStart).toBeInstanceOf(Date);
     expect(initSink.balanceValues?.monthlyPeriodEnd).toBeInstanceOf(Date);
@@ -441,7 +366,7 @@ describe('canConsumeAI', () => {
     // The locked read inside the auth transaction sees an empty balance (a racing request drained it).
     mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
 
-    const r = await canConsumeAI('u1', 'pro');
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
     expect(r.allowed).toBe(false);
     expect(r.reason).toBe('out_of_credits');
   });
@@ -450,12 +375,39 @@ describe('canConsumeAI', () => {
   // TIER_ALLOWANCE_REFILLS.free === false. An expired (or never-stamped) free window
   // must be left alone: no reset transaction, no UPDATE, no monthly_grant row.
 
+  it('never rolls an expired comped paid window — no subscription lookup, no reset, no grant; it refuses at zero until the period sweep renews it (ew9v06jeb)', async () => {
+    mockDb.select.mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: PAST }]));
+    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'business', { spend: PERSONAL_SPEND });
+
+    expect(r).toMatchObject({ allowed: false, reason: 'out_of_credits' });
+    // One unlocked read (the balance pre-read) and one transaction (the hold decision): no
+    // subscription lookup, no period update, no grant row.
+    expect(mockDb.select).toHaveBeenCalledTimes(1);
+    expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+    expect(mockDb.update).not.toHaveBeenCalled();
+    expect(mockDb.insert).not.toHaveBeenCalled();
+  });
+
+  it('never rolls a comped paid row created bare by a top-up (null period): the top-up stays spendable and nothing is granted (ew9v06jeb)', async () => {
+    mockDb.select.mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 2500, debtCents: 0, monthlyPeriodEnd: null }]));
+    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 2500, monthlyPeriodEnd: null }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
+
+    expect(r.allowed).toBe(true);
+    expect(mockDb.select).toHaveBeenCalledTimes(1);
+    expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
   it('does NOT reset a free user whose window has expired — the starter grant is one-time (out_of_credits at 0)', async () => {
     // Only ONE unlocked select (the pre-read): no subscription lookup, no post-reset re-read.
     mockDb.select.mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]));
     mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }, { reserved: 0, inFlight: 0 });
 
-    const r = await canConsumeAI('u1', 'free');
+    const r = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
 
     expect(mockDb.select).toHaveBeenCalledTimes(1);
     expect(mockDb.update).not.toHaveBeenCalled();
@@ -467,7 +419,7 @@ describe('canConsumeAI', () => {
     mockDb.select.mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 200, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]));
     mockTransaction({ monthlyRemainingCents: 200, topupRemainingCents: 0, monthlyPeriodEnd: PAST }, { reserved: 0, inFlight: 0 });
 
-    const r = await canConsumeAI('u1', 'free');
+    const r = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
 
     expect(mockDb.update).not.toHaveBeenCalled();
     expect(mockDb.transaction).toHaveBeenCalledTimes(1);
@@ -480,15 +432,15 @@ describe('canConsumeAI', () => {
     // excluded from the reset path, so the starter grant must land HERE, keyed on the
     // user-scoped ledger row so it can never double-fund.
     mockDb.select
-      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 2500, monthlyPeriodEnd: null }]))
-      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 500, topupRemainingCents: 2500, monthlyPeriodEnd: FUTURE }]));
+      .mockReturnValueOnce(selectReturning([{ id: 'w_bare', monthlyRemainingCents: 0, topupRemainingCents: 2500, monthlyPeriodEnd: null }]))
+      .mockReturnValueOnce(selectReturning([{ id: 'w_bare', monthlyRemainingCents: 500, topupRemainingCents: 2500, monthlyPeriodEnd: FUTURE }]));
     const sink: { set?: Record<string, unknown>; ledgerValues?: Record<string, unknown>; updateCalled?: boolean } = {};
     mockStarterGrantTransaction(sink, true);
     mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 2500, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
 
-    const r = await canConsumeAI('u1', 'free');
+    const r = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
 
-    expect(sink.ledgerValues).toMatchObject({ userId: 'u1', entryType: 'monthly_grant', bucket: 'monthly', amountCents: 500, stripeRef: 'free-init-u1', consumeStatus: 'applied' });
+    expect(sink.ledgerValues).toMatchObject({ userId: 'u1', walletId: 'w_bare', entryType: 'monthly_grant', bucket: 'monthly', amountCents: 500, stripeRef: 'free-init-u1', consumeStatus: 'applied' });
     expect(sink.updateCalled).toBe(true);
     expect(sink.set).toMatchObject({ monthlyAllowanceCents: 500 });
     expect(sink.set?.monthlyPeriodEnd).toBeInstanceOf(Date);
@@ -507,111 +459,31 @@ describe('canConsumeAI', () => {
     mockStarterGrantTransaction(sink, false /* ledger insert conflicted: already granted */);
     mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 2500, monthlyPeriodEnd: null }, { reserved: 0, inFlight: 0 });
 
-    const r = await canConsumeAI('u1', 'free');
+    const r = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
 
     expect(sink.updateCalled).toBeFalsy();
     expect(sink.set).toBeUndefined();
     expect(r.allowed).toBe(true); // the top-up bucket alone is spendable
   });
 
-  it('still gate-resets a comped paid user whose row was created bare by a top-up (null period)', async () => {
-    mockDb.select
-      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 2500, monthlyPeriodEnd: null }]))
-      .mockReturnValueOnce(selectReturning([])) // no renewal-capable subscription
-      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 1500, topupRemainingCents: 2500, monthlyPeriodEnd: FUTURE }]));
-    const sink: { set?: Record<string, unknown> } = {};
-    mockResetTransaction(sink, { monthlyRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: null });
-    mockTransaction({ monthlyRemainingCents: 1500, topupRemainingCents: 2500, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
-
-    const r = await canConsumeAI('u1', 'pro');
-
-    expect(sink.set).toMatchObject({ monthlyRemainingCents: 1500, monthlyAllowanceCents: 1500 });
-    expect(r.allowed).toBe(true);
-  });
-
-  it('does NOT gate-reset a paid user with an expired window while a renewal-capable subscription exists — invoice.paid is authoritative', async () => {
-    mockDb.select
-      // 1st: balance pre-read (expired window)
-      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]))
-      // 2nd: subscription lookup — a live (renewal-capable) subscription row
-      .mockReturnValueOnce(selectReturning([{ id: 'sub_1' }]));
-    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }, { reserved: 0, inFlight: 0 });
-
-    const r = await canConsumeAI('u1', 'pro');
-    expect(mockDb.update).not.toHaveBeenCalled();
-    expect(r).toMatchObject({ allowed: false, reason: 'out_of_credits' });
-  });
-
-  it('gate-resets a paid user with an expired window and NO renewal-capable subscription (comped account — no invoice will ever roll it)', async () => {
-    mockDb.select
-      // 1st: balance pre-read (expired window)
-      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]))
-      // 2nd: subscription lookup — no live subscription rows
-      .mockReturnValueOnce(selectReturning([]))
-      // 3rd: balance re-read after the reset
-      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 10000, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
-    const sink: { set?: Record<string, unknown>; ledgerValues?: Record<string, unknown> } = {};
-    mockResetTransaction(sink, { monthlyRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: PAST });
-    mockTransaction({ monthlyRemainingCents: 10000, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
-
-    const r = await canConsumeAI('u1', 'business');
-
-    // Business tier allowance (10000¢) granted, window rolled.
-    expect(sink.set).toMatchObject({ monthlyRemainingCents: 10000, monthlyAllowanceCents: 10000 });
-    expect(sink.ledgerValues).toMatchObject({ entryType: 'monthly_grant', amountCents: 10000 });
-    expect(r.allowed).toBe(true);
-    expect(r.reason).toBe('ok');
-  });
-
-  it('treats an "unpaid" subscription as renewal-capable — its open invoices are still collectible, so no gate roll', async () => {
-    mockDb.select
-      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]))
-      .mockReturnValueOnce(selectReturning([{ id: 'sub_unpaid' }])); // status filter matched an 'unpaid' row
-    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }, { reserved: 0, inFlight: 0 });
-
-    const r = await canConsumeAI('u1', 'pro');
-    expect(mockDb.update).not.toHaveBeenCalled();
-    expect(r).toMatchObject({ allowed: false, reason: 'out_of_credits' });
-  });
-
   it('does NOT gate-reset a tier with no defined allowance (legacy "normal") — the roll would rewrite the account to free-tier values', async () => {
     mockDb.select.mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]));
     mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }, { reserved: 0, inFlight: 0 });
 
-    const r = await canConsumeAI('u1', 'normal' as unknown as Parameters<typeof canConsumeAI>[1]);
+    const r = await canConsumeAI('u1', 'normal' as unknown as Parameters<typeof canConsumeAI>[1], { spend: PERSONAL_SPEND });
     // Neither the reset transaction nor the subscription lookup ran — one select (pre-read) only.
     expect(mockDb.select).toHaveBeenCalledTimes(1);
     expect(r).toMatchObject({ allowed: false, reason: 'out_of_credits' });
-  });
-
-  it('aborts the paid gate-reset when a renewal-capable subscription appears between the pre-check and the grant (in-tx re-check)', async () => {
-    mockDb.select
-      // 1st: balance pre-read (expired window)
-      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]))
-      // 2nd: unlocked subscription lookup — nothing yet (checkout still in flight)
-      .mockReturnValueOnce(selectReturning([]))
-      // 3rd: balance re-read after the (aborted) reset — unchanged
-      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]));
-    const sink: { updateCalled?: boolean; ledgerValues?: Record<string, unknown> } = {};
-    // In-tx re-check now sees the freshly committed subscription row → abort.
-    mockResetTransaction(sink, { monthlyRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: PAST }, [{ id: 'sub_new' }]);
-    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }, { reserved: 0, inFlight: 0 });
-
-    const r = await canConsumeAI('u1', 'business');
-
-    expect(sink.updateCalled).toBeUndefined(); // no grant written
-    expect(sink.ledgerValues).toBeUndefined();
-    expect(r).toMatchObject({ allowed: false, reason: 'out_of_credits' }); // invoice.paid owns the refill now
   });
 
   it('does NOT look up subscriptions for a free user with an expired window — free is excluded before the lookup', async () => {
     mockDb.select.mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 300, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]));
     mockTransaction({ monthlyRemainingCents: 300, topupRemainingCents: 0, monthlyPeriodEnd: PAST }, { reserved: 0, inFlight: 0 });
 
-    const r = await canConsumeAI('u1', 'free');
+    const r = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
 
-    // Exactly one unlocked select — the pre-read. The refills flag short-circuits
-    // ahead of hasRenewalCapableSubscription, so the hot path stays a single read.
+    // Exactly one unlocked select — the pre-read. The gate never looks at
+    // subscriptions (no period roll lives here), so the hot path stays a single read.
     expect(mockDb.select).toHaveBeenCalledTimes(1);
     expect(r.allowed).toBe(true);
   });
@@ -620,7 +492,7 @@ describe('canConsumeAI', () => {
     mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 300, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]));
     mockTransaction({ monthlyRemainingCents: 300, topupRemainingCents: 0, monthlyPeriodEnd: PAST }, { reserved: 0, inFlight: 0 });
 
-    const r = await canConsumeAI('u1', 'pro');
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
     expect(mockDb.update).not.toHaveBeenCalled();
     expect(r.allowed).toBe(true);
     expect(r.reason).toBe('ok');
@@ -630,7 +502,7 @@ describe('canConsumeAI', () => {
     mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 1000, monthlyPeriodEnd: PAST }]));
     mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 1000, monthlyPeriodEnd: PAST }, { reserved: 0, inFlight: 0 });
 
-    const r = await canConsumeAI('u1', 'pro');
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
     expect(mockDb.update).not.toHaveBeenCalled();
     expect(r.allowed).toBe(true);
     expect(r.reason).toBe('ok');
@@ -640,7 +512,7 @@ describe('canConsumeAI', () => {
     mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 800, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
     mockTransaction({ monthlyRemainingCents: 800, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
 
-    const r = await canConsumeAI('u1', 'free');
+    const r = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
     expect(r.allowed).toBe(true);
   });
 
@@ -652,10 +524,12 @@ describe('canConsumeAI', () => {
     mockLazyInitTransaction(sink);
     mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
 
-    await canConsumeAI('u1', 'free');
+    await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
 
     expect(sink.ledgerValues).toMatchObject({
       userId: 'u1',
+      // WAL-5: the grant names the wallet this transaction just created.
+      walletId: 'w_new',
       entryType: 'monthly_grant',
       bucket: 'monthly',
       amountCents: 500,
@@ -672,7 +546,7 @@ describe('canConsumeAI', () => {
     mockLazyInitTransaction(sink);
     mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
 
-    await canConsumeAI('u1', 'free');
+    await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
 
     // The key contains no timestamp — both concurrent inits produce the same
     // stripeRef, so the unique index silently drops the second via onConflictDoNothing.
@@ -688,40 +562,16 @@ describe('canConsumeAI', () => {
     mockLazyInitTransaction(sink, false /* balanceCreated = false, simulates conflict */);
     mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
 
-    await canConsumeAI('u1', 'free');
+    await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
 
     expect(sink.ledgerValues).toBeUndefined();
-  });
-
-  it('gate-driven reset (comped pro) writes a monthly_grant ledger row with the period-keyed stripeRef', async () => {
-    mockDb.select
-      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]))
-      .mockReturnValueOnce(selectReturning([])) // no renewal-capable subscription
-      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 1500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
-    const sink: { set?: Record<string, unknown>; ledgerValues?: Record<string, unknown> } = {};
-    mockResetTransaction(sink, { monthlyRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: PAST });
-    mockTransaction({ monthlyRemainingCents: 1500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
-
-    await canConsumeAI('u1', 'pro');
-
-    expect(sink.ledgerValues).toMatchObject({
-      userId: 'u1',
-      entryType: 'monthly_grant',
-      bucket: 'monthly',
-      amountCents: 1500,
-      consumeStatus: 'applied',
-    });
-    // The stripeRef includes the period timestamp so each rollover gets a unique
-    // key; concurrent resets within the same millisecond de-duplicate via the index.
-    expect(typeof sink.ledgerValues?.stripeRef).toBe('string');
-    expect((sink.ledgerValues?.stripeRef as string).startsWith('gate-reset-u1-')).toBe(true);
   });
 
   it('never writes a free-reset ledger row: a free user with an expired window gets no grant', async () => {
     mockDb.select.mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]));
     mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }, { reserved: 0, inFlight: 0 });
 
-    await canConsumeAI('u1', 'free');
+    await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
 
     expect(mockDb.insert).not.toHaveBeenCalled();
     expect(mockDb.update).not.toHaveBeenCalled();
@@ -732,83 +582,6 @@ describe('canConsumeAI', () => {
   // transaction, never from the unlocked pre-transaction snapshot. Otherwise a
   // mutation committed between the two reads is clobbered by the reset.
 
-  it('computes the refill from the post-lock read, NOT the unlocked pre-read snapshot', async () => {
-    // Pre-transaction snapshot is stale: it shows 200¢ remaining. A concurrent settle
-    // commits before we take the row lock, leaving only 50¢. The locked read inside the
-    // txn must drive the refill: 50 + 1500 = 1550 (NOT the stale 200 + 1500 = 1700, which
-    // would silently un-bill the concurrent spend).
-    mockDb.select
-      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 200, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: PAST }]))
-      .mockReturnValueOnce(selectReturning([])) // no renewal-capable subscription (comped pro)
-      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 1550, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: FUTURE }]));
-    const sink: { set?: Record<string, unknown>; updateCalled?: boolean } = {};
-    // Locked row diverges from the pre-read: only 50¢ left.
-    mockResetTransaction(sink, { monthlyRemainingCents: 50, debtCents: 0, monthlyPeriodEnd: PAST });
-    mockTransaction({ monthlyRemainingCents: 1550, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
-
-    const r = await canConsumeAI('u1', 'pro');
-
-    // 1550, not 1700 — proves the refill used the locked read.
-    expect(sink.set).toMatchObject({ monthlyRemainingCents: 1550, monthlyAllowanceCents: 1500, debtCents: 0 });
-    expect(r.allowed).toBe(true);
-  });
-
-  it('nets debt from the LOCKED row so a concurrent debt-clearing top-up is not collected twice', async () => {
-    // Pre-read snapshot shows 300¢ debt. A concurrent top-up pays it off before we lock,
-    // so the locked read shows 0 debt. The refill must net against the locked debt (0):
-    // 0 + 1500 = 1500. Using the stale 300¢ debt would re-collect already-paid debt
-    // (0 − 300 + 1500 = 1200), shorting the user 300¢.
-    mockDb.select
-      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, debtCents: 300, monthlyPeriodEnd: PAST }]))
-      .mockReturnValueOnce(selectReturning([])) // no renewal-capable subscription (comped pro)
-      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 1500, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: FUTURE }]));
-    const sink: { set?: Record<string, unknown> } = {};
-    mockResetTransaction(sink, { monthlyRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: PAST });
-    mockTransaction({ monthlyRemainingCents: 1500, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
-
-    const r = await canConsumeAI('u1', 'pro');
-
-    expect(sink.set).toMatchObject({ monthlyRemainingCents: 1500, debtCents: 0 });
-    expect(r.allowed).toBe(true);
-  });
-
-  it('skips the UPDATE + grant when the locked read shows the window already rolled forward (concurrent reset won)', async () => {
-    // The unlocked pre-read still shows an expired window, so we open the reset txn —
-    // but by the time we hold the lock a concurrent reset has rolled the window into the
-    // FUTURE. We must NOT update or write a grant; just re-read and proceed.
-    mockDb.select
-      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]))
-      .mockReturnValueOnce(selectReturning([])) // no renewal-capable subscription (comped pro)
-      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 1500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
-    const sink: { set?: Record<string, unknown>; ledgerValues?: Record<string, unknown>; updateCalled?: boolean } = {};
-    // Locked window is FUTURE → predicate recheck fails → skip.
-    mockResetTransaction(sink, { monthlyRemainingCents: 1500, debtCents: 0, monthlyPeriodEnd: FUTURE });
-    mockTransaction({ monthlyRemainingCents: 1500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
-
-    const r = await canConsumeAI('u1', 'pro');
-
-    expect(sink.updateCalled).toBeFalsy();
-    expect(sink.set).toBeUndefined();
-    expect(sink.ledgerValues).toBeUndefined();
-    // The post-reset re-read picks up the concurrently-rolled balance and the gate allows.
-    expect(r.allowed).toBe(true);
-  });
-
-  it('skips the UPDATE + grant when the locked read finds no row (row removed before the lock)', async () => {
-    mockDb.select
-      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]))
-      .mockReturnValueOnce(selectReturning([])) // no renewal-capable subscription (comped pro)
-      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 1500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
-    const sink: { set?: Record<string, unknown>; ledgerValues?: Record<string, unknown>; updateCalled?: boolean } = {};
-    mockResetTransaction(sink, null); // locked read returns []
-    mockTransaction({ monthlyRemainingCents: 1500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
-
-    const r = await canConsumeAI('u1', 'pro');
-
-    expect(sink.updateCalled).toBeFalsy();
-    expect(sink.ledgerValues).toBeUndefined();
-    expect(r.allowed).toBe(true);
-  });
 });
 
 describe('canConsumeAI — per-user/day exposure cap', () => {
@@ -836,7 +609,7 @@ describe('canConsumeAI — per-user/day exposure cap', () => {
     const sink: { insertCalled?: boolean } = {};
     mockTransactionWithDailyCharge(BAL, { reserved: 0, inFlight: 0 }, 480_000, sink);
 
-    const r = await canConsumeAI('u1', 'pro');
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
 
     expect(r).toEqual({ allowed: false, reason: 'daily_cap_exceeded' });
     // No hold is reserved on a cap denial.
@@ -848,7 +621,7 @@ describe('canConsumeAI — per-user/day exposure cap', () => {
     const sink: { insertCalled?: boolean } = {};
     mockTransactionWithDailyCharge(BAL, { reserved: 0, inFlight: 0 }, 100_000, sink); // 100¢ + 25 < 500
 
-    const r = await canConsumeAI('u1', 'pro');
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
 
     expect(r.allowed).toBe(true);
     expect(r.reason).toBe('ok');
@@ -862,7 +635,7 @@ describe('canConsumeAI — per-user/day exposure cap', () => {
     const sink: { insertCalled?: boolean } = {};
     mockTransactionWithDailyCharge(BAL, { reserved: 450, inFlight: 3 }, 100_000, sink);
 
-    const r = await canConsumeAI('u1', 'pro');
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
 
     expect(r).toEqual({ allowed: false, reason: 'daily_cap_exceeded' });
     expect(sink.insertCalled).toBeFalsy();
@@ -875,7 +648,7 @@ describe('canConsumeAI — per-user/day exposure cap', () => {
     const sink: { insertCalled?: boolean } = {};
     mockTransactionWithDailyCharge(BAL, { reserved: 0, inFlight: 0 }, 600_000, sink);
 
-    const r = await canConsumeAI('u1', 'business');
+    const r = await canConsumeAI('u1', 'business', { spend: PERSONAL_SPEND });
 
     expect(r.allowed).toBe(true);
     expect(sink.insertCalled).toBe(true);
@@ -885,7 +658,7 @@ describe('canConsumeAI — per-user/day exposure cap', () => {
     process.env.DAILY_USER_EXPOSURE_CAP_CENTS = '500';
     mockTransactionWithDailyCharge(BAL, { reserved: 0, inFlight: 0 }, 100_000);
 
-    await canConsumeAI('u1', 'pro');
+    await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
 
     const { inArray } = await import('@pagespace/db/operators');
     // The daily-cap query scopes to usage + adjustment rows (chargeMillicents is set on
@@ -899,7 +672,7 @@ describe('canConsumeAI — per-user/day exposure cap', () => {
     const sink: { insertCalled?: boolean } = {};
     mockTransactionWithDailyCharge(BAL, { reserved: 0, inFlight: 0 }, 480_000, sink);
 
-    const r = await canConsumeAI('u1', 'pro', { skipDailyCap: true });
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND, skipDailyCap: true });
 
     expect(r.allowed).toBe(true);
     expect(r.reason).toBe('ok');
@@ -912,7 +685,7 @@ describe('canConsumeAI — per-user/day exposure cap', () => {
     const sink: { insertCalled?: boolean } = {};
     mockTransaction(BAL, { reserved: 0, inFlight: 0 }, sink);
 
-    const r = await canConsumeAI('u1', 'pro');
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
 
     expect(r.allowed).toBe(true);
     expect(sink.insertCalled).toBe(true);
@@ -925,7 +698,7 @@ describe('canConsumeAI — per-user/day exposure cap', () => {
     const sink: { insertCalled?: boolean } = {};
     mockTransactionWithDailyCharge(BAL, { reserved: 0, inFlight: 0 }, 480_000, sink);
 
-    const r = await canConsumeAI('u1', 'pro', { dailyCapCeilingCents: 500 });
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND, dailyCapCeilingCents: 500 });
 
     expect(r).toEqual({ allowed: false, reason: 'daily_cap_exceeded' });
     expect(sink.insertCalled).toBeFalsy();
@@ -937,7 +710,7 @@ describe('canConsumeAI — per-user/day exposure cap', () => {
     const sink: { insertCalled?: boolean } = {};
     mockTransactionWithDailyCharge(BAL, { reserved: 0, inFlight: 0 }, 480_000, sink);
 
-    const r = await canConsumeAI('u1', 'pro', { dailyCapCeilingCents: 500 });
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND, dailyCapCeilingCents: 500 });
 
     expect(r).toEqual({ allowed: false, reason: 'daily_cap_exceeded' });
   });
@@ -946,7 +719,7 @@ describe('canConsumeAI — per-user/day exposure cap', () => {
     const sink: { insertCalled?: boolean } = {};
     mockTransactionWithDailyCharge(BAL, { reserved: 0, inFlight: 0 }, 100_000, sink); // 100¢ + 25 < 500
 
-    const r = await canConsumeAI('u1', 'pro', { dailyCapCeilingCents: 500 });
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND, dailyCapCeilingCents: 500 });
 
     expect(r.allowed).toBe(true);
     expect(sink.insertCalled).toBe(true);
@@ -957,7 +730,7 @@ describe('canConsumeAI — per-user/day exposure cap', () => {
     const sink: { insertCalled?: boolean } = {};
     mockTransaction(BAL, { reserved: 0, inFlight: 0 }, sink);
 
-    const r = await canConsumeAI('u1', 'pro', { dailyCapCeilingCents: 0 });
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND, dailyCapCeilingCents: 0 });
 
     expect(r.allowed).toBe(true);
     expect(sink.insertCalled).toBe(true);
@@ -972,7 +745,7 @@ describe('canConsumeAI — dailyCapCeilingCents with billing disabled (tenant/on
   function mockBillingOffTransaction(
     reserved: number,
     costUsd: number,
-    sink: { insertCalled?: boolean; executeSql?: string } = {},
+    sink: { insertCalled?: boolean; executeSql?: string; holdValues?: Record<string, unknown> } = {},
   ) {
     mockDb.transaction.mockImplementationOnce(async (cb: (tx: unknown) => Promise<unknown>) => {
       let selectCount = 0;
@@ -994,8 +767,9 @@ describe('canConsumeAI — dailyCapCeilingCents with billing disabled (tenant/on
           };
         }),
         insert: vi.fn(() => ({
-          values: () => {
+          values: (v: Record<string, unknown>) => {
             sink.insertCalled = true;
+            sink.holdValues = v;
             return { returning: () => Promise.resolve([{ id: 'hold-x' }]) };
           },
         })),
@@ -1010,7 +784,7 @@ describe('canConsumeAI — dailyCapCeilingCents with billing disabled (tenant/on
   });
 
   it('stays a pure fast path (no queries) when no ceiling is passed', async () => {
-    const r = await canConsumeAI('u1', 'pro');
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
 
     expect(r).toEqual({ allowed: true, reason: 'unlimited' });
     expect(mockDb.select).not.toHaveBeenCalled();
@@ -1022,7 +796,7 @@ describe('canConsumeAI — dailyCapCeilingCents with billing disabled (tenant/on
     const sink: { insertCalled?: boolean } = {};
     mockBillingOffTransaction(0, 6.0, sink);
 
-    const r = await canConsumeAI('u1', 'pro', { dailyCapCeilingCents: 500 });
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND, dailyCapCeilingCents: 500 });
 
     expect(r).toEqual({ allowed: false, reason: 'daily_cap_exceeded' });
     expect(sink.insertCalled).toBeFalsy();
@@ -1035,28 +809,32 @@ describe('canConsumeAI — dailyCapCeilingCents with billing disabled (tenant/on
     const sink: { insertCalled?: boolean } = {};
     mockBillingOffTransaction(480, 0.5, sink);
 
-    const r = await canConsumeAI('u1', 'pro', { dailyCapCeilingCents: 500 });
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND, dailyCapCeilingCents: 500 });
 
     expect(r).toEqual({ allowed: false, reason: 'daily_cap_exceeded' });
     expect(sink.insertCalled).toBeFalsy();
   });
 
   it('allows under the ceiling, reserves a hold, and serializes via a per-user advisory lock', async () => {
-    const sink: { insertCalled?: boolean; executeSql?: string } = {};
+    const sink: { insertCalled?: boolean; executeSql?: string; holdValues?: Record<string, unknown> } = {};
     mockBillingOffTransaction(0, 1.2, sink); // 120 + 25 < 500
 
-    const r = await canConsumeAI('u1', 'pro', { dailyCapCeilingCents: 500 });
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND, dailyCapCeilingCents: 500 });
 
     expect(r.allowed).toBe(true);
     expect(r.holdId).toBe('hold-x');
     expect(sink.insertCalled).toBe(true);
+    // WAL-5: holds are per wallet even with billing off; the wallet is resolved in the
+    // same transaction that places the hold.
+    expect(mockEnsurePersonalRootWalletId).toHaveBeenCalledTimes(1);
+    expect(sink.holdValues).toMatchObject({ userId: 'u1', walletId: 'w_root' });
     expect(sink.executeSql).toContain('pg_advisory_xact_lock');
   });
 
   it('treats missing/null metered cost as zero spend (local models log no cost)', async () => {
     mockBillingOffTransaction(0, 0);
 
-    const r = await canConsumeAI('u1', 'pro', { dailyCapCeilingCents: 500 });
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND, dailyCapCeilingCents: 500 });
 
     expect(r.allowed).toBe(true);
   });

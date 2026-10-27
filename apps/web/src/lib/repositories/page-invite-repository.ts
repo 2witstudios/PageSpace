@@ -8,6 +8,7 @@
  * therefore writes the drive_members row (as MEMBER, if missing) AND the
  * pagePermissions row in a single transaction.
  */
+import { stageOrgAuditEvents, type OrgAuditEvent } from '@pagespace/lib/audit/org-audit';
 
 import { db } from '@pagespace/db/db'
 import { eq, and, or, gt, lte, isNull } from '@pagespace/db/operators'
@@ -17,6 +18,9 @@ import { users } from '@pagespace/db/schema/auth'
 import { drives, pages } from '@pagespace/db/schema/core'
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { createId } from '@paralleldrive/cuid2';
+import { decideOrgDriveAdmission } from '@pagespace/lib/permissions/guest-admission';
+import { OrgLapsedError, checkDriveMayLoosen, checkPageMayLoosen } from '@pagespace/lib/permissions/org-lapse-guard';
+import { consumeApprovedInvitation, requestGuestApproval } from '@pagespace/lib/permissions/guest-holds';
 import {
   pendingPageInvites,
   type PendingPagePermission,
@@ -80,9 +84,14 @@ export const pageInviteRepository = {
     invitedBy: string;
     expiresAt: Date | null;
     now: Date;
+    /** AUD-1: an approver's `org.guest.approved`, held deliver-unless-undone with the invitation (see drive invites). */
+    approval?: OrgAuditEvent;
   }) {
     const { tokenHash, email, pageId, permissions, invitedBy, expiresAt, now } = input;
     return db.transaction(async (tx) => {
+      // [D-OW-33] an invitation is a token that admits whoever accepts it: none is issued while the page's drive's
+      // org is lapsed (acceptance refuses too, for one issued before the lapse).
+      if (await checkPageMayLoosen(tx, pageId, true)) throw new OrgLapsedError();
       // Sweep already-expired unconsumed rows for this (pageId, email) pair so
       // the partial unique index does not block a legitimate re-invite. The
       // route-level pre-check filters active rows.
@@ -98,7 +107,8 @@ export const pageInviteRepository = {
         .insert(pendingPageInvites)
         .values({ tokenHash, email, pageId, permissions, invitedBy, expiresAt })
         .returning();
-      return row;
+      const approvalStaged = input.approval ? await stageOrgAuditEvents(tx, [input.approval], { held: true }) : [];
+      return { ...row, approvalStaged };
     });
   },
 
@@ -183,11 +193,44 @@ export const pageInviteRepository = {
     grantedAt: Date;
   }): Promise<
     | { ok: true; memberId: string | null }
-    | { ok: false; reason: 'TOKEN_CONSUMED' | 'ALREADY_HAS_PERMISSION' }
+    | { ok: false; reason: 'TOKEN_CONSUMED' | 'ALREADY_HAS_PERMISSION' | 'GUEST_POLICY' | 'GUEST_APPROVAL_PENDING' | 'ORG_LAPSED' }
   > {
     const ALREADY_HAS_PERMISSION = Symbol('ALREADY_HAS_PERMISSION');
+    const HELD = Symbol('GUEST_APPROVAL_PENDING');
     try {
-      const memberId = await db.transaction(async (tx) => {
+      const memberId = await db.transaction(async (tx): Promise<string | null | typeof HELD> => {
+        // POL-2, at the moment the grant would be written: an org that has turned guests OFF admits no outsider,
+        // whenever the invitation was sent. Asked BEFORE the token is consumed, so a refusal burns nothing and the
+        // invitation works again if the policy is turned back on. Under `approve`, only an invitation an Owner or
+        // Admin approved (an `approved` marker) admits; one sent while guests were on, or before the drive joined the
+        // org, is queued for approval instead (independent review of #2762, P2-6).
+        const admission = await decideOrgDriveAdmission({ driveId: input.driveId, userId: input.userId }, tx);
+        if (admission.decision === 'refuse') throw 'GUEST_POLICY';
+        if (admission.decision === 'hold' && admission.orgId) {
+          // Only THIS invitation's approval admits (re-verify N3), never another approval to the same address.
+          const approved = await consumeApprovedInvitation(tx, { driveId: input.driveId, invite: { kind: 'page', id: input.inviteId } });
+          if (!approved) {
+            const spent = await tx
+              .update(pendingPageInvites)
+              .set({ consumedAt: input.grantedAt })
+              .where(and(eq(pendingPageInvites.id, input.inviteId), isNull(pendingPageInvites.consumedAt)))
+              .returning({ id: pendingPageInvites.id });
+            if (spent.length === 0) throw 'TOKEN_CONSUMED';
+            await requestGuestApproval({
+              orgId: admission.orgId,
+              driveId: input.driveId,
+              userId: input.userId,
+              origin: 'page_grant',
+              request: { permissions: [{ pageId: input.pageId, ...PAGE_PERMISSION_FLAGS(input.permissions), canDelete: false }], invitedBy: input.invitedBy },
+              requestedBy: input.invitedBy,
+            }, tx);
+            return HELD;
+          }
+        }
+
+        // [D-OW-33] accepting adds access: refused while the drive's org is lapsed, BEFORE the token is consumed.
+        if (await checkDriveMayLoosen(tx, input.driveId, true)) throw 'ORG_LAPSED';
+
         const consumed = await tx
           .update(pendingPageInvites)
           .set({ consumedAt: input.grantedAt })
@@ -265,10 +308,18 @@ export const pageInviteRepository = {
 
         return createdMemberId;
       });
+      // The invitation was answered by the approval queue: nothing granted, the token spent.
+      if (memberId === HELD) return { ok: false, reason: 'GUEST_APPROVAL_PENDING' };
       return { ok: true, memberId };
     } catch (error) {
       if (error === 'TOKEN_CONSUMED') {
         return { ok: false, reason: 'TOKEN_CONSUMED' };
+      }
+      if (error === 'GUEST_POLICY') {
+        return { ok: false, reason: 'GUEST_POLICY' };
+      }
+      if (error === 'ORG_LAPSED') {
+        return { ok: false, reason: 'ORG_LAPSED' };
       }
       if (error === ALREADY_HAS_PERMISSION) {
         return { ok: false, reason: 'ALREADY_HAS_PERMISSION' };
@@ -317,36 +368,51 @@ export const pageInviteRepository = {
     return results.at(0) ?? null;
   },
 
+  /**
+   * Grant a page directly (share-invite to a verified account). `driveId` is the page's drive: the org's guests
+   * policy is asked again at the write, under the org row's share lock, and an outsider is refused (null) if guests
+   * were turned OFF since the route asked. An existing grant is left as it is and its id returned.
+   */
   async createDirectPagePermission(data: {
     pageId: string;
+    driveId: string;
     userId: string;
     canView: boolean;
     canEdit: boolean;
     canShare: boolean;
     grantedBy: string;
-  }): Promise<{ id: string }> {
-    const [row] = await db
-      .insert(pagePermissions)
-      .values({ id: createId(), ...data, canDelete: false })
-      .onConflictDoNothing({ target: [pagePermissions.pageId, pagePermissions.userId] })
-      .returning({ id: pagePermissions.id });
-    if (row) return row;
+  }): Promise<{ id: string } | null> {
+    const { driveId, ...grant } = data;
+    return db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select({ id: pagePermissions.id })
+        .from(pagePermissions)
+        .where(and(eq(pagePermissions.pageId, grant.pageId), eq(pagePermissions.userId, grant.userId)))
+        .limit(1);
+      if (existing) return existing;
 
-    // Conflict: permission already exists — return the real row id
-    const [existing] = await db
-      .select({ id: pagePermissions.id })
-      .from(pagePermissions)
-      .where(
-        and(
-          eq(pagePermissions.pageId, data.pageId),
-          eq(pagePermissions.userId, data.userId),
-        ),
-      )
-      .limit(1);
+      const admission = await decideOrgDriveAdmission({ driveId, userId: grant.userId }, tx);
+      if (admission.decision === 'refuse') return null;
+      // [D-OW-33] a new grant loosens access: refused while the drive's org is lapsed (an org member too).
+      if (await checkDriveMayLoosen(tx, driveId, true)) throw new OrgLapsedError();
 
-    if (!existing) {
-      throw new Error('Failed to create or read existing page permission');
-    }
-    return existing;
+      const [row] = await tx
+        .insert(pagePermissions)
+        .values({ id: createId(), ...grant, canDelete: false })
+        .onConflictDoNothing({ target: [pagePermissions.pageId, pagePermissions.userId] })
+        .returning({ id: pagePermissions.id });
+      if (row) return row;
+
+      // Conflict: a concurrent grant landed first — return the real row id
+      const [raced] = await tx
+        .select({ id: pagePermissions.id })
+        .from(pagePermissions)
+        .where(and(eq(pagePermissions.pageId, grant.pageId), eq(pagePermissions.userId, grant.userId)))
+        .limit(1);
+      if (!raced) {
+        throw new Error('Failed to create or read existing page permission');
+      }
+      return raced;
+    });
   },
 };

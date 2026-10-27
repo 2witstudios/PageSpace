@@ -12,7 +12,14 @@
  * epic's rename fixes.
  *
  * GET ?driveId=<id> | (none = mine)
- *   → { sessions: [{ …AgentSessionDTO, shells: ShellDTO[], conversations }] }
+ *   → { sessions: [{ …AgentSessionDTO, shells: ShellDTO[], conversations, rev, nodes, targets }] }
+ *
+ * A DRIVE-SCOPED credential (a scoped MCP key / OAuth token) gets a narrower
+ * answer: only sessions in drives its OWN principal permissions can view, and
+ * the session DTOs alone — `shells`/`conversations`/`nodes`/`targets` empty at
+ * `rev: 0`. The child reads resolve as the owning user, and a key restricted by
+ * an explicit role must not receive its owner's conversation titles or tree
+ * targets (PR #2653 review P1). The CLI/SDK need only the DTO fields.
  * POST { driveId, agentPageId, name?, firstThing? }
  *   → 201 { session, conversationId } | { session, shellId, shellName } — spawn (see below)
  *
@@ -24,7 +31,13 @@
  */
 
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, canPrincipalViewPage } from '@/lib/auth';
+import {
+  authenticateRequestWithOptions,
+  isAuthError,
+  canPrincipalViewPage,
+  getPrincipalDriveAccessLevel,
+  isDriveScopedPrincipal,
+} from '@/lib/auth';
 import { conversationRepository, type AiAgent } from '@/lib/repositories/conversation-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -48,7 +61,14 @@ import { listShellsBulk, spawnShell } from '@/lib/agent-workspaces/workspace-she
 import { findWorkspaceOfConversation, checkSessionAccess } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { readWorkspaceNodesBulk } from '@/lib/agent-workspaces/workspace-node-runtime';
 import { sessionQuotaExceeded } from '@/lib/agent-workspaces/quota-response';
+import { isWorkspaceInCredentialScope } from '@/lib/agent-workspaces/credential-scope';
+import {
+  MAX_SESSION_NAME_LENGTH,
+  nextUniqueSessionName,
+} from '@pagespace/lib/agent-workspaces/session-contract';
 import type { LocalEnvRefusal } from '@pagespace/lib/services/drive-envs/local-env-gate';
+import { ORG_LAPSED_MESSAGE } from '@pagespace/lib/organizations/status-core';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 /** C1: how a LOCAL env's typed bind refusal maps to a status. Policy ⇒ 403, machine state ⇒ 409. */
 const LOCAL_BIND_REFUSAL_STATUS = {
@@ -60,24 +80,6 @@ const LOCAL_BIND_REFUSAL_STATUS = {
   not_connected: 409,
   substrate_unsupported: 409,
 } as const satisfies Record<LocalEnvRefusal, number>;
-
-/** Bound on the stored display label — rendered everywhere the session appears. */
-const MAX_SESSION_NAME_LENGTH = 120;
-
-/**
- * A blank-name spawn's auto-label: the first collision-free of `base`,
- * `base 2`, `base 3`, … — mirroring `nextShellLabel`'s "count existing,
- * append a number, scan past collisions" pattern
- * (`plan-spawn-worker.ts:61-68`), but starting at the bare label rather than
- * always suffixing a number: no session is ever born "Shell 1".
- */
-function nextUniqueSessionName(base: string, existingNames: readonly string[]): string {
-  const taken = new Set(existingNames);
-  if (!taken.has(base)) return base;
-  let index = 2;
-  while (taken.has(`${base} ${index}`)) index += 1;
-  return `${base} ${index}`;
-}
 
 /**
  * The `canPrincipalViewPage` gate every agent-permission check in this route
@@ -106,12 +108,15 @@ async function denyIfCannotViewAgent(
   return NextResponse.json({ error: 'Insufficient permissions to use this agent' }, { status: 403 });
 }
 
-const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
+// The listing is token-readable so the CLI/SDK can find a workspace to exec in;
+// a token only ever sees the workspaces inside its own drive scope (below).
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 export async function GET(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) return auth.error;
+  const actor = actorFromAuth(auth);
 
   const url = new URL(request.url);
   const driveId = url.searchParams.get('driveId');
@@ -124,7 +129,27 @@ export async function GET(request: Request) {
       : { ownerId: auth.userId };
 
   try {
-    const sessions = await listSessions(filter);
+    const inScope = (await listSessions(filter)).filter((session) =>
+      isWorkspaceInCredentialScope(auth, session.driveId),
+    );
+
+    if (isDriveScopedPrincipal(auth)) {
+      // Every in-scope session has a drive (a driveless one is out of every
+      // drive scope). One principal read per DISTINCT drive, not per session.
+      const driveIds = [...new Set(inScope.flatMap((session) => (session.driveId ? [session.driveId] : [])))];
+      const viewable = new Set<string>();
+      await Promise.all(
+        driveIds.map(async (id) => {
+          if ((await getPrincipalDriveAccessLevel(auth, id))?.canView) viewable.add(id);
+        }),
+      );
+      const sessions = inScope
+        .filter((session) => session.driveId !== null && viewable.has(session.driveId))
+        .map((session) => ({ ...session, shells: [], conversations: [], rev: 0, nodes: [], targets: [] }));
+      return NextResponse.json({ sessions });
+    }
+
+    const sessions = inScope;
     // Children in THREE bulk queries, however many sessions listed — this is
     // polled by every open sidebar, and the per-session shape was 1+2N
     // queries per poll (review M4).
@@ -137,7 +162,7 @@ export async function GET(request: Request) {
       // grid snapshot. One statement for one workspace and for fifty, and the
       // titles are resolved once per viewer beside the nodes, never inside
       // them.
-      readWorkspaceNodesBulk(workspaceIds, auth.userId),
+      readWorkspaceNodesBulk(workspaceIds, actor),
     ]);
     const withChildren = sessions.map((session) => {
       // Every workspace ASKED FOR has an entry; this fallback covers only a
@@ -275,6 +300,7 @@ function applyAgentDefaultEnv(
 export async function POST(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
+  const actor = actorFromAuth(auth);
 
   let body: {
     driveId?: unknown;
@@ -384,7 +410,7 @@ export async function POST(request: Request) {
       // `workspaceId` in exactly this situation (see `maskOrDrop`); this keeps
       // the two consistent instead of letting the 409 disclose what the
       // listing deliberately hides. Reported by review on #2386.
-      const access = await checkSessionAccess(auth.userId, existingWorkspaceId);
+      const access = await checkSessionAccess(actor, existingWorkspaceId);
       return NextResponse.json(
         {
           error: 'That conversation already belongs to a session',
@@ -471,7 +497,7 @@ export async function POST(request: Request) {
     });
   }
 
-  const access = await checkAccessForSubject(auth.userId, {
+  const access = await checkAccessForSubject(actor, {
     ownerId: auth.userId,
     driveId,
   });
@@ -512,10 +538,13 @@ export async function POST(request: Request) {
           : 'Global Assistant';
     const existingSessions = await listSessions({ ownerId: auth.userId });
     const existingNames = existingSessions.map((session) => session.name);
-    name = nextUniqueSessionName(baseLabel, existingNames).slice(0, MAX_SESSION_NAME_LENGTH);
+    // No `.slice` here: the helper is length-aware and already returns a
+    // bounded name. Truncating afterwards is what destroys its uniqueness
+    // suffix when the base is at the cap.
+    name = nextUniqueSessionName(baseLabel, existingNames);
   }
 
-  const spawned = await spawnSession({ userId: auth.userId, driveId, envId, name });
+  const spawned = await spawnSession({ actor, driveId, envId, name });
   if (!spawned.ok) {
     if (spawned.reason === 'session_limit_reached') {
       // The atomic backstop caught what the pre-check above missed — a
@@ -555,7 +584,7 @@ export async function POST(request: Request) {
     // (`[workspaceId]/shells/route.ts` POST, lines 88-167): a shell always
     // needs a live sandbox, so unlike the conversation path this provisions
     // eagerly rather than waiting for the first tool call.
-    const provisioned = await provisionSessionSandbox(spawned.session, auth.userId);
+    const provisioned = await provisionSessionSandbox(spawned.session, actor);
     if (!provisioned.ok) {
       await endSession(spawned.session.id).catch(() => {});
       // A plan-limit refusal is not an infrastructure failure — same split the
@@ -584,6 +613,10 @@ export async function POST(request: Request) {
           },
           riskScore: 0.5,
         });
+        // SEAT-9: a lapsed org's sandbox is paused until billing is reactivated.
+        if (provisioned.detail === 'org_lapsed') {
+          return NextResponse.json({ error: ORG_LAPSED_MESSAGE, code: 'org_lapsed' }, { status: 402 });
+        }
         return NextResponse.json(
           {
             error:
@@ -602,7 +635,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Could not start a session' }, { status: 502 });
     }
 
-    const shellSpawned = await spawnShell({ workspaceId: spawned.session.id, ownerId: auth.userId });
+    const shellSpawned = await spawnShell({ workspaceId: spawned.session.id, owner: actor });
     if (!shellSpawned.ok) {
       // The session row exists but its first shell failed: end it rather than
       // leave an empty workspace the model says cannot exist.
@@ -646,7 +679,7 @@ export async function POST(request: Request) {
     const conversationId = claimConversationId as string;
     const outcome = await claimConversationInSession({
       conversationId,
-      userId: auth.userId,
+      actor,
       workspaceId: spawned.session.id,
     });
     if (outcome !== 'claimed' && outcome !== 'already_in_session') {
@@ -683,7 +716,7 @@ export async function POST(request: Request) {
         const raceWinnerWorkspaceId = await findWorkspaceOfConversation(conversationId).catch(() => null);
         const raceWinnerOpenable =
           raceWinnerWorkspaceId !== null &&
-          (await checkSessionAccess(auth.userId, raceWinnerWorkspaceId).then(
+          (await checkSessionAccess(actor, raceWinnerWorkspaceId).then(
             (a) => a.allowed,
             () => false,
           ));
@@ -723,7 +756,7 @@ export async function POST(request: Request) {
   try {
     await createConversationInSession({
       conversationId,
-      userId: auth.userId,
+      actor,
       agentPageId,
       workspaceId: spawned.session.id,
     });

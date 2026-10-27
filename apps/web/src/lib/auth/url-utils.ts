@@ -72,8 +72,18 @@ export function isSafeReturnUrl(url: string | undefined): boolean {
  * body, mirroring the OAuth `state.inviteToken` pattern. Adding `/invite/`
  * here would re-introduce the URL-fragility this allowlist was designed to
  * mitigate.
+ *
+ * `/imago` is the Imago app (apps/imago), served same-origin under that
+ * basePath; it sends signed-out users to `/auth/signin?next=/imago/…`.
  */
-export const SIGNIN_NEXT_ALLOWED_PREFIXES = ['/dashboard', '/account', '/s/', '/oauth/consent', '/activate'] as const;
+export const SIGNIN_NEXT_ALLOWED_PREFIXES = [
+  '/dashboard',
+  '/account',
+  '/s/',
+  '/oauth/consent',
+  '/activate',
+  '/imago',
+] as const;
 
 /**
  * Validates that a `next=` redirect target is both same-origin (composed via

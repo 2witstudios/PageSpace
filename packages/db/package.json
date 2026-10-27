@@ -7,6 +7,10 @@
       "types": "./dist/db.d.ts",
       "default": "./dist/db.js"
     },
+    "./wallet-backfill": {
+      "types": "./dist/wallet-backfill.d.ts",
+      "default": "./dist/wallet-backfill.js"
+    },
     "./advisory-lock": {
       "types": "./dist/advisory-lock.d.ts",
       "default": "./dist/advisory-lock.js"
@@ -35,6 +39,10 @@
       "types": "./dist/operators.d.ts",
       "default": "./dist/operators.js"
     },
+    "./read-only-session": {
+      "types": "./dist/read-only-session.d.ts",
+      "default": "./dist/read-only-session.js"
+    },
     "./schema": {
       "types": "./dist/schema.d.ts",
       "default": "./dist/schema.js"
@@ -50,6 +58,26 @@
     "./schema/agent-workspaces": {
       "types": "./dist/schema/agent-workspaces.d.ts",
       "default": "./dist/schema/agent-workspaces.js"
+    },
+    "./schema/agent-accounts": {
+      "types": "./dist/schema/agent-accounts.d.ts",
+      "default": "./dist/schema/agent-accounts.js"
+    },
+    "./schema/agent-account-grant-nonces": {
+      "types": "./dist/schema/agent-account-grant-nonces.d.ts",
+      "default": "./dist/schema/agent-account-grant-nonces.js"
+    },
+    "./schema/organizations": {
+      "types": "./dist/schema/organizations.d.ts",
+      "default": "./dist/schema/organizations.js"
+    },
+    "./schema/org-guest-holds": {
+      "types": "./dist/schema/org-guest-holds.d.ts",
+      "default": "./dist/schema/org-guest-holds.js"
+    },
+    "./schema/drive-join-requests": {
+      "types": "./dist/schema/drive-join-requests.d.ts",
+      "default": "./dist/schema/drive-join-requests.js"
     },
     "./schema/agent-workspace-nodes": {
       "types": "./dist/schema/agent-workspace-nodes.d.ts",
@@ -163,6 +191,14 @@
       "types": "./dist/schema/personalization.d.ts",
       "default": "./dist/schema/personalization.js"
     },
+    "./schema/user-builtin-agents": {
+      "types": "./dist/schema/user-builtin-agents.d.ts",
+      "default": "./dist/schema/user-builtin-agents.js"
+    },
+    "./schema/imago-drive-access": {
+      "types": "./dist/schema/imago-drive-access.d.ts",
+      "default": "./dist/schema/imago-drive-access.js"
+    },
     "./schema/automation-preferences": {
       "types": "./dist/schema/automation-preferences.d.ts",
       "default": "./dist/schema/automation-preferences.js"
@@ -203,6 +239,10 @@
       "types": "./dist/schema/storage.d.ts",
       "default": "./dist/schema/storage.js"
     },
+    "./schema/app-store": {
+      "types": "./dist/schema/app-store.d.ts",
+      "default": "./dist/schema/app-store.js"
+    },
     "./schema/subscriptions": {
       "types": "./dist/schema/subscriptions.d.ts",
       "default": "./dist/schema/subscriptions.js"
@@ -210,6 +250,10 @@
     "./schema/credits": {
       "types": "./dist/schema/credits.d.ts",
       "default": "./dist/schema/credits.js"
+    },
+    "./schema/wallets": {
+      "types": "./dist/schema/wallets.d.ts",
+      "default": "./dist/schema/wallets.js"
     },
     "./schema/tasks": {
       "types": "./dist/schema/tasks.d.ts",

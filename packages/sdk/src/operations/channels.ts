@@ -118,6 +118,19 @@ const channelMessageSchema = z.object({
   quotedMessageId: z.string().nullable(),
   user: channelMessageUserSchema,
   file: channelMessageFileSchema.nullable(),
+  // Optional: rows written before messages could carry several attachments
+  // have only the singular fileId/attachmentMeta pair above.
+  attachments: z
+    .array(
+      z.object({
+        id: z.string(),
+        fileId: z.string().nullable(),
+        attachmentMeta: attachmentMetaSchema.nullable(),
+        position: z.number(),
+        file: channelMessageFileSchema.nullable().optional(),
+      }),
+    )
+    .optional(),
   reactions: z.array(channelMessageReactionSchema),
   mirroredFrom: mirroredFromSchema.nullable(),
   quotedMessage: quotedMessageSnapshotSchema.nullable().optional(),
@@ -136,8 +149,13 @@ export const sendChannelMessage = defineOperation({
     // Route coerces a non-string body to '' (`typeof content === 'string' ? content : ''`)
     // and never enforces a minimum length — attachment-only messages send an empty string.
     content: z.string(),
+    // Legacy singular pair — still accepted by the route. Mutually exclusive
+    // with `attachments`; sending both is a 400.
     fileId: z.string().optional(),
     attachmentMeta: attachmentMetaSchema.optional(),
+    attachments: z
+      .array(z.object({ fileId: z.string(), attachmentMeta: attachmentMetaSchema }))
+      .optional(),
     parentId: z.string().optional(),
     alsoSendToParent: z.boolean().optional(),
     quotedMessageId: z.string().optional(),

@@ -8,6 +8,8 @@ import { getOrCreateStripeCustomer } from '@/lib/stripe-customer';
 import { getUserFriendlyStripeError } from '@/lib/stripe-errors';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { isPersonalPlanPriceId } from '@/lib/subscription/plans';
+import { appleEntitledTier, hasRenewableAppleSubscription } from '@pagespace/lib/billing/apple/apple-entitlement';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -33,10 +35,34 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // SEAT-2 P1 (independent review, allowlist inversion): only a price id
+    // this app recognizes as a PERSONAL plan's current price may be checked
+    // out here. This is deny-by-default — it rejects Business, the
+    // grandfathered Founder price, and any unrecognized price id, not just
+    // the one price id it happens to know is the org plan's.
+    if (!isPersonalPlanPriceId(priceId)) {
+      return NextResponse.json(
+        { error: 'This plan cannot be purchased individually.' },
+        { status: 400 }
+      );
+    }
+
     // Get user
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     if (!user) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
+    }
+
+    // A plan bought in the App Store is managed there: a Stripe checkout on top of it would
+    // bill the same person twice for one plan — including while Apple is still retrying a
+    // failed renewal, which resumes the subscription without a new purchase.
+    const now = new Date();
+    if ((await appleEntitledTier(db, userId, now)) !== 'free'
+      || (await hasRenewableAppleSubscription(db, userId, now, { autoRenewing: true }))) {
+      return NextResponse.json(
+        { error: 'Your plan is managed in the App Store.', code: 'managed_by_app_store' },
+        { status: 409 }
+      );
     }
 
     // Check if user already has a paid subscription

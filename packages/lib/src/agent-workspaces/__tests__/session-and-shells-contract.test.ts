@@ -10,7 +10,15 @@
  */
 import { describe, it, expect } from 'vitest';
 import { ZodError } from 'zod';
-import { SANDBOX_STATUSES, sandboxStatusSchema, agentSessionDtoSchema } from '../session-contract';
+import {
+  SANDBOX_STATUSES,
+  sandboxStatusSchema,
+  agentSessionDtoSchema,
+  sessionNameSchema,
+  renameAgentSessionRequestSchema,
+  nextUniqueSessionName,
+  MAX_SESSION_NAME_LENGTH,
+} from '../session-contract';
 import {
   shellDtoSchema,
   shellConnectPayloadSchema,
@@ -292,5 +300,85 @@ describe('shellSendPayloadSchema', () => {
     expect(
       shellSendPayloadSchema.safeParse({ shellId: 'sh-1', input: '€'.repeat(1366) }).success,
     ).toBe(false);
+  });
+});
+
+describe('sessionNameSchema — one rule for every surface that accepts a name', () => {
+  it('trims surrounding whitespace before storing', () => {
+    expect(sessionNameSchema.parse('  Deploy work  ')).toBe('Deploy work');
+  });
+
+  it('rejects an empty or whitespace-only name', () => {
+    // A blank would be stored and then render as the nameless fallback, which
+    // is the exact state this whole surface exists to remove.
+    expect(sessionNameSchema.safeParse('').success).toBe(false);
+    expect(sessionNameSchema.safeParse('     ').success).toBe(false);
+  });
+
+  it('accepts a name at the limit and refuses one past it', () => {
+    expect(sessionNameSchema.safeParse('x'.repeat(MAX_SESSION_NAME_LENGTH)).success).toBe(true);
+    expect(sessionNameSchema.safeParse('x'.repeat(MAX_SESSION_NAME_LENGTH + 1)).success).toBe(false);
+  });
+
+  it('measures the length AFTER trimming', () => {
+    expect(sessionNameSchema.safeParse(`  ${'x'.repeat(MAX_SESSION_NAME_LENGTH)}  `).success).toBe(true);
+  });
+
+  it('is the whole of the rename request body', () => {
+    expect(renameAgentSessionRequestSchema.safeParse({ name: ' Deploy ' }).data).toEqual({ name: 'Deploy' });
+    expect(renameAgentSessionRequestSchema.safeParse({}).success).toBe(false);
+    expect(renameAgentSessionRequestSchema.safeParse({ name: 42 }).success).toBe(false);
+  });
+});
+
+describe('nextUniqueSessionName — the label a nameless spawn gets', () => {
+  it('given no collision, should use the bare base — never "Agent 1"', () => {
+    expect(nextUniqueSessionName('Agent', [])).toBe('Agent');
+  });
+
+  it('given collisions, should scan past every one of them', () => {
+    expect(nextUniqueSessionName('Agent', ['Agent'])).toBe('Agent 2');
+    expect(nextUniqueSessionName('Agent', ['Agent', 'Agent 2'])).toBe('Agent 3');
+    // Gaps are not filled — the scan stops at the first FREE suffix, so a
+    // deleted "Agent 2" is reused rather than skipped.
+    expect(nextUniqueSessionName('Agent', ['Agent', 'Agent 3'])).toBe('Agent 2');
+  });
+
+  it('given unrelated names, should ignore them', () => {
+    expect(nextUniqueSessionName('Agent', ['Global Assistant', 'Shell'])).toBe('Agent');
+  });
+
+  /**
+   * The suffix has to fit INSIDE the cap, not be appended and then cut off.
+   *
+   * The first cut appended `" 2"` and left both callers to truncate the result,
+   * which for a base already at the cap produced exactly the base back — so the
+   * "unique" name collided with the one it was generated to avoid.
+   */
+  it('given a colliding base already at the length cap, should still return a DIFFERENT bounded name', () => {
+    const base = 'x'.repeat(MAX_SESSION_NAME_LENGTH);
+
+    const result = nextUniqueSessionName(base, [base]);
+
+    expect(result).not.toBe(base);
+    expect(result.length).toBeLessThanOrEqual(MAX_SESSION_NAME_LENGTH);
+    expect(result.endsWith(' 2')).toBe(true);
+  });
+
+  it('given an over-long base, should bound it even when nothing collides', () => {
+    // Callers no longer truncate, so the helper owns the bound outright.
+    const result = nextUniqueSessionName('y'.repeat(MAX_SESSION_NAME_LENGTH + 50), []);
+
+    expect(result).toHaveLength(MAX_SESSION_NAME_LENGTH);
+  });
+
+  it('given repeated collisions at the cap, should keep producing distinct bounded names', () => {
+    const base = 'z'.repeat(MAX_SESSION_NAME_LENGTH);
+    const taken = [base, base.slice(0, MAX_SESSION_NAME_LENGTH - 2) + ' 2'];
+
+    const result = nextUniqueSessionName(base, taken);
+
+    expect(taken).not.toContain(result);
+    expect(result.length).toBeLessThanOrEqual(MAX_SESSION_NAME_LENGTH);
   });
 });

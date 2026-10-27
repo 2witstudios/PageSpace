@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useParams } from 'next/navigation';
 import {
   Boxes,
   ChevronDown,
@@ -22,26 +21,23 @@ import { toast } from 'sonner';
 import useSWR, { useSWRConfig } from 'swr';
 
 import EndSessionDialog from '@/components/agents/EndSessionDialog';
+import { RenameDialog } from '@/components/dialogs/RenameDialog';
 import { useSpawnSession } from '@/components/agents/useSpawnSession';
 import DrivePickerDialog from '@/components/agents/DrivePickerDialog';
 import { Input } from '@/components/ui/input';
-import { cn, isElectron } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import type { SidebarProps } from './index';
-import DriveSwitcher from '@/components/layout/navbar/DriveSwitcher';
 import CreateDriveDialog from './CreateDriveDialog';
-import DashboardFooter from './DashboardFooter';
-import DriveFooter from './DriveFooter';
-import PrimaryNavigation from './PrimaryNavigation';
+import SidebarShell from './SidebarShell';
 import { SidebarLoading, SidebarNotice } from './sidebar-states';
 import { matchesKeyEvent, getEffectiveBinding } from '@/stores/useHotkeyStore';
 import { isEditingActive } from '@/stores/useEditingStore';
 import { useAuth } from '@/hooks/useAuth';
 import { useTouchDevice } from '@/hooks/useTouchDevice';
-import { useBreakpoint } from '@/hooks/useBreakpoint';
 import { useDriveStore, type Drive } from '@/hooks/useDrive';
 import { canManageDrive, isDriveOwner } from '@/hooks/usePermissions';
 import { usePageAgents, type DriveWithAgents } from '@/hooks/page-agents/usePageAgents';
-import { useAgentSurfaceStore, SHEET_BREAKPOINT_QUERY } from '@/stores/agents/useAgentSurfaceStore';
+import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import {
   artifactRowsOf,
@@ -74,6 +70,7 @@ import { envDevPreviewPath } from '@/hooks/dev-preview/useDevPreviewStatus';
 import { useDriveEnvs } from '@/hooks/drive-envs/useDriveEnvs';
 import { reportDriveEnvWriteFailure, type DriveEnvWriteOutcome } from '@/hooks/drive-envs/drive-env-writes';
 import type { DriveEnvStatus } from '@pagespace/lib/drive-envs/env-contract';
+import { focusDriveId, useFocus } from '@/lib/dashboard/focus';
 
 /**
  * The Agents console's left sidebar: **Drive → Session → Pane.**
@@ -112,16 +109,9 @@ import type { DriveEnvStatus } from '@pagespace/lib/drive-envs/env-contract';
  * component remounts, so live shells and streaming chats survive every click.
  */
 export default function AgentsSidebar({ className }: SidebarProps) {
-  const params = useParams();
-  const [isElectronMac, setIsElectronMac] = useState(false);
-  const isSheetBreakpoint = useBreakpoint(SHEET_BREAKPOINT_QUERY);
-
-  const driveIdParams = params?.driveId;
-  const driveId = Array.isArray(driveIdParams) ? driveIdParams[0] : driveIdParams;
+  const driveId = focusDriveId(useFocus());
 
   const drives = useDriveStore((state) => state.drives);
-  const drive = drives.find((d) => d.id === driveId);
-  const canManage = canManageDrive(drive);
 
   const { user, isLoading: authLoading } = useAuth();
   // Sessions/chat/panes are open to every authenticated user — only the
@@ -168,10 +158,6 @@ export default function AgentsSidebar({ className }: SidebarProps) {
   // authenticated user now (#2326).
   const { agentsByDrive } = usePageAgents(undefined, { enabled: isAuthenticated });
 
-  useEffect(() => {
-    setIsElectronMac(isElectron() && /Mac/.test(navigator.platform));
-  }, []);
-
   // SEAT EVERY LISTED WORKSPACE'S TREE. This is the sidebar's only write to the
   // store's structural half, and after it the rows render from the store alone —
   // so a broadcast, a pane the user opened in another tab, and this poll all
@@ -194,18 +180,8 @@ export default function AgentsSidebar({ className }: SidebarProps) {
   }, [data]);
 
   return (
-    <aside
-      className={cn(
-        'flex h-full w-full flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-sidebar-foreground liquid-glass-regular rounded-tr-lg border border-[var(--separator)] shadow-[var(--shadow-elevated)] dark:shadow-none overflow-hidden',
-        className
-      )}
-    >
-      <div className="flex h-full flex-col px-3 py-3">
-        <div className={cn('mb-3', isElectronMac && isSheetBreakpoint && 'pl-[60px]')}>
-          <DriveSwitcher />
-        </div>
-
-        <PrimaryNavigation driveId={driveId} />
+    <SidebarShell className={className}>
+      <div className="flex flex-1 min-h-0 flex-col px-3">
 
         <div className="flex-1 min-h-0 overflow-y-auto scrollbar-none">
           <div className="space-y-0.5">
@@ -224,9 +200,8 @@ export default function AgentsSidebar({ className }: SidebarProps) {
           </div>
         </div>
 
-        {driveId ? <DriveFooter canManage={canManage} /> : <DashboardFooter />}
       </div>
-    </aside>
+    </SidebarShell>
   );
 }
 
@@ -1180,6 +1155,7 @@ function SessionRow({
 
   const [expanded, setExpanded] = useState(false);
   const [confirmingEnd, setConfirmingEnd] = useState(false);
+  const [renaming, setRenaming] = useState(false);
   const isSelected = selectedSessionId === session.workspaceId;
   const isRunning = session.sandboxStatus === 'running' || session.sandboxStatus === 'starting';
 
@@ -1443,6 +1419,7 @@ function SessionRow({
 
   const menuItems: RowMenuItem[] = useMemo(
     () => [
+      { label: 'Rename', icon: Pencil, onSelect: () => setRenaming(true) },
       {
         label: 'End session',
         icon: X,
@@ -1451,6 +1428,42 @@ function SessionRow({
       },
     ],
     [],
+  );
+
+  /**
+   * Relabel this session. A label only — it touches nothing running inside.
+   *
+   * Until now a session's name was written once at spawn and never again, so a
+   * session an AGENT minted (which passed no name at all) sat in this sidebar
+   * as the literal fallback "Session", permanently and with no way to fix it.
+   *
+   * The empty-name guard is ours, not the server's: the API refuses a blank
+   * with a 400, and there is no reason to spend a round trip learning that.
+   */
+  const renameSession = useCallback(
+    async (name: string) => {
+      const trimmed = name.trim();
+      if (!trimmed || trimmed === session.name) {
+        setRenaming(false);
+        return;
+      }
+      try {
+        await patch(`/api/agent-workspaces/${encodeURIComponent(session.workspaceId)}`, { name: trimmed });
+      } catch (error) {
+        toast.error('Could not rename this session', {
+          description: error instanceof Error ? error.message : 'Please try again.',
+        });
+        return;
+      }
+      setRenaming(false);
+      // The same prefix predicate `closeConversation` above revalidates with,
+      // which covers every `/api/agent-workspaces*` listing this row's name is
+      // drawn from. The rename ALSO broadcasts `session:updated`, which is what
+      // refreshes other tabs; this is what refreshes the one that made the
+      // change, without waiting for its own echo to come back.
+      void mutate(isAgentWorkspacesKey);
+    },
+    [mutate, session.workspaceId, session.name],
   );
 
   const openArtifact = useCallback(
@@ -1513,6 +1526,15 @@ function SessionRow({
         onOpenChange={setConfirmingEnd}
         sessionName={session.name}
         onConfirm={() => void endSession()}
+      />
+
+      <RenameDialog
+        isOpen={renaming}
+        onClose={() => setRenaming(false)}
+        onRename={(name) => void renameSession(name)}
+        initialName={session.name || ''}
+        title="Rename session"
+        description="A label only — renaming never affects the sandbox, its shells, or anything running inside."
       />
 
       {expanded && (

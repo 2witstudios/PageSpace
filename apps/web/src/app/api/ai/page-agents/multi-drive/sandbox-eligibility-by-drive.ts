@@ -1,5 +1,8 @@
-import { isSandboxAvailable } from '@pagespace/lib/billing/sandbox-eligibility';
-import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { computeTierForDrive, isSandboxAvailable } from '@pagespace/lib/billing/sandbox-eligibility';
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { isDriveLead, type DriveRelationship } from '@pagespace/lib/permissions/drive-relationship';
+import { applyOpenDriveFloor } from '@pagespace/lib/permissions/open-drive-floor';
+import type { OpenRoleFloor } from '@pagespace/lib/organizations/policies-core';
 
 /**
  * Per-drive sandbox availability for THE REQUESTER: the payer's tier (the
@@ -11,9 +14,13 @@ import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
  * unit-testable without a database: `multi-drive/route.ts` supplies the DB
  * reads (accessible drives, the distinct set of their owners' rows, the
  * requester's edit-capable memberships) already done.
+ *
+ * WAL-9: an ORG drive's payer is the org, not its owner: it is advertised on the org's tier
+ * (the same `computeTierForDrive` every enforcement point resolves), never on the lead's own
+ * plan. Whether the org pool can pay is decided by the hold at run time, not advertised here.
  */
 export function computeSandboxEligibilityByDrive(
-  driveOwners: readonly { id: string; ownerId: string }[],
+  driveOwners: readonly { id: string; ownerId: string; orgId: string | null }[],
   ownerRows: readonly { id: string; subscriptionTier: string | null }[],
   actor: {
     userId: string;
@@ -21,15 +28,19 @@ export function computeSandboxEligibilityByDrive(
     editableDriveIds: ReadonlySet<string>;
     codeExecutionEnabled: boolean;
   },
+  /** SEAT-9 / WAL-8: the orgs of these drives that are lapsed — their drives offer no sandbox (review #2761). */
+  lapsedOrgIds: ReadonlySet<string>,
 ): Map<string, boolean> {
-  const tierByOwnerId = new Map(ownerRows.map((row) => [row.id, toSubscriptionTier(row.subscriptionTier)]));
+  const tierByOwnerId = new Map(ownerRows.map((row) => [row.id, toPersonalSubscriptionTier(row.subscriptionTier)]));
   return new Map(
-    driveOwners.map((drive) => [
-      drive.id,
-      actor.codeExecutionEnabled &&
-        isSandboxAvailable(tierByOwnerId.get(drive.ownerId) ?? 'free') &&
-        (drive.ownerId === actor.userId || actor.editableDriveIds.has(drive.id)),
-    ]),
+    driveOwners.map((drive) => {
+      return [
+        drive.id,
+        actor.codeExecutionEnabled &&
+          isSandboxAvailable(computeTierForDrive(drive, tierByOwnerId.get(drive.ownerId) ?? 'free', drive.orgId !== null && lapsedOrgIds.has(drive.orgId))) &&
+          (isDriveLead(actor.userId, drive) || actor.editableDriveIds.has(drive.id)),
+      ];
+    }),
   );
 }
 
@@ -40,10 +51,11 @@ export function computeSandboxEligibilityByDrive(
  * ADMINs always edit; a plain MEMBER edits; a MEMBER with a custom role
  * edits only when that role's driveWidePermissions grant canEdit explicitly
  * (an unresolvable role fails closed). Keyed strictly by (roleId, driveId)
- * so a role can never apply outside its own drive.
+ * so a role can never apply outside its own drive. POL-6: an implicit Open-drive
+ * member's org floor (`openDriveFloor`) lifts that answer to edit under an edit floor.
  */
 export function resolveEditableDriveIds(
-  membershipRows: readonly { driveId: string; role: string; customRoleId: string | null }[],
+  membershipRows: readonly { driveId: string; role: string; customRoleId: string | null; openDriveFloor: OpenRoleFloor | null }[],
   customRoleRows: readonly { id: string; driveId: string; driveWidePermissions: { canEdit?: boolean } | null }[],
 ): Set<string> {
   const driveWideEditByRole = new Map(
@@ -54,9 +66,23 @@ export function resolveEditableDriveIds(
       .filter((row) => {
         if (row.role === 'ADMIN') return true;
         if (row.role !== 'MEMBER') return false;
-        if (!row.customRoleId) return true;
-        return driveWideEditByRole.get(`${row.customRoleId}:${row.driveId}`) === true;
+        const canEdit = !row.customRoleId || driveWideEditByRole.get(`${row.customRoleId}:${row.driveId}`) === true;
+        return applyOpenDriveFloor({ canView: true, canEdit, canShare: false, canDelete: false }, row.openDriveFloor, { isPrivate: false })?.canEdit === true;
       })
       .map((row) => row.driveId),
+  );
+}
+
+/**
+ * The requester's effective memberships (loadDriveRelationships: accepted rows only, org
+ * Owner/Admin power as ADMIN, an implicit Open member with the drive's default role, stale org
+ * rows counting for nothing) as the rows resolveEditableDriveIds reads. The lead has no row: its
+ * edit access is the ownership check in computeSandboxEligibilityByDrive.
+ */
+export function membershipRowsOf(
+  relationships: ReadonlyMap<string, DriveRelationship>,
+): { driveId: string; role: string; customRoleId: string | null; openDriveFloor: OpenRoleFloor | null }[] {
+  return [...relationships].flatMap(([driveId, { membership }]) =>
+    membership ? [{ driveId, role: membership.role, customRoleId: membership.customRoleId, openDriveFloor: membership.openDriveFloor }] : [],
   );
 }

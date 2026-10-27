@@ -1,4 +1,5 @@
 import { describe, test, beforeEach, vi } from 'vitest';
+import type { FormEvent } from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SWRConfig } from 'swr';
@@ -288,6 +289,51 @@ describe('PageWebhooksDialog', () => {
       should: 'deliver both parked one-time secrets in order, one reveal at a time',
       actual: { firstShown: firstShown !== null, secondShown: secondShown !== null },
       expected: { firstShown: true, secondShown: true },
+    });
+  });
+
+  test('creating a webhook does not submit an ancestor form', async () => {
+    // The dialog renders through a Radix portal, so its form is detached in the
+    // DOM — but React propagates synthetic events along the REACT tree, so a
+    // submit from inside the portal still reaches an ancestor `<form onSubmit>`.
+    // PageAgentSettingsTab became such an ancestor when the agent's Settings tab
+    // took over the webhooks entry point, and without stopPropagation, creating
+    // a webhook also PATCHed the agent config with whatever unsaved edits that
+    // form was holding.
+    vi.mocked(fetchWithAuth).mockImplementation(async () =>
+      listResponse(200, { webhooks: [] }),
+    );
+    vi.mocked(post).mockResolvedValue({
+      webhook: remoteWebhook(),
+      webhookSecret: 'whsec_created',
+    });
+    const outerSubmit = vi.fn((e: FormEvent) => e.preventDefault());
+
+    render(
+      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+        <form onSubmit={outerSubmit}>
+          <PageWebhooksDialog open onOpenChange={() => {}} pageId={PAGE_ID} pageType="AI_CHAT" />
+        </form>
+      </SWRConfig>,
+    );
+
+    await screen.findByPlaceholderText(/Webhook name/);
+    await userEvent.type(screen.getByPlaceholderText(/Webhook name/), 'Deploys');
+    await userEvent.click(screen.getByRole('button', { name: /Create webhook/ }));
+
+    await waitFor(() => screen.getByText('whsec_created'));
+
+    assert({
+      given: 'a webhook created from a dialog rendered inside another form',
+      should: 'POST the webhook without ever submitting the ancestor form',
+      actual: {
+        created: vi.mocked(post).mock.calls[0]?.[0],
+        ancestorSubmits: outerSubmit.mock.calls.length,
+      },
+      expected: {
+        created: `/api/pages/${PAGE_ID}/webhooks`,
+        ancestorSubmits: 0,
+      },
     });
   });
 

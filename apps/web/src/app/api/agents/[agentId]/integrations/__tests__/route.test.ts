@@ -32,6 +32,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserEditPage: vi.fn().mockResolvedValue(true),
 }));
 
@@ -55,6 +56,7 @@ import { GET, POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { builtinProviders } from '@pagespace/lib/integrations/providers/builtin-providers';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockUserId = 'user_123';
 const mockAgentId = 'agent-1';
@@ -354,6 +356,14 @@ describe('POST /api/agents/[agentId]/integrations default bundle', () => {
     mockCreateGrant.mockImplementation(async (_db: unknown, input: Record<string, unknown>) => ({ id: 'grant-1', ...input }));
   });
 
+  it('POL-11 refuses 403 org_policy to grant a connection the org allowlist suspended, creating nothing', async () => {
+    mockGetConnectionWithProvider.mockResolvedValue({ ...githubConnection, suspendedByPolicy: 'integrations' });
+    const response = await POST(postRequest({ connectionId: 'conn-1' }), { params: Promise.resolve({ agentId: mockAgentId }) });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: 'org_policy', policy: 'integrationsAllowlist' });
+    expect(mockCreateGrant).not.toHaveBeenCalled();
+  });
+
   it('defaults allowedTools to the recommended bundle when none is provided', async () => {
     const response = await POST(postRequest({ connectionId: 'conn-1' }), {
       params: Promise.resolve({ agentId: mockAgentId }),
@@ -470,4 +480,13 @@ describe('POST /api/agents/[agentId]/integrations default bundle', () => {
       expect.objectContaining({ allowedTools: ['proxy_read'] })
     );
   });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    canPrincipalEditPage: (auth: { userId: string }, resourceId: string) => permissions.canUserEditPage(credentialActor(auth.userId, null), resourceId),
+  };
 });

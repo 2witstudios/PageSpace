@@ -88,7 +88,24 @@ type DegradeReason =
    * exhaustion, connection reset), never resolving to `acquired`/`lock_busy` at all. Distinct
    * from `lock_busy`: nothing is contending for the lock, the lock connection is just broken.
    */
-  | 'lock_error';
+  | 'lock_error'
+  /**
+   * `run` started under the lock, but the lock connection's backend died while it ran
+   * (`acquired` with `lockLost`). Postgres dropped the session lock with it, so the rest of `run`
+   * was not serialized. `run` has already run, exactly once — it is NOT re-invoked.
+   */
+  | 'lock_lost';
+
+/** The shared "never silent" telemetry for every way this call ends up unserialized. */
+function reportDegraded(metricInfo: { conversationId: string; attemptsMade: number; reason: DegradeReason }, errorMessage?: string): void {
+  logPerformance('ai_send.advisory_lock_degraded', 1, 'count', metricInfo);
+  loggers.ai.warn(
+    metricInfo.reason === 'lock_lost'
+      ? 'start-generation-exclusive: advisory lock lost while running (degraded, best-effort serialization)'
+      : 'start-generation-exclusive: advisory lock unavailable, proceeding unlocked (degraded, best-effort serialization)',
+    { ...metricInfo, error: errorMessage },
+  );
+}
 
 function degradeToUnlocked<T>(
   info: {
@@ -105,11 +122,7 @@ function degradeToUnlocked<T>(
 
   // Rail 8: never silent. Named metric + structured warn, always — best-effort serialization
   // gives up here; availability wins over serialization, a send must never block on this lock.
-  logPerformance('ai_send.advisory_lock_degraded', 1, 'count', metricInfo);
-  loggers.ai.warn(
-    'start-generation-exclusive: advisory lock unavailable, proceeding unlocked (degraded, best-effort serialization)',
-    { ...metricInfo, error: errorMessage },
-  );
+  reportDegraded(metricInfo, errorMessage);
 
   return run().then((result) => ({ outcome: 'degraded', result }));
 }
@@ -158,6 +171,11 @@ export async function startGenerationExclusive<T>(
     }
 
     if (attempt.outcome === 'acquired') {
+      if (attempt.lockLost) {
+        // `run` already ran (once); only report that its tail ran unserialized.
+        reportDegraded({ conversationId, attemptsMade, reason: 'lock_lost' });
+        return { outcome: 'degraded', result: attempt.result };
+      }
       return { outcome: 'locked', result: attempt.result };
     }
 

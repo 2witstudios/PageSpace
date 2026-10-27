@@ -1,3 +1,4 @@
+import { canPrincipalViewPage, isPrincipalDriveMember } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db';
 import { inArray } from '@pagespace/db/operators';
@@ -5,7 +6,7 @@ import { commands } from '@pagespace/db/schema/commands';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { canUserViewPage, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+
 import { BUILTIN_COMMANDS } from '@pagespace/lib/commands/command-core';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
@@ -102,7 +103,7 @@ export async function GET(request: Request) {
         const viewerCanSeeCommand = row.userId
           ? row.userId === userId
           : row.driveId
-            ? await isUserDriveMember(userId, row.driveId)
+            ? await isPrincipalDriveMember(auth, row.driveId)
             : false;
 
         if (!viewerCanSeeCommand) {
@@ -113,7 +114,7 @@ export async function GET(request: Request) {
         const entryPageTrashed = !row.entryPage || row.entryPage.isTrashed;
         const viewerCanViewEntryPage = entryPageTrashed
           ? false
-          : await canUserViewPage(userId, row.entryPageId);
+          : await canPrincipalViewPage(auth, row.entryPageId);
 
         results[id] = {
           state: 'ok',

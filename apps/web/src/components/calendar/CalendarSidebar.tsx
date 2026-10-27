@@ -98,6 +98,16 @@ export function CalendarSidebar({
             )}
           </span>
           <span className="text-sm truncate">{cal.name}</span>
+          {/*
+            The selected calendar is where New puts an event. That was only a
+            tint before; a viewer had no way to know the row meant anything
+            beyond visibility.
+          */}
+          {onSelectCalendar && cal.key === selectedKey && (
+            <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">
+              New events
+            </span>
+          )}
         </div>
       ))}
 

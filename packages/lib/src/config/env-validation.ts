@@ -132,10 +132,26 @@ export const serverEnvSchema = z
     // Optional OAuth state
     OAUTH_STATE_SECRET: z.string().min(32).optional(),
     APPLE_SERVICE_ID: z.string().min(1).optional(),
+    // Sign in with Apple token revocation (TN3194) — all optional; absent means the
+    // token exchange is skipped and deletion falls back to manual instructions.
+    APPLE_TEAM_ID: z.string().min(1).optional(),
+    APPLE_SIGN_IN_KEY_ID: z.string().min(1).optional(),
+    APPLE_SIGN_IN_PRIVATE_KEY: z.string().min(1).optional(),
 
     // Optional Stripe
     STRIPE_SECRET_KEY: z.string().min(1).optional(),
     STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
+
+    // Optional App Store In-App Purchase (billing/apple/apple-verify). Production
+    // purchases verify only once APPLE_IAP_APP_APPLE_ID is set.
+    // Blank values are allowed and read as unset, exactly as appleVerifierConfigFromEnv reads
+    // them (a declared-but-blank optional must never fail boot validation).
+    APPLE_IAP_BUNDLE_ID: z.string().optional(),
+    APPLE_IAP_APP_APPLE_ID: z.string().regex(/^\s*\d*\s*$/).optional(),
+    APPLE_IAP_ALLOW_SANDBOX: z.string().optional(),
+    APPLE_IAP_ONLINE_CHECKS: z.string().optional(),
+    APPLE_IAP_SANDBOX_MAX_FUNDINGS: z.string().regex(/^\s*\d*\s*$/).optional(),
+    APPLE_IAP_SANDBOX_FUNDED_USER_IDS: z.string().optional(),
 
     // Optional real-time / cron / cookie
     REALTIME_BROADCAST_SECRET: z.string().min(1).optional(),

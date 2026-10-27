@@ -52,7 +52,8 @@ vi.mock('@/lib/ai/core/timestamp-utils', () => ({
 
 vi.mock('@pagespace/db/db', async () => {
   const { createFixtureSelect } = await import('./task-fixture-db');
-  return { db: { select: createFixtureSelect(h.tableRows) } };
+  const select = createFixtureSelect(h.tableRows);
+  return { db: { select, selectDistinct: select } };
 });
 
 vi.mock('@pagespace/db/operators', async () => {
@@ -60,15 +61,38 @@ vi.mock('@pagespace/db/operators', async () => {
   return fixtureOperators;
 });
 
+// The one member-drive set (org-aware).
+vi.mock('@pagespace/lib/permissions/member-drives', () => ({
+  getMemberDriveIds: vi.fn(async () => []),
+}));
+
 vi.mock('@pagespace/lib/permissions/accessible-page-ids', () => ({
   accessiblePageIds: vi.fn(() => Promise.resolve(h.accessiblePageIds)),
 }));
 
 vi.mock('@pagespace/db/schema/auth', () => ({
-  users: { id: 'id', timezone: 'timezone' },
+  users: { id: 'id', timezone: 'timezone', name: 'name' },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', driveId: 'driveId', isTrashed: 'isTrashed', updatedAt: 'updatedAt', title: 'title' },
+  drives: { id: 'id', name: 'name' },
+}));
+// Home-signal tables the route now also queries (compute-signals.ts). Not
+// seeded by these task-count-focused tests — an unmocked real schema import
+// here would throw on the first column access (e.g. `drives.id` above), so
+// every table the signal queries touch needs at least a column-name mock,
+// even where these tests never populate rows for it.
+vi.mock('@pagespace/db/schema/notifications', () => ({
+  notifications: { userId: 'userId', type: 'type', isRead: 'isRead', pageId: 'pageId', triggeredByUserId: 'triggeredByUserId', createdAt: 'createdAt' },
+}));
+vi.mock('@pagespace/db/schema/page-views', () => ({
+  userPageViews: { userId: 'userId', pageId: 'pageId', viewedAt: 'viewedAt' },
+}));
+vi.mock('@pagespace/db/schema/versioning', () => ({
+  pageVersions: { pageId: 'pageId', driveId: 'driveId', createdAt: 'createdAt', createdBy: 'createdBy' },
+}));
+vi.mock('@pagespace/db/schema/agent-workspaces', () => ({
+  agentWorkspaces: { id: 'id', ownerId: 'ownerId', driveId: 'driveId', endedAt: 'endedAt' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
   driveMembers: { driveId: 'driveId', userId: 'userId', acceptedAt: 'acceptedAt' },
@@ -104,6 +128,7 @@ import { driveMembers } from '@pagespace/db/schema/members';
 import { taskItems } from '@pagespace/db/schema/tasks';
 import { pulseSummaries } from '@pagespace/db/schema/dashboard';
 import { dmConversations } from '@pagespace/db/schema/social';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 
 const USER_ID = 'user-1';
 const PAGE_ID = 'page-1';
@@ -140,6 +165,25 @@ function setupTables(taskRows: Record<string, unknown>[], accessiblePageIds: str
   // Every other table (calendarEvents, eventAttendees, pages) defaults to [] via
   // `tableRows.get(table) ?? []` in the fixture builder — no entry needed.
 }
+
+describe('GET /api/pulse — the drives it scopes to (B7c)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
+  });
+
+  it('DRV-5 (partial) X-6 (partial) scopes to the org-aware member-drive set, not a drive_members read of its own: a stale org row in the table widens nothing', async () => {
+    setupTables([], []);
+    // A stale source='org' row the old inline read would have counted.
+    h.tableRows.set(driveMembers, [{ driveId: 'drive-stale', userId: USER_ID, acceptedAt: new Date('2024-01-01'), source: 'org' }]);
+    vi.mocked(getMemberDriveIds).mockResolvedValueOnce(['drive-open-org']);
+
+    const response = await GET(new Request('https://example.com/api/pulse'));
+
+    expect(response.status).toBe(200);
+    expect(getMemberDriveIds).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), { includeTrashed: true });
+  });
+});
 
 describe('GET /api/pulse — task counts scoped to accessible pages', () => {
   beforeEach(() => {

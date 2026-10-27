@@ -25,6 +25,9 @@ beforeEach(() => {
   stateResponsePath = join(binDir, 'state-response.json');
 
   writeFakeExecutable('docker', 'exit 0');
+  // The poll loop sleeps 10s between Machines API reads; the deadline is counted in
+  // loop iterations, so a no-op sleep exercises the full 900s budget instantly.
+  writeFakeExecutable('sleep', 'exit 0');
 
   writeFakeExecutable(
     'flyctl',
@@ -32,7 +35,7 @@ beforeEach(() => {
 case "$*" in
   "machine run"*) echo "Machine ID: fake0001234"; exit 0 ;;
   "machine destroy"*) exit 0 ;;
-  "machine logs"*) exit 0 ;;
+  "logs"*) exit 0 ;;
   *) exit 0 ;;
 esac
 `
@@ -65,19 +68,25 @@ function runScript() {
       ...process.env,
       PATH: `${binDir}:${process.env.PATH}`,
       FLY_API_TOKEN: 'fake-token',
+      DIAGNOSTICS_DIR: join(binDir, 'diagnostics'),
     },
     encoding: 'utf-8',
   });
 }
 
-describe('run-fly-migration.sh — machine exit-code handling', () => {
+// 90 polls with stubbed sleep, each forking jq — slower than vitest's default 5s.
+describe('run-fly-migration.sh — machine exit-code handling', { timeout: 60_000 }, () => {
   it('given the machine reaches stopped with exit code 0, should report success', () => {
     writeFileSync(
       stateResponsePath,
       JSON.stringify({
         id: 'fake0001234',
         state: 'stopped',
-        events: [{ type: 'exit', request: { exit_event: { exit_code: 0, exit_signal: 0 } } }],
+        events: [{
+          type: 'exit',
+          timestamp: 1,
+          request: { exit_event: { exited_at: '2026-10-15T18:40:30.498Z', exit_code: 0, signal: -1 } },
+        }],
       })
     );
 
@@ -93,17 +102,22 @@ describe('run-fly-migration.sh — machine exit-code handling', () => {
       JSON.stringify({
         id: 'fake0001234',
         state: 'stopped',
-        events: [{ type: 'exit', request: { exit_event: { exit_code: 1, exit_signal: 0 } } }],
+        events: [{
+          type: 'exit',
+          timestamp: 1,
+          request: { exit_event: { exited_at: '2026-10-15T18:40:30.498Z', exit_code: 1, signal: -1 } },
+        }],
       })
     );
 
     const result = runScript();
 
     expect(result.status).not.toBe(0);
+    expect(result.stdout).toContain('exit evidence indicates failure');
     expect(result.stdout).not.toContain('Migrations complete');
   });
 
-  it('given the machine reaches stopped with a missing exit code, should treat it as a failure (fail closed)', () => {
+  it('given the machine reaches stopped but exit evidence never arrives, should time out as a failure (fail closed)', () => {
     writeFileSync(
       stateResponsePath,
       JSON.stringify({
@@ -116,6 +130,8 @@ describe('run-fly-migration.sh — machine exit-code handling', () => {
     const result = runScript();
 
     expect(result.status).not.toBe(0);
+    expect(result.stdout).toContain('Exit evidence pending');
+    expect(result.stdout).toContain('timed out after 900s');
     expect(result.stdout).not.toContain('Migrations complete');
   });
 });

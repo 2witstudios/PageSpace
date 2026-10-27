@@ -1,7 +1,7 @@
 import { describe, test, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { SWRConfig, mutate as globalMutate } from 'swr';
+import { SWRConfig, useSWRConfig } from 'swr';
 import { assert } from '@/stores/__tests__/riteway';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { CalendarEvent, CalendarEventAttendee } from '../calendar-types';
@@ -96,10 +96,19 @@ interface RenderOpts {
   onSave?: (data: unknown) => Promise<void>;
 }
 
+// The modal renders inside its own SWR cache (`provider`), which the global `mutate` never reaches, so a
+// test that wants a refetch must use the `mutate` bound to THAT cache. This child hands it out.
+let scopedMutate: ReturnType<typeof useSWRConfig>['mutate'] | null = null;
+const CaptureScopedMutate = () => {
+  scopedMutate = useSWRConfig().mutate;
+  return null;
+};
+
 const renderModal = (opts: RenderOpts = {}) => {
   const onSave = opts.onSave ?? (async () => undefined);
   return render(
     <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+      <CaptureScopedMutate />
       <EventModal
         isOpen
         onClose={() => {}}
@@ -317,9 +326,19 @@ describe('EventModal — agent trigger disclosure', () => {
     const onSave = vi.fn<(data: unknown) => Promise<void>>(async () => undefined);
     renderModal({ context: 'user', driveId: undefined, event: null, onSave });
 
-    // Title is required
+    // Title is required. The title is setup here, not the behaviour under test, so it goes in as one
+    // paste: still a real focus + input event through user-event, but one React commit of this
+    // ~1.2k-line modal instead of ten. Typing it key by key cost ~0.4s idle and ~2s under coverage
+    // on a saturated runner, which pushed this test past the 5s timeout on CI.
     const titleInput = await screen.findByLabelText(/Title/i);
-    await userEvent.type(titleInput, 'Solo lunch');
+    await userEvent.click(titleInput);
+    await userEvent.paste('Solo lunch');
+    assert({
+      given: 'the title pasted into the focused title input',
+      should: 'hold the full title before Create is clicked',
+      actual: (titleInput as HTMLInputElement).value,
+      expected: 'Solo lunch',
+    });
 
     await userEvent.click(screen.getByRole('button', { name: /^Create$/i }));
 
@@ -346,17 +365,23 @@ describe('EventModal — agent trigger disclosure', () => {
     )) as HTMLTextAreaElement;
 
     await userEvent.clear(promptInput);
-    await userEvent.type(promptInput, 'in-flight typing');
+    // `delay: null` skips the macrotask wait user-event inserts between keystrokes: the text still
+    // arrives key by key through the same input events and React commits, it just stops yielding to
+    // the event loop sixteen times, which is what made this test cost seconds under CI contention.
+    await userEvent.type(promptInput, 'typed', { delay: null });
 
     assert({
       given: 'the user has typed into the prompt textarea while the modal is open',
       should: 'show the typed text (sanity check before refetch)',
       actual: promptInput.value,
-      expected: 'in-flight typing',
+      expected: 'typed',
     });
 
+    // The remote copy CHANGES, so a refetch that were not paused by the editing-store registration
+    // would hydrate the form with it and clobber the typed text; an identical payload would not.
+    cannedFetch({ trigger: { ...remoteTrigger(), prompt: 'remote-prompt-edited-elsewhere' } });
     await act(async () => {
-      await globalMutate(TRIGGER_URL);
+      await scopedMutate?.(TRIGGER_URL);
       await new Promise((r) => setTimeout(r, 50));
     });
 
@@ -364,7 +389,7 @@ describe('EventModal — agent trigger disclosure', () => {
       given: 'a remote calendar broadcast arrives while the modal is open with unsaved prompt text',
       should: 'preserve the in-progress prompt rather than clobbering it with the refetched value',
       actual: promptInput.value,
-      expected: 'in-flight typing',
+      expected: 'typed',
     });
   });
 });

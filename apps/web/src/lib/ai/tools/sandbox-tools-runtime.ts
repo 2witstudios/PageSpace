@@ -51,19 +51,24 @@ import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
 import { gateSandboxToolCall } from '@pagespace/lib/services/sandbox/tool-gate';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { computeTierForDrive } from '@pagespace/lib/billing/sandbox-eligibility';
 import { createSandboxTools, type ResolveSandboxContext, type SandboxGate } from './sandbox-tools';
 import {
   findSessionForConversation,
   provisionSessionSandbox,
   measureWarmSessionStorage,
   ensureGlobalSandboxSession,
+  ensureDriveSessionForConversation,
   type AgentSessionRecord,
   type EnsureGlobalSandboxSessionFailureReason,
 } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import { findOwnImagoHomeDriveId } from '@/lib/ai/core/imago-agent-context';
 import type { ToolExecutionContext } from '../core/types';
 import { notifyShellAgentActivity } from '@/lib/websocket/socket-utils';
+import { isOrgLapsedForDrive } from '@pagespace/lib/organizations/status';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 // The Sprites client is a process-wide stateless singleton, built lazily so
 // importing this module does no SDK work at load.
@@ -151,7 +156,7 @@ type ResolveOrProvisionResult =
  */
 async function resolveOrProvisionSession(
   conversationId: string,
-  userId: string,
+  actor: AccessActor,
 ): Promise<ResolveOrProvisionResult> {
   const existing = await findSessionForConversation(conversationId);
   if (existing) return { ok: true, session: existing };
@@ -164,15 +169,48 @@ async function resolveOrProvisionSession(
   // shareable with sibling panes exactly like any other), not a second
   // sandbox-only mechanism.
   const conversation = await conversationRepository.getConversation(conversationId);
-  if (conversation?.type !== 'global') return { ok: false, attempted: false };
+  if (conversation?.type === 'global') {
+    const ensured = await ensureGlobalSandboxSession(conversationId, actor);
+    if (ensured.ok) return { ok: true, session: ensured.session };
+    return { ok: false, attempted: true, reason: ensured.reason };
+  }
 
-  const ensured = await ensureGlobalSandboxSession(conversationId, userId);
-  if (ensured.ok) return { ok: true, session: ensured.session };
-  return { ok: false, attempted: true, reason: ensured.reason };
+  // The owner's own Imago conversation replaces the Global Assistant's
+  // (IMG-10.10), so it gets the same automatic workspace — in the Home drive
+  // the agent lives in, which the owner pays for. Anyone else's Imago
+  // conversation, and every other page conversation, keeps the explicit
+  // "New session" spawn.
+  if (conversation?.type === 'page' && conversation.contextId && conversation.userId === actor.userId) {
+    const homeDriveId = await findOwnImagoHomeDriveId(actor.userId, conversation.contextId);
+    if (homeDriveId) {
+      const ensured = await ensureDriveSessionForConversation(conversationId, actor, homeDriveId, 'Imago');
+      if (ensured.ok) return { ok: true, session: ensured.session };
+      return { ok: false, attempted: true, reason: ensured.reason };
+    }
+  }
+  return { ok: false, attempted: false };
+}
+
+/**
+ * How a run finds the session its sandbox belongs to. The chat tools resolve it
+ * from the conversation (`resolveOrProvisionSession`); a caller that already
+ * holds the session row (the workspace exec route) injects a constant. ONE
+ * resolver feeds both `acquireSandbox` and `resolveBillingSession`, so billing
+ * and execution can never disagree about which session they act on.
+ */
+type ResolveRunSession = (conversationId: string, actor: AccessActor) => Promise<ResolveOrProvisionResult>;
+
+interface BuildRealSandboxRunDepsOptions {
+  /** The actor the call's gate authorized: provisioning re-checks code execution as them (sign-in policy included). */
+  actor: AccessActor;
+  resolveSession?: ResolveRunSession;
 }
 
 /** Wire the real lib deps for the runners (session-anchored acquire + real Sprites driver). */
-export function buildRealSandboxRunDeps(): SandboxRunDeps {
+export function buildRealSandboxRunDeps({
+  actor,
+  resolveSession = resolveOrProvisionSession,
+}: BuildRealSandboxRunDepsOptions): SandboxRunDeps {
   return {
     isEnabled: isCodeExecutionEnabled,
     // The session-anchored acquisition: resolve the conversation's SESSION row,
@@ -198,7 +236,9 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
       // as a blanket invariant the auto-provisioning below it visibly
       // contradicts, which is exactly the kind of drift that gets the new
       // behavior "fixed" back out by a future reader trusting the comment).
-      const resolved = await resolveOrProvisionSession(conversationId, input.userId);
+      // The run's user must be the actor its gate authorized; anything else refuses.
+      if (input.userId !== actor.userId) return { ok: false, reason: 'no_drive_access' };
+      const resolved = await resolveSession(conversationId, actor);
       if (!resolved.ok) {
         if (!resolved.attempted) return { ok: false, reason: 'no_session' };
         return { ok: false, reason: 'provision_failed', cause: resolved.reason };
@@ -211,7 +251,7 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
       const guardrail = checkSessionRuntimeGuardrail({ workspaceId: row.id, now: nowMs });
       if (!guardrail.allowed) return { ok: false, reason: guardrail.reason };
 
-      const provisioned = await provisionSessionSandbox(row, input.userId);
+      const provisioned = await provisionSessionSandbox(row, actor);
       if (!provisioned.ok) {
         if (provisioned.reason === 'denied') {
           // `not_authorized` is the capability denial the runners already speak
@@ -367,8 +407,8 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
     // findings — P1, PR #2314, both rounds: session_limit_reached fell
     // through unmetered first, then spawn_failed did too).
     resolveBillingSession: async (ctx) => {
-      if (!ctx.conversationId) return null;
-      const resolved = await resolveOrProvisionSession(ctx.conversationId, ctx.userId);
+      if (!ctx.conversationId || ctx.userId !== actor.userId) return null;
+      const resolved = await resolveSession(ctx.conversationId, actor);
       if (resolved.ok) {
         const row = resolved.session;
         return { workspaceId: row.id, driveId: row.driveId, ownerId: row.ownerId };
@@ -409,8 +449,10 @@ function stampTurnId(context: ToolExecutionContext | undefined): string | undefi
  * function can be unit-tested without a real database connection.
  */
 export interface ResolveSandboxActorContextDeps {
-  findDrive: (driveId: string) => Promise<{ ownerId: string } | undefined>;
+  findDrive: (driveId: string) => Promise<{ ownerId: string; orgId: string | null } | undefined>;
   findPageDriveId: (pageId: string) => Promise<string | undefined>;
+  /** The Home drive of `userId`'s own Imago agent `pageId`, else null (IMG-10.10). */
+  findOwnImagoHomeDriveId: (userId: string, pageId: string) => Promise<string | null>;
   findUser: (userId: string) => Promise<{ subscriptionTier: string | null } | undefined>;
   getActorInfo: (userId: string) => Promise<{ actorEmail: string; actorDisplayName?: string }>;
   /** The conversation's bound session (null = unbound) — the payer source for GLOBAL conversations. */
@@ -421,7 +463,7 @@ export interface ResolveSandboxActorContextDeps {
 
 const defaultResolveDeps: ResolveSandboxActorContextDeps = {
   findDrive: (driveId) =>
-    db.query.drives.findFirst({ where: eq(drives.id, driveId), columns: { ownerId: true } }),
+    db.query.drives.findFirst({ where: eq(drives.id, driveId), columns: { ownerId: true, orgId: true } }),
   findPageDriveId: async (pageId) => {
     const row = await db.query.pages.findFirst({
       where: eq(pages.id, pageId),
@@ -429,6 +471,7 @@ const defaultResolveDeps: ResolveSandboxActorContextDeps = {
     });
     return row?.driveId ?? undefined;
   },
+  findOwnImagoHomeDriveId,
   findUser: (userId) =>
     db.query.users.findFirst({ where: eq(users.id, userId), columns: { subscriptionTier: true } }),
   getActorInfo,
@@ -486,13 +529,21 @@ export function createResolveSandboxActorContext(
     } else if (chatSourceType === 'global') {
       sessionOwnerId = userId;
     } else {
-      driveId =
-        context?.locationContext?.currentDrive?.id ??
-        (context?.chatSource?.agentPageId
-          ? await deps.findPageDriveId(context.chatSource.agentPageId)
-          : undefined);
-      if (!driveId) {
-        return { error: 'Code execution requires an active drive.' };
+      // The owner's own Imago conversation: provisioning mints its session in
+      // the agent's Home drive (`resolveOrProvisionSession`), whatever drive
+      // the user is looking at — so that is the payer, never the location.
+      const agentPageId = context?.chatSource?.agentPageId;
+      const imagoHomeDriveId = agentPageId ? await deps.findOwnImagoHomeDriveId(userId, agentPageId) : null;
+      if (imagoHomeDriveId) {
+        driveId = imagoHomeDriveId;
+        sessionOwnerId = userId;
+      } else {
+        driveId =
+          context?.locationContext?.currentDrive?.id ??
+          (agentPageId ? await deps.findPageDriveId(agentPageId) : undefined);
+        if (!driveId) {
+          return { error: 'Code execution requires an active drive.' };
+        }
       }
     }
 
@@ -525,8 +576,10 @@ export function createResolveSandboxActorContext(
       actorDisplayName: actorInfo.actorDisplayName,
       aiProvider: context?.aiProvider,
       aiModel: context?.aiModel,
-      tier: toSubscriptionTier(payerRow?.subscriptionTier),
+      // WAL-9: an org drive's compute runs on the org's tier, not the lead's own plan.
+      tier: computeTierForDrive(drive, toPersonalSubscriptionTier(payerRow?.subscriptionTier), await isOrgLapsedForDrive(drive)),
       turnId,
+      ...(context?.creditSpend?.automationRef ? { automationRef: context.creditSpend.automationRef } : {}),
     };
 
     // driveId present (a page agent's drive, or a global conversation bound
@@ -560,9 +613,12 @@ export const resolveSandboxActorContext: ResolveSandboxContext =
   createResolveSandboxActorContext();
 
 /** The shared call-time gate binding — kill-switch, canRunCode, quota preflight. */
-export const productionSandboxGate: SandboxGate = (ctx) =>
-  gateSandboxToolCall({
-    userId: ctx.userId,
+export const productionSandboxGate: SandboxGate = (ctx, actor) =>
+  // The resolved sandbox context and the driving actor must name the same person; anything else refuses.
+  actor.userId !== ctx.userId
+    ? Promise.resolve({ ok: false, reason: 'error', error: 'Code execution could not be authorized.' })
+    : gateSandboxToolCall({
+    actor,
     driveId: ctx.driveId,
     ownerId: ctx.ownerId,
     tenantId: ctx.tenantId,
@@ -583,7 +639,7 @@ export function buildSandboxTools(): {
   editFile: Tool;
 } {
   return createSandboxTools({
-    runDeps: buildRealSandboxRunDeps(),
+    runDeps: (actor) => buildRealSandboxRunDeps({ actor }),
     resolveContext: resolveSandboxActorContext,
     gate: productionSandboxGate,
   });

@@ -137,7 +137,7 @@ vi.mock('@/lib/auth/native-invite-acceptance', () => ({
     kind: null,
     invitedDriveId: null,
     invitedPageId: null,
-    connectionId: null,
+    connectionId: null, invitedOrgId: null, orgLandingPath: null,
   }),
   consumeAllInvitesForEmail: vi.fn().mockResolvedValue({
     drivesAccepted: 0,
@@ -146,7 +146,12 @@ vi.mock('@/lib/auth/native-invite-acceptance', () => ({
   }),
 }));
 
+vi.mock('@pagespace/lib/auth/apple/capture-apple-refresh-token', () => ({
+  captureAppleRefreshToken: vi.fn().mockResolvedValue('stored'),
+}));
+
 import { POST } from '../route';
+import { captureAppleRefreshToken } from '@pagespace/lib/auth/apple/capture-apple-refresh-token';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { verifyAppleIdToken } from '@pagespace/lib/auth/oauth-utils';
@@ -249,7 +254,7 @@ describe('POST /api/auth/apple/callback', () => {
       kind: null,
       invitedDriveId: null,
       invitedPageId: null,
-      connectionId: null,
+      connectionId: null, invitedOrgId: null, orgLandingPath: null,
     });
     vi.mocked(consumeAllInvitesForEmail).mockResolvedValue({
       drivesAccepted: 0,
@@ -412,6 +417,7 @@ describe('POST /api/auth/apple/callback', () => {
       // Desktop platform should use device info from state
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
+          authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
           deviceId: 'dev-abc',
           deviceName: 'My Mac',
         })
@@ -430,6 +436,15 @@ describe('POST /api/auth/apple/callback', () => {
       const location = response.headers.get('Location')!;
 
       expect(location).toContain('/dashboard');
+    });
+
+    it('SEC-2 (partial) an Apple callback records single-factor evidence on the session it creates (D-OW-45)', async () => {
+      const before = Date.now();
+      await POST(createCallbackRequest({ id_token: 'valid-token', state: createSignedState({ platform: 'web' }) }));
+
+      const [options] = vi.mocked(sessionService.createSession).mock.calls[0];
+      expect(options.authentication).toEqual({ authenticatedAtMs: expect.any(Number), assurance: 'single_factor' });
+      expect(options.authentication?.authenticatedAtMs).toBeGreaterThanOrEqual(before);
     });
   });
 
@@ -979,6 +994,7 @@ describe('POST /api/auth/apple/callback', () => {
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
+          authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
           deviceName: 'TestBrowser/1.0',
         })
       );
@@ -1022,6 +1038,7 @@ describe('POST /api/auth/apple/callback', () => {
       // Should use createId() as fallback for deviceId
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
+          authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
           deviceId: 'mock-cuid',
           platform: 'ios',
         })
@@ -1244,7 +1261,7 @@ describe('POST /api/auth/apple/callback', () => {
         kind: null,
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
       vi.mocked(consumeAllInvitesForEmail).mockResolvedValue({
         drivesAccepted: 0,
@@ -1258,7 +1275,7 @@ describe('POST /api/auth/apple/callback', () => {
         kind: 'drive',
         invitedDriveId: 'drive-apple-789',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
       const state = createSignedState({
         returnUrl: '/dashboard',
@@ -1289,7 +1306,7 @@ describe('POST /api/auth/apple/callback', () => {
         kind: 'drive',
         invitedDriveId: 'drive-existing-apple',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
       const state = createSignedState({
         returnUrl: '/dashboard',
@@ -1335,7 +1352,7 @@ describe('POST /api/auth/apple/callback', () => {
         kind: null,
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
         inviteError: 'EMAIL_MISMATCH',
       });
 
@@ -1358,7 +1375,7 @@ describe('POST /api/auth/apple/callback', () => {
         kind: null,
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
         inviteError: 'TOKEN_CONSUMED',
       });
 
@@ -1379,7 +1396,7 @@ describe('POST /api/auth/apple/callback', () => {
         kind: 'drive',
         invitedDriveId: 'drive-desktop-apple',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const state = createSignedState({
@@ -1402,7 +1419,7 @@ describe('POST /api/auth/apple/callback', () => {
         kind: 'drive',
         invitedDriveId: 'drive-ios-apple',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const state = createSignedState({
@@ -1422,4 +1439,105 @@ describe('POST /api/auth/apple/callback', () => {
     });
   });
 
+  describe('Apple refresh token capture (TN3194)', () => {
+    beforeEach(() => {
+      process.env.APPLE_REDIRECT_URI = 'https://example.com/api/auth/apple/callback';
+      vi.mocked(captureAppleRefreshToken).mockResolvedValue('stored');
+      vi.mocked(verifyAppleIdToken).mockResolvedValue({
+        success: true,
+        // @ts-expect-error - partial mock data
+        userInfo: { providerId: 'apple-sub-123', email: 'test@example.com', emailVerified: true },
+        audience: 'ai.pagespace.web',
+      });
+    });
+
+    const webRequest = (fields: Record<string, string> = {}) =>
+      createCallbackRequest({
+        id_token: 'valid-token',
+        state: createSignedState({ returnUrl: '/dashboard', platform: 'web' }),
+        ...fields,
+      });
+
+    it('given Apple posts a code, should capture the refresh token with the verified client and the flow\'s redirect_uri', async () => {
+      const response = await POST(webRequest({ code: 'apple-web-code' }));
+
+      expect(response.status).toBe(307);
+      expect(response.headers.get('location')).toContain('auth=success');
+      expect(captureAppleRefreshToken).toHaveBeenCalledWith({
+        userId: 'new-user-id',
+        code: 'apple-web-code',
+        clientId: 'ai.pagespace.web',
+        expectedSub: 'apple-sub-123',
+        redirectUri: 'https://example.com/api/auth/apple/callback',
+      });
+    });
+
+    it('given a slow Apple exchange, should redirect the signed-in user without waiting for it', async () => {
+      let finishExchange: (outcome: 'stored') => void = () => {};
+      vi.mocked(captureAppleRefreshToken).mockReturnValue(
+        new Promise((resolve) => {
+          finishExchange = resolve;
+        }),
+      );
+
+      const response = await POST(webRequest({ code: 'apple-web-code' }));
+
+      expect(captureAppleRefreshToken).toHaveBeenCalledTimes(1);
+      expect(response.headers.get('location')).toContain('auth=success');
+      finishExchange('stored');
+    });
+
+    it('given the capture rejects, should still complete the sign-in', async () => {
+      vi.mocked(captureAppleRefreshToken).mockRejectedValue(new Error('boom'));
+
+      const response = await POST(webRequest({ code: 'apple-web-code' }));
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(response.headers.get('location')).toContain('auth=success');
+      expect(loggers.auth.warn).toHaveBeenCalledWith(
+        'Apple refresh token capture threw',
+        expect.objectContaining({ userId: 'new-user-id' }),
+      );
+    });
+
+    it('given the desktop flow, should also capture the refresh token', async () => {
+      const response = await POST(
+        createCallbackRequest({
+          id_token: 'valid-token',
+          code: 'apple-desktop-code',
+          state: createSignedState({ returnUrl: '/dashboard', platform: 'desktop', deviceId: 'desktop-dev-1' }),
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      expect(captureAppleRefreshToken).toHaveBeenCalledWith(expect.objectContaining({ code: 'apple-desktop-code' }));
+    });
+
+    it('given the iOS web flow, should also capture the refresh token', async () => {
+      await POST(
+        createCallbackRequest({
+          id_token: 'valid-token',
+          code: 'apple-ios-code',
+          state: createSignedState({ returnUrl: '/dashboard', platform: 'ios', deviceId: 'ios-dev-1' }),
+        }),
+      );
+
+      expect(captureAppleRefreshToken).toHaveBeenCalledWith(expect.objectContaining({ code: 'apple-ios-code' }));
+    });
+
+    it('given no code in the post, should sign in without attempting a capture', async () => {
+      const response = await POST(webRequest());
+
+      expect(response.headers.get('location')).toContain('auth=success');
+      expect(captureAppleRefreshToken).not.toHaveBeenCalled();
+    });
+
+    it('given the sign-in fails verification, should never attempt a capture', async () => {
+      vi.mocked(verifyAppleIdToken).mockResolvedValue({ success: false, error: 'bad token' });
+
+      await POST(webRequest({ code: 'apple-web-code' }));
+
+      expect(captureAppleRefreshToken).not.toHaveBeenCalled();
+    });
+  });
 });

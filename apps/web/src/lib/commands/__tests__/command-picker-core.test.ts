@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   filterAndRankCommands,
+  commandInsertsPlainText,
+  isLeadingSlashTrigger,
   resolveSelectionTarget,
   scopeBadgeLabel,
   scopeAnnouncement,
@@ -139,5 +141,64 @@ describe('copy helpers', () => {
     expect(NO_COMMANDS_EMPTY_STATE).toBe(
       'No commands yet. Create one in Settings → AI Settings → Commands.'
     );
+  });
+});
+
+describe('isLeadingSlashTrigger', () => {
+  it('given the / at position 0, should be leading', () => {
+    expect(isLeadingSlashTrigger('/btw', 0)).toBe(true);
+  });
+
+  it('given only whitespace before the /, should be leading (spaces, newlines, tabs)', () => {
+    expect(isLeadingSlashTrigger('  /btw', 2)).toBe(true);
+    // A trigger after a newline still counts when nothing but whitespace
+    // precedes it: ChatInput's send gate tests the trimmed value, so the
+    // first non-whitespace character decides.
+    expect(isLeadingSlashTrigger('\n/btw', 1)).toBe(true);
+    expect(isLeadingSlashTrigger('  \n  /b', 5)).toBe(true);
+    expect(isLeadingSlashTrigger('\t\t/', 2)).toBe(true);
+  });
+
+  it('given text before the newline, should NOT be leading even though / follows a newline', () => {
+    expect(isLeadingSlashTrigger('first line\n  /b', 13)).toBe(false);
+  });
+
+  it('given non-whitespace text before the /, should NOT be leading', () => {
+    expect(isLeadingSlashTrigger('hello /b', 6)).toBe(false);
+    expect(isLeadingSlashTrigger('hey /b', 4)).toBe(false);
+  });
+
+  it('given trailing text after the trigger word, only the prefix before the / decides', () => {
+    expect(isLeadingSlashTrigger('/b after text', 0)).toBe(true);
+    expect(isLeadingSlashTrigger('hi /b after', 3)).toBe(false);
+  });
+
+  it('given an index at or beyond the value length, should be leading (empty prefix)', () => {
+    expect(isLeadingSlashTrigger('', 0)).toBe(true);
+  });
+});
+
+describe('client-handled commands (/btw)', () => {
+  const btwItem: CommandSuggestionItem = item({
+    id: 'builtin:btw',
+    trigger: 'btw',
+    scope: 'builtin',
+    description: 'Ask a side question without interrupting the run',
+    clientHandled: true,
+  });
+
+  it('inserts plain text only for clientHandled suggestions', () => {
+    expect(commandInsertsPlainText(btwItem)).toBe(true);
+    expect(commandInsertsPlainText(item({ trigger: 'help', scope: 'builtin' }))).toBe(false);
+  });
+
+  it('surfaces /btw for the b-prefix query ahead of drive commands', () => {
+    const result = filterAndRankCommands([...list, btwItem], 'b');
+    expect(result.map((i) => i.trigger)).toContain('btw');
+    expect(result[0]?.trigger).toBe('btw');
+  });
+
+  it('resolves a /btw selection to itself', () => {
+    expect(resolveSelectionTarget([...list, btwItem], btwItem)).toBe(btwItem);
   });
 });

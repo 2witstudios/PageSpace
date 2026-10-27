@@ -1,5 +1,6 @@
 'use client';
 
+import { AutomationSkipNote, isSpendSkip } from '@/components/wallets/AutomationSpendState';
 import { useEffect, useRef, useState } from 'react';
 import { AlertCircle, Bot, Zap } from 'lucide-react';
 import { toast } from 'sonner';
@@ -311,7 +312,9 @@ export function TaskAgentTriggersDialog({
                         }
                       />
 
-                      {existingStatus && existingStatus !== 'never_run' && (
+                      {existing && isSpendSkip(existing.lastFireError) ? (
+                        <AutomationSkipNote error={existing.lastFireError} driveId={driveId} />
+                      ) : existingStatus && existingStatus !== 'never_run' && (
                         <p className={statusToneClass(existingStatus)}>
                           {existingStatus === 'error' && (
                             <AlertCircle className="h-3 w-3 inline mr-1" aria-hidden="true" />

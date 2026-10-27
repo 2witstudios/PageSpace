@@ -2,6 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { assert } from './riteway';
 
 // Mock database and dependencies
+// Org sign-in policy (SEC-2/3) admits every actor here; tests that exercise a refusal override it.
+vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
+  checkActorResourceAuthentication: vi.fn(async () => ({ allowed: true })),
+  checkActorDriveAuthentication: vi.fn(async () => ({ allowed: true })),
+  filterDrivesForActor: vi.fn(async (_actor: unknown, ids: readonly string[]) => new Set(ids)),
+  filterResourcesForActor: vi.fn(async (_actor: unknown, ids: readonly string[]) => new Set(ids)),
+  explainOrgAuthenticationDenial: vi.fn(async () => null),
+}));
 vi.mock('@pagespace/db/db', () => ({
   db: {
     insert: vi.fn().mockReturnThis(),
@@ -73,6 +81,7 @@ vi.mock('@pagespace/db/schema/calendar-triggers', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     isUserDriveMember: vi.fn(),
 }));
 
@@ -80,6 +89,13 @@ vi.mock('@pagespace/lib/services/drive-member-service', () => ({
     getDriveRecipientUserIds: vi.fn(),
 }));
 
+// [D-OW-33] the lapse guards: no org drive is lapsed in these tests (proven against real Postgres in
+// services/api/__tests__/org-lapse-loosening.integration.test.ts).
+vi.mock('@pagespace/lib/permissions/org-lapse-guard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/permissions/org-lapse-guard')>()),
+  checkCalendarVisibilityMayLoosen: vi.fn(async () => null),
+  checkDriveMayLoosen: vi.fn(async () => null),
+}));
 vi.mock('@pagespace/lib/services/calendar-event-drive-service', () => ({
     getAllMemberUserIdsForEvent: vi.fn(),
 }));
@@ -175,6 +191,7 @@ import { getAllMemberUserIdsForEvent } from '@pagespace/lib/services/calendar-ev
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { upsertCalendarTriggerWorkflowInTx } from '@/lib/workflows/calendar-trigger-helpers';
 import type { ToolExecutionContext } from '../../core/types';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockDb = vi.mocked(db);
 const mockIsUserDriveMember = vi.mocked(isUserDriveMember);
@@ -203,7 +220,7 @@ const createMockEvent = (overrides = {}) => ({
 const createAuthContext = (userId = 'user-123') => ({
   toolCallId: '1',
   messages: [],
-  experimental_context: { userId } as ToolExecutionContext,
+  experimental_context: { userId, accessActor: credentialActor(userId, null) } as ToolExecutionContext,
 });
 
 describe('calendar-write-tools', () => {
@@ -938,7 +955,7 @@ describe('calendar-write-tools', () => {
         toolCallId: '1',
         messages: [],
         experimental_context: {
-          userId: 'user-123',
+          userId: 'user-123', accessActor: credentialActor('user-123', null),
           mcpAllowedDriveIds: ['drive-A'],
           mcpTokenId: 'token-1',
         } as ToolExecutionContext,

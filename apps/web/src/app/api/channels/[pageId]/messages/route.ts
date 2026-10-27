@@ -2,12 +2,11 @@ import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
-import { driveMembers } from '@pagespace/db/schema/members'
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
-// canUserViewPage below is only used for mention RECIPIENTS (other users), not
-// the requesting principal — those checks are keyed to arbitrary user ids and
-// must stay user-level.
-import { canUserViewPage, getUsersWhoCanViewPage } from '@pagespace/lib/permissions/permissions'
+// getUsersWhoCanViewPage answers for mention RECIPIENTS (other users), not the
+// requesting principal — a third-party audience question keyed to user ids.
+import { getUsersWhoCanViewPage } from '@pagespace/lib/permissions/permissions'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
@@ -19,11 +18,12 @@ import { attachQuotedMessages } from '@pagespace/lib/services/quote-enrichment';
 import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
 import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
 import type { AttachmentMeta } from '@pagespace/lib/types';
+import { MAX_MESSAGE_ATTACHMENTS, parseMessageAttachments } from '@pagespace/lib/services/attachment-upload-core';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 interface ChannelInboxFanoutInput {
   pageId: string;
   driveId: string;
-  driveOwnerId: string | null | undefined;
   senderUserId: string;
   lastMessageAt: string;
   lastMessagePreview: string;
@@ -42,21 +42,11 @@ interface ChannelInboxFanoutInput {
 async function fanOutChannelInboxUpdate(
   input: ChannelInboxFanoutInput
 ): Promise<Set<string>> {
-  const { pageId, driveId, driveOwnerId, senderUserId } = input;
+  const { pageId, driveId, senderUserId } = input;
 
-  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
-  const driveMembersRows = await db.query.driveMembers.findMany({
-    where: eq(driveMembers.driveId, driveId),
-    columns: { userId: true },
-  });
-
-  // Build a local member set so we never mutate the ORM-returned array.
-  // Drive owner is always a recipient even if they have no explicit row.
-  const memberUserIds = new Set(driveMembersRows.map((m) => m.userId));
-  if (driveOwnerId) {
-    memberUserIds.add(driveOwnerId);
-  }
-  const otherMemberIds = [...memberUserIds].filter((id) => id !== senderUserId);
+  // Candidates: the drive's members, lead included, from the one org-aware enumeration.
+  const memberUserIds = await getDriveRecipientUserIds(driveId);
+  const otherMemberIds = memberUserIds.filter((id) => id !== senderUserId);
 
   if (otherMemberIds.length === 0) {
     return new Set<string>();
@@ -109,10 +99,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   // Check if the principal has view permission for this channel
   const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
-    return NextResponse.json({
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({
       error: 'You need view permission to access this channel',
       details: 'Contact the channel owner to request access'
-    }, { status: 403 });
+    }, { status: 403 }));
   }
 
   // Pagination params
@@ -179,12 +169,17 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     return NextResponse.json({ messages: page, nextCursor, hasMore, isFollowing });
   }
 
-  // Fetch limit+1 in DESC order to determine if more exist, then reverse for chronological display
-  const messages = await channelMessageRepository.listChannelMessages({
-    pageId,
-    limit: limit + 1,
-    cursor: parsedCursor,
-  });
+  // Fetch limit+1 in DESC order to determine if more exist, then reverse for chronological display.
+  // The caller's own read watermark rides along so a reader can mark where
+  // unread begins before it marks the channel read.
+  const [messages, lastReadAt] = await Promise.all([
+    channelMessageRepository.listChannelMessages({
+      pageId,
+      limit: limit + 1,
+      cursor: parsedCursor,
+    }),
+    channelMessageRepository.findChannelLastReadAt({ userId, channelId: pageId }),
+  ]);
 
   const hasMore = messages.length > limit;
   const sliced = hasMore ? messages.slice(0, limit) : messages;
@@ -201,7 +196,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
   auditRequest(req, { eventType: 'data.read', userId: auth.userId, resourceType: 'channel', resourceId: pageId, details: { messageCount: page.length } });
 
-  return NextResponse.json({ messages: page, nextCursor, hasMore });
+  return NextResponse.json({
+    messages: page,
+    nextCursor,
+    hasMore,
+    lastReadAt: lastReadAt ? lastReadAt.toISOString() : null,
+  });
 }
 
 export async function POST(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
@@ -218,27 +218,43 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   // Check if the principal has edit permission to post messages in this channel
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({
       error: 'You need edit permission to send messages in this channel',
       details: 'Only channel members with edit access can send messages'
-    }, { status: 403 });
+    }, { status: 403 }));
   }
 
-  const { content, fileId, attachmentMeta, parentId: rawParentId, alsoSendToParent, quotedMessageId: rawQuotedMessageId } = await req.json() as {
+  const body = await req.json() as {
     content: string;
+    // Legacy singular pair, still accepted so the published SDK and CLI keep
+    // working against a server that understands N.
     fileId?: string;
     attachmentMeta?: AttachmentMeta;
+    attachments?: unknown;
     parentId?: string;
     alsoSendToParent?: boolean;
     quotedMessageId?: string;
+    // Client-generated correlation id, echoed back on the response and the
+    // broadcast so the sender can retire exactly its own optimistic row.
+    // Never persisted.
+    clientNonce?: string;
   };
+  const { content, parentId: rawParentId, alsoSendToParent, quotedMessageId: rawQuotedMessageId } = body;
+  const clientNonce = typeof body.clientNonce === 'string' ? body.clientNonce : undefined;
+
+  const parsedAttachments = parseMessageAttachments(body);
+  if (parsedAttachments.kind === 'invalid') {
+    return NextResponse.json({ error: parsedAttachments.error }, { status: 400 });
+  }
+  const attachments = parsedAttachments.attachments;
+
   const messageContent = typeof content === 'string' ? content : '';
   const parentId = typeof rawParentId === 'string' ? rawParentId.trim() : '';
   const quotedMessageId = typeof rawQuotedMessageId === 'string' ? rawQuotedMessageId.trim() : '';
 
   // Debug: Check what content type is being received
   loggers.realtime.debug('API received content type:', { type: typeof content });
-  loggers.realtime.debug('API received content:', { content, fileId });
+  loggers.realtime.debug('API received content:', { content, attachmentCount: attachments.length });
 
   // Quote-reply validation. Quotes are top-level only — the quoted message
   // must (a) belong to this channel, (b) be active, and (c) itself be a
@@ -278,13 +294,18 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       pageId,
       userId,
       content: messageContent,
-      fileId: fileId || null,
-      attachmentMeta: attachmentMeta || null,
+      attachments,
       alsoSendToParent: alsoSendToParent === true,
     });
 
     if (result.kind === 'not_found') {
       return NextResponse.json({ error: 'File not found' }, { status: 400 });
+    }
+    if (result.kind === 'too_many_attachments') {
+      return NextResponse.json(
+        { error: `A message may carry at most ${MAX_MESSAGE_ATTACHMENTS} attachments` },
+        { status: 400 },
+      );
     }
     if (result.kind === 'parent_not_found') {
       return NextResponse.json({ error: 'Parent message not found' }, { status: 404 });
@@ -319,7 +340,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         const thread = JSON.stringify({
           channelId: pageId,
           event: 'new_message',
-          payload: replyWithRelations,
+          payload: clientNonce ? { ...replyWithRelations, clientNonce } : replyWithRelations,
         });
         await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
           method: 'POST',
@@ -332,6 +353,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
           const mirror = JSON.stringify({
             channelId: pageId,
             event: 'new_message',
+            // The mirror is a different row than the one the sender optimistically
+            // inserted, so it deliberately carries NO nonce — matching it would
+            // retire the wrong optimistic entry.
             payload: mirrorWithRelations,
           });
           await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
@@ -441,15 +465,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         // before we broadcast a channel_updated payload (which leaks the channel
         // id, drive id, preview, and sender name), every non-follower candidate
         // must pass the channel's view-permission check.
-        const viewabilityChecks = await Promise.all(
-          nonFollowerMentioned.map(async (id: string) => ({
-            id,
-            canView: await canUserViewPage(id, pageId),
-          }))
-        );
-        const mentionTargets = viewabilityChecks
-          .filter((entry) => entry.canView)
-          .map((entry) => entry.id);
+        // A third-party audience question: who else can view the channel, not what this credential may open.
+        const mentionViewers = await getUsersWhoCanViewPage(pageId, nonFollowerMentioned);
+        const mentionTargets = nonFollowerMentioned.filter((id: string) => mentionViewers.has(id));
 
         await Promise.all(
           mentionTargets.map((memberId: string) =>
@@ -481,7 +499,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         await fanOutChannelInboxUpdate({
           pageId,
           driveId: channel.driveId,
-          driveOwnerId: channel.drive?.ownerId ?? null,
           senderUserId: userId,
           lastMessageAt: mirrorWithRelations.createdAt
             ? new Date(mirrorWithRelations.createdAt).toISOString()
@@ -499,7 +516,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         void import('@/lib/channels/agent-mention-responder')
           .then(({ triggerMentionedAgentResponses }) =>
             triggerMentionedAgentResponses({
-              userId,
+              // The reply runs as THIS request's credential, sign-in policy included (D-OW-62).
+              sender: actorFromAuth(auth),
               channelId: pageId,
               channelTitle: channel?.title || 'Channel',
               channelType: 'CHANNEL',
@@ -519,7 +537,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       loggers.realtime.error('Failed to broadcast thread inbox update:', error as Error);
     }
 
-    return NextResponse.json(replyWithRelations, { status: 201 });
+    return NextResponse.json(
+      clientNonce ? { ...replyWithRelations, clientNonce } : replyWithRelations,
+      { status: 201 },
+    );
   }
 
   // Validates the attachment (if any) and inserts the message atomically —
@@ -529,13 +550,18 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     pageId,
     userId,
     content: messageContent,
-    fileId: fileId || null,
-    attachmentMeta: attachmentMeta || null,
+    attachments,
     quotedMessageId: quotedMessageId.length > 0 ? quotedMessageId : null,
   });
 
   if (insertResult.kind === 'not_found') {
     return NextResponse.json({ error: 'File not found' }, { status: 400 });
+  }
+  if (insertResult.kind === 'too_many_attachments') {
+    return NextResponse.json(
+      { error: `A message may carry at most ${MAX_MESSAGE_ATTACHMENTS} attachments` },
+      { status: 400 },
+    );
   }
   const createdMessage = insertResult.message;
 
@@ -565,7 +591,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       const requestBody = JSON.stringify({
         channelId: pageId,
         event: 'new_message',
-        payload: newMessage,
+        // clientNonce rides along on the wire only — it is not a column. The
+        // sender matches it to retire exactly its own optimistic row instead
+        // of guessing from (content, fileId), which cannot tell two
+        // attachment-only messages apart.
+        payload: clientNonce ? { ...newMessage, clientNonce } : newMessage,
       });
 
       await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
@@ -600,7 +630,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       void import('@/lib/channels/agent-mention-responder')
         .then(({ triggerMentionedAgentResponses }) =>
           triggerMentionedAgentResponses({
-            userId,
+            // The reply runs as THIS request's credential, sign-in policy included (D-OW-62).
+            sender: actorFromAuth(auth),
             channelId: pageId,
             channelTitle: channel?.title || 'Channel',
             channelType: 'CHANNEL',
@@ -622,7 +653,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       await fanOutChannelInboxUpdate({
         pageId,
         driveId: channel.driveId,
-        driveOwnerId: channel.drive?.ownerId ?? null,
         senderUserId: userId,
         lastMessageAt: newMessage?.createdAt?.toISOString() || new Date().toISOString(),
         lastMessagePreview: messagePreview,
@@ -649,5 +679,5 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     loggers.realtime.error('Failed to broadcast inbox update:', error as Error);
   }
 
-  return NextResponse.json(newMessage, { status: 201 });
+  return NextResponse.json(clientNonce ? { ...newMessage, clientNonce } : newMessage, { status: 201 });
 }

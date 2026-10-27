@@ -5,33 +5,48 @@ import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { resolveRolePermissions } from './resolve-role-permissions';
 import { fetchCustomRolePermissions, resolveCustomRolePermissions } from './membership-queries';
 import type { PermissionLevel, PageWithPermissions } from './permissions';
+import { getDrivePolicies } from '../organizations/policy-reader';
+import { crossDriveAgentsDecision } from '../organizations/org-action-decisions';
 
+/**
+ * The agent's membership in a drive, or null. POL-9: a membership held by an agent whose home is
+ * ANOTHER drive is read against the drive's LIVE org policy here, where every agent access decision
+ * starts, so turning cross-drive agents off stops agents already attached (no row is deleted; turning
+ * it back on restores them). An agent in its own home drive is never affected.
+ */
 async function fetchAgentMembership(agentPageId: string, driveId: string) {
   const rows = await db
-    .select()
+    .select({ membership: driveAgentMembers, homeDriveId: pages.driveId })
     .from(driveAgentMembers)
+    .innerJoin(pages, eq(pages.id, driveAgentMembers.agentPageId))
     .where(and(eq(driveAgentMembers.agentPageId, agentPageId), eq(driveAgentMembers.driveId, driveId)))
     .limit(1);
-  return rows[0] ?? null;
+  const row = rows[0];
+  if (!row) return null;
+  if (row.homeDriveId !== driveId) {
+    const drivePolicies = await getDrivePolicies(driveId);
+    if (!crossDriveAgentsDecision(drivePolicies?.policies ?? null).ok) return null;
+  }
+  return row.membership;
 }
 
 async function fetchPageDriveAndPrivacy(
   targetPageId: string,
-): Promise<{ driveId: string; isPrivate: boolean }> {
+): Promise<{ driveId: string; isPrivate: boolean; type: string | null }> {
   const rows = await db
-    .select({ driveId: pages.driveId, isPrivate: pages.isPrivate })
+    .select({ driveId: pages.driveId, isPrivate: pages.isPrivate, type: pages.type })
     .from(pages)
     .where(eq(pages.id, targetPageId))
     .limit(1);
   // No page row ⇒ treat targetPageId as a drive id (drive-as-root-node pattern).
-  return rows[0] ?? { driveId: targetPageId, isPrivate: false };
+  return rows[0] ?? { driveId: targetPageId, isPrivate: false, type: null };
 }
 
 export async function getAgentAccessLevel(
   agentPageId: string,
   targetPageId: string,
 ): Promise<PermissionLevel | null> {
-  const { driveId, isPrivate } = await fetchPageDriveAndPrivacy(targetPageId);
+  const { driveId, isPrivate, type: pageType } = await fetchPageDriveAndPrivacy(targetPageId);
   const membership = await fetchAgentMembership(agentPageId, driveId);
   if (!membership) return null;
 
@@ -58,16 +73,11 @@ export async function getAgentAccessLevel(
     return { canView: false, canEdit: false, canShare: false, canDelete: false };
   }
 
-  return resolveRolePermissions(membership.role, role?.permissions ?? null, targetPageId);
+  return resolveRolePermissions(membership.role, role?.permissions ?? null, targetPageId, pageType);
 }
 
 export async function hasAgentDriveMembership(agentPageId: string, driveId: string): Promise<boolean> {
-  const row = await db
-    .select({ id: driveAgentMembers.id })
-    .from(driveAgentMembers)
-    .where(and(eq(driveAgentMembers.agentPageId, agentPageId), eq(driveAgentMembers.driveId, driveId)))
-    .limit(1);
-  return row.length > 0;
+  return (await fetchAgentMembership(agentPageId, driveId)) !== null;
 }
 
 /**
@@ -190,9 +200,10 @@ export async function getAgentAccessiblePagesInDrive(
     return [];
   }
 
-  // Plain MEMBER (no custom role): view-only over the drive's non-private pages —
-  // the same set a plain MEMBER *user* sees, consistent with getAgentAccessLevel
-  // denying a plain member access to private pages.
+  // Plain MEMBER (no custom role): view-only over the drive's non-private pages
+  // (channels editable, so the agent can post) — the same set a plain MEMBER
+  // *user* sees, consistent with getAgentAccessLevel denying a plain member
+  // access to private pages.
   const memberPages = await db
     .select({
       id: pages.id,
@@ -207,6 +218,6 @@ export async function getAgentAccessiblePagesInDrive(
 
   return memberPages.map((p) => ({
     ...p,
-    permissions: resolveRolePermissions('MEMBER', null, p.id),
+    permissions: resolveRolePermissions('MEMBER', null, p.id, p.type),
   }));
 }

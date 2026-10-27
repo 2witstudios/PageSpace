@@ -34,6 +34,7 @@ import {
   useChatSession,
   useCacheMessageActions,
   useSendHandoff,
+  useQueuedSends,
   useChatErrorCause,
   useAnswerAskUser,
   buildGlobalChatRequestBody,
@@ -233,6 +234,39 @@ export function useAssistantSessionChat({
     buildBody,
   });
 
+  /**
+   * The one send path, shared by the composer and the DRAIN (issue #2676):
+   * optimistic write first, then the wrapped dispatch with rollback — the
+   * drain hook re-invokes this with each queued message.
+   */
+  const dispatchUserMessage = useCallback(
+    (message: UIMessage) => {
+      conversationMessagesActions.addOptimisticSend(conversationId, message);
+      return rollbackOptimisticSendOnFailure(
+        () => wrapSend(() => sendMessage(message, conversationId, { body: buildBody() })),
+        conversationId,
+        message.id,
+      );
+    },
+    [conversationId, wrapSend, sendMessage, buildBody],
+  );
+
+  // Send queue (issue #2676): drains one queued message per observed stream
+  // end, FIFO; manual sends/retries take precedence via the status guard.
+  const {
+    queuedSends,
+    queueCount,
+    isQueueFull,
+    enqueue: enqueueQueuedSend,
+    remove: removeQueuedSend,
+    clear: clearQueuedSends,
+    cancelPendingDrain: cancelQueuedDrain,
+  } = useQueuedSends({
+    conversationId,
+    status,
+    dispatch: dispatchUserMessage,
+  });
+
   const handleSend = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
@@ -242,17 +276,10 @@ export function useAssistantSessionChat({
       // generation already running in another conversation is simply not this send's concern.
       // The `stop()` + settle-wait + possible refusal that stood here is the thing this
       // workstream exists to delete.
-      const userMessage = buildUserMessage({ id: createId(), text: trimmed }) as UIMessage;
-      conversationMessagesActions.addOptimisticSend(conversationId, userMessage);
-
-      rollbackOptimisticSendOnFailure(
-        () => wrapSend(() => sendMessage(userMessage, conversationId, { body: buildBody() })),
-        conversationId,
-        userMessage.id,
-      );
+      dispatchUserMessage(buildUserMessage({ id: createId(), text: trimmed }) as UIMessage);
       return true;
     },
-    [conversationId, wrapSend, sendMessage, buildBody],
+    [conversationId, dispatchUserMessage],
   );
 
   const { handleStop, isStopping } = useStopStream({
@@ -318,6 +345,13 @@ export function useAssistantSessionChat({
     handleEdit,
     handleDelete,
     handleRetry,
+    queuedSends,
+    queueCount,
+    isQueueFull,
+    enqueueQueuedSend,
+    removeQueuedSend,
+    clearQueuedSends,
+    cancelQueuedDrain,
     lastAssistantMessageId,
     lastUserMessageId,
     handleScrollNearTop,

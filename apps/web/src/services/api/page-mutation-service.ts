@@ -14,6 +14,8 @@ import { replaceFromDocument, readSheetDocument } from '@pagespace/lib/sheets/st
 import { PageType } from '@pagespace/lib/utils/enums';
 import { syncMentions, type SyncMentionsResult } from '@/services/api/page-mention-service';
 import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
+import type { PolicyRefusal } from '@pagespace/lib/organizations/sharing-decisions';
+import { agentModelSaveRefusal } from '@/lib/ai/core/org-model-policy';
 
 export class PageRevisionMismatchError extends Error {
   currentRevision: number;
@@ -24,6 +26,32 @@ export class PageRevisionMismatchError extends Error {
     this.currentRevision = currentRevision;
     this.expectedRevision = expectedRevision;
   }
+}
+
+/**
+ * POL-8: the mutation set an agent page's provider or model to one the drive's org does not allow. Nothing was
+ * written; a route answers with the refusal's 403 and policy key.
+ */
+export class OrgModelPolicyError extends Error {
+  readonly refusal: PolicyRefusal;
+
+  constructor(refusal: PolicyRefusal) {
+    super(refusal.message);
+    this.refusal = refusal;
+  }
+}
+
+/** POL-8: throw OrgModelPolicyError when the drive's org does not allow the provider/model an agent page stores. */
+export async function assertAgentModelAllowed(driveId: string, saved: { provider: string | null; modelId: string | null }): Promise<void> {
+  const decision = await agentModelSaveRefusal(driveId, saved);
+  if (!decision.ok) throw new OrgModelPolicyError(decision);
+}
+
+/** The JSON body and status of a refused save, or null when `error` is not one. */
+export function orgModelPolicyErrorResponse(error: unknown): { body: { error: string; code: string; policy: string }; status: 403 } | null {
+  if (!(error instanceof OrgModelPolicyError)) return null;
+  const { message, code, policy, status } = error.refusal;
+  return { body: { error: message, code, policy }, status };
 }
 
 export interface PageMutationContext {
@@ -193,6 +221,15 @@ export async function applyPageMutation({
       ? Boolean(updates.userScopedAccess)
       : currentPage.userScopedAccess,
   };
+
+  // POL-8: every save of an agent page's provider or model passes here, so the org allowlists are judged once, for
+  // every caller (routes, AI tools, the chat echo), before anything is written. Only what this save sets is judged.
+  if (updates.aiProvider !== undefined || updates.aiModel !== undefined) {
+    await assertAgentModelAllowed(currentPage.driveId, {
+      provider: updates.aiProvider !== undefined ? nextPageState.aiProvider : null,
+      modelId: updates.aiModel !== undefined ? nextPageState.aiModel : null,
+    });
+  }
 
   const stateHashAfter = computePageStateHash(nextPageState);
 

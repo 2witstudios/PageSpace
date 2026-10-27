@@ -44,6 +44,14 @@ export interface ChatTextareaProps {
    * the user commands that fail as `not_found` the moment they're sent.
    */
   commandDriveId?: string;
+  /**
+   * Surface capability gate (default false): when false, client-handled
+   * commands (e.g. /btw) are excluded from the `/` picker. They fire via the
+   * composer's pre-send interception, which only some surfaces own — a
+   * surface without it (e.g. ChannelInput) would post the literal
+   * `/trigger …` text instead of firing the command.
+   */
+  allowClientHandledCommands?: boolean;
   /** Enable cross-drive mention search */
   crossDrive?: boolean;
   /** Whether the input is disabled */
@@ -79,6 +87,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
       placeholder = 'Type your message...',
       driveId,
       commandDriveId,
+      allowClientHandledCommands = false,
       crossDrive = false,
       disabled = false,
       variant = 'main',
@@ -129,6 +138,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
       enterSelects: enterToSend,
       onValueChange: handleDisplayTextChange,
       onTokenInserted: registerToken,
+      allowClientHandledCommands,
     });
     const { syncDisplayText } = command;
 
@@ -246,12 +256,12 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
           {...commandComboboxProps}
           className={cn(
             'min-h-[36px] max-h-48 resize-none break-words',
+            variant === 'sidebar' && 'px-2.5 py-2',
             CHAT_TYPOGRAPHY,
-            // Context-aware background:
-            // - main: transparent to blend with InputCard, no shadow in light mode for flush look
-            // - sidebar: white in light mode for contrast, slight gray lift in dark mode
+            // Transparent in both variants so the text blends into its card (sidebar: the
+            // ChatInput card; main: InputCard). Only main keeps the dark-mode shadow.
             variant === 'sidebar'
-              ? 'bg-white dark:bg-card/50'
+              ? 'bg-transparent dark:bg-transparent shadow-none'
               : 'bg-transparent dark:bg-transparent shadow-none dark:shadow-xs',
             'border-none outline-none',
             'text-foreground placeholder:text-muted-foreground',

@@ -1,14 +1,16 @@
+import { isPrincipalDriveMember } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+
 import {
   COMMAND_TRIGGER_MAX_LENGTH,
   type CommandScope,
 } from '@pagespace/lib/commands/command-core';
 import { loadAvailableCommands } from '@/lib/commands/available-commands';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
@@ -22,6 +24,8 @@ interface CommandSuggestion {
   shadows?: CommandScope;
   /** Set on a shadowed (losing) command: the scope of the command that wins. */
   shadowedBy?: CommandScope;
+  /** The composer handles this command client-side — insert plain text, not a chip. */
+  clientHandled?: boolean;
 }
 
 // GET /api/commands/suggest?q=&driveId= - precedence-resolved merged command
@@ -30,6 +34,7 @@ interface CommandSuggestion {
 export async function GET(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
   if (isAuthError(auth)) return auth.error;
+  const actor = actorFromAuth(auth);
   const userId = auth.userId;
 
   const { searchParams } = new URL(request.url);
@@ -49,19 +54,19 @@ export async function GET(request: Request) {
 
   try {
     if (driveId) {
-      const isMember = await isUserDriveMember(userId, driveId);
+      const isMember = await isPrincipalDriveMember(auth, driveId);
       if (!isMember) {
-        return NextResponse.json(
+        return deniedResponse(actor, driveId, NextResponse.json(
           { error: 'Access denied to the specified drive' },
           { status: 403 }
-        );
+        ));
       }
     }
 
     // Shared with the /help built-in injection (available-commands.ts) so the
     // picker and the AI's command list can never drift apart. Membership for
     // driveId was verified above — the loader requires that contract.
-    const { winners, shadowed } = await loadAvailableCommands(userId, driveId || null);
+    const { winners, shadowed } = await loadAvailableCommands(actor, driveId || null);
 
     // q matching happens in JS over the caller's own small command set, so user
     // input never reaches a SQL LIKE pattern
@@ -93,6 +98,7 @@ export async function GET(request: Request) {
         description: winner.description,
         scope: winner.scope,
         ...(winner.shadows !== undefined ? { shadows: winner.shadows } : {}),
+        ...(winner.clientHandled ? { clientHandled: true } : {}),
       })),
       ...shadowedRanked.map((command) => ({
         id: command.id,

@@ -57,8 +57,14 @@ vi.mock('ai', () => ({
 
 vi.mock('../../calendar-context', () => ({
   fetchCalendarContext: vi.fn().mockResolvedValue({
-    happeningNow: [], upcomingToday: [], tomorrow: [], pendingInvites: [], allEvents: [],
+    happeningNow: [], upcomingToday: [], tomorrow: [], pendingInvites: [], allEvents: [], sourceDriveIds: [],
   }),
+  pulseSourceOrgIds: vi.fn(async () => []),
+}));
+
+// The one member-drive set (org-aware).
+vi.mock('@pagespace/lib/permissions/member-drives', () => ({
+  getMemberDriveIds: vi.fn(async () => []),
 }));
 
 vi.mock('@pagespace/lib/permissions/accessible-page-ids', () => ({

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { startThirdPartyOAuth } from '@/lib/navigation/oauth-redirect';
 import {
   Dialog,
   DialogContent,
@@ -88,7 +89,7 @@ export function ConnectIntegrationDialog({
       const result = await post<{ url?: string; connection?: { id: string } }>(endpoint, body);
 
       if (result.url) {
-        window.location.href = result.url;
+        await startThirdPartyOAuth(result.url);
         return;
       }
 

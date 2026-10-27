@@ -1,3 +1,4 @@
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 /**
  * Rollback service — public barrel + composition root.
  *
@@ -16,6 +17,7 @@ import {
   getPageVersionHistory as repoGetPageVersionHistory,
   getDriveVersionHistory as repoGetDriveVersionHistory,
   getUserRetentionDays as repoGetUserRetentionDays,
+  type RetentionResource,
   type VersionHistoryOptions,
   type VersionHistoryPage,
 } from './activity-repo'
@@ -44,11 +46,11 @@ export async function getActivityById(activityId: string): Promise<ActivityLogFo
 /** Preview what a rollback would do */
 export async function previewRollback(
   activityId: string,
-  userId: string,
+  actor: AccessActor,
   context: RollbackContext,
   options?: { force?: boolean; undoGroupActivityIds?: string[] }
 ): Promise<RollbackPreview> {
-  return shellPreviewRollback(deps, activityId, userId, context, options)
+  return shellPreviewRollback(deps, activityId, actor, context, options)
 }
 
 /**
@@ -58,11 +60,11 @@ export async function previewRollback(
  */
 export async function executeRollback(
   activityId: string,
-  userId: string,
+  actor: AccessActor,
   context: RollbackContext,
   options?: { tx?: typeof db; force?: boolean; undoGroupActivityIds?: string[] }
 ): Promise<RollbackResult> {
-  return shellExecuteRollback(deps, activityId, userId, context, options)
+  return shellExecuteRollback(deps, activityId, actor, context, options)
 }
 
 /** Get version history for a page */
@@ -84,6 +86,6 @@ export async function getDriveVersionHistory(
 }
 
 /** Get user's retention limit based on subscription tier */
-export async function getUserRetentionDays(userId: string): Promise<number> {
-  return repoGetUserRetentionDays(deps, userId)
+export async function getUserRetentionDays(userId: string, resource?: RetentionResource): Promise<number> {
+  return repoGetUserRetentionDays(deps, userId, resource)
 }

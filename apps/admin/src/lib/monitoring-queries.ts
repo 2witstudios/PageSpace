@@ -7,16 +7,22 @@ import { sql, eq, and, or, gt, asc, gte, lte, lt, desc, count, inArray, isNull, 
 import { users } from '@pagespace/db/schema/auth'
 import { apiMetrics, aiUsageLogs, systemLogs, errorLogs, activityLogs } from '@pagespace/db/schema/monitoring';
 import { sessions } from '@pagespace/db/schema/sessions';
-import { creditLedger, creditBalances, creditHolds } from '@pagespace/db/schema/credits';
+import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
+import { wallets, isPersonalRootWallet } from '@pagespace/db/schema/wallets';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
+import { orgSubscriptions, orgSubscriptionFunding } from '@pagespace/db/schema/organizations';
 import type { SQL } from '@pagespace/db/operators';
-import { computeBalanceDrift, isNegativeMargin } from '@pagespace/lib/billing/credit-core';
+import { isNegativeMargin } from '@pagespace/lib/billing/credit-core';
+import { unattributedUsage, walletDriftAlerts, type DriftWalletKind, type UnattributedUsage } from '@pagespace/lib/billing/wallet-reconcile';
 import { BALANCE_DRIFT_TOLERANCE_CENTS, NEGATIVE_MARGIN_FLOOR_BPS } from '@pagespace/lib/billing/credit-pricing';
-import { getTierFromPrice, STRIPE_PRICE_TO_TIER } from './stripe/price-config';
-import { stripe } from './stripe/client';
+import { CENTS_PER_DOLLAR } from '@pagespace/lib/billing/money-model';
+import { readCreditLiability } from '@pagespace/lib/billing/credit-liability-query';
+import { fundingWalletTier } from '@pagespace/lib/billing/credit-liability';
+import { getTierFromPrice } from './stripe/price-config';
 import { TIERS, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { decryptUserDisplayFields } from '@pagespace/lib/auth/user-repository';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
+import { getOrgAuditBacklog } from '@pagespace/lib/audit/org-audit';
 import { isClickHouseEnabled, getClickHouseClient } from '@pagespace/lib/observability/clickhouse-client';
 import {
   getLogsByLevel as chGetLogsByLevel,
@@ -62,12 +68,14 @@ export async function getSystemHealth(startDate?: Date, endDate?: Date) {
   const chClient = clickHouseClientIfEnabled();
   if (chClient) {
     const window = { startDate, endDate };
-    const [logsByLevel, recentErrors, activeUserCount] = await Promise.all([
+    const [logsByLevel, recentErrors, activeUserCount, orgAuditBacklog] = await Promise.all([
       chGetLogsByLevel(chClient, window),
       chGetRecentErrors(chClient, window, 20),
       getActiveSessionUserCount(),
+      getOrgAuditBacklog(),
     ]);
     return {
+      orgAuditBacklog,
       logsByLevel,
       recentErrors: recentErrors.map((entry) => ({
         ...entry,
@@ -117,8 +125,10 @@ export async function getSystemHealth(startDate?: Date, endDate?: Date) {
   // Active users: distinct sessions touched in last 15 minutes (sessions.lastUsedAt is
   // updated non-blocking on every authenticated request — reliable signal)
   const activeUserCount = await getActiveSessionUserCount();
+  const orgAuditBacklog = await getOrgAuditBacklog();
 
   return {
+    orgAuditBacklog,
     logsByLevel: logsByLevel.map((entry) => ({
       level: entry.level,
       count: entry.count,
@@ -456,7 +466,7 @@ export interface UnitEconomicsSummary {
   requestCount: number;
   /**
    * Total outstanding user debt as an ALL-TIME point-in-time snapshot of
-   * `credit_balances.debtCents`. Unlike the other fields, it is NOT scoped to
+   * `wallets.debtCents (personal root wallets)`. Unlike the other fields, it is NOT scoped to
    * the summary's start/end date range — debt has no time dimension.
    */
   debtCents: number;
@@ -517,7 +527,7 @@ export function computeMarginPct(realCostCents: number, chargedCents: number): n
 const CLOUD_VENDOR_PROVIDERS = new Set<string>([
   'openai', 'anthropic', 'google', 'xai', 'deepseek', 'qwen', 'mistral',
   'moonshot', 'minimax', 'meta', 'bytedance', 'inception', 'writer', 'zai',
-  'aion-labs', 'amazon', 'arcee-ai', 'cohere', 'dots-studio', 'ibm-granite',
+  'aion-labs', 'amazon', 'apodex', 'arcee-ai', 'cohere', 'dots-studio', 'ibm-granite',
   'inclusionai', 'kwaipilot', 'liquid', 'meituan', 'nex-agi', 'nvidia',
   'poolside', 'rekaai', 'relace', 'sakana', 'sao10k', 'stepfun', 'tencent',
   'thedrummer', 'thinkingmachines', 'upstage', 'xiaomi',
@@ -529,7 +539,7 @@ function getBackendProvider(uiProvider: string): string {
 
 const realCostSum = sql<number>`ROUND(COALESCE(SUM(
   CASE
-    WHEN ${aiUsageLogs.cost} IS NOT NULL THEN ${aiUsageLogs.cost}::numeric * 100
+    WHEN ${aiUsageLogs.cost} IS NOT NULL THEN ${aiUsageLogs.cost}::numeric * ${CENTS_PER_DOLLAR}
     ELSE ${creditLedger.realCostCents}
   END
 ), 0))::int`;
@@ -559,8 +569,9 @@ export async function getUnitEconomicsSummary(
     .where(and(...usageConditions(startDate, endDate)));
 
   const debt = await db
-    .select({ debtCents: sql<number>`COALESCE(SUM(${creditBalances.debtCents}), 0)::int` })
-    .from(creditBalances);
+    .select({ debtCents: sql<number>`COALESCE(SUM(${wallets.debtCents}), 0)::int` })
+    .from(wallets)
+    .where(isPersonalRootWallet());
 
   const realCostCents = usage[0]?.realCostCents ?? 0;
   const chargedCents = usage[0]?.chargedCents ?? 0;
@@ -647,7 +658,8 @@ export async function getTopSpendersByMargin(
 ): Promise<TopSpenderRow[]> {
   const rows = await db
     .select({
-      userId: creditLedger.userId,
+      // The inner join to users: a former member's rows (D-OW-58, userId null) belong to no account here.
+      userId: users.id,
       userName: users.name,
       userEmail: users.email,
       realCostCents: realCostSum,
@@ -659,7 +671,7 @@ export async function getTopSpendersByMargin(
     .leftJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
     .innerJoin(users, eq(creditLedger.userId, users.id))
     .where(and(...usageConditions(startDate, endDate)))
-    .groupBy(creditLedger.userId, users.name, users.email)
+    .groupBy(users.id, users.name, users.email)
     .orderBy(desc(chargedSum))
     .limit(limit);
 
@@ -680,13 +692,20 @@ export interface MarginByTierRow {
   marginPct: number | null;
 }
 
+/**
+ * MON-7: margin per PAYING tier. Usage is grouped by the wallet it was charged to and that
+ * wallet's owner (its funder), never by the spender's personal tier: org-pool and org-drive
+ * spend is Business however the member who spent is subscribed (fundingWalletTier, lib
+ * credit-liability). Groups sharing a tier are folded into one row.
+ */
 export async function getMarginByTier(
   startDate?: Date,
   endDate?: Date,
 ): Promise<MarginByTierRow[]> {
-  const rows = await db
+  const groups = await db
     .select({
-      tier: users.subscriptionTier,
+      ownerType: wallets.ownerType,
+      ownerTier: users.subscriptionTier,
       realCostCents: realCostSum,
       chargedCents: chargedSum,
       appliedCents: appliedSum,
@@ -694,34 +713,44 @@ export async function getMarginByTier(
     })
     .from(creditLedger)
     .leftJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
-    .innerJoin(users, eq(creditLedger.userId, users.id))
+    .innerJoin(wallets, eq(creditLedger.walletId, wallets.id))
+    .leftJoin(users, eq(wallets.userId, users.id))
     .where(and(...usageConditions(startDate, endDate)))
-    .groupBy(users.subscriptionTier)
-    .orderBy(desc(realCostSum));
+    .groupBy(wallets.ownerType, users.subscriptionTier);
 
-  return rows.map((r) => ({
-    tier: r.tier ?? 'free',
-    realCostCents: r.realCostCents,
-    chargedCents: r.chargedCents,
-    appliedCents: r.appliedCents,
-    requestCount: r.requestCount,
-    marginCents: r.chargedCents - r.realCostCents,
-    marginPct: computeMarginPct(r.realCostCents, r.chargedCents),
-  }));
+  const byTier = new Map<SubscriptionTier, { realCostCents: number; chargedCents: number; appliedCents: number; requestCount: number }>();
+  for (const g of groups) {
+    const tier = fundingWalletTier(g);
+    const acc = byTier.get(tier) ?? { realCostCents: 0, chargedCents: 0, appliedCents: 0, requestCount: 0 };
+    acc.realCostCents += g.realCostCents;
+    acc.chargedCents += g.chargedCents;
+    acc.appliedCents += g.appliedCents;
+    acc.requestCount += g.requestCount;
+    byTier.set(tier, acc);
+  }
+
+  return [...byTier.entries()]
+    .map(([tier, r]) => ({
+      tier,
+      ...r,
+      marginCents: r.chargedCents - r.realCostCents,
+      marginPct: computeMarginPct(r.realCostCents, r.chargedCents),
+    }))
+    .sort((a, b) => b.realCostCents - a.realCostCents);
 }
 
 export async function getOutstandingDebtByUser(limit = 10): Promise<DebtByUserRow[]> {
   const rows = await db
     .select({
-      userId: creditBalances.userId,
+      userId: users.id,
       userName: users.name,
       userEmail: users.email,
-      debtCents: creditBalances.debtCents,
+      debtCents: wallets.debtCents,
     })
-    .from(creditBalances)
-    .innerJoin(users, eq(creditBalances.userId, users.id))
-    .where(gt(creditBalances.debtCents, 0))
-    .orderBy(desc(creditBalances.debtCents))
+    .from(wallets)
+    .innerJoin(users, eq(wallets.userId, users.id))
+    .where(and(isPersonalRootWallet(), gt(wallets.debtCents, 0)))
+    .orderBy(desc(wallets.debtCents))
     .limit(limit);
 
   return (await decryptUserDisplayFields(rows)).map((r) => ({
@@ -733,68 +762,60 @@ export async function getOutstandingDebtByUser(limit = 10): Promise<DebtByUserRo
 }
 
 export interface BalanceDriftRow {
-  userId: string;
+  walletId: string;
+  /** A person's root, an org's pool, or a drive's wallet (WAL-5: reconciliation is keyed on wallet). */
+  walletKind: DriftWalletKind;
+  /** The person a personal wallet belongs to; null for an org's. */
+  userId: string | null;
   userName: string | null;
   userEmail: string | null;
-  expectedSpendableCents: number;
-  materializedSpendableCents: number;
+  orgId: string | null;
+  /** The drive a drive wallet funds; null for a root. */
+  subjectId: string | null;
+  expectedNetCents: number;
+  materializedNetCents: number;
   driftCents: number;
   debtCents: number;
 }
 
+/**
+ * Wallets whose net (monthly + top-up − debt) disagrees with their OWN ledger rows beyond tolerance
+ * (WAL-5): every personal root, org pool and drive wallet, every money-moving entry type counted,
+ * through the one lib reader (walletDriftAlerts). Every balance change is a row — forgiveness at a
+ * renewal (debt_forgiven), netting at an allocation reset (allocation_reset), the cutover's
+ * opening_balance — so any drift is a change that bypassed the ledger. Worst drift first.
+ */
 export async function getBalanceDriftAlerts(
   toleranceCents: number = BALANCE_DRIFT_TOLERANCE_CENTS,
   limit = 50,
 ): Promise<BalanceDriftRow[]> {
-  const rows = await db
-    .select({
-      userId: creditBalances.userId,
-      userName: users.name,
-      userEmail: users.email,
-      materializedSpendableCents: sql<number>`(${creditBalances.monthlyRemainingCents} + ${creditBalances.topupRemainingCents})::int`,
-      debtCents: creditBalances.debtCents,
-      grantCents: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.entryType} IN ('monthly_grant', 'topup_purchase') THEN ${creditLedger.amountCents} ELSE 0 END), 0)::int`,
-      appliedUsageCents: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.entryType} = 'usage' THEN ABS(${creditLedger.appliedCents}) ELSE 0 END), 0)::int`,
-      adjustmentCents: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.entryType} = 'adjustment' THEN COALESCE(${creditLedger.appliedCents}, 0) ELSE 0 END), 0)::int`,
-    })
-    .from(creditBalances)
-    .innerJoin(users, eq(creditBalances.userId, users.id))
-    .leftJoin(creditLedger, eq(creditLedger.userId, creditBalances.userId))
-    .groupBy(
-      creditBalances.userId,
-      users.name,
-      users.email,
-      creditBalances.monthlyRemainingCents,
-      creditBalances.topupRemainingCents,
-      creditBalances.debtCents,
-    );
+  const alerts = await walletDriftAlerts({ toleranceCents, limit });
+  const userIds = [...new Set(alerts.map((a) => a.userId).filter((id): id is string => id !== null))];
+  const people = userIds.length > 0
+    ? await decryptUserDisplayFields(await db.select({ userId: users.id, userName: users.name, userEmail: users.email }).from(users).where(inArray(users.id, userIds)))
+    : [];
+  const byId = new Map(people.map((p) => [p.userId, p]));
+  return alerts.map((a) => ({
+    walletId: a.walletId,
+    walletKind: a.kind,
+    userId: a.userId,
+    userName: a.userId ? byId.get(a.userId)?.userName ?? null : null,
+    userEmail: a.userId ? byId.get(a.userId)?.userEmail ?? null : null,
+    orgId: a.orgId,
+    subjectId: a.subjectId,
+    expectedNetCents: a.expectedNetCents,
+    materializedNetCents: a.materializedNetCents,
+    driftCents: a.driftCents,
+    debtCents: a.debtCents,
+  }));
+}
 
-  return (await decryptUserDisplayFields(rows))
-    .map((r): BalanceDriftRow | null => {
-      const drift = computeBalanceDrift(
-        {
-          grantCents: r.grantCents,
-          appliedUsageCents: r.appliedUsageCents,
-          adjustmentCents: r.adjustmentCents,
-          materializedSpendableCents: r.materializedSpendableCents,
-          debtCents: r.debtCents,
-        },
-        toleranceCents,
-      );
-      if (!drift.flagged) return null;
-      return {
-        userId: r.userId,
-        userName: r.userName,
-        userEmail: r.userEmail,
-        expectedSpendableCents: drift.expectedSpendableCents,
-        materializedSpendableCents: r.materializedSpendableCents,
-        driftCents: drift.driftCents,
-        debtCents: r.debtCents,
-      };
-    })
-    .filter((r): r is BalanceDriftRow => r !== null)
-    .sort((a, b) => Math.abs(b.driftCents) - Math.abs(a.driftCents))
-    .slice(0, limit);
+/**
+ * Billable AI usage that names no wallet (WAL-6b fail closed): never charged, marked terminal when
+ * first found, and counted here so an operator reconciles it.
+ */
+export async function getUnattributedUsage(): Promise<UnattributedUsage> {
+  return unattributedUsage();
 }
 
 export interface NegativeMarginRow {
@@ -817,7 +838,8 @@ export async function getNegativeMarginAccounts(
   const floorBps = Math.max(0, marginFloorBps);
   const rows = await db
     .select({
-      userId: creditLedger.userId,
+      // The inner join to users: a former member's rows (D-OW-58, userId null) belong to no account here.
+      userId: users.id,
       userName: users.name,
       userEmail: users.email,
       realCostCents: realCostSum,
@@ -828,7 +850,7 @@ export async function getNegativeMarginAccounts(
     .leftJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
     .innerJoin(users, eq(creditLedger.userId, users.id))
     .where(and(...usageConditions(startDate, endDate)))
-    .groupBy(creditLedger.userId, users.name, users.email)
+    .groupBy(users.id, users.name, users.email)
     .having(sql`${realCostSum} > 0 AND ${chargedSum} < ${realCostSum} * (1 + ${floorBps}::numeric / 10000)`)
     .orderBy(asc(sql`${chargedSum} - ${realCostSum}`))
     .limit(limit);
@@ -891,6 +913,15 @@ export interface CreditRevenue {
   /** Plan allowance grants — NOT cash revenue. */
   monthlyGrantCents: number;
   monthlyGrantCount: number;
+  /**
+   * Included-credit liability (Spec MON-7): grants still outstanding — the monthly
+   * bucket of every personal root wallet AND every org pool (credit-liability.ts says
+   * which wallet kinds count and why a drive wallet's allocation never does).
+   * Point-in-time, not range-scoped, and distinct from cash: a grant is a promise of
+   * credit value the platform still owes, never revenue. Top-up balances are NOT in
+   * this figure (see CreditLiability.topupRemainingCents).
+   */
+  includedCreditLiabilityCents: number;
 }
 
 export interface SubscriptionsByTierRow {
@@ -899,10 +930,17 @@ export interface SubscriptionsByTierRow {
 }
 
 export interface CreditLiability {
+  /** Grants outstanding: personal roots' and org pools' monthly buckets. */
   monthlyRemainingCents: number;
+  /** Of which org pools (MON-3 refills). */
+  orgPoolMonthlyRemainingCents: number;
+  /** Of which free-tier accounts: the unpaid starter grant, shown apart from paid grants. */
+  starterGrantRemainingCents: number;
+  /** Purchased or moved-in credit on every wallet: root top-ups and drive-wallet legs. */
   topupRemainingCents: number;
   totalLiabilityCents: number;
   userCount: number;
+  orgPoolCount: number;
 }
 
 export interface LiveHolds {
@@ -1071,6 +1109,7 @@ export async function getProviderCostRollup(
 export async function getCreditRevenue(
   startDate?: Date,
   endDate?: Date,
+  liabilityWithin?: SQL,
 ): Promise<CreditRevenue> {
   const conditions: SQL[] = [inArray(creditLedger.entryType, ['topup_purchase', 'monthly_grant'])];
   if (startDate) conditions.push(gte(creditLedger.createdAt, startDate));
@@ -1100,77 +1139,52 @@ export async function getCreditRevenue(
     }
   }
 
-  return { topupCents, topupCount, monthlyGrantCents, monthlyGrantCount };
+  // MON-7: outstanding grants = unspent granted credit value on personal roots and org
+  // pools. Read from the wallets (the ledger nets grants against usage there), not from
+  // the range-scoped grant rows above, so it is a liability, not a flow.
+  const liability = await readCreditLiability(liabilityWithin);
+
+  return {
+    topupCents,
+    topupCount,
+    monthlyGrantCents,
+    monthlyGrantCount,
+    includedCreditLiabilityCents: liability.includedCreditLiabilityCents,
+  };
 }
 
-/**
- * Paying subscribers bucketed by tier. Consistent with the `payingUsers`
- * definition in getGrowthMetrics: status IN ('active', 'trialing') and
- * gifted = false. Legacy/grandfathered price IDs (absent from
- * STRIPE_PRICE_TO_TIER) are resolved by fetching their unit amount from
- * Stripe so getTierFromPrice's LEGACY_PRICE_AMOUNTS fallback applies instead
- * of miscounting real subscribers as 'free'.
- */
-// Stripe prices are immutable once created, so resolved unit amounts are
-// cached for the process lifetime. Failures are NOT cached so transient
-// errors retry on the next load.
-const legacyPriceAmountCache = new Map<string, number | null>();
-
+/** Paying, non-gifted active or trialing subscriptions grouped by configured price identity. */
 export async function getActiveSubscriptionsByTier(): Promise<SubscriptionsByTierRow[]> {
-  const rows = await db
-    .select({ stripePriceId: subscriptions.stripePriceId })
-    .from(subscriptions)
-    .where(and(
-      inArray(subscriptions.status, ['active', 'trialing']),
-      eq(subscriptions.gifted, false),
-    ));
-
-  // Look up unit amounts for price IDs the static map doesn't know (one Stripe
-  // call per distinct uncached legacy price ID, not per subscription row).
-  const legacyPriceIds = [...new Set(rows.map((r) => r.stripePriceId))]
-    .filter((priceId) => !(priceId in STRIPE_PRICE_TO_TIER));
-  const amountByPriceId = new Map<string, number | null>();
-  await Promise.all(legacyPriceIds.map(async (priceId) => {
-    const cached = legacyPriceAmountCache.get(priceId);
-    if (cached !== undefined) {
-      amountByPriceId.set(priceId, cached);
-      return;
-    }
-    try {
-      const price = await stripe.prices.retrieve(priceId);
-      legacyPriceAmountCache.set(priceId, price.unit_amount);
-      amountByPriceId.set(priceId, price.unit_amount);
-    } catch {
-      // Unresolvable price (deleted in Stripe, network error) — falls back to
-      // getTierFromPrice's 'free' bucket rather than failing the whole panel.
-      amountByPriceId.set(priceId, null);
-    }
-  }));
+  const [personalRows, orgRows] = await Promise.all([
+    db.select({ stripePriceId: subscriptions.stripePriceId }).from(subscriptions).where(and(
+      inArray(subscriptions.status, ['active', 'trialing']), eq(subscriptions.gifted, false),
+    )),
+    db.select({ stripePriceId: orgSubscriptions.stripeBasePriceId }).from(orgSubscriptions).where(and(
+      inArray(orgSubscriptions.status, ['active']), eq(orgSubscriptions.gifted, false),
+      // [D-OW-44]: send_invoice reads active before anything is collected; only automatic collection pays.
+      eq(orgSubscriptions.collectionMethod, 'charge_automatically'),
+      sql`exists (select 1 from ${orgSubscriptionFunding} where ${orgSubscriptionFunding.orgId} = ${orgSubscriptions.orgId} and ${orgSubscriptionFunding.stripeSubscriptionId} = ${orgSubscriptions.stripeSubscriptionId})`,
+    )),
+  ]);
 
   const counts = Object.fromEntries(TIERS.map((t) => [t, 0])) as Record<SubscriptionTier, number>;
-  for (const r of rows) {
-    counts[getTierFromPrice(r.stripePriceId, amountByPriceId.get(r.stripePriceId))] += 1;
-  }
+  for (const row of personalRows) counts[getTierFromPrice(row.stripePriceId) === 'pro' ? 'pro' : 'free'] += 1;
+  for (const row of orgRows) counts[getTierFromPrice(row.stripePriceId) === 'business' ? 'business' : 'free'] += 1;
 
   return (Object.keys(counts) as SubscriptionTier[]).map((tier) => ({ tier, count: counts[tier] }));
 }
 
-export async function getCreditLiability(): Promise<CreditLiability> {
-  const rows = await db
-    .select({
-      monthlyRemainingCents: sql<number>`COALESCE(SUM(${creditBalances.monthlyRemainingCents}), 0)::double precision`,
-      topupRemainingCents: sql<number>`COALESCE(SUM(${creditBalances.topupRemainingCents}), 0)::double precision`,
-      userCount: count(),
-    })
-    .from(creditBalances);
-
-  const monthlyRemainingCents = rows[0]?.monthlyRemainingCents ?? 0;
-  const topupRemainingCents = rows[0]?.topupRemainingCents ?? 0;
+/** Outstanding credit liability across every wallet kind, point-in-time (MON-7). `within` scopes the read to an allowlisted set of wallets (integration tests in a shared database); production passes nothing. */
+export async function getCreditLiability(within?: SQL): Promise<CreditLiability> {
+  const r = await readCreditLiability(within);
   return {
-    monthlyRemainingCents,
-    topupRemainingCents,
-    totalLiabilityCents: monthlyRemainingCents + topupRemainingCents,
-    userCount: rows[0]?.userCount ?? 0,
+    monthlyRemainingCents: r.includedCreditLiabilityCents,
+    orgPoolMonthlyRemainingCents: r.orgPoolIncludedCents,
+    starterGrantRemainingCents: r.starterGrantIncludedCents,
+    topupRemainingCents: r.topupRemainingCents,
+    totalLiabilityCents: r.totalLiabilityCents,
+    userCount: r.userCount,
+    orgPoolCount: r.orgPoolCount,
   };
 }
 

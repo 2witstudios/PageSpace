@@ -62,6 +62,12 @@ vi.mock('@pagespace/db/schema/conversations', () => ({
   conversations: { id: 'id', type: 'type', contextId: 'contextId' },
 }));
 
+// The up-front org share lock (re-verify N6): spied, so a test can pin that it is taken first, on the undo's tx.
+vi.mock('@pagespace/lib/organizations/policy-reader', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/organizations/policy-reader')>()),
+  lockOrgsOfDrivesForShare: vi.fn(async () => {}),
+}));
+
 // Mock the rollback service
 vi.mock('../rollback-service', () => ({
   executeRollback: vi.fn(),
@@ -94,6 +100,8 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 import { db } from '@pagespace/db/db';
 import { executeRollback, previewRollback } from '../rollback-service';
 import { logConversationUndo } from '@pagespace/lib/monitoring/activity-logger';
+import { lockOrgsOfDrivesForShare } from '@pagespace/lib/organizations/policy-reader';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 /** Matches the mock shape defined in vi.mock('@pagespace/db/db') above */
 type MockFn = ReturnType<typeof vi.fn>;
@@ -242,7 +250,7 @@ describe('ai-undo-service', () => {
     it('returns null when message not found', async () => {
       mockDb.query.messages.findFirst.mockResolvedValue(null);
 
-      const result = await previewAiUndo('nonexistent', mockUserId);
+      const result = await previewAiUndo('nonexistent', credentialActor(mockUserId, null));
 
       expect(result).toBeNull();
     });
@@ -280,7 +288,7 @@ describe('ai-undo-service', () => {
         }),
       }));
 
-      const result = await previewAiUndo(mockMessageId, mockUserId);
+      const result = await previewAiUndo(mockMessageId, credentialActor(mockUserId, null));
 
       expect(result).not.toBeNull();
       expect(result!.messageId).toBe(mockMessageId);
@@ -319,7 +327,7 @@ describe('ai-undo-service', () => {
         .mockResolvedValueOnce(createMockPreview({ canExecute: true }))
         .mockResolvedValueOnce(createMockPreview({ canExecute: false, reason: 'Cannot rollback create' }));
 
-      const result = await previewAiUndo(mockMessageId, mockUserId);
+      const result = await previewAiUndo(mockMessageId, credentialActor(mockUserId, null));
 
       expect(result!.activitiesAffected).toHaveLength(2);
       expect(result!.activitiesAffected[0].preview.canExecute).toBe(true);
@@ -358,7 +366,7 @@ describe('ai-undo-service', () => {
         })
       );
 
-      const result = await previewAiUndo(mockMessageId, mockUserId);
+      const result = await previewAiUndo(mockMessageId, credentialActor(mockUserId, null));
 
       expect(result!.warnings.length).toBeGreaterThan(0);
       expect(result!.warnings[0]).toContain('Cannot undo');
@@ -367,7 +375,7 @@ describe('ai-undo-service', () => {
     it('returns null on error', async () => {
       mockDb.query.messages.findFirst.mockRejectedValue(new Error('DB error'));
 
-      const result = await previewAiUndo(mockMessageId, mockUserId);
+      const result = await previewAiUndo(mockMessageId, credentialActor(mockUserId, null));
 
       expect(result).toBeNull();
     });
@@ -381,7 +389,7 @@ describe('ai-undo-service', () => {
     it('returns failure when message not found', async () => {
       mockDb.query.messages.findFirst.mockResolvedValue(null);
 
-      const result = await executeAiUndo(mockMessageId, mockUserId, 'messages_only');
+      const result = await executeAiUndo(mockMessageId, credentialActor(mockUserId, null), 'messages_only');
 
       expect(result.success).toBe(false);
       expect(result.errors).toContain('Message not found or preview failed');
@@ -414,7 +422,7 @@ describe('ai-undo-service', () => {
         await callback(tx);
       });
 
-      const result = await executeAiUndo(mockMessageId, mockUserId, 'messages_only');
+      const result = await executeAiUndo(mockMessageId, credentialActor(mockUserId, null), 'messages_only');
 
       expect(result.errors).toEqual([]);
       expect(result.success).toBe(true);
@@ -450,7 +458,7 @@ describe('ai-undo-service', () => {
         await callback(tx);
       });
 
-      await executeAiUndo(mockMessageId, mockUserId, 'messages_only');
+      await executeAiUndo(mockMessageId, credentialActor(mockUserId, null), 'messages_only');
 
       // ONE message table, and this assertion has been all four shapes the
       // epic passed through: "the page table OR the global table" (chosen by
@@ -510,7 +518,7 @@ describe('ai-undo-service', () => {
         await callback(tx);
       });
 
-      await executeAiUndo(mockMessageId, mockUserId, 'messages_only');
+      await executeAiUndo(mockMessageId, credentialActor(mockUserId, null), 'messages_only');
 
       const undoArgs = vi.mocked(logConversationUndo).mock.calls[0];
       expect(undoArgs[0]).toBe(mockUserId);
@@ -529,6 +537,41 @@ describe('ai-undo-service', () => {
   // ============================================
 
   describe('executeAiUndo - messages_and_changes mode', () => {
+    it('POL-2 (partial) share-locks the org rows of every touched drive and page on the undo\'s tx BEFORE any activity is rolled back (review #2762 P3-3, N6)', async () => {
+      const mockActivities = [
+        createMockActivity({ id: 'act_1', driveId: 'drive_product', pageId: 'page_roadmap' }),
+        createMockActivity({ id: 'act_2', driveId: 'drive_ops', pageId: null }),
+      ];
+      mockDb.query.messages.findFirst.mockResolvedValue(createMockMessage());
+      mockDb.query.pages.findFirst.mockResolvedValue({ driveId: mockDriveId });
+      let selectCallCount = 0;
+      mockDb.select.mockImplementation(() => ({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockImplementation(() => {
+            selectCallCount++;
+            if (selectCallCount === 1 || selectCallCount === 3) return [{ id: 'msg_1' }];
+            return { orderBy: vi.fn().mockResolvedValue(mockActivities) };
+          }),
+        }),
+      }));
+      mockPreviewRollback.mockResolvedValue(createMockPreview({ canExecute: true }));
+      mockExecuteRollback.mockResolvedValue(createMockRollbackResult());
+      let undoTx: Record<string, unknown> | null = null;
+      mockDb.transaction.mockImplementation(async (callback: (tx: Record<string, unknown>) => Promise<void>) => {
+        undoTx = makeUndoTx();
+        await callback(undoTx);
+      });
+
+      const result = await executeAiUndo(mockMessageId, credentialActor(mockUserId, null), 'messages_and_changes');
+
+      expect(result.success).toBe(true);
+      const lock = vi.mocked(lockOrgsOfDrivesForShare);
+      expect(lock).toHaveBeenCalledTimes(1);
+      expect(lock).toHaveBeenCalledWith(undoTx, { driveIds: ['drive_product', 'drive_ops'], pageIds: ['page_roadmap', null] });
+      expect(mockExecuteRollback).toHaveBeenCalledTimes(2);
+      expect(lock.mock.invocationCallOrder[0]).toBeLessThan(Math.min(...mockExecuteRollback.mock.invocationCallOrder));
+    });
+
     it('rolls back all activities in addition to deleting messages', async () => {
       const mockMessage = createMockMessage();
       const mockActivities = [
@@ -562,7 +605,7 @@ describe('ai-undo-service', () => {
         await callback(tx);
       });
 
-      const result = await executeAiUndo(mockMessageId, mockUserId, 'messages_and_changes');
+      const result = await executeAiUndo(mockMessageId, credentialActor(mockUserId, null), 'messages_and_changes');
 
       expect(result.success).toBe(true);
       expect(result.activitiesRolledBack).toBe(2);
@@ -609,7 +652,7 @@ describe('ai-undo-service', () => {
         }
       });
 
-      const result = await executeAiUndo(mockMessageId, mockUserId, 'messages_and_changes');
+      const result = await executeAiUndo(mockMessageId, credentialActor(mockUserId, null), 'messages_and_changes');
 
       expect(result.success).toBe(false);
       expect(result.errors).toContain('Failed to undo update on Test Page: Rollback failed');
@@ -658,7 +701,7 @@ describe('ai-undo-service', () => {
         }
       });
 
-      const result = await executeAiUndo(mockMessageId, mockUserId, 'messages_and_changes');
+      const result = await executeAiUndo(mockMessageId, credentialActor(mockUserId, null), 'messages_and_changes');
 
       expect(result.success).toBe(false);
       expect(result.errors[0]).toContain('Cannot undo create on New Thing');
@@ -698,7 +741,7 @@ describe('ai-undo-service', () => {
         await callback(tx);
       });
 
-      const result = await executeAiUndo(mockMessageId, mockUserId, 'messages_and_changes', undefined, { force: true });
+      const result = await executeAiUndo(mockMessageId, credentialActor(mockUserId, null), 'messages_and_changes', undefined, { force: true });
 
       expect(result.success).toBe(true);
       expect(result.activitiesRolledBack).toBe(1);
@@ -740,7 +783,7 @@ describe('ai-undo-service', () => {
         }
       });
 
-      const result = await executeAiUndo(mockMessageId, mockUserId, 'messages_and_changes', undefined, { force: true });
+      const result = await executeAiUndo(mockMessageId, credentialActor(mockUserId, null), 'messages_and_changes', undefined, { force: true });
 
       expect(result.success).toBe(false);
       expect(result.errors[0]).toContain('Cannot undo create on New Item');
@@ -776,7 +819,7 @@ describe('ai-undo-service', () => {
         await callback(tx);
       });
 
-      await executeAiUndo(mockMessageId, mockUserId, 'messages_and_changes');
+      await executeAiUndo(mockMessageId, credentialActor(mockUserId, null), 'messages_and_changes');
 
       const undoArgs2 = vi.mocked(logConversationUndo).mock.calls[0];
       expect(undoArgs2[0]).toBe(mockUserId);
@@ -798,7 +841,7 @@ describe('ai-undo-service', () => {
     it('returns failure on unexpected error', async () => {
       mockDb.query.messages.findFirst.mockRejectedValue(new Error('Unexpected error'));
 
-      const result = await executeAiUndo(mockMessageId, mockUserId, 'messages_only');
+      const result = await executeAiUndo(mockMessageId, credentialActor(mockUserId, null), 'messages_only');
 
       expect(result.success).toBe(false);
       expect(result.errors).toContain('Message not found or preview failed');
@@ -836,7 +879,7 @@ describe('ai-undo-service', () => {
 
       mockDb.transaction.mockRejectedValue(new Error('Transaction failed'));
 
-      const result = await executeAiUndo(mockMessageId, mockUserId, 'messages_only');
+      const result = await executeAiUndo(mockMessageId, credentialActor(mockUserId, null), 'messages_only');
 
       expect(result.success).toBe(false);
       expect(result.errors).toContain('Transaction failed');
@@ -874,7 +917,7 @@ describe('ai-undo-service', () => {
         await callback(tx);
       });
 
-      const result = await executeAiUndo(mockMessageId, mockUserId, 'messages_only');
+      const result = await executeAiUndo(mockMessageId, credentialActor(mockUserId, null), 'messages_only');
 
       expect(result.success).toBe(true);
       expect(result.messagesDeleted).toBe(1);
@@ -885,7 +928,7 @@ describe('ai-undo-service', () => {
         createMockMessage({ isActive: false })
       );
 
-      const result = await executeAiUndo(mockMessageId, mockUserId, 'messages_only');
+      const result = await executeAiUndo(mockMessageId, credentialActor(mockUserId, null), 'messages_only');
 
       expect(result.success).toBe(true);
       expect(result.messagesDeleted).toBe(0);
@@ -914,7 +957,7 @@ describe('ai-undo-service', () => {
         }),
       }));
 
-      const result = await previewAiUndo(mockMessageId, mockUserId);
+      const result = await previewAiUndo(mockMessageId, credentialActor(mockUserId, null));
 
       expect(result).not.toBeNull();
       expect(result!.driveId).toBeNull();
@@ -946,7 +989,7 @@ describe('ai-undo-service', () => {
         from: vi.fn().mockReturnValue({ where: whereMock }),
       }));
 
-      await previewAiUndo(mockMessageId, mockUserId);
+      await previewAiUndo(mockMessageId, credentialActor(mockUserId, null));
 
       const affectedMessagesConds = whereMock.mock.calls[0][0] as unknown[];
       expect(affectedMessagesConds).toContainEqual({ field: 'status', op: 'ne', value: 'streaming' });
@@ -977,7 +1020,7 @@ describe('ai-undo-service', () => {
         await callback({ ...makeUndoTx(), update: updateMock });
       });
 
-      await executeAiUndo(mockMessageId, mockUserId, 'messages_only');
+      await executeAiUndo(mockMessageId, credentialActor(mockUserId, null), 'messages_only');
 
       // The one and only update() call: the unified table.
       const primaryConds = updateWhereMock.mock.calls[0][0] as unknown[];
@@ -1015,7 +1058,7 @@ describe('ai-undo-service', () => {
         await callback(makeUndoTx(updatedTables));
       });
 
-      await executeAiUndo(mockMessageId, mockUserId, 'messages_only');
+      await executeAiUndo(mockMessageId, credentialActor(mockUserId, null), 'messages_only');
 
       const { messages: unifiedTable, conversations: conversationsTable } =
         await import('@pagespace/db/schema/conversations');

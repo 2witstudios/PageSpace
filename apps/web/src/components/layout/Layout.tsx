@@ -3,9 +3,13 @@
 import { useAuth } from "@/hooks/useAuth";
 import { useSocket } from "@/hooks/useSocket";
 import { useAccessRevocation } from "@/hooks/useAccessRevocation";
+import { useOrgRealtime } from "@/hooks/useOrgs";
+import { useSurfaceOrgId } from "@/hooks/useSurfaceOrgId";
+import { OrgSurfaceBanner } from "@/components/orgs/OrgSurfaceBanner";
 import { useNotificationToasts } from "@/hooks/useNotificationToasts";
 import { useDesktopNotifications } from "@/hooks/useDesktopNotifications";
 import { useNativeBadgeSync } from "@/hooks/useNativeBadgeSync";
+import { useAppleTransactionObserver } from "@/hooks/useAppleTransactionObserver";
 import TopBar from "@/components/layout/main-header";
 import MemoizedSidebar from "@/components/layout/left-sidebar/MemoizedSidebar";
 import CenterPanel from "@/components/layout/middle-content/CenterPanel";
@@ -17,6 +21,7 @@ import { VoiceSessionProvider } from "@/contexts/VoiceSessionContext";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { motion, AnimatePresence } from "motion/react";
 import { DebugPanel } from "./DebugPanel";
+import { OrgReauthenticationPrompt } from "@/components/auth/OrgReauthenticationPrompt";
 import { useLayoutStore } from "@/stores/useLayoutStore";
 import { useHasHydrated } from "@/hooks/useHasHydrated";
 import { usePerformanceMonitor } from "@/hooks/usePerformanceMonitor";
@@ -57,6 +62,19 @@ interface LayoutProps {
   children?: React.ReactNode;
 }
 
+/**
+ * Radix focuses the first tabbable descendant when a sheet opens. On phones that is
+ * the sidebar search input (or the assistant textarea), which pops the keyboard over
+ * the panel the user just opened. Cancel that and focus the sheet container instead
+ * so focus still enters the modal for keyboard and screen-reader users.
+ */
+function focusSheetContainer(event: Event) {
+  event.preventDefault();
+  if (event.currentTarget instanceof HTMLElement) {
+    event.currentTarget.focus();
+  }
+}
+
 function Layout({ children }: LayoutProps) {
   const { isLoading, isAuthenticated } = useAuth();
   // Has THIS mount observed a successful auth check yet? Starts false on every fresh
@@ -69,6 +87,16 @@ function Layout({ children }: LayoutProps) {
   if (isAuthenticated && !isLoading) {
     hasConfirmedAuthRef.current = true;
   }
+  // Did THIS mount actually render the boot screen below? That — not the mere
+  // fact of mounting — is what "cold boot" means for the entrance animation.
+  // `Layout` is mounted by three sibling layout clients (DashboardLayoutClient,
+  // SettingsLayoutClient, NotificationsLayoutClient), so navigating between
+  // /dashboard, /settings and /notifications unmounts one Layout and mounts
+  // another. Applying the animation unconditionally therefore faded the whole
+  // shell out and back in on ordinary navigation. Set inline during render,
+  // matching hasConfirmedAuthRef above: the spinner return happens in the same
+  // render pass, so the flag is already correct when the gate finally opens.
+  const showedBootScreenRef = useRef(false);
   const router = useRouter();
   const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
 
@@ -147,6 +175,10 @@ function Layout({ children }: LayoutProps) {
   // Handle real-time permission revocation (zero-trust security)
   useAccessRevocation();
 
+  // X-4: the picker's org groups, the crumb and Account Settings follow org:changed (join, leave, rename, delete),
+  // and so does the org this screen belongs to: its banner turns on or off live when it lapses or is paid.
+  useOrgRealtime(useSurfaceOrgId());
+
   // Show live toast popups for new notifications, anywhere in the app
   useNotificationToasts();
 
@@ -155,6 +187,9 @@ function Layout({ children }: LayoutProps) {
 
   // Keep the native app-icon badge in sync with the unread count (reactive SSOT projection)
   useNativeBadgeSync();
+
+  // iOS In-App Purchase: deliver renewals, Ask to Buy and interrupted purchases to the server
+  useAppleTransactionObserver(isAuthenticated);
 
   // Monitor performance
   usePerformanceMonitor();
@@ -362,6 +397,7 @@ function Layout({ children }: LayoutProps) {
       hasConfirmedAuthThisMount: hasConfirmedAuthRef.current,
     })
   ) {
+    showedBootScreenRef.current = true;
     return (
       <div className="flex items-center justify-center h-screen">
         <div className="flex items-center gap-2">
@@ -411,7 +447,7 @@ function Layout({ children }: LayoutProps) {
         */}
         <VoiceSessionBridge />
         <div
-          className="flex flex-col overflow-hidden bg-gradient-to-br from-background via-background to-muted/10"
+          className={`${showedBootScreenRef.current ? "app-shell-enter " : ""}flex flex-col overflow-hidden bg-gradient-to-br from-background via-background to-muted/10`}
           style={{ height: 'var(--app-height, 100dvh)' }}
           onClick={handleLayoutClick}
         >
@@ -474,6 +510,8 @@ function Layout({ children }: LayoutProps) {
                       </motion.div>
                     )}
                   </AnimatePresence>
+                  {/* SEAT-9: the lapse banner on every org surface (org pages, open org drives) */}
+                  <OrgSurfaceBanner />
                   {children ? (
                     <div className="flex flex-1 flex-col min-h-0 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
                       {children}
@@ -549,6 +587,8 @@ function Layout({ children }: LayoutProps) {
           </ResizablePanelGroup>
 
           <DebugPanel />
+          {/* D-OW-45: one prompt for every org sign-in denial the fetch layer reports. */}
+          <OrgReauthenticationPrompt />
         </div>
 
         {isSheetBreakpoint && (
@@ -562,7 +602,12 @@ function Layout({ children }: LayoutProps) {
               }
             }}
           >
-            <SheetContent side="left" className="w-full max-w-[22rem] border-r p-0 sm:max-w-sm">
+            <SheetContent
+              side="left"
+              className="w-full max-w-[22rem] border-r p-0 outline-none sm:max-w-sm"
+              tabIndex={-1}
+              onOpenAutoFocus={focusSheetContainer}
+            >
               <SheetHeader className="sr-only">
                 <SheetTitle>Navigation menu</SheetTitle>
                 <SheetDescription>Browse spaces and files</SheetDescription>
@@ -580,7 +625,12 @@ function Layout({ children }: LayoutProps) {
               }
             }}
           >
-            <SheetContent side="right" className="w-full max-w-[22rem] border-l p-0 sm:max-w-sm">
+            <SheetContent
+              side="right"
+              className="w-full max-w-[22rem] border-l p-0 outline-none sm:max-w-sm"
+              tabIndex={-1}
+              onOpenAutoFocus={focusSheetContainer}
+            >
               <SheetHeader className="sr-only">
                 <SheetTitle>Global Assistant panel</SheetTitle>
                 <SheetDescription>Chat with the global assistant</SheetDescription>

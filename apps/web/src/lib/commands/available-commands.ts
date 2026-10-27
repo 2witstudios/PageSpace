@@ -24,6 +24,7 @@ import {
   type CommandSummary,
   type ResolvedCommands,
 } from '@pagespace/lib/commands/command-core';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 type EntryPageRef = { driveId: string; isTrashed: boolean };
 
@@ -56,7 +57,7 @@ const toSummary = (row: CommandRowShape, scope: CommandScope): CommandSummary =>
 });
 
 /**
- * Load and precedence-resolve every command available to `userId`:
+ * Load and precedence-resolve every command available to the actor:
  * built-ins from the lib registry + the user's enabled personal commands +
  * (when `driveId` is non-null) that drive's enabled commands.
  *
@@ -64,7 +65,7 @@ const toSummary = (row: CommandRowShape, scope: CommandScope): CommandSummary =>
  * contexts without a drive (global assistant) or non-members.
  */
 export async function loadAvailableCommands(
-  userId: string,
+  actor: AccessActor,
   driveId: string | null
 ): Promise<ResolvedCommands> {
   const builtins: CommandSummary[] = BUILTIN_COMMANDS.map((builtin) => ({
@@ -74,6 +75,7 @@ export async function loadAvailableCommands(
     scope: 'builtin',
     type: 'builtin',
     ...(builtin.kind ? { kind: builtin.kind } : {}),
+    ...(builtin.clientHandled ? { clientHandled: true } : {}),
   }));
 
   // The personal and drive lookups are independent — run them concurrently
@@ -82,7 +84,7 @@ export async function loadAvailableCommands(
   const [personalRows, driveRows] = await Promise.all([
     // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     db.query.commands.findMany({
-      where: and(eq(commands.userId, userId), eq(commands.enabled, true)),
+      where: and(eq(commands.userId, actor.userId), eq(commands.enabled, true)),
       with: { entryPage: entryPageColumns },
     }),
     driveId
@@ -107,7 +109,7 @@ export async function loadAvailableCommands(
   // the per-keystroke suggest path at a single permission round-trip.
   const entryPageIds = [...new Set([...livePersonal, ...liveDrive].map((row) => row.entryPageId))];
   const access =
-    entryPageIds.length > 0 ? await getBatchPagePermissions(userId, entryPageIds) : null;
+    entryPageIds.length > 0 ? await getBatchPagePermissions(actor, entryPageIds) : null;
   const canViewEntryPage = (row: { entryPageId: string }): boolean =>
     access?.get(row.entryPageId)?.canView === true;
 

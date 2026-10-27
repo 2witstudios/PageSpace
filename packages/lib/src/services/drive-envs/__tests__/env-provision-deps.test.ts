@@ -39,6 +39,7 @@ vi.mock('../../sandbox/can-run-code', () => ({
 }));
 
 import { buildEnvProvisionDeps, ensureDriveEnvSandbox } from '../env-provision-deps';
+import { DEFAULT_ORG_POLICIES } from '../../../organizations/policies-core';
 import { makeLocalRecord } from './fakes';
 import { deriveDriveEnvSpriteKey } from '../../../drive-envs/env-sprite-key';
 import { deriveAgentSessionSpriteKey } from '../../../agent-workspaces/workspace-sprite-key';
@@ -50,6 +51,7 @@ import {
   type SandboxHandle,
   type SandboxHost,
 } from '../../sandbox/sandbox-host';
+import { credentialActor } from '../../../permissions/access-actor';
 
 const ENV_ID = 'env-1';
 const DRIVE_ID = 'drive-1';
@@ -96,7 +98,7 @@ function deps(tier: 'pro' | 'free' = 'pro') {
   return buildEnvProvisionDeps({
     row: envRow,
     payer: { payerId: DRIVE_OWNER_ID, tier },
-    requesterId: REQUESTER_ID,
+    requester: credentialActor(REQUESTER_ID, null),
     store: noopStore,
     host: noopHost,
   });
@@ -135,7 +137,7 @@ describe('buildEnvProvisionDeps', () => {
     await deps().authorize();
 
     expect(canRunCode).toHaveBeenCalledWith({
-      userId: REQUESTER_ID,
+      actor: expect.objectContaining({ userId: REQUESTER_ID }),
       driveId: DRIVE_ID,
       ownerId: DRIVE_OWNER_ID,
       requestOrigin: 'user',
@@ -208,15 +210,33 @@ describe('ensureDriveEnvSandbox', () => {
     const result = await ensureDriveEnvSandbox({
       envId: ENV_ID,
       intent: 'ensure',
-      requesterId: REQUESTER_ID,
+      requester: credentialActor(REQUESTER_ID, null),
       deps: {
         store: { ...noopStore, findById: async () => null, findLocalByEnvId: async () => null },
         host: noopHost,
+        getDriveOrgPolicies: async () => null,
         resolvePayer: async () => ({ payerId: DRIVE_OWNER_ID, tier: 'pro' }),
       },
     });
 
     expect(result).toEqual({ ok: false, reason: 'provision_failed', detail: 'env_not_found' });
+  });
+
+  it('POL-10 an org that turned persistent environments off stops an EXISTING env from starting, before any host call', async () => {
+    const provision = vi.fn(async () => ({ sandboxId: 'pgs-should-never-exist', spriteInstanceId: 'inst-x' }));
+    const result = await ensureDriveEnvSandbox({
+      envId: ENV_ID,
+      intent: 'ensure',
+      requester: credentialActor(REQUESTER_ID, null),
+      deps: {
+        store: { ...noopStore, findById: async () => envRow, findLocalByEnvId: async () => null },
+        host: { ...noopHost, provision } as never,
+        getDriveOrgPolicies: async () => ({ ...DEFAULT_ORG_POLICIES, persistentEnvironments: false }),
+        resolvePayer: async () => ({ payerId: DRIVE_OWNER_ID, tier: 'pro' }),
+      },
+    });
+    expect(result).toEqual({ ok: false, reason: 'provision_failed', detail: 'org_policy' });
+    expect(provision).not.toHaveBeenCalled();
   });
 
   it('given a vanished DRIVE, should fail closed rather than fold under another tenant', async () => {
@@ -226,10 +246,11 @@ describe('ensureDriveEnvSandbox', () => {
     const result = await ensureDriveEnvSandbox({
       envId: ENV_ID,
       intent: 'ensure',
-      requesterId: REQUESTER_ID,
+      requester: credentialActor(REQUESTER_ID, null),
       deps: {
         store: { ...noopStore, findById: async () => envRow, findLocalByEnvId: async () => null },
         host: noopHost,
+        getDriveOrgPolicies: async () => null,
         resolvePayer: async () => {
           resolved += 1;
           return null;
@@ -287,10 +308,11 @@ describe('ensureDriveEnvSandbox', () => {
       const result = await ensureDriveEnvSandbox({
         envId: ENV_ID,
         intent: 'ensure',
-        requesterId: REQUESTER_ID,
+        requester: credentialActor(REQUESTER_ID, null),
         deps: {
           store: { ...noopStore, findById: async () => localRow, findLocalByEnvId: async () => input.sibling },
           host: host.host,
+          getDriveOrgPolicies: async () => null,
           resolvePayer: async () => ({ payerId: DRIVE_OWNER_ID, tier: 'pro' }),
           liveConnection: input.liveConnection ?? (() => 'connected'),
           localEnvsEnabled: input.flag ?? true,
@@ -427,7 +449,7 @@ describe('ensureDriveEnvSandbox', () => {
       canRunCode.mockResolvedValue({ ok: false, reason: 'no_drive_access' });
       const { result, host } = await ensureLocal({ sibling: sibling() });
       expect(result).toEqual({ ok: false, reason: 'local_refused', refusal: 'code_exec_denied', detail: 'no_drive_access' });
-      expect(canRunCode).toHaveBeenCalledWith({ userId: REQUESTER_ID, driveId: DRIVE_ID, ownerId: DRIVE_OWNER_ID, requestOrigin: 'user' });
+      expect(canRunCode).toHaveBeenCalledWith({ actor: expect.objectContaining({ userId: REQUESTER_ID }), driveId: DRIVE_ID, ownerId: DRIVE_OWNER_ID, requestOrigin: 'user' });
       expect(host.provision).not.toHaveBeenCalled();
     });
 
@@ -449,10 +471,11 @@ describe('ensureDriveEnvSandbox', () => {
       const control = await ensureDriveEnvSandbox({
         envId: ENV_ID,
         intent: 'ensure',
-        requesterId: REQUESTER_ID,
+        requester: credentialActor(REQUESTER_ID, null),
         deps: {
           store: { ...noopStore, findById: async () => envRow, findLocalByEnvId: async () => null },
           host: host.host,
+          getDriveOrgPolicies: async () => null,
           resolvePayer: async () => ({ payerId: DRIVE_OWNER_ID, tier: 'pro' }),
         },
       });

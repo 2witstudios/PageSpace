@@ -31,6 +31,10 @@ import { rewriteCanvasAssets, rewriteInterPageLinksForDrive, extractAndStripOgMe
 import { buildRobotsTxt, buildSitemapXml, buildNotFoundHtml, resolveFaviconTags } from '@pagespace/lib/canvas/site-files';
 import { resolvePrimaryPublishedHost } from '@pagespace/lib/canvas/primary-host';
 import { mirrorPublishedPageToHosts, mirror404ToHosts, getActiveDomainRecords } from './custom-domain-mirror';
+import { checkOrgActive } from '@pagespace/lib/organizations/status';
+import { getOrgPolicies } from '@pagespace/lib/organizations/policy-reader';
+import { publishingDecision } from '@pagespace/lib/organizations/sharing-decisions';
+import { type AccessActor, automationActor, inDrives } from '@pagespace/lib/permissions/access-actor';
 
 export const PUBLISH_HOST = 'pagespace.site';
 const FAVICON_BASE_URL = 'https://pagespace.ai';
@@ -48,6 +52,21 @@ export class PublishError extends Error {
     this.name = 'PublishError';
     this.statusCode = statusCode;
   }
+}
+
+/**
+ * SEAT-9 and POL-4: publishing from an org drive is an org-only capability, and the org may turn it off. A lapsed org's drive
+ * cannot publish or re-publish (402 with the SEAT-9 message); what is already published
+ * stays up and can be unpublished — nothing is deleted. A personal drive has no org.
+ */
+async function assertOrgMayPublish(orgId: string | null | undefined): Promise<void> {
+  if (!orgId) return;
+  const active = await checkOrgActive(orgId);
+  if (!active.ok) throw new PublishError(active.message, active.status);
+  // POL-4: the org's publishing policy, read now (no cache). Off refuses a publish or a subdomain change with
+  // the policy's own message; what is already published is paused in the bucket, never deleted.
+  const decision = publishingDecision(await getOrgPolicies(orgId));
+  if (!decision.ok) throw new PublishError(decision.message, decision.status);
 }
 
 /**
@@ -72,8 +91,8 @@ export interface PublishCanvasPageInput {
   pageId: string;
   /** Drive that owns the page. Resolved by caller. */
   driveId: string;
-  /** User performing the publish (for published_pages.publishedBy + subdomain allocation). */
-  userId: string;
+  /** Who is publishing: the asset checks run as this credential; its user is published_pages.publishedBy. */
+  actor: AccessActor;
   /** Explicit path override. When omitted, derived from page title → pageId fallback. */
   path?: string;
  /**
@@ -178,18 +197,18 @@ async function preparePublishContent(params: {
   homePageId: string | null;
   currentPageId: string;
   currentPath: string;
-  actingUserId: string;
+  actor: AccessActor;
   /**
    * Mirrors `pages.siteMode`. CANVAS only — the DOCUMENT/CODE/SHEET pipelines
    * pass an explicit stricter `cspOverride`, which wins regardless.
    */
   siteMode?: boolean;
 }): Promise<PreparedPublishContent> {
-  const { type, content, contentMode, driveId, subdomain, homePageId, currentPageId, currentPath, actingUserId, siteMode } = params;
+  const { type, content, contentMode, driveId, subdomain, homePageId, currentPageId, currentPath, actor, siteMode } = params;
 
   switch (type) {
     case PageType.CANVAS: {
-      const { html: assetHtml } = await rewriteCanvasAssets({ html: content ?? '', userId: actingUserId, db });
+      const { html: assetHtml } = await rewriteCanvasAssets({ html: content ?? '', actor, db });
       const { html: rewrittenHtml } = await rewriteInterPageLinksForDrive({
         html: assetHtml, driveId, subdomain, homePageId, currentPageId, currentPath, db,
       });
@@ -198,7 +217,7 @@ async function preparePublishContent(params: {
     }
     case PageType.DOCUMENT: {
       const rawHtml = contentMode === 'markdown' ? await marked.parse(content ?? '') : (content ?? '');
-      const { html: assetHtml } = await rewriteCanvasAssets({ html: rawHtml, userId: actingUserId, db });
+      const { html: assetHtml } = await rewriteCanvasAssets({ html: rawHtml, actor, db });
       const { html: rewrittenHtml } = await rewriteInterPageLinksForDrive({
         html: assetHtml, driveId, subdomain, homePageId, currentPageId, currentPath, db,
       });
@@ -233,7 +252,8 @@ async function preparePublishContent(params: {
  * Auth and permission checks are the caller's responsibility.
  */
 export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<PublishCanvasPageResult> {
-  const { pageId, driveId, userId } = input;
+  const { pageId, driveId, actor } = input;
+  const userId = actor.userId;
 
   // ------------------------------------------------------------------
   // 1. Load page (must be a publishable type)
@@ -264,7 +284,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   // ------------------------------------------------------------------
   const drive = await db.query.drives.findFirst({
     where: eq(drives.id, driveId),
-    columns: { id: true, slug: true, publishSubdomain: true, kind: true, homePageId: true, publishDefaultOgImageUrl: true, publishFaviconUrl: true },
+    columns: { id: true, slug: true, publishSubdomain: true, kind: true, homePageId: true, publishDefaultOgImageUrl: true, publishFaviconUrl: true, orgId: true },
   });
 
   if (!drive) {
@@ -274,6 +294,8 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   if (isHomeDrive(drive)) {
     throw new PublishError('Cannot publish from a Home drive', 403);
   }
+
+  await assertOrgMayPublish(drive.orgId);
 
   // Resolve the drive's publish subdomain. The subdomain is a property of the
   // DRIVE, never of an individual publish request: once allocated it is always
@@ -318,7 +340,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
     homePageId: drive.homePageId,
     currentPageId: pageId,
     currentPath: path,
-    actingUserId: userId,
+    actor,
     siteMode: page.siteMode,
   });
   const { meta, body: bodyHtml } = prepared;
@@ -542,7 +564,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
  * publishing is unconfigured. Returns the number of pages successfully
  * re-rendered (useful for callers/tests).
  */
-export async function republishDriveCanonical(driveId: string, userId: string): Promise<number> {
+export async function republishDriveCanonical(driveId: string, actor: AccessActor): Promise<number> {
   if (!isPublishConfigured()) return 0;
 
   // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
@@ -554,7 +576,7 @@ export async function republishDriveCanonical(driveId: string, userId: string): 
   let refreshed = 0;
   for (const row of published) {
     try {
-      await publishCanvasPage({ pageId: row.pageId, driveId, userId, path: row.path });
+      await publishCanvasPage({ pageId: row.pageId, driveId, actor, path: row.path });
       refreshed += 1;
     } catch (err) {
       loggers.api.warn('Failed to re-render published page for canonical refresh', {
@@ -593,14 +615,15 @@ export async function republishDriveCanonical(driveId: string, userId: string): 
 export async function changePublishSubdomain(
   driveId: string,
   candidate: string,
-  userId: string,
+  actor: AccessActor,
 ): Promise<{ oldSubdomain: string | null; newSubdomain: string }> {
   const drive = await db.query.drives.findFirst({
     where: eq(drives.id, driveId),
-    columns: { id: true, publishSubdomain: true, kind: true },
+    columns: { id: true, publishSubdomain: true, kind: true, orgId: true },
   });
   if (!drive) throw new PublishError('Drive not found', 404);
   if (isHomeDrive(drive)) throw new PublishError('Cannot change subdomain of a Home drive', 403);
+  await assertOrgMayPublish(drive.orgId);
 
   const oldSubdomain = drive.publishSubdomain;
 
@@ -638,7 +661,7 @@ export async function changePublishSubdomain(
       where: eq(publishedPages.driveId, driveId),
       columns: { pageId: true },
     });
-    const refreshedCount = await republishDriveCanonical(driveId, userId);
+    const refreshedCount = await republishDriveCanonical(driveId, actor);
     if (refreshedCount !== publishedRows.length) {
       throw new PublishError(
         `Subdomain migration incomplete: refreshed ${refreshedCount}/${publishedRows.length} published pages`,
@@ -721,7 +744,8 @@ async function renderNotFoundPageHtml(params: {
       homePageId,
       currentPageId: pageId,
       currentPath: '',
-      actingUserId: ownerId,
+      // No natural current user here (see above): the drive owner, as a system regeneration, not a sign-in.
+      actor: automationActor(ownerId, 'publish-regeneration', inDrives(driveId)),
       siteMode: page.siteMode,
     });
     const { meta } = prepared;
@@ -923,7 +947,7 @@ export async function regeneratePublishedSiteFiles(driveId: string): Promise<voi
  */
 export async function publishHomePageAtRoot(
   driveId: string,
-  userId: string,
+  actor: AccessActor,
 ): Promise<PublishCanvasPageResult | null> {
   const drive = await db.query.drives.findFirst({
     where: eq(drives.id, driveId),
@@ -935,7 +959,7 @@ export async function publishHomePageAtRoot(
   return publishCanvasPage({
     pageId: drive.homePageId,
     driveId,
-    userId,
+    actor,
   });
 }
 

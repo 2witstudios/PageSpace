@@ -10,6 +10,7 @@ COPY package.json bun.lock ./
 COPY packages/db/package.json ./packages/db/
 COPY packages/lib/package.json ./packages/lib/
 COPY packages/editor/package.json ./packages/editor/
+COPY packages/browser-worker/package.json ./packages/browser-worker/
 COPY packages/sdk/package.json ./packages/sdk/
 COPY packages/cli/package.json ./packages/cli/
 COPY apps/admin/package.json ./apps/admin/
@@ -18,6 +19,7 @@ COPY apps/atlas/package.json ./apps/atlas/
 COPY apps/control-plane/package.json ./apps/control-plane/
 COPY apps/desktop/package.json ./apps/desktop/
 COPY apps/e2e/package.json ./apps/e2e/
+COPY apps/imago/package.json ./apps/imago/
 COPY apps/ios/package.json ./apps/ios/
 COPY apps/marketing/package.json ./apps/marketing/
 COPY apps/processor/package.json ./apps/processor/
@@ -55,6 +57,12 @@ ARG NEXT_PUBLIC_PUBLISH_EDGE_IPV4=""
 ARG NEXT_PUBLIC_PUBLISH_EDGE_IPV6=""
 ARG NEXT_PUBLIC_PUBLISH_EDGE_CNAME_TARGET=""
 ARG NEXT_PUBLIC_COOKIE_DOMAIN=""
+# Imago rollout flag (IMG-10.7): only the exact value "true" shows "Try Imago".
+# Baked at build time, so flipping it means rebuilding web with this arg set.
+ARG NEXT_PUBLIC_IMAGO_ENABLED="false"
+# Imago v3 look for sign-in and other signed-out pages, and /imago as the post-flow
+# landing. Separate from the rollout flag above; only "true" turns it on.
+ARG NEXT_PUBLIC_IMAGO_V3_AUTH="false"
 
 ENV NEXT_PUBLIC_REALTIME_URL=$NEXT_PUBLIC_REALTIME_URL
 ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
@@ -66,6 +74,8 @@ ENV NEXT_PUBLIC_PUBLISH_EDGE_IPV4=$NEXT_PUBLIC_PUBLISH_EDGE_IPV4
 ENV NEXT_PUBLIC_PUBLISH_EDGE_IPV6=$NEXT_PUBLIC_PUBLISH_EDGE_IPV6
 ENV NEXT_PUBLIC_PUBLISH_EDGE_CNAME_TARGET=$NEXT_PUBLIC_PUBLISH_EDGE_CNAME_TARGET
 ENV NEXT_PUBLIC_COOKIE_DOMAIN=$NEXT_PUBLIC_COOKIE_DOMAIN
+ENV NEXT_PUBLIC_IMAGO_ENABLED=$NEXT_PUBLIC_IMAGO_ENABLED
+ENV NEXT_PUBLIC_IMAGO_V3_AUTH=$NEXT_PUBLIC_IMAGO_V3_AUTH
 ARG NEXT_PUBLIC_SENTRY_DSN=""
 ENV NEXT_PUBLIC_SENTRY_DSN=$NEXT_PUBLIC_SENTRY_DSN
 ARG SENTRY_AUTH_TOKEN=""
@@ -80,11 +90,15 @@ ENV SENTRY_PROJECT=$SENTRY_PROJECT
 ENV NEXT_TELEMETRY_DISABLED=1
 
 # Build dependent packages first (db + lib must compile before web)
-RUN bun run --filter '@pagespace/db' build && bun run --filter '@pagespace/lib' build && bun run --filter '@pagespace/editor' build
+RUN bun run --filter '@pagespace/db' build && bun run --filter '@pagespace/lib' build && bun run --filter '@pagespace/editor' build && bun run --filter '@pagespace/browser-worker' build
 
-# Build with development env to ensure Tailwind v4 processes correctly
-# Increased memory for Scribe.js and other heavy dependencies
-RUN cd apps/web && NODE_OPTIONS="--max-old-space-size=4096" bun run build
+# Build with development env to ensure Tailwind v4 processes correctly.
+# Next's production build of apps/web peaks just under Node's ~4GB default heap and
+# OOMs on builder luck; the default matches CI's ceiling (ci.yml, #2740) and fits the
+# 16GB ubuntu-latest runner docker-images.yml builds on. A self-hosted builder with
+# less memory can lower it: --build-arg WEB_BUILD_MAX_OLD_SPACE_MB=<mb>.
+ARG WEB_BUILD_MAX_OLD_SPACE_MB=6144
+RUN cd apps/web && NODE_OPTIONS="--max-old-space-size=${WEB_BUILD_MAX_OLD_SPACE_MB}" bun run build
 
 # Reset NODE_ENV for production runtime
 ENV NODE_ENV=production

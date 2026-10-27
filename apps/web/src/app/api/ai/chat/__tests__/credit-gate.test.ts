@@ -34,15 +34,16 @@ vi.mock('@/lib/auth', () => ({
   ),
   canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserViewPage(auth.userId, pageId);
+    return canUserViewPage(credentialActor(auth.userId, null), pageId);
   }),
   canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserEditPage(auth.userId, pageId);
+    return canUserEditPage(credentialActor(auth.userId, null), pageId);
   }),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn().mockResolvedValue(true),
   canUserEditPage: vi.fn().mockResolvedValue(true),
 }));
@@ -160,6 +161,12 @@ vi.mock('@/lib/ai/core/tool-filtering', () => ({
   filterToolsForMcpScope: vi.fn().mockReturnValue({}),
   buildPageAITools: vi.fn().mockReturnValue({}),
 }));
+// Not a built-in Imago agent: the route's Imago context load fails the turn
+// closed if it throws, so it must not reach this file's partial db mock.
+vi.mock('@/lib/ai/core/imago-agent-context', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/ai/core/imago-agent-context')>()),
+  loadImagoAgentContext: vi.fn().mockResolvedValue(null),
+}));
 vi.mock('@/lib/ai/core/page-tree-context', () => ({
   getPageTreeContext: vi.fn(),
 }));
@@ -217,6 +224,7 @@ import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { streamText } from 'ai';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockUserId = 'user_123';
 
@@ -270,6 +278,13 @@ describe('POST /api/ai/chat - prepaid credit gate', () => {
     expect(streamText).not.toHaveBeenCalled();
   });
 
+  it('SPEND-3 (partial) SPEND-7 (partial) a page turn spends in the page\'s drive and names its conversation, never a source', async () => {
+    await POST(createChatRequest());
+    expect(vi.mocked(canConsumeAI).mock.calls[0]?.[2]?.spend).toEqual({
+      kind: 'drive', driveId: 'drive_A', chosen: null, conversationId: expect.any(String),
+    });
+  });
+
   it('does not block with a 402 when the gate allows', async () => {
     vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'ok' });
 
@@ -287,4 +302,14 @@ describe('POST /api/ai/chat - prepaid credit gate', () => {
     expect(response.status).not.toBe(402);
   });
 
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(credentialActor(auth.userId, null), resourceId),
+    canPrincipalEditPage: (auth: { userId: string }, resourceId: string) => permissions.canUserEditPage(credentialActor(auth.userId, null), resourceId),
+  };
 });

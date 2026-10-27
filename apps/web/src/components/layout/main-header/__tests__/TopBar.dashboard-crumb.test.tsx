@@ -30,7 +30,9 @@ vi.mock('@/components/notifications/VerifyEmailButton', () => ({ default: () => 
 vi.mock('@/components/search/InlineSearch', () => ({ default: () => <div /> }));
 vi.mock('@/components/search/GlobalSearch', () => ({ default: () => <div /> }));
 vi.mock('@/components/shared/UserDropdown', () => ({ default: () => <div /> }));
-vi.mock('@/components/shared/RecentsDropdown', () => ({ default: () => <div /> }));
+vi.mock('@/components/shared/RecentsDropdown', () => ({
+  default: ({ className }: { className?: string }) => <div data-testid="recents" className={className} />,
+}));
 vi.mock('@/components/billing/AiBalanceWidget', () => ({ AiBalanceWidget: () => <div /> }));
 vi.mock('../NavButtons', () => ({ default: () => <div /> }));
 
@@ -42,10 +44,10 @@ const renderTopBar = () =>
   );
 
 describe('TopBar — the way back to the dashboard', () => {
-  it('given the header renders, should say the word "Dashboard" on screen', () => {
+  it('given the header renders, should say the word "Home" on screen', () => {
     renderTopBar();
 
-    expect(screen.getByText('Dashboard')).toBeInTheDocument();
+    expect(screen.getByText('Home')).toBeInTheDocument();
   });
 
   it('given a labelled control in the left group, should let that group wrap rather than overflow its neighbours', () => {
@@ -57,13 +59,36 @@ describe('TopBar — the way back to the dashboard', () => {
     // this survives reordering.
     renderTopBar();
 
-    let group: HTMLElement | null = screen.getByText('Dashboard');
+    let group: HTMLElement | null = screen.getByText('Home');
     while (group && !/\bflex-1\b/.test(group.className)) {
       group = group.parentElement;
     }
 
     expect(group, 'expected a flex-1 ancestor group').not.toBeNull();
     expect(group?.className).toMatch(/\bflex-wrap\b/);
+  });
+
+  it('given a phone-width header, should keep Recents: below lg the sidebar is a sheet, so this is the only quick navigation', () => {
+    // jsdom applies no media queries, so this pins the mechanism: the ONLY
+    // gate on the recents trigger is lg, where the sidebar becomes a panel.
+    renderTopBar();
+
+    const recents = screen.getByTestId('recents');
+    expect(recents.className.split(/\s+/).filter(Boolean)).toEqual(['lg:hidden']);
+  });
+
+  it('given a phone-width header, should keep the search trigger with the other actions, not trailing Home', () => {
+    // Left is navigation, right is actions. The search trigger in the left
+    // group is what pushed the left group to three rows on a phone; walking
+    // up from it must never reach the flex-1 navigation group.
+    renderTopBar();
+
+    let node: HTMLElement | null = screen.getByRole('button', { name: 'Open search' });
+    while (node && !/\bflex-1\b/.test(node.className)) {
+      node = node.parentElement;
+    }
+
+    expect(node).toBeNull();
   });
 
   it('given the header renders, should not fall back to a lone slash as the route home', () => {

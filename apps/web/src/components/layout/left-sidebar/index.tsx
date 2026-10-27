@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
 import { Lock, Plus, Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -12,19 +11,15 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { cn, isElectron } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
-import { useBreakpoint } from "@/hooks/useBreakpoint";
-import { getPermissionErrorMessage, canManageDrive } from "@/hooks/usePermissions";
+import { getPermissionErrorMessage } from "@/hooks/usePermissions";
 import { useDriveStore } from "@/hooks/useDrive";
 import { useUIStore } from "@/stores/useUIStore";
 
-import DashboardFooter from "./DashboardFooter";
 import DashboardSidebar from "./DashboardSidebar";
-import DriveFooter from "./DriveFooter";
 import PageTree from "./page-tree/PageTree";
-import PrimaryNavigation from "./PrimaryNavigation";
-import DriveSwitcher from "@/components/layout/navbar/DriveSwitcher";
+import SidebarShell from "./SidebarShell";
+import { focusDriveId, useFocus } from "@/lib/dashboard/focus";
 
 export interface SidebarProps {
   className?: string;
@@ -33,19 +28,18 @@ export interface SidebarProps {
 
 export default function Sidebar({ className }: SidebarProps) {
   const [searchQuery, setSearchQuery] = useState("");
-  const [isElectronMac, setIsElectronMac] = useState(false);
-  const params = useParams();
-  const { driveId: driveIdParams } = params;
   const { user } = useAuth();
-  const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
 
   const drives = useDriveStore((state) => state.drives);
   const fetchDrives = useDriveStore((state) => state.fetchDrives);
   const openQuickCreate = useUIStore((state) => state.openQuickCreate);
-  const driveId = Array.isArray(driveIdParams) ? driveIdParams[0] : driveIdParams;
+  const driveId = focusDriveId(useFocus());
 
   const drive = drives.find((d) => d.id === driveId);
-  const canManage = canManageDrive(drive);
+  // Server-computed effective permission (#2627): the + button is a projection
+  // of drive.canCreatePages — never a client-side role-tier derivation. A
+  // stale persisted DTO without the field fails closed to the lock.
+  const canCreate = drive?.canCreatePages === true;
 
   useEffect(() => {
     if (user?.id) {
@@ -53,29 +47,8 @@ export default function Sidebar({ className }: SidebarProps) {
     }
   }, [user?.id, fetchDrives]);
 
-  useEffect(() => {
-    setIsElectronMac(isElectron() && /Mac/.test(navigator.platform));
-  }, []);
-
   return (
-    <aside
-      className={cn(
-        "flex h-full w-full flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-sidebar-foreground liquid-glass-regular rounded-tr-lg border border-[var(--separator)] shadow-[var(--shadow-elevated)] dark:shadow-none overflow-hidden",
-        className
-      )}
-    >
-      <div className="flex h-full flex-col py-3">
-        {/* Drive Switcher - always visible, at top */}
-        {/* On macOS Electron in sheet mode, add left padding to clear stoplight buttons */}
-        <div className={cn("px-3 mb-3", isElectronMac && isSheetBreakpoint && "pl-[60px]")}>
-          <DriveSwitcher />
-        </div>
-
-        {/* Primary Navigation (Dashboard, Inbox, Tasks, Calendar) */}
-        <div className="px-3">
-          <PrimaryNavigation driveId={driveId as string} />
-        </div>
-
+    <SidebarShell className={className}>
         {/* Main content area */}
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
           {driveId ? (
@@ -91,11 +64,12 @@ export default function Sidebar({ className }: SidebarProps) {
                     onChange={(event) => setSearchQuery(event.target.value)}
                   />
                 </div>
-                {canManage ? (
+                {canCreate ? (
                   <Button
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 shrink-0"
+                    aria-label="Create new page"
                     onClick={() => openQuickCreate(null)}
                   >
                     <Plus className="h-4 w-4" />
@@ -108,6 +82,7 @@ export default function Sidebar({ className }: SidebarProps) {
                           variant="ghost"
                           size="icon"
                           disabled
+                          aria-label="Create page locked"
                           className="h-8 w-8 shrink-0 cursor-not-allowed opacity-50"
                         >
                           <Lock className="h-4 w-4" />
@@ -133,13 +108,6 @@ export default function Sidebar({ className }: SidebarProps) {
           )}
         </div>
 
-        {/* Drive footer - only shown when in a drive */}
-        {driveId && <div className="px-3"><DriveFooter canManage={canManage} /></div>}
-
-        {/* Dashboard footer - only shown when NOT in a drive */}
-        {!driveId && <div className="px-3"><DashboardFooter /></div>}
-
-      </div>
-    </aside>
+    </SidebarShell>
   );
 }

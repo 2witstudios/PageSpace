@@ -26,6 +26,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isUserDriveMember: vi.fn(),
   getBatchPagePermissions: vi.fn(),
 }));
@@ -47,6 +48,7 @@ const withBuiltins = (...triggers: string[]) =>
   [...BUILTIN_COMMANDS.map((c) => c.trigger), ...triggers].sort();
 import { getBatchPagePermissions, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions } from '@/lib/auth';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockedAuth = vi.mocked(authenticateRequestWithOptions);
 const mockedDb = vi.mocked(db, true);
@@ -160,7 +162,7 @@ describe('GET /api/commands/suggest', () => {
     expect(json.suggestions.map((s: { trigger: string }) => s.trigger).sort()).toEqual(
       withBuiltins('mine')
     );
-    expect(mockedBatchPermissions).toHaveBeenCalledWith(USER_ID, [
+    expect(mockedBatchPermissions).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), [
       'page_ok',
       'page_denied',
     ]);
@@ -299,4 +301,27 @@ describe('GET /api/commands/suggest', () => {
     const longResponse = await GET(suggestRequest({ driveId: 'x'.repeat(200) }));
     expect(longResponse.status).toBe(400);
   });
+});
+
+describe('/btw through GET /api/commands/suggest', () => {
+  it('offers the btw built-in with clientHandled:true and the side-question copy', async () => {
+    mockedAuth.mockResolvedValue(webAuth());
+    vi.mocked(db.query.commands.findMany).mockResolvedValue([]);
+    mockedBatchPermissions.mockResolvedValue(new Map());
+    const response = await GET(new Request('http://test/api/commands/suggest'));
+    const { suggestions } = (await response.json()) as { suggestions: Array<{ trigger: string; description: string; clientHandled?: boolean }> };
+    const btw = suggestions.find((s) => s.trigger === 'btw');
+    expect(btw).toBeDefined();
+    expect(btw?.clientHandled).toBe(true);
+    expect(btw?.description).toBe('Ask a side question without interrupting the run');
+  });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    isPrincipalDriveMember: (auth: { userId: string }, resourceId: string) => permissions.isUserDriveMember(credentialActor(auth.userId, null), resourceId),
+  };
 });

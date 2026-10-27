@@ -14,6 +14,9 @@ vi.stubEnv('NEXT_PUBLIC_DEPLOYMENT_MODE', 'cloud');
 const postMock = vi.fn().mockResolvedValue(undefined);
 vi.mock('../../auth/auth-fetch', () => ({ post: (...args: unknown[]) => postMock(...args) }));
 
+const { isCapacitorApp } = vi.hoisted(() => ({ isCapacitorApp: vi.fn(() => false) }));
+vi.mock('@/lib/capacitor-bridge', () => ({ isCapacitorApp }));
+
 import { track } from '../client-tracker';
 
 const NOW = '2026-06-24T00:00:00.000Z';
@@ -29,6 +32,7 @@ function setConsentCookie(value: string | null) {
 
 beforeEach(() => {
   beacon.mockClear();
+  isCapacitorApp.mockReturnValue(false);
   postMock.mockClear();
   Object.defineProperty(navigator, 'sendBeacon', { value: beacon, configurable: true, writable: true });
   setConsentCookie(null);
@@ -65,5 +69,23 @@ describe('client tracker consent gate', () => {
     expect(beacon).not.toHaveBeenCalled();
     expect(postMock).not.toHaveBeenCalled();
     vi.stubEnv('NEXT_PUBLIC_DEPLOYMENT_MODE', 'cloud');
+  });
+
+  // App Review (5.1.2(i)): the native app shows no consent prompt, so a grant stored
+  // earlier — accepted in a previous build, or toggled on /settings/privacy — must not
+  // turn analytics back on there.
+  it('never sends in the native app even with analytics consent stored', () => {
+    isCapacitorApp.mockReturnValue(true);
+    setConsentCookie(serializeConsentState(acceptAll(defaultConsentState(), NOW)));
+    track('feature_used', { feature: 'x' });
+    expect(beacon).not.toHaveBeenCalled();
+    expect(postMock).not.toHaveBeenCalled();
+  });
+
+  it('never sends in the native app with no consent decision', () => {
+    isCapacitorApp.mockReturnValue(true);
+    track('feature_used', { feature: 'x' });
+    expect(beacon).not.toHaveBeenCalled();
+    expect(postMock).not.toHaveBeenCalled();
   });
 });

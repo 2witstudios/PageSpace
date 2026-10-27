@@ -1,5 +1,19 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
+// SPEND-6: each mentioned agent's reply is gated on the channel's drive wallet
+// (mention-credit-gate, unit-tested on its own). This suite covers other behaviour,
+// so the gate admits every reply here.
+// POL-9: the responder asks the channel drive's org whether agents may reply on their own; no org in these tests.
+vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getDrivePolicies: vi.fn() }));
+
+vi.mock('@/lib/channels/mention-credit-gate', () => ({
+  acquireMentionCreditHold: async () => ({
+    allowed: true,
+    creditSpend: { spend: { kind: 'automation', driveId: 'drive-1' }, walletId: 'w-drive-1' },
+    release: () => {},
+  }),
+}));
+
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
@@ -8,7 +22,10 @@ vi.mock('@pagespace/db/db', () => ({
     },
   },
 }));
-vi.mock('@pagespace/db/operators', () => ({
+vi.mock('@pagespace/db/operators', async (importOriginal) => ({
+  // Keep the real re-exports so transitively imported lib modules that use
+  // `sql` still load (e.g. sheets/search-sql via services/preview).
+  ...(await importOriginal<typeof import('@pagespace/db/operators')>()),
   and: vi.fn(),
   eq: vi.fn(),
   inArray: vi.fn(),
@@ -20,7 +37,21 @@ vi.mock('@pagespace/db/schema/core', () => ({
 vi.mock('@pagespace/db/schema/chat', () => ({
   channelMessages: { pageId: 'pageId', isActive: 'isActive', createdAt: 'createdAt' },
 }));
+// The two gates added for member agents (see agent-mention-responder.ts):
+// membership in the channel's drive is the grant when the mentioner cannot
+// view the agent's home page, and the agent must be able to post in the
+// channel BEFORE any model call is spent on it.
+vi.mock('@pagespace/lib/permissions/agent-permissions', () => ({
+  hasAgentDriveMembership: vi.fn().mockResolvedValue(false),
+}));
+vi.mock('@/lib/ai/tools/actor-permissions', () => ({
+  toolActor: (ctx: { userId: string; accessActor?: unknown }) => ctx.accessActor ?? { via: 'credential', userId: ctx.userId, authentication: null },
+  canActorEditPage: vi.fn().mockResolvedValue(true),
+  canActorConsultAgent: vi.fn().mockResolvedValue(true),
+  pageReadableByModel: vi.fn().mockResolvedValue(true),
+}));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/services/drive-agent-service', () => ({
@@ -74,7 +105,10 @@ import { channelTools } from '@/lib/ai/tools/channel-tools';
 import { planCommandExecutions } from '@/lib/ai/core/command-resolver';
 import { loadHelpAnswerText } from '@/lib/commands/help-answer';
 import type { CommandExecutionPlan } from '@/lib/ai/core/command-processor';
+import { pageReadableByModel } from '@/lib/ai/tools/actor-permissions';
+import { DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { triggerMentionedAgentResponses } from '../agent-mention-responder';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockPagesFindMany = db.query.pages.findMany as unknown as Mock;
 const mockChannelMessagesFindMany = db.query.channelMessages.findMany as unknown as Mock;
@@ -87,7 +121,7 @@ const mockSendChannelExecute = channelTools.send_channel_message.execute as unkn
 const CMD_ID = 'tz4a98xxat96iws9zmbrgj3a';
 
 const baseParams = {
-  userId: 'user-1',
+  sender: credentialActor('user-1', null),
   channelId: 'channel-1',
   channelTitle: 'General',
   sourceMessageId: 'msg-1',
@@ -121,6 +155,7 @@ const skipPlan: CommandExecutionPlan = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(pageReadableByModel).mockResolvedValue(true);
   mockPagesFindMany.mockResolvedValue([
     { id: 'agent-1', title: 'Helper', enabledTools: ['send_channel_message'] },
   ]);
@@ -136,7 +171,7 @@ describe('triggerMentionedAgentResponses — universal commands', () => {
   it("resolves the command with the SENDER's permissions and the channel's drive context", async () => {
     mockPlanCommandExecutions.mockResolvedValue([injectPlan]);
     await triggerMentionedAgentResponses({ ...baseParams, driveId: 'drive-1' });
-    expect(mockPlanCommandExecutions).toHaveBeenCalledWith(baseParams.content, 'user-1', {
+    expect(mockPlanCommandExecutions).toHaveBeenCalledWith(baseParams.content, expect.objectContaining({ via: 'credential', userId: 'user-1' }), {
       driveId: 'drive-1',
     });
   });
@@ -144,7 +179,7 @@ describe('triggerMentionedAgentResponses — universal commands', () => {
   it('resolves with a null drive context when the channel has none', async () => {
     mockPlanCommandExecutions.mockResolvedValue([injectPlan]);
     await triggerMentionedAgentResponses(baseParams);
-    expect(mockPlanCommandExecutions).toHaveBeenCalledWith(baseParams.content, 'user-1', {
+    expect(mockPlanCommandExecutions).toHaveBeenCalledWith(baseParams.content, expect.objectContaining({ via: 'credential', userId: 'user-1' }), {
       driveId: null,
     });
   });
@@ -156,6 +191,19 @@ describe('triggerMentionedAgentResponses — universal commands', () => {
     const askArgs = mockAskAgentExecute.mock.calls[0][0] as { context: string };
     expect(askArgs.context).toContain('Step 1: run tests');
     expect(askArgs.context).toContain('/release-checklist');
+  });
+
+  it('POL-8: a command page whose org does not allow the model the agent runs (its default) is skipped, not injected', async () => {
+    mockPlanCommandExecutions.mockResolvedValue([injectPlan]);
+    vi.mocked(pageReadableByModel).mockResolvedValue(false);
+    await triggerMentionedAgentResponses(baseParams);
+
+    // Judged against the pair the agent's reply resolves: it sets no model, so the default.
+    expect(pageReadableByModel).toHaveBeenCalledWith(expect.objectContaining({ aiModel: DEFAULT_MODEL, runsModel: true }), 'entry-1');
+    const askArgs = mockAskAgentExecute.mock.calls[0][0] as { context: string };
+    expect(askArgs.context).not.toContain('Step 1: run tests');
+    const sendOptions = mockSendChannelExecute.mock.calls[0][1] as { experimental_context: { commandExecution?: unknown } };
+    expect(sendOptions.experimental_context.commandExecution).toEqual([{ label: 'release-checklist', status: 'skipped', reason: 'no_access' }]);
   });
 
   it('passes the skip notice into the ask context for a skipped command', async () => {
@@ -270,7 +318,7 @@ describe('triggerMentionedAgentResponses — solo /help mention', () => {
   it('answers from loadHelpAnswerText instead of calling the model', async () => {
     await triggerMentionedAgentResponses(soloHelpParams);
 
-    expect(mockLoadHelpAnswerText).toHaveBeenCalledWith('user-1', null);
+    expect(mockLoadHelpAnswerText).toHaveBeenCalledWith(expect.objectContaining({ via: 'credential', userId: 'user-1' }), null);
     expect(mockAskAgentExecute).not.toHaveBeenCalled();
     expect(mockSendChannelExecute).toHaveBeenCalledTimes(1);
     const [sendInput] = mockSendChannelExecute.mock.calls[0] as [{ content: string }];
@@ -285,7 +333,7 @@ describe('triggerMentionedAgentResponses — solo /help mention', () => {
 
   it('resolves the answer against the channel drive context', async () => {
     await triggerMentionedAgentResponses({ ...soloHelpParams, driveId: 'drive-1' });
-    expect(mockLoadHelpAnswerText).toHaveBeenCalledWith('user-1', 'drive-1');
+    expect(mockLoadHelpAnswerText).toHaveBeenCalledWith(expect.objectContaining({ via: 'credential', userId: 'user-1' }), 'drive-1');
   });
 
   it('still carries the "used" command-execution pill, without resolving the command at all', async () => {

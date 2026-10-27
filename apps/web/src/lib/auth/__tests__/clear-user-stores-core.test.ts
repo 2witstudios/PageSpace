@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   computeKeysToClear,
+  computePrefixesToClear,
   LEGACY_STORAGE_KEYS,
   USER_SPECIFIC_STORAGE_KEYS,
 } from '../clear-user-stores-core';
@@ -28,5 +29,19 @@ describe('computeKeysToClear', () => {
   test('given the deleted open-tabs store, should treat its key as legacy, not user-specific', () => {
     expect(LEGACY_STORAGE_KEYS).toContain('open-tabs-storage');
     expect(USER_SPECIFIC_STORAGE_KEYS).not.toContain('open-tabs-storage');
+  });
+});
+
+describe('computePrefixesToClear', () => {
+  test('given no previous user, should purge no prefixed keys', () => {
+    expect(computePrefixesToClear(null, 'user-a')).toEqual([]);
+  });
+
+  test('given the same user, should purge no prefixed keys', () => {
+    expect(computePrefixesToClear('user-a', 'user-a')).toEqual([]);
+  });
+
+  test('given a different user, should purge the create-org setup plans', () => {
+    expect(computePrefixesToClear('user-a', 'user-b')).toEqual(['pagespace.orgSetup.']);
   });
 });

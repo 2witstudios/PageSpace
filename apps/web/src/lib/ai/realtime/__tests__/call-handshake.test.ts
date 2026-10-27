@@ -16,7 +16,7 @@ import {
   type HandshakeLogger,
 } from '../call-handshake';
 import { CLIENT_SECRETS_URL, REALTIME_CALLS_URL } from '../session';
-import { VOICE_BRIDGE_ROUTES } from '@pagespace/lib/realtime/voice-bridge-contract';
+import { VOICE_BRIDGE_ROUTES, realtimeAttachPayloadSchema } from '@pagespace/lib/realtime/voice-bridge-contract';
 
 const SECRET = 'ek_call_secret';
 const CALL_ID = 'rtc_u0_EBNOwQshLeDzYP6HmPHHV';
@@ -113,6 +113,7 @@ function harness(
 const run = (deps: HandshakeDeps, conversationId?: string) =>
   runCallHandshake(deps, {
     offerSdp: OFFER_SDP,
+    authentication: null,
     userId: 'u1',
     ...(conversationId === undefined ? {} : { conversationId }),
   });
@@ -152,7 +153,14 @@ describe('runCallHandshake — the happy path', () => {
       callId: CALL_ID,
       answerSdp: ANSWER_SDP,
       attached: true,
+      spendFallback: null,
     });
+  });
+
+  it('SPEND-4 (partial) carries the realtime server\'s report that the opening gate fell back, from and to', async () => {
+    const spendFallback = { from: 'drive_wallet', to: 'own_credits', walletId: 'w-own' };
+    const { deps } = harness({ handoff: () => response({ json: { success: true, callId: CALL_ID, spendFallback } }) });
+    expect(await run(deps)).toMatchObject({ ok: true, attached: true, spendFallback });
   });
 
   it('should mint with the model it was GIVEN, never a built-in default', async () => {
@@ -209,6 +217,7 @@ describe('runCallHandshake — the handoff to the realtime server', () => {
       callId: CALL_ID,
       secret: SECRET,
       userId: 'u1',
+      authentication: null,
       conversationId: 'conv1',
       tools: TOOLS,
       // The realtime server meters the call itself and can derive neither:
@@ -240,6 +249,7 @@ describe('runCallHandshake — the handoff to the realtime server', () => {
 
     await runCallHandshake(deps, {
       offerSdp: OFFER_SDP,
+      authentication: null,
       userId: 'u1',
       conversationId: 'conv1',
       seed,
@@ -404,6 +414,7 @@ describe('runCallHandshake — the bound assistant', () => {
 
     await runCallHandshake(deps, {
       offerSdp: OFFER_SDP,
+      authentication: null,
       userId: 'u1',
       conversationId: 'conv1',
       instructions: 'You are speaking out loud.',
@@ -425,6 +436,28 @@ describe('runCallHandshake — the bound assistant', () => {
     const payload = JSON.parse(String(handoff?.init.body)) as Record<string, unknown>;
     expect(payload).not.toHaveProperty('assistant');
     expect(payload).not.toHaveProperty('instructions');
+  });
+});
+
+describe('runCallHandshake — the drive the call spends in', () => {
+  it('SPEND-1 (partial) given the bound conversation\'s drive, should carry it to the realtime server that meters the call', async () => {
+    const { deps, calls } = harness();
+
+    await runCallHandshake(deps, { offerSdp: OFFER_SDP, authentication: null, userId: 'u1', conversationId: 'conv1', spendDriveId: 'drive-1' });
+
+    const handoff = calls.find((c) => c.url.includes(VOICE_BRIDGE_ROUTES.attach));
+    const payload = JSON.parse(String(handoff?.init.body)) as Record<string, unknown>;
+    expect(payload.spendDriveId).toBe('drive-1');
+    expect(realtimeAttachPayloadSchema.parse(payload).spendDriveId).toBe('drive-1');
+  });
+
+  it('SPEND-8 (partial) given no drive, should omit the key: the call spends personal credits', async () => {
+    const { deps, calls } = harness();
+
+    await run(deps, 'conv1');
+
+    const handoff = calls.find((c) => c.url.includes(VOICE_BRIDGE_ROUTES.attach));
+    expect(JSON.parse(String(handoff?.init.body))).not.toHaveProperty('spendDriveId');
   });
 });
 

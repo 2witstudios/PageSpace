@@ -189,6 +189,18 @@ describe('POST /api/auth/device/refresh', () => {
     vi.mocked(hashToken).mockReturnValue('hashed-old-session');
   });
 
+  it.each(['web', 'desktop', 'ios'])('SEC-3 (partial) %s refresh preserves the device ceremony instead of refreshing its age', async (platform) => {
+    const authenticatedAtMs = Date.now() - 3600000;
+    vi.mocked(validateDeviceToken).mockResolvedValue({ ...mockDeviceRecord, platform,
+      authenticatedAt: new Date(authenticatedAtMs), authenticationAssurance: 'user_verified_passkey',
+    } as never);
+    const response = await POST(createRefreshRequest(validRefreshPayload));
+    expect(response.status).toBe(200);
+    expect(sessionService.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      authentication: { authenticatedAtMs, assurance: 'user_verified_passkey' },
+    }));
+  });
+
   describe('input validation', () => {
     it('returns 400 for missing deviceToken', async () => {
       const request = createRefreshRequest({ deviceId: 'device-123' });

@@ -27,12 +27,15 @@ vi.mock('next/server', () => {
 // ============================================================================
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getUserAccessLevel: vi.fn(),
   getUserDriveAccess: vi.fn(),
   getDriveIdsForUser: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
+    // auditRequest (lib/audit/audit-log) logs through loggers.security.
+    security: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -53,6 +56,14 @@ vi.mock('@pagespace/lib/services/drive-member-service', () => ({
   getDriveRecipientUserIds: vi.fn(),
 }));
 
+// Guest agent members (agents that belong to the drive via drive_agent_members
+// but whose page lives in another drive). The finder hits the DB, so it is
+// mocked; the pure helpers stay real.
+vi.mock('@/lib/mentions/guest-agent-members', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/mentions/guest-agent-members')>()),
+  findGuestAgentMembers: vi.fn(),
+}));
+
 vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnThis(),
@@ -68,9 +79,11 @@ import { GET } from '../route';
 import { getUserAccessLevel, getUserDriveAccess, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { findGuestAgentMembers } from '@/lib/mentions/guest-agent-members';
 import { db } from '@pagespace/db/db';
 import * as dbOperators from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ============================================================================
 // Test Fixtures
@@ -102,6 +115,7 @@ describe('GET /api/mentions/search', () => {
     vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(findGuestAgentMembers).mockResolvedValue([]);
 
     // Default mock for db.select chain
     const selectChain = {
@@ -157,7 +171,7 @@ describe('GET /api/mentions/search', () => {
 
       expect(response.status).toBe(403);
       expect(body.error).toBe('Access denied to the specified drive');
-      expect(getUserDriveAccess).toHaveBeenCalledWith(mockUserId, mockOtherDriveId);
+      expect(getUserDriveAccess).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), mockOtherDriveId);
     });
 
     it('should call getUserDriveAccess when driveId is provided', async () => {
@@ -168,7 +182,7 @@ describe('GET /api/mentions/search', () => {
       await GET(request);
 
       // The critical security check: getUserDriveAccess is called to verify access
-      expect(getUserDriveAccess).toHaveBeenCalledWith(mockUserId, mockDriveId);
+      expect(getUserDriveAccess).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), mockDriveId);
     });
 
     it('should NOT leak data about pages in unauthorized drives', async () => {
@@ -195,7 +209,7 @@ describe('GET /api/mentions/search', () => {
       await GET(request);
 
       // The critical security check: getDriveIdsForUser is used to limit search scope
-      expect(getDriveIdsForUser).toHaveBeenCalledWith(mockUserId);
+      expect(getDriveIdsForUser).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }));
       // getUserDriveAccess should NOT be called for cross-drive
       // (drive access is inherently enforced by getDriveIdsForUser)
       expect(getUserDriveAccess).not.toHaveBeenCalled();
@@ -223,7 +237,7 @@ describe('GET /api/mentions/search', () => {
 
       // The security fix: using getDriveIdsForUser instead of the old
       // getUserAccessibleDrives that only returned owned drives
-      expect(getDriveIdsForUser).toHaveBeenCalledWith(mockUserId);
+      expect(getDriveIdsForUser).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }));
     });
   });
 
@@ -255,7 +269,7 @@ describe('GET /api/mentions/search', () => {
       await GET(request);
 
       // getUserDriveAccess should be called
-      expect(getUserDriveAccess).toHaveBeenCalledWith('user_123', 'drive_unauthorized');
+      expect(getUserDriveAccess).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_123' }), 'drive_unauthorized');
 
       // But page queries should NOT be made since access was denied
       // The db.select call for pages should not happen after access denial
@@ -274,7 +288,7 @@ describe('GET /api/mentions/search', () => {
       await GET(request);
 
       // The security fix: getUserDriveAccess checks owner, member, and page permissions
-      expect(getUserDriveAccess).toHaveBeenCalledWith(mockUserId, mockDriveId);
+      expect(getUserDriveAccess).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), mockDriveId);
     });
 
     it('should deny access when getUserDriveAccess returns false regardless of membership type', async () => {
@@ -299,7 +313,7 @@ describe('GET /api/mentions/search', () => {
       await GET(request);
 
       // Drive access is checked first
-      expect(getUserDriveAccess).toHaveBeenCalledWith(mockUserId, mockDriveId);
+      expect(getUserDriveAccess).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), mockDriveId);
       // Note: getUserAccessLevel would be called for each page result from DB
       // The exact calls depend on DB mock behavior
     });
@@ -400,6 +414,180 @@ describe('GET /api/mentions/search', () => {
   // — the same module the route imports it from — rather than asserting on a
   // response shape the mock can't meaningfully vary.
   // ==========================================================================
+  // ==========================================================================
+  // Guest agent members: an agent added to the drive through
+  // drive_agent_members whose AI_CHAT page lives in ANOTHER drive. The
+  // in-drive page query can never return it (pages.driveId is elsewhere), and
+  // the requester usually cannot view its home page — membership in the
+  // channel's drive is the grant, the same rule the drive's agent-members
+  // list already applies to every drive member.
+  // ==========================================================================
+  describe('guest agent members', () => {
+    const guestAgentId = 'agent_guest_aaaaaaaaaaaaa';
+    const guestRow = { id: guestAgentId, title: 'Guest Agent', memberDriveId: mockDriveId, homeDriveId: 'drive_home' };
+
+    // `.where()` resolves to `rows` when awaited directly (the drives/users
+    // lookups) AND still chains `.orderBy()/.limit()` (the page query).
+    function stubPages(rows: Array<{ id: string; title: string; type: string; driveId: string; mimeType: null }>) {
+      const tail = { orderBy: vi.fn().mockReturnThis(), offset: vi.fn().mockReturnThis(), limit: vi.fn().mockResolvedValue(rows) };
+      const selectChain = {
+        from: vi.fn().mockReturnThis(),
+        where: vi.fn().mockImplementation(() => Object.assign(Promise.resolve(rows), tail)),
+      };
+      vi.mocked(db.select).mockReturnValue(selectChain as unknown as ReturnType<typeof db.select>);
+    }
+
+    beforeEach(() => {
+      vi.mocked(getUserDriveAccess).mockResolvedValue(true);
+      vi.mocked(getUserAccessLevel).mockResolvedValue({ canView: true, canEdit: false, canShare: false, canDelete: false });
+      vi.mocked(getDriveRecipientUserIds).mockResolvedValue([mockUserId, 'user_other']);
+      stubPages([{ id: 'doc-1', title: 'Roadmap', type: 'DOCUMENT', driveId: mockDriveId, mimeType: null }]);
+    });
+
+    it('offers a guest agent member to a drive member as a page mention in the channel drive', async () => {
+      vi.mocked(findGuestAgentMembers).mockResolvedValue([guestRow]);
+
+      const request = new Request(`https://example.com/api/mentions/search?driveId=${mockDriveId}&types=page`);
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(findGuestAgentMembers).toHaveBeenCalledWith(
+        expect.objectContaining({ memberDriveIds: [mockDriveId] })
+      );
+      const guest = body.find((s: { id: string }) => s.id === guestAgentId);
+      expect(guest).toEqual({
+        id: guestAgentId,
+        label: 'Guest Agent',
+        type: 'page',
+        data: { pageType: 'AI_CHAT', driveId: mockDriveId, mimeType: null },
+        description: `agent · ${guestAgentId.slice(0, 6)}`,
+      });
+      // Membership is the grant: the requester's ACL on the agent's HOME page
+      // is never consulted (it would deny — the home drive is not theirs).
+      expect(getUserAccessLevel).not.toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), guestAgentId);
+    });
+
+    it('does not offer guest agents to a requester who is not a drive member (page-permission access only)', async () => {
+      vi.mocked(getDriveRecipientUserIds).mockResolvedValue(['user_owner', 'user_other']);
+      vi.mocked(findGuestAgentMembers).mockResolvedValue([guestRow]);
+
+      const request = new Request(`https://example.com/api/mentions/search?driveId=${mockDriveId}&types=page`);
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(findGuestAgentMembers).not.toHaveBeenCalled();
+      expect(body.some((s: { id: string }) => s.id === guestAgentId)).toBe(false);
+    });
+
+    it('does not look for guest agents when the caller excludes AI_CHAT', async () => {
+      const request = new Request(
+        `https://example.com/api/mentions/search?driveId=${mockDriveId}&types=page&excludePageTypes=FOLDER,AI_CHAT`
+      );
+      const response = await GET(request);
+
+      expect(response.status).toBe(200);
+      expect(findGuestAgentMembers).not.toHaveBeenCalled();
+    });
+
+    it('does not look for guest agents when pages are not requested', async () => {
+      stubPages([]);
+      const request = new Request(`https://example.com/api/mentions/search?driveId=${mockDriveId}&types=user`);
+      const response = await GET(request);
+
+      expect(response.status).toBe(200);
+      expect(findGuestAgentMembers).not.toHaveBeenCalled();
+    });
+
+    it('never lists the same agent twice when it is also an in-drive page result', async () => {
+      stubPages([{ id: guestAgentId, title: 'Guest Agent', type: 'AI_CHAT', driveId: mockDriveId, mimeType: null }]);
+      vi.mocked(findGuestAgentMembers).mockResolvedValue([guestRow]);
+
+      const request = new Request(`https://example.com/api/mentions/search?driveId=${mockDriveId}&types=page`);
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(body.filter((s: { id: string }) => s.id === guestAgentId)).toHaveLength(1);
+    });
+
+    it('in a cross-drive search, only drives where the requester is a member are consulted', async () => {
+      vi.mocked(getDriveIdsForUser).mockResolvedValue([mockDriveId, mockOtherDriveId]);
+      vi.mocked(getDriveRecipientUserIds).mockImplementation(async (id: string) =>
+        id === mockDriveId ? [mockUserId] : ['user_owner']
+      );
+      vi.mocked(findGuestAgentMembers).mockResolvedValue([]);
+      stubPages([]);
+
+      const request = new Request('https://example.com/api/mentions/search?crossDrive=true&types=page');
+      const response = await GET(request);
+
+      expect(response.status).toBe(200);
+      expect(findGuestAgentMembers).toHaveBeenCalledWith(
+        expect.objectContaining({ memberDriveIds: [mockDriveId] })
+      );
+    });
+  });
+
+  // ==========================================================================
+  // Recent pages (no `q`): the view check runs per page after the fetch, so the
+  // drive's newest window can hold nothing the requester may see. The route
+  // reads windows of 50 newest first until 20 pass, at most 200 candidates.
+  // ==========================================================================
+  describe('recent pages with no query', () => {
+    const row = (n: number) => ({ id: `p-${n}`, title: `Page ${n}`, type: 'DOCUMENT', driveId: mockDriveId, mimeType: null });
+    const rows = (from: number, count: number) => Array.from({ length: count }, (_, i) => row(from + i));
+
+    function stubWindows(windows: ReturnType<typeof rows>[]) {
+      const offsets: number[] = [];
+      const chain = {
+        from: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnThis(),
+        orderBy: vi.fn().mockReturnThis(),
+        offset: vi.fn((offset: number) => {
+          offsets.push(offset);
+          return chain;
+        }),
+        limit: vi.fn(async () => windows[offsets.length - 1] ?? []),
+      };
+      vi.mocked(db.select).mockReturnValue(chain as unknown as ReturnType<typeof db.select>);
+      return offsets;
+    }
+
+    beforeEach(() => {
+      vi.mocked(getUserDriveAccess).mockResolvedValue(true);
+      vi.mocked(getDriveRecipientUserIds).mockResolvedValue([mockUserId]);
+    });
+
+    it('reads older windows until it finds a page the requester can view', async () => {
+      const offsets = stubWindows([rows(0, 50), rows(50, 50), rows(100, 10)]);
+      // Only page 105's grant is held: it sits in the third window.
+      vi.mocked(getUserAccessLevel).mockImplementation(async (_actor, pageId) =>
+        pageId === 'p-105' ? { canView: true, canEdit: false, canShare: false, canDelete: false } : null,
+      );
+
+      const response = await GET(new Request(`https://example.com/api/mentions/search?driveId=${mockDriveId}&types=page`));
+      const body = await response.json();
+
+      expect(offsets).toEqual([0, 50, 100]);
+      expect(body.map((s: { id: string }) => s.id)).toEqual(['p-105']);
+    });
+
+    it('stops at 20 viewable pages, and after 200 candidates', async () => {
+      vi.mocked(getUserAccessLevel).mockResolvedValue({ canView: true, canEdit: false, canShare: false, canDelete: false });
+      const filled = stubWindows([rows(0, 50), rows(50, 50)]);
+      const first = await (await GET(new Request(`https://example.com/api/mentions/search?driveId=${mockDriveId}&types=page`))).json();
+
+      vi.mocked(getUserAccessLevel).mockResolvedValue(null);
+      const capped = stubWindows([rows(0, 50), rows(50, 50), rows(100, 50), rows(150, 50), rows(200, 50)]);
+      await GET(new Request(`https://example.com/api/mentions/search?driveId=${mockDriveId}&types=page`));
+
+      // 20 found in the first window, so no second read; the answer is then cut to the route's 10.
+      expect([filled, first.length]).toEqual([[0], 10]);
+      expect(capped).toEqual([0, 50, 100, 150]);
+    });
+  });
+
   describe('excludePageTypes filter', () => {
     beforeEach(() => {
       vi.mocked(getUserDriveAccess).mockResolvedValue(true);
@@ -410,8 +598,9 @@ describe('GET /api/mentions/search', () => {
         from: vi.fn().mockReturnThis(),
         where: vi.fn().mockReturnThis(),
         // No `q=` in these requests, so the route takes the "recent pages"
-        // branch (`.orderBy(...).limit(20)`), not `.limit(50)` directly.
+        // branch (`.orderBy(...).offset(...).limit(...)`), not `.limit(50)` directly.
         orderBy: vi.fn().mockReturnThis(),
+        offset: vi.fn().mockReturnThis(),
         limit: vi.fn().mockResolvedValue([
           { id: 'doc-1', title: 'Roadmap', type: 'DOCUMENT', driveId: mockDriveId, mimeType: null },
         ]),
@@ -475,4 +664,14 @@ describe('GET /api/mentions/search', () => {
       expect(patterns).toContain('%off%');
     });
   });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    getPrincipalAccessLevel: (auth: { userId: string }, resourceId: string) => permissions.getUserAccessLevel(credentialActor(auth.userId, null), resourceId),
+    getPrincipalDriveAccess: (auth: { userId: string }, resourceId: string) => permissions.getUserDriveAccess(credentialActor(auth.userId, null), resourceId),
+  };
 });

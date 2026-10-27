@@ -3,7 +3,12 @@ import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { createId } from '@paralleldrive/cuid2';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
+import { toolModelContext } from '@/lib/ai/core/tool-model-context';
+import { MODEL_ENTITLEMENT_MESSAGES, modelEntitlement } from '@/lib/ai/core/model-entitlement';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
+import { automationRunUnreserved, automationSpend } from '@pagespace/lib/billing/spend-target';
+import { automationRefFor } from '@pagespace/lib/billing/automation-attribution';
+import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import { filterToolsForEphemeralWorkspace, filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier, SANDBOX_COMPUTE_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibility } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { spawnSession, createConversationInSession, endSession } from '@/lib/agent-workspaces/agent-workspaces-runtime';
@@ -11,6 +16,7 @@ import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
 import { messageRepository } from '@/lib/repositories/message-repository';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { db } from '@pagespace/db/db'
 import { eq, and, inArray } from '@pagespace/db/operators'
@@ -26,13 +32,18 @@ import { workflowRunSteps } from '@pagespace/db/schema/workflow-run-steps'
 import type { WorkflowStep, WorkflowToolStep } from '@pagespace/db/schema/workflows'
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { MAX_WORKFLOW_STEPS } from './core/step-plan';
+import { MAX_WORKFLOW_STEPS, hasAiStep, resolveSteps } from './core/step-plan';
 import { resolveStepArgs } from './core/resolve-step-args';
 import { applyImplicitStepArgs } from './core/implicit-step-args';
 import { frameWebhookPayloadPrompt } from '@/lib/webhooks/webhook-payload-framing';
 import { DETERMINISTIC_TOOL_ALLOWLIST, getDeterministicTools } from '@/lib/ai/core/deterministic-tools';
 import type { z } from 'zod';
 import { capStepToolPayloads } from '@/lib/ai/core/cap-step-tool-payloads';
+import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
+import { agentsAutonomousDecision } from '@pagespace/lib/organizations/org-action-decisions';
+import { readWorkflowOwnership } from '@pagespace/lib/organizations/automation-ownership';
+import { claimedRunOwner } from '@pagespace/lib/permissions/automation-ownership';
+import { type AccessActor, automationActor, inDrives } from '@pagespace/lib/permissions/access-actor';
 
 export type WorkflowRunSource =
   | { table: 'cron'; id: null; triggerAt: Date | null }
@@ -54,6 +65,12 @@ export interface WorkflowExecutionResult {
   /** True iff the partial unique index rejected the claim (another in-flight run). */
   claimConflict?: boolean;
   /**
+   * True iff the claimed run was refused by the caller's `admit` hook (e.g. the
+   * credit gate): no model ran, and the run row was finalized as 'cancelled'
+   * with `error` as the reason. A skip, not a failure.
+   */
+  skipped?: boolean;
+  /**
    * Set when execution itself completed but the end-of-run UPDATE on
    * workflow_runs failed. The row is left in 'running' state and the
    * stuck-run sweeper will mark it as 'error' after the timeout. Callers
@@ -73,7 +90,28 @@ export interface WorkflowExecutionResult {
  * augmentations injected by the trigger-fire path so executeWorkflow
  * doesn't need to know which kind of trigger it serves.
  */
+/**
+ * The actor a run reads and writes as (D-OW-34, D-OW-45, D-OW-62). A manual Run is a person pressing a button in an
+ * authenticated request: it runs as THAT credential (`actingActor`), so the org sign-in policy applies to it as to any
+ * request. A scheduled or triggered run has no one signing in: it runs as the workflow's creator, an automation
+ * CONFINED to the workflow's own drive (plus its agent's home drive, part of the same configuration), so an
+ * automation is never a way to read a drive its creator could open only by signing in.
+ */
+function workflowActor(
+  input: Pick<WorkflowExecutionInput, 'createdBy' | 'source' | 'driveId' | 'actingActor'>,
+  agentDriveId?: string | null,
+): AccessActor {
+  if (input.actingActor) return input.actingActor;
+  const drives = agentDriveId && agentDriveId !== input.driveId ? [input.driveId, agentDriveId] : [input.driveId];
+  return automationActor(input.createdBy, `workflow:${input.source.table}`, inDrives(...drives));
+}
+
 export interface WorkflowExecutionInput {
+  /**
+   * The person who pressed Run, as their request's credential (D-OW-62): a manual run reads and writes as them, under
+   * their org's sign-in policy. Absent for scheduled and triggered runs, which run as the confined creator automation.
+   */
+  actingActor?: AccessActor;
   workflowId: string;
   workflowName: string;
   driveId: string;
@@ -101,7 +139,45 @@ export interface WorkflowExecutionInput {
   eventContext?: { promptOverride?: string; payload?: unknown };
 }
 
-export async function executeWorkflow(input: WorkflowExecutionInput): Promise<WorkflowExecutionResult> {
+/**
+ * Where a run's AI usage is charged: the spend target its gate resolved and the wallet the
+ * gate reserved on (WAL-5). Threaded to settlement and to the run's own tools, so a tool
+ * that gates or bills inside the run lands on the same wallet (SPEND-6, SPEND-7).
+ */
+export type RunCreditSpend = NonNullable<ToolExecutionContext['creditSpend']>;
+
+/** A caller's go/no-go for a claimed run. `release` runs once the run settles. */
+export type RunAdmission =
+  | { admitted: true; release: () => void; creditSpend?: RunCreditSpend }
+  | { admitted: false; error: string };
+
+/** A claimed, admitted run's input plus the wallet it spends. Internal to this module. */
+type ClaimedRunInput = WorkflowExecutionInput & { creditSpend: RunCreditSpend };
+
+export interface ExecuteWorkflowOptions {
+  /**
+   * Consulted AFTER the running claim is won and BEFORE any model is built —
+   * the seam for the credit gate. Inside the claim on purpose: an overlapping
+   * fire of the same workflow loses the claim first and never reaches it, so
+   * only the fire that holds the claim can be refused and record the refusal
+   * (a gate run before the claim could be denied by a peer's hold and write a
+   * false cancellation beside the peer's real run).
+   */
+  admit?: () => Promise<RunAdmission>;
+  /**
+   * For a caller that gated BEFORE the claim (the calendar, zoom and page-webhook trigger
+   * executors): the wallet its gate reserved on. An admission's own creditSpend wins.
+   * Absent both, the run names its drive (SPEND-6) and no wallet: while wallets are live a
+   * run that would call a model is then refused (automationRunUnreserved), never settled
+   * on a person.
+   */
+  creditSpend?: RunCreditSpend;
+}
+
+export async function executeWorkflow(
+  input: WorkflowExecutionInput,
+  options: ExecuteWorkflowOptions = {},
+): Promise<WorkflowExecutionResult> {
   const startTime = Date.now();
 
   // 0. Atomic claim via workflow_runs partial unique index. The
@@ -131,23 +207,48 @@ export async function executeWorkflow(input: WorkflowExecutionInput): Promise<Wo
 
   const runId = runRow.id;
   let result: WorkflowExecutionResult;
+  let release: (() => void) | undefined;
 
   try {
-    const explicitSteps = input.steps && input.steps.length > 0 ? input.steps : null;
-    if (explicitSteps) {
-      result = await runStepChain(input, explicitSteps, runId, startTime);
-    } else if (input.agentPageId) {
-      // Legacy single-AI-prompt path, byte-for-byte pre-steps behavior.
-      result = await runExecution(input, startTime, {
-        prompt: input.eventContext?.promptOverride ?? input.prompt,
-        agentPageId: input.agentPageId,
-      });
+    // [D-OW-36] Nothing runs under a missing person. Read fresh inside the claim, before the policy, the admission
+    // and any hold: a workflow whose creator left the org (flagged owner-left) or deleted their account (no
+    // creator) is skipped, manual Runs included, and the run row is finalized as cancelled with the reason. The
+    // fresh read also closes the race with a departure that committed after a poller selected the row.
+    // And the run proceeds only as the owner read now: a run composed from a poller's stale row whose workflow
+    // was reassigned since is skipped owner_changed, never run as the old creator (review #2831 P2-2). A
+    // calendar trigger runs as its scheduler, which its executor re-read before gating.
+    const ownership = await readWorkflowOwnership(input.workflowId);
+    const owner = ownership
+      ? claimedRunOwner(ownership, input.source.table === 'calendarTriggers' ? null : input.createdBy)
+      : null;
+    // POL-9: an org can turn agents' autonomous runs off. A run with no person asking (every source but a manual
+    // run) in an org drive is skipped before any credit is reserved or any model is built; the run row is finalized
+    // as cancelled with the policy's message. Read now, every run: no cache, no restart.
+    const autonomy = owner && !owner.runs
+      ? { ok: false as const, message: owner.error }
+      : input.source.table === 'manual' ? { ok: true as const } : agentsAutonomousDecision((await getDrivePolicies(input.driveId))?.policies ?? null);
+    const admission = autonomy.ok && options.admit ? await options.admit() : undefined;
+    if (!autonomy.ok) {
+      result = { success: false, skipped: true, durationMs: Date.now() - startTime, error: autonomy.message };
+    } else if (admission && !admission.admitted) {
+      result = { success: false, skipped: true, durationMs: Date.now() - startTime, error: admission.error };
     } else {
-      result = {
-        success: false,
-        durationMs: Date.now() - startTime,
-        error: 'workflow has no steps and no agentPageId',
-      };
+      release = admission?.release;
+      const creditSpend = admission?.creditSpend ?? options.creditSpend ?? { spend: automationSpend(input.driveId) };
+      const runsModel = hasAiStep(resolveSteps({ steps: input.steps ?? null, prompt: input.prompt, agentPageId: input.agentPageId }));
+      if (runsModel && automationRunUnreserved({
+        billingEnabled: isBillingEnabled(),
+        target: creditSpend.spend,
+        walletId: creditSpend.walletId,
+      })) {
+        // SPEND-6, fail closed: with no reserved drive wallet this run's usage would settle
+        // on the recorded person's personal root (consumeCredits' fallback). Skip instead.
+        result = { success: false, skipped: true, durationMs: Date.now() - startTime, error: 'AI credit gate denied: no drive wallet reserved for this automation' };
+      } else {
+        // SPEND-10: a run no person is present for is listed as this workflow on the drive's spend.
+        const automationRef = automationRefFor(creditSpend.spend, input.workflowId);
+        result = await runClaimed({ ...input, creditSpend: automationRef ? { ...creditSpend, automationRef } : creditSpend }, runId, startTime);
+      }
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -156,6 +257,8 @@ export async function executeWorkflow(input: WorkflowExecutionInput): Promise<Wo
       durationMs: Date.now() - startTime,
       error: errorMessage,
     };
+  } finally {
+    release?.();
   }
 
   const finalizeError = await finalizeRun(runId, result);
@@ -163,6 +266,28 @@ export async function executeWorkflow(input: WorkflowExecutionInput): Promise<Wo
   return finalizeError
     ? { ...result, runId, finalizeError }
     : { ...result, runId };
+}
+
+/** The body of a claimed, admitted run. Throws propagate to executeWorkflow. */
+async function runClaimed(
+  input: ClaimedRunInput,
+  runId: string,
+  startTime: number,
+): Promise<WorkflowExecutionResult> {
+  const explicitSteps = input.steps && input.steps.length > 0 ? input.steps : null;
+  if (explicitSteps) return runStepChain(input, explicitSteps, runId, startTime);
+  if (input.agentPageId) {
+    // Legacy single-AI-prompt path, byte-for-byte pre-steps behavior.
+    return runExecution(input, startTime, {
+      prompt: input.eventContext?.promptOverride ?? input.prompt,
+      agentPageId: input.agentPageId,
+    });
+  }
+  return {
+    success: false,
+    durationMs: Date.now() - startTime,
+    error: 'workflow has no steps and no agentPageId',
+  };
 }
 
 /**
@@ -177,7 +302,7 @@ async function finalizeRun(runId: string, result: WorkflowExecutionResult): Prom
     await db
       .update(workflowRuns)
       .set({
-        status: result.success ? 'success' : 'error',
+        status: result.success ? 'success' : result.skipped ? 'cancelled' : 'error',
         endedAt: new Date(),
         durationMs: result.durationMs,
         error: result.error ?? null,
@@ -202,7 +327,7 @@ async function finalizeRun(runId: string, result: WorkflowExecutionResult): Prom
  * the legacy execution body with the step's own prompt/agent.
  */
 async function runStepChain(
-  input: WorkflowExecutionInput,
+  input: ClaimedRunInput,
   steps: WorkflowStep[],
   runId: string,
   startTime: number
@@ -334,7 +459,7 @@ type ToolStepResult = { ok: true } | { ok: false; error: string };
 async function runToolStep(
   step: WorkflowToolStep,
   index: number,
-  input: WorkflowExecutionInput
+  input: ClaimedRunInput
 ): Promise<ToolStepResult> {
   if (!(DETERMINISTIC_TOOL_ALLOWLIST as readonly string[]).includes(step.toolName)) {
     return { ok: false, error: `tool "${step.toolName}" is not deterministically invocable` };
@@ -360,9 +485,12 @@ async function runToolStep(
     };
   }
 
+  const stepActor = workflowActor(input);
   const executionContext: ToolExecutionContext = {
-    userId: input.createdBy,
+    userId: stepActor.userId,
+    accessActor: stepActor,
     timezone: input.timezone,
+    creditSpend: input.creditSpend,
   };
 
   try {
@@ -435,7 +563,7 @@ async function releaseWorkflowSession(workspaceId: string, workflowId: string): 
 }
 
 async function runExecution(
-  input: WorkflowExecutionInput,
+  input: ClaimedRunInput,
   startTime: number,
   exec: { prompt: string; agentPageId: string }
 ): Promise<WorkflowExecutionResult> {
@@ -526,7 +654,7 @@ async function runExecution(
 
     // 4c. Load instruction page content if present
     if (input.instructionPageId) {
-      const instrContent = await loadInstructionPage(input.instructionPageId, input.createdBy);
+      const instrContent = await loadInstructionPage(input.instructionPageId, workflowActor(input));
       if (instrContent) {
         userMessage += '\n\n--- Detailed Instructions ---\n' + instrContent;
       }
@@ -541,10 +669,22 @@ async function runExecution(
       selectedModel,
     };
 
-    const providerResult = await createAIProvider(input.createdBy, providerRequest);
+    const providerResult = await createAIProvider(input.createdBy, providerRequest, { driveId: input.driveId });
 
     if (isProviderError(providerResult)) {
       return { success: false, durationMs: Date.now() - startTime, error: `AI provider error: ${providerResult.error}` };
+    }
+
+    // The pro-model gate, for the tier of whoever funds this run (WAL-8, POL-8): the drive wallet's root owner for an
+    // automation, the presser's own for a manual Run that spends their credits. Keyed on the model that will run.
+    const entitlement = await modelEntitlement({
+      userId: input.creditSpend.userId ?? input.createdBy,
+      provider: providerResult.provider,
+      model: providerResult.modelName,
+      spend: input.creditSpend.spend,
+    });
+    if (!entitlement.allowed) {
+      return { success: false, durationMs: Date.now() - startTime, error: MODEL_ENTITLEMENT_MESSAGES[entitlement.reason] };
     }
 
     // 6. Filter tools based on agent's enabled tools
@@ -570,7 +710,7 @@ async function runExecution(
     // Step 3b's own reasoning.
     const workflowSandboxEnabled = Boolean(agent.sandboxEnabled);
     const workflowSandboxTierEligible = workflowSandboxEnabled
-      ? await resolveSandboxToolEligibility(agent.driveId ?? null, input.createdBy)
+      ? await resolveSandboxToolEligibility(agent.driveId ?? null, workflowActor(input))
       : false;
     availableTools = filterToolsForSandboxEnablement(availableTools, workflowSandboxEnabled) as ToolSet;
     // Tier strips only COMPUTE tools — the chat-only session family stays
@@ -583,9 +723,12 @@ async function runExecution(
       const { resolvePageAgentIntegrationTools } = await import('@/lib/ai/core/integration-tool-resolver');
       const integrationTools = await resolvePageAgentIntegrationTools({
         agentId: agent.id,
-        userId: input.createdBy,
+        actor: workflowActor(input),
         driveId: input.driveId,
         currentTools: availableTools,
+        // The workflow's drive is where it works; an Imago agent draws that
+        // drive's integrations only when it is Home or granted.
+        contextDriveId: input.driveId,
       });
 
       if (Object.keys(integrationTools).length > 0) {
@@ -606,10 +749,10 @@ async function runExecution(
 
     // 6c. Session-backed execution (review #2326, three rounds). The session
     // runtime resolves a conversation's BOUND SESSION and refuses session-less
-    // callers — a synthetic `workflow-…` id has no conversation row at all,
-    // so EVERY session-backed tool the gates above admitted (bash/file/git
-    // compute AND the chat-only session family, which free-tier and
-    // kill-switch-off runs keep) would answer `no_session` and never execute.
+    // callers — a plain page conversation has no bound session, so EVERY
+    // session-backed tool the gates above admitted (bash/file/git compute AND
+    // the chat-only session family, which free-tier and kill-switch-off runs
+    // keep) would answer `no_session` and never execute.
     //
     // spawn_session/send_session are stripped from EVERY workflow run. This
     // used to rest on two reasons (codex rounds 7, 8 and 11); only ONE is still
@@ -636,7 +779,7 @@ async function runExecution(
     // cap, transient fault) degrades to running WITHOUT the session-backed
     // families rather than failing the workflow — the same posture as an
     // agent with the sandbox toggled off.
-    let conversationId = `workflow-${input.workflowId}-${Date.now()}`;
+    let conversationId: string | null = null;
     availableTools = filterToolsForEphemeralWorkspace(availableTools, false) as ToolSet;
     const sessionBackedToolsActive =
       workflowSandboxEnabled &&
@@ -646,7 +789,7 @@ async function runExecution(
     }
     if (sessionBackedToolsActive) {
       const spawned = await spawnSession({
-        userId: input.createdBy,
+        actor: workflowActor(input),
         driveId: agent.driveId ?? input.driveId,
         name: `Workflow: ${input.workflowName}`.slice(0, 100),
       });
@@ -655,7 +798,7 @@ async function runExecution(
         try {
           await createConversationInSession({
             conversationId: boundConversationId,
-            userId: input.createdBy,
+            actor: workflowActor(input),
             agentPageId: agent.id,
             workspaceId: spawned.session.id,
             title: `Workflow: ${input.workflowName}`.slice(0, 100),
@@ -684,12 +827,36 @@ async function runExecution(
       }
     }
 
+    // 6d. Every run persists into a REAL conversation (#2686). `messages.
+    // conversationId` is a hard FK, so a run that bound no session (sandbox
+    // off, spawn refused, bind failed) gets a plain page conversation on the
+    // agent — the same row an interactive chat would have — minted BEFORE the
+    // model runs, because tools read `conversationId` from the execution
+    // context. Without it the run did its tool work and then failed saving its
+    // own transcript.
+    if (conversationId === null) {
+      const plainConversationId = createId();
+      const created = await conversationRepository.createConversation(
+        plainConversationId,
+        input.createdBy,
+        agent.id,
+        { title: `Workflow: ${input.workflowName}`.slice(0, 100) },
+      );
+      if (created !== 'created') {
+        throw new Error(`Workflow run conversation could not be created: ${created}`);
+      }
+      conversationId = plainConversationId;
+    }
+
     // 7. Build execution context
+    const agentActor = workflowActor(input, agent.driveId);
     const executionContext: ToolExecutionContext = {
-      userId: input.createdBy,
+      userId: agentActor.userId,
+      accessActor: agentActor,
       timezone: input.timezone,
-      aiProvider: agent.aiProvider ?? undefined,
-      aiModel: agent.aiModel ?? undefined,
+      creditSpend: input.creditSpend,
+      // POL-8: the tools are judged by the model this run resolved (an agent with no model runs the default).
+      ...toolModelContext(providerResult),
       conversationId,
       // The run's agent identity, exactly as the chat route passes it: the
       // session tools' `callerAgentPageId` reads `chatSource.agentPageId` so
@@ -717,6 +884,21 @@ async function runExecution(
     };
 
     const messages = [{ role: 'user' as const, content: userMessage }];
+
+    // 7b. Save the user prompt BEFORE the model runs. The conversation row
+    // above is already committed, and both history lists only show a
+    // conversation with an active message — a run whose generation throws
+    // would otherwise leave an empty conversation its owner can neither see
+    // nor delete. With the prompt saved, a failed run is a visible, deletable
+    // conversation holding what was asked.
+    await messageRepository.savePageMessage({
+      messageId: createId(),
+      pageId: agent.id,
+      conversationId,
+      userId: input.createdBy,
+      role: 'user',
+      content: userMessage,
+    });
 
     // 8. Call generateText
     const result = Object.keys(availableTools).length > 0
@@ -759,21 +941,9 @@ async function runExecution(
       0
     ) || 0;
 
-    // 9. Save user prompt + AI response as chat messages
-    const userMessageId = createId();
-    const assistantMessageId = createId();
-
+    // 9. Save the AI response into the run's conversation
     await messageRepository.savePageMessage({
-      messageId: userMessageId,
-      pageId: agent.id,
-      conversationId,
-      userId: input.createdBy,
-      role: 'user',
-      content: userMessage,
-    });
-
-    await messageRepository.savePageMessage({
-      messageId: assistantMessageId,
+      messageId: createId(),
       pageId: agent.id,
       conversationId,
       userId: null,
@@ -792,9 +962,13 @@ async function runExecution(
     // the webhook path's daily-ceiling accounting reads aiUsageLogs, so a
     // detached write here would open a window where neither the hold nor the
     // landed cost is visible to the next gate check.
-    const usage = result.usage;
+    // A step is a tool loop (up to 100 model rounds); settle its AGGREGATE usage
+    // so caps and accounting cover every round-trip, not just the last one
+    // (HIST-03, #2736) — the same contract the consult route settles on.
+    const usage = result.totalUsage;
     await AIMonitoring.trackUsage({
-      userId: input.createdBy,
+      // Counted as the consumer the run's gate bound: a manual Run's presser, else the creator (review #2817 P2-3).
+      userId: input.creditSpend.userId ?? input.createdBy,
       provider: providerResult.provider,
       model: providerResult.modelName,
       source: 'workflow',
@@ -803,6 +977,10 @@ async function runExecution(
       totalTokens: usage ? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)) : undefined,
       pageId: agent.id,
       driveId: input.driveId,
+      // WAL-5 / SPEND-6: settle on the wallet the run's gate reserved on — the drive wallet,
+      // never a person's — not the payer's personal root.
+      walletId: input.creditSpend.walletId,
+      automationRef: input.creditSpend.automationRef,
       success: true,
     });
 
@@ -928,7 +1106,7 @@ async function buildTaskContext(taskItemId: string, triggerType: 'due_date' | 'c
   return parts.join('\n');
 }
 
-async function loadInstructionPage(pageId: string, userId: string): Promise<string | null> {
+async function loadInstructionPage(pageId: string, actor: AccessActor): Promise<string | null> {
   const [instrPage] = await db
     .select({ title: pages.title, content: pages.content, driveId: pages.driveId, isTrashed: pages.isTrashed })
     .from(pages)
@@ -937,7 +1115,7 @@ async function loadInstructionPage(pageId: string, userId: string): Promise<stri
   if (!instrPage || instrPage.isTrashed || !instrPage.content) return null;
 
   if (instrPage.driveId) {
-    const hasAccess = await isUserDriveMember(userId, instrPage.driveId);
+    const hasAccess = await isUserDriveMember(actor, instrPage.driveId);
     if (!hasAccess) return null;
   } else {
     return null;

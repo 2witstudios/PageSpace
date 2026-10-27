@@ -1,18 +1,23 @@
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages } from '@pagespace/db/schema/core'
 import { eventAttendees } from '@pagespace/db/schema/calendar'
 import { workflows } from '@pagespace/db/schema/workflows';
+import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
+import { AUTOMATION_OWNER_LEFT_ERROR, automationRunOwner } from '@pagespace/lib/permissions/automation-ownership';
 import { decryptUserRows } from '@pagespace/lib/auth/user-repository';
 import type { CalendarEvent } from '@pagespace/db/schema/calendar'
 import type { CalendarTrigger } from '@pagespace/db/schema/calendar-triggers';
 import { executeWorkflow, type WorkflowExecutionResult, type WorkflowExecutionInput } from './workflow-executor';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { automationSpend } from '@pagespace/lib/billing/spend-target';
+import { creditDeniedError } from '@/lib/workflows/workflow-credit-gate';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { automationActor, inDrives } from '@pagespace/lib/permissions/access-actor';
 
 const logger = loggers.api.child({ module: 'calendar-trigger-executor' });
 
@@ -33,14 +38,7 @@ export async function executeCalendarTrigger(
   const startTime = Date.now();
 
   try {
-    // 1. Verify scheduling user still has drive access (may have been removed since scheduling)
-    const hasDriveAccess = await isUserDriveMember(trigger.scheduledById, trigger.driveId);
-    if (!hasDriveAccess) {
-      const error = 'Scheduling user no longer has access to the drive';
-      return { success: false, durationMs: Date.now() - startTime, error };
-    }
-
-    // 2. Load the linked workflows row (the trigger holds only "when"; payload lives on workflows)
+    // 1. Load the linked workflows row (the trigger holds only "when"; payload lives on workflows)
     const [workflow] = await db
       .select()
       .from(workflows)
@@ -48,6 +46,35 @@ export async function executeCalendarTrigger(
 
     if (!workflow) {
       const error = `Linked workflow ${trigger.workflowId} not found`;
+      return { success: false, durationMs: Date.now() - startTime, error };
+    }
+
+    // 2. [D-OW-36] Nothing runs under a missing person: a workflow whose creator left the org (flagged
+    //    owner-left), or a trigger whose scheduler's account is gone, is skipped before the access check,
+    //    the credit gate or any hold. A cancelled run records why and consumes this occurrence, so the
+    //    poller does not re-discover it every tick.
+    const owner = automationRunOwner(workflow);
+    if (!owner.runs || trigger.scheduledById === null) {
+      const error = owner.runs ? AUTOMATION_OWNER_LEFT_ERROR : owner.error;
+      await db.insert(workflowRuns).values({
+        workflowId: trigger.workflowId,
+        sourceTable: 'calendarTriggers',
+        sourceId: trigger.id,
+        triggerAt: trigger.triggerAt,
+        status: 'cancelled',
+        endedAt: new Date(),
+        error,
+      }).onConflictDoNothing();
+      logger.info('Calendar trigger: skipped (owner left)', { triggerId: trigger.id, workflowId: workflow.id });
+      return { success: false, skipped: true, durationMs: Date.now() - startTime, error };
+    }
+    const scheduledById = trigger.scheduledById;
+
+    // Verify the scheduling user still has drive access (may have been removed since scheduling)
+    // An automation runs as its scheduler (D-OW-34): membership applies, sign-in policy does not.
+    const hasDriveAccess = await isUserDriveMember(automationActor(scheduledById, 'calendar-trigger', inDrives(trigger.driveId)), trigger.driveId);
+    if (!hasDriveAccess) {
+      const error = 'Scheduling user no longer has access to the drive';
       return { success: false, durationMs: Date.now() - startTime, error };
     }
 
@@ -74,18 +101,22 @@ export async function executeCalendarTrigger(
     const [schedulingUser] = await db
       .select({ subscriptionTier: users.subscriptionTier })
       .from(users)
-      .where(eq(users.id, trigger.scheduledById));
+      .where(eq(users.id, scheduledById));
+    //    SPEND-6: a trigger has no person present; it spends the workflow's drive wallet
+    //    or is skipped, never the scheduling user's credits or allowance.
+    const spend = automationSpend(workflow.driveId);
     const gate = await canConsumeAI(
-      trigger.scheduledById,
-      (schedulingUser?.subscriptionTier ?? 'free') as SubscriptionTier,
-      { skipDailyCap: true },
+      scheduledById,
+      toPersonalSubscriptionTier(schedulingUser?.subscriptionTier),
+      { spend, skipDailyCap: true },
     );
     if (!gate.allowed) {
       logger.info('Calendar trigger: skipped (credit gate denied)', {
         triggerId: trigger.id,
         reason: gate.reason,
+        refusal: gate.refusal?.reason,
       });
-      return { success: false, durationMs: Date.now() - startTime, error: `AI credit gate denied: ${gate.reason}` };
+      return { success: false, durationMs: Date.now() - startTime, error: creditDeniedError(gate.reason, gate.refusal) };
     }
     const holdId = gate.holdId;
 
@@ -100,7 +131,7 @@ export async function executeCalendarTrigger(
       workflowId: workflow.id,
       workflowName: `calendar-trigger-${trigger.id}`,
       driveId: workflow.driveId,
-      createdBy: trigger.scheduledById,
+      createdBy: scheduledById,
       agentPageId: workflow.agentPageId,
       prompt: workflow.prompt,
       contextPageIds: (workflow.contextPageIds as string[] | null) ?? [],
@@ -115,7 +146,7 @@ export async function executeCalendarTrigger(
     // so the user's spendable balance is accurate immediately after execution.
     let result: WorkflowExecutionResult;
     try {
-      result = await executeWorkflow(input);
+      result = await executeWorkflow(input, { creditSpend: { spend, walletId: gate.walletId } });
     } finally {
       if (holdId) void releaseHold(holdId).catch(() => {});
     }

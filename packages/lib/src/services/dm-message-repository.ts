@@ -8,11 +8,12 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, asc, desc, eq, gt, isNotNull, isNull, lt, or, sql, type InferSelectModel } from '@pagespace/db/operators';
-import { dmConversations, directMessages, dmMessageReactions, dmThreadFollowers } from '@pagespace/db/schema/social';
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, or, sql, type InferSelectModel } from '@pagespace/db/operators';
+import { dmConversations, directMessages, directMessageAttachments, dmMessageReactions, dmThreadFollowers } from '@pagespace/db/schema/social';
 import { fileConversations, files, type AttachmentMeta } from '@pagespace/db/schema/storage';
 import { decryptField } from '../encryption/field-crypto';
 import { deriveConversationLastMessage, deriveLatestTimestamp } from './message-derived-state';
+import { MAX_MESSAGE_ATTACHMENTS, type MessageAttachmentInput } from './attachment-upload-core';
 
 /**
  * Decrypt the joined sender/reactor `name` PII on a loaded DM row in place
@@ -55,11 +56,28 @@ const dmMessageWith = {
       image: true,
     },
   },
+  // Legacy single-attachment relation, still read so a row written by a pod on
+  // the previous build renders; retired with the columns themselves.
   file: {
     columns: {
       id: true,
       mimeType: true,
       sizeBytes: true,
+    },
+  },
+  // Shaped exactly like `reactions` above — a bare nested `with`. The rows
+  // carry `position`; ordering is applied where they are consumed rather than
+  // in this shared clause, which is `as const` and so cannot contextually type
+  // an orderBy callback.
+  attachments: {
+    with: {
+      file: {
+        columns: {
+          id: true,
+          mimeType: true,
+          sizeBytes: true,
+        },
+      },
     },
   },
   reactions: {
@@ -109,18 +127,20 @@ export interface InsertDmMessageInput {
   conversationId: string;
   senderId: string;
   content: string;
-  fileId: string | null;
-  attachmentMeta: AttachmentMeta | null;
+  attachments: MessageAttachmentInput[];
   quotedMessageId?: string | null;
 }
 
 export type DmMessageRow = InferSelectModel<typeof directMessages>;
 
 export type InsertDmMessageResult =
-  | { kind: 'ok'; message: DmMessageRow }
+  | { kind: 'ok'; message: DmMessageRow; attachments: DmMessageAttachmentRow[] }
   | { kind: 'not_found' }
   | { kind: 'wrong_owner' }
-  | { kind: 'not_linked' };
+  | { kind: 'not_linked' }
+  | { kind: 'too_many_attachments' };
+
+type DmMessageAttachmentRow = InferSelectModel<typeof directMessageAttachments>;
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -146,38 +166,52 @@ type DmAttachmentLockResult =
  * NOT be enough: a single blocked DELETE keeps its pre-block snapshot, which
  * is why purge re-checks in a separate statement.
  *
- * Callers without a fileId should skip calling this entirely — it always
- * locks, so it must stay conditional on `input.fileId` at the call site.
+ * Both locks are taken ORDER BY id / fileId ascending. That ordering is
+ * load-bearing now that one message can carry several files: without it two
+ * concurrent sends sharing files {A, B} could take A-then-B and B-then-A and
+ * deadlock, and a send could deadlock against `purgeInactiveMessages` (which
+ * orders its own link lock the same way for exactly this reason). The one
+ * global order, honoured everywhere: message rows -> `files` by id asc ->
+ * `file_conversations` by fileId asc -> `dm_conversations`.
+ *
+ * Callers with no attachments should skip calling this entirely — it always
+ * locks, so it must stay conditional on a non-empty list at the call site.
  */
-async function lockAndValidateDmAttachment(
+async function lockAndValidateDmAttachments(
   tx: Tx,
-  input: { fileId: string; senderId: string; conversationId: string }
+  input: { fileIds: string[]; senderId: string; conversationId: string }
 ): Promise<DmAttachmentLockResult> {
-  const [file] = await tx
+  // files.id is a content hash, so the same photo attached twice yields one id.
+  // Lock the distinct set and compare against that same set.
+  const unique = [...new Set(input.fileIds)].sort();
+
+  const fileRows = await tx
     .select({ id: files.id, createdBy: files.createdBy })
     .from(files)
-    .where(eq(files.id, input.fileId))
+    .where(inArray(files.id, unique))
+    .orderBy(asc(files.id))
     .for('update');
 
-  if (!file) {
+  if (fileRows.length !== unique.length) {
     return { kind: 'not_found' };
   }
-  if (file.createdBy !== input.senderId) {
+  if (fileRows.some((file) => file.createdBy !== input.senderId)) {
     return { kind: 'wrong_owner' };
   }
 
-  const [link] = await tx
+  const links = await tx
     .select({ fileId: fileConversations.fileId })
     .from(fileConversations)
     .where(
       and(
-        eq(fileConversations.fileId, input.fileId),
+        inArray(fileConversations.fileId, unique),
         eq(fileConversations.conversationId, input.conversationId)
       )
     )
+    .orderBy(asc(fileConversations.fileId))
     .for('update');
 
-  if (!link) {
+  if (links.length !== unique.length) {
     return { kind: 'not_linked' };
   }
 
@@ -185,19 +219,46 @@ async function lockAndValidateDmAttachment(
 }
 
 /**
+ * Write the attachment rows for a just-inserted DM, in the client-supplied
+ * display order (unrelated to the sorted order the file rows were locked in).
+ */
+async function insertDmAttachmentRows(
+  tx: Tx,
+  messageId: string,
+  attachments: MessageAttachmentInput[]
+): Promise<DmMessageAttachmentRow[]> {
+  if (attachments.length === 0) return [];
+  return tx
+    .insert(directMessageAttachments)
+    .values(
+      attachments.map((attachment, position) => ({
+        messageId,
+        fileId: attachment.fileId,
+        attachmentMeta: attachment.attachmentMeta,
+        position,
+      }))
+    )
+    .returning();
+}
+
+/**
  * Validates the attachment (if any) and inserts the top-level DM in one
  * transaction. Without this, a validate-then-insert-later split lets a
  * concurrent `purgeInactiveMessages` orphan-link cleanup delete the
  * `fileConversations` row between our validation read and the INSERT. See
- * `lockAndValidateDmAttachment`'s doc comment for the full lock protocol.
+ * `lockAndValidateDmAttachments`'s doc comment for the full lock protocol.
  */
 async function insertDmMessageWithAttachment(
   input: InsertDmMessageInput
 ): Promise<InsertDmMessageResult> {
+  if (input.attachments.length > MAX_MESSAGE_ATTACHMENTS) {
+    return { kind: 'too_many_attachments' };
+  }
+
   return db.transaction(async (tx) => {
-    if (input.fileId) {
-      const check = await lockAndValidateDmAttachment(tx, {
-        fileId: input.fileId,
+    if (input.attachments.length > 0) {
+      const check = await lockAndValidateDmAttachments(tx, {
+        fileIds: input.attachments.map((a) => a.fileId),
         senderId: input.senderId,
         conversationId: input.conversationId,
       });
@@ -212,15 +273,21 @@ async function insertDmMessageWithAttachment(
         conversationId: input.conversationId,
         senderId: input.senderId,
         content: input.content,
-        fileId: input.fileId,
-        attachmentMeta: input.attachmentMeta,
+        // Legacy columns keep carrying the first attachment for readers not yet
+        // migrated. They are NOT what keeps files 1..N safe from the reaper —
+        // the file_conversations link does that, which is why the purge below
+        // had to learn about the attachment table.
+        fileId: input.attachments[0]?.fileId ?? null,
+        attachmentMeta: input.attachments[0]?.attachmentMeta ?? null,
         quotedMessageId: input.quotedMessageId ?? null,
       })
       .returning();
 
+    const attachments = await insertDmAttachmentRows(tx, row.id, input.attachments);
+
     await recomputeConversationLastMessage(tx, input.conversationId);
 
-    return { kind: 'ok', message: row };
+    return { kind: 'ok', message: row, attachments };
   });
 }
 
@@ -255,6 +322,7 @@ async function recomputeConversationLastMessage(
 
   const [newest] = await tx
     .select({
+      id: directMessages.id,
       createdAt: directMessages.createdAt,
       content: directMessages.content,
       attachmentMeta: directMessages.attachmentMeta,
@@ -270,7 +338,39 @@ async function recomputeConversationLastMessage(
     .orderBy(desc(directMessages.createdAt))
     .limit(1);
 
-  const derived = deriveConversationLastMessage(newest ?? null);
+  // Preview the whole batch, so a five-photo DM reads "[5 images]" rather than
+  // one arbitrary filename. Falls back to the legacy column when the message
+  // has no attachment rows (written by a pod on the previous build).
+  let previewAttachments: AttachmentMeta | Array<AttachmentMeta | null> | null =
+    newest?.attachmentMeta ?? null;
+  if (newest) {
+    const attachmentRows = await tx
+      .select({ attachmentMeta: directMessageAttachments.attachmentMeta })
+      .from(directMessageAttachments)
+      .where(eq(directMessageAttachments.messageId, newest.id))
+      .orderBy(asc(directMessageAttachments.position));
+
+    // Every attachment row counts, including one whose meta is null (a row
+    // backfilled from a legacy fileId has none). The preview builder handles a
+    // null entry; filtering here would under-count a batch instead, and a
+    // `[2 images]` label on a three-photo message is worse than a generic one.
+    // `?? null` normalizes `undefined` away so nothing downstream has to reach
+    // through it for `.mimeType`.
+    const metas: Array<AttachmentMeta | null> = attachmentRows.map(
+      (row) => row.attachmentMeta ?? null
+    );
+    if (metas.length > 0) previewAttachments = metas;
+  }
+
+  const derived = deriveConversationLastMessage(
+    newest
+      ? {
+          createdAt: newest.createdAt,
+          content: newest.content,
+          attachmentMeta: previewAttachments,
+        }
+      : null
+  );
 
   await tx
     .update(dmConversations)
@@ -496,33 +596,121 @@ async function restoreDmMessage(messageId: string): Promise<number> {
   });
 }
 
+/**
+ * How many rows one statement in the purge may name — message ids in the
+ * attachment capture, released (fileId, conversationId) pairs in the orphan
+ * link cleanup. Postgres caps a statement at 65535 bind parameters and a
+ * retention sweep can cover far more tombstones than that, so both are chunked
+ * even though the DELETE between them is predicate-based and unbounded.
+ */
+const ATTACHMENT_CAPTURE_CHUNK = 500;
+
 async function purgeInactiveMessages(olderThan: Date): Promise<number> {
   return db.transaction(async (tx) => {
+    // Everything below is expressed against this predicate rather than a list
+    // of ids. A retention sweep can cover a very large number of tombstones,
+    // and Postgres caps a statement at 65535 bind parameters — passing the ids
+    // around would turn a big sweep into an opaque 08P01 protocol error.
+    const isDoomed = and(
+      eq(directMessages.isActive, false),
+      isNotNull(directMessages.deletedAt),
+      lt(directMessages.deletedAt, olderThan)
+    );
+
+    // Lock the doomed rows before reading what they reference, so a concurrent
+    // restore cannot resurrect one between the capture and the delete. Ordered
+    // by id, consistent with the rest of this module's lock order. The rows
+    // come back carrying their conversationId, which is what lets the
+    // attachment capture below avoid a join.
+    const doomedMessages = await tx
+      .select({ id: directMessages.id, conversationId: directMessages.conversationId })
+      .from(directMessages)
+      .where(isDoomed)
+      .orderBy(asc(directMessages.id))
+      .for('update');
+
+    const conversationByMessageId = new Map(
+      doomedMessages.map((message) => [message.id, message.conversationId]),
+    );
+
+    // Capture the released (fileId, conversationId) pairs BEFORE the delete:
+    // attachment rows cascade away with their message, so `DELETE ...
+    // RETURNING` can no longer see them. Both sources matter — the attachment
+    // rows, and the legacy column a pod on the previous build may still be
+    // writing. Missing either leaves a file_conversations link behind that
+    // nothing references.
+    //
+    // Read in chunks rather than joining back to direct_messages: the
+    // conversation id is already in hand from the lock above, and Postgres caps
+    // a statement at 65535 bind parameters, so an unbounded id list would turn
+    // a large retention sweep into an opaque 08P01. The DELETE below stays
+    // predicate-based and is not chunked at all.
+    const seenPairs = new Set<string>();
+    const purgedAttachmentPairs: Array<{ fileId: string; conversationId: string }> = [];
+
+    const addPair = (fileId: string | null, conversationId: string | undefined) => {
+      if (!fileId || conversationId === undefined) return;
+      const key = `${fileId}\u0000${conversationId}`;
+      if (seenPairs.has(key)) return;
+      seenPairs.add(key);
+      purgedAttachmentPairs.push({ fileId, conversationId });
+    };
+
+    const doomedIds = doomedMessages.map((message) => message.id);
+    for (let i = 0; i < doomedIds.length; i += ATTACHMENT_CAPTURE_CHUNK) {
+      const chunk = doomedIds.slice(i, i + ATTACHMENT_CAPTURE_CHUNK);
+      const rows = await tx
+        .select({
+          messageId: directMessageAttachments.messageId,
+          fileId: directMessageAttachments.fileId,
+        })
+        .from(directMessageAttachments)
+        .where(
+          and(
+            inArray(directMessageAttachments.messageId, chunk),
+            isNotNull(directMessageAttachments.fileId)
+          )
+        );
+
+      for (const row of rows) {
+        addPair(row.fileId, conversationByMessageId.get(row.messageId));
+      }
+    }
+
+    const legacyPairs = await tx
+      .select({
+        fileId: directMessages.fileId,
+        conversationId: directMessages.conversationId,
+      })
+      .from(directMessages)
+      .where(and(isDoomed, isNotNull(directMessages.fileId)));
+
+    for (const pair of legacyPairs) {
+      addPair(pair.fileId, pair.conversationId);
+    }
+
     const purgedMessages = await tx
       .delete(directMessages)
-      .where(
-        and(
-          eq(directMessages.isActive, false),
-          isNotNull(directMessages.deletedAt),
-          lt(directMessages.deletedAt, olderThan)
-        )
-      )
+      .where(isDoomed)
       .returning({
         id: directMessages.id,
         conversationId: directMessages.conversationId,
-        fileId: directMessages.fileId,
       });
 
-    const purgedAttachmentPairs = purgedMessages.flatMap((message) =>
-      message.fileId
-        ? [{ fileId: message.fileId, conversationId: message.conversationId }]
-        : []
+    // Both statements below inline the released pairs as a VALUES list, which
+    // is two bind parameters per pair — so the pairs are chunked for the same
+    // reason the capture above is. Sorted by fileId first, so chunk boundaries
+    // do not break the ascending file_conversations lock order this module
+    // shares with insertDmMessageWithAttachment.
+    const sortedPairs = [...purgedAttachmentPairs].sort((a, b) =>
+      a.fileId < b.fileId ? -1 : a.fileId > b.fileId ? 1 : 0
     );
 
-    if (purgedAttachmentPairs.length > 0) {
+    for (let i = 0; i < sortedPairs.length; i += ATTACHMENT_CAPTURE_CHUNK) {
+      const pairChunk = sortedPairs.slice(i, i + ATTACHMENT_CAPTURE_CHUNK);
       const pairValues = () =>
         sql.join(
-          purgedAttachmentPairs.map((pair) => sql`(${pair.fileId}, ${pair.conversationId})`),
+          pairChunk.map((pair) => sql`(${pair.fileId}, ${pair.conversationId})`),
           sql`, `
         );
 
@@ -541,6 +729,7 @@ async function purgeInactiveMessages(olderThan: Date): Promise<number> {
         JOIN (VALUES ${pairValues()}) AS pp("fileId", "conversationId")
           ON fc."fileId" = pp."fileId"
          AND fc."conversationId" = pp."conversationId"
+        ORDER BY fc."fileId"
         FOR UPDATE OF fc
       `);
 
@@ -552,6 +741,13 @@ async function purgeInactiveMessages(olderThan: Date): Promise<number> {
         USING purged_pairs pp
         WHERE fc."fileId" = pp."fileId"
           AND fc."conversationId" = pp."conversationId"
+          AND NOT EXISTS (
+            SELECT 1
+            FROM direct_message_attachments a
+            JOIN direct_messages dm ON dm.id = a."messageId"
+            WHERE a."fileId" = fc."fileId"
+              AND dm."conversationId" = fc."conversationId"
+          )
           AND NOT EXISTS (
             SELECT 1
             FROM direct_messages dm
@@ -700,8 +896,7 @@ export interface InsertDmThreadReplyInput {
   conversationId: string;
   senderId: string;
   content: string;
-  fileId: string | null;
-  attachmentMeta: AttachmentMeta | null;
+  attachments: MessageAttachmentInput[];
   alsoSendToParent?: boolean;
 }
 
@@ -709,7 +904,10 @@ export type InsertDmThreadReplyResult =
   | {
       kind: 'ok';
       reply: DmMessageRow;
+      /** The reply's attachment rows, so the caller need not re-read them. */
+      replyAttachments: DmMessageAttachmentRow[];
       mirror: DmMessageRow | null;
+      mirrorAttachments: DmMessageAttachmentRow[];
       rootId: string;
       replyCount: number;
       lastReplyAt: Date;
@@ -719,24 +917,29 @@ export type InsertDmThreadReplyResult =
   | { kind: 'parent_not_top_level' }
   | { kind: 'not_found' }
   | { kind: 'wrong_owner' }
-  | { kind: 'not_linked' };
+  | { kind: 'not_linked' }
+  | { kind: 'too_many_attachments' };
 
 /**
- * Locks the parent row, then (if a fileId is attached) the file + link rows
- * via `lockAndValidateDmAttachment`, before inserting the reply and its
+ * Locks the parent row, then (if anything is attached) the file + link rows
+ * via `lockAndValidateDmAttachments`, before inserting the reply and its
  * optional `alsoSendToParent` mirror — all inside one transaction. Lock order
- * is parent -> files -> fileConversations, which never conflicts with
- * `insertDmMessageWithAttachment` (files -> fileConversations, no parent
- * lock) or `purgeInactiveMessages` (fileConversations only, never a
- * parent/directMessages row), so this can't introduce a deadlock.
+ * is parent -> files (id asc) -> fileConversations (fileId asc), matching
+ * `insertDmMessageWithAttachment` and `purgeInactiveMessages`, which order
+ * their own locks the same way. That shared order is what keeps a
+ * multi-attachment send from deadlocking against a concurrent send or purge.
  *
  * The file/link lock is taken once and covers both the reply and the mirror
- * row: both reference the same input.fileId within this same transaction, so
- * a single FOR UPDATE on each row is sufficient for both inserts.
+ * row: both reference the same input.attachments within this same transaction,
+ * so a single FOR UPDATE on each row is sufficient for both inserts.
  */
 async function insertDmThreadReply(
   input: InsertDmThreadReplyInput
 ): Promise<InsertDmThreadReplyResult> {
+  if (input.attachments.length > MAX_MESSAGE_ATTACHMENTS) {
+    return { kind: 'too_many_attachments' };
+  }
+
   return db.transaction(async (tx) => {
     // SELECT ... FOR UPDATE locks the parent row for the rest of this tx so a
     // concurrent softDeleteMessage(parentId) blocks until our INSERT and
@@ -765,9 +968,9 @@ async function insertDmThreadReply(
       return { kind: 'parent_not_top_level' };
     }
 
-    if (input.fileId) {
-      const check = await lockAndValidateDmAttachment(tx, {
-        fileId: input.fileId,
+    if (input.attachments.length > 0) {
+      const check = await lockAndValidateDmAttachments(tx, {
+        fileIds: input.attachments.map((a) => a.fileId),
         senderId: input.senderId,
         conversationId: input.conversationId,
       });
@@ -782,11 +985,13 @@ async function insertDmThreadReply(
         conversationId: input.conversationId,
         senderId: input.senderId,
         content: input.content,
-        fileId: input.fileId,
-        attachmentMeta: input.attachmentMeta,
+        fileId: input.attachments[0]?.fileId ?? null,
+        attachmentMeta: input.attachments[0]?.attachmentMeta ?? null,
         parentId: input.parentId,
       })
       .returning();
+
+    const replyAttachments = await insertDmAttachmentRows(tx, reply.id, input.attachments);
 
     const [updatedParent] = await tx
       .update(directMessages)
@@ -814,6 +1019,7 @@ async function insertDmThreadReply(
       .onConflictDoNothing();
 
     let mirror: DmMessageRow | null = null;
+    let mirrorAttachments: DmMessageAttachmentRow[] = [];
     if (input.alsoSendToParent) {
       const [mirrorRow] = await tx
         .insert(directMessages)
@@ -821,11 +1027,13 @@ async function insertDmThreadReply(
           conversationId: input.conversationId,
           senderId: input.senderId,
           content: input.content,
-          fileId: input.fileId,
-          attachmentMeta: input.attachmentMeta,
+          fileId: input.attachments[0]?.fileId ?? null,
+          attachmentMeta: input.attachments[0]?.attachmentMeta ?? null,
           mirroredFromId: reply.id,
         })
         .returning();
+      // The mirror is a distinct message row and needs its own attachment rows.
+      mirrorAttachments = await insertDmAttachmentRows(tx, mirrorRow.id, input.attachments);
       mirror = mirrorRow;
       // The mirror is a top-level row and behaves like a regular send —
       // recompute the conversation preview from it (#2153). A thread-only
@@ -837,7 +1045,9 @@ async function insertDmThreadReply(
     return {
       kind: 'ok',
       reply,
+      replyAttachments,
       mirror,
+      mirrorAttachments,
       rootId: input.parentId,
       replyCount: updatedParent.replyCount,
       // We just SET lastReplyAt = reply.createdAt above, so the RETURNING value

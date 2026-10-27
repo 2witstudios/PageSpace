@@ -79,6 +79,7 @@ export const driveEnvLabelSchema = z
  */
 export const DRIVE_ENV_SUBSTRATES = ['sprite', 'local'] as const;
 export const driveEnvSubstrateSchema = z.enum(DRIVE_ENV_SUBSTRATES);
+/** @public Public contract type for the local-environments epic (#2590). */
 export type DriveEnvSubstrate = z.infer<typeof driveEnvSubstrateSchema>;
 
 /**
@@ -186,6 +187,7 @@ export const createDriveEnvRequestSchema = z
   )
   .transform((value) => (value.substrate === 'local' ? value : { name: value.name, substrate: value.substrate }));
 
+/** @public Public contract type for the local-environments epic (#2590). */
 export type CreateDriveEnvRequest = z.infer<typeof createDriveEnvRequestSchema>;
 
 /**

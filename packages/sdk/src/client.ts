@@ -55,7 +55,23 @@ import { deleteChannelMessage, sendChannelMessage } from './operations/channels.
 import { listCollaborators } from './operations/collaborators.js';
 import { createCommand, deleteCommand, listCommands, updateCommand } from './operations/commands.js';
 import { listConversations, readConversation } from './operations/conversations.js';
-import { createDrive, listDrives, renameDrive, restoreDrive, setHomePage, trashDrive, updateDriveContext } from './operations/drives.js';
+import {
+  answerDriveJoinRequest,
+  createDrive,
+  listDriveJoinRequests,
+  listDrives,
+  moveDriveOutOfOrg,
+  moveDriveToOrg,
+  renameDrive,
+  requestToJoinDrive,
+  restoreDrive,
+  setDriveOrgLead,
+  setDriveOrgVisibility,
+  setHomePage,
+  trashDrive,
+  updateDriveContext,
+  withdrawDriveJoinRequest,
+} from './operations/drives.js';
 import {
   createPage,
   getPageDetails,
@@ -69,10 +85,12 @@ import {
 import { deleteLines, editSheetCells, insertLines, readDocument, replaceLines } from './operations/documents.js';
 import {
   appendRows as appendSheetRows,
+  applySheetFormat,
   deleteRows as deleteSheetRows,
   describeSheet,
   getRows as getSheetRows,
   queryRows as querySheetRows,
+  readSheetFormatting,
   updateCells as updateSheetCells,
 } from './operations/sheets.js';
 import { exportPageMarkdown, exportSheetCsv } from './operations/export.js';
@@ -101,6 +119,44 @@ import { describeSelfKey, listMcpTokens, revokeMcpToken } from './operations/mcp
 import { globSearch, multiDriveSearch, regexSearch } from './operations/search.js';
 import { cancelUpload, completeUpload, presignUpload } from './operations/uploads.js';
 import { createWorkflow, deleteWorkflow, listWorkflows, updateWorkflow } from './operations/workflows.js';
+import { execInWorkspace, listWorkspaces } from './operations/workspaces.js';
+import { getAlwaysOwnCredits, getConversationSpendSource, getDriveSpendSource, getDriveWallet, listMyWallets } from './operations/wallets.js';
+import {
+  acceptOrgInvitation,
+  addOrgDomain,
+  answerOrgGuestApproval,
+  changeOrgMemberRole,
+  clearOrgSuppression,
+  confirmOrgDomainEmail,
+  deleteOrgAutomation,
+  exportOrgAuditLog,
+  getOrgAuditLog,
+  getOrgDriveUsage,
+  getOrgPolicies,
+  getOrganization,
+  inviteToOrganization,
+  leaveOrganization,
+  listMyOrganizations,
+  listOrgAutomations,
+  listOrgDomains,
+  listOrgDriveDirectory,
+  listOrgGuestApprovals,
+  listOrgGuests,
+  listOrgInvitations,
+  listOrgMemberActivity,
+  listOrgMembers,
+  listOrgPolicySuspensions,
+  previewOrgSignInPolicy,
+  listOrgTrashedDrives,
+  reassignOrgAutomation,
+  removeOrgDomain,
+  removeOrgMember,
+  resendOrgInvitation,
+  revokeOrgInvitation,
+  updateOrgPolicies,
+  updateOrganization,
+  verifyOrgDomain,
+} from './operations/organizations.js';
 import type { Operation } from './registry/define.js';
 import { createRegistry, type OperationRegistry } from './registry/registry.js';
 import { buildRequest } from './transport/build-request.js';
@@ -119,6 +175,14 @@ const DEFAULT_OPERATIONS_MAP = {
     setHomePage: setHomePage,
     trash: trashDrive,
     restore: restoreDrive,
+    moveToOrg: moveDriveToOrg,
+    moveOutOfOrg: moveDriveOutOfOrg,
+    setOrgVisibility: setDriveOrgVisibility,
+    setOrgLead: setDriveOrgLead,
+    listJoinRequests: listDriveJoinRequests,
+    requestToJoin: requestToJoinDrive,
+    answerJoinRequest: answerDriveJoinRequest,
+    withdrawJoinRequest: withdrawDriveJoinRequest,
   },
   pages: {
     list: listPages,
@@ -151,6 +215,13 @@ const DEFAULT_OPERATIONS_MAP = {
     appendRows: appendSheetRows,
     updateCells: updateSheetCells,
     deleteRows: deleteSheetRows,
+    /**
+     * Presentation, not data. `readFormatting` before `applyFormat`, so a
+     * write builds on the regions and rules already declared instead of over
+     * them — the same order `read_sheet`/`format_sheet` ask of a model.
+     */
+    readFormatting: readSheetFormatting,
+    applyFormat: applySheetFormat,
   },
   roles: {
     list: listDriveRoles,
@@ -244,6 +315,65 @@ const DEFAULT_OPERATIONS_MAP = {
     presign: presignUpload,
     complete: completeUpload,
     cancel: cancelUpload,
+  },
+  /** Agent workspaces as a shell target: find one, then run commands in its sandbox. */
+  workspaces: {
+    list: listWorkspaces,
+    exec: execInWorkspace,
+  },
+  /**
+   * Organizations (Spec X-1, ORG-5): every org read and write the web exposes to a key, all
+   * riding the web's one org authorization function (requireOrgRole). A drive-scoped key is
+   * refused everywhere but the drive directory (filtered to its scope); the org's sign-in policy
+   * applies to the key. Card-checkout create, org delete (Stripe), ownership transfer, seat caps
+   * and the admin money views stay session-only ([D-OW-26]) and are not operations.
+   */
+  organizations: {
+    list: listMyOrganizations,
+    get: getOrganization,
+    update: updateOrganization,
+    listMembers: listOrgMembers,
+    listMemberActivity: listOrgMemberActivity,
+    changeMemberRole: changeOrgMemberRole,
+    removeMember: removeOrgMember,
+    leave: leaveOrganization,
+    listInvitations: listOrgInvitations,
+    invite: inviteToOrganization,
+    resendInvitation: resendOrgInvitation,
+    revokeInvitation: revokeOrgInvitation,
+    acceptInvitation: acceptOrgInvitation,
+    listDrives: listOrgDriveDirectory,
+    listTrashedDrives: listOrgTrashedDrives,
+    getDriveUsage: getOrgDriveUsage,
+    getPolicies: getOrgPolicies,
+    updatePolicies: updateOrgPolicies,
+    listSuspended: listOrgPolicySuspensions,
+    previewSignInPolicy: previewOrgSignInPolicy,
+    getAuditLog: getOrgAuditLog,
+    exportAuditLog: exportOrgAuditLog,
+    listAutomations: listOrgAutomations,
+    deleteAutomation: deleteOrgAutomation,
+    reassignAutomation: reassignOrgAutomation,
+    listGuests: listOrgGuests,
+    listGuestApprovals: listOrgGuestApprovals,
+    answerGuestApproval: answerOrgGuestApproval,
+    listDomains: listOrgDomains,
+    addDomain: addOrgDomain,
+    removeDomain: removeOrgDomain,
+    verifyDomain: verifyOrgDomain,
+    confirmDomainEmail: confirmOrgDomainEmail,
+    clearSuppression: clearOrgSuppression,
+  },
+  /**
+   * Wallet READS only ([D-OW-26]): an access key never moves money or changes a spend
+   * source, so no wallet write is an operation. A key always reads the consumer view.
+   */
+  wallets: {
+    getDriveWallet: getDriveWallet,
+    list: listMyWallets,
+    getConversationSource: getConversationSpendSource,
+    getDriveSource: getDriveSpendSource,
+    getAlwaysOwnCredits: getAlwaysOwnCredits,
   },
 } as const;
 

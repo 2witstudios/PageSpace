@@ -32,7 +32,14 @@ export default function TopBar({ onToggleLeftPanel, onToggleRightPanel, onReveal
 
   return (
     <header className="sticky top-0 z-50 pt-[env(safe-area-inset-top)] liquid-glass-thin border-b border-[var(--separator)] text-card-foreground shadow-[var(--shadow-ambient)] dark:shadow-none">
-      <div className="flex flex-wrap items-center gap-2 px-3 py-2.5 sm:px-4">
+      {/*
+        Phone spacing (below sm): 8px sides, 4px in the left group, 2px in the
+        right. That, plus "Home" being four letters and the search button
+        living with the other actions, is what fits menu + Home + six controls
+        on one row at 375px with every button still 36px. From sm up the row
+        is back at its usual spacing.
+      */}
+      <div className="flex flex-wrap items-center gap-2 px-2 py-2.5 sm:px-4">
         {/*
           flex-wrap, not just min-w-0: this group is flex-1 and shrinkable, so
           it never forces the OUTER wrap — it silently narrows below its own
@@ -47,7 +54,7 @@ export default function TopBar({ onToggleLeftPanel, onToggleRightPanel, onReveal
           the header gets taller, which is recoverable; without this it would
           overlap, which is not.
         */}
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1 sm:gap-2">
           <div className="flex items-center">
             <Button
               variant="ghost"
@@ -77,7 +84,14 @@ export default function TopBar({ onToggleLeftPanel, onToggleRightPanel, onReveal
           <div className="hidden min-w-[200px] flex-1 md:flex">
             <InlineSearch />
           </div>
+        </div>
 
+        {/*
+          Left is navigation, right is actions: below md the search trigger
+          sits here with the other actions rather than trailing Home, which is
+          also what keeps the left group short enough for one row on a phone.
+        */}
+        <div className="flex flex-shrink-0 items-center gap-0.5 sm:gap-2">
           <Button
             variant="ghost"
             size="icon"
@@ -87,9 +101,7 @@ export default function TopBar({ onToggleLeftPanel, onToggleRightPanel, onReveal
           >
             <Search className="h-5 w-5" />
           </Button>
-        </div>
 
-        <div className="flex flex-shrink-0 items-center gap-2">
           {/*
             THE voice trigger, in the one piece of chrome that is on every
             route. Voice is not a feature of a panel — it is a second transport
@@ -104,6 +116,10 @@ export default function TopBar({ onToggleLeftPanel, onToggleRightPanel, onReveal
 
           <NotificationBell />
 
+          {/*
+            Stays on the phone: below lg the sidebar is a sheet, so this is the
+            only quick navigation the header offers there.
+          */}
           <RecentsDropdown className="lg:hidden" />
 
           <Button

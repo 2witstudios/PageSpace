@@ -37,6 +37,8 @@
     "../../packages/**/*.test.tsx",
     "../../packages/**/__tests__/**",
     "../../packages/cli/**",
-    "../../packages/sdk/**"
+    "../../packages/sdk/**",
+    "../../packages/browser-worker/**",
+    "../../packages/editor/**"
   ]
 }

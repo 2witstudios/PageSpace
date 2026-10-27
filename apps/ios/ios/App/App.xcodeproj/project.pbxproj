@@ -17,6 +17,7 @@
 		50B271D11FEDC1A000F3C39B /* public in Resources */ = {isa = PBXBuildFile; fileRef = 50B271D01FEDC1A000F3C39B /* public */; };
 		A1B2C3D42025010100ABC123 /* MyViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D32025010100ABC123 /* MyViewController.swift */; };
 		A1B2C3D62025010200ABC123 /* PageSpaceKeychainPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D52025010200ABC123 /* PageSpaceKeychainPlugin.swift */; };
+		A1B2C3DA2025010400ABC123 /* PageSpaceStorePlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D92025010400ABC123 /* PageSpaceStorePlugin.swift */; };
 		FBE80FFA2F2AA6E90025005E /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = FBE80FF92F2AA6E90025005E /* PrivacyInfo.xcprivacy */; };
 /* End PBXBuildFile section */
 
@@ -35,6 +36,8 @@
 		A1B2C3D12025010000ABC123 /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
 		A1B2C3D32025010100ABC123 /* MyViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyViewController.swift; sourceTree = "<group>"; };
 		A1B2C3D52025010200ABC123 /* PageSpaceKeychainPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageSpaceKeychainPlugin.swift; sourceTree = "<group>"; };
+		A1B2C3D92025010400ABC123 /* PageSpaceStorePlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageSpaceStorePlugin.swift; sourceTree = "<group>"; };
+		A1B2C3DB2025010500ABC123 /* PageSpace.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = PageSpace.storekit; sourceTree = "<group>"; };
 		FBE80FF92F2AA6E90025005E /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -54,6 +57,7 @@
 			isa = PBXGroup;
 			children = (
 				FBE80FF92F2AA6E90025005E /* PrivacyInfo.xcprivacy */,
+				A1B2C3DB2025010500ABC123 /* PageSpace.storekit */,
 				958DCC722DB07C7200EA8C5F /* debug.xcconfig */,
 				958DCC732DB07C7200EA8C60 /* release.xcconfig */,
 				504EC3061FED79650016851F /* App */,
@@ -91,6 +95,7 @@
 			isa = PBXGroup;
 			children = (
 				A1B2C3D52025010200ABC123 /* PageSpaceKeychainPlugin.swift */,
+				A1B2C3D92025010400ABC123 /* PageSpaceStorePlugin.swift */,
 			);
 			path = Plugins;
 			sourceTree = "<group>";
@@ -130,6 +135,11 @@
 					504EC3031FED79650016851F = {
 						CreatedOnToolsVersion = 9.2;
 						LastSwiftMigration = 1100;
+						SystemCapabilities = {
+							com.apple.InAppPurchase = {
+								enabled = 1;
+							};
+						};
 					};
 				};
 			};
@@ -179,6 +189,7 @@
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
 				A1B2C3D42025010100ABC123 /* MyViewController.swift in Sources */,
 				A1B2C3D62025010200ABC123 /* PageSpaceKeychainPlugin.swift in Sources */,
+				A1B2C3DA2025010400ABC123 /* PageSpaceStorePlugin.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -253,7 +264,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				MTL_ENABLE_DEBUG_INFO = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
@@ -304,7 +315,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				SDKROOT = iphoneos;
 				SWIFT_COMPILATION_MODE = wholemodule;
@@ -320,17 +331,17 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 10;
 				DEVELOPMENT_TEAM = M96WTV3CKX;
 				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = PageSpace;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.4;
+				MARKETING_VERSION = 1.0;
 				OTHER_SWIFT_FLAGS = "$(inherited) \"-DDEBUG\"";
 				PRODUCT_BUNDLE_IDENTIFIER = ai.pagespace.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -346,19 +357,18 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
-				CODE_SIGN_IDENTITY = "Apple Distribution";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 10;
 				DEVELOPMENT_TEAM = M96WTV3CKX;
 				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = PageSpace;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.4;
+				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.pagespace.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";

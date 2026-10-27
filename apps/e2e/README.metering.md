@@ -13,7 +13,7 @@ only the model provider and Stripe (webhook side) faked.
 | `11-metering-limits.spec.ts` | `402 out_of_credits` at the reserve floor; `429 too_many_in_flight` at the free-tier concurrency cap. |
 | `12-token-packs.spec.ts` | Credit-pack checkout validation (400s) and the funding webhook: a paid `checkout.session.completed` (`metadata.kind=credit_pack`) credits the never-expiring top-up bucket **exactly once** (idempotent on event id). |
 | `13-metering-reconcile.spec.ts` | The cost-reconcile cron (`GET /api/cron/reconcile-ai-cost`): a billed-inline call whose authoritative `/generation` cost differs gets a correcting **adjustment** ledger row + balance delta; the correction is **idempotent** across a duplicate generation set and a re-run. The mock now also serves `GET /generation?id=` (overridable per-id via `POST /__set-generation-cost`). |
-| `14-metering-daily-cap.spec.ts` | The per-user/day exposure cap: with enforcement ON and a small `DAILY_CAP_BUSINESS_CENTS`, driving calls past the ceiling returns **429 `daily_cap_exceeded`** — the model isn't called on the over-cap request and nothing is billed beyond the cap. |
+| `14-metering-daily-cap.spec.ts` | The per-user/day exposure cap: with enforcement ON and a small `DAILY_CAP_PRO_CENTS`, driving calls past the ceiling returns **429 `daily_cap_exceeded`** — the model isn't called on the over-cap request and nothing is billed beyond the cap. |
 
 The cost-extraction/settlement math is covered by unit tests in
 `packages/lib/src/billing/__tests__/`.
@@ -24,7 +24,7 @@ The cost-extraction/settlement math is covered by unit tests in
 
    ```bash
    DATABASE_URL=postgres://…@localhost:5432/…   # local DB only — seeders refuse non-local hosts
-   DAILY_CAP_BUSINESS_CENTS=25                  # 14-metering-daily-cap only; read at call time in the app process
+   DAILY_CAP_PRO_CENTS=0                   # use 25 only for the separate daily-cap run
    OPENROUTER_DEFAULT_API_KEY=sk-e2e            # any non-empty value; enables the openrouter branch + reconcile fetcher
    OPENROUTER_BASE_URL=http://127.0.0.1:4998/api/v1
    WEB_APP_URL=http://localhost:3000
@@ -33,10 +33,9 @@ The cost-extraction/settlement math is covered by unit tests in
    CSRF_SECRET=<shared>
    ```
 
-   `DAILY_CAP_BUSINESS_CENTS` is scoped to the `business` tier so it only affects the
-   daily-cap spec (every other metering spec uses `pro`/`free`). It's read at call time
-   in the app process, so it must be set when the app launches — it cannot be set from
-   inside a spec.
+   Run `14-metering-daily-cap.spec.ts` separately against an app launched with
+   `DAILY_CAP_PRO_CENTS=25`. For the other metering specs, leave that cap unset
+   (or zero). Personal Business seeds are no longer valid.
 
    `CRON_SECRET`, `STRIPE_WEBHOOK_SECRET`, and `CSRF_SECRET` must be the **same** values the
    Playwright process sees (both load `.env`), so the test can forge valid signatures/tokens.
@@ -46,7 +45,7 @@ The cost-extraction/settlement math is covered by unit tests in
    ```bash
    bun run --filter '@pagespace/e2e' test:e2e -- tests/09-metering-no-bypass.spec.ts \
      tests/10-metering-billing.spec.ts tests/11-metering-limits.spec.ts tests/12-token-packs.spec.ts \
-     tests/13-metering-reconcile.spec.ts tests/14-metering-daily-cap.spec.ts
+     tests/13-metering-reconcile.spec.ts
    ```
 
 ## How the model is faked
@@ -56,3 +55,9 @@ that returns a deterministic completion carrying `usage.cost` (the value PageSpa
 on). Users are seeded with `currentAiProvider='openrouter'` so their calls route to it via
 the `OPENROUTER_BASE_URL` override added in `provider-factory.ts`. The stub records hits
 (`GET /__calls`, `POST /__reset`) so a test can prove a blocked request never reached it.
+
+Run the daily-cap case against its separately configured server:
+
+```sh
+bun run --filter '@pagespace/e2e' test:e2e -- tests/14-metering-daily-cap.spec.ts
+```

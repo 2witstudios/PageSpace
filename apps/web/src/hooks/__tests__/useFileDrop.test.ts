@@ -210,7 +210,9 @@ describe('useFileDrop', () => {
         await result.current.handleFileDrop(event);
       });
 
-      expect(mockPost).toHaveBeenCalledWith('/api/storage/check', { fileSize: 100 });
+      // WAL-9 (partial), #2719 review P1-1: the pre-check names the drop's drive, so an org
+      // drive is checked against the org's quota, not the uploader's personal one.
+      expect(mockPost).toHaveBeenCalledWith('/api/storage/check', { fileSize: 100, driveId: 'drive-123' });
       expect(mockUpload).toHaveBeenCalledTimes(1);
       expect(onUploadComplete).toHaveBeenCalled();
     });
@@ -403,5 +405,43 @@ describe('useFileDrop', () => {
         afterNodeId: 'sibling-456',
       });
     });
+  });
+});
+
+describe('quotaDenial', () => {
+  it('given a 413 on a personal quota, should surface the reason and point at the usage page', async () => {
+    const { quotaDenial } = await import('../useFileDrop');
+    expect(quotaDenial({ status: 413, body: { allowed: false, reason: 'Insufficient storage: need 2 GB, have 1 GB available', requiredBytes: 2, quota: { userId: 'u1', availableBytes: 1 } } }))
+      .toEqual({ reason: 'Insufficient storage: need 2 GB, have 1 GB available', manageHref: '/settings/usage' });
+  });
+
+  it('given a 413 on an org quota, should point at the org billing page', async () => {
+    const { quotaDenial } = await import('../useFileDrop');
+    expect(quotaDenial({ status: 413, body: { reason: 'Insufficient storage', requiredBytes: 2, quota: { orgId: 'org 1', availableBytes: 1 } } })?.manageHref)
+      .toBe('/orgs/org%201/settings/billing');
+  });
+
+  it('given a file over the per-file limit, should show the reason without offering storage', async () => {
+    const { quotaDenial } = await import('../useFileDrop');
+    expect(quotaDenial({ status: 413, body: { reason: 'File exceeds pro tier limit of 250MB', requiredBytes: 300, quota: { userId: 'u1', availableBytes: 1000, tier: 'pro' } } }))
+      .toEqual({ reason: 'File exceeds pro tier limit of 250MB', manageHref: null });
+  });
+
+  it('given a file over the per-file limit that is also larger than the space left, should still not offer storage', async () => {
+    const { quotaDenial } = await import('../useFileDrop');
+    expect(quotaDenial({ status: 413, body: { reason: 'File exceeds pro tier limit of 250MB', requiredBytes: 300, quota: { userId: 'u1', availableBytes: 100, tier: 'pro' } } })?.manageHref)
+      .toBeNull();
+  });
+
+  it('given the Free file-count cap, should point at the usage page to upgrade', async () => {
+    const { quotaDenial } = await import('../useFileDrop');
+    expect(quotaDenial({ status: 413, body: { reason: 'File count limit reached (100 files max for free tier)', requiredBytes: 1, quota: { userId: 'u1', availableBytes: 1000, tier: 'free' } } })?.manageHref)
+      .toBe('/settings/usage');
+  });
+
+  it('given any other error, should not treat it as a quota denial', async () => {
+    const { quotaDenial } = await import('../useFileDrop');
+    expect(quotaDenial(new Error('boom'))).toBeNull();
+    expect(quotaDenial({ status: 500, body: { reason: 'x' } })).toBeNull();
   });
 });

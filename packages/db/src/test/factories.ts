@@ -5,54 +5,102 @@ import { users } from '../schema/auth';
 import { drives, pages } from '../schema/core';
 import { conversations, messages } from '../schema/conversations';
 import { driveMembers, pagePermissions } from '../schema/members';
+import { orgSubscriptions, orgSubscriptionFunding } from '../schema/organizations';
 import { eq } from 'drizzle-orm';
 
-export const factories = {
-  async createUser(overrides?: Partial<typeof users.$inferInsert>) {
-    const id = createId()
-    const user = {
-      id,
-      name: faker.person.fullName(),
-      /**
-       * Unique BY CONSTRUCTION, not by luck. `faker.internet.email()` draws
-       * from a small fixed name pool, so it repeats within a single CI run —
-       * and `users` is no longer truncated between suites (that TRUNCATE took
-       * ACCESS EXCLUSIVE on shared tables and deleted other packages' fixtures,
-       * so it was scoped down). Rows now accumulate across the whole run, which
-       * turns a repeat into a `users_email_unique` violation (23505) surfacing
-       * as some unrelated test failing on an insert. Folding the row's own id
-       * in removes the collision entirely; `@example.test` matches the
-       * convention the hand-written integration fixtures already use.
-       */
-      email: `${faker.person.firstName().toLowerCase().replace(/[^a-z]/g, '')}-${id}@example.test`,
-      emailVerified: new Date(),
-      provider: 'email' as const,
-      tokenVersion: 0,
-      role: 'user' as const,
-      currentAiProvider: 'zai',
-      currentAiModel: 'z-ai/glm-5.3-flash',
-      storageUsedBytes: 0,
-      subscriptionTier: 'free',
-      /**
-       * Seeded users are ESTABLISHED accounts by default, not brand-new ones.
-       *
-       * A NULL stamp means "show first-run onboarding", so leaving it unset
-       * pops the onboarding modal over every dashboard page in the E2E suite —
-       * which then blocks the UI and times out suites that have nothing to do
-       * with onboarding (the send button is unreachable behind the dialog).
-       *
-       * A test that actually wants the first-run flow passes
-       * `onboardingCompletedAt: null` explicitly, which reads as the deliberate
-       * choice it is.
-       */
-      onboardingCompletedAt: new Date(),
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      ...overrides,
-    }
+/**
+ * Rows per multi-row INSERT in the bulk helpers. Postgres caps one statement at
+ * 65535 bind parameters and a users row binds ~17, so 500 rows stays far under
+ * it while still collapsing hundreds of round trips into one or two.
+ */
+const BULK_INSERT_CHUNK = 500
 
-    const [created] = await db.insert(users).values(user).returning()
+async function insertChunked<T, R>(rows: T[], insert: (chunk: T[]) => Promise<R[]>): Promise<R[]> {
+  const created: R[] = []
+  for (let i = 0; i < rows.length; i += BULK_INSERT_CHUNK) {
+    created.push(...(await insert(rows.slice(i, i + BULK_INSERT_CHUNK))))
+  }
+  return created
+}
+
+function buildUser(overrides?: Partial<typeof users.$inferInsert>) {
+  const id = createId()
+  return {
+    id,
+    name: faker.person.fullName(),
+    /**
+     * Unique BY CONSTRUCTION, not by luck. `faker.internet.email()` draws
+     * from a small fixed name pool, so it repeats within a single CI run —
+     * and `users` is no longer truncated between suites (that TRUNCATE took
+     * ACCESS EXCLUSIVE on shared tables and deleted other packages' fixtures,
+     * so it was scoped down). Rows now accumulate across the whole run, which
+     * turns a repeat into a `users_email_unique` violation (23505) surfacing
+     * as some unrelated test failing on an insert. Folding the row's own id
+     * in removes the collision entirely; `@example.test` matches the
+     * convention the hand-written integration fixtures already use.
+     */
+    email: `${faker.person.firstName().toLowerCase().replace(/[^a-z]/g, '')}-${id}@example.test`,
+    emailVerified: new Date(),
+    provider: 'email' as const,
+    tokenVersion: 0,
+    role: 'user' as const,
+    currentAiProvider: 'zai',
+    currentAiModel: 'z-ai/glm-5.3-flash',
+    storageUsedBytes: 0,
+    subscriptionTier: 'free',
+    /**
+     * Seeded users are ESTABLISHED accounts by default, not brand-new ones.
+     *
+     * A NULL stamp means "show first-run onboarding", so leaving it unset
+     * pops the onboarding modal over every dashboard page in the E2E suite —
+     * which then blocks the UI and times out suites that have nothing to do
+     * with onboarding (the send button is unreachable behind the dialog).
+     *
+     * A test that actually wants the first-run flow passes
+     * `onboardingCompletedAt: null` explicitly, which reads as the deliberate
+     * choice it is.
+     */
+    onboardingCompletedAt: new Date(),
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  }
+}
+
+function buildDriveMember(
+  driveId: string,
+  userId: string,
+  overrides?: Partial<typeof driveMembers.$inferInsert>
+) {
+  return {
+    id: createId(),
+    driveId,
+    userId,
+    role: 'MEMBER' as const,
+    invitedAt: new Date(),
+    acceptedAt: new Date(),
+    ...overrides,
+  }
+}
+
+/** Explicit paid evidence for fixtures that exercise capabilities, never a production bypass. */
+async function fundOrgSubscription(orgId: string): Promise<void> {
+  const subscription = await db.query.orgSubscriptions.findFirst({ where: eq(orgSubscriptions.orgId, orgId) });
+  if (!subscription) throw new Error('Cannot fund a missing fixture subscription');
+  await db.insert(orgSubscriptionFunding).values({ orgId, stripeSubscriptionId: subscription.stripeSubscriptionId, stripeInvoiceId: `in_fixture_${createId()}`, basis: 'paid', paidCents: 5000 }).onConflictDoNothing();
+}
+
+export const factories = {
+  fundOrgSubscription,
+  async createUser(overrides?: Partial<typeof users.$inferInsert>) {
+    const [created] = await db.insert(users).values(buildUser(overrides)).returning()
     return created
+  },
+
+  /** `count` users in one INSERT per chunk rather than one round trip each. */
+  async createUsers(count: number, overrides?: Partial<typeof users.$inferInsert>) {
+    const rows = Array.from({ length: count }, () => buildUser(overrides))
+    return insertChunked(rows, (chunk) => db.insert(users).values(chunk).returning())
   },
 
   async createDrive(ownerId: string, overrides?: Partial<typeof drives.$inferInsert>) {
@@ -194,17 +242,47 @@ export const factories = {
     userId: string,
     overrides?: Partial<typeof driveMembers.$inferInsert>
   ) {
-    const member = {
-      id: createId(),
-      driveId,
-      userId,
-      role: 'MEMBER' as const,
-      invitedAt: new Date(),
-      acceptedAt: new Date(),
-      ...overrides,
-    }
+    const [created] = await db
+      .insert(driveMembers)
+      .values(buildDriveMember(driveId, userId, overrides))
+      .returning()
+    return created
+  },
 
-    const [created] = await db.insert(driveMembers).values(member).returning()
+  /** One membership row per user id, in one INSERT per chunk. */
+  async createDriveMembers(
+    driveId: string,
+    userIds: string[],
+    overrides?: Partial<typeof driveMembers.$inferInsert>
+  ) {
+    const rows = userIds.map((userId) => buildDriveMember(driveId, userId, overrides))
+    return insertChunked(rows, (chunk) => db.insert(driveMembers).values(chunk).returning())
+  },
+
+  /**
+   * An org that has PAID: its subscription row as the webhook mirror stores an active
+   * Business subscription. There is no org trial ([D-OW-30]), so an org with no row is
+   * lapsed from creation; a fixture that exercises org capabilities needs this. The row
+   * restricts its org's delete: tear down org_subscriptions before organizations.
+   */
+  async createOrgSubscription(
+    orgId: string,
+    overrides?: Partial<typeof orgSubscriptions.$inferInsert>
+  ) {
+    const [created] = await db
+      .insert(orgSubscriptions)
+      .values({
+        orgId,
+        stripeSubscriptionId: `sub_test_${createId()}`,
+        stripeBasePriceId: 'price_base_test',
+        stripeBaseItemId: `si_base_${createId()}`,
+        stripeSeatPriceId: 'price_seat_test',
+        stripeSeatItemId: `si_seat_${createId()}`,
+        status: 'active',
+        ...overrides,
+      })
+      .returning()
+    await fundOrgSubscription(orgId)
     return created
   },
 }

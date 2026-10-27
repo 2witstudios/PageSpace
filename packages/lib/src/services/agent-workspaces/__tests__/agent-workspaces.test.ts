@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   spawnAgentSession,
   endAgentSession,
+  renameAgentSession,
   listAgentSessions,
   toAgentSessionDTO,
   type SpawnAgentSessionDeps,
@@ -21,6 +22,7 @@ import {
   makeSessionRecord,
   makeSpriteHost,
 } from './fakes';
+import { credentialActor } from '../../../permissions/access-actor';
 
 const SESSION_KEY = deriveAgentSessionSpriteKey({ tenantId: TENANT_ID, workspaceId: SESSION_ID, secret: SECRET });
 
@@ -39,6 +41,8 @@ function makeSpawnDeps(
     gateLocalEnvBind: async () => {
       throw new Error('gateLocalEnvBind must not be consulted for a Sprite env');
     },
+    // Only consulted for a global-assistant (driveless) spawn.
+    resolveHomeDriveId: async (ownerId) => `home-of-${ownerId}`,
     ...over,
   };
 }
@@ -46,7 +50,7 @@ function makeSpawnDeps(
 describe('spawnAgentSession', () => {
   it('should mint a session row with its OWN id — never a conversation id', async () => {
     const store = makeAgentSessionStore();
-    const result = await spawnAgentSession({ ownerId: OWNER_ID, driveId: DRIVE_ID, deps: makeSpawnDeps(store) });
+    const result = await spawnAgentSession({ owner: credentialActor(OWNER_ID, null), driveId: DRIVE_ID, deps: makeSpawnDeps(store) });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -60,7 +64,7 @@ describe('spawnAgentSession', () => {
     // Lazy provisioning is the invariant: no sandbox exists until first real
     // use, so a spawned session must carry no Sprite identity at all.
     const store = makeAgentSessionStore();
-    const result = await spawnAgentSession({ ownerId: OWNER_ID, driveId: DRIVE_ID, deps: makeSpawnDeps(store) });
+    const result = await spawnAgentSession({ owner: credentialActor(OWNER_ID, null), driveId: DRIVE_ID, deps: makeSpawnDeps(store) });
     if (!result.ok) throw new Error('expected ok');
     expect(result.session.sandboxId).toBeNull();
     expect(result.session.spriteKey).toBeNull();
@@ -68,24 +72,79 @@ describe('spawnAgentSession', () => {
 
   it('given two spawns, should mint two sessions — two spawns MEAN two workspaces', async () => {
     const store = makeAgentSessionStore();
-    const a = await spawnAgentSession({ ownerId: OWNER_ID, driveId: DRIVE_ID, deps: makeSpawnDeps(store) });
-    const b = await spawnAgentSession({ ownerId: OWNER_ID, driveId: DRIVE_ID, deps: makeSpawnDeps(store) });
+    const a = await spawnAgentSession({ owner: credentialActor(OWNER_ID, null), driveId: DRIVE_ID, deps: makeSpawnDeps(store) });
+    const b = await spawnAgentSession({ owner: credentialActor(OWNER_ID, null), driveId: DRIVE_ID, deps: makeSpawnDeps(store) });
     if (!a.ok || !b.ok) throw new Error('expected ok');
     expect(a.session.id).not.toBe(b.session.id);
     expect(store.rows.size).toBe(2);
   });
 
-  it('given a null driveId, should spawn a user-scoped global-assistant session', async () => {
+  it("given a null driveId, should create the global-assistant session in the owner's Home drive", async () => {
     const store = makeAgentSessionStore();
-    const result = await spawnAgentSession({ ownerId: OWNER_ID, driveId: null, deps: makeSpawnDeps(store) });
+    const asked: string[] = [];
+    const result = await spawnAgentSession({
+      owner: credentialActor(OWNER_ID, null),
+      driveId: null,
+      deps: makeSpawnDeps(store, {
+        resolveHomeDriveId: async (ownerId) => {
+          asked.push(ownerId);
+          return 'home-drive-1';
+        },
+      }),
+    });
     if (!result.ok) throw new Error('expected ok');
-    expect(result.session.driveId).toBeNull();
+    expect(asked).toEqual([OWNER_ID]);
+    expect(result.session.driveId).toBe('home-drive-1');
+    expect(store.rows.get(result.session.id)?.driveId).toBe('home-drive-1');
+  });
+
+  it('given a drive, should never consult the Home drive resolver', async () => {
+    const store = makeAgentSessionStore();
+    const result = await spawnAgentSession({
+      owner: credentialActor(OWNER_ID, null),
+      driveId: DRIVE_ID,
+      deps: makeSpawnDeps(store, {
+        resolveHomeDriveId: async () => {
+          throw new Error('resolveHomeDriveId must not be consulted for a drive spawn');
+        },
+      }),
+    });
+    if (!result.ok) throw new Error('expected ok');
+    expect(result.session.driveId).toBe(DRIVE_ID);
+  });
+
+  it('given the Home drive cannot be resolved, should report spawn_failed and insert nothing', async () => {
+    const store = makeAgentSessionStore();
+    const result = await spawnAgentSession({
+      owner: credentialActor(OWNER_ID, null),
+      driveId: null,
+      deps: makeSpawnDeps(store, {
+        resolveHomeDriveId: async () => {
+          throw new Error('home drive provisioning failed');
+        },
+      }),
+    });
+    expect(result).toMatchObject({ ok: false, reason: 'spawn_failed' });
+    expect(store.rows.size).toBe(0);
+  });
+
+  it('given any spawn shape, should never hand the store a null driveId', async () => {
+    const store = makeAgentSessionStore();
+    const seen: Array<string | null> = [];
+    const createIfUnderLimit = store.store.createIfUnderLimit;
+    store.store.createIfUnderLimit = async (input) => {
+      seen.push(input.driveId);
+      return createIfUnderLimit(input);
+    };
+    await spawnAgentSession({ owner: credentialActor(OWNER_ID, null), driveId: null, deps: makeSpawnDeps(store) });
+    await spawnAgentSession({ owner: credentialActor(OWNER_ID, null), driveId: DRIVE_ID, deps: makeSpawnDeps(store) });
+    expect(seen).toEqual([`home-of-${OWNER_ID}`, DRIVE_ID]);
   });
 
   it('should carry the display name as a LABEL, defaulting to null', async () => {
     const store = makeAgentSessionStore();
-    const named = await spawnAgentSession({ ownerId: OWNER_ID, driveId: DRIVE_ID, name: 'api refactor', deps: makeSpawnDeps(store) });
-    const unnamed = await spawnAgentSession({ ownerId: OWNER_ID, driveId: DRIVE_ID, deps: makeSpawnDeps(store) });
+    const named = await spawnAgentSession({ owner: credentialActor(OWNER_ID, null), driveId: DRIVE_ID, name: 'api refactor', deps: makeSpawnDeps(store) });
+    const unnamed = await spawnAgentSession({ owner: credentialActor(OWNER_ID, null), driveId: DRIVE_ID, deps: makeSpawnDeps(store) });
     if (!named.ok || !unnamed.ok) throw new Error('expected ok');
     expect(named.session.name).toBe('api refactor');
     expect(unnamed.session.name).toBeNull();
@@ -96,21 +155,21 @@ describe('spawnAgentSession', () => {
     store.store.createIfUnderLimit = async () => {
       throw new Error('violates foreign key constraint');
     };
-    const result = await spawnAgentSession({ ownerId: OWNER_ID, driveId: 'no-such-drive', deps: makeSpawnDeps(store) });
+    const result = await spawnAgentSession({ owner: credentialActor(OWNER_ID, null), driveId: 'no-such-drive', deps: makeSpawnDeps(store) });
     expect(result).toMatchObject({ ok: false, reason: 'spawn_failed' });
   });
 
   it('given the owner is AT the ceiling, should report session_limit_reached — the check a future caller cannot omit (review #2261/2)', async () => {
     const store = makeAgentSessionStore();
     const result = await spawnAgentSession({
-      ownerId: OWNER_ID,
+      owner: credentialActor(OWNER_ID, null),
       driveId: DRIVE_ID,
       deps: makeSpawnDeps(store, { maxActiveSessions: 1 }),
     });
     expect(result.ok).toBe(true);
 
     const second = await spawnAgentSession({
-      ownerId: OWNER_ID,
+      owner: credentialActor(OWNER_ID, null),
       driveId: DRIVE_ID,
       deps: makeSpawnDeps(store, { maxActiveSessions: 1 }),
     });
@@ -142,6 +201,90 @@ describe('findByConversation — how a thread resolves its working context', () 
     // conflation that was removed.
     const store = makeAgentSessionStore([makeSessionRecord()]);
     expect(await store.store.findByConversation('unbound-conv')).toBeNull();
+  });
+});
+
+describe('renameAgentSession', () => {
+  const LATER = new Date(NOW.getTime() + 60_000);
+
+  it('given an existing session, should store the new label and bump updatedAt', async () => {
+    const store = makeAgentSessionStore([makeSessionRecord({ name: 'Old name' })]);
+
+    const result = await renameAgentSession({
+      workspaceId: SESSION_ID,
+      name: 'Deploy work',
+      deps: { store: store.store, now: () => LATER },
+    });
+
+    expect(result).toEqual({ ok: true, session: expect.objectContaining({ name: 'Deploy work' }) });
+    expect(store.rows.get(SESSION_ID)?.name).toBe('Deploy work');
+    expect(store.rows.get(SESSION_ID)?.updatedAt).toEqual(LATER);
+  });
+
+  it('given an unknown id, should answer not_found rather than creating anything', async () => {
+    const store = makeAgentSessionStore([makeSessionRecord()]);
+
+    const result = await renameAgentSession({
+      workspaceId: 'ses-does-not-exist',
+      name: 'Deploy work',
+      deps: { store: store.store, now: () => LATER },
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'not_found' });
+    expect(store.rows.size).toBe(1);
+  });
+
+  it('given an ENDED session, should still rename it', async () => {
+    // Deliberate, not an oversight: an ended row is retained so its
+    // conversations stay readable as history, and labelling history is exactly
+    // as useful as labelling live work. There is no lifecycle gate here to
+    // "restore" later.
+    const store = makeAgentSessionStore([makeSessionRecord({ name: 'Old name', endedAt: NOW })]);
+
+    const result = await renameAgentSession({
+      workspaceId: SESSION_ID,
+      name: 'Last week\'s migration',
+      deps: { store: store.store, now: () => LATER },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(store.rows.get(SESSION_ID)?.name).toBe('Last week\'s migration');
+    expect(store.rows.get(SESSION_ID)?.endedAt).toEqual(NOW);
+  });
+
+  it('given a name already held by another session, should allow it', async () => {
+    // Names are labels, never addresses (session-contract invariant 2): there
+    // is no uniqueness constraint at any level, and the whole rename design
+    // rests on that — a conflict arm here would be inventing a rule the schema
+    // deliberately does not have.
+    const store = makeAgentSessionStore([
+      makeSessionRecord({ id: 'ses-a', name: 'Shared name' }),
+      makeSessionRecord({ id: 'ses-b', name: 'Other' }),
+    ]);
+
+    const result = await renameAgentSession({
+      workspaceId: 'ses-b',
+      name: 'Shared name',
+      deps: { store: store.store, now: () => LATER },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(store.rows.get('ses-a')?.name).toBe('Shared name');
+    expect(store.rows.get('ses-b')?.name).toBe('Shared name');
+  });
+
+  it('given a rename, should leave the Sprite identity untouched', async () => {
+    const store = makeAgentSessionStore([makeSessionRecord({ spriteKey: SESSION_KEY, sandboxId: 'sb-1' })]);
+
+    await renameAgentSession({
+      workspaceId: SESSION_ID,
+      name: 'Deploy work',
+      deps: { store: store.store, now: () => LATER },
+    });
+
+    const row = store.rows.get(SESSION_ID);
+    expect(row?.spriteKey).toBe(SESSION_KEY);
+    expect(row?.sandboxId).toBe('sb-1');
   });
 });
 
@@ -362,7 +505,7 @@ describe('end then ensure — the same session key comes back', () => {
     const provisioned = await ensureAgentSessionSandbox({
       row,
       intent: 'ensure',
-      actor: { userId: OWNER_ID, tenantId: TENANT_ID },
+      actor: { access: credentialActor(OWNER_ID, null), tenantId: TENANT_ID },
       deps: {
         store: store.store,
         host: host.host,
@@ -443,7 +586,7 @@ describe('spawnAgentSession — inside an environment', () => {
   it('given an env in the session\'s drive, should bind the session to it and STILL provision nothing', async () => {
     const store = makeAgentSessionStore();
     const result = await spawnAgentSession({
-      ownerId: OWNER_ID,
+      owner: credentialActor(OWNER_ID, null),
       driveId: DRIVE_ID,
       envId: ENV_ID,
       deps: makeSpawnDeps(store, envInDrive),
@@ -461,7 +604,7 @@ describe('spawnAgentSession — inside an environment', () => {
   it('given no such env, should refuse rather than mint a row pointing at nothing', async () => {
     const store = makeAgentSessionStore();
     const result = await spawnAgentSession({
-      ownerId: OWNER_ID,
+      owner: credentialActor(OWNER_ID, null),
       driveId: DRIVE_ID,
       envId: ENV_ID,
       deps: makeSpawnDeps(store, { findEnv: async () => null }),
@@ -478,7 +621,7 @@ describe('spawnAgentSession — inside an environment', () => {
     // enumerating its environments through spawn errors.
     const store = makeAgentSessionStore();
     const result = await spawnAgentSession({
-      ownerId: OWNER_ID,
+      owner: credentialActor(OWNER_ID, null),
       driveId: DRIVE_ID,
       envId: ENV_ID,
       deps: makeSpawnDeps(store, { findEnv: async () => ({ driveId: 'drive-other', substrate: 'sprite' }) }),
@@ -494,7 +637,7 @@ describe('spawnAgentSession — inside an environment', () => {
     // an access path (`decideAgentSessionAccess`) that only ever reads driveId.
     const store = makeAgentSessionStore();
     const result = await spawnAgentSession({
-      ownerId: OWNER_ID,
+      owner: credentialActor(OWNER_ID, null),
       driveId: null,
       envId: ENV_ID,
       deps: makeSpawnDeps(store, envInDrive),
@@ -504,11 +647,32 @@ describe('spawnAgentSession — inside an environment', () => {
     expect(store.calls.create).toBe(0);
   });
 
+  it("given a GLOBAL-assistant spawn naming an env in the owner's HOME drive, should still refuse — the Home drive must not enable env binding", async () => {
+    const store = makeAgentSessionStore();
+    let resolved = 0;
+    const result = await spawnAgentSession({
+      owner: credentialActor(OWNER_ID, null),
+      driveId: null,
+      envId: ENV_ID,
+      deps: makeSpawnDeps(store, {
+        findEnv: async () => ({ driveId: `home-of-${OWNER_ID}`, substrate: 'sprite' }),
+        resolveHomeDriveId: async (ownerId) => {
+          resolved += 1;
+          return `home-of-${ownerId}`;
+        },
+      }),
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'env_not_found' });
+    expect(resolved).toBe(0);
+    expect(store.calls.create).toBe(0);
+  });
+
   it('given no envId, should never consult the env lookup at all', async () => {
     const store = makeAgentSessionStore();
     let looked = 0;
     const result = await spawnAgentSession({
-      ownerId: OWNER_ID,
+      owner: credentialActor(OWNER_ID, null),
       driveId: DRIVE_ID,
       deps: makeSpawnDeps(store, {
         findEnv: async () => {
@@ -531,10 +695,10 @@ describe('spawnAgentSession — inside an environment', () => {
       const store = makeAgentSessionStore();
       const asked: Array<{ envId: string; requesterId: string }> = [];
       const result = await spawnAgentSession({
-        ownerId: OWNER_ID,
+        owner: credentialActor(OWNER_ID, null),
         driveId: DRIVE_ID,
         envId: ENV_ID,
-        deps: makeSpawnDeps(store, { ...localEnvInDrive, gateLocalEnvBind: async (input) => { asked.push(input); return { ok: true, envId: input.envId }; } }),
+        deps: makeSpawnDeps(store, { ...localEnvInDrive, gateLocalEnvBind: async (input) => { asked.push({ envId: input.envId, requesterId: input.requester.userId }); return { ok: true, envId: input.envId }; } }),
       });
       expect(result.ok).toBe(true);
       if (!result.ok) return;
@@ -545,7 +709,7 @@ describe('spawnAgentSession — inside an environment', () => {
     it('given the gate refuses, should answer env_bind_refused with the typed refusal and mint NO row', async () => {
       const store = makeAgentSessionStore();
       const result = await spawnAgentSession({
-        ownerId: OWNER_ID,
+        owner: credentialActor(OWNER_ID, null),
         driveId: DRIVE_ID,
         envId: ENV_ID,
         deps: makeSpawnDeps(store, { ...localEnvInDrive, gateLocalEnvBind: async () => ({ ok: false, refusal: 'not_connected' }) }),
@@ -557,7 +721,7 @@ describe('spawnAgentSession — inside an environment', () => {
     it('given the gate refuses on the base code-exec gate, should carry its cause', async () => {
       const store = makeAgentSessionStore();
       const result = await spawnAgentSession({
-        ownerId: OWNER_ID,
+        owner: credentialActor(OWNER_ID, null),
         driveId: DRIVE_ID,
         envId: ENV_ID,
         deps: makeSpawnDeps(store, { ...localEnvInDrive, gateLocalEnvBind: async () => ({ ok: false, refusal: 'code_exec_denied', cause: 'tier_ineligible' }) }),
@@ -568,7 +732,7 @@ describe('spawnAgentSession — inside an environment', () => {
 
     it('given a SPRITE env, should never consult the gate (byte-identical to before)', async () => {
       const store = makeAgentSessionStore();
-      const result = await spawnAgentSession({ ownerId: OWNER_ID, driveId: DRIVE_ID, envId: ENV_ID, deps: makeSpawnDeps(store, envInDrive) });
+      const result = await spawnAgentSession({ owner: credentialActor(OWNER_ID, null), driveId: DRIVE_ID, envId: ENV_ID, deps: makeSpawnDeps(store, envInDrive) });
       expect(result.ok).toBe(true);
     });
   });

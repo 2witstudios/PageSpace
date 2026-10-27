@@ -4,6 +4,67 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`pagespace wallets drive|list|source` — read your wallets from the terminal.** `wallets drive
+  <driveId>` shows a drive's wallet: remaining credits, your own cap for today and this month,
+  whether donations are on and the drive's default spend source. `wallets list` shows what you spend
+  from and fund. `wallets source <conversationId> [--drive <driveId>]` shows which wallet a
+  conversation spends from and what the next AI call would do (`--drive` only matters for a global
+  conversation). Amounts are shown as credits, never as money; `--json` prints the raw result.
+  `list` and `source` need a key with no drive restriction.
+- **`pagespace wallets drive-source <driveId>`** shows which wallet a new conversation in a drive
+  would spend from, and the wallets you may pick there.
+- **Read-only, by design.** A key can never create, fund, donate to or change a wallet, or change
+  what a conversation or your account spends from — sign in to the web app for that. There is no
+  CLI verb for any of it.
+- **`pagespace mcp` exposes `wallets.getDriveWallet`, `wallets.list`,
+  `wallets.getConversationSource`, `wallets.getDriveSource` and `wallets.getAlwaysOwnCredits` as
+  tools** — and no wallet write.
+- Organizations and wallets are not yet enabled on pagespace.ai; until they are, these verbs answer
+  not found.
+
+## [1.11.0] — 2026-09-16
+
+### Added
+
+- **`pagespace workspaces list` and `pagespace workspaces exec` — a shell in an agent workspace's
+  sandbox.** Running a command in a workspace sandbox used to be possible only through an agent in
+  chat. `workspaces list [--drive <id>]` shows your workspaces, and `workspaces exec <workspaceId>
+  -- <command…>` runs a command there: stdout and stderr go to your terminal's stdout and stderr,
+  and **the CLI exits with the command's own exit status**, so `exec … -- test -f build/ok && …`
+  composes like a local shell. `--cwd <dir>` (relative to the sandbox root) and `--timeout-ms <ms>`
+  (up to 200000) are optional, and `--json` prints the raw result instead. A cold workspace starts
+  its sandbox on the first exec. The run is gated, metered and audited exactly like the agent's
+  own `bash` tool: it needs a plan that includes code execution, and a key scoped to other drives
+  cannot see or reach the workspace. One argument after `--` runs as a shell command line, so
+  quote a pipeline as one argument (`-- 'ls | wc -l'`) and your local shell does not run half of
+  it. Several arguments are passed as separate words with their quoting preserved, so
+  `-- sh -c 'echo hi; exit 3'` hands `sh` the whole script as one word.
+- **`--` ends option parsing for every command.** Everything after it is passed to the command
+  verbatim, so a flag like `--json` after `--` belongs to the remote command, not to the CLI.
+- **`pagespace mcp` exposes `workspaces.list` and `workspaces.exec` as tools.**
+
+## [1.10.0] — 2026-09-12
+
+### Added
+
+- **`pagespace sheets formatting` and `pagespace sheets format` — read and write how a sheet
+  looks.** The row verbs could fill a sheet but not style it, so a sheet built from a script stayed
+  a grid of bare numbers. `formatting <pageId>` prints the declared tables, the conditional rules
+  **with their ids** (the only way to get an id you can later remove), frozen rows and columns,
+  column formats and widths, and row heights; add `--ranges A1:F40,H2:H9` to also read the formats
+  on individual cells, which are not read otherwise because they live on the rows. `format
+  <pageId>` takes a JSON array of ops on stdin or `--json-input` and applies them **in order, in
+  one transaction, all or nothing** — one bad op refuses the whole call, names its index, and
+  writes nothing. Both take `--tab <n>` and `--json` like every other sheet verb.
+
+  Prefer declaring a **region** to formatting cells: a region says what an area *is* (header rows,
+  what each column means, where the totals are, an accent hue) and an open range like `A1:F` covers
+  rows added later at no cost however tall the sheet gets. `format` is not gated behind `--yes`,
+  unlike `delete-rows`: formatting is presentation, recoverable by writing it again, and prompting
+  to bold a header row would only train the habit of passing `--yes` blind.
+
 ### Changed
 
 - **The `pagespace env` documentation now states, in plain words and before the commands, what

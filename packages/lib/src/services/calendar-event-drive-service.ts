@@ -2,15 +2,17 @@ import { db } from '@pagespace/db/db';
 import { eq, and, inArray, isNotNull } from '@pagespace/db/operators';
 import { calendarEvents, calendarEventDrives } from '@pagespace/db/schema/calendar';
 import { drives } from '@pagespace/db/schema/core';
-import { driveMembers } from '@pagespace/db/schema/members';
 import { isDriveOwnerOrAdmin, isUserDriveMember } from '../permissions/permissions';
-import { getDriveRecipientUserIds } from './drive-member-service';
+import { listDriveAudiences } from '../permissions/drive-audience';
+import { checkDriveMayLoosen } from '../permissions/org-lapse-guard';
+import type { AccessActor } from '../permissions/access-actor';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-export type ServiceFailure = { ok: false; status: number; error: string };
+/** `code` is set for a refusal the UI keys on: `org_lapsed` ([D-OW-33], 402). */
+export type ServiceFailure = { ok: false; status: number; error: string; code?: string };
 
 export interface EventDriveEntry {
   driveId: string;
@@ -128,11 +130,12 @@ async function insertCalendarEventDrive(
  * Triggers on the event remain bound to the home drive (calendarEvents.driveId).
  */
 export async function shareEventWithDrive(input: {
-  actingUserId: string;
+  actor: AccessActor;
   eventId: string;
   driveId: string;
 }): Promise<{ ok: true; status: 201; row: typeof calendarEventDrives.$inferSelect } | ServiceFailure> {
-  const { actingUserId, eventId, driveId } = input;
+  const { actor, eventId, driveId } = input;
+  const actingUserId = actor.userId;
 
   const [event] = await db
     .select({ id: calendarEvents.id, driveId: calendarEvents.driveId, createdById: calendarEvents.createdById, isTrashed: calendarEvents.isTrashed })
@@ -145,8 +148,8 @@ export async function shareEventWithDrive(input: {
   if (driveId === event.driveId) return { ok: false, status: 400, error: 'Cannot share event with its home drive' };
 
   const [actingUserIsHomeDriveAdmin, actingUserIsTargetDriveMember] = await Promise.all([
-    isDriveOwnerOrAdmin(actingUserId, event.driveId),
-    isUserDriveMember(actingUserId, driveId),
+    isDriveOwnerOrAdmin(actor, event.driveId),
+    isUserDriveMember(actor, driveId),
   ]);
 
   const validation = validateShareEventInput({
@@ -159,8 +162,16 @@ export async function shareEventWithDrive(input: {
   if (!validation.ok) return validation;
 
   try {
-    const row = await insertCalendarEventDrive(db, { eventId, driveId, sharedBy: actingUserId });
-    return { ok: true, status: 201, row };
+    // [D-OW-33] ruling: sharing an org-drive event into ANOTHER drive widens who reads org content (the calendar
+    // analog of copying pages out): refused while the event's home drive's org is lapsed, read in the insert's
+    // transaction. Unsharing still works.
+    const homeDriveId = event.driveId;
+    return await db.transaction(async (tx) => {
+      const lapsed = await checkDriveMayLoosen(tx, homeDriveId, true);
+      if (lapsed) return { ok: false as const, status: lapsed.status, error: lapsed.message, code: lapsed.code };
+      const row = await insertCalendarEventDrive(tx, { eventId, driveId, sharedBy: actingUserId });
+      return { ok: true as const, status: 201 as const, row };
+    });
   } catch (err) {
     if ((err as { code?: string }).code === '23505') {
       return { ok: false, status: 409, error: 'Event is already shared with this drive' };
@@ -174,11 +185,12 @@ export async function shareEventWithDrive(input: {
  * The home drive (calendarEvents.driveId) cannot be removed.
  */
 export async function unshareEventFromDrive(input: {
-  actingUserId: string;
+  actor: AccessActor;
   eventId: string;
   driveId: string;
 }): Promise<{ ok: true; status: 200 } | ServiceFailure> {
-  const { actingUserId, eventId, driveId } = input;
+  const { actor, eventId, driveId } = input;
+  const actingUserId = actor.userId;
 
   const [event] = await db
     .select({ id: calendarEvents.id, driveId: calendarEvents.driveId, createdById: calendarEvents.createdById, isTrashed: calendarEvents.isTrashed })
@@ -190,8 +202,8 @@ export async function unshareEventFromDrive(input: {
   if (driveId === event.driveId) return { ok: false, status: 400, error: 'Cannot remove the home drive from an event' };
 
   const [actingUserIsHomeDriveAdmin, actingUserIsTargetDriveAdmin, [junctionRow]] = await Promise.all([
-    event.driveId ? isDriveOwnerOrAdmin(actingUserId, event.driveId) : Promise.resolve(false),
-    isDriveOwnerOrAdmin(actingUserId, driveId),
+    event.driveId ? isDriveOwnerOrAdmin(actor, event.driveId) : Promise.resolve(false),
+    isDriveOwnerOrAdmin(actor, driveId),
     db.select({ id: calendarEventDrives.id })
       .from(calendarEventDrives)
       .where(and(eq(calendarEventDrives.eventId, eventId), eq(calendarEventDrives.driveId, driveId)))
@@ -275,46 +287,31 @@ export async function listEventDrives(eventId: string): Promise<EventDriveEntry[
 }
 
 /**
- * Check if a user is a member (or owner) of the event's home drive OR any shared drive.
- * Fast-path: skips junction query if home-drive membership/ownership is confirmed first.
- * Uses batched queries for shared drives — not N+1.
+ * Check if a user is a member (or the lead) of the event's home drive OR any shared drive: the
+ * shared org-aware membership, drive by drive (an event is shared into a handful at most), home
+ * drive first so the junction is read only when it is needed.
  */
 export async function isUserMemberOfAnyEventDrive(
-  userId: string,
+  actor: AccessActor,
   event: { id: string; driveId: string | null },
 ): Promise<boolean> {
   if (!event.driveId) return false;
 
-  // getDriveRecipientUserIds includes the drive owner + all accepted members.
-  const homeRecipients = new Set(await getDriveRecipientUserIds(event.driveId));
-  if (homeRecipients.has(userId)) return true;
-
-  const sharedRows = await db
+  if (await isUserDriveMember(actor, event.driveId)) return true;
+  const shared = await db
     .select({ driveId: calendarEventDrives.driveId })
     .from(calendarEventDrives)
     .where(eq(calendarEventDrives.eventId, event.id));
-
-  if (sharedRows.length === 0) return false;
-
-  const sharedDriveIds = sharedRows.map((r) => r.driveId);
-  const [sharedMembers, sharedOwners] = await Promise.all([
-    db.select({ userId: driveMembers.userId })
-      .from(driveMembers)
-      .where(and(inArray(driveMembers.driveId, sharedDriveIds), isNotNull(driveMembers.acceptedAt))),
-    db.select({ ownerId: drives.ownerId })
-      .from(drives)
-      .where(inArray(drives.id, sharedDriveIds)),
-  ]);
-
-  return sharedMembers.some((m) => m.userId === userId) ||
-    sharedOwners.some((d) => d.ownerId === userId);
+  for (const { driveId } of shared) {
+    if (await isUserDriveMember(actor, driveId)) return true;
+  }
+  return false;
 }
 
 /**
- * Return the union of all member/owner user IDs across the home drive and all shared drives.
- * Uses batched queries for shared drives — not N+1.
- * Filters by acceptedAt IS NOT NULL to exclude pending invitations.
- * Includes drive owners (stored on drives.ownerId, not in driveMembers).
+ * Return the union of the members (lead included) of the home drive and every shared drive, from
+ * the one org-aware membership enumeration (listDriveAudiences): pending invitations and stale org
+ * rows are no members. Constant queries however many drives.
  */
 export async function getAllMemberUserIdsForEvent(
   eventId: string,
@@ -322,30 +319,16 @@ export async function getAllMemberUserIdsForEvent(
 ): Promise<Set<string>> {
   if (!homeDriveId) return new Set();
 
-  // getDriveRecipientUserIds includes the drive owner + all accepted members.
-  const [homeRecipients, sharedRows] = await Promise.all([
-    getDriveRecipientUserIds(homeDriveId),
-    db.select({ driveId: calendarEventDrives.driveId })
-      .from(calendarEventDrives)
-      .where(eq(calendarEventDrives.eventId, eventId)),
-  ]);
+  const sharedRows = await db
+    .select({ driveId: calendarEventDrives.driveId })
+    .from(calendarEventDrives)
+    .where(eq(calendarEventDrives.eventId, eventId));
 
-  const result = new Set(homeRecipients);
-
-  if (sharedRows.length > 0) {
-    const sharedDriveIds = sharedRows.map((r) => r.driveId);
-    const [sharedMembers, sharedOwners] = await Promise.all([
-      db.select({ userId: driveMembers.userId })
-        .from(driveMembers)
-        .where(and(inArray(driveMembers.driveId, sharedDriveIds), isNotNull(driveMembers.acceptedAt))),
-      db.select({ ownerId: drives.ownerId })
-        .from(drives)
-        .where(inArray(drives.id, sharedDriveIds)),
-    ]);
-    for (const { userId } of sharedMembers) result.add(userId);
-    for (const { ownerId } of sharedOwners) result.add(ownerId);
+  const audiences = await listDriveAudiences([homeDriveId, ...sharedRows.map((r) => r.driveId)]);
+  const result = new Set<string>();
+  for (const members of audiences.values()) {
+    for (const { userId } of members) result.add(userId);
   }
-
   return result;
 }
 

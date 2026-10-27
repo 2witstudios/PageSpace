@@ -114,13 +114,27 @@ vi.mock('@/components/messages/MessageLinkPreviews', () => ({
   MessageLinkPreviews: () => null,
 }));
 
-// MessageAttachment — sentinel for inspection
+// MessageAttachments — sentinel for inspection. The page renders the plural
+// gallery component; a message with no renderable attachment produces nothing,
+// which is what the negative assertions below rely on.
 const messageAttachmentCalls = vi.fn();
-vi.mock('@/components/shared/MessageAttachment', () => ({
-  MessageAttachment: ({ message }: { message: { fileId?: string | null } }) => {
+vi.mock('@/components/shared/MessageAttachments', () => ({
+  MessageAttachments: ({
+    message,
+  }: {
+    message: { fileId?: string | null; attachments?: Array<{ fileId?: string | null }> | null };
+  }) => {
     messageAttachmentCalls(message);
-    if (!message.fileId) return null;
-    return <div data-testid={`attachment-${message.fileId}`}>attachment</div>;
+    const ids = (message.attachments ?? []).map((a) => a.fileId).filter(Boolean);
+    const rendered = ids.length > 0 ? ids : message.fileId ? [message.fileId] : [];
+    if (rendered.length === 0) return null;
+    return (
+      <>
+        {rendered.map((id) => (
+          <div key={id} data-testid={`attachment-${id}`}>attachment</div>
+        ))}
+      </>
+    );
   },
 }));
 
@@ -199,7 +213,7 @@ describe('InboxDMPage — attachments', () => {
     expect(lastChannelInputPropsRef.current!.attachmentsEnabled).toBe(true);
   });
 
-  it('sendWithAttachment_postsBodyIncludesFileIdAndAttachmentMeta', async () => {
+  it('sendWithAttachment_postsBodyIncludesTheAttachment', async () => {
     await act(async () => {
       render(<InboxDMPage />);
     });
@@ -211,15 +225,24 @@ describe('InboxDMPage — attachments', () => {
     expect(mockPost).toHaveBeenCalledTimes(1);
     const call = mockPost.mock.calls[0];
     expect(call[0]).toBe('/api/messages/conv-1');
+    // One send is one message carrying an ARRAY now, even for a single file —
+    // the singular fileId/attachmentMeta pair is still accepted by the route
+    // for the published SDK and CLI, but this composer no longer sends it.
     expect(call[1]).toMatchObject({
-      fileId: sampleAttachment.id,
-      attachmentMeta: {
-        originalName: sampleAttachment.originalName,
-        size: sampleAttachment.size,
-        mimeType: sampleAttachment.mimeType,
-        contentHash: sampleAttachment.contentHash,
-      },
+      attachments: [
+        {
+          fileId: sampleAttachment.id,
+          attachmentMeta: {
+            originalName: sampleAttachment.originalName,
+            size: sampleAttachment.size,
+            mimeType: sampleAttachment.mimeType,
+            contentHash: sampleAttachment.contentHash,
+          },
+        },
+      ],
     });
+    // And a nonce, so the echo retires exactly this row.
+    expect(typeof (call[1] as { clientNonce?: unknown }).clientNonce).toBe('string');
   });
 
   it('sendWithoutAttachment_postsBodyOmitsFileFields', async () => {

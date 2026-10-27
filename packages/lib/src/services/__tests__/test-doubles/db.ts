@@ -110,6 +110,16 @@ export const operators = {
     (row) => compare(row[col.name], value) < 0,
   gt: (col: ColumnRef, value: unknown): RowPredicate =>
     (row) => compare(row[col.name], value) > 0,
+  inArray: (col: ColumnRef, values: readonly unknown[]): RowPredicate => {
+    // Recorded, not just evaluated. Drizzle binds one parameter per value and
+    // Postgres caps a statement at 65535 of them, so "how many ids did this
+    // query name?" is a real property of the SQL that a predicate-as-function
+    // double would otherwise hide completely — a query that binds an unbounded
+    // id list behaves identically here and fails with an opaque 08P01 in
+    // production.
+    testDbState.recordInArray(col, values.length);
+    return (row) => values.includes(row[col.name]);
+  },
   isNull: (col: ColumnRef): RowPredicate =>
     (row) => row[col.name] === null || row[col.name] === undefined,
   isNotNull: (col: ColumnRef): RowPredicate =>
@@ -206,6 +216,16 @@ function applyDefaults(table: string, row: Row): Row {
     }
     if (!('createdAt' in out)) out.createdAt = new Date();
   }
+  if (table === 'channelMessageAttachments' || table === 'directMessageAttachments') {
+    if (!out.id) out.id = autoId();
+    if (!('createdAt' in out)) out.createdAt = new Date();
+    // A nullable column reads back as NULL, never `undefined` — a fixture that
+    // omits attachmentMeta must look like the legacy row it stands for, or a
+    // `meta !== null` filter downstream lets `undefined` through and the code
+    // under test crashes on something the database cannot produce.
+    if (!('attachmentMeta' in out)) out.attachmentMeta = null;
+    if (!('fileId' in out)) out.fileId = null;
+  }
   return out;
 }
 
@@ -218,6 +238,7 @@ export class DbState {
   private tables = new Map<string, Row[]>();
   private hooks = new Map<string, Hook[]>();
   private executeCalls: SqlMarker[] = [];
+  private inArrayCalls: Array<{ table: string; column: string; count: number }> = [];
   private forCalls: ForCall[] = [];
   private transactionCallCount = 0;
 
@@ -230,6 +251,22 @@ export class DbState {
     const cur = this.tables.get(table) ?? [];
     cur.push(...rows.map((r) => applyDefaults(table, { ...r })));
     this.tables.set(table, cur);
+  }
+
+  /** @see operators.inArray — every id list a query bound, in call order. */
+  recordInArray(col: ColumnRef, count: number): void {
+    this.inArrayCalls.push({ table: col.table, column: col.name, count });
+  }
+
+  /**
+   * The id lists bound so far, optionally narrowed to one column. Lets a test
+   * assert on the SHAPE of a query's binds — that a sweep names no message ids
+   * at all, or that it chunks the ones it does name.
+   */
+  binds(column?: { table: string; name: string }): Array<{ table: string; column: string; count: number }> {
+    return this.inArrayCalls.filter(
+      (call) => !column || (call.table === column.table && call.column === column.name),
+    );
   }
 
   rows(table: string): Row[] {
@@ -337,6 +374,7 @@ export class DbState {
     this.tables.clear();
     this.hooks.clear();
     this.executeCalls.length = 0;
+    this.inArrayCalls.length = 0;
     this.forCalls.length = 0;
     this.transactionCallCount = 0;
   }
@@ -395,6 +433,17 @@ function joinRelations(
     } else if (relName === 'file') {
       const file = state.rowsRef('files').find((f) => f.id === row.fileId);
       result.file = projectColumns(file, relCfg.columns);
+    } else if (relName === 'attachments') {
+      const attachmentsTable =
+        table === 'channelMessages' ? 'channelMessageAttachments' : 'directMessageAttachments';
+      // Deliberately NOT sorted: the repositories' shared `with` clause carries
+      // no ORDER BY, so production may hand these back in any order and the
+      // client seam (getAttachments) is what applies `position`. Sorting here
+      // would model a guarantee the database does not make.
+      const attachments = state.rowsRef(attachmentsTable).filter((a) => a.messageId === row.id);
+      result.attachments = attachments.map((attachment) =>
+        joinRelations(state, attachmentsTable, attachment, relCfg.with)
+      );
     } else if (relName === 'reactions') {
       const reactionsTable =
         table === 'channelMessages' ? 'channelMessageReactions' : 'dmMessageReactions';
@@ -497,6 +546,8 @@ interface SelectWhere extends Thenable<Row[]> {
 
 interface SelectOrdered {
   limit: (n: number) => Promise<Row[]>;
+  for: (mode: string) => Promise<Row[]>;
+  then: ReturnType<typeof makeThen<Row[]>>;
 }
 
 const makeThen = <T>(produce: () => T) =>
@@ -519,6 +570,8 @@ interface QueryApi {
 
 const QUERY_TABLES = [
   'channelMessages',
+  'channelMessageAttachments',
+  'directMessageAttachments',
   'channelMessageReactions',
   'directMessages',
   'dmMessageReactions',
@@ -574,9 +627,19 @@ const isSqlJoin = (v: unknown): v is SqlJoinMarker =>
  *   DELETE FROM file_conversations fc
  *   USING (VALUES (fileId, conversationId), …) AS purged_pairs
  *   WHERE fc.fileId = pp.fileId AND fc.conversationId = pp.conversationId
+ *     AND NOT EXISTS (SELECT 1 FROM direct_message_attachments a
+ *                     JOIN direct_messages dm ON dm.id = a."messageId"
+ *                     WHERE a.fileId = fc.fileId
+ *                       AND dm.conversationId = fc.conversationId)
  *     AND NOT EXISTS (SELECT 1 FROM direct_messages dm
  *                     WHERE dm.fileId = fc.fileId
  *                       AND dm.conversationId = fc.conversationId)
+ *
+ * Both NOT EXISTS clauses matter and are mirrored below. A live message can
+ * reference a file through an attachment row while the legacy column on that
+ * row is null (anything past the first attachment), and dropping the link for
+ * one of those is the first step of a chain that ends with the orphaned-file
+ * cron deleting the blob from S3.
  *
  * Tests must observe that the orphan-link delete actually runs — without
  * this branch, dropping the entire `tx.execute` call from the impl would
@@ -616,9 +679,18 @@ function applyExecuteSideEffects(state: DbState, marker: SqlMarker): void {
       (p) => p.fileId === link.fileId && p.conversationId === link.conversationId
     );
     if (!matchedPair) continue;
-    const stillReferenced = directMessages.some(
+    const messagesById = new Map(directMessages.map((dm) => [dm.id, dm]));
+    const referencedByAttachment = state
+      .rowsRef('directMessageAttachments')
+      .some((attachment) => {
+        if (attachment.fileId !== link.fileId) return false;
+        const owner = messagesById.get(attachment.messageId as string);
+        return owner?.conversationId === link.conversationId;
+      });
+    const referencedByLegacyColumn = directMessages.some(
       (dm) => dm.fileId === link.fileId && dm.conversationId === link.conversationId
     );
+    const stillReferenced = referencedByAttachment || referencedByLegacyColumn;
     if (!stillReferenced) fileConversations.splice(i, 1);
   }
 }
@@ -785,6 +857,14 @@ function makeSelectBuilder(state: DbState, cols?: Record<string, ColumnRef>): Se
           },
           orderBy: (...orders) => ({
             limit: async (n) => buildResult(sortRows(filter(), orders).slice(0, n)),
+            // Real drizzle allows FOR UPDATE after ORDER BY, and the repositories
+            // rely on it: locking several file rows in a deterministic order is
+            // what stops two concurrent multi-attachment sends from deadlocking.
+            for: async (mode: string) => {
+              state.recordFor(table.__name, mode);
+              return buildResult(sortRows(filter(), orders));
+            },
+            then: makeThen<Row[]>(() => buildResult(sortRows(filter(), orders))),
           }),
           then: makeThen<Row[]>(() => buildResult(filter())),
         };
@@ -840,6 +920,9 @@ export const chatSchema = {
   channelThreadFollowers: makeTable('channelThreadFollowers', [
     'rootMessageId', 'userId', 'createdAt',
   ]),
+  channelMessageAttachments: makeTable('channelMessageAttachments', [
+    'id', 'messageId', 'fileId', 'attachmentMeta', 'position', 'createdAt',
+  ]),
 };
 
 export const socialSchema = {
@@ -858,6 +941,9 @@ export const socialSchema = {
   ]),
   dmMessageReactions: makeTable('dmMessageReactions', [
     'id', 'messageId', 'userId', 'emoji', 'createdAt',
+  ]),
+  directMessageAttachments: makeTable('directMessageAttachments', [
+    'id', 'messageId', 'fileId', 'attachmentMeta', 'position', 'createdAt',
   ]),
 };
 

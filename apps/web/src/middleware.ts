@@ -368,6 +368,7 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
       pathname === '/api/pulse/cron' ||
       pathname === '/api/integrations/zoom/webhook' ||
       pathname === '/api/stripe/webhook' ||
+      pathname === '/api/iap/apple/notifications' ||
       pathname === '/api/integrations/google-calendar/webhook' ||
       pathname.startsWith('/api/webhooks/') ||
       pathname === '/api/auth/signup-passkey' ||

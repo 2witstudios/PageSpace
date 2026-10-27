@@ -75,8 +75,13 @@ export interface AgentSessionRecord {
 
 export interface NewAgentSessionInput {
   ownerId: string;
-  /** null = a global-assistant session. */
-  driveId: string | null;
+  /**
+   * Never null: a global-assistant session is created in its owner's Home
+   * drive (`spawnAgentSession` resolves it), so no write path can mint a
+   * null-drive row. Existing null rows are still READ as global sessions until
+   * the backfill lands.
+   */
+  driveId: string;
   name: string | null;
   /**
    * The environment to run inside, or null for the ordinary ephemeral session
@@ -165,6 +170,21 @@ export interface AgentSessionStore {
   createIfUnderLimit(
     input: NewAgentSessionInput & { maxActive: number },
   ): Promise<{ ok: true; session: AgentSessionRecord } | { ok: false; reason: 'limit_reached' }>;
+  /**
+   * Relabel a session. `null` = no such row.
+   *
+   * NOT a lifecycle transition, and the only write in this store that carries
+   * no CAS and consults no planner. A name is a label with no addressing role
+   * (session-contract invariant 2): nothing looks a session up by it, so a
+   * rename cannot race a provision, cannot invalidate a teardown plan, and
+   * cannot break a connection. It is also deliberately UNGUARDED by
+   * `endedAt` — an ended row is retained as readable history, and relabelling
+   * history is exactly as useful as labelling it in the first place.
+   *
+   * No uniqueness arm, unlike `DriveEnvStore.rename`: session names carry no
+   * constraint at any level, so there is no conflict to report.
+   */
+  rename(input: { workspaceId: string; name: string; now: Date }): Promise<AgentSessionRecord | null>;
   /**
    * ACTIVE sessions only (`endedAt IS NULL`), newest activity first
    * (`lastActiveAt DESC NULLS LAST, createdAt DESC`), capped at
@@ -530,6 +550,18 @@ export async function createDbAgentSessionStore(now: () => Date = () => new Date
           .returning();
         return { ok: true as const, session: row as AgentSessionRecord };
       });
+    },
+
+    async rename({ workspaceId, name, now: at }) {
+      // No CAS and no `endedAt` guard — see the interface doc. The name has
+      // already been trimmed and bounded by `sessionNameSchema` at the request
+      // boundary; the store holds no policy of its own.
+      const [row] = await db
+        .update(agentWorkspaces)
+        .set({ name, updatedAt: at })
+        .where(eq(agentWorkspaces.id, workspaceId))
+        .returning();
+      return (row as AgentSessionRecord) ?? null;
     },
 
     async list(filter) {

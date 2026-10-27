@@ -57,6 +57,7 @@ import {
   type SpriteHolderProvisionIntent,
 } from '../../agent-workspaces/agent-workspace-sprite';
 import { makeSpriteHost, type FakeSpriteHost } from '../../agent-workspaces/__tests__/fakes';
+import { credentialActor } from '../../../permissions/access-actor';
 
 /** >= 32 chars — the key derivations refuse anything shorter. */
 const SECRET = 'env-session-integration-secret-key-0123456789';
@@ -113,7 +114,7 @@ async function ensureForSession(row: AgentSessionRecord, host: FakeSpriteHost) {
   return ensureAgentSessionSandbox({
     row: { ...row, workspaceId: row.id },
     intent: 'ensure',
-    actor: { userId: payerId, tenantId: payerId },
+    actor: { access: credentialActor(payerId, null), tenantId: payerId },
     deps: {
       store: sessionStore,
       host: host.host,
@@ -145,7 +146,7 @@ async function seedEnv(name = `env-${createId().slice(0, 8)}`, inDrive = driveId
 /** The spawn, with its result union intact — for the cases where refusal IS the assertion. */
 async function trySpawn(input: { envId: string | null; driveId?: string | null }) {
   return spawnAgentSession({
-    ownerId: payerId,
+    owner: credentialActor(payerId, null),
     driveId: input.driveId === undefined ? driveId : input.driveId,
     envId: input.envId,
     deps: {
@@ -155,15 +156,19 @@ async function trySpawn(input: { envId: string | null; driveId?: string | null }
       // The REAL gate (C1), on the real store: the sibling lookup, the drive-role
       // check and canRunCode all run against Postgres. Only consulted for a
       // LOCAL env — the Sprite rows in this suite never reach it.
-      gateLocalEnvBind: ({ envId, requesterId }) =>
+      gateLocalEnvBind: ({ envId, requester }) =>
         gateLocalEnvForRequester({
           row: { id: envId, driveId, substrate: 'local' },
-          requesterId,
+          requester,
           deps: { store: envStore, resolvePayer: async () => ({ payerId, tier: 'pro' }), localEnvsEnabled: true },
         }),
       // The REAL store, so the drive-agreement check reads a real row rather
       // than a fixture that could disagree with one.
       findEnv: async (id) => envStore.findById(id),
+      // A global spawn into an env is refused before Home is ever resolved.
+      resolveHomeDriveId: async () => {
+        throw new Error('no driveless spawn reaches Home in this suite');
+      },
     },
   });
 }

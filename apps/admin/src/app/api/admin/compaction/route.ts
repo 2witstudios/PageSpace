@@ -3,6 +3,7 @@ import { db } from '@pagespace/db/db';
 import { conversationCompactions } from '@pagespace/db/schema/ai-compaction';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { and, desc, eq, gte, isNotNull, sql } from '@pagespace/db/operators';
+import { CENTS_PER_DOLLAR, centsFromDollars } from '@pagespace/lib/billing/money-model';
 
 // Every summary aggregate shares this ONE window and is computed with SQL
 // aggregates over ALL rows in the window — never from a row-limited list.
@@ -19,7 +20,7 @@ export const GET = withAdminAuth(async () => {
     db
       .select({
         count: sql<number>`count(*)::int`,
-        totalCostCents: sql<number>`COALESCE(ROUND(SUM(COALESCE(${aiUsageLogs.cost}, 0) * 100)::numeric), 0)::int`,
+        totalCostCents: sql<number>`COALESCE(ROUND(SUM(COALESCE(${aiUsageLogs.cost}, 0) * ${CENTS_PER_DOLLAR})::numeric), 0)::int`,
       })
       .from(aiUsageLogs)
       .where(and(eq(aiUsageLogs.source, 'compaction'), gte(aiUsageLogs.timestamp, since7d))),
@@ -85,7 +86,7 @@ export const GET = withAdminAuth(async () => {
       model: r.model,
       inputTokens: r.inputTokens,
       outputTokens: r.outputTokens,
-      costCents: Math.round((r.cost ?? 0) * 100),
+      costCents: centsFromDollars(r.cost ?? 0),
       timestamp: r.timestamp?.toISOString() ?? null,
     })),
     meta: {

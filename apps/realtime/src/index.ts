@@ -1,9 +1,13 @@
 import './instrument';
+import { getDrivePolicies, getResourceAuthenticationPolicies } from '@pagespace/lib/organizations/policy-reader';
+import { credentialActor, type AccessActor } from '@pagespace/lib/permissions/access-actor';
+import { createOrgRoomWatch, createPolicyChangeFanout, ORG_REAUTHENTICATION_REQUIRED_EVENT, type OrgRoomWatch } from './org-room-watch';
+import { ORG_CHANGED_EVENT } from '@pagespace/lib/realtime/org-wallet-events';
 import * as Sentry from '@sentry/node';
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import type { Duplex } from 'stream';
 import { Server, Socket } from 'socket.io';
-import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
+import { explainSignInRefusal, getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
 import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-workspaces/shells-contract';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { verifyBroadcastSignature } from '@pagespace/lib/auth/broadcast-auth';
@@ -28,6 +32,9 @@ import {
 } from '@pagespace/lib/services/sandbox/containment';
 import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/machine-session-manager';
 import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/sandbox-billing';
+import { makeResolveShellPayer } from './terminal/shell-payer';
+import { pgWindowClaimLock } from './terminal/window-claim-lock';
+import { computeTierForDrive } from '@pagespace/lib/billing/sandbox-eligibility';
 import { acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
 import { createSpritesSandboxClient, createSpriteHandleCache, type SpritesSdk } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { createSpriteSandboxHost } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-sandbox-host';
@@ -43,6 +50,8 @@ import { openPtyShell } from './terminal/sprites-shell';
 import { getRealtimeSpritesSdk } from './terminal/realtime-sprites-client';
 import {
   buildShellHandlers,
+  claimBillingWindow,
+  regateResumedWindow,
   composeSocketKey,
   connectFailureMessage,
   ensureShellSession,
@@ -97,6 +106,7 @@ import {
   emitValidationError,
 } from './validation';
 import { loggers, initializeLogging } from '@pagespace/lib/logging/logger-config';
+import { corsOrigin, validateAndLogWebSocketOrigin } from './origin-allowlist';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 // Room names come EXCLUSIVELY from the shared grammar (#2158) — the same
 // module the broadcast-audience validator checks against, so a join shape
@@ -111,6 +121,7 @@ import {
   userSessionsRoom,
   driveRoom,
   driveCalendarRoom,
+  driveWalletRoom,
   dmRoom,
   conversationRoom,
   sessionRoom,
@@ -118,12 +129,14 @@ import {
   pageActivityRoom,
 } from '@pagespace/lib/realtime/rooms';
 import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
+import { canViewDriveWallet } from '@pagespace/lib/permissions/spend-standing';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { socketRegistry } from './socket-registry';
 import { handleKickRequest } from './kick-handler';
 import { authorizeBroadcastAudience } from './broadcast-audience';
 import { presenceTracker, type PresenceViewer } from './presence-tracker';
 import { withPerEventAuth, type AuthSocket } from './per-event-auth';
+import { isOrgActive, isOrgLapsedForDrive } from '@pagespace/lib/organizations/status';
 
 dotenv.config({ path: '../../.env' });
 
@@ -213,9 +226,10 @@ async function resolveOwnerTier(ownerId: string) {
  * tier of the system.
  */
 async function resolveDriveEnvPayer(driveId: string) {
-  const [drive] = await db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, driveId)).limit(1);
+  const [drive] = await db.select({ ownerId: drives.ownerId, orgId: drives.orgId }).from(drives).where(eq(drives.id, driveId)).limit(1);
   if (!drive) return null;
-  return { payerId: drive.ownerId, tier: await resolveOwnerTier(drive.ownerId) };
+  // The tenant stays the lead (key folding); the tier is the org's for an org drive (WAL-9).
+  return { payerId: drive.ownerId, tier: computeTierForDrive(drive, await resolveOwnerTier(drive.ownerId), await isOrgLapsedForDrive(drive)) };
 }
 
 /**
@@ -228,7 +242,7 @@ async function resolveDriveEnvPayer(driveId: string) {
  * function the web tier's `provisionSessionSandbox` calls, so a vanished
  * drive fails closed identically on both tiers.
  */
-async function ensureShellSessionSandbox({ workspaceId, userId }: { workspaceId: string; userId: string }): Promise<
+async function ensureShellSessionSandbox({ workspaceId, actor }: { workspaceId: string; actor: AccessActor }): Promise<
   { ok: true; sandboxId: string } | { ok: false; reason: string }
 > {
   const store = await dbAgentSessionStorePromise;
@@ -245,7 +259,7 @@ async function ensureShellSessionSandbox({ workspaceId, userId }: { workspaceId:
   const result = await ensureAgentSessionSandbox({
     row: { ...row, workspaceId: row.id },
     intent: 'ensure',
-    actor: { userId, tenantId },
+    actor: { access: actor, tenantId },
     deps: {
       store,
       host,
@@ -294,8 +308,14 @@ async function ensureShellSessionSandbox({ workspaceId, userId }: { workspaceId:
         ensureDriveEnvSandbox({
           envId,
           intent,
-          requesterId: userId,
-          deps: { store: await dbDriveEnvStorePromise, host, resolvePayer: resolveDriveEnvPayer },
+          requester: actor,
+          deps: {
+            store: await dbDriveEnvStorePromise,
+            host,
+            resolvePayer: resolveDriveEnvPayer,
+            // POL-10: the org's persistent-environments switch, read live at every start (same reader the web tier binds).
+            getDriveOrgPolicies: async (id) => (await getDrivePolicies(id))?.policies ?? null,
+          },
         }),
       checkConcurrency: async ({ ownerId, alreadyProvisioned }) => {
         // Tier of the PAYER — the session's tenant (drive owner, else session
@@ -389,13 +409,13 @@ const shellCheckAuth = buildShellCheckAuth({
     const store = await dbSessionShellStorePromise;
     return resolveSessionShellById({ shellId, deps: { store } });
   },
-  checkSessionAccess: async ({ requesterId, workspaceId }) => {
+  checkSessionAccess: async ({ requester, workspaceId }) => {
     const store = await dbAgentSessionStorePromise;
     const row = await store.findById(workspaceId);
     if (!row) return { allowed: false, reason: 'session_not_found' };
     const subject = { ownerId: row.ownerId, driveId: row.driveId };
     const decision = await checkAgentSessionAccess({
-      requesterId,
+      requester,
       workspaceId,
       deps: {
         // The row was just read; hand the wrapper the same subject rather than
@@ -415,21 +435,16 @@ const shellCheckAuth = buildShellCheckAuth({
     // fires — without it, a member who lost the capability could keep typing
     // into a live PTY.
     const allowedToRunCode = await canRunCodeForSession({
-      userId: requesterId,
+      actor: requester,
       driveId: subject.driveId,
       ownerId: subject.ownerId,
     });
     if (!allowedToRunCode) return { allowed: false, reason: 'code_execution_denied' };
     return { allowed: true, session: subject };
   },
-  resolvePayer: async (session) => {
-    // Payer = the session's DRIVE owner; a global-assistant session (or a
-    // vanished drive) attributes to the session owner instead.
-    if (session.driveId === null) return { payerId: session.ownerId, driveId: null };
-    const [drive] = await db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, session.driveId)).limit(1);
-    if (!drive) return { payerId: session.ownerId, driveId: null };
-    return { payerId: drive.ownerId, driveId: session.driveId };
-  },
+  // WAL-2: the session's drive's payer, recorded under and capped against the ACTOR connecting.
+  resolvePayer: makeResolveShellPayer(),
+  isOrgLapsed: async (orgId) => !(await isOrgActive(orgId)),
   getUser: async (userId) => {
     const [userRow] = await db
       .select({ subscriptionTier: users.subscriptionTier, email: users.email })
@@ -487,6 +502,8 @@ const shellSessionDeps: ShellSessionDeps = {
     await store.recordColdTail({ id: shellId, tail, hasOutput, endedAt });
   },
   billing: defaultSandboxBillingDeps,
+  // re-review P2-1: billing-window claims serialize per session ACROSS realtime instances.
+  windowClaimLock: pgWindowClaimLock,
   // Sprites Tasks API hold (leaf 5-1): while an agent is running or a
   // viewer attached, a short-expiry platform task (refreshed on a
   // heartbeat, deleted on exit) keeps the sprite from cold-pausing mid-run;
@@ -537,16 +554,16 @@ const HEADLESS_ROWS = 24;
  * bills the session's payer, and writes a code-execution audit row.
  */
 const startHeadlessShell = async (
-  { shellId, userId }: { shellId: string; userId: string },
+  { shellId, actor }: { shellId: string; actor: AccessActor },
   abandoned: () => boolean,
 ) => {
-  const access = await shellCheckAuth({ userId, shellId });
+  const access = await shellCheckAuth({ actor, shellId });
   if (!access.ok) return undefined;
 
   const outcome = await ensureShellSession(shellSessionDeps, {
     access,
     target: { shellId },
-    userId,
+    actor,
     cols: HEADLESS_COLS,
     rows: HEADLESS_ROWS,
     abandoned,
@@ -580,228 +597,21 @@ const shellIoDeps = {
   // identity is never refreshed — correct but useless, since revocation would
   // then evict whoever happened to create the session rather than whoever is
   // driving it.
-  reauthorizeViewer: async ({ shellId, userId }: { shellId: string; userId: string }) => {
-    const decision = await shellCheckAuth({ userId, shellId });
+  reauthorizeViewer: async ({ shellId, actor }: { shellId: string; actor: AccessActor }) => {
+    const decision = await shellCheckAuth({ actor, shellId });
     return decision.ok;
   },
+  // WAL-2: typing on someone's behalf runs compute as them — their cap, their window.
+  claimBillingWindow: async (session: TerminalSession, userId: string) => {
+    const billing = shellSessionDeps.billing;
+    if (!billing) return true;
+    return (await claimBillingWindow(billing, agentTerminalSessionMap, session, userId, pgWindowClaimLock)).ok;
+  },
+  // Review #2761: a window this send restarted is re-gated at once, never left unheld.
+  regateResumedWindow: (session: TerminalSession) => {
+    void regateResumedWindow(shellSessionDeps, agentTerminalSessionMap, session, session.sessionKey);
+  },
 };
-
-/**
- * Origin Validation for WebSocket Connections (Defense-in-Depth with Blocking)
- *
- * This module provides explicit origin validation that BLOCKS invalid origins.
- * Socket.IO CORS is a first line of defense, but this provides defense-in-depth
- * by rejecting connections from unexpected origins at the middleware level.
- */
-
-/**
- * Normalizes an origin URL by extracting protocol, host, and port
- * This ensures consistent comparison between origins
- *
- * @param origin - The origin URL to normalize
- * @returns Normalized origin (protocol://host:port) or empty string if invalid
- */
-function normalizeOrigin(origin: string): string {
-  try {
-    const url = new URL(origin);
-    return url.origin;
-  } catch {
-    return '';
-  }
-}
-
-/**
- * Gets the list of allowed origins from environment configuration
- *
- * @returns Array of allowed origin URLs
- */
-function getAllowedOrigins(): string[] {
-  const origins: string[] = [];
-
-  // Primary origins from CORS_ORIGIN or WEB_APP_URL (matches Socket.IO CORS config)
-  const corsOrigin = process.env.CORS_ORIGIN;
-  const webAppUrl = process.env.WEB_APP_URL;
-
-  if (corsOrigin) {
-    const normalized = normalizeOrigin(corsOrigin);
-    if (normalized) origins.push(normalized);
-  } else if (webAppUrl) {
-    const normalized = normalizeOrigin(webAppUrl);
-    if (normalized) origins.push(normalized);
-  }
-
-  // Additional origins from ADDITIONAL_ALLOWED_ORIGINS (comma-separated)
-  const additionalOrigins = process.env.ADDITIONAL_ALLOWED_ORIGINS;
-  if (additionalOrigins) {
-    const parsed = additionalOrigins
-      .split(',')
-      .map((o) => normalizeOrigin(o.trim()))
-      .filter((o) => o.length > 0);
-    origins.push(...parsed);
-  }
-
-  return origins;
-}
-
-/**
- * Checks if the given origin is in the allowed list
- *
- * @param origin - The origin to validate
- * @param allowedOrigins - List of allowed origins
- * @returns true if origin is allowed, false otherwise
- */
-function isOriginAllowed(origin: string, allowedOrigins: string[]): boolean {
-  const normalizedOrigin = normalizeOrigin(origin);
-  if (!normalizedOrigin) {
-    return false;
-  }
-
-  return allowedOrigins.some((allowed) => allowed === normalizedOrigin);
-}
-
-/**
- * Result of WebSocket origin validation
- */
-interface WebSocketOriginValidationResult {
-  /** Whether the origin is valid (allowed or not required) */
-  isValid: boolean;
-  /** The origin that was validated (normalized), or undefined if not provided */
-  origin: string | undefined;
-  /** Reason for the validation result */
-  reason: 'valid' | 'no_origin' | 'invalid' | 'no_config';
-}
-
-/**
- * Validates a WebSocket connection origin against allowed origins
- *
- * This helper function provides a simple boolean check for origin validation.
- * It can be used for additional security monitoring or optional blocking decisions.
- *
- * Validation rules:
- * - Missing origin: Returns valid (non-browser clients like curl, mobile apps)
- * - No config: Returns valid with warning (CORS_ORIGIN/WEB_APP_URL not set)
- * - Origin matches allowed list: Returns valid
- * - Origin doesn't match: Returns invalid
- *
- * @param origin - The Origin header value from the connection request
- * @returns Validation result with isValid boolean and reason
- *
- * @example
- * ```typescript
- * const result = validateWebSocketOrigin(socket.handshake.headers.origin);
- * if (!result.isValid) {
- *   // Optionally reject the connection or log a warning
- *   socket.disconnect();
- * }
- * ```
- */
-/* c8 ignore start */
-function validateWebSocketOrigin(origin: string | undefined): WebSocketOriginValidationResult {
-  // No origin header - non-browser client, allow by default
-  if (!origin) {
-    return {
-      isValid: true,
-      origin: undefined,
-      reason: 'no_origin',
-    };
-  }
-
-  const normalizedOrigin = normalizeOrigin(origin);
-  const allowedOrigins = getAllowedOrigins();
-
-  // No allowed origins configured - allow but this is a misconfiguration
-  if (allowedOrigins.length === 0) {
-    return {
-      isValid: true,
-      origin: normalizedOrigin || origin,
-      reason: 'no_config',
-    };
-  }
-
-  // Check if origin is in allowed list
-  if (isOriginAllowed(origin, allowedOrigins)) {
-    return {
-      isValid: true,
-      origin: normalizedOrigin,
-      reason: 'valid',
-    };
-  }
-
-  // Origin not in allowed list
-  return {
-    isValid: false,
-    origin: normalizedOrigin || origin,
-    reason: 'invalid',
-  };
-}
-/* c8 ignore stop */
-
-/**
- * Validates WebSocket connection origin and returns whether to allow the connection
- *
- * This function BLOCKS connections from invalid origins (defense-in-depth).
- * Socket.IO CORS is a first line of defense, but this provides additional protection.
- *
- * @param origin - The Origin header value from the connection request
- * @param metadata - Additional metadata for logging (socketId, IP, etc.)
- * @returns true if connection should be allowed, false if it should be rejected
- */
-function validateAndLogWebSocketOrigin(
-  origin: string | undefined,
-  metadata: { socketId: string; ip: string | undefined; userAgent: string | undefined }
-): boolean {
-  const allowedOrigins = getAllowedOrigins();
-
-  // No origin header - non-browser client (curl, mobile apps, etc.)
-  // Allow these as they authenticate via tokens, not cookies
-  if (!origin) {
-    loggers.realtime.debug('WebSocket origin validation: no Origin header', {
-      ...metadata,
-      reason: 'Non-browser client or same-origin request',
-    });
-    return true;
-  }
-
-  // No allowed origins configured in production is a misconfiguration
-  // In development, allow but warn. In production, this should fail closed.
-  if (allowedOrigins.length === 0) {
-    const isProduction = process.env.NODE_ENV === 'production';
-    if (isProduction) {
-      loggers.realtime.error('WebSocket origin validation: REJECTED - no allowed origins configured in production', {
-        ...metadata,
-        origin,
-        severity: 'security',
-        reason: 'CORS_ORIGIN and WEB_APP_URL not set in production',
-      });
-      return false;
-    }
-    loggers.realtime.warn('WebSocket origin validation: no allowed origins configured (allowing in development)', {
-      ...metadata,
-      origin,
-      reason: 'CORS_ORIGIN and WEB_APP_URL not set',
-    });
-    return true;
-  }
-
-  // Check if origin is allowed
-  if (isOriginAllowed(origin, allowedOrigins)) {
-    loggers.realtime.debug('WebSocket origin validation: valid origin', {
-      ...metadata,
-      origin,
-    });
-    return true;
-  }
-
-  // Origin not in allowed list - REJECT the connection
-  loggers.realtime.warn('WebSocket origin validation: REJECTED - unexpected origin', {
-    ...metadata,
-    origin,
-    allowedOrigins,
-    severity: 'security',
-    reason: 'Origin not in allowed list - connection rejected',
-  });
-  return false;
-}
 
 const requestListener = (req: IncomingMessage, res: ServerResponse) => {
     // Helper to verify signature (shared by broadcast and kick)
@@ -936,6 +746,12 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
 
                 const { channelId, event, payload } = parsed;
                 io.to(channelId).emit(event, payload);
+                // SEC-2/3: an org's policy changed — EVERY socket here re-decides its org rooms now, not at the next
+                // timer (a tightened sign-in rule evicts at once), guests and non-members included.
+                const orgChange = payload as { orgId?: unknown; change?: unknown };
+                if (event === ORG_CHANGED_EVENT && orgChange.change === 'policy' && typeof orgChange.orgId === 'string') {
+                    fanOutOrgPolicyChange(orgChange.orgId);
+                }
                 loggers.realtime.debug('Broadcast event sent successfully', {
                     channelId,
                     event,
@@ -1139,15 +955,7 @@ const io = new Server(httpServer, {
   // The single upgrade dispatcher below closes stray sockets itself.
   destroyUpgrade: false,
   cors: {
-    origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-      const allowed = getAllowedOrigins();
-      if (allowed.length === 0 || allowed.includes(normalizeOrigin(origin))) {
-        callback(null, true);
-      } else {
-        callback(new Error('Origin not allowed'));
-      }
-    },
+    origin: corsOrigin,
     credentials: true,
   },
 });
@@ -1211,6 +1019,24 @@ async function populateUserMetadata(socket: AuthSocket): Promise<void> {
   }
 }
 
+/** One org-room watch per connected socket (SEC-3 eviction), so an org policy change can nudge them. */
+const orgRoomWatches = new Map<string, OrgRoomWatch>();
+const fanOutOrgPolicyChange = createPolicyChangeFanout({
+  watches: () => orgRoomWatches.values(),
+  now: () => Date.now(),
+  windowMs: 1_000,
+});
+
+/**
+ * After a join was refused: when the org's sign-in policy is why (SEC-2/3), tell the socket so the client can ask the
+ * person to sign in again, and answer true so the caller does not treat it as a protocol violation.
+ */
+async function emitSignInDenial(socket: AuthSocket, actor: AccessActor, resourceId: string): Promise<boolean> {
+  const code = await explainSignInRefusal(actor, resourceId);
+  if (code) socket.emit(ORG_REAUTHENTICATION_REQUIRED_EVENT, { code, resourceId });
+  return code !== null;
+}
+
 io.use(async (socket: AuthSocket, next) => {
   // Extract connection metadata for logging
   const connectionMetadata = {
@@ -1258,6 +1084,8 @@ io.use(async (socket: AuthSocket, next) => {
       }
 
       socket.data.user = { id: sessionClaims.userId, name: 'Unknown', avatarUrl: null };
+      // SEC-2/3: the credential's ceremony evidence rides with the socket for every access check it makes.
+      socket.data.actor = credentialActor(sessionClaims.userId, sessionClaims.authentication);
       await populateUserMetadata(socket);
       loggers.realtime.info('Socket.IO: User authenticated via socket token', { userId: sessionClaims.userId });
       return next();
@@ -1277,6 +1105,7 @@ io.use(async (socket: AuthSocket, next) => {
       }
 
       socket.data.user = { id: sessionClaims.userId, name: 'Unknown', avatarUrl: null };
+      socket.data.actor = credentialActor(sessionClaims.userId, sessionClaims.authentication);
       await populateUserMetadata(socket);
       loggers.realtime.info('Socket.IO: User authenticated via session token', { userId: sessionClaims.userId });
       return next();
@@ -1294,6 +1123,24 @@ io.use(async (socket: AuthSocket, next) => {
 io.on('connection', (socket: AuthSocket) => {
   loggers.realtime.info('User connected', { socketId: socket.id });
   const user = socket.data.user;
+  // The socket's credential (D-OW-45). Every join below asks the org sign-in policy of it, and the watch evicts the
+  // socket from an org's rooms when that org's maximum session age elapses or its policy tightens.
+  const actor = socket.data.actor;
+  // App-log streams are tracked by the same watch (SEC-2/3); an eviction tears the stream down too.
+  let onOrgRoomEvicted: (room: string) => void = () => {};
+  const orgRoomWatch = createOrgRoomWatch(socket, {
+    // A page's own org and, for a memory page, every org its content was derived from (D-OW-62).
+    readPolicies: (resourceIds) => getResourceAuthenticationPolicies(resourceIds),
+    onLeft: (room) => {
+      socketRegistry.trackRoomLeave(socket.id, room);
+      onOrgRoomEvicted(room);
+    },
+    now: () => Date.now(),
+    setTimer: (run, delayMs) => setTimeout(run, delayMs),
+    clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+    onError: (error) => loggers.realtime.error('Org room re-check failed', error instanceof Error ? error : new Error(String(error)), { socketId: socket.id }),
+  });
+  orgRoomWatches.set(socket.id, orgRoomWatch);
 
   // Register socket in the registry for permission revocation tracking
   if (user?.id) {
@@ -1325,7 +1172,7 @@ io.on('connection', (socket: AuthSocket) => {
   }
 
   socket.on('join_channel', async (payload: unknown) => {
-    if (!user?.id) return;
+    if (!user?.id || !actor) return;
 
     // Validate payload before any DB query
     const validation = validatePageId(payload);
@@ -1337,13 +1184,16 @@ io.on('connection', (socket: AuthSocket) => {
     const pageId = validation.value;
 
     try {
-      const accessLevel = await getUserAccessLevel(user.id, pageId);
+      const accessLevel = await getUserAccessLevel(actor, pageId);
       if (accessLevel) {
         socket.join(pageId);
         socketRegistry.trackRoomJoin(socket.id, pageId);
+        void orgRoomWatch.track(pageId, pageId);
         loggers.realtime.debug('User joined channel', { userId: user.id, channelId: pageId });
       } else {
         loggers.realtime.warn('User denied access to channel', { userId: user.id, channelId: pageId });
+        // A sign-in policy refusal is an expected state (sign in again), not a protocol violation.
+        if (await emitSignInDenial(socket, actor, pageId)) return;
         socket.disconnect();
       }
     } catch (error) {
@@ -1363,11 +1213,12 @@ io.on('connection', (socket: AuthSocket) => {
     const pageId = validation.value;
     socket.leave(pageId);
     socketRegistry.trackRoomLeave(socket.id, pageId);
+    orgRoomWatch.untrack(pageId);
     loggers.realtime.debug('User left channel', { userId: user.id, channelId: pageId });
   });
 
   socket.on('join_drive', async (payload: unknown) => {
-    if (!user?.id) return;
+    if (!user?.id || !actor) return;
 
     // Validate payload before any DB query
     const validation = validateDriveId(payload);
@@ -1379,12 +1230,16 @@ io.on('connection', (socket: AuthSocket) => {
     const driveId = validation.value;
 
     try {
-      const hasAccess = await getUserDriveAccess(user.id, driveId);
+      const hasAccess = await getUserDriveAccess(actor, driveId);
       if (hasAccess) {
         const rooms = [driveRoom(driveId), driveCalendarRoom(driveId)];
+        // X-4: wallet:changed reaches only people with a wallet view of the drive, never a
+        // page-share collaborator whose drive-room access comes from a page grant alone.
+        if (await canViewDriveWallet(actor, driveId)) rooms.push(driveWalletRoom(driveId));
         for (const room of rooms) {
           socket.join(room);
           socketRegistry.trackRoomJoin(socket.id, room);
+          void orgRoomWatch.track(room, driveId);
         }
         loggers.realtime.debug('User joined drive and drive calendar rooms', {
           userId: user.id,
@@ -1392,6 +1247,7 @@ io.on('connection', (socket: AuthSocket) => {
         });
       } else {
         loggers.realtime.warn('User denied access to drive', { userId: user.id, driveId });
+        await emitSignInDenial(socket, actor, driveId);
       }
     } catch (error) {
       loggers.realtime.error('Error joining drive', error as Error, { driveId });
@@ -1406,7 +1262,7 @@ io.on('connection', (socket: AuthSocket) => {
   // GLOBAL conversation (no page to share through) all deny for non-owners.
   socket.on('join_conversation', async (payload: unknown) => {
     const userId = user?.id;
-    if (!userId) return;
+    if (!userId || !actor) return;
 
     const validation = validateConversationId(payload);
     if (!validation.ok) {
@@ -1429,7 +1285,7 @@ io.on('connection', (socket: AuthSocket) => {
         .limit(1);
 
       const allowed =
-        conversation !== undefined && (await canAccessConversation(userId, conversation));
+        conversation !== undefined && (await canAccessConversation(actor, conversation));
       if (!allowed) {
         // Deny quietly (no disconnect): unlike join_channel, a stale join
         // attempt after an un-share is an expected client state, not a
@@ -1441,6 +1297,8 @@ io.on('connection', (socket: AuthSocket) => {
       const room = conversationRoom(conversationId);
       socket.join(room);
       socketRegistry.trackRoomJoin(socket.id, room);
+      // A page or drive conversation carries that org's content: watched like the page itself.
+      if (conversation.type !== 'global' && conversation.contextId) void orgRoomWatch.track(room, conversation.contextId);
       loggers.realtime.debug('User joined conversation room', { userId, room });
     } catch (error) {
       loggers.realtime.error('Error joining conversation', error as Error, { conversationId });
@@ -1456,7 +1314,7 @@ io.on('connection', (socket: AuthSocket) => {
   // shell bridge below re-adds that gate for itself).
   socket.on('join_session', async (payload: unknown) => {
     const userId = user?.id;
-    if (!userId) return;
+    if (!userId || !actor) return;
 
     const validation = validateSessionId(payload);
     if (!validation.ok) {
@@ -1471,7 +1329,7 @@ io.on('connection', (socket: AuthSocket) => {
       const row = await store.findById(workspaceId);
       const decision = row
         ? await checkAgentSessionAccess({
-            requesterId: userId,
+            requester: actor,
             workspaceId,
             deps: {
               // The row was just read; hand the wrapper the same subject
@@ -1494,6 +1352,7 @@ io.on('connection', (socket: AuthSocket) => {
       const room = sessionRoom(workspaceId);
       socket.join(room);
       socketRegistry.trackRoomJoin(socket.id, room);
+      if (row?.driveId) void orgRoomWatch.track(room, row.driveId);
       loggers.realtime.debug('User joined session layout room', { userId, room });
     } catch (error) {
       loggers.realtime.error('Error joining session layout room', error as Error, { workspaceId });
@@ -1513,6 +1372,7 @@ io.on('connection', (socket: AuthSocket) => {
     const room = sessionRoom(validation.value);
     socket.leave(room);
     socketRegistry.trackRoomLeave(socket.id, room);
+    orgRoomWatch.untrack(room);
     loggers.realtime.debug('User left session layout room', { userId, room });
   });
 
@@ -1529,6 +1389,7 @@ io.on('connection', (socket: AuthSocket) => {
     const room = conversationRoom(validation.value);
     socket.leave(room);
     socketRegistry.trackRoomLeave(socket.id, room);
+    orgRoomWatch.untrack(room);
     loggers.realtime.debug('User left conversation room', { userId, room });
   });
 
@@ -1609,10 +1470,11 @@ io.on('connection', (socket: AuthSocket) => {
     }
     const driveId = validation.value;
 
-    const rooms = [driveRoom(driveId), driveCalendarRoom(driveId)];
+    const rooms = [driveRoom(driveId), driveCalendarRoom(driveId), driveWalletRoom(driveId)];
     for (const room of rooms) {
       socket.leave(room);
       socketRegistry.trackRoomLeave(socket.id, room);
+      orgRoomWatch.untrack(room);
     }
     loggers.realtime.debug('User left drive and drive calendar rooms', {
       userId: user.id,
@@ -1622,7 +1484,7 @@ io.on('connection', (socket: AuthSocket) => {
 
   // Activity channel handlers - for real-time activity feed updates
   socket.on('join_activity_drive', async (payload: unknown) => {
-    if (!user?.id) return;
+    if (!user?.id || !actor) return;
 
     // Validate payload before any DB query
     const validation = validateDriveId(payload);
@@ -1634,14 +1496,16 @@ io.on('connection', (socket: AuthSocket) => {
     const driveId = validation.value;
 
     try {
-      const hasAccess = await getUserDriveAccess(user.id, driveId);
+      const hasAccess = await getUserDriveAccess(actor, driveId);
       if (hasAccess) {
         const activityRoom = driveActivityRoom(driveId);
         socket.join(activityRoom);
         socketRegistry.trackRoomJoin(socket.id, activityRoom);
+        void orgRoomWatch.track(activityRoom, driveId);
         loggers.realtime.debug('User joined activity drive room', { userId: user.id, room: activityRoom });
       } else {
         loggers.realtime.warn('User denied access to activity drive', { userId: user.id, driveId });
+        await emitSignInDenial(socket, actor, driveId);
       }
     } catch (error) {
       loggers.realtime.error('Error joining activity drive', error as Error, { driveId });
@@ -1649,7 +1513,7 @@ io.on('connection', (socket: AuthSocket) => {
   });
 
   socket.on('join_activity_page', async (payload: unknown) => {
-    if (!user?.id) return;
+    if (!user?.id || !actor) return;
 
     // Validate payload before any DB query
     const validation = validatePageId(payload);
@@ -1661,14 +1525,16 @@ io.on('connection', (socket: AuthSocket) => {
     const pageId = validation.value;
 
     try {
-      const accessLevel = await getUserAccessLevel(user.id, pageId);
+      const accessLevel = await getUserAccessLevel(actor, pageId);
       if (accessLevel) {
         const activityRoom = pageActivityRoom(pageId);
         socket.join(activityRoom);
         socketRegistry.trackRoomJoin(socket.id, activityRoom);
+        void orgRoomWatch.track(activityRoom, pageId);
         loggers.realtime.debug('User joined activity page room', { userId: user.id, room: activityRoom });
       } else {
         loggers.realtime.warn('User denied access to activity page', { userId: user.id, pageId });
+        await emitSignInDenial(socket, actor, pageId);
       }
     } catch (error) {
       loggers.realtime.error('Error joining activity page', error as Error, { pageId });
@@ -1690,6 +1556,7 @@ io.on('connection', (socket: AuthSocket) => {
     const activityRoom = driveActivityRoom(driveId);
     socket.leave(activityRoom);
     socketRegistry.trackRoomLeave(socket.id, activityRoom);
+    orgRoomWatch.untrack(activityRoom);
     loggers.realtime.debug('User left activity drive room', { userId: user.id, room: activityRoom });
   });
 
@@ -1708,12 +1575,13 @@ io.on('connection', (socket: AuthSocket) => {
     const activityRoom = pageActivityRoom(pageId);
     socket.leave(activityRoom);
     socketRegistry.trackRoomLeave(socket.id, activityRoom);
+    orgRoomWatch.untrack(activityRoom);
     loggers.realtime.debug('User left activity page room', { userId: user.id, room: activityRoom });
   });
 
   // Presence tracking: join a page as a viewer
   socket.on('presence:join_page', async (payload: unknown) => {
-    if (!user?.id) return;
+    if (!user?.id || !actor) return;
 
     const pageValidation = validatePresencePagePayload(payload);
     if (!pageValidation.ok) {
@@ -1724,7 +1592,7 @@ io.on('connection', (socket: AuthSocket) => {
 
     try {
       // Verify the user has access to this page
-      const accessLevel = await getUserAccessLevel(user.id, pageId);
+      const accessLevel = await getUserAccessLevel(actor, pageId);
       if (!accessLevel) {
         loggers.realtime.warn('Presence denied: no page access', { userId: user.id, pageId });
         return;
@@ -1875,13 +1743,16 @@ io.on('connection', (socket: AuthSocket) => {
 
   // Published-app log streaming (app:logs:* family): read-only fan-out of a
   // Fly app's NATS log firehose to every attached viewer — see app-logs/.
-  const appLogHandlers = buildAppLogHandlers(socket as unknown as AppLogSocketLike);
+  const appLogHandlers = buildAppLogHandlers(socket as unknown as AppLogSocketLike, undefined, orgRoomWatch);
+  onOrgRoomEvicted = (room) => appLogHandlers.onEvicted(room);
   socket.on('app:logs:subscribe', (payload) => {
     void appLogHandlers.onSubscribe(payload);
   });
   socket.on('app:logs:unsubscribe', (payload) => appLogHandlers.onUnsubscribe(payload));
 
   socket.on('disconnect', (reason) => {
+    orgRoomWatch.dispose();
+    orgRoomWatches.delete(socket.id);
     shellHandlers.onDisconnect();
     appLogHandlers.onDisconnect();
     // Clean up presence tracking and broadcast updates for affected pages

@@ -1,8 +1,8 @@
 import type { Node as PmNode } from 'prosemirror-model';
 import type * as Y from 'yjs';
-import { yDocToPmDoc } from './collab-document.js';
-import { mentionLabelText } from './page-mention-node.js';
-import { UnknownNodeError } from './projection-errors.js';
+import { yDocToPmDoc } from './collab-document.ts';
+import { mentionLabelText } from './page-mention-node.ts';
+import { UnknownNodeError } from './projection-errors.ts';
 
 /**
  * The plain-text projection: the document's prose, and nothing else.

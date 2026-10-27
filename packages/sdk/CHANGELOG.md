@@ -2,6 +2,105 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **`agents.ask` takes `sessionDriveId`.** When you consult an agent that lives in another drive
+  from work in drive A, pass A: the consultation spends, and its usage is recorded, in A rather
+  than in the agent's drive, under A's org model policy. You must be able to use A (403
+  otherwise). Omit it and the consultation runs in the agent's drive, as before. Needs a server
+  on API contract 1.4.0; an older server ignores the field.
+- **`wallets.getDriveWallet`, `wallets.list` and `wallets.getConversationSource` — wallet reads
+  for a key.** `getDriveWallet({ driveId })` returns a drive's wallet as a consumer sees it: status,
+  remaining credit, your own remaining daily/monthly cap (null = no cap), whether donations are on,
+  and the drive's default spend source (`wallet` is null when the drive has none). `list({})` returns
+  what you spend from and fund: your own wallet and default source, the wallets of drives you can
+  open, your org seats, the drive wallets your wallet funds and your donations.
+  `getConversationSource({ conversationId, driveId? })` returns a conversation's stored choice, the
+  wallets you may pick there, and what the next AI call would spend (`resolved`, discriminated on
+  `kind`: `spend`, `refuse` or `skip`). `list` and `getConversationSource` need a key with no drive
+  restriction. Amounts are cents of credit value — render them as credits, not money.
+- **`wallets.getDriveSource({ driveId })`** returns what a new conversation in a drive would spend
+  from: the wallets you may pick there and the gate's decision now (`resolved`), nothing reserved.
+- **Reads only, by design.** An access key never moves money or changes a spend source: creating,
+  allocating, pausing, topping up or donating to a wallet, and setting a default or a
+  conversation's source, need a signed-in session, and the server refuses a key on each by name
+  (`mcp_token_cannot_move_money`, `mcp_token_cannot_change_spend_source`). None of them is an
+  operation here.
+- **A key always reads the consumer view, and the SDK holds the server to it.** The output schemas
+  stay open-world for additive fields, but a response that shows a key more than a consumer may see
+  — a `lead`/`org_admin` viewer, an action other than `view`, the org pool, the allocation or spend
+  by member, or a non-empty `funds.pools` — is refused as a `ResponseValidationError` rather than
+  passed through.
+- Organizations and wallets are not yet enabled on pagespace.ai; until they are, these reads answer
+  not found.
+
+## [2.5.0] — 2026-09-16
+
+### Added
+
+- **`workspaces.list` and `workspaces.exec` — shell access to agent workspace sandboxes.**
+  `list({ driveId? })` returns your workspaces (a drive-scoped token only sees the ones inside its
+  drives); `exec({ workspaceId, command, cwd?, timeoutMs? })` runs a command in the workspace's
+  sandbox, starting it on first use, and returns `{ stdout, stderr, exitCode, truncated }`. A
+  non-zero `exitCode` is a normal result, not a thrown error — only a refusal throws (not found,
+  plan, quota). It goes through the same gate, command policy, billing and audit as the in-app
+  agent's `bash` tool. The operation's own timeout (260s) outlasts the server's 200s run ceiling,
+  and it is never retried automatically.
+- **A drive-scoped key is authorized as itself, not as its owner.** `exec` requires the key's own
+  drive grant to allow drive-wide edit, so an owner's key downgraded to a view-only role cannot run
+  commands (it gets the same not-found). For such a key, `list` returns only workspaces in drives
+  the key can view, with `shells`, `conversations`, `nodes` and `targets` empty — those are resolved
+  as the owning user and are only returned to a session or an unscoped key.
+
+## [2.4.0] — 2026-09-12
+
+### Added
+
+- **`sheets.readFormatting` and `sheets.applyFormat` — a sheet as a styled document, not only as
+  rows.** The in-process AI tools (`read_sheet` with `includeFormatting`, `format_sheet`,
+  `set_conditional_format`) could read and write regions, conditional rules, freezes and cell
+  formats; the SDK could do none of it, so a sheet built programmatically was a grid of bare
+  numbers. `readFormatting` returns the whole presentation model in one call — regions, parsed
+  conditional rules, frozen panes, column formats and widths, row heights, and per-cell formats for
+  the `ranges` asked for (omitted, none are read: they live on the rows). `applyFormat` takes
+  `SheetFormatOp` verbatim, all fifteen members, applied **in order, in one transaction, all or
+  nothing** — which makes it strictly more capable than the tools it brings parity with, since a
+  model can only add and remove a conditional rule while a caller here can patch one in place or
+  reorder it. Every refusal names the offending op's index in the list sent.
+- **A conditional rule's `id` is caller-supplied and required**, where `format_sheet` mints one.
+  The id is the caller's own idempotency key: a retried `addConditionalRule` after a timeout is
+  refused as a duplicate rather than silently adding the rule a second time under a fresh id.
+  A `cell` rule nests `condition: {operator, value, value2}` — the shape the sheet actually stores,
+  not the AI tool's flattened form (which exists only because a discriminated union overruns the
+  schema-size ceiling a model's tool definition can carry).
+- **Rule and region schemas tolerate unknown extension fields, and still refuse cross-kind ones.**
+  `readTabFormatting` returns PARSED rules and regions, and lib's parsers spread the stored value
+  (`{...value, id, kind, ...}`) on purpose, so "a rule written by a newer build survives a load/save
+  cycle". A strict schema would have rejected the whole `readFormatting` response the first time a
+  newer same-major server returned a rule carrying an extension field — and then refused to write
+  that rule back, making the read-modify-write round trip impossible against any server newer than
+  the client. The rule, region and region-column schemas are therefore loose. A field belonging to a
+  *different* rule kind is still refused, because that is not an extension: lib's own
+  `ruleRenderProblem` refuses those too, on the same list, since "a colorScale rule does not read
+  format, so it would be stored and never used". Scale anchors stay strict (`readAnchor` rebuilds
+  rather than spreads, so an extra never round-trips), and the format OPS stay strict, as lib's own
+  note says they should: "ops are transient and versioned with the code that sends them, so unlike
+  the stored shapes elsewhere in this module there is no forward-compatibility argument".
+- **`applyFormat` reports `changed: false` for a no-op.** A retry, or a bold that was already bold,
+  writes nothing and bumps no revision; a caller must not present that as an edit.
+
+`applyFormat` is deliberately **not** `destructive`: the flag makes the CLI demand `--yes` on every
+call, and gating "bold the header row" behind a prompt only trains the habit of passing `--yes`
+blind. Formatting is presentation, recoverable by writing it again — unlike `deleteRows`.
+
+The op union is hand-written here, because the published SDK must never runtime- or type-import
+`@pagespace/lib`; a test-only drift guard reads lib's `OP_FIELDS` and `FIELDS_BY_KIND` so an op
+added there cannot go missing here. `patch`/`format` payloads stay opaque for the reason a stored
+cell's `format` already is: `CellFormat` exists twice with a compile-time assertion holding those
+two together, and a third copy would be the one with nothing keeping it honest.
+
 ## [2.3.0] — 2026-09-06
 
 ### Added

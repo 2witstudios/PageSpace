@@ -152,6 +152,7 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
       unauthorizedRoles: [],
       invalidCustomRoles: [],
       unauthorizedCustomRoles: [],
+      explicitRoleWithoutMembership: [],
     });
   });
 
@@ -196,6 +197,7 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
           unauthorizedRoles: [],
           invalidCustomRoles: [],
           unauthorizedCustomRoles: [],
+          explicitRoleWithoutMembership: [],
         });
 
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
@@ -259,8 +261,7 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
         expect(validateDriveScopeAccess).toHaveBeenCalledTimes(1);
         expect(validateDriveScopeAccess).toHaveBeenCalledWith(
           [{ id: 'drive-1', role: null, customRoleId: undefined }],
-          'test-user-id'
-        );
+          expect.objectContaining({ userId: 'test-user-id' }));
 
         // Repository should be called with deduplicated drives.
         // Legacy driveIds carry no role: stored role is null (inherit owner).
@@ -291,6 +292,31 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
       });
     });
 
+    describe('explicit roles on organization drives', () => {
+      it('ORG-4 (partial) returns 403 and mints nothing when an explicit role is asked on an org drive reached only through the org', async () => {
+        vi.mocked(validateDriveScopeAccess).mockResolvedValue({
+          invalidDriveIds: [],
+          unauthorizedRoles: [],
+          invalidCustomRoles: [],
+          unauthorizedCustomRoles: [],
+          explicitRoleWithoutMembership: ['drive-finance'],
+        });
+
+        const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Cookie: 'ps_session=valid-token', 'X-CSRF-Token': 'x' },
+          body: JSON.stringify({ name: 'Token', drives: [{ id: 'drive-finance', role: 'ADMIN' }], stepUpToken: 'ps_stepup_test' }),
+        });
+
+        const response = await POST(request);
+        const body = await response.json();
+        expect(response.status).toBe(403);
+        expect(body.error).toContain('drive-finance');
+        expect(body.error).toContain('inherit');
+        expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
+      });
+    });
+
     describe('custom role privilege escalation', () => {
       it('returns 403 when a MEMBER specifies a custom role not assigned to them', async () => {
         vi.mocked(validateDriveScopeAccess).mockResolvedValue({
@@ -298,6 +324,7 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
           unauthorizedRoles: [],
           invalidCustomRoles: [],
           unauthorizedCustomRoles: ['drive-1'],
+          explicitRoleWithoutMembership: [],
         });
 
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {

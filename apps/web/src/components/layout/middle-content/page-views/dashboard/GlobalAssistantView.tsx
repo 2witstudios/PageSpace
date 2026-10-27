@@ -55,6 +55,10 @@ import { usePageAgentDashboardStore } from '@/stores/page-agents';
 import { VoiceCallBarForConversation } from '@/components/ai/voice/realtime';
 import { useVoiceRebindStore } from '@/stores/useVoiceRebindStore';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
+import { useHomeSignals } from '@/hooks/useHomeSignals';
+import { HomeLine } from '@/components/ai/chat/layouts/HomeLine';
+import { HomeSuggestions } from '@/components/ai/chat/layouts/HomeSuggestions';
+import DriveSwitcher from '@/components/layout/navbar/DriveSwitcher';
 
 // Shared hooks and components
 import {
@@ -63,6 +67,7 @@ import {
   useProviderSettings,
   useChatSession,
   useSendHandoff,
+  useQueuedSends,
   useResumeBootstrap,
   useAnswerAskUser,
   useChatErrorCause,
@@ -83,6 +88,10 @@ import {
   type ChatLayoutRef,
 } from '@/components/ai/chat/layouts';
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
+import { useSideQuestion, parseSideQuestionInput } from '@/components/ai/btw/useSideQuestion';
+import { SideQuestionCard } from '@/components/ai/btw/SideQuestionCard';
+import { ComposerSpendStrip } from '@/components/wallets/ComposerSpendStrip';
+import { SpendSurfaceProvider } from '@/components/wallets/SpendSurface';
 import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 import { DEFAULT_PROVIDER } from '@/lib/ai/core/ai-providers-config';
@@ -157,6 +166,11 @@ const GlobalAssistantView: React.FC = () => {
   const [input, setInput] = useState<string>('');
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
+  const { line: homeLine, signInRequired: homeSignInRequired } = useHomeSignals();
+  const leftSidebarOpen = useLayoutStore((state) => state.leftSidebarOpen);
+  // No agent selected and no drive context — the Home line/suggestions,
+  // the drive-scope pill, and the collapsed strip all gate on this.
+  const isGlobalMode = !selectedAgent && !locationContext?.currentDrive;
   // Agent mode state (provider/model settings)
   const [agentSelectedProvider, setAgentSelectedProvider] = useState<string>(DEFAULT_PROVIDER);
   const [agentSelectedModel, setAgentSelectedModel] = useState<string>('');
@@ -178,6 +192,16 @@ const GlobalAssistantView: React.FC = () => {
   // SHARED HOOKS
   // ============================================
   const currentConversationId = selectedAgent ? agentConversationId : globalConversationId;
+
+  // Detached /btw side question (#2678 contract): independent of the primary
+  // useChat lifecycle and activeStreamId; no persistence, ephemeral card.
+  const sideQuestion = useSideQuestion(currentConversationId ?? '');
+  const handleSideQuestion = useCallback(() => {
+    const question = parseSideQuestionInput(input);
+    if (!question || !currentConversationId) return;
+    setInput('');
+    void sideQuestion.ask(question);
+  }, [input, currentConversationId, sideQuestion]);
 
   // The switcher is the voice switcher — see the twin of this comment in
   // SidebarChatTab. Records an intent on the explicit act; navigation records
@@ -741,6 +765,41 @@ const GlobalAssistantView: React.FC = () => {
   ]);
 
   /**
+   * The one text send path, shared by the composer and the DRAIN (issue
+   * #2676): optimistic write first, then the wrapped dispatch with rollback —
+   * the drain hook re-invokes it with each queued message. Text-only: queued
+   * messages never carry the composer's image attachments.
+   */
+  const dispatchUserMessage = useCallback((message: UIMessage) => {
+    if (!currentConversationId) return;
+    conversationMessagesActions.addOptimisticSend(currentConversationId, message);
+    return rollbackOptimisticSendOnFailure(
+      () => wrapSend(() => sendMessage(message, currentConversationId, { body: buildRequestBody() })),
+      currentConversationId,
+      message.id,
+    );
+  }, [currentConversationId, wrapSend, sendMessage, buildRequestBody]);
+
+  // Send queue (issue #2676): drains one queued message per observed stream
+  // end, FIFO; manual sends/retries take precedence via the status guard.
+  const {
+    queuedSends,
+    isQueueFull,
+    enqueue: enqueueQueuedSend,
+    remove: removeQueuedSend,
+    clear: clearQueuedSends,
+    cancelPendingDrain: cancelQueuedDrain,
+  } = useQueuedSends({
+    conversationId: currentConversationId,
+    status,
+    dispatch: dispatchUserMessage,
+  });
+
+  const handleEnqueueFromComposer = useCallback(() => {
+    if (enqueueQueuedSend(input)) setInput('');
+  }, [enqueueQueuedSend, input]);
+
+  /**
    * Send `text` as the user's message.
    *
    * Split out from `handleSendMessage` so a caller that did not come from the
@@ -899,12 +958,20 @@ const GlobalAssistantView: React.FC = () => {
   }
 
   return (
+    <SpendSurfaceProvider conversationId={currentConversationId ?? null} driveId={selectedAgent ? selectedAgent.driveId : locationContext?.currentDrive?.id ?? null} isGlobal={!selectedAgent}>
     <AskUserAnswerProvider value={askUserAnswering}>
     <div data-testid="global-assistant-view" className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center justify-between p-4 border-[var(--separator)]">
-        <div className="flex items-center space-x-2">
+      <div className="flex items-center justify-between gap-2 p-4 border-[var(--separator)]">
+        <div className="flex min-w-0 items-center space-x-2">
           <AISelector
+            // `shrink` overrides the shared button variant's own `shrink-0`
+            // (twMerge, later class wins), and `min-w-0` lets it fall below
+            // its intrinsic width. Without both, a long agent title keeps the
+            // button at full width and pushes the actions off the row — the
+            // truncate on the label inside can only act once the button
+            // itself is allowed to narrow.
+            className="min-w-0 shrink"
             selectedAgent={selectedAgent}
             onSelectAgent={handleSelectAgentForVoice}
             // The CONVERSATION's own liveness, not a raw chat status. Switching agent while
@@ -912,8 +979,21 @@ const GlobalAssistantView: React.FC = () => {
             // longer reports "streaming" at all, because this client does not read a body.
             disabled={effectiveIsStreaming}
           />
+          {/* When the left sidebar (and its drive switcher) is collapsed, the
+              scope the assistant can see would otherwise be invisible.
+
+              Desktop only (lg+), the same gate as DashboardCrumb's drive
+              crumb: below lg the sidebar is a sheet whatever `leftSidebarOpen`
+              says, its DriveSwitcher opens this same picker, and a phone
+              header row has no room for a second wordy control — it pushed
+              the New button off the right edge. */}
+          {!leftSidebarOpen && isGlobalMode && (
+            <div className="hidden rounded-lg bg-primary-soft lg:block">
+              <DriveSwitcher />
+            </div>
+          )}
         </div>
-        <div className="flex items-center space-x-2">
+        <div className="flex shrink-0 items-center space-x-2">
           <PlanChip conversationId={currentConversationId} messages={plainMessages} />
           <TasksDropdown messages={plainMessages} driveId={selectedAgent?.driveId || locationContext?.currentDrive?.id} />
           <Button
@@ -1023,6 +1103,14 @@ const GlobalAssistantView: React.FC = () => {
             ? 'Ask about pages in this drive, or tell me what you\'re working on.'
             : 'Tell me what you\'re thinking about or working on.'
         }
+        welcomeContent={
+          isGlobalMode ? (
+            <>
+              <HomeLine line={homeLine} signInRequired={homeSignInRequired} />
+              <HomeSuggestions suggestions={homeLine.suggestions} onSelect={setInput} />
+            </>
+          ) : undefined
+        }
         onEdit={handleEdit}
         onDelete={handleDelete}
         onRetry={handleRetry}
@@ -1041,11 +1129,25 @@ const GlobalAssistantView: React.FC = () => {
         remoteStreams={remoteStreams}
         renderInput={(props) => (
           <>
+            {currentConversationId && (
+              // SPEND-2: the composer's top band names the source before the first message.
+              <ComposerSpendStrip
+                conversationId={currentConversationId}
+                driveId={selectedAgent ? selectedAgent.driveId : locationContext?.currentDrive?.id ?? null}
+                isGlobal={!selectedAgent}
+                hasMessages={plainMessages.length > 0}
+                className="rounded-none border-0 border-b"
+              />
+            )}
+            {sideQuestion.state && (
+              <SideQuestionCard state={sideQuestion.state} onDismiss={sideQuestion.dismiss} />
+            )}
             <ChatInput
               ref={inputRef}
               value={props.value}
               onChange={props.onChange}
               onSend={props.onSend}
+              onSideQuestion={handleSideQuestion}
               onStop={props.onStop}
               isStreaming={props.isStreaming}
               isStopping={props.isStopping}
@@ -1069,6 +1171,12 @@ const GlobalAssistantView: React.FC = () => {
                 (selectedAgent ? agentSelectedModel : currentModel) || ''
               )}
               remoteStreamingUser={remoteStreamingUser}
+              queuedMessages={queuedSends}
+              onEnqueue={handleEnqueueFromComposer}
+              onRemoveQueued={removeQueuedSend}
+              onClearQueued={clearQueuedSends}
+              onCancelQueue={cancelQueuedDrain}
+              isQueueFull={isQueueFull}
             />
           </>
         )}
@@ -1076,6 +1184,7 @@ const GlobalAssistantView: React.FC = () => {
 
     </div>
     </AskUserAnswerProvider>
+    </SpendSurfaceProvider>
   );
 };
 

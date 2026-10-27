@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { stripeConfig } from '@/lib/stripe-config';
 import { NextResponse } from 'next/server';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 // Mock Stripe - use vi.hoisted to ensure mocks are available before vi.mock
 const {
   mockStripeInvoicesList,
+  mockListLineItems,
   StripeError,
 } = vi.hoisted(() => {
   const StripeError = class extends Error {
@@ -15,6 +17,7 @@ const {
   };
   return {
     mockStripeInvoicesList: vi.fn(),
+    mockListLineItems: vi.fn(),
     StripeError,
   };
 });
@@ -23,6 +26,7 @@ vi.mock('@/lib/stripe', () => ({
   stripe: {
     invoices: {
       list: mockStripeInvoicesList,
+      listLineItems: mockListLineItems,
     },
   },
   Stripe: {
@@ -219,6 +223,30 @@ describe('Invoices API', () => {
       expect(body.hasMore).toBe(false);
     });
 
+    it('price identity: a configured Pro line on a later page determines the invoice name', async () => {
+      const first = { id: 'il_pending', description: 'Pending item', amount: 100 };
+      const pro = { id: 'il_pro', amount: 1500,
+        parent: { subscription_item_details: { subscription_item: 'si_pro' } },
+        pricing: { price_details: { price: stripeConfig.priceIds.pro } },
+      };
+      const invoice = { ...mockInvoice(), lines: { data: [first], has_more: true } };
+      mockStripeInvoicesList.mockResolvedValue({ data: [invoice], has_more: false });
+      mockListLineItems.mockImplementationOnce(async function* () { yield first; yield pro; });
+      const response = await GET(new Request('https://example.com/api/stripe/invoices') as import('next/server').NextRequest);
+      expect(response.status).toBe(200);
+      expect((await response.json()).invoices[0].description).toBe('Pro Plan');
+      expect(mockListLineItems).toHaveBeenCalledWith(invoice.id, { limit: 100 });
+      expect(invoice.lines.data).toEqual([first]);
+    });
+
+    it('does not return a guessed description when a later line page fails', async () => {
+      mockStripeInvoicesList.mockResolvedValue({ data: [{ ...mockInvoice(), lines: { data: [], has_more: true } }], has_more: false });
+      mockListLineItems.mockImplementationOnce(async function* () { yield { id: 'il_first' }; throw new Error('Stripe unavailable'); });
+      const response = await GET(new Request('https://example.com/api/stripe/invoices') as import('next/server').NextRequest);
+      expect(response.status).toBe(500);
+      expect((await response.json()).invoices).toBeUndefined();
+    });
+
     it('should use invoice description if present', async () => {
       mockStripeInvoicesList.mockResolvedValue({
         data: [mockInvoice({ description: 'Custom Description' })],
@@ -233,6 +261,34 @@ describe('Invoices API', () => {
       const body = await response.json();
 
       expect(body.invoices[0].description).toBe('Custom Description');
+    });
+
+    it.each([
+      ['5000', 'Legacy plan'],
+      ['1500', 'Legacy plan'],
+    ])('price identity: an unmapped price with amount %s retains its description %s', async (decimal, name) => {
+      mockStripeInvoicesList.mockResolvedValue({
+        data: [{
+          ...mockInvoice(),
+          lines: {
+            data: [{
+              description: 'Legacy plan',
+              amount: Number(decimal),
+              parent: { subscription_item_details: { subscription: 'sub_legacy' } },
+              pricing: { price_details: { price: 'price_legacy_unmapped' }, unit_amount_decimal: decimal },
+            }],
+          },
+        }],
+        has_more: false,
+      });
+
+      const request = new Request('https://example.com/api/stripe/invoices', {
+        method: 'GET',
+      }) as unknown as import('next/server').NextRequest;
+
+      const body = await (await GET(request)).json();
+
+      expect(body.invoices[0].description).toBe(name);
     });
 
     it('should pass pagination params to Stripe', async () => {

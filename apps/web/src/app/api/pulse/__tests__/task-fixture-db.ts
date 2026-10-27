@@ -78,8 +78,17 @@ export interface RowQueryBuilder {
  * .where()[.orderBy()][.groupBy()][.limit()]`, and resolves to `[{count}]` when
  * `fields` is the single `{ count: count() }` shape, otherwise to the row list
  * mapped through `fields` (or the raw rows when no fields/select shape applies).
+ *
+ * `opts.distinct: true` makes this behave like `.selectDistinct(fields)`: rows
+ * are deduplicated by their MAPPED field values (after applying `fields`, so
+ * `selectDistinct({ pageId })` genuinely collapses two rows that only differ
+ * in a column not selected) before `limit` is applied — matching real SQL's
+ * DISTINCT-then-LIMIT order, not the reverse.
  */
-export function createFixtureSelect(tableRows: Map<unknown, Record<string, unknown>[]>) {
+export function createFixtureSelect(
+  tableRows: Map<unknown, Record<string, unknown>[]>,
+  opts: { distinct?: boolean } = {},
+) {
   return (fields?: Record<string, unknown>): RowQueryBuilder => {
     let rows: Record<string, unknown>[] = [];
     let cond: Cond;
@@ -107,14 +116,21 @@ export function createFixtureSelect(tableRows: Map<unknown, Record<string, unkno
             resolve([{ count: filtered.length }]);
             return;
           }
-          const sliced = limitN != null ? filtered.slice(0, limitN) : filtered;
-          if (!fieldEntries) {
-            resolve(sliced);
-            return;
+          let mapped: Record<string, unknown>[] = fieldEntries
+            ? filtered.map(r => Object.fromEntries(
+                fieldEntries.map(([outKey, colName]) => [outKey, r[colName as string]])
+              ))
+            : filtered;
+          if (opts.distinct) {
+            const seen = new Set<string>();
+            mapped = mapped.filter(r => {
+              const key = JSON.stringify(r);
+              if (seen.has(key)) return false;
+              seen.add(key);
+              return true;
+            });
           }
-          resolve(sliced.map(r => Object.fromEntries(
-            fieldEntries.map(([outKey, colName]) => [outKey, r[colName as string]])
-          )));
+          resolve(limitN != null ? mapped.slice(0, limitN) : mapped);
         } catch (e) {
           if (reject) reject(e); else throw e;
         }

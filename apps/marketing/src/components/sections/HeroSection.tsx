@@ -1,9 +1,10 @@
-import Image from "next/image";
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { APP_URL } from "@/lib/metadata";
 import { Ico } from "./landing/icons";
 import { ScaledAppWindow } from "./landing/ScaledAppWindow";
+import { HeroDemo } from "./landing/HeroDemo";
+import { HeroBackdrop } from "./landing/HeroBackdrop";
 
 /**
  * Hero — product-as-hero, split layout. Left: the single page <h1>, a quiet
@@ -13,25 +14,11 @@ import { ScaledAppWindow } from "./landing/ScaledAppWindow";
 export function HeroSection() {
   return (
     <section className="hero">
-      {/* Space backdrop. next/image negotiates AVIF/WebP and picks a width for
-          the viewport (~70-280 KB at q90); `priority` preloads it since it is
-          the LCP candidate. The inline blur paints the dark field instantly. */}
-      <Image
-        className="hero-bg"
-        src="/hero-space.webp"
-        alt=""
-        fill
-        priority
-        fetchPriority="high"
-        sizes="100vw"
-        quality={90}
-        placeholder="blur"
-        blurDataURL="data:image/webp;base64,UklGRnIAAABXRUJQVlA4IGYAAAAQBACdASoYAAoAPtFapEwoJSOiMAgBABoJZACdMoAKOILPbRUwIYbwsAD+/re+Pv0MN+A1bR7I/7yCzqImeck6gy0aV0OsD81MyQafLMicOSPnAvKKaENGBgRjKZhqKF8e1s+QAAA="
-      />
+      <HeroBackdrop />
       <div className="hero-in">
         <div className="hero-cap">
-          <h1 className="hero-h">The AI for working</h1>
-          <p className="hero-sub">Partner for any project, workspace for any team.</p>
+          <h1 className="hero-h">The workspace that keeps working</h1>
+          <p className="hero-sub">Your virtual office, where you, your team, and your agents all work together.</p>
           <div className="hero-cta">
             <a className="cta-primary" href={`${APP_URL}/auth/signup`}>
               Start free
@@ -46,6 +33,7 @@ export function HeroSection() {
         </div>
 
         <ScaledAppWindow>
+        <HeroDemo>
         <div className="appwin">
           <div className="aw-top liquid-thin">
             <span className="aw-tbtn"><svg className="i i14" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M9 3v18" /></svg></span>
@@ -151,6 +139,7 @@ export function HeroSection() {
             </div>
           </div>
         </div>
+        </HeroDemo>
         </ScaledAppWindow>
       </div>
     </section>

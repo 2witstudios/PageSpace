@@ -30,6 +30,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     isDriveOwnerOrAdmin: vi.fn(),
 }));
 
@@ -52,6 +53,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { getDriveVersionHistory, getUserRetentionDays } from '@/services/api';
 import { isActivityEligibleForRollback } from '@pagespace/lib/permissions/rollback-permissions';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ============================================================================
 // Test Helpers
@@ -130,7 +132,7 @@ describe('GET /api/drives/[driveId]/history', () => {
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/history`);
       await GET(request, createContext(mockDriveId));
 
-      expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(mockUserId, mockDriveId);
+      expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), mockDriveId);
     });
   });
 
@@ -215,6 +217,7 @@ describe('GET /api/drives/[driveId]/history', () => {
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/history`);
       await GET(request, createContext(mockDriveId));
+      expect(getUserRetentionDays).toHaveBeenCalledWith(mockUserId, { driveId: mockDriveId });
 
       expect(getDriveVersionHistory).toHaveBeenCalledWith(
         mockDriveId,
@@ -408,4 +411,13 @@ describe('GET /api/drives/[driveId]/history', () => {
       );
     });
   });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    isPrincipalDriveOwnerOrAdmin: (auth: { userId: string }, resourceId: string) => permissions.isDriveOwnerOrAdmin(credentialActor(auth.userId, null), resourceId),
+  };
 });

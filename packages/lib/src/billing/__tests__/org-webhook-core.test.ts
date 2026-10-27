@@ -1,0 +1,171 @@
+import { describe, it, expect } from 'vitest';
+import { ORG_ID_METADATA_KEY, ORG_SUBSCRIPTION_KIND } from '../org-subscription-core';
+import { routeBillingOwner, planOrgSubscriptionMirror, planOrgSeatItemMirror, planOrgSubscriptionPriceMirror, orgSubscriptionMirrorAuditEvents } from '../org-webhook-core';
+
+const ORG = 'org_northwind';
+
+describe('routeBillingOwner', () => {
+  it("SEAT-7 (partial) an org customer's event routes to the org, whatever its metadata says about kind", () => {
+    expect(routeBillingOwner({ customerOrgId: ORG, metadata: null })).toEqual({ kind: 'org', orgId: ORG });
+    expect(routeBillingOwner({ customerOrgId: ORG, metadata: { kind: ORG_SUBSCRIPTION_KIND, [ORG_ID_METADATA_KEY]: ORG } })).toEqual({
+      kind: 'org',
+      orgId: ORG,
+    });
+  });
+
+  it("SEAT-7 (partial) a person's event (customer is no org's, no org tag) takes the personal path", () => {
+    expect(routeBillingOwner({ customerOrgId: null, metadata: null })).toEqual({ kind: 'person' });
+    expect(routeBillingOwner({ customerOrgId: null, metadata: { type: 'gift_subscription' } })).toEqual({ kind: 'person' });
+  });
+
+  it('SEAT-7 (partial) an org-tagged event whose customer is no org of ours never reaches the personal path', () => {
+    expect(routeBillingOwner({ customerOrgId: null, metadata: { kind: ORG_SUBSCRIPTION_KIND } })).toEqual({
+      kind: 'org_unlinked',
+      taggedOrgId: null,
+    });
+    expect(routeBillingOwner({ customerOrgId: null, metadata: { [ORG_ID_METADATA_KEY]: ORG } })).toEqual({
+      kind: 'org_unlinked',
+      taggedOrgId: ORG,
+    });
+  });
+
+  it("SEAT-7 (partial) an event tagged for org B on org A's customer is refused, never applied to either", () => {
+    expect(routeBillingOwner({ customerOrgId: ORG, metadata: { [ORG_ID_METADATA_KEY]: 'org_other' } })).toEqual({
+      kind: 'org_mismatch',
+      orgId: ORG,
+      taggedOrgId: 'org_other',
+    });
+  });
+});
+
+describe('planOrgSubscriptionMirror', () => {
+  it('SEAT-7 (partial) the fetched subscription is mirrored only onto the row that names it', () => {
+    expect(planOrgSubscriptionMirror({ storedSubscriptionId: 'sub_1', fetchedSubscriptionId: 'sub_1' })).toBe('apply');
+  });
+
+  it('SEAT-7 (partial) a late event about an ended, replaced subscription never overwrites the current one', () => {
+    expect(planOrgSubscriptionMirror({ storedSubscriptionId: 'sub_2', fetchedSubscriptionId: 'sub_1' })).toBe('ignore_other_subscription');
+  });
+
+  it('SEAT-7 (partial) an org with no stored subscription row is left to the provisioning path', () => {
+    expect(planOrgSubscriptionMirror({ storedSubscriptionId: null, fetchedSubscriptionId: 'sub_1' })).toBe('no_row');
+  });
+});
+
+describe('planOrgSeatItemMirror — the storage add-on item', () => {
+  const prices = { basePriceId: 'price_base', seatPriceId: 'price_seat', storagePriceId: 'price_storage' };
+  const base = [
+    { id: 'si_base', priceId: 'price_base', quantity: 1 },
+    { id: 'si_seat', priceId: 'price_seat', quantity: 2 },
+  ];
+  const stored = { stripeBaseItemId: 'si_base', stripeSeatItemId: 'si_seat', extraSeatQuantity: 2, seatRevision: 4, stripeStorageItemId: null, storageBlocks: 0 };
+
+  it('given a storage item Stripe now holds, should mirror its id and quantity without touching the seat revision', () => {
+    const items = [...base, { id: 'si_storage', priceId: 'price_storage', quantity: 2 }];
+    expect(planOrgSeatItemMirror({ stored, items, prices })).toEqual({ stripeStorageItemId: 'si_storage', storageBlocks: 2 });
+  });
+
+  it('given a storage item removed in Stripe, should clear it', () => {
+    expect(planOrgSeatItemMirror({ stored: { ...stored, stripeStorageItemId: 'si_storage', storageBlocks: 2 }, items: base, prices }))
+      .toEqual({ stripeStorageItemId: null, storageBlocks: 0 });
+  });
+});
+
+describe('planOrgSeatItemMirror — the mirror refreshes the seat item from what Stripe says now (review 3+4 P2-8)', () => {
+  const prices = { basePriceId: 'price_base', seatPriceId: 'price_seat' };
+  const stored = { stripeBaseItemId: 'si_base', stripeSeatItemId: 'si_seat', extraSeatQuantity: 2, seatRevision: 4 };
+
+  it('SEAT-7 (partial) a quantity changed in Stripe outside the app (stored 2, Stripe 3) is mirrored, and the seat revision moves so no later change reuses a key', () => {
+    const items = [
+      { id: 'si_base', priceId: 'price_base', quantity: 1 },
+      { id: 'si_seat', priceId: 'price_seat', quantity: 3 },
+    ];
+    expect(planOrgSeatItemMirror({ stored, items, prices })).toEqual({ extraSeatQuantity: 3, seatRevision: 5 });
+  });
+
+  it('SEAT-7 (partial) replaced item ids are mirrored; the same quantity on a new item moves no revision', () => {
+    const items = [
+      { id: 'si_base_2', priceId: 'price_base', quantity: 1 },
+      { id: 'si_seat_2', priceId: 'price_seat', quantity: 2 },
+    ];
+    expect(planOrgSeatItemMirror({ stored, items, prices })).toEqual({ stripeBaseItemId: 'si_base_2', stripeSeatItemId: 'si_seat_2' });
+  });
+
+  it('nothing changed is an empty patch; missing base or seat identity invalidates the mirror', () => {
+    const same = [
+      { id: 'si_base', priceId: 'price_base', quantity: 1 },
+      { id: 'si_seat', priceId: 'price_seat', quantity: 2 },
+    ];
+    expect(planOrgSeatItemMirror({ stored, items: same, prices })).toEqual({});
+    expect(planOrgSeatItemMirror({ stored, items: [{ id: 'si_x', priceId: 'price_other', quantity: 9 }], prices })).toBeNull();
+    expect(planOrgSeatItemMirror({ stored, items: [{ id: 'si_base_3', priceId: 'price_base', quantity: 1 }], prices })).toBeNull();
+  });
+});
+
+describe('org subscription price mirror', () => {
+  const prices = { basePriceId: 'price_base', seatPriceId: 'price_seat' };
+  const stored = { stripeBaseItemId: 'si_base', stripeSeatItemId: 'si_seat', extraSeatQuantity: 2, seatRevision: 4 };
+  const items = [{ id: 'si_base', priceId: 'price_base', quantity: 1 }, { id: 'si_seat', priceId: 'price_seat', quantity: 2 }];
+
+  it.each(['active', 'past_due', 'trialing', 'incomplete'])('invalidates a live %s mirror with unknown or incomplete identity', status => {
+    for (const invalid of [
+      [], items.slice(0, 1), items.slice(1),
+      [...items, { id: 'si_extra', priceId: 'price_unknown', quantity: 1 }],
+      [...items, { ...items[0], id: 'si_duplicate' }],
+      [{ ...items[0], quantity: 2 }, items[1]],
+      [items[0], { ...items[1], quantity: -1 }],
+    ]) {
+      expect(planOrgSubscriptionPriceMirror({ stored, subscription: { status, items: invalid }, prices })).toEqual({ status: 'unverified_price', stripeBasePriceId: '', stripeSeatPriceId: '' });
+    }
+    expect(planOrgSubscriptionPriceMirror({ stored, subscription: { status, items, itemsHasMore: true }, prices }).status).toBe('unverified_price');
+    expect(planOrgSubscriptionPriceMirror({ stored, subscription: { status, items }, prices: { ...prices, seatPriceId: prices.basePriceId } }).status).toBe('unverified_price');
+  });
+
+  it.each(['canceled', 'incomplete_expired'])('preserves an ended %s subscription so recovery can replace it safely', status => {
+    expect(planOrgSubscriptionPriceMirror({ stored, subscription: { status, items: [] }, prices })).toEqual({ status, stripeBasePriceId: '', stripeSeatPriceId: '' });
+  });
+
+  it('restores configured price identities when the complete collection verifies', () => {
+    expect(planOrgSubscriptionPriceMirror({ stored, subscription: { status: 'active', items: [...items].reverse() }, prices })).toEqual({ status: 'active', stripeBasePriceId: 'price_base', stripeSeatPriceId: 'price_seat' });
+  });
+});
+
+describe('orgSubscriptionMirrorAuditEvents', () => {
+  const unchanged = { status: 'active', cancelAtPeriodEnd: false, extraSeatQuantity: 2 };
+  const base = { orgId: ORG, eventId: 'evt_1', previous: unchanged, next: unchanged, orgStatusBefore: 'active' as const, orgStatusAfter: 'active' as const, transition: null };
+
+  it('AUD-1 (partial) a redelivered event that mirrors the same state writes nothing', () => {
+    expect(orgSubscriptionMirrorAuditEvents(base)).toEqual([]);
+  });
+
+  it('AUD-1 (partial) a seat quantity changed on Stripe\'s side (dashboard, portal, support) is an org seat event naming both quantities', () => {
+    expect(orgSubscriptionMirrorAuditEvents({ ...base, next: { ...unchanged, extraSeatQuantity: 3 } })).toEqual([{
+      orgId: ORG,
+      eventType: 'org.seat.quantity_changed',
+      resourceType: 'organization',
+      resourceId: ORG,
+      details: { reason: 'stripe_side_change', source: 'stripe_webhook', eventId: 'evt_1', from: 2, to: 3 },
+    }]);
+  });
+
+  it('AUD-1 (partial) a status or cancel-at-period-end change is a billing event carrying the lapse transition', () => {
+    const events = orgSubscriptionMirrorAuditEvents({
+      ...base,
+      next: { ...unchanged, status: 'past_due' },
+      orgStatusAfter: 'lapsed',
+      transition: 'entered_lapse',
+    });
+    expect(events).toEqual([{
+      orgId: ORG,
+      eventType: 'org.billing.subscription_changed',
+      resourceType: 'org_subscription',
+      resourceId: ORG,
+      details: { source: 'stripe_webhook', eventId: 'evt_1', from: 'active', to: 'past_due', cancelAtPeriodEnd: false, orgStatusBefore: 'active', orgStatusAfter: 'lapsed', transition: 'entered_lapse' },
+    }]);
+  });
+
+  it('AUD-1 (partial) a mirror that changes both writes both events, billing first', () => {
+    const events = orgSubscriptionMirrorAuditEvents({ ...base, next: { status: 'active', cancelAtPeriodEnd: true, extraSeatQuantity: 0 } });
+    expect(events.map((e) => e.eventType)).toEqual(['org.billing.subscription_changed', 'org.seat.quantity_changed']);
+  });
+});

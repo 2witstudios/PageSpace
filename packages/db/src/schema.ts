@@ -13,6 +13,7 @@ export * from './schema/monitoring';
 export * from './schema/versioning';
 export * from './schema/social';
 export * from './schema/subscriptions';
+export * from './schema/app-store';
 export * from './schema/contact';
 export * from './schema/feedback';
 export * from './schema/storage';
@@ -38,6 +39,7 @@ export * from './schema/auth-handoff-tokens';
 export * from './schema/pending-invites';
 export * from './schema/pending-page-invites';
 export * from './schema/pending-connection-invites';
+export * from './schema/drive-join-requests';
 export * from './schema/ai-streams';
 export * from './schema/share-links';
 export * from './schema/zoom';
@@ -45,6 +47,7 @@ export * from './schema/webhook-triggers';
 export * from './schema/drafts';
 export * from './schema/published-pages';
 export * from './schema/credits';
+export * from './schema/wallets';
 export * from './schema/commands';
 export * from './schema/content-tags';
 export * from './schema/ai-compaction';
@@ -65,6 +68,12 @@ export * from './schema/drive-envs';
 export * from './schema/drive-env-local';
 export * from './schema/dev-preview-services';
 export * from './schema/dev-preview-grants';
+export * from './schema/agent-account-grant-nonces';
+export * from './schema/organizations';
+export * from './schema/org-guest-holds';
+export * from './schema/agent-accounts';
+export * from './schema/user-builtin-agents';
+export * from './schema/imago-drive-access';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -81,6 +90,7 @@ import * as monitoring from './schema/monitoring';
 import * as versioning from './schema/versioning';
 import * as social from './schema/social';
 import * as subscriptions from './schema/subscriptions';
+import * as appStore from './schema/app-store';
 import * as contact from './schema/contact';
 import * as feedback from './schema/feedback';
 import * as storage from './schema/storage';
@@ -105,6 +115,7 @@ import * as authHandoffTokens from './schema/auth-handoff-tokens';
 import * as pendingInvites from './schema/pending-invites';
 import * as pendingPageInvites from './schema/pending-page-invites';
 import * as pendingConnectionInvites from './schema/pending-connection-invites';
+import * as driveJoinRequestsSchema from './schema/drive-join-requests';
 import * as aiStreams from './schema/ai-streams';
 import * as shareLinks from './schema/share-links';
 import * as zoom from './schema/zoom';
@@ -112,6 +123,7 @@ import * as webhookTriggers from './schema/webhook-triggers';
 import * as drafts from './schema/drafts';
 import * as publishedPages from './schema/published-pages';
 import * as credits from './schema/credits';
+import * as walletsSchema from './schema/wallets';
 import * as commands from './schema/commands';
 import * as contentTags from './schema/content-tags';
 import * as aiCompaction from './schema/ai-compaction';
@@ -132,6 +144,12 @@ import * as driveEnvs from './schema/drive-envs';
 import * as driveEnvLocal from './schema/drive-env-local';
 import * as devPreviewServices from './schema/dev-preview-services';
 import * as devPreviewGrants from './schema/dev-preview-grants';
+import * as agentAccountGrantNonces from './schema/agent-account-grant-nonces';
+import * as orgs from './schema/organizations';
+import * as orgGuestHolds from './schema/org-guest-holds';
+import * as agentAccounts from './schema/agent-accounts';
+import * as userBuiltinAgents from './schema/user-builtin-agents';
+import * as imagoDriveAccess from './schema/imago-drive-access';
 
 export const schema = {
   ...auth,
@@ -149,6 +167,7 @@ export const schema = {
   ...versioning,
   ...social,
   ...subscriptions,
+  ...appStore,
   ...contact,
   ...feedback,
   ...storage,
@@ -173,6 +192,7 @@ export const schema = {
   ...pendingInvites,
   ...pendingPageInvites,
   ...pendingConnectionInvites,
+  ...driveJoinRequestsSchema,
   ...aiStreams,
   ...shareLinks,
   ...zoom,
@@ -180,6 +200,7 @@ export const schema = {
   ...drafts,
   ...publishedPages,
   ...credits,
+  ...walletsSchema,
   ...commands,
   ...contentTags,
   ...aiCompaction,
@@ -200,4 +221,10 @@ export const schema = {
   ...driveEnvLocal,
   ...devPreviewServices,
   ...devPreviewGrants,
+  ...agentAccountGrantNonces,
+  ...orgs,
+  ...orgGuestHolds,
+  ...agentAccounts,
+  ...userBuiltinAgents,
+  ...imagoDriveAccess,
 };

@@ -75,6 +75,9 @@ export const REPO_TOOL_ROWS: GitToolRow[] = [
         cwd: cwdField,
       })
       .strict(),
+    // key is a bare positional; a value may legitimately start with "-" and is
+    // covered by the "--" the builder emits.
+    validate: ({ key }) => validateFlagSafe(key, 'key'),
     buildArgs: ({ key, value, global }) => ({ args: buildConfigArgs({ key, value, global }) }),
   }),
   defineRow({

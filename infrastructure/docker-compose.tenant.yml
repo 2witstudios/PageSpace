@@ -88,6 +88,7 @@ services:
       ADMIN_PROCESSOR_PASSWORD: ${ADMIN_PROCESSOR_PASSWORD:?ADMIN_APP/PROCESSOR/READER_PASSWORD missing from .env - see infrastructure/UPGRADE.md (Phase 2 admin login users)}
       ADMIN_READER_PASSWORD: ${ADMIN_READER_PASSWORD:?ADMIN_APP/PROCESSOR/READER_PASSWORD missing from .env - see infrastructure/UPGRADE.md (Phase 2 admin login users)}
       ADMIN_ERASER_PASSWORD: ${ADMIN_ERASER_PASSWORD:?ADMIN_ERASER_PASSWORD missing from .env - see infrastructure/UPGRADE.md (Phase 2 GDPR eraser login user)}
+      BILLING_CUTOVER_OFFLINE: ${BILLING_CUTOVER_OFFLINE:-false}
     command: >
       sh -c "
         echo 'Starting database migrations...' &&

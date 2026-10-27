@@ -33,7 +33,7 @@ export const trashListHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.pages.listTrash({ driveId: extracted.driveId as string }));
+  const result = await callSdk(ctx, () => ctx.sdk.pages.listTrash({ driveId: extracted.driveId as string }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {

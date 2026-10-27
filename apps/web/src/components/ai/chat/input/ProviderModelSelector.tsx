@@ -16,7 +16,7 @@ import { toast } from 'sonner';
 import {
   AI_PROVIDERS,
   getModelDisplayName,
-  getDefaultModel,
+  getDefaultModelForTier,
   getVisibleProviders,
   isModelAllowedForTier,
   ADMIN_ONLY_PROVIDERS,
@@ -32,6 +32,11 @@ interface ProviderSettings {
   providers: Record<string, ProviderStatus>;
   userSubscriptionTier?: string;
   isAdmin?: boolean;
+  /**
+   * POL-8: the models the drive's org lets this picker offer, as the server computed them — provider → allowed model
+   * ids (null: any model of that provider). Absent or null: nothing is restricted.
+   */
+  allowedModels?: Record<string, string[] | null> | null;
 }
 
 /** Providers served from a local server (model lists fetched at runtime). */
@@ -76,6 +81,8 @@ export interface ProviderModelSelectorProps {
   className?: string;
   /** Disable the selector */
   disabled?: boolean;
+  /** The drive the chat runs in: its org's model allowlists decide what is offered (POL-8). */
+  driveId?: string | null;
 }
 
 /**
@@ -88,6 +95,7 @@ export function ProviderModelSelector({
   onChange,
   className,
   disabled = false,
+  driveId = null,
 }: ProviderModelSelectorProps) {
   const [providerOpen, setProviderOpen] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
@@ -149,7 +157,8 @@ export function ProviderModelSelector({
   const fetchSettings = useCallback(async () => {
     setIsLoading(true);
     try {
-      const response = await fetchWithAuth('/api/ai/settings');
+      const query = driveId ? `?driveId=${encodeURIComponent(driveId)}` : '';
+      const response = await fetchWithAuth(`/api/ai/settings${query}`);
       if (response.ok) {
         const data = await response.json();
         setProviderSettings(data);
@@ -160,7 +169,7 @@ export function ProviderModelSelector({
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [driveId]);
 
   // Fetch on mount
   useEffect(() => {
@@ -193,6 +202,18 @@ export function ProviderModelSelector({
 
   const subscriptionTier = providerSettings?.userSubscriptionTier;
   const isAdmin = providerSettings?.isAdmin ?? false;
+  const allowedModels = providerSettings?.allowedModels ?? null;
+
+  // POL-8: does the drive's org let this picker offer the provider (and, given, the model)? The server decided the list.
+  const isOrgAllowed = useCallback(
+    (providerId: string, modelId?: string) => {
+      if (!allowedModels) return true;
+      if (!(providerId in allowedModels)) return false;
+      const models = allowedModels[providerId];
+      return modelId === undefined || models === null || models.includes(modelId);
+    },
+    [allowedModels]
+  );
 
   // Get display names
   const providerDisplayName = useMemo(() => {
@@ -232,21 +253,30 @@ export function ProviderModelSelector({
     [subscriptionTier]
   );
 
+  // Whether the current tier can use a provider at all. Providers whose entire
+  // static catalog is paid are hidden rather than selectable-and-failing.
+  const hasAccessibleModel = useCallback(
+    (providerId: string) => {
+      if (LOCAL_PROVIDERS[providerId]) return true;
+      const config = AI_PROVIDERS[providerId as keyof typeof AI_PROVIDERS];
+      if (!config) return false;
+      return Object.keys(config.models).some((modelId) => isModelAccessible(providerId, modelId) && isOrgAllowed(providerId, modelId));
+    },
+    [isModelAccessible, isOrgAllowed]
+  );
+
   // Get models for current provider
   const availableModels = useMemo(() => {
     if (!provider) return [];
 
-    if (provider === 'ollama' && ollamaModels) {
-      return Object.entries(ollamaModels);
-    }
-    if (provider === 'lmstudio' && lmstudioModels) {
-      return Object.entries(lmstudioModels);
-    }
-
-    const config = AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS];
-    if (!config) return [];
-    return Object.entries(config.models);
-  }, [provider, ollamaModels, lmstudioModels]);
+    const entries = (): [string, string][] => {
+      if (provider === 'ollama' && ollamaModels) return Object.entries(ollamaModels);
+      if (provider === 'lmstudio' && lmstudioModels) return Object.entries(lmstudioModels);
+      const config = AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS];
+      return config ? Object.entries(config.models) : [];
+    };
+    return entries().filter(([modelId]) => isOrgAllowed(provider, modelId));
+  }, [provider, ollamaModels, lmstudioModels, isOrgAllowed]);
 
   // Handle provider selection
   const handleProviderSelect = useCallback(
@@ -258,7 +288,14 @@ export function ProviderModelSelector({
 
       setIsSaving(true);
       try {
-        const newModel = getDefaultModel(newProvider);
+        // Land on the first model the current tier can actually select — the raw
+        // catalog default is usually a paid flagship, which the server's tier
+        // gate would reject for free users.
+        // Within an org that restricts models, land on one it allows (POL-8).
+        const orgModels = allowedModels?.[newProvider] ?? null;
+        const newModel = orgModels
+          ? (orgModels.find((m) => isModelAllowedForTier(m, subscriptionTier)) ?? orgModels[0] ?? '')
+          : getDefaultModelForTier(newProvider, subscriptionTier);
 
         // Build request body - model is optional for local providers
         const requestBody: { provider: string; model?: string } = {
@@ -274,12 +311,12 @@ export function ProviderModelSelector({
         setProviderOpen(false);
       } catch (error) {
         console.error('Failed to update provider:', error);
-        toast.error('Failed to update provider');
+        toast.error(error instanceof Error ? error.message : 'Failed to update provider');
       } finally {
         setIsSaving(false);
       }
     },
-    [provider, onChange]
+    [provider, subscriptionTier, allowedModels, onChange]
   );
 
   // Handle model selection
@@ -344,7 +381,7 @@ export function ProviderModelSelector({
                 .map((group) => ({
                   ...group,
                   providers: group.providers.filter((p) =>
-                    isProviderAvailable(p.id) && (!ADMIN_ONLY_PROVIDERS.has(p.id) || isAdmin)
+                    isProviderAvailable(p.id) && (!ADMIN_ONLY_PROVIDERS.has(p.id) || isAdmin) && isOrgAllowed(p.id) && hasAccessibleModel(p.id)
                   ),
                 }))
                 .filter((group) => group.providers.length > 0)

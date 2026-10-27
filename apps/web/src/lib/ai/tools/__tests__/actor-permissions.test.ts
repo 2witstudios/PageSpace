@@ -10,6 +10,7 @@ const {
   mockGetAppDriveMembership,
   mockGetAppDriveAccessLevel,
   mockGetAppAccessiblePagesInDrive,
+  mockImagoExcludedDriveIds,
 } = vi.hoisted(() => ({
   mockHasAgentDriveMembership: vi.fn(),
   mockCheckDriveAccess: vi.fn(),
@@ -20,9 +21,22 @@ const {
   mockGetAppDriveMembership: vi.fn(),
   mockGetAppDriveAccessLevel: vi.fn(),
   mockGetAppAccessiblePagesInDrive: vi.fn(),
+  mockImagoExcludedDriveIds: vi.fn(async () => new Set<string>()),
+}));
+vi.mock('@pagespace/lib/agents/imago-reach', () => ({
+  imagoExcludedDriveIds: mockImagoExcludedDriveIds,
 }));
 
+// Org sign-in policy (SEC-2/3) admits every actor here; tests that exercise a refusal override it.
+vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
+  checkActorResourceAuthentication: vi.fn(async () => ({ allowed: true })),
+  checkActorDriveAuthentication: vi.fn(async () => ({ allowed: true })),
+  filterDrivesForActor: vi.fn(async (_actor: unknown, ids: readonly string[]) => new Set(ids)),
+  filterResourcesForActor: vi.fn(async (_actor: unknown, ids: readonly string[]) => new Set(ids)),
+  explainOrgAuthenticationDenial: vi.fn(async () => null),
+}));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getUserAccessLevel: vi.fn(),
   getUserDriveAccess: mockGetUserDriveAccess,
   canUserEditPage: vi.fn(),
@@ -44,31 +58,38 @@ vi.mock('@pagespace/lib/services/drive-member-service', () => ({
   checkDriveAccess: mockCheckDriveAccess,
 }));
 vi.mock('@pagespace/db/db', () => ({
-  db: { select: () => ({ from: () => ({ where: mockDbWhere }) }) },
+  db: { select: () => ({ from: () => ({ where: mockDbWhere, leftJoin: () => ({ where: mockDbWhere }) }) }) },
 }));
 vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn() }));
 vi.mock('@pagespace/db/schema/core', () => ({
-  pages: { id: 'id', driveId: 'driveId', type: 'type', userScopedAccess: 'userScopedAccess' },
+  pages: { id: 'id', driveId: 'driveId', type: 'type', userScopedAccess: 'userScopedAccess', parentId: 'parentId' },
 }));
 
 import {
   canActorManageDrive,
   canActorAccessDrive,
   canActorEditPage,
+  canActorDeletePage,
   canActorViewPage,
+  canActorConsultAgent,
   getActorAccessiblePagesInDrive,
   filterDriveIdsByMcpScope,
   driveOutsideMcpScope,
   driveDeniedByAppToken,
   filterDriveIdsByAppTokenScope,
   hasAgentUserScopedAccess,
+  filterAgentDriveIdsByActorReach,
+  filterDriveIdsForActor,
+  resolveActingAgentId,
 } from '../actor-permissions';
 import type { ToolExecutionContext } from '../../core/types';
+import * as permissionsModule from '@pagespace/lib/permissions/permissions';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const DRIVE = 'drive-1';
-const userCtx = { userId: 'user-1' } as ToolExecutionContext;
+const userCtx = { userId: 'user-1' , accessActor: credentialActor('user-1', null)} as ToolExecutionContext;
 const agentCtx = {
-  userId: 'user-1',
+  userId: 'user-1', accessActor: credentialActor('user-1', null),
   chatSource: { type: 'page', agentPageId: 'agent-1' },
 } as ToolExecutionContext;
 
@@ -127,7 +148,7 @@ describe('MCP drive-scope enforcement', () => {
 
   // A scoped MCP token acting as an agent that DOES have access to the target.
   const scopedAgentCtx = {
-    userId: 'user-1',
+    userId: 'user-1', accessActor: credentialActor('user-1', null),
     chatSource: { type: 'page', agentPageId: 'agent-1' },
     mcpAllowedDriveIds: ['drive-A'],
   } as ToolExecutionContext;
@@ -175,7 +196,7 @@ describe('MCP drive-scope enforcement', () => {
   });
 
   it('unscoped caller (no mcpAllowedDriveIds) skips scope checks entirely', async () => {
-    const unscoped = { userId: 'user-1', mcpAllowedDriveIds: [] } as ToolExecutionContext;
+    const unscoped = { userId: 'user-1', accessActor: credentialActor('user-1', null), mcpAllowedDriveIds: [] } as ToolExecutionContext;
     mockGetUserDriveAccess.mockResolvedValue(true);
     expect(await canActorAccessDrive(unscoped, 'drive-B')).toBe(true);
     // No page-drive lookup happens for drive-level checks.
@@ -191,7 +212,7 @@ describe('app-member RBAC ceiling (mcpTokenId set)', () => {
 
   // Scoped token driving an agent whose own ACL would allow everything.
   const tokenAgentCtx = {
-    userId: 'user-1',
+    userId: 'user-1', accessActor: credentialActor('user-1', null),
     chatSource: { type: 'page', agentPageId: 'agent-1' },
     mcpAllowedDriveIds: ['drive-A'],
     mcpTokenId: 'token-1',
@@ -199,7 +220,7 @@ describe('app-member RBAC ceiling (mcpTokenId set)', () => {
 
   // Scoped token acting directly as the user (global assistant via MCP).
   const tokenUserCtx = {
-    userId: 'user-1',
+    userId: 'user-1', accessActor: credentialActor('user-1', null),
     mcpAllowedDriveIds: ['drive-A'],
     mcpTokenId: 'token-1',
   } as ToolExecutionContext;
@@ -211,7 +232,7 @@ describe('app-member RBAC ceiling (mcpTokenId set)', () => {
     mockGetAgentAccessLevel.mockResolvedValue(FULL);
 
     expect(await canActorEditPage(tokenAgentCtx, 'page-x')).toBe(false);
-    expect(mockGetAppAccessLevel).toHaveBeenCalledWith('token-1', 'page-x');
+    expect(mockGetAppAccessLevel).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'token-1', 'page-x');
     // Denied at the token ceiling — agent ACL never consulted.
     expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
   });
@@ -247,7 +268,7 @@ describe('app-member RBAC ceiling (mcpTokenId set)', () => {
 
   it('contexts without mcpTokenId keep the scope-only behavior (no app-permission lookups)', async () => {
     const legacyScopedCtx = {
-      userId: 'user-1',
+      userId: 'user-1', accessActor: credentialActor('user-1', null),
       chatSource: { type: 'page', agentPageId: 'agent-1' },
       mcpAllowedDriveIds: ['drive-A'],
     } as ToolExecutionContext;
@@ -310,12 +331,12 @@ describe('app-member RBAC ceiling (mcpTokenId set)', () => {
 
   it('filterDriveIdsByAppTokenScope: drops drives where the token has no usable membership', async () => {
     const ctx = {
-      userId: 'user-1',
+      userId: 'user-1', accessActor: credentialActor('user-1', null),
       mcpAllowedDriveIds: ['drive-A', 'drive-B'],
       mcpTokenId: 'token-1',
     } as ToolExecutionContext;
     // drive-A: explicit membership (kept); drive-B: dangling row (dropped).
-    mockGetAppDriveMembership.mockImplementation(async (_t: string, driveId: string) =>
+    mockGetAppDriveMembership.mockImplementation(async (_actor: unknown, _t: string, driveId: string) =>
       driveId === 'drive-A' ? { role: 'MEMBER', customRoleId: null, ownerUserId: 'user-1' } : null);
     mockGetAppDriveAccessLevel.mockResolvedValue({ ...VIEW_ONLY, canEdit: true });
 
@@ -323,15 +344,15 @@ describe('app-member RBAC ceiling (mcpTokenId set)', () => {
   });
 
   it('filterDriveIdsByAppTokenScope: unscoped/legacy contexts pass through', async () => {
-    const unscoped = { userId: 'u' } as ToolExecutionContext;
+    const unscoped = { userId: 'u' , accessActor: credentialActor('u', null)} as ToolExecutionContext;
     expect(await filterDriveIdsByAppTokenScope(unscoped, ['a', 'b'])).toEqual(['a', 'b']);
     expect(mockGetAppDriveAccessLevel).not.toHaveBeenCalled();
   });
 });
 
 describe('filterDriveIdsByMcpScope / driveOutsideMcpScope', () => {
-  const scoped = { userId: 'u', mcpAllowedDriveIds: ['a', 'b'] } as ToolExecutionContext;
-  const unscoped = { userId: 'u' } as ToolExecutionContext;
+  const scoped = { userId: 'u', accessActor: credentialActor('u', null), mcpAllowedDriveIds: ['a', 'b'] } as ToolExecutionContext;
+  const unscoped = { userId: 'u' , accessActor: credentialActor('u', null)} as ToolExecutionContext;
 
   it('filters a drive list down to the token scope', () => {
     expect(filterDriveIdsByMcpScope(scoped, ['a', 'c', 'b', 'd'])).toEqual(['a', 'b']);
@@ -362,7 +383,7 @@ describe('user-scoped agents (userScopedAccess fallback to the invoking user)', 
     vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
 
     expect(await canActorViewPage(agentCtx, 'page-x')).toBe(true);
-    expect(vi.mocked(getUserAccessLevel)).toHaveBeenCalledWith('user-1', 'page-x');
+    expect(vi.mocked(getUserAccessLevel)).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'page-x');
     expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
   });
 
@@ -371,7 +392,7 @@ describe('user-scoped agents (userScopedAccess fallback to the invoking user)', 
     vi.mocked(canUserEditPage).mockResolvedValue(true);
 
     expect(await canActorEditPage(agentCtx, 'page-x')).toBe(true);
-    expect(vi.mocked(canUserEditPage)).toHaveBeenCalledWith('user-1', 'page-x');
+    expect(vi.mocked(canUserEditPage)).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'page-x');
     expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
   });
 
@@ -379,7 +400,7 @@ describe('user-scoped agents (userScopedAccess fallback to the invoking user)', 
     mockGetUserDriveAccess.mockResolvedValue(true);
 
     expect(await canActorAccessDrive(agentCtx, DRIVE)).toBe(true);
-    expect(mockGetUserDriveAccess).toHaveBeenCalledWith('user-1', DRIVE);
+    expect(mockGetUserDriveAccess).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), DRIVE);
     expect(mockHasAgentDriveMembership).not.toHaveBeenCalled();
   });
 
@@ -412,7 +433,7 @@ describe('user-scoped agents (userScopedAccess fallback to the invoking user)', 
 
   it('a scoped MCP token still ceilings a user-scoped agent', async () => {
     const scopedCtx = {
-      userId: 'user-1',
+      userId: 'user-1', accessActor: credentialActor('user-1', null),
       chatSource: { type: 'page', agentPageId: 'agent-1' },
       mcpAllowedDriveIds: ['drive-A'],
     } as ToolExecutionContext;
@@ -430,7 +451,7 @@ describe('user-scoped agents (userScopedAccess fallback to the invoking user)', 
 describe('non-agent-page conversations (agentPageId is not an AI_CHAT agent)', () => {
   const FULL = { canView: true, canEdit: true, canShare: true, canDelete: true };
   const nonAgentPaneCtx = {
-    userId: 'user-1',
+    userId: 'user-1', accessActor: credentialActor('user-1', null),
     chatSource: { type: 'page', agentPageId: 'doc-1' },
   } as ToolExecutionContext;
 
@@ -444,7 +465,7 @@ describe('non-agent-page conversations (agentPageId is not an AI_CHAT agent)', (
     vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
 
     expect(await canActorViewPage(nonAgentPaneCtx, 'doc-1')).toBe(true);
-    expect(vi.mocked(getUserAccessLevel)).toHaveBeenCalledWith('user-1', 'doc-1');
+    expect(vi.mocked(getUserAccessLevel)).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'doc-1');
     expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
   });
 
@@ -461,9 +482,9 @@ describe('non-agent-page conversations (agentPageId is not an AI_CHAT agent)', (
     mockGetUserDriveAccess.mockResolvedValue(true);
 
     expect(await canActorEditPage(nonAgentPaneCtx, 'page-x')).toBe(true);
-    expect(vi.mocked(canUserEditPage)).toHaveBeenCalledWith('user-1', 'page-x');
+    expect(vi.mocked(canUserEditPage)).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'page-x');
     expect(await canActorAccessDrive(nonAgentPaneCtx, DRIVE)).toBe(true);
-    expect(mockGetUserDriveAccess).toHaveBeenCalledWith('user-1', DRIVE);
+    expect(mockGetUserDriveAccess).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), DRIVE);
     expect(mockHasAgentDriveMembership).not.toHaveBeenCalled();
   });
 
@@ -495,7 +516,7 @@ describe('non-agent-page conversations (agentPageId is not an AI_CHAT agent)', (
     vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
 
     expect(await canActorViewPage(nonAgentPaneCtx, 'page-x')).toBe(true);
-    expect(vi.mocked(getUserAccessLevel)).toHaveBeenCalledWith('user-1', 'page-x');
+    expect(vi.mocked(getUserAccessLevel)).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'page-x');
     expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
   });
 
@@ -513,7 +534,7 @@ describe('non-agent-page conversations (agentPageId is not an AI_CHAT agent)', (
     } as ToolExecutionContext;
 
     expect(await canActorViewPage(nestedCtx, 'page-the-user-cannot-see')).toBe(false);
-    expect(vi.mocked(getUserAccessLevel)).toHaveBeenCalledWith('user-1', 'page-the-user-cannot-see');
+    expect(vi.mocked(getUserAccessLevel)).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'page-the-user-cannot-see');
     expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
   });
 
@@ -523,6 +544,76 @@ describe('non-agent-page conversations (agentPageId is not an AI_CHAT agent)', (
 
     expect(await canActorViewPage(agentCtx, 'page-x')).toBe(true);
     expect(mockGetAgentAccessLevel).toHaveBeenCalledWith('agent-1', 'page-x');
+  });
+});
+
+// The Agent Memory write path: every AI_CHAT agent is instructed (agent-memory.ts)
+// to create and edit an "Agent Memory" child of its own page, but the default
+// MEMBER membership resolves canEdit:false on every non-channel page — so the
+// write was refused everywhere, and cron workflow runs (whose tool context
+// carries the agent identity) failed with "Insufficient permissions to edit
+// this document". The agent's own subtree is the one space it authors.
+describe('agent-owned subtree (Agent Memory write path)', () => {
+  const VIEW_ONLY = { canView: true, canEdit: false, canShare: false, canDelete: false };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDbWhere.mockResolvedValue([AGENT_PAGE_ROW]);
+  });
+
+  it('canActorEditPage: the agent page itself is editable (create_page passes it as the parent)', async () => {
+    expect(await canActorEditPage(agentCtx, 'agent-1')).toBe(true);
+    expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
+  });
+
+  it('canActorEditPage: a child of the agent page ("Agent Memory") is editable despite a view-only membership', async () => {
+    mockGetAgentAccessLevel.mockResolvedValue(VIEW_ONLY);
+    mockDbWhere.mockResolvedValueOnce([AGENT_PAGE_ROW]).mockResolvedValueOnce([{ parentId: 'agent-1' }]);
+
+    expect(await canActorEditPage(agentCtx, 'memory-page')).toBe(true);
+    expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
+  });
+
+  it('canActorEditPage: a grandchild is editable too (the walk follows the parent chain)', async () => {
+    mockGetAgentAccessLevel.mockResolvedValue(VIEW_ONLY);
+    mockDbWhere
+      .mockResolvedValueOnce([AGENT_PAGE_ROW])
+      .mockResolvedValueOnce([{ parentId: 'memory-page' }])
+      .mockResolvedValueOnce([{ parentId: 'agent-1' }]);
+
+    expect(await canActorEditPage(agentCtx, 'deep-note')).toBe(true);
+    expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
+  });
+
+  it('canActorEditPage: an unrelated page still defers to the membership ACL', async () => {
+    mockGetAgentAccessLevel.mockResolvedValue(VIEW_ONLY);
+    mockDbWhere.mockResolvedValueOnce([AGENT_PAGE_ROW]).mockResolvedValueOnce([{ parentId: null }]);
+
+    expect(await canActorEditPage(agentCtx, 'some-doc')).toBe(false);
+    expect(mockGetAgentAccessLevel).toHaveBeenCalledWith('agent-1', 'some-doc');
+  });
+
+  it('canActorEditPage: an MCP token scope still ceilings the own subtree', async () => {
+    const scopedAgentCtx = {
+      userId: 'user-1', accessActor: credentialActor('user-1', null),
+      chatSource: { type: 'page', agentPageId: 'agent-1' },
+      mcpAllowedDriveIds: ['drive-A'],
+    } as ToolExecutionContext;
+    mockDbWhere
+      .mockResolvedValueOnce([{ driveId: 'drive-B' }]) // pageOutsideMcpScope: memory-page's drive
+      .mockResolvedValueOnce([AGENT_PAGE_ROW]);
+
+    expect(await canActorEditPage(scopedAgentCtx, 'memory-page')).toBe(false);
+    expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
+  });
+
+  it('canActorDeletePage is NOT widened by the walk — the agent cannot trash its own page', async () => {
+    // canEdit:true is exactly what the walk would grant on the agent's own
+    // page; delete must still come from the membership ACL alone.
+    mockGetAgentAccessLevel.mockResolvedValue({ canView: true, canEdit: true, canShare: true, canDelete: false });
+
+    expect(await canActorDeletePage(agentCtx, 'agent-1')).toBe(false);
+    expect(mockGetAgentAccessLevel).toHaveBeenCalledWith('agent-1', 'agent-1');
   });
 });
 
@@ -550,5 +641,227 @@ describe('hasAgentUserScopedAccess', () => {
     // userScopedAccess: true must not diverge the answers.
     mockDbWhere.mockResolvedValue([{ type: 'DOCUMENT', userScopedAccess: true }]);
     expect(await hasAgentUserScopedAccess('doc-page')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// canActorConsultAgent — the ONE rule for "may this actor ask that agent",
+// shared by executeAskAgent and the channel-mention responder. Viewing the
+// agent page is sufficient; membership of the agent in the drive the actor is
+// operating in, plus the actor's own access to that drive, is the other grant
+// (guest agents: added to a drive from elsewhere so its members can talk to it).
+// ---------------------------------------------------------------------------
+describe('canActorConsultAgent', () => {
+  const AGENT = 'agent-guest';
+  const getUserAccessLevel = vi.mocked(permissionsModule.getUserAccessLevel);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDbWhere.mockResolvedValue([]); // no chatSource row lookups needed for a user ctx
+  });
+
+  it('allows when the actor can view the agent page (membership never consulted)', async () => {
+    getUserAccessLevel.mockResolvedValue({ canView: true, canEdit: false, canShare: false, canDelete: false });
+    expect(await canActorConsultAgent(userCtx, AGENT, DRIVE)).toBe(true);
+    expect(mockHasAgentDriveMembership).not.toHaveBeenCalled();
+  });
+
+  it('allows a guest agent that is a member of the current drive when the actor can access that drive', async () => {
+    getUserAccessLevel.mockResolvedValue(null);
+    mockHasAgentDriveMembership.mockResolvedValue(true);
+    mockGetUserDriveAccess.mockResolvedValue(true);
+    expect(await canActorConsultAgent(userCtx, AGENT, DRIVE)).toBe(true);
+    expect(mockHasAgentDriveMembership).toHaveBeenCalledWith(AGENT, DRIVE);
+    expect(mockGetUserDriveAccess).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), DRIVE);
+  });
+
+  it('denies a guest agent member when the actor cannot access the current drive', async () => {
+    getUserAccessLevel.mockResolvedValue(null);
+    mockHasAgentDriveMembership.mockResolvedValue(true);
+    mockGetUserDriveAccess.mockResolvedValue(false);
+    expect(await canActorConsultAgent(userCtx, AGENT, DRIVE)).toBe(false);
+  });
+
+  it('denies when the agent is not a member of the current drive', async () => {
+    getUserAccessLevel.mockResolvedValue(null);
+    mockHasAgentDriveMembership.mockResolvedValue(false);
+    mockGetUserDriveAccess.mockResolvedValue(true);
+    expect(await canActorConsultAgent(userCtx, AGENT, DRIVE)).toBe(false);
+  });
+
+  it('falls back to locationContext.currentDrive when no drive id is passed, and denies with neither', async () => {
+    getUserAccessLevel.mockResolvedValue(null);
+    mockHasAgentDriveMembership.mockResolvedValue(true);
+    mockGetUserDriveAccess.mockResolvedValue(true);
+    const located = { ...userCtx, locationContext: { currentDrive: { id: DRIVE, name: 'D', slug: 'd' } } } as ToolExecutionContext;
+    expect(await canActorConsultAgent(located, AGENT)).toBe(true);
+    expect(mockHasAgentDriveMembership).toHaveBeenCalledWith(AGENT, DRIVE);
+    expect(await canActorConsultAgent(userCtx, AGENT)).toBe(false);
+  });
+
+  it('denies a drive outside the MCP token scope even for a member agent', async () => {
+    getUserAccessLevel.mockResolvedValue(null);
+    mockHasAgentDriveMembership.mockResolvedValue(true);
+    mockGetUserDriveAccess.mockResolvedValue(true);
+    const scoped = { ...userCtx, mcpAllowedDriveIds: ['drive-other'] } as ToolExecutionContext;
+    expect(await canActorConsultAgent(scoped, AGENT, DRIVE)).toBe(false);
+  });
+});
+
+
+describe("built-in Imago agents (IMG-10.10: the owner's full reach, minus the drives they keep it out of)", () => {
+  const FULL = { canView: true, canEdit: true, canShare: true, canDelete: true };
+  const EXCLUDED = 'drive-excluded';
+  // The acting-page row of the INVOKER's own Imago: a `user_builtin_agents`
+  // pointer joins in, and the page carries userScopedAccess.
+  const OWN_IMAGO_ROW = { type: 'AI_CHAT', userScopedAccess: true, builtinOwnerId: 'user-1' };
+  // Someone else's Imago, reached by user-1 (consult, @mention, a shared page…).
+  const FOREIGN_IMAGO_ROW = { type: 'AI_CHAT', userScopedAccess: true, builtinOwnerId: 'user-2' };
+  const page = (id: string) => ({
+    id, title: id, type: 'DOCUMENT', parentId: null, position: 0, isTrashed: false, permissions: FULL,
+  });
+  /** The acting row first, then the page's drive for every page-level gate. */
+  const actingRowThenDrive = (row: object, driveId: string) =>
+    mockDbWhere.mockImplementation(async () => [{ ...row, driveId }]);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockImagoExcludedDriveIds.mockResolvedValue(new Set([EXCLUDED]));
+  });
+
+  describe("run by its owner, in a drive they have not kept it out of", () => {
+    beforeEach(() => actingRowThenDrive(OWN_IMAGO_ROW, DRIVE));
+
+    it("acts with the user's own access on pages — never a drive grant", async () => {
+      const { getUserAccessLevel, canUserEditPage, canUserDeletePage } = await import('@pagespace/lib/permissions/permissions');
+      vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
+      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      vi.mocked(canUserDeletePage).mockResolvedValue(true);
+
+      expect(await canActorViewPage(agentCtx, 'private-page')).toBe(true);
+      expect(await canActorEditPage(agentCtx, 'private-page')).toBe(true);
+      expect(await canActorDeletePage(agentCtx, 'private-page')).toBe(true);
+      expect(vi.mocked(getUserAccessLevel)).toHaveBeenCalledWith(credentialActor('user-1', null), 'private-page');
+      expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
+      expect(mockImagoExcludedDriveIds).toHaveBeenCalledWith('user-1');
+    });
+
+    it("acts with the user's drive access and owner/admin bar", async () => {
+      mockGetUserDriveAccess.mockResolvedValue(true);
+      mockCheckDriveAccess.mockResolvedValue({ isOwner: false, isAdmin: true, isMember: true });
+
+      expect(await canActorAccessDrive(agentCtx, DRIVE)).toBe(true);
+      expect(await canActorManageDrive(agentCtx, DRIVE)).toBe(true);
+      expect(mockHasAgentDriveMembership).not.toHaveBeenCalled();
+    });
+
+    it("lists the pages the user can see in the drive", async () => {
+      const { getUserAccessiblePagesInDriveWithDetails } = await import('@pagespace/lib/permissions/permissions');
+      vi.mocked(getUserAccessiblePagesInDriveWithDetails).mockResolvedValue([page('a'), page('b')]);
+
+      expect(await getActorAccessiblePagesInDrive(agentCtx, DRIVE)).toEqual([page('a'), page('b')]);
+    });
+
+    it('takes the user branch for drive discovery', async () => {
+      expect(await resolveActingAgentId(agentCtx)).toBeUndefined();
+    });
+
+    it('is still capped by the user: a page the user cannot see stays out of reach', async () => {
+      const { getUserAccessLevel } = await import('@pagespace/lib/permissions/permissions');
+      vi.mocked(getUserAccessLevel).mockResolvedValue(null);
+
+      expect(await canActorViewPage(agentCtx, 'someone-elses-page')).toBe(false);
+    });
+  });
+
+  describe('run by its owner, in a drive they keep it out of', () => {
+    beforeEach(() => actingRowThenDrive(OWN_IMAGO_ROW, EXCLUDED));
+
+    it('denies every page gate without asking the user ACL', async () => {
+      const { getUserAccessLevel, canUserEditPage, canUserDeletePage } = await import('@pagespace/lib/permissions/permissions');
+      vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
+      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      vi.mocked(canUserDeletePage).mockResolvedValue(true);
+
+      expect(await canActorViewPage(agentCtx, 'page-in-excluded')).toBe(false);
+      expect(await canActorEditPage(agentCtx, 'page-in-excluded')).toBe(false);
+      expect(await canActorDeletePage(agentCtx, 'page-in-excluded')).toBe(false);
+      expect(vi.mocked(getUserAccessLevel)).not.toHaveBeenCalled();
+    });
+
+    it('denies the root of the drive (create_page passes the drive id as the parent)', async () => {
+      // No page row matches a drive id: the id itself is the drive.
+      mockDbWhere.mockImplementation(async () => [{ ...OWN_IMAGO_ROW }]);
+      const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
+      vi.mocked(canUserEditPage).mockResolvedValue(true);
+
+      expect(await canActorEditPage(agentCtx, EXCLUDED)).toBe(false);
+    });
+
+    it('denies the drive-level gates, listings and token ceilings', async () => {
+      const { getUserAccessiblePagesInDriveWithDetails } = await import('@pagespace/lib/permissions/permissions');
+      mockGetUserDriveAccess.mockResolvedValue(true);
+      mockCheckDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true, isMember: true });
+      vi.mocked(getUserAccessiblePagesInDriveWithDetails).mockResolvedValue([page('a')]);
+
+      expect(await canActorAccessDrive(agentCtx, EXCLUDED)).toBe(false);
+      expect(await canActorManageDrive(agentCtx, EXCLUDED)).toBe(false);
+      expect(await getActorAccessiblePagesInDrive(agentCtx, EXCLUDED)).toEqual([]);
+      expect(await driveDeniedByAppToken(agentCtx, EXCLUDED)).toBe(true);
+      expect(await filterDriveIdsByAppTokenScope(agentCtx, [DRIVE, EXCLUDED])).toEqual([DRIVE]);
+      expect(await filterDriveIdsForActor(agentCtx, [DRIVE, EXCLUDED])).toEqual([DRIVE]);
+    });
+  });
+
+  describe("someone else's Imago (consult, @mention, workflow, ask_agent, a shared page)", () => {
+    beforeEach(() => actingRowThenDrive(FOREIGN_IMAGO_ROW, DRIVE));
+
+    it("reaches nothing — not the invoker's reach, not the owner's", async () => {
+      const { getUserAccessLevel, canUserEditPage, getUserAccessiblePagesInDriveWithDetails } = await import('@pagespace/lib/permissions/permissions');
+      vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
+      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      vi.mocked(getUserAccessiblePagesInDriveWithDetails).mockResolvedValue([page('a')]);
+      mockGetUserDriveAccess.mockResolvedValue(true);
+      mockCheckDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true, isMember: true });
+      mockHasAgentDriveMembership.mockResolvedValue(true);
+      mockGetAgentAccessLevel.mockResolvedValue(FULL);
+
+      expect(await canActorViewPage(agentCtx, 'any')).toBe(false);
+      expect(await canActorEditPage(agentCtx, 'any')).toBe(false);
+      expect(await canActorDeletePage(agentCtx, 'any')).toBe(false);
+      expect(await canActorAccessDrive(agentCtx, DRIVE)).toBe(false);
+      expect(await canActorManageDrive(agentCtx, DRIVE)).toBe(false);
+      expect(await getActorAccessiblePagesInDrive(agentCtx, DRIVE)).toEqual([]);
+      expect(await driveDeniedByAppToken(agentCtx, DRIVE)).toBe(true);
+      expect(await filterDriveIdsForActor(agentCtx, [DRIVE])).toEqual([]);
+      expect(await filterAgentDriveIdsByActorReach(agentCtx, [DRIVE])).toEqual([]);
+      expect(mockImagoExcludedDriveIds).not.toHaveBeenCalled();
+    });
+
+    it('sends drive discovery down the agent branch, where it then gets no drive', async () => {
+      expect(await resolveActingAgentId(agentCtx)).toBe('agent-1');
+    });
+  });
+
+  it('leaves an ordinary page agent on its own reach (no user lookups, no exclusions)', async () => {
+    const { getUserAccessLevel } = await import('@pagespace/lib/permissions/permissions');
+    mockDbWhere.mockResolvedValue([{ ...AGENT_PAGE_ROW, builtinOwnerId: null }]);
+    mockGetAgentAccessLevel.mockResolvedValue(FULL);
+    mockHasAgentDriveMembership.mockResolvedValue(true);
+
+    expect(await canActorViewPage(agentCtx, 'page-x')).toBe(true);
+    expect(await canActorAccessDrive(agentCtx, DRIVE)).toBe(true);
+    expect(await filterAgentDriveIdsByActorReach(agentCtx, ['drive-A', 'drive-B'])).toEqual(['drive-A', 'drive-B']);
+    expect(vi.mocked(getUserAccessLevel)).not.toHaveBeenCalled();
+    expect(mockGetUserDriveAccess).not.toHaveBeenCalled();
+    expect(mockImagoExcludedDriveIds).not.toHaveBeenCalled();
+  });
+
+  it("leaves the user (the global assistant) untouched by any Imago exclusion", async () => {
+    mockGetUserDriveAccess.mockResolvedValue(true);
+
+    expect(await canActorAccessDrive(userCtx, EXCLUDED)).toBe(true);
+    expect(await filterDriveIdsForActor(userCtx, [EXCLUDED])).toEqual([EXCLUDED]);
+    expect(mockImagoExcludedDriveIds).not.toHaveBeenCalled();
   });
 });

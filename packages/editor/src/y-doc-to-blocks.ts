@@ -1,9 +1,9 @@
 import type { Node as PmNode } from 'prosemirror-model';
 import type * as Y from 'yjs';
-import { yDocToPmDoc } from './collab-document.js';
-import { nonEmptyStringAttr } from './pm-attrs.js';
-import { pmDocToMarkdown } from './y-doc-to-markdown.js';
-import { pmDocToText } from './y-doc-to-text.js';
+import { yDocToPmDoc } from './collab-document.ts';
+import { nonEmptyStringAttr } from './pm-attrs.ts';
+import { pmDocToMarkdown } from './y-doc-to-markdown.ts';
+import { pmDocToText } from './y-doc-to-text.ts';
 
 /**
  * One addressable unit of a document.

@@ -2,21 +2,21 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { drives } from '@pagespace/db/schema/core';
 import { z } from 'zod/v4';
-import { slugify } from '@pagespace/lib/utils/utils';
-import { isReservedDriveName } from '@pagespace/lib/services/drive-guards';
-import { allocatePublishSubdomain } from '@pagespace/lib/services/drive-service';
+import { createDriveForCaller } from '@/lib/drives/create-drive-for-caller';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { eq } from '@pagespace/db/operators';
-import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
+import { getAppDriveMembership, hasAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { authenticateMCPRequest, isAuthError, isMCPAuthResult } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
-// Schema for drive creation
+// Schema for drive creation. orgId: create the drive in that org (DRV-3).
 const createDriveSchema = z.object({
   name: z.string().min(1).max(100),
+  orgId: z.string().min(1).optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -37,27 +37,15 @@ export async function POST(req: NextRequest) {
   try {
     const userId = auth.userId;
     const body = await req.json();
-    const { name } = createDriveSchema.parse(body);
-    
-    // Validate name
-    if (isReservedDriveName(name)) {
-      return NextResponse.json({ error: 'Cannot create a drive with that name.' }, { status: 400 });
+    const { name, orgId } = createDriveSchema.parse(body);
+
+    // DRV-3: the same create as every other door — personal, or org-owned from creation when orgId
+    // names an org the caller may create drives in (decided server-side by createOrgDrive).
+    const created = await createDriveForCaller({ userId, name, orgId, authentication: auth.authentication });
+    if (!created.ok) {
+      return NextResponse.json({ error: created.error, ...(created.code && { code: created.code }) }, { status: created.status });
     }
-
-    const slug = slugify(name);
-
-    // Create drive + allocate subdomain atomically — allocation failure after insert
-    // would leave a drive without a subdomain identity.
-    const newDrive = await db.transaction(async (tx) => {
-      const [created] = await tx.insert(drives).values({
-        name,
-        slug,
-        ownerId: userId,
-        updatedAt: new Date(),
-      }).returning();
-      await allocatePublishSubdomain(created.id, slug, tx);
-      return created;
-    });
+    const newDrive = created.drive;
 
     // Broadcast drive creation event (only creator receives for new drives)
     await broadcastDriveEvent(
@@ -78,7 +66,7 @@ export async function POST(req: NextRequest) {
       metadata: { source: 'mcp' },
     });
 
-    auditRequest(req, { eventType: 'data.write', userId, resourceType: 'drive', resourceId: newDrive.id, details: { source: 'mcp' } });
+    auditRequest(req, { eventType: 'data.write', userId, resourceType: 'drive', resourceId: newDrive.id, details: { source: 'mcp', ...(orgId && { orgId }) } });
 
     return NextResponse.json(newDrive, { status: 201 });
   } catch (error) {
@@ -108,7 +96,7 @@ export async function GET(req: NextRequest) {
     }
 
     // Get all drives user has access to (owned + shared via membership)
-    const allAccessibleDrives = await listAccessibleDrives(userId);
+    const allAccessibleDrives = await listAccessibleDrives(actorFromAuth(auth));
 
     // Filter by token scope if applicable
     let filteredDrives;
@@ -122,10 +110,12 @@ export async function GET(req: NextRequest) {
       filteredDrives = (
         await Promise.all(
           allowedDriveIds.map(async (driveId) => {
+            // Review #2849 r5 (P2): a key lists a drive only while its owner is a current member, whichever row it holds.
+            if (tokenId && !(await hasAppDriveMembership(actorFromAuth(auth), tokenId, driveId))) return null;
             const userView = accessibleById.get(driveId);
             if (userView) return userView;
             if (!tokenId) return null;
-            const membership = await getAppDriveMembership(tokenId, driveId);
+            const membership = await getAppDriveMembership(actorFromAuth(auth), tokenId, driveId);
             if (!membership || membership.role === null) return null; // dangling inherit
             const drive = await db.query.drives.findFirst({ where: eq(drives.id, driveId) });
             if (!drive || drive.isTrashed) return null;

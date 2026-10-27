@@ -4,7 +4,13 @@ import { ensureTestDb } from '@/test/ensure-test-db';
 
 // Mock boundaries
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     isUserDriveMember: vi.fn(),
+}));
+
+// The one member-drive set (org-aware).
+vi.mock('@pagespace/lib/permissions/member-drives', () => ({
+    getMemberDriveIds: vi.fn(async () => []),
 }));
 
 vi.mock('@pagespace/lib/content/activity-diff-utils', () => ({
@@ -19,7 +25,9 @@ vi.mock('@pagespace/lib/services/page-content-store', () => ({
 
 import { activityTools, filterAccessibleActivities, shouldContinuePaging } from '../activity-tools';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import type { ToolExecutionContext } from '../../core/types';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockIsUserDriveMember = vi.mocked(isUserDriveMember);
 
@@ -82,12 +90,64 @@ describe('activity-tools', () => {
       const context = {
         toolCallId: '1',
         messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
         activityTools.get_activity.execute!(createTestInput({ driveIds: ['drive-1'] }), context)
       ).rejects.toThrow('No access to any of the specified drives');
+    });
+
+    it('DRV-5 (partial) X-6 (partial) with no driveIds, scopes to the org-aware member-drive set (non-trashed), never a drive_members read of its own', async () => {
+      vi.mocked(getMemberDriveIds).mockResolvedValueOnce([]);
+      const context = {
+        toolCallId: '1',
+        messages: [],
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
+      };
+
+      const result = await activityTools.get_activity.execute!(createTestInput(), context);
+
+      expect(getMemberDriveIds).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-123' }), { includeTrashed: false });
+      expect(result).toMatchObject({ ok: true, drives: [] });
+    });
+
+    it('does not surface a drive the caller is only a GUEST of (redeemed page share link), and does surface it to a MEMBER', async () => {
+      // Calls through to the REAL getMemberDriveIds: this file mocks it, and a mocked
+      // drive set would pass this test without ever reading the GUEST row.
+      const actual = await vi.importActual<typeof import('@pagespace/lib/permissions/member-drives')>('@pagespace/lib/permissions/member-drives');
+      // Once per call below (guest, then member), so later tests keep the file's default mock.
+      vi.mocked(getMemberDriveIds)
+        .mockImplementationOnce(actual.getMemberDriveIds)
+        .mockImplementationOnce(actual.getMemberDriveIds);
+
+      const { factories } = await import('@pagespace/db/test/factories');
+      const { db } = await import('@pagespace/db/db');
+      const { activityLogs } = await import('@pagespace/db/schema/monitoring');
+      const owner = await factories.createUser();
+      const guest = await factories.createUser();
+      const member = await factories.createUser();
+      const drive = await factories.createDrive(owner.id, { name: 'Guest-only drive' });
+      await factories.createDriveMember(drive.id, guest.id, { role: 'GUEST' });
+      await factories.createDriveMember(drive.id, member.id, { role: 'MEMBER' });
+      // Drive-scoped activity carries no pageId, so the page filter would keep
+      // it: only the drive list stands between a guest and the drive's feed.
+      await db.insert(activityLogs).values({
+        userId: owner.id, actorEmail: 'owner@example.com', operation: 'update',
+        resourceType: 'drive', resourceId: drive.id, resourceTitle: drive.name, driveId: drive.id,
+      });
+
+      const contextFor = (userId: string) => ({
+        toolCallId: '1',
+        messages: [],
+        experimental_context: { userId, accessActor: credentialActor(userId, null) } as ToolExecutionContext,
+      });
+      const guestResult = await activityTools.get_activity.execute!(createTestInput(), contextFor(guest.id));
+      const memberResult = await activityTools.get_activity.execute!(createTestInput(), contextFor(member.id));
+
+      expect(JSON.stringify(guestResult)).not.toContain(drive.id);
+      // The positive control: the same drive, read the same way, reaches a real member.
+      expect(JSON.stringify(memberResult)).toContain(drive.id);
     });
 
     it('has expected input schema shape', () => {

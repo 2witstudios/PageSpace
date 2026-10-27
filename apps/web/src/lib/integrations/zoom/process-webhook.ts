@@ -1,14 +1,23 @@
 import { db } from '@pagespace/db/db';
 import { and, eq } from '@pagespace/db/operators';
 import { zoomConnections, type ZoomConnection } from '@pagespace/db/schema/zoom';
+import { CREDIT_HOLD_ESTIMATE_CENTS } from '@pagespace/lib/billing/credit-pricing';
+import type { GateReason } from '@pagespace/lib/billing/credit-core';
+import type { SpendRefusal } from '@pagespace/lib/billing/credit-gate';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { pageService } from '@/services/api';
+import { acquireUserCreditHold } from '@/lib/ai/core/user-credit-hold';
+import { automationRunUnreserved, automationSpend } from '@pagespace/lib/billing/spend-target';
+import { lookupDriveBillingFacts } from '@pagespace/lib/billing/sandbox-payer';
+import { encodeAutomationRef } from '@pagespace/lib/billing/automation-attribution';
+import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import { getRecordings, downloadTranscript } from './zoom-api-client';
 import { getValidZoomAccessToken } from './token-refresh';
 import { parseVtt, vttToHtml } from './parse-vtt';
 import { buildDocumentHtml } from './build-document';
 import { generateTranscriptSummary } from './generate-summary';
 import { extractActionItems } from './extract-action-items';
+import { automationActor, inDrives } from '@pagespace/lib/permissions/access-actor';
 
 interface ZoomTranscriptPayload {
   event: string;
@@ -118,11 +127,13 @@ export async function processZoomWebhook(
   const transcriptHtml = connection.includeTranscript ? vttToHtml(segments) : '';
   const plainText = segments.map((s) => `${s.speaker}: ${s.text}`).join('\n');
 
-  // AI enrichment (fail-safe — never blocks page creation)
-  const [summary, actionItems] = await Promise.all([
-    connection.includeAiSummary ? generateTranscriptSummary(connection.userId, plainText) : Promise.resolve(''),
-    connection.includeActionItems ? extractActionItems(connection.userId, plainText) : Promise.resolve([]),
-  ]);
+  // AI enrichment (fail-safe — never blocks page creation). It passes the credit
+  // gate first; a refusal still creates the page, just without the summary/action
+  // items, and records why. A webhook trigger has no person present (SPEND-6), so
+  // it spends the DESTINATION drive's wallet only, run as the connection's owner —
+  // never anyone's own credits, on an org drive or a personal one.
+  const enrichment = await enrichTranscript(connection, connection.targetDriveId, plainText);
+  const { summary, actionItems } = enrichment;
 
   const html = buildDocumentHtml(
     { topic, startTime: start_time, duration, hostEmail: host_email },
@@ -134,7 +145,8 @@ export async function processZoomWebhook(
   const title = `${datePrefix} — ${topic}`;
 
   const result = await pageService.createPage(
-    connection.userId,
+    // A recording webhook files the page as the connection owner, an automation confined to its target drive (D-OW-34, D-OW-62).
+    automationActor(connection.userId, 'zoom-recording', inDrives(connection.targetDriveId)),
     {
       title,
       type: 'DOCUMENT',
@@ -143,7 +155,16 @@ export async function processZoomWebhook(
       content: html,
       contentMode: 'html',
     },
-    { context: { metadata: { source: 'zoom_transcript', meetingUuid } } }
+    {
+      context: {
+        metadata: {
+          source: 'zoom_transcript',
+          meetingUuid,
+          ...(enrichment.skippedReason ? { aiEnrichmentSkipped: enrichment.skippedReason } : {}),
+          ...(enrichment.skippedRefusal ? { aiEnrichmentRefusal: enrichment.skippedRefusal } : {}),
+        },
+      },
+    }
   );
 
   if (!result.success) {
@@ -161,4 +182,89 @@ export async function processZoomWebhook(
     title,
     meetingUuid,
   });
+}
+
+interface TranscriptEnrichment {
+  summary: string;
+  actionItems: Awaited<ReturnType<typeof extractActionItems>>;
+  /**
+   * Set when the credit gate refused the enrichment calls, could not be checked, or
+   * reserved no drive wallet for them (SPEND-6, fail closed).
+   */
+  skippedReason?: GateReason | 'gate_error' | 'no_drive_wallet';
+  /** Why a named source refused, when it did — e.g. source_cap_reached once the connection owner's cap is spent ([D-OW-34]). */
+  skippedRefusal?: SpendRefusal['reason'];
+}
+
+/**
+ * Run the enabled AI enrichment calls behind ONE credit hold, sized for how many
+ * model calls will run. skipDailyCap: server-triggered by Zoom, not interactive
+ * fan-out — the same bound the Zoom/calendar trigger executors use. Each helper
+ * debits its own real usage on the wallet the hold reserved, so the hold is
+ * released exactly once when they settle, whether they succeeded or not.
+ *
+ * SPEND-6: the enrichment is a trigger with no person present, so it spends the destination
+ * drive's wallet only (automationSpend), run on behalf of the connection's owner, whose caps
+ * bind it ([D-OW-34]) — on an org drive and on a personal drive alike, exactly as a workflow
+ * does. Empty, paused or missing, it is skipped (the lead is told) before any model call; it
+ * never falls to anyone's own credits.
+ */
+async function enrichTranscript(
+  connection: ZoomConnection,
+  targetDriveId: string,
+  plainText: string,
+): Promise<TranscriptEnrichment> {
+  const aiCalls = Number(connection.includeAiSummary) + Number(connection.includeActionItems);
+  if (aiCalls === 0) return { summary: '', actionItems: [] };
+
+  // A gate that cannot be checked (DB outage, lock timeout) must not block the
+  // page either: skip the enrichment — no model call, no charge — and say why.
+  const billing = { userId: connection.userId, spend: automationSpend(targetDriveId) };
+  let hold: Awaited<ReturnType<typeof acquireUserCreditHold>>;
+  try {
+    // A destination that vanished since the connection was set up is a gate that cannot be checked.
+    if (!(await lookupDriveBillingFacts(targetDriveId))) throw new Error(`destination drive ${targetDriveId} not found`);
+    hold = await acquireUserCreditHold(billing.userId, {
+      spend: billing.spend,
+      estCostCents: CREDIT_HOLD_ESTIMATE_CENTS * aiCalls,
+      skipDailyCap: true,
+    });
+  } catch (err) {
+    loggers.api.warn('Zoom webhook: AI enrichment skipped (credit gate failed)', {
+      userId: connection.userId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return { summary: '', actionItems: [], skippedReason: 'gate_error' };
+  }
+  if (!hold.allowed) {
+    loggers.api.info('Zoom webhook: AI enrichment skipped (credit gate denied)', {
+      userId: connection.userId,
+      reason: hold.reason,
+      refusal: hold.refusal?.reason,
+    });
+    return { summary: '', actionItems: [], skippedReason: hold.reason, ...(hold.refusal ? { skippedRefusal: hold.refusal.reason } : {}) };
+  }
+
+  try {
+    if (automationRunUnreserved({
+      billingEnabled: isBillingEnabled(),
+      target: billing.spend,
+      walletId: hold.walletId,
+    })) {
+      loggers.api.warn('Zoom webhook: AI enrichment skipped (no drive wallet reserved)', {
+        userId: connection.userId,
+        driveId: targetDriveId,
+      });
+      return { summary: '', actionItems: [], skippedReason: 'no_drive_wallet' };
+    }
+    // SPEND-10: listed on the drive's spend as this connection's "Zoom transcripts", not its owner's own.
+    const settleOn = { driveId: targetDriveId, userId: billing.userId, walletId: hold.walletId, automationRef: encodeAutomationRef({ kind: 'zoom', connectionId: connection.id }) };
+    const [summary, actionItems] = await Promise.all([
+      connection.includeAiSummary ? generateTranscriptSummary(connection.userId, plainText, settleOn) : Promise.resolve(''),
+      connection.includeActionItems ? extractActionItems(connection.userId, plainText, settleOn) : Promise.resolve([]),
+    ]);
+    return { summary, actionItems };
+  } finally {
+    hold.release();
+  }
 }

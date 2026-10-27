@@ -18,6 +18,7 @@ import { isServingStatus } from '@pagespace/lib/canvas/cert-action';
 import { resolveAppRouterFlyAppName } from '@pagespace/lib/services/app-hosting/routing-env';
 import { removeCertificate } from '@/lib/fly/certs';
 import { isValidDriveNotFoundPage } from '@pagespace/lib/services/drive-service';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -58,7 +59,7 @@ export async function PATCH(
     if (scopeError) return scopeError;
 
     if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
-      return NextResponse.json({ error: 'Only drive owners and admins can change the primary domain' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can change the primary domain' }, { status: 403 }));
     }
 
     let requestBody: unknown;
@@ -155,7 +156,7 @@ export async function PATCH(
       // never fails the primary change itself — the DB update has already
       // committed and the next publish re-bakes anything that lagged.
       try {
-        const refreshed = await republishDriveCanonical(driveId, auth.userId);
+        const refreshed = await republishDriveCanonical(driveId, actorFromAuth(auth));
         if (refreshed === 0) {
           await regeneratePublishedSiteFiles(driveId);
         }
@@ -263,7 +264,7 @@ export async function DELETE(
     if (scopeError) return scopeError;
 
     if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
-      return NextResponse.json({ error: 'Only drive owners and admins can remove custom domains' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can remove custom domains' }, { status: 403 }));
     }
 
     const [deleted] = await db

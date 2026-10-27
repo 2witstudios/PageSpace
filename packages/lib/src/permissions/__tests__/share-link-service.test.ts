@@ -1,4 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+// The org sign-in gate (D-OW-45) reads policies through its own module; these tests are about the
+// resolvers behind it, so no org here sets a sign-in policy. Plain functions: a mock reset must not undo them.
+vi.mock('../actor-authentication', () => ({
+  checkActorDriveAuthentication: vi.fn(async () => ({ allowed: true })),
+  checkActorResourceAuthentication: async () => ({ allowed: true }),
+  filterDrivesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  filterResourcesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  explainOrgAuthenticationDenial: async () => null,
+}));
 
 // ---------------------------------------------------------------------------
 // Mocks (must be declared before imports)
@@ -19,6 +28,9 @@ const { mockDb } = vi.hoisted(() => {
 });
 
 vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
+// [D-OW-33] the lapse guard: no org (null) unless a test lapses the drive.
+const checkDriveMayLoosen = vi.hoisted(() => vi.fn(async (): Promise<unknown> => null));
+vi.mock('../org-lapse-guard', () => ({ checkDriveMayLoosen }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
   and: vi.fn((...args) => ({ op: 'and', args })),
@@ -64,6 +76,9 @@ vi.mock('@pagespace/db/schema/share-links', () => ({
     expiresAt: 'psl.expiresAt', isActive: 'psl.isActive', useCount: 'psl.useCount',
   },
 }));
+// POL-3: the share-link service reads the drive's org policies; these unit tests are about a drive with no org.
+vi.mock('../../organizations/policy-reader', () => ({ getDrivePolicies: vi.fn().mockResolvedValue(null) }));
+
 vi.mock('../permissions', () => ({
   isDriveOwnerOrAdmin: vi.fn(),
   canUserSharePage: vi.fn(),
@@ -92,9 +107,14 @@ import {
   listPageShareLinks,
   redeemPageShareLink,
   resolveShareToken,
+  completeApprovedLinkAdmission,
 } from '../share-link-service';
 import { EnforcedAuthContext } from '../enforced-context';
 import { isDriveOwnerOrAdmin, canUserSharePage, isUserDriveMember } from '../permissions';
+import { checkActorDriveAuthentication } from '../actor-authentication';
+import { getDrivePolicies } from '../../organizations/policy-reader';
+import { DEFAULT_ORG_POLICIES } from '../../organizations/policies-core';
+import type { ClaimedGuestApproval } from '../guest-holds';
 import { hashToken } from '../../auth/token-utils';
 import type { SessionClaims } from '../../auth/session-service';
 
@@ -123,6 +143,8 @@ function makeSelectChain(result: unknown[]) {
       Promise.resolve(result).then(resolve, reject),
     limit: vi.fn().mockResolvedValue(result),
     orderBy: vi.fn().mockReturnThis(),
+    // Claimed approvals name this valid org/drive pair; component tests exercise scope refusals.
+    for: vi.fn(async () => [{ id: 'org', orgId: 'org' }]),
   };
   const chain = {
     from: vi.fn().mockReturnThis(),
@@ -162,9 +184,13 @@ function makeUpdateChain(result: unknown[] = []) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(checkActorDriveAuthentication).mockReset().mockResolvedValue({ allowed: true });
+  vi.mocked(getDrivePolicies).mockReset().mockResolvedValue(null);
   // Default: drives are STANDARD (not Home), pages have a drive
   mockDb.query.drives.findFirst.mockResolvedValue({ kind: 'STANDARD' });
   mockDb.query.pages.findFirst.mockResolvedValue({ driveId: DRIVE_ID });
+  // POL-2: a redemption's writes run in a transaction that re-asks the guests policy (a drive with no org here).
+  mockDb.transaction.mockImplementation(async (fn: (tx: typeof mockDb) => Promise<unknown>) => fn(mockDb));
 });
 
 describe('createDriveShareLink', () => {
@@ -189,6 +215,18 @@ describe('createDriveShareLink', () => {
       expect(result.data.id).toBe(LINK_ID);
       expect(result.data.rawToken).toBe('ps_share_testtoken');
     }
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] while the drive\'s org is lapsed no link is created: ORG_LAPSED with the lapse copy, nothing inserted', async () => {
+    vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
+    makeInsertChain([{ id: LINK_ID }]);
+    checkDriveMayLoosen.mockResolvedValueOnce({ ok: false, code: 'org_lapsed', status: 402, message: 'lapsed copy' });
+
+    const result = await createDriveShareLink(makeCtx(), DRIVE_ID, { role: 'MEMBER' });
+
+    expect(result).toEqual({ ok: false, error: 'ORG_LAPSED', message: 'lapsed copy' });
+    expect(checkDriveMayLoosen).toHaveBeenCalledWith(expect.anything(), DRIVE_ID, true);
+    expect(mockDb.insert).not.toHaveBeenCalled();
   });
 
   it('returns NOT_FOUND when customRoleId does not belong to the drive', async () => {
@@ -317,7 +355,7 @@ describe('redeemDriveShareLink', () => {
 
   it('returns NOT_FOUND for expired token', async () => {
     const past = new Date(Date.now() - 1000);
-    makeSelectChain([{ id: LINK_ID, driveId: DRIVE_ID, role: 'MEMBER', isActive: true, expiresAt: past }]);
+    makeSelectChain([{ id: LINK_ID, driveId: DRIVE_ID, role: 'MEMBER', isActive: true, suspendedByPolicy: null, expiresAt: past }]);
 
     const result = await redeemDriveShareLink(makeCtx(), 'some-token');
 
@@ -333,7 +371,7 @@ describe('redeemDriveShareLink', () => {
   });
 
   it('returns ALREADY_MEMBER with driveId without mutation when user is already a member', async () => {
-    makeSelectChain([{ id: LINK_ID, driveId: DRIVE_ID, role: 'MEMBER', isActive: true, expiresAt: null }]);
+    makeSelectChain([{ id: LINK_ID, driveId: DRIVE_ID, role: 'MEMBER', isActive: true, suspendedByPolicy: null, expiresAt: null }]);
     vi.mocked(isUserDriveMember).mockResolvedValue(true);
 
     const result = await redeemDriveShareLink(makeCtx(), 'some-token');
@@ -349,7 +387,7 @@ describe('redeemDriveShareLink', () => {
       where: vi.fn().mockReturnThis(),
       limit: vi.fn().mockResolvedValue([{
         id: LINK_ID, driveId: DRIVE_ID, role: 'MEMBER',
-        isActive: true, expiresAt: null, driveName: 'Test Drive',
+        isActive: true, suspendedByPolicy: null, expiresAt: null, driveName: 'Test Drive',
         createdBy: 'creator-user-id',
       }]),
     }));
@@ -379,7 +417,7 @@ describe('redeemDriveShareLink', () => {
       where: vi.fn().mockReturnThis(),
       limit: vi.fn().mockResolvedValue([{
         id: LINK_ID, driveId: DRIVE_ID, role: 'MEMBER',
-        isActive: true, expiresAt: null, driveName: 'Admin Drive',
+        isActive: true, suspendedByPolicy: null, expiresAt: null, driveName: 'Admin Drive',
         createdBy: 'creator-id',
       }]),
     }));
@@ -517,7 +555,7 @@ describe('redeemPageShareLink', () => {
     expect(result).toEqual({ ok: false, error: 'NOT_FOUND' });
   });
 
-  it('auto-creates drive membership when user is not yet a member', async () => {
+  it('creates a GUEST membership row, and never overwrites an existing row', async () => {
     let callCount = 0;
     mockDb.select.mockImplementation(() => ({
       from: vi.fn().mockReturnThis(),
@@ -530,13 +568,18 @@ describe('redeemPageShareLink', () => {
         if (callCount === 1) {
           return Promise.resolve([{
             id: LINK_ID, pageId: PAGE_ID, driveId: DRIVE_ID,
-            permissions: ['VIEW'], isActive: true, expiresAt: null,
+            permissions: ['VIEW'], isActive: true, suspendedByPolicy: null, expiresAt: null,
           }]);
         }
         return Promise.resolve([]);
       }),
     }));
-    mockDb.insert.mockReturnValue({
+    const memberInsert = {
+      values: vi.fn().mockReturnThis(),
+      onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
+      onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
+    };
+    mockDb.insert.mockReturnValueOnce(memberInsert).mockReturnValue({
       values: vi.fn().mockReturnThis(),
       returning: vi.fn().mockResolvedValue([{ id: 'new-pp-id' }]),
       onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
@@ -552,6 +595,10 @@ describe('redeemPageShareLink', () => {
       expect(result.data.linkId).toBe(LINK_ID);
     }
     expect(mockDb.insert).toHaveBeenCalledTimes(2);
+    expect(memberInsert.values).toHaveBeenCalledWith(expect.objectContaining({ driveId: DRIVE_ID, role: 'GUEST' }));
+    // A pending invite or a real membership is left exactly as it is.
+    expect(memberInsert.onConflictDoNothing).toHaveBeenCalledOnce();
+    expect(memberInsert.onConflictDoUpdate).not.toHaveBeenCalled();
   });
 
   it('maps SHARE and DELETE permissions from link into pagePermissions insert', async () => {
@@ -567,7 +614,7 @@ describe('redeemPageShareLink', () => {
         if (callCount === 1) {
           return Promise.resolve([{
             id: LINK_ID, pageId: PAGE_ID, driveId: DRIVE_ID,
-            permissions: ['VIEW', 'SHARE', 'DELETE'], isActive: true, expiresAt: null,
+            permissions: ['VIEW', 'SHARE', 'DELETE'], isActive: true, suspendedByPolicy: null, expiresAt: null,
           }]);
         }
         return Promise.resolve([]);
@@ -611,7 +658,7 @@ describe('redeemPageShareLink', () => {
         if (callCount === 1) {
           return Promise.resolve([{
             id: LINK_ID, pageId: PAGE_ID, driveId: DRIVE_ID,
-            permissions: ['VIEW', 'EDIT'], isActive: true, expiresAt: null,
+            permissions: ['VIEW', 'EDIT'], isActive: true, suspendedByPolicy: null, expiresAt: null,
           }]);
         }
         return Promise.resolve([]);
@@ -655,7 +702,7 @@ describe('redeemPageShareLink', () => {
         if (callCount === 1) {
           return Promise.resolve([{
             id: LINK_ID, pageId: PAGE_ID, driveId: DRIVE_ID,
-            permissions: ['VIEW'], isActive: true, expiresAt: null,
+            permissions: ['VIEW'], isActive: true, suspendedByPolicy: null, expiresAt: null,
           }]);
         }
         // existingPerms query returns a row with canView=true
@@ -697,7 +744,7 @@ describe('resolveShareToken', () => {
 
   it('returns null for expired token without throwing', async () => {
     makeSelectChain([{
-      id: LINK_ID, driveId: DRIVE_ID, isActive: true,
+      id: LINK_ID, driveId: DRIVE_ID, isActive: true, suspendedByPolicy: null,
       expiresAt: new Date(Date.now() - 1000), driveName: 'My Drive', creatorName: 'Bob',
     }]);
 
@@ -717,7 +764,7 @@ describe('resolveShareToken', () => {
         if (callCount === 1) {
           return Promise.resolve([{
             id: LINK_ID, driveId: DRIVE_ID, role: 'MEMBER',
-            isActive: true, expiresAt: null, useCount: 5,
+            isActive: true, suspendedByPolicy: null, expiresAt: null, useCount: 5,
             driveName: 'My Drive', creatorName: 'Alice',
           }]);
         }
@@ -744,7 +791,7 @@ describe('resolveShareToken', () => {
         if (callCount === 1) return Promise.resolve([]);
         return Promise.resolve([{
           id: LINK_ID, pageId: PAGE_ID, driveId: DRIVE_ID,
-          permissions: ['VIEW'], isActive: true, expiresAt: null,
+          permissions: ['VIEW'], isActive: true, suspendedByPolicy: null, expiresAt: null,
           useCount: 2, pageTitle: 'My Page', driveName: 'My Drive', creatorName: 'Bob',
         }]);
       }),
@@ -755,5 +802,86 @@ describe('resolveShareToken', () => {
     expect(result).not.toBeNull();
     expect(result?.type).toBe('page');
     expect(result?.pageTitle).toBe('My Page');
+  });
+});
+
+
+describe('share-link refusal boundaries', () => {
+  it.each(['drive', 'page'] as const)('refuses creation of a %s link under the live org sharing policy without writing', async kind => {
+    vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
+    vi.mocked(canUserSharePage).mockResolvedValue(true);
+    vi.mocked(getDrivePolicies).mockResolvedValue({ orgId: 'org_policy', policies: { ...DEFAULT_ORG_POLICIES, publicShareLinks: false } });
+    const result = kind === 'drive' ? await createDriveShareLink(makeCtx(), DRIVE_ID, {}) : await createPageShareLink(makeCtx(), PAGE_ID, {});
+    expect(result).toMatchObject({ ok: false, error: 'POLICY_FORBIDDEN' });
+    expect(mockDb.insert).not.toHaveBeenCalled();
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  for (const kind of ['drive', 'page'] as const) {
+    it.each(['revoked', 'expired', 'paused', 'policy_off', 'weak_credential'] as const)('a %s '+kind+' link discloses no target and grants no access', async refusal => {
+      makeSelectChain([{ id: LINK_ID, driveId: DRIVE_ID, pageId: PAGE_ID, role: 'MEMBER', permissions: ['VIEW'],
+        isActive: refusal !== 'revoked', expiresAt: refusal === 'expired' ? new Date(0) : null,
+        suspendedByPolicy: refusal === 'paused' ? 'publicShareLinks' : null }]);
+      if (refusal === 'policy_off') vi.mocked(getDrivePolicies).mockResolvedValue({ orgId: 'org_policy', policies: { ...DEFAULT_ORG_POLICIES, publicShareLinks: false } });
+      if (refusal === 'weak_credential') vi.mocked(checkActorDriveAuthentication).mockResolvedValue({ allowed: false, code: 'org_strong_sign_in_required' });
+      const result = kind === 'drive' ? await redeemDriveShareLink(makeCtx(), 'refused-token') : await redeemPageShareLink(makeCtx(), 'refused-token');
+      expect(result).toEqual({ ok: false, error: 'NOT_FOUND' });
+      expect(mockDb.insert).not.toHaveBeenCalled();
+      expect(mockDb.update).not.toHaveBeenCalled();
+      expect(mockDb.transaction).not.toHaveBeenCalled();
+    });
+  }
+
+  it.each(['drive', 'page'] as const)('a valid %s landing link retains its real expiry and creator identity', async kind => {
+    const expiry = new Date(Date.now() + 60_000);
+    let call = 0;
+    mockDb.select.mockImplementation(() => ({ from: vi.fn().mockReturnThis(), leftJoin: vi.fn().mockReturnThis(), where: vi.fn().mockReturnThis(),
+      limit: vi.fn(async () => kind === 'page' && ++call === 1 ? [] : [{ id: LINK_ID, pageId: PAGE_ID, driveId: DRIVE_ID, isActive: true, expiresAt: expiry, suspendedByPolicy: null, driveName: 'Shared drive', pageTitle: 'Shared page', creatorName: 'Test creator' }]),
+    }));
+    expect(await resolveShareToken('valid-token')).toMatchObject({ type: kind, driveId: DRIVE_ID, expiresAt: expiry, creatorName: 'Test creator' });
+  });
+
+  it.each(['drive', 'page'] as const)('a paused %s landing link does not disclose resource or creator names', async kind => {
+    let call = 0;
+    mockDb.select.mockImplementation(() => ({ from: vi.fn().mockReturnThis(), leftJoin: vi.fn().mockReturnThis(), where: vi.fn().mockReturnThis(),
+      limit: vi.fn(async () => kind === 'page' && ++call === 1 ? [] : [{ id: LINK_ID, pageId: PAGE_ID, driveId: DRIVE_ID, isActive: true, expiresAt: null, suspendedByPolicy: 'publicShareLinks', driveName: 'Private drive', creatorName: 'Private creator' }]),
+    }));
+    expect(await resolveShareToken('paused-token')).toBeNull();
+  });
+});
+
+describe('approved share links retain the original admission boundaries', () => {
+  beforeEach(() => vi.mocked(getDrivePolicies).mockResolvedValue({ orgId: 'org', policies: { ...DEFAULT_ORG_POLICIES, guests: 'approve' } }));
+  const claim = (origin: 'drive_link' | 'page_link'): ClaimedGuestApproval => ({ holdId: 'hold', driveId: DRIVE_ID, userId: ACTOR_ID, email: null, origin, createdAt: new Date(), orgId: 'org', request: { linkId: LINK_ID }, requestedBy: null });
+
+  it.each(['no_account', 'no_offer', 'non_link_request'] as const)('refuses an approval with %s without granting access', invalid => {
+    const request = claim('drive_link');
+    if (invalid === 'no_account') request.userId = null;
+    if (invalid === 'no_offer') request.request = {};
+    if (invalid === 'non_link_request') request.origin = 'invite';
+    return expect(completeApprovedLinkAdmission(request)).resolves.toEqual({ ok: false, error: 'NOT_A_LINK_REQUEST' });
+  });
+
+  it.each(['drive_link', 'page_link'] as const)('an approved %s cannot bypass a later guests-off policy', async origin => {
+    makeSelectChain([{ id: LINK_ID, driveId: DRIVE_ID, pageId: PAGE_ID, isActive: true, expiresAt: null, suspendedByPolicy: null }]);
+    vi.mocked(getDrivePolicies).mockResolvedValue({ orgId: 'org', policies: { ...DEFAULT_ORG_POLICIES, guests: 'off' } });
+    expect(await completeApprovedLinkAdmission(claim(origin))).toEqual({ ok: false, error: 'POLICY_OFF' });
+    expect(mockDb.insert).not.toHaveBeenCalled();
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  it.each(['drive_link', 'page_link'] as const)('an approved %s with a revoked offer cannot restore access', async origin => {
+    makeSelectChain([{ id: LINK_ID, driveId: DRIVE_ID, pageId: PAGE_ID, isActive: false, expiresAt: null, suspendedByPolicy: null }]);
+    expect(await completeApprovedLinkAdmission(claim(origin))).toEqual({ ok: false, error: 'LINK_GONE' });
+    expect(mockDb.insert).not.toHaveBeenCalled();
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  it.each(['drive_link', 'page_link'] as const)('an approved %s still refuses a lapse that occurs before the write', async origin => {
+    makeSelectChain([{ id: LINK_ID, driveId: DRIVE_ID, pageId: PAGE_ID, isActive: true, expiresAt: null, suspendedByPolicy: null }]);
+    checkDriveMayLoosen.mockResolvedValueOnce({ message: 'Lapsed' });
+    expect(await completeApprovedLinkAdmission(claim(origin))).toEqual({ ok: false, error: 'POLICY_OFF' });
+    expect(mockDb.insert).not.toHaveBeenCalled();
+    expect(mockDb.update).not.toHaveBeenCalled();
   });
 });

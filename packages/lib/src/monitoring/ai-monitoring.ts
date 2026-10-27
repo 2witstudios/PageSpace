@@ -1,3 +1,5 @@
+import { MODEL_CONTEXT_WINDOWS, getContextWindow } from '../ai/model-context-windows';
+export { MODEL_CONTEXT_WINDOWS, getContextWindow } from '../ai/model-context-windows';
 /**
  * AI Usage Monitoring Module
  * Comprehensive tracking for AI provider usage, tokens, costs, and performance
@@ -6,12 +8,15 @@
 import { db } from '@pagespace/db/db';
 import { sql, and, eq, gte, lte } from '@pagespace/db/operators';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
+import type { SpendKind } from '@pagespace/db/schema/credits';
 import { writeAiUsage } from '../logging/logger-database';
-import { consumeCredits, releaseHold } from '../billing/credit-consume';
+import { consumeCredits, holdSettleFacts, releaseHold } from '../billing/credit-consume';
+import { isBillingEnabled } from '../deployment-mode';
 import { CACHE_READ_DISCOUNT_FACTOR_BPS } from '../billing/credit-pricing';
 import { loggers } from '../logging/logger-config';
 import { normalizeUsageSource, type AIUsageSource } from './usage-source';
 import { isMeteringExempt } from '../ai/model-defaults';
+import { errorLogFields } from '../logging/error-cause';
 
 /**
  * Providers NOT served through OpenRouter. Everything else is a cloud vendor
@@ -56,7 +61,7 @@ export const AI_PRICING = {
   'anthropic/claude-3-haiku': { input: 0.25, output: 1.25 },
 
   // OpenRouter - OpenAI (source: openrouter.ai/api/v1/models)
-  'openai/gpt-5.6-sol-pro': { input: 2, output: 10 },
+  'openai/gpt-5.6-sol-pro': { input: 4, output: 20 },
   'openai/gpt-5.6-sol': { input: 2, output: 10 },
   'openai/gpt-5.6-terra-pro': { input: 2, output: 12 },
   'openai/gpt-5.6-terra': { input: 2, output: 12 },
@@ -92,10 +97,10 @@ export const AI_PRICING = {
   'openai/gpt-5-mini': { input: 0.25, output: 2 },
   'openai/gpt-5-nano': { input: 0.05, output: 0.4 },
   'openai/gpt-oss-120b': { input: 0.037, output: 0.17 },
-  'openai/gpt-oss-20b': { input: 0.03, output: 0.13 },
+  'openai/gpt-oss-20b': { input: 0.018, output: 0.09 },
 
   // OpenRouter - Google (source: openrouter.ai/api/v1/models)
-  'google/gemini-3.7-flash': { input: 0.375, output: 1.875 },
+  'google/gemini-3.7-flash': { input: 0.75, output: 3.75 },
   'google/gemini-3.6-flash': { input: 0.75, output: 3.75 },
   'google/gemini-3.5-flash-lite': { input: 0.3, output: 2.5 },
   'google/gemini-3.5-flash': { input: 1.5, output: 9 },
@@ -114,23 +119,23 @@ export const AI_PRICING = {
   'google/gemini-2.5-flash-lite-preview-06-17': { input: 0.10, output: 0.40 },
   'google/gemini-2.0-pro': { input: 1.25, output: 5.00 },
   'google/gemma-4-31b-it': { input: 0.09, output: 0.34 },
-  'google/gemma-4-26b-a4b-it': { input: 0.07, output: 0.34 },
+  'google/gemma-4-26b-a4b-it': { input: 0.09, output: 0.3 },
 
   // OpenRouter - Meta (source: openrouter.ai/api/v1/models)
   'meta/muse-spark-1.1': { input: 1.25, output: 4.25 },
-  'meta-llama/llama-4-maverick': { input: 0.2, output: 0.8 },
-  'meta-llama/llama-4-scout': { input: 0.11, output: 0.34 },
-  'meta-llama/llama-3.3-70b-instruct': { input: 0.71, output: 0.71 },
+  'meta-llama/llama-4-maverick': { input: 0.1875, output: 0.6525 },
+  'meta-llama/llama-4-scout': { input: 0.1, output: 0.3 },
+  'meta-llama/llama-3.3-70b-instruct': { input: 0.1, output: 0.32 },
   'meta-llama/llama-3.1-405b-instruct': { input: 3.00, output: 3.00 },
 
   // OpenRouter - Mistral (source: openrouter.ai/api/v1/models)
   'mistralai/mistral-large-2512': { input: 0.5, output: 1.5 },
   'mistralai/mistral-medium-3-5': { input: 1.5, output: 7.5 },
   'mistralai/mistral-medium-3': { input: 0.4, output: 2 },
-  'mistralai/devstral-2512': { input: 0.44, output: 2.2 },
+  'mistralai/devstral-2512': { input: 0.4, output: 2 },
   'mistralai/mistral-small-2603': { input: 0.15, output: 0.6 },
   'mistralai/mistral-medium-3.1': { input: 0.4, output: 2 },
-  'mistralai/mistral-small-3.2-24b-instruct': { input: 0.075, output: 0.2 },
+  'mistralai/mistral-small-3.2-24b-instruct': { input: 0.09375, output: 0.25 },
   'mistralai/codestral-2508': { input: 0.3, output: 0.9 },
   'mistralai/devstral-medium': { input: 0.40, output: 2.00 },
   'mistralai/devstral-small': { input: 0.10, output: 0.30 },
@@ -138,6 +143,7 @@ export const AI_PRICING = {
   // Z.ai GLM direct — GLM Coder Plan supported models only (source: z.ai/guides/overview/pricing)
   // GLM-5.3 rates unpublished at launch (2026-08-14); GLM-5.2 rates as placeholder.
   'glm-5.3':     { input: 1.40, output: 4.40 },
+  'glm-5.3-flash': { input: 0.075, output: 0.25 },
   'glm-5.2':     { input: 1.40, output: 4.40 },
   'glm-5.1':     { input: 1.40, output: 4.40 },
   'glm-5-turbo': { input: 1.20, output: 4.00 },
@@ -148,12 +154,12 @@ export const AI_PRICING = {
   'glm-5':       { input: 1.00, output: 3.20 },
 
   // OpenRouter - Chinese/Asian (source: openrouter.ai/api/v1/models)
-  'z-ai/glm-5.2': { input: 1.19, output: 3.74 },
-  'z-ai/glm-5.1': { input: 1.26, output: 3.96 },
+  'z-ai/glm-5.2': { input: 0.41, output: 3.99 },
+  'z-ai/glm-5.1': { input: 0.9646, output: 3.032 },
   'z-ai/glm-5-turbo': { input: 1.2, output: 4 },
   'z-ai/glm-5': { input: 0.6, output: 1.92 },
   'z-ai/glm-4.7-flash': { input: 0.06, output: 0.4 },
-  'z-ai/glm-4.7': { input: 0.4, output: 1.75 },
+  'z-ai/glm-4.7': { input: 0.6, output: 2.2 },
   'z-ai/glm-4.6': { input: 0.43, output: 1.75 },
   'z-ai/glm-4.5v': { input: 0.6, output: 1.8 },
   'z-ai/glm-4.5': { input: 0.6, output: 2.2 },
@@ -164,26 +170,26 @@ export const AI_PRICING = {
   'qwen/qwen3.6-max-preview': { input: 1.027, output: 6.162 },
   'qwen/qwen3.6-plus': { input: 0.325, output: 1.95 },
   'qwen/qwen3.6-flash': { input: 0.1875, output: 1.125 },
-  'qwen/qwen3.6-35b-a3b': { input: 0.1, output: 0.9 },
-  'qwen/qwen3.6-27b': { input: 0.6, output: 3.6 },
+  'qwen/qwen3.6-35b-a3b': { input: 0.15, output: 1 },
+  'qwen/qwen3.6-27b': { input: 0.32, output: 3.2 },
   'qwen/qwen3.5-plus-20260420': { input: 0.3, output: 1.8 },
   'qwen/qwen3.5-flash-02-23': { input: 0.065, output: 0.26 },
-  'qwen/qwen3.5-397b-a17b': { input: 0.39, output: 2.34 },
-  'qwen/qwen3.5-122b-a10b': { input: 0.29, output: 2.4 },
-  'qwen/qwen3.5-35b-a3b': { input: 0.25, output: 1.25 },
+  'qwen/qwen3.5-397b-a17b': { input: 0.55, output: 3.5 },
+  'qwen/qwen3.5-122b-a10b': { input: 0.26, output: 2.08 },
+  'qwen/qwen3.5-35b-a3b': { input: 0.15, output: 1 },
   'qwen/qwen3.5-27b': { input: 0.195, output: 1.56 },
   'qwen/qwen3-max-thinking': { input: 0.78, output: 3.9 },
   'qwen/qwen3-max': { input: 0.78, output: 3.9 },
   'qwen/qwen3-235b-a22b-thinking-2507': { input: 0.23, output: 2.3 },
   'qwen/qwen3-235b-a22b-2507': { input: 0.0875, output: 0.35 },
   'qwen/qwen3-coder': { input: 0.3, output: 1 },
-  'moonshotai/kimi-k3': { input: 3, output: 15 },
-  'moonshotai/kimi-k2.7-code': { input: 0.66, output: 3.4 },
-  'moonshotai/kimi-k2.6': { input: 0.95, output: 4 },
+  'moonshotai/kimi-k3': { input: 2.7, output: 13.5 },
+  'moonshotai/kimi-k2.7-code': { input: 0.6712, output: 3.35 },
+  'moonshotai/kimi-k2.6': { input: 0.4341, output: 1.828 },
   'moonshotai/kimi-k2-thinking': { input: 0.6, output: 2.5 },
   'moonshotai/kimi-k2': { input: 0.57, output: 2.3 },
   'minimax/minimax-m3': { input: 0.3, output: 1.2 },
-  'minimax/minimax-m2.7': { input: 0.3, output: 1.2 },
+  'minimax/minimax-m2.7': { input: 0.21, output: 0.84 },
   'minimax/minimax-m2.5': { input: 0.27, output: 1.08 },
   'minimax/minimax-m2.1': { input: 0.3, output: 1.2 },
   'minimax/minimax-m1': { input: 0.55, output: 2.2 },
@@ -191,10 +197,10 @@ export const AI_PRICING = {
   'bytedance-seed/seed-2.0-mini': { input: 0.1, output: 0.4 },
 
   // OpenRouter - DeepSeek (source: openrouter.ai/api/v1/models)
-  'deepseek/deepseek-v4-pro': { input: 0.87, output: 1.74 },
-  'deepseek/deepseek-v4-flash': { input: 0.0871, output: 0.1742 },
-  'deepseek/deepseek-v3.2': { input: 0.269, output: 0.4 },
-  'deepseek/deepseek-v3.1-terminus': { input: 0.27, output: 1 },
+  'deepseek/deepseek-v4-pro': { input: 0.2088, output: 0.4176 },
+  'deepseek/deepseek-v4-flash': { input: 0.042, output: 0.084 },
+  'deepseek/deepseek-v3.2': { input: 0.28, output: 0.42 },
+  'deepseek/deepseek-v3.1-terminus': { input: 0.3, output: 1 },
   'deepseek/deepseek-r1-0528': { input: 0.5, output: 2.15 },
 
   // OpenRouter - AI21
@@ -350,7 +356,7 @@ export const AI_PRICING = {
   'qwen/qwen3-next-80b-a3b-thinking': { input: 0.15, output: 1.2 },
   'qwen/qwen3-vl-235b-a22b-instruct': { input: 0.21, output: 1.9 },
   'qwen/qwen3-vl-235b-a22b-thinking': { input: 0.4, output: 4 },
-  'qwen/qwen3-vl-30b-a3b-instruct': { input: 0.13, output: 0.52 },
+  'qwen/qwen3-vl-30b-a3b-instruct': { input: 0.15, output: 0.6 },
   'qwen/qwen3-vl-30b-a3b-thinking': { input: 0.2, output: 2.4 },
   'qwen/qwen3-vl-32b-instruct': { input: 0.104, output: 0.416 },
   'qwen/qwen3-vl-8b-instruct': { input: 0.117, output: 0.455 },
@@ -359,14 +365,14 @@ export const AI_PRICING = {
   'qwen/qwen3.5-plus-02-15': { input: 0.26, output: 1.56 },
   'qwen/qwen3.7-flash': { input: 0.03, output: 0.13 },
   'qwen/qwen3.8-2.4t-a95b': { input: 2, output: 6 },
-  'qwen/qwen3.8-27b': { input: 0.425, output: 2.55 },
+  'qwen/qwen3.8-27b': { input: 0.42, output: 3 },
   'qwen/qwen3.8-flash': { input: 0.15, output: 0.47 },
   'qwen/qwen3.8-max': { input: 2, output: 6 },
   // Z.ai
   'z-ai/glm-4.6v': { input: 0.3, output: 0.9 },
   'z-ai/glm-5.2:free': { input: 0, output: 0 },
   'z-ai/glm-5.3': { input: 1.4, output: 4.4 },
-  'z-ai/glm-5.3-flash': { input: 0.075, output: 0.25 },
+  'z-ai/glm-5.3-flash': { input: 0.15, output: 0.5 },
   'z-ai/glm-5v-turbo': { input: 1.2, output: 4 },
   // Meta
   'meta-llama/llama-3.1-70b-instruct': { input: 0.4, output: 0.4 },
@@ -376,12 +382,12 @@ export const AI_PRICING = {
   'meta/muse-spark-1.2-contributor': { input: 0.1, output: 0.2 },
   // DeepSeek
   'deepseek/deepseek-chat': { input: 0.2574, output: 1.0287 },
-  'deepseek/deepseek-chat-v3-0324': { input: 0.25, output: 1 },
-  'deepseek/deepseek-chat-v3.1': { input: 0.55, output: 1.65 },
+  'deepseek/deepseek-chat-v3-0324': { input: 0.29, output: 1.14 },
+  'deepseek/deepseek-chat-v3.1': { input: 0.25, output: 0.95 },
   'deepseek/deepseek-r1': { input: 0.7, output: 2.5 },
   'deepseek/deepseek-v3.2-exp': { input: 0.27, output: 0.41 },
-  'deepseek/deepseek-v4-flash-0731': { input: 0.07, output: 0.14 },
-  'deepseek/deepseek-v4-flash-vision-exp': { input: 0.22, output: 0.66 },
+  'deepseek/deepseek-v4-flash-0731': { input: 0.0171, output: 1.28 },
+  'deepseek/deepseek-v4-flash-vision-exp': { input: 0.2156, output: 0.6468 },
   'deepseek/deepseek-v4-pro-0813': { input: 0.66, output: 1.98 },
   // Google
   'google/gemini-2.5-flash-image': { input: 0.3, output: 2.5 },
@@ -401,7 +407,7 @@ export const AI_PRICING = {
   'x-ai/grok-4.6': { input: 2, output: 6 },
   // MoonshotAI
   'moonshotai/kimi-k2-0905': { input: 0.6, output: 2.5 },
-  'moonshotai/kimi-k2.5': { input: 0.6, output: 3 },
+  'moonshotai/kimi-k2.5': { input: 0.45, output: 2.25 },
   // OpenAI
   'openai/gpt-3.5-turbo': { input: 0.5, output: 1.5 },
   'openai/gpt-3.5-turbo-0613': { input: 1, output: 2 },
@@ -426,7 +432,7 @@ export const AI_PRICING = {
   'openai/o3-mini-high': { input: 1.1, output: 4.4 },
   'openai/o4-mini-high': { input: 1.1, output: 4.4 },
   // MiniMax
-  'minimax/minimax-m2': { input: 0.255, output: 1.02 },
+  'minimax/minimax-m2': { input: 0.3, output: 1.2 },
   'minimax/minimax-m2.7:free': { input: 0, output: 0 },
   'minimax/minimax-m3:free': { input: 0, output: 0 },
   // Mistral
@@ -453,7 +459,7 @@ export const AI_PRICING = {
   'amazon/nova-premier-v1': { input: 2.5, output: 12.5 },
   'amazon/nova-pro-v1': { input: 0.8, output: 3.2 },
   // Arcee AI
-  'arcee-ai/trinity-large-thinking': { input: 0.22, output: 0.85 },
+  'arcee-ai/trinity-large-thinking': { input: 0.25, output: 0.8 },
   'arcee-ai/virtuoso-large': { input: 0.75, output: 1.2 },
   // Cohere
   'cohere/command-r-08-2024': { input: 0.15, output: 0.6 },
@@ -480,11 +486,11 @@ export const AI_PRICING = {
   // NVIDIA
   'nvidia/nemotron-3-nano-30b-a3b': { input: 0.05, output: 0.2 },
   'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free': { input: 0, output: 0 },
-  'nvidia/nemotron-3-super-120b-a12b': { input: 0.085, output: 0.4 },
+  'nvidia/nemotron-3-super-120b-a12b': { input: 0.08, output: 0.45 },
   'nvidia/nemotron-3-super-120b-a12b:free': { input: 0, output: 0 },
   'nvidia/nemotron-3-ultra-550b-a55b': { input: 0.5, output: 2.2 },
   'nvidia/nemotron-3-ultra-550b-a55b:free': { input: 0, output: 0 },
-  'nvidia/nemotron-3.5-lightning': { input: 0.1, output: 0.25 },
+  'nvidia/nemotron-3.5-lightning': { input: 0.06, output: 0.16 },
   'nvidia/nemotron-3.5-lightning:free': { input: 0, output: 0 },
   // Poolside
   'poolside/laguna-s-2.1': { input: 0.09, output: 0.18 },
@@ -515,10 +521,70 @@ export const AI_PRICING = {
   'thinkingmachines/inkling:free': { input: 0, output: 0 },
   // Upstage
   'upstage/solar-pro-3': { input: 0.15, output: 0.6 },
-  'upstage/solar-pro4': { input: 0.03, output: 0.12 },
+  'upstage/solar-pro4': { input: 0.09, output: 0.36 },
   // Xiaomi
   'xiaomi/mimo-v2.5': { input: 0.14, output: 0.28 },
   'xiaomi/mimo-v2.5-pro': { input: 0.435, output: 0.87 },
+
+  'openai/gpt-6-luna': { input: 0.1, output: 0.5 },
+
+  'openai/gpt-6-luna-pro': { input: 0.1, output: 0.5 },
+
+  'openai/gpt-6-sol': { input: 2, output: 10 },
+
+  'openai/gpt-6-sol-pro': { input: 2, output: 10 },
+
+  'openai/gpt-6.1-sol': { input: 2, output: 10 },
+
+  'openai/gpt-6.1-sol-pro': { input: 2, output: 10 },
+
+  'openai/gpt-6-astra': { input: 10, output: 50 },
+
+  'openai/gpt-6-astra-pro': { input: 10, output: 50 },
+
+  'anthropic/claude-opus-5.5': { input: 4, output: 20 },
+
+  'anthropic/claude-sonnet-5.5': { input: 2, output: 10 },
+
+  'anthropic/claude-fable-5.1': { input: 10, output: 50 },
+
+  'google/gemini-3.8-flash': { input: 0.75, output: 3.75 },
+
+  'x-ai/grok-4.7': { input: 2, output: 6 },
+
+  'deepseek/deepseek-v4.1-flash': { input: 0.3, output: 1.2 },
+
+  'qwen/qwen3.8-max-prime': { input: 4, output: 12 },
+
+  'qwen/qwen3.8-max-0902': { input: 2, output: 6 },
+
+  'qwen/qwen3.8-omni-flash': { input: 0.15, output: 0.47 },
+
+  'qwen/qwen3.8-27b:free': { input: 0, output: 0 },
+
+  'meta/muse-spark-1.3': { input: 1.25, output: 4.25 },
+
+  'meta/muse-spark-1.3-contributor': { input: 0.1, output: 0.2 },
+
+  'inception/mercury-2.5': { input: 0.04, output: 0.15 },
+
+  'z-ai/glm-5.3-prime': { input: 2.8, output: 8.8 },
+
+  'z-ai/glm-5.3-flashx': { input: 0.37, output: 1.25 },
+
+  'cohere/command-a-plus': { input: 0.3, output: 1.5 },
+
+  'cohere/command-a': { input: 2.5, output: 10 },
+
+  'inclusionai/ling-3.0-flash-sante:free': { input: 0, output: 0 },
+
+  'xiaomi/mimo-v2.6-pro': { input: 0.435, output: 0.87 },
+
+  'xiaomi/mimo-v2.6-flash': { input: 0.14, output: 0.28 },
+
+  // Free-tier catalog model (#2758). Priced at $0 explicitly: an id missing here is
+  // "unknown" to chat-pricing and would hold and abort-guard at the fallback cost.
+  'apodex/apodex-1.1-mini:free': { input: 0, output: 0 },
 
   // Default/Unknown models
   'default': { input: 0, output: 0 }
@@ -529,498 +595,12 @@ export const AI_PRICING = {
  * Maximum context length for each model
  * Updated July 25, 2026
  */
-export const MODEL_CONTEXT_WINDOWS = {
-  // OpenRouter Models - Anthropic
-  'anthropic/claude-opus-5': 1000000,
-  'anthropic/claude-opus-5-fast': 1000000,
-  'anthropic/claude-sonnet-5': 1000000,
-  'anthropic/claude-fable-5': 1000000,
-  'anthropic/claude-opus-4.8': 1000000,
-  'anthropic/claude-opus-4.8-fast': 1000000,
-  'anthropic/claude-opus-4.7': 1000000,
-  'anthropic/claude-opus-4.7-fast': 1000000,
-  'anthropic/claude-opus-4.6': 1000000,
-  'anthropic/claude-opus-4.6-fast': 1000000,
-  'anthropic/claude-sonnet-4.6': 1000000,
-  'anthropic/claude-opus-4.5': 200000,
-  'anthropic/claude-sonnet-4.5': 1000000,
-  'anthropic/claude-haiku-4.5': 200000,
-  'anthropic/claude-opus-4.1': 200000,
-  'anthropic/claude-opus-4': 200000,
-  'anthropic/claude-sonnet-4': 1000000,
-  'anthropic/claude-3.5-sonnet': 200000,
-  'anthropic/claude-3.5-haiku': 200000,
-  'anthropic/claude-3-haiku': 200000,
 
-  // OpenRouter Models - OpenAI
-  'openai/gpt-5.6-sol-pro': 1050000,
-  'openai/gpt-5.6-sol': 1050000,
-  'openai/gpt-5.6-terra-pro': 1050000,
-  'openai/gpt-5.6-terra': 1050000,
-  'openai/gpt-5.6-luna-pro': 1050000,
-  'openai/gpt-5.6-luna': 1050000,
-  'openai/gpt-5.5-pro': 1050000,
-  'openai/gpt-5.2-pro': 400000,
-  'openai/gpt-5.2-chat': 128000,
-  'openai/gpt-5.1-codex-max': 400000,
-  'openai/gpt-5-pro': 400000,
-  'openai/o3': 200000,
-  'openai/o3-pro': 200000,
-  'openai/o4-mini': 200000,
-  'openai/gpt-4.1': 1047576,
-  'openai/gpt-4.1-mini': 1047576,
-  'openai/gpt-5.5': 1050000,
-  'openai/gpt-5.4-pro': 1050000,
-  'openai/gpt-5.4': 1050000,
-  'openai/gpt-5.4-mini': 400000,
-  'openai/gpt-5.4-nano': 400000,
-  'openai/gpt-5.3-chat-latest': 272000,
-  'openai/gpt-5.3-codex': 400000,
-  'openai/gpt-5.2': 400000,
-  'openai/gpt-5.2-codex': 400000,
-  'openai/gpt-5.2-mini': 256000,
-  'openai/gpt-5.2-nano': 256000,
-  'openai/gpt-5.1': 400000,
-  'openai/gpt-5.1-codex': 400000,
-  'openai/gpt-5.1-codex-mini': 400000,
-  'openai/gpt-4o': 128000,
-  'openai/gpt-4o-mini': 128000,
-  'openai/gpt-5': 400000,
-  'openai/gpt-5-mini': 400000,
-  'openai/gpt-5-nano': 400000,
-  'openai/gpt-oss-120b': 131072,
-  'openai/gpt-oss-20b': 131072,
-
-  // OpenRouter Models - Google
-  'google/gemini-3.7-flash': 1048576,
-  'google/gemini-3.6-flash': 1048576,
-  'google/gemini-3.5-flash-lite': 1048576,
-  'google/gemini-3.5-flash': 1048576,
-  'google/gemini-3.1-flash-lite-image': 65536,
-  'google/gemini-3.1-flash-image': 131072,
-  'google/gemini-3-pro-image': 131072,
-  'google/gemini-3.1-pro-preview': 1048576,
-  'google/gemini-3.1-pro-preview-customtools': 1048576,
-  'google/gemini-3.1-flash-lite': 1048576,
-  'google/gemini-3.1-flash-lite-preview': 1048576,
-  'google/gemini-3.1-flash-image-preview': 65536,
-  'google/gemini-3-flash-preview': 1048576,
-  'google/gemini-2.5-pro': 1048576,
-  'google/gemini-2.5-flash': 1048576,
-  'google/gemini-2.5-flash-lite': 1048576,
-  'google/gemini-2.5-flash-lite-preview-06-17': 1000000,
-  'google/gemini-2.0-pro': 2000000,
-  'google/gemini-2.0-flash': 1000000,
-  'google/gemma-4-31b-it': 262144,
-  'google/gemma-4-26b-a4b-it': 262144,
-
-  // OpenRouter Models - Meta
-  'meta/muse-spark-1.1': 1048576,
-  'meta-llama/llama-4-maverick': 1048576,
-  'meta-llama/llama-4-scout': 1310720,
-  'meta-llama/llama-3.3-70b-instruct': 131072,
-  'meta-llama/llama-3.1-405b-instruct': 128000,
-
-  // OpenRouter Models - Mistral
-  'mistralai/mistral-large-2512': 262144,
-  'mistralai/mistral-medium-3': 131072,
-  'mistralai/devstral-2512': 262144,
-  'mistralai/mistral-medium-3-5': 262144,
-  'mistralai/mistral-small-2603': 262144,
-  'mistralai/mistral-medium-3.1': 131072,
-  'mistralai/mistral-small-3.2-24b-instruct': 131072,
-  'mistralai/codestral-2508': 256000,
-  'mistralai/devstral-medium': 128000,
-  'mistralai/devstral-small': 128000,
-
-  // Z.ai GLM direct — GLM Coder Plan supported models only
-  'glm-5.3':     1000000,
-  'glm-5.2':     1000000,
-  'glm-5.1':     202752,
-  'glm-5-turbo': 202752,
-  'glm-4.7':     200000,
-  'glm-4.5-air': 128000,
-  'glm-5':       202752, // legacy fallback for historical billing rows
-
-  // OpenRouter Models - Chinese/Asian
-  'z-ai/glm-5.2': 1048576,
-  'z-ai/glm-5.1': 204800,
-  'z-ai/glm-5-turbo': 202752,
-  'z-ai/glm-5': 204800,
-  'z-ai/glm-4.7-flash': 202752,
-  'z-ai/glm-4.7': 204800,
-  'z-ai/glm-4.6': 204800,
-  'z-ai/glm-4.5v': 65536,
-  'z-ai/glm-4.5': 131072,
-  'z-ai/glm-4.5-air': 131072,
-  'z-ai/glm-4-32b': 128000,
-  'qwen/qwen3.7-plus': 1000000,
-  'qwen/qwen3.6-max-preview': 262144,
-  'qwen/qwen3.6-plus': 1000000,
-  'qwen/qwen3.6-flash': 1000000,
-  'qwen/qwen3.6-35b-a3b': 262144,
-  'qwen/qwen3.6-27b': 262144,
-  'qwen/qwen3.5-flash-02-23': 1000000,
-  'qwen/qwen3.5-397b-a17b': 262144,
-  'qwen/qwen3.5-plus-20260420': 1000000,
-  'qwen/qwen3.5-122b-a10b': 262144,
-  'qwen/qwen3.5-35b-a3b': 262144,
-  'qwen/qwen3.5-27b': 262144,
-  'qwen/qwen3-max-thinking': 262144,
-  'qwen/qwen3-max': 262144,
-  'qwen/qwen3-235b-a22b-thinking-2507': 131072,
-  'qwen/qwen3-235b-a22b-2507': 262144,
-  'qwen/qwen3-coder': 262144,
-  'qwen/qwen3.7-max': 1000000,
-  'moonshotai/kimi-k3': 1048576,
-  'moonshotai/kimi-k2.7-code': 262144,
-  'moonshotai/kimi-k2.6': 262144,
-  'moonshotai/kimi-k2-thinking': 262144,
-  'moonshotai/kimi-k2': 131072,
-  'minimax/minimax-m3': 1048576,
-  'minimax/minimax-m2.7': 204800,
-  'minimax/minimax-m2.5': 204800,
-  'minimax/minimax-m2.1': 204800,
-  'minimax/minimax-m1': 1000000,
-  'bytedance-seed/seed-2.0-lite': 262144,
-  'bytedance-seed/seed-2.0-mini': 262144,
-
-  // OpenRouter Models - DeepSeek
-  'deepseek/deepseek-v4-pro': 1048576,
-  'deepseek/deepseek-v4-flash': 1048576,
-  'deepseek/deepseek-v3.2': 163840,
-  'deepseek/deepseek-v3.1-terminus': 163840,
-  'deepseek/deepseek-r1-0528': 163840,
-
-  // OpenRouter Models - AI21
-
-  // OpenRouter Models - xAI (source: openrouter.ai/api/v1/models)
-  'x-ai/grok-4.5': 500000,
-  'x-ai/grok-4.3': 1000000,
-  'x-ai/grok-4.20': 2000000,
-  'x-ai/grok-4.20-multi-agent': 2000000,
-  'x-ai/grok-build-0.1': 256000,
-  'x-ai/grok-4-fast': 2000000,
-  'x-ai/grok-4': 128000,
-
-  // OpenRouter Models - Other
-  'inception/mercury-2': 128000,
-  'inception/mercury': 128000,
-  'writer/palmyra-x5': 1040000,
-
-  // Google AI Direct (source: ai.google.dev/gemini-api/docs/models, 2026-05)
-  'gemini-3.5-flash': 1048576,
-  'gemini-3.1-pro-preview': 1048576,
-  'gemini-3.1-pro-preview-customtools': 1048576,
-  'gemini-3.1-flash-lite': 1048576,
-  'gemini-3.1-flash-lite-preview': 1048576,
-  'gemini-3-flash-preview': 1048576,
-  'gemini-2.5-pro': 2097152,
-  'gemini-2.5-flash': 1048576,
-  'gemini-2.5-flash-lite': 1048576,
-  'gemini-2.5-flash-lite-preview-06-17': 1048576,
-  'gemini-2.0-pro-exp': 2097152,
-  'gemini-2.0-flash': 1048576,
-  'gemini-2.0-flash-exp': 1048576,
-  'gemini-2.0-flash-lite': 1048576,
-  'gemini-1.5-flash': 1048576,
-  'gemini-1.5-flash-8b': 1048576,
-  'gemini-1.5-pro': 2097152,
-
-  // OpenAI Direct Models
-  'gpt-5.4-pro': 200000,
-  'gpt-5.4': 272000,
-  'gpt-5.3-chat-latest': 272000,
-  'gpt-5.3-codex': 272000,
-  'gpt-5.2': 400000,
-  'gpt-5.2-codex': 400000,
-  'gpt-5.2-mini': 256000,
-  'gpt-5.2-nano': 256000,
-  'gpt-5.1': 400000,
-  'gpt-5.1-codex': 400000,
-  'gpt-5': 272000,
-  'gpt-5-mini': 128000,
-  'gpt-5-nano': 128000,
-  'gpt-4.1-2025-04-14': 400000,
-  'gpt-4.1-mini-2025-04-14': 400000,
-  'gpt-4.1-nano-2025-04-14': 400000,
-  'gpt-4o': 128000,
-  'gpt-4o-mini': 128000,
-  'gpt-4o-audio-preview': 128000,
-  'gpt-4-turbo': 128000,
-  'gpt-4': 8192,
-  'gpt-3.5-turbo': 16385,
-  'o4-mini-2025-04-16': 200000,
-  'o3': 200000,
-  'o3-mini': 200000,
-  'o1': 200000,
-  'o1-mini': 200000,
-  'o1-preview': 200000,
-
-  // Anthropic Direct (source: platform.claude.com/docs/about-claude/models, 2026-05)
-  'claude-opus-4-7': 1000000,
-  'claude-sonnet-4-6': 1000000,
-  'claude-haiku-4-5-20251001': 200000,
-  'claude-haiku-4-5': 200000,
-  'claude-opus-4-6': 1000000,
-  'claude-sonnet-4-5-20250929': 200000,
-  'claude-sonnet-4-5': 200000,
-  'claude-opus-4-5-20251101': 200000,
-  'claude-opus-4-5': 200000,
-  'claude-opus-4-1-20250805': 200000,
-  'claude-opus-4-1': 200000,
-  'claude-sonnet-4-1-20250805': 200000,
-  'claude-3-7-sonnet-20250219': 200000,
-  'claude-3-5-sonnet-20241022': 200000,
-  'claude-3-5-sonnet-20240620': 200000,
-  'claude-3-5-sonnet-latest': 200000,
-  'claude-3-5-haiku-20241022': 200000,
-  'claude-3-5-haiku-latest': 200000,
-  'claude-3-opus-20240229': 200000,
-  'claude-3-opus-latest': 200000,
-  'claude-3-sonnet-20240229': 200000,
-  'claude-3-haiku-20240307': 200000,
-
-  // xAI Models
-  'grok-4.3': 1000000,
-  'grok-4': 128000,
-  'grok-4-fast-reasoning': 2000000,
-  'grok-4-fast-non-reasoning': 2000000,
-  'grok-code-fast-1': 128000,
-  'grok-3': 128000,
-  'grok-3-latest': 128000,
-  'grok-3-fast': 128000,
-  'grok-3-fast-latest': 128000,
-  'grok-3-mini': 128000,
-  'grok-3-mini-latest': 128000,
-  'grok-3-mini-fast': 128000,
-  'grok-3-mini-fast-latest': 128000,
-  'grok-2': 128000,
-  'grok-2-latest': 128000,
-  'grok-2-1212': 128000,
-  'grok-2-vision': 128000,
-  'grok-2-vision-latest': 128000,
-  'grok-2-vision-1212': 128000,
-  'grok-beta': 128000,
-  'grok-vision-beta': 128000,
-
-  // MiniMax Direct Models
-  'MiniMax-M2.5': 1000000,
-  'MiniMax-M2.1': 128000,
-  'MiniMax-M2': 128000,
-  'MiniMax-M2-Stable': 128000,
-
-  // Ollama (local) - context varies by model and configuration
-  'llama3.2': 128000,
-  'llama3.2-vision': 128000,
-  'llama3.1': 128000,
-  'qwen2.5-coder': 32000,
-  'deepseek-r1': 64000,
-  'gemma2': 8192,
-  'mistral': 32000,
-  'phi3': 128000,
-
-  // OpenRouter - additional models added for existing providers
-  // Qwen
-  'qwen/qwen-2.5-72b-instruct': 32768,
-  'qwen/qwen-2.5-7b-instruct': 32768,
-  'qwen/qwen-plus': 1000000,
-  'qwen/qwen-plus-2025-07-28': 1000000,
-  'qwen/qwen3-14b': 131072,
-  'qwen/qwen3-235b-a22b': 131072,
-  'qwen/qwen3-30b-a3b': 131072,
-  'qwen/qwen3-30b-a3b-instruct-2507': 262144,
-  'qwen/qwen3-30b-a3b-thinking-2507': 81920,
-  'qwen/qwen3-32b': 131072,
-  'qwen/qwen3-8b': 131072,
-  'qwen/qwen3-coder-30b-a3b-instruct': 262144,
-  'qwen/qwen3-coder-flash': 1000000,
-  'qwen/qwen3-coder-next': 262144,
-  'qwen/qwen3-coder-plus': 1000000,
-  'qwen/qwen3-next-80b-a3b-instruct': 262144,
-  'qwen/qwen3-next-80b-a3b-thinking': 262144,
-  'qwen/qwen3-vl-235b-a22b-instruct': 262144,
-  'qwen/qwen3-vl-235b-a22b-thinking': 131072,
-  'qwen/qwen3-vl-30b-a3b-instruct': 262144,
-  'qwen/qwen3-vl-30b-a3b-thinking': 262144,
-  'qwen/qwen3-vl-32b-instruct': 131072,
-  'qwen/qwen3-vl-8b-instruct': 262144,
-  'qwen/qwen3-vl-8b-thinking': 131072,
-  'qwen/qwen3.5-9b': 262144,
-  'qwen/qwen3.5-plus-02-15': 1000000,
-  'qwen/qwen3.7-flash': 1000000,
-  'qwen/qwen3.8-2.4t-a95b': 1048576,
-  'qwen/qwen3.8-27b': 1000000,
-  'qwen/qwen3.8-flash': 1000000,
-  'qwen/qwen3.8-max': 1000000,
-  // Z.ai
-  'z-ai/glm-4.6v': 131072,
-  'z-ai/glm-5.2:free': 256000,
-  'z-ai/glm-5.3': 1048576,
-  'z-ai/glm-5.3-flash': 1310720,
-  'z-ai/glm-5v-turbo': 202752,
-  // Meta
-  'meta-llama/llama-3.1-70b-instruct': 131072,
-  'meta-llama/llama-3.1-8b-instruct': 131072,
-  'meta/muse-glimmer-30b': 131072,
-  'meta/muse-spark-1.2': 1048576,
-  'meta/muse-spark-1.2-contributor': 1048576,
-  // DeepSeek
-  'deepseek/deepseek-chat': 163840,
-  'deepseek/deepseek-chat-v3-0324': 163840,
-  'deepseek/deepseek-chat-v3.1': 163840,
-  'deepseek/deepseek-r1': 64000,
-  'deepseek/deepseek-v3.2-exp': 163840,
-  'deepseek/deepseek-v4-flash-0731': 1310720,
-  'deepseek/deepseek-v4-flash-vision-exp': 1048576,
-  'deepseek/deepseek-v4-pro-0813': 1048576,
-  // Google
-  'google/gemini-2.5-flash-image': 32768,
-  'google/gemini-2.5-pro-preview': 1048576,
-  'google/gemini-2.5-pro-preview-05-06': 1048576,
-  'google/gemini-3-pro-image-preview': 65536,
-  'google/gemma-3-12b-it': 131072,
-  'google/gemma-3-27b-it': 262144,
-  'google/gemma-4-26b-a4b-it:free': 262144,
-  'google/gemma-4-31b-it:free': 262144,
-  // ByteDance Seed
-  'bytedance-seed/seed-1.6': 262144,
-  'bytedance-seed/seed-1.6-flash': 262144,
-  'bytedance-seed/seed-2-1-turbo': 262144,
-  'bytedance-seed/seed-2.0-code': 262144,
-  // SpaceXAI
-  'x-ai/grok-4.6': 500000,
-  // MoonshotAI
-  'moonshotai/kimi-k2-0905': 262144,
-  'moonshotai/kimi-k2.5': 262144,
-  // OpenAI
-  'openai/gpt-3.5-turbo': 16385,
-  'openai/gpt-3.5-turbo-0613': 4095,
-  'openai/gpt-3.5-turbo-16k': 16385,
-  'openai/gpt-4': 8191,
-  'openai/gpt-4-turbo': 128000,
-  'openai/gpt-4-turbo-preview': 128000,
-  'openai/gpt-4.1-nano': 1047576,
-  'openai/gpt-4o-2024-05-13': 128000,
-  'openai/gpt-4o-2024-08-06': 128000,
-  'openai/gpt-4o-2024-11-20': 128000,
-  'openai/gpt-4o-mini-2024-07-18': 128000,
-  'openai/gpt-5-image': 400000,
-  'openai/gpt-5-image-mini': 400000,
-  'openai/gpt-5.4-image-2': 272000,
-  'openai/gpt-audio': 128000,
-  'openai/gpt-audio-mini': 128000,
-  'openai/gpt-chat-latest': 400000,
-  'openai/gpt-oss-safeguard-20b': 131072,
-  'openai/o1': 200000,
-  'openai/o3-mini': 200000,
-  'openai/o3-mini-high': 200000,
-  'openai/o4-mini-high': 200000,
-  // MiniMax
-  'minimax/minimax-m2': 204800,
-  'minimax/minimax-m2.7:free': 196608,
-  'minimax/minimax-m3:free': 1048576,
-  // Mistral
-  'mistralai/ministral-14b-2512': 262144,
-  'mistralai/ministral-3b-2512': 131072,
-  'mistralai/ministral-8b-2512': 262144,
-  'mistralai/mistral-large': 128000,
-  'mistralai/mistral-large-2407': 131072,
-  'mistralai/mistral-nemo': 131072,
-  'mistralai/mistral-saba': 32768,
-  'mistralai/mixtral-8x22b-instruct': 65536,
-  'mistralai/voxtral-small-24b-2507': 32000,
-
-
-  // OpenRouter - newly added providers
-  // AionLabs
-  'aion-labs/aion-2.0': 131072,
-  'aion-labs/aion-3.0': 131072,
-  'aion-labs/aion-3.0-mini': 131072,
-  // Amazon
-  'amazon/nova-2-lite-v1': 1000000,
-  'amazon/nova-lite-v1': 300000,
-  'amazon/nova-micro-v1': 128000,
-  'amazon/nova-premier-v1': 1000000,
-  'amazon/nova-pro-v1': 300000,
-  // Arcee AI
-  'arcee-ai/trinity-large-thinking': 262144,
-  'arcee-ai/virtuoso-large': 131072,
-  // Cohere
-  'cohere/command-r-08-2024': 128000,
-  'cohere/command-r-plus-08-2024': 128000,
-  'cohere/north-mini-code:free': 256000,
-  // Dots Studio
-  'dots-studio/dots-3-note-preview:free': 512000,
-  // IBM
-  'ibm-granite/granite-4.1-8b': 131072,
-  // InclusionAI
-  'inclusionai/ling-3.0-flash': 262144,
-  'inclusionai/ling-3.0-flash-fin:free': 262144,
-  // Kwaipilot
-  'kwaipilot/kat-coder-air-v2.5': 256000,
-  'kwaipilot/kat-coder-pro-v2': 262144,
-  'kwaipilot/kat-coder-pro-v2.5': 262144,
-  // LiquidAI
-  'liquid/lfm-2.5-2.6b:free': 65536,
-  // Meituan
-  'meituan/longcat-2.0': 1048756,
-  // Nex AGI
-  'nex-agi/nex-n2-mini': 262144,
-  'nex-agi/nex-n2-pro': 262144,
-  // NVIDIA
-  'nvidia/nemotron-3-nano-30b-a3b': 262144,
-  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free': 256000,
-  'nvidia/nemotron-3-super-120b-a12b': 1000000,
-  'nvidia/nemotron-3-super-120b-a12b:free': 262144,
-  'nvidia/nemotron-3-ultra-550b-a55b': 262144,
-  'nvidia/nemotron-3-ultra-550b-a55b:free': 1000000,
-  'nvidia/nemotron-3.5-lightning': 262144,
-  'nvidia/nemotron-3.5-lightning:free': 1000000,
-  // Poolside
-  'poolside/laguna-s-2.1': 1048576,
-  'poolside/laguna-s-2.1:free': 262144,
-  'poolside/laguna-xs-2.1': 262144,
-  'poolside/laguna-xs-2.1:free': 262144,
-  // Reka
-  'rekaai/reka-edge': 16384,
-  // Relace
-  'relace/relace-search': 256000,
-  // Sakana
-  'sakana/fugu-ultra': 1000000,
-  'sakana/sakana-namazu': 262144,
-  // Sao10K
-  'sao10k/l3.1-euryale-70b': 131072,
-  // StepFun
-  'stepfun/step-3.5-flash': 262144,
-  'stepfun/step-3.7-flash': 262144,
-  // Tencent
-  'tencent/hy3': 262144,
-  'tencent/hy3-preview': 262144,
-  // TheDrummer
-  'thedrummer/unslopnemo-12b': 1024000,
-  // Thinking Machines
-  'thinkingmachines/inkling': 1048576,
-  'thinkingmachines/inkling-small': 1048576,
-  'thinkingmachines/inkling-small:free': 1048576,
-  'thinkingmachines/inkling:free': 1048576,
-  // Upstage
-  'upstage/solar-pro-3': 131072,
-  'upstage/solar-pro4': 524288,
-  // Xiaomi
-  'xiaomi/mimo-v2.5': 1050000,
-  'xiaomi/mimo-v2.5-pro': 1050000,
-
-  // Default
-  'default': 200000 // Updated default for newer models
-} as const;
 
 /**
  * Get context window size for a model
  */
-export function getContextWindow(model: string): number {
-  return MODEL_CONTEXT_WINDOWS[model as keyof typeof MODEL_CONTEXT_WINDOWS] || MODEL_CONTEXT_WINDOWS.default;
-}
+
 
 /**
  * Calculate cost based on tokens and model — the ESTIMATE fallback used only when
@@ -1222,6 +802,25 @@ export interface AIUsageData {
   // route → here → consumeCredits. Absent for un-gated calls (e.g. cron paths).
   holdId?: string;
 
+  // The wallet that hold was placed on (CreditGateResult.walletId, WAL-5), threaded with
+  // it so the charge settles against the wallet the call named, never re-derived from the
+  // user. Absent for un-gated calls, which charge the personal root wallet.
+  walletId?: string;
+
+  // WAL-6b: for a call with no hold of its own, the chosen wallet its turn's fallback moved off
+  // (spendFallbackFromWalletId of the turn's target), so its overshoot never lands on the person.
+  fallbackFromWalletId?: string;
+
+  // SPEND-10: the automation (its stored reference, automation-attribution) this call ran for with no person present
+  // (automationRefFor). Recorded on the usage row and the ledger claim, so the drive lead
+  // sees the spend as the automation rather than merged into its creator.
+  automationRef?: string;
+
+  // What the spend is FOR: an AI call (the default) or compute (WAL-9). Written on the
+  // ledger rows and stamped into metadata.spendKind, so the orphan recovery re-settles
+  // with the same kind; compute on an org pool never counts toward a seat.
+  spendKind?: SpendKind;
+
   // Override the cost provenance stamped into metadata.costSource (which the admin
   // panel reads to classify coverage). Defaults to 'openrouter' when a finite
   // providerCostDollars is given, else 'estimate'. Voice routes pass 'list_price'
@@ -1398,6 +997,31 @@ export async function trackAIUsage(data: AIUsageData): Promise<UsageTrackingOutc
     // log AND the charge — and with no aiUsageLogs row the reconcile cron's orphan
     // sweep has nothing to recover from. Awaiting makes the write durable before
     // the request returns. Still never throws into the AI request (see catch).
+    // FAIL CLOSED (review 5343636479 P1-1): a charge that names a wallet other than the
+    // one its hold reserves on is refused BEFORE anything is written — no usage row (so no
+    // sweep can bill it later), no charge to either wallet. The caller keeps its window
+    // open; a meter whose payer changed mid-window releases and re-acquires the hold on the
+    // right wallet first (app-lifecycle-metering, awake-meter), so this is the backstop.
+    // Only where money moves: a billing-off deployment charges no wallet at all.
+    // WAL-5 / WAL-6b: the wallet and fallback origin are read from the LIVE hold now and written
+    // on the usage row itself, so a settle that fails here is recovered by the orphan sweep on
+    // exactly that wallet with exactly that origin — never re-derived onto the person later.
+    const heldFacts = isBillingEnabled() && data.holdId ? await holdSettleFacts(data.holdId).catch(() => null) : null;
+    const settleWalletId = data.walletId ?? heldFacts?.walletId;
+    const settleFallbackFromWalletId = heldFacts?.fallbackFromWalletId ?? data.fallbackFromWalletId;
+    if (heldFacts !== null && data.walletId !== undefined) {
+      const held = heldFacts.walletId;
+      if (held !== data.walletId) {
+        loggers.ai.error('AI usage settle REFUSED: the charge names a different wallet than its hold — nothing written, nothing charged', new Error('hold wallet mismatch'), {
+          holdId: data.holdId,
+          holdWalletId: held,
+          requestedWalletId: data.walletId,
+          model: data.model,
+          source: data.source,
+        });
+        return { persisted: false, creditsSettled: false };
+      }
+    }
     try {
       const aiUsageLogId = await writeAiUsage({
         userId: data.userId,
@@ -1441,7 +1065,16 @@ export async function trackAIUsage(data: AIUsageData): Promise<UsageTrackingOutc
           // when present (OpenRouter calls); the cron reads these to fetch authoritative
           // /generation costs and correct billing drift.
           ...(generationIds.length > 0 ? { generationIds } : {}),
+          // Explicit for the orphan recovery: a usage row whose settle never landed is
+          // re-settled with this kind (credit-backfill), never guessed from its source.
+          ...(data.spendKind !== undefined && data.spendKind !== 'ai' ? { spendKind: data.spendKind } : {}),
+          // WAL-6b: the chosen wallet a fallback moved this call off, for the orphan recovery.
+          ...(settleFallbackFromWalletId ? { fallbackFromWalletId: settleFallbackFromWalletId } : {}),
         },
+        // WAL-5: the wallet this call is charged to, recorded WITH the usage row so the
+        // orphan recovery re-settles on it — never re-derived onto the person's own wallet.
+        ...(settleWalletId !== undefined ? { walletId: settleWalletId } : {}),
+        ...(data.automationRef ? { automationRef: data.automationRef } : {}),
         reconcileStatus,
       });
       // `writeAiUsage` CATCHES its own failure and returns null rather than
@@ -1492,13 +1125,19 @@ export async function trackAIUsage(data: AIUsageData): Promise<UsageTrackingOutc
           userId: data.userId,
           costDollars: cost,
           holdId: data.holdId,
+          // The wallet and origin read from the live hold above (or named by the caller): the same
+          // ones written on the usage row, so the in-line settle and any recovery agree.
+          walletId: settleWalletId,
+          ...(settleFallbackFromWalletId ? { fallbackFromWalletId: settleFallbackFromWalletId } : {}),
+          ...(data.automationRef ? { automationRef: data.automationRef } : {}),
+          spendKind: data.spendKind,
           // Scope the live balance push so the per-conversation usage monitor
           // refreshes the right view; the navbar widget updates regardless.
           conversationId: data.conversationId,
           pageId: data.pageId,
           markupBpsOverride: data.markupBpsOverride,
         }).catch((error) => {
-          loggers.ai.debug('credit consume failed', { error: (error as Error).message });
+          loggers.ai.warn('credit consume failed', errorLogFields(error));
           return 'deferred' as const;
         });
         if (settle !== 'settled') {
@@ -1545,9 +1184,7 @@ export async function trackAIUsage(data: AIUsageData): Promise<UsageTrackingOutc
       return USAGE_TRACKING_LOST;
     }
   } catch (error) {
-    loggers.ai.debug('AI usage calculation failed', {
-      error: (error as Error).message
-    });
+    loggers.ai.warn('AI usage calculation failed', errorLogFields(error));
     // Same reasoning as the inner catch above: a stranded hold outlives its TTL
     // suppressing the payer's balance for nothing, and nothing on this path could
     // have confirmed a charge against it.

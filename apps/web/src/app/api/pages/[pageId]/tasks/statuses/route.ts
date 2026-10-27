@@ -8,6 +8,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '
 import { canPrincipalEditPage, canPrincipalViewPage } from '@/lib/auth'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastTaskEvent } from '@/lib/websocket';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -18,6 +19,24 @@ function slugify(name: string): string {
     .trim()
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '');
+}
+
+const MAX_WIP_LIMIT = 999;
+const WIP_LIMIT_ERROR = `wipLimit must be a positive integer no greater than ${MAX_WIP_LIMIT}, or null`;
+
+/**
+ * Normalise a status's advisory WIP limit from an unvalidated body.
+ * Absent (undefined) or null → null (no limit); PUT checks presence itself so an
+ * absent field leaves the stored value alone. A positive integer up to
+ * MAX_WIP_LIMIT is kept. Anything else is invalid. The limit is advisory only:
+ * no write path ever refuses a status move because a column is over it.
+ */
+function parseWipLimit(input: unknown): { ok: true; value: number | null } | { ok: false } {
+  if (input === undefined || input === null) return { ok: true, value: null };
+  if (typeof input !== 'number' || !Number.isInteger(input) || input < 1 || input > MAX_WIP_LIMIT) {
+    return { ok: false };
+  }
+  return { ok: true, value: input };
 }
 
 /**
@@ -40,7 +59,7 @@ export async function GET(
 
   const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
-    return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
   }
 
   const taskList = await db.query.taskLists.findFirst({
@@ -70,6 +89,7 @@ export async function GET(
         id: `default-${s.slug}`,
         taskListId: '',
         ...s,
+        wipLimit: null,
         position: i,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -108,11 +128,15 @@ export async function POST(
 
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({ error: 'You need edit permission to manage statuses' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'You need edit permission to manage statuses' }, { status: 403 }));
   }
 
   const body = await req.json();
   const { name, color, group, position } = body;
+  const wipLimitResult = parseWipLimit(body.wipLimit);
+  if (!wipLimitResult.ok) {
+    return NextResponse.json({ error: WIP_LIMIT_ERROR }, { status: 400 });
+  }
 
   if (!name || typeof name !== 'string' || name.trim().length === 0) {
     return NextResponse.json({ error: 'Name is required' }, { status: 400 });
@@ -187,6 +211,7 @@ export async function POST(
     color,
     group,
     position: newPosition,
+    wipLimit: wipLimitResult.value,
   }).returning();
 
   // Broadcast update
@@ -223,7 +248,7 @@ export async function PUT(
 
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({ error: 'You need edit permission to manage statuses' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'You need edit permission to manage statuses' }, { status: 403 }));
   }
 
   const body = await req.json();
@@ -242,6 +267,8 @@ export async function PUT(
   }
 
   // Validate each status
+  // undefined = leave the stored limit untouched (field absent from the body).
+  const wipLimits: (number | null | undefined)[] = [];
   for (const s of statuses) {
     if (!s.id) {
       return NextResponse.json({ error: 'Each status must have an id' }, { status: 400 });
@@ -251,6 +278,18 @@ export async function PUT(
     }
     if (!['todo', 'in_progress', 'done'].includes(s.group)) {
       return NextResponse.json({ error: 'Each status group must be: todo, in_progress, or done' }, { status: 400 });
+    }
+    // Only an explicit wipLimit (number or null) is written. Clients that predate
+    // the field (e.g. StatusConfigManager) PUT statuses without it, and that must
+    // not wipe a limit set elsewhere.
+    if (s !== null && typeof s === 'object' && 'wipLimit' in s) {
+      const wip = parseWipLimit(s.wipLimit);
+      if (!wip.ok) {
+        return NextResponse.json({ error: WIP_LIMIT_ERROR }, { status: 400 });
+      }
+      wipLimits.push(wip.value);
+    } else {
+      wipLimits.push(undefined);
     }
   }
 
@@ -264,6 +303,7 @@ export async function PUT(
           color: s.color,
           group: s.group,
           position: s.position ?? i,
+          ...(wipLimits[i] !== undefined ? { wipLimit: wipLimits[i] } : {}),
         })
         .where(and(
           eq(taskStatusConfigs.id, s.id),
@@ -313,7 +353,7 @@ export async function DELETE(
 
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({ error: 'You need edit permission to manage statuses' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'You need edit permission to manage statuses' }, { status: 403 }));
   }
 
   const { searchParams } = new URL(req.url);

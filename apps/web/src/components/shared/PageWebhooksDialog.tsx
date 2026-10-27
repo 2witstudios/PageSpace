@@ -1,5 +1,6 @@
 'use client';
 
+import { AutomationSkipNote, AutomationSpendLine, isSpendSkip } from '@/components/wallets/AutomationSpendState';
 import { memo, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Check, Copy, Webhook } from 'lucide-react';
 import { toast } from 'sonner';
@@ -35,6 +36,8 @@ interface WebhookRow {
   isEnabled: boolean;
   lastFiredAt: string | null;
   lastFireError: string | null;
+  /** [D-OW-36] Set when its creator left the org: disabled until an Owner or Admin reassigns or deletes it. */
+  ownerLeftAt?: string | null;
 }
 
 interface PageWebhooksDialogProps {
@@ -369,6 +372,17 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
               className="flex items-center gap-2"
               onSubmit={(e) => {
                 e.preventDefault();
+                // ...and stop it here. This dialog renders through a Radix
+                // portal, but React propagates synthetic events along the REACT
+                // tree, not the DOM one — so a submit from inside the portal
+                // still reaches an ancestor `<form onSubmit>` even though the
+                // node is detached in the DOM. `PageAgentSettingsTab` is such
+                // an ancestor now that the agent's Settings tab hosts the
+                // webhooks entry point, and without this, creating a webhook
+                // would also PATCH the agent config with whatever unsaved edits
+                // the form happened to be holding. `preventDefault` alone only
+                // stops the browser's navigation, not the propagation.
+                e.stopPropagation();
                 void createWebhook();
               }}
             >
@@ -401,7 +415,11 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
                       <span className="text-xs font-mono text-muted-foreground truncate block">
                         …{webhook.webhookToken.slice(-8)}
                       </span>
-                      {webhook.lastFireError && (
+                      {webhook.ownerLeftAt ? (
+                        <AutomationSpendLine creatorName={null} walletLabel={null} ownerLeft />
+                      ) : isSpendSkip(webhook.lastFireError) ? (
+                        <AutomationSkipNote error={webhook.lastFireError} driveId={null} className="text-xs text-muted-foreground mt-1" />
+                      ) : webhook.lastFireError && (
                         <p className="text-xs text-destructive mt-1">Last delivery failed: {webhook.lastFireError}</p>
                       )}
                     </div>

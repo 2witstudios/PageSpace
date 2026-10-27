@@ -15,10 +15,18 @@ import { customDomains } from '@pagespace/db/schema/custom-domains';
 import { drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { getPlan } from '@/lib/subscription/plans';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { orgEntitlementTier } from '@pagespace/lib/billing/spend-target';
+import { isOrgLapsedForDrive } from '@pagespace/lib/organizations/status';
+import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
 import { reconcileCustomDomainCert } from '@/lib/canvas/reconcile-cert';
 import { mirrorDriveToCustomHost } from '@/lib/canvas/custom-domain-mirror';
 import { renderDomainNotFoundOverride } from '@/lib/canvas/publish-page';
+import { CUSTOM_DOMAINS_UNAVAILABLE_MESSAGE } from '@/lib/subscription/plan-refusal-copy';
+import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
+import { customDomainsDecision, publishingDecision } from '@pagespace/lib/organizations/sharing-decisions';
+import { OrgLapsedError, checkDriveMayLoosen, isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 /** Statuses whose cert is still advancing — worth a lazy reconcile on read. */
 const CERT_NON_TERMINAL = new Set(['verified', 'provisioning']);
@@ -30,16 +38,18 @@ const addDomainSchema = z.object({
   hostname: z.string().min(1),
 });
 
-/** Resolve the maximum custom domains allowed for the drive owner's tier. */
+/** Organization drives use their own entitlement, independent of the human lead. */
 async function getMaxCustomDomainsForDrive(driveId: string): Promise<number> {
   const [row] = await db
-    .select({ tier: users.subscriptionTier })
+    .select({ tier: users.subscriptionTier, orgId: drives.orgId })
     .from(drives)
     .innerJoin(users, eq(drives.ownerId, users.id))
     .where(eq(drives.id, driveId))
     .limit(1);
 
-  const tier = ((row?.tier ?? 'free') as SubscriptionTier);
+  const tier = row?.orgId
+    ? orgEntitlementTier(await isOrgLapsedForDrive(row))
+    : resolvePersonalCapabilityTier(row?.tier);
   return getPlan(tier).limits.maxCustomDomains;
 }
 
@@ -56,7 +66,7 @@ export async function GET(
     if (scopeError) return scopeError;
 
     if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
-      return NextResponse.json({ error: 'Only drive owners and admins can view custom domains' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can view custom domains' }, { status: 403 }));
     }
 
     const [domains, limit] = await Promise.all([
@@ -142,6 +152,16 @@ export async function POST(
     // custom domain slot.
     const wantsPlatformDomain = isAdmin && PLATFORM_OWNED_DOMAINS.includes(hostname);
 
+    // POL-4: an org that turned publishing off takes no domain (the domain would serve nothing it may publish),
+    // and one that turned custom domains off takes no domain of its own. A platform-owned alias follows
+    // publishing only. Read now; a personal drive has no org policies.
+    const orgPolicies = (await getDrivePolicies(driveId))?.policies ?? null;
+    const publishing = publishingDecision(orgPolicies);
+    const domainDecision = publishing.ok && !wantsPlatformDomain ? customDomainsDecision(orgPolicies) : publishing;
+    if (!domainDecision.ok) {
+      return NextResponse.json({ error: domainDecision.message, code: domainDecision.code, policy: domainDecision.policy }, { status: domainDecision.status });
+    }
+
     const validation = validateCustomDomain(hostname, { allowPlatformDomain: wantsPlatformDomain });
     if (!validation.valid) {
       return NextResponse.json({ error: validation.reason }, { status: 400 });
@@ -151,12 +171,17 @@ export async function POST(
 
     if (wantsPlatformDomain) {
       try {
-        const rows = await db
-          .insert(customDomains)
-          .values({ driveId, hostname, status: 'active', platformOwned: true })
-          .returning();
+        // [D-OW-33] a new host for published content loosens access: refused while the drive's org is lapsed.
+        const rows = await db.transaction(async (tx) => {
+          if (await checkDriveMayLoosen(tx, driveId, true)) throw new OrgLapsedError();
+          return tx
+            .insert(customDomains)
+            .values({ driveId, hostname, status: 'active', platformOwned: true })
+            .returning();
+        });
         inserted = rows[0];
       } catch (err) {
+        if (isOrgLapsedError(err)) return orgLapsedResponse();
         const anyErr = err as { code?: string };
         if (anyErr.code === '23505') {
           return NextResponse.json({ error: 'Domain is already registered' }, { status: 409 });
@@ -181,7 +206,7 @@ export async function POST(
 
       if (maxAllowed === 0) {
         return NextResponse.json(
-          { error: 'Custom domains are not available on your current plan. Upgrade to add a custom domain.' },
+          { error: CUSTOM_DOMAINS_UNAVAILABLE_MESSAGE },
           { status: 403 },
         );
       }
@@ -191,6 +216,8 @@ export async function POST(
       try {
         const rows = await db.transaction(async (tx) => {
           await tx.select({ id: drives.id }).from(drives).where(eq(drives.id, driveId)).for('update');
+          // [D-OW-33] a new host for published content loosens access: refused while the drive's org is lapsed.
+          if (await checkDriveMayLoosen(tx, driveId, true)) throw new OrgLapsedError();
 
           const [countRow] = await tx.select({ n: count() }).from(customDomains).where(eq(customDomains.driveId, driveId));
           const existingCount = countRow?.n ?? 0;
@@ -204,6 +231,7 @@ export async function POST(
         });
         inserted = rows[0];
       } catch (err) {
+        if (isOrgLapsedError(err)) return orgLapsedResponse();
         const anyErr = err as { code?: string; maxAllowed?: number };
         if (anyErr.code === 'cap_exceeded') {
           const max = anyErr.maxAllowed!;

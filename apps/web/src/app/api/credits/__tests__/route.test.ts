@@ -45,6 +45,13 @@ beforeEach(() => {
 });
 
 describe('GET /api/credits', () => {
+  it.each(['business', 'founder'])('A-9 reports retired personal %s as Free', async (subscriptionTier) => {
+    mockSelectWhere.mockResolvedValue([{ subscriptionTier }]);
+    const res = await GET(createMockRequest('https://example.com/api/credits'));
+    expect(await res.json()).toEqual({ ...summary, subscriptionTier: 'free' });
+    expect(mockGetCreditBalance).toHaveBeenCalledWith('u1', 'free');
+  });
+
   it('returns the user balance summary', async () => {
     const res = await GET(createMockRequest('https://example.com/api/credits'));
     expect(res.status).toBe(200);

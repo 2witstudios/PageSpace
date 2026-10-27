@@ -72,8 +72,13 @@ vi.mock('@pagespace/db/schema/auth', () => ({
 
 vi.mock('@pagespace/db/schema/credits', () => ({
   creditLedger: { entryType: 'CL_ENTRY_TYPE', amountCents: 'CL_AMOUNT', chargeMillicents: 'CL_CHARGE', appliedCents: 'CL_APPLIED', realCostCents: 'CL_REAL_COST', aiUsageLogId: 'CL_AI_ID', createdAt: 'CL_CREATED', userId: 'CL_USER' },
-  creditBalances: { userId: 'CB_USER', monthlyRemainingCents: 'CB_MONTHLY', topupRemainingCents: 'CB_TOPUP', debtCents: 'CB_DEBT' },
   creditHolds: { estCents: 'CH_EST', expiresAt: 'CH_EXPIRES' },
+}));
+
+vi.mock('@pagespace/db/schema/wallets', () => ({
+  wallets: { id: 'W_ID', userId: 'CB_USER', monthlyRemainingCents: 'CB_MONTHLY', topupRemainingCents: 'CB_TOPUP', debtCents: 'CB_DEBT' },
+  isPersonalRootWallet: vi.fn(() => ({ personalRoot: true })),
+  personalRootWalletOf: vi.fn((userId: string) => ({ personalRootOf: userId })),
 }));
 
 vi.mock('@pagespace/db/schema/subscriptions', () => ({

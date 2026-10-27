@@ -3,12 +3,16 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { pumpSdkStreamToChannel, type PumpResult } from '@/lib/ai/core/pump-sdk-stream';
 import { STREAM_ID_HEADER, removeStream } from '@/lib/ai/core/stream-abort-registry';
 import type { StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
+import type { TurnTimer } from '@/lib/ai/core/turn-timing';
 import {
   ADMISSION_ENVELOPE_CONTENT_TYPE,
   STREAM_MODE_DETACHED,
   wantsDetachedStream,
   type StreamAdmissionEnvelope,
 } from '@/lib/ai/core/detached-stream-mode';
+
+/** Re-exported so the turn strategies take it from the module that consumes it. */
+export type { TurnTimer };
 
 /**
  * Caps for the HTTP response subscriber.
@@ -81,6 +85,7 @@ export const pumpAndRespond = ({
   request,
   channelId,
   conversationId,
+  timer,
 }: {
   sdkStream: ReadableStream<UIMessageChunk>;
   lifecycle: StreamLifecycleHandle;
@@ -91,12 +96,18 @@ export const pumpAndRespond = ({
   channelId: string;
   /** The conversation being answered into; rides the envelope. */
   conversationId: string;
+  /** Time-to-first-token instrumentation; stops on the first model output frame. */
+  timer?: TurnTimer;
 }): Response => {
-  terminalizeOnPumpFailure({
-    pump: pumpSdkStreamToChannel(sdkStream, lifecycle.channel, loggers.ai),
-    lifecycle,
-    streamId,
-  });
+  const pump = pumpSdkStreamToChannel(sdkStream, lifecycle.channel, loggers.ai, timer?.observeChunk);
+  terminalizeOnPumpFailure({ pump, lifecycle, streamId });
+  if (timer) {
+    timer.handOff();
+    void pump.then(
+      (result) => timer.end(result.error === undefined ? 'complete' : 'error'),
+      () => timer.end('error'),
+    );
+  }
 
   if (wantsDetachedStream(request.headers)) {
     // A RECEIPT, not a stream. The generation is already running and already recording into

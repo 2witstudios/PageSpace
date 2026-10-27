@@ -21,7 +21,10 @@ import { MessageHoverToolbar } from '@/components/shared/MessageHoverToolbar';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Lock, Check, X, MessageSquareText, Webhook } from 'lucide-react';
 import { PageWebhooksDialog } from '@/components/shared/PageWebhooksDialog';
-import { MessageAttachment } from '@/components/shared/MessageAttachment';
+import { MessageAttachments } from '@/components/shared/MessageAttachments';
+import type { MessageAttachmentLike } from '@/lib/attachment-utils';
+import { createId } from '@paralleldrive/cuid2';
+import { reconcileOptimistic, sameAttachmentBatch } from '@/lib/messages/reconcile-optimistic';
 import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
 import { ThreadOriginBadge } from '@/components/messages/ThreadOriginBadge';
 import { CommandExecutionIndicator } from '@/components/messages/CommandExecutionIndicator';
@@ -47,6 +50,25 @@ import { cn } from '@/lib/utils';
 import { useFindStore } from '@/stores/useFindStore';
 import { useDraft } from '@/hooks/useDraft';
 import { buildDraftKey } from '@/lib/draft/draft';
+
+interface MessageAttachmentBearing {
+  content?: string;
+  fileId?: string | null;
+  attachments?: Array<{ fileId?: string | null; position?: number }> | null;
+}
+
+const authorOf = (m: { userId?: string | null }) => m.userId;
+
+/**
+ * Fallback used ONLY when a confirmation carries no `clientNonce` — what a pod
+ * that predates the nonce broadcasts, so it is reachable during a rolling
+ * deploy. Same text, same first file, same author (checked by the reconciler).
+ */
+const looksLikeSameSend = (
+  pending: MessageAttachmentBearing,
+  confirmed: MessageAttachmentBearing,
+) => pending.content === confirmed.content && sameAttachmentBatch(pending, confirmed);
+
 
 /** Coalesces the re-mark-as-read POST across a burst of incoming messages. */
 const MARK_READ_DEBOUNCE_MS = 1000;
@@ -86,6 +108,7 @@ interface MessageWithReactions extends MessageWithUser {
   reactions?: Reaction[];
   fileId?: string | null;
   attachmentMeta?: AttachmentMeta | null;
+  attachments?: MessageAttachmentLike[] | null;
   file?: FileRelation | null;
   aiMeta?: AiMeta | null;
   editedAt?: string | null;
@@ -95,6 +118,11 @@ interface MessageWithReactions extends MessageWithUser {
   lastReplyAt?: string | null;
   mirroredFromId?: string | null;
   mirroredFrom?: { parentId: string | null } | null;
+  /**
+   * Correlation id for an in-flight send. Set on the optimistic row and echoed
+   * by the server on the POST response and the socket broadcast; never stored.
+   */
+  clientNonce?: string;
 }
 
 function ChannelView({ page }: ChannelViewProps) {
@@ -262,13 +290,9 @@ function ChannelView({ page }: ChannelViewProps) {
       // the ThreadPanel; until then, drop them here so the thread API does
       // not pollute the live channel view of older clients.
       if (message.parentId) return;
-      setMessages((prev) => {
-        // If the message is already in the list, don't add it again.
-        if (prev.find((m) => m.id === message.id)) {
-          return prev;
-        }
-        return [...prev.filter(m => !m.id.startsWith('temp-')), message];
-      });
+      setMessages((prev) =>
+        reconcileOptimistic(prev, message, authorOf, looksLikeSameSend),
+      );
       // It is on screen now, so it is not unread.
       scheduleMarkChannelRead();
     };
@@ -319,7 +343,7 @@ function ChannelView({ page }: ChannelViewProps) {
 
   const handleSubmit = async (
     content: string,
-    attachment?: FileAttachment,
+    attachments: FileAttachment[],
     activeQuoteId?: string | null,
     activeQuoteSnapshot?: QuotedMessageSnapshot | null,
   ) => {
@@ -332,7 +356,21 @@ function ChannelView({ page }: ChannelViewProps) {
 
     const messageContent = typeof content === 'string' ? content : JSON.stringify(content);
 
-    const tempId = `temp-${Date.now()}`;
+    const attachmentPayload = attachments.map((attachment) => ({
+      fileId: attachment.id,
+      attachmentMeta: {
+        originalName: attachment.originalName,
+        size: attachment.size,
+        mimeType: attachment.mimeType,
+        contentHash: attachment.contentHash,
+      },
+    }));
+
+    // createId(), not Date.now(): several sends can start inside one
+    // millisecond, and a duplicate id here is a duplicate React key, which
+    // strands the extra rows on screen until the list remounts.
+    const clientNonce = createId();
+    const tempId = `temp-${clientNonce}`;
     const optimisticMessage: MessageWithReactions = {
       id: tempId,
       pageId: page.id,
@@ -347,14 +385,20 @@ function ChannelView({ page }: ChannelViewProps) {
         name: user.name || 'You',
         image: user.image ?? null,
       },
-      // Include attachment info in optimistic message
-      fileId: attachment?.id || null,
-      attachmentMeta: attachment ? {
-        originalName: attachment.originalName,
-        size: attachment.size,
-        mimeType: attachment.mimeType,
-        contentHash: attachment.contentHash,
-      } : null,
+      // Render the whole batch optimistically, and keep the legacy singular
+      // fields pointing at the first file so anything still reading them
+      // agrees with the gallery.
+      fileId: attachmentPayload[0]?.fileId ?? null,
+      attachmentMeta: attachmentPayload[0]?.attachmentMeta ?? null,
+      // Carry position on the optimistic rows too, so the gallery's ordering
+      // never has to lean on sort stability to look right before the server
+      // echo replaces them.
+      attachments: attachmentPayload.map(({ fileId, attachmentMeta }, position) => ({
+        fileId,
+        attachmentMeta,
+        position,
+      })),
+      clientNonce,
       quotedMessageId: activeQuoteId ?? null,
       // Carry the snapshot through the optimistic phase so the embed renders
       // immediately; the server's enriched payload will replace it.
@@ -364,25 +408,36 @@ function ChannelView({ page }: ChannelViewProps) {
     setMessages((prev) => [...prev, optimisticMessage]);
 
     try {
-      await post(`/api/channels/${page.id}/messages`, {
-        content: messageContent,
-        fileId: attachment?.id,
-        attachmentMeta: attachment ? {
-          originalName: attachment.originalName,
-          size: attachment.size,
-          mimeType: attachment.mimeType,
-          contentHash: attachment.contentHash,
-        } : undefined,
-        quotedMessageId: activeQuoteId ?? undefined,
-      });
+      const persistedMessage = await post<MessageWithReactions | null>(
+        `/api/channels/${page.id}/messages`,
+        {
+          content: messageContent,
+          attachments: attachmentPayload,
+          quotedMessageId: activeQuoteId ?? undefined,
+          clientNonce,
+        },
+      );
 
-      // The new message will be received via the socket connection,
-      // which will replace the optimistic one.
+      // Normally the socket echo retires the optimistic row. But the send does
+      // not require a live socket — it only checks `canEdit` — so on a dropped
+      // connection no echo ever arrives and the pending row would sit there
+      // looking unsent until a refetch. The POST response is the same enriched
+      // message the broadcast carries, nonce included, so reconcile with it
+      // too; whichever lands second is deduped by id.
+      if (persistedMessage?.id) {
+        setMessages((prev) =>
+          reconcileOptimistic(prev, persistedMessage, authorOf, looksLikeSameSend),
+        );
+      }
     } catch (error) {
       // If the API call fails, remove the optimistic message
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
       console.error('Error sending message:', error);
       toast.error('Failed to send message. Please try again.');
+      // Put the files back too. They are already in S3, but the composer
+      // cleared on send, so without this a failed ten-photo send would make the
+      // user pick and re-upload all ten.
+      channelInputRef.current?.restoreAttachments(attachments);
       // Restore the quote chip so the user's retry still carries the quote
       // they originally selected; without this the failed-send recovery would
       // silently strip the quote context.
@@ -395,12 +450,12 @@ function ChannelView({ page }: ChannelViewProps) {
 
   const handleTopLevelSubmit = ({
     content,
-    attachment,
+    attachments,
   }: {
     content: string;
-    attachment?: FileAttachment;
+    attachments: FileAttachment[];
   }) => {
-    if (!content.trim() && !attachment) return;
+    if (!content.trim() && attachments.length === 0) return;
     if (!canEdit) {
       toast.error(getPermissionErrorMessage('send', 'channel'));
       return;
@@ -410,7 +465,7 @@ function ChannelView({ page }: ChannelViewProps) {
     clearInputDraft();
     channelInputRef.current?.clear();
     clearQuote();
-    handleSubmit(content, attachment, activeQuoteId, activeQuoteSnapshot);
+    handleSubmit(content, attachments, activeQuoteId, activeQuoteSnapshot);
   };
 
   // Load older messages when scrolling to top
@@ -440,7 +495,7 @@ function ChannelView({ page }: ChannelViewProps) {
       prev.map((m) => {
         if (m.id !== messageId) return m;
         const optimisticReaction: Reaction = {
-          id: `temp-${Date.now()}`,
+          id: `temp-${createId()}`,
           emoji,
           userId: user.id,
           user: { id: user.id, name: user.name || 'You' },
@@ -653,7 +708,7 @@ function ChannelView({ page }: ChannelViewProps) {
             </div>
           )}
           {m.content && <MessageLinkPreviews content={m.content} />}
-          <MessageAttachment message={m} />
+          <MessageAttachments message={m} />
         </div>
       </div>
     );
@@ -856,7 +911,7 @@ function ChannelView({ page }: ChannelViewProps) {
                                     )}
                                   </>
                                 )}
-                                <MessageAttachment message={m} />
+                                <MessageAttachments message={m} />
                                 {replyCount > 0 && (
                                   <button
                                     type="button"

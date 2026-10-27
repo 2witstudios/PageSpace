@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { assert } from './riteway';
+import type { DriveBillingFacts } from '../../../billing/sandbox-payer';
 import {
   reconcileSandboxStorage,
   computeElapsedGbMonths,
@@ -147,7 +148,7 @@ function makeDeps(over: Partial<ReconcileSandboxStorageDeps> = {}): {
     listAgentSessionSprites: async () => [],
     listDriveEnvSprites: async () => [],
     listPublishedAppRootfs: async () => [],
-    lookupDriveOwnerId: async () => 'owner-1',
+    lookupDriveBillingFacts: async () => ({ ownerId: 'owner-1', orgId: null }),
     chargeStorage: async (input) => {
       chargeCalls.push(input);
       // The real seam reports whether the usage row landed; the happy-path stub
@@ -171,6 +172,11 @@ function makeDeps(over: Partial<ReconcileSandboxStorageDeps> = {}): {
       return 'advanced';
     },
     now: () => new Date('2026-07-01T00:00:00.000Z'),
+    // Org compute billing went live long before every default watermark: nothing forgiven.
+    orgComputeBillingEpoch: async () => new Date(0),
+    // An org pool that covers every accrual in full, unless a test says otherwise.
+    reserveOrgAccrual: async ({ chargeMillicents }) => ({ kind: 'held', holdId: 'hold-pool', walletId: 'pool-northwind', chargeMillicents }),
+    releaseAccrualHold: async () => {},
     ...over,
   };
   return { deps, chargeCalls, agentSessionAdvanceCalls, driveEnvAdvanceCalls, publishedAppAdvanceCalls };
@@ -200,6 +206,7 @@ function driveEnv(over: Partial<DriveEnvStorageRow> = {}): DriveEnvStorageRow {
   return {
     envId: 'env-1',
     driveId: 'drive-1',
+    costOwnerId: null,
     storageLastBilledAt: new Date(new Date('2026-07-01T00:00:00.000Z').getTime() - MAX_BILLABLE_SPAN_MS),
     measuredBytes: 1_000_000_000, // 1 GB
     measuredAt: new Date('2026-06-30T23:00:00.000Z'),
@@ -217,6 +224,7 @@ function publishedAppRootfs(over: Partial<PublishedAppStorageRow> = {}): Publish
   return {
     publishedAppId: 'app-1',
     driveId: 'drive-1',
+    costOwnerId: null,
     storageLastBilledAt: new Date(new Date('2026-07-01T00:00:00.000Z').getTime() - MAX_BILLABLE_SPAN_MS),
     measuredBytes: 1_000_000_000, // 1 GB
     measuredAt: new Date('2026-06-30T23:00:00.000Z'),
@@ -244,24 +252,24 @@ describe('reconcileSandboxStorage', () => {
     expect(agentSessionAdvanceCalls).toEqual([{ workspaceId: 'session-1', billedThrough: new Date('2026-07-01T00:00:00.000Z') }]);
   });
 
-  it('resolves the payer via lookupDriveOwnerId when driveId is set', async () => {
-    const lookup = vi.fn(async (driveId: string) => `owner-of-${driveId}`);
+  it('resolves the payer via lookupDriveBillingFacts when driveId is set', async () => {
+    const lookup = vi.fn(async (driveId: string) => ({ ownerId: `owner-of-${driveId}`, orgId: null }));
     const { deps, chargeCalls } = makeDeps({
       listAgentSessionSprites: async () => [agentSession({ driveId: 'drive-9', ownerId: 'session-owner-9' })],
-      lookupDriveOwnerId: lookup,
+      lookupDriveBillingFacts: lookup,
     });
 
     await reconcileSandboxStorage(deps);
 
     expect(lookup).toHaveBeenCalledWith('drive-9');
-    expect(chargeCalls[0]).toMatchObject({ payerId: 'owner-of-drive-9', driveId: 'drive-9' });
+    expect(chargeCalls[0]).toMatchObject({ charge: { kind: 'user', userId: 'owner-of-drive-9' }, driveId: 'drive-9' });
   });
 
   it('bills a global-assistant session (null driveId) straight to its ownerId, with no drive lookup and no driveId on the charge', async () => {
-    const lookup = vi.fn(async () => 'should-not-be-called');
+    const lookup = vi.fn(async () => ({ ownerId: 'should-not-be-called', orgId: null }));
     const { deps, chargeCalls } = makeDeps({
       listAgentSessionSprites: async () => [agentSession({ driveId: null, ownerId: 'global-owner-1' })],
-      lookupDriveOwnerId: lookup,
+      lookupDriveBillingFacts: lookup,
     });
 
     const result = await reconcileSandboxStorage(deps);
@@ -270,7 +278,7 @@ describe('reconcileSandboxStorage', () => {
     assert({
       given: 'a global-assistant agent-session Sprite (no backing drive)',
       should: 'charge the session ownerId directly, with driveId omitted from the charge',
-      actual: { charged: result.charged, payerId: chargeCalls[0]?.payerId, driveId: chargeCalls[0]?.driveId },
+      actual: { charged: result.charged, payerId: chargeCalls[0]?.charge.userId, driveId: chargeCalls[0]?.driveId },
       expected: { charged: 1, payerId: 'global-owner-1', driveId: undefined },
     });
   });
@@ -293,7 +301,7 @@ describe('reconcileSandboxStorage', () => {
   it('skips (and does not advance the watermark for) a page-backed session whose page owner cannot be resolved', async () => {
     const { deps, chargeCalls, agentSessionAdvanceCalls } = makeDeps({
       listAgentSessionSprites: async () => [agentSession({ driveId: 'orphaned-page' })],
-      lookupDriveOwnerId: async () => null,
+      lookupDriveBillingFacts: async () => null,
     });
 
     const result = await reconcileSandboxStorage(deps);
@@ -301,6 +309,213 @@ describe('reconcileSandboxStorage', () => {
     expect(result).toMatchObject({ processed: 1, charged: 0, skipped: 1 });
     expect(chargeCalls).toEqual([]);
     expect(agentSessionAdvanceCalls).toEqual([]);
+  });
+
+  it('WAL-9 (partial) charges ORG-drive storage to the org pool for every kind — a session recorded under its owner, an env and an app under the lead', async () => {
+    const { deps, chargeCalls } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ driveId: 'org-drive', ownerId: 'session-owner-1' })],
+      listDriveEnvSprites: async () => [driveEnv({ driveId: 'org-drive' })],
+      listPublishedAppRootfs: async () => [publishedAppRootfs({ driveId: 'org-drive' })],
+      lookupDriveBillingFacts: async () => ({ ownerId: 'lead-marcus', orgId: 'org-northwind' }),
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    expect(result).toMatchObject({ processed: 3, charged: 3, skipped: 0, orgBacklogForgiven: 0 });
+    expect(chargeCalls.map((call) => [call.subjectKind, call.charge])).toEqual([
+      ['session', { kind: 'org', orgId: 'org-northwind', userId: 'session-owner-1' }],
+      ['env', { kind: 'org', orgId: 'org-northwind', userId: 'lead-marcus', accrual: true }],
+      ['hosting', { kind: 'org', orgId: 'org-northwind', userId: 'lead-marcus', accrual: true }],
+    ]);
+  });
+
+  it('SEAT-9 (partial) D-OW-32: a LAPSED org is charged nothing for storage — every kind, parked apps included — and the watermark moves to the tick, so the lapsed span is never back-billed', async () => {
+    const asked: string[] = [];
+    const { deps, chargeCalls, driveEnvAdvanceCalls, agentSessionAdvanceCalls } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ driveId: 'org-drive' })],
+      listDriveEnvSprites: async () => [driveEnv({ driveId: 'org-drive' })],
+      listPublishedAppRootfs: async () => [publishedAppRootfs({ driveId: 'org-drive' })],
+      lookupDriveBillingFacts: async () => ({ ownerId: 'lead-marcus', orgId: 'org-northwind' }),
+      isOrgLapsed: async (orgId: string) => {
+        asked.push(orgId);
+        return true;
+      },
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    expect(chargeCalls).toEqual([]);
+    expect(result).toMatchObject({ charged: 0, failed: 0, skipped: 0, orgLapsedForgiven: 3, billableRows: 0 });
+    expect(agentSessionAdvanceCalls).toHaveLength(1);
+    expect(driveEnvAdvanceCalls).toHaveLength(1);
+    // One status read per org per tick, however many rows it owns.
+    expect(asked).toEqual(['org-northwind']);
+  });
+
+  it('WAL-9 (partial) a PAUSED or EMPTY org pool is charged nothing for storage: the window closes uncharged (forgiven, never debt), counted by name', async () => {
+    for (const reason of ['org_wallet_paused', 'org_wallet_empty'] as const) {
+      const { deps, chargeCalls, driveEnvAdvanceCalls } = makeDeps({
+        listDriveEnvSprites: async () => [driveEnv({ driveId: 'org-drive' })],
+        lookupDriveBillingFacts: async () => ({ ownerId: 'lead-marcus', orgId: 'org-northwind' }),
+        reserveOrgAccrual: async () => ({ kind: 'forgive', reason }),
+      });
+      const result = await reconcileSandboxStorage(deps);
+      expect(chargeCalls).toEqual([]);
+      expect(result).toMatchObject({ charged: 0, failed: 0, skipped: 0, orgPoolForgiven: 1, billableRows: 0 });
+      expect(driveEnvAdvanceCalls).toHaveLength(1);
+    }
+  });
+
+  it('WAL-9 (partial) an org pool that covers only part of an accrual is held for that part and charged no more — on its hold, the rest forgiven', async () => {
+    const reserved: Array<{ chargeMillicents: number; charge: unknown }> = [];
+    const full = makeDeps({
+      listDriveEnvSprites: async () => [driveEnv({ driveId: 'org-drive', costOwnerId: 'member-ana' })],
+      lookupDriveBillingFacts: async () => ({ ownerId: 'lead-marcus', orgId: 'org-northwind' }),
+    });
+    await reconcileSandboxStorage(full.deps);
+    const fullCost = full.chargeCalls[0]?.costDollars ?? 0;
+
+    const { deps, chargeCalls } = makeDeps({
+      listDriveEnvSprites: async () => [driveEnv({ driveId: 'org-drive', costOwnerId: 'member-ana' })],
+      lookupDriveBillingFacts: async () => ({ ownerId: 'lead-marcus', orgId: 'org-northwind' }),
+      reserveOrgAccrual: async (input) => {
+        reserved.push(input);
+        return { kind: 'held', holdId: 'hold-part', walletId: 'pool-northwind', chargeMillicents: 1 };
+      },
+    });
+    const result = await reconcileSandboxStorage(deps);
+
+    expect(reserved).toEqual([{ charge: { kind: 'org', orgId: 'org-northwind', userId: 'member-ana', accrual: true }, chargeMillicents: expect.any(Number) }]);
+    expect(fullCost).toBeGreaterThan(0);
+    expect(chargeCalls).toHaveLength(1);
+    expect(chargeCalls[0].hold).toEqual({ holdId: 'hold-part', walletId: 'pool-northwind' });
+    expect(chargeCalls[0].costDollars).toBeLessThan(fullCost);
+    expect(result).toMatchObject({ charged: 1, orgPoolCapped: 1 });
+  });
+
+  it('WAL-9 (partial) a personal row is never held on any pool; an org hold whose charge throws is released, and the window stays open', async () => {
+    const reserve = vi.fn();
+    const personal = makeDeps({ listAgentSessionSprites: async () => [agentSession()], reserveOrgAccrual: reserve });
+    await reconcileSandboxStorage(personal.deps);
+    expect(reserve).not.toHaveBeenCalled();
+    expect(personal.chargeCalls[0]?.hold).toBeUndefined();
+
+    const released: string[] = [];
+    const { deps, driveEnvAdvanceCalls } = makeDeps({
+      listDriveEnvSprites: async () => [driveEnv({ driveId: 'org-drive' })],
+      lookupDriveBillingFacts: async () => ({ ownerId: 'lead-marcus', orgId: 'org-northwind' }),
+      chargeStorage: async () => {
+        throw new Error('ledger down');
+      },
+      releaseAccrualHold: async (holdId) => {
+        released.push(holdId);
+      },
+    });
+    const result = await reconcileSandboxStorage(deps);
+    expect(released).toEqual(['hold-pool']);
+    expect(driveEnvAdvanceCalls).toEqual([]);
+    expect(result).toMatchObject({ charged: 0, failed: 1 });
+  });
+
+  it('SEAT-9 (partial) D-OW-32: a paid org (not lapsed) is charged as before', async () => {
+    const { deps, chargeCalls } = makeDeps({
+      listDriveEnvSprites: async () => [driveEnv({ driveId: 'org-drive' })],
+      lookupDriveBillingFacts: async () => ({ ownerId: 'lead-marcus', orgId: 'org-northwind' }),
+      isOrgLapsed: async () => false,
+    });
+    const result = await reconcileSandboxStorage(deps);
+    expect(result).toMatchObject({ charged: 1, orgLapsedForgiven: 0 });
+    expect(chargeCalls).toHaveLength(1);
+  });
+
+  it('WAL-9 (partial) on the FIRST org-billed tick, forgives the pre-epoch backlog: nothing charged, the watermark moves to the tick, counted by name', async () => {
+    const tick = new Date('2026-07-01T00:00:00.000Z');
+    const { deps, chargeCalls, driveEnvAdvanceCalls, agentSessionAdvanceCalls } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ driveId: 'org-drive', storageLastBilledAt: new Date('2026-05-01T00:00:00.000Z') })],
+      listDriveEnvSprites: async () => [driveEnv({ driveId: 'org-drive', storageLastBilledAt: new Date('2026-05-01T00:00:00.000Z') })],
+      lookupDriveBillingFacts: async () => ({ ownerId: 'lead-marcus', orgId: 'org-northwind' }),
+      orgComputeBillingEpoch: async (tickStart) => tickStart,
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    expect(chargeCalls).toEqual([]);
+    expect(result).toMatchObject({ charged: 0, skipped: 0, failed: 0, orgBacklogForgiven: 2, billableRows: 0 });
+    expect(agentSessionAdvanceCalls).toEqual([{ workspaceId: 'session-1', billedThrough: tick }]);
+    expect(driveEnvAdvanceCalls).toEqual([{ envId: 'env-1', billedThrough: tick }]);
+  });
+
+  it('WAL-9 (partial) a later tick with a pre-epoch watermark charges only from the epoch', async () => {
+    const epoch = new Date('2026-06-30T23:00:00.000Z');
+    const full = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ driveId: 'org-drive', storageLastBilledAt: epoch })],
+      lookupDriveBillingFacts: async () => ({ ownerId: 'lead-marcus', orgId: 'org-northwind' }),
+    });
+    await reconcileSandboxStorage(full.deps);
+    const fromEpoch = full.chargeCalls[0]?.costDollars;
+
+    const { deps, chargeCalls } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ driveId: 'org-drive', storageLastBilledAt: new Date('2026-05-01T00:00:00.000Z') })],
+      lookupDriveBillingFacts: async () => ({ ownerId: 'lead-marcus', orgId: 'org-northwind' }),
+      orgComputeBillingEpoch: async () => epoch,
+    });
+    const result = await reconcileSandboxStorage(deps);
+
+    expect(fromEpoch).toBeGreaterThan(0);
+    expect(chargeCalls[0]?.costDollars).toBe(fromEpoch);
+    expect(result).toMatchObject({ charged: 1, orgBacklogForgiven: 1 });
+  });
+
+  it('a PERSONAL row with an old watermark is never forgiven — the epoch is asked only for org rows', async () => {
+    const epochAsked = vi.fn(async (tickStart: Date) => tickStart);
+    const { deps, chargeCalls } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ storageLastBilledAt: new Date('2026-06-01T00:00:00.000Z') })],
+      orgComputeBillingEpoch: epochAsked,
+    });
+    const result = await reconcileSandboxStorage(deps);
+    expect(chargeCalls).toHaveLength(1);
+    expect(result).toMatchObject({ orgBacklogForgiven: 0 });
+    expect(epochAsked).not.toHaveBeenCalled();
+  });
+
+  it('given the reconcile lock is lost while a row is being priced, should NOT charge it (only the pre-charge check stands in the way)', async () => {
+    // Lost after the loop-top check has passed for this row: another run may already be charging
+    // this same window from the same watermark.
+    const lost = new AbortController();
+    const { deps, chargeCalls, agentSessionAdvanceCalls } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ workspaceId: 'only' })],
+      lookupDriveBillingFacts: async () => {
+        lost.abort(new Error('terminating connection due to administrator command'));
+        return { ownerId: 'owner-1', orgId: null };
+      },
+    });
+
+    const result = await reconcileSandboxStorage(deps, lost.signal);
+
+    expect(chargeCalls).toEqual([]);
+    expect(agentSessionAdvanceCalls).toEqual([]);
+    expect(result).toMatchObject({ charged: 0 });
+  });
+
+  it('given the reconcile lock is lost after a charge, should still advance THAT row\'s watermark but charge no further row', async () => {
+    // Skipping the advance after a charge is what re-bills a window, so the in-flight row
+    // completes; every later row is left for the next run, which may already hold the lock.
+    const lost = new AbortController();
+    const { deps, chargeCalls, agentSessionAdvanceCalls } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ workspaceId: 'first' }), agentSession({ workspaceId: 'second' })],
+    });
+    const charge = deps.chargeStorage;
+    deps.chargeStorage = async (input) => {
+      const outcome = await charge(input);
+      lost.abort(new Error('terminating connection due to administrator command'));
+      return outcome;
+    };
+
+    const result = await reconcileSandboxStorage(deps, lost.signal);
+
+    expect(chargeCalls.map((c) => c.subjectId)).toEqual(['first']);
+    expect(agentSessionAdvanceCalls.map((c) => c.workspaceId)).toEqual(['first']);
+    expect(result).toMatchObject({ charged: 1, failed: 0 });
   });
 
   it('given chargeStorage succeeds but the FOLLOWING watermark advance throws, counts the money as charged (never under-reported) and flags the row distinguishably', async () => {
@@ -418,10 +633,10 @@ describe('reconcileSandboxStorage', () => {
   // -------------------------------------------------------------------------
 
   it('bills a drive env to its DRIVE OWNER for its measured storage window and advances the ENV watermark', async () => {
-    const lookup = vi.fn(async (driveId: string) => `owner-of-${driveId}`);
+    const lookup = vi.fn(async (driveId: string) => ({ ownerId: `owner-of-${driveId}`, orgId: null }));
     const { deps, chargeCalls, driveEnvAdvanceCalls, agentSessionAdvanceCalls } = makeDeps({
       listDriveEnvSprites: async () => [driveEnv({ envId: 'env-7', driveId: 'drive-7' })],
-      lookupDriveOwnerId: lookup,
+      lookupDriveBillingFacts: lookup,
     });
 
     const result = await reconcileSandboxStorage(deps);
@@ -432,7 +647,7 @@ describe('reconcileSandboxStorage', () => {
       should: "charge the DRIVE OWNER, attributed to the env's drive and named as an env subject",
       actual: {
         charged: result.charged,
-        payerId: chargeCalls[0]?.payerId,
+        payerId: chargeCalls[0]?.charge.userId,
         driveId: chargeCalls[0]?.driveId,
         subjectKind: chargeCalls[0]?.subjectKind,
         subjectId: chargeCalls[0]?.subjectId,
@@ -456,7 +671,7 @@ describe('reconcileSandboxStorage', () => {
   it('SKIPS an env whose drive owner cannot be resolved — no charge, no watermark advance, no fallback payer', async () => {
     const { deps, chargeCalls, driveEnvAdvanceCalls } = makeDeps({
       listDriveEnvSprites: async () => [driveEnv({ envId: 'env-orphan', driveId: 'drive-mid-delete' })],
-      lookupDriveOwnerId: async () => null,
+      lookupDriveBillingFacts: async () => null,
     });
 
     const result = await reconcileSandboxStorage(deps);
@@ -491,10 +706,10 @@ describe('reconcileSandboxStorage', () => {
   // -------------------------------------------------------------------------
 
   it("bills a published app's rootfs to its DRIVE OWNER and advances the APP's own watermark", async () => {
-    const lookup = vi.fn(async (driveId: string) => `owner-of-${driveId}`);
+    const lookup = vi.fn(async (driveId: string) => ({ ownerId: `owner-of-${driveId}`, orgId: null }));
     const { deps, chargeCalls, publishedAppAdvanceCalls, driveEnvAdvanceCalls, agentSessionAdvanceCalls } = makeDeps({
       listPublishedAppRootfs: async () => [publishedAppRootfs({ publishedAppId: 'app-9', driveId: 'drive-9' })],
-      lookupDriveOwnerId: lookup,
+      lookupDriveBillingFacts: lookup,
     });
 
     const result = await reconcileSandboxStorage(deps);
@@ -505,7 +720,7 @@ describe('reconcileSandboxStorage', () => {
       should: "charge the DRIVE OWNER, attributed to the app's drive and named as a hosting subject",
       actual: {
         charged: result.charged,
-        payerId: chargeCalls[0]?.payerId,
+        payerId: chargeCalls[0]?.charge.userId,
         driveId: chargeCalls[0]?.driveId,
         subjectKind: chargeCalls[0]?.subjectKind,
         subjectId: chargeCalls[0]?.subjectId,
@@ -532,7 +747,7 @@ describe('reconcileSandboxStorage', () => {
     // "who pays". Billing it would be a money movement that cannot be taken back.
     const { deps, chargeCalls, publishedAppAdvanceCalls } = makeDeps({
       listPublishedAppRootfs: async () => [publishedAppRootfs({ driveId: 'drive-mid-delete' })],
-      lookupDriveOwnerId: async () => null,
+      lookupDriveBillingFacts: async () => null,
     });
 
     const result = await reconcileSandboxStorage(deps);
@@ -586,7 +801,7 @@ describe('reconcileSandboxStorage', () => {
       listAgentSessionSprites: async () => [agentSession({ workspaceId: 'session-a', driveId: null, ownerId: 'global-owner' })],
       listDriveEnvSprites: async () => [driveEnv({ envId: 'env-b', driveId: 'drive-b' })],
       listPublishedAppRootfs: async () => [publishedAppRootfs({ publishedAppId: 'app-c', driveId: 'drive-c' })],
-      lookupDriveOwnerId: async (driveId) => `owner-of-${driveId}`,
+      lookupDriveBillingFacts: async (driveId) => ({ ownerId: `owner-of-${driveId}`, orgId: null }),
     });
 
     const result = await reconcileSandboxStorage(deps);
@@ -610,7 +825,7 @@ describe('reconcileSandboxStorage', () => {
     const { deps, chargeCalls, agentSessionAdvanceCalls, driveEnvAdvanceCalls } = makeDeps({
       listAgentSessionSprites: async () => [agentSession({ workspaceId: 'session-a', driveId: null, ownerId: 'global-owner' })],
       listDriveEnvSprites: async () => [driveEnv({ envId: 'env-b', driveId: 'drive-b' })],
-      lookupDriveOwnerId: async (driveId) => `owner-of-${driveId}`,
+      lookupDriveBillingFacts: async (driveId) => ({ ownerId: `owner-of-${driveId}`, orgId: null }),
     });
 
     const result = await reconcileSandboxStorage(deps);
@@ -621,7 +836,7 @@ describe('reconcileSandboxStorage', () => {
       actual: {
         processed: result.processed,
         charged: result.charged,
-        payers: chargeCalls.map((call) => [call.subjectKind, call.subjectId, call.payerId]),
+        payers: chargeCalls.map((call) => [call.subjectKind, call.subjectId, call.charge.userId]),
       },
       expected: {
         processed: 2,
@@ -722,7 +937,7 @@ describe('reconcileSandboxStorage', () => {
       listDriveEnvSprites: async () => {
         throw new Error('envs down');
       },
-      lookupDriveOwnerId: async () => {
+      lookupDriveBillingFacts: async () => {
         throw new Error('lookup down');
       },
       chargeStorage: async () => {
@@ -743,7 +958,7 @@ describe('reconcileSandboxStorage', () => {
     const { deps } = makeDeps({
       listAgentSessionSprites: async () => [agentSession()],
       listDriveEnvSprites: async () => [driveEnv()],
-      lookupDriveOwnerId: async () => {
+      lookupDriveBillingFacts: async () => {
         throw new Error('lookup down');
       },
     });
@@ -830,7 +1045,7 @@ describe('reconcileSandboxStorage', () => {
       listDriveEnvSprites: async () => [
         driveEnv({ storageLastBilledAt: new Date(now.getTime() - 40 * 24 * 60 * 60 * 1000) }),
       ],
-      lookupDriveOwnerId: async () => null,
+      lookupDriveBillingFacts: async () => null,
       now: () => now,
     });
 
@@ -1004,8 +1219,8 @@ describe('reconcileSandboxStorage', () => {
     const { deps, chargeCalls } = makeDeps({
       listAgentSessionSprites: async () => [agentSession({ workspaceId: 'session-this', driveId: 'drive-s' })],
       listDriveEnvSprites: async () => [driveEnv({ envId: 'env-this', driveId: 'drive-e' })],
-      lookupDriveOwnerId(this: ReconcileSandboxStorageDeps, driveId: string): Promise<string | null> {
-        return Promise.resolve(`owner-of-${driveId}-at-${this.now().toISOString()}`);
+      lookupDriveBillingFacts(this: ReconcileSandboxStorageDeps, driveId: string): Promise<DriveBillingFacts | null> {
+        return Promise.resolve({ ownerId: `owner-of-${driveId}-at-${this.now().toISOString()}`, orgId: null });
       },
     });
 
@@ -1018,7 +1233,7 @@ describe('reconcileSandboxStorage', () => {
       actual: {
         charged: result.charged,
         failed: result.failed,
-        payers: chargeCalls.map((call) => [call.subjectId, call.payerId]),
+        payers: chargeCalls.map((call) => [call.subjectId, call.charge.userId]),
       },
       expected: {
         charged: 2,
@@ -1093,7 +1308,7 @@ describe('reconcileSandboxStorage', () => {
   });
 
   it('looks a drive owner up ONCE PER DRIVE per tick, not once per row', async () => {
-    const lookup = vi.fn(async (driveId: string) => `owner-of-${driveId}`);
+    const lookup = vi.fn(async (driveId: string) => ({ ownerId: `owner-of-${driveId}`, orgId: null }));
     const { deps, chargeCalls } = makeDeps({
       listAgentSessionSprites: async () => [
         agentSession({ workspaceId: 's1', driveId: 'drive-a' }),
@@ -1103,7 +1318,7 @@ describe('reconcileSandboxStorage', () => {
         driveEnv({ envId: 'e1', driveId: 'drive-a' }),
         driveEnv({ envId: 'e2', driveId: 'drive-b' }),
       ],
-      lookupDriveOwnerId: lookup,
+      lookupDriveBillingFacts: lookup,
     });
 
     const result = await reconcileSandboxStorage(deps);
@@ -1115,7 +1330,7 @@ describe('reconcileSandboxStorage', () => {
       expected: { calls: ['drive-a', 'drive-b'], charged: 4 },
     });
     // Every row still gets the right payer despite the sharing.
-    expect(chargeCalls.map((call) => [call.subjectId, call.payerId])).toEqual([
+    expect(chargeCalls.map((call) => [call.subjectId, call.charge.userId])).toEqual([
       ['s1', 'owner-of-drive-a'],
       ['s2', 'owner-of-drive-a'],
       ['e1', 'owner-of-drive-a'],
@@ -1130,7 +1345,7 @@ describe('reconcileSandboxStorage', () => {
         driveEnv({ envId: 'e1', driveId: 'gone' }),
         driveEnv({ envId: 'e2', driveId: 'gone' }),
       ],
-      lookupDriveOwnerId: lookup,
+      lookupDriveBillingFacts: lookup,
     });
 
     const result = await reconcileSandboxStorage(deps);
@@ -1148,7 +1363,7 @@ describe('reconcileSandboxStorage', () => {
       // one and not the other.
       listDriveEnvSprites: async () => [driveEnv({ envId: 'e1', driveId: 'drive-env' })],
       // The sessions' drive cannot resolve a payer; the env's can.
-      lookupDriveOwnerId: async (driveId) => (driveId === 'drive-1' ? null : `owner-of-${driveId}`),
+      lookupDriveBillingFacts: async (driveId) => (driveId === 'drive-1' ? null : { ownerId: `owner-of-${driveId}`, orgId: null }),
     });
 
     const result = await reconcileSandboxStorage(deps);
@@ -1216,7 +1431,7 @@ describe('reconcileSandboxStorage', () => {
         agentSession({ workspaceId: 'z2', measuredBytes: null, measuredAt: null }),
         agentSession({ workspaceId: 'z3', measuredBytes: null, measuredAt: null }),
       ],
-      lookupDriveOwnerId: async () => null,
+      lookupDriveBillingFacts: async () => null,
       advanceAgentSessionWatermark: async () => {
         throw new Error('transient db error');
       },

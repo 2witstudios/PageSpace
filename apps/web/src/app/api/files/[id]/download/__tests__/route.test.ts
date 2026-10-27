@@ -26,6 +26,7 @@ vi.mock('@pagespace/lib/utils/enums', () => ({
     PageType: { FILE: 'FILE' },
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserViewPage: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('@pagespace/lib/content/page-types.config', () => ({

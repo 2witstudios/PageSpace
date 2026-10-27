@@ -84,6 +84,7 @@ vi.mock('@pagespace/lib/utils/enums', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn().mockResolvedValue(true),
   canUserEditPage: vi.fn().mockResolvedValue(true),
 }));
@@ -159,6 +160,8 @@ vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
 
 vi.mock('@pagespace/lib/billing/credit-gate', () => ({
   canConsumeAI: vi.fn().mockResolvedValue({ allowed: true, reason: 'unlimited' }),
+  // WAL-8: the funder's tier; here the caller's own.
+  resolveEntitlementTier: vi.fn(async (_userId: string, tier: string) => tier),
 }));
 
 vi.mock('ai', async (importOriginal) => {
@@ -260,7 +263,7 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
-      agentPageId: null, rev: 0,
+      agentPageId: null, chosenWalletId: null, rev: 0,
       planPageId: null,
       type: 'page',
       lastMessageAt: null,
@@ -330,7 +333,7 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
-      agentPageId: null, rev: 0,
+      agentPageId: null, chosenWalletId: null, rev: 0,
       planPageId: null,
       type: 'page',
       lastMessageAt: null,
@@ -376,7 +379,7 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
-      agentPageId: null, rev: 0,
+      agentPageId: null, chosenWalletId: null, rev: 0,
       planPageId: null,
       type: 'page',
       lastMessageAt: null,

@@ -444,10 +444,10 @@ describe('tab-title', () => {
       expect(meta!.iconName).toBe('Calendar');
     });
 
-    it('given dashboard-drives type, should return Drives title', () => {
+    it('given dashboard-drives type, should return the Files title, as the page is titled', () => {
       const meta = getStaticTabMeta({ type: 'dashboard-drives' });
 
-      expect(meta!.title).toBe('Drives');
+      expect(meta!.title).toBe('Files');
       expect(meta!.iconName).toBe('Folder');
     });
 

@@ -18,6 +18,7 @@ import type { FormatOpInput, RegionInput, RuleInput } from '@/lib/ai/tools/sheet
 import { AgentConfigRenderer, type AgentConfigData } from './AgentConfigRenderer';
 import { ModelListRenderer, type ModelListProvider } from './ModelListRenderer';
 import { WebFetchRenderer } from './WebFetchRenderer';
+import { HttpRequestRenderer, type HttpRequestToolOutput } from './HttpRequestRenderer';
 import { TaskStatusRenderer } from './TaskStatusRenderer';
 import { CalendarEventRenderer, type CalendarEventData } from './calendar/CalendarEventRenderer';
 import { CalendarEventListRenderer } from './calendar/CalendarEventListRenderer';
@@ -267,6 +268,17 @@ export const toolRenderers: Record<string, ToolRenderer> = {
       title={(parsedOutput.name || parsedOutput.title) as string | undefined}
       oldTitle={parsedOutput.oldName as string | undefined}
       message={parsedOutput.message as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  // The agent SESSION's label (agent_workspaces), not a drive's — see
+  // `tool-labels.ts` on why the two read differently in a transcript.
+  rename_workspace: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="rename"
+      success={parsedOutput.success !== false}
+      title={parsedOutput.name as string | undefined}
       errorMessage={parsedOutput.error as string | undefined}
     />
   ),
@@ -899,6 +911,11 @@ export const toolRenderers: Record<string, ToolRenderer> = {
     );
   },
 
+  // Plain list of ids, names and sites: the generic view shows it well.
+  list_accounts: () => null,
+  http_request: ({ parsedInput, parsedOutput }) => (
+    <HttpRequestRenderer method={parsedInput?.method as string | undefined} url={parsedInput?.url as string | undefined} output={parsedOutput as HttpRequestToolOutput} />
+  ),
   web_fetch: ({ parsedInput, parsedOutput }) => {
     if (parsedOutput.success === false) return null;
     const url = (parsedOutput.url as string | undefined) ?? (parsedInput?.url as string | undefined);

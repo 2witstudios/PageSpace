@@ -3,6 +3,7 @@ import { db } from '@pagespace/db/db';
 import { conversationCompactions } from '@pagespace/db/schema/ai-compaction';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { and, desc, eq, gte, isNotNull, sql } from '@pagespace/db/operators';
+import { centsFromDollars } from '@pagespace/lib/billing/money-model';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { buildAdminReadAuditEvent } from '@pagespace/lib/audit/admin-read-audit';
 
@@ -54,7 +55,7 @@ async function handleCompactionStats(adminUserId: string, request: Request): Pro
 
   // Aggregate cost across the 24h compaction run window
   const totalCompactionCostCents = compactionLogs.reduce(
-    (sum, r) => sum + Math.round((r.cost ?? 0) * 100),
+    (sum, r) => sum + centsFromDollars(r.cost ?? 0),
     0,
   );
   const avgSummaryTokens =
@@ -92,7 +93,7 @@ async function handleCompactionStats(adminUserId: string, request: Request): Pro
       model: r.model,
       inputTokens: r.inputTokens,
       outputTokens: r.outputTokens,
-      costCents: Math.round((r.cost ?? 0) * 100),
+      costCents: centsFromDollars(r.cost ?? 0),
       timestamp: r.timestamp?.toISOString() ?? null,
     })),
     meta: { since24h: since24h.toISOString(), since7d: since7d.toISOString() },

@@ -22,7 +22,11 @@ test('New Task button focuses the task input and creates a task', async ({ page,
   await expect(newTaskBtn).toBeVisible();
 
   await newTaskBtn.click();
-  await expect(page.locator('#new-task-input')).toBeFocused();
+  // Two add-task inputs are mounted at all times — the narrow one and the wide
+  // table row — with the losing one CSS-hidden by a container query. Which is
+  // visible depends on the centre pane's width, not the viewport, so target the
+  // visible one rather than either copy's own handle.
+  await expect(page.locator('input[placeholder="+ Add a new task..."]:visible')).toBeFocused();
 
   const taskTitle = `E2E task ${Date.now()}`;
   const [taskCreateResponse] = await Promise.all([

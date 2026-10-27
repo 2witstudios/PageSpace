@@ -12,27 +12,30 @@ export interface PersistableFilters {
   dueDateFilter?: DueDateFilter;
   assigneeFilter?: AssigneeFilter;
   statusGroup?: StatusGroupFilter;
-  driveId?: string;
 }
 
 export const DEFAULT_DASHBOARD_FILTERS: PersistableFilters = {
   status: undefined,
   priority: undefined,
-  driveId: undefined,
   search: undefined,
   dueDateFilter: undefined,
   assigneeFilter: 'mine',
   statusGroup: 'active',
 };
 
-const URL_FILTER_KEYS = ['status', 'priority', 'driveId', 'search', 'dueDateFilter', 'assigneeFilter', 'statusGroup'] as const;
+const URL_FILTER_KEYS = ['status', 'priority', 'search', 'dueDateFilter', 'assigneeFilter', 'statusGroup'] as const;
 
 export function scopeKeyFor(context: 'user' | 'drive', driveId: string | undefined): string {
   return context === 'user' ? 'user' : `drive:${driveId ?? ''}`;
 }
 
-function urlHasAnyPersistableParam(searchParams: URLSearchParams): boolean {
-  return URL_FILTER_KEYS.some((key) => searchParams.has(key));
+/**
+ * The URL wins over stored preferences only when it carries a filter this
+ * focus will honour — otherwise a bookmark holding just a discarded key
+ * would throw away the preferences AND show nothing for it.
+ */
+function urlHasHonouredParam(searchParams: URLSearchParams, scopedToDrive: boolean): boolean {
+  return URL_FILTER_KEYS.some((key) => (scopedToDrive || key !== 'status') && searchParams.has(key));
 }
 
 const VALID_STATUS_GROUPS: ReadonlyArray<StatusGroupFilter> = ['all', 'active', 'completed'];
@@ -57,7 +60,6 @@ function readFromUrl(searchParams: URLSearchParams): PersistableFilters {
   return {
     status,
     priority: (searchParams.get('priority') as TaskPriority) || undefined,
-    driveId: searchParams.get('driveId') || undefined,
     search: searchParams.get('search') || undefined,
     dueDateFilter: (searchParams.get('dueDateFilter') as DueDateFilter) || undefined,
     assigneeFilter: (searchParams.get('assigneeFilter') as AssigneeFilter) || 'mine',
@@ -77,11 +79,30 @@ export function fromStoredOrDefaults(
 export function pickInitialFilters(
   searchParams: URLSearchParams,
   stored: StoredDashboardFilters | undefined,
+  scopedToDrive = true,
 ): PersistableFilters {
-  if (urlHasAnyPersistableParam(searchParams)) {
-    return readFromUrl(searchParams);
-  }
-  return fromStoredOrDefaults(stored);
+  // The URL is read as written and forFocus decides what the focus keeps,
+  // so `?status=done&statusGroup=all` under All drives loses both the slug
+  // and the group it widened, the same as a persisted pair would.
+  const filters = urlHasHonouredParam(searchParams, scopedToDrive)
+    ? readFromUrl(searchParams)
+    : fromStoredOrDefaults(stored);
+  return forFocus(filters, scopedToDrive);
+}
+
+/**
+ * What a focus can honour. Across all drives a slug-level `status` belongs
+ * to no list in particular, and the control for it is not shown, so a
+ * persisted or bookmarked one would narrow the list invisibly. Applied at
+ * every entry point (mount, change) so state, URL, persistence and the
+ * request never carry a filter the UI cannot show.
+ */
+export function forFocus(filters: PersistableFilters, scopedToDrive: boolean): PersistableFilters {
+  if (scopedToDrive || filters.status === undefined) return filters;
+  const { status: _status, ...withoutStatus } = filters;
+  // A slug used to widen the group to 'all' so the two would not be ANDed;
+  // with the slug gone that widening has no reason left either.
+  return withoutStatus.statusGroup === 'all' ? { ...withoutStatus, statusGroup: 'active' } : withoutStatus;
 }
 
 export function toStoredDashboardFilters(filters: PersistableFilters): StoredDashboardFilters {

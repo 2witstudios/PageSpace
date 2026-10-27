@@ -24,11 +24,32 @@
  * The only thing dropped in the port is the checkout chip (`scopeLabel`), which
  * named a project/branch. That slot is now the agent label, so a grid holding
  * conversations with several different agents says which is which.
+ *
+ * The shared pieces a bar is BUILT from live here too — the tab strip, the
+ * split/close controls, "+", "Open in Agents", the identity — because the AI_CHAT
+ * page and the agents console both assemble a bar from them and must not drift
+ * into two differently-shaped versions of the same control. That sharing is what
+ * let the page drop its own header, which carried a second, full-size copy of
+ * the same Chat/History/Settings tabs the host pane's bar already had.
  */
 
 import type { MouseEvent, ReactNode } from 'react';
-import { Plus, SquareSplitHorizontal, SquareSplitVertical, X } from 'lucide-react';
+import Link from 'next/link';
+import {
+  Check,
+  ExternalLink,
+  History,
+  Loader2,
+  MessageSquare,
+  Plus,
+  Save,
+  Settings,
+  SquareSplitHorizontal,
+  SquareSplitVertical,
+  X,
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
+import type { AgentSettingsSaveState } from '@/lib/ai/shared/hooks/useAgentSettingsSaveState';
 import { Button } from '@/components/ui/button';
 
 export default function PaneBar({
@@ -173,6 +194,82 @@ export function PaneNewConversationAction({
 }
 
 /**
+ * The Settings tab's Save, scaled for a 30px bar: clean/dirty/saving/saved as
+ * one control, no toast.
+ *
+ * Shared because BOTH chat surfaces show a Settings tab now — a grid pane and
+ * the agent page's session-less chat — and a save button that reports its state
+ * differently depending on which bar you are looking at is exactly the drift
+ * this file exists to prevent.
+ */
+export function PaneSettingsSaveAction({
+  saveState,
+  onSave,
+}: {
+  saveState: AgentSettingsSaveState;
+  onSave(): void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={guarded(onSave)}
+      // Only clickable once there is something to save — also the guard against
+      // clicking before the agent's config has arrived.
+      disabled={saveState !== 'dirty'}
+      // The state change (Saving.../Saved) is the ONLY save confirmation —
+      // there is no toast — so screen readers need this to catch it.
+      aria-live="polite"
+      aria-atomic="true"
+      className={cn(
+        'flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium transition-colors disabled:pointer-events-none',
+        saveState === 'clean' && 'text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50',
+        saveState === 'dirty' && 'text-warning hover:bg-warning/10',
+        saveState === 'saving' && 'text-warning',
+        saveState === 'saved' && 'text-success',
+      )}
+    >
+      {saveState === 'saving' ? (
+        <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+      ) : saveState === 'saved' ? (
+        <Check className="size-3 animate-in zoom-in-50 fade-in-0 duration-200" aria-hidden="true" />
+      ) : (
+        <span className="relative inline-flex">
+          <Save className="size-3" aria-hidden="true" />
+          {saveState === 'dirty' && (
+            <span aria-hidden="true" className="absolute -right-0.5 -top-0.5 size-1 animate-pulse rounded-full bg-warning" />
+          )}
+        </span>
+      )}
+      {saveState === 'saved' ? 'Saved' : 'Save'}
+    </button>
+  );
+}
+
+/**
+ * "Open in Agents" — the cross-link from a chat pane hosted on an AI_CHAT page
+ * to the same conversation in the agents console.
+ *
+ * It lives in the BAR, not a page header, because the page header is gone: one
+ * pane, one bar, one set of controls. Only page-hosted panes render it — inside
+ * the console itself it would link to where the user already is.
+ */
+export function PaneOpenInAgentsAction({ href }: { href: string }) {
+  return (
+    <Link
+      href={href}
+      aria-label="Open in Agents"
+      title="Open in Agents"
+      // The pane's own click handler selects the pane; a navigation should not
+      // also re-select on its way out, same as every other control in this bar.
+      onClick={(event) => event.stopPropagation()}
+      className="flex shrink-0 items-center justify-center rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+    >
+      <ExternalLink className="size-3.5" aria-hidden="true" />
+    </Link>
+  );
+}
+
+/**
  * A pane's identity: a status dot, the session name, and an optional label.
  *
  * The dot's FILL means "a live session is bound here" — in the pane grid that
@@ -214,5 +311,58 @@ export function PaneSessionIdentity({
         </span>
       )}
     </span>
+  );
+}
+
+/** Which of a chat surface's three faces its bar is currently showing. */
+export type PaneChatTab = 'chat' | 'history' | 'settings';
+
+/**
+ * The tab strip itself — icon-only (a pane bar is 30px tall, no room for
+ * spacious text pills), tooltipped/aria-labeled for the text a mouse-hover or
+ * screen reader still needs.
+ *
+ * Lives here rather than in `AgentPanes` because it is not the grid's: the
+ * agent page's session-less chat wears the same bar with no grid behind it,
+ * and Chat/History/Settings has to be reachable from there too. One strip,
+ * both surfaces — the whole point of removing the page's own duplicate tabs.
+ */
+export function PaneChatTabStrip({
+  activeTab,
+  onSelectTab,
+  showSettings,
+  agentTitle,
+}: {
+  activeTab: PaneChatTab;
+  onSelectTab: (tab: PaneChatTab) => void;
+  showSettings: boolean;
+  agentTitle: string;
+}) {
+  const tabButton = (tab: PaneChatTab, label: string, Icon: typeof MessageSquare) => (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={activeTab === tab}
+      aria-label={label}
+      title={label}
+      onClick={(e) => {
+        e.stopPropagation();
+        onSelectTab(tab);
+      }}
+      className={cn(
+        'flex shrink-0 items-center justify-center rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground',
+        activeTab === tab && 'bg-primary-soft text-foreground',
+      )}
+    >
+      <Icon className="size-3" aria-hidden="true" />
+    </button>
+  );
+
+  return (
+    <div role="tablist" className="flex shrink-0 items-center gap-0.5">
+      {tabButton('chat', 'Chat', MessageSquare)}
+      {tabButton('history', 'History', History)}
+      {showSettings && tabButton('settings', `${agentTitle} settings`, Settings)}
+    </div>
   );
 }

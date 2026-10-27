@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { motion } from 'motion/react';
 import { Mail } from 'lucide-react';
 import {
-  AuthShell,
+  AuthLayout,
   AuthDivider,
   OAuthButtons,
   GoogleOneTap,
@@ -20,6 +20,7 @@ import { useOAuthSignIn } from '@/hooks/useOAuthSignIn';
 import type { InviteContextData } from '@/lib/auth/invite-resolver';
 import { getPreferredBrowserName } from '@/lib/auth/browser-detection';
 import { useInAppBrowserNotice } from '@/hooks/useInAppBrowserNotice';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
 
 interface SignUpClientProps {
   inviteToken?: string;
@@ -60,9 +61,11 @@ export function SignUpClient({ inviteToken, inviteContext, returnUrl }: SignUpCl
 
   const browserName = getPreferredBrowserName() ?? 'your browser';
   const appLabel = inAppInfo.appName ?? 'this app';
+  // The v3 look is only applied when Imago is enabled; classic markup is unchanged.
+  const v3 = isV3AuthEnabled();
 
   return (
-    <AuthShell>
+    <AuthLayout>
       <GoogleOneTap
         autoSelect={false}
         cancelOnTapOutside={true}
@@ -88,7 +91,11 @@ export function SignUpClient({ inviteToken, inviteContext, returnUrl }: SignUpCl
 
       {inviteContext && (
         <motion.div
-          className="mb-6 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm dark:border-blue-900 dark:bg-blue-950/40"
+          className={
+            v3
+              ? 'mb-6 rounded-[10px] border border-[oklch(0.50_0.16_235/0.22)] bg-[oklch(0.50_0.16_235/0.07)] px-3.5 py-3 text-[13.5px] leading-[1.5]'
+              : 'mb-6 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm dark:border-blue-900 dark:bg-blue-950/40'
+          }
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3 }}
@@ -101,8 +108,8 @@ export function SignUpClient({ inviteToken, inviteContext, returnUrl }: SignUpCl
               </>
             ) : (
               <>
-                You&apos;re joining{' '}
-                <span className="font-semibold text-blue-700 dark:text-blue-300">
+                {v3 ? 'You’re joining' : "You're joining"}{' '}
+                <span className={v3 ? 'font-semibold text-[oklch(0.38_0.16_235)]' : 'font-semibold text-blue-700 dark:text-blue-300'}>
                   {inviteContext.driveName}
                 </span>
                 , invited by{' '}
@@ -119,7 +126,13 @@ export function SignUpClient({ inviteToken, inviteContext, returnUrl }: SignUpCl
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4 }}
       >
-        <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">
+        <h1
+          className={
+            v3
+              ? 'text-[28px] font-bold leading-[1.15] tracking-[-0.02em] text-[oklch(0.15_0.01_220)]'
+              : 'text-3xl font-bold tracking-tight text-gray-900 dark:text-white'
+          }
+        >
           Get on the same page.
         </h1>
         <p className="mt-2 text-sm text-muted-foreground">
@@ -218,6 +231,6 @@ export function SignUpClient({ inviteToken, inviteContext, returnUrl }: SignUpCl
           </Link>
         </p>
       </motion.div>
-    </AuthShell>
+    </AuthLayout>
   );
 }

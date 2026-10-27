@@ -2,9 +2,9 @@
  * credit-balance — read-only view of a user's prepaid AI-credit balance for the
  * dashboard widget and the `GET /api/credits` endpoint.
  *
- * This is the DISPLAY layer; it never mutates. The authoritative spend decision and
- * the gate-driven periodic rollover live in `./credit-gate` (the imperative shell that
- * owns the clock and the row lock). Here we only mirror the gate's semantics for presentation:
+ * This is the DISPLAY layer; it never mutates. The authoritative spend decision lives
+ * in `./credit-gate`, and a comped account's periodic rollover in the period sweep
+ * (`./wallet-funding-shell` rollDuePersonalRoots). Here we only mirror the gate's semantics for presentation:
  *   - free tier (a ONE-TIME starter grant, TIER_ALLOWANCE_REFILLS.free === false) is
  *     shown its stored remaining only, and no renewal date — nothing will ever be
  *     added to the monthly bucket again;
@@ -28,12 +28,15 @@
  * without reaching back into apps/web. See ./credit-emit.
  */
 
+import { toPersonalSubscriptionTier } from './subscription-tiers';
 import { db } from '@pagespace/db/db';
-import { creditBalances, creditHolds } from '@pagespace/db/schema/credits';
+import { creditHolds } from '@pagespace/db/schema/credits';
+import { wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
 import { users } from '@pagespace/db/schema/auth';
 import { and, eq, gt, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
-import { TIER_MONTHLY_ALLOWANCE_CENTS, allowanceRefills, isOneTimeAllowanceTier } from './credit-pricing';
+import { allowanceRefills, isOneTimeAllowanceTier } from './credit-pricing';
+import { tierAllowanceCents } from './money-model';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
 // Mirror of addOneMonth in credit-gate (same logic, kept local to avoid pulling
@@ -80,8 +83,9 @@ export interface CreditBalanceSummary {
   reserved: number;
 }
 
+/** Display allowance for an account never granted: derived from the list price (MON-2). */
 function allowanceFor(tier: SubscriptionTier): number {
-  return TIER_MONTHLY_ALLOWANCE_CENTS[tier] ?? TIER_MONTHLY_ALLOWANCE_CENTS.free;
+  return tierAllowanceCents(tier);
 }
 
 /** The unlimited/hidden summary used when prepaid billing is disabled. */
@@ -97,7 +101,7 @@ function disabledSummary(): CreditBalanceSummary {
 }
 
 /** The funded-balance columns both the display read and the routing gate need. */
-interface FundedBalanceRow {
+export interface FundedBalanceRow {
   monthlyRemainingCents: number;
   monthlyAllowanceCents: number;
   topupRemainingCents: number;
@@ -127,7 +131,7 @@ function pendingStarterGrant(row: FundedBalanceRow, tier: SubscriptionTier): boo
   return isOneTimeAllowanceTier(tier) && row.monthlyPeriodEnd === null;
 }
 
-function spendableCentsFor(row: FundedBalanceRow | null, tier: SubscriptionTier): number {
+export function spendableCentsFor(row: FundedBalanceRow | null, tier: SubscriptionTier): number {
   // No row yet: the gate lazy-inits from the tier allowance on the first call.
   if (!row) return Math.max(0, allowanceFor(tier));
 
@@ -166,14 +170,14 @@ export async function readSpendableCents(
 ): Promise<number> {
   const [row] = await db
     .select({
-      monthlyRemainingCents: creditBalances.monthlyRemainingCents,
-      monthlyAllowanceCents: creditBalances.monthlyAllowanceCents,
-      topupRemainingCents: creditBalances.topupRemainingCents,
-      debtCents: creditBalances.debtCents,
-      monthlyPeriodEnd: creditBalances.monthlyPeriodEnd,
+      monthlyRemainingCents: wallets.monthlyRemainingCents,
+      monthlyAllowanceCents: wallets.monthlyAllowanceCents,
+      topupRemainingCents: wallets.topupRemainingCents,
+      debtCents: wallets.debtCents,
+      monthlyPeriodEnd: wallets.monthlyPeriodEnd,
     })
-    .from(creditBalances)
-    .where(eq(creditBalances.userId, userId))
+    .from(wallets)
+    .where(personalRootWalletOf(userId))
     .limit(1);
 
   return spendableCentsFor(row ?? null, tier);
@@ -195,14 +199,14 @@ export async function getCreditBalance(
   const [rows, holdAgg] = await Promise.all([
     db
       .select({
-        monthlyRemainingCents: creditBalances.monthlyRemainingCents,
-        monthlyAllowanceCents: creditBalances.monthlyAllowanceCents,
-        topupRemainingCents: creditBalances.topupRemainingCents,
-        debtCents: creditBalances.debtCents,
-        monthlyPeriodEnd: creditBalances.monthlyPeriodEnd,
+        monthlyRemainingCents: wallets.monthlyRemainingCents,
+        monthlyAllowanceCents: wallets.monthlyAllowanceCents,
+        topupRemainingCents: wallets.topupRemainingCents,
+        debtCents: wallets.debtCents,
+        monthlyPeriodEnd: wallets.monthlyPeriodEnd,
       })
-      .from(creditBalances)
-      .where(eq(creditBalances.userId, userId))
+      .from(wallets)
+      .where(personalRootWalletOf(userId))
       .limit(1),
     db
       .select({ reserved: sql<number>`coalesce(sum(${creditHolds.estCents}), 0)` })
@@ -287,5 +291,5 @@ export async function resolveTier(userId: string): Promise<SubscriptionTier> {
     .from(users)
     .where(eq(users.id, userId))
     .limit(1);
-  return (rows[0]?.subscriptionTier as SubscriptionTier) ?? 'free';
+  return toPersonalSubscriptionTier(rows[0]?.subscriptionTier);
 }

@@ -67,6 +67,24 @@ describe('env-validation', () => {
       expect(result.success).toBe(true);
     });
 
+    it('given the App Store IAP vars declared blank (as .env.example ships them), should still parse', () => {
+      const env = {
+        NODE_ENV: 'test',
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
+        APPLE_IAP_BUNDLE_ID: '',
+        APPLE_IAP_APP_APPLE_ID: '',
+        APPLE_IAP_SANDBOX_MAX_FUNDINGS: '',
+        APPLE_IAP_SANDBOX_FUNDED_USER_IDS: '',
+      };
+      expect(serverEnvSchema.safeParse(env).success).toBe(true);
+      expect(serverEnvSchema.safeParse({ ...env, APPLE_IAP_APP_APPLE_ID: ' 6700000001 ' }).success).toBe(true);
+    });
+
+    it('given a non-numeric APPLE_IAP_APP_APPLE_ID, should fail validation', () => {
+      const env = { NODE_ENV: 'test', DATABASE_URL: 'postgresql://user:pass@localhost:5432/db', APPLE_IAP_APP_APPLE_ID: 'ai.pagespace.ios' };
+      expect(serverEnvSchema.safeParse(env).success).toBe(false);
+    });
+
     it('given a too-short non-empty SANDBOX_SESSION_SECRET, should fail validation', () => {
       const env = {
         NODE_ENV: 'test',
@@ -646,7 +664,7 @@ describe('env-validation', () => {
     it('given APP_HOSTING_ENABLED=true and an explicit apex, should boot', () => {
       bootable();
       process.env.APP_HOSTING_ENABLED = 'true';
-      process.env.PUBLISHED_APPS_APEX = 'pagespace.app';
+      process.env.PUBLISHED_APPS_APEX = 'pagespace.io';
 
       expect(() => validateEnv()).not.toThrow();
     });
@@ -660,7 +678,7 @@ describe('env-validation', () => {
       // either, on a feature that is dark by default.
       bootable();
       process.env.APP_HOSTING_ENABLED = 'true';
-      process.env.PUBLISHED_APPS_APEX = 'pagespace.app';
+      process.env.PUBLISHED_APPS_APEX = 'pagespace.io';
       process.env.PUBLISHED_APP_IDLE_STOP_SECONDS = '15m';
       process.env.PUBLISHED_APP_HIT_STAMP_INTERVAL_SECONDS = 'sixty';
       process.env.PUBLISHED_APP_DAILY_AWAKE_SECONDS_CAP = '-1';

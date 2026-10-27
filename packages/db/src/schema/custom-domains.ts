@@ -3,6 +3,7 @@ import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { drives, pages } from './core';
 import { publishedApps } from './published-apps';
+import type { SuspensionKind } from './organizations';
 
 export const customDomainStatus = pgEnum('custom_domain_status', ['pending', 'verified', 'failed', 'provisioning', 'active', 'dns_failed', 'cert_failed']);
 
@@ -39,10 +40,13 @@ export const customDomains = pgTable('custom_domains', {
   // domain back to the static site rather than leaving it dangling or deleting
   // the domain: the domain is the user's, the app is not.
   publishedAppId: text('published_app_id').references(() => publishedApps.id, { onDelete: 'set null' }),
+  // Set by the org's custom-domains policy (POL-1); the domain row stays and is not served while set.
+  suspendedByPolicy: text('suspended_by_policy').$type<SuspensionKind>(),
   createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
 }, (table) => ({
   hostnameKey: uniqueIndex('custom_domains_hostname_key').on(table.hostname),
   driveIdx: index('custom_domains_drive_id_idx').on(table.driveId),
+  suspendedIdx: index('custom_domains_suspended_by_policy_idx').on(table.driveId).where(sql`${table.suspendedByPolicy} IS NOT NULL`),
   publishedAppIdx: index('custom_domains_published_app_id_idx').on(table.publishedAppId),
   // At most one primary domain per drive.
   primaryPerDrive: uniqueIndex('custom_domains_primary_per_drive')

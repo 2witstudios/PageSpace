@@ -79,6 +79,10 @@ vi.mock('@/lib/auth', () => ({
   // Session auth = unscoped, which is all this route accepts. Stubbed because
   // the route passes the scope ceiling into the Home-drive hint.
   getAllowedDriveIds: vi.fn(() => []),
+  authSessionIdOf: vi.fn<typeof import('@/lib/auth').authSessionIdOf>((result) => (result.tokenType === 'session' ? result.sessionId : undefined)),
+  // The turn's tool selection reads this; a session principal is never
+  // drive-scoped, so the account-level tools stay advertised.
+  isDriveScopedPrincipal: vi.fn(() => false),
 }));
 
 vi.mock('@/lib/ai/core/stream-takeover', () => ({
@@ -354,6 +358,8 @@ vi.mock('@/lib/ai/core/tool-filtering', () => ({
   filterToolsForSandboxEnablement: vi.fn((tools: unknown) => tools),
   filterToolsForSandboxTier: vi.fn((tools: unknown) => tools),
   filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
+  filterToolsForAgentAccounts: vi.fn((tools: unknown) => tools),
+  filterToolsForMcpScope: vi.fn((tools: unknown) => tools),
   filterToolsForReadOnly: vi.fn().mockReturnValue({}),
   filterToolsForWebSearch: vi.fn().mockReturnValue({}),
   filterToolsForImageGen: vi.fn((t) => t),
@@ -414,6 +420,16 @@ vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: { trackUsage: vi.fn(), trackToolUsage: vi.fn() },
   extractOpenRouterCostDollars: vi.fn(() => undefined),
   extractOpenRouterGenerationIds: vi.fn(() => []),
+  // $2 / $10 per million input / output tokens, and 4 chars per token.
+  calculateCost: vi.fn((_model: string, input = 0, output = 0) => (input * 2 + output * 10) / 1e6),
+  estimateTokens: vi.fn((text: string) => Math.ceil(text.length / 4)),
+}));
+
+// Deterministic hold: 3 cents reserved per chat call.
+vi.mock('@pagespace/lib/monitoring/chat-pricing', () => ({
+  estimateChatHoldCentsForModel: vi.fn(() => 3),
+  calcStepCostDollars: vi.fn(() => 0),
+  shouldAbortAfterStep: vi.fn(() => false),
 }));
 
 vi.mock('@pagespace/lib/monitoring/ai-context-calculator', () => ({
@@ -498,6 +514,10 @@ import { db } from '@pagespace/db/db';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { extractMessageContent } from '@/lib/ai/core/message-utils';
+import { streamText, type UIMessageChunk } from 'ai';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { pipeUIMessageStreamStrippingStart } from '@/lib/ai/core/stream-pipe-utils';
+import { calculateTotalContextSize } from '@pagespace/lib/monitoring/ai-context-calculator';
 
 /** A signal that reports aborted=true — simulates onAbort having already fired. */
 const abortedSignal = (): AbortSignal => {
@@ -574,6 +594,9 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
     captured.createUIMessageStreamOptions = {};
     captured.streamTextOptions = {};
     mockConversationActiveAtLockTime.current = true;
+    // clearAllMocks() clears calls, not implementations: the takeover test near the end
+    // installs a persistent rejection that would otherwise leak into any later test.
+    mockTakeOverConversationStreams.mockResolvedValue({ aborted: [], reconciled: [] });
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
     mockCreateStreamLifecycle.mockResolvedValue({
       channel: makeFakeChannel(),
@@ -792,7 +815,7 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
   const newConv = {
     id: 'conv-1', userId: 'user-1', title: null, type: 'global',
     contextId: null, isActive: true, isShared: false,
-  agentPageId: null, rev: 0, planPageId: null,
+  agentPageId: null, chosenWalletId: null, rev: 0, planPageId: null,
     createdAt: new Date('2024-01-01'), updatedAt: new Date('2024-01-01'), lastMessageAt: null,
   };
 
@@ -847,7 +870,7 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
       expect(response).toBe(await mockRespondWithHelpAnswer.mock.results[0].value);
       expect(mockCanConsumeAI).not.toHaveBeenCalled();
       expect(mockRespondWithHelpAnswer).toHaveBeenCalledWith(
-        expect.objectContaining({ senderId: 'user-1' })
+        expect.objectContaining({ sender: expect.objectContaining({ userId: 'user-1' }) })
       );
     });
 
@@ -1133,6 +1156,106 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
       expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
       const assistantSave = mockSaveGlobalAssistantMessageToDatabase.mock.calls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
       expect(assistantSave).toBeUndefined();
+    });
+  });
+
+  // Mirrors the page route's test: the global settle must bill the step a Stop interrupted.
+  // ai@6 rejects `steps` and `totalUsage` for a single-step turn stopped mid-stream.
+  describe('billing a turn aborted mid-step', () => {
+    it('given a Stop during the only step, settles the hold ONCE and bills the prompt plus the streamed output', async () => {
+      const signalAny = (AbortSignal as { any?: unknown }).any;
+      (AbortSignal as unknown as { any: (signals: AbortSignal[]) => AbortSignal }).any = (signals) =>
+        signals.find((sig) => sig.aborted) ?? signals[0];
+      try {
+        mockCanConsumeAI.mockResolvedValueOnce({
+          allowed: true,
+          holdId: 'hold-1',
+          balanceSnapshot: { netSpendableCents: 1000 },
+        });
+        // The system prompt + tool definitions the interrupted step's prompt carries.
+        vi.mocked(calculateTotalContextSize).mockReturnValueOnce({
+          ...vi.mocked(calculateTotalContextSize)({} as Parameters<typeof calculateTotalContextSize>[0]),
+          systemPromptTokens: 900,
+          toolDefinitionTokens: 100,
+        });
+        vi.mocked(createStreamAbortController).mockReturnValueOnce({ streamId: 'stream_123', signal: abortedSignal(), controller: new AbortController() });
+        vi.mocked(streamText).mockImplementationOnce(((options: MockStreamTextOptions) => {
+          captured.streamTextOptions = options;
+          const aborted = Promise.reject(new DOMException('This operation was aborted', 'AbortError'));
+          aborted.catch(() => {});
+          return {
+            toUIMessageStream: () => (async function* () {})(),
+            totalUsage: aborted,
+            steps: aborted,
+            finishReason: aborted,
+            response: aborted,
+          };
+        }) as unknown as typeof streamText);
+        vi.mocked(pipeUIMessageStreamStrippingStart).mockImplementationOnce(async (_result, _writer, options) => {
+          const chunks: UIMessageChunk[] = [
+            { type: 'start-step' },
+            { type: 'text-start', id: 't' },
+            { type: 'text-delta', id: 't', delta: 'o'.repeat(200) },
+          ];
+          for (const chunk of chunks) options?.onChunk?.(chunk);
+          options?.onContent?.();
+        });
+
+        await POST(makeRequest(), makeContext());
+        await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+        await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+      } finally {
+        (AbortSignal as { any?: unknown }).any = signalAny;
+      }
+
+      const calls = vi.mocked(AIMonitoring.trackUsage).mock.calls;
+      expect(calls).toHaveLength(1);
+      const settled = calls[0][0];
+      expect(settled.holdId).toBe('hold-1');
+      // 900 system-prompt + 100 tool tokens in (this harness has no message history),
+      // 50 streamed out (200 chars): 1000 * $2/M + 50 * $10/M, under the 3-cent hold.
+      expect(settled.inputTokens).toBe(1000);
+      expect(settled.outputTokens).toBe(50);
+      expect(settled.providerCostDollars).toBeCloseTo(0.0025, 9);
+      expect(settled.metadata).toMatchObject({ abortedStep: { inputTokens: 1000, outputTokens: 50, capped: false } });
+    });
+  });
+  describe('turn timing marks', () => {
+    it('persists the preflight marks on the usage row, in the order the steps complete', async () => {
+      await POST(makeRequest(), makeContext());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+
+      const calls = vi.mocked(AIMonitoring.trackUsage).mock.calls;
+      expect(calls).toHaveLength(1);
+      const timing = (calls[0][0].metadata as { timing?: { marks: Record<string, number> } }).timing;
+      expect(timing).toBeDefined();
+      const names = Object.keys(timing!.marks);
+      // Conditional steps (drive prompt, page tree, drive summary, MCP drive access) may be
+      // absent for this fixture (this file does not mock the integration resolver, so
+      // `integrations_ready` is skipped by its caught failure); the rest must appear, each after the step it follows.
+      const inOrder = [
+        'credit_gate',
+        'provider_ready',
+        'history_loaded',
+        'history_converted',
+        // The payer's eligibility first, then the context the shared
+        // assistant-surface builder assembles (IMG-10.10).
+        'sandbox_eligibility',
+        'personalization',
+        'home_drive_resolved',
+        'agent_awareness_built',
+        'commands_loaded',
+        'active_plan_loaded',
+        'system_prompt',
+        'integrations_import',
+        'history_compacted',
+        'model_messages_built',
+        'history_prepared',
+        'display_name_ready',
+        'generation_started',
+      ];
+      expect(names.filter((name) => inOrder.includes(name))).toEqual(inOrder);
     });
   });
 });

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import type { UIMessage } from 'ai';
 import { useGroupedParts } from '../useGroupedParts';
-import { isTextGroupPart, isFileGroupPart, isProcessedToolPart, isToolRunGroupPart } from '../message-types';
+import { isTextGroupPart, isFileGroupPart, isProcessedToolPart, isToolRunGroupPart, isSpendFallbackPart } from '../message-types';
 
 type Parts = UIMessage['parts'];
 
@@ -417,5 +417,18 @@ describe('useGroupedParts', () => {
       expect(result.current[2].toolName).toBe('ask_agent');
     }
     expect(isToolRunGroupPart(result.current[3])).toBe(true);
+  });
+
+  it('SPEND-4 (partial) given a data-spend-fallback part, should keep it as its own group ahead of the text it precedes', () => {
+    const parts = asMessageParts([
+      { type: 'data-spend-fallback', id: 'm1-spend-fallback', data: { from: 'drive_wallet', to: 'own_credits', walletId: 'w-marcus' } },
+      { type: 'text', text: 'Answer' },
+    ]);
+    const { result } = renderHook(() => useGroupedParts(parts));
+    expect(result.current).toHaveLength(2);
+    const [fallback, text] = result.current;
+    expect(isSpendFallbackPart(fallback)).toBe(true);
+    expect(fallback).toEqual({ type: 'data-spend-fallback', id: 'm1-spend-fallback', data: { from: 'drive_wallet', to: 'own_credits', walletId: 'w-marcus' } });
+    expect(isTextGroupPart(text)).toBe(true);
   });
 });

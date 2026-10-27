@@ -16,6 +16,8 @@ const {
   mockUpdateWhere,
   mockIsUserDriveMember,
   mockInnerJoin,
+  mockInsert,
+  mockInsertValues,
   makeChildLogger,
 } = vi.hoisted(() => {
   const makeChildLogger = (): Record<string, unknown> => ({
@@ -37,6 +39,8 @@ const {
     mockUpdateWhere: vi.fn(),
     mockIsUserDriveMember: vi.fn(),
     mockInnerJoin: vi.fn(),
+    mockInsert: vi.fn(),
+    mockInsertValues: vi.fn(),
     makeChildLogger,
   };
 });
@@ -45,8 +49,10 @@ vi.mock('@pagespace/db/db', () => ({
   db: {
     select: mockSelect,
     update: mockUpdate,
+    insert: mockInsert,
   },
 }));
+vi.mock('@pagespace/db/schema/workflow-runs', () => ({ workflowRuns: { id: 'id' } }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
@@ -104,6 +110,7 @@ vi.mock('@/lib/logging/mask', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     isUserDriveMember: mockIsUserDriveMember,
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -151,6 +158,7 @@ const createWorkflowRow = (overrides: Record<string, unknown> = {}) => ({
   eventDebounceSecs: null,
   instructionPageId: null,
   isEnabled: true,
+  ownerLeftAt: null,
   nextRunAt: null,
   createdAt: new Date(),
   updatedAt: new Date(),
@@ -213,11 +221,37 @@ describe('executeCalendarTrigger', () => {
     mockUpdate.mockReturnValue({ set: mockUpdateSet });
     mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
     mockUpdateWhere.mockResolvedValue(undefined);
+    mockInsert.mockReturnValue({ values: mockInsertValues });
+    mockInsertValues.mockReturnValue({ onConflictDoNothing: vi.fn().mockResolvedValue(undefined) });
 
     mockExecuteWorkflow.mockResolvedValue({
       success: true,
       durationMs: 500,
       conversationId: 'conv-1',
+    });
+  });
+
+  describe('a trigger whose owner left ([D-OW-36])', () => {
+    const ownerLeftCases: Array<[string, CalendarTrigger, Record<string, unknown>]> = [
+      ['its workflow is flagged owner-left', createTrigger(), { ownerLeftAt: new Date() }],
+      ['the scheduler\'s account was deleted (no scheduler)', createTrigger({ scheduledById: null }), {}],
+      ['the workflow\'s creator account was deleted (no creator)', createTrigger(), { createdBy: null }],
+    ];
+
+    it.each(ownerLeftCases)('SPEND-6 (partial) when %s: skipped before the access check, the credit gate or any hold, with a cancelled run recording owner_left', async (_label, trigger, workflowOverrides) => {
+      mockSelectWhere.mockReset();
+      mockSelectWhere.mockResolvedValueOnce([createWorkflowRow(workflowOverrides)]).mockResolvedValue([]);
+
+      const result = await executeCalendarTrigger(trigger, createEvent());
+
+      expect(result).toMatchObject({ success: false, skipped: true });
+      expect(result.error).toContain('owner_left');
+      expect(mockIsUserDriveMember).not.toHaveBeenCalled();
+      expect(mockCanConsumeAI).not.toHaveBeenCalled();
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+      expect(mockInsertValues).toHaveBeenCalledWith(expect.objectContaining({
+        workflowId: 'wf-1', sourceTable: 'calendarTriggers', sourceId: 'trg-1', status: 'cancelled', error: expect.stringContaining('owner_left'),
+      }));
     });
   });
 
@@ -363,6 +397,39 @@ describe('executeCalendarTrigger', () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain('agent');
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('SPEND-6 (partial) the gate names the drive as consumer, never the scheduling user\'s credits', async () => {
+    await executeCalendarTrigger(createTrigger(), createEvent());
+
+    expect(mockCanConsumeAI).toHaveBeenCalledWith('user-123', 'free', {
+      spend: { kind: 'automation', driveId: 'drive-1' },
+      skipDailyCap: true,
+    });
+  });
+
+  it('SPEND-6 (partial) the run settles on the drive wallet the gate reserved on', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-1', reason: 'ok', walletId: 'w-drive' });
+
+    await executeCalendarTrigger(createTrigger(), createEvent());
+
+    expect(mockExecuteWorkflow.mock.calls[0][1]).toEqual({
+      creditSpend: { spend: { kind: 'automation', driveId: 'drive-1' }, walletId: 'w-drive' },
+    });
+  });
+
+  it('SPEND-6 (partial) with only the person funded and the drive wallet empty the run is skipped, naming why', async () => {
+    mockCanConsumeAI.mockResolvedValue({
+      allowed: false,
+      reason: 'source_refused',
+      refusal: { source: 'drive_wallet', reason: 'drive_wallet_empty', options: [] },
+    });
+
+    const result = await executeCalendarTrigger(createTrigger(), createEvent());
+
+    expect(result).toMatchObject({ success: false, error: 'AI credit gate denied: source_refused (drive_wallet_empty)' });
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockCanConsumeAI).toHaveBeenCalledTimes(1);
   });
 
   it('skips execution and returns failure when credit gate denies', async () => {

@@ -63,6 +63,85 @@ import { z } from 'zod';
 export const MAX_ACTIVE_WORKSPACES_PER_OWNER = 100;
 
 /**
+ * Bound on a session's stored display label — it is rendered everywhere the
+ * session appears (sidebar rows, listings, tool output).
+ *
+ * ONE constant, for the same reason `MAX_ACTIVE_WORKSPACES_PER_OWNER` above is
+ * one: this used to live in the spawn route as a route-local literal, while
+ * every other surface that accepts a name (the rename PATCH, the agent's
+ * `rename_workspace` tool) would have had to restate it and keep it equal by
+ * hand.
+ *
+ * Deliberately NOT the same number as `plan-spawn-worker.ts`'s own
+ * `MAX_SESSION_NAME_LENGTH` (200), which bounds a WORKER's name — a
+ * conversation title — not a workspace's. Two different objects, two bounds.
+ */
+export const MAX_SESSION_NAME_LENGTH = 120;
+
+/**
+ * A session name as accepted from ANY client — a human through the API, or an
+ * agent through the tool surface. Trimmed first, then bounded, so
+ * whitespace-only input is a refusal rather than a stored blank that renders
+ * as the nameless fallback.
+ *
+ * A label, never an address (invariant 2): there is no uniqueness check here
+ * and none in the store, so two sessions may hold the same name and a rename
+ * can never break a connection.
+ */
+export const sessionNameSchema = z
+  .string()
+  .transform((value) => value.trim())
+  .pipe(z.string().min(1).max(MAX_SESSION_NAME_LENGTH));
+
+/** PATCH body for `/api/agent-workspaces/[workspaceId]` — the rename request. */
+export const renameAgentSessionRequestSchema = z.object({ name: sessionNameSchema });
+export type RenameAgentSessionRequest = z.infer<typeof renameAgentSessionRequestSchema>;
+
+/**
+ * A blank-name spawn's auto-label: the first collision-free of `base`,
+ * `base 2`, `base 3`, … — starting at the bare label rather than always
+ * suffixing a number, so no session is ever born "Agent 1".
+ *
+ * Shared BY DESIGN across every path that mints a workspace. The HTTP route has
+ * always derived a label this way; none of the three agent-side paths did, and
+ * each wrote `null` instead — which is why an agent-minted workspace rendered as
+ * the generic "Session" forever. All of them call this now: the explicit
+ * `spawn_session({ workspace: "new" })`, the DEFAULT `spawn_session` placement
+ * that lazily mints the caller's own workspace, and the same lazy mint reached
+ * by the first sandbox tool call in a global chat.
+ *
+ * Uniqueness here is COSMETIC, not structural: names carry no constraint, and
+ * a collision would be legal — this only keeps a sidebar of ten sessions
+ * readable.
+ */
+export function nextUniqueSessionName(base: string, existingNames: readonly string[]): string {
+  const taken = new Set(existingNames);
+  // LENGTH-AWARE, and the result is already bounded — callers must NOT truncate
+  // it afterwards (review). Appending a suffix and letting the caller cut the
+  // result back to the cap destroys the very thing the suffix was for: a
+  // 120-character base yields "<base> 2", which truncates back to exactly
+  // `base`, so every "unique" candidate collapses onto the name it was meant to
+  // avoid and the loop hands back a duplicate. Room for the suffix has to be
+  // made BEFORE the candidate is tested, not taken away after.
+  const bounded = base.slice(0, MAX_SESSION_NAME_LENGTH);
+  if (!taken.has(bounded)) return bounded;
+  // Each candidate is built by CUTTING the base to leave room for its own
+  // suffix, so the result is bounded by construction and the suffix always
+  // survives.
+  const withSuffix = (index: number): string => {
+    const suffix = ` ${index}`;
+    return bounded.slice(0, MAX_SESSION_NAME_LENGTH - suffix.length) + suffix;
+  };
+  let index = 2;
+  let candidate = withSuffix(index);
+  while (taken.has(candidate)) {
+    index += 1;
+    candidate = withSuffix(index);
+  }
+  return candidate;
+}
+
+/**
  * The sandbox states the UI and tools discriminate between, and the ONLY four
  * that exist. `'none'` = the session has never acquired a Sprite (the common
  * case — most conversations never touch one); `'starting'` = provisioning is in

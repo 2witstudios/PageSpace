@@ -22,6 +22,7 @@ vi.mock('@/services/api', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserViewPage: vi.fn().mockResolvedValue(true),
     isUserDriveMember: vi.fn().mockResolvedValue(true),
 }));

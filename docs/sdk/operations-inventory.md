@@ -104,6 +104,72 @@ per-cell stats but only ever addresses tab 0, while `updateCells` takes `tabInde
 the only way to write to a second tab. `deleteRows` requires both bounds — neither is defaulted,
 because a guessed `count` deletes the wrong rows irreversibly.
 
+### 2.6c Sheet formatting (2 SDK operations)
+
+The presentation half of the same endpoint, and the one that closed a real parity gap: the
+in-process AI tools (`read_sheet` with `includeFormatting`, `format_sheet`,
+`set_conditional_format`) could read and write regions, conditional rules, freezes and cell
+formats, while an SDK or CLI caller could do none of it — so a sheet built programmatically was a
+grid of bare numbers with no call available to change that.
+
+| SDK | CLI | Input | Response (route truth) |
+|---|---|---|---|
+| `sheets.readFormatting` | `sheets formatting` | `pageId*`, `tabIndex`, `ranges[]` | `{pageId, pageTitle, tabIndex, rowCount, columnCount, frozenRows, frozenColumns, columnFormats{}, columnWidths{}, rowHeights{}, conditionalFormats[], regions[], cellFormats{}}` |
+| `sheets.applyFormat` | `sheets format` | `pageId*`, `tabIndex`, `ops*[]` (`SheetFormatOp`) | `{pageId, pageTitle, tabIndex, changed, cellsFormatted, rowsTouched, tabFieldsChanged[], conditionalRules, ruleIdsAdded[], ruleIdsRemoved[], regions, regionIdsAdded[], regionIdsRemoved[], rowCount, columnCount, recomputed[]}` |
+
+`ops` is `SheetFormatOp` from `@pagespace/lib/sheets` verbatim — fifteen members: `setCellFormat`,
+`clearCellFormat`, `setColumnFormat`, `setColumnWidth`, `setRowHeight`, `setFrozen`,
+`addConditionalRule`, `updateConditionalRule`, `removeConditionalRule`, `moveConditionalRule`,
+`clearConditionalRules`, `setConditionalRules`, `setRegions`, `upsertRegion`, `removeRegion`. That
+makes these two strictly MORE capable than the AI tools they bring parity with: a model can only
+add and remove conditional rules, while a programmatic caller can patch one in place or reorder it.
+
+Ops apply **in the order given, in one transaction, all or nothing** — a `clearCellFormat` after a
+`setCellFormat` over the same cells means something different from the reverse. Every refusal comes
+from `planFormatOps` (pure, pre-lock) and names the offending op's INDEX in the list sent, as a 400;
+the route deliberately restates none of that validation as a zod union of its own.
+
+Two shape notes where these differ from the AI tools, both deliberate:
+
+- A conditional rule's `id` is **caller-supplied and required**, where `format_sheet` mints it. The
+  id is the caller's own idempotency key, so a retried `addConditionalRule` after a timeout is
+  refused as a duplicate rather than silently adding the rule a second time.
+- A `cell` rule nests `condition: {operator, value, value2}`. The AI tool flattens those onto the
+  rule because a discriminated union fans out past the schema-size ceiling a model's tool definition
+  can carry; this is the shape the sheet actually stores.
+
+`applyFormat` is **not** flagged `destructive`, though `setRegions: []` discards declared structure:
+the flag makes the CLI demand `--yes` on every call, and gating "bold the header row" behind a
+prompt only trains the habit of passing `--yes` blind. Formatting is presentation, recoverable by
+writing it again — unlike `deleteRows`, where the rows are gone.
+
+Prefer a **region** to per-cell ops for anything table-shaped. A region declares what an area IS
+(header rows, column roles, total rows, theme) and the presentation is derived at render time, so an
+open range (`"A1:F"`, no row end) covers rows that do not exist yet and costs no cell budget however
+tall the sheet is; `setCellFormat` over `A2:A5000` charges 4,999 cells against the per-call ceiling.
+
+**Schema size, measured.** `sheets.applyFormat` serialises to ~10.8k characters of JSON Schema —
+the largest of the 85 registry operations by 6.5x (next is `calendar.create` at ~1.7k), and ~25% of
+the whole MCP tool surface, which every MCP client receives per session. The cause is duplication,
+not the op count: `operationToMcpTool` calls `z.toJSONSchema` with the default `reused: 'inline'`,
+so the four-variant rule schema is inlined twice (`addConditionalRule`, `setConditionalRules`), the
+region schema twice (`upsertRegion`, `setRegions`), and the scale anchor ten times — those four
+variants alone are 75% of the union.
+
+Passing `reused: 'ref'` in `packages/cli/src/mcp/tool-convert.ts` was measured at 38% smaller for
+this operation (10.8k -> 6.7k) and 9.4% across the surface. It is deliberately NOT done here: it
+changes the emitted shape of 8 of 85 operations, 7 of them nothing to do with sheets, and `$ref`
+handling varies by provider — so it wants its own change and its own verification against real MCP
+clients rather than riding along in a sheets PR. The tool is correct and usable as it stands.
+
+The op union is hand-written in the SDK — the published package must never runtime- or type-import
+`@pagespace/lib` — and held to lib by
+`packages/sdk/src/operations/__tests__/sheets-format-drift-guard.test.ts`, which reads lib's
+`OP_FIELDS` and `FIELDS_BY_KIND` so a sixteenth op cannot join the union without failing there.
+`patch`/`format` payloads stay opaque (`z.record`) for the reason `storedCellSchema.format` already
+does: `CellFormat` exists twice with a compile-time assertion holding those two together, and a
+third copy here would be the one with nothing keeping it honest.
+
 `nextFromRow` is a POSITION, not a count. A caller advancing by `rows.length` loops forever on a
 sparse tab (rows 0-9, then 500-509); following `nextFromRow` terminates.
 
@@ -208,6 +274,92 @@ All write paths are owner/admin-gated server-side; role permission maps are `Rec
 | `send_channel_message` (tools.js:1511) | `pageId*`, `content*` | POST `/api/channels/{pageId}/messages` `{content}` (conversation.js:140) | `channels/[pageId]/messages/route.ts:229` | `201` message row (`:671`; thread replies `:549`). Route accepts `fileId`, `attachmentMeta`, `parentId`, `alsoSendToParent`, `quotedMessageId` (`:249–256`). **Stale tool description:** the "may only support session auth" warning (tools.js:1512) is wrong — the route allows mcp (`:117–118`). Edit permission required → 403 (`:242–247`). |
 | `delete_channel_message` (tools.js:1530) | `pageId*`, `messageId*` | DELETE `/api/channels/{pageId}/messages/{messageId}` (conversation.js:195) | `channels/[pageId]/messages/[messageId]/route.ts:86` | `{success:true}` (`:142`). Author-only (`:105`) + edit permission (`:93–96`). |
 | `get_activity` (tools.js:1549) | `driveId?`, `pageId?`, `limit?`, `types?[]` | **POST** `/api/activities` JSON body (conversation.js:214–223) | `activities/route.ts:39` — **GET only** | `{activities, pagination{total,limit,offset,hasMore}}` (`:235–243`). **DISCREPANCY (method + params):** the route exports **no POST** → the tool 405s on every call. The GET contract is query params `{context ('user' default), driveId, pageId, startDate, endDate, actorId, operation, resourceType, limit, offset}` (`:53–67`); there is **no `types` filter** — nearest equivalents are `operation` + `resourceType`. Resolution: SDK op = GET with the route's real query schema; drop `types`. |
+
+### 2.17 Workspace shell (2 SDK operations — no v5.2.7 tool)
+
+New surface, not a port: the in-app `bash` AI tool had no token-reachable route.
+
+| Operation | Input | Route | Response (route truth) |
+|---|---|---|---|
+| `workspaces.list` | `driveId?` | GET `agent-workspaces/route.ts` (`allow: session, mcp`) | `{sessions: [AgentSessionDTO + shells, conversations, rev, nodes, targets]}` — owner-only, then filtered to the credential's drive scope (`credential-scope.ts`; a driveless workspace only for an unscoped credential). A drive-scoped credential additionally keeps only drives its own principal permissions can view (`getPrincipalDriveAccessLevel`) and gets the session DTOs with `shells`/`conversations`/`nodes`/`targets` empty at `rev: 0` — the child reads resolve as the owning user, so they are never run for a key. |
+| `workspaces.exec` | `workspaceId*`, `command*`, `cwd?`, `timeoutMs?` | POST `agent-workspaces/[workspaceId]/exec/route.ts` (`allow: session, mcp`) | `200 {stdout, stderr, exitCode, truncated}` for any command that ran (non-zero exit included). Body = the `bash` tool's `bashInputSchema`. Denied / not found / out of scope / ended → the same `404`; so is a drive-scoped key whose OWN grant fails the drive-wide edit bar (`principal-code-exec-access.ts`: inherit → owner's `canEdit`, OWNER/ADMIN/plain MEMBER → yes, custom role → its `driveWidePermissions.canEdit`), checked before the owning user's `canRunCode` gate. Gate/runner refusals → `{error, reason, retryAfter?}` with `DENIAL_STATUS` (403 plan/access, 402 insufficient balance, 429 quota, 400 policy, 503 provisioning). |
+
+### 2.18 Wallet reads (4 SDK operations — no v5.2.7 tool; X-1 narrowed by [D-OW-26])
+
+New surface, not a port. READS ONLY ([D-OW-26]: a token may read wallet views, consumer allowlist only, but never moves money or changes a spend source): every wallet write route (`POST/PATCH/DELETE drives/[driveId]/wallet`, `…/wallet/top-up`, `…/wallet/donate`, `PUT/DELETE …/wallet/caps/[userId]`, `PUT wallets/default`, `PUT wallets/conversations/[conversationId]`, `PUT wallets/always-own-credits`) admits an `mcp` token only to refuse it by name (`mcp_token_cannot_move_money` / `mcp_token_cannot_change_spend_source`, 403, nothing read or written), so none is an operation. Nor is `GET drives/[driveId]/wallet/caps`: it lists every person's caps (an admin money view), and a token always reads the consumer projection, so the route refuses it. The org pool, seat caps and seat-cap writes are §2.19's exclusions.
+
+| Operation | Input | Route | Response (route truth) |
+|---|---|---|---|
+| `wallets.getDriveWallet` | `driveId*` | GET `drives/[driveId]/wallet/route.ts` (`allow: session, mcp`; `checkMCPDriveScope`) | `{viewer, actions, wallet}`. A token is always the consumer projection (`viewerForCredential`): `viewer` ∈ `member`/`guest`, `actions` ⊆ `['view']`, `wallet` null or exactly `ConsumerWalletView` (`CONSUMER_WALLET_FIELDS`, `billing/wallet-views.ts`). 404 for a drive the caller cannot open. |
+| `wallets.list` | — | GET `wallets/route.ts` (`allow: session, mcp`) | `MyWallets` (`services/drive-wallet-service.ts`); `funds.pools` is always `[]` for a token. A drive-scoped token → 403 (`refuseScopedTokenForAccountRead`). |
+| `wallets.getAlwaysOwnCredits` | `driveId?` (query) | GET `wallets/always-own-credits/route.ts` (`allow: session, mcp`) | `{alwaysOwnCredits, alwaysOwnCreditsInDrive}` (SPEND-5). A drive-scoped token → 403. Setting the switches (PUT) is a spend-source change: session only. |
+| `wallets.getConversationSource` | `conversationId*`, `driveId?` (query; only read for a global conversation) | GET `wallets/conversations/[conversationId]/route.ts` (`allow: session, mcp`) | `{conversationId, driveId (nullable), chosenWalletId (nullable), options: {source, walletId}[], resolved: CallSpendDecision}` (`billing/spend-target.ts`, `kind` ∈ `spend`/`refuse`/`skip`). Caller's own conversation only (else 404). A drive-scoped token → 403. |
+
+### 2.19 Organizations and the org side of drives (43 SDK operations — no v5.2.7 tool; Spec X-1, ORG-5)
+
+New surface, not a port. Every org route the web exposes is an operation here unless it is on the exclusion list below. All go through the web's ONE org gate (`authorizeOrgRequest` → `requireOrgRole`, ORG-5; the drive-org services through `orgDriveServiceDeps.getOrgRole`/`drive-join-request-service`, the same function) Key rules, uniform: an `mcp` key is admitted (`allow: session, mcp`; CSRF applies to sessions only); a drive-scoped key is refused (403 `token_scope_refused`) everywhere but the drive directory, which a scoped key sees filtered to its own drives; and the org's sign-in policy (`requireStrongSignIn`, `maximumSessionAgeMinutes`) is enforced on the key's credential-bound sign-in evidence (403 `org_strong_sign_in_required` / `org_reauthentication_required`). Every operation declares `requiredScope: 'account'`.
+
+**Session-only — NOT operations** (the server refuses a key; an operation that can only fail has no place on the registry or the MCP surface):
+
+| Route | Why |
+|---|---|
+| POST `orgs` | Creating an org is a card checkout. |
+| DELETE `orgs/[orgId]` | Ends the org's Stripe subscription (billing). |
+| POST `orgs/[orgId]/transfer-ownership` | [D-OW-26]: hands over the org's money authority. |
+| PUT/DELETE `orgs/[orgId]/members/[userId]/seat-cap` | [D-OW-26]: allocates the org pool (audited `org.wallet.allocation_changed`). |
+| GET `orgs/[orgId]/seat-caps`, GET `orgs/[orgId]/pool` | [D-OW-26]: admin money views; a key reads only the consumer projection. |
+| `orgs/[orgId]/billing/**` | Billing (Stripe). |
+
+**Operations** (reads first, then writes; `destructive` ones need `--yes` in the CLI):
+
+| Operation | Input | Route |
+|---|---|---|
+| `organizations.update` | `orgId*`, `name?`, `slug?`, `avatarUrl?` (≥1) | PATCH `orgs/[orgId]` (ADMIN) → `{organization}` |
+| `organizations.listMemberActivity` | `orgId*` | GET `orgs/[orgId]/members/activity` (ADMIN) → `{activity: OrgMemberActivity[]}` |
+| `organizations.changeMemberRole` | `orgId*`, `userId*`, `role* ∈ ADMIN/MEMBER` | PATCH `orgs/[orgId]/members/[userId]` (ADMIN) → `{userId, role}` |
+| `organizations.removeMember` (destructive) | `orgId*`, `userId*` | DELETE `orgs/[orgId]/members/[userId]` (ADMIN) → `{removed: true}` |
+| `organizations.leave` (destructive) | `orgId*` | POST `orgs/[orgId]/leave` (MEMBER) → `{left: true}` |
+| `organizations.listInvitations` | `orgId*` | GET `orgs/[orgId]/invitations` (ADMIN) → `{invitations: PublicOrgInvitation[]}` |
+| `organizations.invite` | `orgId*`, `email*`, `role?` | POST `orgs/[orgId]/invitations` (MEMBER + POL-5) → `{invitation}`. [D-OW-26]: a key never raises the Stripe seat quantity — past the purchased seats it is refused 403 `mcp_token_cannot_move_money` and no invite is written (`decideSeatAdmission`); `resendInvitation` likewise. |
+| `organizations.resendInvitation` | `orgId*`, `invitationId*` | POST `orgs/[orgId]/invitations/[invitationId]/resend` → `{invitation}` |
+| `organizations.revokeInvitation` (destructive) | `orgId*`, `invitationId*` | DELETE `orgs/[orgId]/invitations/[invitationId]` (ADMIN) → `{revoked: true}` |
+| `organizations.acceptInvitation` | `token*` | POST `orgs/invitations/accept` (no org role yet) → `{orgId, role, joined}` |
+| `organizations.updatePolicies` | `orgId*`, any non-money policy key (`DelegatedOrgPolicies`; ≥1; `maximumSessionAgeMinutes` 15–43200 or null) | PATCH `orgs/[orgId]/policies` (ADMIN) → `{policies, changed, suspended, restored, blocked, auditRecorded, publishedVisibility?}`. [D-OW-26]: a key naming `seatAllowanceCents` → 403 `mcp_token_cannot_move_money`, `walletFallback` → 403 `mcp_token_cannot_change_spend_source` (`delegatedPolicyPatchRefusal`, classified per key in `policies-core.ts`); nothing is stored. |
+| `organizations.listSuspended` | `orgId*` | GET `orgs/[orgId]/policies/suspended` (ADMIN) → `{suspended: NamedSuspendedListing[]}` |
+| `organizations.listTrashedDrives` | `orgId*` | GET `orgs/[orgId]/drives/trashed` (ADMIN) → `{drives: OrgTrashedDrive[]}` |
+| `organizations.getDriveUsage` | `orgId*` | GET `orgs/[orgId]/drives/usage` (ADMIN) → `{usage: OrgDriveUsage[]}` |
+| `organizations.getAuditLog` | `orgId*`, `type?`, `category?`, `driveId?`, `from?`, `to?`, `limit?` (1–500), `before?` (query) | GET `orgs/[orgId]/audit` (ADMIN) → `{entries: OrgAuditEntry[], nextCursor}` |
+| `organizations.exportAuditLog` | the same filters, no paging (query) | GET `orgs/[orgId]/audit/export` (ADMIN) → CSV text (`textResponse`, `text/csv`) |
+| `organizations.listAutomations` | `orgId*` | GET `orgs/[orgId]/automations` (ADMIN) → `{automations}` |
+| `organizations.deleteAutomation` (destructive) | `orgId*`, `kind* ∈ workflow/page_webhook`, `automationId*` | DELETE `orgs/[orgId]/automations/[kind]/[automationId]` (ADMIN) → `{deleted: true}` |
+| `organizations.reassignAutomation` | `orgId*`, `kind*`, `automationId*`, `newOwnerId*` | POST `…/[automationId]/reassign` (ADMIN) → `{reassigned: true, newOwnerId}` |
+| `organizations.listGuests` | `orgId*` | GET `orgs/[orgId]/guests` (ADMIN) → `{guests: OrgGuest[]}` |
+| `organizations.listGuestApprovals` | `orgId*` | GET `orgs/[orgId]/guest-approvals` (ADMIN) → `{total, items: PendingGuestApprovalView[]}` |
+| `organizations.answerGuestApproval` | `orgId*`, `holdId*`, `decision* ∈ approve/decline` | POST `orgs/[orgId]/guest-approvals/[holdId]` (ADMIN) → `{decided, driveId?, pageIds?, result?}` |
+| `organizations.listDomains` | `orgId*` | GET `orgs/[orgId]/domains` (ADMIN) → `{domains}` (with `dnsRecord`) |
+| `organizations.addDomain` | `orgId*`, `domain*` | POST `orgs/[orgId]/domains` (ADMIN) → `{domain}` |
+| `organizations.removeDomain` (destructive) | `orgId*`, `domainId*` | DELETE `orgs/[orgId]/domains/[domainId]` (ADMIN) → `{removed: true}` |
+| `organizations.verifyDomain` | `orgId*`, `domainId*`, `method* ∈ dns/email`, `mailbox?` | POST `orgs/[orgId]/domains/[domainId]/verify` (ADMIN) → `{domain, alreadyVerified}` or `202 {sentTo, expiresAt}` |
+| `organizations.confirmDomainEmail` | `token*` | POST `orgs/domains/verify-email` (any signed-in account) → `{domain, verified: true}` |
+| `organizations.clearSuppression` | `orgId*`, `email*` | POST `orgs/[orgId]/suppressions/clear` (ADMIN) → `{cleared}` |
+| `drives.list` (§2.1) | — | now also carries `orgId` (nullable) and `orgVisibility` (tolerant: optional for older servers) |
+| `drives.create` (§2.1) | `name*`, `orgId?`, `orgVisibility?` | POST `drives/route.ts` — with `orgId`, `createOrgDrive` (DRV-3, POL-5) |
+| `drives.moveToOrg` | `driveId*`, `orgId*`, `orgVisibility?` | PUT `drives/[driveId]/org` (the drive's owner, an org member; a wallet requires a session, otherwise an unscoped key is allowed) → `{drive, storageReattribution}` |
+| `drives.moveOutOfOrg` (destructive) | `driveId*`, `implicitMembers* ∈ keep/remove` (JSON body on DELETE) | DELETE `drives/[driveId]/org` (org ADMIN; a wallet requires a session, otherwise an unscoped key is allowed) → `{drive, storageReattribution}` |
+| `drives.setOrgVisibility` | `driveId*`, `orgVisibility*` | PATCH `drives/[driveId]/org` (lead or org ADMIN) → `{drive}` |
+| `drives.setOrgLead` | `driveId*`, `userId*` | PUT `drives/[driveId]/org/lead` (lead or org ADMIN) → `{drive}` |
+| `drives.listJoinRequests` | `driveId*` | GET `drives/[driveId]/join-requests` (lead or org ADMIN) → `{requests: PendingJoinRequest[]}` |
+| `drives.requestToJoin` | `driveId*`, `message?` (≤500) | POST `drives/[driveId]/join-requests` (org member) → `{request}` (201 new, 200 existing) |
+| `drives.answerJoinRequest` | `driveId*`, `requestId*`, `decision* ∈ approve/deny` | PATCH `drives/[driveId]/join-requests/[requestId]` → `{request, admitted}` |
+| `drives.withdrawJoinRequest` | `driveId*`, `requestId*` | DELETE `drives/[driveId]/join-requests/[requestId]` (requester) → `{request}` |
+
+The five original reads:
+
+| `organizations.list` | — | GET `orgs/route.ts` (`allow: session, mcp`) | `{organizations: [{id, name, slug, avatarUrl (nullable), role ∈ OWNER/ADMIN/MEMBER, lapsed}]}` (`OrgSummaryForUser` + the route's `lapsed` flag, ORG-2 / [DOW-33]). A drive-scoped token → 403. |
+| `organizations.get` | `orgId*` | GET `orgs/[orgId]/route.ts` (MEMBER; `allow: session, mcp`) | `{organization: {id, name, slug, avatarUrl, ownerId, createdAt}, viewer: {userId, role}, billingNotice?}` — `billingNotice` is the per-role SEAT-9 banner, left shape-open in the SDK. 404 for a non-member. A drive-scoped token → 403. |
+| `organizations.listMembers` | `orgId*` | GET `orgs/[orgId]/members/route.ts` (MEMBER; `allow: session, mcp`) | `{members: [{userId, role, joinedAt (ISO), name, email, image (nullable)}]}` (`OrgMemberDetail`, ORG-2). A drive-scoped token → 403. |
+| `organizations.listDrives` | `orgId*` | GET `orgs/[orgId]/drives/route.ts` (MEMBER; `allow: session, mcp`) | `{drives: [{id, name, slug, orgVisibility ∈ OPEN/RESTRICTED/PRIVATE, joined, joinRequest ∈ 'pending'/null, canRequest, lead: {id, name, image}}]}` — the org Drives directory (DRV-6), the only place a Restricted drive is discovered before joining; Private drives appear only where the caller can already open them (D-OW-25). A drive-scoped token sees only its own drives (filtered after the member gate). |
+| `organizations.getPolicies` | `orgId*` | GET `orgs/[orgId]/policies/route.ts` (ADMIN — SEAT-6; `allow: session, mcp`) | `{policies: DelegatedOrgPolicies}` — every non-money key present, defaults filled in (POL-1, `organizations/policies-core.ts`); a key never sees `seatAllowanceCents`/`walletFallback` ([D-OW-26], `policiesForDelegatedCredential`). A plain member → 403 `insufficient_role`; a non-member → 404; a drive-scoped Admin token → 403 `token_scope_refused`. |
 
 ---
 

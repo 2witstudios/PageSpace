@@ -1,5 +1,6 @@
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getUserAccessLevel, getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 import type { EnforcedAuthContext, ResourceBinding } from '../middleware/auth';
 import {
   getLinksForFile,
@@ -175,12 +176,12 @@ function getScopedConversationLinks(
 }
 
 async function checkPagePermissions(
-  userId: string,
+  actor: AccessActor,
   links: FileLink[],
   requirement: AccessRequirement
 ): Promise<{ allowed: boolean; pageId?: string; driveId?: string }> {
   for (const link of links) {
-    const perms = await getUserAccessLevel(userId, link.pageId);
+    const perms = await getUserAccessLevel(actor, link.pageId);
     if (!perms) {
       continue;
     }
@@ -216,11 +217,11 @@ function checkConversationPermissions(
 }
 
 async function checkDrivePermissions(
-  userId: string,
+  actor: AccessActor,
   driveId: string,
   requirement: AccessRequirement
 ): Promise<boolean> {
-  const drivePerms = await getUserDrivePermissions(userId, driveId);
+  const drivePerms = await getUserDrivePermissions(actor, driveId);
   if (!drivePerms) {
     return false;
   }
@@ -306,7 +307,7 @@ export async function authorizeFileAccess(
       return decision;
     }
 
-    const pageResult = await checkPagePermissions(auth.userId, scopedLinks, requirement);
+    const pageResult = await checkPagePermissions(auth.actor, scopedLinks, requirement);
 
     if (pageResult.allowed) {
       const decision = buildAllowedDecision(binding, matchType, requirement, 'page_permission', {
@@ -374,7 +375,7 @@ export async function authorizeFileAccess(
     }
 
     // Check drive permissions for orphan file
-    const hasDriveAccess = await checkDrivePermissions(auth.userId, fileDriveId, requirement);
+    const hasDriveAccess = await checkDrivePermissions(auth.actor, fileDriveId, requirement);
 
     if (!hasDriveAccess) {
       const decision = buildDeniedDecision('permission', binding, matchType, requirement);

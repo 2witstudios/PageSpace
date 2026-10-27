@@ -94,7 +94,7 @@ describe('GET /api/drives/[driveId]/integrations/[connectionId]', () => {
   describe('authorization', () => {
     it('should return 403 when user is not a member', async () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: false, isAdmin: false, isMember: false, role: null,
+        isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null,
       });
 
       const request = new Request('https://example.com/api/drives/d/integrations/c');
@@ -109,7 +109,7 @@ describe('GET /api/drives/[driveId]/integrations/[connectionId]', () => {
   describe('connection lookup', () => {
     beforeEach(() => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null,
       });
     });
 
@@ -156,7 +156,7 @@ describe('GET /api/drives/[driveId]/integrations/[connectionId]', () => {
   describe('response contract', () => {
     beforeEach(() => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null,
       });
     });
 
@@ -243,7 +243,7 @@ describe('GET /api/drives/[driveId]/integrations/[connectionId]', () => {
   describe('error handling', () => {
     it('should return 500 and log when service throws', async () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null,
       });
       const error = new Error('DB failed');
       vi.mocked(getConnectionWithProvider).mockRejectedValueOnce(error);
@@ -288,7 +288,7 @@ describe('DELETE /api/drives/[driveId]/integrations/[connectionId]', () => {
   describe('authorization', () => {
     it('should return 403 when user is not owner or admin', async () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER',
+        isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER', customRoleId: null,
       });
 
       const request = new Request('https://example.com/api/drives/d/integrations/c', { method: 'DELETE' });
@@ -301,7 +301,7 @@ describe('DELETE /api/drives/[driveId]/integrations/[connectionId]', () => {
 
     it('should allow owner to delete', async () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null,
       });
       // @ts-expect-error - partial mock data
       vi.mocked(getConnectionById).mockResolvedValue({
@@ -321,7 +321,7 @@ describe('DELETE /api/drives/[driveId]/integrations/[connectionId]', () => {
 
     it('should allow admin to delete', async () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: false, isAdmin: true, isMember: true, role: 'ADMIN',
+        isOwner: false, isAdmin: true, isMember: true, role: 'ADMIN', customRoleId: null,
       });
       // @ts-expect-error - partial mock data
       vi.mocked(getConnectionById).mockResolvedValue({
@@ -343,7 +343,7 @@ describe('DELETE /api/drives/[driveId]/integrations/[connectionId]', () => {
   describe('connection lookup', () => {
     beforeEach(() => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null,
       });
     });
 
@@ -380,7 +380,7 @@ describe('DELETE /api/drives/[driveId]/integrations/[connectionId]', () => {
   describe('response contract', () => {
     it('should return success true and log deletion', async () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null,
       });
       // @ts-expect-error - partial mock data
       vi.mocked(getConnectionById).mockResolvedValue({
@@ -414,7 +414,7 @@ describe('DELETE /api/drives/[driveId]/integrations/[connectionId]', () => {
   describe('error handling', () => {
     it('should return 500 and log when service throws', async () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null,
       });
       const error = new Error('Delete failed');
       vi.mocked(getConnectionById).mockRejectedValueOnce(error);

@@ -1,5 +1,5 @@
 /*
- * Landing page ("The AI for working") — scoped styles.
+ * Landing page ("The workspace that keeps working") — scoped styles.
  * Ported from the finalized design prototype. Everything is scoped under `.lp`
  * to avoid leaking into the rest of the marketing site. Dark mode is driven by
  * the app's `.dark` class (not [data-theme]); only prototype-only tokens are
@@ -30,6 +30,14 @@
   --separator: oklch(0.55 0.02 230 / 0.13);
   --shadow-lg: 0 10px 15px -3px rgb(0 0 0/.08), 0 4px 6px -4px rgb(0 0 0/.08);
   --hero-glow: radial-gradient(ellipse 62% 50% at 50% -6%, rgba(59, 130, 246, 0.08), rgba(255, 255, 255, 0));
+  /* Hero backdrop: each theme has its own image, so the section ground, the
+     legibility scrim, and the copy ink follow it. --hero-edge matches the
+     image's left edge so pre-paint and letterboxing blend in. */
+  --hero-edge: #f4f8fd;
+  --hero-scrim: linear-gradient(90deg, rgba(244, 248, 253, 0.72) 0%, rgba(244, 248, 253, 0.35) 38%, rgba(244, 248, 253, 0) 62%);
+  --hero-ink: var(--foreground);
+  --hero-ink-sub: color-mix(in oklab, var(--foreground), transparent 18%);
+  --hero-ink-quiet: var(--muted-foreground);
   /* Type scale. Two faces: the display serif speaks for the site (headlines,
      pull-quotes); Geist is the product's own face and stays on body, UI, and
      every mock. Marketing copy uses only these six steps — mock internals keep
@@ -60,6 +68,11 @@
   --separator: oklch(0.94 0 0 / 0.10);
   --shadow-lg: 0 10px 15px -3px rgb(0 0 0/.4), 0 4px 6px -4px rgb(0 0 0/.4);
   --hero-glow: radial-gradient(ellipse 62% 50% at 50% -6%, rgba(59, 130, 246, 0.12), rgba(0, 0, 0, 0));
+  --hero-edge: #010305;
+  --hero-scrim: linear-gradient(90deg, rgba(1, 3, 5, 0.72) 0%, rgba(1, 3, 5, 0.35) 38%, rgba(1, 3, 5, 0) 62%);
+  --hero-ink: #fff;
+  --hero-ink-sub: rgba(255, 255, 255, 0.88);
+  --hero-ink-quiet: rgba(255, 255, 255, 0.68);
 }
 
 .lp {
@@ -79,32 +92,34 @@
   /* hero — product-as-hero */
   /* bottom padding leaves room for the app window's drop shadow — the section
      clips overflow (for the right-edge bleed), which was cutting the shadow off. */
-  /* Space-themed hero: the backdrop image sits at z 0, a legibility gradient
-     over it at z 1 (the copy lives on the image's near-black left third), and
-     content at z 2. The gradient must outrank the image explicitly: ::before is
-     generated before the image in DOM order, so at equal z the image would paint
-     over it. Background colour matches the image's edge so the pre-image paint
-     and any letterboxing read as the same black in both themes. */
-  & .hero { position: relative; overflow: hidden; padding: 28px 0 56px; background: #010305; }
+  /* Space-themed hero: the backdrop images sit at z 0 (dark nebula below, the
+     white frame's layer above it — see HeroBackdrop), a legibility gradient over
+     them at z 1 (the copy lives on the image's plain left third), and content at
+     z 2. The gradient must outrank the images explicitly: ::before is generated
+     before them in DOM order, so at equal z they would paint over it. Background
+     colour matches the current theme's image edge so the pre-image paint and any
+     letterboxing read as part of the picture. */
+  & .hero { position: relative; overflow: hidden; padding: 28px 0 56px; background: var(--hero-edge); }
   & .hero .hero-bg { object-fit: cover; object-position: 50% 50%; z-index: 0; }
+  & .hero-bg-light { position: absolute; inset: 0; z-index: 0; opacity: 1; }
   & .hero::before { content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none;
-    background: linear-gradient(90deg, rgba(1, 3, 5, 0.72) 0%, rgba(1, 3, 5, 0.35) 38%, rgba(1, 3, 5, 0) 62%), var(--hero-glow); }
+    background: var(--hero-scrim), var(--hero-glow); }
   & .hero-in { position: relative; z-index: 2; max-width: 1280px; margin: 0 auto; padding: 0 32px; }
   & h1.hero-h { font-family: var(--font-display); font-optical-sizing: auto; font-size: var(--t-display); font-weight: 500; letter-spacing: -0.02em; line-height: 0.98; text-wrap: balance; margin: 0 0 14px; }
   /* The subline is our claim, so it outranks everything below the fold line:
      foreground, not muted, and one step above the testimonial quotes. */
-  & .hero-sub { font-size: 20px; color: rgba(255, 255, 255, 0.88); line-height: 1.5; text-wrap: pretty; margin: 0 0 22px; }
+  & .hero-sub { font-size: 20px; color: var(--hero-ink-sub); line-height: 1.5; text-wrap: pretty; margin: 0 0 22px; }
   /* light copy scoped to the caption only: the app window mock must keep its own (dark-on-card) text */
-  & .hero-cap { max-width: 640px; margin-bottom: 28px; color: #fff; }
+  & .hero-cap { max-width: 640px; margin-bottom: 28px; color: var(--hero-ink); }
   & .hero-cta { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
   /* quiet, linked cross-platform cue — inline beside the CTA, links to /downloads */
   & .hero-plat {
     font-size: var(--t-small);
-    color: rgba(255, 255, 255, 0.68);
+    color: var(--hero-ink-quiet);
     text-decoration: none;
     transition: color 0.16s ease;
   }
-  & a.hero-plat:hover { color: #fff; }
+  & a.hero-plat:hover { color: var(--hero-ink); }
   & .hero-plat:focus-visible {
     outline: 2px solid color-mix(in oklab, var(--primary), transparent 55%);
     outline-offset: 3px;
@@ -491,6 +506,8 @@
 @media (min-width: 1100px) {
   .lp .hero-in { display: grid; grid-template-columns: minmax(320px, 440px) minmax(0, 1fr); align-items: center; gap: 44px; }
   .lp .hero-cap { max-width: none; margin-bottom: 0; }
+  /* Five-word headline in a 440px column: cap the size so "The workspace" holds one line (3 lines, not 4). */
+  .lp h1.hero-h { font-size: clamp(44px, 4.6vw, 64px); }
   .lp .appwin { width: 960px; justify-self: start; }
   .lp .aw-body { height: 548px; }
   /* The window is laid out at 960x595 and scaled to fit between its column's
@@ -534,6 +551,10 @@
    forcing its track wide. */
 .lp .appwin-outer { min-width: 0; }
 
+/* HeroDemo is a behaviour wrapper, never a box — display:contents keeps the
+   window's layout exactly as it was before it was wrapped. */
+.lp .hero-demo { display: contents; }
+
 @media (max-width: 600px) {
   .lp .hero-in { padding: 0 16px; }
   /* portrait crop of a landscape image: bias left so the copy stays on the
@@ -543,4 +564,113 @@
 
 @media (prefers-reduced-motion: reduce) {
   .lp .slide { transition: none; }
+}
+
+
+/* ---------------------------------------------------------------------------
+   Entrance — "the approach"
+
+   A deliberate ~2.4s open: the black lifts, the nebula falls away from a hard
+   push-in, and the copy pulls into focus ahead of the product. Pure CSS, no
+   library, no hydration dependency.
+
+   The push-in is the whole effect. A few percent of scale reads as a rendering
+   artefact; 16% over two and a half seconds reads as a camera. It is also the
+   cheapest drama available here, because `transform` on an already-composited
+   layer costs nothing per frame and — unlike opacity — does not touch LCP.
+
+   Everything still resolves to its resting state rather than a forwards fill,
+   so a browser that runs none of these keyframes shows the finished page. That
+   is what makes the opaque curtain safe to use at all.
+
+   The one property deliberately never animated is `.hero-bg`'s opacity: it is
+   the LCP element, Chrome does not count a transparent element as painted, and
+   fading it would push LCP out by the full duration. Painting an opaque curtain
+   *over* it does not, because occlusion is not the element's own opacity.
+   --------------------------------------------------------------------------- */
+
+/* Holds at full black for the first fifth, so the lift reads as intentional
+   rather than as a slow page. */
+@keyframes lp-curtain {
+  0%, 18% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* Focus pull: the copy arrives out of focus and settles. Blur is what makes
+   this feel photographic instead of like a sliding div. */
+@keyframes lp-focus {
+  from { opacity: 0; transform: translateY(26px); filter: blur(12px); }
+  to { opacity: 1; transform: none; filter: blur(0); }
+}
+
+/* The product lands in frame — further out, and no blur: a full-width blurred
+   screenshot is expensive to composite and reads as a smear, not a focus pull. */
+@keyframes lp-land {
+  from { opacity: 0; transform: translateY(46px) scale(0.965); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Theme switch: the white frame's layer fades over (or off) the nebula. Two
+   names so every switch restarts the animation; `both` holds the end state. */
+@keyframes lp-bg-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes lp-bg-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+.dark .lp .hero-bg-light { opacity: 0; }
+.lp .hero-bg-light[data-theme-fade] { animation: lp-bg-in 700ms cubic-bezier(0.4, 0, 0.2, 1) both; }
+.dark .lp .hero-bg-light[data-theme-fade] { animation: lp-bg-out 700ms cubic-bezier(0.4, 0, 0.2, 1) both; }
+
+/* The camera. Long, heavily eased, and still drifting after the copy is
+   readable — the page is usable well before the motion stops. */
+@keyframes lp-approach {
+  from { transform: scale(1.16); }
+  to { transform: none; }
+}
+
+.lp .lp-curtain {
+  position: fixed;
+  inset: 0;
+  z-index: 100; /* over the sticky z-50 navbar */
+  background: var(--hero-edge);
+  opacity: 0;
+  pointer-events: none; /* can never swallow a click, even at full opacity */
+  animation: lp-curtain 1150ms cubic-bezier(0.4, 0, 0.2, 1) backwards;
+}
+
+.lp .hero .hero-bg {
+  animation: lp-approach 2600ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+
+.lp .hero-h,
+.lp .hero-sub,
+.lp .hero-cta {
+  animation: lp-focus 900ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+.lp .hero-h { animation-delay: 420ms; }
+.lp .hero-sub { animation-delay: 600ms; }
+.lp .hero-cta { animation-delay: 760ms; }
+
+.lp .appwin-outer {
+  animation: lp-land 1150ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  animation-delay: 900ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Every resting state is already the finished state, so dropping the
+     animations lands on a correct, fully visible page — curtain invisible. */
+  .lp .lp-curtain,
+  .lp .hero .hero-bg,
+  .lp .hero-bg-light[data-theme-fade],
+  .dark .lp .hero-bg-light[data-theme-fade],
+  .lp .hero-h,
+  .lp .hero-sub,
+  .lp .hero-cta,
+  .lp .appwin-outer {
+    animation: none;
+  }
 }

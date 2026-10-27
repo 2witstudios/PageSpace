@@ -10,7 +10,7 @@
  * the schema must be able to represent.
  *
  * READ-ONLY, and not on the honour system: every connection is put into
- * `default_transaction_read_only` (see read-only-session.ts), and
+ * `default_transaction_read_only` (see @pagespace/db/read-only-session), and
  * read-only.test.ts fails the build if any census source grows a write.
  *
  * NEVER PRINTS DOCUMENT CONTENT. This runs against production user data. The
@@ -85,7 +85,7 @@ import { createDomWorkspace } from '../src/lib/editor/census/constructs';
 import { analyzeHtmlDocument } from '../src/lib/editor/census/round-trip';
 import { analyzeMarkdown } from '../src/lib/editor/census/markdown';
 import { createCensusAccumulator, formatCensusReport } from '../src/lib/editor/census/report';
-import { assertReadOnlySession, enforceReadOnlySession } from '../src/lib/editor/census/read-only-session';
+import { assertReadOnlySession, enforceReadOnlySession } from '@pagespace/db/read-only-session';
 
 interface Options {
   limit: number;

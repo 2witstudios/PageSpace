@@ -10,14 +10,13 @@ import {
   SheetTitle,
   SheetDescription,
 } from '@/components/ui/sheet';
-import type { Drive, StatusConfigsByTaskList } from './types';
+import type { StatusConfigsByTaskList } from './types';
 import { aggregateStatuses } from './task-helpers';
 import {
   type DueDateFilter,
   type AssigneeFilter,
   type StatusGroupFilter,
   type FilterValues,
-  DriveSelect,
   StatusSelect,
   PrioritySelect,
   DueDateSelect,
@@ -30,13 +29,11 @@ export type { DueDateFilter, AssigneeFilter, StatusGroupFilter, FilterValues };
 export interface TaskFilterSheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  isLocked: boolean;
-  drives: Drive[];
-  selectedDriveId: string | undefined;
+  /** See FilterControls: the slug-level Status filter is only offered in a drive. */
+  scopedToDrive: boolean;
   filters: FilterValues;
   activeFilterCount: number;
   statusConfigsByTaskList?: StatusConfigsByTaskList;
-  onDriveChange: (driveId: string) => void;
   onFiltersChange: (filters: Partial<FilterValues>) => void;
   onClearFilters: () => void;
 }
@@ -44,13 +41,10 @@ export interface TaskFilterSheetProps {
 export function TaskFilterSheet({
   open,
   onOpenChange,
-  isLocked,
-  drives,
-  selectedDriveId,
+  scopedToDrive,
   filters,
   activeFilterCount,
   statusConfigsByTaskList,
-  onDriveChange,
   onFiltersChange,
   onClearFilters,
 }: TaskFilterSheetProps) {
@@ -105,27 +99,17 @@ export function TaskFilterSheet({
             />
           </div>
 
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">Drive</label>
-            <DriveSelect
-              isLocked={isLocked}
-              drives={drives}
-              selectedDriveId={selectedDriveId}
-              driveFilterId={filters.driveId}
-              onDriveChange={onDriveChange}
-              triggerClassName="h-11 w-full"
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">Status</label>
-            <StatusSelect
-              value={filters.status}
-              statuses={aggregatedStatuses}
-              onChange={(s) => onFiltersChange({ status: s })}
-              triggerClassName="h-11 w-full"
-            />
-          </div>
+          {scopedToDrive && (
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">Status</label>
+              <StatusSelect
+                value={filters.status}
+                statuses={aggregatedStatuses}
+                onChange={(s) => onFiltersChange({ status: s })}
+                triggerClassName="h-11 w-full"
+              />
+            </div>
+          )}
 
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-muted-foreground">Priority</label>
@@ -167,6 +151,11 @@ export function TaskFilterButton({
       size="icon"
       className="h-10 w-10 shrink-0 relative"
       onClick={onClick}
+      // Icon-only: without a name this announces as just "button", and the
+      // count badge beside it is decorative markup a screen reader skips.
+      aria-label={
+        activeFilterCount > 0 ? `Filters (${activeFilterCount} active)` : 'Filters'
+      }
     >
       <Filter className="h-4 w-4" />
       {activeFilterCount > 0 && (

@@ -87,6 +87,28 @@
 # across crashes/deploys. Local-only — makes no Stripe calls.
 */10 * * * * cron-curl GET __WEB_URL__/api/cron/reconcile-credits >> /var/log/cron/reconcile-credits.log 2>&1
 
+# Wallet allocation reset - Hourly at :15
+# Resets each drive/agent wallet's allocation on its governing date (D-OW-12): an org
+# drive's on the org pool's refill date, a personal drive's on the owner's personal
+# renewal. Idempotent per period, so a repeated or overlapping tick resets once.
+15 * * * * cron-curl GET __WEB_URL__/api/cron/reset-wallet-allocations >> /var/log/cron/reset-wallet-allocations.log 2>&1
+
+# Org seat release - Every 15 minutes
+# Removing an org member frees their seat at PERIOD END (SEAT-5): nothing is written to Stripe
+# when they leave, so a re-add inside the period reuses the paid seat. This tick finds org
+# subscriptions whose period ends within the hour and sets the extra-seat quantity to the seats
+# actually held (lowered without proration, or restored when Stripe bills fewer than are held),
+# so the renewal invoice bills the right count. Four ticks fit the window, so one failed run is
+# retried before the boundary. Idempotent; a replayed write carries the same idempotency key.
+*/15 * * * * flock -n /run/release-org-seats.lock cron-curl GET __WEB_URL__/api/cron/release-org-seats >> /var/log/cron/release-org-seats.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/release-org-seats.log
+
+# Org audit outbox drain - Every minute
+# Every org change stages its audit event in the same transaction and publishes it right after
+# commit (AUD-1). An event that publish could not deliver (the audit chain refused it, or the
+# process stopped in between) stays queued; this tick appends every due one to the security
+# audit chain, retrying a refused append with a capped backoff. Nothing is ever dropped.
+* * * * * flock -n /run/drain-org-audit-outbox.lock cron-curl GET __WEB_URL__/api/cron/drain-org-audit-outbox >> /var/log/cron/drain-org-audit-outbox.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/drain-org-audit-outbox.log
+
 # Machine storage reconcile - Hourly
 # Bills each Terminal Machine's persistent storage from its last persisted
 # measurement (see machine-storage-reconcile.ts in @pagespace/lib); watermarks
@@ -193,3 +215,11 @@
 # this is the check on it. It COMPARES AND ALERTS; it never moves money (a scraped
 # gauge is not evidence of a charge). Inert with no FLY_PROMETHEUS_ORG_SLUG.
 30 3 * * 1 flock -n /run/reconcile-app-awake-seconds.lock cron-curl GET __WEB_URL__/api/cron/reconcile-app-awake-seconds >> /var/log/cron/reconcile-app-awake-seconds.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/reconcile-app-awake-seconds.log
+
+# Published-site visibility reconcile - Every 10 minutes (POL-4)
+# An org can turn publishing or custom domains off; its published sites are then MOVED (not deleted) to a
+# non-public prefix in the publish bucket, and moved back when the policy is turned on. The move runs right
+# after the policy change; this sweep finishes whatever an object-store failure left behind, and re-parks anything
+# that reappeared. It reads the live policy, so a tick with nothing to do lists and changes nothing. Inert with no
+# PUBLISH_BUCKET.
+*/10 * * * * flock -n /run/reconcile-published-visibility.lock cron-curl GET __WEB_URL__/api/cron/reconcile-published-visibility >> /var/log/cron/reconcile-published-visibility.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/reconcile-published-visibility.log

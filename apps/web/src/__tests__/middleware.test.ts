@@ -177,14 +177,14 @@ describe('middleware — published-app router carve-out', () => {
     // every non-GET request a published app made to itself would 403.
     mockValidateOriginForMiddleware.mockReturnValue({
       valid: false,
-      origin: 'https://acme.pagespace.app',
+      origin: 'https://acme.pagespace.io',
       skipped: false,
       reason: 'origin not in allowlist',
     });
     mockIsOriginValidationBlocking.mockReturnValue(true);
 
     const response = await middleware(
-      buildRequest('/api/app-hosting/router', { origin: 'https://acme.pagespace.app' }),
+      buildRequest('/api/app-hosting/router', { origin: 'https://acme.pagespace.io' }),
     );
 
     expect(response.status).not.toBe(403);

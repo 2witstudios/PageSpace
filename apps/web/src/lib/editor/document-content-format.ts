@@ -1,26 +1,15 @@
 import { Window } from 'happy-dom';
 
+import { HTML_ELEMENT_NAMES } from '@pagespace/editor/html-element-names';
+
 /**
- * Real HTML element names. Anything outside this set that a parser produced is
- * not markup the author wrote — it is an unescaped `<` in prose or a code
- * sample (`ActionResult<void>`, `<task-id>`), which every happy-dom parse
- * turns into an element of its own. Moved here (out of
- * `census/constructs.ts`, which this repo is going to delete once
- * `COLLAB_SCHEMA_VERSION` v1 is frozen) because the mislabelled-content-mode
- * backfill needs the exact same "does this contain real HTML" answer the
- * census measured, and needs it to survive after the census is gone.
+ * Re-exported from `@pagespace/editor/html-element-names`, where the list now
+ * lives so the seed fidelity audit (root `scripts/`, which cannot import
+ * `apps/web`) counts tagless pages by the same definition the census and the
+ * mislabelled-content-mode backfill do. Everything in `apps/web` keeps
+ * importing it from here.
  */
-export const HTML_ELEMENT_NAMES = new Set<string>([
-  'a','abbr','address','area','article','aside','audio','b','base','bdi','bdo','blockquote','body',
-  'br','button','canvas','caption','cite','code','col','colgroup','data','datalist','dd','del',
-  'details','dfn','dialog','div','dl','dt','em','embed','fieldset','figcaption','figure','footer',
-  'form','h1','h2','h3','h4','h5','h6','head','header','hgroup','hr','html','i','iframe','img',
-  'input','ins','kbd','label','legend','li','link','main','map','mark','menu','meta','meter','nav',
-  'noscript','object','ol','optgroup','option','output','p','param','picture','pre','progress','q',
-  'rp','rt','ruby','s','samp','script','search','section','select','slot','small','source','span',
-  'strong','style','sub','summary','sup','table','tbody','td','template','textarea','tfoot','th',
-  'thead','time','title','tr','track','u','ul','var','video','wbr','svg','math',
-]);
+export { HTML_ELEMENT_NAMES };
 
 /** Single marker for parser artefacts of unescaped `<` in text. */
 export const UNESCAPED_ANGLE_BRACKET_KEY = 'text:unescaped-angle-bracket';

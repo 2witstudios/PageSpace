@@ -28,7 +28,13 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 // --- Permissions ---------------------------------------------------------------
+// The drive's members, from the one org-aware enumeration (the lead included).
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+  getDriveRecipientUserIds: vi.fn(async () => ['owner-1']),
+}));
+
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn().mockResolvedValue(true),
   canUserEditPage: vi.fn().mockResolvedValue(true),
   // Inbox fan-out asks the centralized helper which candidates can view the
@@ -47,6 +53,7 @@ const mockInsertChannelThreadReply = vi.fn();
 const mockUpsertChannelReadStatus = vi.fn();
 const mockLoadChannelMessageWithRelations = vi.fn();
 const mockListChannelThreadFollowers = vi.fn();
+const mockFindChannelLastReadAt = vi.fn();
 vi.mock('@pagespace/lib/services/channel-message-repository', () => ({
   channelMessageRepository: {
     listChannelMessages: (...args: unknown[]) => mockListChannelMessages(...args),
@@ -57,6 +64,7 @@ vi.mock('@pagespace/lib/services/channel-message-repository', () => ({
     upsertChannelReadStatus: (...args: unknown[]) => mockUpsertChannelReadStatus(...args),
     loadChannelMessageWithRelations: (...args: unknown[]) => mockLoadChannelMessageWithRelations(...args),
     listChannelThreadFollowers: (...args: unknown[]) => mockListChannelThreadFollowers(...args),
+    findChannelLastReadAt: (...args: unknown[]) => mockFindChannelLastReadAt(...args),
   },
 }));
 
@@ -129,7 +137,7 @@ vi.mock('@/lib/channels/notify-mentioned-users', () => ({
 
 // --- Imports under test --------------------------------------------------------
 import { GET, POST } from '../route';
-import { authenticateRequestWithOptions } from '@/lib/auth';
+import { authenticateRequestWithOptions, canPrincipalViewPage } from '@/lib/auth';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 // --- Fixtures ------------------------------------------------------------------
@@ -166,6 +174,19 @@ function makePostRequest(body: unknown): Request {
 
 const callGet = (qs = '') =>
   GET(makeGetRequest(qs), { params: Promise.resolve({ pageId: PAGE_ID }) });
+
+/**
+ * Both send routes now validate attachmentMeta's shape per attachment — the
+ * channel route previously accepted any JSON here, or none at all. A body
+ * carrying a fileId with no metadata is rejected at the door, so tests that
+ * mean to exercise the repository must supply it.
+ */
+const IMAGE_META = {
+  originalName: 'photo.png',
+  size: 1024,
+  mimeType: 'image/png',
+  contentHash: 'a'.repeat(64),
+};
 
 const callPost = (body: unknown) =>
   POST(makePostRequest(body), { params: Promise.resolve({ pageId: PAGE_ID }) });
@@ -260,6 +281,35 @@ describe('GET /api/channels/[pageId]/messages', () => {
       expect.objectContaining({ pageId: PAGE_ID })
     );
     expect(mockListChannelThreadReplies).not.toHaveBeenCalled();
+  });
+
+  it('top-level GET returns the requesting user\'s read watermark as lastReadAt', async () => {
+    mockListChannelMessages.mockResolvedValueOnce([]);
+    mockFindChannelLastReadAt.mockResolvedValueOnce(new Date('2026-10-05T09:30:00.000Z'));
+
+    const res = await callGet();
+    const body = await res.json();
+
+    expect(mockFindChannelLastReadAt).toHaveBeenCalledWith({ userId: USER_ID, channelId: PAGE_ID });
+    expect(body).toEqual({ messages: [], nextCursor: null, hasMore: false, lastReadAt: '2026-10-05T09:30:00.000Z' });
+  });
+
+  it('top-level GET returns lastReadAt null when the user has never read the channel', async () => {
+    mockListChannelMessages.mockResolvedValueOnce([]);
+    mockFindChannelLastReadAt.mockResolvedValueOnce(null);
+
+    const body = await (await callGet()).json();
+
+    expect(body.lastReadAt).toBeNull();
+  });
+
+  it('top-level GET denied by view permission never reads the watermark', async () => {
+    vi.mocked(canPrincipalViewPage).mockResolvedValueOnce(false);
+
+    const res = await callGet();
+
+    expect(res.status).toBe(403);
+    expect(mockFindChannelLastReadAt).not.toHaveBeenCalled();
   });
 });
 
@@ -408,7 +458,7 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
   it('returns 400 when the reply fileId does not exist', async () => {
     mockInsertChannelThreadReply.mockResolvedValueOnce({ kind: 'not_found' });
 
-    const res = await callPost({ content: 'x', parentId: PARENT_ID, fileId: 'file-1' });
+    const res = await callPost({ content: 'x', parentId: PARENT_ID, fileId: 'file-1', attachmentMeta: IMAGE_META });
 
     expect(res.status).toBe(400);
     const body = await res.json();
@@ -634,9 +684,9 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
       title: 'General',
       drive: { ownerId: 'owner-1', name: 'Workspace', slug: 'workspace' },
     });
-    // Sender (USER_ID) passes; the mentioned outsider does not.
-    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
-    vi.mocked(canUserViewPage).mockImplementation(async (uid) => uid === USER_ID);
+    // Sender (USER_ID) can view; the mentioned outsider cannot (a third-party audience question).
+    const { getUsersWhoCanViewPage } = await import('@pagespace/lib/permissions/permissions');
+    vi.mocked(getUsersWhoCanViewPage).mockImplementationOnce(async (_pageId, ids) => new Set(ids.filter((id) => id === USER_ID)));
 
     await callPost({
       content: 'hey @[Stranger](user-outsider:user)',
@@ -696,10 +746,71 @@ describe('POST /api/channels/[pageId]/messages (top-level — existing path)', (
     expect(mockInsertChannelMessageWithAttachment).not.toHaveBeenCalled();
   });
 
+  it('rejects a fileId sent without its metadata', async () => {
+    // Behaviour change: this route previously accepted a fileId with no
+    // attachmentMeta (it validated nothing at all), which stored an attachment
+    // that could only half-render. The DM route always rejected it; both now
+    // share one validator.
+    const res = await callPost({ content: 'hi', fileId: 'file-1' });
+
+    expect(res.status).toBe(400);
+    expect(mockInsertChannelMessageWithAttachment).not.toHaveBeenCalled();
+  });
+
+  it('rejects metadata whose fields are the wrong type', async () => {
+    const res = await callPost({
+      content: 'hi',
+      fileId: 'file-1',
+      attachmentMeta: { ...IMAGE_META, size: '1024' },
+    });
+
+    expect(res.status).toBe(400);
+    expect(mockInsertChannelMessageWithAttachment).not.toHaveBeenCalled();
+  });
+
+  it('accepts several attachments on one message and passes them through in order', async () => {
+    mockInsertChannelMessageWithAttachment.mockResolvedValueOnce({
+      kind: 'ok',
+      message: { id: 'msg-multi' },
+    });
+
+    const res = await callPost({
+      content: 'look at these',
+      attachments: [
+        { fileId: 'file-1', attachmentMeta: IMAGE_META },
+        { fileId: 'file-2', attachmentMeta: IMAGE_META },
+        { fileId: 'file-3', attachmentMeta: IMAGE_META },
+      ],
+    });
+
+    expect(res.status).toBe(201);
+    expect(mockInsertChannelMessageWithAttachment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachments: [
+          { fileId: 'file-1', attachmentMeta: IMAGE_META },
+          { fileId: 'file-2', attachmentMeta: IMAGE_META },
+          { fileId: 'file-3', attachmentMeta: IMAGE_META },
+        ],
+      }),
+    );
+  });
+
+  it('refuses a body carrying both the array and the legacy pair', async () => {
+    const res = await callPost({
+      content: 'hi',
+      fileId: 'file-1',
+      attachmentMeta: IMAGE_META,
+      attachments: [{ fileId: 'file-2', attachmentMeta: IMAGE_META }],
+    });
+
+    expect(res.status).toBe(400);
+    expect(mockInsertChannelMessageWithAttachment).not.toHaveBeenCalled();
+  });
+
   it('returns 400 when insertChannelMessageWithAttachment rejects with not_found (fileId vanished inside the tx)', async () => {
     mockInsertChannelMessageWithAttachment.mockResolvedValueOnce({ kind: 'not_found' });
 
-    const res = await callPost({ content: 'hi', fileId: 'file-1' });
+    const res = await callPost({ content: 'hi', fileId: 'file-1', attachmentMeta: IMAGE_META });
 
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: 'File not found' });

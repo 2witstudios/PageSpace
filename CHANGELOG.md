@@ -5,8 +5,631 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- In Imago, the Files, Messages, Tasks, Calendar, Console and Activity sidebars have a switch beside their title: the drive you're in, or All drives. It works the same on every drive, not just Home, and each section remembers its choice on this device. Until you pick, Home's Messages, Calendar, Console and Activity show All drives. Files and Tasks always start on the drive you're in, so Home's own pages and task lists stay where they were. Other drives start on themselves. In All drives:
+  - **Files** shows your favorites and recent pages from every drive, each naming its drive, plus a list of your drives in place of the page tree. Pick a drive to open its Files.
+  - **Tasks** shows your views and Needs attention across every drive, plus a list of your drives in place of the task lists.
+  - **Messages** shows every drive's channels with your DMs. Set to one drive, it shows that drive's channels and your DMs, and the "Showing all drives" note under the inbox is gone.
+- In Imago, the chat now sits on the plain page background and the left sidebars (pages, messages, chat history and tool sidebars) take the light blue tint, the reverse of before. An open conversation, the page tree in Pages and the Console sessions list now follow the swap too, instead of keeping the old colours as a band inside their pane.
+- In Imago, the Files section is now called Pages: in the rail, the phone's bottom bar and header, its sidebar and tab, the folder browser, the chat's context chip and prompt ("Ask across Pages"), and the "Back to Pages" links.
+- Imago's billing and wallet screens now match the classic ones:
+  - The account menu and the account overview show your credits as whole credits. Before, they showed the balance in cents, ten times too high.
+  - Wallets (Account › Wallets) and a drive's Wallet settings use Imago's settings layout instead of the classic cards. Spending your own credits now shows a coins mark instead of a sparkle, here, in the credits button and in the organization's Usage link.
+  - Storage has Add storage and Change storage for extra 50 GB blocks where your plan allows them, and an upgrade link on Free. An organization's Plan & seats page shows its storage and, for the Owner, extra storage blocks.
+  - When an upload is refused because you are out of space, the message says why and offers Get more storage. Uploads to an organization drive are checked against the organization's storage, not yours.
+  - The Plan page says when your plan was bought in the App Store, and no longer offers to change, cancel or discount it here.
+- Your Home drive can no longer be funded. What you spend there is always your own credits, so its Wallet settings say so, and Fund a drive (in Imago and the classic interface) no longer lists it. No one can create, top up or donate to a wallet on a Home drive. A Home wallet made earlier is spent until it runs out, and its monthly allocation stops at the next renewal, so no credits already in it are lost.
+- In Imago, opening Calendar from the rail now shows the calendar beside its sidebar immediately.
+- Imago message filters now remove duplicate conversations from overlapping inbox pages so switching All, Channels and Direct does not leave stale rows behind. Segmented selectors fit their buttons without an empty tail.
+- Imago’s left sidebar content now resizes with its column across chat history, files, messages and tool sidebars, instead of being clipped or leaving blank space. Sidebar content also fills the narrower overlay sheets.
+
+- The Terms of Service and Privacy Policy now cover purchases made in the iOS app through Apple: subscriptions bought there are managed and cancelled in your App Store account settings, Apple handles their refunds, and Apple shares only the transaction details needed to provide what you bought. In the iOS app, the Terms, Privacy, Cookie and Subprocessors pages open without the website's navigation and footer.
+- Imago's ⌘K search has a new look. The search field no longer shows a blue focus outline that was cut off at the top. Results show an icon, the title with the matching letters highlighted and, when searching every workspace, the page's workspace underneath. Before you type, the palette lists the recently updated pages in the current workspace. The "All workspaces" checkbox is now a switch between the current workspace and all of them; press Tab to flip it.
+- In Imago you can resize the left sidebar and the Imago panel beside a page by dragging their inner edge, as you can in the classic interface. Double-click the edge to reset it. The widths are remembered on this device, and the sidebar keeps one width across sections. With the edge focused, the arrow keys also resize, by 64px with Shift. The middle always keeps at least 400px. On smaller windows, where the sidebar or Imago opens as a sheet over the page, they keep their usual width.
+- Paid plans now include their full price in credits each month (a dollar paid is ten credits), up from 60%. Pro, Business and extra seats all include more credits; plan cards, the comparison table and the pricing page show the new amounts, and each next renewal grants them.
+- Task lists in Imago have their own views again, in place of the classic table. Switch between Focus, Tree, Board and a new Roadmap from the list's toolbar, which also has All / Mine / Overdue filters with counts, a search box, Statuses, Workflows and + Task.
+  - **Tree** is an outline of the list. Each row shows subtask progress, priority, who's on it and its due date. Drag a row to reorder it, or use its ⋯ menu to move it up or down, open it or delete it. The list's description sits folded above the outline.
+  - **Board** lets you drag a card within a column as well as between columns. Cards open in place to show their subtasks. A column can have a WIP limit, which is a reminder only and never blocks a move, and any column can fold to a narrow strip. Lanes split the board by priority or by assignee; dropping a card into another lane changes that field too.
+  - **Focus** lists what you can start next, either in the open list or across every list in the drive, with a "Done today" section and a quick-add row.
+  - **Roadmap** puts the list on a timeline in weeks, months or quarters. Drag a bar's ends to change its start or due date, and pick up tasks with no date from the Unscheduled tray.
+  - Tasks now have an optional **start date**, which you can set from a task's detail or the Roadmap. In a task's detail, status, due date, start date, priority and assignees open proper pickers, and you can delete the task. If you can only view the list, the detail shows these fields as plain text instead. A due date set on the same day as a start time is kept rather than refused.
+  - On the Tasks home, you can tick tasks off straight from the list.
+  - Lists update live when someone else changes them.
+
+- Imago's Home drive is now your dashboard, as "All drives" is in the classic interface. On Home, Tasks lists your tasks from every drive with each one's drive named beside its list, Calendar shows every drive's events with your personal and Google ones, Console lists agent sessions from every drive and starts new ones in Home, and Activity shows your own changes across drives, naming the drive each was in. Messages already showed every drive's channels and your DMs. Imago's chat on Home now knows all your drives instead of assuming you mean Home. Every other drive stays scoped to itself, and Home's Files, Members, Workflows and Trash are still Home's own. The cross-drive Tasks, Calendar, Activity, Agents and Messages screens are gone from account settings; old links to them open Home's, keeping any date, view or filters in the link.
+- Drives can have their own look. Drive owners and admins can upload an image (JPEG, PNG, GIF or WebP, up to 5 MB) or pick a color for the drive's tile, in Imago's drive Settings under Appearance or in the classic drive settings under General. The drive shows that image or color at the top left of Imago's rail, in the phone header, in the drive switcher and in the classic header. A drive in an organization with neither shows the organization's avatar. Changes show up for everyone in the drive without a refresh. Like organization avatars, a drive image is stored by PageSpace and only shown to people who can open the drive.
+
+- Imago UI polish:
+  - The rail's first button is now Home, with a house icon, and the Agents tool is now Console, with a terminal icon.
+  - The Imago orb is larger in the chat header's agent picker and its list.
+  - The credits button no longer shows a sparkle when you are spending your own credits.
+- Imago tabs:
+  - + (New tab) opens a blank tab on the drive's home right away, as in a browser, instead of asking you to create a page. What you open next loads into it.
+  - Tool tabs such as Calendar and Console show their own icon.
+  - The active tab is clearer: it takes the color of the sheet below it and stands out from the tab strip in both light and dark mode.
+  - The browser's Back button returns to the tab you came from. Before, after opening a New tab or switching tabs, Back loaded the earlier page into the current tab and left two tabs showing it.
+  - Every navigation loads into the tab you're in, as in the classic interface, including the drive's chat and a section's index (Files, Messages, Tasks) from the rail. Before, those left the tab showing the last page you opened.
+- Imago's left rail shows its tooltips in full instead of clipping them, and no longer scrolls sideways.
+- Opening Calendar, Activity or Console, any other spot from the rail, or an agent page no longer folds Imago away. Imago stays open beside every screen and page until you collapse or close it yourself.
+- Imago's Console works like the classic Agents console again:
+  - Chats run inside the session's panes, so you can split the grid and talk to several agents side by side. Before, a chat pane only showed a button that moved the conversation into Imago's column.
+  - The Console sidebar is classic's: each environment with its sessions nested under it, sessions with their own sandbox beside them, and each session's conversations, pages and shells listed under it. Every row opens in a pane.
+  - With no session open, the Console sidebar sits beside Imago, which keeps the middle. Opening a session puts its panes there under one session bar (name, environment, start time, preview, Add pane, End session and Close).
+  - A session whose last pane was closed opens on the pane picker instead of an empty screen, and Add pane works there too.
+  - A terminal that can't reach the realtime server now says so instead of staying blank.
+  - On Home, the Console lists every drive's sessions, grouped by drive, as classic's All drives view does.
+
+- Sign-in, sign-up, invitations, share links and the other signed-out pages are back to the classic look on pagespace.ai, and finishing email verification or passkey setup lands you on your dashboard again instead of Imago. The Imago-styled versions now sit behind their own build flag (`NEXT_PUBLIC_IMAGO_V3_AUTH`), off by default, so trying Imago no longer changes how you sign in. Imago itself and the "Try Imago" link are unchanged.
+
+- You can now subscribe to Pro and buy credit packs inside the PageSpace iPhone and iPad app, paid through your Apple ID. Pro bought in the app includes exactly what Pro on the web does (the same monthly credits, storage and models) and shows up on every device you sign in on. App Store prices are set a little higher to cover Apple's fee. Manage or cancel an App Store subscription from the app's Plan page or your Apple ID settings, and use Restore Purchases after reinstalling. A plan bought on the web is still managed on the web, and organization (Business) plans are still managed by the organization's admin. Credit packs can be bought either way, whichever store your plan is on.
+- The chat composer in a docked Imago column is one row: the model name is a single button, and it opens a searchable list of every model, browsed by provider, so the composer no longer clips against Send in a narrow column.
+- Imago now has a face of its own: a living liquid-metal orb wherever Imago shows up, in place of the generic agent icon. It moves on Imago's empty chat, in the chat header, while Imago is thinking, and on the Ask buttons. It listens as you type, churns while it thinks and ripples as it replies. Elsewhere it is still and comes alive when you hover it: the Chat button on the rail, Imago's page in the sidebar, tabs, recents, favorites, search and the agent picker. Your other agents keep their usual icon.
+
+- Every spot on Imago's rail now works the same way. Clicking one opens its sidebar, and Imago's chat fills the rest of the screen. Picking something in that sidebar (a page, a task view, a calendar date, a setting, a workflow, a member group) opens it in the middle, and the chat moves to the right. Closing it with × brings back that same sidebar with the chat in the middle. It no longer sends you to Home. This now applies to Tasks, Calendar, Console, Workflows, Activity, Members, Trash, Drive settings and Account, as well as Files and Messages.
+  - Tasks' sidebar shows your overdue and due-this-week tasks at a glance, under the smart views. Picking a view opens its tasks in the middle.
+  - Calendar's sidebar is the filter again, as in the classic calendar. It has checkboxes to show or hide each calendar (on Home), user events, agent events and tasks. The row of filter pills across the top of Home's calendar is gone.
+  - Trash's sidebar filters by Pages or Files, and Activity's sidebar has an "All activity" row.
+  - The chat in the right column now has the same narrow layout everywhere. On Tasks it used to keep the wide full-screen layout.
+
+- Imago no longer draws a blue focus outline around a document when you click into it, and the ⌘K search palette and new-page palette no longer show a focus outline on their fields when they open. The highlighted result marks where the keyboard is.
+- Imago's Tasks and Messages sidebars have a proper header now. New list and New message sit in the header as + buttons beside Close sidebar, like New page in Files, and the "Create page" button is gone from both sidebars, which frees the space it took.
+- Imago's Files view no longer shows the "N pages in <drive> · Browse files" line above the chat. The Browse files link is still available from the Files section itself.
+- The drive picker in Imago opens centered and full-size, as it does in the classic interface, instead of as a narrow panel pinned beside the sidebar.
+
+- Imago's tabs now work like browser tabs, as in the classic interface: opening a page loads it into the tab you're in instead of adding a new tab every time. Each tab keeps its own Back and Forward history, and the browser's Back and Forward move within the tab you're in. To open a new tab, use + (New tab), or ⌘/Ctrl-click or middle-click a link, which opens it beside the current tab without leaving it.
+
+- The pricing page and Choose Your Plan page are easier to read: each plan's included credits, top-up rate, storage and models sit in a clear spec list, and Business's team terms (seats, extra-seat credits and checkout) have their own labeled panel instead of cramped small print. Choose Your Plan now centers its two personal plans side by side.
+
+- Credits are now a larger unit, so every balance, allowance, cap and pack shows one-tenth the number it did. What you have, and what things cost, is unchanged. A custom top-up must now be a whole number of credits; an amount that is not is refused rather than rounded.
+
+- Pro now includes 10 GB of storage (up from 2 GB) and no longer limits how many files you can store. Business organizations no longer have a file-count limit either. Free is unchanged at 500 MB and 100 files.
+
+- Need more room? Pro members and Business organization Owners can now add extra storage in 50 GB blocks for $5 a month each (Settings › Usage, or the organization's Plan & seats page). Added storage is charged right away for the rest of the billing period; removing it takes effect at the end of the period, and no files are ever deleted. When an upload is refused for lack of space, the message now says why and links to where you can get more.
+
+- Organizations and their settings are now available in both interfaces. A fresh assistant conversation shows its spending source before the first message, and choosing another source uses it for the first reply. Imago now applies organization sign-in requirements and keeps access-restricting changes available while an organization is unpaid.
+
+- Paid models and voice now follow whoever pays for the call. Inside an organization's drive, its plan applies to a member on the drive wallet or their seat; on someone's personal drive wallet, the drive owner's plan applies; on your own credits, your own plan applies. This now holds for agent consultations, the OpenAI-compatible API, workflows, @mentions, agents asking agents, text-to-speech and voice calls.
+
+- Text-to-speech and Global Assistant voice calls made inside a drive now spend from that drive's wallet, like a typed message there, instead of always using your personal credits. Speech or a call whose drive cannot be determined is refused and charges nothing.
+
+- An agent consulted from work in another drive (`agents.ask` with `sessionDriveId`, or `drive_context` on the OpenAI-compatible API) now spends and records its usage in that drive, not the agent's own. API threads spend in the drive they were opened in.
+
+- Storage in someone else's personal drive now counts against the drive owner's quota, not the member who uploaded it. Moving a drive into or out of an organization, or handing a personal drive to a new owner, moves its storage with it. Direct-message attachments still count against the sender.
+
+- Machine storage in an organization's drive never puts the organization's credits pool into debt: a paused pool is not charged, and a pool that can't cover the full amount is charged only what it has. An organization's Owner or Admin can now buy dedicated (always-on) hosting for an app in an organization drive; it is billed to the organization, not to a person's card.
+
+- The personal usage breakdown now shows only spend from your own credits. Compute you run in an organization's drive is the organization's spend and no longer appears there.
+
+- Organization Owners and Admins can pause the whole credits pool from Plan & seats: while paused, no seat and no drive wallet can spend from it. A paused pool's drive wallets show as paused.
+- Guests can no longer spend an organization drive's wallet by @mentioning an agent or pressing Run. An Admin can let a drive's guests spend its wallet (Drive Settings › Wallet › Guests); guests are then always held to spending caps (the default daily and monthly caps unless set lower).
+- The amount shown for a drive wallet in the "spending from" chip, strip and popover is now the wallet's own remaining amount, the same figure as the drive's Wallet page.
+- When an automation or mention is skipped because the person it runs as reached their cap, or is a guest the drive keeps off its wallet, the drive lead's notice now says so.
+- A donation to a drive wallet is now always kept whole as your gift; it no longer pays off the wallet's debt, and it can be spent right away even while the wallet is over.
+- Moving a drive into or out of an organization now moves its wallet with it: top-ups and donations stay, and the new owner sets its monthly allocation.
+- Zoom transcript summaries and action items spend the destination drive's wallet on personal drives too, never anyone's own credits; a drive without a wallet skips them.
+- On the Wallet page, each member's spend now shows how much was today and how much ran through their automations, with each automation listed by name under the person who created it.
+- Inside a drive with no chat open, the header chip now shows what a new conversation there would spend from.
+
+- A conversation in a drive now keeps the source it started on. If that drive wallet is empty, paused or at your cap, the call is refused, names the wallet and offers your other options; it moves only where the drive's fallback rule allows, and the move is shown. It no longer switches to your own credits without telling you. Asking another agent (ask_agent) now reserves credits before the agent runs and is refused when the wallet cannot cover it.
+
+- Organization sign-in rules now also cover: channel @mention replies and manual workflow Runs (they act with the sign-in of the person who sent or pressed them), org admin settings and drive join-request approvals for sessions and access keys (leaving an organization never needs a fresh sign-in), Pulse summaries, AI memory and the Memory pages that hold it when drawn from an org's content (withheld, with a prompt to sign in as the org requires, on Home and in Personalization settings; a data export or drive backup leaves them out and says why), conversation transcripts, calendar events, and live app logs. Scheduled automations (workflows, triggers, backups) now reach only the drive they live in. The Security page shows how many members and guests a rule would block, flags a damaged maximum age as invalid, and saves only what you changed; the CLI tells access-key users to create a new key rather than sign in again.
+
+- An organization's sign-in rules (require a passkey sign-in, maximum session age) now apply everywhere its content can be reached: pages, files, search, inbox, activity and Pulse, AI assistants and their tools, live collaboration (open documents and channels are closed when a session passes the maximum age), terminals and previews, uploads, and the CLI and MCP keys. A refused request answers `403` with `code: "org_strong_sign_in_required"` or `"org_reauthentication_required"` so you can sign in again; your personal drives and account settings stay reachable. Scheduled automations (workflows, triggers, scheduled backups, Pulse) keep running as their creator, since no one signs in for them, within the drives they belong to.
+
+- Organization capabilities now require a verified payment or supported gift for the current subscription. A zero-dollar non-gift invoice or balance left from a previous subscription cannot activate an unpaid organization.
+
+- Included credits now follow the published money model: each Pro or Business payment includes credits worth a set share of what it paid, rather than its full price, and the plan cards, pricing page and Plan & seats page show the new monthly figures. Top-up packs are unchanged. A gifted organization's pool is funded the same way from the list price; staff gift an organization from the admin console, on the organization's own subscription, for a fixed number of seats (inviting past them is refused until the gift changes), and can revoke the gift; gifting a lapsed organization cancels its unpaid renewal invoice and restores it at once.
+
+- Organization seats: re-adding someone in the last hour of a billing period no longer charges a proration, and a member who hits the seat limit is no longer told how many seats the organization has. On self-hosted and dedicated deployments every organization billing page and endpoint is absent for everyone.
+
+- Billing now recognizes paid plans only by their configured Stripe price IDs. Unknown and retired prices no longer gain paid access or credit grants by matching a plan amount.
+
+- Organization audit log: every org event is now saved together with the change it records, so an event can no longer go missing when the audit store is briefly unavailable; it is delivered as soon as the store recovers. Seat count changes made in Stripe (the customer portal or a support edit) now appear in the log too.
+
+- Organization model allowlists now apply everywhere: agent model changes, agent creation, copies and moves of agents into an org drive refuse disallowed models, the model picker in an org drive shows only allowed models, and Zoom summaries, compaction, memory and pulse respect each org's allowlist. Workflows, @mentions and agent-to-agent consults now check the model against the plan of whoever pays for the run.
+
+- Moving a team to a dedicated PageSpace instance now brings its organizations with it: org drives arrive
+  as org drives with their visibility, members, policies, verified domains and subscription record. Wallet
+  balances (including debt), donations and spending caps are copied across as records only: a dedicated
+  instance does not run PageSpace billing, so there they are not charged against or enforced, and every
+  organization counts as active. An organization that is only reached through a drive you were a guest in
+  comes along without its money, invitations or domains, but people who left it still cannot be
+  automatically re-added by email domain. Usage history stays on the original instance.
+
+- /btw side questions now work on every chat surface (dashboard assistant, right-sidebar chat, agent console) and /btw appears in the / command picker on all of them.
+
 ### Added
 
+- **Organization Drives directory and join requests** — every
+  member, not only admins, can open the organization's Drives directory from the organization page or
+  "Browse … drives" in the drive picker: the drives they can open, and the Restricted drives they can ask
+  to join, with an optional note. The drive lead and organization Owners and Admins see pending requests
+  on the drive's Members page and approve or decline them.
+
+- **Unpaid-organization banner everywhere in the organization** (shown once organizations are switched
+  on) — the reactivate banner (Owner and Admins) and the read-only notice (members) now show on every
+  organization page and on every page of an organization drive, not only in organization settings.
+
+- **Who spends, today and via automations** — a drive wallet's "Spend this month" list shows, per
+  member, how much was spent today and how much came from automations run on their behalf. Settings ›
+  Usage › Wallets shows what you spent from each drive wallet this month.
+
+- **Organization changes update live** — renaming an organization, changing its avatar, deleting it, and
+  sending or revoking invitations update the drive picker, the header and organization pages for every
+  member without a refresh.
+
+- **Joining an organization from the invitation email** — the
+  invitation link now opens a page that lets you join: sign in or create an account with the invited
+  address (by any sign-in method) and you land in the organization; if you are already signed in, one click
+  joins. The page says plainly when the link has expired, is no longer valid, belongs to another account,
+  or you are already a member.
+
+- **Organization avatar upload** — Owners and Admins set the
+  organization's avatar in Organization settings › General by uploading an image (JPEG, PNG, GIF or WebP,
+  up to 5 MB). The avatar is stored by PageSpace and shown only to members; an avatar can no longer be a
+  link to an image on another site.
+
+- **Create drives in your organization from anywhere** — the
+  New drive dialog offers the organizations you may create drives in, preselecting the one you are working
+  in, and the AI assistant's create-drive tool and the MCP drive create accept an organization too. The
+  organization's "who can create drives" setting applies everywhere.
+
+- **Organization sign-in requirements** — an organization's
+  Security page can now require strong sign-in (a passkey confirmed on your device) and a maximum sign-in age
+  (15 minutes to 30 days) for everyone opening its drives, with a preview of how many members would have to
+  sign in again. Turning a requirement on first asks you to meet it yourself, so you never lock yourself out;
+  relaxing one needs a sign-in that meets the one in force. Someone who does not meet a requirement keeps their
+  account and personal drives: the app asks them to confirm it is them (passkey, or an emailed link for a
+  sign-in that is too old) without signing out, the Files page shows the organization's drives as locked
+  instead of hiding them, and the CLI and MCP tools say to run `pagespace login` (with a passkey when strong
+  sign-in is required). Every sign-in method now records how you signed in; sessions from before this change
+  must sign in again to open an organization's drives under these requirements. Single sign-on and SCIM are
+  out of scope and named as such on the Security page.
+
+- **Organizations in the CLI and on MCP keys** — `pagespace orgs
+  list|get|members|drives|policies` and the matching `organizations.*` MCP tools read what the web already
+  shows: your organizations and your role in each, the member roster, the drive directory (including
+  Restricted drives, with join standing), and the org's policies for Owners and Admins. The CLI and MCP now
+  also do what the web does with an organization, under the same roles: rename it, invite, resend and revoke
+  invitations, accept one, change roles, remove members, leave, change policies (including requiring a
+  passkey sign-in and a maximum sign-in age), manage verified domains, answer guest requests and owner-left
+  automations, read the audit log (and export it as CSV), trashed drives, drive usage and suspended items,
+  preview how many members a sign-in policy would refuse before saving it (`pagespace orgs sign-in-preview`);
+  create a drive in an organization, move drives in and out, change a drive's visibility or lead, and ask
+  to join, approve, deny or withdraw drive join requests (`pagespace orgs …`, `pagespace drives …`). Money
+  stays with a signed-in session: creating or deleting an organization, transferring ownership, seat caps,
+  the seat allowance and wallet fallback policies, buying another seat (an access key may invite only into
+  seats already paid for), billing, the credits pool and every wallet change refuse an access key by name,
+  and the CLI asks before a change that can remove or suspend access. An access key scoped to
+  specific drives is refused on organization actions and sees only its own drives in the directory, and
+  an organization's sign-in requirements now apply to its own settings and admin actions too, for access
+  keys and signed-in sessions alike.
+
+- **Organization settings** — Settings › Organizations lists the
+  organizations you belong to and lets you create one: name it, choose the drives you own to move in (Home
+  stays personal), invite people, see the price, and pay with a card; the organization is ready once that
+  first payment goes through. Each organization has a settings page for its Owner and Admins: Members &
+  seats (roles, invitations, guests, per-person seat caps), Drives, Policies, Security (verified domains),
+  Plan & seats (seats, the credits pool, drive wallets and invoices), an Audit log with CSV export, a
+  Needs your attention list (guest requests to approve, automations whose owner left), and the Owner's
+  Danger Zone. A member who is not an Admin sees only the option to leave. While an organization is
+  unpaid, every page says so, offers to reactivate it, and allows only changes that restrict access.
+
+### Changed
+
+- **Imago's new shell (C · Blue Spine)** — Imago now sits on a blue spine: the drive tile, Search (⌘K), Chat, Files, Messages and Tasks, then Calendar, Agents, Workflows, Activity, Members and Trash, with the notification bell, Drive settings and your avatar at the foot. Open pages live in a tab bar across the top (Back, Forward, tabs that remember themselves per drive, and a + for a new page); under it every column has the same 48px head. The left sidebar folds away with its panel button and comes back from "Show sidebar"; a page closes with ×; Imago docked beside a page folds into an "Ask" pill, and when no page is open Imago fills the middle and can be closed, leaving "Nothing open" with your recent pages and "Ask Imago". A page's head carries its path, who is viewing, Share and a "…" for page actions, and its tools sit in one strip beneath it. The Files pane gains a filter, Favorites and Recents; drive settings and your account each get a sidebar of their screens.
+
+- **Imago's chat column (C · Blue Spine)** — the Imago column's head now has the agent picker (Imago first), History, New chat and a collapse button. A "Spending from …" line above the compact composer shows which credits a reply draws on. Tool calls appear as short rows ("Read Page: Brief") instead of raw tool names. The Chats pane can be searched and groups your conversations by date, and a home greeting suggests where to pick up.
+
+- **Imago's pages (C · Blue Spine)** — each page type has one tool strip under its head:
+  - Documents: Formatting, plus an "Ask" button in the selection bubble that quotes your selection to Imago.
+  - Sheets: Cell and Formula.
+  - Code: Language.
+  - Files: file facts and Download.
+  - Channels: Webhooks, a "New messages" divider, and "Sending…" on pending posts.
+  - Canvases: Code, Preview and Settings tabs, with "Republish" when the published copy is out of date.
+  - Folders: their contents as a table with Name, Type and Modified.
+  - Agent pages: Chat, History and Settings views.
+  - Task lists: Table/Board, Active/Completed/All, and a progress line.
+
+  A public link that no longer works now says so.
+
+- **Imago's files browser (C · Blue Spine)** — a folder opens in a browser of its own, from its "Browse files" link: a Files strip with the breadcrumb, List and Grid views (your choice is remembered), and New Page. The list sorts by Name, Type and Last Modified. A row's "…" or right-click opens Open, Open in new tab, Rename, Favorite, Move to, Copy to and Trash. An empty folder says "No child pages" with Upload files and Create page, and files dragged over it show how many will go in.
+
+- **Imago's settings (C · Blue Spine)** — agent and canvas settings open with a category list beside the form, which you can fold away with "Close settings menu". Editing an agent's settings shows a bar with "Unsaved changes to …", Discard and Save. A published canvas's strip shows its URL, Settings (publish title, description, share image and search visibility), Copy link and Unpublish.
+
+- **Imago's messages (C · Blue Spine)** — the Messages index lists channels and direct messages together, newest first, with an All · Channels · Direct filter, and opens on your unread counts. Direct messages get their own pane with a filter and the people you can message. An open conversation has one head ("Direct messages › name", Conversation options), and New message groups people by how you know them. Channel composers say how to mention and send. The Webhooks button only appears for drive owners and admins. Account › Messages lists every channel across your drives, with search, a drive filter, an Unread toggle and Load older.
+
+- **Imago's tasks (C · Blue Spine)** — the Tasks pane has New list, views with counts (Assigned to me, Overdue, Due today, This week, Upcoming) and each list's progress. The ground shows the tasks assigned to you by due window, with Active · Completed · All. The board view has a column per status with counts and richer cards. An open task shows its list's other tasks in the pane, Previous / Next, its automations and its activity. The Agent triggers and Manage statuses dialogs match the new look. Account › Tasks groups your tasks by drive, with due chips and a drive filter.
+
+- **Imago's drive tools (C · Blue Spine)** — Calendar, Agents, Workflows, Activity, Members and Trash now open with a pane on the left that folds away like every other. Calendar has a mini month, calendars and event types beside a week toolbar, and event popovers with attendees and triggers. Agents lists sessions by environment, with the published app, a session toolbar and closable chat and shell panes. Workflows lists your workflows beside a detail you can enable, run, edit or delete. Activity filters by person, operation, resource and date, with Undo and Roll back on each change. Trash is a tree of trashed pages with Restore and Delete forever. Members has counts for each group, a profile with role and page permissions behind a save bar, and an invite flow with role and expiry. The Ask pill asks about the week, what changed, or why a workflow failed.
+
+- **Imago's settings and account (C · Blue Spine)** — every drive settings and account screen now uses one layout: a single heading with a short explanation, then plain sections, with the settings list in the pane on the left. Drive settings has an overview with live hints, General (name, home page, Imago access), Roles with an inline editor and access grid, Integrations with an audit log, Commands created inline, Context with a character counter, Backups, Domains with DNS records, and a Danger zone that deletes a drive only after you type its name. The account has an overview, your profile with passkeys, devices and connected apps, display, personalization, notifications, hotkeys, privacy, AI providers, agents, agent accounts, commands, plan, billing, usage, storage, drives, backups with snapshots, trash, activity, connections, integrations, Google Calendar, MCP, local MCP and your calendar. The Danger zone row shows only to a drive's owner, Privacy is hidden in the mobile app, and screens like Calendar and Activity open with Imago folded to its Ask pill.
+
+- **Imago's overlays and dialogs (C · Blue Spine)** — dialogs, popovers, menus and side sheets share one look. Toasts are dark pills, at most three at a time. A page's "…" opens its actions (open in new tab, add child page, rename, favorite, protect, permissions, home page, select multiple, move, copy, trash), and multi-select shows a toolbar to move, copy or trash several pages at once. Share, Page history (with undo and roll back), the create-page palette, find in page (⌘F), the drive switcher, ⌘K search with Pages and Users, the notifications popover and a full Notifications page, the account menu with your credits and Send feedback, an offline banner and the verify-email banner, the first-run onboarding, and DM report and block all match the new design.
+
+- **Signed-out pages in the Imago look (C · Blue Spine)** — when Imago is enabled, sign-in, sign-up, check your email, the cookie banner, status pages, passkey setup, device activation, OAuth consent, invitations, share links, provisioning, offline and unsubscribe pages use the new frame with the blue spine, and finishing them lands you in Imago instead of the classic dashboard. A "Cookie preferences" link on sign-in reopens the cookie banner. With Imago off, these pages look as before. In Imago, running out of credits shows an alert with Buy credits and the Pro upgrade.
+
+- **Imago on tablets, phones and the desktop app (C · Blue Spine)** — between 1024 and 1279 pixels wide, Imago opens as a sheet over the page instead of a third column; below 1024 the sidebar slides in as a sheet too. On a phone Imago shows one screen at a time with a bottom bar (Chat, Files, Messages, Tasks, More), a full-screen Files screen, a page view with an "open pages" sheet, and Ask opening Imago full-screen with Back. In the desktop app on macOS the spine leaves room for the window buttons and the top of the window can be dragged.
+
+- **Imago's avatar crop, account deletion and drive actions (C · Blue Spine)** — uploading an avatar opens Crop Avatar with a circle or square crop; deleting your account first asks you to hand off or delete drives you co-own, then asks you to type your email; each drive in Account › Drives has an actions menu to open, rename, favorite or move it to trash.
+
+- **Imago reuses the full PageSpace feature UI** — native editors and file viewers, page creation and sharing, rich chat controls and results, messaging, tasks, agent sessions and account/drive settings now stay inside the persistent Imago shell. Classic PageSpace and rollout defaults are preserved.
+
+- **Right-sidebar chat input is a single compact card** — attach, tools, model picker and one send/stop button now share one toolbar row under the text box instead of stacking a separate model selector above it. While a reply is streaming, a queue button appears next to Stop once you've typed something, so you can still queue a follow-up on phones.
+
+- Failed organization payments now pause organization spending and access expansion immediately. Stripe-side trials do not grant organization access. Existing pages remain readable, and security restrictions still work.
+
+- Reactivating an organization now only pays what is owed or starts a new paid subscription. If the subscription was changed outside PageSpace (for example a trial, a pause or invoice billing set up in Stripe), Reactivate no longer tries to repair it: Owners and Admins are told it needs support and can contact us from the banner, and the organization is never shown as active until it really is. An organization whose subscription is switched to invoice billing in Stripe is treated as unpaid until support restores automatic payment.
+
+- Personal accounts now offer Free and Pro only. Business belongs to organizations; retired personal Business pricing and access exceptions have been removed.
+
+- **A lapsed organization can no longer open things up** (organizations; off until organizations launch) —
+  while its plan is unpaid or canceled, an organization's drives cannot be made more open (Private to
+  Restricted or Open, Restricted to Open), a member cannot be made an Admin, and nobody from outside can be
+  added as a guest, by invitation, share link or page share, even with guests turned on. Making a drive less
+  open, making an Admin a Member and removing people still work. The settings pages only offer what is
+  allowed and say why the rest waits until the plan is paid.
+- **A lapsed organization can only restrict access, everywhere** (organizations; off until organizations
+  launch) — while its plan is unpaid, nothing in its drives can give anyone more access: no new members,
+  invitations (direct, by email, or to the organization), share links, page shares or wider page
+  permissions; no raising a member's role or widening a role people hold; no approving join requests,
+  changing a drive's lead, adding agents to a drive or letting an agent carry a drive's instructions; no
+  new custom domain; and no making a private page visible to the whole drive. Undo, redo and backup
+  restores that would give access back wait too. Invitations already sent stay open and work once the plan
+  is paid. Removing people, revoking links, lowering roles, narrowing permissions and making pages private
+  all still work, and each screen disables only what is paused and says so.
+- **A key never reaches further than the person who made it** — an MCP key or a connected app's access to
+  a drive now ends the moment its owner leaves that drive, and returns if they are added back: it no longer
+  lists the drive, its calendar events, tasks or search results, and a key's admin role counts only while
+  its owner is still an admin there.
+- **New conversations start on the drive's wallet** — if you have not chosen a default, a new conversation
+  in a drive with a wallet you can spend now uses that wallet, and elsewhere your own credits, instead of
+  asking you to choose first. Settings › Usage › Wallets shows this default as selected. In the right
+  sidebar and the dashboard assistant, a new conversation now shows its spending source as soon as it is
+  saved.
+- **Automations spend their drive's wallet only** — the Wallet settings, workflow details and the
+  organization's attention page now say so: a scheduled run counts against its creator's caps and never
+  falls back to anyone's own credits. A workflow whose owner left can no longer be run by hand.
+- **Organization pages show where you are** — the header names the organization on its settings pages,
+  the drive picker lists each organization's settings as an option you can reach by keyboard and screen
+  reader, and the organization hub's rows keep readable text on hover.
+- **Clearer guest invitations** — if you cannot see an organization's Guests policy, inviting someone from
+  outside says that it may need approval or may be turned off, and if guests are off the refusal says so
+  and switches you to giving them a seat. A failed "Move out of the organization" keeps its dialog open with
+  the reason. The Workflows list fits a phone screen.
+- **Pricing page and plan cards show the organization plan's terms** — the pricing page and the in-app
+  plan cards now show three tiers, Free, Pro and Business. Each card lists the price, the credits
+  included, and the top-up rate as separate lines. Business is the organization plan: $50 a month with
+  5 seats, $10 a month for each extra seat, and the credits each extra seat adds. There is no trial, and
+  a card is required at checkout. Credit amounts are plain counts and never carry a "$". All figures come
+  from the same billing model the app charges with.
+- **New organizations ask before letting outsiders in** — a new organization's "guests from outside"
+  setting now starts at "Admins approve" instead of "On": inviting or sharing with someone outside the
+  organization waits for an Owner or Admin to approve it. Owners can change the setting at any time.
+- **An organization's automations outlive the person who made them** — when someone leaves an
+  organization, is removed from it, or deletes their account, the workflows, task and calendar triggers
+  and page webhooks they set up in its drives are no longer deleted. They are switched off and marked
+  "owner left", and nothing runs under the missing person, including a manual Run. An Owner or Admin can
+  hand each one to another member who can reach its drive (it then runs as that person and counts against
+  their spending cap) or delete it; both are recorded in the organization's audit log. An automation whose
+  creator deleted their account keeps nothing that identifies them. Automations in personal drives still
+  go with the account, as before.
+- **A lapsed organization can still lock things down** — while an organization's plan is unpaid or
+  canceled, its Owner and Admins can still make any change that restricts: turn guests from outside off
+  or to approval (guests are removed from its drives at once, as when the plan is active), turn off share
+  links, publishing and other features, lower the seat allowance, narrow the allowed models or
+  integrations, remove members, revoke share links and invitations, decline guest requests, pause a
+  drive's wallet and lower a person's spending cap. Changes that open access or add spending — including
+  approving a guest request — still wait until the plan is paid again.
+- **Automations count against their creator's spending cap** — a workflow, a scheduled run or a trigger
+  now counts toward the per-person spending cap of the person who created it, on the drive wallet it
+  spends. Once that person's cap is reached the run is skipped and the run log says the cap was reached;
+  the wallet's funders get the same 80% and 100% alerts as for that person's own chats. People with no
+  cap set are unaffected. An automation stops running if the person who created it leaves the
+  organization (or, on a personal drive, the drive); its run log says why. A workflow you run by hand
+  counts against your own cap, not its creator's.
+- **Organization policies now hold everywhere they apply** — when an organization turns guests from
+  outside off, nobody outside it can be added to its drives by sharing a single page either (the Share
+  dialog, an email share or accepting a page invitation), and people outside it whose only access was a
+  shared page lose that access until guests are turned back on, as other guests already did. When guests
+  need approval, sharing a page with someone outside waits for an Owner or Admin just like a drive invite.
+  An organization's minimum default role for its Open drives is now enforced: a drive's default role, a
+  drive becoming Open, or a raise of the minimum is refused with a message naming the policy when the
+  role would fall below it. The minimum also holds when access is checked, not only when roles are saved:
+  every member of the organization in one of its Open drives can always view (or, under an edit minimum,
+  edit) its non-private pages, even if an older role or a page-specific setting says less. People invited
+  with a specific role, guests and other outsiders keep exactly the access they were given, and private
+  pages stay private. Pulse, the activity summary and opened pages follow exactly the same organization
+  access as everywhere else: a member who has lost access to a Restricted or Private drive no longer sees
+  its pages there, and an Owner or Admin opening a Private drive this way is recorded in the audit log.
+  A policy change that turns off published apps, environments, agents from
+  other drives, autonomous agents or some models lists what it affected in the organization's audit log,
+  and the log now also shows compute handed to a drive's lead, resumed apps, and a former member's
+  turned-away attempt to rejoin (without their email address).
+- **Your allowance of an organization's credits covers compute too** — sandbox runs, terminals and
+  browsers you use in an organization's drives count toward your monthly allowance of the organization's
+  credits, together with your AI use, whoever's session you are working in: compute is charged to the
+  person who runs it. In a shared terminal that is whoever is typing: joining a teammate's terminal to
+  watch costs you nothing, and once your allowance is used up your keystrokes there are refused with a
+  message saying so. When two people type at the same moment, each is charged for their own turn. Environments and published apps you create there count toward your allowance too
+  (their storage, wakes and running time). Once your allowance is used up, new compute is refused with a
+  message saying so, you cannot create a new environment or publish a new app, and your published apps
+  show visitors a "This app is paused" page. A paused app comes back by itself within the hour after your
+  allowance renews (a daily allowance at midnight UTC, a monthly one after the organization's credits
+  refill; the paused page shows when that refill is next due), and you, the drive's lead or an organization Owner or
+  Admin can resume it sooner from the app pane once there is room again (for example after an Owner or
+  Admin raises your allowance). If you leave the organization, your environments and apps keep running
+  and their costs move to the drive's lead; if you are removed from one drive, the same happens for that
+  drive's environments and apps within the hour.
+- **Complimentary paid plans refill on their renewal date** — an account on a paid plan with no Stripe
+  subscription behind it now gets its monthly credits on its renewal date (within the hour), instead of
+  at its next AI request after the date passed. The renewal date no longer drifts later each month.
+- **Imago reuses the full PageSpace feature UI** — native editors and file viewers, page creation and sharing, rich chat controls and results, messaging, tasks, agent sessions and account/drive settings now stay inside the persistent Imago shell. Classic PageSpace and rollout defaults are preserved.
+
+- **Right-sidebar chat input is a single compact card** — attach, tools, model picker and one send/stop button now share one toolbar row under the text box instead of stacking a separate model selector above it. While a reply is streaming, a queue button appears next to Stop once you've typed something, so you can still queue a follow-up on phones.
+
+### Added
+
+- **See what your AI usage spends from, before you send** (organizations; off until organizations
+  launch) — inside a drive with more than one source, the credit chip in the header shows which one a
+  conversation will spend (the drive's wallet, your seat allowance from the organization, or your own
+  credits) and how much is left, and lets you switch for that conversation. A new conversation names its
+  source above the message box. When the source cannot pay, the message is not sent and nothing is
+  charged: a card says what happened (the wallet is empty, paused, or you reached your cap) and who
+  controls that budget, and offers your other sources. When a drive's rule moves a reply to another
+  source, a note under the reply (and on side questions and voice calls) says so.
+- **Drive Settings › Wallet** — a drive's wallet in one place: what is left this month, and for its lead
+  and the organization's Owner and Admins the monthly allocation, top-ups, the pause switch, what spends
+  from it and what happens when it runs out, per-person daily and monthly caps, and spend this month by
+  person. Members see only what is left and their own cap, and can add credits from their own balance.
+- **Settings › Usage › Wallets** — everything you spend from (your credits, your seat allowance with what
+  is left, drive wallets, including paused or over-budget ones) and everything you fund, plus what a new
+  conversation starts on.
+- **Organizations in your drives** — an organization's drive shows the organization's mark in the header,
+  the drive picker groups drives under each organization and Personal, a drive's General settings show
+  who owns and pays for it, who in the organization can see it, its lead and moving it in or out, and its
+  Members page labels guests and where each person's access comes from, with the people who joined a
+  single page by link listed apart. Inviting someone from outside lets you choose: a guest of this drive
+  or a member of the organization.
+- **Spending cap alerts in your notifications** — when someone reaches 80% or 100% of a cap on a wallet
+  you fund, the notification opens that wallet's settings. Workflows and triggers show who they spend as
+  and why a run was skipped, and flag an automation whose creator left the organization.
+
+- **Spending caps per person, with alerts** — an organization Owner or Admin can set a daily and a
+  monthly spending cap for a person on an organization drive's wallet or on their organization seat, and
+  the owner of a personal drive can do the same on that drive's wallet. A person who reaches a cap is told
+  the wallet is capped for them and can pick another source; the wallet's funders get an in-app
+  notification when the person reaches 80% and again at 100% of a cap, once per day or month.
+- **A fallback to another wallet is always shown** — when a drive's rule moves a call off the wallet you
+  chose (for example onto your own credits because the drive's wallet is empty), the answer now says so on
+  every surface: API completions, side questions, agent consultations and voice calls, not only chat. A
+  tool or a later step of the same turn never moves to yet another wallet on its own, and any overspend on
+  such a call is charged where your chosen wallet would have put it, never to you.
+- **Drive Members shows guests** — members of an organization drive who are not in the organization are
+  marked as guests, each member shows whether they were invited or joined through the organization, and
+  the drive's lead and admins see people who joined through a page share link listed separately.
+
+- **Wallet debt notices, and who absorbs a drive's overspend** — when spending in an organization's drive
+  runs past what its wallet held, the organization's Owner and Admins get an in-app notification, at most
+  once per billing period, and the wallet shows as over until its debt is cleared. An Owner or Admin can
+  choose whether a drive wallet's overspend is absorbed by the organization's pool (the default) or carried
+  by the drive wallet and taken out of its next allocation. The person who was spending is never charged
+  for it.
+- **Organization audit log** — an organization Owner or Admin can read the organization's audit log:
+  membership and ownership changes, seats, invitations, policy changes, verified domains, drive
+  visibility, join requests, drives created in or moved into and out of the organization, lead changes,
+  an Owner or Admin opening a Private drive, drive wallet changes, top-ups, donations and billing events.
+  It filters by event type or category, by drive and by time, and exports to CSV (values that would run
+  as a spreadsheet formula are written as plain text). The log is part of the existing tamper-evident
+  security audit trail, and it only ever shows the organization's own events.
+- **Verified email domains for organizations** — an organization Owner or Admin can add the
+  organization's email domain and prove it is theirs, either with a DNS TXT record or with a link sent
+  to an administrative mailbox of the domain (admin@, postmaster@ and the like). Once verified, people
+  who create a PageSpace account with a verified address on that domain join the organization as members
+  automatically, taking a seat: if every seat is taken and automatic seat purchase is off they are not
+  added, and the Owner finds the refusal in the audit trail. Joining opens the organization's Open drives
+  only, never a Restricted or Private one. Only one organization can hold a domain, shared providers such
+  as gmail.com cannot be claimed, existing accounts and guests are never swept in, and someone who leaves
+  or is removed is not re-added, even after deleting their account and signing up again (the organization
+  keeps only a one-way fingerprint of the address, which an Owner or Admin can clear). Removing a domain stops future joins and removes nobody.
+- **Organization sharing policies** — an organization Owner or Admin can turn public share links,
+  publishing to the web, custom domains and guests from outside the organization off, or (for guests)
+  require approval. Turning one off pauses what already exists instead of deleting it: share links stop
+  working and read as if they never existed, published sites stop being served, and guests lose access
+  to the organization's drives, all listed for the Owner and Admins and all restored exactly when the
+  policy is turned back on. With guests set to require approval, a person invited from outside, or who
+  opens a share link, waits in an approval queue and holds no access until an Owner or Admin approves.
+  Policies take effect immediately and only ever apply to the organization's own drives.
+- **Organization policies for members, AI, compute and services** — an organization Owner or Admin can
+  choose who may invite members and create drives, which AI models and providers its drives may use, whether
+  agents may run on their own (mentions, schedules, triggers) or be added from other drives, whether cloud
+  sandboxes, persistent environments and published apps are allowed, and which services a drive may connect.
+  Each applies the moment it changes and only to the organization's own drives. Nothing is deleted when a
+  policy turns something off: agents, environments, apps and connections are paused and come back when it is
+  turned on again, and a model the organization does not allow is refused rather than replaced by another.
+- **Organization seats follow your members** — an organization's Business plan includes 5 seats, and
+  each accepted member or pending invitation takes one; guests, agents and apps never do. Inviting
+  past your purchased seats either adds a seat automatically (billed pro rata) when the Owner has
+  turned on automatic seat purchase, or is refused with a message saying how to free one. Removing
+  a member keeps their paid seat until the billing period ends, so adding someone back in the same
+  period costs nothing; at period end unused seats are released from the next invoice. Automatic
+  seat purchase is off until an Owner turns it on. No credits are added or removed by any seat change.
+- **Sandboxes, environments and published apps run in organization drives** — compute in a drive
+  that belongs to an organization is now billed to the organization's credit pool, not to the
+  person who started it or the drive's lead. Before, it was refused. If the organization's pool is
+  empty, paused, or not set up, the run is refused before anything starts and nothing is charged.
+  The message says which of the three it is and that an org Owner or Admin can fix it. A published
+  app parks the same way. Usage from before organization billing started is never charged. Buying
+  dedicated hosting for an organization's app is still unavailable.
+  Moving a drive into or out of an organization while a terminal is open changes who pays from the
+  next ten-minute settle, and the window the move fell in stays with whoever owed it. An
+  organization's app is no longer refused because the lead spent a lot on AI that day: daily and
+  in-flight limits count AI and organization compute separately.
+- **Imago preview at `/imago`** — a first look at PageSpace's new interface, served
+  beside classic PageSpace and signed in with the same account. Live on pagespace.ai since the
+  IMG-11.2 flip; self-hosted installs stay dark until they set `IMAGO_ENABLED=true` (and
+  `NEXT_PUBLIC_IMAGO_ENABLED=true` for the "Try Imago" link in the user menu); until then every
+  `/imago` address answers not found. One frame stays put as you move
+  around: a rail of sections, a drive switcher with your Home drive first, and an avatar menu with
+  theme, "Classic PageSpace" and sign out.
+  **Chat** talks to your agents. The header picks who you talk to: your Imago agents first, then the
+  agents you can use in the open drive; switching agent opens that agent's latest conversation, and
+  an agent you can no longer use hands the chat back to Imago with a note saying so. Replies stream
+  in as you watch, with one expandable line per tool the agent used and page citations as chips that
+  open the page in Files; Stop ends a reply and keeps what it had written so far. Whatever you open
+  elsewhere in the frame is what the agent answers about, and the draft in the composer waits for you
+  when you come back. The chat history lists the agent's conversations grouped by day, switches
+  between them in place, and starts a fresh one with New chat.
+  **Files** shows a drive's pages as a live tree: open a folder in place with its caret, filter by
+  name (the folders on the way to a match stay in view), and press + to create a document in the
+  open folder, which appears at once and opens. Opening a folder shows it Finder-style: the path back
+  up the drive, then each page in it with its type icon, kind and when it last changed; an empty
+  folder offers New page. Opening a document shows it in a centred column with the path of pages
+  above it; if you can edit it, you edit its title and text in place and it saves as you pause
+  ("Saving…", "Saved"). If someone else saved it while you were editing, your text stays put and you
+  choose "Keep my version" or "Use the saved version"; if you lose edit access, Imago says your
+  last changes were not saved. A sheet, canvas, code page, file or task list shows a card with an
+  "Open in classic" button; an agent page also offers "Chat with this agent".
+  **Messages** lists a drive's channels and your direct messages with unread counts, and opens a
+  channel or a direct message to read and post in, with new posts arriving live; the unread count on
+  the rail keeps up wherever you are. **Tasks** lists a drive's task lists with progress and opens one
+  in Tree or Focus view, where you can tick and add tasks, or open a task to edit its title, status,
+  priority, due date, assignees, description and subtasks. **Settings** shows a drive's name (owners
+  and admins can rename it), its members, and an "Imago access" switch that lets your Imago agents
+  work in that drive; your Home drive can't be renamed and your agents always have access to it.
+  Account links to your account, billing and connections settings in classic PageSpace.
+  Press ⌘K (Ctrl-K on Windows and Linux) anywhere to search the open drive's pages by name, or tick
+  "Include all workspaces" to search every drive you can open; move with the arrow keys, press Enter
+  to jump straight to a page, channel, task list or agent, and Escape to go back where you were. An
+  empty drive, a section that fails to load and an address that names nothing you can open each get
+  their own screen inside the frame: a note about what will show up, a "Try again" button, or "not
+  found" with a link back. Imago is a preview, and classic PageSpace is unchanged.
+
+- **Imago in your Home drive** — every account now gets Imago, the assistant that replaces the global
+  assistant: it works with your own access, the global assistant's tools and context, and its own
+  memory, everywhere except drives you keep it out of, in an `Imago` folder in your Home drive. It is
+  added when you sign in (including with a passkey), and if you delete it it comes back the next time
+  you sign in. Existing accounts get them (and a Home drive, if they lack one) from a
+  one-time backfill, without having to sign in.
+- **Imago agents can read the drives you own** — when your Imago agents are first set up, and
+  whenever you create a drive, they are added to each regular drive you own as members: they can
+  read its pages but not private ones, and cannot edit, share or delete. They are never added to
+  drives you only belong to. When you hand a drive to a new owner — or undo or redo that handover
+  from the drive's history — your Imago agents leave it; the new owner decides which agents get in.
+- **Turn Imago's access to a drive on or off** — drive owners and admins can switch their own Imago
+  agents into or out of a drive (`/api/drives/{driveId}/imago-access`). Your choice is saved for
+  each drive, so a drive you switch off stays off for good: through later sign-ins, when an Imago
+  agent you delete comes back, and even after all three are deleted permanently (emptied from the
+  trash). Older copies of your Imago agents left in the trash keep no access to other drives, so
+  restoring one cannot bring it back into a drive you switched off. In a drive you administer but do not own,
+  turning Imago on keeps all three agents in it, including any that come back after being deleted.
+  Your Home drive is where the agents live, so it cannot be switched off.
+- **Imago agents know where they can work** — each Imago agent is told which drives it has been
+  added to (by name and role) and, each turn, whether the drive or page you are looking at is one of
+  them. Asked to work somewhere it has not been added, it says so and tells you how to give it
+  access instead of trying and failing. It is never told about drives it has not been added to, and
+  a page you cannot open is never passed to it as your location.
+- **Imago agents can use your integrations** — Imago agents get the same connected integrations
+  your global assistant uses, following the same settings (which integrations are enabled, per-drive
+  overrides, visibility). A drive's own integrations are available only in your Home drive and in
+  drives the agent has been added to, never in a drive it has not been added to. Self-hosted
+  (on-prem) installs expose no external integrations to Imago agents.
+- **Imago agents never see more than you do** — an Imago agent can read, search, list or change
+  something only if it has been added to that drive AND you can still do the same yourself. If you
+  lose access to a drive while the agent is still in it (for example after a member change is
+  undone from the drive's history), the agent loses it too: it no longer finds, opens or even names
+  pages and drives you cannot see, and does not show their activity. If an Imago agent's setup
+  cannot be loaded, the chat fails with an error instead of running without its usual limits. An
+  Imago agent can manage a drive's scheduled workflows only where you are its owner or an admin.
+  The same limits hold wherever an Imago agent runs — chat, @-mentions in a channel, consulted
+  through the API, or a workflow: it never uses integrations from a drive it has not been added to,
+  and run by someone else it gets none of yours. When you leave a drive because a member change is
+  undone or redone from its history, or a backup is restored, your Imago agents leave it too. A
+  restore never removes the drive owner's own agents, even when the backup predates the owner's
+  first visit to the drive.
+- **Give an agent its own account** — in an agent's settings (Accounts), or in your personal
+  settings for your global assistant, add an API key for a site so the agent can call that site's
+  API for you. The agent refers to the account by name and never sees the key: PageSpace keeps it in
+  a separate credential vault and adds it to each request itself, only for the site address you
+  pinned — no other sites, other ports or redirects. New requests ask you to approve them in the
+  chat unless you let the agent use that site without asking. The dialog recommends creating a
+  dedicated account for the agent; sharing a personal login needs an explicit acknowledgment, which
+  the account list shows. Revoking stops PageSpace from using the key immediately; revoke it at the
+  site too to disable it everywhere.
+- **Agents can use a real browser (where an operator enables it)** — an agent with its sandbox
+  turned on can open public web pages, read them, click, type and fill in forms, take screenshots
+  and manage tabs in a browser that runs separately from its sandbox. The agent gets only those
+  actions: it cannot run scripts in the page or read cookies or stored data, and private or
+  internal addresses are refused. Browser time is billed like sandbox time. Off unless the server
+  is configured for it.
+
+- **Ask a detached side question with `/btw`** — while an agent is working, type `/btw` followed by a question to get a separate, temporary answer from the completed conversation context. It never interrupts the active run or becomes part of the chat history.
+
+- **Sign-up says where AI content goes** — the consent line on every sign-up screen now says AI
+  features send your content to OpenRouter and the model provider you choose, alongside the Terms
+  and Privacy Policy.
+- **Deleting your account disconnects Sign in with Apple** — if you sign in with Apple, PageSpace
+  now keeps a revocable Apple token and revokes it when you delete your account, so PageSpace no
+  longer stays listed under your Apple Account's Sign in with Apple apps. If PageSpace has no token
+  for you (you last signed in before this change, or Apple could not be reached), the delete dialog
+  and the page after deletion show how to stop using Sign in with Apple for PageSpace yourself.
+  Stopping Sign in with Apple for PageSpace from your Apple Account now also signs you out of
+  PageSpace everywhere.
+- **Report and block people** — a direct message conversation now has a menu to report the other
+  person (the report goes to the PageSpace team with what happened) or block them, and Connections
+  has a Block action plus a Blocked list to unblock. A block stops direct messages in both
+  directions, including in a conversation that already exists.
+- **The + button in a drive now matches what you can actually do** — a plain member of a drive,
+  who could always create pages through the command palette or the API, saw a lock on the +
+  button and could not click it. The button now reflects the server's effective create permission:
+  enabled for members and members whose custom role grants drive-wide edit, locked for view-only
+  custom roles and page-collaborator-only access. The same rule now also gates the API check that
+  backs it, so a view-only custom role is refused at the server too instead of silently
+  over-granted on the session path.
+
+- **Run shell commands in an agent workspace from the CLI and SDK** — a workspace's sandbox was
+  only reachable through an agent in chat. `pagespace workspaces exec <workspaceId> -- <command>`
+  (and `workspaces.exec` in the SDK and over `pagespace mcp`) now runs a command there with an
+  access key and exits with the command's own status; `pagespace workspaces list` finds the id. It
+  is held to the same rules as the agent's own `bash` tool — plan, quota, command policy, billing
+  and audit — and a key scoped to other drives cannot see or reach the workspace.
+- **Multi-question prompts from the assistant have Back and Next buttons** — when the assistant
+  asks several questions at once, you could only switch between them by tapping the small
+  numbered tabs or pressing the arrow keys, which is awkward on a phone. Each question now has a
+  Back / Next row with a "2 of 3" counter under it, sized for a finger, and it works on a card you
+  have already answered too. The tabs and arrow keys still work as before.
+- **The marketing site follows your system theme, and light mode has its own hero** — the site used
+  to open in dark mode for everyone, and its space hero only worked on a dark page. Light mode now
+  has a white version of the same scene with dark text over it, and the site starts in whatever
+  theme your device uses (a theme you picked with the toggle still wins), and the browser's
+  address and status bar match whichever theme is showing. Switching themes, or your
+  device switching on its own, fades one hero picture into the other instead of cutting. The
+  preview card shown when a site link is shared now carries the current headline.
+- **The Home screen now tells you what's actually waiting for you** — opening the dashboard used
+  to show a generic "How can I help you today?" with no sign of what changed across your drives,
+  and the only place that context lived (the sidebar's Pulse note) disappeared the moment you
+  collapsed the sidebar. Home now leads with one line above the composer naming the single most
+  important thing that needs you — someone mentioning you, an overdue task, invites waiting on an
+  RSVP, a finished agent session, or what changed since you were last here — with a couple of
+  quick prompts underneath that put the same thing straight into the composer without sending it.
+  Nothing is invented: the line only ever says what it can back up, and on a quiet day it just says
+  you're caught up. The line and its suggestions stay in the empty state, then give the conversation
+  the full pane once you begin. On desktop, collapse the left sidebar and a small drive switcher
+  stays next to the title, so you always know what the assistant can see; on a phone the sidebar
+  sheet's own switcher covers that, so the header row stays one row.
+- **Channels, Files, Tasks and Calendar are one page each, with a drive focus** — each of those
+  views used to exist twice: a dashboard version and a drive version, with different titles and a
+  sidebar that only ever linked to whichever one you were in. Now "All drives" is a focus like any
+  drive. The sidebar's drive switcher names the focus ("All drives" or the drive), and the drive
+  picker it opens lists All drives as its first row; choosing either keeps you in the section you
+  are in, so a drive's tasks become every drive's tasks and back. Page titles stop encoding scope
+  ("Tasks", not "My Tasks" and "Drive Tasks"); the line under each title names the focus and
+  opens the same picker, and on a phone it is the only control added to the row. Files across all
+  drives is the drives browser, and opening a drive there lands in its files. Tasks loses its
+  separate Drive filter and Back button (the focus is the drive, Home is one tap away), withholds
+  the per-list Status filter across all drives where it would merge unrelated lists, and names the
+  drive before the list on every row. The calendar's sidebar now labels the calendar new events go
+  to. The first navigation item is "Home" whichever focus you are in.
 - **AI agents can format spreadsheets** — two new workspace tools, **Format Sheet** and
   **Conditional Formatting**, let an agent make a SHEET page presentable instead of leaving a grid
   of bare numbers. An agent declares what a table *is* (its range, header rows, which columns are
@@ -18,6 +641,22 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   tables declared, ranges touched and rules added, with a swatch per colour, so you can see what
   changed without opening the sheet. The spreadsheets skill now teaches all of this; the
   workspace-tool count in the docs goes from 81 to 83.
+- **The SDK and CLI can now format a spreadsheet, not just fill it** — the AI agent tools could
+  already declare a table's structure and style it (that shipped just above); an SDK or CLI caller
+  could not, so a sheet built by a script stayed a grid of bare numbers with no call available to
+  change that. Two additions close it. `pagespace sheets formatting <pageId>` shows how a sheet is
+  styled today — the tables it declares, its conditional rules and their ids, frozen rows and
+  columns, column formats and widths, row heights, and (with `--ranges`) the formats on individual
+  cells. `pagespace sheets format <pageId>` applies changes: declare a table's range, header rows,
+  what each column means, where the totals are and an accent colour, and the presentation is derived
+  from that, so rows you add next week inherit it. Everything the grid itself can do is reachable —
+  cell and column formats, widths, heights, freezes, and conditional rules you can add, edit,
+  reorder or remove by id. In fact more than the agent tools can do: an agent can only add and
+  remove a rule, while a script can patch one in place. Changes apply in the order you send them,
+  in one transaction, all or nothing: one bad instruction refuses the whole call, tells you which
+  one was wrong, and writes nothing. The same two operations are available to the TypeScript SDK as
+  `client.sheets.readFormatting` / `client.sheets.applyFormat`, and to any MCP client
+  (ChatGPT, Codex, Claude Desktop) through `pagespace mcp`.
 - **iPhone and iPad: sign-in no longer tells you Google is blocked when it isn't, and an emailed
   sign-in link now signs you in inside the app** — two things were wrong on the app's sign-in
   screen. It showed a warning saying "Google sign-in is blocked in this app" and pushed you toward
@@ -434,16 +1073,63 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
-- **The header now says "Dashboard" instead of showing a house and a slash** — the way back out of
-  a drive used to be a small house icon followed by a `/`, and nothing on screen said where it
-  went. That made it easy to miss entirely, and easy to misread when you did notice it: drives have
-  their own home page, and the sidebar calls that "Drive Home", so a house in the header looked like
-  it meant the drive you were already in. It now reads **Dashboard** in words. Inside a drive it
-  becomes a bordered button with a back arrow, followed by the name of the drive you are in, so the
-  header tells you both where you can go and where you are standing; on the dashboard itself it
-  stops being a button, because you are already there. On narrower windows, where the header has
-  other things to fit, the button keeps its word wherever it is a way out — that being the whole
-  point — and the drive name and the you-are-here marker are the parts that give way.
+- **Credits are counted, not priced** — every credit amount in the app, on the plan page, and on the
+  marketing site now reads as a whole-number count with thousands separators, never as a dollar
+  figure or a fraction, and a credit has one definition everywhere (the pricing page states the
+  rate). Nothing changes about what you are granted or charged; a balance that used to show as a
+  dollar-like amount now shows as the matching whole credit count. The included
+  allowance behind a paid plan is derived from the plan's price rather than kept in a separate
+  table, and the admin billing view lists it as included credits.
+- **Plans are Free, Pro, and Business; Founder is retired** — the pricing page and the in-app plan
+  page now show three plans. Pro stays $15 a month for a person. Business is now the plan for an
+  organization: $50 a month with 5 seats included and $10 a month for each extra seat, and it is not
+  offered to a single user. Every plan card states its price, its included credits (a plain count),
+  and the top-up rate as three separate facts. The Founder plan is no longer sold; its subscriber
+  moves to Pro at the end of the current billing period, and anyone already on the earlier $100
+  personal Business plan keeps Business features at the price they pay today.
+- **New global assistant sessions live in your Home drive** — a sandbox session started from the
+  global assistant (or by its first sandbox tool call) is now created in your Home drive, which is
+  set up for you if you do not have one yet, so it is listed under Home rather than under "Global
+  Assistant". Only you can open it, and it is billed to you and runs in the same sandbox as before.
+  Existing assistant sessions stay where they are.
+- **The privacy policy now describes AI routing as it actually works** — every cloud AI request
+  goes through OpenRouter to the provider of the model you picked, including Anthropic, OpenAI,
+  Google and xAI models. The policy previously described those four as direct and said OpenRouter
+  models were optional extras you had to select. The subprocessors page says the same, and both now
+  point to OpenRouter's per-model retention and training policies rather than implying one rule for
+  every model.
+- **Paid-feature prompts in the iOS app no longer send you to a purchase page** — the locked Memory
+  automation, automatic backups and custom subdomain settings linked to the plan page, which the
+  iOS app cannot sell. They now say the feature is available on paid plans; on the web the upgrade
+  links are unchanged. Out-of-credits and paid-model messages no longer tell you to buy or upgrade in
+  their text (the web still shows its Buy credits button beside them), and the Privacy & Cookies
+  settings entry is hidden in the native app, matching the cookie banner. The native app also no
+  longer sends usage analytics, even if analytics consent was saved in an earlier version.
+- **iOS app: legal pages, integrations and privacy tightened for App Review** — Settings now has
+  Privacy Policy and Terms of Service entries on every platform, and in the iOS app those pages (and
+  the Terms/Privacy links on sign-in and invite screens) open in a browser sheet instead of loading
+  the marketing site inside the app. Connecting Google Calendar or another integration from the iOS
+  app opens the sign-in screen in a browser sheet, where it can finish, instead of an error page
+  with no way back. The iOS app no longer shows buy, top-up or upgrade wording on credit balances,
+  storage and domain limits, or the image generator, and never offers the published-app always-on
+  checkout. The iOS app records no session replays. The Terms now set a minimum age of 16 (matching
+  sign-up) and an acceptable-use policy with zero tolerance for objectionable content and abusive
+  users; the privacy policy uses the same minimum age, and the subprocessors page discloses web
+  session replay.
+- **The header now says "Home", and the drive name next to it opens a proper drive picker** —
+  the way back out of a drive used to be a small house icon followed by a `/`, and nothing on
+  screen said where it went, so it was easy to miss entirely. It now reads **Home** in words, next
+  to the house, as the one outlined button in the header so it is clearly the place to go. Inside a
+  drive it is followed by the name of the drive you are standing in, and that name is now a button:
+  click it and a drive picker opens — a wide, searchable dialog with your favourite drives, the
+  ones you opened most recently, and everything else, plus **All drives** and **Create drive**
+  right under the search box. It replaces the narrow dropdown the sidebar used to open for the
+  same job, which had to squeeze search, sections and actions into one thin scrolling column; the
+  sidebar's drive button now opens this same dialog, and on a phone the dialog sits at the top of
+  the screen so the keyboard never covers the search box. On the dashboard itself the word stops
+  being a button, because you are already there. On a phone the header fits on one row again with
+  every control still present, including recent pages: the search button moves in with the other
+  actions, and the spacing tightens a little below tablet width.
 
 - **Android app: first internal-testing version identity, and the Android/iOS shell configs are now
   checked in CI (still not distributed)** — the Android build now identifies itself as version 1.4
@@ -456,13 +1142,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   the Android shell never hands its native bridge to a third-party site or a wildcard host.
 
 - **Free plan credits are now a one-time starter grant instead of a monthly allowance** — new
-  free accounts still get 5 credits to try AI with, granted once on their first AI call, but
+  free accounts still get a starter grant of credits to try AI with, granted once on their first AI call, but
   that grant no longer refills or accumulates month over month. Credits you already have never
   expire, and nothing is taken away: free accounts that had built up a balance keep it. To keep
   going after the starter credits are spent, buy a top-up pack (top-ups never expire) or upgrade
   to a paid plan, which includes a monthly allowance that rolls over. The credits card, the plan
   comparison, the out-of-credits message, and the pricing, FAQ, terms, and docs pages now say
-  "5 credits to start" for Free rather than "5/month", and free accounts no longer show a
+  that the Free grant is "to start" rather than "per month", and free accounts no longer show a
   "Renews" date. Free accounts receive a one-time email explaining the change, quoting the
   exact balance they keep and pointing to top-ups and the Pro plan; anyone who has turned
   product-update email off is skipped, and the notice carries a one-click unsubscribe link.
@@ -481,6 +1167,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   the hero demo), the code editor and terminal fallbacks, and the iOS/Android status bar and
   splash colors all use the same new floor so nothing looks darker than the page around it.
 
+- **The default AI model is now OpenAI's GPT-6 Luna** — cheap, a 1M-token context window, and on the
+  free-tier allowlist. New accounts pick it up automatically; anyone with an explicit model already
+  selected keeps that choice. The OpenRouter catalog was refreshed again: GPT-6 / GPT-6.1 (Luna, Sol,
+  Astra), Claude Opus 5.5 / Sonnet 5.5 / Fable 5.1, Gemini 3.8 Flash, Grok 4.7, DeepSeek V4.1 Flash,
+  Qwen3.8 Max, Muse Spark 1.3, GLM 5.3 Prime / FlashX and more are now selectable, and pricing was
+  re-synced with OpenRouter. The admin GLM Coder Plan list now shows only GLM-5.3 and GLM-5.3 Flash,
+  the models the plan currently offers.
+
 - **The default AI model is now Z.ai's GLM-5.3 Flash** — cheaper per token and a larger context
   window than the previous default (OpenAI's GPT-5.6 Luna), and still on the free-tier allowlist.
   New accounts pick it up automatically; anyone with an explicit model already selected keeps that
@@ -489,6 +1183,177 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   OpenRouter's live data, and a handful of models OpenRouter no longer serves were removed.
 
 ### Fixed
+
+- **Signing up at the same moment as someone else no longer fails to set up your Home drive** —
+  when several new accounts were created at once, all but one could end up without a Home drive
+  until their next sign-in.
+
+- **A dropped database connection no longer takes the server down** — if the database restarted,
+  failed over or closed an idle connection while PageSpace held a background lock (starting an AI
+  reply, storage usage corrections, sandbox storage billing, agent account credentials and usage
+  limits), the whole server process could crash. The lost connection is now logged and discarded
+  and the server keeps running; an affected request may fail and can be retried. Billing and
+  storage-correction runs that lose their lock part-way stop before their next charge or
+  correction and leave the rest to the next run instead of repeating it.
+- **Apodex 1.1 Mini (free) no longer reserves credits as if it were a paid model** — the free model was
+  missing from the price list, so each call held and counted a paid model's estimated cost against your
+  balance mid-reply. It is now priced as free.
+- **Memory now checks your AI credits before it learns** — the nightly Memory pass (learning
+  from your conversations and tidying your profile pages) used to run and charge you even when
+  your balance was used up, so you could go into debt without opening PageSpace. Now each step
+  checks your credits before the AI runs. When you're out of credits that night's learning is
+  skipped: nothing is charged, your profile pages stay exactly as they were, and anything Memory
+  was about to add waits for the next night.
+- **Every AI call now checks your credits before it runs** — conversation summarising (when a long chat
+  is condensed) and the nightly Memory update used to run first and charge afterwards, which could
+  push an out-of-credit balance into debt. They now reserve credits first like every other AI call;
+  with no credits they simply don't run, and nothing about your conversation or your Memory pages
+  changes. A live voice call with a page agent now spends from the same source as typing to that
+  agent in its drive, instead of always from your own credits — including images it makes during
+  the call. If the call cannot tell which drive pays for it, it does not start and you are not
+  charged. Voice calls with the global assistant still use your own credits.
+- **Published pricing figures match the plans** — the "Credits Replace Daily Limits" blog post no
+  longer lists per-plan credit amounts from before the credit count change, and no longer names the
+  retired Founder plan; it points to the pricing page for current amounts, packs and the top-up range.
+  The Business plan card no longer claims "20x more than Free".
+- **Admin billing counts organization credit** — "Included credit liability" and "Outstanding
+  liability" now include organization credit pools and credit moved into drive wallets, counted
+  once; a pool's allocation to a drive wallet is not counted twice. The free starter grant is shown
+  separately.
+- **Stripe plan detection by amount works again** — when an invoice carries a price the app does
+  not recognise, its amount is read as the cents Stripe sends, so a $15 or $50 price resolves to
+  Pro or Business instead of never matching.
+
+- **Agents answering an @mention in a channel now check credits first** — an agent's reply to a
+  channel mention used to run even when there were no credits to pay for it. Each reply is now
+  checked before the agent starts; if there is nothing to pay with, the agent does not reply and
+  you are not charged.
+
+- **A page share that has expired no longer lists its drive** — when someone shared a single page
+  with you for a limited time, the share stopped opening the page once it expired, but the drive
+  it lived in stayed in your drive picker and sidebar, where it opened to nothing. An expired
+  share now lists nothing, just as it opens nothing, so that drive disappears from your list
+  unless you still have another way in.
+
+- **Zoom summaries now check your AI credits first** — the AI summary and action items on a
+  recorded Zoom meeting's page used to run and charge you even when your balance was used up, so
+  you could go into debt. Now they check your credits before the AI runs. When you're out of
+  credits, the meeting still gets its page, just without the summary and action items.
+- **A page share link now opens only that page** — opening a link to one page used to make you a
+  full member of its drive, so you could read every other non-private page there and post in its
+  channels. Now you join as a guest: you see only the pages that were shared with you. Guests do
+  not appear on the drive's Members page, cannot message the drive's members through it, and do not
+  count as members when the owner deletes their account. Opening a page link no longer accepts a
+  pending drive invitation or changes an existing member's role. A drive link or an invitation
+  still makes a guest a full member.
+- **Workflows no longer run when you are out of AI credits** — pressing Run on a workflow,
+  a scheduled workflow, and a task's due-date or completion trigger now check your AI credit
+  balance before the agent starts, as calendar, Zoom and webhook triggers already did. Previously
+  they ran anyway and were charged afterwards. Pressing Run with no credits left now says so; a
+  scheduled or task-triggered run that is skipped shows in the workflow's run history as cancelled,
+  with the reason, and the schedule moves on to its next time.
+- **A stopped AI reply is charged for what it used** — pressing Stop, or running out of credits,
+  while the assistant was still answering used to charge nothing for the unfinished part of the reply,
+  and in a multi-step reply sometimes nothing for the finished steps either. Stopped replies are now
+  charged for the finished steps plus the part of the reply you already saw. The unfinished part is
+  never charged more than the amount set aside when the reply started.
+- **A queued message is no longer lost when it fails to send** — if a message you queued while a
+  response was streaming could not be sent (a network error, or not enough credits), it used to
+  disappear. It now stays at the front of the queue, you see an error, and it goes out after the
+  next response.
+- **`/btw` side questions use your AI credits like any other chat message** — a side question now
+  checks your balance before it runs (and says so when you are out of credits or have too many AI
+  requests running), and its usage shows up on your usage page.
+- **The workflow editor fits the screen again** — a workflow with a long AI prompt pushed the
+  Edit Workflow dialog's fields past its right edge and pushed Save below the fold. The dialog is
+  now wider on desktop, its fields scroll between a fixed header and a fixed Cancel/Save footer, and
+  long prompts wrap and scroll inside their own box.
+- **A pending drive invitation no longer reveals the drive's people** — someone invited to a drive
+  who had not yet accepted saw every member's name, email, bio and avatar in the New Conversation
+  picker and could start a direct message with them (and members could do the same to them). Until
+  the invitation is accepted, neither side appears in the other's picker and a new direct message
+  between them is refused, unless they are already connected.
+- **Pulse no longer surfaces pages you are denied** — the activity summaries built pages a person
+  can view from a database rule that ignored a custom role's "no view" setting and a per-page
+  "no view" grant, so a member could see those pages' activity in Pulse. Pulse now follows the same
+  rules as opening the page: those denies are honoured, a custom role's per-page grant on a private
+  page is included, and a time-limited grant expires at the right moment in every time zone.
+- **Workflows run by agents without the sandbox no longer fail** — a workflow whose agent has the
+  sandbox turned off failed every run, from any trigger (schedule, task, calendar or page webhook),
+  when saving its messages — often after its tools had already done their work. Every run now saves
+  into its own conversation on the agent, so it completes and its transcript can be opened like any
+  other chat.
+- **Agents can write to their own memory pages again** — every agent is instructed to keep notes
+  on an "Agent Memory" child page of its own, but the permission check behind the write tools
+  looked only at the agent's drive membership, which grants edit on no ordinary page — so every
+  create or edit of that page was refused with "Insufficient permissions to edit this document",
+  and scheduled workflow runs that journal to their memory failed at the write. An agent can now
+  always edit its own page and the pages under it; deleting them is still refused, and everything
+  beyond its own subtree stays governed by its membership exactly as before, including any API
+  token's drive scope.
+
+- **An unaccepted drive invitation no longer grants drive access** — a person invited to a drive but
+  who had not yet accepted could already, in four places, act as if they had joined: an invited
+  admin could view and edit the drive's custom roles, reorder and move its pages, and grant or
+  revoke page permissions, and any invitee saw every channel in the drive with its latest message
+  in their messages list. All four now require an accepted membership, like the rest of the app.
+
+- **A custom role's drive-wide access no longer opens private pages in search, badges and
+  notifications** — opening a private page already required a per-page entry, but the batch check
+  behind search, the inbox, sidebar badges and channel notifications let a role's drive-wide
+  default stand in for one, so a member with that role could see a private page's title and
+  unread counts and receive its channel events. It now applies the same rule as everywhere else.
+
+- **Sign-in emails no longer lock you out of your own account** — every email PageSpace sends to
+  the same address (a sign-in link, an invite, a notification) shared one rate-limit bucket capped
+  at 3 per hour, and a failed send still used up one of those 3 — so a couple of sign-in attempts,
+  or one flaky delivery, could leave you unable to get a new sign-in link for the rest of the hour.
+  The cap is now 10 per hour per recipient, the sign-in link's own limit goes from 3 to 5 attempts
+  per 15 minutes, and a send that fails no longer counts against the limit at all — only emails
+  that actually go out do.
+
+- **Agents you add to a drive can be @-mentioned in its channels, and they answer** — a drive
+  member can post in the drive's channels, but an agent added as a member could not: its
+  membership never granted posting rights in channels the way a person's or an app's does, so an
+  @-mentioned agent silently said nothing (or its reply was refused after the model call had
+  already been paid for). A freshly created agent with no tool restrictions was skipped as if
+  channel posting were switched off, and an agent added to a drive from another drive was neither
+  offered by the @ picker nor allowed to reply unless you could open its home page. Now a member
+  agent posts in non-private channels by default, the @ picker lists every agent that belongs to
+  the drive, and a mention gets a reply in the channel or in the thread it was made in. Agents
+  whose tool list deliberately leaves out channel posting stay silent, as before.
+- **The open-source licenses screen no longer references a private IP-sale disclosure** — the "Full
+  inventory" notice at Settings → Legal → Open-source licenses said the complete dependency
+  inventory was "maintained in the seller's IP disclosure and is available to recipients on
+  request" — language from a private acquisition process that never belonged in the product. The
+  notice now links directly to OSS-INVENTORY.md, the standalone sanitized inventory published in
+  the open-source PageSpace repository.
+- **The marketing site no longer goes down when a retina screen loads the home page** — the hero's
+  space backdrops were resized on the server the first time each size was asked for, and a
+  high-resolution screen asked for both the dark and light pictures at full 4K size at once, which ran
+  the site's server out of memory. It restarted, forgot every picture it had already made, and the
+  next visitor with a sharp screen took it down again. Every size of both pictures is now made once
+  when the site is built, so loading the page asks the server for nothing but files. The hero looks
+  and fades exactly as before.
+- **Sending several photos at once now makes one message with one gallery, and stops them appearing
+  twice** — attaching a batch of photos used to send them as separate messages, one per file: the
+  channel or DM filled with a column of single-photo bubbles, the typed text sat on the first one,
+  and until you refreshed the page each photo also appeared a second time. The doubling and the
+  splitting were the same bug. A batch is now a single message carrying every file, stacked into a
+  grid you can click into: the viewer opens on the photo you picked and pages through the rest with
+  the arrow keys or the on-screen arrows. Text and photos sent together stay in one bubble. Mixed
+  batches put the images in the grid and any videos or documents beneath it, a single photo looks
+  exactly as it did before, and a message sent before this change still renders the way it always
+  has. Channels and DMs both work this way, and the other person sees the batch arrive as one
+  message rather than as several. Thread replies display a batch as one gallery too, though
+  attaching a file while writing a thread reply is still not possible — that part has never worked
+  and is unchanged here. A message can carry up to ten files; the composer says so rather than
+  silently dropping the extras.
+
+- **Phone: opening a side panel no longer pops the keyboard** — on a phone or in the iOS and
+  Android apps, tapping the menu button to open the navigation panel (or the assistant panel)
+  immediately focused the search box inside it, so the keyboard slid up over the panel you had just
+  opened. The panel now opens with nothing focused; tap the search box when you want it.
 
 - **The account menu no longer labels free accounts "Billing (Business)"** — the plan name in the
   avatar dropdown fell through to "Business" whenever the subscription lookup had not answered yet
@@ -1039,6 +1904,47 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   drawn about you, including ones that were rejected or are still pending, along with the quote
   from your own messages each was based on. Those quotes are removed 90 days after an observation
   is settled.
+
+### Security
+
+- **Only administrators can add a custom integration provider** — the admin check on the
+  provider-creation endpoint compared the wrong thing, so any signed-in account could add a
+  global custom integration provider, and a browser session that failed the cross-site request
+  check was let through as well. Non-admins and failed cross-site checks are now refused, and
+  nothing is created. Installing a built-in provider was already checked correctly and is
+  unaffected.
+- **The AI's sandbox git tools can no longer be tricked into force-pushing your current branch** —
+  the `git_push` tool took its remote and branch names as free text and placed them straight
+  after `-u origin` on the command line. A branch value of `--force` (or a remote of `--mirror`)
+  was therefore read by git as an option rather than a name, which force-pushed whatever branch
+  the sandbox was on, including `main`, with your connected GitHub token and without tripping the
+  guard that refuses force-pushes to the default branch. The tool now refuses any remote or
+  branch that starts with a dash before it builds the command, then runs the default-branch guard
+  on the real destination, and the command itself carries an end-of-options marker so a name can
+  never be read as a flag. The same audit found and closed the same gap in `git_fetch`, `git_pull`
+  (remote and branch), `git_config` (key), and `git_diff` (base and head refs).
+- **Integration base URLs can no longer point inside the platform** — a custom base URL on an
+  integration connection (the field that lets a webhook or self-hosted API be reached) was only
+  checked for being a well-formed URL. It could name the server's own loopback address, a private
+  network range, or a cloud metadata address, and a tool call would then send the connection's
+  credentials there and hand the reply to the assistant. A base URL is now refused when it is
+  saved if it points at any of those, including a hostname that resolves there, and it is checked
+  again, with a fresh DNS lookup, immediately before every request is sent; the request then
+  connects to exactly the address that was checked, so a name that changes its answer between the
+  check and the connection gains nothing, and a check that stalls is cut off by the same time
+  limit as the request. The check covers every non-public range, not just the common private
+  ones (carrier-grade NAT, multicast, reserved ranges, and any IPv6 address that maps,
+  translates or tunnels to a private IPv4, however it is written). An IPv6 address is only
+  treated as public when it sits in a block the internet registries have actually handed out
+  (as published by IANA on 2025-10-10); a block allocated after that date cannot be fetched by
+  web fetch or by integrations until PageSpace is updated to include it. A base URL must
+  also use `https://` now: an `http://` base URL put the connection's credentials on the wire in
+  the clear for anyone on the network path to read, so it is refused when you save it and again
+  before every request, with a message saying so. Every built-in provider already used `https://`,
+  so only a hand-entered `http://` base URL is affected — change it to `https://`. Upstream
+  redirects are no longer followed automatically: a redirect to a different site is refused
+  outright, so a connection's credentials never travel to a site the integration was not set up
+  for.
 
 ## [1.7.1] — 2026-08-10
 

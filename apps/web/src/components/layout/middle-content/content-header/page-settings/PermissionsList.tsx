@@ -36,7 +36,11 @@ type PermissionsData = {
   roles: RoleGrant[];
 };
 
-export function PermissionsList({ pageId: propPageId }: { pageId?: string | null } = {}) {
+/**
+ * `lapsed` ([D-OW-33]): the drive's org is unpaid, so a flag may only be turned OFF (restricting); turning one on
+ * waits until it pays, exactly as the grant and role routes refuse it.
+ */
+export function PermissionsList({ pageId: propPageId, lapsed = false }: { pageId?: string | null; lapsed?: boolean } = {}) {
   const storePageId = usePageStore((state) => state.pageId);
   const pageId = propPageId ?? storePageId;
   const [data, setData] = useState<PermissionsData | null>(null);
@@ -271,7 +275,7 @@ export function PermissionsList({ pageId: propPageId }: { pageId?: string | null
                   <label className="flex items-center space-x-1">
                     <Checkbox
                       checked={role.canView}
-                      disabled={updatingRoles.has(role.roleId)}
+                      disabled={updatingRoles.has(role.roleId) || (lapsed && !role.canView)}
                       onCheckedChange={(checked) =>
                         handleRolePermissionUpdate(role.roleId, 'canView', !!checked)
                       }
@@ -282,7 +286,7 @@ export function PermissionsList({ pageId: propPageId }: { pageId?: string | null
                   <label className="flex items-center space-x-1">
                     <Checkbox
                       checked={role.canEdit}
-                      disabled={!role.canView || updatingRoles.has(role.roleId)}
+                      disabled={!role.canView || updatingRoles.has(role.roleId) || (lapsed && !role.canEdit)}
                       onCheckedChange={(checked) =>
                         handleRolePermissionUpdate(role.roleId, 'canEdit', !!checked)
                       }
@@ -293,7 +297,7 @@ export function PermissionsList({ pageId: propPageId }: { pageId?: string | null
                   <label className="flex items-center space-x-1">
                     <Checkbox
                       checked={role.canShare}
-                      disabled={!role.canView || updatingRoles.has(role.roleId)}
+                      disabled={!role.canView || updatingRoles.has(role.roleId) || (lapsed && !role.canShare)}
                       onCheckedChange={(checked) =>
                         handleRolePermissionUpdate(role.roleId, 'canShare', !!checked)
                       }
@@ -354,7 +358,7 @@ export function PermissionsList({ pageId: propPageId }: { pageId?: string | null
                   <label className="flex items-center space-x-1">
                     <Checkbox
                       checked={permission.canView}
-                      disabled={updatingPermissions.has(permission.userId)}
+                      disabled={updatingPermissions.has(permission.userId) || (lapsed && !permission.canView)}
                       onCheckedChange={(checked) =>
                         handlePermissionUpdate(permission.userId, 'canView', !!checked)
                       }
@@ -365,7 +369,7 @@ export function PermissionsList({ pageId: propPageId }: { pageId?: string | null
                   <label className="flex items-center space-x-1">
                     <Checkbox
                       checked={permission.canEdit}
-                      disabled={!permission.canView || updatingPermissions.has(permission.userId)}
+                      disabled={!permission.canView || updatingPermissions.has(permission.userId) || (lapsed && !permission.canEdit)}
                       onCheckedChange={(checked) =>
                         handlePermissionUpdate(permission.userId, 'canEdit', !!checked)
                       }
@@ -376,7 +380,7 @@ export function PermissionsList({ pageId: propPageId }: { pageId?: string | null
                   <label className="flex items-center space-x-1">
                     <Checkbox
                       checked={permission.canShare}
-                      disabled={!permission.canView || updatingPermissions.has(permission.userId)}
+                      disabled={!permission.canView || updatingPermissions.has(permission.userId) || (lapsed && !permission.canShare)}
                       onCheckedChange={(checked) =>
                         handlePermissionUpdate(permission.userId, 'canShare', !!checked)
                       }
@@ -387,7 +391,7 @@ export function PermissionsList({ pageId: propPageId }: { pageId?: string | null
                   <label className="flex items-center space-x-1">
                     <Checkbox
                       checked={permission.canDelete}
-                      disabled={!permission.canView || updatingPermissions.has(permission.userId)}
+                      disabled={!permission.canView || updatingPermissions.has(permission.userId) || (lapsed && !permission.canDelete)}
                       onCheckedChange={(checked) =>
                         handlePermissionUpdate(permission.userId, 'canDelete', !!checked)
                       }

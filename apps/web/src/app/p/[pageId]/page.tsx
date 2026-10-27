@@ -6,6 +6,7 @@ import { pages } from '@pagespace/db/schema/core';
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { getSessionFromCookies } from '@/lib/auth/cookie-config';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 interface PageProps {
   params: Promise<{ pageId: string }>;
@@ -18,9 +19,9 @@ interface PageProps {
  */
 export default async function PageRedirect({ params, searchParams }: PageProps) {
   const { pageId } = await params;
-  // Forwarded verbatim (e.g. `?tab=settings` from the agents console's
-  // Settings link) — this route only resolves the driveId, it must not drop
-  // query params the destination page itself interprets.
+  // Forwarded verbatim (e.g. `?conversationId=&sessionId=` from the agents
+  // console's past-conversations list) — this route only resolves the driveId,
+  // it must not drop query params the destination page itself interprets.
   const query = new URLSearchParams(
     Object.entries(await searchParams).flatMap(([key, value]): [string, string][] =>
       value === undefined ? [] : (typeof value === 'string' ? [value] : value).map((v): [string, string] => [key, v]),
@@ -57,7 +58,7 @@ export default async function PageRedirect({ params, searchParams }: PageProps) 
   }
 
   // Check user has access to the page
-  const accessLevel = await getUserAccessLevel(userId, pageId);
+  const accessLevel = await getUserAccessLevel(credentialActor(userId, session.authentication), pageId);
   if (!accessLevel) {
     notFound();
   }

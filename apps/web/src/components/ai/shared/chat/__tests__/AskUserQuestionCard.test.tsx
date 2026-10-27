@@ -174,6 +174,67 @@ describe('AskUserQuestionCard', () => {
     expect(getByText('First?')).toBeTruthy();
   });
 
+  it('Back / Next buttons step the active question and the counter, clamped at the ends', () => {
+    const twoQuestions = {
+      questions: [
+        { header: 'Q1', question: 'First?', options: [{ label: 'A' }, { label: 'B' }] },
+        { header: 'Q2', question: 'Second?', options: [{ label: 'C' }, { label: 'D' }] },
+      ],
+    };
+    const { getAllByRole, getByRole, getByText } = renderAnswerable(answerablePart(twoQuestions));
+    const back = getByRole('button', { name: 'Previous question' }) as HTMLButtonElement;
+    const next = getByRole('button', { name: 'Next question' }) as HTMLButtonElement;
+    expect(getByText('1 of 2')).toBeTruthy();
+    expect(back.disabled).toBe(true);
+    expect(next.disabled).toBe(false);
+
+    fireEvent.click(next);
+    expect(getAllByRole('tab')[1]).toHaveAttribute('aria-selected', 'true');
+    expect(getByText('Second?')).toBeTruthy();
+    expect(getByText('2 of 2')).toBeTruthy();
+    expect(next.disabled).toBe(true);
+    expect(back.disabled).toBe(false);
+
+    fireEvent.click(back);
+    expect(getAllByRole('tab')[0]).toHaveAttribute('aria-selected', 'true');
+    expect(getByText('First?')).toBeTruthy();
+    expect(back.disabled).toBe(true);
+  });
+
+  it('does not render Back / Next for a single question', () => {
+    const { queryByRole } = renderAnswerable(answerablePart(QUESTIONS_INPUT));
+    expect(queryByRole('button', { name: 'Next question' })).toBeNull();
+    expect(queryByRole('button', { name: 'Previous question' })).toBeNull();
+  });
+
+  it('Back / Next still navigate an already-answered (read-only) card', () => {
+    const twoQuestions = {
+      questions: [
+        { header: 'Q1', question: 'First?', options: [{ label: 'A' }, { label: 'B' }] },
+        { header: 'Q2', question: 'Second?', options: [{ label: 'C' }, { label: 'D' }] },
+      ],
+    };
+    const part = {
+      ...answerablePart(twoQuestions),
+      state: 'output-available' as const,
+      output: {
+        answers: [
+          { header: 'Q1', question: 'First?', selectedLabel: 'A' },
+          { header: 'Q2', question: 'Second?', selectedLabel: 'D' },
+        ],
+      },
+    };
+    const { getByRole, getByText, queryByText } = render(
+      <AskUserAnswerProvider value={{ answerableToolCallIds: new Set(), submitAnswers: () => {} }}>
+        <AskUserQuestionCard part={part} />
+      </AskUserAnswerProvider>
+    );
+    expect(queryByText('Submit')).toBeNull();
+    fireEvent.click(getByRole('button', { name: 'Next question' }));
+    expect(getByText('Second?')).toBeTruthy();
+    expect(getByRole('button', { name: /^D$/ }).querySelector('svg')).not.toBeNull();
+  });
+
   it('number-key shortcut selects the Nth option of the active question without a click', () => {
     let submitted: unknown = null;
     const part = answerablePart(QUESTIONS_INPUT);

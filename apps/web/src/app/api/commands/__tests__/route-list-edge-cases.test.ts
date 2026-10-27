@@ -25,6 +25,7 @@ vi.mock('@pagespace/db/operators', () => ({
   or: vi.fn((...args: unknown[]) => ({ or: args })),
   inArray: vi.fn((field: unknown, values: unknown) => ({ field, values })),
   isNotNull: vi.fn((field: unknown) => ({ isNotNull: field })),
+  ne: vi.fn((a: unknown, b: unknown) => ({ _ne: true, a, b })),
 }));
 vi.mock('@pagespace/db/schema/commands', () => ({
   commands: { id: 'id', userId: 'userId', driveId: 'driveId', trigger: 'trigger', enabled: 'enabled' },
@@ -49,10 +50,16 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn(),
   isDriveOwnerOrAdmin: vi.fn(),
   isUserDriveMember: vi.fn(),
 }));
+// The one member-drive set (org-aware).
+vi.mock('@pagespace/lib/permissions/member-drives', () => ({
+  getMemberDriveIds: vi.fn(),
+}));
+
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(
@@ -63,8 +70,10 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { GET } from '../route';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import { db } from '@pagespace/db/db';
 import { authenticateRequestWithOptions, canPrincipalViewPage, filterDrivesByMCPScope } from '@/lib/auth';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockedAuth = vi.mocked(authenticateRequestWithOptions);
 const mockedDb = vi.mocked(db, true);
@@ -80,13 +89,6 @@ const webAuth = (): SessionAuthResult => ({
   sessionId: 'sess_1',
   role: 'user',
   adminRoleVersion: 0,
-});
-
-const selectChain = (rows: unknown[]) => ({
-  from: vi.fn(() => ({
-    where: vi.fn().mockResolvedValue(rows),
-    innerJoin: vi.fn(() => ({ where: vi.fn().mockResolvedValue(rows) })),
-  })),
 });
 
 const getRequest = () => new Request('http://localhost/api/commands');
@@ -120,9 +122,7 @@ beforeEach(() => {
   mockedDb.query.pages.findMany.mockResolvedValue([entryPage] as never);
   mockedDb.query.users.findMany.mockResolvedValue([] as never);
   mockedCanView.mockResolvedValue(true);
-  mockedDb.select
-    .mockReturnValueOnce(selectChain([]) as never)
-    .mockReturnValueOnce(selectChain([]) as never);
+  vi.mocked(getMemberDriveIds).mockResolvedValue([]);
 });
 
 describe('GET /api/commands — entry page degradation in the settings list', () => {
@@ -198,4 +198,15 @@ describe('GET /api/commands — entry page degradation in the settings list', ()
       entryPageTitle: 'Healthy Page',
     });
   });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(credentialActor(auth.userId, null), resourceId),
+    isPrincipalDriveMember: (auth: { userId: string }, resourceId: string) => permissions.isUserDriveMember(credentialActor(auth.userId, null), resourceId),
+    isPrincipalDriveOwnerOrAdmin: (auth: { userId: string }, resourceId: string) => permissions.isDriveOwnerOrAdmin(credentialActor(auth.userId, null), resourceId),
+  };
 });

@@ -44,7 +44,7 @@ vi.mock('@pagespace/lib/auth/user-repository', () => ({
 }));
 
 vi.mock('@pagespace/lib/onprem-defaults', () => ({
-  getOnPremUserDefaults: vi.fn(() => ({ subscriptionTier: 'business' })),
+  getOnPremUserDefaults: vi.fn(() => ({ subscriptionTier: 'free' })),
 }));
 
 // The script now delegates one-time link minting to the shared

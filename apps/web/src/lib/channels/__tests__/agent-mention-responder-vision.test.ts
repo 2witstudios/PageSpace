@@ -1,6 +1,20 @@
 import { beforeEach, describe, it, vi, type Mock } from 'vitest';
 import { assert } from '@/lib/ai/core/__tests__/riteway';
 
+// SPEND-6: each mentioned agent's reply is gated on the channel's drive wallet
+// (mention-credit-gate, unit-tested on its own). This suite covers other behaviour,
+// so the gate admits every reply here.
+// POL-9: the responder asks the channel drive's org whether agents may reply on their own; no org in these tests.
+vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getDrivePolicies: vi.fn() }));
+
+vi.mock('@/lib/channels/mention-credit-gate', () => ({
+  acquireMentionCreditHold: async () => ({
+    allowed: true,
+    creditSpend: { spend: { kind: 'automation', driveId: 'drive-1' }, walletId: 'w-drive-1' },
+    release: () => {},
+  }),
+}));
+
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
@@ -9,7 +23,10 @@ vi.mock('@pagespace/db/db', () => ({
     },
   },
 }));
-vi.mock('@pagespace/db/operators', () => ({
+vi.mock('@pagespace/db/operators', async (importOriginal) => ({
+  // Keep the real re-exports so transitively imported lib modules that use
+  // `sql` still load (e.g. sheets/search-sql via services/preview).
+  ...(await importOriginal<typeof import('@pagespace/db/operators')>()),
   and: vi.fn(),
   eq: vi.fn(),
   inArray: vi.fn(),
@@ -22,7 +39,20 @@ vi.mock('@pagespace/db/schema/chat', () => ({
   channelMessages: { pageId: 'pageId', isActive: 'isActive', createdAt: 'createdAt' },
 }));
 
+// The two gates added for member agents (see agent-mention-responder.ts):
+// membership in the channel's drive is the grant when the mentioner cannot
+// view the agent's home page, and the agent must be able to post in the
+// channel BEFORE any model call is spent on it.
+vi.mock('@pagespace/lib/permissions/agent-permissions', () => ({
+  hasAgentDriveMembership: vi.fn().mockResolvedValue(false),
+}));
+vi.mock('@/lib/ai/tools/actor-permissions', () => ({
+  toolActor: (ctx: { userId: string; accessActor?: unknown }) => ctx.accessActor ?? { via: 'credential', userId: ctx.userId, authentication: null },
+  canActorEditPage: vi.fn().mockResolvedValue(true),
+  canActorConsultAgent: vi.fn().mockResolvedValue(true),
+}));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({

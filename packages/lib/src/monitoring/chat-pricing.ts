@@ -23,6 +23,7 @@ import {
   CHAT_HOLD_ASSUMED_OUTPUT_TOKENS,
   CREDIT_HOLD_ESTIMATE_CENTS,
 } from '../billing/credit-pricing';
+import { providerDollarsCoveredByCents } from '../billing/money-model';
 
 /**
  * Conservative per-step cost (dollars) used when a model is not in the catalog.
@@ -32,7 +33,7 @@ import {
  * (CREDIT_HOLD_ESTIMATE_CENTS) back to dollars — after markup it charges exactly
  * CREDIT_HOLD_ESTIMATE_CENTS per step, bounding uncatalogued-model runs.
  */
-const UNKNOWN_MODEL_FALLBACK_DOLLARS = CREDIT_HOLD_ESTIMATE_CENTS / (MARKUP_BPS / 10000) / 100;
+const UNKNOWN_MODEL_FALLBACK_DOLLARS = providerDollarsCoveredByCents(CREDIT_HOLD_ESTIMATE_CENTS, MARKUP_BPS);
 
 /**
  * Cost in dollars for one AI SDK step. Unknown/uncatalogued models use a conservative

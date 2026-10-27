@@ -45,6 +45,7 @@ import {
   renderSheetTableWithinBudget,
 } from '../tools/sheet-view';
 import { PageType } from '@pagespace/lib/utils/enums';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * Characters a SHEET entry page may spend inside a command injection.
@@ -200,7 +201,7 @@ export interface CommandResolutionContext {
  */
 export async function planCommandExecutions(
   content: string,
-  senderId: string,
+  sender: AccessActor,
   context: CommandResolutionContext = {}
 ): Promise<CommandExecutionPlan[]> {
   const tokens = findActiveCommandTokens(content);
@@ -211,7 +212,7 @@ export async function planCommandExecutions(
     RESOLUTION_CONCURRENCY_LIMIT,
     async (token) => {
       try {
-        return await resolveToken(token, senderId, context);
+        return await resolveToken(token, sender, context);
       } catch (error) {
         loggers.ai.error('Command resolution failed; proceeding without injection', error as Error, {
           commandId: token.commandId,
@@ -234,15 +235,15 @@ function skip(
 
 async function resolveToken(
   token: ParsedCommandToken,
-  senderId: string,
+  sender: AccessActor,
   context: CommandResolutionContext
 ): Promise<CommandExecutionPlan> {
   if (token.commandId.startsWith(BUILTIN_ID_PREFIX)) {
     const trigger = token.commandId.slice(BUILTIN_ID_PREFIX.length);
-    return resolveBuiltinInjection(trigger, senderId, context, token.label);
+    return resolveBuiltinInjection(trigger, sender, context, token.label);
   }
 
-  return resolveCommandInjectionById(token.commandId, senderId, token.label);
+  return resolveCommandInjectionById(token.commandId, sender, token.label);
 }
 
 /**
@@ -258,7 +259,7 @@ async function resolveToken(
  */
 export async function resolveCommandInjectionById(
   commandId: string,
-  senderId: string,
+  sender: AccessActor,
   label: string = commandId
 ): Promise<CommandExecutionPlan> {
   // Shape-validate the hostile id before any DB operation.
@@ -287,9 +288,9 @@ export async function resolveCommandInjectionById(
   // Usability gate first: a command the sender can't use must be
   // indistinguishable from a nonexistent one (no state probing).
   if (command.userId) {
-    if (command.userId !== senderId) return skip(commandId, label, 'not_found');
+    if (command.userId !== sender.userId) return skip(commandId, label, 'not_found');
   } else if (command.driveId) {
-    const isMember = await isUserDriveMember(senderId, command.driveId);
+    const isMember = await isUserDriveMember(sender, command.driveId);
     if (!isMember) return skip(commandId, label, 'not_found');
   } else {
     // Scope invariant violated (DB check constraint should prevent this).
@@ -302,7 +303,7 @@ export async function resolveCommandInjectionById(
   if (!entryPage || entryPage.isTrashed) return skip(commandId, label, 'page_trashed');
 
   // Cross-drive / stale references are re-permission-checked on every use.
-  const canView = await canUserViewPage(senderId, entryPage.id);
+  const canView = await canUserViewPage(sender, entryPage.id);
   if (!canView) return skip(commandId, label, 'no_access');
 
   // A SHEET entry page is injected as rows, not as its stored document.
@@ -321,7 +322,7 @@ export async function resolveCommandInjectionById(
       ? serializePageContentForAI(entryPage)
       : `(This entry page is a ${entryPage.type} page. Use read_page with pageId "${entryPage.id}" to read it.)`;
 
-  const children = await loadViewableChildren(entryPage.id, senderId);
+  const children = await loadViewableChildren(entryPage.id, sender);
 
   return {
     kind: 'inject',
@@ -356,7 +357,7 @@ export async function resolveCommandInjectionById(
  */
 export async function resolveBuiltinInjection(
   trigger: string,
-  senderId: string,
+  sender: AccessActor,
   context: CommandResolutionContext,
   label: string = trigger
 ): Promise<CommandExecutionPlan> {
@@ -367,7 +368,7 @@ export async function resolveBuiltinInjection(
   const dynamicContent =
     builtin.kind === 'skill'
       ? (getSkillBody(builtin.trigger) ?? undefined)
-      : await loadBuiltinDynamicSection(builtin, senderId, context);
+      : await loadBuiltinDynamicSection(builtin, sender, context);
 
   return {
     kind: 'inject',
@@ -394,7 +395,7 @@ export async function resolveBuiltinInjection(
  */
 async function loadBuiltinDynamicSection(
   builtin: BuiltinCommandDefinition,
-  senderId: string,
+  sender: AccessActor,
   context: CommandResolutionContext
 ): Promise<string | undefined> {
   if (!builtin.buildPromptSection) return undefined;
@@ -402,10 +403,10 @@ async function loadBuiltinDynamicSection(
   try {
     const requestedDriveId = context.driveId ?? null;
     const driveId =
-      requestedDriveId && (await isUserDriveMember(senderId, requestedDriveId))
+      requestedDriveId && (await isUserDriveMember(sender, requestedDriveId))
         ? requestedDriveId
         : null;
-    const { winners } = await loadAvailableCommands(senderId, driveId);
+    const { winners } = await loadAvailableCommands(sender, driveId);
     return builtin.buildPromptSection({ availableCommands: winners });
   } catch (error) {
     loggers.ai.error(
@@ -420,7 +421,7 @@ async function loadBuiltinDynamicSection(
 /** Direct, non-trashed children of the entry page the sender can view. */
 async function loadViewableChildren(
   entryPageId: string,
-  senderId: string
+  sender: AccessActor
 ): Promise<CommandChildResource[]> {
   const childRows = await db.query.pages.findMany({
     where: and(eq(pages.parentId, entryPageId), eq(pages.isTrashed, false)),
@@ -434,7 +435,7 @@ async function loadViewableChildren(
   const viewChecks = await Promise.all(
     childRows.map(async (child) => ({
       child,
-      canView: await canUserViewPage(senderId, child.id),
+      canView: await canUserViewPage(sender, child.id),
     }))
   );
 

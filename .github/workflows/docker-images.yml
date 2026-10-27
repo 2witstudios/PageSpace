@@ -2,6 +2,19 @@ name: Docker Images
 
 on:
   workflow_dispatch:
+    inputs:
+      build_only:
+        description: 'Build candidate images without changing latest tags or deploying'
+        type: boolean
+        default: false
+      topology_run_id:
+        description: 'Original topology artifact run ID for a fresh-runner billing recovery'
+        type: string
+        default: ''
+      billing_cutover:
+        description: 'Offline final billing cutover: remove old app machines before migration'
+        type: boolean
+        default: false
   push:
     branches: [master]
     tags: ['v*.*.*']
@@ -39,6 +52,10 @@ on:
       - 'scripts/deploy/**'
 
 env:
+  # Every deploy (staging and prod, normal and billing-cutover) pulls the immutable
+  # full-sha tag build-and-push always publishes — never the mutable :latest, so the
+  # exact artifact smoke-tested on staging is the one promoted to prod.
+  RELEASE_IMAGE_TAG: sha-${{ github.sha }}
   REGISTRY: ghcr.io
   IMAGE_PREFIX: ghcr.io/2witstudios/pagespace
 
@@ -82,6 +99,9 @@ jobs:
               NEXT_PUBLIC_PUBLISH_EDGE_IPV6=2a09:8280:1::118:198f:0
               NEXT_PUBLIC_PUBLISH_EDGE_CNAME_TARGET=pagespace-proxy.fly.dev
               NEXT_PUBLIC_COOKIE_DOMAIN=.pagespace.ai
+              # Imago rollout flag, inlined at build time: true since the IMG-11.2
+              # flip, with IMAGO_ENABLED=true set on the imago app's runtime env.
+              NEXT_PUBLIC_IMAGO_ENABLED=true
           - service: migrate
             dockerfile: apps/web/Dockerfile.migrate
             context: .
@@ -103,6 +123,14 @@ jobs:
             context: .
             build_args: |
               NEXT_PUBLIC_WEB_APP_URL=https://pagespace.ai
+          # Built and published only: /imago production routing (and so any
+          # deploy-fly step for it) is human-only, IMG-11.1.
+          - service: imago
+            dockerfile: apps/imago/Dockerfile
+            context: .
+            build_args: |
+              NEXT_PUBLIC_REALTIME_URL=https://pagespace.ai
+              NEXT_PUBLIC_COOKIE_DOMAIN=.pagespace.ai
           - service: marketing
             dockerfile: apps/marketing/Dockerfile
             context: .
@@ -132,7 +160,8 @@ jobs:
         with:
           images: ${{ env.IMAGE_PREFIX }}-${{ matrix.service }}
           tags: |
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ inputs.build_only != true }}
+            type=raw,value=sha-${{ github.sha }}
             type=sha,prefix=sha-,format=short
             type=semver,pattern=v{{version}}
 
@@ -167,7 +196,7 @@ jobs:
     needs: [build-and-push, ci]
     runs-on: ubuntu-latest
     environment: fly-staging
-    if: github.ref == 'refs/heads/master'
+    if: github.ref == 'refs/heads/master' && inputs.build_only != true
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -189,20 +218,38 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Same sha-pinned tag that smoke-test verifies and deploy-fly (prod) later
-      # promotes — staging and prod always run the exact same artifact.
+      # Same sha-pinned $RELEASE_IMAGE_TAG that smoke-test verifies and deploy-fly
+      # (prod) later promotes — staging and prod always run the exact same artifact,
+      # through the exact same migration script.
+      #
+      # BILLING_CUTOVER_OFFLINE mirrors prod: a billing-cutover run applies the same
+      # gated migration here first. Staging has no customer traffic to drain, so the
+      # offline assertion holds trivially; without it the cutover migration would
+      # refuse on staging and block the prod cutover behind it.
       - name: Run staging migrations
         run: |
           scripts/deploy/run-fly-migration.sh pagespace-web-staging \
-            ghcr.io/2witstudios/pagespace-migrate "sha-${GITHUB_SHA::7}"
+            ghcr.io/2witstudios/pagespace-migrate "$RELEASE_IMAGE_TAG" \
+            -- --env "BILLING_CUTOVER_OFFLINE=$BILLING_CUTOVER_OFFLINE"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           FLY_NO_UPDATE_CHECK: "true"
+          DIAGNOSTICS_DIR: ${{ runner.temp }}/migration-diagnostics/staging
+          BILLING_CUTOVER_OFFLINE: ${{ inputs.billing_cutover == true && 'true' || 'false' }}
+
+      - name: Upload staging migration diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: staging-migration-diagnostics
+          path: ${{ runner.temp }}/migration-diagnostics
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: Deploy web to staging
         run: |
           scripts/deploy/deploy-fly-service.sh pagespace-web-staging \
-            ghcr.io/2witstudios/pagespace-web "sha-${GITHUB_SHA::7}" 180
+            ghcr.io/2witstudios/pagespace-web "$RELEASE_IMAGE_TAG" 180
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
@@ -224,12 +271,17 @@ jobs:
     needs: [build-and-push, ci, smoke-test]
     runs-on: ubuntu-latest
     environment: fly-production
-    if: github.ref == 'refs/heads/master'
+    if: github.ref == 'refs/heads/master' && inputs.build_only != true
+    env:
+      # Read by scripts/deploy/deploy-fly-service.sh: when a billing-cutover snapshot
+      # exists for an app, deploy with its config and restore its drained fleet.
+      CUTOVER_DIR: /tmp/pagespace-cutover
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+
 
       - name: Setup flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master
@@ -246,15 +298,63 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # MONEY-3 resume: a re-run after a runner loss starts with an empty /tmp. The durable
+      # pre-drain artifact is the ONLY recovery input — restore it before anything can
+      # snapshot the (already drained) empty fleets. A first run has no artifact yet; that
+      # is not an error, the snapshot step below takes the original.
+      - name: Resume from the durable topology snapshot
+        if: inputs.billing_cutover == true
+        continue-on-error: ${{ inputs.topology_run_id == '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: billing-cutover-topology
+          path: /tmp/pagespace-cutover
+          run-id: ${{ inputs.topology_run_id || github.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Snapshot old application topology for billing cutover
+        if: inputs.billing_cutover == true
+        run: |
+          # On a resume, the durable copy IS the original pre-drain topology: never
+          # re-snapshot over it — the fleets may already be drained, and snapshotting
+          # then would record empty fleets as the restoration target.
+          bash scripts/fly-billing-cutover.sh --snapshot-only /tmp/pagespace-cutover
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      # MONEY-3: the only copy of the restoration topology is durably persisted BEFORE the
+      # first destructive scale call. If this runner dies mid-migration or mid-deploy, a
+      # fresh resume run downloads this artifact instead of reconciling fleets to empty.
+      - name: Persist the restoration topology before draining
+        if: inputs.billing_cutover == true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: billing-cutover-topology
+          path: /tmp/pagespace-cutover
+          retention-days: 7
+          if-no-files-found: error
+          overwrite: true
+
+      - name: Drain old application images for billing cutover
+        if: inputs.billing_cutover == true
+        run: bash scripts/fly-billing-cutover.sh --drain /tmp/pagespace-cutover
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
       # Promotes the EXACT tag that smoke-test just verified against staging —
-      # never :latest, which could have moved since the build.
+      # never :latest, which could have moved since the build. The script waits for
+      # clean exit evidence (scripts/fly-migration-succeeded.jq) and its EXIT trap
+      # captures sanitized diagnostics before destroying the one-shot machine.
       - name: Run migrations
         run: |
           scripts/deploy/run-fly-migration.sh pagespace-web \
-            ghcr.io/2witstudios/pagespace-migrate "sha-${GITHUB_SHA::7}"
+            ghcr.io/2witstudios/pagespace-migrate "$RELEASE_IMAGE_TAG" \
+            -- --env "BILLING_CUTOVER_OFFLINE=$BILLING_CUTOVER_OFFLINE"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           FLY_NO_UPDATE_CHECK: "true"
+          DIAGNOSTICS_DIR: ${{ runner.temp }}/migration-diagnostics/main
+          BILLING_CUTOVER_OFFLINE: ${{ inputs.billing_cutover == true && 'true' || 'false' }}
 
       # Admin PG (trust plane, #890): mirrors the main migration machine but runs
       # db:migrate:admin. The machine runs in the pagespace-web app, BUT it must
@@ -282,12 +382,22 @@ jobs:
           fi
 
           scripts/deploy/run-fly-migration.sh pagespace-web \
-            ghcr.io/2witstudios/pagespace-migrate "sha-${GITHUB_SHA::7}" \
+            ghcr.io/2witstudios/pagespace-migrate "$RELEASE_IMAGE_TAG" \
             -- --env ADMIN_DATABASE_URL_MIGRATE="$ADMIN_DATABASE_URL_MIGRATE" bun run db:migrate:admin
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           FLY_NO_UPDATE_CHECK: "true"
+          DIAGNOSTICS_DIR: ${{ runner.temp }}/migration-diagnostics/admin
           ADMIN_DATABASE_URL_MIGRATE: ${{ secrets.ADMIN_DATABASE_URL_MIGRATE }}
+
+      - name: Upload migration diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: migration-diagnostics
+          path: ${{ runner.temp }}/migration-diagnostics
+          retention-days: 7
+          if-no-files-found: ignore
 
       # REALTIME BEFORE WEB — order is load-bearing, do not swap.
       #
@@ -304,18 +414,17 @@ jobs:
       #
       # This way round, the stale case is benign: an old web client simply
       # never emits the new joins, and the new handlers idle until it reloads.
-      # Pinned by apps/realtime/src/__tests__/deploy-order.guard.test.ts.
       - name: Deploy realtime
         run: |
           scripts/deploy/deploy-fly-service.sh pagespace-realtime \
-            ghcr.io/2witstudios/pagespace-realtime "sha-${GITHUB_SHA::7}" 300
+            ghcr.io/2witstudios/pagespace-realtime "$RELEASE_IMAGE_TAG" 300
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
       - name: Deploy web
         run: |
           scripts/deploy/deploy-fly-service.sh pagespace-web \
-            ghcr.io/2witstudios/pagespace-web "sha-${GITHUB_SHA::7}" 300
+            ghcr.io/2witstudios/pagespace-web "$RELEASE_IMAGE_TAG" 300
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
@@ -327,27 +436,30 @@ jobs:
         # state and produces false-negative CI failures.
         run: |
           scripts/deploy/deploy-fly-service.sh pagespace-processor \
-            ghcr.io/2witstudios/pagespace-processor "sha-${GITHUB_SHA::7}" 120
+            ghcr.io/2witstudios/pagespace-processor "$RELEASE_IMAGE_TAG" 120
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
       - name: Deploy admin
         run: |
           scripts/deploy/deploy-fly-service.sh pagespace-admin \
-            ghcr.io/2witstudios/pagespace-admin "sha-${GITHUB_SHA::7}" 300
+            ghcr.io/2witstudios/pagespace-admin "$RELEASE_IMAGE_TAG" 300
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
       - name: Deploy cron
         run: |
           scripts/deploy/deploy-fly-service.sh pagespace-cron \
-            ghcr.io/2witstudios/pagespace-cron "sha-${GITHUB_SHA::7}" 300
+            ghcr.io/2witstudios/pagespace-cron "$RELEASE_IMAGE_TAG" 300
 
           # Cron is a SINGLETON scheduler: exactly one machine must run, or scheduled jobs
           # (memory/pulse crons) double-fire. Reconcile to one machine, ensure it's started,
           # then VERIFY the invariant — if it can't be enforced, fail the deploy rather than
           # silently leave duplicate (double-firing) or stopped (non-firing) cron machines.
-          flyctl scale count 1 --app pagespace-cron --yes
+          # A billing-cutover restore already reconciled the snapshotted topology.
+          if [ ! -f "$CUTOVER_DIR/pagespace-cron.machines.json" ]; then
+            flyctl scale count 1 --app pagespace-cron --yes
+          fi
           for id in $(flyctl machines list --app pagespace-cron --json | jq -r '.[].id'); do
             flyctl machine start "$id" --app pagespace-cron 2>/dev/null || true
           done
@@ -363,9 +475,19 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
+      - name: Deploy imago
+        run: |
+          docker pull "ghcr.io/2witstudios/pagespace-imago:$RELEASE_IMAGE_TAG"
+          docker tag "ghcr.io/2witstudios/pagespace-imago:$RELEASE_IMAGE_TAG" "registry.fly.io/pagespace-imago:$RELEASE_IMAGE_TAG"
+          docker push "registry.fly.io/pagespace-imago:$RELEASE_IMAGE_TAG"
+          flyctl deploy --app pagespace-imago --image "registry.fly.io/pagespace-imago:$RELEASE_IMAGE_TAG" --yes --wait-timeout 300
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+
       - name: Deploy marketing
         run: |
           scripts/deploy/deploy-fly-service.sh pagespace-marketing \
-            ghcr.io/2witstudios/pagespace-marketing "sha-${GITHUB_SHA::7}" 300
+            ghcr.io/2witstudios/pagespace-marketing "$RELEASE_IMAGE_TAG" 300
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

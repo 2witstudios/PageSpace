@@ -20,6 +20,7 @@ export default defineWorkspace([
     },
   },
   './packages/editor/vitest.config.ts',
+  './packages/browser-worker/vitest.config.ts',
   {
     resolve: {
       alias: {

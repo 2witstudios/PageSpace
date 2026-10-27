@@ -25,6 +25,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn(),
 }));
 
@@ -66,6 +67,7 @@ import { GET } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockPageId = 'page-test-123';
 const mockCanSubscribeToStream = vi.fn();
@@ -221,7 +223,7 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
 
       await GET(makeRequest(), makeContext(mockMessageId));
 
-      expect(canUserViewPage).toHaveBeenCalledWith(mockUserId, mockPageId);
+      expect(canUserViewPage).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), mockPageId);
     });
 
     it('runs canSubscribeToStream with the row\'s OWNER, so a co-member\'s private conversation is still private', async () => {
@@ -230,7 +232,7 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       await GET(makeRequest(), makeContext(mockMessageId));
 
       expect(mockCanSubscribeToStream).toHaveBeenCalledWith({
-        userId: mockUserId,
+        actor: expect.objectContaining({ userId: mockUserId }),
         streamOwnerId: 'user-other',
         conversationId: mockConversationId,
       });
@@ -471,7 +473,7 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       await GET(makeRequest(), makeContext(mockMessageId));
       testRegistry.close(mockMessageId);
 
-      expect(canUserViewPage).toHaveBeenCalledWith(mockUserId, mockPageId);
+      expect(canUserViewPage).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), mockPageId);
     });
 
     it('given a global channel pageId owned by the requesting user, should allow without calling canUserViewPage', async () => {
@@ -514,7 +516,7 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
 
       expect(response.status).toBe(200);
       expect(mockCanSubscribeToStream).toHaveBeenCalledWith({
-        userId: 'user-other',
+        actor: expect.objectContaining({ userId: 'user-other' }),
         streamOwnerId: mockUserId,
         conversationId: mockConversationId,
       });
@@ -1017,4 +1019,13 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       expect(vi.getTimerCount()).toBe(beforeGet);
     });
   });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(credentialActor(auth.userId, null), resourceId),
+  };
 });

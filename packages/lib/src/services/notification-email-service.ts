@@ -4,6 +4,8 @@ import { users, emailUnsubscribeTokens } from '@pagespace/db/schema/auth';
 import { emailNotificationPreferences, emailNotificationLog } from '@pagespace/db/schema/email-notifications';
 import { sendEmail, resolveAppUrl } from './email-service';
 import { DriveInvitationEmail } from '../email-templates/DriveInvitationEmail';
+import { OrgInvitationEmail } from '../email-templates/OrgInvitationEmail';
+import { DomainVerificationEmail } from '../email-templates/DomainVerificationEmail';
 import { ConnectionInvitationEmail } from '../email-templates/ConnectionInvitationEmail';
 import { PageShareInvitationEmail } from '../email-templates/PageShareInvitationEmail';
 import { DirectMessageEmail } from '../email-templates/DirectMessageEmail';
@@ -38,6 +40,11 @@ export type NotificationType =
   | 'TOS_PRIVACY_UPDATED'
   | 'MENTION'
   | 'TASK_ASSIGNED'
+  // In-app only (SPEND-6): no email is sent for it, but the column type is the db enum.
+  | 'AUTOMATION_SKIPPED'
+  // In-app only (WAL-6e): the funder's once-per-period notice that a wallet is in debt.
+  | 'WALLET_DEBT'
+  | 'WALLET_CAP_ALERT'
   | 'PRODUCT_UPDATE';
 
 interface NotificationEmailData {
@@ -268,9 +275,23 @@ function getEmailTemplate(data: NotificationEmailData, user: { name: string; ema
         }),
       };
 
-    default:
-      // No email template for this notification type
+    // No per-event email, each deliberately. Listed by name so the switch is exhaustive:
+    // a NEW type reaches the `never` below and fails typecheck until someone decides
+    // whether it gets a template or joins this list.
+    case 'EMAIL_VERIFICATION_REQUIRED':
+    case 'TOS_PRIVACY_UPDATED':
+    case 'MENTION':
+    case 'TASK_ASSIGNED':
+    case 'PRODUCT_UPDATE': // broadcast-only (email_broadcasts), never a per-event email
+    case 'AUTOMATION_SKIPPED': // in-app only (SPEND-6): the drive lead's skip notice
+    case 'WALLET_DEBT': // in-app only (WAL-6e): the funder's debt notice
+    case 'WALLET_CAP_ALERT': // in-app only (WAL-7): the funder's 80% / 100% cap alert
       return null;
+
+    default: {
+      const unhandled: never = data.type;
+      return unhandled;
+    }
   }
 }
 
@@ -307,6 +328,60 @@ export async function sendPendingDriveInvitationEmail(input: {
       inviterName: safeInviterName,
       driveName: safeDriveName,
       acceptUrl: input.inviteUrl,
+    }),
+  });
+}
+
+/**
+ * Send an organization invitation (Spec ORG-3). Transactional: it goes to an
+ * address the inviter typed, which may have no account yet. Errors propagate so
+ * the route can report a failed send; the invite row stays and can be resent.
+ */
+export async function sendOrgInvitationEmail(input: {
+  recipientEmail: string;
+  inviterName: string;
+  orgName: string;
+  role: 'ADMIN' | 'MEMBER';
+  expiresInDays: number;
+  inviteUrl: string;
+}): Promise<void> {
+  const safeInviterName = stripHeaderControls(input.inviterName) || 'Someone';
+  const safeOrgName = stripHeaderControls(input.orgName) || 'an organization';
+
+  await sendEmail({
+    to: input.recipientEmail,
+    subject: `${safeInviterName} invited you to join ${safeOrgName} on PageSpace`,
+    react: OrgInvitationEmail({
+      userName: input.recipientEmail,
+      inviterName: safeInviterName,
+      orgName: safeOrgName,
+      roleLabel: input.role === 'ADMIN' ? 'an Admin' : 'a Member',
+      expiresInDays: input.expiresInDays,
+      acceptUrl: input.inviteUrl,
+    }),
+  });
+}
+
+/**
+ * The domain-ownership proof for a verified email domain (SEC-1), sent to one of the domain's
+ * administrative mailboxes. Errors propagate so the caller can withdraw the stored token.
+ */
+export async function sendDomainVerificationEmail(input: {
+  recipientEmail: string;
+  orgName: string;
+  domain: string;
+  expiresInHours: number;
+  verifyUrl: string;
+}): Promise<void> {
+  const safeOrgName = stripHeaderControls(input.orgName) || 'an organization';
+  await sendEmail({
+    to: input.recipientEmail,
+    subject: `Verify ${input.domain} for ${safeOrgName} on PageSpace`,
+    react: DomainVerificationEmail({
+      orgName: safeOrgName,
+      domain: input.domain,
+      expiresInHours: input.expiresInHours,
+      verifyUrl: input.verifyUrl,
     }),
   });
 }

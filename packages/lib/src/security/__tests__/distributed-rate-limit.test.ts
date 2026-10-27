@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 
-const { insertMock, deleteMock, selectMock, executeMock } = vi.hoisted(() => ({
+const { insertMock, deleteMock, selectMock, executeMock, updateMock } = vi.hoisted(() => ({
   insertMock: vi.fn(),
   deleteMock: vi.fn(),
   selectMock: vi.fn(),
   executeMock: vi.fn(),
+  updateMock: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/db', () => ({
@@ -13,6 +14,7 @@ vi.mock('@pagespace/db/db', () => ({
     delete: deleteMock,
     select: selectMock,
     execute: executeMock,
+    update: updateMock,
   },
 }));
 vi.mock('@pagespace/db/schema/rate-limit-buckets', () => ({
@@ -43,6 +45,7 @@ vi.mock('../../logging/logger-config', () => ({
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
+  refundDistributedRateLimitAttempt,
   getDistributedRateLimitStatus,
   initializeDistributedRateLimiting,
   shutdownRateLimiting,
@@ -141,6 +144,14 @@ function mockCheckBuckets(currCount: number, prevCount: number = 0) {
 function mockDeleteResolves() {
   deleteMock.mockReturnValue({
     where: async () => ({}),
+  });
+}
+
+function mockUpdateResolves() {
+  updateMock.mockReturnValue({
+    set: () => ({
+      where: async () => ({}),
+    }),
   });
 }
 
@@ -632,6 +643,59 @@ describe('distributed-rate-limit', () => {
       const next = await checkDistributedRateLimit('reset-recovery-2', config);
       expect(next.allowed).toBe(true);
       expect(next.attemptsRemaining).toBe(4); // distributed path, not fallback
+    });
+  });
+
+  describe('refundDistributedRateLimitAttempt', () => {
+    it('issues an UPDATE against rate_limit_buckets for the identifier', async () => {
+      mockUpdateResolves();
+      await refundDistributedRateLimitAttempt('refund-key', 60_000);
+      expect(updateMock).toHaveBeenCalled();
+    });
+
+    it('swallows DB errors without throwing', async () => {
+      updateMock.mockImplementation(() => {
+        throw new Error('DB down');
+      });
+      await expect(
+        refundDistributedRateLimitAttempt('fail-refund', 60_000)
+      ).resolves.toBeUndefined();
+    });
+
+    it('decrements only the current window bucket, leaving other successful attempts intact', async () => {
+      // 3 accepted sends land in the bucket; a 4th fails and is refunded.
+      // The window must still show 3 consumed, not 0 (a full reset would
+      // over-refund and re-open headroom the caller never earned back).
+      const config: RateLimitConfig = { maxAttempts: 10, windowMs: 60 * 60 * 1000 };
+      mockInsertReturning(1);
+      await checkDistributedRateLimit('refund-partial', config);
+      mockInsertReturning(2);
+      await checkDistributedRateLimit('refund-partial', config);
+      mockInsertReturning(3);
+      await checkDistributedRateLimit('refund-partial', config);
+      mockInsertReturning(4);
+      await checkDistributedRateLimit('refund-partial', config); // the failed 4th attempt
+
+      mockUpdateResolves();
+      await refundDistributedRateLimitAttempt('refund-partial', config.windowMs);
+
+      mockInsertReturning(3); // reflects the post-refund count for the next check
+      const after = await checkDistributedRateLimit('refund-partial', config);
+      expect(after.attemptsRemaining).toBe(7); // 10 - 3 (the refund undid the 4th attempt)
+    });
+
+    it('attempts the Postgres update even while the outage cooldown is active', async () => {
+      // Mirrors resetDistributedRateLimit: a refund is a low-volume cold path
+      // that cannot stampede a stalled pool, so it is deliberately not
+      // breaker-gated.
+      process.env.NODE_ENV = 'production';
+      mockInsertThrows(drizzleWrappedPgError());
+      const config: RateLimitConfig = { maxAttempts: 5, windowMs: 60_000 };
+      await checkDistributedRateLimit('refund-breaker', config); // opens circuit
+
+      mockUpdateResolves();
+      await refundDistributedRateLimitAttempt('refund-breaker', config.windowMs);
+      expect(updateMock).toHaveBeenCalled();
     });
   });
 

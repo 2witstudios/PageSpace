@@ -3,10 +3,11 @@ import type { UIMessage } from 'ai';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
+import { useSideQuestion, parseSideQuestionInput } from '@/components/ai/btw/useSideQuestion';
+import { SideQuestionCard } from '@/components/ai/btw/SideQuestionCard';
 import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 import { Loader2, Plus } from 'lucide-react';
-import { ProviderModelSelector } from '@/components/ai/chat/input/ProviderModelSelector';
 import { CompactMessageRenderer, AISelector, AiUsageMonitor, TasksDropdown, PlanChip } from '@/components/ai/shared';
 import { UndoAiChangesDialog, VirtualizedMessageList } from '@/components/ai/shared/chat';
 import {
@@ -44,7 +45,7 @@ import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
 import { rollbackOptimisticSendOnFailure } from '@/lib/ai/streams/rollbackOptimisticSendOnFailure';
 import { createId } from '@paralleldrive/cuid2';
 import { useStopStream } from '@/hooks/useStopStream';
-import { useSendHandoff, useCacheMessageActions, useResumeBootstrap, useAnswerAskUser, useChatErrorCause, buildGlobalChatRequestBody } from '@/lib/ai/shared';
+import { useSendHandoff, useCacheMessageActions, useResumeBootstrap, useAnswerAskUser, useChatErrorCause, useQueuedSends, buildGlobalChatRequestBody } from '@/lib/ai/shared';
 import { AskUserAnswerProvider } from '@/components/ai/shared/chat/ask-user/AskUserAnswerContext';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { VoiceCallBarForConversation } from '@/components/ai/voice/realtime';
@@ -55,6 +56,8 @@ import { ChatErrorBanner } from '@/components/ai/shared/chat/ChatErrorBanner';
 import { selectMessagesAreaMode } from '@/lib/ai/streams/selectMessagesAreaMode';
 import { canResumeRecovery } from '@/lib/ai/streams/canResumeRecovery';
 import { commandDriveIdFor } from '@/lib/commands/command-scope';
+import { ComposerSpendStrip } from '@/components/wallets/ComposerSpendStrip';
+import { SpendSurfaceProvider } from '@/components/wallets/SpendSurface';
 
 // Threshold for enabling virtualization in sidebar (lower than main chat due to compact items)
 const SIDEBAR_VIRTUALIZATION_THRESHOLD = 30;
@@ -499,6 +502,16 @@ const SidebarChatTab: React.FC = () => {
   // Refs
   const chatInputRef = useRef<ChatInputRef>(null);
 
+  // Detached /btw side question (#2678 contract): independent of the primary
+  // chat lifecycle and activeStreamId; no persistence, ephemeral card.
+  const sideQuestion = useSideQuestion(currentConversationId ?? '');
+  const handleSideQuestion = useCallback(() => {
+    const question = parseSideQuestionInput(input);
+    if (!question || !currentConversationId) return;
+    setInput('');
+    void sideQuestion.ask(question);
+  }, [input, currentConversationId, sideQuestion]);
+
   // ============================================
   // Effects: Drive Loading
   // ============================================
@@ -666,6 +679,41 @@ const SidebarChatTab: React.FC = () => {
     currentProvider,
     currentModel,
   ]);
+
+  /**
+   * The one send path for the mode on screen, shared by the composer and the
+   * DRAIN (issue #2676): optimistic write first, then the wrapped dispatch
+   * with rollback — the drain hook re-invokes it with each queued message, so
+   * rollback/handoff/promotion behave exactly as for a composer send.
+   */
+  const dispatchUserMessage = useCallback((message: UIMessage) => {
+    if (!currentConversationId) return;
+    conversationMessagesActions.addOptimisticSend(currentConversationId, message);
+    return rollbackOptimisticSendOnFailure(
+      () => wrapSend(() => sendMessage(message, currentConversationId, { body: buildSidebarChatRequestBody(buildFreshContextRef(), !writeMode) })),
+      currentConversationId,
+      message.id,
+    );
+  }, [currentConversationId, wrapSend, sendMessage, buildSidebarChatRequestBody, buildFreshContextRef, writeMode]);
+
+  // Send queue (issue #2676): drains one queued message per observed stream
+  // end, FIFO; manual sends/retries take precedence via the status guard.
+  const {
+    queuedSends,
+    isQueueFull,
+    enqueue: enqueueQueuedSend,
+    remove: removeQueuedSend,
+    clear: clearQueuedSends,
+    cancelPendingDrain: cancelQueuedDrain,
+  } = useQueuedSends({
+    conversationId: currentConversationId,
+    status,
+    dispatch: dispatchUserMessage,
+  });
+
+  const handleEnqueueFromComposer = useCallback(() => {
+    if (enqueueQueuedSend(input)) setInput('');
+  }, [enqueueQueuedSend, input]);
 
   const handleSendMessage = useCallback(async () => {
     const files = getFilesForSend();
@@ -857,6 +905,7 @@ const SidebarChatTab: React.FC = () => {
   }
 
   return (
+    <SpendSurfaceProvider conversationId={currentConversationId ?? null} driveId={selectedAgent ? selectedAgent.driveId : locationContext?.currentDrive?.id ?? null} isGlobal={!selectedAgent}>
     <AskUserAnswerProvider value={askUserAnswering}>
     <div data-testid="sidebar-chat-tab" className="flex flex-col h-full">
       {/* Header */}
@@ -962,6 +1011,21 @@ const SidebarChatTab: React.FC = () => {
           paddingBottom: isKeyboardOpen ? `calc(0.75rem + ${keyboardHeight}px)` : undefined,
         }}
       >
+        {sideQuestion.state && (
+          <SideQuestionCard state={sideQuestion.state} onDismiss={sideQuestion.dismiss} />
+        )}
+        {currentConversationId && (
+          // SPEND-2: an agent's conversation spends in the agent's drive; the global
+          // assistant's in the drive its turns name (the same contextRef drive).
+          <ComposerSpendStrip
+            conversationId={currentConversationId}
+            driveId={selectedAgent ? selectedAgent.driveId : locationContext?.currentDrive?.id ?? null}
+            isGlobal={!selectedAgent}
+            hasMessages={renderedMessages.length > 0}
+            // Below lg this sidebar is a modal sheet over the header chip: keep the strip.
+            persistentBelowLg
+          />
+        )}
         <ChatErrorBanner
           cause={errorCause}
           show={showError}
@@ -971,20 +1035,12 @@ const SidebarChatTab: React.FC = () => {
           }}
         />
 
-        <div className="px-1">
-          <ProviderModelSelector
-            provider={currentProvider}
-            model={currentModel}
-            onChange={setProviderSettings}
-            disabled={status === 'streaming'}
-          />
-        </div>
-
         <ChatInput
           ref={chatInputRef}
           value={input}
           onChange={setInput}
           onSend={handleSendMessage}
+          onSideQuestion={handleSideQuestion}
           onStop={handleStop}
           isStreaming={displayIsStreaming}
           isStopping={isStopping}
@@ -998,8 +1054,10 @@ const SidebarChatTab: React.FC = () => {
           // (`driveId`/`crossDrive` above) is deliberately left as it was.
           commandDriveId={commandDriveIdFor(selectedAgent, locationContext?.currentDrive?.id)}
           crossDrive={true}
-          hideModelSelector={true}
           variant="sidebar"
+          selectedProvider={currentProvider}
+          selectedModel={currentModel}
+          onProviderModelChange={setProviderSettings}
           attachments={attachments}
           onAddFiles={addFiles}
           onRemoveFile={removeFile}
@@ -1007,6 +1065,12 @@ const SidebarChatTab: React.FC = () => {
             (selectedAgent ? selectedAgent.aiModel : currentModel) || ''
           )}
           remoteStreamingUser={remoteStreamingUser}
+          queuedMessages={queuedSends}
+          onEnqueue={handleEnqueueFromComposer}
+          onRemoveQueued={removeQueuedSend}
+          onClearQueued={clearQueuedSends}
+          onCancelQueue={cancelQueuedDrain}
+          isQueueFull={isQueueFull}
         />
       </div>
 
@@ -1018,6 +1082,7 @@ const SidebarChatTab: React.FC = () => {
       />
     </div>
     </AskUserAnswerProvider>
+    </SpendSurfaceProvider>
   );
 };
 

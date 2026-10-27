@@ -13,6 +13,7 @@ import {
   processMessageContentUpdate,
 } from '@/lib/repositories/message-repository';
 import { getState, invalidate } from '@/lib/ai/core/compaction/compaction-repository';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -50,6 +51,7 @@ export async function PATCH(
       auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'message', resourceId: 'edit', details: { reason: 'auth_failed', method: 'PATCH', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
       return auth.error;
     }
+    const actor = actorFromAuth(auth);
     const userId = auth.userId;
 
     const { messageId } = await context.params;
@@ -92,10 +94,10 @@ export async function PATCH(
         pageId: maskIdentifier(messagePageId)
       });
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'message', resourceId: messageId, details: { reason: 'no_edit_permission', method: 'PATCH', pageId: messagePageId }, riskScore: 0.5 });
-      return NextResponse.json(
+      return deniedResponse(actor, messagePageId, NextResponse.json(
         { error: 'You do not have permission to edit messages in this chat' },
         { status: 403 }
-      );
+      ));
     }
 
     // A 'streaming' row is mid-flight: its content is a placeholder the generation is about
@@ -201,6 +203,7 @@ export async function DELETE(
       auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'message', resourceId: 'delete', details: { reason: 'auth_failed', method: 'DELETE', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
       return auth.error;
     }
+    const actor = actorFromAuth(auth);
     const userId = auth.userId;
 
     const { messageId } = await context.params;
@@ -234,10 +237,10 @@ export async function DELETE(
         pageId: maskIdentifier(messagePageId)
       });
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'message', resourceId: messageId, details: { reason: 'no_edit_permission', method: 'DELETE', pageId: messagePageId }, riskScore: 0.5 });
-      return NextResponse.json(
+      return deniedResponse(actor, messagePageId, NextResponse.json(
         { error: 'You do not have permission to delete messages in this chat' },
         { status: 403 }
-      );
+      ));
     }
 
     // A 'streaming' row is mid-flight: deleting it now would race the execute-end/onFinish

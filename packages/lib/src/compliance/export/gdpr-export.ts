@@ -1,4 +1,4 @@
-import { eq, inArray, or, and, ne, isNull, gte, asc } from 'drizzle-orm';
+import { eq, inArray, or, and, ne, isNull, gte, gt, asc, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { users } from '@pagespace/db/schema/auth';
 import { agentWorkspaces, agentWorkspaceShells } from '@pagespace/db/schema/agent-workspaces';
@@ -10,22 +10,32 @@ import { drives, pages, tags } from '@pagespace/db/schema/core';
 import { contentTags } from '@pagespace/db/schema/content-tags';
 import { sheetTabs, sheetRows } from '@pagespace/db/schema/sheets';
 import { aiUsageLogs, activityLogs, systemLogs, apiMetrics, errorLogs, errorResolutions } from '@pagespace/db/schema/monitoring';
-import { files, filePages } from '@pagespace/db/schema/storage';
+import { files, filePages, type AttachmentMeta } from '@pagespace/db/schema/storage';
 import { driveMembers } from '@pagespace/db/schema/members';
-import { channelMessages } from '@pagespace/db/schema/chat';
+import { channelMessages, channelMessageAttachments } from '@pagespace/db/schema/chat';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
-import { directMessages, dmConversations } from '@pagespace/db/schema/social';
+import { directMessages, dmConversations, directMessageAttachments } from '@pagespace/db/schema/social';
 import { taskLists, taskItems } from '@pagespace/db/schema/tasks';
 import { sessions } from '@pagespace/db/schema/sessions';
 import { notifications } from '@pagespace/db/schema/notifications';
 import { displayPreferences } from '@pagespace/db/schema/display-preferences';
 import { userPersonalization, personalizationCandidates } from '@pagespace/db/schema/personalization';
+import { pulseSummaries } from '@pagespace/db/schema/dashboard';
 import { userHotkeyPreferences } from '@pagespace/db/schema/hotkeys';
 import { userAutomationPreferences } from '@pagespace/db/schema/automation-preferences';
+import { imagoDriveAccess } from '@pagespace/db/schema/imago-drive-access';
 import { userToastNotificationPreferences } from '@pagespace/db/schema/toast-notification-preferences';
 import { emailNotificationPreferences } from '@pagespace/db/schema/email-notifications';
 import { decryptUserRow } from '../../auth/user-repository';
+import { agentAccounts, agentAccountApprovals, agentAccountBindings, agentAccountDelegations } from '@pagespace/db/schema/agent-accounts';
+import { organizations, orgMembers, orgMemberDepartures } from '@pagespace/db/schema/organizations';
+import { driveJoinRequests } from '@pagespace/db/schema/drive-join-requests';
+import { orgGuestHolds } from '@pagespace/db/schema/org-guest-holds';
+import { wallets, walletFundingLegs, driveSpendOverrides, walletConsumerCaps } from '@pagespace/db/schema/wallets';
 import { getClickHouseGdprClient } from '../../observability/clickhouse-client';
+import { isGuestRole } from '../../permissions/guest-role';
+import type { OrgAuthenticationDenialCode } from '../../permissions/access-actor';
+import type { ExportSignInGate } from './export-sign-in-gate';
 import {
   collectChUserSystemLogs,
   collectChUserApiMetrics,
@@ -60,6 +70,16 @@ export interface UserDriveExport {
   name: string;
   slug: string;
   role: 'OWNER' | 'ADMIN' | 'MEMBER';
+  /**
+   * The org this drive belongs to (Spec X-2), or null for a personal drive.
+   * Which container a drive sits in is a fact about the subject's own
+   * membership map — a member of an org drive knows where they are — and it is
+   * what makes the rest of the bundle readable: `pages.json` and `sheets.json`
+   * key on driveId, and without the org pointer an org drive is
+   * indistinguishable from a personal one in the subject's own export.
+   * The org's OTHER facts (policies, billing, domains) stay the org's data.
+   */
+  orgId: string | null;
   createdAt: Date;
 }
 
@@ -126,6 +146,18 @@ export interface UserMessageExport {
   /** Assistant-row lifecycle state ('ai_chat'/'conversation' sources only) — explains an
    * empty-content row as a still-streaming or interrupted placeholder rather than data loss. */
   status?: 'streaming' | 'complete' | 'interrupted';
+  /**
+   * Files the subject attached to this message ('channel'/'direct_message'
+   * sources). The filename a person chose is their data, and a message can
+   * carry several, so exporting only the message body would leave the batch
+   * out of a subject access request entirely.
+   */
+  attachments?: Array<{
+    fileId: string | null;
+    originalName: string | null;
+    mimeType: string | null;
+    size: number | null;
+  }>;
 }
 
 export interface UserFileExport {
@@ -257,6 +289,8 @@ export interface UserSettingsExport {
   automation: { pulseEnabled: boolean; updatedAt: Date } | null;
   toastNotifications: { level: string; updatedAt: Date } | null;
   emailNotifications: { notificationType: string; emailEnabled: boolean; updatedAt: Date }[];
+  /** The subject's per-drive Imago access choices (the toggle), one row per drive they set it for. */
+  imagoDriveAccess: { driveId: string; enabled: boolean; updatedAt: Date }[];
 }
 
 export interface UserPersonalizationExport {
@@ -288,6 +322,51 @@ export interface UserPersonalizationExport {
  * `claim` that exists solely for deduplication, so it carries no information
  * the subject cannot already read in `claim`.
  */
+/**
+ * One Pulse summary the AI wrote for the subject: a digest of their own workspace activity, addressed to them.
+ * `contextData` (the raw activity snapshot it was generated from) is not carried: everything in it is exported under
+ * its own category (pages, tasks, messages, notifications, calendar), and the generation metadata names no one.
+ */
+export interface UserPulseSummaryExport {
+  summary: string;
+  greeting: string | null;
+  type: string;
+  periodStart: Date;
+  periodEnd: Date;
+  generatedAt: Date;
+}
+
+/**
+ * Content the export left out because an org's sign-in policy refuses the credential that requested it (SEC-2/3,
+ * D-OW-62). Recorded in the manifest so the subject knows to sign in again (or with a passkey) and export again.
+ *
+ *   - `orgDriveContent`: the pages, sheets and tags of org drives (`count` = drives).
+ *   - `orgDriveMessages`, `orgDriveFiles`, `orgDriveTasks`, `orgDriveActivity`: what the subject wrote, uploaded, listed
+ *     or did in such a drive (`count` = messages, files, task lists, activity entries). Global AI conversations and
+ *     direct messages belong to no drive and are always carried.
+ *   - `memoryPages`: memory pages restating content distilled from org drives (`count` = pages).
+ *   - `pulseSummaries`, `personalizationCandidates`: rows derived from org drives (`count` = rows).
+ *   - `personalization`: the distilled memory (About You, Communication, Rules) in personalization.json (`count` = 1).
+ */
+export type ExportWithheldCategory =
+  | 'orgDriveContent'
+  | 'orgDriveMessages'
+  | 'orgDriveFiles'
+  | 'orgDriveTasks'
+  | 'orgDriveActivity'
+  | 'memoryPages'
+  | 'pulseSummaries'
+  | 'personalization'
+  | 'personalizationCandidates';
+
+export interface ExportWithheld {
+  category: ExportWithheldCategory;
+  count: number;
+  code: OrgAuthenticationDenialCode;
+  /** The refusing orgs, sorted. */
+  orgIds: string[];
+}
+
 export interface UserPersonalizationCandidateExport {
   /** Which profile page this claim was staged for. */
   field: string;
@@ -478,11 +557,86 @@ export interface AllUserData {
   settings: UserSettingsExport;
   personalization: UserPersonalizationExport | null;
   personalizationCandidates: UserPersonalizationCandidateExport[];
+  pulseSummaries: UserPulseSummaryExport[];
+  /** What this bundle left out under an org sign-in policy (SEC-2/3); written to the manifest, never a file. */
+  withheld: ExportWithheld[];
   agentWorkspaces: UserAgentWorkspaceExport[];
+  agentAccounts: UserAgentAccountsExport;
   streamState: UserStreamStateExport[];
   contentTags: UserContentTagExport[];
   /** Machines the subject enrolled as local environments — their own devices. */
   localEnvironments: UserLocalEnvironmentExport[];
+  /** Orgs the subject OWNS (X-2). */
+  organizations: UserOrganizationExport[];
+  /** The subject's org life: memberships, departures, join requests, guest holds (X-2). */
+  orgMembership: UserOrgMembershipExportFile;
+  /** The subject's wallet: personal root balance, legs they funded, spend switches (X-2). */
+  wallet: UserWalletExport;
+}
+
+/**
+ * The subject's AGENT ACCOUNTS (L2·G2): the accounts they own (metadata only —
+ * the credential itself lives in the credential plane and is never exported,
+ * exactly as it is never shown), and the approvals, bindings and delegations
+ * they themselves gave. An agent page's own accounts belong to the drive, not
+ * to the person who added them, so they travel with the drive's data, not here
+ * (the Art 15(4) boundary `collectUserMessages` settled: rows the subject
+ * authored or owns).
+ */
+export type UserAgentAccountsExport = {
+  accounts: {
+    id: string;
+    kind: string;
+    name: string;
+    providerSlug: string | null;
+    allowedOrigins: string[];
+    acknowledgment: string;
+    status: string;
+    lastUsedAt: Date | null;
+    createdAt: Date;
+    revokedAt: Date | null;
+  }[];
+  approvalsGiven: { id: string; accountId: string; outcome: string; createdAt: Date; expiresAt: Date; consumedAt: Date | null }[];
+  bindingsMade: { accountId: string; agentPageId: string; boundAt: Date; revokedAt: Date | null }[];
+  delegationsGiven: { id: string; accountId: string; agentPageId: string | null; expiresAt: Date; createdAt: Date; revokedAt: Date | null }[];
+};
+
+/** Bounded like every other collector's worst case; a person's accounts and decisions are few. */
+const AGENT_ACCOUNT_EXPORT_LIMIT = 10_000;
+
+export async function collectUserAgentAccounts(database: DB, userId: string): Promise<UserAgentAccountsExport> {
+  const accounts = await database
+    .select({
+      id: agentAccounts.id,
+      kind: agentAccounts.kind,
+      name: agentAccounts.name,
+      providerSlug: agentAccounts.providerSlug,
+      allowedOrigins: agentAccounts.allowedOrigins,
+      acknowledgment: agentAccounts.acknowledgment,
+      status: agentAccounts.status,
+      lastUsedAt: agentAccounts.lastUsedAt,
+      createdAt: agentAccounts.createdAt,
+      revokedAt: agentAccounts.revokedAt,
+    })
+    .from(agentAccounts)
+    .where(eq(agentAccounts.ownerUserId, userId))
+    .limit(AGENT_ACCOUNT_EXPORT_LIMIT);
+  const approvalsGiven = await database
+    .select({ id: agentAccountApprovals.id, accountId: agentAccountApprovals.accountId, outcome: agentAccountApprovals.outcome, createdAt: agentAccountApprovals.createdAt, expiresAt: agentAccountApprovals.expiresAt, consumedAt: agentAccountApprovals.consumedAt })
+    .from(agentAccountApprovals)
+    .where(eq(agentAccountApprovals.approvedByUserId, userId))
+    .limit(AGENT_ACCOUNT_EXPORT_LIMIT);
+  const bindingsMade = await database
+    .select({ accountId: agentAccountBindings.accountId, agentPageId: agentAccountBindings.agentPageId, boundAt: agentAccountBindings.boundAt, revokedAt: agentAccountBindings.revokedAt })
+    .from(agentAccountBindings)
+    .where(eq(agentAccountBindings.boundByUserId, userId))
+    .limit(AGENT_ACCOUNT_EXPORT_LIMIT);
+  const delegationsGiven = await database
+    .select({ id: agentAccountDelegations.id, accountId: agentAccountDelegations.accountId, agentPageId: agentAccountDelegations.agentPageId, expiresAt: agentAccountDelegations.expiresAt, createdAt: agentAccountDelegations.createdAt, revokedAt: agentAccountDelegations.revokedAt })
+    .from(agentAccountDelegations)
+    .where(eq(agentAccountDelegations.delegatedByUserId, userId))
+    .limit(AGENT_ACCOUNT_EXPORT_LIMIT);
+  return { accounts: accounts.map((row) => ({ ...row, allowedOrigins: [...row.allowedOrigins] })), approvalsGiven, bindingsMade, delegationsGiven };
 }
 
 export async function collectUserProfile(database: DB, userId: string): Promise<UserProfileExport | null> {
@@ -511,6 +665,7 @@ export async function collectUserDrives(database: DB, userId: string): Promise<U
       id: drives.id,
       name: drives.name,
       slug: drives.slug,
+      orgId: drives.orgId,
       createdAt: drives.createdAt,
     })
     .from(drives)
@@ -527,6 +682,7 @@ export async function collectUserDrives(database: DB, userId: string): Promise<U
       id: drives.id,
       name: drives.name,
       slug: drives.slug,
+      orgId: drives.orgId,
       role: driveMembers.role,
       createdAt: drives.createdAt,
     })
@@ -534,13 +690,19 @@ export async function collectUserDrives(database: DB, userId: string): Promise<U
     .innerJoin(drives, eq(driveMembers.driveId, drives.id))
     .where(eq(driveMembers.userId, userId));
 
-  const members: UserDriveExport[] = memberDrives.map(d => ({
-    id: d.id,
-    name: d.name,
-    slug: d.slug,
-    role: d.role,
-    createdAt: d.createdAt,
-  }));
+  // A GUEST row (redeemed page share link) is not a drive the subject belongs
+  // to: every drive listed here has its pages, sheets and tags exported below,
+  // and a guest was given single pages of it, not its content.
+  const members: UserDriveExport[] = memberDrives
+    .filter((d): d is typeof d & { role: UserDriveExport['role'] } => !isGuestRole(d.role))
+    .map(d => ({
+      id: d.id,
+      name: d.name,
+      slug: d.slug,
+      orgId: d.orgId,
+      role: d.role,
+      createdAt: d.createdAt,
+    }));
 
   // Deduplicate (owner is also a member)
   const seen = new Set(owned.map(d => d.id));
@@ -668,6 +830,67 @@ export async function collectUserSheets(
   return out;
 }
 
+/**
+ * How many message ids one attachment lookup may bind.
+ *
+ * Drizzle expands every `inArray` value into its own bind parameter, and
+ * Postgres caps a statement at 65535 of them — a subject with that many
+ * messages would otherwise fail the whole export with an opaque `08P01`
+ * protocol error instead of exercising their Art 15 right.
+ */
+const ATTACHMENT_LOOKUP_CHUNK = 500;
+
+/**
+ * Group a message table's attachment rows by messageId.
+ *
+ * Shared by the channel and DM branches because the two attachment tables are
+ * mirrors of each other; keeping one reader means an Art 15 gap cannot open on
+ * one surface while the other stays correct.
+ */
+async function collectAttachments(
+  database: DB,
+  table: typeof channelMessageAttachments | typeof directMessageAttachments,
+  messageIds: string[],
+): Promise<Map<string, NonNullable<UserMessageExport['attachments']>>> {
+  const byMessage = new Map<string, NonNullable<UserMessageExport['attachments']>>();
+  if (messageIds.length === 0) return byMessage;
+
+  const rows: Array<{
+    messageId: string;
+    fileId: string | null;
+    attachmentMeta: AttachmentMeta | null;
+    position: number;
+  }> = [];
+  for (let i = 0; i < messageIds.length; i += ATTACHMENT_LOOKUP_CHUNK) {
+    const chunk = messageIds.slice(i, i + ATTACHMENT_LOOKUP_CHUNK);
+    const chunkRows = await database
+      .select({
+        messageId: table.messageId,
+        fileId: table.fileId,
+        attachmentMeta: table.attachmentMeta,
+        position: table.position,
+      })
+      .from(table)
+      .where(inArray(table.messageId, chunk));
+    rows.push(...chunkRows);
+  }
+
+  // Sorted across the whole result, not per chunk: a message's rows all land in
+  // one chunk (chunking is by message id), so this restores display order.
+  for (const row of [...rows].sort((a, b) => a.position - b.position)) {
+    const list = byMessage.get(row.messageId) ?? [];
+    list.push({
+      fileId: row.fileId,
+      originalName: row.attachmentMeta?.originalName ?? null,
+      mimeType: row.attachmentMeta?.mimeType ?? null,
+      size: row.attachmentMeta?.size ?? null,
+    });
+    byMessage.set(row.messageId, list);
+  }
+
+  return byMessage;
+}
+
 export async function collectUserMessages(database: DB, userId: string): Promise<UserMessageExport[]> {
   const result: UserMessageExport[] = [];
 
@@ -682,6 +905,15 @@ export async function collectUserMessages(database: DB, userId: string): Promise
     .from(channelMessages)
     .where(eq(channelMessages.userId, userId));
 
+  // Attachment rows carry the filename the subject chose, which is their data
+  // and lives in no other table. Fetched per batch rather than per message so
+  // a prolific subject does not turn the export into N+1 queries.
+  const channelAttachmentsByMessage = await collectAttachments(
+    database,
+    channelMessageAttachments,
+    channelMsgs.map((msg) => msg.id),
+  );
+
   for (const msg of channelMsgs) {
     result.push({
       id: msg.id,
@@ -689,6 +921,7 @@ export async function collectUserMessages(database: DB, userId: string): Promise
       content: msg.content,
       pageId: msg.pageId,
       createdAt: msg.createdAt,
+      attachments: channelAttachmentsByMessage.get(msg.id) ?? [],
     });
   }
 
@@ -787,6 +1020,16 @@ export async function collectUserMessages(database: DB, userId: string): Promise
     .from(directMessages)
     .where(eq(directMessages.senderId, userId));
 
+  // Only the SENT branch carries attachments: a received message's filename is
+  // the other participant's data, and Art 15(4) says the subject's access right
+  // must not adversely affect the rights of others — the same reasoning the
+  // conversation branch above applies to other authors' rows.
+  const dmAttachmentsByMessage = await collectAttachments(
+    database,
+    directMessageAttachments,
+    sentDms.map((msg) => msg.id),
+  );
+
   for (const msg of sentDms) {
     result.push({
       id: msg.id,
@@ -797,6 +1040,7 @@ export async function collectUserMessages(database: DB, userId: string): Promise
       isActive: msg.isActive,
       deletedAt: msg.deletedAt,
       createdAt: msg.createdAt,
+      attachments: dmAttachmentsByMessage.get(msg.id) ?? [],
     });
   }
 
@@ -863,7 +1107,10 @@ export async function collectUserFiles(database: DB, userId: string): Promise<Us
   return result;
 }
 
-export async function collectUserActivity(database: DB, userId: string): Promise<UserActivityExport[]> {
+/** An activity entry as collected, with the drive and page it happened in; the gate strips them. */
+export type CollectedActivity = UserActivityExport & { driveId: string | null; pageId: string | null };
+
+export async function collectUserActivity(database: DB, userId: string): Promise<CollectedActivity[]> {
   const result = await database
     .select({
       id: activityLogs.id,
@@ -872,6 +1119,8 @@ export async function collectUserActivity(database: DB, userId: string): Promise
       resourceId: activityLogs.resourceId,
       timestamp: activityLogs.timestamp,
       metadata: activityLogs.metadata,
+      driveId: activityLogs.driveId,
+      pageId: activityLogs.pageId,
     })
     .from(activityLogs)
     .where(eq(activityLogs.userId, userId));
@@ -974,7 +1223,10 @@ export async function collectUserAiUsage(database: DB, userId: string): Promise<
   return result;
 }
 
-export async function collectUserTasks(database: DB, userId: string): Promise<UserTaskExport[]> {
+/** A task list as collected, with the page it lives on (null for a conversation's list); the gate strips it. */
+export type CollectedTaskList = UserTaskExport & { pageId: string | null };
+
+export async function collectUserTasks(database: DB, userId: string): Promise<CollectedTaskList[]> {
   const lists = await database
     .select({
       id: taskLists.id,
@@ -989,7 +1241,7 @@ export async function collectUserTasks(database: DB, userId: string): Promise<Us
   const listPageIds = lists.map(l => l.pageId).filter((id): id is string => id != null);
 
   if (listPageIds.length === 0) {
-    return lists.map(list => ({ listId: list.id, listTitle: list.title, items: [] }));
+    return lists.map(list => ({ listId: list.id, listTitle: list.title, pageId: list.pageId ?? null, items: [] }));
   }
 
   const allItems = await database
@@ -1019,6 +1271,7 @@ export async function collectUserTasks(database: DB, userId: string): Promise<Us
   return lists.map(list => ({
     listId: list.id,
     listTitle: list.title,
+    pageId: list.pageId ?? null,
     items: (itemsByListPageId.get(list.pageId ?? '') ?? []).map(item => ({
       id: item.id,
       title: item.title,
@@ -1082,7 +1335,7 @@ export async function collectUserDisplayPreferences(database: DB, userId: string
 
 /** Every settings row the subject owns, in one Art 15 category. */
 export async function collectUserSettings(database: DB, userId: string): Promise<UserSettingsExport> {
-  const [hotkeys, automation, toast, email] = await Promise.all([
+  const [hotkeys, automation, toast, email, imagoAccess] = await Promise.all([
     database
       .select({ hotkeyId: userHotkeyPreferences.hotkeyId, binding: userHotkeyPreferences.binding, updatedAt: userHotkeyPreferences.updatedAt })
       .from(userHotkeyPreferences)
@@ -1099,6 +1352,10 @@ export async function collectUserSettings(database: DB, userId: string): Promise
       .select({ notificationType: emailNotificationPreferences.notificationType, emailEnabled: emailNotificationPreferences.emailEnabled, updatedAt: emailNotificationPreferences.updatedAt })
       .from(emailNotificationPreferences)
       .where(eq(emailNotificationPreferences.userId, userId)),
+    database
+      .select({ driveId: imagoDriveAccess.driveId, enabled: imagoDriveAccess.enabled, updatedAt: imagoDriveAccess.updatedAt })
+      .from(imagoDriveAccess)
+      .where(eq(imagoDriveAccess.userId, userId)),
   ]);
   return {
     hotkeys,
@@ -1107,6 +1364,7 @@ export async function collectUserSettings(database: DB, userId: string): Promise
     automation: automation[0] ?? null,
     toastNotifications: toast[0] ?? null,
     emailNotifications: email,
+    imagoDriveAccess: imagoAccess,
   };
 }
 
@@ -1126,7 +1384,7 @@ export async function collectUserSettings(database: DB, userId: string): Promise
  * silently emptied itself after a migration is exactly the kind of omission the
  * export coverage guard exists to prevent.
  */
-export async function collectUserPersonalization(database: DB, userId: string): Promise<UserPersonalizationExport | null> {
+export async function collectUserPersonalization(database: DB, userId: string): Promise<CollectedPersonalization | null> {
   const result = await database
     .select({
       bio: userPersonalization.bio,
@@ -1138,6 +1396,7 @@ export async function collectUserPersonalization(database: DB, userId: string): 
       bioPageId: userPersonalization.bioPageId,
       writingStylePageId: userPersonalization.writingStylePageId,
       rulesPageId: userPersonalization.rulesPageId,
+      memoryOrgIds: userPersonalization.memoryOrgIds,
     })
     .from(userPersonalization)
     .where(eq(userPersonalization.userId, userId))
@@ -1146,7 +1405,7 @@ export async function collectUserPersonalization(database: DB, userId: string): 
   const row = result[0];
   if (!row) return null;
 
-  const { bioPageId, writingStylePageId, rulesPageId, ...profile } = row;
+  const { bioPageId, writingStylePageId, rulesPageId, memoryOrgIds, ...profile } = row;
   // Truthiness, not `!== null`: a pointer can arrive undefined as well as null
   // (an older row, or a projection that omits the column), and an undefined id
   // would otherwise reach `inArray` as a phantom lookup.
@@ -1154,7 +1413,8 @@ export async function collectUserPersonalization(database: DB, userId: string): 
     (id): id is string => Boolean(id),
   );
 
-  if (pageIds.length === 0) return profile;
+  const provenance = { memoryOrgIds: memoryOrgIds ?? [] };
+  if (pageIds.length === 0) return { ...profile, ...provenance };
 
   const memoryPages = await database
     .select({ id: pages.id, content: pages.content, isTrashed: pages.isTrashed })
@@ -1174,8 +1434,12 @@ export async function collectUserPersonalization(database: DB, userId: string): 
       ? (contentById.get(writingStylePageId) ?? null)
       : profile.writingStyle,
     rules: rulesPageId ? (contentById.get(rulesPageId) ?? null) : profile.rules,
+    ...provenance,
   };
 }
+
+/** The profile as collected, with the orgs its distilled memory drew on (D-OW-62); the gate strips the provenance. */
+export type CollectedPersonalization = UserPersonalizationExport & { memoryOrgIds: string[] };
 
 /**
  * Every inference the memory cron staged about the subject — promoted, declined
@@ -1190,7 +1454,7 @@ export async function collectUserPersonalization(database: DB, userId: string): 
 export async function collectUserPersonalizationCandidates(
   database: DB,
   userId: string,
-): Promise<UserPersonalizationCandidateExport[]> {
+): Promise<CollectedPersonalizationCandidate[]> {
   const rows = await database
     .select({
       field: personalizationCandidates.field,
@@ -1201,6 +1465,7 @@ export async function collectUserPersonalizationCandidates(
       lastSeenAt: personalizationCandidates.lastSeenAt,
       promotedAt: personalizationCandidates.promotedAt,
       rejectedAt: personalizationCandidates.rejectedAt,
+      orgIds: personalizationCandidates.orgIds,
     })
     .from(personalizationCandidates)
     .where(eq(personalizationCandidates.userId, userId));
@@ -1208,6 +1473,29 @@ export async function collectUserPersonalizationCandidates(
   return [...rows].sort(
     (a, b) => new Date(a.firstSeenAt).getTime() - new Date(b.firstSeenAt).getTime(),
   );
+}
+
+/** A candidate as collected, with the orgs whose drives fed it (D-OW-62); the gate strips the provenance. */
+export type CollectedPersonalizationCandidate = UserPersonalizationCandidateExport & { orgIds: string[] };
+
+/** A Pulse summary as collected, with the orgs whose drives fed it (D-OW-62); the gate strips the provenance. */
+export type CollectedPulseSummary = UserPulseSummaryExport & { orgIds: string[] };
+
+/** Every Pulse summary written for the subject, oldest first (in memory, as for candidates). */
+export async function collectUserPulseSummaries(database: DB, userId: string): Promise<CollectedPulseSummary[]> {
+  const rows = await database
+    .select({
+      summary: pulseSummaries.summary,
+      greeting: pulseSummaries.greeting,
+      type: pulseSummaries.type,
+      periodStart: pulseSummaries.periodStart,
+      periodEnd: pulseSummaries.periodEnd,
+      generatedAt: pulseSummaries.generatedAt,
+      orgIds: pulseSummaries.orgIds,
+    })
+    .from(pulseSummaries)
+    .where(eq(pulseSummaries.userId, userId));
+  return [...rows].sort((a, b) => new Date(a.generatedAt).getTime() - new Date(b.generatedAt).getTime());
 }
 
 /**
@@ -1561,17 +1849,406 @@ export async function collectUserLocalEnvironments(database: DB, userId: string)
     .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 }
 
-export async function collectAllUserData(database: DB, userId: string): Promise<AllUserData | null> {
+/**
+ * An ORG the subject OWNS (Spec X-2). The org row is the founder's record —
+ * they named it, they own it — so its identity travels. Everything else about
+ * it (policies, subscription, domains) is the organisation's own record and
+ * stays excluded in the coverage registry: the other members' relationship to
+ * this org is THEIR data, disclosed to them in their own exports, not to its
+ * owner.
+ */
+export interface UserOrganizationExport {
+  id: string;
+  name: string;
+  slug: string;
+  createdAt: Date;
+}
+
+/**
+ * The subject's own seat in an org, with the seat allowance they hold on the
+ * org pool (WAL-7/POL-7: a `wallet_consumer_caps` row keyed `user:<id>` on the
+ * pool). `invitedBy` is deliberately absent: it names another person, the same
+ * Art 15(4) line that excludes `org_invitations` and `pending_invites` — a
+ * membership tells the subject where they stand, not who put them there.
+ *
+ * The POOL's balance is not here. The pool is the org's money (SPEND-9, D18):
+ * its ledger and balance belong to the org, and a member's export carries
+ * their seat, never the pool's full ledger.
+ */
+export interface UserOrgMembershipExport {
+  orgId: string;
+  orgName: string;
+  role: 'OWNER' | 'ADMIN' | 'MEMBER';
+  joinedAt: Date;
+  /** The subject's monthly seat allowance on the org pool, or null when none is set. */
+  seatAllowanceCents: number | null;
+}
+
+/**
+ * The record that the subject once belonged to an org and went (SEC-1: kept so
+ * a verified email domain never auto-joins them back). Their own departure,
+ * not the org's roster.
+ */
+export interface UserOrgDepartureExport {
+  orgId: string;
+  orgName: string;
+  reason: 'left' | 'removed' | 'account_deleted';
+  departedAt: Date;
+}
+
+/**
+ * The subject's own request to join a Restricted org drive (DRV-6), including
+ * the note they wrote — their words, which no other category carries.
+ * `decidedBy` is omitted: who decided is the approver's act, and the decision
+ * itself is carried by `status` + `decidedAt`.
+ */
+export interface UserOrgDriveJoinRequestExport {
+  id: string;
+  driveId: string;
+  driveName: string | null;
+  status: 'pending' | 'approved' | 'denied' | 'withdrawn';
+  message: string | null;
+  requestedAt: Date;
+  decidedAt: Date | null;
+}
+
+/**
+ * A guest hold that names the subject (POL-2): either their queued request to
+ * join an org drive as a guest (`request` — what was asked for them), or the
+ * snapshot of the access an org policy parked (`parked` — their own member row
+ * and page grants). The `request.invitedBy`/`request.linkId` fields inside the
+ * JSON blobs can name the inviter; the blobs are carried verbatim because they
+ * are the record of the subject's own queued/parked access, and the inviter of
+ * an invitation the subject received is already known to them.
+ */
+export interface UserOrgGuestHoldExport {
+  id: string;
+  orgId: string;
+  driveId: string;
+  state: 'pending_approval' | 'suspended' | 'approved';
+  origin: string;
+  request: unknown;
+  parked: unknown;
+  createdAt: Date;
+}
+
+/** Everything the export carries about the subject's org life, in one file. */
+export interface UserOrgMembershipExportFile {
+  memberships: UserOrgMembershipExport[];
+  departures: UserOrgDepartureExport[];
+  joinRequests: UserOrgDriveJoinRequestExport[];
+  guestHolds: UserOrgGuestHoldExport[];
+}
+
+/**
+ * The subject's PERSONAL ROOT WALLET (X-5: the row their `credit_balances` row
+ * became) — their balance, carried whole. Their money, their numbers.
+ *
+ * Org pools and drive wallets are NOT here: a pool is the org's money (its
+ * balance and ledger stay the org's), and a drive wallet's remaining amount is
+ * disclosed to a consumer only as "can I spend" at call time (D18, O-5) — not
+ * as a copy in their export. What IS here from those wallets are the legs the
+ * SUBJECT funded (donations, their own top-ups): money they gave away is their
+ * financial record.
+ */
+export interface UserWalletExport {
+  wallet: {
+    id: string;
+    monthlyRemainingCents: number;
+    monthlyAllowanceCents: number;
+    spentCents: number;
+    topupRemainingCents: number;
+    debtCents: number;
+    status: string;
+    fallbackRule: string | null;
+    defaultSpendSource: string | null;
+    alwaysOwnCredits: boolean;
+    monthlyPeriodStart: Date | null;
+    monthlyPeriodEnd: Date | null;
+    createdAt: Date;
+  } | null;
+  /**
+   * Every funding leg the subject funded, anywhere (WAL-3): owner top-ups of
+   * wallets they fund and donations (WAL-4) they made into drive/agent
+   * wallets. Keyed on `funderUserId = :subject` — never another person's legs,
+   * and never the org pool's refill legs, which are the org's record.
+   */
+  fundingLegs: UserFundingLegExport[];
+  /** The subject's SPEND-5 "always my own credits" switch, per drive. */
+  spendOverrides: { driveId: string; createdAt: Date }[];
+}
+
+/**
+ * One leg the subject funded. The destination is named readably: the wallet's
+ * owner/subject shape plus the drive's NAME for a drive wallet (the subject
+ * donated to that drive by name; an opaque id alone would not tell them where
+ * their money went — the same join-in-the-name move `contentTags` makes for
+ * the drive's vocabulary). `remainingCents` is how much of their leg is left.
+ */
+export interface UserFundingLegExport {
+  id: string;
+  walletId: string;
+  walletOwnerType: 'user' | 'org';
+  walletSubjectType: 'drive' | null;
+  walletSubjectDriveName: string | null;
+  funderKind: 'owner' | 'donation';
+  originalCents: number;
+  remainingCents: number;
+  nonRefundable: boolean;
+  createdAt: Date;
+}
+
+/**
+ * The ORGS the subject OWNS (X-2). Membership in orgs owned by OTHERS is
+ * carried by the orgMembership category; owning one is a different
+ * relationship and a different row (`organizations.ownerId`).
+ */
+export async function collectUserOrganizations(database: DB, userId: string): Promise<UserOrganizationExport[]> {
+  return database
+    .select({
+      id: organizations.id,
+      name: organizations.name,
+      slug: organizations.slug,
+      createdAt: organizations.createdAt,
+    })
+    .from(organizations)
+    .where(eq(organizations.ownerId, userId));
+}
+
+/**
+ * The subject's org life (X-2): their memberships with their seat allowances,
+ * their departures, their join requests, their guest holds.
+ *
+ * Every table here is read through the subject's OWN row — `org_members.userId`,
+ * `org_member_departures.userId`, `drive_join_requests.userId`,
+ * `org_guest_holds.userId` (or a hold keyed on their email for an invitation
+ * sent before they had linked the account). Another member's rows never enter:
+ * the org's roster is the org's data, disclosed to each member in their own
+ * export.
+ */
+export async function collectUserOrgMembership(database: DB, userId: string): Promise<UserOrgMembershipExportFile> {
+  const membershipRows = await database
+    .select({
+      orgId: orgMembers.orgId,
+      orgName: organizations.name,
+      role: orgMembers.role,
+      joinedAt: orgMembers.joinedAt,
+    })
+    .from(orgMembers)
+    .innerJoin(organizations, eq(orgMembers.orgId, organizations.id))
+    .where(eq(orgMembers.userId, userId));
+
+  // The seat allowance is the consumer cap the org pool holds for this person
+  // (WAL-7): one row per (pool, consumer), read off the pools of the orgs the
+  // subject belongs to. This is the ONLY piece of wallet state exported from
+  // an org wallet: the pool's balance and ledger are the org's (SPEND-9/D18).
+  const orgIds = membershipRows.map((row) => row.orgId);
+  const allowances = orgIds.length === 0
+    ? new Map<string, number>()
+    : new Map(
+        (
+          await database
+            .select({ orgId: wallets.orgId, monthlyCapCents: walletConsumerCaps.monthlyCapCents })
+            .from(walletConsumerCaps)
+            .innerJoin(wallets, eq(walletConsumerCaps.walletId, wallets.id))
+            .where(and(
+              eq(walletConsumerCaps.consumerKey, `user:${userId}`),
+              inArray(wallets.orgId, orgIds),
+            ))
+        ).filter((row): row is { orgId: string; monthlyCapCents: number } => row.monthlyCapCents !== null)
+          .map((row) => [row.orgId as string, row.monthlyCapCents]),
+      );
+
+  const memberships: UserOrgMembershipExport[] = membershipRows.map((row) => ({
+    ...row,
+    seatAllowanceCents: allowances.get(row.orgId) ?? null,
+  }));
+
+  const departures: UserOrgDepartureExport[] = await database
+    .select({
+      orgId: orgMemberDepartures.orgId,
+      orgName: organizations.name,
+      reason: orgMemberDepartures.reason,
+      departedAt: orgMemberDepartures.departedAt,
+    })
+    .from(orgMemberDepartures)
+    .innerJoin(organizations, eq(orgMemberDepartures.orgId, organizations.id))
+    .where(eq(orgMemberDepartures.userId, userId));
+
+  // The request's drive name is joined in (left, so a deleted drive cannot
+  // drop the row): the subject asked to join that drive BY NAME.
+  const joinRequests: UserOrgDriveJoinRequestExport[] = await database
+    .select({
+      id: driveJoinRequests.id,
+      driveId: driveJoinRequests.driveId,
+      driveName: drives.name,
+      status: driveJoinRequests.status,
+      message: driveJoinRequests.message,
+      requestedAt: driveJoinRequests.requestedAt,
+      decidedAt: driveJoinRequests.decidedAt,
+    })
+    .from(driveJoinRequests)
+    .leftJoin(drives, eq(driveJoinRequests.driveId, drives.id))
+    .where(eq(driveJoinRequests.userId, userId));
+
+  // A hold names the subject either by id or — for an emailed invitation that
+  // predates their account — by address. The email comes off the subject's own
+  // row, never from the hold.
+  const [subject] = await database
+    .select({ email: users.email })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  const holds: UserOrgGuestHoldExport[] = await database
+    .select({
+      id: orgGuestHolds.id,
+      orgId: orgGuestHolds.orgId,
+      driveId: orgGuestHolds.driveId,
+      state: orgGuestHolds.state,
+      origin: orgGuestHolds.origin,
+      request: orgGuestHolds.request,
+      parked: orgGuestHolds.parked,
+      createdAt: orgGuestHolds.createdAt,
+    })
+    .from(orgGuestHolds)
+    .where(subject
+      ? or(eq(orgGuestHolds.userId, userId), sql`lower(${orgGuestHolds.email}) = lower(${subject.email})`)
+      : eq(orgGuestHolds.userId, userId));
+
+  return { memberships, departures, joinRequests, guestHolds: holds };
+}
+
+/**
+ * The subject's WALLET (X-2): their personal root wallet, every funding leg
+ * THEY funded, and their per-drive spend switches.
+ *
+ * The SPEND-9/D18 boundary, stated once: this collector answers "what is
+ * mine and what did I give", never "what does everyone else have". Legs are
+ * read on `funderUserId`, so another member's donation to the same drive is
+ * as invisible here as their balance; an org pool contributes only the seat
+ * allowance carried beside the membership in `orgMembership`, never its row.
+ * A deleted drive's name reads as null rather than dropping the leg — money
+ * movement outlives the container it moved into.
+ */
+export async function collectUserWallet(database: DB, userId: string, options?: { fundingLegBatchSize?: number }): Promise<UserWalletExport> {
+  const walletRows = await database
+    .select({
+      id: wallets.id,
+      monthlyRemainingCents: wallets.monthlyRemainingCents,
+      monthlyAllowanceCents: wallets.monthlyAllowanceCents,
+      spentCents: wallets.spentCents,
+      topupRemainingCents: wallets.topupRemainingCents,
+      debtCents: wallets.debtCents,
+      status: wallets.status,
+      fallbackRule: wallets.fallbackRule,
+      defaultSpendSource: wallets.defaultSpendSource,
+      alwaysOwnCredits: wallets.alwaysOwnCredits,
+      monthlyPeriodStart: wallets.monthlyPeriodStart,
+      monthlyPeriodEnd: wallets.monthlyPeriodEnd,
+      createdAt: wallets.createdAt,
+    })
+    .from(wallets)
+    // The personal root wallet predicate, not a bare userId match: a drive
+    // wallet the subject owns is that drive's budget, not their balance.
+    .where(and(
+      eq(wallets.userId, userId),
+      isNull(wallets.subjectType),
+      isNull(wallets.parentWalletId),
+    ));
+
+  // HIST-02 (#2859): EVERY funding leg the subject funded is emitted, through bounded
+  // deterministic keyset batches. One capped query silently dropped legs past its limit —
+  // an incomplete export with no truncation signal — and without an ordering, which legs
+  // survived was not even deterministic. Batches walk (createdAt, id) in a stable order.
+  type FundingLegRow = {
+    id: string;
+    walletId: string;
+    walletOwnerType: 'user' | 'org';
+    walletSubjectType: 'drive' | null;
+    walletSubjectDriveName: string | null;
+    funderKind: 'owner' | 'donation';
+    originalCents: number;
+    remainingCents: number;
+    nonRefundable: boolean;
+    createdAt: Date;
+  };
+  const legRows: FundingLegRow[] = [];
+  let cursor: { createdAt: Date; id: string } | null = null;
+  const FUNDING_LEG_BATCH = options?.fundingLegBatchSize ?? 1_000;
+  for (;;) {
+    const batch: FundingLegRow[] = await database
+      .select({
+        id: walletFundingLegs.id,
+        walletId: walletFundingLegs.walletId,
+        walletOwnerType: wallets.ownerType,
+        walletSubjectType: wallets.subjectType,
+        walletSubjectDriveName: drives.name,
+        funderKind: walletFundingLegs.funderKind,
+        originalCents: walletFundingLegs.originalCents,
+        remainingCents: walletFundingLegs.remainingCents,
+        nonRefundable: walletFundingLegs.nonRefundable,
+        createdAt: walletFundingLegs.createdAt,
+      })
+      .from(walletFundingLegs)
+      .innerJoin(wallets, eq(walletFundingLegs.walletId, wallets.id))
+      // `wallets.subjectId` is a soft link with no FK; the name join is a
+      // convenience left join and a missing drive row reads as null.
+      .leftJoin(drives, eq(drives.id, wallets.subjectId))
+      .where(cursor
+        ? and(
+            eq(walletFundingLegs.funderUserId, userId),
+            or(
+              gt(walletFundingLegs.createdAt, cursor.createdAt),
+              and(
+                eq(walletFundingLegs.createdAt, cursor.createdAt),
+                gt(walletFundingLegs.id, cursor.id),
+              ),
+            ),
+          )
+        : eq(walletFundingLegs.funderUserId, userId))
+      .orderBy(asc(walletFundingLegs.createdAt), asc(walletFundingLegs.id))
+      .limit(FUNDING_LEG_BATCH);
+    legRows.push(...batch);
+    if (batch.length < FUNDING_LEG_BATCH) break;
+    const last = batch[batch.length - 1];
+    cursor = { createdAt: last.createdAt, id: last.id };
+  }
+
+  const fundingLegs: UserFundingLegExport[] = legRows.map((row) => ({
+    id: row.id,
+    walletId: row.walletId,
+    walletOwnerType: row.walletOwnerType,
+    walletSubjectType: row.walletSubjectType,
+    walletSubjectDriveName: row.walletSubjectDriveName,
+    funderKind: row.funderKind,
+    originalCents: row.originalCents,
+    remainingCents: row.remainingCents,
+    nonRefundable: row.nonRefundable,
+    createdAt: row.createdAt,
+  }));
+
+  const spendOverrides: { driveId: string; createdAt: Date }[] = await database
+    .select({ driveId: driveSpendOverrides.driveId, createdAt: driveSpendOverrides.createdAt })
+    .from(driveSpendOverrides)
+    .where(eq(driveSpendOverrides.userId, userId));
+
+  return { wallet: walletRows[0] ?? null, fundingLegs, spendOverrides };
+}
+
+export async function collectAllUserData(database: DB, userId: string, gate: ExportSignInGate): Promise<AllUserData | null> {
   const profile = await collectUserProfile(database, userId);
   if (!profile) return null;
 
   const userDrives = await collectUserDrives(database, userId);
-  const driveIds = userDrives.map(d => d.id);
+  // SEC-2/3: the content of an org drive whose sign-in policy refuses the requesting credential is left out (the drive
+  // itself stays listed in drives.json); the manifest says so.
+  const refusedDrives = await gate.refusedDrives(userDrives.map(d => d.id));
+  const driveIds = userDrives.map(d => d.id).filter(id => !refusedDrives.has(id));
 
   // Positional: this destructuring order must exactly match the Promise.all array
   // order below (each collector returns a differently-shaped array, so TypeScript
   // cannot catch a reorder/insert mismatch here).
-  const [userPages, userSheets, userMessages, userFiles, activity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userSettings, userPersonalizationData, userPersonalizationCandidates, userAgentWorkspaces, userStreamState, userContentTags, userLocalEnvironments] = await Promise.all([
+  const [collectedPages, userSheets, collectedMessages, collectedFiles, collectedActivity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, collectedTasks, userSessions, userNotifications, userDisplayPreferences, userSettings, collectedPersonalization, collectedCandidates, collectedPulse, userAgentWorkspaces, userAgentAccounts, userStreamState, userContentTags, userLocalEnvironments, userOrganizations, userOrgMembership, userWallet] = await Promise.all([
     collectUserPages(database, userId, driveIds),
     collectUserSheets(database, userId, driveIds),
     collectUserMessages(database, userId),
@@ -1588,11 +2265,82 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     collectUserSettings(database, userId),
     collectUserPersonalization(database, userId),
     collectUserPersonalizationCandidates(database, userId),
+    collectUserPulseSummaries(database, userId),
     collectUserAgentWorkspaces(database, userId),
+    collectUserAgentAccounts(database, userId),
     collectUserStreamState(database, userId),
     collectUserContentTags(database, userId, driveIds),
     collectUserLocalEnvironments(database, userId),
+    collectUserOrganizations(database, userId),
+    collectUserOrgMembership(database, userId),
+    collectUserWallet(database, userId),
   ]);
+
+  const withheld = new WithheldLedger();
+  for (const [driveId, code] of refusedDrives) {
+    const orgId = userDrives.find(d => d.id === driveId)?.orgId;
+    withheld.add('orgDriveContent', 1, code, orgId ? [orgId] : []);
+  }
+
+  // What the subject wrote, uploaded, listed or did inside an org drive the credential is refused is that drive's
+  // content too (SEC-2/3). Pages resolve to their drive in one batched read; drives the subject no longer belongs to
+  // are decided as well.
+  const pageDrive = await driveOfPages(database, [
+    ...collectedMessages.flatMap(m => (m.source === 'ai_chat' || m.source === 'channel') && m.pageId ? [m.pageId] : []),
+    ...collectedTasks.flatMap(t => t.pageId ? [t.pageId] : []),
+    ...collectedActivity.flatMap(a => !a.driveId && a.pageId ? [a.pageId] : []),
+  ]);
+  const messageDrive = (m: UserMessageExport) =>
+    (m.source === 'ai_chat' || m.source === 'channel') && m.pageId ? pageDrive.get(m.pageId) ?? null : null;
+  const taskDrive = (t: CollectedTaskList) => (t.pageId ? pageDrive.get(t.pageId) ?? null : null);
+  const activityDrive = (a: CollectedActivity) => a.driveId ?? (a.pageId ? pageDrive.get(a.pageId) ?? null : null);
+  const decided = new Set(userDrives.map(d => d.id));
+  const undecided = [...new Set([
+    ...collectedMessages.map(messageDrive),
+    ...collectedFiles.map(f => f.driveId),
+    ...collectedTasks.map(taskDrive),
+    ...collectedActivity.map(activityDrive),
+  ].filter((id): id is string => id !== null && !decided.has(id)))];
+  const authoredRefused = new Map([...refusedDrives, ...(await gate.refusedDrives(undecided))]);
+  const orgOfDrive = new Map(userDrives.map(d => [d.id, d.orgId ?? null]));
+  for (const [id, orgId] of await orgOfDrives(database, [...authoredRefused.keys()].filter(id => !orgOfDrive.has(id)))) {
+    orgOfDrive.set(id, orgId);
+  }
+  const keepOutsideRefused = <Row>(rows: readonly Row[], driveOf: (row: Row) => string | null, category: ExportWithheldCategory): Row[] =>
+    rows.filter((row) => {
+      const driveId = driveOf(row);
+      const code = driveId ? authoredRefused.get(driveId) : undefined;
+      if (!code || !driveId) return true;
+      const orgId = orgOfDrive.get(driveId);
+      withheld.add(category, 1, code, orgId ? [orgId] : []);
+      return false;
+    });
+  const userMessages = keepOutsideRefused(collectedMessages, messageDrive, 'orgDriveMessages');
+  const userFiles = keepOutsideRefused(collectedFiles, f => f.driveId, 'orgDriveFiles');
+  const tasks: UserTaskExport[] = keepOutsideRefused(collectedTasks, taskDrive, 'orgDriveTasks')
+    .map(({ pageId: _pageId, ...list }) => list);
+  const activity: UserActivityExport[] = keepOutsideRefused(collectedActivity, activityDrive, 'orgDriveActivity')
+    .map(({ driveId: _driveId, pageId: _pageId, ...entry }) => entry);
+
+  const refusedMemoryPages = await gate.refusedDerivedPages(collectedPages.map(p => p.id));
+  for (const refusal of refusedMemoryPages.values()) withheld.add('memoryPages', 1, refusal.code, refusal.orgIds);
+  const userPages = collectedPages.filter(p => !refusedMemoryPages.has(p.id));
+
+  let userPersonalizationData: UserPersonalizationExport | null = null;
+  if (collectedPersonalization) {
+    const { memoryOrgIds, ...personalization } = collectedPersonalization;
+    const access = await gate.derivedContent(memoryOrgIds);
+    if (access.allowed) {
+      userPersonalizationData = personalization;
+    } else {
+      // The memory text (pages, or the legacy columns before backfill) is withheld; the settings around it are not.
+      userPersonalizationData = { ...personalization, bio: null, writingStyle: null, rules: null };
+      withheld.add('personalization', 1, access.code, access.orgIds);
+    }
+  }
+
+  const userPersonalizationCandidates = await keepAdmitted(collectedCandidates, gate, 'personalizationCandidates', withheld);
+  const userPulseSummaries = await keepAdmitted(collectedPulse, gate, 'pulseSummaries', withheld);
 
   return {
     profile,
@@ -1613,9 +2361,79 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     settings: userSettings,
     personalization: userPersonalizationData,
     personalizationCandidates: userPersonalizationCandidates,
+    pulseSummaries: userPulseSummaries,
+    withheld: withheld.entries(),
     agentWorkspaces: userAgentWorkspaces,
+    agentAccounts: userAgentAccounts,
     streamState: userStreamState,
     contentTags: userContentTags,
     localEnvironments: userLocalEnvironments,
+    organizations: userOrganizations,
+    orgMembership: userOrgMembership,
+    wallet: userWallet,
   };
+}
+
+/** Groups what the export left out by category and code, summing counts and uniting the refusing orgs. */
+class WithheldLedger {
+  private readonly byKey = new Map<string, ExportWithheld>();
+
+  add(category: ExportWithheldCategory, count: number, code: OrgAuthenticationDenialCode, orgIds: readonly string[]): void {
+    const key = `${category}:${code}`;
+    const entry = this.byKey.get(key) ?? { category, count: 0, code, orgIds: [] };
+    this.byKey.set(key, { ...entry, count: entry.count + count, orgIds: [...new Set([...entry.orgIds, ...orgIds])].sort() });
+  }
+
+  entries(): ExportWithheld[] {
+    return [...this.byKey.values()];
+  }
+}
+
+/** The rows the gate admits (by each row's contributing orgs), provenance stripped; the rest are recorded as withheld. */
+async function keepAdmitted<Row extends { orgIds: string[] }>(
+  rows: readonly Row[],
+  gate: ExportSignInGate,
+  category: ExportWithheldCategory,
+  withheld: WithheldLedger,
+): Promise<Omit<Row, 'orgIds'>[]> {
+  const kept: Omit<Row, 'orgIds'>[] = [];
+  const decided = new Map<string, Awaited<ReturnType<ExportSignInGate['derivedContent']>>>();
+  for (const { orgIds, ...row } of rows) {
+    const key = [...(orgIds ?? [])].sort().join(',');
+    const access = decided.get(key) ?? (await gate.derivedContent(orgIds ?? []));
+    decided.set(key, access);
+    if (access.allowed) kept.push(row);
+    else withheld.add(category, 1, access.code, access.orgIds);
+  }
+  return kept;
+}
+
+const EXPORT_ID_CHUNK = 500;
+
+/** The drive of each of `pageIds` (absent: no such page), one read per chunk. */
+async function driveOfPages(database: DB, pageIds: readonly string[]): Promise<Map<string, string>> {
+  const unique = [...new Set(pageIds)];
+  const out = new Map<string, string>();
+  for (let i = 0; i < unique.length; i += EXPORT_ID_CHUNK) {
+    const rows = await database
+      .select({ id: pages.id, driveId: pages.driveId })
+      .from(pages)
+      .where(inArray(pages.id, unique.slice(i, i + EXPORT_ID_CHUNK)));
+    for (const row of rows) out.set(row.id, row.driveId);
+  }
+  return out;
+}
+
+/** The org governing each of `driveIds` (null: a personal drive), one read per chunk. */
+async function orgOfDrives(database: DB, driveIds: readonly string[]): Promise<Map<string, string | null>> {
+  const unique = [...new Set(driveIds)];
+  const out = new Map<string, string | null>();
+  for (let i = 0; i < unique.length; i += EXPORT_ID_CHUNK) {
+    const rows = await database
+      .select({ id: drives.id, orgId: drives.orgId })
+      .from(drives)
+      .where(inArray(drives.id, unique.slice(i, i + EXPORT_ID_CHUNK)));
+    for (const row of rows) out.set(row.id, row.orgId);
+  }
+  return out;
 }

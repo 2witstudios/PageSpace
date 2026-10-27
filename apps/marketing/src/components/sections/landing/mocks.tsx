@@ -70,10 +70,10 @@ function DocMock() {
       </div>
       <div className="doc">
         <div className="h3">Q1 Planning</div>
-        <p>A rich-text editor built on TipTap with markdown shortcuts and code blocks. Write naturally — the toolbar stays out of your way.</p>
-        <p><span className="fg">AI edits your document directly.</span> Ask the sidebar chat to rewrite a paragraph and changes appear inline.</p>
+        <p>Ship the redesigned onboarding and hit 45% week-one activation. This is the plan the team runs from. The AI drafted it from the brief.</p>
+        <p><span className="fg">Ask the AI to rewrite a section</span> and the edit lands here, inline, with every version kept.</p>
         <ul>
-          <li>Real-time collaboration &amp; version history</li>
+          <li>Owners, timeline, and the launch checklist below</li>
         </ul>
       </div>
     </>
@@ -345,16 +345,16 @@ function FolderMock() {
 }
 
 export const PAGE_TYPES: PageType[] = [
-  { id: "tree", label: "The tree", icon: "tree", parent: "", title: "My Workspace", actions: <span className="iconbtn"><Ico name="updown" size="i14" /></span>, desc: "One tree holds every page type, and where you place a page is the context the AI gets.", Body: TreeMock },
-  { id: "document", label: "Document", icon: "fileText", parent: "Product Launch", title: "Q1 Planning", actions: null, desc: "Rich-text pages with markdown, real-time collaboration, and version history.", Body: DocMock },
-  { id: "ai-chat", label: "AI Chat", icon: "bot", parent: "Product Launch", title: "Product AI", actions: <><span className="pill">Anthropic<Ico name="chevD" size="i14" /></span><span className="muted">/</span><span className="pill">Opus 4.6<Ico name="chevD" size="i14" /></span></>, desc: "A conversation with an agent that reads, writes, and organises your workspace with real tools.", Body: ChatMock },
-  { id: "channel", label: "Channel", icon: "channel", parent: "Product Launch", title: "product-launch", actions: <span className="muted" style={{ fontSize: 13 }}>12 members</span>, desc: "Real-time team messaging in the tree. @-mention an agent and it joins in.", Body: ChannelMock },
-  { id: "task-list", label: "Task List", icon: "task", parent: "Product Launch", title: "Launch Tasks", actions: <span className="seg"><span className="s"><Ico name="book" size="i14" /></span><span className="s on"><Ico name="rows" size="i14" /></span><span className="s"><Ico name="kanban" size="i14" /></span></span>, desc: "Table and kanban views, custom statuses, and assignees that can include AI agents.", Body: TaskMock },
-  { id: "sheet", label: "Sheet", icon: "sheet", parent: "Product Launch", title: "Budget", actions: <span className="iconbtn"><Ico name="download" size="i14" /></span>, desc: "Spreadsheets with formulas, live cell collaboration, and AI that reads and analyses data.", Body: SheetMock },
-  { id: "canvas", label: "Canvas", icon: "canvas", parent: "Product Launch", title: "Launch Site", actions: <span className="pill pri">Publish</span>, desc: "Custom HTML and CSS in an isolated sandbox. Build a full static site and publish it to a live URL.", Body: CanvasMock },
-  { id: "code", label: "Code", icon: "code", parent: "Product Launch", title: "config.json", actions: null, desc: "A Monaco-powered editor, the same engine as VS Code, with syntax highlighting and live collaboration.", Body: CodeMock },
-  { id: "file", label: "File", icon: "file", parent: "Assets", title: "brief.pdf", actions: <span className="pill on"><Ico name="download" size="i14" />Download</span>, desc: "Uploaded files with preview, text extraction, and search indexing. Identical uploads stored once.", Body: FileMock },
-  { id: "folder", label: "Folder", icon: "folder", parent: "", title: "Product Launch", actions: <span className="seg"><span className="s on"><Ico name="rows" size="i14" /></span><span className="s"><Ico name="lgrid" size="i14" /></span></span>, desc: "Containers that organise other pages, with no editor and no body of their own.", Body: FolderMock },
+  { id: "tree", label: "The tree", icon: "tree", parent: "", title: "My Workspace", actions: <span className="iconbtn"><Ico name="updown" size="i14" /></span>, desc: "Where a page sits is where the agent finds it. Put the launch in one folder and every page in it is one read away.", Body: TreeMock },
+  { id: "document", label: "Document", icon: "fileText", parent: "Product Launch", title: "Q1 Planning", actions: null, desc: "The plan. Ask the AI to draft the next section and it can read the spec and the tasks beside it before it writes.", Body: DocMock },
+  { id: "ai-chat", label: "AI Chat", icon: "bot", parent: "Product Launch", title: "Product AI", actions: <><span className="pill">Anthropic<Ico name="chevD" size="i14" /></span><span className="muted">/</span><span className="pill">Opus 4.6<Ico name="chevD" size="i14" /></span></>, desc: "An agent inside the project. Ask for a launch plan and it reads the spec next door, writes the page, and files it where the team will look.", Body: ChatMock },
+  { id: "channel", label: "Channel", icon: "channel", parent: "Product Launch", title: "product-launch", actions: <span className="muted" style={{ fontSize: 13 }}>12 members</span>, desc: "The team's thread, with the agent in it. @-mention it and it can pull up the positioning doc two pages away.", Body: ChannelMock },
+  { id: "task-list", label: "Task List", icon: "task", parent: "Product Launch", title: "Launch Tasks", actions: <span className="seg"><span className="s"><Ico name="book" size="i14" /></span><span className="s on"><Ico name="rows" size="i14" /></span><span className="s"><Ico name="kanban" size="i14" /></span></span>, desc: "The checklist. Assign a task to a person or to an agent. Both can open the plan it came from.", Body: TaskMock },
+  { id: "sheet", label: "Sheet", icon: "sheet", parent: "Product Launch", title: "Budget", actions: <span className="iconbtn"><Ico name="download" size="i14" /></span>, desc: "The budget. Ask what is over plan and the AI reads the cells, not a screenshot.", Body: SheetMock },
+  { id: "canvas", label: "Canvas", icon: "canvas", parent: "Product Launch", title: "Launch Site", actions: <span className="pill pri">Publish</span>, desc: "The launch site, published from the same tree as the plan behind it. The agent that wrote the plan can build the page.", Body: CanvasMock },
+  { id: "code", label: "Code", icon: "code", parent: "Product Launch", title: "config.json", actions: null, desc: "Config and scripts beside the docs that explain them, so an agent editing one can read the other first.", Body: CodeMock },
+  { id: "file", label: "File", icon: "file", parent: "Assets", title: "brief.pdf", actions: <span className="pill on"><Ico name="download" size="i14" />Download</span>, desc: "Drop in the brief. From then on the AI can read it and the team can search it.", Body: FileMock },
+  { id: "folder", label: "Folder", icon: "folder", parent: "", title: "Product Launch", actions: <span className="seg"><span className="s on"><Ico name="rows" size="i14" /></span><span className="s"><Ico name="lgrid" size="i14" /></span></span>, desc: "The project, whole. A person or an agent opening it sees everything in it, and only what they are allowed to see.", Body: FolderMock },
 ];
 
 /** One carousel card: real ViewHeader (crumb + non-semantic title + actions) + body. */

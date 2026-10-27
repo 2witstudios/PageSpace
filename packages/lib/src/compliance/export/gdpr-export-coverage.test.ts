@@ -75,13 +75,19 @@ const EMPTY: AllUserData = {
   sessions: [],
   notifications: [],
   displayPreferences: [],
-  settings: { hotkeys: [], automation: null, toastNotifications: null, emailNotifications: [] },
+  settings: { hotkeys: [], automation: null, toastNotifications: null, emailNotifications: [], imagoDriveAccess: [] },
   personalization: null,
   personalizationCandidates: [],
+  pulseSummaries: [],
+  withheld: [],
   agentWorkspaces: [],
+  agentAccounts: { accounts: [], approvalsGiven: [], bindingsMade: [], delegationsGiven: [] },
   streamState: [],
   contentTags: [],
   localEnvironments: [],
+  organizations: [],
+  orgMembership: { memberships: [], departures: [], joinRequests: [], guestHolds: [] },
+  wallet: { wallet: null, fundingLegs: [], spendOverrides: [] },
 };
 
 describe('GDPR export table coverage', () => {
@@ -164,10 +170,17 @@ describe('GDPR export table coverage', () => {
       // Omitted entirely when the user has none, so an empty bundle lacks it.
       personalization: null,
       personalizationCandidates: 'personalization-candidates.json',
+      pulseSummaries: 'pulse-summaries.json',
+      // Never a file: written into manifest.json.
+      withheld: null,
       agentWorkspaces: 'agent-workspaces.json',
+      agentAccounts: 'agent-accounts.json',
       streamState: 'stream-state.json',
       localEnvironments: 'local-environments.json',
       contentTags: 'content-tags.json',
+      organizations: 'organizations.json',
+      orgMembership: 'org-membership.json',
+      wallet: 'wallet.json',
     };
 
     const unshipped = [...new Set(Object.values(EXPORTED_TABLES))].filter((category) => {

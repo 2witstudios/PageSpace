@@ -26,6 +26,8 @@ import { messageRepository } from '@/lib/repositories/message-repository';
 import type { BumpedConversationRow } from '@/lib/repositories/conversation-rev';
 import { conversationPageId } from '@pagespace/lib/conversations/conversation-page';
 import type { ConversationAccessRow } from '@pagespace/lib/permissions/conversation-access';
+import { lockOrgsOfDrivesForShare } from '@pagespace/lib/organizations/policy-reader';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * Preview of what will be undone
@@ -194,8 +196,9 @@ async function getPageDriveId(pageId: string): Promise<string | null> {
  */
 export async function previewAiUndo(
   messageId: string,
-  userId: string
+  actor: AccessActor
 ): Promise<AiUndoPreview | null> {
+  const userId = actor.userId;
   loggers.api.debug('[AiUndo:Preview] Starting preview', { messageId, userId });
 
   try {
@@ -330,7 +333,7 @@ export async function previewAiUndo(
 
       let preview: ActivityActionPreview;
       try {
-        preview = await previewRollback(activity.id, userId, context, { undoGroupActivityIds });
+        preview = await previewRollback(activity.id, actor, context, { undoGroupActivityIds });
         if (!preview) {
           preview = fallbackPreview('Preview failed');
           warnings.push(`Could not preview undo for activity ${activity.id}`);
@@ -413,11 +416,12 @@ export async function previewAiUndo(
  */
 export async function executeAiUndo(
   messageId: string,
-  userId: string,
+  actor: AccessActor,
   mode: UndoMode,
   existingPreview?: AiUndoPreview,
   options?: { force?: boolean }
 ): Promise<AiUndoResult> {
+  const userId = actor.userId;
   loggers.api.debug('[AiUndo:Execute] Starting execution', {
     messageId,
     userId,
@@ -476,7 +480,7 @@ export async function executeAiUndo(
     }
 
     // Use existing preview if provided, otherwise compute it
-    const preview = existingPreview ?? await previewAiUndo(messageId, userId);
+    const preview = existingPreview ?? await previewAiUndo(messageId, actor);
     if (!preview) {
       loggers.api.debug('[AiUndo:Execute] Aborting - preview not available');
       return {
@@ -523,6 +527,12 @@ export async function executeAiUndo(
         .from(conversations)
         .where(eq(conversations.id, conversationId))
         .for('update');
+      // POL-2 (re-verify N6): the org rows of every drive these activities touch are share-locked BEFORE any of
+      // them writes, so a re-entering grant's policy check cannot deadlock with a concurrent policy change.
+      await lockOrgsOfDrivesForShare(tx, {
+        driveIds: preview.activitiesAffected.map((a) => a.driveId),
+        pageIds: preview.activitiesAffected.map((a) => a.pageId),
+      });
 
       // If mode includes changes, rollback activities in reverse chronological order
       if (mode === 'messages_and_changes') {
@@ -564,7 +574,7 @@ export async function executeAiUndo(
 
           // Pass transaction to executeRollback for atomicity
           // Any failure aborts entire transaction
-          const result = await executeRollback(activity.id, userId, context, { tx, force, undoGroupActivityIds });
+          const result = await executeRollback(activity.id, actor, context, { tx, force, undoGroupActivityIds });
           if (!result.success) {
             loggers.api.debug('[AiUndo:Execute] Activity rollback failed - aborting', {
               activityId: activity.id,

@@ -8,7 +8,7 @@ import { files, filePages } from '@pagespace/db/schema/storage';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
 import { getAppDriveAccessLevel } from '@pagespace/lib/permissions/app-permissions';
-import { updateStorageUsage, shouldChargeForStore } from '@pagespace/lib/services/storage-limits';
+import { chargeStorageForStore, shouldChargeForStore } from '@pagespace/lib/services/storage-limits';
 import { releasePendingUpload } from '@pagespace/lib/services/pending-uploads';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { buildS3Key, canLinkExistingFileRow } from '@pagespace/lib/services/upload-validation';
@@ -17,6 +17,7 @@ import { getActorInfo, logFileActivity } from '@pagespace/lib/monitoring/activit
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { enqueueProcessorJob } from '@/lib/upload/processor-effects';
 import { checkObjectExists } from '@/lib/upload/s3-effects';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -203,17 +204,17 @@ export async function POST(request: Request) {
   // A scoped MCP token is its own drive member — uploads require the TOKEN's
   // role to grant edit, not the owning user's.
   if (isScopedMCPAuth(auth)) {
-    const level = await getAppDriveAccessLevel(auth.tokenId, driveId);
+    const level = await getAppDriveAccessLevel(actorFromAuth(auth), auth.tokenId, driveId);
     if (!level?.canEdit) {
       return NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 });
     }
   } else {
-    const drivePerms = await getUserDrivePermissions(userId, driveId);
+    const drivePerms = await getUserDrivePermissions(actorFromAuth(auth), driveId);
     if (!drivePerms) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
     if (!drivePerms.canEdit) {
-      return NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 }));
     }
   }
 
@@ -326,7 +327,7 @@ export async function POST(request: Request) {
     });
 
     try {
-      await enqueueProcessorJob(userId, driveId, newPage.id);
+      await enqueueProcessorJob(actorFromAuth(auth), driveId, newPage.id);
     } catch (err) {
       // Best-effort by design, but the page now has no derived content
       // (thumbnails/OCR/extraction) until reprocessed — keep this loud.
@@ -341,7 +342,8 @@ export async function POST(request: Request) {
     // single credit the reaper issues at unlink). Dedup completes store no new
     // bytes and must not be charged.
     if (shouldChargeForStore(fileWasInserted)) {
-      await updateStorageUsage(userId, fileSize, { pageId: newPage.id, driveId, eventType: 'upload' });
+      // WAL-9, O-9: an org drive's bytes bill the org, never the uploader's personal quota.
+      await chargeStorageForStore(userId, driveId, fileSize, { pageId: newPage.id, eventType: 'upload' });
     }
 
     auditRequest(request, {

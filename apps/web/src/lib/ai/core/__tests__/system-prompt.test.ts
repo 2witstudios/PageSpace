@@ -289,6 +289,19 @@ describe('buildSystemPrompt — sandbox guidance', () => {
     expect(result).not.toContain('kill_session');
   });
 
+  it('given rename_workspace, tells the model it labels the SESSION, not a worker', () => {
+    // The session itself was the one thing an agent could not name, and the
+    // cost of not knowing is silent and permanent — an unnamed session stays
+    // "Session" in its owner's sidebar forever.
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'bash', 'rename_workspace']);
+    expect(result).toContain('rename_workspace labels the SESSION itself');
+  });
+
+  it('given no rename_workspace, does not mention it', () => {
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'bash', 'spawn_session']);
+    expect(result).not.toContain('rename_workspace');
+  });
+
   it('given only git_clone (a PATH-family tool, no cwd-family git tool), does not claim "the rest of the git_* tools take cwd"', () => {
     // codex review: git_clone/git_init take `path` (sandbox-git/tools/repo.ts
     // schema), not `cwd` — an agent holding only git_clone has no "rest" of

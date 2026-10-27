@@ -40,6 +40,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn().mockResolvedValue(true),
   canUserEditPage: vi.fn().mockResolvedValue(true),
 }));
@@ -219,6 +220,12 @@ vi.mock('@/lib/ai/core/tool-filtering', async (importOriginal) => {
     filterToolsForMcpScope: vi.fn(actual.filterToolsForMcpScope),
   };
 });
+// Not a built-in Imago agent: the route's Imago context load fails the turn
+// closed if it throws, so it must not reach this file's partial db mock.
+vi.mock('@/lib/ai/core/imago-agent-context', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/ai/core/imago-agent-context')>()),
+  loadImagoAgentContext: vi.fn().mockResolvedValue(null),
+}));
 vi.mock('@/lib/ai/core/page-tree-context', () => ({
   getPageTreeContext: vi.fn(),
 }));
@@ -292,6 +299,7 @@ vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
 
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockUserId = 'user_123';
 const chatId = 'page_123'; // in drive_A per db mock above
@@ -358,4 +366,14 @@ describe('POST /api/ai/chat - account-level-only tool listing', () => {
     expect(filtered).toHaveProperty('create_drive');
     expect(filtered).toHaveProperty('list_pages');
   });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(credentialActor(auth.userId, null), resourceId),
+    canPrincipalEditPage: (auth: { userId: string }, resourceId: string) => permissions.canUserEditPage(credentialActor(auth.userId, null), resourceId),
+  };
 });

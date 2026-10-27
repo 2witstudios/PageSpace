@@ -1,5 +1,19 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
+// SPEND-6: each mentioned agent's reply is gated on the channel's drive wallet
+// (mention-credit-gate, unit-tested on its own). This suite covers other behaviour,
+// so the gate admits every reply here.
+// POL-9: the responder asks the channel drive's org whether agents may reply on their own; no org in these tests.
+vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getDrivePolicies: vi.fn() }));
+
+vi.mock('@/lib/channels/mention-credit-gate', () => ({
+  acquireMentionCreditHold: async () => ({
+    allowed: true,
+    creditSpend: { spend: { kind: 'automation', driveId: 'drive-1' }, walletId: 'w-drive-1' },
+    release: () => {},
+  }),
+}));
+
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
@@ -9,7 +23,10 @@ vi.mock('@pagespace/db/db', () => ({
     },
   },
 }));
-vi.mock('@pagespace/db/operators', () => ({
+vi.mock('@pagespace/db/operators', async (importOriginal) => ({
+  // Keep the real re-exports so transitively imported lib modules that use
+  // `sql` still load (e.g. sheets/search-sql via services/preview).
+  ...(await importOriginal<typeof import('@pagespace/db/operators')>()),
   and: vi.fn(),
   eq: vi.fn(),
   inArray: vi.fn(),
@@ -25,7 +42,20 @@ vi.mock('@pagespace/db/schema/storage', () => ({
   files: { id: 'id' },
 }));
 
+// The two gates added for member agents (see agent-mention-responder.ts):
+// membership in the channel's drive is the grant when the mentioner cannot
+// view the agent's home page, and the agent must be able to post in the
+// channel BEFORE any model call is spent on it.
+vi.mock('@pagespace/lib/permissions/agent-permissions', () => ({
+  hasAgentDriveMembership: vi.fn().mockResolvedValue(false),
+}));
+vi.mock('@/lib/ai/tools/actor-permissions', () => ({
+  toolActor: (ctx: { userId: string; accessActor?: unknown }) => ctx.accessActor ?? { via: 'credential', userId: ctx.userId, authentication: null },
+  canActorEditPage: vi.fn().mockResolvedValue(true),
+  canActorConsultAgent: vi.fn().mockResolvedValue(true),
+}));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -81,6 +111,7 @@ vi.mock('@/lib/presigned-url', () => ({
 
 import { db } from '@pagespace/db/db';
 import { triggerMentionedAgentResponses, type TriggerMentionedAgentResponsesParams } from '../agent-mention-responder';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockPagesFindMany = db.query.pages.findMany as unknown as Mock;
 const mockChannelMessagesFindMany = db.query.channelMessages.findMany as unknown as Mock;
@@ -97,7 +128,7 @@ const fileRow = {
 };
 
 const baseParams: TriggerMentionedAgentResponsesParams = {
-  userId: 'user-1',
+  sender: credentialActor('user-1', null),
   channelId: 'channel-1',
   channelTitle: 'General',
   channelType: 'CHANNEL',
@@ -147,7 +178,7 @@ describe('triggerMentionedAgentResponses — image attachment plumbing', () => {
     });
 
     // Access-checked against the file row's own drive, not the channel's.
-    expect(mockCanUserAccessFile).toHaveBeenCalledWith('user-1', 'file-1', 'file-drive-1');
+    expect(mockCanUserAccessFile).toHaveBeenCalledWith(expect.objectContaining({ via: 'credential', userId: 'user-1' }), 'file-1', 'file-drive-1');
     expect(mockAskAgentExecute).toHaveBeenCalledTimes(1);
     const askArgs = mockAskAgentExecute.mock.calls[0][0];
     expect(askArgs.imageAttachments).toEqual([
@@ -262,6 +293,57 @@ describe('triggerMentionedAgentResponses — image attachment plumbing', () => {
     expect(mockAskAgentExecute).toHaveBeenCalledTimes(1);
     const askArgs = mockAskAgentExecute.mock.calls[0][0];
     expect(askArgs.imageAttachments).toBeUndefined();
+  });
+
+  it('given an old photo batch and a newer photo, keeps the newer one', async () => {
+    // The 5-slot cap keeps the LAST candidates, and the responder hands the
+    // resolver its context oldest-first — that pairing is what makes the cap
+    // keep the NEWEST images. It only started mattering when one message could
+    // carry a whole batch: reverse either half and a single old batch fills
+    // every slot and evicts everything posted since.
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Vision Agent', enabledTools: ['send_channel_message'], aiProvider: 'anthropic', aiModel: 'claude-sonnet-4.5' },
+    ]);
+    const batchFileIds = ['file-b1', 'file-b2', 'file-b3', 'file-b4', 'file-b5'];
+    // Newest first, exactly as the query returns it.
+    mockChannelMessagesFindMany.mockResolvedValue([
+      {
+        ...imageMessage,
+        fileId: 'file-new',
+        createdAt: new Date('2026-07-01T01:00:00.000Z'),
+        attachmentMeta: { ...imageMessage.attachmentMeta, originalName: 'newest.png' },
+      },
+      {
+        ...imageMessage,
+        fileId: batchFileIds[0],
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+        attachments: batchFileIds.map((fileId, position) => ({
+          fileId,
+          attachmentMeta: { ...imageMessage.attachmentMeta, originalName: `${fileId}.png` },
+          position,
+        })),
+      },
+    ]);
+    mockFilesFindMany.mockResolvedValue([
+      { ...fileRow, id: 'file-new', storagePath: `files/${'c'.repeat(64)}/original` },
+      ...batchFileIds.map((id, i) => ({
+        ...fileRow,
+        id,
+        storagePath: `files/${String(i).repeat(64)}/original`,
+      })),
+    ]);
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      content: '@[Vision Agent](agent-1:page) look at this',
+    });
+
+    const askArgs = mockAskAgentExecute.mock.calls[0][0];
+    expect(askArgs.imageAttachments).toHaveLength(5);
+    // The newest message's photo survives the cap; the old batch gives up a slot.
+    expect(
+      (askArgs.imageAttachments as Array<{ filename: string }>).map((part) => part.filename),
+    ).toContain('newest.png');
   });
 
   it('given the same fileId attached to multiple recent messages, access-checks and signs it only once', async () => {

@@ -34,20 +34,9 @@ describe('buildGlobalChatRequestBody', () => {
     expect(second.conversationId).toBe('conv-b');
   });
 
-  it('given no locationContext, should default to undefined', () => {
+  it('never sends the removed client-computed locationContext (the server refuses it)', () => {
     const body = buildGlobalChatRequestBody(baseParams);
-    expect(body.locationContext).toBeUndefined();
-  });
-
-  it('given a null locationContext, should default to undefined', () => {
-    const body = buildGlobalChatRequestBody({ ...baseParams, locationContext: null });
-    expect(body.locationContext).toBeUndefined();
-  });
-
-  it('given a locationContext object, should pass it through', () => {
-    const locationContext = { currentPage: { id: 'p1', title: 'Page', type: 'Document', path: '/p1' } };
-    const body = buildGlobalChatRequestBody({ ...baseParams, locationContext });
-    expect(body.locationContext).toBe(locationContext);
+    expect('locationContext' in body).toBe(false);
   });
 
   it('given no contextRef, should default to undefined', () => {

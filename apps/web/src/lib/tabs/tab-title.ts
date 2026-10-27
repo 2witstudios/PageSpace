@@ -303,7 +303,9 @@ export const getStaticTabMeta = (parsed: ParsedPath): TabMeta | null => {
       return { title: 'Calendar', iconName: 'Calendar' };
 
     case 'dashboard-drives':
-      return { title: 'Drives', iconName: 'Folder' };
+      // The drives browser is what Files shows in the All drives focus, and
+      // the page is titled as such, so the tab is too.
+      return { title: 'Files', iconName: 'Folder' };
 
     case 'dashboard-agents':
       return { title: 'Agents', iconName: 'Bot' };

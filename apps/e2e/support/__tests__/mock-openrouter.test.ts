@@ -281,6 +281,24 @@ describe('mock OpenRouter — abort safety and reset', () => {
     expect(await health.json()).toEqual({ ok: true });
   });
 
+  // The live-window count is what a Stop spec asserts web hung up on: a held stream must stop
+  // counting the moment its client goes away. This holds on Node, where the mock runs
+  // (playwright.config.ts); on Bun 1.3.12 a node:http server never learns of the hang-up, so
+  // this test fails there and the held stream reads "open" forever.
+  it('given a client that hangs up on a held stream, should stop counting it open', async () => {
+    await setMode('held');
+    const controller = new AbortController();
+    const res = await completions(APP_MODEL, controller.signal);
+    await res.body!.getReader().read();
+    expect(await readStreams()).toEqual({ open: 1, held: 1 });
+
+    controller.abort();
+
+    await expect.poll(readStreams).toEqual({ open: 0, held: 0 });
+    const released = (await (await fetch(`${base}/__release-stream`, { method: 'POST' })).json()) as { released: number };
+    expect(released.released, 'a hung-up stream must not be left to release').toBe(0);
+  });
+
   it('given a held stream, should release it and restore default config on /__reset', async () => {
     await setMode('held');
     const res = await completions(APP_MODEL);
@@ -306,4 +324,14 @@ describe('mock OpenRouter — abort safety and reset', () => {
     expect(json.count).toBe(1);
     expect(json.requests[0].model).toBe(APP_MODEL);
   });
+});
+
+it('emits one configured provider tool call, then restores the normal response', async () => {
+  await fetch(`${base}/__next-tool`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'ask_user', arguments: { questions: [] } }) });
+  const first = await (await completions(APP_MODEL)).text();
+  expect(first).toContain('ask_user');
+  expect(first).toContain('tool_calls');
+  const second = await (await completions(APP_MODEL)).text();
+  expect(second).toContain('pong');
+  expect(second).not.toContain('tool_calls');
 });

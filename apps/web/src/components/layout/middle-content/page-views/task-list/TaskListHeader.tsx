@@ -35,7 +35,7 @@ export function TaskListHeader({
   const showSaveStatus = canEdit && (viewMode === 'editor' || descriptionOpen);
 
   return (
-    <div className="flex items-center justify-between px-4 py-2 border-b bg-background shrink-0">
+    <div className="flex items-center justify-between gap-2 px-3 py-1.5 @[700px]:px-4 @[700px]:py-2 border-b bg-background shrink-0">
       <div className="flex items-center gap-2">
         <SelfTaskControls pageId={pageId} canEdit={canEdit} />
         {onDescriptionToggle ? (
@@ -43,16 +43,19 @@ export function TaskListHeader({
             type="button"
             onClick={onDescriptionToggle}
             className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            aria-label={descriptionOpen ? 'Hide description' : 'Show description'}
           >
             {descriptionOpen ? (
               <ChevronDown className="h-3.5 w-3.5 shrink-0" />
             ) : (
               <ChevronRight className="h-3.5 w-3.5 shrink-0" />
             )}
-            <span className="font-medium">Description</span>
+            {/* The word is the first thing to go when the bar is narrow — the
+                chevron alone still reads as a disclosure. */}
+            <span className="font-medium hidden @[700px]:inline">Description</span>
           </button>
         ) : (
-          <span className="text-sm font-medium text-muted-foreground">Description</span>
+          <span className="text-sm font-medium text-muted-foreground hidden @[700px]:inline">Description</span>
         )}
         {showSaveStatus && (
           <SaveStatusIndicator isDirty={isDirty} isSaving={isSaving} />

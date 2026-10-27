@@ -12,8 +12,10 @@
  *
  * The danger in relaxing an assertion is that the relaxation swallows a real
  * loss. So the tolerance is NOT a loose comparison — it is an explicit,
- * exhaustively-named allowlist (`ALLOWED_COSMETIC_ADDITIONS`) which the suite
- * also asserts is not larger than it needs to be. A rewrite that is not on the
+ * exhaustively-named allowlist (`ALLOWED_COSMETIC_ADDITIONS`, in
+ * `seed-fidelity.ts`, shared with `scripts/collab-seed-audit.ts` so the corpus
+ * and real documents are held to ONE list) which the suite also asserts is not
+ * larger than it needs to be. A rewrite that is not on the
  * list fails, whether it is new or newly noticed.
  */
 import { describe, it, expect } from 'vitest';
@@ -21,143 +23,23 @@ import { htmlToPmDoc, describeHtmlLoss } from '../html-to-ydoc.js';
 import { pmDocToHtml } from '../y-doc-to-html.js';
 import { withDomWorkspace } from '../dom-workspace.js';
 import {
+  ALLOWED_COSMETIC_ADDITIONS,
+  PRINTABLE_ATTRIBUTE_VALUES,
+  VALUE_BEARING_ATTRIBUTES,
+  constructKeysOf,
+  contentFreeKey,
+  constructDifference as difference,
+} from '../seed-fidelity.js';
+import {
   CONSTRUCT_CORPUS,
   CORPUS_CASES,
   corpusDocumentHtml,
 } from './support/construct-corpus.js';
 
-/**
- * Every markup construct one pass through the schema is allowed to ADD.
- *
- * Each entry is a rewrite whose absence from the source is not information:
- *
- * - `a@target` / `a@rel` — `Link` stamps these on every anchor it renders.
- * - `a@data-type`, `span@data-type` — TipTap's node-name marker on a mention.
- * - `a@contenteditable`, `a@data-drive-id` — the AI mention dialect omits
- *   them; the node's own `renderHTML` always writes them.
- * - `ul@class`, `ul@data-tight` (`=true`) — `MarkdownTightLists` makes the
- *   tightness it INFERRED from the source (`!element.querySelector('p')`)
- *   explicit.
- * - `a@data-drive-id=` — the AI mention dialect carries no drive, and the
- *   node's `renderHTML` always writes the attribute, so it appears empty. The
- *   EMPTY value is the allowlisted one; a mention gaining a real drive id would
- *   produce a different key and fail.
- * - `p` — a bare `<li>text</li>` becomes `<li><p>text</p></li>`, because the
- *   schema's `listItem` content is `paragraph block*`.
- * - `label`, `input`, `input@type`, `input@checked`, `span`, `div` —
- *   `TaskItem`'s rendered checkbox. The state itself lives in
- *   `li@data-checked`, which the source already carried.
- * - `pre@class` — `CodeBlockNode` mirrors `language-x` onto the `<pre>`.
- * - `table@style`, `colgroup`, `col`, `col@style` (and their `style:min-width`
- *   forms) — TipTap's table column model, emitted as `min-width` from the
- *   schema's own defaults.
- *
- * The `=pageMention` entries are the VALUE-bearing form of the `data-type`
- * marker above. They are listed separately, and deliberately: it is the value
- * that carries the meaning, so `data-type` changing from `taskList` to
- * `taskItem` must fail rather than be absorbed by a bare `attr@data-type`.
- *
- * Nothing here changes what the document SAYS. An addition outside this set is
- * a change to the stored dialect and must be looked at, not tolerated.
- */
-const ALLOWED_COSMETIC_ADDITIONS: ReadonlySet<string> = new Set([
-  'attr:a@contenteditable',
-  'attr:a@data-drive-id',
-  'attr:a@data-drive-id=',
-  'attr:a@data-type',
-  'attr:a@data-type=pageMention',
-  'attr:a@rel',
-  'attr:a@target',
-  'attr:col@style',
-  'attr:col@style:min-width',
-  'attr:input@checked',
-  'attr:input@type',
-  'attr:pre@class',
-  'attr:span@data-type',
-  'attr:span@data-type=pageMention',
-  'attr:table@style',
-  'attr:table@style:min-width',
-  'attr:ul@class',
-  'attr:ul@data-tight',
-  'attr:ul@data-tight=true',
-  'el:col',
-  'el:colgroup',
-  'el:div',
-  'el:input',
-  'el:label',
-  'el:p',
-  'el:span',
-]);
-
-/**
- * Markup constructs as comparable keys: `el:<tag>`, `attr:<tag>@<name>`, and —
- * for the two attributes whose VALUE is the construct — `attr:<tag>@<name>=<value>`.
- * Deliberately not the markup string: a set difference names WHICH construct
- * moved, where a string diff only says "changed".
- *
- * `style` is split per CSS property, and the attributes in
- * `VALUE_BEARING_ATTRIBUTES` carry their value, because a bare `attr:p@style`
- * merges the question with the answer. `text-align:center` becoming
- * `text-align:left`, `data-type="taskList"` becoming `taskItem`, a rewritten
- * `href`, a `data-page-id` pointing at a different page, or `start="7"` becoming
- * `start="1"` would otherwise all be invisible to a gate whose entire job is
- * naming the construct that moved — and the corpus has fixtures for every one
- * of them.
- *
- * Presence-only keys are kept alongside the value keys, so a DROPPED attribute
- * and a CHANGED one are distinguishable in the diff.
- */
-const VALUE_BEARING_ATTRIBUTES: ReadonlySet<string> = new Set([
-  'data-type',
-  'href',
-  'data-page-id',
-  'data-user-id',
-  'data-role-id',
-  'data-drive-id',
-  'data-file-id',
-  'data-block-id',
-  'data-change-id',
-  'data-change-type',
-  'data-checked',
-  'data-tight',
-  'start',
-  'colspan',
-  'rowspan',
-  'alt',
-]);
+/** `constructKeysOf` over a markup string, in a throwaway workspace. */
 function constructsOf(html: string): Set<string> {
-  return withDomWorkspace((workspace) => {
-    const keys = new Set<string>();
-    const walk = (element: Element): void => {
-      const tag = element.tagName.toLowerCase();
-      keys.add(`el:${tag}`);
-      for (const name of element.getAttributeNames()) {
-        keys.add(`attr:${tag}@${name}`);
-        if (VALUE_BEARING_ATTRIBUTES.has(name)) {
-          keys.add(`attr:${tag}@${name}=${element.getAttribute(name) ?? ''}`);
-        }
-        if (name === 'style') {
-          for (const declaration of (element.getAttribute(name) ?? '').split(';')) {
-            const property = declaration.split(':')[0]?.trim().toLowerCase();
-            if (property) {
-              keys.add(`attr:${tag}@style:${property}`);
-            }
-          }
-        }
-      }
-      for (const child of Array.from(element.children)) {
-        walk(child);
-      }
-    };
-    for (const child of Array.from(workspace.parse(html).children)) {
-      walk(child);
-    }
-    return keys;
-  });
+  return withDomWorkspace((workspace) => constructKeysOf(workspace.parse(html)));
 }
-
-const difference = (a: Set<string>, b: Set<string>): string[] =>
-  [...a].filter((key) => !b.has(key)).sort();
 
 describe.each(CORPUS_CASES)(
   'seed fidelity: %s',
@@ -222,5 +104,104 @@ describe('the allowlist itself', () => {
     expect([...ALLOWED_COSMETIC_ADDITIONS].sort().filter((key) => !produced.includes(key))).toEqual(
       [],
     );
+  });
+});
+
+describe('printable attribute values', () => {
+  it('are a subset of the value-bearing attributes — a value that is never in a key needs no printability rule', () => {
+    expect([...PRINTABLE_ATTRIBUTE_VALUES.keys()].filter((name) => !VALUE_BEARING_ATTRIBUTES.has(name))).toEqual([]);
+  });
+
+  it('every value-bearing attribute that is not printable is one whose value could be content or an identifier', () => {
+    // The complement is the list a reader should check when adding to either set.
+    expect([...VALUE_BEARING_ATTRIBUTES].filter((name) => !PRINTABLE_ATTRIBUTE_VALUES.has(name)).sort()).toEqual([
+      'alt', 'data-block-id', 'data-change-id', 'data-change-type', 'data-drive-id', 'data-file-id',
+      'data-page-id', 'data-role-id', 'data-user-id', 'href',
+    ]);
+  });
+});
+
+describe('contentFreeKey', () => {
+  it('keeps values the schema itself enumerates', () => {
+    expect(contentFreeKey('attr:ul@data-type=taskList')).toBe('attr:ul@data-type=taskList');
+    expect(contentFreeKey('attr:li@data-checked=true')).toBe('attr:li@data-checked=true');
+    expect(contentFreeKey('attr:td@colspan=2')).toBe('attr:td@colspan=2');
+    expect(contentFreeKey('attr:ol@start=7')).toBe('attr:ol@start=7');
+    expect(contentFreeKey('attr:p@style:text-align')).toBe('attr:p@style:text-align');
+    expect(contentFreeKey('el:img')).toBe('el:img');
+  });
+
+  it('withholds prose, urls and ids while keeping the key marked as a VALUE key', () => {
+    // `=(withheld)` rather than the bare presence key: `constructKeysOf` emits
+    // both forms so a dropped attribute and a changed one stay distinguishable,
+    // and collapsing to presence here would undo that at the last step.
+    expect(contentFreeKey('attr:img@alt=a photo of Ada')).toBe('attr:img@alt=(withheld)');
+    expect(contentFreeKey('attr:a@href=https://x.test/ada-lovelace')).toBe('attr:a@href=(withheld)');
+    expect(contentFreeKey('attr:a@data-page-id=pg_1')).toBe('attr:a@data-page-id=(withheld)');
+    // The presence key is untouched, so the two remain different rows.
+    expect(contentFreeKey('attr:img@alt')).toBe('attr:img@alt');
+  });
+
+  it('withholds a printable attribute whose value is not one the schema renders', () => {
+    expect(contentFreeKey('attr:span@data-type=customer-name')).toBe('attr:span@data-type=(withheld)');
+    expect(contentFreeKey('attr:li@data-checked=SECRET')).toBe('attr:li@data-checked=(withheld)');
+    expect(contentFreeKey('attr:ol@start=SECRET_START')).toBe('attr:ol@start=(withheld)');
+    expect(contentFreeKey('attr:td@colspan=1234567')).toBe('attr:td@colspan=(withheld)');
+  });
+
+  it('never withholds a value into a key that is itself on the cosmetic allowlist', () => {
+    // Without the `=(withheld)` marker an author-typed `data-type` would print
+    // as `attr:a@data-type`, which IS allowlisted — a finding wearing the key
+    // of a non-finding.
+    for (const key of ['attr:a@data-type=customer-name', 'attr:ul@data-tight=maybe', 'attr:td@colspan=x']) {
+      expect(ALLOWED_COSMETIC_ADDITIONS.has(contentFreeKey(key)), key).toBe(false);
+    }
+  });
+
+  it('folds names the author could have typed: unknown tags, odd attribute names, custom properties', () => {
+    expect(contentFreeKey('el:secret-tag')).toBe('text:unescaped-angle-bracket');
+    expect(contentFreeKey('attr:secret-tag@class')).toBe('text:unescaped-angle-bracket');
+    expect(contentFreeKey('attr:p@secret_attr_name')).toBe('attr:p@(unrecognised-attribute)');
+    expect(contentFreeKey('attr:p@secretattr')).toBe('attr:p@(unrecognised-attribute)');
+    expect(contentFreeKey('attr:p@data-secret=x')).toBe('attr:p@(unrecognised-attribute)=(withheld)');
+    expect(contentFreeKey('attr:p@style:--secret-name')).toBe('attr:p@style:(unrecognised-property)');
+    expect(contentFreeKey('attr:p@style:secret_prop')).toBe('attr:p@style:(unrecognised-property)');
+    expect(contentFreeKey('attr:p@style:margin-top')).toBe('attr:p@style:margin-top');
+  });
+
+  it('FAILS CLOSED on a key it cannot decompose, rather than handing back its input', () => {
+    // happy-dom builds a real element for a tag name starting with `@`, so a
+    // pasted FreeMarker directive or Slack mention produces `attr:@list@items`
+    // — which the attribute pattern cannot split, because its tag group needs
+    // one non-`@` character. Returning the input there printed a Slack user id
+    // and a full href straight into the report.
+    expect(contentFreeKey('attr:@u08jane.doe@email=jane.doe@acme.com')).toBe('text:unescaped-angle-bracket');
+    expect(contentFreeKey('attr:@list@items=payroll-2026-Q1.csv')).toBe('text:unescaped-angle-bracket');
+    expect(contentFreeKey('attr:@p@href=https://secret.example/a')).toBe('text:unescaped-angle-bracket');
+    expect(contentFreeKey('attr:@x@style:color')).toBe('text:unescaped-angle-bracket');
+    expect(contentFreeKey('not a key at all')).toBe('text:unescaped-angle-bracket');
+    // The marker itself is the one thing that survives, or folding would not
+    // be idempotent.
+    expect(contentFreeKey('text:unescaped-angle-bracket')).toBe('text:unescaped-angle-bracket');
+    expect(contentFreeKey(contentFreeKey('attr:@list@items=x'))).toBe('text:unescaped-angle-bracket');
+  });
+
+  it('bounds every key it returns, so one document cannot pad the whole report', () => {
+    const long = 'a'.repeat(5000);
+    for (const key of [`el:${long}`, `attr:p@${long}`, `attr:p@style:${long}`, `attr:p@alt=${long}`, `attr:@${long}@x=${long}`]) {
+      expect(contentFreeKey(key).length, key.slice(0, 30)).toBeLessThanOrEqual(64);
+    }
+  });
+});
+
+describe('the corpus reports only recognised names', () => {
+  it('folds nothing the schema renders — every corpus key is already content-free', () => {
+    for (const fixture of CONSTRUCT_CORPUS) {
+      const rendered = constructsOf(pmDocToHtml(htmlToPmDoc(fixture.html)));
+      for (const key of rendered) {
+        if (VALUE_BEARING_ATTRIBUTES.has(/@([^=]+)=/u.exec(key)?.[1] ?? '') && !PRINTABLE_ATTRIBUTE_VALUES.has(/@([^=]+)=/u.exec(key)?.[1] ?? '')) continue;
+        expect(contentFreeKey(key), key).toBe(key);
+      }
+    }
   });
 });
