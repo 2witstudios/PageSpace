@@ -22,8 +22,8 @@ export type PendingFile = {
   readonly knownIds: readonly string[];
 };
 
-/** Text a document held when it closed and the server never got, with the revision it was made on. */
-export type DocumentDraft = { readonly patch: DocumentPatch; readonly revision: number };
+/** Text a document held when it closed and the server never got, with the content revision it was made on. */
+export type DocumentDraft = { readonly patch: DocumentPatch; readonly contentRevision: number };
 
 /**
  * One open view of a document that holds unsaved text. A page can have two

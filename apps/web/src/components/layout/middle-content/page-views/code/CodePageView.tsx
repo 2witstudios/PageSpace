@@ -180,7 +180,7 @@ const CodePageView = ({ pageId, driveId: driveIdProp }: CodePageViewProps) => {
       if (response.ok) {
         const updatedPage = await response.json();
         if (updatedPage.content !== documentState?.content && !documentState?.isDirty) {
-          updateContentFromServer(updatedPage.content, updatedPage.revision);
+          updateContentFromServer(updatedPage.content, updatedPage.contentRevision);
         }
       }
     } catch (error) {

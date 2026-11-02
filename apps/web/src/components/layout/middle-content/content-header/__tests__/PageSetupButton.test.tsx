@@ -60,7 +60,7 @@ describe('PageSetupButton content-mode conversion', () => {
     useDocumentManagerStore.getState().updateDocument(pageId, { isDirty: true });
     useDocumentManagerStore.getState().setConflict(pageId, {
       remoteContent: 'their text',
-      remoteRevision: 4,
+      remoteContentRevision: 4,
       detectedAt: 1,
     });
 
@@ -88,7 +88,7 @@ describe('PageSetupButton content-mode conversion', () => {
         return Promise.resolve({
           ok: false,
           status: 409,
-          json: () => Promise.resolve({ error: 'Page was modified', currentRevision: 4 }),
+          json: () => Promise.resolve({ error: 'Page was modified', currentContentRevision: 4 }),
         } as Response);
       }
       if (patched) return Promise.reject(new Error('network down'));

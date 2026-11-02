@@ -10,21 +10,21 @@
 /** The server's copy, parked while the user decides what to do with it. */
 export interface DocumentConflict {
   remoteContent: string;
-  remoteRevision: number;
+  remoteContentRevision: number;
   detectedAt: number;
 }
 
-/** Body of the 409 response (`route.ts` returns error/currentRevision/expectedRevision). */
+/** Body of the 409 response (`route.ts` returns error and the revisions). */
 export interface ConflictResponseBody {
   error?: string;
-  currentRevision?: number;
-  expectedRevision?: number;
+  currentContentRevision?: number;
+  expectedContentRevision?: number;
 }
 
 /** The refetched server page, or null when the refetch itself failed. */
 export interface RemotePageSnapshot {
   content?: string | null;
-  revision?: number;
+  contentRevision?: number;
 }
 
 /**
@@ -83,9 +83,9 @@ export function decideConflictOutcome(input: ConflictDecisionInput): ConflictDec
     };
   }
 
-  const remoteRevision = remotePage.revision ?? conflictBody?.currentRevision;
+  const remoteContentRevision = remotePage.contentRevision ?? conflictBody?.currentContentRevision;
 
-  if (remoteRevision === undefined) {
+  if (remoteContentRevision === undefined) {
     return {
       kind: 'error',
       message:
@@ -97,7 +97,7 @@ export function decideConflictOutcome(input: ConflictDecisionInput): ConflictDec
     kind: 'conflict',
     conflict: {
       remoteContent: remote.content,
-      remoteRevision,
+      remoteContentRevision,
       detectedAt,
     },
   };
@@ -106,8 +106,8 @@ export function decideConflictOutcome(input: ConflictDecisionInput): ConflictDec
 export type ConflictResolutionChoice = 'keep-mine' | 'use-theirs';
 
 export type ConflictResolutionPlan =
-  | { action: 'save-local'; contentToSave: string; expectedRevision: number }
-  | { action: 'adopt-remote'; contentToAdopt: string; revision: number };
+  | { action: 'save-local'; contentToSave: string; expectedContentRevision: number }
+  | { action: 'adopt-remote'; contentToAdopt: string; contentRevision: number };
 
 export interface ConflictResolutionInput {
   localContent: string;
@@ -117,7 +117,7 @@ export interface ConflictResolutionInput {
 /**
  * What each resolution choice means, as data.
  *
- * `keep-mine` re-saves the local content with `expectedRevision` set to the
+ * `keep-mine` re-saves the local content with `expectedContentRevision` set to the
  * revision we just observed, so the retry compare-and-swaps against the version
  * that caused the conflict instead of the stale one.
  *
@@ -139,14 +139,14 @@ export function planConflictResolution(
     return {
       action: 'save-local',
       contentToSave: input.localContent,
-      expectedRevision: input.conflict.remoteRevision,
+      expectedContentRevision: input.conflict.remoteContentRevision,
     };
   }
 
   return {
     action: 'adopt-remote',
     contentToAdopt: input.conflict.remoteContent,
-    revision: input.conflict.remoteRevision,
+    contentRevision: input.conflict.remoteContentRevision,
   };
 }
 

@@ -20,11 +20,21 @@ import { agentModelSaveRefusal } from '@/lib/ai/core/org-model-policy';
 export class PageRevisionMismatchError extends Error {
   currentRevision: number;
   expectedRevision?: number;
+  /** Set when the refusal came from the content lock rather than the row revision. */
+  currentContentRevision?: number;
+  expectedContentRevision?: number;
 
-  constructor(message: string, currentRevision: number, expectedRevision?: number) {
+  constructor(
+    message: string,
+    currentRevision: number,
+    expectedRevision?: number,
+    contentLock?: { current: number; expected: number | undefined }
+  ) {
     super(message);
     this.currentRevision = currentRevision;
     this.expectedRevision = expectedRevision;
+    this.currentContentRevision = contentLock?.current;
+    this.expectedContentRevision = contentLock?.expected;
   }
 }
 
@@ -73,7 +83,13 @@ export interface ApplyPageMutationInput {
   operation: ActivityOperation;
   updates: Record<string, unknown>;
   updatedFields?: string[];
+  /** Refuses the write unless the row is at this revision, whatever field last changed it. */
   expectedRevision?: number;
+  /**
+   * Refuses a change to the content unless the content is at this revision. What
+   * an editor saves against: it only conflicts with a real change to the text.
+   */
+  expectedContentRevision?: number;
   context: PageMutationContext;
   source?: PageVersionSource;
   tx?: typeof db;
@@ -101,6 +117,7 @@ export async function applyPageMutation({
   updates,
   updatedFields,
   expectedRevision,
+  expectedContentRevision,
   context,
   source,
   tx,
@@ -116,7 +133,7 @@ export async function applyPageMutation({
     throw new Error('Page not found');
   }
 
-  if (STRICT_REVISION && expectedRevision === undefined) {
+  if (STRICT_REVISION && expectedRevision === undefined && expectedContentRevision === undefined) {
     throw new PageRevisionMismatchError('Expected revision required', currentPage.revision, undefined);
   }
 
@@ -157,6 +174,25 @@ export async function applyPageMutation({
     ? (await readSheetDocument(pageId, database as never)) ?? storedContent
     : storedContent;
   const nextContent = updates.content !== undefined ? String(updates.content) : previousContent;
+
+  // Only a real change to the text, or to how it is read, moves the content
+  // lock, and only such a change can be refused by it. So a rename never
+  // conflicts with a save, and a resend of what is already stored (a second pane,
+  // a retry after a lost response) is not somebody else's edit.
+  const changesContent =
+    nextContent !== previousContent ||
+    (updates.contentMode !== undefined && updates.contentMode !== currentPage.contentMode);
+  const guardsContent = changesContent && expectedContentRevision !== undefined;
+  const contentLock = { current: currentPage.contentRevision, expected: expectedContentRevision };
+
+  if (guardsContent && currentPage.contentRevision !== expectedContentRevision) {
+    throw new PageRevisionMismatchError(
+      'Page content was modified since your last read',
+      currentPage.revision,
+      expectedRevision,
+      contentLock
+    );
+  }
 
   const contentFormatBefore = detectPageContentFormat(previousContent);
   const contentFormatAfter = detectPageContentFormat(nextContent);
@@ -233,6 +269,28 @@ export async function applyPageMutation({
 
   const stateHashAfter = computePageStateHash(nextPageState);
 
+  // An editor's save of the text already stored, with nothing else in it. There
+  // is nothing to write: another version and activity entry would record an edit
+  // that did not happen, and the caller already holds this content.
+  const isResendOfStoredContent =
+    expectedContentRevision !== undefined &&
+    !changesContent &&
+    Object.keys(updates).every((field) => field === 'content');
+
+  if (isResendOfStoredContent) {
+    return {
+      pageId,
+      driveId: currentPage.driveId,
+      nextRevision: currentPage.revision,
+      stateHashBefore,
+      stateHashAfter: stateHashBefore,
+      contentRefBefore: contentRefBefore ?? null,
+      contentRefAfter: contentRefBefore ?? null,
+      contentFormatBefore,
+      contentFormatAfter: contentFormatBefore,
+    };
+  }
+
   // A sheet's content lives in rows, so a content write to one takes a
   // different path entirely.
   //
@@ -305,9 +363,11 @@ export async function applyPageMutation({
       );
     }
 
-    const updateWhere = expectedRevision !== undefined
-      ? and(eq(pages.id, pageId), eq(pages.revision, expectedRevision))
-      : eq(pages.id, pageId);
+    const updateWhere = and(
+      eq(pages.id, pageId),
+      ...(expectedRevision !== undefined ? [eq(pages.revision, expectedRevision)] : []),
+      ...(guardsContent ? [eq(pages.contentRevision, expectedContentRevision)] : [])
+    );
 
     const [updated] = await transaction
       .update(pages)
@@ -315,6 +375,7 @@ export async function applyPageMutation({
         ...updates,
         // Rows are the truth for a sheet; the column would be a stale copy.
         ...(isSheetContentWrite ? { content: '' } : {}),
+        ...(changesContent ? { contentRevision: currentPage.contentRevision + 1 } : {}),
         revision: nextRevision,
         stateHash: stateHashAfter,
         updatedAt: new Date(),
@@ -326,7 +387,8 @@ export async function applyPageMutation({
       throw new PageRevisionMismatchError(
         'Page was modified while applying changes',
         currentPage.revision,
-        expectedRevision
+        expectedRevision,
+        guardsContent ? contentLock : undefined
       );
     }
 

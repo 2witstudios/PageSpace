@@ -995,24 +995,25 @@ describe('sheet store (integration)', () => {
 
   describe('page revision', () => {
     it('bumps on a row write, so an open editor sees a conflict', async () => {
-      // The editor holds an `expectedRevision`. A row write that leaves it
-      // alone is invisible to that guard, and the editor's next save then
+      // The editor holds an `expectedContentRevision`. A row write that leaves
+      // it alone is invisible to that guard, and the editor's next save then
       // deletes every row absent from its stale document.
       const { pageId, ownerId } = await makeSheet();
 
       const before = await db
-        .select({ revision: pages.revision })
+        .select({ revision: pages.revision, contentRevision: pages.contentRevision })
         .from(pages)
         .where(eq(pages.id, pageId));
 
       await setCells({ pageId }, [{ address: 'A1', value: 'x' }], { userId: ownerId });
 
       const after = await db
-        .select({ revision: pages.revision })
+        .select({ revision: pages.revision, contentRevision: pages.contentRevision })
         .from(pages)
         .where(eq(pages.id, pageId));
 
       expect(after[0].revision).toBeGreaterThan(before[0].revision);
+      expect(after[0].contentRevision).toBeGreaterThan(before[0].contentRevision);
     });
   });
 

@@ -28,35 +28,35 @@ describe('readContent', () => {
 describe('decideConflictOutcome', () => {
   it('given a refetched remote page with a revision, should park it as a conflict', () => {
     const outcome = decideConflictOutcome({
-      conflictBody: { error: 'Page was modified', currentRevision: 4, expectedRevision: 3 },
-      remotePage: { content: 'their text', revision: 4 },
+      conflictBody: { error: 'Page was modified', currentContentRevision: 4, expectedContentRevision: 3 },
+      remotePage: { content: 'their text', contentRevision: 4 },
       detectedAt: 1000,
     });
 
     expect(outcome).toEqual({
       kind: 'conflict',
-      conflict: { remoteContent: 'their text', remoteRevision: 4, detectedAt: 1000 },
+      conflict: { remoteContent: 'their text', remoteContentRevision: 4, detectedAt: 1000 },
     });
   });
 
   it('given a remote page with null content, should treat it as an empty remote document', () => {
     const outcome = decideConflictOutcome({
-      conflictBody: { currentRevision: 9 },
-      remotePage: { content: null, revision: 9 },
+      conflictBody: { currentContentRevision: 9 },
+      remotePage: { content: null, contentRevision: 9 },
       detectedAt: 5,
     });
 
     expect(outcome).toEqual({
       kind: 'conflict',
-      conflict: { remoteContent: '', remoteRevision: 9, detectedAt: 5 },
+      conflict: { remoteContent: '', remoteContentRevision: 9, detectedAt: 5 },
     });
   });
 
   it('given a remote page with an absent content field, should error rather than offer an empty document', () => {
     // Coercing absent content to '' would let "Use theirs" wipe the local text.
     const outcome = decideConflictOutcome({
-      conflictBody: { currentRevision: 4 },
-      remotePage: { revision: 4 },
+      conflictBody: { currentContentRevision: 4 },
+      remotePage: { contentRevision: 4 },
       detectedAt: 1000,
     });
 
@@ -65,22 +65,22 @@ describe('decideConflictOutcome', () => {
     expect(outcome.message).toContain('still here');
   });
 
-  it('given a remote page without a revision, should fall back to currentRevision from the 409 body', () => {
+  it('given a remote page without a revision, should fall back to currentContentRevision from the 409 body', () => {
     const outcome = decideConflictOutcome({
-      conflictBody: { currentRevision: 7, expectedRevision: 6 },
+      conflictBody: { currentContentRevision: 7, expectedContentRevision: 6 },
       remotePage: { content: 'their text' },
       detectedAt: 2,
     });
 
     expect(outcome).toEqual({
       kind: 'conflict',
-      conflict: { remoteContent: 'their text', remoteRevision: 7, detectedAt: 2 },
+      conflict: { remoteContent: 'their text', remoteContentRevision: 7, detectedAt: 2 },
     });
   });
 
   it('given the refetch failed, should return an error rather than a conflict', () => {
     const outcome = decideConflictOutcome({
-      conflictBody: { currentRevision: 4 },
+      conflictBody: { currentContentRevision: 4 },
       remotePage: null,
       detectedAt: 1000,
     });
@@ -103,13 +103,13 @@ describe('decideConflictOutcome', () => {
   it('given a missing 409 body, should still park a conflict when the remote page carries a revision', () => {
     const outcome = decideConflictOutcome({
       conflictBody: null,
-      remotePage: { content: 'their text', revision: 12 },
+      remotePage: { content: 'their text', contentRevision: 12 },
       detectedAt: 3,
     });
 
     expect(outcome).toEqual({
       kind: 'conflict',
-      conflict: { remoteContent: 'their text', remoteRevision: 12, detectedAt: 3 },
+      conflict: { remoteContent: 'their text', remoteContentRevision: 12, detectedAt: 3 },
     });
   });
 });
@@ -117,7 +117,7 @@ describe('decideConflictOutcome', () => {
 describe('planConflictResolution', () => {
   const conflict: DocumentConflict = {
     remoteContent: 'their text',
-    remoteRevision: 11,
+    remoteContentRevision: 11,
     detectedAt: 1,
   };
 
@@ -125,7 +125,7 @@ describe('planConflictResolution', () => {
     expect(planConflictResolution('keep-mine', { localContent: 'my text', conflict })).toEqual({
       action: 'save-local',
       contentToSave: 'my text',
-      expectedRevision: 11,
+      expectedContentRevision: 11,
     });
   });
 
@@ -133,7 +133,7 @@ describe('planConflictResolution', () => {
     expect(planConflictResolution('use-theirs', { localContent: 'my text', conflict })).toEqual({
       action: 'adopt-remote',
       contentToAdopt: 'their text',
-      revision: 11,
+      contentRevision: 11,
     });
   });
 });

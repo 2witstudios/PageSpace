@@ -58,31 +58,39 @@ const RIGHTS = 'GET /api/pages/notes/permissions/check';
 const TREE = 'GET /api/drives/d1/pages';
 
 /** The stored page: what GET and a successful PATCH answer. */
-const stored = { title: 'Notes', content: '<p>Stored</p>', revision: 3 };
+const stored = { title: 'Notes', content: '<p>Stored</p>', revision: 3, contentRevision: 3 };
 
 const pageBody = () =>
   Response.json({
     ...pageRow('notes', 'DOCUMENT', { parentId: 'brief', title: stored.title }),
     content: stored.content,
     revision: stored.revision,
+    contentRevision: stored.contentRevision,
     children: [],
     messages: [],
   });
 
 const getPage: FakeRoute = () => pageBody();
 
-/** apps/web's PATCH: applies the change and bumps the revision, or 409s on a stale one. */
+/** apps/web's PATCH: only a real change to the text is checked against, or moves, the content lock. */
 const savePage: FakeRoute = (request: Recorded) => {
-  const body = request.body as { content?: string; title?: string; expectedRevision?: number };
-  if (body.expectedRevision !== stored.revision) {
+  const body = request.body as { content?: string; title?: string; expectedContentRevision?: number };
+  const changesContent = body.content !== undefined && body.content !== stored.content;
+  if (changesContent && body.expectedContentRevision !== stored.contentRevision) {
     return Response.json(
-      { error: 'Page was modified', currentRevision: stored.revision, expectedRevision: body.expectedRevision },
+      {
+        error: 'Page was modified',
+        currentRevision: stored.revision,
+        currentContentRevision: stored.contentRevision,
+        expectedContentRevision: body.expectedContentRevision,
+      },
       { status: 409 },
     );
   }
   if (body.content !== undefined) stored.content = body.content;
   if (body.title !== undefined) stored.title = body.title;
   stored.revision += 1;
+  if (changesContent) stored.contentRevision += 1;
   return pageBody();
 };
 
@@ -100,6 +108,7 @@ beforeEach(() => {
   stored.title = 'Notes';
   stored.content = '<p>Stored</p>';
   stored.revision = 3;
+  stored.contentRevision = 3;
 });
 
 /** The tree as a sibling pane holds it: every title, top first. */
@@ -217,7 +226,7 @@ describe('editing a document in the Files object', () => {
         title: 'Notes',
         beforePause: 0,
         stateWhileTyping: 'Unsaved changes',
-        sent: [['tok-1', { content: '<p>Draft</p>', expectedRevision: 3 }]],
+        sent: [['tok-1', { content: '<p>Draft</p>', expectedContentRevision: 3 }]],
         socketId: 'sock-me',
         stored: '<p>Draft</p>',
         state: 'Saved',
@@ -260,7 +269,7 @@ describe('editing a document in the Files object', () => {
       given: 'text typed, then the editor left before the pause',
       should: 'save it without waiting for the pause',
       actual: saves(web).map((request) => request.body),
-      expected: [{ content: '<p>Quick</p>', expectedRevision: 3 }],
+      expected: [{ content: '<p>Quick</p>', expectedContentRevision: 3 }],
     });
   });
 
@@ -277,7 +286,7 @@ describe('editing a document in the Files object', () => {
       given: 'text typed, then the document closed before the pause',
       should: 'save it as it closes, then let SWR have the page again',
       actual: [saves(web).map((request) => request.body), isEditingDocument(getUiState(), 'notes')],
-      expected: [[{ content: '<p>Last words</p>', expectedRevision: 3 }], false],
+      expected: [[{ content: '<p>Last words</p>', expectedContentRevision: 3 }], false],
     });
   });
 
@@ -287,6 +296,7 @@ describe('editing a document in the Files object', () => {
     // Someone else saves first.
     stored.content = '<p>Theirs</p>';
     stored.revision = 4;
+    stored.contentRevision = 4;
     await type(container, '<p>Mine</p>');
     await settle(() => {
       if (!container.querySelector('[data-save-conflict]')) throw new Error('no conflict');
@@ -320,6 +330,7 @@ describe('editing a document in the Files object', () => {
     await editable(container);
     stored.content = '<p>Theirs</p>';
     stored.revision = 4;
+    stored.contentRevision = 4;
     await type(container, '<p>Mine</p>');
     await settle(() => {
       if (!container.querySelector('[data-save-conflict]')) throw new Error('no conflict');
@@ -335,7 +346,7 @@ describe('editing a document in the Files object', () => {
       given: 'a conflict the viewer settles by keeping their text',
       should: 'save it over the revision now stored, and clear the conflict',
       actual: [saves(web).at(-1)?.body, stored.content, container.querySelector('[data-save-conflict]')],
-      expected: [{ content: '<p>Mine</p>', expectedRevision: 4 }, '<p>Mine</p>', null],
+      expected: [{ content: '<p>Mine</p>', expectedContentRevision: 4 }, '<p>Mine</p>', null],
     });
   });
 
@@ -344,6 +355,7 @@ describe('editing a document in the Files object', () => {
     await editable(container);
     stored.content = '<p>Theirs</p>';
     stored.revision = 4;
+    stored.contentRevision = 4;
     await type(container, '<p>Mine</p>');
     await settle(() => {
       if (!container.querySelector('[data-save-conflict]')) throw new Error('no conflict');
@@ -363,7 +375,7 @@ describe('editing a document in the Files object', () => {
       given: 'a conflict the viewer settles by taking the stored copy, then an edit',
       should: 'show the stored copy, and save the next edit against its revision',
       actual: [container.querySelector('[data-save-conflict]'), saves(web).at(-1)?.body],
-      expected: [null, { content: '<p>Theirs, edited</p>', expectedRevision: 4 }],
+      expected: [null, { content: '<p>Theirs, edited</p>', expectedContentRevision: 4 }],
     });
   });
 
@@ -414,8 +426,8 @@ describe('editing a document in the Files object', () => {
       expected: [
         ['Mine', 'Failed to update page'],
         [
-          { content: '<p>Mine</p>', expectedRevision: 3 },
-          { content: '<p>Mine</p>', expectedRevision: 3 },
+          { content: '<p>Mine</p>', expectedContentRevision: 3 },
+          { content: '<p>Mine</p>', expectedContentRevision: 3 },
         ],
         '<p>Mine</p>',
       ],
@@ -430,6 +442,7 @@ describe('someone else’s save (page:content-updated)', () => {
     const editorNode = bodyOf(container);
     stored.content = '<p>Theirs</p>';
     stored.revision = 4;
+    stored.contentRevision = 4;
     const before = web.count(PAGE);
     realtime.emit('page:content-updated', { driveId: 'd1', pageId: 'notes', socketId: 'sock-other' });
     await settle(() => {
@@ -449,6 +462,7 @@ describe('someone else’s save (page:content-updated)', () => {
     await type(container, '<p>Mine</p>');
     stored.content = '<p>Theirs</p>';
     stored.revision = 4;
+    stored.contentRevision = 4;
     const before = web.count(PAGE);
     realtime.emit('page:content-updated', { driveId: 'd1', pageId: 'notes', socketId: 'sock-other' });
     await pass(50);
@@ -491,7 +505,7 @@ describe('revalidation mid-edit', () => {
     await act(async () => {
       await swr.mutate?.(
         '/api/pages/notes',
-        (current: unknown) => ({ ...(current as object), content: '<p>Theirs</p>', revision: 9 }),
+        (current: unknown) => ({ ...(current as object), content: '<p>Theirs</p>', revision: 9, contentRevision: 9 }),
         { revalidate: false },
       );
     });
@@ -504,7 +518,7 @@ describe('revalidation mid-edit', () => {
       given: 'SWR asked to revalidate the page, then a newer copy written into it, while the viewer has unsaved text',
       should: 'fetch nothing, keep the viewer’s text, and save it against the revision the editor knew',
       actual: [during, saves(web)[0]?.body],
-      expected: [[0, 'Mine'], { content: '<p>Mine</p>', expectedRevision: 3 }],
+      expected: [[0, 'Mine'], { content: '<p>Mine</p>', expectedContentRevision: 3 }],
     });
   });
 
@@ -517,7 +531,7 @@ describe('revalidation mid-edit', () => {
     await act(async () => {
       await swr.mutate?.(
         '/api/pages/notes',
-        (current: unknown) => ({ ...(current as object), content: '<p>Revalidated</p>', revision: 4 }),
+        (current: unknown) => ({ ...(current as object), content: '<p>Revalidated</p>', revision: 4, contentRevision: 4 }),
         { revalidate: false },
       );
     });
@@ -563,7 +577,7 @@ describe('editing the title', () => {
         field: field.value,
       },
       expected: {
-        sent: [{ title: 'Launch notes', expectedRevision: 3 }],
+        sent: [{ title: 'Launch notes' }],
         treeAtOnce: ['Brief', 'Launch notes'],
         stored: 'Launch notes',
         current: 'Launch notes',
@@ -608,8 +622,8 @@ describe('editing the title', () => {
       actual: [saves(web).map((request) => request.body), container.querySelector('[data-save-conflict]')],
       expected: [
         [
-          { content: '<p>Body</p>', title: 'Plan', expectedRevision: 3 },
-          { content: '<p>Body, more</p>', expectedRevision: 4 },
+          { content: '<p>Body</p>', title: 'Plan', expectedContentRevision: 3 },
+          { content: '<p>Body, more</p>', expectedContentRevision: 4 },
         ],
         null,
       ],
@@ -638,6 +652,7 @@ describe('leaving with text the server does not have', () => {
     await editable(container);
     stored.content = '<p>Theirs</p>';
     stored.revision = 4;
+    stored.contentRevision = 4;
     await type(container, '<p>Mine</p>');
     await settle(() => {
       if (!container.querySelector('[data-save-conflict]')) throw new Error('no conflict');
@@ -675,7 +690,7 @@ describe('leaving with text the server does not have', () => {
       should: 'keep their text as a draft, restore it into the editor, and surface the conflict again',
       actual: shown,
       expected: {
-        kept: { patch: { content: '<p>Mine</p>' }, revision: 3 },
+        kept: { patch: { content: '<p>Mine</p>' }, contentRevision: 3 },
         text: 'Mine',
         restored: DRAFT_RESTORED_NOTICE,
         stored: '<p>Theirs</p>',
@@ -714,9 +729,9 @@ describe('leaving with text the server does not have', () => {
         back.container.querySelector('[data-draft-restored]'),
       ],
       expected: [
-        { patch: { content: '<p>Mine</p>' }, revision: 3 },
+        { patch: { content: '<p>Mine</p>' }, contentRevision: 3 },
         '<p>Mine</p>',
-        [{ content: '<p>Mine</p>', expectedRevision: 3 }],
+        [{ content: '<p>Mine</p>', expectedContentRevision: 3 }],
         null,
       ],
     });
@@ -948,5 +963,67 @@ describe('a closing save that answers after the page reopened', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('nobody else touched the text', () => {
+  test('a rename elsewhere does not refuse the next save', async () => {
+    const { container, web } = show({});
+    await editable(container);
+    // Renamed in the sidebar or another tab: the page moved on, the text did not.
+    stored.title = 'Renamed elsewhere';
+    stored.revision = 9;
+    await type(container, '<p>Mine</p>');
+    await settle(() => {
+      if (saves(web).length < 1) throw new Error('not saved');
+    });
+    await settle(() => {
+      if (stored.content !== '<p>Mine</p>') throw new Error('not stored');
+    });
+    assert({
+      given: 'a save after the page was renamed somewhere else',
+      should: 'save against the content revision it opened with, with no conflict',
+      actual: [saves(web)[0].body, container.querySelector('[data-save-conflict]')],
+      expected: [{ content: '<p>Mine</p>', expectedContentRevision: 3 }, null],
+    });
+  });
+
+  test('a rename alone carries no lock', async () => {
+    const { container, web } = show({});
+    await editable(container);
+    const field = focusTitle(container);
+    typeInto(field, 'Plan');
+    press(field, 'Enter');
+    await settle(() => {
+      if (saves(web).length < 1) throw new Error('not saved');
+    });
+    assert({
+      given: 'a new title and no waiting text',
+      should: 'send only the title',
+      actual: saves(web)[0].body,
+      expected: { title: 'Plan' },
+    });
+  });
+
+  test('a rename revalidated into SWR brings the title across and leaves the body', async () => {
+    const { container } = show({});
+    await editable(container);
+    const editorNode = bodyOf(container);
+    await act(async () => {
+      await swr.mutate?.(
+        '/api/pages/notes',
+        (current: unknown) => ({ ...(current as object), title: 'Renamed elsewhere', revision: 9 }),
+        { revalidate: false },
+      );
+    });
+    await settle(() => {
+      if (focusTitle(container).value !== 'Renamed elsewhere') throw new Error('title not drawn');
+    });
+    assert({
+      given: 'a newer page revision with the same content revision',
+      should: 'keep the same editor showing the same text',
+      actual: [bodyOf(container) === editorNode, textOf(container)],
+      expected: [true, 'Stored'],
+    });
   });
 });

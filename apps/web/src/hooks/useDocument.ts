@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { createId } from '@paralleldrive/cuid2';
-import { useDocumentManagerStore, DocumentState } from '@/stores/useDocumentManagerStore';
+import { createPageSaveSerializer, isOwnUnconfirmedSave } from '@pagespace/lib/documents/page-save';
+import { isOlderContentRevision, useDocumentManagerStore, DocumentState } from '@/stores/useDocumentManagerStore';
 import { useDirtyStore } from '@/stores/useDirtyStore';
 import { toast } from 'sonner';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -14,6 +15,14 @@ import {
   type ConflictResponseBody,
   type RemotePageSnapshot,
 } from '@/lib/documents/conflict-resolution';
+
+/**
+ * Shared by every hook instance: a page can be mounted in the centre panel and
+ * an agent pane at once, and both save on window blur.
+ */
+const pageSaves = createPageSaveSerializer<boolean>();
+
+type SaveOptions = { expectedContentRevision?: number; resolvingConflict?: boolean };
 
 export const useDocumentState = (pageId: string) => {
   const document = useDocumentManagerStore(
@@ -66,18 +75,16 @@ export const useDocumentSaving = (pageId: string) => {
     useDocumentManagerStore.setState({ savingDocuments: newSaving });
   }, []);
 
-  const saveDocument = useCallback(
-    async (
-      content: string,
-      options?: { expectedRevision?: number; resolvingConflict?: boolean }
-    ) => {
+  const sendSave = useCallback(
+    async (content: string, options?: SaveOptions, mayClaimOwnSave = true): Promise<boolean> => {
       // Deepest guard: while a conflict is parked the stored revision is
       // known-stale, so ONLY the resolution path may write. This is an explicit
       // per-call opt-in rather than a temporary clear of the shared conflict
       // state — clearing it early would open the debounce/forceSave guards for
       // the whole duration of the awaited retry, letting a keystroke fire a
       // second PATCH with the stale revision and park a phantom conflict for a
-      // save that actually succeeded.
+      // save that actually succeeded. Checked here as well as on entry, because
+      // a save can wait behind another that ends in a conflict.
       if (
         !options?.resolvingConflict &&
         !canScheduleSave({
@@ -87,13 +94,17 @@ export const useDocumentSaving = (pageId: string) => {
         return false;
       }
 
+      // Whether the server has definitely answered about this save. Until it
+      // has, a failure leaves open that the text was stored all the same.
+      let outcomeKnown = false;
+
       try {
         const saveStartTime = Date.now();
 
         markAsSaving(pageId);
 
         const docBeforeSave = useDocumentManagerStore.getState().documents.get(pageId);
-        const expectedRevision = options?.expectedRevision ?? docBeforeSave?.revision;
+        const expectedContentRevision = options?.expectedContentRevision ?? docBeforeSave?.contentRevision;
 
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
@@ -105,10 +116,12 @@ export const useDocumentSaving = (pageId: string) => {
         const response = await fetchWithAuth(`/api/pages/${pageId}`, {
           method: 'PATCH',
           headers,
-          body: JSON.stringify({ content, expectedRevision, changeGroupId: sessionId }),
+          body: JSON.stringify({ content, expectedContentRevision, changeGroupId: sessionId }),
         });
 
         if (!response.ok) {
+          outcomeKnown = response.status < 500;
+
           if (response.status === 409) {
             // NEVER replace the user's buffer here. Park the server's copy
             // beside it and let the user choose; `content` / `isDirty` and the
@@ -126,6 +139,23 @@ export const useDocumentSaving = (pageId: string) => {
             } catch {
               // Leave remotePage null — decideConflictOutcome reports an error
               // rather than offering a resolution we cannot honour.
+            }
+
+            // The refusal came from a save of ours that was stored but never
+            // answered, not from another writer. Nothing of anyone else's is at
+            // stake, so carry on from where that save left the document. Once
+            // only: a further refusal is a real one.
+            const unconfirmedContent = useDocumentManagerStore.getState().documents.get(pageId)?.unconfirmedContent;
+            if (
+              mayClaimOwnSave &&
+              remotePage?.contentRevision !== undefined &&
+              isOwnUnconfirmedSave(remotePage.content, unconfirmedContent)
+            ) {
+              useDocumentManagerStore.getState().updateDocument(pageId, {
+                contentRevision: remotePage.contentRevision,
+                unconfirmedContent: undefined,
+              });
+              return await sendSave(content, { ...options, expectedContentRevision: remotePage.contentRevision }, false);
             }
 
             const outcome = decideConflictOutcome({
@@ -162,10 +192,12 @@ export const useDocumentSaving = (pageId: string) => {
         }
 
         const savedPage = await response.json();
+        outcomeKnown = true;
 
-        if (savedPage.revision !== undefined) {
-          useDocumentManagerStore.getState().updateDocument(pageId, { revision: savedPage.revision });
-        }
+        useDocumentManagerStore.getState().updateDocument(pageId, {
+          unconfirmedContent: undefined,
+          ...(savedPage.contentRevision !== undefined ? { contentRevision: savedPage.contentRevision } : {}),
+        });
 
         const currentDoc = useDocumentManagerStore.getState().documents.get(pageId);
 
@@ -184,11 +216,33 @@ export const useDocumentSaving = (pageId: string) => {
       } catch (error) {
         console.error('Save failed:', error);
         toast.error('Failed to save document');
+        if (!outcomeKnown) {
+          useDocumentManagerStore.getState().updateDocument(pageId, { unconfirmedContent: content });
+        }
         clearSavingState(pageId);
         throw error;
       }
     },
     [pageId, markAsSaving, markAsSaved, clearSavingState, socket, sessionId]
+  );
+
+  const saveDocument = useCallback(
+    async (content: string, options?: SaveOptions): Promise<boolean> => {
+      if (
+        !options?.resolvingConflict &&
+        !canScheduleSave({
+          hasPendingConflict: useDocumentManagerStore.getState().conflicts.has(pageId),
+        })
+      ) {
+        return false;
+      }
+
+      // One save of a page at a time. A second one sent while the first is out
+      // would carry the same revision, and the first would refuse it: a person
+      // working alone told that someone else had saved.
+      return pageSaves.run(pageId, content, () => sendSave(content, options));
+    },
+    [pageId, sendSave]
   );
 
   return {
@@ -220,7 +274,7 @@ export const useDocument = (pageId: string) => {
           pageId,
           page.content || '',
           page.contentMode || 'html',
-          page.revision
+          page.contentRevision
         );
         setActiveDocument(pageId);
       } else {
@@ -261,7 +315,10 @@ export const useDocument = (pageId: string) => {
   );
 
   const updateContentFromServer = useCallback(
-    (newContent: string, revision?: number) => {
+    (newContent: string, contentRevision?: number) => {
+      const held = useDocumentManagerStore.getState().documents.get(pageId)?.contentRevision;
+      if (isOlderContentRevision(contentRevision, held)) return;
+
       const now = Date.now();
       const updates: Partial<DocumentState> = {
         content: newContent,
@@ -269,7 +326,7 @@ export const useDocument = (pageId: string) => {
         lastSaved: now,
         lastUpdateTime: now,
       };
-      if (revision !== undefined) updates.revision = revision;
+      if (contentRevision !== undefined) updates.contentRevision = contentRevision;
       useDocumentManagerStore.getState().updateDocument(pageId, updates);
     },
     [pageId]
@@ -343,7 +400,7 @@ export const useDocument = (pageId: string) => {
 
       // Serialize: a page can be open in more than one view, each rendering its
       // own banner. Without this, two clicks send two PATCHes with the same
-      // expectedRevision — the server takes one and 409s the other, parking a
+      // expected revision — the server takes one and 409s the other, parking a
       // spurious conflict on the conflict that was just resolved.
       if (state.resolvingConflicts.has(pageId)) return false;
 
@@ -364,7 +421,7 @@ export const useDocument = (pageId: string) => {
         const now = Date.now();
         state.updateDocument(pageId, {
           content: plan.contentToAdopt,
-          revision: plan.revision,
+          contentRevision: plan.contentRevision,
           isDirty: false,
           lastSaved: now,
           lastUpdateTime: now,
@@ -383,7 +440,7 @@ export const useDocument = (pageId: string) => {
       try {
         const saved = await saving
           .saveDocument(plan.contentToSave, {
-            expectedRevision: plan.expectedRevision,
+            expectedContentRevision: plan.expectedContentRevision,
             resolvingConflict: true,
           })
           .catch(() => false);

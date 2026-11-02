@@ -12,7 +12,7 @@ import type { RollbackDeps } from '../deps';
 
 function currentPageRow() {
   return {
-    id: 'page_1', revision: 3, content: 'BEFORE', title: 'T', parentId: null, position: 0,
+    id: 'page_1', revision: 3, contentRevision: 2, content: 'BEFORE', title: 'T', parentId: null, position: 0,
     isTrashed: false, type: 'DOCUMENT', driveId: 'drive_1', aiProvider: null, aiModel: null,
     systemPrompt: null, enabledTools: null, isPaginated: false, includeDrivePrompt: false,
     agentDefinition: null, visibleToGlobalAssistant: false, includePageTree: false,
@@ -20,12 +20,18 @@ function currentPageRow() {
   };
 }
 
-function makeDeps(opts: { selectRows: unknown[]; updateRows: unknown[] }): { deps: RollbackDeps; syncMentions: ReturnType<typeof vi.fn>; createPageVersion: ReturnType<typeof vi.fn> } {
+function makeDeps(opts: { selectRows: unknown[]; updateRows: unknown[] }): { deps: RollbackDeps; syncMentions: ReturnType<typeof vi.fn>; createPageVersion: ReturnType<typeof vi.fn>; sets: Array<Record<string, unknown>> } {
+  const sets: Array<Record<string, unknown>> = [];
   const syncMentions = vi.fn().mockResolvedValue({ mentionedByUserId: 'u', sourcePageId: 'page_1', newlyMentionedUserIds: [] });
   const createPageVersion = vi.fn().mockResolvedValue({ contentRef: 'ref_after', contentSize: 42 });
   const fakeDb = {
     select: () => ({ from: () => ({ where: () => ({ limit: () => Promise.resolve(opts.selectRows) }) }) }),
-    update: () => ({ set: () => ({ where: () => ({ returning: () => Promise.resolve(opts.updateRows) }) }) }),
+    update: () => ({
+      set: (values: Record<string, unknown>) => {
+        sets.push(values);
+        return { where: () => ({ returning: () => Promise.resolve(opts.updateRows) }) };
+      },
+    }),
   } as unknown as RollbackDeps['db'];
   const deps = {
     db: fakeDb,
@@ -42,7 +48,7 @@ function makeDeps(opts: { selectRows: unknown[]; updateRows: unknown[] }): { dep
     createMentionNotification: vi.fn(),
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
   } as unknown as RollbackDeps;
-  return { deps, syncMentions, createPageVersion };
+  return { deps, syncMentions, createPageVersion, sets };
 }
 
 describe('applyPageUpdateWithRevision (DI shell)', () => {
@@ -95,6 +101,26 @@ describe('applyPageUpdateWithRevision (DI shell)', () => {
       should: 'call syncMentions for content and skip it otherwise',
       actual: withoutContent.syncMentions.mock.calls.length,
       expected: 0,
+    });
+  });
+
+  it('moves the content lock only when the rollback restores content', async () => {
+    const restoresContent = makeDeps({ selectRows: [currentPageRow()], updateRows: [{ id: 'page_1' }] });
+    await applyPageUpdateWithRevision(restoresContent.deps, 'page_1', { content: 'NEW' });
+    const restoresTitle = makeDeps({ selectRows: [currentPageRow()], updateRows: [{ id: 'page_1' }] });
+    await applyPageUpdateWithRevision(restoresTitle.deps, 'page_1', { title: 'X' });
+
+    assert({
+      given: 'a rollback restoring content, so an editor holding the undone text must be stopped',
+      should: 'move the content revision',
+      actual: restoresContent.sets[0].contentRevision,
+      expected: 3,
+    });
+    assert({
+      given: 'a rollback of a rename, which has no bearing on the content',
+      should: 'leave the content revision alone',
+      actual: 'contentRevision' in restoresTitle.sets[0],
+      expected: false,
     });
   });
 });

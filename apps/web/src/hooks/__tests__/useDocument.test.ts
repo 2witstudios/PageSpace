@@ -6,7 +6,7 @@ import { useDirtyStore } from '@/stores/useDirtyStore';
 vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: vi.fn().mockResolvedValue({
     ok: true,
-    json: () => Promise.resolve({ content: 'test', revision: 1 }),
+    json: () => Promise.resolve({ content: 'test', contentRevision: 1 }),
   }),
 }));
 
@@ -62,11 +62,11 @@ describe('useDocument dirty flag integration', () => {
       const pageId = 'page-123';
 
       useDocumentManagerStore.getState().upsertDocument(pageId, 'content', 'html');
-      useDocumentManagerStore.getState().updateDocument(pageId, { revision: 5 });
+      useDocumentManagerStore.getState().updateDocument(pageId, { contentRevision: 5 });
 
       vi.mocked(fetchWithAuth).mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ content: 'content', revision: 6 }),
+        json: () => Promise.resolve({ content: 'content', contentRevision: 6 }),
       } as Response);
 
       const { result } = renderHook(() => useDocumentSaving(pageId));
@@ -76,7 +76,7 @@ describe('useDocument dirty flag integration', () => {
       });
 
       const doc = useDocumentManagerStore.getState().documents.get(pageId);
-      expect(doc?.revision).toBe(6);
+      expect(doc?.contentRevision).toBe(6);
     });
 
     it('given a document save fails, should retain the dirty flag for retry', async () => {
@@ -116,11 +116,11 @@ describe('useDocument dirty flag integration', () => {
       vi.mocked(fetchWithAuth).mockResolvedValueOnce({
         ok: false,
         status: 409,
-        json: () => Promise.resolve({ error: 'Page was modified', currentRevision: 4, expectedRevision: 3 }),
+        json: () => Promise.resolve({ error: 'Page was modified', currentContentRevision: 4, expectedContentRevision: 3 }),
       } as Response);
       vi.mocked(fetchWithAuth).mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ content: 'newer content', revision: 4 }),
+        json: () => Promise.resolve({ content: 'newer content', contentRevision: 4 }),
       } as Response);
 
       const { result } = renderHook(() => useDocumentSaving(pageId));
@@ -141,7 +141,7 @@ describe('useDocument dirty flag integration', () => {
       // The server's copy is parked, not merged.
       const conflict = useDocumentManagerStore.getState().conflicts.get(pageId);
       expect(conflict?.remoteContent).toBe('newer content');
-      expect(conflict?.remoteRevision).toBe(4);
+      expect(conflict?.remoteContentRevision).toBe(4);
       expect(typeof conflict?.detectedAt).toBe('number');
 
       expect(toast.error).toHaveBeenCalledWith(
@@ -160,7 +160,7 @@ describe('useDocument dirty flag integration', () => {
       vi.mocked(fetchWithAuth).mockResolvedValueOnce({
         ok: false,
         status: 409,
-        json: () => Promise.resolve({ error: 'Page was modified', currentRevision: 4, expectedRevision: 3 }),
+        json: () => Promise.resolve({ error: 'Page was modified', currentContentRevision: 4, expectedContentRevision: 3 }),
       } as Response);
       vi.mocked(fetchWithAuth).mockRejectedValueOnce(new Error('network down'));
 
@@ -188,11 +188,11 @@ describe('useDocument dirty flag integration', () => {
       vi.mocked(fetchWithAuth).mockResolvedValueOnce({
         ok: false,
         status: 409,
-        json: () => Promise.resolve({ error: 'Page was modified', currentRevision: 4, expectedRevision: 3 }),
+        json: () => Promise.resolve({ error: 'Page was modified', currentContentRevision: 4, expectedContentRevision: 3 }),
       } as Response);
       vi.mocked(fetchWithAuth).mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ content: 'newer content', revision: 4 }),
+        json: () => Promise.resolve({ content: 'newer content', contentRevision: 4 }),
       } as Response);
 
       const { result } = renderHook(() => useDocumentSaving(pageId));
@@ -205,7 +205,7 @@ describe('useDocument dirty flag integration', () => {
       clearTimeout(pendingTimeout);
     });
 
-    it('given an explicit expectedRevision, should send it instead of the stale stored revision', async () => {
+    it('given an explicit expectedContentRevision, should send it instead of the stale stored revision', async () => {
       const pageId = 'page-123';
 
       useDocumentManagerStore.getState().upsertDocument(pageId, 'content', 'html', 3);
@@ -213,14 +213,14 @@ describe('useDocument dirty flag integration', () => {
       const { result } = renderHook(() => useDocumentSaving(pageId));
 
       await act(async () => {
-        await result.current.saveDocument('content', { expectedRevision: 9 });
+        await result.current.saveDocument('content', { expectedContentRevision: 9 });
       });
 
       const opts = vi.mocked(fetchWithAuth).mock.calls[0][1] as { body: string };
-      expect(JSON.parse(opts.body)).toMatchObject({ expectedRevision: 9 });
+      expect(JSON.parse(opts.body)).toMatchObject({ expectedContentRevision: 9 });
     });
 
-    it('given a save with revision, should send expectedRevision in request body', async () => {
+    it('given a save with revision, should send expectedContentRevision in request body', async () => {
       const pageId = 'page-123';
 
       useDocumentManagerStore.getState().upsertDocument(pageId, 'content', 'html', 7);
@@ -235,7 +235,7 @@ describe('useDocument dirty flag integration', () => {
       expect(call[0]).toBe(`/api/pages/${pageId}`);
       const opts = call[1] as { method: string; body: string };
       expect(opts.method).toBe('PATCH');
-      expect(JSON.parse(opts.body)).toMatchObject({ expectedRevision: 7 });
+      expect(JSON.parse(opts.body)).toMatchObject({ expectedContentRevision: 7 });
     });
   });
 
@@ -261,7 +261,7 @@ describe('useDocument dirty flag integration', () => {
     const parkConflict = (pageId: string) => {
       useDocumentManagerStore.getState().setConflict(pageId, {
         remoteContent: 'their text',
-        remoteRevision: 11,
+        remoteContentRevision: 11,
         detectedAt: 1,
       });
     };
@@ -349,7 +349,7 @@ describe('useDocument dirty flag integration', () => {
 
       vi.mocked(fetchWithAuth).mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ content: 'my text', revision: 12 }),
+        json: () => Promise.resolve({ content: 'my text', contentRevision: 12 }),
       } as Response);
 
       const { result } = renderHook(() => useDocument(pageId));
@@ -360,12 +360,12 @@ describe('useDocument dirty flag integration', () => {
 
       const opts = vi.mocked(fetchWithAuth).mock.calls[0][1] as { method: string; body: string };
       expect(opts.method).toBe('PATCH');
-      expect(JSON.parse(opts.body)).toMatchObject({ content: 'my text', expectedRevision: 11 });
+      expect(JSON.parse(opts.body)).toMatchObject({ content: 'my text', expectedContentRevision: 11 });
 
       expect(useDocumentManagerStore.getState().conflicts.has(pageId)).toBe(false);
       const doc = useDocumentManagerStore.getState().documents.get(pageId);
       expect(doc?.content).toBe('my text');
-      expect(doc?.revision).toBe(12);
+      expect(doc?.contentRevision).toBe(12);
     });
 
     it('given keep-mine that 409s again, should keep the local text and re-park the fresh conflict', async () => {
@@ -377,11 +377,11 @@ describe('useDocument dirty flag integration', () => {
       vi.mocked(fetchWithAuth).mockResolvedValueOnce({
         ok: false,
         status: 409,
-        json: () => Promise.resolve({ error: 'Page was modified', currentRevision: 13, expectedRevision: 11 }),
+        json: () => Promise.resolve({ error: 'Page was modified', currentContentRevision: 13, expectedContentRevision: 11 }),
       } as Response);
       vi.mocked(fetchWithAuth).mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ content: 'even newer', revision: 13 }),
+        json: () => Promise.resolve({ content: 'even newer', contentRevision: 13 }),
       } as Response);
 
       const { result } = renderHook(() => useDocument(pageId));
@@ -393,7 +393,7 @@ describe('useDocument dirty flag integration', () => {
       expect(useDocumentManagerStore.getState().documents.get(pageId)?.content).toBe('my text');
       const conflict = useDocumentManagerStore.getState().conflicts.get(pageId);
       expect(conflict?.remoteContent).toBe('even newer');
-      expect(conflict?.remoteRevision).toBe(13);
+      expect(conflict?.remoteContentRevision).toBe(13);
     });
 
     it('given use-theirs, should adopt the remote copy, clear dirty, and send no PATCH', async () => {
@@ -412,7 +412,7 @@ describe('useDocument dirty flag integration', () => {
       expect(fetchWithAuth).not.toHaveBeenCalled();
       const doc = useDocumentManagerStore.getState().documents.get(pageId);
       expect(doc?.content).toBe('their text');
-      expect(doc?.revision).toBe(11);
+      expect(doc?.contentRevision).toBe(11);
       expect(doc?.isDirty).toBe(false);
       expect(useDirtyStore.getState().isDirty(pageId)).toBe(false);
       expect(useDocumentManagerStore.getState().conflicts.has(pageId)).toBe(false);
@@ -454,7 +454,7 @@ describe('useDocument dirty flag integration', () => {
       await act(async () => {
         releaseRetry({
           ok: true,
-          json: () => Promise.resolve({ content: 'my text', revision: 12 }),
+          json: () => Promise.resolve({ content: 'my text', contentRevision: 12 }),
         } as Response);
         await resolution;
       });
@@ -512,7 +512,7 @@ describe('useDocument dirty flag integration', () => {
       await act(async () => {
         releaseRetry({
           ok: true,
-          json: () => Promise.resolve({ content: 'my text', revision: 12 }),
+          json: () => Promise.resolve({ content: 'my text', contentRevision: 12 }),
         } as Response);
         await resolution;
       });
@@ -567,7 +567,7 @@ describe('useDocument dirty flag integration', () => {
       await act(async () => {
         releaseRetry({
           ok: true,
-          json: () => Promise.resolve({ content: 'my text', revision: 12 }),
+          json: () => Promise.resolve({ content: 'my text', contentRevision: 12 }),
         } as Response);
         await firstClick;
       });
@@ -640,7 +640,7 @@ describe('useDocument dirty flag integration', () => {
 
       vi.mocked(fetchWithAuth).mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ content: 'server content', contentMode: 'html', revision: 2 }),
+        json: () => Promise.resolve({ content: 'server content', contentMode: 'html', contentRevision: 2 }),
       } as Response);
 
       useDocumentManagerStore.getState().upsertDocument(pageId, 'stale cached content', 'html');
@@ -654,7 +654,7 @@ describe('useDocument dirty flag integration', () => {
       expect(fetchWithAuth).toHaveBeenCalledWith(`/api/pages/${pageId}`);
       const doc = useDocumentManagerStore.getState().documents.get(pageId);
       expect(doc?.content).toBe('server content');
-      expect(doc?.revision).toBe(2);
+      expect(doc?.contentRevision).toBe(2);
     });
 
     it('given a dirty document, should fetch from server but preserve unsaved content', async () => {
@@ -662,7 +662,7 @@ describe('useDocument dirty flag integration', () => {
 
       vi.mocked(fetchWithAuth).mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ content: 'server content', contentMode: 'html', revision: 3 }),
+        json: () => Promise.resolve({ content: 'server content', contentMode: 'html', contentRevision: 3 }),
       } as Response);
 
       useDocumentManagerStore.getState().upsertDocument(pageId, 'unsaved user edits', 'html');

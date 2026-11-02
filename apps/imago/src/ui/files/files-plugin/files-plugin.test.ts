@@ -264,7 +264,7 @@ describe('drafts kept for documents that closed unsaved', () => {
   test('keeping and dropping a draft', () => {
     const { keepDocumentDraft, dropDocumentDraft } = filesPlugin.transactions;
     const fresh = createInitialState();
-    const draft = { patch: { content: '<p>mine</p>' }, revision: 3 };
+    const draft = { patch: { content: '<p>mine</p>' }, contentRevision: 3 };
     const kept = keepDocumentDraft(fresh, { pageId: 'p1', draft });
     const dropped = dropDocumentDraft(kept, 'p1');
     assert({

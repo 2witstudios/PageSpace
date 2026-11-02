@@ -121,7 +121,7 @@ export const useSheetPersistence = ({ pageId, socket, resetHistory }: UseSheetPe
         if (!response.ok) return;
         const updatedPage = await response.json();
         if (shouldApplyServerContent(updatedPage.content, contentRef.current, isDirtyRef.current)) {
-          updateContentFromServer(updatedPage.content, updatedPage.revision);
+          updateContentFromServer(updatedPage.content, updatedPage.contentRevision);
         }
       } catch (error) {
         console.error('Failed to fetch updated sheet content:', error);

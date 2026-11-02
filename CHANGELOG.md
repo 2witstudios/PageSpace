@@ -5,6 +5,7 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- Documents no longer tell you someone else saved when nobody did, in PageSpace and in Imago. Renaming, moving or changing the privacy of a page while it's open no longer stops your next save, and neither do saves overlapping when you switch windows, press Cmd+S or have the page open in two panes. You're only asked to choose a version when the text really changed somewhere else, and the message now says it may have been another person, an AI agent, or another of your own tabs or devices. An edit made by someone else while you have unsaved text can also no longer be overwritten without asking.
 - Imago's Messages sidebar no longer switches layouts when you open a conversation. It is always the compact list: channels first, then direct messages. Opening a thread only highlights its row. Set to a drive it lists that drive's channels; set to All drives (Home's default) and on the direct-message pages it lists every drive's channels, grouped under each drive's name. Click a group's label to collapse it, for example to see only your direct messages. A collapsed group shows its unread total and stays collapsed across pages and reloads. The All / Channels / Direct filter and the separate direct-messages sidebar with search are gone.
 - Imago on phones:
   - Headers no longer sit under the notch or status bar, and the bottom bar and Ask button sit above the home indicator. Full-screen Imago keeps its message box above the home indicator too.

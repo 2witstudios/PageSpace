@@ -30,6 +30,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
     contentMode: 'contentMode',
     updatedAt: 'updatedAt',
     revision: 'revision',
+    contentRevision: 'contentRevision',
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({
@@ -159,6 +160,8 @@ describe('planAndApplyBackfill', () => {
     expect(sets[0].updatedAt).toBe(priorUpdatedAt);
     expect(sets[0].content).toBeUndefined();
     expect(sets[0].revision).toEqual(expect.objectContaining({ __sql: true }));
+    // The lock an open editor saves against: a relabel must stop its next save.
+    expect(sets[0].contentRevision).toEqual(expect.objectContaining({ __sql: true }));
   });
 
   it('leaves genuinely html-mode pages alone', async () => {

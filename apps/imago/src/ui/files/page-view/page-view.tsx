@@ -23,13 +23,14 @@ export type PageViewProps = {
 /** The page as a document the view can draw, or null for any other page type. */
 export const documentOf = (data: unknown): DocumentPage | null => {
   if (typeof data !== 'object' || data === null) return null;
-  const { id, title, type, content, revision, contentMode } = data as Record<string, unknown>;
+  const { id, title, type, content, revision, contentRevision, contentMode } = data as Record<string, unknown>;
   if (type !== 'DOCUMENT' || typeof id !== 'string') return null;
   return {
     id,
     title: typeof title === 'string' ? title : '',
     content: typeof content === 'string' ? content : '',
     revision: typeof revision === 'number' ? revision : 0,
+    contentRevision: typeof contentRevision === 'number' ? contentRevision : 0,
     contentMode: contentMode === 'markdown' ? 'markdown' : 'html',
   };
 };

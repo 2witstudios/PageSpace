@@ -124,6 +124,7 @@ export async function POST(
       content: updatedPage?.content,
       contentMode: updatedPage?.contentMode,
       revision: updatedPage?.revision,
+      contentRevision: updatedPage?.contentRevision,
     });
   } catch (error) {
     loggers.api.error('Error converting page content mode:', error as Error);

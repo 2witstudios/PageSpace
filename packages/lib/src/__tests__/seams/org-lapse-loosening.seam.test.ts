@@ -204,11 +204,11 @@ export const LOOSENING_WRITE_LEDGER: Readonly<Record<string, Verdict>> = {
   // ── generic page writers (computed .set objects, flagged fail-closed by review #2849 r3) ─────────────────
   'apps/web/src/services/api/page-mutation-service.ts#applyMutationInTx': {
     exempt: "the generic page mutation: `isPrivate` reaches it only from pageService.updatePage, which judges it in the same transaction against the locked page row (checkPageMayLoosen); `driveId` never does (moves go through page-cross-drive-move-service, guarded)",
-    writes: ['update(pages).set({ ..., ... })'],
+    writes: ['update(pages).set({ ..., ..., ... })'],
   },
   'apps/web/src/services/api/rollback/page-mutation.ts#applyPageUpdateWithRevision': {
     exempt: "rollback/redo's page write: the page and drive branches of executeRollback run it under guardDriveAccess with the page's privacy in the snapshot; the agent-config branch restores only whitelisted agent fields (AGENT_CONFIG_ROLLBACK_FIELDS: no isPrivate, no driveId)",
-    writes: ['update(pages).set({ ... })'],
+    writes: ['update(pages).set({ ..., ... })'],
   },
   'packages/lib/src/repositories/page-repository.ts#pageRepository.update': {
     exempt: 'its input type (UpdatePageInput) carries title, trash, parent, position and agent fields: never isPrivate or driveId',

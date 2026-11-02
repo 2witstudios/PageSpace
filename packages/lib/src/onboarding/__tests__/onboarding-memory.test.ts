@@ -64,6 +64,12 @@ describe('recordOnboardingContext', () => {
     expect(locked).toBe(true);
   });
 
+  test('moves the content lock, so an open editor cannot save over the block', async () => {
+    await recordOnboardingContext('u1', CONTEXT);
+    const { contentRevision } = setSpy.mock.calls[0][0] as { contentRevision?: { strings: string[] } };
+    expect(contentRevision?.strings.join('')).toContain('+ 1');
+  });
+
   test('preserves content the user or another agent already wrote', async () => {
     findFirst.mockResolvedValue({ content: '# About You\n\nI prefer blunt feedback.\n' });
     await recordOnboardingContext('u1', CONTEXT);

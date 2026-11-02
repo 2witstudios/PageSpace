@@ -9,7 +9,13 @@ export interface DocumentState {
   lastSaved: number;
   lastUpdateTime: number;
   saveTimeout?: NodeJS.Timeout;
-  revision?: number;
+  /** The content revision this text was made against: what the next save is checked by. */
+  contentRevision?: number;
+  /**
+   * Text sent in a save that never got an answer. It may have been stored, so a
+   * later refusal naming exactly this text is this client's own save.
+   */
+  unconfirmedContent?: string;
 }
 
 export interface DocumentManagerState {
@@ -27,11 +33,11 @@ export interface DocumentManagerState {
    * per-hook state: a page can be mounted by more than one view at once (the
    * centre panel and an agent pane via PagePaneView), and each would otherwise
    * hold its own boolean — leaving one banner's buttons live while the other's
-   * are disabled, so two resolutions could fire the same expectedRevision.
+   * are disabled, so two resolutions could fire the same expected revision.
    */
   resolvingConflicts: Set<string>;
 
-  upsertDocument: (pageId: string, content: string, contentMode: 'html' | 'markdown', revision?: number) => void;
+  upsertDocument: (pageId: string, content: string, contentMode: 'html' | 'markdown', contentRevision?: number) => void;
   updateDocument: (pageId: string, updates: Partial<DocumentState>) => void;
   getDocument: (pageId: string) => DocumentState | undefined;
   setActiveDocument: (pageId: string | null) => void;
@@ -45,6 +51,10 @@ export interface DocumentManagerState {
   setResolvingConflict: (pageId: string, resolving: boolean) => void;
 }
 
+/** Content revisions only rise, so a lower one describes a copy that has been replaced. */
+export const isOlderContentRevision = (incoming: number | undefined, held: number | undefined): boolean =>
+  incoming !== undefined && held !== undefined && incoming < held;
+
 export const useDocumentManagerStore = create<DocumentManagerState>((set, get) => ({
   documents: new Map(),
   activeDocumentId: null,
@@ -52,31 +62,38 @@ export const useDocumentManagerStore = create<DocumentManagerState>((set, get) =
   conflicts: new Map(),
   resolvingConflicts: new Set(),
 
-  upsertDocument: (pageId, content, contentMode, revision) => {
+  upsertDocument: (pageId, content, contentMode, contentRevision) => {
     const state = get();
     const existing = state.documents.get(pageId);
     const now = Date.now();
-    const newDocuments = new Map(state.documents);
 
     if (existing?.isDirty) {
-      // Preserve unsaved edits — only update revision; contentMode stays
-      // aligned with the preserved local content to avoid parse mismatch
-      newDocuments.set(pageId, {
-        ...existing,
-        ...(revision !== undefined ? { revision } : {}),
-      });
-    } else {
-      newDocuments.set(pageId, {
-        id: pageId,
-        content,
-        contentMode,
-        isDirty: false,
-        lastSaved: now,
-        lastUpdateTime: now,
-        ...(existing?.saveTimeout ? { saveTimeout: existing.saveTimeout } : {}),
-        ...(revision !== undefined ? { revision } : {}),
-      });
+      // Unsaved edits are kept, and so is the revision they were made against.
+      // Taking a newer one here would tell the next save its text was based on
+      // content it has never seen, and it would silently overwrite that content
+      // instead of being refused. Only a document with no revision yet takes one.
+      if (existing.contentRevision !== undefined || contentRevision === undefined) return;
+      const newDocuments = new Map(state.documents);
+      newDocuments.set(pageId, { ...existing, contentRevision });
+      set({ documents: newDocuments });
+      return;
     }
+
+    // A slow load must not undo what has happened since it set out: a save that
+    // answered first has already moved this document on.
+    if (isOlderContentRevision(contentRevision, existing?.contentRevision)) return;
+
+    const newDocuments = new Map(state.documents);
+    newDocuments.set(pageId, {
+      id: pageId,
+      content,
+      contentMode,
+      isDirty: false,
+      lastSaved: now,
+      lastUpdateTime: now,
+      ...(existing?.saveTimeout ? { saveTimeout: existing.saveTimeout } : {}),
+      ...(contentRevision !== undefined ? { contentRevision } : {}),
+    });
 
     set({ documents: newDocuments });
   },

@@ -48,6 +48,7 @@ function toPageData(dbPage: {
   createdAt: Date;
   updatedAt: Date;
   revision: number;
+  contentRevision: number;
   stateHash: string | null;
   isTrashed: boolean;
   trashedAt: Date | null;
@@ -69,6 +70,7 @@ function toPageData(dbPage: {
     createdAt: dbPage.createdAt,
     updatedAt: dbPage.updatedAt,
     revision: dbPage.revision,
+    contentRevision: dbPage.contentRevision,
     stateHash: dbPage.stateHash,
     isTrashed: dbPage.isTrashed,
     trashedAt: dbPage.trashedAt,
@@ -158,6 +160,7 @@ export interface PageData {
   createdAt: Date;
   updatedAt: Date;
   revision: number;
+  contentRevision: number;
   stateHash: string | null;
   isTrashed: boolean;
   trashedAt: Date | null;
@@ -207,6 +210,8 @@ export interface UpdatePageError {
   status: number;
   currentRevision?: number;
   expectedRevision?: number;
+  currentContentRevision?: number;
+  expectedContentRevision?: number;
 }
 
 export type UpdatePageResult = UpdatePageSuccess | UpdatePageError;
@@ -293,6 +298,8 @@ export interface UpdatePageParams {
 
 export interface UpdatePageOptions {
   expectedRevision?: number;
+  /** What an editor saves against: refuses only a change to content that has moved on. */
+  expectedContentRevision?: number;
   context?: Omit<PageMutationContext, 'userId'>;
   source?: PageVersionSource;
   skipPermissionCheck?: boolean;
@@ -574,22 +581,28 @@ export const pageService = {
           updates: processedUpdates,
           updatedFields,
           expectedRevision: options?.expectedRevision,
+          expectedContentRevision: options?.expectedContentRevision,
           context: mutationContext,
           source: options?.source,
         };
-        if (processedUpdates.isPrivate === false) {
-          // [D-OW-33] making a page readable by the whole drive loosens access: judged INSIDE the write's transaction,
-          // against the page row locked FOR UPDATE, so a concurrent "make private" cannot slip between the check and
-          // the write. Refused (OrgLapsedError) only when the page is private now and its drive's org is lapsed.
-          const result = await db.transaction(async (tx) => {
-            const [current] = await tx.select({ isPrivate: pages.isPrivate }).from(pages).where(eq(pages.id, pageId)).for('update');
-            if (current?.isPrivate === true && (await checkPageMayLoosen(tx, pageId, true))) throw new OrgLapsedError();
-            return applyPageMutation({ ...mutation, tx: tx as unknown as typeof db });
-          });
-          result.deferredTrigger?.();
-        } else {
-          await applyPageMutation(mutation);
-        }
+        // Every update holds the row, so the mutation reads the revision it is about to bump under the lock. An
+        // editor's save no longer checks the row revision, so nothing else stops a rename and a save racing: both
+        // would read N and write N+1, and the activity chain would hold two entries claiming the same place.
+        const result = await db.transaction(async (tx) => {
+          const [current] = await tx.select({ isPrivate: pages.isPrivate }).from(pages).where(eq(pages.id, pageId)).for('update');
+          // [D-OW-33] making a page readable by the whole drive loosens access: judged against the locked row, so a
+          // concurrent "make private" cannot slip between the check and the write. Refused (OrgLapsedError) only
+          // when the page is private now and its drive's org is lapsed.
+          if (
+            processedUpdates.isPrivate === false &&
+            current?.isPrivate === true &&
+            (await checkPageMayLoosen(tx, pageId, true))
+          ) {
+            throw new OrgLapsedError();
+          }
+          return applyPageMutation({ ...mutation, tx: tx as unknown as typeof db });
+        });
+        result.deferredTrigger?.();
       } catch (error) {
         // POL-8: a model or provider the drive's org does not allow is refused, nothing saved.
         if (error instanceof OrgModelPolicyError) {
@@ -599,9 +612,11 @@ export const pageService = {
           return {
             success: false,
             error: error.message,
-            status: error.expectedRevision === undefined ? 428 : 409,
+            status: error.expectedRevision === undefined && error.expectedContentRevision === undefined ? 428 : 409,
             currentRevision: error.currentRevision,
             expectedRevision: error.expectedRevision,
+            currentContentRevision: error.currentContentRevision,
+            expectedContentRevision: error.expectedContentRevision,
           };
         }
         throw error;

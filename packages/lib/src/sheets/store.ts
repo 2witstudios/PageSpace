@@ -2851,20 +2851,22 @@ function growExtent(
 }
 
 /**
- * Bump the page's revision and mtime after a row write.
+ * Bump the page's revisions and mtime after a row write.
  *
- * The sheet editor holds an `expectedRevision` and sends it on save. A row
- * write that leaves the revision alone is therefore INVISIBLE to that guard: a
- * form submission or an MCP cell write landing while somebody has the sheet
- * open would pass the check, and `replaceFromDocument` would then delete every
- * row absent from the editor's stale document. Bumping here restores the
- * conflict the old document path produced.
+ * The sheet editor holds an `expectedContentRevision` and sends it on save. A
+ * row write that leaves it alone is therefore INVISIBLE to that guard: a form
+ * submission or an MCP cell write landing while somebody has the sheet open
+ * would pass the check, and `replaceFromDocument` would then delete every row
+ * absent from the editor's stale document. Bumping here restores the conflict
+ * the old document path produced. `revision` moves too, for callers that check
+ * the row.
  */
 async function touchPage(pageId: string, exec: Executor): Promise<void> {
   await exec
     .update(pages)
     .set({
       revision: sql`${pages.revision} + 1`,
+      contentRevision: sql`${pages.contentRevision} + 1`,
       // `stateHash` moves too. Restore-diff decides a page is unchanged by
       // comparing a backup version's `stateHash` against the page's, so leaving
       // it at whatever the last DOCUMENT write computed meant a sheet that had

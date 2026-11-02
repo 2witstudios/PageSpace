@@ -109,7 +109,7 @@ export function PageSetupButton({ pageId }: PageSetupButtonProps) {
       store.updateDocument(pageId, {
         content: result.content,
         contentMode: result.contentMode,
-        revision: result.revision,
+        contentRevision: result.contentRevision,
         isDirty: false,
         lastSaved: Date.now(),
         lastUpdateTime: Date.now(),
