@@ -163,7 +163,7 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
       'fileSize', 'mimeType', 'originalFileName', 'filePath', 'fileMetadata',
       'processingStatus', 'processingError', 'processedAt', 'extractionMethod',
       'extractionMetadata', 'contentHash', 'excludeFromSearch', 'isPrivate',
-      'createdBy', 'createdAt', 'updatedAt', 'trashedAt', 'revision', 'stateHash',
+      'createdBy', 'createdAt', 'updatedAt', 'trashedAt', 'revision', 'contentRevision', 'stateHash',
       'driveId', 'parentId', 'originalParentId',
     ],
     excluded: {
