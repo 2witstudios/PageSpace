@@ -742,6 +742,7 @@ export async function replaceFromDocument(
   exec?: Executor
 ): Promise<{ rows: number }> {
   const run = async (tx: Executor) => {
+    await lockSheetPage(ref.pageId, tx);
     // EVERY tab the document describes, not just the first.
     //
     // The document is the complete statement of the sheet, and this is the only
@@ -882,6 +883,7 @@ export async function setCells(
   exec?: Executor
 ): Promise<SetCellsResult> {
   const run = async (tx: Executor): Promise<SetCellsResult> => {
+    await lockSheetPage(ref.pageId, tx);
     const tab = await ensureTab(ref, tx);
 
     const normalized = normalizeUpdates(updates);
@@ -1169,12 +1171,13 @@ export async function applyFormatOps(
   exec?: Executor
 ): Promise<ApplyFormatOpsResult> {
   const run = async (tx: Executor): Promise<ApplyFormatOpsResult> => {
+    await lockSheetPage(ref.pageId, tx);
     const tab = await ensureTab(ref, tx);
 
-    // 1. Validate and plan, before any lock.
+    // 1. Validate and plan, before taking tab or row locks.
     //
     // Everything a request can be refused for on its own is refused here, on
-    // the pre-lock snapshot, so a bad request costs no transaction time. (The
+    // the page-locked snapshot, before taking any tab or row locks. (The
     // re-plan in step 4 can still refuse, when the tab moved in between.) The
     // plan is also what the locks are derived from: `plan.rows` is exactly the
     // set of `sheet_rows` a per-cell op will write, and the tab-field flag and
@@ -1842,6 +1845,7 @@ export async function appendRows(
   exec?: Executor
 ): Promise<AppendRowsResult> {
   const run = async (tx: Executor): Promise<AppendRowsResult> => {
+    await lockSheetPage(ref.pageId, tx);
     const tab = await ensureTab(ref, tx);
     if (rows.length === 0) {
       // `max(rowIndex) + 1`, not the declared extent — a caller that plans its
@@ -1956,6 +1960,7 @@ export async function deleteRows(
   exec?: Executor
 ): Promise<{ deleted: number; rowCount: number }> {
   const run = async (tx: Executor) => {
+    await lockSheetPage(ref.pageId, tx);
     const tab = await getTab(ref, tx);
     if (!tab) throw new Error(`Sheet tab not found for page ${ref.pageId}`);
 
@@ -2100,6 +2105,7 @@ export async function deleteRows(
  */
 export async function rebuildTab(ref: TabRef, exec?: Executor): Promise<{ rows: number }> {
   const run = async (tx: Executor) => {
+    await lockSheetPage(ref.pageId, tx);
     const tab = await getTab(ref, tx);
     if (!tab) throw new Error(`Sheet tab not found for page ${ref.pageId}`);
 
@@ -2848,6 +2854,15 @@ function growExtent(
   return rowCount === tab.rowCount && columnCount === tab.columnCount
     ? null
     : { rowCount, columnCount };
+}
+
+/**
+ * Page before tabs before rows, including caller-owned transactions. Editor
+ * saves already hold this row while deriving their next revision; taking sheet
+ * locks first would deadlock with them when touchPage updates the page.
+ */
+async function lockSheetPage(pageId: string, exec: Executor): Promise<void> {
+  await exec.select({ id: pages.id }).from(pages).where(eq(pages.id, pageId)).for('update');
 }
 
 /**

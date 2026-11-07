@@ -14,7 +14,8 @@ permissions:
 jobs:
   unit-tests:
     name: Unit Tests (${{ matrix.suite }})
-    runs-on: ubuntu-latest
+    # Playwright 1.60 supports Ubuntu 24.04; ubuntu-latest can move ahead of it.
+    runs-on: ubuntu-24.04
 
     strategy:
       fail-fast: false
@@ -526,7 +527,8 @@ jobs:
   # specs pass for the wrong reason.
   e2e:
     name: E2E (agent-session user stories)
-    runs-on: ubuntu-latest
+    # Keep Chromium and its native dependencies on a supported distribution.
+    runs-on: ubuntu-24.04
 
     services:
       postgres:

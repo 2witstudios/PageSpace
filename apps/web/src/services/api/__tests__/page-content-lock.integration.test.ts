@@ -11,7 +11,7 @@
  */
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import { db } from '@pagespace/db/db';
-import { eq, inArray } from '@pagespace/db/operators';
+import { eq, inArray, sql } from '@pagespace/db/operators';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { users } from '@pagespace/db/schema/auth';
@@ -35,6 +35,8 @@ import { createPageVersion } from '@pagespace/lib/services/page-version-service'
 import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 import { applyPageMutation } from '../page-mutation-service';
 import { pageService } from '../page-service';
+import { appendRows, applyFormatOps, deleteRows, materializeFromDocument, readSheetDocument, setCells } from '@pagespace/lib/sheets/store';
+import { serializeSheetContent, parseSheetContent } from '@pagespace/lib/sheets/io';
 
 const createdDrives: string[] = [];
 const createdUsers: string[] = [];
@@ -181,4 +183,75 @@ describe('the content lock against real Postgres', () => {
       });
     }
   });
+
+  it.each(['cell', 'growing cell', 'append', 'delete', 'cell format', 'tab format', 'growing format'])(
+    'serializes an editor save with a concurrent %s writer without a page/sheet deadlock',
+    async (writer) => {
+      const initial = serializeSheetContent({
+        version: 1, rowCount: 2, columnCount: 2,
+        cells: { A1: 'before', A2: 'second' },
+      }, { pageId });
+      await db.update(pages).set({ type: 'SHEET', content: initial }).where(eq(pages.id, pageId));
+      await materializeFromDocument(pageId, initial);
+      const incoming = serializeSheetContent({
+        version: 1, rowCount: 2, columnCount: 2,
+        cells: { A1: 'editor', A2: 'second' },
+      }, { pageId });
+      let concurrent: Promise<unknown> | undefined;
+      try {
+        await db.transaction(async (tx) => {
+          await tx.select({ id: pages.id }).from(pages).where(eq(pages.id, pageId)).for('update');
+          const holder = await tx.execute(sql`SELECT pg_backend_pid() AS pid`);
+          const holderPid = Number(holder.rows[0].pid);
+          concurrent = db.transaction(async (other) => {
+            const ref = { pageId };
+            const actor = { userId };
+            switch (writer) {
+              case 'cell': return setCells(ref, [{ address: 'B2', value: 'writer' }], actor, other);
+              case 'growing cell': return setCells(ref, [{ address: 'C3', value: 'writer' }], actor, other);
+              case 'append': return appendRows(ref, [{ A: 'writer' }], actor, other);
+              case 'delete': return deleteRows(ref, 1, 1, actor, other);
+              case 'cell format': return applyFormatOps(ref, [{ type: 'setCellFormat', range: 'B2', patch: { bold: true } }], actor, other);
+              case 'tab format': return applyFormatOps(ref, [{ type: 'setColumnWidth', column: 'B', width: 240 }], actor, other);
+              default: return applyFormatOps(ref, [{ type: 'setCellFormat', range: 'C3', patch: { bold: true } }], actor, other);
+            }
+          });
+          // Attach immediately: a deadlock victim may reject before the holder.
+          void concurrent.catch(() => {});
+          const deadline = Date.now() + 3000;
+          for (;;) {
+            const waiting = await tx.execute(sql`SELECT count(*)::int AS n FROM pg_stat_activity
+              WHERE ${holderPid} = ANY(pg_blocking_pids(pid))`);
+            if (Number(waiting.rows[0].n) > 0) break;
+            if (Date.now() > deadline) throw new Error('Sheet writer never waited on the held page');
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+          // Original code reaches this with the sheet lock held by the writer,
+          // producing the exact pages -> sheet -> pages cycle from the review.
+          await applyPageMutation({
+            pageId, operation: 'update', updates: { content: incoming },
+            expectedContentRevision: 0, context: { userId }, tx,
+          });
+        });
+        await concurrent;
+        expect(await read()).toMatchObject({ revision: 2, contentRevision: 2 });
+        const projected = parseSheetContent((await readSheetDocument(pageId))!);
+        expect(projected.cells.A1).toBe('editor');
+        if (writer === 'cell') expect(projected.cells.B2).toBe('writer');
+        if (writer === 'growing cell') expect(projected.cells.C3).toBe('writer');
+        if (writer === 'append') expect(projected.cells.A3).toBe('writer');
+        if (writer === 'delete') expect(projected.cells.A2).toBeUndefined();
+        if (writer === 'cell format') expect(projected.formats?.B2).toMatchObject({ bold: true });
+        if (writer === 'growing format') expect(projected.formats?.C3).toMatchObject({ bold: true });
+        if (writer === 'tab format') expect(projected.columnWidths?.B).toBe(240);
+        const stale = await update({ content: incoming }, 1);
+        expect(stale).toMatchObject({ success: false, status: 409, currentContentRevision: 2 });
+      } finally {
+        // Never leave a rejected or pending writer leaking into the next case.
+        await concurrent?.catch(() => {});
+      }
+    }, 15000,
+  );
+
+
 });

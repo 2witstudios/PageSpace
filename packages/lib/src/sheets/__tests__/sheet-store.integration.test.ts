@@ -169,7 +169,7 @@ const holdBeforeInsert = (exec: StoreExecutor, hook: () => Promise<void>) => hol
 const holdBeforeUpdate = (exec: StoreExecutor, hook: () => Promise<void>) => holdFirst(exec, 'update', hook);
 
 /**
- * Resolves once ANOTHER connection is waiting on a `sheet_tabs` lock while
+ * Resolves once ANOTHER connection is waiting on a page or tab lock while
  * `pending` is still unsettled — so a test that releases a held transaction
  * after this knows the other writer really was blocked behind it, rather than
  * having quietly finished first and turned the race into a sequence.
@@ -182,10 +182,10 @@ async function waitForLockWaiter(pending: Promise<unknown>, timeoutMs = 10_000):
     if (settled) throw new Error('The other writer finished before it was seen waiting on the lock');
     const result = await db.execute(
       sql`SELECT count(*)::int AS waiting FROM pg_stat_activity
-          WHERE pid <> pg_backend_pid() AND wait_event_type = 'Lock' AND query ILIKE '%sheet_tabs%'`
+          WHERE pid <> pg_backend_pid() AND wait_event_type = 'Lock' AND (query ILIKE '%sheet_tabs%' OR query ILIKE '%pages%')`
     );
     if (Number((result.rows[0] as { waiting: number }).waiting) > 0) return;
-    if (Date.now() > deadline) throw new Error('No transaction ever waited on the sheet_tabs lock');
+    if (Date.now() > deadline) throw new Error('No transaction ever waited on the page or tab lock');
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }
@@ -1459,12 +1459,12 @@ describe('sheet store (integration)', () => {
       // whole `cells` object rather than the columns this call touched.
       //
       // The interleaving that loses the update: the row does not exist yet,
-      // so there is no row lock to take; the format write reads nothing, a
-      // `setCells` to column A of the same row commits, and then the format
-      // write upserts column C. Sequentially those two calls prove nothing —
+      // so a row lock alone cannot serialize the writes. The first
+      // writer now holds the page lock until it commits; the second must wait
+      // before reading the row, then preserve the first writer's columns. Sequentially those two calls prove nothing —
       // the second reads the first's row. So the format write runs inside an
       // open transaction whose first `sheet_rows` insert is held back until
-      // the value write has committed on another connection.
+      // the value write is observed waiting on another connection.
       const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 10 });
 
       let valueWrite: Promise<unknown> | null = null;
@@ -1475,7 +1475,7 @@ describe('sheet store (integration)', () => {
           { userId: ownerId },
           holdBeforeInsert(tx, async () => {
             valueWrite ??= setCells({ pageId }, [{ address: 'A5', value: 'kept' }], { userId: ownerId });
-            await valueWrite;
+            await waitForLockWaiter(valueWrite);
           })
         )
       );
@@ -1492,7 +1492,7 @@ describe('sheet store (integration)', () => {
       // value write and a format write to it can both read nothing and both
       // upsert; if the cell object under the column is replaced whole, the
       // second commit either drops the format or overwrites the just-entered
-      // value with `raw: ''`. Both orders are forced, the same way as above.
+      // value with `raw: ''`. Both commit orders are forced, the same way as above.
       const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 10 });
 
       // Format commits second.
@@ -1504,7 +1504,7 @@ describe('sheet store (integration)', () => {
           { userId: ownerId },
           holdBeforeInsert(tx, async () => {
             value ??= setCells({ pageId }, [{ address: 'C5', value: '=1+1' }], { userId: ownerId });
-            await value;
+            await waitForLockWaiter(value);
           })
         )
       );
@@ -1523,7 +1523,7 @@ describe('sheet store (integration)', () => {
           { userId: ownerId },
           holdBeforeInsert(tx, async () => {
             format ??= applyFormatOps({ pageId }, [{ type: 'setCellFormat', range: 'D7', patch: { italic: true } }], { userId: ownerId });
-            await format;
+            await waitForLockWaiter(format);
           })
         )
       );
