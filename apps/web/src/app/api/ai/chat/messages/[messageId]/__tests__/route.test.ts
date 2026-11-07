@@ -112,6 +112,7 @@ type PageLookupResult = {
   createdAt: Date;
   updatedAt: Date;
   revision: number;
+  contentRevision: number;
   stateHash: string | null;
   aiProvider: string | null;
   aiModel: string | null;
@@ -160,6 +161,7 @@ const mockPageLookup = (overrides: Partial<PageLookupResult> = {}): PageLookupRe
   createdAt: new Date(),
   updatedAt: new Date(),
   revision: 0,
+  contentRevision: 0,
   stateHash: null,
   aiProvider: null,
   aiModel: null,

@@ -196,6 +196,7 @@ describe('PUT /api/ai/page-agents/[agentId]/config', () => {
       pageId: mockAgentId,
       driveId: mockDriveId,
       nextRevision: 1,
+      nextContentRevision: 0,
       stateHashBefore: 'state_before',
       stateHashAfter: 'state_after',
       contentRefBefore: null,

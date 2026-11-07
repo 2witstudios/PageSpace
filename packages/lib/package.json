@@ -2239,6 +2239,11 @@
       "import": "./dist/content/page-type-validators.js",
       "require": "./dist/content/page-type-validators.js"
     },
+    "./documents/page-save": {
+      "types": "./dist/documents/page-save.d.ts",
+      "import": "./dist/documents/page-save.js",
+      "require": "./dist/documents/page-save.js"
+    },
     "./content/tree-utils": {
       "types": "./dist/content/tree-utils.d.ts",
       "import": "./dist/content/tree-utils.js",

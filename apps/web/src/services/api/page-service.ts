@@ -1,3 +1,4 @@
+import { normalizeEmptyDocumentContent as sanitizeEmptyContent } from '@pagespace/lib/documents/page-save';
 import { db } from '@pagespace/db/db'
 import { DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { eq, and, asc, desc, isNull } from '@pagespace/db/operators'
@@ -48,6 +49,7 @@ function toPageData(dbPage: {
   createdAt: Date;
   updatedAt: Date;
   revision: number;
+  contentRevision: number;
   stateHash: string | null;
   isTrashed: boolean;
   trashedAt: Date | null;
@@ -69,6 +71,7 @@ function toPageData(dbPage: {
     createdAt: dbPage.createdAt,
     updatedAt: dbPage.updatedAt,
     revision: dbPage.revision,
+    contentRevision: dbPage.contentRevision,
     stateHash: dbPage.stateHash,
     isTrashed: dbPage.isTrashed,
     trashedAt: dbPage.trashedAt,
@@ -78,46 +81,6 @@ function toPageData(dbPage: {
     enabledTools: dbPage.enabledTools as string[] | null,
     isPaginated: dbPage.isPaginated,
   };
-}
-
-/**
- * Content sanitization utility - cleans empty TipTap structures
- * Internal utility - not exported from module
- */
-function sanitizeEmptyContent(content: string): string {
-  if (!content || content.trim() === '') {
-    return '';
-  }
-
-  const trimmedContent = content.trim();
-
-  const emptyParagraphPatterns = [
-    /^<p><\/p>$/,
-    /^<p><br><\/p>$/,
-    /^<p>\s*<\/p>$/,
-    /^<p><br\s*\/><\/p>$/
-  ];
-
-  for (const pattern of emptyParagraphPatterns) {
-    if (pattern.test(trimmedContent)) {
-      return '';
-    }
-  }
-
-  try {
-    const parsed = JSON.parse(trimmedContent);
-    if (parsed.type === 'doc' &&
-        Array.isArray(parsed.content) &&
-        parsed.content.length === 1 &&
-        parsed.content[0].type === 'paragraph' &&
-        (!parsed.content[0].content || parsed.content[0].content.length === 0)) {
-      return '';
-    }
-  } catch {
-    // Not JSON, continue
-  }
-
-  return content;
 }
 
 /**
@@ -158,6 +121,7 @@ export interface PageData {
   createdAt: Date;
   updatedAt: Date;
   revision: number;
+  contentRevision: number;
   stateHash: string | null;
   isTrashed: boolean;
   trashedAt: Date | null;
@@ -207,6 +171,8 @@ export interface UpdatePageError {
   status: number;
   currentRevision?: number;
   expectedRevision?: number;
+  currentContentRevision?: number;
+  expectedContentRevision?: number;
 }
 
 export type UpdatePageResult = UpdatePageSuccess | UpdatePageError;
@@ -284,6 +250,7 @@ export interface CreatePageOptions {
 export interface UpdatePageParams {
   title?: string;
   content?: string;
+  contentMode?: 'html' | 'markdown';
   aiProvider?: string;
   aiModel?: string;
   parentId?: string | null;
@@ -293,6 +260,8 @@ export interface UpdatePageParams {
 
 export interface UpdatePageOptions {
   expectedRevision?: number;
+  /** What an editor saves against: refuses only a change to content that has moved on. */
+  expectedContentRevision?: number;
   context?: Omit<PageMutationContext, 'userId'>;
   source?: PageVersionSource;
   skipPermissionCheck?: boolean;
@@ -545,6 +514,8 @@ export const pageService = {
 
     const updatedFields = Object.keys(processedUpdates);
 
+    let committedPage: typeof pages.$inferSelect | undefined;
+
     if (updatedFields.length > 0) {
       try {
         const actorInfo = options?.context?.actorEmail
@@ -574,22 +545,41 @@ export const pageService = {
           updates: processedUpdates,
           updatedFields,
           expectedRevision: options?.expectedRevision,
+          expectedContentRevision: options?.expectedContentRevision,
           context: mutationContext,
           source: options?.source,
         };
-        if (processedUpdates.isPrivate === false) {
-          // [D-OW-33] making a page readable by the whole drive loosens access: judged INSIDE the write's transaction,
-          // against the page row locked FOR UPDATE, so a concurrent "make private" cannot slip between the check and
-          // the write. Refused (OrgLapsedError) only when the page is private now and its drive's org is lapsed.
-          const result = await db.transaction(async (tx) => {
-            const [current] = await tx.select({ isPrivate: pages.isPrivate }).from(pages).where(eq(pages.id, pageId)).for('update');
-            if (current?.isPrivate === true && (await checkPageMayLoosen(tx, pageId, true))) throw new OrgLapsedError();
-            return applyPageMutation({ ...mutation, tx: tx as unknown as typeof db });
-          });
-          result.deferredTrigger?.();
-        } else {
-          await applyPageMutation(mutation);
-        }
+        // Every update holds the row, so the mutation reads the revision it is about to bump under the lock. An
+        // editor's save no longer checks the row revision, so nothing else stops a rename and a save racing: both
+        // would read N and write N+1, and the activity chain would hold two entries claiming the same place.
+        const result = await db.transaction(async (tx) => {
+          const [current] = await tx.select({ isPrivate: pages.isPrivate }).from(pages).where(eq(pages.id, pageId)).for('update');
+          // [D-OW-33] making a page readable by the whole drive loosens access: judged against the locked row, so a
+          // concurrent "make private" cannot slip between the check and the write. Refused (OrgLapsedError) only
+          // when the page is private now and its drive's org is lapsed.
+          if (
+            processedUpdates.isPrivate === false &&
+            current?.isPrivate === true &&
+            (await checkPageMayLoosen(tx, pageId, true))
+          ) {
+            throw new OrgLapsedError();
+          }
+          const mutationResult = await applyPageMutation({ ...mutation, tx: tx as unknown as typeof db });
+          const stored = await tx.query.pages.findFirst({ where: eq(pages.id, pageId) });
+          if (stored) {
+            // A save acknowledges the body and lock written by THIS transaction.
+            // Refetching after commit can attach a later writer's lock to this
+            // client's older buffer and silently authorize its next overwrite.
+            committedPage = {
+              ...stored,
+              content: isSheetType(stored.type as PageTypeEnum)
+                ? (await readSheetDocument(pageId, tx)) ?? stored.content ?? ''
+                : stored.content,
+            };
+          }
+          return mutationResult;
+        });
+        result.deferredTrigger?.();
       } catch (error) {
         // POL-8: a model or provider the drive's org does not allow is refused, nothing saved.
         if (error instanceof OrgModelPolicyError) {
@@ -599,18 +589,20 @@ export const pageService = {
           return {
             success: false,
             error: error.message,
-            status: error.expectedRevision === undefined ? 428 : 409,
+            status: error.expectedRevision === undefined && error.expectedContentRevision === undefined ? 428 : 409,
             currentRevision: error.currentRevision,
             expectedRevision: error.expectedRevision,
+            currentContentRevision: error.currentContentRevision,
+            expectedContentRevision: error.expectedContentRevision,
           };
         }
         throw error;
       }
     }
 
-    // Refetch the page with details
+    // Related data may be fresh, but the acknowledged body and lock must agree.
     const [updatedPage, children, messages] = await Promise.all([
-      db.query.pages.findFirst({
+      committedPage ?? db.query.pages.findFirst({
         where: eq(pages.id, pageId),
       }),
       // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
@@ -631,7 +623,7 @@ export const pageService = {
     // response body (MCP, the SDK, an SWR cache write) sees the spreadsheet as
     // empty. The web editor happens to read only `revision` off this, which is
     // exactly the kind of accident that stops being true later.
-    const responseContent = isSheetType(updatedPage.type as PageTypeEnum)
+    const responseContent = !committedPage && isSheetType(updatedPage.type as PageTypeEnum)
       ? (await readSheetDocument(pageId)) ?? pageData.content ?? ''
       : pageData.content;
 

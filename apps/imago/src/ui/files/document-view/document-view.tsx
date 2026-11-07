@@ -10,7 +10,7 @@
 // edited in place and saved through classic's own route (PATCH
 // /api/pages/[pageId]) the way classic's DocumentView saves: debounced while
 // typing, at once on blur, rename, leaving the page or the tab, and always
-// against the revision the editor last knew. Text the server does not have
+// against the content revision the editor last knew. Text the server does not have
 // yet is never replaced: SWR is held off the page meanwhile (the files
 // slice's editingDocuments, imago's useEditingStore), and someone else's
 // save reloads the document only when the viewer holds nothing unsaved.
@@ -47,8 +47,10 @@ export type DocumentPage = {
   readonly id: string;
   readonly title: string;
   readonly content: string;
-  /** The stored revision the content is; saves are made against it. */
+  /** The stored revision of the page as a whole; a newer one with the same text is a rename or a move. */
   readonly revision: number;
+  /** The stored revision the content is; saves are made against it. */
+  readonly contentRevision: number;
   /** How the content is stored, and so how an edit is written back. */
   readonly contentMode: 'html' | 'markdown';
 };
@@ -130,7 +132,13 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
   const canEdit = useCanEdit(page.id);
 
   // The stored copy the editor last matched: newer revisions from SWR replace it, older never do.
-  const known = useRef<StoredDocument>({ revision: page.revision, title: page.title, content: page.content });
+  const known = useRef<StoredDocument>({
+    revision: page.revision,
+    contentRevision: page.contentRevision,
+    title: page.title,
+    content: page.content,
+    contentMode: page.contentMode,
+  });
   const [title, setTitle] = useState(page.title);
   const [titleDraft, setTitleDraft] = useState(page.title);
   const [saveState, setSaveState] = useState<SaverState>(SAVED);
@@ -156,18 +164,22 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
     [mutatePage],
   );
 
-  const opened = useRef(page.revision);
+  const opened = useRef({ contentRevision: page.contentRevision, contentMode: page.contentMode });
   const saver = useMemo(
     () =>
       createDocumentSaver({
-        revision: opened.current,
-        send: async (patch, expectedRevision) => {
-          const stored = await saveDocument(client, page.id, patch, expectedRevision, socketId());
-          known.current = stored;
+        contentRevision: opened.current.contentRevision,
+        contentMode: opened.current.contentMode,
+        send: async (patch, expectedContentRevision, contentMode) => {
+          const stored = await saveDocument(client, page.id, patch, expectedContentRevision, socketId(), contentMode);
+          known.current = patch.content === undefined
+            ? { ...known.current, revision: stored.revision, title: stored.title }
+            : stored;
           // The entry holds what was saved, so no older copy is drawn from it later.
           storeInCache(stored);
           return stored;
         },
+        readStored: () => fetchStoredDocument(client, page.id),
         onState: (state) => {
           setSaveState(state);
           // Restored changes that are saved (or set aside for the stored copy) need no more saying.
@@ -191,13 +203,13 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
       editorProps: { attributes: bodyAttributes(shownTitleOf(page.title), false) },
       // Content set while read-only, or from the server, is not the viewer's to save.
       onUpdate: ({ editor: changed }) => {
-        if (changed.isEditable) saver.edit(serializeDocument(changed, page.contentMode));
+        if (changed.isEditable) saver.edit(serializeDocument(changed, saver.contentMode()));
       },
       onBlur: () => {
         void saver.flush();
       },
     },
-    [navigate, saver, page.contentMode],
+    [navigate, saver],
   );
 
   useEffect(() => {
@@ -229,7 +241,7 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
         if (unsaved !== null) {
           dispatch(transactions.keepDocumentDraft, {
             pageId: page.id,
-            draft: { patch: unsaved, revision: saver.revision() },
+            draft: { patch: unsaved, contentRevision: saver.contentRevision(), contentMode: saver.contentMode() },
           });
         }
         release();
@@ -239,7 +251,7 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
   );
 
   // A document that closed with unsaved text opens with it again, and saves
-  // it against the revision it was made on: a conflict or refusal surfaces anew.
+  // it against the content revision it was made on: a conflict or refusal surfaces anew.
   const draftTaken = useRef(false);
   useEffect(() => {
     if (editor === null || draftTaken.current) return;
@@ -253,7 +265,7 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
       setTitle(draftTitle);
       setTitleDraft(draftTitle);
     }
-    saver.restore(draft.patch, draft.revision);
+    saver.restore(draft.patch, draft.contentRevision, draft.contentMode);
     setDraftRestored(true);
   }, [editor, saver, page.id]);
 
@@ -279,7 +291,7 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
   const adopt = useCallback(
     (stored: StoredDocument) => {
       known.current = stored;
-      saver.adopt(stored.revision);
+      saver.adopt(stored.contentRevision, stored.contentMode);
       editor?.commands.setContent(stored.content, { emitUpdate: false });
       setTitle(stored.title);
       setTitleDraft(stored.title);
@@ -288,11 +300,26 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
   );
 
   // A newer stored copy (SWR revalidated, or someone else's save reloaded)
-  // replaces what is shown, unless the viewer holds unsaved text.
+  // replaces what is shown, unless the viewer holds unsaved text. Newer text
+  // reloads the body. A rename or a move elsewhere only brings the title across:
+  // reloading the body for it would throw away the cursor for nothing.
   useEffect(() => {
-    if (editor === null || saver.isEditing() || page.revision <= known.current.revision) return;
-    adopt({ revision: page.revision, title: page.title, content: page.content });
-  }, [editor, saver, adopt, page.revision, page.title, page.content]);
+    if (editor === null || saver.isEditing()) return;
+    const latest: StoredDocument = {
+      revision: page.revision,
+      contentRevision: page.contentRevision,
+      title: page.title,
+      content: page.content,
+      contentMode: page.contentMode,
+    };
+    if (page.contentRevision > known.current.contentRevision) {
+      adopt(latest);
+    } else if (page.revision > known.current.revision) {
+      known.current = { ...known.current, revision: page.revision, title: page.title };
+      setTitle(page.title);
+      setTitleDraft(page.title);
+    }
+  }, [editor, saver, adopt, page.revision, page.contentRevision, page.title, page.content, page.contentMode, saveState.editing]);
 
   // Someone else saved this page: reload it, unless the viewer is editing.
   // The editing check is the first of three layers (with SWR's pause and the
@@ -309,7 +336,7 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
       setResolveError(error instanceof ApiError ? error.message : OFFLINE);
     }
   };
-  const keepMine = () => void resolve((stored) => saver.keepMine(stored.revision));
+  const keepMine = () => void resolve((stored) => saver.keepMine(stored.contentRevision));
   const takeStored = () =>
     void resolve((stored) => {
       adopt(stored);

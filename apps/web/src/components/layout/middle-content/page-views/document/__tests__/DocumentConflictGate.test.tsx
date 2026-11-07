@@ -5,7 +5,7 @@ import DocumentConflictGate from '../DocumentConflictGate';
 
 const conflict = {
   remoteContent: '<p>their text</p>',
-  remoteRevision: 11,
+  remoteContentRevision: 11,
   detectedAt: 1,
 };
 

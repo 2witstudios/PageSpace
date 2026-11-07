@@ -145,14 +145,21 @@ export async function planAndApplyBackfill(
             // between the select and this write must not be relabelled
             // against content this run never actually classified. updatedAt
             // is pinned to its prior value — this is a label correction, not
-            // a user edit. `revision` is bumped (atomically, via the SQL
-            // expression, not the stale JS-side value) so a client session
+            // a user edit. `contentRevision` is bumped (atomically, via the
+            // SQL expression, not the stale JS-side value) so a client session
             // that already had this page open under the old `contentMode`
             // gets a 409 on its next save instead of silently writing content
             // that no longer matches the label — see PR #2511 review.
+            // `revision` moves with it, for callers that check the row and for
+            // `revertBackfill`, which pins each page to it.
             const [written] = await db
               .update(pages)
-              .set({ contentMode: 'markdown', updatedAt: page.updatedAt, revision: sql`${pages.revision} + 1` })
+              .set({
+                contentMode: 'markdown',
+                updatedAt: page.updatedAt,
+                revision: sql`${pages.revision} + 1`,
+                contentRevision: sql`${pages.contentRevision} + 1`,
+              })
               .where(and(eq(pages.id, page.id), eq(pages.content, page.content), eq(pages.contentMode, 'html')))
               .returning({ id: pages.id, revision: pages.revision });
 
@@ -205,7 +212,11 @@ export async function revertBackfill(db: BackfillDb, corrections: CorrectedPage[
   // and so actually flipped.
   const written = await db
     .update(pages)
-    .set({ contentMode: 'html', revision: sql`${pages.revision} + 1` })
+    .set({
+      contentMode: 'html',
+      revision: sql`${pages.revision} + 1`,
+      contentRevision: sql`${pages.contentRevision} + 1`,
+    })
     .where(
       and(
         eq(pages.contentMode, 'markdown'),

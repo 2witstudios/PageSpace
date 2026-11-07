@@ -119,7 +119,14 @@ export const pages = pgTable('pages', {
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
   trashedAt: timestamp('trashedAt', { mode: 'date' }),
+  /** Versions the whole row: every write moves it, whichever field it changed. */
   revision: integer('revision').default(0).notNull(),
+  /**
+   * Versions the content alone, and is the lock a content save is checked
+   * against. Only a real change to the content or its mode moves it, so a rename
+   * or a move can never refuse someone's save. Compared for equality only.
+   */
+  contentRevision: integer('contentRevision').default(0).notNull(),
   stateHash: text('stateHash'),
   driveId: text('driveId').notNull().references(() => drives.id, { onDelete: 'cascade' }),
   parentId: text('parentId'),

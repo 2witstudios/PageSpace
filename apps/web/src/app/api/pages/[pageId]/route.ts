@@ -56,12 +56,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 const patchSchema = z.object({
   title: z.string().optional(),
   content: z.string().optional(),
+  contentMode: z.enum(['html', 'markdown']).optional(),
   aiProvider: z.string().optional(),
   aiModel: z.string().optional(),
   parentId: z.string().nullable().optional(),
   isPaginated: z.boolean().optional(),
   isPrivate: z.boolean().optional(),
   expectedRevision: z.number().int().min(0).optional(),
+  expectedContentRevision: z.number().int().min(0).optional(),
   changeGroupId: z.string().optional(), // Groups related edits in activity log
 });
 
@@ -81,7 +83,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
   try {
     const body = await req.json();
     const safeBody = patchSchema.parse(body);
-    const { expectedRevision, changeGroupId, isPrivate: isPrivateUpdate, ...contentUpdates } = safeBody;
+    const { expectedRevision, expectedContentRevision, changeGroupId, isPrivate: isPrivateUpdate, ...contentUpdates } = safeBody;
 
     // isPrivate is a visibility-level change — requires share permission, NOT edit permission.
     // Apply it through the service with skipPermissionCheck so users with canShare but not
@@ -116,6 +118,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
 
     const result = await pageService.updatePage(pageId, actorFromAuth(auth), updates, {
       expectedRevision,
+      expectedContentRevision,
       context,
       skipPermissionCheck: isPrivateUpdate !== undefined && Object.keys(contentUpdates).length === 0,
       // Scoped MCP tokens authorize with their OWN drive-membership role.
@@ -128,6 +131,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
           error: result.error,
           currentRevision: result.currentRevision,
           expectedRevision: result.expectedRevision,
+          currentContentRevision: result.currentContentRevision,
+          expectedContentRevision: result.expectedContentRevision,
         },
         { status: result.status }
       );

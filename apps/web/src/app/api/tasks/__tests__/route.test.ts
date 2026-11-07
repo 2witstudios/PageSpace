@@ -175,6 +175,7 @@ const createPageFixture = (overrides: Partial<{
   createdAt: new Date('2024-01-01'),
   updatedAt: new Date('2024-01-01'),
   revision: 0,
+  contentRevision: 0,
   stateHash: null,
   parentId: null,
   originalParentId: null,

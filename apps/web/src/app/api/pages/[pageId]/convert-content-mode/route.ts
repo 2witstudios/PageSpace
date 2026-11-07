@@ -93,7 +93,7 @@ export async function POST(
     }
 
     // Atomic update: content + contentMode
-    await applyPageMutation({
+    const mutation = await applyPageMutation({
       pageId: page.id,
       operation: 'update',
       updates: {
@@ -112,18 +112,14 @@ export async function POST(
       })
     );
 
-    // Refetch updated page
-    const updatedPage = await db.query.pages.findFirst({
-      where: eq(pages.id, pageId),
-    });
-
     auditRequest(request, { eventType: 'data.write', userId, resourceType: 'page', resourceId: pageId, details: { operation: 'convert_content_mode' } });
 
     return NextResponse.json({
       success: true,
-      content: updatedPage?.content,
-      contentMode: updatedPage?.contentMode,
-      revision: updatedPage?.revision,
+      content: convertedContent,
+      contentMode: targetMode,
+      revision: mutation.nextRevision,
+      contentRevision: mutation.nextContentRevision,
     });
   } catch (error) {
     loggers.api.error('Error converting page content mode:', error as Error);

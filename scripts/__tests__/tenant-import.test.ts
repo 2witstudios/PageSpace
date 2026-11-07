@@ -596,11 +596,11 @@ describe('runImport', () => {
     expect(Number((usersResult.rows as Record<string, unknown>[])[0].count)).toBe(0);
   });
 
-  it('round-trips page content with semicolons and SQL-like comments', async () => {
+  it('round-trips page content with semicolons and both revision counters', async () => {
     const contentWithSemicolons = 'const x = 1;\n-- SQL comment\nconst y = 2;';
 
     await db.execute(sql.raw(
-      `UPDATE pages SET content = '${contentWithSemicolons.replace(/'/g, "''")}' WHERE id = '${FIXTURES.pages.root.id}'`,
+      `UPDATE pages SET content = '${contentWithSemicolons.replace(/'/g, "''")}', revision = 42, "contentRevision" = 17 WHERE id = '${FIXTURES.pages.root.id}'`,
     ));
 
     // Re-export with the new content
@@ -630,10 +630,10 @@ describe('runImport', () => {
 
     // Verify content survived the round-trip
     const result = await db.execute(sql.raw(
-      `SELECT content FROM pages WHERE id = '${FIXTURES.pages.root.id}'`,
+      `SELECT content, revision, "contentRevision" FROM pages WHERE id = '${FIXTURES.pages.root.id}'`,
     ));
     const rows = result.rows as Record<string, unknown>[];
-    expect(rows[0].content).toBe(contentWithSemicolons);
+    expect(rows[0]).toMatchObject({ content: contentWithSemicolons, revision: 42, contentRevision: 17 });
   });
 
   it('flags path traversal in manifest checksums as INVALID_PATH', async () => {

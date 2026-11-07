@@ -5,7 +5,7 @@ import DocumentConflictBanner from '../DocumentConflictBanner';
 
 const conflict = {
   remoteContent: '<p>their text</p>',
-  remoteRevision: 11,
+  remoteContentRevision: 11,
   detectedAt: 1,
 };
 
@@ -16,7 +16,7 @@ describe('DocumentConflictBanner', () => {
     const banner = screen.getByTestId('document-conflict-banner');
     expect(banner.textContent).toContain('Your unsaved changes are still in the editor');
     expect(banner.textContent).toContain('have not been sent');
-    expect(banner.textContent).toContain('replaces their version in the document');
+    expect(banner.textContent).toContain('replaces that version in the document');
     expect(banner.textContent).toContain('discards your unsaved changes');
   });
 
@@ -33,7 +33,7 @@ describe('DocumentConflictBanner', () => {
 
     expect(screen.queryByTestId('document-conflict-remote-preview')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'View their version' }));
+    fireEvent.click(screen.getByRole('button', { name: 'View the other version' }));
 
     expect(screen.getByTestId('document-conflict-remote-preview').textContent).toContain(
       'their text'
@@ -48,7 +48,7 @@ describe('DocumentConflictBanner', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'View their version' }));
+    fireEvent.click(screen.getByRole('button', { name: 'View the other version' }));
 
     const preview = screen.getByTestId('document-conflict-remote-preview');
     expect(preview.textContent).toContain('hi');
@@ -64,7 +64,7 @@ describe('DocumentConflictBanner', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'View their version' }));
+    fireEvent.click(screen.getByRole('button', { name: 'View the other version' }));
 
     const preview = screen.getByTestId('document-conflict-remote-preview');
     expect(preview.querySelector('pre')?.textContent).toBe('# their heading');

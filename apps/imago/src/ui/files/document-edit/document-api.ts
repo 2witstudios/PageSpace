@@ -1,9 +1,10 @@
 // The page routes a document edit uses, called through imago's API client:
 // the session cookie on every request and the CSRF token on every write.
 // Saves go to apps/web's existing PATCH /api/pages/[pageId] (the route
-// classic's DocumentView saves through), carrying the revision the editor
-// last knew so the server answers 409 when someone else saved first, and this
-// tab's socket id so realtime does not echo the save back as someone else's.
+// classic's DocumentView saves through), carrying the content revision the
+// editor last knew so the server answers 409 when the text changed elsewhere
+// first, and this tab's socket id so realtime does not echo the save back as
+// someone else's.
 
 import useSWR from 'swr';
 import type { ApiClient } from '@/api/client';
@@ -21,9 +22,13 @@ export const SOCKET_ID_HEADER = 'X-Socket-ID';
 
 /** The stored copy of a document, as GET or PATCH /api/pages/[pageId] answers. */
 export type StoredDocument = {
+  /** Versions the whole page: moves on any write, so it tells a rename from nothing. */
   readonly revision: number;
+  /** Versions the text alone: what a save is made against. */
+  readonly contentRevision: number;
   readonly title: string;
   readonly content: string;
+  readonly contentMode: 'html' | 'markdown';
 };
 
 const invalid = (status: number): ApiError =>
@@ -31,27 +36,34 @@ const invalid = (status: number): ApiError =>
 
 /** The stored copy from a page answer; throws when it has no revision to save against. */
 export const storedDocumentOf = (body: unknown): StoredDocument => {
-  const { revision, title, content } = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>;
-  if (typeof revision !== 'number') throw invalid(200);
+  const { revision, contentRevision, title, content, contentMode } = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>;
+  if (typeof revision !== 'number' || typeof contentRevision !== 'number') throw invalid(200);
   return {
     revision,
+    contentRevision,
     title: typeof title === 'string' ? title : '',
     content: typeof content === 'string' ? content : '',
+    contentMode: contentMode === 'markdown' ? 'markdown' : 'html',
   };
 };
 
-/** Saves a change to a page against the revision the editor last knew. */
+/**
+ * Saves a change to a page. A change to the text is made against the content
+ * revision the editor last knew; a rename alone cannot conflict with anything,
+ * so it carries no lock.
+ */
 export const saveDocument = async (
   client: ApiClient,
   pageId: string,
   patch: DocumentPatch,
-  expectedRevision: number,
+  expectedContentRevision: number,
   socketId: string | undefined,
+  contentMode: 'html' | 'markdown' = 'html',
 ): Promise<StoredDocument> =>
   storedDocumentOf(
     await client.apiFetch<unknown>(pageKey(pageId), {
       method: 'PATCH',
-      json: { ...patch, expectedRevision },
+      json: patch.content === undefined ? patch : { ...patch, contentMode, expectedContentRevision },
       headers: socketId === undefined ? undefined : { [SOCKET_ID_HEADER]: socketId },
     }),
   );

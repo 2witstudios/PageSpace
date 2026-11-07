@@ -302,6 +302,7 @@ describe('applyPageRestoreOps', () => {
     expect(tx.update).toHaveBeenCalled();
     const setArgs = tx.update.mock.results[0].value.set.mock.calls[0][0] as Record<string, unknown>;
     expect(setArgs).toHaveProperty('stateHash');
+    expect(setArgs).toHaveProperty('contentRevision');
     expect(createPageVersion).toHaveBeenCalledWith(
       expect.objectContaining({ pageId: 'p3', source: 'restore' }),
       expect.anything(),

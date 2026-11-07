@@ -169,12 +169,14 @@ const holdBeforeInsert = (exec: StoreExecutor, hook: () => Promise<void>) => hol
 const holdBeforeUpdate = (exec: StoreExecutor, hook: () => Promise<void>) => holdFirst(exec, 'update', hook);
 
 /**
- * Resolves once ANOTHER connection is waiting on a `sheet_tabs` lock while
+ * Resolves once ANOTHER connection is waiting on a page or tab lock while
  * `pending` is still unsettled — so a test that releases a held transaction
  * after this knows the other writer really was blocked behind it, rather than
  * having quietly finished first and turned the race into a sequence.
  */
-async function waitForLockWaiter(pending: Promise<unknown>, timeoutMs = 10_000): Promise<void> {
+async function waitForLockWaiter(pending: Promise<unknown>, holder: StoreExecutor, timeoutMs = 10_000): Promise<void> {
+  const held = await holder.execute(sql`SELECT pg_backend_pid() AS pid`);
+  const holderPid = Number(held.rows[0].pid);
   let settled = false;
   void pending.then(() => { settled = true; }, () => { settled = true; });
   const deadline = Date.now() + timeoutMs;
@@ -182,10 +184,11 @@ async function waitForLockWaiter(pending: Promise<unknown>, timeoutMs = 10_000):
     if (settled) throw new Error('The other writer finished before it was seen waiting on the lock');
     const result = await db.execute(
       sql`SELECT count(*)::int AS waiting FROM pg_stat_activity
-          WHERE pid <> pg_backend_pid() AND wait_event_type = 'Lock' AND query ILIKE '%sheet_tabs%'`
+          WHERE datname = current_database() AND ${holderPid} = ANY(pg_blocking_pids(pid))
+            AND wait_event_type = 'Lock' AND (query ILIKE '%sheet_tabs%' OR query ILIKE '%pages%')`
     );
     if (Number((result.rows[0] as { waiting: number }).waiting) > 0) return;
-    if (Date.now() > deadline) throw new Error('No transaction ever waited on the sheet_tabs lock');
+    if (Date.now() > deadline) throw new Error('No transaction ever waited on the page or tab lock');
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }
@@ -236,6 +239,20 @@ describe('sheet store (integration)', () => {
     if (seededUserIds.length === 0) return;
     await db.delete(users).where(inArray(users.id, seededUserIds));
     seededUserIds.length = 0;
+  });
+
+  it('keeps the content lock for identical writes but moves it for a repaired computed value', async () => {
+    const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 10 });
+    await setCells({ pageId }, [{ address: 'A1', value: '1' }, { address: 'B1', value: '=A1*2' }], { userId: ownerId });
+    const [before] = await db.select().from(pages).where(eq(pages.id, pageId));
+    await setCells({ pageId }, [{ address: 'A1', value: '1' }], { userId: ownerId });
+    const [unchanged] = await db.select().from(pages).where(eq(pages.id, pageId));
+    expect(unchanged).toMatchObject({ revision: before.revision + 1, contentRevision: before.contentRevision });
+    await db.update(sheetRows).set({ cells: sql`jsonb_set(${sheetRows.cells}, '{B,value}', '999'::jsonb)` }).where(eq(sheetRows.tabId, tabId));
+    await setCells({ pageId }, [{ address: 'A1', value: '1' }], { userId: ownerId });
+    expect(cellAt(await readRows(tabId), 0, 'B')?.value).toBe(2);
+    const [repaired] = await db.select().from(pages).where(eq(pages.id, pageId));
+    expect(repaired).toMatchObject({ revision: unchanged.revision + 1, contentRevision: unchanged.contentRevision + 1 });
   });
 
   describe('conditional formatting survives the store', () => {
@@ -995,24 +1012,25 @@ describe('sheet store (integration)', () => {
 
   describe('page revision', () => {
     it('bumps on a row write, so an open editor sees a conflict', async () => {
-      // The editor holds an `expectedRevision`. A row write that leaves it
-      // alone is invisible to that guard, and the editor's next save then
+      // The editor holds an `expectedContentRevision`. A row write that leaves
+      // it alone is invisible to that guard, and the editor's next save then
       // deletes every row absent from its stale document.
       const { pageId, ownerId } = await makeSheet();
 
       const before = await db
-        .select({ revision: pages.revision })
+        .select({ revision: pages.revision, contentRevision: pages.contentRevision })
         .from(pages)
         .where(eq(pages.id, pageId));
 
       await setCells({ pageId }, [{ address: 'A1', value: 'x' }], { userId: ownerId });
 
       const after = await db
-        .select({ revision: pages.revision })
+        .select({ revision: pages.revision, contentRevision: pages.contentRevision })
         .from(pages)
         .where(eq(pages.id, pageId));
 
       expect(after[0].revision).toBeGreaterThan(before[0].revision);
+      expect(after[0].contentRevision).toBeGreaterThan(before[0].contentRevision);
     });
   });
 
@@ -1458,12 +1476,12 @@ describe('sheet store (integration)', () => {
       // whole `cells` object rather than the columns this call touched.
       //
       // The interleaving that loses the update: the row does not exist yet,
-      // so there is no row lock to take; the format write reads nothing, a
-      // `setCells` to column A of the same row commits, and then the format
-      // write upserts column C. Sequentially those two calls prove nothing —
+      // so a row lock alone cannot serialize the writes. The first
+      // writer now holds the page lock until it commits; the second must wait
+      // before reading the row, then preserve the first writer's columns. Sequentially those two calls prove nothing —
       // the second reads the first's row. So the format write runs inside an
       // open transaction whose first `sheet_rows` insert is held back until
-      // the value write has committed on another connection.
+      // the value write is observed waiting on another connection.
       const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 10 });
 
       let valueWrite: Promise<unknown> | null = null;
@@ -1474,7 +1492,7 @@ describe('sheet store (integration)', () => {
           { userId: ownerId },
           holdBeforeInsert(tx, async () => {
             valueWrite ??= setCells({ pageId }, [{ address: 'A5', value: 'kept' }], { userId: ownerId });
-            await valueWrite;
+            await waitForLockWaiter(valueWrite, tx);
           })
         )
       );
@@ -1491,10 +1509,10 @@ describe('sheet store (integration)', () => {
       // value write and a format write to it can both read nothing and both
       // upsert; if the cell object under the column is replaced whole, the
       // second commit either drops the format or overwrites the just-entered
-      // value with `raw: ''`. Both orders are forced, the same way as above.
+      // value with `raw: ''`. Both commit orders are forced, the same way as above.
       const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 10 });
 
-      // Format commits second.
+      // Format commits first; the value writer queues behind its page lock.
       let value: Promise<unknown> | null = null;
       await db.transaction(async (tx) =>
         applyFormatOps(
@@ -1503,7 +1521,7 @@ describe('sheet store (integration)', () => {
           { userId: ownerId },
           holdBeforeInsert(tx, async () => {
             value ??= setCells({ pageId }, [{ address: 'C5', value: '=1+1' }], { userId: ownerId });
-            await value;
+            await waitForLockWaiter(value, tx);
           })
         )
       );
@@ -1511,7 +1529,7 @@ describe('sheet store (integration)', () => {
       let cell = cellAt(await readRows(tabId, { limit: 10 }), 4, 'C');
       expect(cell).toMatchObject({ raw: '=1+1', value: 2, type: 'number', format: BOLD });
 
-      // Value commits second — `setCells`'s own merge must leave the format.
+      // Value commits first; the queued format writer must leave its value.
       // A different row: row 5 now exists, so a write to it would take its
       // lock and the held transaction would block the one it is waiting for.
       let format: Promise<unknown> | null = null;
@@ -1522,7 +1540,7 @@ describe('sheet store (integration)', () => {
           { userId: ownerId },
           holdBeforeInsert(tx, async () => {
             format ??= applyFormatOps({ pageId }, [{ type: 'setCellFormat', range: 'D7', patch: { italic: true } }], { userId: ownerId });
-            await format;
+            await waitForLockWaiter(format, tx);
           })
         )
       );
@@ -1779,7 +1797,7 @@ describe('sheet store (integration)', () => {
           { userId: ownerId },
           holdBeforeUpdate(tx, async () => {
             other ??= applyFormatOps({ pageId }, [{ type: 'addConditionalRule', rule: second }], { userId: ownerId });
-            await waitForLockWaiter(other);
+            await waitForLockWaiter(other, tx);
           })
         )
       );
@@ -1810,7 +1828,7 @@ describe('sheet store (integration)', () => {
               [{ type: 'addConditionalRule', rule: { ...FORMAT_RULE, format: { bold: true } } }],
               { userId: ownerId }
             );
-            await waitForLockWaiter(other);
+            await waitForLockWaiter(other, tx);
           })
         )
       );

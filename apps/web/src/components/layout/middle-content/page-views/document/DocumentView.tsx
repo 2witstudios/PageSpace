@@ -13,7 +13,6 @@ import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
-import { useDocumentManagerStore } from '@/stores/useDocumentManagerStore';
 import { useFindStore } from '@/stores/useFindStore';
 import { dispatchFind, getPluginMatches } from '@/lib/editor/find-plugin';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
@@ -82,12 +81,7 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
       const response = await fetchWithAuth(`/api/pages/${pageId}`);
       if (response.ok) {
         const updatedPage = await response.json();
-        updateContentFromServer(updatedPage.content, updatedPage.revision);
-        if (updatedPage.contentMode) {
-          useDocumentManagerStore.getState().updateDocument(pageId, {
-            contentMode: updatedPage.contentMode,
-          });
-        }
+        updateContentFromServer(updatedPage.content, updatedPage.contentRevision, updatedPage.contentMode);
       }
     } catch (error) {
       console.error('Failed to refresh document:', error);
@@ -165,25 +159,12 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
       const response = await fetchWithAuth(`/api/pages/${pageId}`);
       if (response.ok) {
         const updatedPage = await response.json();
-        if (!documentState?.isDirty) {
-          const contentChanged = updatedPage.content !== documentState?.content;
-          const modeChanged = updatedPage.contentMode && updatedPage.contentMode !== documentState?.contentMode;
-          if (contentChanged || modeChanged) {
-            useDocumentManagerStore.getState().updateDocument(pageId, {
-              content: updatedPage.content,
-              contentMode: updatedPage.contentMode,
-              revision: updatedPage.revision,
-              isDirty: false,
-              lastSaved: Date.now(),
-              lastUpdateTime: Date.now(),
-            });
-          }
-        }
+        updateContentFromServer(updatedPage.content, updatedPage.contentRevision, updatedPage.contentMode);
       }
     } catch (error) {
       console.error('Failed to fetch updated content:', error);
     }
-  }, [pageId, documentState?.isDirty, documentState?.content, documentState?.contentMode]);
+  }, [pageId, updateContentFromServer]);
 
   usePageContentSocket(pageId, driveId, {
     onContentUpdated: handleContentUpdate,

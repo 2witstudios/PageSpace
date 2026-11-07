@@ -102,7 +102,9 @@ export async function recordOnboardingContext(
 
     await tx
       .update(pages)
-      .set({ content: next, contentMode: 'markdown' })
+      // The content lock moves so a user with this page open cannot save over
+      // the block just written. The row revision is left as it always was.
+      .set({ content: next, contentMode: 'markdown', contentRevision: sql`${pages.contentRevision} + 1` })
       .where(eq(pages.id, bioPageId));
   });
 

@@ -1,4 +1,4 @@
-import { describe, test } from 'vitest';
+import { describe, test, expect } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { ApiError } from '@/api/errors';
 import {
@@ -30,22 +30,22 @@ const manualClock = () => {
   };
 };
 
-type Sent = { readonly patch: DocumentPatch; readonly expectedRevision: number };
+type Sent = { readonly patch: DocumentPatch; readonly expectedContentRevision: number };
 
 const refused = (status: number, message = 'refused', code: string | null = null) =>
   new ApiError({ status, code, message });
 
-/** answer() decides each send's fate; a revision number is a save that landed. */
-const setup = (answer: (sent: Sent, index: number) => Promise<number> = async (sent) => sent.expectedRevision + 1) => {
+/** answer() decides each send's fate; a contentRevision number is a save that landed. */
+const setup = (answer: (sent: Sent, index: number) => Promise<number> = async (sent) => sent.expectedContentRevision + 1) => {
   const clock = manualClock();
   const sent: Sent[] = [];
   const states: SaverState[] = [];
   const saver = createDocumentSaver({
-    revision: 4,
-    send: async (patch, expectedRevision) => {
-      const entry = { patch, expectedRevision };
+    contentRevision: 4,
+    send: async (patch, expectedContentRevision) => {
+      const entry = { patch, expectedContentRevision };
       sent.push(entry);
-      return { revision: await answer(entry, sent.length - 1) };
+      return { contentRevision: await answer(entry, sent.length - 1) };
     },
     onState: (state) => states.push(state),
     schedule: clock.schedule,
@@ -57,6 +57,20 @@ const setup = (answer: (sent: Sent, index: number) => Promise<number> = async (s
 const flushPromises = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe('createDocumentSaver()', () => {
+  test('a title-only answer cannot move the baseline of an unseen body', async () => {
+    const { saver, sent } = setup(async (entry, index) => {
+      if (index === 0) return 5;
+      if (entry.expectedContentRevision !== 5) throw refused(409);
+      return 6;
+    });
+    await saver.rename('Plan');
+    expect(saver.contentRevision()).toBe(4);
+    saver.edit('<p>Stored plus my typing</p>');
+    expect(await saver.flush()).toBe('conflict');
+    expect(sent[1].expectedContentRevision).toBe(4);
+    expect(saver.unsaved()).toEqual({ content: '<p>Stored plus my typing</p>' });
+  });
+
   test('a burst of edits', async () => {
     const { clock, sent, states, saver } = setup();
     saver.edit('<p>a</p>');
@@ -67,11 +81,11 @@ describe('createDocumentSaver()', () => {
     await flushPromises();
     assert({
       given: 'three edits before typing pauses',
-      should: 'send nothing until the pause, then only the last, against the revision it opened with',
+      should: 'send nothing until the pause, then only the last, against the contentRevision it opened with',
       actual: { before, sent, kinds: states.map((state) => state.status.kind), editing: saver.isEditing() },
       expected: {
         before: [],
-        sent: [{ patch: { content: '<p>abc</p>' }, expectedRevision: 4 }],
+        sent: [{ patch: { content: '<p>abc</p>' }, expectedContentRevision: 4 }],
         kinds: ['unsaved', 'saving', 'saved'],
         editing: false,
       },
@@ -88,16 +102,16 @@ describe('createDocumentSaver()', () => {
     await flushPromises();
     assert({
       given: 'a second save after the first landed',
-      should: 'send it against the revision the first save answered with',
-      actual: sent.map((entry) => entry.expectedRevision),
+      should: 'send it against the contentRevision the first save answered with',
+      actual: sent.map((entry) => entry.expectedContentRevision),
       expected: [4, 5],
     });
   });
 
   test('typing while a save is out', async () => {
-    let release: (revision: number) => void = () => {};
+    let release: (contentRevision: number) => void = () => {};
     const { clock, sent, saver } = setup((entry, index) =>
-      index === 0 ? new Promise<number>((resolve) => (release = resolve)) : Promise.resolve(entry.expectedRevision + 1),
+      index === 0 ? new Promise<number>((resolve) => (release = resolve)) : Promise.resolve(entry.expectedContentRevision + 1),
     );
     saver.edit('<p>first</p>');
     clock.tick();
@@ -115,8 +129,8 @@ describe('createDocumentSaver()', () => {
         whileOut: 1,
         editingWhileOut: true,
         sent: [
-          { patch: { content: '<p>first</p>' }, expectedRevision: 4 },
-          { patch: { content: '<p>second</p>' }, expectedRevision: 5 },
+          { patch: { content: '<p>first</p>' }, expectedContentRevision: 4 },
+          { patch: { content: '<p>second</p>' }, expectedContentRevision: 5 },
         ],
         editing: false,
       },
@@ -131,14 +145,14 @@ describe('createDocumentSaver()', () => {
       given: 'a title committed while text waits for its pause',
       should: 'save both at once, in one PATCH, and cancel the pending timer',
       actual: { outcome, sent, timers: clock.pending() },
-      expected: { outcome: 'saved', sent: [{ patch: { content: '<p>typed</p>', title: 'Plan' }, expectedRevision: 4 }], timers: 0 },
+      expected: { outcome: 'saved', sent: [{ patch: { content: '<p>typed</p>', title: 'Plan' }, expectedContentRevision: 4 }], timers: 0 },
     });
   });
 
   test('a 409 conflict', async () => {
     const { clock, sent, states, saver } = setup(async (entry, index) => {
       if (index === 0) throw refused(409, 'Page was modified');
-      return entry.expectedRevision + 1;
+      return entry.expectedContentRevision + 1;
     });
     saver.edit('<p>mine</p>');
     clock.tick();
@@ -171,19 +185,19 @@ describe('createDocumentSaver()', () => {
   test('resolving a conflict by keeping mine', async () => {
     const { clock, sent, states, saver } = setup(async (entry, index) => {
       if (index === 0) throw refused(409);
-      return entry.expectedRevision + 1;
+      return entry.expectedContentRevision + 1;
     });
     saver.edit('<p>mine</p>');
     clock.tick();
     await flushPromises();
     const outcome = await saver.keepMine(9);
     assert({
-      given: 'a parked conflict the viewer settles by keeping their text against the revision now stored',
-      should: 'send the kept text against that revision and be saved',
+      given: 'a parked conflict the viewer settles by keeping their text against the contentRevision now stored',
+      should: 'send the kept text against that contentRevision and be saved',
       actual: { outcome, last: sent.at(-1), status: states.at(-1)?.status, editing: saver.isEditing() },
       expected: {
         outcome: 'saved',
-        last: { patch: { content: '<p>mine</p>' }, expectedRevision: 9 },
+        last: { patch: { content: '<p>mine</p>' }, expectedContentRevision: 9 },
         status: { kind: 'saved' },
         editing: false,
       },
@@ -205,7 +219,7 @@ describe('createDocumentSaver()', () => {
       given: 'the viewer takes the stored version, then types again',
       should: 'drop the parked text and save the new edit against the adopted revision',
       actual: { last: sent.at(-1), adoptedStatus: states.find((state) => state.status.kind === 'saved')?.status },
-      expected: { last: { patch: { content: '<p>after</p>' }, expectedRevision: 9 }, adoptedStatus: { kind: 'saved' } },
+      expected: { last: { patch: { content: '<p>after</p>' }, expectedContentRevision: 9 }, adoptedStatus: { kind: 'saved' } },
     });
   });
 
@@ -229,7 +243,7 @@ describe('createDocumentSaver()', () => {
   test('a failed save', async () => {
     const { clock, sent, states, saver } = setup(async (entry, index) => {
       if (index === 0) throw new TypeError('Failed to fetch');
-      return entry.expectedRevision + 1;
+      return entry.expectedContentRevision + 1;
     });
     saver.edit('<p>mine</p>');
     clock.tick();
@@ -298,7 +312,7 @@ describe('createDocumentSaver()', () => {
   test('a CSRF rejection that outlives the client’s retry', async () => {
     const { clock, sent, states, saver } = setup(async (entry, index) => {
       if (index === 0) throw refused(403, 'CSRF token invalid', 'CSRF_TOKEN_INVALID');
-      return entry.expectedRevision + 1;
+      return entry.expectedContentRevision + 1;
     });
     saver.edit('<p>mine</p>');
     clock.tick();
@@ -325,15 +339,156 @@ describe('createDocumentSaver()', () => {
     clock.tick();
     await flushPromises();
     assert({
-      given: 'text the server never got, kept from when the document was last open at revision 7',
+      given: 'text the server never got, kept from when the document was last open at contentRevision 7',
       should: 'hold it as unsaved and save it after the pause against that revision',
-      actual: { scheduled, first: states[0], sent, revision: saver.revision() },
+      actual: { scheduled, first: states[0], sent, contentRevision: saver.contentRevision() },
       expected: {
         scheduled: 1,
         first: { status: { kind: 'unsaved' }, editing: true },
-        sent: [{ patch: { content: '<p>kept</p>', title: 'Kept' }, expectedRevision: 7 }],
-        revision: 8,
+        sent: [{ patch: { content: '<p>kept</p>', title: 'Kept' }, expectedContentRevision: 7 }],
+        contentRevision: 8,
       },
+    });
+  });
+
+  test('a rename elsewhere does not concern the saver', async () => {
+    const { clock, sent, saver } = setup();
+    saver.edit('<p>mine</p>');
+    clock.tick();
+    await flushPromises();
+    assert({
+      given: 'a save after any number of writes to the page that left its text alone',
+      should: 'send only the content revision it holds',
+      actual: sent,
+      expected: [{ patch: { content: '<p>mine</p>' }, expectedContentRevision: 4 }],
+    });
+  });
+});
+
+describe('a save that was stored but never answered', () => {
+  /** A saver whose first save never gets an answer, and whose next is refused by it. */
+  const afterLostAnswer = (stored: { readonly contentRevision: number; readonly content: string }, retry: () => Promise<number>) => {
+    const clock = manualClock();
+    const sent: Sent[] = [];
+    const states: SaverState[] = [];
+    const saver = createDocumentSaver({
+      contentRevision: 4,
+      send: async (patch, expectedContentRevision) => {
+        sent.push({ patch, expectedContentRevision });
+        if (sent.length === 1) throw new TypeError('Failed to fetch');
+        if (sent.length === 2) throw refused(409);
+        return { contentRevision: await retry() };
+      },
+      readStored: async () => stored,
+      onState: (state) => states.push(state),
+      schedule: clock.schedule,
+      cancel: clock.cancel,
+    });
+    return { sent, states, saver };
+  };
+
+  test('does not claim identical bytes after a remote content mode conversion', async () => {
+    const clock = manualClock();
+    let sends = 0;
+    const saver = createDocumentSaver({
+      contentRevision: 4,
+      send: async () => {
+        sends += 1;
+        if (sends === 1) throw new TypeError('lost response');
+        if (sends === 2) throw refused(409);
+        return { contentRevision: 7 };
+      },
+      readStored: async () => ({ contentRevision: 6, content: '', contentMode: 'markdown' as const }),
+      onState: () => {}, schedule: clock.schedule, cancel: clock.cancel,
+    });
+    saver.edit('');
+    await saver.flush();
+    saver.edit('<p>local HTML typing</p>');
+    expect(await saver.flush()).toBe('conflict');
+    expect(sends).toBe(2);
+    expect(saver.unsaved()).toEqual({ content: '<p>local HTML typing</p>' });
+  });
+
+  test('recognizes an unanswered editor clear normalized to empty by the server', async () => {
+    const { saver, sent } = afterLostAnswer({ contentRevision: 5, content: '' }, async () => 6);
+    saver.edit('<p></p>');
+    await saver.flush();
+    saver.edit('<p>typing after clearing</p>');
+    expect(await saver.flush()).toBe('saved');
+    expect(sent.at(-1)?.expectedContentRevision).toBe(5);
+  });
+
+  test('its own text behind a refusal', async () => {
+    const { sent, saver } = afterLostAnswer({ contentRevision: 5, content: '<p>first</p>' }, async () => 6);
+    saver.edit('<p>first</p>');
+    await saver.flush();
+    saver.edit('<p>more</p>');
+    const outcome = await saver.flush();
+    assert({
+      given: 'a 409 while the stored text is exactly what the unanswered save sent',
+      should: 'carry on from where that save left the text, with no conflict',
+      actual: { outcome, last: sent.at(-1), contentRevision: saver.contentRevision(), unsaved: saver.unsaved() },
+      expected: {
+        outcome: 'saved',
+        last: { patch: { content: '<p>more</p>' }, expectedContentRevision: 5 },
+        contentRevision: 6,
+        unsaved: null,
+      },
+    });
+  });
+
+  test('another writer behind a refusal', async () => {
+    const { sent, saver } = afterLostAnswer({ contentRevision: 5, content: '<p>theirs</p>' }, async () => 6);
+    saver.edit('<p>first</p>');
+    await saver.flush();
+    saver.edit('<p>more</p>');
+    const outcome = await saver.flush();
+    assert({
+      given: 'a 409 while the stored text is not what the unanswered save sent',
+      should: 'stop and keep the text for the viewer to settle',
+      actual: { outcome, sends: sent.length, unsaved: saver.unsaved() },
+      expected: { outcome: 'conflict', sends: 2, unsaved: { content: '<p>more</p>' } },
+    });
+  });
+
+  test('a retry refused again', async () => {
+    const { sent, saver } = afterLostAnswer({ contentRevision: 5, content: '<p>first</p>' }, async () => {
+      throw refused(409);
+    });
+    saver.edit('<p>first</p>');
+    await saver.flush();
+    saver.edit('<p>more</p>');
+    const outcome = await saver.flush();
+    assert({
+      given: 'a claim of its own save whose retry is refused too',
+      should: 'ask, rather than try again',
+      actual: { outcome, sends: sent.length },
+      expected: { outcome: 'conflict', sends: 3 },
+    });
+  });
+
+  test('a definite refusal', async () => {
+    const clock = manualClock();
+    let stored = false;
+    const saver = createDocumentSaver({
+      contentRevision: 4,
+      send: async () => {
+        throw refused(stored ? 409 : 400);
+      },
+      readStored: async () => ({ contentRevision: 5, content: '<p>first</p>' }),
+      onState: () => {},
+      schedule: clock.schedule,
+      cancel: clock.cancel,
+    });
+    saver.edit('<p>first</p>');
+    await saver.flush();
+    stored = true;
+    const outcome = await saver.flush();
+    assert({
+      given: 'a save the server definitely turned away, then a 409',
+      should: 'not claim the stored text as its own',
+      actual: outcome,
+      expected: 'conflict',
     });
   });
 });

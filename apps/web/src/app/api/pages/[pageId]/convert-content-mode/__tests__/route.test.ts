@@ -159,15 +159,8 @@ describe('POST /api/pages/[pageId]/convert-content-mode', () => {
     mockCanUserEditPage.mockResolvedValue(true);
     mockTurndown.mockReturnValue('# Converted Markdown');
     mockMarkedParse.mockResolvedValue('<h1>Converted HTML</h1>');
-    mockPagesFindFirst
-      .mockResolvedValueOnce(mockDocPage)       // first call: fetch current page
-      .mockResolvedValueOnce({                   // second call: refetch after update
-        ...mockDocPage,
-        content: '# Converted Markdown',
-        contentMode: 'markdown',
-        revision: 6,
-      });
-    mockApplyPageMutation.mockResolvedValue({});
+    mockPagesFindFirst.mockReset().mockResolvedValue(mockDocPage);
+    mockApplyPageMutation.mockResolvedValue({ nextRevision: 6, nextContentRevision: 1 });
   });
 
   describe('authentication', () => {
@@ -371,6 +364,18 @@ describe('POST /api/pages/[pageId]/convert-content-mode', () => {
         })
       );
     });
+  });
+
+  it('acknowledges the conversion rather than a newer post-commit writer', async () => {
+    mockPagesFindFirst.mockReset().mockResolvedValueOnce(mockDocPage).mockResolvedValue({
+      ...mockDocPage, content: 'newer unseen content', contentMode: 'html', revision: 7, contentRevision: 9,
+    });
+    mockApplyPageMutation.mockResolvedValue({ nextRevision: 6, nextContentRevision: 8 });
+    const response = await POST(createRequest({ targetMode: 'markdown' }), mockParams);
+    expect(await response.json()).toMatchObject({
+      content: '# Converted Markdown', contentMode: 'markdown', revision: 6, contentRevision: 8,
+    });
+    expect(mockPagesFindFirst).toHaveBeenCalledTimes(1);
   });
 
   describe('side effects', () => {

@@ -170,6 +170,7 @@ const mockPage: PageWithDetails = {
   createdAt: new Date(),
   updatedAt: new Date(),
   revision: 0,
+  contentRevision: 0,
   stateHash: null,
   isTrashed: false,
   trashedAt: null,
@@ -752,6 +753,53 @@ describe('PATCH /api/pages/[pageId]', () => {
       expect(response.status).toBe(409);
       expect(body.currentRevision).toBe(10);
       expect(body.expectedRevision).toBe(5);
+    });
+
+    it('passes the editor content mode through so a same-byte conversion is guarded', async () => {
+      await PATCH(createRequest({ content: '', contentMode: 'html', expectedContentRevision: 7 }), { params: mockParams });
+      expect(pageService.updatePage).toHaveBeenCalledWith(
+        mockPageId, expect.anything(), expect.objectContaining({ content: '', contentMode: 'html' }),
+        expect.objectContaining({ expectedContentRevision: 7 })
+      );
+    });
+
+    it('passes expectedContentRevision to the service', async () => {
+      await PATCH(createRequest({ content: 'edited', expectedContentRevision: 7 }), { params: mockParams });
+
+      expect(pageService.updatePage).toHaveBeenCalledWith(
+        mockPageId,
+        expect.anything(),
+        { content: 'edited' },
+        expect.objectContaining({ expectedContentRevision: 7, expectedRevision: undefined })
+      );
+    });
+
+    it('rejects a malformed expectedContentRevision', async () => {
+      const response = await PATCH(createRequest({ content: 'edited', expectedContentRevision: 'seven' }), {
+        params: mockParams,
+      });
+
+      expect(response.status).toBe(400);
+    });
+
+    it('tells a refused save where the content is now', async () => {
+      vi.mocked(pageService.updatePage).mockResolvedValue({
+        success: false,
+        error: 'Conflict',
+        status: 409,
+        currentRevision: 12,
+        currentContentRevision: 7,
+        expectedContentRevision: 3,
+      });
+
+      const response = await PATCH(createRequest({ content: 'edited', expectedContentRevision: 3 }), {
+        params: mockParams,
+      });
+      const body = await response.json();
+
+      expect(response.status).toBe(409);
+      expect(body.currentContentRevision).toBe(7);
+      expect(body.expectedContentRevision).toBe(3);
     });
   });
 });
