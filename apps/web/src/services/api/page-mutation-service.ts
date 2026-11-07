@@ -99,6 +99,7 @@ export interface ApplyPageMutationResult {
   pageId: string;
   driveId: string;
   nextRevision: number;
+  nextContentRevision: number;
   stateHashBefore: string;
   stateHashAfter: string;
   contentRefBefore: string | null;
@@ -282,6 +283,7 @@ export async function applyPageMutation({
       pageId,
       driveId: currentPage.driveId,
       nextRevision: currentPage.revision,
+      nextContentRevision: currentPage.contentRevision,
       stateHashBefore,
       stateHashAfter: stateHashBefore,
       contentRefBefore: contentRefBefore ?? null,
@@ -571,6 +573,7 @@ export async function applyPageMutation({
     pageId,
     driveId: currentPage.driveId,
     nextRevision,
+    nextContentRevision: currentPage.contentRevision + (changesContent ? 1 : 0),
     stateHashBefore,
     stateHashAfter,
     contentRefBefore: contentRefBefore ?? null,

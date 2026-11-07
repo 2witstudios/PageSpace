@@ -93,8 +93,8 @@ export const createPageSaveSerializer = <T>(): PageSaveSerializer<T> => {
  *
  * A save can commit and still never be answered: the connection drops, or the
  * server fails after the write. The next save is then refused by the save before
- * it. If what the server holds is exactly what this client sent and never heard
- * back about, nothing of anyone else's can be lost by saving over it.
+ * it. If the server holds the same normalized content in the same mode that
+ * this client sent and never heard back about, no unseen edit can be lost.
  */
 export const isOwnUnconfirmedSave = (
   storedContent: string | null | undefined,
@@ -102,4 +102,27 @@ export const isOwnUnconfirmedSave = (
   storedContentMode: string = 'html',
   unconfirmedContentMode: string = 'html'
 ): boolean =>
-  unconfirmedContent !== undefined && storedContent !== undefined && storedContent !== null && storedContent === unconfirmedContent && storedContentMode === unconfirmedContentMode;
+  unconfirmedContent !== undefined &&
+  storedContent !== undefined &&
+  storedContent !== null &&
+  storedContentMode === unconfirmedContentMode &&
+  normalizeEmptyDocumentContent(storedContent) === normalizeEmptyDocumentContent(unconfirmedContent);
+
+/** The server's canonical form for empty TipTap HTML and JSON documents. */
+export const normalizeEmptyDocumentContent = (content: string): string => {
+  const trimmed = content.trim();
+  if (trimmed === '' || /^<p>(?:\s*|<br>|<br\s*\/>)<\/p>$/.test(trimmed)) return '';
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (
+      typeof parsed === 'object' && parsed !== null &&
+      'type' in parsed && parsed.type === 'doc' &&
+      'content' in parsed && Array.isArray(parsed.content) && parsed.content.length === 1 &&
+      parsed.content[0]?.type === 'paragraph' &&
+      (!parsed.content[0].content || parsed.content[0].content.length === 0)
+    ) return '';
+  } catch {
+    // Non-JSON text is already canonical.
+  }
+  return content;
+};

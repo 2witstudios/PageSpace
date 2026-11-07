@@ -15,7 +15,7 @@ import {
   DropdownMenuTrigger,
 } from '@/retained/components/ui/dropdown-menu';
 import { fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
-import { useDocumentSaving } from '@/retained/hooks/useDocument';
+import { useDocument } from '@/retained/hooks/useDocument';
 import { useDocumentManagerStore } from '@/retained/stores/useDocumentManagerStore';
 
 interface PageSetupButtonProps {
@@ -36,7 +36,7 @@ const fetcher = async (url: string): Promise<PageDetails> => {
 
 export function PageSetupButton({ pageId }: PageSetupButtonProps) {
   const [isConverting, setIsConverting] = useState(false);
-  const { saveDocument } = useDocumentSaving(pageId);
+  const { forceSave, updateContentFromServer } = useDocument(pageId);
 
   const { data: pageData, mutate } = useSWR(
     pageId ? `/api/pages/${pageId}` : null,
@@ -76,7 +76,7 @@ export function PageSetupButton({ pageId }: PageSetupButtonProps) {
           clearTimeout(doc.saveTimeout);
         }
 
-        const saveResult = await saveDocument(doc.content);
+        const saveResult = await forceSave();
         if (!saveResult) {
           // A parked save conflict blocks writes until the user picks a
           // version, so "save first" would be advice they cannot follow.
@@ -92,6 +92,13 @@ export function PageSetupButton({ pageId }: PageSetupButtonProps) {
         }
       }
 
+      // Typing while the preliminary save was out still belongs to the old
+      // mode. Convert only once that newer buffer has also been saved.
+      if (useDocumentManagerStore.getState().documents.get(pageId)?.isDirty) {
+        toast.error('Please save your changes before converting');
+        return;
+      }
+
       const response = await fetchWithAuth(`/api/pages/${pageId}/convert-content-mode`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -105,15 +112,7 @@ export function PageSetupButton({ pageId }: PageSetupButtonProps) {
 
       const result = await response.json();
 
-      const store = useDocumentManagerStore.getState();
-      store.updateDocument(pageId, {
-        content: result.content,
-        contentMode: result.contentMode,
-        contentRevision: result.contentRevision,
-        isDirty: false,
-        lastSaved: Date.now(),
-        lastUpdateTime: Date.now(),
-      });
+      updateContentFromServer(result.content, result.contentRevision, result.contentMode);
 
       await mutate();
       toast.success(`Converted to ${nextMode === 'markdown' ? 'Markdown' : 'Rich Text'}`);
@@ -122,7 +121,7 @@ export function PageSetupButton({ pageId }: PageSetupButtonProps) {
     } finally {
       setIsConverting(false);
     }
-  }, [contentMode, isConverting, mutate, pageId, saveDocument]);
+  }, [contentMode, isConverting, mutate, pageId, forceSave, updateContentFromServer]);
 
   return (
     <DropdownMenu>

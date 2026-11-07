@@ -168,3 +168,12 @@ it('does not claim an unanswered save across a content mode conversion', () => {
   expect(isOwnUnconfirmedSave('', '', 'markdown', 'html')).toBe(false);
   expect(isOwnUnconfirmedSave('', '', 'html', 'html')).toBe(true);
 });
+
+
+it.each(['<p></p>', '<p><br></p>', '<p><br /></p>', '   ', '{"type":"doc","content":[{"type":"paragraph"}]}'])(
+  'recognizes a stored unanswered empty editor value %s', (sent) => {
+    expect(isOwnUnconfirmedSave('', sent, 'html', 'html')).toBe(true);
+    expect(isOwnUnconfirmedSave(undefined, sent, 'html', 'html')).toBe(false);
+    expect(isOwnUnconfirmedSave('', sent, 'markdown', 'html')).toBe(false);
+  },
+);

@@ -1,3 +1,4 @@
+import { normalizeEmptyDocumentContent as sanitizeEmptyContent } from '@pagespace/lib/documents/page-save';
 import { db } from '@pagespace/db/db'
 import { DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { eq, and, asc, desc, isNull } from '@pagespace/db/operators'
@@ -80,46 +81,6 @@ function toPageData(dbPage: {
     enabledTools: dbPage.enabledTools as string[] | null,
     isPaginated: dbPage.isPaginated,
   };
-}
-
-/**
- * Content sanitization utility - cleans empty TipTap structures
- * Internal utility - not exported from module
- */
-function sanitizeEmptyContent(content: string): string {
-  if (!content || content.trim() === '') {
-    return '';
-  }
-
-  const trimmedContent = content.trim();
-
-  const emptyParagraphPatterns = [
-    /^<p><\/p>$/,
-    /^<p><br><\/p>$/,
-    /^<p>\s*<\/p>$/,
-    /^<p><br\s*\/><\/p>$/
-  ];
-
-  for (const pattern of emptyParagraphPatterns) {
-    if (pattern.test(trimmedContent)) {
-      return '';
-    }
-  }
-
-  try {
-    const parsed = JSON.parse(trimmedContent);
-    if (parsed.type === 'doc' &&
-        Array.isArray(parsed.content) &&
-        parsed.content.length === 1 &&
-        parsed.content[0].type === 'paragraph' &&
-        (!parsed.content[0].content || parsed.content[0].content.length === 0)) {
-      return '';
-    }
-  } catch {
-    // Not JSON, continue
-  }
-
-  return content;
 }
 
 /**

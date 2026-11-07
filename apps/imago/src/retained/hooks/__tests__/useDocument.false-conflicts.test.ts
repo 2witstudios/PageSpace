@@ -335,6 +335,23 @@ describe('useDocument false conflicts', () => {
     expect(patchBodies()[1]).toMatchObject({ content: 'same bytes', contentMode: 'markdown', expectedContentRevision: 8 });
   });
 
+  it('recovers an unanswered editor-empty HTML save normalized by the server', async () => {
+    open(pageId, 'start', 7);
+    vi.mocked(fetchWithAuth)
+      .mockRejectedValueOnce(new TypeError('lost clear response'))
+      .mockResolvedValueOnce(conflict(8, 7))
+      .mockResolvedValueOnce(answer({ content: '', contentMode: 'html', contentRevision: 8 }))
+      .mockResolvedValueOnce(answer({ contentRevision: 9 }));
+    const { result } = renderHook(() => useDocument(pageId));
+    type(result, '<p></p>');
+    await act(async () => { await result.current.forceSave().catch(() => undefined); });
+    type(result, '<p>typing after clearing</p>');
+    await act(async () => { await result.current.forceSave(); });
+    expect(hasConflict(pageId)).toBe(false);
+    expect(patchBodies().at(-1)).toMatchObject({ content: '<p>typing after clearing</p>', contentMode: 'html', expectedContentRevision: 8 });
+    expect(stored(pageId)).toMatchObject({ content: '<p>typing after clearing</p>', contentRevision: 9 });
+  });
+
   describe('a slow load', () => {
     it('cannot put back the revision a save has moved past', async () => {
       open(pageId, 'start', 7);

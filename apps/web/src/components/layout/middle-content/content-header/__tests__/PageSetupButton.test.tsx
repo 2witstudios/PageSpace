@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useDocumentManagerStore } from '@/stores/useDocumentManagerStore';
 
@@ -106,4 +106,35 @@ describe('PageSetupButton content-mode conversion', () => {
     );
     expect(useDocumentManagerStore.getState().conflicts.has(pageId)).toBe(false);
   });
+  it.each(['clean conversion', 'dirty save', 'dirty conversion'])(
+    'keeps edits typed during %s', async (stage) => {
+      const id = `${pageId}-${stage}`;
+      useDocumentManagerStore.getState().upsertDocument(id, 'original', 'html', 3);
+      useDocumentManagerStore.getState().updateDocument(id, { isDirty: stage !== 'clean conversion', lastUpdateTime: Date.now() - 1000 });
+      let release!: (response: Response) => void;
+      const pending = new Promise<Response>((resolve) => { release = resolve; });
+      const answer = (body: object) => ({ ok: true, json: async () => body }) as Response;
+      vi.mocked(fetchWithAuth).mockImplementation((_url, init) => {
+        if (init?.method === 'PATCH') return stage === 'dirty save' ? pending : Promise.resolve(answer({ contentRevision: 4 }));
+        if (init?.method === 'POST') return pending;
+        return Promise.resolve(answer({ contentMode: 'html' }));
+      });
+      render(<PageSetupButton pageId={id} />);
+      await openAndPickMarkdown();
+      await waitFor(() => expect(vi.mocked(fetchWithAuth).mock.calls.some(([, init]) => init?.method === (stage === 'dirty save' ? 'PATCH' : 'POST'))).toBe(true));
+      act(() => useDocumentManagerStore.getState().updateDocument(id, { content: 'new local typing', isDirty: true, lastUpdateTime: Date.now() + 1 }));
+      await act(async () => {
+        release(answer(stage === 'dirty save'
+          ? { contentRevision: 4 }
+          : { content: 'converted original', contentMode: 'markdown', contentRevision: stage === 'clean conversion' ? 4 : 5 }));
+      });
+      await waitFor(() => expect(screen.getByRole('button')).toBeEnabled());
+      expect(useDocumentManagerStore.getState().documents.get(id)).toMatchObject({
+        content: 'new local typing', contentMode: 'html', isDirty: true,
+        contentRevision: stage === 'clean conversion' ? 3 : 4,
+      });
+      if (stage === 'dirty save') expect(vi.mocked(fetchWithAuth).mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
+    },
+  );
+
 });

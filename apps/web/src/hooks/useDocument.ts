@@ -158,7 +158,7 @@ export const useDocumentSaving = (pageId: string) => {
               useDocumentManagerStore.getState().updateDocument(pageId, {
                 contentRevision: remotePage.contentRevision,
                 unconfirmedContent: undefined,
-          unconfirmedContentMode: undefined,
+                unconfirmedContentMode: undefined,
               });
               return await sendSave(content, { ...options, expectedContentRevision: remotePage.contentRevision }, false);
             }

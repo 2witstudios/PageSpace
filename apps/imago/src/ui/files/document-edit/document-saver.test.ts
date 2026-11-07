@@ -409,6 +409,15 @@ describe('a save that was stored but never answered', () => {
     expect(saver.unsaved()).toEqual({ content: '<p>local HTML typing</p>' });
   });
 
+  test('recognizes an unanswered editor clear normalized to empty by the server', async () => {
+    const { saver, sent } = afterLostAnswer({ contentRevision: 5, content: '' }, async () => 6);
+    saver.edit('<p></p>');
+    await saver.flush();
+    saver.edit('<p>typing after clearing</p>');
+    expect(await saver.flush()).toBe('saved');
+    expect(sent.at(-1)?.expectedContentRevision).toBe(5);
+  });
+
   test('its own text behind a refusal', async () => {
     const { sent, saver } = afterLostAnswer({ contentRevision: 5, content: '<p>first</p>' }, async () => 6);
     saver.edit('<p>first</p>');
