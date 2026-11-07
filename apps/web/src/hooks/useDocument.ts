@@ -22,7 +22,7 @@ import {
  */
 const pageSaves = createPageSaveSerializer<boolean>();
 
-type SaveOptions = { expectedContentRevision?: number; resolvingConflict?: boolean };
+type SaveOptions = { expectedContentRevision?: number; resolvingConflict?: boolean; contentMode?: 'html' | 'markdown' };
 
 export const useDocumentState = (pageId: string) => {
   const document = useDocumentManagerStore(
@@ -97,6 +97,7 @@ export const useDocumentSaving = (pageId: string) => {
       // Whether the server has definitely answered about this save. Until it
       // has, a failure leaves open that the text was stored all the same.
       let outcomeKnown = false;
+      const contentMode = options?.contentMode ?? useDocumentManagerStore.getState().documents.get(pageId)?.contentMode ?? 'html';
 
       try {
         const saveStartTime = Date.now();
@@ -116,7 +117,7 @@ export const useDocumentSaving = (pageId: string) => {
         const response = await fetchWithAuth(`/api/pages/${pageId}`, {
           method: 'PATCH',
           headers,
-          body: JSON.stringify({ content, expectedContentRevision, changeGroupId: sessionId }),
+          body: JSON.stringify({ content, contentMode, expectedContentRevision, changeGroupId: sessionId }),
         });
 
         if (!response.ok) {
@@ -149,11 +150,15 @@ export const useDocumentSaving = (pageId: string) => {
             if (
               mayClaimOwnSave &&
               remotePage?.contentRevision !== undefined &&
-              isOwnUnconfirmedSave(remotePage.content, unconfirmedContent)
+              isOwnUnconfirmedSave(
+                remotePage.content, unconfirmedContent, remotePage.contentMode ?? 'html',
+                useDocumentManagerStore.getState().documents.get(pageId)?.unconfirmedContentMode ?? contentMode
+              )
             ) {
               useDocumentManagerStore.getState().updateDocument(pageId, {
                 contentRevision: remotePage.contentRevision,
                 unconfirmedContent: undefined,
+          unconfirmedContentMode: undefined,
               });
               return await sendSave(content, { ...options, expectedContentRevision: remotePage.contentRevision }, false);
             }
@@ -196,6 +201,7 @@ export const useDocumentSaving = (pageId: string) => {
 
         useDocumentManagerStore.getState().updateDocument(pageId, {
           unconfirmedContent: undefined,
+          unconfirmedContentMode: undefined,
           ...(savedPage.contentRevision !== undefined ? { contentRevision: savedPage.contentRevision } : {}),
         });
 
@@ -204,6 +210,7 @@ export const useDocumentSaving = (pageId: string) => {
         if (
           currentDoc &&
           currentDoc.content === content &&
+          currentDoc.contentMode === contentMode &&
           currentDoc.lastUpdateTime < saveStartTime
         ) {
           markAsSaved(pageId);
@@ -217,7 +224,7 @@ export const useDocumentSaving = (pageId: string) => {
         console.error('Save failed:', error);
         toast.error('Failed to save document');
         if (!outcomeKnown) {
-          useDocumentManagerStore.getState().updateDocument(pageId, { unconfirmedContent: content });
+          useDocumentManagerStore.getState().updateDocument(pageId, { unconfirmedContent: content, unconfirmedContentMode: contentMode });
         }
         clearSavingState(pageId);
         throw error;
@@ -240,7 +247,9 @@ export const useDocumentSaving = (pageId: string) => {
       // One save of a page at a time. A second one sent while the first is out
       // would carry the same revision, and the first would refuse it: a person
       // working alone told that someone else had saved.
-      return pageSaves.run(pageId, content, () => sendSave(content, options));
+      const contentMode = options?.contentMode ?? useDocumentManagerStore.getState().documents.get(pageId)?.contentMode ?? 'html';
+      const identity = JSON.stringify({ content, contentMode, expectedContentRevision: options?.expectedContentRevision, resolvingConflict: options?.resolvingConflict });
+      return pageSaves.run(pageId, identity, () => sendSave(content, { ...options, contentMode }));
     },
     [pageId, sendSave]
   );
@@ -315,9 +324,11 @@ export const useDocument = (pageId: string) => {
   );
 
   const updateContentFromServer = useCallback(
-    (newContent: string, contentRevision?: number) => {
-      const held = useDocumentManagerStore.getState().documents.get(pageId)?.contentRevision;
-      if (isOlderContentRevision(contentRevision, held)) return;
+    (newContent: string, contentRevision?: number, contentMode?: 'html' | 'markdown') => {
+      const state = useDocumentManagerStore.getState();
+      const current = state.documents.get(pageId);
+      if (current?.isDirty || state.conflicts.has(pageId) || state.savingDocuments.has(pageId)) return;
+      if (isOlderContentRevision(contentRevision, current?.contentRevision)) return;
 
       const now = Date.now();
       const updates: Partial<DocumentState> = {
@@ -327,6 +338,7 @@ export const useDocument = (pageId: string) => {
         lastUpdateTime: now,
       };
       if (contentRevision !== undefined) updates.contentRevision = contentRevision;
+      if (contentMode !== undefined) updates.contentMode = contentMode;
       useDocumentManagerStore.getState().updateDocument(pageId, updates);
     },
     [pageId]
@@ -421,6 +433,7 @@ export const useDocument = (pageId: string) => {
         const now = Date.now();
         state.updateDocument(pageId, {
           content: plan.contentToAdopt,
+          ...(plan.contentMode !== undefined ? { contentMode: plan.contentMode } : {}),
           contentRevision: plan.contentRevision,
           isDirty: false,
           lastSaved: now,

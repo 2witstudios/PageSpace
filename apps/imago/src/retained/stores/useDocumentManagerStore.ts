@@ -16,6 +16,7 @@ export interface DocumentState {
    * later refusal naming exactly this text is this client's own save.
    */
   unconfirmedContent?: string;
+  unconfirmedContentMode?: 'html' | 'markdown';
 }
 
 export interface DocumentManagerState {

@@ -162,3 +162,9 @@ describe('isOwnUnconfirmedSave', () => {
     expect(isOwnUnconfirmedSave(null, 'sent earlier')).toBe(false);
   });
 });
+
+
+it('does not claim an unanswered save across a content mode conversion', () => {
+  expect(isOwnUnconfirmedSave('', '', 'markdown', 'html')).toBe(false);
+  expect(isOwnUnconfirmedSave('', '', 'html', 'html')).toBe(true);
+});

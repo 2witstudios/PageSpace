@@ -755,6 +755,14 @@ describe('PATCH /api/pages/[pageId]', () => {
       expect(body.expectedRevision).toBe(5);
     });
 
+    it('passes the editor content mode through so a same-byte conversion is guarded', async () => {
+      await PATCH(createRequest({ content: '', contentMode: 'html', expectedContentRevision: 7 }), { params: mockParams });
+      expect(pageService.updatePage).toHaveBeenCalledWith(
+        mockPageId, expect.anything(), expect.objectContaining({ content: '', contentMode: 'html' }),
+        expect.objectContaining({ expectedContentRevision: 7 })
+      );
+    });
+
     it('passes expectedContentRevision to the service', async () => {
       await PATCH(createRequest({ content: 'edited', expectedContentRevision: 7 }), { params: mockParams });
 

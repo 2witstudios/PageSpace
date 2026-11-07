@@ -275,7 +275,7 @@ export async function applyPageMutation({
   const isResendOfStoredContent =
     expectedContentRevision !== undefined &&
     !changesContent &&
-    Object.keys(updates).every((field) => field === 'content');
+    Object.keys(updates).every((field) => field === 'content' || field === 'contentMode');
 
   if (isResendOfStoredContent) {
     return {

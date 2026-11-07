@@ -289,6 +289,7 @@ export interface CreatePageOptions {
 export interface UpdatePageParams {
   title?: string;
   content?: string;
+  contentMode?: 'html' | 'markdown';
   aiProvider?: string;
   aiModel?: string;
   parentId?: string | null;

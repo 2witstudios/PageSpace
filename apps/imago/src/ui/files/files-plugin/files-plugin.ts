@@ -23,7 +23,7 @@ export type PendingFile = {
 };
 
 /** Text a document held when it closed and the server never got, with the content revision it was made on. */
-export type DocumentDraft = { readonly patch: DocumentPatch; readonly contentRevision: number };
+export type DocumentDraft = { readonly patch: DocumentPatch; readonly contentRevision: number; readonly contentMode?: 'html' | 'markdown' };
 
 /**
  * One open view of a document that holds unsaved text. A page can have two

@@ -137,6 +137,7 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
     contentRevision: page.contentRevision,
     title: page.title,
     content: page.content,
+    contentMode: page.contentMode,
   });
   const [title, setTitle] = useState(page.title);
   const [titleDraft, setTitleDraft] = useState(page.title);
@@ -163,13 +164,14 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
     [mutatePage],
   );
 
-  const opened = useRef(page.contentRevision);
+  const opened = useRef({ contentRevision: page.contentRevision, contentMode: page.contentMode });
   const saver = useMemo(
     () =>
       createDocumentSaver({
-        contentRevision: opened.current,
-        send: async (patch, expectedContentRevision) => {
-          const stored = await saveDocument(client, page.id, patch, expectedContentRevision, socketId());
+        contentRevision: opened.current.contentRevision,
+        contentMode: opened.current.contentMode,
+        send: async (patch, expectedContentRevision, contentMode) => {
+          const stored = await saveDocument(client, page.id, patch, expectedContentRevision, socketId(), contentMode);
           known.current = patch.content === undefined
             ? { ...known.current, revision: stored.revision, title: stored.title }
             : stored;
@@ -201,13 +203,13 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
       editorProps: { attributes: bodyAttributes(shownTitleOf(page.title), false) },
       // Content set while read-only, or from the server, is not the viewer's to save.
       onUpdate: ({ editor: changed }) => {
-        if (changed.isEditable) saver.edit(serializeDocument(changed, page.contentMode));
+        if (changed.isEditable) saver.edit(serializeDocument(changed, saver.contentMode()));
       },
       onBlur: () => {
         void saver.flush();
       },
     },
-    [navigate, saver, page.contentMode],
+    [navigate, saver],
   );
 
   useEffect(() => {
@@ -239,7 +241,7 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
         if (unsaved !== null) {
           dispatch(transactions.keepDocumentDraft, {
             pageId: page.id,
-            draft: { patch: unsaved, contentRevision: saver.contentRevision() },
+            draft: { patch: unsaved, contentRevision: saver.contentRevision(), contentMode: saver.contentMode() },
           });
         }
         release();
@@ -263,7 +265,7 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
       setTitle(draftTitle);
       setTitleDraft(draftTitle);
     }
-    saver.restore(draft.patch, draft.contentRevision);
+    saver.restore(draft.patch, draft.contentRevision, draft.contentMode);
     setDraftRestored(true);
   }, [editor, saver, page.id]);
 
@@ -289,7 +291,7 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
   const adopt = useCallback(
     (stored: StoredDocument) => {
       known.current = stored;
-      saver.adopt(stored.contentRevision);
+      saver.adopt(stored.contentRevision, stored.contentMode);
       editor?.commands.setContent(stored.content, { emitUpdate: false });
       setTitle(stored.title);
       setTitleDraft(stored.title);
@@ -308,6 +310,7 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
       contentRevision: page.contentRevision,
       title: page.title,
       content: page.content,
+      contentMode: page.contentMode,
     };
     if (page.contentRevision > known.current.contentRevision) {
       adopt(latest);
@@ -316,7 +319,7 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
       setTitle(page.title);
       setTitleDraft(page.title);
     }
-  }, [editor, saver, adopt, page.revision, page.contentRevision, page.title, page.content, saveState.editing]);
+  }, [editor, saver, adopt, page.revision, page.contentRevision, page.title, page.content, page.contentMode, saveState.editing]);
 
   // Someone else saved this page: reload it, unless the viewer is editing.
   // The editing check is the first of three layers (with SWR's pause and the

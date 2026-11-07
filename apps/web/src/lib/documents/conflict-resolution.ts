@@ -11,6 +11,7 @@
 export interface DocumentConflict {
   remoteContent: string;
   remoteContentRevision: number;
+  remoteContentMode?: 'html' | 'markdown';
   detectedAt: number;
 }
 
@@ -25,6 +26,7 @@ export interface ConflictResponseBody {
 export interface RemotePageSnapshot {
   content?: string | null;
   contentRevision?: number;
+  contentMode?: 'html' | 'markdown';
 }
 
 /**
@@ -98,6 +100,7 @@ export function decideConflictOutcome(input: ConflictDecisionInput): ConflictDec
     conflict: {
       remoteContent: remote.content,
       remoteContentRevision,
+      ...(remotePage.contentMode !== undefined ? { remoteContentMode: remotePage.contentMode } : {}),
       detectedAt,
     },
   };
@@ -107,7 +110,7 @@ export type ConflictResolutionChoice = 'keep-mine' | 'use-theirs';
 
 export type ConflictResolutionPlan =
   | { action: 'save-local'; contentToSave: string; expectedContentRevision: number }
-  | { action: 'adopt-remote'; contentToAdopt: string; contentRevision: number };
+  | { action: 'adopt-remote'; contentToAdopt: string; contentRevision: number; contentMode?: 'html' | 'markdown' };
 
 export interface ConflictResolutionInput {
   localContent: string;
@@ -147,6 +150,7 @@ export function planConflictResolution(
     action: 'adopt-remote',
     contentToAdopt: input.conflict.remoteContent,
     contentRevision: input.conflict.remoteContentRevision,
+    ...(input.conflict.remoteContentMode !== undefined ? { contentMode: input.conflict.remoteContentMode } : {}),
   };
 }
 

@@ -39,15 +39,16 @@ export type FlushOutcome = 'saved' | 'conflict' | 'read-only' | 'failed';
 export type DocumentSaverOptions = {
   /** The content revision the editor opened with. */
   readonly contentRevision: number;
+  readonly contentMode?: 'html' | 'markdown';
   /** Sends one PATCH; resolves with the page's new content revision, rejects when it was not saved. */
-  readonly send: (patch: DocumentPatch, expectedContentRevision: number) => Promise<{ readonly contentRevision: number }>;
+  readonly send: (patch: DocumentPatch, expectedContentRevision: number, contentMode: 'html' | 'markdown') => Promise<{ readonly contentRevision: number }>;
   /** Told each time the state changes. */
   readonly onState: (state: SaverState) => void;
   /**
    * Reads what the server holds now. Asked only after a 409 while an earlier
    * save is unanswered, to tell whether that save is what refused this one.
    */
-  readonly readStored?: () => Promise<{ readonly contentRevision: number; readonly content: string }>;
+  readonly readStored?: () => Promise<{ readonly contentRevision: number; readonly content: string; readonly contentMode?: 'html' | 'markdown' }>;
   /** How long typing must pause before a save. */
   readonly delayMs?: number;
   readonly schedule?: (run: () => void, delayMs: number) => TimerId;
@@ -62,11 +63,12 @@ export type DocumentSaver = {
   /** Saves what is waiting now. */
   readonly flush: () => Promise<FlushOutcome>;
   /** Holds text kept from an earlier visit (made at `contentRevision`) and saves it once typing pauses. */
-  readonly restore: (patch: DocumentPatch, contentRevision: number) => void;
+  readonly restore: (patch: DocumentPatch, contentRevision: number, contentMode?: 'html' | 'markdown') => void;
   /** Settles a conflict by saving the viewer's text over `contentRevision`, the one now stored. */
   readonly keepMine: (contentRevision: number) => Promise<FlushOutcome>;
   /** The editor now shows the stored copy at `contentRevision`: what was waiting is dropped. */
-  readonly adopt: (contentRevision: number) => void;
+  readonly adopt: (contentRevision: number, contentMode?: 'html' | 'markdown') => void;
+  readonly contentMode: () => 'html' | 'markdown';
   readonly isEditing: () => boolean;
   /** The content revision the next save is made against. */
   readonly contentRevision: () => number;
@@ -96,6 +98,7 @@ const mayHaveBeenStored = (error: unknown): boolean => !(error instanceof ApiErr
 
 export const createDocumentSaver = ({
   contentRevision: opened,
+  contentMode: openedMode = 'html',
   send,
   onState,
   readStored,
@@ -104,6 +107,7 @@ export const createDocumentSaver = ({
   cancel = (id) => clearTimeout(id),
 }: DocumentSaverOptions): DocumentSaver => {
   let contentRevision = opened;
+  let contentMode = openedMode;
   /** Text sent in a save that never got an answer, and so may be what the server holds. */
   let unconfirmed: string | undefined;
   let pending: DocumentPatch | null = null;
@@ -138,7 +142,7 @@ export const createDocumentSaver = ({
     if (unconfirmed === undefined || readStored === undefined) return false;
     try {
       const stored = await readStored();
-      if (!isOwnUnconfirmedSave(stored.content, unconfirmed)) return false;
+      if (!isOwnUnconfirmedSave(stored.content, unconfirmed, stored.contentMode ?? 'html', contentMode)) return false;
       contentRevision = stored.contentRevision;
       unconfirmed = undefined;
       return true;
@@ -151,7 +155,7 @@ export const createDocumentSaver = ({
   const sendNow = async (patch: DocumentPatch): Promise<FlushOutcome> => {
     setStatus({ kind: 'saving' });
     try {
-      const saved = await send(patch, contentRevision);
+      const saved = await send(patch, contentRevision, contentMode);
       // A title-only response can contain a body the editor has never shown.
       // Only a content save establishes a new baseline for its pending text.
       if (patch.content !== undefined) {
@@ -204,7 +208,8 @@ export const createDocumentSaver = ({
       if (status.kind !== 'saving') setStatus({ kind: 'unsaved' });
       later();
     },
-    restore: (patch, kept) => {
+    restore: (patch, kept, mode) => {
+      if (mode !== undefined) contentMode = mode;
       contentRevision = kept;
       pending = merge(patch, pending);
       setStatus({ kind: 'unsaved' });
@@ -222,7 +227,8 @@ export const createDocumentSaver = ({
       status = { kind: 'unsaved' };
       return flush();
     },
-    adopt: (stored) => {
+    adopt: (stored, mode) => {
+      if (mode !== undefined) contentMode = mode;
       stopTimer();
       contentRevision = stored;
       unconfirmed = undefined;
@@ -231,6 +237,7 @@ export const createDocumentSaver = ({
     },
     isEditing,
     contentRevision: () => contentRevision,
+    contentMode: () => contentMode,
     unsaved: () => pending,
   };
 };

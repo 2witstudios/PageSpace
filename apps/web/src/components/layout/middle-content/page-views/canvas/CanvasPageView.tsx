@@ -196,7 +196,8 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
             if (!currentDoc?.isDirty) {
               updateContentFromServer(
                 typeof updatedPage.content === 'string' ? updatedPage.content : '',
-                updatedPage.contentRevision
+                updatedPage.contentRevision,
+                updatedPage.contentMode
               );
             }
           }

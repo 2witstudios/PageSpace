@@ -58,12 +58,13 @@ const RIGHTS = 'GET /api/pages/notes/permissions/check';
 const TREE = 'GET /api/drives/d1/pages';
 
 /** The stored page: what GET and a successful PATCH answer. */
-const stored = { title: 'Notes', content: '<p>Stored</p>', revision: 3, contentRevision: 3 };
+const stored = { title: 'Notes', content: '<p>Stored</p>', revision: 3, contentRevision: 3, contentMode: 'html' as 'html' | 'markdown' };
 
 const pageBody = () =>
   Response.json({
     ...pageRow('notes', 'DOCUMENT', { parentId: 'brief', title: stored.title }),
     content: stored.content,
+    contentMode: stored.contentMode,
     revision: stored.revision,
     contentRevision: stored.contentRevision,
     children: [],
@@ -74,8 +75,8 @@ const getPage: FakeRoute = () => pageBody();
 
 /** apps/web's PATCH: only a real change to the text is checked against, or moves, the content lock. */
 const savePage: FakeRoute = (request: Recorded) => {
-  const body = request.body as { content?: string; title?: string; expectedContentRevision?: number };
-  const changesContent = body.content !== undefined && body.content !== stored.content;
+  const body = request.body as { content?: string; title?: string; contentMode?: 'html' | 'markdown'; expectedContentRevision?: number };
+  const changesContent = (body.content !== undefined && body.content !== stored.content) || (body.contentMode !== undefined && body.contentMode !== stored.contentMode);
   if (changesContent && body.expectedContentRevision !== stored.contentRevision) {
     return Response.json(
       {
@@ -88,6 +89,7 @@ const savePage: FakeRoute = (request: Recorded) => {
     );
   }
   if (body.content !== undefined) stored.content = body.content;
+  if (body.contentMode !== undefined) stored.contentMode = body.contentMode;
   if (body.title !== undefined) stored.title = body.title;
   stored.revision += 1;
   if (changesContent) stored.contentRevision += 1;
@@ -106,6 +108,7 @@ const tree: FakeRoute = () =>
 
 beforeEach(() => {
   stored.title = 'Notes';
+  stored.contentMode = 'html';
   stored.content = '<p>Stored</p>';
   stored.revision = 3;
   stored.contentRevision = 3;
@@ -226,7 +229,7 @@ describe('editing a document in the Files object', () => {
         title: 'Notes',
         beforePause: 0,
         stateWhileTyping: 'Unsaved changes',
-        sent: [['tok-1', { content: '<p>Draft</p>', expectedContentRevision: 3 }]],
+        sent: [['tok-1', { content: '<p>Draft</p>', contentMode: 'html', expectedContentRevision: 3 }]],
         socketId: 'sock-me',
         stored: '<p>Draft</p>',
         state: 'Saved',
@@ -269,7 +272,7 @@ describe('editing a document in the Files object', () => {
       given: 'text typed, then the editor left before the pause',
       should: 'save it without waiting for the pause',
       actual: saves(web).map((request) => request.body),
-      expected: [{ content: '<p>Quick</p>', expectedContentRevision: 3 }],
+      expected: [{ content: '<p>Quick</p>', contentMode: 'html', expectedContentRevision: 3 }],
     });
   });
 
@@ -286,7 +289,7 @@ describe('editing a document in the Files object', () => {
       given: 'text typed, then the document closed before the pause',
       should: 'save it as it closes, then let SWR have the page again',
       actual: [saves(web).map((request) => request.body), isEditingDocument(getUiState(), 'notes')],
-      expected: [[{ content: '<p>Last words</p>', expectedContentRevision: 3 }], false],
+      expected: [[{ content: '<p>Last words</p>', contentMode: 'html', expectedContentRevision: 3 }], false],
     });
   });
 
@@ -346,7 +349,7 @@ describe('editing a document in the Files object', () => {
       given: 'a conflict the viewer settles by keeping their text',
       should: 'save it over the revision now stored, and clear the conflict',
       actual: [saves(web).at(-1)?.body, stored.content, container.querySelector('[data-save-conflict]')],
-      expected: [{ content: '<p>Mine</p>', expectedContentRevision: 4 }, '<p>Mine</p>', null],
+      expected: [{ content: '<p>Mine</p>', contentMode: 'html', expectedContentRevision: 4 }, '<p>Mine</p>', null],
     });
   });
 
@@ -375,7 +378,7 @@ describe('editing a document in the Files object', () => {
       given: 'a conflict the viewer settles by taking the stored copy, then an edit',
       should: 'show the stored copy, and save the next edit against its revision',
       actual: [container.querySelector('[data-save-conflict]'), saves(web).at(-1)?.body],
-      expected: [null, { content: '<p>Theirs, edited</p>', expectedContentRevision: 4 }],
+      expected: [null, { content: '<p>Theirs, edited</p>', contentMode: 'html', expectedContentRevision: 4 }],
     });
   });
 
@@ -426,8 +429,8 @@ describe('editing a document in the Files object', () => {
       expected: [
         ['Mine', 'Failed to update page'],
         [
-          { content: '<p>Mine</p>', expectedContentRevision: 3 },
-          { content: '<p>Mine</p>', expectedContentRevision: 3 },
+          { content: '<p>Mine</p>', contentMode: 'html', expectedContentRevision: 3 },
+          { content: '<p>Mine</p>', contentMode: 'html', expectedContentRevision: 3 },
         ],
         '<p>Mine</p>',
       ],
@@ -518,7 +521,7 @@ describe('revalidation mid-edit', () => {
       given: 'SWR asked to revalidate the page, then a newer copy written into it, while the viewer has unsaved text',
       should: 'fetch nothing, keep the viewer’s text, and save it against the revision the editor knew',
       actual: [during, saves(web)[0]?.body],
-      expected: [[0, 'Mine'], { content: '<p>Mine</p>', expectedContentRevision: 3 }],
+      expected: [[0, 'Mine'], { content: '<p>Mine</p>', contentMode: 'html', expectedContentRevision: 3 }],
     });
   });
 
@@ -622,8 +625,8 @@ describe('editing the title', () => {
       actual: [saves(web).map((request) => request.body), container.querySelector('[data-save-conflict]')],
       expected: [
         [
-          { content: '<p>Body</p>', title: 'Plan', expectedContentRevision: 3 },
-          { content: '<p>Body, more</p>', expectedContentRevision: 4 },
+          { content: '<p>Body</p>', title: 'Plan', contentMode: 'html', expectedContentRevision: 3 },
+          { content: '<p>Body, more</p>', contentMode: 'html', expectedContentRevision: 4 },
         ],
         null,
       ],
@@ -690,7 +693,7 @@ describe('leaving with text the server does not have', () => {
       should: 'keep their text as a draft, restore it into the editor, and surface the conflict again',
       actual: shown,
       expected: {
-        kept: { patch: { content: '<p>Mine</p>' }, contentRevision: 3 },
+        kept: { patch: { content: '<p>Mine</p>' }, contentRevision: 3, contentMode: 'html' },
         text: 'Mine',
         restored: DRAFT_RESTORED_NOTICE,
         stored: '<p>Theirs</p>',
@@ -729,9 +732,9 @@ describe('leaving with text the server does not have', () => {
         back.container.querySelector('[data-draft-restored]'),
       ],
       expected: [
-        { patch: { content: '<p>Mine</p>' }, contentRevision: 3 },
+        { patch: { content: '<p>Mine</p>' }, contentRevision: 3, contentMode: 'html' },
         '<p>Mine</p>',
-        [{ content: '<p>Mine</p>', expectedContentRevision: 3 }],
+        [{ content: '<p>Mine</p>', contentMode: 'html', expectedContentRevision: 3 }],
         null,
       ],
     });
@@ -967,6 +970,63 @@ describe('a closing save that answers after the page reopened', () => {
 });
 
 describe('nobody else touched the text', () => {
+  test('clearing conflicts across a remote mode conversion, and use saved adopts its mode', async () => {
+    const { container, web } = show({});
+    await editable(container);
+    stored.content = '';
+    stored.contentMode = 'markdown';
+    stored.contentRevision = 4;
+    stored.revision = 4;
+    await type(container, '');
+    await settle(() => { if (!container.querySelector('[data-save-conflict]')) throw new Error('no mode conflict'); });
+    click([...container.querySelectorAll<HTMLButtonElement>('[data-save-conflict] button')].find(
+      (button) => button.textContent === 'Use the saved version',
+    )!);
+    await settle(() => { if (container.querySelector('[data-save-conflict]')) throw new Error('not adopted'); });
+    await type(container, '<p>Markdown typing</p>');
+    await settle(() => { if (stored.content !== 'Markdown typing') throw new Error('not saved in markdown'); });
+    assert({
+      given: 'an empty HTML editor after a remote conversion to markdown',
+      should: 'ask before overwriting the mode and then serialize the explicitly adopted markdown copy',
+      actual: saves(web).map((request) => request.body),
+      expected: [
+        { content: '<p></p>', contentMode: 'html', expectedContentRevision: 3 },
+        { content: 'Markdown typing', contentMode: 'markdown', expectedContentRevision: 4 },
+      ],
+    });
+  });
+
+  test('an HTML draft reopens across a remote mode conversion without being relabelled', async () => {
+    const first = show({ [SAVE]: () => Response.json({ error: 'offline' }, { status: 500 }) });
+    await editable(first.container);
+    await type(first.container, '<p>HTML draft</p>');
+    await settle(() => { if (!first.container.querySelector('[data-save-failed]')) throw new Error('not failed'); });
+    first.close();
+    await settle(() => { if (!documentDraftOf(getUiState(), 'notes')) throw new Error('draft not kept'); });
+    unmountAll();
+    stored.content = 'Remote markdown';
+    stored.contentMode = 'markdown';
+    stored.contentRevision = 4;
+    stored.revision = 4;
+    const back = show({});
+    await editable(back.container);
+    await settle(() => { if (!back.container.querySelector('[data-save-conflict]')) throw new Error('no conflict'); });
+    click([...back.container.querySelectorAll<HTMLButtonElement>('[data-save-conflict] button')].find(
+      (button) => button.textContent === 'Keep my version',
+    )!);
+    await settle(() => { if (stored.content !== '<p>HTML draft</p>') throw new Error('not kept'); });
+    assert({
+      given: 'an unsaved HTML draft reopened after a remote conversion',
+      should: 'preserve its original mode while asking and on explicitly keeping it',
+      actual: [saves(back.web)[0].body, saves(back.web).at(-1)?.body, stored.contentMode],
+      expected: [
+        { content: '<p>HTML draft</p>', contentMode: 'html', expectedContentRevision: 3 },
+        { content: '<p>HTML draft</p>', contentMode: 'html', expectedContentRevision: 4 },
+        'html',
+      ],
+    });
+  });
+
   test('a rename elsewhere does not refuse the next save', async () => {
     const { container, web } = show({});
     await editable(container);
@@ -984,7 +1044,7 @@ describe('nobody else touched the text', () => {
       given: 'a save after the page was renamed somewhere else',
       should: 'save against the content revision it opened with, with no conflict',
       actual: [saves(web)[0].body, container.querySelector('[data-save-conflict]')],
-      expected: [{ content: '<p>Mine</p>', expectedContentRevision: 3 }, null],
+      expected: [{ content: '<p>Mine</p>', contentMode: 'html', expectedContentRevision: 3 }, null],
     });
   });
 
@@ -1008,7 +1068,7 @@ describe('nobody else touched the text', () => {
       given: 'a remote body change returned by a title-only rename',
       should: 'show that body before adopting its save baseline',
       actual: saves(web).map((request) => request.body),
-      expected: [{ title: 'Plan' }, { content: '<p>Remote plus typing</p>', expectedContentRevision: 4 }],
+      expected: [{ title: 'Plan' }, { content: '<p>Remote plus typing</p>', contentMode: 'html', expectedContentRevision: 4 }],
     });
   });
 
@@ -1037,7 +1097,7 @@ describe('nobody else touched the text', () => {
       given: 'local typing before a title-only response carrying an unseen remote body',
       should: 'retain local text and refuse its save against the original baseline',
       actual: [textOf(container), stored.content, saves(web)[1].body],
-      expected: ['Stored plus typing', '<p>Remote</p>', { content: '<p>Stored plus typing</p>', expectedContentRevision: 3 }],
+      expected: ['Stored plus typing', '<p>Remote</p>', { content: '<p>Stored plus typing</p>', contentMode: 'html', expectedContentRevision: 3 }],
     });
   });
 

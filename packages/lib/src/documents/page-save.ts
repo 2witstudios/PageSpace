@@ -98,6 +98,8 @@ export const createPageSaveSerializer = <T>(): PageSaveSerializer<T> => {
  */
 export const isOwnUnconfirmedSave = (
   storedContent: string | null | undefined,
-  unconfirmedContent: string | undefined
+  unconfirmedContent: string | undefined,
+  storedContentMode: string = 'html',
+  unconfirmedContentMode: string = 'html'
 ): boolean =>
-  unconfirmedContent !== undefined && storedContent !== undefined && storedContent !== null && storedContent === unconfirmedContent;
+  unconfirmedContent !== undefined && storedContent !== undefined && storedContent !== null && storedContent === unconfirmedContent && storedContentMode === unconfirmedContentMode;

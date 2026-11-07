@@ -13,7 +13,6 @@ import { toast } from 'sonner';
 import { usePermissions } from '@/retained/hooks/usePermissions';
 import { fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
 import { useEditingStore } from '@/retained/stores/useEditingStore';
-import { isOlderContentRevision, useDocumentManagerStore } from '@/retained/stores/useDocumentManagerStore';
 import { useFindStore } from '@/retained/stores/useFindStore';
 import { dispatchFind, getPluginMatches } from '@/retained/lib/editor/find-plugin';
 import { PullToRefresh } from '@/retained/components/ui/pull-to-refresh';
@@ -94,12 +93,7 @@ const DocumentView = ({ pageId, driveId, renderToolbar, bodyHeader }: DocumentVi
       const response = await fetchWithAuth(`/api/pages/${pageId}`);
       if (response.ok) {
         const updatedPage = await response.json();
-        updateContentFromServer(updatedPage.content, updatedPage.contentRevision);
-        if (updatedPage.contentMode) {
-          useDocumentManagerStore.getState().updateDocument(pageId, {
-            contentMode: updatedPage.contentMode,
-          });
-        }
+        updateContentFromServer(updatedPage.content, updatedPage.contentRevision, updatedPage.contentMode);
       }
     } catch (error) {
       console.error('Failed to refresh document:', error);
@@ -146,31 +140,12 @@ const DocumentView = ({ pageId, driveId, renderToolbar, bodyHeader }: DocumentVi
       const response = await fetchWithAuth(`/api/pages/${pageId}`);
       if (response.ok) {
         const updatedPage = await response.json();
-        // Read the document as it is now, not as it was when this render's
-        // closure was made: text typed while the fetch was out must not be
-        // replaced, and a save that answered first must not be undone.
-        const store = useDocumentManagerStore.getState();
-        const current = store.getDocument(pageId);
-        if (!current || current.isDirty) return;
-        if (isOlderContentRevision(updatedPage.contentRevision, current.contentRevision)) return;
-
-        const contentChanged = updatedPage.content !== current.content;
-        const modeChanged = updatedPage.contentMode && updatedPage.contentMode !== current.contentMode;
-        if (contentChanged || modeChanged) {
-          store.updateDocument(pageId, {
-            content: updatedPage.content,
-            contentMode: updatedPage.contentMode,
-            contentRevision: updatedPage.contentRevision,
-            isDirty: false,
-            lastSaved: Date.now(),
-            lastUpdateTime: Date.now(),
-          });
-        }
+        updateContentFromServer(updatedPage.content, updatedPage.contentRevision, updatedPage.contentMode);
       }
     } catch (error) {
       console.error('Failed to fetch updated content:', error);
     }
-  }, [pageId]);
+  }, [pageId, updateContentFromServer]);
 
   usePageContentSocket(pageId, driveId, {
     onContentUpdated: handleContentUpdate,

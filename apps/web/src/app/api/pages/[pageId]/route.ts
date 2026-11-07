@@ -56,6 +56,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 const patchSchema = z.object({
   title: z.string().optional(),
   content: z.string().optional(),
+  contentMode: z.enum(['html', 'markdown']).optional(),
   aiProvider: z.string().optional(),
   aiModel: z.string().optional(),
   parentId: z.string().nullable().optional(),

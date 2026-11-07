@@ -387,6 +387,28 @@ describe('a save that was stored but never answered', () => {
     return { sent, states, saver };
   };
 
+  test('does not claim identical bytes after a remote content mode conversion', async () => {
+    const clock = manualClock();
+    let sends = 0;
+    const saver = createDocumentSaver({
+      contentRevision: 4,
+      send: async () => {
+        sends += 1;
+        if (sends === 1) throw new TypeError('lost response');
+        if (sends === 2) throw refused(409);
+        return { contentRevision: 7 };
+      },
+      readStored: async () => ({ contentRevision: 6, content: '', contentMode: 'markdown' as const }),
+      onState: () => {}, schedule: clock.schedule, cancel: clock.cancel,
+    });
+    saver.edit('');
+    await saver.flush();
+    saver.edit('<p>local HTML typing</p>');
+    expect(await saver.flush()).toBe('conflict');
+    expect(sends).toBe(2);
+    expect(saver.unsaved()).toEqual({ content: '<p>local HTML typing</p>' });
+  });
+
   test('its own text behind a refusal', async () => {
     const { sent, saver } = afterLostAnswer({ contentRevision: 5, content: '<p>first</p>' }, async () => 6);
     saver.edit('<p>first</p>');

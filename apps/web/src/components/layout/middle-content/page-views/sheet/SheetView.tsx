@@ -226,7 +226,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       const response = await fetchWithAuth(`/api/pages/${page.id}`);
       if (response.ok) {
         const updatedPage = await response.json();
-        updateContentFromServer(updatedPage.content, updatedPage.contentRevision);
+        updateContentFromServer(updatedPage.content, updatedPage.contentRevision, updatedPage.contentMode);
       }
     } catch (error) {
       console.error('Failed to refresh sheet:', error);

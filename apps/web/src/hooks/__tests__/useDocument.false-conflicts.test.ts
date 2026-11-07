@@ -262,6 +262,78 @@ describe('useDocument false conflicts', () => {
     });
   });
 
+  it('does not merge a refresh over text typed while its request was out', () => {
+    open(pageId, 'start', 7);
+    const { result } = renderHook(() => useDocument(pageId));
+    type(result, 'local typing');
+    act(() => result.current.updateContentFromServer('remote', 8));
+    expect(stored(pageId)).toMatchObject({ content: 'local typing', contentRevision: 7, isDirty: true });
+  });
+
+  it('does not claim an unanswered clear after an unseen mode conversion', async () => {
+    open(pageId, 'start', 7);
+    vi.mocked(fetchWithAuth)
+      .mockRejectedValueOnce(new TypeError('lost response'))
+      .mockResolvedValueOnce(conflict(9, 7))
+      .mockResolvedValueOnce(answer({ content: '', contentMode: 'markdown', contentRevision: 9 }))
+      .mockResolvedValueOnce(answer({ contentRevision: 10 }));
+    const { result } = renderHook(() => useDocument(pageId));
+    type(result, '');
+    await act(async () => { await result.current.forceSave().catch(() => undefined); });
+    type(result, '<p>HTML typing</p>');
+    await act(async () => { await result.current.forceSave(); });
+    expect(hasConflict(pageId)).toBe(true);
+    expect(patchBodies()).toHaveLength(2);
+    expect(stored(pageId)).toMatchObject({ content: '<p>HTML typing</p>', contentMode: 'html', contentRevision: 7, isDirty: true });
+  });
+
+  it('sends its content mode even when resending identical empty bytes', async () => {
+    open(pageId, 'start', 7);
+    vi.mocked(fetchWithAuth).mockResolvedValueOnce(answer({ contentRevision: 8 }));
+    const { result } = renderHook(() => useDocument(pageId));
+    type(result, '');
+    await act(async () => { await result.current.forceSave(); });
+    expect(patchBodies()[0]).toMatchObject({ content: '', contentMode: 'html', expectedContentRevision: 7 });
+  });
+
+  it('adopts remote content and mode together, and leaves both alone for an older refresh', () => {
+    open(pageId, 'start', 7);
+    const { result } = renderHook(() => useDocument(pageId));
+    act(() => result.current.updateContentFromServer('markdown body', 8, 'markdown'));
+    expect(stored(pageId)).toMatchObject({ content: 'markdown body', contentMode: 'markdown', contentRevision: 8 });
+    act(() => result.current.updateContentFromServer('old HTML', 7, 'html'));
+    expect(stored(pageId)).toMatchObject({ content: 'markdown body', contentMode: 'markdown', contentRevision: 8 });
+  });
+
+  it('use theirs adopts the remote content mode as well as its bytes and lock', async () => {
+    open(pageId, 'start', 7);
+    vi.mocked(fetchWithAuth)
+      .mockResolvedValueOnce(conflict(8, 7))
+      .mockResolvedValueOnce(answer({ content: 'remote markdown', contentMode: 'markdown', contentRevision: 8 }));
+    const { result } = renderHook(() => useDocument(pageId));
+    type(result, '<p>mine</p>');
+    await act(async () => { await result.current.forceSave(); });
+    await act(async () => { await result.current.resolveConflict('use-theirs'); });
+    expect(stored(pageId)).toMatchObject({ content: 'remote markdown', contentMode: 'markdown', contentRevision: 8, isDirty: false });
+  });
+
+  it('does not deduplicate identical bytes requested in different content modes', async () => {
+    open(pageId, 'start', 7);
+    const first = held();
+    vi.mocked(fetchWithAuth).mockReturnValueOnce(first.promise).mockResolvedValueOnce(answer({ contentRevision: 9 }));
+    const { result } = renderHook(() => useDocument(pageId));
+    type(result, 'same bytes');
+    let saving!: Promise<boolean>;
+    let queued!: Promise<boolean>;
+    act(() => { saving = result.current.forceSave(); });
+    act(() => { useDocumentManagerStore.getState().updateDocument(pageId, { contentMode: 'markdown' }); });
+    act(() => { queued = result.current.forceSave(); });
+    await act(async () => { first.release(answer({ contentRevision: 8 })); await saving; await queued; });
+    expect(patchBodies()).toHaveLength(2);
+    expect(patchBodies()[0]).toMatchObject({ content: 'same bytes', contentMode: 'html', expectedContentRevision: 7 });
+    expect(patchBodies()[1]).toMatchObject({ content: 'same bytes', contentMode: 'markdown', expectedContentRevision: 8 });
+  });
+
   describe('a slow load', () => {
     it('cannot put back the revision a save has moved past', async () => {
       open(pageId, 'start', 7);

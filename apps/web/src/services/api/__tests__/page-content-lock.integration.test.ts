@@ -148,6 +148,19 @@ describe('the content lock against real Postgres', () => {
     expect(createPageVersion).not.toHaveBeenCalled();
   });
 
+  it('resends identical content and mode without an edit, but refuses an unseen mode conversion', async () => {
+    await update({ content: '', contentMode: 'html' }, 0);
+    const baseline = await read();
+    vi.mocked(createPageVersion).mockClear();
+    await update({ content: '', contentMode: 'html' }, 0);
+    expect(await read()).toEqual(baseline);
+    expect(createPageVersion).not.toHaveBeenCalled();
+    await applyPageMutation({
+      pageId, operation: 'update', updates: { contentMode: 'markdown' }, context: { userId },
+    });
+    expect(await update({ content: '', contentMode: 'html' }, baseline.contentRevision)).toMatchObject({ success: false, status: 409 });
+  });
+
   it('of many saves racing on one lock with different text, exactly one lands', async () => {
     const opened = await read();
 
