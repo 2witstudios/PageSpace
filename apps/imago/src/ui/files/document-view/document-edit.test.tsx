@@ -988,6 +988,59 @@ describe('nobody else touched the text', () => {
     });
   });
 
+  test('a title-only rename adopts an unseen remote body before later typing', async () => {
+    const { container, web } = show({});
+    await editable(container);
+    stored.content = '<p>Remote</p>';
+    stored.revision = 4;
+    stored.contentRevision = 4;
+    const field = focusTitle(container);
+    typeInto(field, 'Plan');
+    press(field, 'Enter');
+    await settle(() => {
+      if (textOf(container) !== 'Remote') throw new Error('remote body was not adopted');
+    });
+    await type(container, '<p>Remote plus typing</p>');
+    await settle(() => {
+      if (stored.content !== '<p>Remote plus typing</p>') throw new Error('not saved');
+    });
+    assert({
+      given: 'a remote body change returned by a title-only rename',
+      should: 'show that body before adopting its save baseline',
+      actual: saves(web).map((request) => request.body),
+      expected: [{ title: 'Plan' }, { content: '<p>Remote plus typing</p>', expectedContentRevision: 4 }],
+    });
+  });
+
+  test('typing during a title-only rename keeps its original body baseline', async () => {
+    let release: () => void = () => {};
+    const { container, web } = show({
+      [SAVE]: (request) => {
+        if ((request.body as { title?: string }).title !== undefined) {
+          return new Promise<Response>((resolve) => { release = () => resolve(savePage(request) as Response); });
+        }
+        return savePage(request);
+      },
+    });
+    await editable(container);
+    stored.content = '<p>Remote</p>';
+    stored.revision = 4;
+    stored.contentRevision = 4;
+    const field = focusTitle(container);
+    typeInto(field, 'Plan');
+    press(field, 'Enter');
+    await settle(() => { if (saves(web).length !== 1) throw new Error('rename not out'); });
+    await type(container, '<p>Stored plus typing</p>');
+    await act(async () => { release(); });
+    await settle(() => { if (!container.querySelector('[data-save-conflict]')) throw new Error('no conflict'); });
+    assert({
+      given: 'local typing before a title-only response carrying an unseen remote body',
+      should: 'retain local text and refuse its save against the original baseline',
+      actual: [textOf(container), stored.content, saves(web)[1].body],
+      expected: ['Stored plus typing', '<p>Remote</p>', { content: '<p>Stored plus typing</p>', expectedContentRevision: 3 }],
+    });
+  });
+
   test('a rename alone carries no lock', async () => {
     const { container, web } = show({});
     await editable(container);

@@ -552,6 +552,8 @@ export const pageService = {
 
     const updatedFields = Object.keys(processedUpdates);
 
+    let committedPage: typeof pages.$inferSelect | undefined;
+
     if (updatedFields.length > 0) {
       try {
         const actorInfo = options?.context?.actorEmail
@@ -600,7 +602,20 @@ export const pageService = {
           ) {
             throw new OrgLapsedError();
           }
-          return applyPageMutation({ ...mutation, tx: tx as unknown as typeof db });
+          const mutationResult = await applyPageMutation({ ...mutation, tx: tx as unknown as typeof db });
+          const stored = await tx.query.pages.findFirst({ where: eq(pages.id, pageId) });
+          if (stored) {
+            // A save acknowledges the body and lock written by THIS transaction.
+            // Refetching after commit can attach a later writer's lock to this
+            // client's older buffer and silently authorize its next overwrite.
+            committedPage = {
+              ...stored,
+              content: isSheetType(stored.type as PageTypeEnum)
+                ? (await readSheetDocument(pageId, tx)) ?? stored.content ?? ''
+                : stored.content,
+            };
+          }
+          return mutationResult;
         });
         result.deferredTrigger?.();
       } catch (error) {
@@ -623,9 +638,9 @@ export const pageService = {
       }
     }
 
-    // Refetch the page with details
+    // Related data may be fresh, but the acknowledged body and lock must agree.
     const [updatedPage, children, messages] = await Promise.all([
-      db.query.pages.findFirst({
+      committedPage ?? db.query.pages.findFirst({
         where: eq(pages.id, pageId),
       }),
       // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
@@ -646,7 +661,7 @@ export const pageService = {
     // response body (MCP, the SDK, an SWR cache write) sees the spreadsheet as
     // empty. The web editor happens to read only `revision` off this, which is
     // exactly the kind of accident that stops being true later.
-    const responseContent = isSheetType(updatedPage.type as PageTypeEnum)
+    const responseContent = !committedPage && isSheetType(updatedPage.type as PageTypeEnum)
       ? (await readSheetDocument(pageId)) ?? pageData.content ?? ''
       : pageData.content;
 

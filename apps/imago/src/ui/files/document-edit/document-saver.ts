@@ -151,8 +151,13 @@ export const createDocumentSaver = ({
   const sendNow = async (patch: DocumentPatch): Promise<FlushOutcome> => {
     setStatus({ kind: 'saving' });
     try {
-      ({ contentRevision } = await send(patch, contentRevision));
-      unconfirmed = undefined;
+      const saved = await send(patch, contentRevision);
+      // A title-only response can contain a body the editor has never shown.
+      // Only a content save establishes a new baseline for its pending text.
+      if (patch.content !== undefined) {
+        contentRevision = saved.contentRevision;
+        unconfirmed = undefined;
+      }
       return 'saved';
     } catch (error) {
       if (error instanceof ApiError && error.status === 409 && (await claimOwnSave())) return sendNow(patch);

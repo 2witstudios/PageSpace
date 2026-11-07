@@ -254,4 +254,28 @@ describe('the content lock against real Postgres', () => {
   );
 
 
+  it.each(['DOCUMENT', 'SHEET'] as const)('returns its own committed %s snapshot when another writer commits before the response', async (type) => {
+    const content = (value: string) => type === 'SHEET'
+      ? serializeSheetContent({ version: 1, rowCount: 2, columnCount: 2, cells: { A1: value } }, { pageId })
+      : `<p>${value}</p>`;
+    await db.update(pages).set({ type, content: content('initial') }).where(eq(pages.id, pageId));
+    const transaction = db.transaction.bind(db);
+    // Pause A just after COMMIT. B commits before A can assemble its response.
+    const pause = vi.spyOn(db, 'transaction').mockImplementationOnce(async (callback, config) => {
+      const result = await transaction(callback, config);
+      const second = await update({ content: content('B') }, 1);
+      expect(second).toMatchObject({ success: true, page: { contentRevision: 2 } });
+      return result;
+    });
+    try {
+      const first = await update({ content: content('A') }, 0);
+      expect(first).toMatchObject({ success: true, page: { revision: 1, contentRevision: 1 } });
+      if (!first.success) throw new Error('First save failed');
+      expect(type === 'SHEET' ? parseSheetContent(first.page.content).cells.A1 : first.page.content).toBe(type === 'SHEET' ? 'A' : content('A'));
+      expect(await read()).toMatchObject({ revision: 2, contentRevision: 2 });
+    } finally {
+      pause.mockRestore();
+    }
+  });
+
 });

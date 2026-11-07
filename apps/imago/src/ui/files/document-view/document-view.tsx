@@ -170,7 +170,9 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
         contentRevision: opened.current,
         send: async (patch, expectedContentRevision) => {
           const stored = await saveDocument(client, page.id, patch, expectedContentRevision, socketId());
-          known.current = stored;
+          known.current = patch.content === undefined
+            ? { ...known.current, revision: stored.revision, title: stored.title }
+            : stored;
           // The entry holds what was saved, so no older copy is drawn from it later.
           storeInCache(stored);
           return stored;
@@ -314,7 +316,7 @@ export function DocumentView({ driveId, page }: DocumentViewProps): ReactNode {
       setTitle(page.title);
       setTitleDraft(page.title);
     }
-  }, [editor, saver, adopt, page.revision, page.contentRevision, page.title, page.content]);
+  }, [editor, saver, adopt, page.revision, page.contentRevision, page.title, page.content, saveState.editing]);
 
   // Someone else saved this page: reload it, unless the viewer is editing.
   // The editing check is the first of three layers (with SWR's pause and the

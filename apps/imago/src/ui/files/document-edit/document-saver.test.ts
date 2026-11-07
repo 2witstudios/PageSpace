@@ -1,4 +1,4 @@
-import { describe, test } from 'vitest';
+import { describe, test, expect } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { ApiError } from '@/api/errors';
 import {
@@ -57,6 +57,20 @@ const setup = (answer: (sent: Sent, index: number) => Promise<number> = async (s
 const flushPromises = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe('createDocumentSaver()', () => {
+  test('a title-only answer cannot move the baseline of an unseen body', async () => {
+    const { saver, sent } = setup(async (entry, index) => {
+      if (index === 0) return 5;
+      if (entry.expectedContentRevision !== 5) throw refused(409);
+      return 6;
+    });
+    await saver.rename('Plan');
+    expect(saver.contentRevision()).toBe(4);
+    saver.edit('<p>Stored plus my typing</p>');
+    expect(await saver.flush()).toBe('conflict');
+    expect(sent[1].expectedContentRevision).toBe(4);
+    expect(saver.unsaved()).toEqual({ content: '<p>Stored plus my typing</p>' });
+  });
+
   test('a burst of edits', async () => {
     const { clock, sent, states, saver } = setup();
     saver.edit('<p>a</p>');

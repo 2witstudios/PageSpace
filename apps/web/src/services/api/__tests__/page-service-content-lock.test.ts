@@ -68,6 +68,7 @@ vi.mock('@pagespace/db/db', () => {
     return chain;
   };
   const tx = {
+    query: { pages: { findFirst: (...args: unknown[]) => mocks.findFirstPage(...args) } },
     select: () => ({
       from: () => ({
         where: () => ({
