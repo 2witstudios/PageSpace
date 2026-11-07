@@ -202,6 +202,10 @@ export const LOOSENING_WRITE_LEDGER: Readonly<Record<string, Verdict>> = {
     writes: ['insert(eventAttendees)'],
   },
   // ── generic page writers (computed .set objects, flagged fail-closed by review #2849 r3) ─────────────────
+  'packages/lib/src/sheets/store.ts#touchPage': {
+    exempt: 'sheet bookkeeping sets only revision, conditional contentRevision, stateHash and updatedAt; neither isPrivate nor driveId nor any grant or membership field can reach this write',
+    writes: ['update(pages).set({ ... })'],
+  },
   'apps/web/src/services/api/page-mutation-service.ts#applyMutationInTx': {
     exempt: "the generic page mutation: `isPrivate` reaches it only from pageService.updatePage, which judges it in the same transaction against the locked page row (checkPageMayLoosen); `driveId` never does (moves go through page-cross-drive-move-service, guarded)",
     writes: ['update(pages).set({ ..., ..., ... })'],
