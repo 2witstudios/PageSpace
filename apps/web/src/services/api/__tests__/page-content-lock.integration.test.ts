@@ -161,6 +161,18 @@ describe('the content lock against real Postgres', () => {
     expect(await update({ content: '', contentMode: 'html' }, baseline.contentRevision)).toMatchObject({ success: false, status: 409 });
   });
 
+  it('does not refuse an editor after a redundant addressed sheet write', async () => {
+    const content = (cells: Record<string, string>) => serializeSheetContent({ version: 1, rowCount: 2, columnCount: 2, cells }, { pageId });
+    const initial = content({ A1: 'same' });
+    await db.update(pages).set({ type: 'SHEET', content: initial }).where(eq(pages.id, pageId));
+    await materializeFromDocument(pageId, initial);
+    const projected = await readSheetDocument(pageId);
+    await setCells({ pageId }, [{ address: 'A1', value: 'same' }], { userId });
+    expect(await readSheetDocument(pageId)).toBe(projected);
+    expect(await read()).toMatchObject({ revision: 1, contentRevision: 0 });
+    expect(await update({ content: content({ A1: 'same', B2: 'editor' }) }, 0)).toMatchObject({ success: true, page: { revision: 2, contentRevision: 1 } });
+  });
+
   it('of many saves racing on one lock with different text, exactly one lands', async () => {
     const opened = await read();
 

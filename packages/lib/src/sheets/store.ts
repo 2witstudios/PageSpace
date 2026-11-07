@@ -896,21 +896,9 @@ export async function setCells(
     // Reads only the dirty ADDRESSES, so no row has to be read first — which is
     // what lets every row be read once, under the lock, in step 3.
     //
-    // Resolved BEFORE the locks, because the locks are derived from it: the set
-    // of rows to lock is exactly the touched rows plus the closure's. That
-    // leaves one narrow race. If another transaction CREATES a formula
-    // referencing a cell this call is writing, in a DIFFERENT row, after this
-    // query's snapshot and before this call commits, the new formula is not in
-    // this closure and its author evaluated it against the pre-write value — so
-    // it keeps a stale result until something touches it again.
-    //
-    // Same-row is safe, which covers the common shape (`=A1*2` beside `A1`):
-    // one `sheet_rows` row holds both, so the row lock serialises the two
-    // writers and the second re-reads. The document path is safe too — it
-    // rewrites every row. Closing the cross-row case would mean re-resolving
-    // after locking and then acquiring more row locks out of order, which
-    // trades a rare stale value for a real deadlock, so it is left open
-    // deliberately rather than half-fixed.
+    // Resolve before tab/row locks, which are derived from this closure. The
+    // page lock serializes same-page writers, so another writer cannot create
+    // a dependency between this read and the eventual cell write.
     const touchedRowIndexes = unique(normalized.map((u) => u.position.row));
     const dirty = normalized.map((u) => u.address);
     const closure = await resolveDependentClosure(tab.id, dirty, tx);
@@ -931,21 +919,9 @@ export async function setCells(
     const closureRowIndexes = unique(closure.map((address) => decodeCellAddress(address).row));
     const allRowIndexes = unique([...touchedRowIndexes, ...closureRowIndexes]);
 
-    // TAB BEFORE ROWS — the order every function here uses — but only when this
-    // write will actually touch the tab.
-    //
-    // The ordering matters because `appendRows` and `deleteRows` lock the tab
-    // and then reach row locks; `setCells` taking rows first and the tab later
-    // deadlocks against them. Taking the tab UNCONDITIONALLY fixes that but
-    // serialises every write to the sheet behind one exclusive lock — which
-    // would undo the concurrency this whole storage model exists to provide,
-    // most visibly for a form taking simultaneous submissions.
-    //
-    // `growExtent` depends only on the tab's declared extent and the incoming
-    // addresses, both known here, so whether the tab will be written is
-    // decidable before any lock is taken. Computing it from a possibly-stale
-    // `tab.rowCount` is safe: if it says "no growth" then nothing writes the
-    // tab either, so there is nothing to serialise.
+    // Page -> tab -> rows, with a tab lock only when the extent grows.
+    // Same-page writers already serialize on the page; keeping this order
+    // also covers callers that compose several store operations in one tx.
     const grown = growExtent(tab, normalized);
     if (grown) {
       await tx.select({ id: sheetTabs.id }).from(sheetTabs).where(eq(sheetTabs.id, tab.id)).for('update');
@@ -957,6 +933,13 @@ export async function setCells(
     // writing a row that was only partially loaded would delete every column it
     // did not know about.
     const working = await loadRowsByIndex(tab.id, allRowIndexes, tx, false);
+    const toEvaluate = unique([...dirty, ...closure]);
+    // Capture values before applying authored text or evaluation: the working
+    // cells are mutated in place, including recomputed dependents.
+    const cellBefore = new Map(toEvaluate.map((address) => {
+      const { row, column } = decodeCellAddress(address);
+      return [address, storedCellState(working.get(row)?.cells[encodeColumnLabel(column)])];
+    }));
 
     // 3b. Re-derive the dependency edges, UNDER the lock.
     //
@@ -987,7 +970,6 @@ export async function setCells(
     }
 
     // 5. Evaluate the dirty cells and that closure, and nothing else.
-    const toEvaluate = unique([...dirty, ...closure]);
     const evaluated = await evaluateClosure(tab, toEvaluate, working, tx);
 
     // 6. Persist.
@@ -1009,7 +991,13 @@ export async function setCells(
         tx
       );
     }
-    await touchPage(ref.pageId, tx);
+    const changesContent = grown !== null || toEvaluate.some((address) => {
+      const { row, column } = decodeCellAddress(address);
+      return cellBefore.get(address) !== storedCellState(working.get(row)?.cells[encodeColumnLabel(column)]);
+    });
+    // Keep the addressed-write revision and audit contract even for a resend;
+    // only real cell/extent/evaluation changes invalidate an editor's content.
+    await touchPage(ref.pageId, tx, changesContent);
 
     if (!actor.suppressCellLog) {
       const entries =
@@ -1214,9 +1202,8 @@ export async function applyFormatOps(
     //
     // Only formulas with an OPEN-ENDED range are seeded: a bounded rectangle
     // reads the same cells whatever the extent, and the rows a format op
-    // creates carry no values. The narrow race `setCells` documents applies
-    // here too — a formula created concurrently in another row after this
-    // snapshot keeps a stale result until something touches it.
+    // creates carry no values. The page lock keeps this dependency snapshot
+    // stable until the write commits.
     let recomputeTargets: string[] = [];
     if (growth) {
       const open = await openRangeFormulas(tab.id, tx);
@@ -1230,14 +1217,8 @@ export async function applyFormatOps(
     );
     const allRowIndexes = unique([...rowIndexes, ...recomputeRowIndexes]);
 
-    // 3. TAB BEFORE ROWS, and only when this write will touch the tab — the
-    // same conditional order `setCells` uses, for the same two reasons.
-    // `appendRows`, `deleteRows` and `replaceFromDocument` all take the tab
-    // first and then reach rows, so rows-then-tab is a deadlock against every
-    // one of them; and taking the tab unconditionally would serialise every
-    // write to the sheet behind one exclusive lock, undoing the concurrency
-    // the row store exists to provide. Whether the tab will be written is
-    // decidable from the ops and the extent, both known here.
+    // 3. Page -> tab -> rows. The page lock already serializes same-page
+    // writes; take the tab lock when its fields or extent will be written.
     const touchesTab = preview.touchesTabFields || growth !== null;
     if (touchesTab) {
       await tx.select({ id: sheetTabs.id }).from(sheetTabs).where(eq(sheetTabs.id, tab.id)).for('update');
@@ -1246,10 +1227,9 @@ export async function applyFormatOps(
 
     // 4. Re-read UNDER the lock and plan again against what is actually there.
     //
-    // The `tab` from `ensureTab` is a snapshot taken before any lock. A rule
-    // another transaction added while this one waited for the tab is absent
-    // from it, and a plan built on it would write a rule list without that
-    // rule — a lost update with a success returned to both. Planning twice is
+    // The `tab` from `ensureTab` was read under the page lock. A rule
+    // composed earlier in a caller-owned transaction must also be visible to
+    // the final plan, so derive it from the current stored tab fields. Planning twice is
     // pure and bounded; the second plan is the one that is written, and the
     // first exists only to decide what to lock. Rows depend on the ops alone,
     // so the two agree on what was locked.
@@ -1262,11 +1242,8 @@ export async function applyFormatOps(
     const regionIdsBefore = new Set((lockedTarget.regions ?? []).map((region) => region.id));
     const regionIdsAfter = new Set(plan.regions.map((region) => region.id));
 
-    // Growth is re-derived from the locked extent, and only if the snapshot
-    // said so: if it did not, no tab lock is held and the recompute seeds were
-    // never resolved, and the window where the extent SHRANK in between is
-    // the same one `setCells` accepts rather than acquiring more locks out of
-    // order for it.
+    // Re-derive growth from the current extent. Same-page writes cannot
+    // shrink it between planning and this read while the page lock is held.
     const grown = growth ? formatGrowth(current, plan) : null;
     const extent = {
       rowCount: grown?.rowCount ?? current.rowCount,
@@ -1804,6 +1781,14 @@ function mergeCellFormat(existing: CellFormat | undefined, patch: CellFormat): C
     if (merged[key] === undefined) delete merged[key];
   }
   return isEmptyFormat(merged) ? undefined : merged;
+}
+
+/** An absent cell and an unformatted empty tombstone display identically. */
+function storedCellState(cell: StoredCell | undefined): string {
+  if (!cell || (cell.raw === '' && !cell.format && !cell.error &&
+    (cell.value === undefined || cell.value === '') &&
+    (cell.type === undefined || cell.type === 'empty'))) return 'null';
+  return stableJson(cell);
 }
 
 /** Structural equality with key order ignored; `undefined` and `null` agree. */
@@ -2876,12 +2861,12 @@ async function lockSheetPage(pageId: string, exec: Executor): Promise<void> {
  * the old document path produced. `revision` moves too, for callers that check
  * the row.
  */
-async function touchPage(pageId: string, exec: Executor): Promise<void> {
+async function touchPage(pageId: string, exec: Executor, changesContent = true): Promise<void> {
   await exec
     .update(pages)
     .set({
       revision: sql`${pages.revision} + 1`,
-      contentRevision: sql`${pages.contentRevision} + 1`,
+      ...(changesContent ? { contentRevision: sql`${pages.contentRevision} + 1` } : {}),
       // `stateHash` moves too. Restore-diff decides a page is unchanged by
       // comparing a backup version's `stateHash` against the page's, so leaving
       // it at whatever the last DOCUMENT write computed meant a sheet that had
