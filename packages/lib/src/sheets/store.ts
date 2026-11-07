@@ -2866,7 +2866,7 @@ async function touchPage(pageId: string, exec: Executor, changesContent = true):
     .update(pages)
     .set({
       revision: sql`${pages.revision} + 1`,
-      ...(changesContent ? { contentRevision: sql`${pages.contentRevision} + 1` } : {}),
+      contentRevision: sql`${pages.contentRevision} + ${changesContent ? 1 : 0}`,
       // `stateHash` moves too. Restore-diff decides a page is unchanged by
       // comparing a backup version's `stateHash` against the page's, so leaving
       // it at whatever the last DOCUMENT write computed meant a sheet that had
