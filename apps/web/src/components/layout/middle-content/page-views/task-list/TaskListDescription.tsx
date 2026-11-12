@@ -7,6 +7,7 @@ import { useDocument } from '@/hooks/useDocument';
 import DocumentConflictGate from '@/components/layout/middle-content/page-views/document/DocumentConflictGate';
 import { useDocumentManagerStore } from '@/stores/useDocumentManagerStore';
 import { useEditingStore } from '@/stores/useEditingStore';
+import { resolveDescriptionSeed } from './description-seed';
 
 const RichEditor = dynamic(() => import('@/components/editors/RichEditor'), { ssr: false });
 
@@ -36,15 +37,15 @@ export function TaskListDescriptionContent({
     isResolvingConflict,
   } = useDocument(pageId);
 
-  // Seed the store from the parent's already-loaded page content to avoid a
-  // redundant network fetch. Only fetches if the document isn't cached yet and
-  // no initialContent was provided (e.g. a standalone mount without a tree page).
+  // Seed the store from caller-provided content when there is some; otherwise fetch it.
   useEffect(() => {
-    const existing = useDocumentManagerStore.getState().documents.get(pageId);
-    if (existing) return;
-    if (initialContent !== undefined) {
-      useDocumentManagerStore.getState().upsertDocument(pageId, initialContent ?? '', 'html');
-    } else {
+    const seed = resolveDescriptionSeed({
+      hasCachedDocument: useDocumentManagerStore.getState().documents.has(pageId),
+      initialContent,
+    });
+    if (seed.kind === 'seed') {
+      useDocumentManagerStore.getState().upsertDocument(pageId, seed.content, 'html');
+    } else if (seed.kind === 'fetch') {
       initializeAndActivate();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps

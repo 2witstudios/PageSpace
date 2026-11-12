@@ -110,7 +110,8 @@ import {
 } from './core/format-commands';
 
 interface SheetViewProps {
-  page: TreePage;
+  // Tree nodes carry no content; a page fetched from /api/pages (CenterPanel's fallback) does.
+  page: TreePage & { content?: string | null };
 }
 
 /** Ctrl/Cmd chords that apply a format to the selection. */

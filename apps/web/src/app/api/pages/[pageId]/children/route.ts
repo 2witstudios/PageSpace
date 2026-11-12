@@ -1,9 +1,10 @@
 import { canPrincipalViewPage, getPrincipalBatchPagePermissions } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { and, eq, asc, isNotNull } from '@pagespace/db/operators'
+import { and, eq, asc, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskItems } from '@pagespace/db/schema/tasks';
+import { pageTreeColumns, toTreeNodes } from '@pagespace/lib/content/tree-utils';
 
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -30,6 +31,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   try {
     // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const listed = await db.query.pages.findMany({
+      columns: pageTreeColumns,
       where: and(
         eq(pages.parentId, pageId),
         eq(pages.isTrashed, false)
@@ -41,17 +43,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     const permissions = await getPrincipalBatchPagePermissions(auth, listed.map((child) => child.id));
     const children = listed.filter((child) => permissions.get(child.id)?.canView);
 
-    // Get task-linked page IDs to mark them
-    const taskLinkedPageIds = await db.selectDistinct({ pageId: taskItems.pageId })
+    // Task links for these children only — pageId is indexed, so this is a lookup, not a table scan
+    const childIds = children.map((child) => child.id);
+    const taskLinkedPageIds = childIds.length === 0 ? [] : await db.selectDistinct({ pageId: taskItems.pageId })
       .from(taskItems)
-      .where(isNotNull(taskItems.pageId));
-    const taskLinkedSet = new Set(taskLinkedPageIds.map(t => t.pageId));
+      .where(inArray(taskItems.pageId, childIds));
 
-    // Add isTaskLinked flag to each child
-    const childrenWithTaskInfo = children.map(child => ({
-      ...child,
-      isTaskLinked: taskLinkedSet.has(child.id),
-    }));
+    const childrenWithTaskInfo = toTreeNodes(children, { taskLinkedIds: new Set(taskLinkedPageIds.map(t => t.pageId)) });
 
     auditRequest(req, { eventType: 'data.read', userId: auth.userId, resourceType: 'page_children', resourceId: pageId, details: { action: 'list_children', count: childrenWithTaskInfo.length } });
 

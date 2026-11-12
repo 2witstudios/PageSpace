@@ -121,7 +121,8 @@ export interface SheetToolsControls {
 }
 
 interface SheetViewProps {
-  page: TreePage;
+  // Tree nodes carry no content; a page fetched from /api/pages does.
+  page: TreePage & { content?: string | null };
   /** Renders the page's tools strip; the sheet's history and size live here, so it reaches them through this. */
   renderTools: (controls: SheetToolsControls) => React.ReactNode;
 }
