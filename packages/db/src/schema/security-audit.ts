@@ -97,6 +97,13 @@ export type SecurityEventType =
   | 'content.takedown.avatar'
   // An admin looked up a takedown target or the case list (metadata only, never the file).
   | 'content.case.read'
+  // Content reports (PR 3). `created`: a report opened a new case under review.
+  // `attached`: a report joined the case already under review for that target.
+  // `resolved`: staff closed a reported case (dismissed or actioned). resourceId is
+  // the case ID; details carry the category and report count, never the reporter's text.
+  | 'content.report.created'
+  | 'content.report.attached'
+  | 'content.report.resolved'
   // Agent-account credential brokering (L1·G1b, ADR 0004 §5). The `allowed`
   // row is written and durably accepted BEFORE the operation runs, and the
   // outcome row is keyed by the same grant id, so the chain carries both

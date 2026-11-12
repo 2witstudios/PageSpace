@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { pgTable, text, timestamp, jsonb, index, uniqueIndex } from 'drizzle-orm/pg-core';
 import { createId } from '@paralleldrive/cuid2';
 
@@ -33,13 +34,22 @@ export type ContentCaseTargetType =
   | 'drive';
 
 /**
- * `open`: reported or part-way through a takedown (resumable).
+ * `reported`: opened by one or more reports and waiting for staff review. A
+ *   report never acts on its own: nothing is blocked, unpublished or deleted
+ *   until an admin runs a takedown. At most one per target (unique index).
+ * `open`: part-way through a takedown (resumable).
  * `awaiting_evidence`: the hash is blocked, but nothing was deleted because the
  *   material must be preserved first and no evidence storage is configured.
  * `actioned`: every step of the takedown finished.
  * `dismissed`: closed with no action.
  */
-export type ContentCaseStatus = 'open' | 'awaiting_evidence' | 'actioned' | 'dismissed';
+export type ContentCaseStatus = 'reported' | 'open' | 'awaiting_evidence' | 'actioned' | 'dismissed';
+
+/** What a reporter says is wrong. Wider than ContentBlockCategory: not every report is about illegal content. */
+export type ContentReportCategory = 'csam' | 'illegal_other' | 'malware' | 'copyright' | 'harassment' | 'other';
+
+/** Who filed a report: a signed-in user (`reporterUserId` set) or a visitor to the public report page. */
+export type ContentReportSource = 'signed_in' | 'anonymous';
 
 /** Which takedown a case runs. Stored on the snapshot so a rerun does the same thing. */
 export type ContentTakedownKind = 'global' | 'unpublish_page' | 'park_drive' | 'avatar' | 'park_user_sites';
@@ -94,6 +104,8 @@ export type ContentCaseSnapshot = {
   additionalEvidenceKeys?: string[];
   /** An avatar takedown's preserved copies, one per avatar object, each named by its own checksum. */
   avatarEvidenceKeys?: string[];
+  /** How staff closed a `reported` case (PR 3). */
+  review?: { outcome: 'dismissed' | 'actioned'; actorUserId: string; note?: string; at: string };
   /** Re-sweep bookkeeping for a global takedown: passes attempted, and whether the last one finished. */
   resweep?: { attempts: number; done: boolean };
   [key: string]: unknown;
@@ -165,8 +177,42 @@ export const contentCases = pgTable(
   },
   (table) => ({
     targetIdx: index('content_cases_target_idx').on(table.targetType, table.targetId),
+    // One case under review per target: every further report attaches to it, even when two arrive at once.
+    reportedTargetKey: uniqueIndex('content_cases_reported_target_key')
+      .on(table.targetType, table.targetId)
+      .where(sql`${table.status} = 'reported'`),
     contentHashIdx: index('content_cases_content_hash_idx').on(table.contentHash),
     statusCreatedIdx: index('content_cases_status_created_at_idx').on(table.status, table.createdAt),
+  }),
+);
+
+/**
+ * One report about a case's target. A case collects every report filed while it
+ * is under review; the count of these rows is the case's report count.
+ *
+ * The reporter is a user ID or nobody. NO IP ADDRESS is stored here, by design:
+ * the public report page is rate-limited by IP, but the address is never kept
+ * with the report. `contactEmail` is only what a visitor chose to give.
+ *
+ * `description` is the reporter's own words and may be abusive or contain links:
+ * it is shown to staff as inert text and never sent in an alert email.
+ *
+ * Plain text IDs, no FK (see file header).
+ */
+export const contentReports = pgTable(
+  'content_reports',
+  {
+    id: text('id').primaryKey().$defaultFn(() => createId()),
+    caseId: text('case_id').notNull(),
+    category: text('category').$type<ContentReportCategory>().notNull(),
+    description: text('description'),
+    source: text('source').$type<ContentReportSource>().notNull(),
+    reporterUserId: text('reporter_user_id'),
+    contactEmail: text('contact_email'),
+    createdAt: timestamp('created_at', { mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    caseCreatedIdx: index('content_reports_case_id_created_at_idx').on(table.caseId, table.createdAt),
   }),
 );
 
@@ -209,3 +255,4 @@ export type NewContentScan = typeof contentScans.$inferInsert;
 export type ContentCase = typeof contentCases.$inferSelect;
 export type NewContentCase = typeof contentCases.$inferInsert;
 export type ContentSiteHold = typeof contentSiteHolds.$inferSelect;
+export type ContentReport = typeof contentReports.$inferSelect;
