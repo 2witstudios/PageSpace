@@ -48,6 +48,10 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
+const mockFindBlockedUploads = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/content-safety/upload-gate', () => ({
+  findBlockedUploads: mockFindBlockedUploads,
+}));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
 }));
@@ -242,6 +246,8 @@ function setupSuccessScenario() {
   // Transaction mocks
   txInsertValues.mockResolvedValue(undefined);
   txInsert.mockReturnValue({ values: txInsertValues });
+  mockFindBlockedUploads.mockResolvedValue(new Set());
+
   txQueryPagesFindMany.mockResolvedValue([]);
   mockTransaction.mockImplementation(async (fn: (t: unknown) => Promise<void>) => {
     await fn({
@@ -718,5 +724,70 @@ describe('POST /api/pages/bulk-copy', () => {
       expect(response.status).toBe(500);
       expect(body.error).toMatch(/failed.*copy/i);
     });
+  });
+});
+
+describe('POST /api/pages/bulk-copy — content blocklist', () => {
+  const BLOCKED_HASH = 'ab'.repeat(32);
+  const filePage = (overrides: Record<string, unknown> = {}) =>
+    mockSourcePage({ type: 'FILE', filePath: BLOCKED_HASH, contentHash: BLOCKED_HASH, ...overrides });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupSuccessScenario();
+  });
+
+  it('refuses to copy a page whose content hash is blocked, with a neutral 422 and no transaction', async () => {
+    vi.mocked(db.query.pages.findMany).mockResolvedValue([filePage()] as never);
+    mockFindBlockedUploads.mockResolvedValue(new Set([BLOCKED_HASH]));
+
+    const response = await POST(createRequest(validBody));
+
+    expect(response.status).toBe(422);
+    expect(await response.json()).toEqual({ error: "This file can't be uploaded" });
+    expect(mockTransaction).not.toHaveBeenCalled();
+    expect(txInsertValues).not.toHaveBeenCalled();
+  });
+
+  it('records the attempt against the user, the request and the target drive', async () => {
+    vi.mocked(db.query.pages.findMany).mockResolvedValue([filePage()] as never);
+    const request = createRequest(validBody);
+
+    await POST(request);
+
+    expect(mockFindBlockedUploads).toHaveBeenCalledWith([BLOCKED_HASH, BLOCKED_HASH], {
+      entryPoint: 'page.copy',
+      userId: mockUserId,
+      request,
+      details: { driveId: mockDriveId },
+    });
+  });
+
+  it('refuses when a DESCENDANT carries a blocked hash, aborting the copy', async () => {
+    txQueryPagesFindMany.mockResolvedValueOnce([filePage({ id: 'child-1' })]).mockResolvedValue([]);
+    // The top-level page has no hashes, so the only lookup is the child level's.
+    mockFindBlockedUploads.mockResolvedValue(new Set([BLOCKED_HASH]));
+
+    const response = await POST(createRequest(validBody));
+
+    expect(response.status).toBe(422);
+    expect(await response.json()).toEqual({ error: "This file can't be uploaded" });
+    // The parent was inserted inside the transaction that this throw rolls back; the child never was.
+    expect(txInsertValues).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not query the blocklist when no copied page carries a hash', async () => {
+    await POST(createRequest(validBody));
+
+    expect(mockFindBlockedUploads).not.toHaveBeenCalled();
+  });
+
+  it('copies a file page whose hash is not blocked', async () => {
+    vi.mocked(db.query.pages.findMany).mockResolvedValue([filePage()] as never);
+
+    const response = await POST(createRequest(validBody));
+
+    expect(response.status).toBe(200);
+    expect(txInsertValues.mock.calls[0][0].contentHash).toBe(BLOCKED_HASH);
   });
 });

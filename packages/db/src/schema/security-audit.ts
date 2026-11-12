@@ -84,6 +84,10 @@ export type SecurityEventType =
   | 'security.suspicious.activity'
   // Personal-data breach / security incident recorded (#979, Art 33/34).
   | 'security.incident.created'
+  // Content safety: an attempt to store, attach or copy bytes whose hash is on the
+  // content blocklist was refused. resourceId is the content hash. Its own type (not
+  // `authz.access.denied`) so case tooling can find attempts without reading `details`.
+  | 'content.upload.blocked'
   // Agent-account credential brokering (L1·G1b, ADR 0004 §5). The `allowed`
   // row is written and durably accepted BEFORE the operation runs, and the
   // outcome row is keyed by the same grant id, so the chain carries both

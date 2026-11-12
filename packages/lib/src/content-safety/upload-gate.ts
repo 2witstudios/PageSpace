@@ -1,9 +1,10 @@
 /**
- * The re-upload gate: one call for every place bytes enter storage by hash.
+ * The re-upload gate: one call for every place bytes enter storage by hash, or
+ * an existing hash is attached to something new.
  *
- * Checks the blocklist and, on a hit, records the attempt (tamper-evident audit
- * log + structured security log) so case tooling can find who tried to bring
- * blocked content back. The caller only has to refuse with the neutral message.
+ * Checks the blocklist and, on a hit, records the attempt in the tamper-evident
+ * audit log so case tooling can find who tried to bring blocked content back.
+ * The caller only has to refuse with the neutral message.
  *
  * Applies in every deployment mode, on-prem included: it is a local database
  * lookup with no external call.
@@ -11,8 +12,7 @@
 
 import { audit, auditRequest } from '../audit/audit-log';
 import type { AuditEvent } from '../audit/security-audit';
-import { loggers } from '../logging/logger-config';
-import { isHashBlocked } from './blocklist';
+import { findBlockedHashes } from './blocklist';
 import { ContentBlockedError } from './policy';
 
 /** Where the bytes were trying to enter. Recorded on the audit event. */
@@ -22,10 +22,11 @@ export type ContentUploadEntryPoint =
   | 'attachment.presign'
   | 'attachment.complete'
   | 'image-generation'
-  | 'chat-attachment';
+  | 'chat-attachment'
+  | 'page.copy'
+  | 'attachment.send';
 
-export interface UploadGateInput {
-  contentHash: string;
+export interface UploadGateContext {
   entryPoint: ContentUploadEntryPoint;
   /** Omitted only where the writer genuinely has no user in scope. */
   userId?: string;
@@ -35,28 +36,45 @@ export interface UploadGateInput {
   details?: Record<string, unknown>;
 }
 
-/** True when the hash is blocked. The attempt has already been recorded. */
-export async function isUploadBlocked(input: UploadGateInput): Promise<boolean> {
-  const { contentHash, entryPoint, userId, request, details } = input;
+export interface UploadGateInput extends UploadGateContext {
+  contentHash: string;
+}
 
-  if (!(await isHashBlocked(contentHash))) return false;
+/**
+ * The subset of `contentHashes` that is blocked, from ONE blocklist query. Every
+ * blocked hash has already been audited (one `content.upload.blocked` event each)
+ * by the time this returns.
+ */
+export async function findBlockedUploads(
+  contentHashes: readonly string[],
+  context: UploadGateContext,
+): Promise<Set<string>> {
+  const blocked = await findBlockedHashes(contentHashes);
 
-  const event: AuditEvent = {
-    eventType: 'authz.access.denied',
-    userId,
-    resourceType: 'file',
-    resourceId: contentHash,
-    riskScore: 0.9,
-    details: { reason: 'content_blocked', entryPoint, ...details },
-  };
-  if (request) {
-    auditRequest(request, event);
-  } else {
-    audit(event);
+  for (const contentHash of blocked) {
+    const event: AuditEvent = {
+      eventType: 'content.upload.blocked',
+      userId: context.userId,
+      resourceType: 'file',
+      resourceId: contentHash,
+      // >= 0.5, so the audit pipeline also logs it at warn.
+      riskScore: 0.9,
+      // `entryPoint` last: a caller's details can never overwrite it.
+      details: { ...context.details, entryPoint: context.entryPoint },
+    };
+    if (context.request) {
+      auditRequest(context.request, event);
+    } else {
+      audit(event);
+    }
   }
-  loggers.security.warn('Blocked content upload refused', { contentHash, userId, entryPoint, ...details });
 
-  return true;
+  return blocked;
+}
+
+/** True when the hash is blocked. The attempt has already been recorded. */
+export async function isUploadBlocked({ contentHash, ...context }: UploadGateInput): Promise<boolean> {
+  return (await findBlockedUploads([contentHash], context)).size > 0;
 }
 
 /** For server-side writers with no HTTP response to shape: throws on a blocked hash. */

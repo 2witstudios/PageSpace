@@ -3,20 +3,19 @@ import { GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { getS3Client, getS3Bucket } from '@/lib/presigned-url';
 import { checkObjectExists, putObject } from '@/lib/upload/s3-effects';
-import { assertUploadNotBlocked } from '@pagespace/lib/content-safety/upload-gate';
 
 const CHAT_ATTACHMENT_PREFIX = 'chat-attachments';
 const GET_URL_TTL_SECONDS = 3600;
 // Matches the storage key this module mints in buildChatAttachmentKey, wherever
 // it appears in a URL path — virtual-hosted (bucket.host/key) and path-style
 // (host/bucket/key) presigned URLs both put the key verbatim in the pathname.
-const CHAT_ATTACHMENT_KEY_PATTERN = /(chat-attachments\/[0-9a-f]{64}\/original)/;
+const CHAT_ATTACHMENT_KEY_PATTERN = /(chat-attachments\/([0-9a-f]{64})\/original)/;
 // Defense-in-depth mirror of MAX_DATA_URL_LENGTH in validate-image-parts.ts: the
 // chat route validates inbound data URLs, but this helper must stay safe for any
 // future caller that skips route-level validation.
 const MAX_CHAT_ATTACHMENT_BYTES = 4 * 1024 * 1024;
 
-function hashAttachmentBuffer(buffer: Buffer): string {
+export function hashAttachmentBuffer(buffer: Buffer): string {
   return createHash('sha256').update(buffer).digest('hex');
 }
 
@@ -24,10 +23,15 @@ export function buildChatAttachmentKey(contentHash: string): string {
   return `${CHAT_ATTACHMENT_PREFIX}/${contentHash}/original`;
 }
 
+/**
+ * Write attachment bytes to storage. Does NOT consult the content blocklist:
+ * this runs inside the message-save transaction, and every caller screens the
+ * whole message first with `screenFilePartsAgainstBlocklist` (message-utils.ts)
+ * — one query, before the transaction and before any write.
+ */
 export async function uploadChatAttachment(
   buffer: Buffer,
   mediaType: string,
-  context: { userId?: string | null } = {},
 ): Promise<{ storageKey: string; contentHash: string }> {
   if (buffer.byteLength > MAX_CHAT_ATTACHMENT_BYTES) {
     throw new Error(
@@ -35,16 +39,6 @@ export async function uploadChatAttachment(
     );
   }
   const contentHash = hashAttachmentBuffer(buffer);
-
-  // Content blocklist: checked before the existence probe, so blocked bytes are
-  // refused even if a copy is still in storage, and never handed back as a
-  // usable storage key. Throws ContentBlockedError; the gate audits the attempt.
-  await assertUploadNotBlocked({
-    contentHash,
-    userId: context.userId ?? undefined, // null = a system-authored message
-    entryPoint: 'chat-attachment',
-  });
-
   const storageKey = buildChatAttachmentKey(contentHash);
 
   const exists = await checkObjectExists(storageKey);
@@ -69,4 +63,10 @@ export async function getChatAttachmentUrl(storageKey: string): Promise<string> 
 export function parseChatAttachmentStorageKey(url: string): string | null {
   const match = CHAT_ATTACHMENT_KEY_PATTERN.exec(url);
   return match ? match[1] : null;
+}
+
+/** The content hash inside a chat-attachment storage key or URL, if it is one. */
+export function parseChatAttachmentContentHash(keyOrUrl: string): string | null {
+  const match = CHAT_ATTACHMENT_KEY_PATTERN.exec(keyOrUrl);
+  return match ? match[2] : null;
 }

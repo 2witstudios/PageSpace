@@ -8,18 +8,17 @@ vi.mock('@/lib/upload/s3-effects', () => ({
   putObject: (...args: unknown[]) => mockPutObject(...args),
 }));
 
-const mockAssertUploadNotBlocked = vi.fn();
-vi.mock('@pagespace/lib/content-safety/upload-gate', () => ({
-  assertUploadNotBlocked: (...args: unknown[]) => mockAssertUploadNotBlocked(...args),
-}));
-
-import { buildChatAttachmentKey, uploadChatAttachment, parseChatAttachmentStorageKey } from '../chat-attachment-storage';
-import { ContentBlockedError } from '@pagespace/lib/content-safety/policy';
+import {
+  buildChatAttachmentKey,
+  uploadChatAttachment,
+  parseChatAttachmentStorageKey,
+  parseChatAttachmentContentHash,
+  hashAttachmentBuffer,
+} from '../chat-attachment-storage';
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockPutObject.mockResolvedValue(undefined);
-  mockAssertUploadNotBlocked.mockResolvedValue(undefined);
 });
 
 describe('buildChatAttachmentKey', () => {
@@ -120,43 +119,27 @@ describe('parseChatAttachmentStorageKey', () => {
   });
 });
 
-describe('uploadChatAttachment — content blocklist', () => {
-  const buffer = Buffer.from('hello world');
-  const HELLO_WORLD_SHA256 = 'b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9';
+describe('parseChatAttachmentContentHash', () => {
+  const HASH = 'ab'.repeat(32);
 
-  beforeEach(() => {
-    mockCheckObjectExists.mockResolvedValue(false);
+  it('given a storage key, should return the content hash inside it', () => {
+    expect(parseChatAttachmentContentHash(buildChatAttachmentKey(HASH))).toBe(HASH);
   });
 
-  it('given blocked bytes, should throw ContentBlockedError and write nothing', async () => {
-    mockAssertUploadNotBlocked.mockRejectedValue(new ContentBlockedError(HELLO_WORLD_SHA256));
-
-    await expect(uploadChatAttachment(buffer, 'image/png')).rejects.toBeInstanceOf(ContentBlockedError);
-    expect(mockPutObject).not.toHaveBeenCalled();
+  it('given a presigned URL for a chat attachment, should return the content hash', () => {
+    expect(parseChatAttachmentContentHash(`https://bucket.example.com/chat-attachments/${HASH}/original?X-Amz-Signature=x`)).toBe(HASH);
   });
 
-  it('given blocked bytes already in storage, should still refuse rather than return the existing key', async () => {
-    mockCheckObjectExists.mockResolvedValue(true);
-    mockAssertUploadNotBlocked.mockRejectedValue(new ContentBlockedError(HELLO_WORLD_SHA256));
-
-    await expect(uploadChatAttachment(buffer, 'image/png')).rejects.toBeInstanceOf(ContentBlockedError);
+  it('given anything else, should return null', () => {
+    expect(parseChatAttachmentContentHash('https://example.com/cat.png')).toBeNull();
+    expect(parseChatAttachmentContentHash(`files/${HASH}/original`)).toBeNull();
   });
+});
 
-  it('should check the hash of the bytes themselves and name the sender', async () => {
-
-    await uploadChatAttachment(buffer, 'image/png', { userId: 'user-1' });
-
-    expect(mockAssertUploadNotBlocked).toHaveBeenCalledWith({
-      contentHash: HELLO_WORLD_SHA256,
-      userId: 'user-1',
-      entryPoint: 'chat-attachment',
-    });
-  });
-
-  it('given unblocked bytes, should upload as before', async () => {
-
-    const result = await uploadChatAttachment(buffer, 'image/png');
-
-    expect(mockPutObject).toHaveBeenCalledWith(result.storageKey, buffer, 'image/png');
+describe('hashAttachmentBuffer', () => {
+  it('should be the sha256 hex of the bytes — the hash the storage key is built from', () => {
+    expect(hashAttachmentBuffer(Buffer.from('hello world'))).toBe(
+      'b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9',
+    );
   });
 });

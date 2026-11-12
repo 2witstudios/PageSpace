@@ -13,6 +13,7 @@ import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { extractMentionedUserIds } from '@/lib/channels/extract-user-mentions';
 import { MAX_MESSAGE_ATTACHMENTS, parseMessageAttachments } from '@pagespace/lib/services/attachment-upload-core';
 import { isBlockedBetween } from '@/lib/repositories/user-block-repository';
+import { refuseBlockedAttachments } from '@/lib/upload/content-blocked-response';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -322,6 +323,15 @@ export async function POST(
         { status: 404 }
       );
     }
+
+    // Content blocklist: a send attaches stored files by hash without uploading.
+    const blockedAttachments = await refuseBlockedAttachments({
+      fileIds: attachmentFileIds,
+      request,
+      userId,
+      details: { targetType: 'conversation', targetId: conversationId },
+    });
+    if (blockedAttachments) return blockedAttachments;
 
     // A block stops messages in a conversation that already exists, not only the
     // creation of a new one (App Review Guideline 1.2).

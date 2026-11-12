@@ -201,6 +201,7 @@ vi.mock('ai', async (importOriginal) => {
 import { NextResponse } from 'next/server';
 import { streamText } from 'ai';
 import { POST } from '../route';
+import { ContentBlockedError } from '@pagespace/lib/content-safety/policy';
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
@@ -1374,6 +1375,30 @@ describe('POST /api/v1/chat/completions', () => {
   });
 
   // --- Credit-hold leak regressions (audit findings L6, L7) ---
+
+  test('a blocklisted attachment refused at user-message persistence returns the neutral 422, not a 500', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValueOnce({ allowed: true, reason: 'unlimited', holdId: 'hold-blocked' });
+    vi.mocked(messageRepository.savePageMessage).mockRejectedValueOnce(new ContentBlockedError('ab'.repeat(32)));
+
+    const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
+
+    assert({
+      given: 'a user message whose attachment is on the content blocklist',
+      should: 'return 422 with the neutral message, release the hold, and never call the model',
+      actual: {
+        status: response.status,
+        body: await response.json(),
+        releasedHoldId: vi.mocked(releaseHold).mock.calls[0]?.[0],
+        streamTextCalls: vi.mocked(streamText).mock.calls.length,
+      },
+      expected: {
+        status: 422,
+        body: { error: "This file can't be uploaded" },
+        releasedHoldId: 'hold-blocked',
+        streamTextCalls: 0,
+      },
+    });
+  });
 
   test('L6: a pre-stream setup throw releases the hold and never reaches the model', async () => {
     vi.mocked(canConsumeAI).mockResolvedValueOnce({ allowed: true, reason: 'unlimited', holdId: 'hold-setup' });

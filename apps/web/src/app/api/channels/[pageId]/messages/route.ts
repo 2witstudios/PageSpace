@@ -20,6 +20,7 @@ import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
 import type { AttachmentMeta } from '@pagespace/lib/types';
 import { MAX_MESSAGE_ATTACHMENTS, parseMessageAttachments } from '@pagespace/lib/services/attachment-upload-core';
 import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
+import { refuseBlockedAttachments } from '@/lib/upload/content-blocked-response';
 
 interface ChannelInboxFanoutInput {
   pageId: string;
@@ -247,6 +248,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     return NextResponse.json({ error: parsedAttachments.error }, { status: 400 });
   }
   const attachments = parsedAttachments.attachments;
+
+  // Content blocklist: a send attaches stored files by hash without uploading.
+  const blockedAttachments = await refuseBlockedAttachments({
+    fileIds: attachments.map((a) => a.fileId),
+    request: req,
+    userId,
+    details: { targetType: 'page', targetId: pageId },
+  });
+  if (blockedAttachments) return blockedAttachments;
 
   const messageContent = typeof content === 'string' ? content : '';
   const parentId = typeof rawParentId === 'string' ? rawParentId.trim() : '';

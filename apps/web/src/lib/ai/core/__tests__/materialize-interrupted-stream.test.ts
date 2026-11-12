@@ -218,6 +218,11 @@ vi.mock('@/lib/repositories/message-repository', async (importOriginal) => {
   };
 });
 
+const mockFindBlockedUploads = vi.fn();
+vi.mock('@pagespace/lib/content-safety/upload-gate', () => ({
+  findBlockedUploads: (...args: unknown[]) => mockFindBlockedUploads(...args),
+}));
+
 import { materializeInterruptedStream } from '../materialize-interrupted-stream';
 import type { ReapClaim } from '../stream-reap-claim';
 import type { UIMessagePart } from '../stream-channel-registry';
@@ -307,6 +312,7 @@ beforeEach(() => {
   // The frame release re-verifies the claim before deleting. Held by default; the case that
   // matters overrides it.
   mockIsReapClaimStillHeld.mockResolvedValue(true);
+  mockFindBlockedUploads.mockResolvedValue(new Set());
 });
 
 describe('materializeInterruptedStream — table routing', () => {
@@ -1210,5 +1216,46 @@ describe('materializeInterruptedStream — frame retention', () => {
       actual: settled,
       expected: true,
     });
+  });
+});
+
+describe('materializeInterruptedStream — content blocklist', () => {
+  // An echoed chat-attachment key, so no bytes need uploading in this test.
+  const BLOCKED_HASH = 'ab'.repeat(32);
+  const filePart = (): UIMessagePart =>
+    ({
+      type: 'file',
+      url: `https://bucket.example.com/chat-attachments/${BLOCKED_HASH}/original`,
+      mediaType: 'image/png',
+    }) as UIMessagePart;
+
+  it('treats a blocked attachment as terminal: drops the part, keeps the reply, and settles the row', async () => {
+    mockFindBlockedUploads.mockResolvedValue(new Set([BLOCKED_HASH]));
+
+    const settled = await materialize(pageRow({ parts: [textPart('here you go'), filePart()] }));
+
+    const parsed = JSON.parse(mockInsertValues.mock.calls[0][0].content as string);
+    assert({
+      given: 'a recovered reply carrying a blocklisted file part',
+      should: 'materialize the text without the part and settle, so no later sweep retries it',
+      actual: { settled, textParts: parsed.textParts, fileParts: parsed.fileParts },
+      expected: { settled: true, textParts: ['here you go'], fileParts: undefined },
+    });
+  });
+
+  it('screens once per materialization, attributed to the stream owner', async () => {
+    mockFindBlockedUploads.mockResolvedValue(new Set([BLOCKED_HASH]));
+
+    await materialize(pageRow({ parts: [textPart('here you go'), filePart()] }));
+
+    expect(mockFindBlockedUploads).toHaveBeenCalledTimes(1);
+    expect(mockFindBlockedUploads).toHaveBeenCalledWith([BLOCKED_HASH], { entryPoint: 'chat-attachment', userId: 'user-a' });
+  });
+
+  it('keeps an unblocked attachment in the materialized reply', async () => {
+    await materialize(pageRow({ parts: [textPart('here you go'), filePart()] }));
+
+    const parsed = JSON.parse(mockInsertValues.mock.calls[0][0].content as string);
+    expect(parsed.fileParts).toEqual([{ storageKey: `chat-attachments/${BLOCKED_HASH}/original`, mediaType: 'image/png' }]);
   });
 });

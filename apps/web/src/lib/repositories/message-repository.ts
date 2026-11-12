@@ -44,6 +44,7 @@
  * derived from its conversation rather than stored on the row.
  */
 
+import { ContentBlockedError } from '@pagespace/lib/content-safety/policy';
 import type { UIMessage } from 'ai';
 import { db } from '@pagespace/db/db';
 import { eq, and, ne, lt, gte, asc, desc } from '@pagespace/db/operators';
@@ -55,6 +56,7 @@ import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
 import {
   extractStructuredContentFromParts,
+  screenFilePartsAgainstBlocklist,
   convertDbMessageToUIMessage,
   MessageConversationConflictError,
   type ToolCall,
@@ -132,7 +134,7 @@ async function savePageMessageRow({
 }): Promise<string | null> {
   let structuredContent = content;
   if (uiMessage?.parts && uiMessage.parts.length > 0) {
-    structuredContent = await extractStructuredContentFromParts(uiMessage.parts, content, { userId });
+    structuredContent = await extractStructuredContentFromParts(uiMessage.parts, content);
   }
 
   const toolCallsJson = serializeJsonColumn(toolCalls);
@@ -213,7 +215,7 @@ async function saveGlobalMessageRow({
 }): Promise<string | null> {
   let structuredContent = content;
   if (uiMessage?.parts && uiMessage.parts.length > 0) {
-    structuredContent = await extractStructuredContentFromParts(uiMessage.parts, content, { userId });
+    structuredContent = await extractStructuredContentFromParts(uiMessage.parts, content);
   }
 
   const toolCallsJson = serializeJsonColumn(toolCalls);
@@ -606,6 +608,29 @@ function emitMaterialized(
     .catch(() => {});
 }
 
+/**
+ * Content-blocklist screen for a message about to be saved — run BEFORE the save
+ * transaction opens (it reads on the shared pool) and before any attachment
+ * bytes are written.
+ *
+ *   - A USER message carrying a blocked attachment is refused outright
+ *     (ContentBlockedError): nothing is stored and the turn never reaches the model.
+ *   - Any other message (an assistant reply, a system write) is saved WITHOUT the
+ *     blocked part. Refusing there would strand the reply at 'streaming' and have
+ *     every recovery sweep retry — and re-audit — the same doomed write.
+ */
+async function withScreenedAttachments<
+  T extends { uiMessage?: UIMessage; role: 'user' | 'assistant' | 'system'; userId: string | null },
+>(args: T): Promise<T> {
+  if (!args.uiMessage?.parts?.length) return args;
+  const { parts, blockedHashes } = await screenFilePartsAgainstBlocklist(args.uiMessage.parts, {
+    userId: args.userId,
+  });
+  if (blockedHashes.length === 0) return args;
+  if (args.role === 'user') throw new ContentBlockedError(blockedHashes[0]);
+  return { ...args, uiMessage: { ...args.uiMessage, parts } };
+}
+
 // ---------------------------------------------------------------------------
 // The repository
 // ---------------------------------------------------------------------------
@@ -633,6 +658,7 @@ export const messageRepository = {
     triggeredBy?: ConversationEventTriggeredBy;
     beforeSave?: BeforeSaveHook;
   }): Promise<MessageWriteResult> {
+    args = await withScreenedAttachments(args);
     const outcome = await db.transaction(async (tx) => {
       const hook = await normalizeHook(tx, args.beforeSave);
       if (!hook.proceed) return null;
@@ -704,6 +730,7 @@ export const messageRepository = {
     triggeredBy?: ConversationEventTriggeredBy;
     beforeSave?: BeforeSaveHook;
   }): Promise<MessageWriteResult> {
+    args = await withScreenedAttachments(args);
     const outcome = await db.transaction(async (tx) => {
       const hook = await normalizeHook(tx, args.beforeSave);
       if (!hook.proceed) return null;

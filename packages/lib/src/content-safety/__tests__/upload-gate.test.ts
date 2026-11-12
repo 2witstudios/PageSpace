@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const mockIsHashBlocked = vi.fn();
+const mockFindBlockedHashes = vi.fn();
 vi.mock('../blocklist', () => ({
-  isHashBlocked: (...a: unknown[]) => mockIsHashBlocked(...a),
+  findBlockedHashes: (...a: unknown[]) => mockFindBlockedHashes(...a),
 }));
 
 const mockAudit = vi.fn();
@@ -12,20 +12,16 @@ vi.mock('../../audit/audit-log', () => ({
   auditRequest: (...a: unknown[]) => mockAuditRequest(...a),
 }));
 
-const mockWarn = vi.fn();
-vi.mock('../../logging/logger-config', () => ({
-  loggers: { security: { warn: (...a: unknown[]) => mockWarn(...a) } },
-}));
-
-import { assertUploadNotBlocked, isUploadBlocked } from '../upload-gate';
+import { assertUploadNotBlocked, findBlockedUploads, isUploadBlocked } from '../upload-gate';
 import { ContentBlockedError } from '../policy';
 
 const HASH = 'c'.repeat(64);
+const OTHER = 'd'.repeat(64);
 const request = () => new Request('http://localhost/api/upload/presign', { method: 'POST' });
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockIsHashBlocked.mockResolvedValue(false);
+  mockFindBlockedHashes.mockResolvedValue(new Set());
 });
 
 describe('isUploadBlocked', () => {
@@ -35,11 +31,10 @@ describe('isUploadBlocked', () => {
     expect(blocked).toBe(false);
     expect(mockAuditRequest).not.toHaveBeenCalled();
     expect(mockAudit).not.toHaveBeenCalled();
-    expect(mockWarn).not.toHaveBeenCalled();
   });
 
-  it('reports a blocked hash and records the attempt with request metadata', async () => {
-    mockIsHashBlocked.mockResolvedValue(true);
+  it('reports a blocked hash and records the attempt under its own event type, with request metadata', async () => {
+    mockFindBlockedHashes.mockResolvedValue(new Set([HASH]));
     const req = request();
 
     const blocked = await isUploadBlocked({
@@ -51,38 +46,64 @@ describe('isUploadBlocked', () => {
     });
 
     expect(blocked).toBe(true);
+    expect(mockAuditRequest).toHaveBeenCalledTimes(1);
     expect(mockAuditRequest).toHaveBeenCalledWith(req, {
-      eventType: 'authz.access.denied',
+      eventType: 'content.upload.blocked',
       userId: 'user-1',
       resourceType: 'file',
       resourceId: HASH,
       riskScore: 0.9,
-      details: { reason: 'content_blocked', entryPoint: 'upload.presign', driveId: 'drive-1' },
+      details: { driveId: 'drive-1', entryPoint: 'upload.presign' },
     });
-    expect(mockWarn).toHaveBeenCalledWith(
-      'Blocked content upload refused',
-      expect.objectContaining({ contentHash: HASH, userId: 'user-1', entryPoint: 'upload.presign' }),
+  });
+
+  it("does not let a caller's details overwrite the entry point", async () => {
+    mockFindBlockedHashes.mockResolvedValue(new Set([HASH]));
+
+    await isUploadBlocked({ contentHash: HASH, entryPoint: 'upload.complete', details: { entryPoint: 'spoofed' } });
+
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ details: { entryPoint: 'upload.complete' } }),
     );
   });
 
   it('audits without request metadata when there is no request (server-side writers)', async () => {
-    mockIsHashBlocked.mockResolvedValue(true);
+    mockFindBlockedHashes.mockResolvedValue(new Set([HASH]));
 
     const blocked = await isUploadBlocked({ contentHash: HASH, userId: 'user-1', entryPoint: 'image-generation' });
 
     expect(blocked).toBe(true);
     expect(mockAuditRequest).not.toHaveBeenCalled();
     expect(mockAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: 'authz.access.denied', resourceId: HASH, userId: 'user-1' }),
+      expect.objectContaining({ eventType: 'content.upload.blocked', resourceId: HASH, userId: 'user-1' }),
     );
   });
 
   it('records an attempt with no known user', async () => {
-    mockIsHashBlocked.mockResolvedValue(true);
+    mockFindBlockedHashes.mockResolvedValue(new Set([HASH]));
 
     await isUploadBlocked({ contentHash: HASH, entryPoint: 'chat-attachment' });
 
     expect(mockAudit).toHaveBeenCalledWith(expect.objectContaining({ userId: undefined, resourceId: HASH }));
+  });
+});
+
+describe('findBlockedUploads', () => {
+  it('checks a batch with one blocklist query and audits each blocked hash once', async () => {
+    mockFindBlockedHashes.mockResolvedValue(new Set([OTHER]));
+
+    const blocked = await findBlockedUploads([HASH, OTHER], { entryPoint: 'page.copy', userId: 'user-1' });
+
+    expect(blocked).toEqual(new Set([OTHER]));
+    expect(mockFindBlockedHashes).toHaveBeenCalledTimes(1);
+    expect(mockFindBlockedHashes).toHaveBeenCalledWith([HASH, OTHER]);
+    expect(mockAudit).toHaveBeenCalledTimes(1);
+    expect(mockAudit).toHaveBeenCalledWith(expect.objectContaining({ resourceId: OTHER }));
+  });
+
+  it('audits nothing when nothing is blocked', async () => {
+    expect(await findBlockedUploads([HASH, OTHER], { entryPoint: 'page.copy' })).toEqual(new Set());
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 });
 
@@ -92,7 +113,7 @@ describe('assertUploadNotBlocked', () => {
   });
 
   it('throws ContentBlockedError for a blocked hash, after recording the attempt', async () => {
-    mockIsHashBlocked.mockResolvedValue(true);
+    mockFindBlockedHashes.mockResolvedValue(new Set([HASH]));
 
     const attempt = assertUploadNotBlocked({ contentHash: HASH, userId: 'user-1', entryPoint: 'image-generation' });
 

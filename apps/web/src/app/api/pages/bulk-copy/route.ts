@@ -21,6 +21,9 @@ import { OrgLapsedError, checkDriveMayLoosen, isOrgLapsedError } from '@pagespac
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 import { assertAgentModelAllowed, orgModelPolicyErrorResponse } from '@/services/api/page-mutation-service';
 import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
+import { findBlockedUploads } from '@pagespace/lib/content-safety/upload-gate';
+import { ContentBlockedError } from '@pagespace/lib/content-safety/policy';
+import { contentBlockedResponseFor } from '@/lib/upload/content-blocked-response';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -149,6 +152,12 @@ export async function POST(request: Request) {
       orderBy: [desc(pages.position)],
     });
 
+    // Content blocklist: a copy attaches each source file's bytes to a new page
+    // without an upload, so it gets the upload gate. Top-level pages are checked
+    // here, before the transaction; descendants as the copy walks them.
+    const copyGate: CopyGate = { request, userId, targetDriveId };
+    await assertCopyNotBlocked(sourcePages, copyGate);
+
     let nextPosition = (lastPage?.position || 0) + 1;
     let copiedCount = 0;
     const copiedPages: Array<{ newId: string; sourceTitle: string | null; sourceId: string }> = [];
@@ -230,7 +239,8 @@ export async function POST(request: Request) {
             page.id,
             newPageId,
             targetDriveId,
-            userId
+            userId,
+            copyGate
           );
           copiedCount += childCount;
         }
@@ -272,6 +282,8 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     if (isOrgLapsedError(error)) return orgLapsedResponse();
+    const blocked = contentBlockedResponseFor(error);
+    if (blocked) return blocked;
     const refused = orgModelPolicyErrorResponse(error);
     if (refused) return NextResponse.json(refused.body, { status: refused.status });
     loggers.api.error('Error bulk copying pages:', error as Error);
@@ -291,13 +303,42 @@ async function assertCopiedAgentModelAllowed(targetDriveId: string, page: { type
   await assertAgentModelAllowed(targetDriveId, { provider: page.aiProvider, modelId: page.aiModel });
 }
 
+interface CopyGate {
+  request: Request;
+  userId: string;
+  targetDriveId: string;
+}
+
+/**
+ * Refuse the whole copy (ContentBlockedError → neutral 422, transaction rolled
+ * back) if any of these pages carries a content hash on the blocklist. One
+ * blocklist query per call; each blocked hash is audited by the gate.
+ */
+async function assertCopyNotBlocked(
+  rows: ReadonlyArray<{ contentHash: string | null; filePath: string | null }>,
+  gate: CopyGate,
+): Promise<void> {
+  // A FILE page carries its hash in both columns; non-hash values are ignored by the lookup.
+  const hashes = rows.flatMap((row) => [row.contentHash, row.filePath]).filter((h): h is string => !!h);
+  if (hashes.length === 0) return;
+  const blocked = await findBlockedUploads(hashes, {
+    entryPoint: 'page.copy',
+    userId: gate.userId,
+    request: gate.request,
+    details: { driveId: gate.targetDriveId },
+  });
+  const [first] = blocked;
+  if (first) throw new ContentBlockedError(first);
+}
+
 // Recursively copy children
 async function copyChildrenRecursively(
   tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
   sourceParentId: string,
   newParentId: string,
   targetDriveId: string,
-  userId: string
+  userId: string,
+  copyGate: CopyGate
 ): Promise<number> {
   // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const children = await tx.query.pages.findMany({
@@ -306,6 +347,8 @@ async function copyChildrenRecursively(
       eq(pages.isTrashed, false)
     ),
   });
+
+  await assertCopyNotBlocked(children, copyGate);
 
   let copiedCount = 0;
 
@@ -372,7 +415,8 @@ async function copyChildrenRecursively(
       child.id,
       newChildId,
       targetDriveId,
-      userId
+      userId,
+      copyGate
     );
     copiedCount += grandchildCount;
   }

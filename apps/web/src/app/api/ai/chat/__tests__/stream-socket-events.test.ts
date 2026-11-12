@@ -490,6 +490,7 @@ vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
 }));
 
 import { POST } from '../route';
+import { ContentBlockedError } from '@pagespace/lib/content-safety/policy';
 import { extractMessageContent } from '@/lib/ai/core/message-utils';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import type { SessionAuthResult } from '@/lib/auth';
@@ -616,6 +617,18 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       channel: makeFakeChannel(),
       finish: mockLifecycleFinish,
       getParts: vi.fn().mockResolvedValue([]),
+    });
+  });
+
+  describe('content blocklist', () => {
+    it('given the user-message save refuses a blocklisted attachment, should return the neutral 422 and never reach the model', async () => {
+      mockSaveMessageToDatabase.mockRejectedValueOnce(new ContentBlockedError('ab'.repeat(32)));
+
+      const response = await POST(makeRequest());
+
+      expect(response.status).toBe(422);
+      expect(await response.json()).toEqual({ error: "This file can't be uploaded" });
+      expect(streamText).not.toHaveBeenCalled();
     });
   });
 

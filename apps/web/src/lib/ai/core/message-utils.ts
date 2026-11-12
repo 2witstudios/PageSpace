@@ -6,7 +6,14 @@ import {
   type ToolUIPart,
 } from 'ai';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { uploadChatAttachment, getChatAttachmentUrl, parseChatAttachmentStorageKey } from '@/lib/upload/chat-attachment-storage';
+import {
+  uploadChatAttachment,
+  getChatAttachmentUrl,
+  parseChatAttachmentStorageKey,
+  parseChatAttachmentContentHash,
+  hashAttachmentBuffer,
+} from '@/lib/upload/chat-attachment-storage';
+import { findBlockedUploads } from '@pagespace/lib/content-safety/upload-gate';
 
 /** Parse a `data:<mediaType>;base64,<data>` URL into its raw bytes and media type. */
 function decodeDataUrl(dataUrl: string): { buffer: Buffer; mediaType: string } | null {
@@ -487,15 +494,58 @@ async function reconstructFromStructuredContent(
 }
 
 /**
- * Extract structured content data from UIMessage parts for database storage
+ * The content hash a file part would store or reference when persisted: the
+ * hash inside an echoed chat-attachment key, or the hash of a new data: URL's
+ * bytes. Null for anything else (an externally hosted URL is not our storage).
  */
-export async function extractStructuredContentFromParts(
+function filePartContentHash(part: FileUIPart): string | null {
+  const echoed = parseChatAttachmentContentHash(part.url);
+  if (echoed) return echoed;
+  const decoded = decodeDataUrl(part.url);
+  return decoded ? hashAttachmentBuffer(decoded.buffer) : null;
+}
+
+/**
+ * Screen a message's file parts against the content blocklist with ONE query,
+ * before any bytes are written. Covers new uploads (data: URLs) and echoed
+ * storage keys alike — an echoed key is a client-supplied reference to stored
+ * bytes, so it gets the same check as the bytes themselves.
+ *
+ * Returns the parts with blocked file parts removed, and the blocked hashes
+ * (each already audited). The caller decides what a block means: refuse the
+ * message, or keep it without the part.
+ *
+ * Call this BEFORE opening the save transaction: it reads on the shared pool.
+ */
+export async function screenFilePartsAgainstBlocklist(
   uiParts: UIMessage['parts'],
-  originalContent: string,
-  // Who is persisting the message. Passed to the attachment upload so a refused
-  // (blocklisted) attachment is attributed to its sender in the audit log.
   context: { userId?: string | null } = {},
-): Promise<string> {
+): Promise<{ parts: UIMessage['parts']; blockedHashes: string[] }> {
+  const hashByPart = new Map<UIMessage['parts'][number], string>();
+  for (const part of uiParts) {
+    if (!isFilePart(part)) continue;
+    const hash = filePartContentHash(part);
+    if (hash) hashByPart.set(part, hash);
+  }
+  if (hashByPart.size === 0) return { parts: uiParts, blockedHashes: [] };
+
+  const blocked = await findBlockedUploads([...hashByPart.values()], {
+    entryPoint: 'chat-attachment',
+    userId: context.userId ?? undefined, // null = no user in scope (system write)
+  });
+  if (blocked.size === 0) return { parts: uiParts, blockedHashes: [] };
+
+  return {
+    parts: uiParts.filter((part) => !blocked.has(hashByPart.get(part) ?? '')),
+    blockedHashes: [...blocked],
+  };
+}
+
+/**
+ * Extract structured content data from UIMessage parts for database storage.
+ * Callers screen the parts with `screenFilePartsAgainstBlocklist` first.
+ */
+export async function extractStructuredContentFromParts(uiParts: UIMessage['parts'], originalContent: string): Promise<string> {
   const textParts = uiParts
     .filter(isTextPart)
     .map(p => p.text || '');
@@ -516,7 +566,7 @@ export async function extractStructuredContentFromParts(
           return { url: fp.url, mediaType: fp.mediaType, filename: fp.filename };
         }
         const mediaType = fp.mediaType || decoded.mediaType;
-        const { storageKey } = await uploadChatAttachment(decoded.buffer, mediaType, context);
+        const { storageKey } = await uploadChatAttachment(decoded.buffer, mediaType);
         return { storageKey, mediaType, filename: fp.filename };
       })
   );

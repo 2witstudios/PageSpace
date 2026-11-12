@@ -98,6 +98,10 @@ vi.mock('@pagespace/db/schema/core', () => ({ pages: {} }));
 vi.mock('@pagespace/db/schema/members', () => ({ driveMembers: {}, pagePermissions: {} }));
 
 // --- Audit + logger seams ------------------------------------------------------
+const mockFindBlockedUploads = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => new Set<string>()));
+vi.mock('@pagespace/lib/content-safety/upload-gate', () => ({
+  findBlockedUploads: mockFindBlockedUploads,
+}));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
@@ -793,6 +797,32 @@ describe('POST /api/channels/[pageId]/messages (top-level — existing path)', (
         ],
       }),
     );
+  });
+
+  it('refuses a send whose attachment is on the content blocklist, with a neutral 422 and no insert', async () => {
+    mockFindBlockedUploads.mockResolvedValueOnce(new Set(['file-2']));
+
+    const res = await callPost({
+      content: 'look at these',
+      attachments: [
+        { fileId: 'file-1', attachmentMeta: IMAGE_META },
+        { fileId: 'file-2', attachmentMeta: IMAGE_META },
+      ],
+    });
+
+    expect(res.status).toBe(422);
+    expect(await res.json()).toEqual({ error: "This file can't be uploaded" });
+    expect(mockInsertChannelMessageWithAttachment).not.toHaveBeenCalled();
+    expect(mockFindBlockedUploads).toHaveBeenCalledWith(
+      ['file-1', 'file-2'],
+      expect.objectContaining({ entryPoint: 'attachment.send', details: expect.objectContaining({ targetType: 'page' }) }),
+    );
+  });
+
+  it('does not consult the blocklist for a message with no attachments', async () => {
+    await callPost({ content: 'just text' });
+
+    expect(mockFindBlockedUploads).not.toHaveBeenCalled();
   });
 
   it('refuses a body carrying both the array and the legacy pair', async () => {

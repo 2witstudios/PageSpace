@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { UIMessage } from 'ai';
+import { createHash } from 'crypto';
 
 const mockUploadChatAttachment = vi.fn();
 const mockGetChatAttachmentUrl = vi.fn();
@@ -11,9 +12,23 @@ vi.mock('@/lib/upload/chat-attachment-storage', () => ({
     const match = /(chat-attachments\/[0-9a-f]{64}\/original)/.exec(url);
     return match ? match[1] : null;
   },
+  parseChatAttachmentContentHash: (url: string) => {
+    const match = /chat-attachments\/([0-9a-f]{64})\/original/.exec(url);
+    return match ? match[1] : null;
+  },
+  hashAttachmentBuffer: (buffer: Buffer) => createHash('sha256').update(buffer).digest('hex'),
 }));
 
-import { extractStructuredContentFromParts, convertDbMessageToUIMessage } from '../message-utils';
+const mockFindBlockedUploads = vi.fn();
+vi.mock('@pagespace/lib/content-safety/upload-gate', () => ({
+  findBlockedUploads: (...args: unknown[]) => mockFindBlockedUploads(...args),
+}));
+
+import {
+  extractStructuredContentFromParts,
+  convertDbMessageToUIMessage,
+  screenFilePartsAgainstBlocklist,
+} from '../message-utils';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -22,6 +37,7 @@ beforeEach(() => {
     contentHash: 'deadbeef',
   });
   mockGetChatAttachmentUrl.mockResolvedValue('https://signed.example.com/get/deadbeef');
+  mockFindBlockedUploads.mockResolvedValue(new Set());
 });
 
 describe('extractStructuredContentFromParts — S3-backed file parts', () => {
@@ -46,30 +62,6 @@ describe('extractStructuredContentFromParts — S3-backed file parts', () => {
     expect(Buffer.isBuffer(buffer)).toBe(true);
     expect((buffer as Buffer).toString('utf-8')).toBe('hello world');
     expect(mediaType).toBe('image/png');
-  });
-
-  it('given a sender, should pass the user id to the upload so a blocked attachment is attributable', async () => {
-    const filePart = {
-      type: 'file' as const,
-      url: 'data:image/png;base64,aGVsbG8gd29ybGQ=',
-      mediaType: 'image/png',
-    } as unknown as UIMessage['parts'][number];
-
-    await extractStructuredContentFromParts([filePart], '', { userId: 'user-1' });
-
-    expect(mockUploadChatAttachment.mock.calls[0][2]).toEqual({ userId: 'user-1' });
-  });
-
-  it('given the upload refuses the bytes, should propagate the error rather than persist the message', async () => {
-    const filePart = {
-      type: 'file' as const,
-      url: 'data:image/png;base64,aGVsbG8gd29ybGQ=',
-      mediaType: 'image/png',
-    } as unknown as UIMessage['parts'][number];
-    const refusal = new Error("This file can't be uploaded");
-    mockUploadChatAttachment.mockRejectedValue(refusal);
-
-    await expect(extractStructuredContentFromParts([filePart], '')).rejects.toBe(refusal);
   });
 
   it('given a file part with an already-hosted (non-data) URL, should pass it through unchanged', async () => {
@@ -187,5 +179,72 @@ describe('convertDbMessageToUIMessage — S3-backed file parts', () => {
 
     expect(result.parts).toEqual([{ type: 'text', text: 'my message' }]);
     expect(JSON.stringify(result)).not.toContain('storageKey');
+  });
+});
+
+describe('screenFilePartsAgainstBlocklist', () => {
+  const HELLO_WORLD_SHA256 = 'b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9';
+  const ECHOED_HASH = 'ab'.repeat(32);
+  type Part = UIMessage['parts'][number];
+
+  const text = { type: 'text', text: 'look at this' } as Part;
+  const newUpload = { type: 'file', url: 'data:image/png;base64,aGVsbG8gd29ybGQ=', mediaType: 'image/png' } as unknown as Part;
+  const echoed = {
+    type: 'file',
+    url: `https://bucket.example.com/chat-attachments/${ECHOED_HASH}/original?X-Amz-Signature=x`,
+    mediaType: 'image/png',
+  } as unknown as Part;
+  const hosted = { type: 'file', url: 'https://example.com/cat.png', mediaType: 'image/png' } as unknown as Part;
+
+  it('given new uploads and echoed keys, should check every hash in ONE call, attributed to the sender', async () => {
+    await screenFilePartsAgainstBlocklist([text, newUpload, echoed], { userId: 'user-1' });
+
+    expect(mockFindBlockedUploads).toHaveBeenCalledTimes(1);
+    expect(mockFindBlockedUploads).toHaveBeenCalledWith([HELLO_WORLD_SHA256, ECHOED_HASH], {
+      entryPoint: 'chat-attachment',
+      userId: 'user-1',
+    });
+  });
+
+  it('given nothing blocked, should return the parts untouched', async () => {
+    const parts = [text, newUpload, echoed];
+
+    const result = await screenFilePartsAgainstBlocklist(parts);
+
+    expect(result).toEqual({ parts, blockedHashes: [] });
+  });
+
+  it('given a blocked new upload, should drop that part, report its hash, and write nothing', async () => {
+    mockFindBlockedUploads.mockResolvedValue(new Set([HELLO_WORLD_SHA256]));
+
+    const result = await screenFilePartsAgainstBlocklist([text, newUpload, echoed]);
+
+    expect(result.parts).toEqual([text, echoed]);
+    expect(result.blockedHashes).toEqual([HELLO_WORLD_SHA256]);
+    expect(mockUploadChatAttachment).not.toHaveBeenCalled();
+  });
+
+  it('given a blocked ECHOED key, should drop it — a reference to stored bytes is checked like the bytes', async () => {
+    mockFindBlockedUploads.mockResolvedValue(new Set([ECHOED_HASH]));
+
+    const result = await screenFilePartsAgainstBlocklist([text, echoed]);
+
+    expect(result.parts).toEqual([text]);
+    expect(result.blockedHashes).toEqual([ECHOED_HASH]);
+  });
+
+  it('given no file part that touches our storage, should not query the blocklist', async () => {
+    const parts = [text, hosted];
+
+    const result = await screenFilePartsAgainstBlocklist(parts);
+
+    expect(result).toEqual({ parts, blockedHashes: [] });
+    expect(mockFindBlockedUploads).not.toHaveBeenCalled();
+  });
+
+  it('given no user in scope, should attribute the check to nobody rather than null', async () => {
+    await screenFilePartsAgainstBlocklist([echoed], { userId: null });
+
+    expect(mockFindBlockedUploads).toHaveBeenCalledWith([ECHOED_HASH], { entryPoint: 'chat-attachment', userId: undefined });
   });
 });
