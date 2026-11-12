@@ -37,6 +37,7 @@ const row = (overrides: Record<string, unknown> = {}) => ({
   },
   steps: [
     { step: 'block', status: 'ok', at: 't1' },
+    { step: 'quarantine_public', status: 'ok', at: 't1' },
     { step: 'preserve', status: 'ok', at: 't2' },
     { step: 'delete_uploads', status: 'failed', detail: 'S3 down', at: 't3' },
   ],
@@ -67,6 +68,7 @@ describe('GET /api/admin/content/cases', () => {
         resweepable: false,
         steps: [
           { step: 'block', status: 'ok' },
+          { step: 'quarantine_public', status: 'ok' },
           { step: 'preserve', status: 'ok' },
           { step: 'delete_uploads', status: 'failed', detail: 'S3 down' },
           { step: 'delete_public', status: 'pending' },
