@@ -40,7 +40,10 @@ import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 const PRESIGN_TTL = 900;
 
 /** Neutral refusal for a blocklisted hash — never says why. */
-const CONTENT_BLOCKED_RESULT = { status: CONTENT_BLOCKED_STATUS, body: { error: CONTENT_BLOCKED_MESSAGE } };
+const contentBlockedResult = (): OrchestratorResult => ({
+  status: CONTENT_BLOCKED_STATUS,
+  body: { error: CONTENT_BLOCKED_MESSAGE },
+});
 
 /** IDs recorded on the audit event when a blocked attachment is refused. */
 function blockedAttemptDetails(target: AttachmentTarget): Record<string, unknown> {
@@ -85,10 +88,9 @@ export async function presignAttachment(args: PresignAttachmentArgs): Promise<Or
   if (!validation.ok) return { status: validation.status, body: { error: validation.error } };
   const canonicalHash = validation.canonicalHash;
 
-  // Content blocklist: refuse before any presigned URL, slot or storage probe
-  // exists for this hash. The gate audits the attempt.
+  // Content blocklist — before any storage probe, slot or presigned URL.
   if (await isUploadBlocked({ contentHash: canonicalHash, userId, entryPoint: 'attachment.presign', request, details: blockedAttemptDetails(target) })) {
-    return { ...CONTENT_BLOCKED_RESULT };
+    return contentBlockedResult();
   }
 
   const quotaCheck = await checkUploadQuotaTarget(quotaTarget, fileSize);
@@ -180,13 +182,12 @@ export async function completeAttachment(args: CompleteAttachmentArgs): Promise<
   // client-declared presign values.
   const { contentHash } = reserved;
 
-  // Content blocklist, re-checked at finalize: the hash may have been blocked
-  // since presign, and the dedup path reaches here without any PUT. Refuse
-  // before the processor reads the bytes or a `files` row can point at them.
+  // Content blocklist, re-checked: the hash may have been blocked since presign,
+  // and the dedup path reaches here without any PUT. Before the processor reads it.
   if (await isUploadBlocked({ contentHash, userId, entryPoint: 'attachment.complete', request, details: blockedAttemptDetails(target) })) {
     uploadSemaphore.releaseUploadSlot(jobId);
     await releasePendingUpload(jobId).catch(() => undefined);
-    return { ...CONTENT_BLOCKED_RESULT };
+    return contentBlockedResult();
   }
 
   // Synchronous byte verification before any rows exist. The processor re-hashes

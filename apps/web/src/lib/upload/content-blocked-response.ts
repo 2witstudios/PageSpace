@@ -6,14 +6,18 @@ import {
 } from '@pagespace/lib/content-safety/policy';
 
 /**
- * Map a ContentBlockedError thrown by a server-side writer (chat attachments,
- * generated images) to the same neutral refusal the upload routes return.
- * Returns null for anything else so the caller keeps its own error handling.
- *
- * The body is rebuilt from the constant rather than the error, so nothing the
- * error carries (the hash) can reach the client.
+ * The one neutral refusal for blocklisted content. It gives no reason: it must
+ * not confirm that a file is on a blocklist.
+ */
+export function contentBlockedResponse(): NextResponse {
+  return NextResponse.json({ error: CONTENT_BLOCKED_MESSAGE }, { status: CONTENT_BLOCKED_STATUS });
+}
+
+/**
+ * Map a ContentBlockedError thrown while persisting a chat attachment to that
+ * refusal. Returns null for anything else so the caller keeps its own error
+ * handling. Nothing the error carries (the hash) reaches the client.
  */
 export function contentBlockedResponseFor(error: unknown): NextResponse | null {
-  if (!(error instanceof ContentBlockedError)) return null;
-  return NextResponse.json({ error: CONTENT_BLOCKED_MESSAGE }, { status: CONTENT_BLOCKED_STATUS });
+  return error instanceof ContentBlockedError ? contentBlockedResponse() : null;
 }

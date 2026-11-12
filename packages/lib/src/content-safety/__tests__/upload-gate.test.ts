@@ -23,12 +23,12 @@ import { ContentBlockedError } from '../policy';
 const HASH = 'c'.repeat(64);
 const request = () => new Request('http://localhost/api/upload/presign', { method: 'POST' });
 
-describe('isUploadBlocked', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockIsHashBlocked.mockResolvedValue(false);
-  });
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockIsHashBlocked.mockResolvedValue(false);
+});
 
+describe('isUploadBlocked', () => {
   it('lets an unblocked hash through without auditing', async () => {
     const blocked = await isUploadBlocked({ contentHash: HASH, userId: 'user-1', entryPoint: 'upload.presign', request: request() });
 
@@ -87,12 +87,7 @@ describe('isUploadBlocked', () => {
 });
 
 describe('assertUploadNotBlocked', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
   it('resolves for an unblocked hash', async () => {
-    mockIsHashBlocked.mockResolvedValue(false);
     await expect(assertUploadNotBlocked({ contentHash: HASH, entryPoint: 'image-generation' })).resolves.toBeUndefined();
   });
 

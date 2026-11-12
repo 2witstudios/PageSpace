@@ -1063,7 +1063,6 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
             .catch((err) => loggers.ai.error('AI Chat: Failed to expand mentions', err as Error));
         }
       } catch (error) {
-        // Deleted conversation → 404; blocklisted attachment → neutral 4xx.
         const refusal = userMessageSaveRefusal(error);
         if (refusal) return refusal;
         loggers.ai.error('AI Chat API: Failed to save user message', error as Error);

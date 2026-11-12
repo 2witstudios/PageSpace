@@ -516,7 +516,7 @@ export async function extractStructuredContentFromParts(
           return { url: fp.url, mediaType: fp.mediaType, filename: fp.filename };
         }
         const mediaType = fp.mediaType || decoded.mediaType;
-        const { storageKey } = await uploadChatAttachment(decoded.buffer, mediaType, { userId: context.userId });
+        const { storageKey } = await uploadChatAttachment(decoded.buffer, mediaType, context);
         return { storageKey, mediaType, filename: fp.filename };
       })
   );

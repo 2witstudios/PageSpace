@@ -14,7 +14,7 @@ import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { buildS3Key, canLinkExistingFileRow } from '@pagespace/lib/services/upload-validation';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isUploadBlocked } from '@pagespace/lib/content-safety/upload-gate';
-import { CONTENT_BLOCKED_MESSAGE, CONTENT_BLOCKED_STATUS } from '@pagespace/lib/content-safety/policy';
+import { contentBlockedResponse } from '@/lib/upload/content-blocked-response';
 import { getActorInfo, logFileActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { enqueueProcessorJob } from '@/lib/upload/processor-effects';
@@ -220,13 +220,12 @@ export async function POST(request: Request) {
     }
   }
 
-  // Content blocklist, re-checked at finalize: the hash may have been blocked
-  // since presign, and the dedup fast-path reaches here without any PUT. Refuse
-  // before a page or `files` row can point at it. Neutral reply; the gate audits.
+  // Content blocklist, re-checked: the hash may have been blocked since presign,
+  // and the dedup fast-path reaches here without any PUT.
   if (await isUploadBlocked({ contentHash, userId, entryPoint: 'upload.complete', request, details: { driveId } })) {
     uploadSemaphore.releaseUploadSlot(jobId);
     await releasePendingUpload(jobId).catch(() => undefined);
-    return NextResponse.json({ error: CONTENT_BLOCKED_MESSAGE }, { status: CONTENT_BLOCKED_STATUS });
+    return contentBlockedResponse();
   }
 
   // A client-supplied parentId is only gated by drive-level edit access above, so

@@ -603,7 +603,6 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
 
         loggers.api.debug('Global Assistant Chat API: User message saved to database', {});
       } catch (error) {
-        // Deleted conversation → 404; blocklisted attachment → neutral 4xx.
         const refusal = userMessageSaveRefusal(error);
         if (refusal) return refusal;
         loggers.api.error('Global Assistant Chat API: Failed to save user message', error as Error);

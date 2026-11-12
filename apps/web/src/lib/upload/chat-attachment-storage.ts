@@ -41,7 +41,7 @@ export async function uploadChatAttachment(
   // usable storage key. Throws ContentBlockedError; the gate audits the attempt.
   await assertUploadNotBlocked({
     contentHash,
-    userId: context.userId ?? undefined,
+    userId: context.userId ?? undefined, // null = a system-authored message
     entryPoint: 'chat-attachment',
   });
 

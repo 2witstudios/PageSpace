@@ -21,12 +21,12 @@ import { findBlockedHashes, isHashBlocked } from '../blocklist';
 const HASH_A = 'a'.repeat(64);
 const HASH_B = 'b'.repeat(64);
 
-describe('findBlockedHashes', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockWhere.mockResolvedValue([]);
-  });
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockWhere.mockResolvedValue([]);
+});
 
+describe('findBlockedHashes', () => {
   it('returns the subset of hashes that are on the blocklist', async () => {
     mockWhere.mockResolvedValue([{ contentHash: HASH_B }]);
 
@@ -62,11 +62,6 @@ describe('findBlockedHashes', () => {
 });
 
 describe('isHashBlocked', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockWhere.mockResolvedValue([]);
-  });
-
   it('is true for a blocked hash', async () => {
     mockWhere.mockResolvedValue([{ contentHash: HASH_A }]);
     expect(await isHashBlocked(HASH_A)).toBe(true);

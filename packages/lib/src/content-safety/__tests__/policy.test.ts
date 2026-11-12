@@ -1,11 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   CONTENT_BLOCKED_MESSAGE,
-  CONTENT_BLOCKED_STATUS,
-  CONTENT_BLOCK_CATEGORIES,
   ContentBlockedError,
-  isContentBlockCategory,
-  isValidContentHash,
   normalizeContentHash,
   normalizeContentHashes,
   requiresGlobalPurge,
@@ -41,17 +37,6 @@ describe('normalizeContentHash', () => {
   });
 });
 
-describe('isValidContentHash', () => {
-  it('accepts any casing of a sha256 hex hash', () => {
-    expect(isValidContentHash(HASH)).toBe(true);
-    expect(isValidContentHash(HASH.toUpperCase())).toBe(true);
-  });
-
-  it('rejects anything else', () => {
-    expect(isValidContentHash('nope')).toBe(false);
-  });
-});
-
 describe('normalizeContentHashes', () => {
   it('normalizes, drops invalid entries and de-duplicates', () => {
     const other = 'b2'.repeat(32);
@@ -73,20 +58,6 @@ describe('requiresGlobalPurge', () => {
     expect(requiresGlobalPurge('illegal_other')).toBe(false);
     expect(requiresGlobalPurge('policy')).toBe(false);
   });
-
-  it('has a decision for every category', () => {
-    for (const category of CONTENT_BLOCK_CATEGORIES) {
-      expect(typeof requiresGlobalPurge(category)).toBe('boolean');
-    }
-  });
-});
-
-describe('isContentBlockCategory', () => {
-  it('accepts known categories and rejects everything else', () => {
-    expect(isContentBlockCategory('csam')).toBe(true);
-    expect(isContentBlockCategory('spam')).toBe(false);
-    expect(isContentBlockCategory(undefined)).toBe(false);
-  });
 });
 
 describe('ContentBlockedError', () => {
@@ -102,9 +73,5 @@ describe('ContentBlockedError', () => {
   it('never says why the upload was refused', () => {
     expect(CONTENT_BLOCKED_MESSAGE).toBe("This file can't be uploaded");
     expect(CONTENT_BLOCKED_MESSAGE).not.toMatch(/block|illegal|csam|malware|policy|safety|abuse/i);
-  });
-
-  it('maps to an ordinary 4xx', () => {
-    expect(CONTENT_BLOCKED_STATUS).toBe(422);
   });
 });

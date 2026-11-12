@@ -11,7 +11,7 @@ describe('content-safety schema', () => {
     expect(config.name).toBe('content_blocks');
     expect(config.columns.find((c) => c.primary)?.name).toBe('content_hash');
     expect(columnNames(contentBlocks)).toEqual(
-      ['case_id', 'category', 'content_hash', 'created_at', 'created_by', 'source'].sort(),
+      ['case_id', 'category', 'content_hash', 'created_at', 'created_by', 'source'],
     );
   });
 
@@ -20,30 +20,28 @@ describe('content-safety schema', () => {
     expect(config.name).toBe('content_scans');
     expect(config.columns.find((c) => c.primary)?.name).toBe('content_hash');
     expect(columnNames(contentScans)).toEqual(
-      ['content_hash', 'provider', 'provider_version', 'scanned_at', 'scores', 'verdict'].sort(),
+      ['content_hash', 'provider', 'provider_version', 'scanned_at', 'scores', 'verdict'],
     );
   });
 
   it('content_cases carries target, reporter, snapshot and resumable steps', () => {
     const config = getTableConfig(contentCases);
     expect(config.name).toBe('content_cases');
-    expect(columnNames(contentCases)).toEqual(
-      [
-        'id',
-        'target_type',
-        'target_id',
-        'content_hash',
-        'status',
-        'category',
-        'reporter_user_id',
-        'reporter_contact',
-        'reason',
-        'snapshot',
-        'steps',
-        'created_at',
-        'updated_at',
-      ].sort(),
-    );
+    expect(columnNames(contentCases)).toEqual([
+      'category',
+      'content_hash',
+      'created_at',
+      'id',
+      'reason',
+      'reporter_contact',
+      'reporter_user_id',
+      'snapshot',
+      'status',
+      'steps',
+      'target_id',
+      'target_type',
+      'updated_at',
+    ]);
   });
 
   // Legal preservation: a case, block or verdict must outlive the user, page and

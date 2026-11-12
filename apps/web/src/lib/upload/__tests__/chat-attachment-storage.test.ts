@@ -124,8 +124,11 @@ describe('uploadChatAttachment — content blocklist', () => {
   const buffer = Buffer.from('hello world');
   const HELLO_WORLD_SHA256 = 'b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9';
 
-  it('given blocked bytes, should throw ContentBlockedError and write nothing', async () => {
+  beforeEach(() => {
     mockCheckObjectExists.mockResolvedValue(false);
+  });
+
+  it('given blocked bytes, should throw ContentBlockedError and write nothing', async () => {
     mockAssertUploadNotBlocked.mockRejectedValue(new ContentBlockedError(HELLO_WORLD_SHA256));
 
     await expect(uploadChatAttachment(buffer, 'image/png')).rejects.toBeInstanceOf(ContentBlockedError);
@@ -140,7 +143,6 @@ describe('uploadChatAttachment — content blocklist', () => {
   });
 
   it('should check the hash of the bytes themselves and name the sender', async () => {
-    mockCheckObjectExists.mockResolvedValue(false);
 
     await uploadChatAttachment(buffer, 'image/png', { userId: 'user-1' });
 
@@ -152,7 +154,6 @@ describe('uploadChatAttachment — content blocklist', () => {
   });
 
   it('given unblocked bytes, should upload as before', async () => {
-    mockCheckObjectExists.mockResolvedValue(false);
 
     const result = await uploadChatAttachment(buffer, 'image/png');
 

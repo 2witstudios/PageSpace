@@ -8,14 +8,7 @@
  */
 
 import type { ContentBlockCategory } from '@pagespace/db/schema/content-safety';
-
-export type {
-  ContentBlockCategory,
-  ContentBlockSource,
-  ContentScanVerdict,
-  ContentCaseTargetType,
-  ContentCaseStatus,
-} from '@pagespace/db/schema/content-safety';
+import { validateContentHash } from '../services/upload-validation';
 
 /**
  * The only thing a refused uploader is told. It deliberately gives no reason:
@@ -27,28 +20,16 @@ export const CONTENT_BLOCKED_MESSAGE = "This file can't be uploaded";
 /** An ordinary client error — indistinguishable in kind from other upload refusals. */
 export const CONTENT_BLOCKED_STATUS = 422;
 
-export const CONTENT_BLOCK_CATEGORIES = [
-  'csam',
-  'malware',
-  'illegal_other',
-  'policy',
-] as const satisfies readonly ContentBlockCategory[];
-
-const SHA256_HEX = /^[0-9a-f]{64}$/;
-
 /**
  * Canonical form of a content hash: trimmed, lowercase sha256 hex. Returns null
  * for anything that isn't one, so a caller can't look up (or block) a value that
- * could never match a stored object.
+ * could never match a stored object. Canonicalization is the upload routes' own
+ * `validateContentHash`, so the blocklist key can never drift from the storage key.
  */
 export function normalizeContentHash(input: unknown): string | null {
   if (typeof input !== 'string') return null;
-  const candidate = input.trim().toLowerCase();
-  return SHA256_HEX.test(candidate) ? candidate : null;
-}
-
-export function isValidContentHash(input: unknown): boolean {
-  return normalizeContentHash(input) !== null;
+  const result = validateContentHash(input.trim());
+  return result.ok ? result.value : null;
 }
 
 /** Normalize a batch: invalid entries dropped, duplicates collapsed, order kept. */
@@ -59,10 +40,6 @@ export function normalizeContentHashes(inputs: readonly unknown[]): string[] {
     if (hash) seen.add(hash);
   }
   return [...seen];
-}
-
-export function isContentBlockCategory(value: unknown): value is ContentBlockCategory {
-  return typeof value === 'string' && (CONTENT_BLOCK_CATEGORIES as readonly string[]).includes(value);
 }
 
 /**
