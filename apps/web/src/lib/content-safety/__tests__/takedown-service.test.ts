@@ -19,9 +19,12 @@ const mocks = vi.hoisted(() => ({
   clearImage: vi.fn(),
   listAvatars: vi.fn(),
   openCreated: { value: true },
+  openThrows: { value: null as Error | null },
 }));
 
+const CaseCategoryDowngradeError = vi.hoisted(() => class CaseCategoryDowngradeError extends Error {});
 vi.mock('@pagespace/lib/content-safety/case-store', () => ({
+  CaseCategoryDowngradeError,
   createTakedownCaseStore: () => ({
     load: async (id: string) => (cases.has(id) ? structuredClone(cases.get(id)) : null),
     appendStep: async (id: string, step: ContentCaseStep) => {
@@ -40,6 +43,7 @@ vi.mock('@pagespace/lib/content-safety/case-store', () => ({
   }),
   getContentCase: async (id: string) => (cases.has(id) ? structuredClone(cases.get(id)) : null),
   openTakedownCase: async (input: { targetType: string; targetId: string; category: string; reason: string; takedown: { kind: string }; snapshot?: object }) => {
+    if (mocks.openThrows.value) throw mocks.openThrows.value;
     const id = `case-${input.takedown.kind}-${input.targetId}`;
     const created = mocks.openCreated.value && !cases.has(id);
     if (!cases.has(id)) {
@@ -101,6 +105,7 @@ beforeEach(() => {
   cases.clear();
   vi.clearAllMocks();
   mocks.openCreated.value = true;
+  mocks.openThrows.value = null;
   mocks.unpublishPage.mockResolvedValue({ unpublished: true, driveId: 'drive-1', path: 'docs' });
   mocks.parkDriveSites.mockResolvedValue({ driveId: 'drive-1', prefixes: [{ prefix: 'acme', action: 'parked', objects: 3 }] });
   mocks.parkUserSites.mockResolvedValue({
@@ -300,6 +305,15 @@ describe('suspension parks the user\'s sites', () => {
 });
 
 describe('requests that cannot be acted on', () => {
+  it('answers 409 when an open CSAM case would be re-filed under another category', async () => {
+    mocks.openThrows.value = new CaseCategoryDowngradeError('This content has an open CSAM case; it cannot be re-filed under another category.');
+
+    await expect(
+      executeTakedown({ action: 'unpublish_page', pageId: 'page-1', category: 'policy', reason: 'r' }, 'admin-1'),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(mocks.unpublishPage).not.toHaveBeenCalled();
+  });
+
   it('answers 404 for a case that does not exist', async () => {
     await expect(executeTakedown({ action: 'resume', caseId: 'missing' }, 'admin-1')).rejects.toMatchObject({ status: 404 });
   });

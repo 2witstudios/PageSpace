@@ -216,6 +216,9 @@ async function executeGlobalStep(
       if (!source) {
         if (existing && verified) return { detail: 'already_preserved' };
         if (existing) throw new Error('An unverified evidence copy exists and there is no source left to verify it against');
+        // The case says a copy was preserved, but it is not there. Stop: going on
+        // would delete what is left with the evidence missing.
+        if (verified) throw new Error('The preserved evidence copy recorded on this case is missing');
         return { detail: 'no_source_object', skipped: true };
       }
       if (!existing || !verified) {

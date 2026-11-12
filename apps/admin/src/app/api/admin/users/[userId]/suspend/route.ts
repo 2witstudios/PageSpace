@@ -178,9 +178,6 @@ export const DELETE = withAdminAuth<RouteContext>(async (adminUser, request, con
     if (outcome.status === 'not_found') {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
-    if (outcome.status === 'not_suspended') {
-      return NextResponse.json({ error: 'User is not suspended' }, { status: 409 });
-    }
 
     // Put back the sites this user's suspension parked. Holds a takedown placed
     // on the same drives are a separate decision and stay. Only asked of the web
@@ -191,6 +188,13 @@ export const DELETE = withAdminAuth<RouteContext>(async (adminUser, request, con
       .from(contentSiteHolds)
       .where(eq(contentSiteHolds.holder, `user:${targetUserId}`))
       .limit(1);
+    // "Not suspended" is an error only when there is nothing left to do. If an
+    // earlier unsuspend lifted the suspension but could not restore the sites,
+    // the holds are still here and this call is the retry.
+    const alreadyReactivated = outcome.status === 'not_suspended';
+    if (alreadyReactivated && !hold) {
+      return NextResponse.json({ error: 'User is not suspended' }, { status: 409 });
+    }
     if (hold) {
       const restored = await callWebTakedown({ action: 'restore_user_sites', userId: targetUserId }, adminUser.id);
       sitesRestore = restored.ok
@@ -208,6 +212,16 @@ export const DELETE = withAdminAuth<RouteContext>(async (adminUser, request, con
           stillHeldDriveIds: sitesRestore.stillHeldDriveIds,
           outcome: sitesRestore.errorCode ?? 'completed',
         },
+      });
+    }
+
+    if (alreadyReactivated) {
+      return NextResponse.json({
+        success: !sitesRestore?.error,
+        ...(sitesRestore ? { sites: sitesRestore } : {}),
+        message: sitesRestore?.error
+          ? `The user's published sites still could not be restored: ${sitesRestore.error}`
+          : "The user's published sites have been restored.",
       });
     }
 

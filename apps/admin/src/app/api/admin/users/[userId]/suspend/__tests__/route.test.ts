@@ -296,6 +296,29 @@ describe('/api/admin/users/[userId]/suspend', () => {
       expect(body.message).toContain('stay parked');
     });
 
+    it('retries the restore when an earlier unsuspend lifted the suspension but left the sites parked', async () => {
+      unsuspendUserMock.mockResolvedValue({ status: 'not_suspended' });
+      holdRowsMock.mockResolvedValue([{ driveId: 'drive-1' }]);
+      callWebTakedownMock.mockResolvedValue({ ok: true, status: 200, body: { action: 'restore_user_sites', restoredDriveIds: ['drive-1'], stillHeldDriveIds: [] } });
+
+      const res = await DELETE(request('DELETE'), ctx());
+      const body = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.message).toContain('have been restored');
+      expect(callWebTakedownMock).toHaveBeenCalledWith({ action: 'restore_user_sites', userId: 'user-1' }, 'admin-1');
+      // Not a second reactivation: only the restore is audited.
+      const types = vi.mocked(auditRequest).mock.calls.map(([, event]) => event.eventType);
+      expect(types).toEqual(['content.takedown.sites_restored']);
+    });
+
+    it('still answers 409 for a user who is not suspended and has nothing parked', async () => {
+      unsuspendUserMock.mockResolvedValue({ status: 'not_suspended' });
+      expect((await DELETE(request('DELETE'), ctx())).status).toBe(409);
+      expect(callWebTakedownMock).not.toHaveBeenCalled();
+    });
+
     it('still lifts the suspension, and says so, when the sites could not be restored', async () => {
       holdRowsMock.mockResolvedValue([{ driveId: 'drive-1' }]);
       callWebTakedownMock.mockResolvedValue({ ok: false, status: 502, error: 'Failed to reach the web app.' });

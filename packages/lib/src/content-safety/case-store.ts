@@ -54,6 +54,14 @@ export function createTakedownCaseStore(): TakedownCaseStore {
   };
 }
 
+/** Thrown when an open CSAM case is re-filed under a different category. */
+export class CaseCategoryDowngradeError extends Error {
+  constructor(readonly caseId: string) {
+    super('This content has an open CSAM case; it cannot be re-filed under another category.');
+    this.name = 'CaseCategoryDowngradeError';
+  }
+}
+
 export interface OpenTakedownCaseInput {
   targetType: ContentCaseTargetType;
   targetId: string;
@@ -73,13 +81,14 @@ export interface OpenedCase {
 /**
  * Open the case for a takedown, or return the one already open for the same
  * target and action so a repeated request continues it instead of starting a
- * second sequence. A reused case takes on options the new request adds
- * (`suspendUploader`, `skipPreservation`); it never drops ones it already had.
+ * second sequence. A reused case keeps `suspendUploader` once asked for, and
+ * takes `skipPreservation` from the latest request (so a skip can be withdrawn).
  *
  * It also takes the new request's CATEGORY. The category decides whether
  * preservation may be skipped, so a case first filed as malware with
  * "skip preservation" and then re-filed as CSAM must run under the CSAM rule,
- * not the one it was opened with.
+ * not the one it was opened with. The reverse is refused: a CSAM case cannot be
+ * re-filed under another category (`CaseCategoryDowngradeError`).
  */
 export async function openTakedownCase(input: OpenTakedownCaseInput): Promise<OpenedCase> {
   const [existing] = await db
@@ -97,12 +106,18 @@ export async function openTakedownCase(input: OpenTakedownCaseInput): Promise<Op
     .limit(1);
 
   if (existing) {
+    // A case that is CSAM stays CSAM. Re-filing it under a category that allows
+    // "skip preservation" would be a way to delete it unpreserved.
+    if (existing.category === 'csam' && input.category !== 'csam') {
+      throw new CaseCategoryDowngradeError(existing.id);
+    }
     const previous = existing.snapshot?.takedown;
     const merged: TakedownOptions = {
       ...previous,
       ...input.takedown,
-      skipPreservation: previous?.skipPreservation === true || input.takedown.skipPreservation === true,
-      skipPreservationReason: input.takedown.skipPreservationReason ?? previous?.skipPreservationReason,
+      // The latest request decides whether preservation is skipped, so a skip can be withdrawn.
+      skipPreservation: input.takedown.skipPreservation === true,
+      skipPreservationReason: input.takedown.skipPreservation === true ? input.takedown.skipPreservationReason : undefined,
       suspendUploader: previous?.suspendUploader === true || input.takedown.suspendUploader === true,
     };
     const [updated] = await db

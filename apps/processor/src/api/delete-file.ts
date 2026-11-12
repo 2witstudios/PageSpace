@@ -1,6 +1,7 @@
 import { Router, type Router as RouterType } from 'express';
 import { contentStore } from '../server';
 import { isValidContentHash } from '../cache/content-store';
+import { isHeldForTakedown } from '../services/takedown-guard';
 import {
   assertDeleteFileAccess,
   DeleteFileAuthorizationError,
@@ -28,6 +29,13 @@ router.delete('/:contentHash', async (req, res) => {
 
   try {
     await assertDeleteFileAccess(auth, contentHash);
+
+    // A blocked hash is deleted only by its content takedown, which preserves a
+    // copy first. Reaping it here could destroy the only copy while a case is
+    // still waiting to preserve it. The caller keeps its row and moves on.
+    if (await isHeldForTakedown(contentHash)) {
+      return res.status(409).json({ error: 'File is held and cannot be hard deleted', held: true });
+    }
 
     const { originalDeleted, cacheDeleted } = await contentStore.deleteOriginalAndCache(contentHash);
 

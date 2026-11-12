@@ -44,6 +44,9 @@ vi.mock('@pagespace/lib/services/storage-limits', () => ({
   },
 }));
 
+const mockFindBlockedHashes = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/content-safety/blocklist', () => ({ findBlockedHashes: mockFindBlockedHashes }));
+
 import { reapOrphanedFiles } from '../reap-orphaned-files';
 
 const db = {} as never;
@@ -58,6 +61,8 @@ const orphan = (overrides: Partial<{ id: string; storagePath: string; driveId: s
 
 describe('reapOrphanedFiles', () => {
   beforeEach(() => {
+    mockFindBlockedHashes.mockReset();
+    mockFindBlockedHashes.mockResolvedValue(new Set());
     vi.clearAllMocks();
     mockFindOrphans.mockResolvedValue([]);
     mockDeleteRecords.mockResolvedValue([]);
@@ -90,14 +95,47 @@ describe('reapOrphanedFiles', () => {
     vi.unstubAllGlobals();
   });
 
-  // Content takedown deletes a hash's objects directly and leaves its `files` rows. Once the
-  // pages and messages that referenced it are gone the row is an ordinary orphan, and the reaper
-  // must be able to finish it even though there is no blob left to delete.
-  it('reaps a row whose blob a takedown already deleted: the processor answers 200 for the missing objects', async () => {
+  // A hash on the content blocklist belongs to its takedown. While a CSAM case waits for evidence
+  // storage the private original is the ONLY copy, so nothing but the takedown may delete it.
+  it('never asks the processor to delete a blocked hash, but still reaps the row and releases the quota', async () => {
     const hash = 'b'.repeat(64);
     mockFindOrphans.mockResolvedValue([orphan({ id: hash, storagePath: hash, sizeBytes: 4096, createdBy: 'u1' })]);
+    mockFindBlockedHashes.mockResolvedValue(new Set([hash]));
     mockDeleteRecords.mockResolvedValue([hash]);
-    // What the processor returns when S3 reports the (idempotent) deletes as done.
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await reapOrphanedFiles(db, { fileIds: [hash] });
+
+    expect(mockFindBlockedHashes).toHaveBeenCalledWith([hash]);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(mockCreateSystemFileDeleteToken).not.toHaveBeenCalled();
+    expect(result).toEqual({ orphansFound: 1, physicalFilesDeleted: 0, dbRecordsDeleted: 1, failedPhysicalDeletes: [] });
+    expect(mockUpdateStorageUsage).toHaveBeenCalledWith('u1', -4096, expect.objectContaining({ eventType: 'delete' }));
+
+    vi.unstubAllGlobals();
+  });
+
+  it('resolves the legacy files/<hash>/original form before checking the blocklist', async () => {
+    const hash = 'd'.repeat(64);
+    mockFindOrphans.mockResolvedValue([orphan({ id: 'legacy', storagePath: `files/${hash}/original` })]);
+    mockFindBlockedHashes.mockResolvedValue(new Set([hash]));
+    mockDeleteRecords.mockResolvedValue(['legacy']);
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await reapOrphanedFiles(db, { fileIds: ['legacy'] });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  // After a takedown has finished, a hash that is no longer blocked cannot exist, but a blob can be
+  // missing for other reasons: the processor answers 200 for the (idempotent) deletes and the row is reaped.
+  it('reaps a row whose blob is already gone: the processor answers 200 for the missing objects', async () => {
+    const hash = 'e'.repeat(64);
+    mockFindOrphans.mockResolvedValue([orphan({ id: hash, storagePath: hash, sizeBytes: 4096, createdBy: 'u1' })]);
+    mockDeleteRecords.mockResolvedValue([hash]);
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ success: true, contentHash: hash, originalDeleted: true, cacheDeleted: true }), { status: 200 }),
     );
@@ -107,7 +145,6 @@ describe('reapOrphanedFiles', () => {
 
     expect(String(fetchMock.mock.calls[0][0])).toContain(`/api/files/${hash}`);
     expect(result).toEqual({ orphansFound: 1, physicalFilesDeleted: 1, dbRecordsDeleted: 1, failedPhysicalDeletes: [] });
-    expect(mockDeleteRecords).toHaveBeenCalledWith(db, [hash]);
 
     vi.unstubAllGlobals();
   });

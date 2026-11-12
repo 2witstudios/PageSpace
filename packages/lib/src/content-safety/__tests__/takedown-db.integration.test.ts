@@ -17,6 +17,7 @@ import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { suspendUser, unsuspendUser } from '../../auth/suspend-user';
 import {
+  CaseCategoryDowngradeError,
   createTakedownCaseStore,
   listCasesDueForResweep,
   listCasesForTarget,
@@ -153,6 +154,28 @@ describe('takedown database edge — real Postgres', () => {
 
       expect(second.case.id).toBe(first.case.id);
       expect(second.case.category).toBe('csam');
+    });
+
+    it('refuses to re-file an open CSAM case under another category: that would be a way around preservation', async () => {
+      const hash = freshHash();
+      const first = await open({ targetId: hash, contentHash: hash, category: 'csam' });
+
+      await expect(
+        open({ targetId: hash, contentHash: hash, category: 'malware', takedown: { kind: 'global', skipPreservation: true, skipPreservationReason: 'x' } }),
+      ).rejects.toBeInstanceOf(CaseCategoryDowngradeError);
+
+      const [row] = await db.select().from(contentCases).where(eq(contentCases.id, first.case.id));
+      expect(row.category).toBe('csam');
+      expect(row.snapshot?.takedown?.skipPreservation).not.toBe(true);
+    });
+
+    it('lets the latest request withdraw a skip, and keeps a suspension once asked for', async () => {
+      const hash = freshHash();
+      await open({ targetId: hash, contentHash: hash, takedown: { kind: 'global', skipPreservation: true, skipPreservationReason: 'known sample', suspendUploader: true } });
+      const second = await open({ targetId: hash, contentHash: hash, takedown: { kind: 'global' } });
+
+      expect(second.case.snapshot?.takedown).toMatchObject({ skipPreservation: false, suspendUploader: true });
+      expect(second.case.snapshot?.takedown?.skipPreservationReason).toBeUndefined();
     });
 
     it('opens a separate case for a different action on the same target', async () => {

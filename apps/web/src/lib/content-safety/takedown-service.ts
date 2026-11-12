@@ -8,6 +8,7 @@ import { audit } from '@pagespace/lib/audit/audit-log';
 import { suspendUser } from '@pagespace/lib/auth/suspend-user';
 import { sendContentSafetyAlert } from '@pagespace/lib/content-safety/alerts';
 import {
+  CaseCategoryDowngradeError,
   createTakedownCaseStore,
   getContentCase,
   openTakedownCase,
@@ -304,7 +305,13 @@ export async function executeTakedown(request: TakedownRequest, actorUserId: str
     case 'park_drive':
     case 'avatar':
     case 'park_user_sites': {
-      const opened = await openTakedownCase(caseInputFor(request, actorUserId ?? undefined));
+      let opened: Awaited<ReturnType<typeof openTakedownCase>>;
+      try {
+        opened = await openTakedownCase(caseInputFor(request, actorUserId ?? undefined));
+      } catch (error) {
+        if (error instanceof CaseCategoryDowngradeError) throw new TakedownRequestError(error.message, 409);
+        throw error;
+      }
       if (opened.created) {
         await safeAlert(deps, { event: 'opened', caseId: opened.case.id, category: opened.case.category });
       }

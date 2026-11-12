@@ -297,6 +297,20 @@ describe('runGlobalTakedown', () => {
     expect(result).toMatchObject({ status: 'open', failedStep: 'preserve' });
   });
 
+  it('stops when the case says a copy was preserved but the evidence object is missing and no source is left', async () => {
+    await runGlobalTakedown(CASE_ID, deps);
+    // The evidence object disappears; a re-sweep finds no source either.
+    world.evidence.clear();
+    world.uploads.set(`cache/${HASH}/thumbnail.webp`, 50);
+
+    const result = await resweepGlobalTakedown(CASE_ID, deps);
+
+    expect(result).toMatchObject({ status: 'open', failedStep: 'preserve' });
+    expect(result.error).toContain('missing');
+    expect(world.uploads.has(`cache/${HASH}/thumbnail.webp`)).toBe(true);
+    expect(world.alerts.map((a) => a.event)).toContain('resweep_failed');
+  });
+
   it('re-filed as CSAM after a skipped preserve and a failed delete: the resume preserves before it deletes', async () => {
     ({ world, deps } = createWorld({
       category: 'malware',

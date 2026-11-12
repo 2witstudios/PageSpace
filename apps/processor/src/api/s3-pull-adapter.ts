@@ -1,3 +1,4 @@
+import { deleteOriginalUnlessHeld } from '../services/takedown-guard';
 import { contentStore } from '../server';
 import {
   setPageProcessing,
@@ -105,7 +106,7 @@ export async function runPullPipeline(job: PullJob, fetchOpts: FetchOptions = {}
  */
 async function rejectAndFail(pageId: string, contentHash: string, reason: string): Promise<void> {
   try {
-    await contentStore.deleteOriginal(contentHash);
+    await deleteOriginalUnlessHeld(contentHash);
   } catch (err) {
     loggers.processor.error('Failed to delete rejected object', err instanceof Error ? err : undefined, { pageId, contentHash });
   }
