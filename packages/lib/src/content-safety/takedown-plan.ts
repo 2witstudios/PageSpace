@@ -15,19 +15,22 @@
  *                    untouched, and a public-only file is first copied into
  *                    private storage.
  *   3. record      — who and what referenced the hash, written to the case
- *                    BEFORE the step that can wait. A case can sit at
+ *                    BEFORE the step that can wait. This includes a quick,
+ *                    best-effort search of AI-chat messages (see 6). A case can sit at
  *                    preservation for a long time, and the uploader can delete
  *                    their page meanwhile; the rows that say who uploaded it
  *                    must be captured before then.
  *   4. preserve    — nothing private is deleted until a copy is verified (or,
  *                    outside CSAM, an admin has explicitly declined one).
  *   5. deletes     — uploads bucket, then the public bucket.
- *   6. record AI   — the AI-chat messages that carry the file, and their authors.
- *                    This search cannot use an index and can be slow, so it is
- *                    kept out of the path above: it never delays taking content
- *                    down. It runs here, after the deletes (message rows are not
- *                    affected by them), and the case is not finished until it
- *                    succeeds — an uploader is never dropped silently.
+ *   6. record AI   — the AI-chat messages that carry the file, and their authors,
+ *                    searched again with a long timeout. That search cannot use
+ *                    an index, so the mandatory run is kept out of the path
+ *                    above, where it could delay taking content down. The case
+ *                    is not finished until it succeeds, and its results are
+ *                    ADDED to step 3's: an uploader found early stays on the
+ *                    case even if their message was deleted in between, and one
+ *                    the quick attempt missed is never dropped silently.
  *   7. suspend     — only when asked for, from the uploaders recorded above.
  */
 

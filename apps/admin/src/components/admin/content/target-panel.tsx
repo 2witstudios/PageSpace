@@ -346,7 +346,11 @@ export function TargetPanel() {
           description={DIALOGS[dialog].description}
           confirmLabel={DIALOGS[dialog].confirmLabel}
           categories={dialog === 'global' ? GLOBAL_CATEGORIES : ALL_CATEGORIES}
-          globalOptions={dialog === 'global' ? { uploaderCount: refs?.uploaderUserIds.length ?? 0 } : undefined}
+          globalOptions={
+            dialog === 'global'
+              ? { uploaderCount: refs?.uploaderUserIds.length ?? 0, uploaderCountIncomplete: refs?.aiMessageScanFailed === true }
+              : undefined
+          }
           pending={pending}
           error={dialogError}
           onConfirm={(values) => {

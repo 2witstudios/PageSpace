@@ -15,8 +15,12 @@ export type WebTakedownResult =
   | { ok: false; status: number; error: string };
 
 const TAKEDOWN_PATH = '/api/internal/content-safety/takedown';
-/** A takedown lists and deletes across two buckets; give it room, but not forever. */
-const TIMEOUT_MS = 120_000;
+/**
+ * A takedown lists and deletes across two buckets and may run a message search
+ * with a 120-second statement timeout; this must be longer than that, or a slow
+ * search would surface here as "could not reach the web app".
+ */
+const TIMEOUT_MS = 180_000;
 
 export async function callWebTakedown(request: TakedownRequest, adminUserId: string): Promise<WebTakedownResult> {
   const webUrl = process.env.WEB_APP_INTERNAL_URL ?? process.env.NEXT_PUBLIC_WEB_APP_URL;

@@ -11,6 +11,8 @@ const state = vi.hoisted(() => ({
   failMessages: false,
   pageRows: [] as Array<{ id: string; driveId: string; createdBy: string | null }>,
   messageRows: [] as Array<{ id: string; conversationId: string; userId: string | null }>,
+  transactions: 0,
+  statements: [] as string[],
 }));
 
 vi.mock('@pagespace/db/db', () => {
@@ -30,8 +32,16 @@ vi.mock('@pagespace/db/db', () => {
   return {
     db: {
       select,
-      transaction: async (run: (tx: { execute: () => Promise<void>; select: typeof select }) => Promise<unknown>) =>
-        run({ execute: async () => undefined, select }),
+      transaction: async (run: (tx: { execute: (query: unknown) => Promise<void>; select: typeof select }) => Promise<unknown>) => {
+        state.transactions += 1;
+        return run({
+          execute: async (query: unknown) => {
+            const chunks = (query as { queryChunks?: Array<{ value?: string[] }> }).queryChunks ?? [];
+            state.statements.push(chunks.flatMap((chunk) => chunk.value ?? []).join(''));
+          },
+          select,
+        });
+      },
     },
   };
 });
@@ -76,22 +86,14 @@ describe('collectContentReferences (a lookup) — when the AI-message search can
     expect(refs.aiMessageScanFailed).toBeUndefined();
     expect(loggers.security.error).not.toHaveBeenCalled();
   });
-
-  it('does not run the search at all when asked to skip it (the takedown records these in a step of its own)', async () => {
-    state.failMessages = true;
-
-    const refs = await collectContentReferences(HASH, { aiMessages: 'skip' });
-
-    expect(refs.aiMessageScanFailed).toBeUndefined();
-    expect(refs.aiMessageIds).toEqual([]);
-    expect(loggers.security.error).not.toHaveBeenCalled();
-  });
 });
 
 describe('collectAiMessageReferences (the takedown step)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     state.failMessages = false;
+    state.transactions = 0;
+    state.statements = [];
     state.messageRows = [
       { id: 'msg-1', conversationId: 'conv-1', userId: 'chat-user' },
       { id: 'msg-2', conversationId: 'conv-1', userId: null },
@@ -105,6 +107,15 @@ describe('collectAiMessageReferences (the takedown step)', () => {
       uploaderUserIds: ['chat-user'],
       truncated: false,
     });
+  });
+
+  it('runs at the ordinary timeout by default and in its own transaction with a longer one when asked', async () => {
+    await collectAiMessageReferences(HASH);
+    expect(state.transactions).toBe(0);
+
+    await collectAiMessageReferences(HASH, { extendedTimeout: true });
+    expect(state.transactions).toBe(1);
+    expect(state.statements).toEqual(["set local statement_timeout = '120s'"]);
   });
 
   it('throws when the search cannot finish, rather than returning a partial list as if it were whole', async () => {

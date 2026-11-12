@@ -58,8 +58,8 @@ export function createTakedownCaseStore(): TakedownCaseStore {
         await insert.onConflictDoNothing({ target: contentBlocks.contentHash });
       }
     },
-    collectReferences: (contentHash) => collectContentReferences(contentHash, { aiMessages: 'skip' }),
-    collectAiReferences: collectAiMessageReferences,
+    collectReferences: collectContentReferences,
+    collectAiReferences: (contentHash) => collectAiMessageReferences(contentHash, { extendedTimeout: true }),
   };
 }
 

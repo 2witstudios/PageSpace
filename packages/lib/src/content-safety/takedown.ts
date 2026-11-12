@@ -88,9 +88,12 @@ export interface TakedownCaseStore {
     caseId: string;
     createdBy: string | null;
   }): Promise<void>;
-  /** References held in rows: pages, files, drives, channel and direct messages. Fast; no AI-message scan. */
+  /**
+   * Everything that references the hash. The AI-message part is a quick,
+   * best-effort attempt here: results are kept, a failure sets `aiMessageScanFailed`.
+   */
   collectReferences(contentHash: string): Promise<ContentReferences>;
-  /** The AI-chat messages carrying the file and their authors. Slow; throws rather than return a partial list. */
+  /** The AI-chat messages carrying the file and their authors, with a long timeout. Throws rather than return a partial list. */
   collectAiReferences(contentHash: string): Promise<AiMessageReferences>;
 }
 
@@ -258,12 +261,17 @@ async function executeGlobalStep(
         pageIds: references.pageIds,
       });
       return {
-        detail: `pages=${references.pageIds.length} files=${references.fileIds.length} drives=${references.driveIds.length} uploaders=${references.uploaderUserIds.length}`,
+        detail:
+          `pages=${references.pageIds.length} files=${references.fileIds.length} drives=${references.driveIds.length} uploaders=${references.uploaderUserIds.length}` +
+          // Not a failure: the mandatory search still runs before the case can finish.
+          (references.aiMessageScanFailed ? ' ai_message_search=deferred' : ''),
       };
     }
     case 'record_ai_references': {
       const ai = await deps.cases.collectAiReferences(contentHash);
-      // Merge into what the earlier step stored; a resumed run has nothing in memory.
+      // UNION with what the earlier step stored, never replace it: a message the
+      // early attempt found may have been deleted since, and its author must stay
+      // on the case. (A resumed run has nothing in memory, hence the reload.)
       const stored = (await loadCase(row.id, deps)).snapshot?.references;
       const union = (a: readonly string[] = [], b: readonly string[]) => [...new Set([...a, ...b])];
       const references: ContentReferences = {

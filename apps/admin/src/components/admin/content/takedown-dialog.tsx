@@ -42,7 +42,7 @@ interface TakedownDialogProps {
   /** The categories this action accepts. A global takedown never offers `policy`. */
   categories: readonly TakedownCategory[];
   /** Global takedown only: offer "suspend uploader" and "skip preservation". */
-  globalOptions?: { uploaderCount: number };
+  globalOptions?: { uploaderCount: number; uploaderCountIncomplete?: boolean };
   pending: boolean;
   error: string | null;
   onConfirm: (values: TakedownDialogValues) => void;
@@ -143,6 +143,8 @@ export function TakedownDialog({
                   </Label>
                   <p className="text-xs text-muted-foreground">
                     Storage is shared by content hash, so this suspends every account that uploaded these exact bytes.
+                    {globalOptions.uploaderCountIncomplete &&
+                      ' The count may be low: the AI chat search did not finish. The takedown searches again, and suspends whoever it finds.'}
                   </p>
                 </div>
               </div>

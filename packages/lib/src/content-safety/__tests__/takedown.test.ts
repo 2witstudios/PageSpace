@@ -478,6 +478,36 @@ describe('runGlobalTakedown', () => {
       expect(world.suspended).toEqual(['chat-user']);
     });
 
+    it('keeps an uploader the early search found even if their message is deleted before the mandatory search runs', async () => {
+      // The quick search at record_references finds the chat uploader...
+      world.references = { ...emptyRefs(), aiMessageIds: ['msg-1'], conversationIds: ['conv-1'], uploaderUserIds: ['chat-user'] };
+      // ...the case then waits at preserve, and meanwhile the message row is hard-deleted.
+      world.evidenceConfigured = false;
+      await runGlobalTakedown(CASE_ID, deps);
+      expect(world.row.status).toBe('awaiting_evidence');
+      expect(world.row.snapshot?.references?.uploaderUserIds).toEqual(['chat-user']);
+
+      world.aiReferences = { aiMessageIds: [], conversationIds: [], uploaderUserIds: [], truncated: false };
+      world.evidenceConfigured = true;
+      const result = await runGlobalTakedown(CASE_ID, deps);
+
+      expect(result.status).toBe('actioned');
+      expect(world.row.snapshot?.references).toMatchObject({ aiMessageIds: ['msg-1'], uploaderUserIds: ['chat-user'] });
+      expect(world.suspended).toEqual(['chat-user']);
+    });
+
+    it('notes on the step when the quick search did not finish, without failing it', async () => {
+      world.references = { ...emptyRefs(), aiMessageScanFailed: true };
+      await runGlobalTakedown(CASE_ID, deps);
+
+      const step = world.row.steps?.find((s) => s.step === 'record_references');
+      expect(step).toMatchObject({ status: 'ok' });
+      expect(step?.detail).toContain('ai_message_search=deferred');
+      // The mandatory search then found them, and the stored references carry no stale flag.
+      expect(world.row.snapshot?.references?.uploaderUserIds).toEqual(['chat-user']);
+      expect(world.row.snapshot?.references?.aiMessageScanFailed).toBeUndefined();
+    });
+
     it('adds to the references recorded earlier instead of replacing them', async () => {
       world.references = { ...emptyRefs(), pageIds: ['page-1'], uploaderUserIds: ['user-1'], conversationIds: ['dm-1'] };
       await runGlobalTakedown(CASE_ID, deps);
