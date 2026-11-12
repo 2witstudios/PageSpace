@@ -2944,6 +2944,21 @@
       "import": "./dist/content-safety/targets.js",
       "require": "./dist/content-safety/targets.js"
     },
+    "./content-safety/reports": {
+      "types": "./dist/content-safety/reports.d.ts",
+      "import": "./dist/content-safety/reports.js",
+      "require": "./dist/content-safety/reports.js"
+    },
+    "./content-safety/report-intake": {
+      "types": "./dist/content-safety/report-intake.d.ts",
+      "import": "./dist/content-safety/report-intake.js",
+      "require": "./dist/content-safety/report-intake.js"
+    },
+    "./content-safety/report-store": {
+      "types": "./dist/content-safety/report-store.d.ts",
+      "import": "./dist/content-safety/report-store.js",
+      "require": "./dist/content-safety/report-store.js"
+    },
     "./content-safety/alerts": {
       "types": "./dist/content-safety/alerts.d.ts",
       "import": "./dist/content-safety/alerts.js",
