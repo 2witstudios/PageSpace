@@ -758,3 +758,40 @@ export async function createSystemFileDeleteToken(
     grantedScopes: SYSTEM_FILE_DELETE_SCOPES,
   };
 }
+
+/** Scopes for a content-safety avatar takedown: delete another user's avatar objects. */
+const SYSTEM_AVATAR_DELETE_SCOPES: ServiceScope[] = ['avatars:write', 'avatars:write:any'];
+
+/**
+ * Create a system token that lets the processor delete ONE user's avatar
+ * objects, for a content-safety takedown.
+ *
+ * The processor's avatar routes let a caller touch another user's avatar only
+ * with `avatars:write:any`. No user token can be minted with that scope for
+ * someone else, so the takedown uses the system principal, exactly as the
+ * orphan reaper does for file deletes. The token is bound to the target user as
+ * its resource and lives 30 seconds; it is minted only from the web app's
+ * service-authenticated takedown path.
+ */
+export async function createSystemAvatarDeleteToken(
+  options: { userId: string; expiresIn?: string }
+): Promise<ValidatedTokenResult> {
+  const { userId, expiresIn = '30s' } = options;
+
+  await ensureSystemPrincipal();
+
+  loggers.api.info('System avatar delete token mint', { targetUserId: userId, scopes: SYSTEM_AVATAR_DELETE_SCOPES });
+
+  const token = await sessionService.createSession({
+    authentication: MACHINE_CREDENTIAL_AUTHENTICATION,
+    userId: SYSTEM_SERVICE_USER_ID,
+    type: 'service',
+    scopes: SYSTEM_AVATAR_DELETE_SCOPES as string[],
+    resourceType: 'user',
+    resourceId: userId,
+    expiresInMs: durationToMs(expiresIn),
+    createdByService: 'web',
+  });
+
+  return { token, grantedScopes: SYSTEM_AVATAR_DELETE_SCOPES };
+}

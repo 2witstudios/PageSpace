@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { getTableConfig } from 'drizzle-orm/pg-core';
-import { contentBlocks, contentScans, contentCases } from '../content-safety';
+import { contentBlocks, contentScans, contentCases, contentSiteHolds } from '../content-safety';
 
 const columnNames = (table: Parameters<typeof getTableConfig>[0]) =>
   getTableConfig(table).columns.map((c) => c.name).sort();
@@ -44,6 +44,15 @@ describe('content-safety schema', () => {
     ]);
   });
 
+  it('content_site_holds is keyed by drive, one hold per drive', () => {
+    const config = getTableConfig(contentSiteHolds);
+    expect(config.name).toBe('content_site_holds');
+    expect(config.columns.find((c) => c.primary)?.name).toBe('drive_id');
+    expect(columnNames(contentSiteHolds)).toEqual(
+      ['case_id', 'created_at', 'created_by', 'drive_id', 'source', 'user_id'],
+    );
+  });
+
   // Legal preservation: a case, block or verdict must outlive the user, page and
   // drive it names. Any foreign key here would let user erasure (or a page/drive
   // delete) cascade into — or be blocked by — the evidence record.
@@ -51,6 +60,7 @@ describe('content-safety schema', () => {
     ['content_blocks', contentBlocks],
     ['content_scans', contentScans],
     ['content_cases', contentCases],
+    ['content_site_holds', contentSiteHolds],
   ])('%s has no foreign keys, so erasure cannot reach it', (_name, table) => {
     expect(getTableConfig(table).foreignKeys).toHaveLength(0);
   });

@@ -2909,6 +2909,46 @@
       "import": "./dist/content-safety/upload-gate.js",
       "require": "./dist/content-safety/upload-gate.js"
     },
+    "./content-safety/takedown-plan": {
+      "types": "./dist/content-safety/takedown-plan.d.ts",
+      "import": "./dist/content-safety/takedown-plan.js",
+      "require": "./dist/content-safety/takedown-plan.js"
+    },
+    "./content-safety/takedown": {
+      "types": "./dist/content-safety/takedown.d.ts",
+      "import": "./dist/content-safety/takedown.js",
+      "require": "./dist/content-safety/takedown.js"
+    },
+    "./content-safety/case-store": {
+      "types": "./dist/content-safety/case-store.d.ts",
+      "import": "./dist/content-safety/case-store.js",
+      "require": "./dist/content-safety/case-store.js"
+    },
+    "./content-safety/references": {
+      "types": "./dist/content-safety/references.d.ts",
+      "import": "./dist/content-safety/references.js",
+      "require": "./dist/content-safety/references.js"
+    },
+    "./content-safety/targets": {
+      "types": "./dist/content-safety/targets.d.ts",
+      "import": "./dist/content-safety/targets.js",
+      "require": "./dist/content-safety/targets.js"
+    },
+    "./content-safety/alerts": {
+      "types": "./dist/content-safety/alerts.d.ts",
+      "import": "./dist/content-safety/alerts.js",
+      "require": "./dist/content-safety/alerts.js"
+    },
+    "./auth/suspend-user": {
+      "types": "./dist/auth/suspend-user.d.ts",
+      "import": "./dist/auth/suspend-user.js",
+      "require": "./dist/auth/suspend-user.js"
+    },
+    "./email-templates/ContentSafetyAlertEmail": {
+      "types": "./dist/email-templates/ContentSafetyAlertEmail.d.ts",
+      "import": "./dist/email-templates/ContentSafetyAlertEmail.js",
+      "require": "./dist/email-templates/ContentSafetyAlertEmail.js"
+    },
     "./compliance/erasure/erasure-plan": {
       "types": "./dist/compliance/erasure/erasure-plan.d.ts",
       "import": "./dist/compliance/erasure/erasure-plan.js",

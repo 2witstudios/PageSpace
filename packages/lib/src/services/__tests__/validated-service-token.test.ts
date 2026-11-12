@@ -8,6 +8,7 @@ import {
   createOrgServiceToken,
   createUploadServiceToken,
   createSystemFileDeleteToken,
+  createSystemAvatarDeleteToken,
   SYSTEM_SERVICE_USER_ID,
   PermissionDeniedError,
   isPermissionDeniedError,
@@ -1172,5 +1173,29 @@ describe('createValidatedServiceToken', () => {
       error.code = 'OTHER_ERROR';
       expect(isPermissionDeniedError(error)).toBe(false);
     });
+  });
+});
+
+describe('createSystemAvatarDeleteToken', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCreateSession.mockResolvedValue('ps_svc_mock-session-token');
+  });
+
+  it('mints a short-lived system token bound to the target user, able to delete another user\'s avatar', async () => {
+    const result = await createSystemAvatarDeleteToken({ userId: 'user-42' });
+
+    expect(result.grantedScopes).toEqual(['avatars:write', 'avatars:write:any']);
+    expect(getUserAccessLevel).not.toHaveBeenCalled();
+    expect(mockCreateSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: SYSTEM_SERVICE_USER_ID,
+        type: 'service',
+        resourceType: 'user',
+        resourceId: 'user-42',
+        scopes: ['avatars:write', 'avatars:write:any'],
+        expiresInMs: 30_000,
+      })
+    );
   });
 });

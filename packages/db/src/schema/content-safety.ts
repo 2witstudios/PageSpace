@@ -29,9 +29,23 @@ export type ContentCaseTargetType =
   | 'page'
   | 'published_url'
   | 'user'
-  | 'avatar';
+  | 'avatar'
+  | 'drive';
 
-export type ContentCaseStatus = 'open' | 'actioned' | 'dismissed';
+/**
+ * `open`: reported or part-way through a takedown (resumable).
+ * `awaiting_evidence`: the hash is blocked, but nothing was deleted because the
+ *   material must be preserved first and no evidence storage is configured.
+ * `actioned`: every step of the takedown finished.
+ * `dismissed`: closed with no action.
+ */
+export type ContentCaseStatus = 'open' | 'awaiting_evidence' | 'actioned' | 'dismissed';
+
+/** Which takedown a case runs. Stored on the snapshot so a rerun does the same thing. */
+export type ContentTakedownKind = 'global' | 'unpublish_page' | 'park_drive' | 'avatar' | 'park_user_sites';
+
+/** Why a drive's published sites are held off the public bucket. */
+export type ContentSiteHoldSource = 'takedown' | 'user_suspension';
 
 /**
  * Who and what was involved at the moment the case was opened, copied here so
@@ -43,6 +57,29 @@ export type ContentCaseSnapshot = {
   pageIds?: string[];
   ipAddress?: string;
   userAgent?: string;
+  /** The takedown this case runs and the options it was started with (PR 2). */
+  takedown?: {
+    kind: ContentTakedownKind;
+    actorUserId?: string;
+    skipPreservation?: boolean;
+    skipPreservationReason?: string;
+    suspendUploader?: boolean;
+  };
+  /** Everything that referenced the hash when it was taken down. IDs only. */
+  references?: {
+    pageIds: string[];
+    fileIds: string[];
+    driveIds: string[];
+    uploaderUserIds: string[];
+    channelMessageIds: string[];
+    directMessageIds: string[];
+    aiMessageIds: string[];
+    conversationIds: string[];
+    /** True when a list hit its cap and is incomplete. */
+    truncated: boolean;
+  };
+  /** Where the preserved copy is, when one was made. Bucket-relative key, never a URL. */
+  evidenceKey?: string;
   [key: string]: unknown;
 };
 
@@ -117,9 +154,35 @@ export const contentCases = pgTable(
   }),
 );
 
+/**
+ * Drives whose published sites are held off the public bucket by a takedown or
+ * a user suspension. The sites are parked under `suspended/<prefix>/`, and this
+ * row is what keeps them there: the visibility reconciler and every publish
+ * write consult it (packages/lib/src/organizations/published-visibility.ts), so
+ * neither the retry sweep nor a republish can put a held site back.
+ *
+ * Plain text IDs, no FK (see file header): the hold is part of the case record.
+ */
+export const contentSiteHolds = pgTable(
+  'content_site_holds',
+  {
+    driveId: text('drive_id').primaryKey(),
+    source: text('source').$type<ContentSiteHoldSource>().notNull(),
+    caseId: text('case_id'),
+    // For `user_suspension`: whose suspension parked the drive, so lifting it can restore exactly those.
+    userId: text('user_id'),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    userIdx: index('content_site_holds_user_id_idx').on(table.userId),
+  }),
+);
+
 export type ContentBlock = typeof contentBlocks.$inferSelect;
 export type NewContentBlock = typeof contentBlocks.$inferInsert;
 export type ContentScan = typeof contentScans.$inferSelect;
 export type NewContentScan = typeof contentScans.$inferInsert;
 export type ContentCase = typeof contentCases.$inferSelect;
 export type NewContentCase = typeof contentCases.$inferInsert;
+export type ContentSiteHold = typeof contentSiteHolds.$inferSelect;

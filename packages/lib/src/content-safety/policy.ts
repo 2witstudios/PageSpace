@@ -43,6 +43,16 @@ export function normalizeContentHashes(inputs: readonly unknown[]): string[] {
 }
 
 /**
+ * Whether an admin MAY purge a hash globally under this category. Illegal
+ * content can be purged everywhere; a `policy` case (copyright, terms) never
+ * can, because another tenant may hold the same bytes legitimately — it gets a
+ * scoped takedown instead.
+ */
+export function allowsGlobalTakedown(category: ContentBlockCategory): boolean {
+  return category !== 'policy';
+}
+
+/**
  * Whether a takedown in this category removes the bytes for EVERY tenant.
  * CSAM and malware are illegal or harmful wherever they sit. Other categories
  * depend on who is using the file and how, so they stay scoped to the reported

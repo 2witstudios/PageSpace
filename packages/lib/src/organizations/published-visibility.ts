@@ -9,9 +9,11 @@
  *  - reconcileAllPublishedVisibility: the sweep that retries anything a failed object-store call left behind.
  */
 import { db } from '@pagespace/db/db';
-import { eq, inArray } from '@pagespace/db/operators';
+import { and, eq, inArray, ne } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
+import { contentSiteHolds, type ContentSiteHoldSource } from '@pagespace/db/schema/content-safety';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
+import { driveMembers } from '@pagespace/db/schema/members';
 import { loggers } from '../logging/logger-config';
 import { getOrgPolicies, listOrgsSettingPolicyKeys } from './policy-reader';
 import {
@@ -29,10 +31,42 @@ type Executor = typeof db | Tx;
 export class PublishHiddenError extends Error {
   readonly code = 'org_policy' as const;
   readonly statusCode = 403 as const;
-  constructor(readonly prefix: string) {
-    super("This organization's policies pause publishing to the web, so this site cannot be written to.");
+  constructor(
+    readonly prefix: string,
+    message = "This organization's policies pause publishing to the web, so this site cannot be written to.",
+  ) {
+    super(message);
     this.name = 'PublishHiddenError';
   }
+}
+
+/**
+ * A write refused because the drive's sites are held by a content-safety takedown or a user suspension. Same
+ * class as the policy refusal, so every caller that already answers 403 for a hidden site does so here too; the
+ * wording gives no reason.
+ */
+export class PublishHeldError extends PublishHiddenError {
+  constructor(prefix: string) {
+    super(prefix, 'Publishing is not available for this site.');
+    this.name = 'PublishHeldError';
+  }
+}
+
+/** The subset of `driveIds` whose published sites are held (content_site_holds). */
+async function heldDriveIds(driveIds: readonly string[], executor: Executor = db): Promise<Set<string>> {
+  const held = new Set<string>();
+  for (let i = 0; i < driveIds.length; i += 500) {
+    const rows = await executor
+      .select({ driveId: contentSiteHolds.driveId })
+      .from(contentSiteHolds)
+      .where(inArray(contentSiteHolds.driveId, driveIds.slice(i, i + 500)));
+    for (const row of rows) held.add(row.driveId);
+  }
+  return held;
+}
+
+export async function isDriveSiteHeld(driveId: string, executor: Executor = db): Promise<boolean> {
+  return (await heldDriveIds([driveId], executor)).has(driveId);
 }
 
 export interface PrefixOwner {
@@ -55,16 +89,29 @@ export async function resolvePrefixOwner(prefix: string, executor: Executor = db
   return null;
 }
 
-/** Whether the prefix is publicly readable right now: the live policy of its owner's org. Unowned = visible. */
+/** Whether this owner's prefix should be public: no content-safety hold on the drive, and the org's live policy allows it. */
+async function ownerVisible(owner: PrefixOwner, executor: Executor): Promise<boolean> {
+  if (await isDriveSiteHeld(owner.driveId, executor)) return false;
+  if (!owner.orgId) return true;
+  return prefixVisible(await getOrgPolicies(owner.orgId, executor), owner.kind);
+}
+
+/**
+ * Whether the prefix is publicly readable right now: its drive is not held, and the live policy of its owner's
+ * org allows it. Unowned = visible.
+ */
 export async function isPrefixVisible(prefix: string, executor: Executor = db): Promise<boolean> {
   const owner = await resolvePrefixOwner(prefix, executor);
-  if (!owner || !owner.orgId) return true;
-  return prefixVisible(await getOrgPolicies(owner.orgId, executor), owner.kind);
+  if (!owner) return true;
+  return ownerVisible(owner, executor);
 }
 
 /** Refuse a write into a hidden site. Called before every PUT or COPY into `published/<prefix>/`. */
 export async function assertPrefixWritable(prefix: string, executor: Executor = db): Promise<void> {
-  if (!(await isPrefixVisible(prefix, executor))) throw new PublishHiddenError(prefix);
+  const owner = await resolvePrefixOwner(prefix, executor);
+  if (!owner) return;
+  if (await isDriveSiteHeld(owner.driveId, executor)) throw new PublishHeldError(prefix);
+  if (owner.orgId && !prefixVisible(await getOrgPolicies(owner.orgId, executor), owner.kind)) throw new PublishHiddenError(prefix);
 }
 
 export interface PrefixOutcome {
@@ -90,27 +137,41 @@ async function reconcilePrefix(store: PublishedObjectStore, prefix: string, visi
 }
 
 /** The prefixes an org's drives publish under, with their kind: each drive's subdomain and each custom domain host. */
-async function orgPrefixes(orgId: string, executor: Executor): Promise<Array<{ prefix: string; kind: PrefixKind }>> {
-  const orgDrives = await executor.select({ id: drives.id, sub: drives.publishSubdomain }).from(drives).where(eq(drives.orgId, orgId));
-  const out: Array<{ prefix: string; kind: PrefixKind }> = [];
-  for (const d of orgDrives) if (d.sub) out.push({ prefix: d.sub, kind: 'site' });
-  const driveIds = orgDrives.map((d) => d.id);
+interface DrivePrefix {
+  prefix: string;
+  kind: PrefixKind;
+  driveId: string;
+}
+
+/** The prefixes these drives publish under, with their kind: each drive's subdomain and each custom domain host. */
+async function prefixesOfDrives(driveRows: ReadonlyArray<{ id: string; sub: string | null }>, executor: Executor): Promise<DrivePrefix[]> {
+  const out: DrivePrefix[] = [];
+  for (const d of driveRows) if (d.sub) out.push({ prefix: d.sub, kind: 'site', driveId: d.id });
+  const driveIds = driveRows.map((d) => d.id);
   for (let i = 0; i < driveIds.length; i += 500) {
     const domains = await executor
-      .select({ host: customDomains.hostname, platformOwned: customDomains.platformOwned })
+      .select({ host: customDomains.hostname, platformOwned: customDomains.platformOwned, driveId: customDomains.driveId })
       .from(customDomains)
       .where(inArray(customDomains.driveId, driveIds.slice(i, i + 500)));
-    for (const d of domains) out.push({ prefix: d.host, kind: d.platformOwned ? 'platform_domain' : 'domain' });
+    for (const d of domains) out.push({ prefix: d.host, kind: d.platformOwned ? 'platform_domain' : 'domain', driveId: d.driveId });
   }
   return out;
+}
+
+async function orgPrefixes(orgId: string, executor: Executor): Promise<DrivePrefix[]> {
+  const orgDrives = await executor.select({ id: drives.id, sub: drives.publishSubdomain }).from(drives).where(eq(drives.orgId, orgId));
+  return prefixesOfDrives(orgDrives, executor);
 }
 
 /** Make the bucket match the org's live policies: park every hidden prefix, restore every visible one. */
 export async function reconcileOrgPublishedVisibility(orgId: string, store: PublishedObjectStore, executor: Executor = db): Promise<PrefixOutcome[]> {
   const policies = await getOrgPolicies(orgId, executor);
+  const prefixes = await orgPrefixes(orgId, executor);
+  // A drive held by a takedown or suspension stays parked whatever the policy says.
+  const held = await heldDriveIds([...new Set(prefixes.map((p) => p.driveId))], executor);
   const outcomes: PrefixOutcome[] = [];
-  for (const { prefix, kind } of await orgPrefixes(orgId, executor)) {
-    outcomes.push(await reconcilePrefix(store, prefix, prefixVisible(policies, kind)));
+  for (const { prefix, kind, driveId } of prefixes) {
+    outcomes.push(await reconcilePrefix(store, prefix, !held.has(driveId) && prefixVisible(policies, kind)));
   }
   return outcomes;
 }
@@ -133,8 +194,7 @@ export async function reconcileAllPublishedVisibility(store: PublishedObjectStor
   for (const prefix of await store.listPrefixes(PARKED_PREFIX)) {
     const owner = await resolvePrefixOwner(prefix, executor);
     if (!owner) continue;
-    const visible = !owner.orgId || prefixVisible(await getOrgPolicies(owner.orgId, executor), owner.kind);
-    if (!visible) continue;
+    if (!(await ownerVisible(owner, executor))) continue;
     outcomes.push(await reconcilePrefix(store, prefix, true));
     seen.add(prefix);
   }
@@ -143,5 +203,124 @@ export async function reconcileAllPublishedVisibility(store: PublishedObjectStor
       if (!seen.has(o.prefix)) outcomes.push(o);
     }
   }
+  return outcomes;
+}
+
+// ---------------------------------------------------------------------------
+// Content-safety holds: parking a drive's sites for a takedown or a suspension
+// ---------------------------------------------------------------------------
+
+export interface DriveSitesOutcome {
+  driveId: string;
+  prefixes: PrefixOutcome[];
+}
+
+const failedPrefixes = (outcome: DriveSitesOutcome) => outcome.prefixes.filter((p) => p.action === 'failed');
+
+/**
+ * Take every published site of a drive off the public bucket and keep it off.
+ *
+ * The hold row is written FIRST: from that moment every publish write into the drive's prefixes is refused and
+ * the reconcile sweep will not restore them, so a failure part-way through the move leaves a site that can only
+ * get more hidden, never less. Rerunning finishes the move. Throws when a prefix could not be moved, so the
+ * caller's step is recorded as failed and retried; the hold stays.
+ */
+export async function parkDriveSites(
+  input: { driveId: string; source: ContentSiteHoldSource; caseId?: string | null; userId?: string | null; createdBy?: string | null },
+  store: PublishedObjectStore,
+  executor: Executor = db,
+): Promise<DriveSitesOutcome> {
+  await executor
+    .insert(contentSiteHolds)
+    .values({
+      driveId: input.driveId,
+      source: input.source,
+      caseId: input.caseId ?? null,
+      userId: input.userId ?? null,
+      createdBy: input.createdBy ?? null,
+    })
+    // An existing hold wins: a takedown's hold must not be relabelled as a suspension's and later lifted with it.
+    .onConflictDoNothing({ target: contentSiteHolds.driveId });
+
+  const [drive] = await executor.select({ id: drives.id, sub: drives.publishSubdomain }).from(drives).where(eq(drives.id, input.driveId)).limit(1);
+  const prefixes = drive ? await prefixesOfDrives([drive], executor) : [];
+  const outcome: DriveSitesOutcome = { driveId: input.driveId, prefixes: [] };
+  for (const { prefix } of prefixes) outcome.prefixes.push(await reconcilePrefix(store, prefix, false));
+
+  const failed = failedPrefixes(outcome);
+  if (failed.length > 0) throw new Error(`Could not park ${failed.map((p) => p.prefix).join(', ')}: ${failed[0].error ?? 'unknown error'}`);
+  return outcome;
+}
+
+/**
+ * Lift a drive's hold and put back whatever its org's live policy allows. The objects move back BEFORE the hold
+ * row is deleted, so a failure leaves the drive held (and hidden) rather than half-restored and unprotected.
+ */
+export async function restoreDriveSites(driveId: string, store: PublishedObjectStore, executor: Executor = db): Promise<DriveSitesOutcome> {
+  const [drive] = await executor.select({ id: drives.id, sub: drives.publishSubdomain, orgId: drives.orgId }).from(drives).where(eq(drives.id, driveId)).limit(1);
+  const outcome: DriveSitesOutcome = { driveId, prefixes: [] };
+  if (drive) {
+    const policies = drive.orgId ? await getOrgPolicies(drive.orgId, executor) : null;
+    for (const { prefix, kind } of await prefixesOfDrives([drive], executor)) {
+      outcome.prefixes.push(await reconcilePrefix(store, prefix, prefixVisible(policies, kind)));
+    }
+  }
+  const failed = failedPrefixes(outcome);
+  if (failed.length > 0) throw new Error(`Could not restore ${failed.map((p) => p.prefix).join(', ')}: ${failed[0].error ?? 'unknown error'}`);
+  await executor.delete(contentSiteHolds).where(eq(contentSiteHolds.driveId, driveId));
+  return outcome;
+}
+
+export interface UserSitesOutcome {
+  parked: DriveSitesOutcome[];
+  /** Drives left alone, for an admin to decide through a scoped takedown. */
+  skipped: Array<{ driveId: string; reason: 'org_drive_with_other_members' }>;
+}
+
+/**
+ * Park the published sites of the drives a user OWNS (used when suspending them). An org drive that other people
+ * are members of is not the user's alone to lose: it is reported in `skipped` and left published.
+ * Only drives that publish something are considered.
+ */
+export async function parkUserSites(
+  input: { userId: string; caseId?: string | null; createdBy?: string | null },
+  store: PublishedObjectStore,
+  executor: Executor = db,
+): Promise<UserSitesOutcome> {
+  const owned = await executor
+    .select({ id: drives.id, sub: drives.publishSubdomain, orgId: drives.orgId })
+    .from(drives)
+    .where(eq(drives.ownerId, input.userId));
+  const publishing = new Set((await prefixesOfDrives(owned, executor)).map((p) => p.driveId));
+
+  const result: UserSitesOutcome = { parked: [], skipped: [] };
+  for (const drive of owned) {
+    if (!publishing.has(drive.id)) continue;
+    if (drive.orgId) {
+      const [other] = await executor
+        .select({ id: driveMembers.id })
+        .from(driveMembers)
+        .where(and(eq(driveMembers.driveId, drive.id), ne(driveMembers.userId, input.userId)))
+        .limit(1);
+      if (other) {
+        result.skipped.push({ driveId: drive.id, reason: 'org_drive_with_other_members' });
+        continue;
+      }
+    }
+    result.parked.push(
+      await parkDriveSites({ driveId: drive.id, source: 'user_suspension', caseId: input.caseId, userId: input.userId, createdBy: input.createdBy }, store, executor),
+    );
+  }
+  return result;
+}
+
+/** Restore the sites a user's suspension parked. Holds placed by a takedown on the same drives are left in place. */
+export async function restoreUserSites(userId: string, store: PublishedObjectStore, executor: Executor = db): Promise<DriveSitesOutcome[]> {
+  const holds = await executor
+    .select({ driveId: contentSiteHolds.driveId })
+    .from(contentSiteHolds)
+    .where(and(eq(contentSiteHolds.userId, userId), eq(contentSiteHolds.source, 'user_suspension')));
+  const outcomes: DriveSitesOutcome[] = [];
+  for (const hold of holds) outcomes.push(await restoreDriveSites(hold.driveId, store, executor));
   return outcomes;
 }
