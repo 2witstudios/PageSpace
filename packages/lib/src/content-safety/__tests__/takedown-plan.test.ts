@@ -30,7 +30,7 @@ describe('nextGlobalTakedownStep', () => {
     expect(nextGlobalTakedownStep(input())).toEqual({ kind: 'run', step: 'block' });
   });
 
-  it('walks block, unpublish, record references, preserve, delete uploads, delete public in order', () => {
+  it('walks block, unpublish, record references, preserve, both deletes, then the AI-message search, in order', () => {
     const steps: ContentCaseStep[] = [];
     const order: GlobalTakedownStep[] = [];
     for (;;) {
@@ -42,7 +42,7 @@ describe('nextGlobalTakedownStep', () => {
       order.push(decision.step);
       steps.push(ok(decision.step));
     }
-    expect(order).toEqual(['block', 'unpublish_public', 'record_references', 'preserve', 'delete_uploads', 'delete_public']);
+    expect(order).toEqual(['block', 'unpublish_public', 'record_references', 'preserve', 'delete_uploads', 'delete_public', 'record_ai_references']);
   });
 
   it('adds the suspension as the last step only when asked for', () => {
@@ -125,6 +125,21 @@ describe('nextGlobalTakedownStep', () => {
     });
   });
 
+  it('does not finish a case, or suspend anyone, until the AI-message search has succeeded', () => {
+    const steps = ['block', 'unpublish_public', 'record_references', 'preserve', 'delete_uploads', 'delete_public'].map(ok);
+    expect(nextGlobalTakedownStep(input({ steps, suspendUploader: true }))).toEqual({ kind: 'run', step: 'record_ai_references' });
+    expect(nextGlobalTakedownStep(input({ steps: [...steps, failed('record_ai_references')], suspendUploader: true }))).toEqual({
+      kind: 'run',
+      step: 'record_ai_references',
+    });
+  });
+
+  it('keeps the slow AI-message search out of the way of taking content down and deleting it', () => {
+    const order = [...GLOBAL_TAKEDOWN_STEPS];
+    expect(order.indexOf('record_ai_references')).toBeGreaterThan(order.indexOf('delete_public'));
+    expect(order.indexOf('record_ai_references')).toBeLessThan(order.indexOf('suspend_uploader'));
+  });
+
   describe('a case re-filed under a different category', () => {
     // Malware, admin skipped preservation, the run failed at delete_uploads — then the hash is re-filed as CSAM.
     const refiled = [ok('block'), ok('unpublish_public'), ok('record_references'), { ...skipped('preserve'), detail: 'skipped_by_admin' }, failed('delete_uploads')];
@@ -163,7 +178,7 @@ describe('nextGlobalTakedownStep', () => {
   });
 
   describe('re-sweep', () => {
-    const finished = ['block', 'unpublish_public', 'record_references', 'preserve', 'delete_uploads', 'delete_public'].map(ok);
+    const finished = ['block', 'unpublish_public', 'record_references', 'preserve', 'delete_uploads', 'delete_public', 'record_ai_references'].map(ok);
 
     it('repeats preserve and both deletes after a re-sweep marker, and nothing else', () => {
       const steps = [...finished, ok(RESWEEP_MARKER)];
@@ -206,6 +221,7 @@ describe('summarizeSteps', () => {
       { step: 'preserve', status: 'ok' },
       { step: 'delete_uploads', status: 'failed', detail: 'boom' },
       { step: 'delete_public', status: 'pending' },
+      { step: 'record_ai_references', status: 'pending' },
       { step: 'suspend_uploader', status: 'pending' },
     ]);
   });
@@ -229,6 +245,7 @@ describe('describeCaseProgress', () => {
       'preserve:ok',
       'delete_uploads:failed',
       'delete_public:pending',
+      'record_ai_references:pending',
     ]);
   });
 

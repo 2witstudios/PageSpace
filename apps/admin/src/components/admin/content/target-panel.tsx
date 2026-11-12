@@ -287,6 +287,13 @@ export function TargetPanel() {
                           {refs.channelMessageIds.length} channel, {refs.directMessageIds.length} direct,{' '}
                           {refs.aiMessageIds.length} AI chat
                         </Field>
+                        {refs.aiMessageScanFailed && (
+                          <p className="text-xs text-amber-700 dark:text-amber-400" role="status">
+                            The AI chat search did not finish, so AI chat messages and the people who uploaded this through
+                            AI chat may be missing from this list. A takedown runs that search again and does not finish
+                            until it succeeds.
+                          </p>
+                        )}
                       </dl>
                     </CardContent>
                   )}

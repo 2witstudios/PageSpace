@@ -21,6 +21,7 @@ import type {
 } from '@pagespace/db/schema/content-safety';
 import type { SuspendUserResult } from '../auth/suspend-user';
 import { allowsGlobalTakedown } from './policy';
+import type { AiMessageReferences } from './references';
 import {
   RESWEEP_MARKER,
   latestEntry,
@@ -87,7 +88,10 @@ export interface TakedownCaseStore {
     caseId: string;
     createdBy: string | null;
   }): Promise<void>;
+  /** References held in rows: pages, files, drives, channel and direct messages. Fast; no AI-message scan. */
   collectReferences(contentHash: string): Promise<ContentReferences>;
+  /** The AI-chat messages carrying the file and their authors. Slow; throws rather than return a partial list. */
+  collectAiReferences(contentHash: string): Promise<AiMessageReferences>;
 }
 
 /** `skipped_admin`: the account is an admin, and a takedown never suspends one automatically. */
@@ -254,10 +258,27 @@ async function executeGlobalStep(
         pageIds: references.pageIds,
       });
       return {
-        detail:
-          `pages=${references.pageIds.length} files=${references.fileIds.length} drives=${references.driveIds.length} uploaders=${references.uploaderUserIds.length}` +
-          (references.aiMessageScanFailed ? ' ai_message_search=failed' : ''),
+        detail: `pages=${references.pageIds.length} files=${references.fileIds.length} drives=${references.driveIds.length} uploaders=${references.uploaderUserIds.length}`,
       };
+    }
+    case 'record_ai_references': {
+      const ai = await deps.cases.collectAiReferences(contentHash);
+      // Merge into what the earlier step stored; a resumed run has nothing in memory.
+      const stored = (await loadCase(row.id, deps)).snapshot?.references;
+      const union = (a: readonly string[] = [], b: readonly string[]) => [...new Set([...a, ...b])];
+      const references: ContentReferences = {
+        pageIds: stored?.pageIds ?? [],
+        fileIds: stored?.fileIds ?? [],
+        driveIds: stored?.driveIds ?? [],
+        channelMessageIds: stored?.channelMessageIds ?? [],
+        directMessageIds: stored?.directMessageIds ?? [],
+        uploaderUserIds: union(stored?.uploaderUserIds, ai.uploaderUserIds),
+        aiMessageIds: union(stored?.aiMessageIds, ai.aiMessageIds),
+        conversationIds: union(stored?.conversationIds, ai.conversationIds),
+        truncated: (stored?.truncated ?? false) || ai.truncated,
+      };
+      await deps.cases.mergeSnapshot(row.id, { references, uploaderUserId: references.uploaderUserIds[0] });
+      return { detail: `ai_messages=${ai.aiMessageIds.length} uploaders=${ai.uploaderUserIds.length}` };
     }
     case 'suspend_uploader': {
       // Read the references the previous step stored, not the ones in memory:

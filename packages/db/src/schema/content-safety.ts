@@ -77,7 +77,10 @@ export type ContentCaseSnapshot = {
     conversationIds: string[];
     /** True when a list hit its cap and is incomplete. */
     truncated: boolean;
-    /** True when the AI-message search could not finish, so `aiMessageIds` (and their authors) may be missing. */
+    /**
+     * Lookup only: the AI-message search could not finish, so `aiMessageIds` (and their authors) may be missing.
+     * A takedown never stores this — its AI-message step fails and is retried instead.
+     */
     aiMessageScanFailed?: boolean;
   };
   /** Where the preserved copy is, when one was made. Bucket-relative key, never a URL. */

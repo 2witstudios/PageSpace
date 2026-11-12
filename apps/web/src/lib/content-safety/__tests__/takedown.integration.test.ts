@@ -226,6 +226,7 @@ describe('content takedown — upload, publish, take down, removed, re-upload re
       'preserve:ok',
       'delete_uploads:ok',
       'delete_public:ok',
+      'record_ai_references:ok',
       'suspend_uploader:ok',
     ]);
   });

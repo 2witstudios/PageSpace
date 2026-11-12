@@ -74,6 +74,7 @@ describe('GET /api/admin/content/cases', () => {
           { step: 'preserve', status: 'ok' },
           { step: 'delete_uploads', status: 'failed', detail: 'S3 down' },
           { step: 'delete_public', status: 'pending' },
+          { step: 'record_ai_references', status: 'pending' },
         ],
       },
       references: { pageIds: ['p1', 'p2'], driveIds: ['d1'], uploaderUserIds: ['u1'], messageCount: 3, truncated: false },

@@ -19,7 +19,7 @@ import {
   type ContentCaseStatus,
   type ContentCaseTargetType,
 } from '@pagespace/db/schema/content-safety';
-import { collectContentReferences } from './references';
+import { collectAiMessageReferences, collectContentReferences } from './references';
 import type { TakedownCaseStore } from './takedown';
 
 type TakedownOptions = NonNullable<ContentCaseSnapshot['takedown']>;
@@ -58,7 +58,8 @@ export function createTakedownCaseStore(): TakedownCaseStore {
         await insert.onConflictDoNothing({ target: contentBlocks.contentHash });
       }
     },
-    collectReferences: collectContentReferences,
+    collectReferences: (contentHash) => collectContentReferences(contentHash, { aiMessages: 'skip' }),
+    collectAiReferences: collectAiMessageReferences,
   };
 }
 
@@ -134,7 +135,7 @@ export async function openTakedownCase(input: OpenTakedownCaseInput): Promise<Op
     // The block step has usually already run for a reused case, so upgrade the
     // block row here when the case becomes CSAM.
     if (input.category === 'csam' && existing.category !== 'csam' && input.contentHash) {
-      await db.update(contentBlocks).set({ category: 'csam' }).where(eq(contentBlocks.contentHash, input.contentHash));
+      await db.update(contentBlocks).set({ category: 'csam' }).where(eq(contentBlocks.contentHash, existing.contentHash ?? input.contentHash));
     }
     const previous = existing.snapshot?.takedown;
     const merged: TakedownOptions = {

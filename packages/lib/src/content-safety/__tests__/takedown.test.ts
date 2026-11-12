@@ -61,6 +61,7 @@ function createWorld(options: { category?: ContentCase['category']; evidence?: b
     calls,
     evidenceConfigured: options.evidence ?? true,
     references: { ...emptyRefs(), pageIds: ['page-1'], driveIds: ['drive-1'], uploaderUserIds: ['user-1', 'user-2'] },
+    aiReferences: { aiMessageIds: [] as string[], conversationIds: [] as string[], uploaderUserIds: [] as string[], truncated: false },
     corruptCopy: false,
     copies: [] as string[],
     row: {
@@ -104,6 +105,10 @@ function createWorld(options: { category?: ContentCase['category']; evidence?: b
       collectReferences: async () => {
         boom('record_references');
         return world.references;
+      },
+      collectAiReferences: async () => {
+        boom('record_ai_references');
+        return world.aiReferences;
       },
     },
     storage: {
@@ -185,6 +190,7 @@ describe('runGlobalTakedown', () => {
       'preserve:ok',
       'delete_uploads:ok',
       'delete_public:ok',
+      'record_ai_references:ok',
     ]);
     expect(world.suspended).toEqual([]);
   });
@@ -438,6 +444,49 @@ describe('runGlobalTakedown', () => {
 
       expect(result).toMatchObject({ status: 'open', haltReason: 'preservation_decision_required' });
       expect(world.uploads.size).toBe(2);
+    });
+  });
+
+  describe('content uploaded only through AI chat', () => {
+    beforeEach(() => {
+      world.references = emptyRefs();
+      world.aiReferences = { aiMessageIds: ['msg-1'], conversationIds: ['conv-1'], uploaderUserIds: ['chat-user'], truncated: false };
+      world.row.snapshot = { takedown: { kind: 'global', actorUserId: 'admin-1', suspendUploader: true } };
+    });
+
+    it('records the AI-chat uploader and suspends them', async () => {
+      const result = await runGlobalTakedown(CASE_ID, deps);
+
+      expect(result.status).toBe('actioned');
+      expect(world.row.snapshot?.references).toMatchObject({ aiMessageIds: ['msg-1'], conversationIds: ['conv-1'], uploaderUserIds: ['chat-user'] });
+      expect(world.suspended).toEqual(['chat-user']);
+    });
+
+    it('does not lose the uploader when the search fails: the case stays open, nobody is skipped, and a resume finishes it', async () => {
+      world.failNext.add('record_ai_references');
+
+      const first = await runGlobalTakedown(CASE_ID, deps);
+      expect(first).toMatchObject({ status: 'open', failedStep: 'record_ai_references' });
+      expect(world.suspended).toEqual([]);
+      expect(stepStates(world.row.steps)).not.toContain('suspend_uploader:skipped');
+      // The content is already down and deleted: the slow search held nothing up.
+      expect(world.uploads.size).toBe(0);
+      expect(world.publish.size).toBe(0);
+
+      const second = await runGlobalTakedown(CASE_ID, deps);
+      expect(second.status).toBe('actioned');
+      expect(world.suspended).toEqual(['chat-user']);
+    });
+
+    it('adds to the references recorded earlier instead of replacing them', async () => {
+      world.references = { ...emptyRefs(), pageIds: ['page-1'], uploaderUserIds: ['user-1'], conversationIds: ['dm-1'] };
+      await runGlobalTakedown(CASE_ID, deps);
+
+      expect(world.row.snapshot?.references).toMatchObject({
+        pageIds: ['page-1'],
+        uploaderUserIds: ['user-1', 'chat-user'],
+        conversationIds: ['dm-1', 'conv-1'],
+      });
     });
   });
 

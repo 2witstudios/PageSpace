@@ -22,7 +22,13 @@
  *   4. preserve    — nothing private is deleted until a copy is verified (or,
  *                    outside CSAM, an admin has explicitly declined one).
  *   5. deletes     — uploads bucket, then the public bucket.
- *   6. suspend     — only when asked for, from the uploaders recorded in step 3.
+ *   6. record AI   — the AI-chat messages that carry the file, and their authors.
+ *                    This search cannot use an index and can be slow, so it is
+ *                    kept out of the path above: it never delays taking content
+ *                    down. It runs here, after the deletes (message rows are not
+ *                    affected by them), and the case is not finished until it
+ *                    succeeds — an uploader is never dropped silently.
+ *   7. suspend     — only when asked for, from the uploaders recorded above.
  */
 
 import type {
@@ -40,6 +46,7 @@ export const GLOBAL_TAKEDOWN_STEPS = [
   'preserve',
   'delete_uploads',
   'delete_public',
+  'record_ai_references',
   'suspend_uploader',
 ] as const;
 

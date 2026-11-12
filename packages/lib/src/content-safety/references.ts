@@ -8,7 +8,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, inArray, like, or } from '@pagespace/db/operators';
+import { eq, inArray, like, or, sql } from '@pagespace/db/operators';
 import { channelMessageAttachments, channelMessages } from '@pagespace/db/schema/chat';
 import { messages } from '@pagespace/db/schema/conversations';
 import { pages } from '@pagespace/db/schema/core';
@@ -27,7 +27,10 @@ export function storedFormsOf(contentHash: string): string[] {
   return [contentHash, `files/${contentHash}/original`];
 }
 
-export async function collectContentReferences(rawHash: string): Promise<ContentReferences> {
+export async function collectContentReferences(
+  rawHash: string,
+  options: { aiMessages?: 'best_effort' | 'skip' } = {},
+): Promise<ContentReferences> {
   const contentHash = normalizeContentHash(rawHash);
   if (!contentHash) throw new Error('Invalid content hash');
   const forms = storedFormsOf(contentHash);
@@ -128,28 +131,21 @@ export async function collectContentReferences(rawHash: string): Promise<Content
   }
 
   // AI chat attachments have no `files` row: the message body carries the
-  // storage key. This is an unindexed scan of `messages`, and on a large table
-  // it can exceed the statement timeout. It is best-effort: a takedown must not
-  // be held up — with private bytes undeleted — by the one search that cannot
-  // be indexed. A failure is recorded on the references, never swallowed.
+  // storage key, and finding it is an unindexed scan that can exceed the
+  // statement timeout on a large table. A takedown records these in a step of
+  // its own (`collectAiMessageReferences`), which fails loudly and is retried.
+  // Here the scan is optional: a lookup shows what it can and flags the rest.
+  let ai: AiMessageReferences = { aiMessageIds: [], conversationIds: [], uploaderUserIds: [], truncated: false };
   let aiMessageScanFailed = false;
-  let aiRows: Array<{ id: string; conversationId: string; userId: string | null }> = [];
-  try {
-    aiRows = capped(
-      await db
-        .select({ id: messages.id, conversationId: messages.conversationId, userId: messages.userId })
-        .from(messages)
-        .where(like(messages.content, `%${escapeLikePattern(`chat-attachments/${contentHash}/original`)}%`))
-        .limit(fetchLimit),
-    );
-  } catch (error) {
-    aiMessageScanFailed = true;
-    loggers.security.error('Content references: AI message search failed; continuing without it', error instanceof Error ? error : undefined);
+  if (options.aiMessages !== 'skip') {
+    try {
+      ai = await collectAiMessageReferences(contentHash);
+    } catch {
+      aiMessageScanFailed = true;
+    }
   }
-  for (const row of aiRows) {
-    conversationIds.add(row.conversationId);
-    if (row.userId) uploaders.add(row.userId);
-  }
+  for (const id of ai.conversationIds) conversationIds.add(id);
+  for (const id of ai.uploaderUserIds) uploaders.add(id);
 
   return {
     pageIds: [...pageIds],
@@ -158,9 +154,60 @@ export async function collectContentReferences(rawHash: string): Promise<Content
     uploaderUserIds: [...uploaders],
     channelMessageIds: [...channelMessageIds],
     directMessageIds: [...directMessageIds],
-    aiMessageIds: aiRows.map((row) => row.id),
+    aiMessageIds: ai.aiMessageIds,
     conversationIds: [...conversationIds],
-    truncated,
+    truncated: truncated || ai.truncated,
     ...(aiMessageScanFailed ? { aiMessageScanFailed: true } : {}),
+  };
+}
+
+export interface AiMessageReferences {
+  aiMessageIds: string[];
+  conversationIds: string[];
+  /** Authors of the messages that carry the attachment: for a chat attachment, they are the uploaders. */
+  uploaderUserIds: string[];
+  truncated: boolean;
+}
+
+/** Statement timeout for the unindexed message scan. The pool default (15s) is too short for a large table. */
+const AI_SCAN_TIMEOUT = '120s';
+
+/**
+ * AI chat messages whose body carries this hash's attachment key, and their
+ * authors. Throws when the scan cannot finish — it never returns an incomplete
+ * list as if it were whole, because for content uploaded only through AI chat
+ * this is the ONLY record of who uploaded it.
+ *
+ * Runs in its own transaction so the longer timeout applies to this one
+ * statement and nothing else on the connection.
+ */
+export async function collectAiMessageReferences(rawHash: string): Promise<AiMessageReferences> {
+  const contentHash = normalizeContentHash(rawHash);
+  if (!contentHash) throw new Error('Invalid content hash');
+  const pattern = `%${escapeLikePattern(`chat-attachments/${contentHash}/original`)}%`;
+
+  let rows: Array<{ id: string; conversationId: string; userId: string | null }>;
+  try {
+    rows = await db.transaction(async (tx) => {
+      await tx.execute(sql.raw(`set local statement_timeout = '${AI_SCAN_TIMEOUT}'`));
+      return tx
+        .select({ id: messages.id, conversationId: messages.conversationId, userId: messages.userId })
+        .from(messages)
+        .where(like(messages.content, pattern))
+        .limit(REFERENCE_LIMIT + 1);
+    });
+  } catch (error) {
+    // No hash in the log line.
+    loggers.security.error('Content references: AI message search failed', error instanceof Error ? error : undefined);
+    throw error;
+  }
+
+  const truncated = rows.length > REFERENCE_LIMIT;
+  const kept = truncated ? rows.slice(0, REFERENCE_LIMIT) : rows;
+  return {
+    aiMessageIds: kept.map((row) => row.id),
+    conversationIds: [...new Set(kept.map((row) => row.conversationId))],
+    uploaderUserIds: [...new Set(kept.flatMap((row) => row.userId ?? []))],
+    truncated,
   };
 }
