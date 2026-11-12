@@ -305,7 +305,10 @@ export const isPublicPageRoute = (pathname: string): boolean =>
   // sign in to perform is both a bulk-sender violation and, in practice, no
   // opt-out at all. The one-time token in the URL is the only authorization.
   pathname === '/unsubscribe' ||
-  pathname === '/unsubscribe-success';
+  pathname === '/unsubscribe-success' ||
+  // Reporting illegal or abusive content must not require an account: the person
+  // who finds it on a published site usually has none.
+  pathname === '/report';
 
 // Published Canvas pages live on *.pagespace.site and are served from object
 // storage, never by this app. If such a request reaches us (proxy misroute /

@@ -676,6 +676,12 @@ describe('Security Headers', () => {
       expect(isPublicPageRoute('/unsubscribe-success')).toBe(true);
     });
 
+    it('isPublicPageRoute keeps the content report page reachable without an account', () => {
+      expect(isPublicPageRoute('/report')).toBe(true);
+      expect(isPublicPageRoute('/reports')).toBe(false);
+      expect(isPublicPageRoute('/report/anything')).toBe(false);
+    });
+
     it('shouldDisableCOEP returns true for auth and Stripe routes', () => {
       expect(shouldDisableCOEP('/auth/signin')).toBe(true);
       expect(shouldDisableCOEP('/auth')).toBe(true);

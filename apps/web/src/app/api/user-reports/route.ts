@@ -8,12 +8,25 @@ import { sendEmail } from '@pagespace/lib/services/email-service';
 import { FeedbackNotificationEmail } from '@pagespace/lib/email-templates/FeedbackNotificationEmail';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
+import { signedInReportSchema } from '@pagespace/lib/content-safety/reports';
+import { actorFromAuth } from '@/lib/auth/request-actor';
+import { fileReport } from '@/lib/content-safety/report-service';
+import { reportResponse } from '@/lib/content-safety/report-response';
 
 /**
  * Reports of objectionable content or abusive users (App Review Guideline 1.2).
  *
- * Stored alongside feedback, where support already triages, and emailed to the
- * same inbox so a report is seen without polling the admin console.
+ * Two shapes:
+ * - `{ targetUserId, conversationId?, reason }` — a user report, as the app's
+ *   safety menu sends it. Stored alongside feedback, where support already
+ *   triages, and emailed to the same inbox; it ALSO opens (or joins) a content
+ *   case about that user, so it shows in the admin review queue.
+ * - `{ target, category, description? }` — a report about a page, file, user or
+ *   published URL. It goes only to a content case: never to the feedback inbox,
+ *   and its text is never emailed. The reporter must be able to see a page or
+ *   file; a refusal does not say whether it exists.
+ *
+ * A report never takes anything down or blocks it. Staff review it.
  */
 const REPORT_EMAIL = process.env.CONTACT_EMAIL || 'hello@pagespace.ai';
 
@@ -39,7 +52,22 @@ export async function POST(request: Request) {
       );
     }
 
-    const validation = reportSchema.safeParse(await request.json());
+    const body: unknown = await request.json();
+    if (typeof body === 'object' && body !== null && 'target' in body) {
+      const parsed = signedInReportSchema.safeParse(body);
+      if (!parsed.success) {
+        return Response.json({ error: 'Validation failed', details: parsed.error.flatten().fieldErrors }, { status: 400 });
+      }
+      const outcome = await fileReport(request, actorFromAuth(auth), {
+        reporter: { kind: 'user', userId },
+        target: parsed.data.target,
+        category: parsed.data.category,
+        description: parsed.data.description,
+      });
+      return reportResponse(outcome);
+    }
+
+    const validation = reportSchema.safeParse(body);
     if (!validation.success) {
       return Response.json({ error: 'Validation failed', details: validation.error.flatten().fieldErrors }, { status: 400 });
     }
@@ -71,6 +99,19 @@ export async function POST(request: Request) {
       });
     } catch (emailError) {
       loggers.api.error('Failed to send report notification email', emailError as Error);
+    }
+
+    // The same report, as a content case for the review queue. Best-effort: the
+    // feedback row above is this flow's record, as it always was.
+    try {
+      await fileReport(request, actorFromAuth(auth), {
+        reporter: { kind: 'user', userId },
+        target: { type: 'user', userId: targetUserId },
+        category: 'harassment',
+        description: reason,
+      });
+    } catch (caseError) {
+      loggers.api.error('Failed to open a content case for a user report', caseError as Error);
     }
 
     return Response.json({ message: 'Report received. Thank you.' }, { status: 201 });
