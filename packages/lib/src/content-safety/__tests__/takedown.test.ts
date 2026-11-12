@@ -180,8 +180,8 @@ describe('runGlobalTakedown', () => {
     expect(world.row.snapshot?.evidenceKey).toBe(evidenceKeyFor(CASE_ID, HASH));
     expect(stepStates(world.row.steps)).toEqual([
       'block:ok',
-      'record_references:ok',
       'unpublish_public:ok',
+      'record_references:ok',
       'preserve:ok',
       'delete_uploads:ok',
       'delete_public:ok',
@@ -191,7 +191,7 @@ describe('runGlobalTakedown', () => {
 
   it('takes the public copies off the web before anything is preserved', async () => {
     await runGlobalTakedown(CASE_ID, deps);
-    expect(world.calls.slice(0, 4)).toEqual(['block', 'record_references', 'unpublish_public', 'preserve']);
+    expect(world.calls.slice(0, 4)).toEqual(['block', 'unpublish_public', 'record_references', 'preserve']);
   });
 
   it('runs the block before any other effect', async () => {

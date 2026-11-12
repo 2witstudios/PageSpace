@@ -254,7 +254,9 @@ async function executeGlobalStep(
         pageIds: references.pageIds,
       });
       return {
-        detail: `pages=${references.pageIds.length} files=${references.fileIds.length} drives=${references.driveIds.length} uploaders=${references.uploaderUserIds.length}`,
+        detail:
+          `pages=${references.pageIds.length} files=${references.fileIds.length} drives=${references.driveIds.length} uploaders=${references.uploaderUserIds.length}` +
+          (references.aiMessageScanFailed ? ' ai_message_search=failed' : ''),
       };
     }
     case 'suspend_uploader': {

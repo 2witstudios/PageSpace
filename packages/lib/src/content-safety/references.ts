@@ -15,6 +15,7 @@ import { pages } from '@pagespace/db/schema/core';
 import { directMessageAttachments, directMessages } from '@pagespace/db/schema/social';
 import { fileConversations, filePages, files } from '@pagespace/db/schema/storage';
 import { escapeLikePattern } from '../db/like-pattern';
+import { loggers } from '../logging/logger-config';
 import { normalizeContentHash } from './policy';
 import type { ContentReferences } from './takedown';
 
@@ -127,15 +128,24 @@ export async function collectContentReferences(rawHash: string): Promise<Content
   }
 
   // AI chat attachments have no `files` row: the message body carries the
-  // storage key. This is an unindexed scan of `messages`, acceptable for an
-  // operation an admin runs by hand.
-  const aiRows = capped(
-    await db
-      .select({ id: messages.id, conversationId: messages.conversationId, userId: messages.userId })
-      .from(messages)
-      .where(like(messages.content, `%${escapeLikePattern(`chat-attachments/${contentHash}/original`)}%`))
-      .limit(fetchLimit),
-  );
+  // storage key. This is an unindexed scan of `messages`, and on a large table
+  // it can exceed the statement timeout. It is best-effort: a takedown must not
+  // be held up — with private bytes undeleted — by the one search that cannot
+  // be indexed. A failure is recorded on the references, never swallowed.
+  let aiMessageScanFailed = false;
+  let aiRows: Array<{ id: string; conversationId: string; userId: string | null }> = [];
+  try {
+    aiRows = capped(
+      await db
+        .select({ id: messages.id, conversationId: messages.conversationId, userId: messages.userId })
+        .from(messages)
+        .where(like(messages.content, `%${escapeLikePattern(`chat-attachments/${contentHash}/original`)}%`))
+        .limit(fetchLimit),
+    );
+  } catch (error) {
+    aiMessageScanFailed = true;
+    loggers.security.error('Content references: AI message search failed; continuing without it', error instanceof Error ? error : undefined);
+  }
   for (const row of aiRows) {
     conversationIds.add(row.conversationId);
     if (row.userId) uploaders.add(row.userId);
@@ -151,5 +161,6 @@ export async function collectContentReferences(rawHash: string): Promise<Content
     aiMessageIds: aiRows.map((row) => row.id),
     conversationIds: [...conversationIds],
     truncated,
+    ...(aiMessageScanFailed ? { aiMessageScanFailed: true } : {}),
   };
 }

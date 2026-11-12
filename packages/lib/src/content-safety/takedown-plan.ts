@@ -8,19 +8,21 @@
  *
  * The order is the safety property:
  *   1. block       — the gates close before anything else happens.
- *   2. record      — who and what referenced the hash, written to the case
- *                    NOW. A case can wait at preservation for a long time, and
- *                    the uploader can delete their page meanwhile; the rows
- *                    that say who uploaded it must be captured before then.
- *   3. unpublish   — public copies come off the web at once, so the content is
- *                    not served to the world even if the case then has to wait
- *                    at the next step. Nothing is lost: the private original
- *                    is untouched, and a public-only file is first copied into
+ *   2. unpublish   — public copies come off the web at once. This touches only
+ *                    the buckets and cannot be made to wait, so nothing stands
+ *                    between the block and the content no longer being served
+ *                    to the world. Nothing is lost: the private original is
+ *                    untouched, and a public-only file is first copied into
  *                    private storage.
- *   4. preserve    — nothing is deleted until a copy is verified (or, outside
- *                    CSAM, an admin has explicitly declined one).
+ *   3. record      — who and what referenced the hash, written to the case
+ *                    BEFORE the step that can wait. A case can sit at
+ *                    preservation for a long time, and the uploader can delete
+ *                    their page meanwhile; the rows that say who uploaded it
+ *                    must be captured before then.
+ *   4. preserve    — nothing private is deleted until a copy is verified (or,
+ *                    outside CSAM, an admin has explicitly declined one).
  *   5. deletes     — uploads bucket, then the public bucket.
- *   6. suspend     — only when asked for, from the uploaders recorded in step 2.
+ *   6. suspend     — only when asked for, from the uploaders recorded in step 3.
  */
 
 import type {
@@ -33,8 +35,8 @@ import type {
 
 export const GLOBAL_TAKEDOWN_STEPS = [
   'block',
-  'record_references',
   'unpublish_public',
+  'record_references',
   'preserve',
   'delete_uploads',
   'delete_public',

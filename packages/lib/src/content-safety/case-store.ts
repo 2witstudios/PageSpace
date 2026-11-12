@@ -48,7 +48,15 @@ export function createTakedownCaseStore(): TakedownCaseStore {
     async upsertBlock(block) {
       // The first block of a hash keeps its provenance; a second takedown of the
       // same hash changes nothing here, the hash is already refused everywhere.
-      await db.insert(contentBlocks).values(block).onConflictDoNothing({ target: contentBlocks.contentHash });
+      // One exception: a hash later found to be CSAM is marked CSAM for good.
+      // The block row is what a later request is checked against, so a hash that
+      // was first blocked as malware must not stay "malware" once it is CSAM.
+      const insert = db.insert(contentBlocks).values(block);
+      if (block.category === 'csam') {
+        await insert.onConflictDoUpdate({ target: contentBlocks.contentHash, set: { category: 'csam' } });
+      } else {
+        await insert.onConflictDoNothing({ target: contentBlocks.contentHash });
+      }
     },
     collectReferences: collectContentReferences,
   };
@@ -122,6 +130,11 @@ export async function openTakedownCase(input: OpenTakedownCaseInput): Promise<Op
     // "skip preservation" would be a way to delete it unpreserved.
     if (existing.category === 'csam' && input.category !== 'csam') {
       throw new CaseCategoryDowngradeError(existing.id);
+    }
+    // The block step has usually already run for a reused case, so upgrade the
+    // block row here when the case becomes CSAM.
+    if (input.category === 'csam' && existing.category !== 'csam' && input.contentHash) {
+      await db.update(contentBlocks).set({ category: 'csam' }).where(eq(contentBlocks.contentHash, input.contentHash));
     }
     const previous = existing.snapshot?.takedown;
     const merged: TakedownOptions = {

@@ -221,8 +221,8 @@ describe('content takedown — upload, publish, take down, removed, re-upload re
     expect(row.status).toBe('actioned');
     expect(row.steps?.map((s) => `${s.step}:${s.status}`)).toEqual([
       'block:ok',
-      'record_references:ok',
       'unpublish_public:ok',
+      'record_references:ok',
       'preserve:ok',
       'delete_uploads:ok',
       'delete_public:ok',

@@ -77,6 +77,8 @@ export type ContentCaseSnapshot = {
     conversationIds: string[];
     /** True when a list hit its cap and is incomplete. */
     truncated: boolean;
+    /** True when the AI-message search could not finish, so `aiMessageIds` (and their authors) may be missing. */
+    aiMessageScanFailed?: boolean;
   };
   /** Where the preserved copy is, when one was made. Bucket-relative key, never a URL. */
   evidenceKey?: string;

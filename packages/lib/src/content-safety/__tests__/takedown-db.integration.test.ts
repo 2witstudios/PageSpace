@@ -180,6 +180,35 @@ describe('takedown database edge — real Postgres', () => {
       await db.delete(contentBlocks).where(eq(contentBlocks.contentHash, hash));
     });
 
+    it('marks a hash CSAM for good once any case says so, so a later malware case on it is refused', async () => {
+      const store = createTakedownCaseStore();
+      const hash = freshHash();
+      // First blocked as malware...
+      await store.upsertBlock({ contentHash: hash, category: 'malware', source: 'admin', caseId: 'case-m', createdBy: null });
+      // ...then a CSAM case blocks the same hash.
+      await store.upsertBlock({ contentHash: hash, category: 'csam', source: 'admin', caseId: 'case-c', createdBy: null });
+
+      const [block] = await db.select().from(contentBlocks).where(eq(contentBlocks.contentHash, hash));
+      expect(block).toMatchObject({ category: 'csam', caseId: 'case-m' });
+      await expect(
+        open({ targetId: hash, contentHash: hash, category: 'malware', takedown: { kind: 'global', skipPreservation: true, skipPreservationReason: 'x' } }),
+      ).rejects.toBeInstanceOf(CaseCategoryDowngradeError);
+      await db.delete(contentBlocks).where(eq(contentBlocks.contentHash, hash));
+    });
+
+    it('upgrades the block row when an open malware case is re-filed as CSAM', async () => {
+      const store = createTakedownCaseStore();
+      const hash = freshHash();
+      await open({ targetId: hash, contentHash: hash, category: 'malware' });
+      await store.upsertBlock({ contentHash: hash, category: 'malware', source: 'admin', caseId: 'case-m', createdBy: null });
+
+      await open({ targetId: hash, contentHash: hash, category: 'csam' });
+
+      const [block] = await db.select().from(contentBlocks).where(eq(contentBlocks.contentHash, hash));
+      expect(block.category).toBe('csam');
+      await db.delete(contentBlocks).where(eq(contentBlocks.contentHash, hash));
+    });
+
     it('lets the latest request withdraw a skip, and keeps a suspension once asked for', async () => {
       const hash = freshHash();
       await open({ targetId: hash, contentHash: hash, takedown: { kind: 'global', skipPreservation: true, skipPreservationReason: 'known sample', suspendUploader: true } });
@@ -212,7 +241,7 @@ describe('takedown database edge — real Postgres', () => {
       expect(loaded?.status).toBe('awaiting_evidence');
     });
 
-    it('writes the block once and keeps the first one', async () => {
+    it('writes the block once and keeps the first one (a later non-CSAM category does not replace it)', async () => {
       const store = createTakedownCaseStore();
       await store.upsertBlock({ contentHash: CHAT_HASH, category: 'csam', source: 'admin', caseId: 'case-a', createdBy: 'admin-1' });
       await store.upsertBlock({ contentHash: CHAT_HASH, category: 'malware', source: 'admin', caseId: 'case-b', createdBy: 'admin-2' });
