@@ -221,11 +221,11 @@ describe('content takedown — upload, publish, take down, removed, re-upload re
     expect(row.status).toBe('actioned');
     expect(row.steps?.map((s) => `${s.step}:${s.status}`)).toEqual([
       'block:ok',
+      'record_references:ok',
       'unpublish_public:ok',
       'preserve:ok',
       'delete_uploads:ok',
       'delete_public:ok',
-      'record_references:ok',
       'suspend_uploader:ok',
     ]);
   });
@@ -403,6 +403,12 @@ describe('content takedown — CSAM with no evidence storage configured', () => 
       'This file is not available for publishing',
     );
     expect(s3.has(PUBLISH, `assets/${hash}`)).toBe(false);
+  });
+
+  it('and who uploaded it is already on the case, before anything else could remove that record', async () => {
+    const [row] = await db.select().from(contentCases).where(eq(contentCases.id, waitingCaseId));
+    expect(row.snapshot?.references?.uploaderUserIds).toEqual([ownerId]);
+    expect(row.snapshot?.references?.pageIds).toEqual([filePageId]);
   });
 
   it('finishes when evidence storage is configured and the case is resumed', async () => {

@@ -54,10 +54,10 @@ export function createTakedownCaseStore(): TakedownCaseStore {
   };
 }
 
-/** Thrown when an open CSAM case is re-filed under a different category. */
+/** Thrown when content with an open CSAM case, or a hash blocked as CSAM, is re-filed under a different category. */
 export class CaseCategoryDowngradeError extends Error {
   constructor(readonly caseId: string) {
-    super('This content has an open CSAM case; it cannot be re-filed under another category.');
+    super('This content is recorded as CSAM; it cannot be re-filed under another category.');
     this.name = 'CaseCategoryDowngradeError';
   }
 }
@@ -91,6 +91,18 @@ export interface OpenedCase {
  * re-filed under another category (`CaseCategoryDowngradeError`).
  */
 export async function openTakedownCase(input: OpenTakedownCaseInput): Promise<OpenedCase> {
+  // A hash once blocked as CSAM is CSAM for every later case, finished or not:
+  // a new malware case with "skip preservation" must not be a way to delete
+  // late-arriving copies of it unpreserved.
+  if (input.takedown.kind === 'global' && input.contentHash && input.category !== 'csam') {
+    const [block] = await db
+      .select({ category: contentBlocks.category, caseId: contentBlocks.caseId })
+      .from(contentBlocks)
+      .where(eq(contentBlocks.contentHash, input.contentHash))
+      .limit(1);
+    if (block?.category === 'csam') throw new CaseCategoryDowngradeError(block.caseId ?? 'unknown');
+  }
+
   const [existing] = await db
     .select()
     .from(contentCases)

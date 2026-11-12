@@ -169,6 +169,17 @@ describe('takedown database edge — real Postgres', () => {
       expect(row.snapshot?.takedown?.skipPreservation).not.toBe(true);
     });
 
+    it('refuses a non-CSAM global case on a hash already blocked as CSAM, even after the CSAM case finished', async () => {
+      const hash = freshHash();
+      await createTakedownCaseStore().upsertBlock({ contentHash: hash, category: 'csam', source: 'admin', caseId: 'finished-case', createdBy: null });
+
+      await expect(
+        open({ targetId: hash, contentHash: hash, category: 'malware', takedown: { kind: 'global', skipPreservation: true, skipPreservationReason: 'x' } }),
+      ).rejects.toBeInstanceOf(CaseCategoryDowngradeError);
+      await expect(open({ targetId: hash, contentHash: hash, category: 'csam' })).resolves.toMatchObject({ created: true });
+      await db.delete(contentBlocks).where(eq(contentBlocks.contentHash, hash));
+    });
+
     it('lets the latest request withdraw a skip, and keeps a suspension once asked for', async () => {
       const hash = freshHash();
       await open({ targetId: hash, contentHash: hash, takedown: { kind: 'global', skipPreservation: true, skipPreservationReason: 'known sample', suspendUploader: true } });

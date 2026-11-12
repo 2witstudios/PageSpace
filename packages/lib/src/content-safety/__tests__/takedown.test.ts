@@ -180,18 +180,18 @@ describe('runGlobalTakedown', () => {
     expect(world.row.snapshot?.evidenceKey).toBe(evidenceKeyFor(CASE_ID, HASH));
     expect(stepStates(world.row.steps)).toEqual([
       'block:ok',
+      'record_references:ok',
       'unpublish_public:ok',
       'preserve:ok',
       'delete_uploads:ok',
       'delete_public:ok',
-      'record_references:ok',
     ]);
     expect(world.suspended).toEqual([]);
   });
 
   it('takes the public copies off the web before anything is preserved', async () => {
     await runGlobalTakedown(CASE_ID, deps);
-    expect(world.calls.slice(0, 3)).toEqual(['block', 'unpublish_public', 'preserve']);
+    expect(world.calls.slice(0, 4)).toEqual(['block', 'record_references', 'unpublish_public', 'preserve']);
   });
 
   it('runs the block before any other effect', async () => {
@@ -373,6 +373,21 @@ describe('runGlobalTakedown', () => {
 
       expect(world.publish.size).toBe(0);
       expect(world.uploads.get(holdKeyFor(CASE_ID, HASH))).toBe(1234);
+    });
+
+    it('has already recorded who uploaded it, so that survives the uploader deleting their page while the case waits', async () => {
+      await runGlobalTakedown(CASE_ID, deps);
+      expect(world.row.snapshot?.references?.uploaderUserIds).toEqual(['user-1', 'user-2']);
+
+      // The page is deleted and the orphan reaper removes the rows: nothing references the hash any more.
+      world.references = emptyRefs();
+      world.evidenceConfigured = true;
+      world.row.snapshot = { ...world.row.snapshot, takedown: { kind: 'global', actorUserId: 'admin-1', suspendUploader: true } };
+      const result = await runGlobalTakedown(CASE_ID, deps);
+
+      expect(result.status).toBe('actioned');
+      expect(world.row.snapshot?.references?.uploaderUserIds).toEqual(['user-1', 'user-2']);
+      expect(world.suspended).toEqual(['user-1', 'user-2']);
     });
 
     it('alerts once that the case stopped at the evidence step', async () => {

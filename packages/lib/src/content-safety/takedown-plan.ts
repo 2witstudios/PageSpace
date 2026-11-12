@@ -8,16 +8,19 @@
  *
  * The order is the safety property:
  *   1. block       — the gates close before anything else happens.
- *   2. unpublish   — public copies come off the web at once, so the content is
+ *   2. record      — who and what referenced the hash, written to the case
+ *                    NOW. A case can wait at preservation for a long time, and
+ *                    the uploader can delete their page meanwhile; the rows
+ *                    that say who uploaded it must be captured before then.
+ *   3. unpublish   — public copies come off the web at once, so the content is
  *                    not served to the world even if the case then has to wait
  *                    at the next step. Nothing is lost: the private original
  *                    is untouched, and a public-only file is first copied into
  *                    private storage.
- *   3. preserve    — nothing is deleted until a copy is verified (or, outside
+ *   4. preserve    — nothing is deleted until a copy is verified (or, outside
  *                    CSAM, an admin has explicitly declined one).
- *   4. deletes     — uploads bucket, then the public bucket.
- *   5. record      — who and what referenced the hash.
- *   6. suspend     — only when asked for.
+ *   5. deletes     — uploads bucket, then the public bucket.
+ *   6. suspend     — only when asked for, from the uploaders recorded in step 2.
  */
 
 import type {
@@ -30,11 +33,11 @@ import type {
 
 export const GLOBAL_TAKEDOWN_STEPS = [
   'block',
+  'record_references',
   'unpublish_public',
   'preserve',
   'delete_uploads',
   'delete_public',
-  'record_references',
   'suspend_uploader',
 ] as const;
 
