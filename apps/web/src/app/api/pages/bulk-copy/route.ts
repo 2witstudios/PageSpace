@@ -321,8 +321,8 @@ interface CopyScreenRow {
 
 /**
  * Every non-trashed descendant of `rootIds`, one query per tree level, read
- * before the copy transaction opens. The `seen` set also ends the walk on a
- * parent cycle.
+ * before the copy transaction opens. The `seen` set ends THIS walk on a parent
+ * cycle; the copy's own recursion has no such guard (as before this screen).
  */
 async function collectDescendants(rootIds: readonly string[]): Promise<CopyScreenRow[]> {
   const seen = new Set(rootIds);

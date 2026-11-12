@@ -219,6 +219,9 @@ written only by the web app.
    The blocklist gate (entry point 9) is in place; the ownership check is not.
 4. **A bulk-copied FILE page gets no `files`/`file_pages` row** (`apps/web/src/app/api/pages/bulk-copy/route.ts`),
    so storage accounting and file-link permissions don't see the copy.
+6. **Bulk copy recurses without bound on a `parentId` cycle** (`copyChildrenRecursively`). Needs corrupt data:
+   `packages/lib/src/pages/circular-reference-guard.ts` guards the reorder route. Unchanged from `master`; the
+   blocklist screen's own walk does terminate.
 5. **Bulk copy reads the tree twice**: once for the blocklist screen, once inside the transaction. Copying
    from the first read would remove the second; it means restructuring the route's copy loop, so it is left.
 
