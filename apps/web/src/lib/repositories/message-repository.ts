@@ -132,7 +132,7 @@ async function savePageMessageRow({
 }): Promise<string | null> {
   let structuredContent = content;
   if (uiMessage?.parts && uiMessage.parts.length > 0) {
-    structuredContent = await extractStructuredContentFromParts(uiMessage.parts, content);
+    structuredContent = await extractStructuredContentFromParts(uiMessage.parts, content, { userId });
   }
 
   const toolCallsJson = serializeJsonColumn(toolCalls);
@@ -213,7 +213,7 @@ async function saveGlobalMessageRow({
 }): Promise<string | null> {
   let structuredContent = content;
   if (uiMessage?.parts && uiMessage.parts.length > 0) {
-    structuredContent = await extractStructuredContentFromParts(uiMessage.parts, content);
+    structuredContent = await extractStructuredContentFromParts(uiMessage.parts, content, { userId });
   }
 
   const toolCallsJson = serializeJsonColumn(toolCalls);

@@ -92,6 +92,7 @@ import { resolveGenerationAdmission } from '@/lib/ai/core/generation-admission';
 import { makeOnStepFinishHandler } from '@/lib/ai/core/step-finish-handler';
 import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
+import { userMessageSaveRefusal } from './user-message-save-refusal';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
 import { buildBuiltinSkillCatalog } from '@/lib/ai/core/skill-catalog';
@@ -602,9 +603,9 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
 
         loggers.api.debug('Global Assistant Chat API: User message saved to database', {});
       } catch (error) {
-        if (error instanceof ConversationHistoryDeletedError) {
-          return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
-        }
+        // Deleted conversation → 404; blocklisted attachment → neutral 4xx.
+        const refusal = userMessageSaveRefusal(error);
+        if (refusal) return refusal;
         loggers.api.error('Global Assistant Chat API: Failed to save user message', error as Error);
         return NextResponse.json({
           error: 'Failed to save message to database',

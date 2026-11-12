@@ -80,6 +80,8 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 
+vi.mock('@pagespace/lib/content-safety/upload-gate', () => ({ isUploadBlocked: vi.fn() }));
+
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   getActorInfo: vi.fn().mockResolvedValue({}),
   logFileActivity: vi.fn(),
@@ -108,6 +110,7 @@ import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { chargeStorageForStore } from '@pagespace/lib/services/storage-limits';
 import { releasePendingUpload } from '@pagespace/lib/services/pending-uploads';
 import { enqueueProcessorJob } from '@/lib/upload/processor-effects';
+import { isUploadBlocked } from '@pagespace/lib/content-safety/upload-gate';
 
 // Captures the values passed to tx.insert(pages).values(...) for assertion
 let capturedPageValues: Record<string, unknown> | undefined;
@@ -181,6 +184,7 @@ beforeEach(() => {
   vi.mocked(uploadSemaphore.getSlotMetadata).mockReturnValue(SLOT_META);
   vi.mocked(enqueueProcessorJob).mockResolvedValue(undefined);
   vi.mocked(releasePendingUpload).mockResolvedValue(undefined);
+  vi.mocked(isUploadBlocked).mockResolvedValue(false);
 
   // Default sibling lookups: empty list (new page lands at position 0).
   mockFindFirst.mockResolvedValue(undefined);
@@ -448,5 +452,51 @@ describe('POST /api/upload/complete', () => {
       // Response may vary but slot must be released
       expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_JOB_ID);
     });
+  });
+});
+
+describe('POST /api/upload/complete — content blocklist', () => {
+  // The hash can be blocked between presign and complete, and the dedup
+  // fast-path reaches /complete without a PUT, so presign's check is not enough.
+  it('refuses a blocked hash with a neutral 422 and creates no page or file row', async () => {
+    vi.mocked(isUploadBlocked).mockResolvedValue(true);
+
+    const res = await POST(makeRequest(VALID_BODY));
+
+    expect(res.status).toBe(422);
+    expect(await res.json()).toEqual({ error: "This file can't be uploaded" });
+    expect(mockTransaction).not.toHaveBeenCalled();
+    expect(chargeStorageForStore).not.toHaveBeenCalled();
+    expect(enqueueProcessorJob).not.toHaveBeenCalled();
+  });
+
+  it('releases the reserved slot and pending-upload row when it refuses', async () => {
+    vi.mocked(isUploadBlocked).mockResolvedValue(true);
+
+    await POST(makeRequest(VALID_BODY));
+
+    expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_JOB_ID);
+    expect(releasePendingUpload).toHaveBeenCalledWith(MOCK_JOB_ID);
+  });
+
+  it('checks the hash reserved at presign, never one from the body', async () => {
+    const request = makeRequest({ ...VALID_BODY, contentHash: 'f'.repeat(64) });
+
+    await POST(request);
+
+    expect(isUploadBlocked).toHaveBeenCalledWith({
+      contentHash: VALID_HASH,
+      userId: 'user-1',
+      entryPoint: 'upload.complete',
+      request,
+      details: { driveId: 'drive-1' },
+    });
+  });
+
+  it('leaves an unblocked hash unaffected', async () => {
+    const res = await POST(makeRequest(VALID_BODY));
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).success).toBe(true);
   });
 });

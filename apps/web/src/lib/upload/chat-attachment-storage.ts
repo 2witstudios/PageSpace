@@ -3,6 +3,7 @@ import { GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { getS3Client, getS3Bucket } from '@/lib/presigned-url';
 import { checkObjectExists, putObject } from '@/lib/upload/s3-effects';
+import { assertUploadNotBlocked } from '@pagespace/lib/content-safety/upload-gate';
 
 const CHAT_ATTACHMENT_PREFIX = 'chat-attachments';
 const GET_URL_TTL_SECONDS = 3600;
@@ -26,6 +27,7 @@ export function buildChatAttachmentKey(contentHash: string): string {
 export async function uploadChatAttachment(
   buffer: Buffer,
   mediaType: string,
+  context: { userId?: string | null } = {},
 ): Promise<{ storageKey: string; contentHash: string }> {
   if (buffer.byteLength > MAX_CHAT_ATTACHMENT_BYTES) {
     throw new Error(
@@ -33,6 +35,16 @@ export async function uploadChatAttachment(
     );
   }
   const contentHash = hashAttachmentBuffer(buffer);
+
+  // Content blocklist: checked before the existence probe, so blocked bytes are
+  // refused even if a copy is still in storage, and never handed back as a
+  // usable storage key. Throws ContentBlockedError; the gate audits the attempt.
+  await assertUploadNotBlocked({
+    contentHash,
+    userId: context.userId ?? undefined,
+    entryPoint: 'chat-attachment',
+  });
+
   const storageKey = buildChatAttachmentKey(contentHash);
 
   const exists = await checkObjectExists(storageKey);

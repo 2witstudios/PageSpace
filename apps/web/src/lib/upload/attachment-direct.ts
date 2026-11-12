@@ -29,6 +29,8 @@ import {
 } from '@pagespace/lib/services/attachment-upload-core';
 import { sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { isUploadBlocked } from '@pagespace/lib/content-safety/upload-gate';
+import { CONTENT_BLOCKED_MESSAGE, CONTENT_BLOCKED_STATUS } from '@pagespace/lib/content-safety/policy';
 import { getActorInfo, logFileActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkObjectExists, issuePresignedPutUrl } from './s3-effects';
@@ -36,6 +38,17 @@ import { verifyAttachmentBytes, type AttachmentVerifyResult } from './attachment
 import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 const PRESIGN_TTL = 900;
+
+/** Neutral refusal for a blocklisted hash — never says why. */
+const CONTENT_BLOCKED_RESULT = { status: CONTENT_BLOCKED_STATUS, body: { error: CONTENT_BLOCKED_MESSAGE } };
+
+/** IDs recorded on the audit event when a blocked attachment is refused. */
+function blockedAttemptDetails(target: AttachmentTarget): Record<string, unknown> {
+  return {
+    targetType: target.type,
+    targetId: target.type === 'page' ? target.pageId : target.conversationId,
+  };
+}
 
 export interface OrchestratorResult {
   status: number;
@@ -71,6 +84,12 @@ export async function presignAttachment(args: PresignAttachmentArgs): Promise<Or
   const validation = validateAttachmentPresign({ contentHash, mimeType, fileSize, tier: quota.tier });
   if (!validation.ok) return { status: validation.status, body: { error: validation.error } };
   const canonicalHash = validation.canonicalHash;
+
+  // Content blocklist: refuse before any presigned URL, slot or storage probe
+  // exists for this hash. The gate audits the attempt.
+  if (await isUploadBlocked({ contentHash: canonicalHash, userId, entryPoint: 'attachment.presign', request, details: blockedAttemptDetails(target) })) {
+    return { ...CONTENT_BLOCKED_RESULT };
+  }
 
   const quotaCheck = await checkUploadQuotaTarget(quotaTarget, fileSize);
   if (!quotaCheck.allowed) {
@@ -160,6 +179,15 @@ export async function completeAttachment(args: CompleteAttachmentArgs): Promise<
   // taken from the processor's verification result (authoritative), not the
   // client-declared presign values.
   const { contentHash } = reserved;
+
+  // Content blocklist, re-checked at finalize: the hash may have been blocked
+  // since presign, and the dedup path reaches here without any PUT. Refuse
+  // before the processor reads the bytes or a `files` row can point at them.
+  if (await isUploadBlocked({ contentHash, userId, entryPoint: 'attachment.complete', request, details: blockedAttemptDetails(target) })) {
+    uploadSemaphore.releaseUploadSlot(jobId);
+    await releasePendingUpload(jobId).catch(() => undefined);
+    return { ...CONTENT_BLOCKED_RESULT };
+  }
 
   // Synchronous byte verification before any rows exist. The processor re-hashes
   // the stored object (deleting it on mismatch) and returns the true MIME type and

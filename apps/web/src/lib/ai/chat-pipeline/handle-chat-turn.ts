@@ -86,7 +86,7 @@
  *   - `runPageChatTurn` is ~2,500 lines in ONE function; `runGlobalChatTurn`
  *     ~1,550. Both interleave decision and effect throughout, so neither has an
  *     extractable core that can be unit-tested without a DB and a provider.
- *   - 153 substantive lines of 40+ characters are byte-identical between them
+ *   - 154 substantive lines of 40+ characters are byte-identical between them
  *     (of 1,528 and 960 respectively). Measured, not estimated — strip comments
  *     and blanks, compare the sets.
  *   - The longest identical runs are NOT scattered. They cluster at

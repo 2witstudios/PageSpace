@@ -21,6 +21,7 @@ import { PageType } from '@pagespace/lib/utils/enums';
 import { getHomeDrive } from '@pagespace/lib/services/drive-service';
 import { getDefaultContent } from '@pagespace/lib/content/page-types.config';
 import { buildS3Key } from '@pagespace/lib/services/upload-validation';
+import { assertUploadNotBlocked } from '@pagespace/lib/content-safety/upload-gate';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { checkStorageQuotaForDrive, chargeStorageForStore, shouldChargeForStore } from '@pagespace/lib/services/storage-limits';
 import { putObject } from './s3-effects';
@@ -251,6 +252,18 @@ export async function createImageFilePage(
   }
 
   const hash = (deps.hash ?? sha256Hex)(input.buffer);
+
+  // Content blocklist: these bytes are produced server-side, but a model can
+  // reproduce (or be handed) blocked content, so they get the same check as an
+  // upload — before anything is written. Throws ContentBlockedError; the gate
+  // audits the attempt.
+  await assertUploadNotBlocked({
+    contentHash: hash,
+    userId: input.userId,
+    entryPoint: 'image-generation',
+    details: { driveId: input.targetDriveId },
+  });
+
   await (deps.putObject ?? putObject)(buildS3Key(hash), input.buffer, input.mimeType);
 
   // Branch on the PARENT, not the drive: a named parent is an exact placement the

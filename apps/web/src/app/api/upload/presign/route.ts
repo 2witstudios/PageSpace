@@ -14,6 +14,8 @@ import { releasePendingUpload } from '@pagespace/lib/services/pending-uploads';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkObjectExists, issuePresignedPutUrl } from '@/lib/upload/s3-effects';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { isUploadBlocked } from '@pagespace/lib/content-safety/upload-gate';
+import { CONTENT_BLOCKED_MESSAGE, CONTENT_BLOCKED_STATUS } from '@pagespace/lib/content-safety/policy';
 import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -73,6 +75,13 @@ export async function POST(request: Request) {
   }
   // Use the canonicalized (lowercased) hash everywhere downstream.
   const canonicalHash = hashResult.value;
+
+  // Content blocklist: refuse before any presigned URL, slot or storage probe
+  // exists for this hash. The reply is deliberately neutral — it must not
+  // confirm the file is on a blocklist. The attempt is audited by the gate.
+  if (await isUploadBlocked({ contentHash: canonicalHash, userId, entryPoint: 'upload.presign', request, details: { driveId } })) {
+    return NextResponse.json({ error: CONTENT_BLOCKED_MESSAGE }, { status: CONTENT_BLOCKED_STATUS });
+  }
 
   const mimeResult = validateMimeTypeDeclaration(mimeType);
   if (!mimeResult.ok) {

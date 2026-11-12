@@ -489,7 +489,13 @@ async function reconstructFromStructuredContent(
 /**
  * Extract structured content data from UIMessage parts for database storage
  */
-export async function extractStructuredContentFromParts(uiParts: UIMessage['parts'], originalContent: string): Promise<string> {
+export async function extractStructuredContentFromParts(
+  uiParts: UIMessage['parts'],
+  originalContent: string,
+  // Who is persisting the message. Passed to the attachment upload so a refused
+  // (blocklisted) attachment is attributed to its sender in the audit log.
+  context: { userId?: string | null } = {},
+): Promise<string> {
   const textParts = uiParts
     .filter(isTextPart)
     .map(p => p.text || '');
@@ -510,7 +516,7 @@ export async function extractStructuredContentFromParts(uiParts: UIMessage['part
           return { url: fp.url, mediaType: fp.mediaType, filename: fp.filename };
         }
         const mediaType = fp.mediaType || decoded.mediaType;
-        const { storageKey } = await uploadChatAttachment(decoded.buffer, mediaType);
+        const { storageKey } = await uploadChatAttachment(decoded.buffer, mediaType, { userId: context.userId });
         return { storageKey, mediaType, filename: fp.filename };
       })
   );

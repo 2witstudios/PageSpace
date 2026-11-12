@@ -37,6 +37,8 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 
+vi.mock('@pagespace/lib/content-safety/upload-gate', () => ({ isUploadBlocked: vi.fn() }));
+
 vi.mock('@/lib/upload/s3-effects', () => ({
   checkObjectExists: vi.fn(),
   issuePresignedPutUrl: vi.fn(),
@@ -48,6 +50,7 @@ import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions'
 import { resolveUploadQuotaTarget, checkUploadQuotaTarget, reserveConcurrentUploadSlot, userReferencesContentHash } from '@pagespace/lib/services/storage-limits';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkObjectExists, issuePresignedPutUrl } from '@/lib/upload/s3-effects';
+import { isUploadBlocked } from '@pagespace/lib/content-safety/upload-gate';
 
 const VALID_HASH = 'a'.repeat(64);
 const MOCK_URL = 'https://tigris.example.com/files/aaa.../original?X-Amz-Signature=abc';
@@ -94,6 +97,7 @@ beforeEach(() => {
   // Default: caller already references the hash, so the dedup fast-path stays
   // available for the existing dedup tests. H3-specific tests override this.
   vi.mocked(userReferencesContentHash).mockResolvedValue(true);
+  vi.mocked(isUploadBlocked).mockResolvedValue(false);
 });
 
 describe('POST /api/upload/presign', () => {
@@ -332,5 +336,60 @@ describe('POST /api/upload/presign', () => {
       await POST(makeRequest(VALID_BODY));
       expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_SLOT);
     });
+  });
+});
+
+describe('POST /api/upload/presign — content blocklist', () => {
+  it('refuses a blocked hash with a neutral 422, before touching storage or reserving a slot', async () => {
+    vi.mocked(isUploadBlocked).mockResolvedValue(true);
+
+    const res = await POST(makeRequest(VALID_BODY));
+
+    expect(res.status).toBe(422);
+    expect(await res.json()).toEqual({ error: "This file can't be uploaded" });
+    expect(checkObjectExists).not.toHaveBeenCalled();
+    expect(uploadSemaphore.acquireUploadSlot).not.toHaveBeenCalled();
+    expect(issuePresignedPutUrl).not.toHaveBeenCalled();
+  });
+
+  it('refuses a blocked hash even when the caller already references it (dedup fast-path)', async () => {
+    vi.mocked(isUploadBlocked).mockResolvedValue(true);
+    vi.mocked(checkObjectExists).mockResolvedValue(true);
+    vi.mocked(userReferencesContentHash).mockResolvedValue(true);
+
+    const res = await POST(makeRequest(VALID_BODY));
+
+    expect(res.status).toBe(422);
+    expect(uploadSemaphore.acquireUploadSlot).not.toHaveBeenCalled();
+  });
+
+  it('checks the canonical hash and names the user and drive for the audit trail', async () => {
+    const request = makeRequest({ ...VALID_BODY, contentHash: VALID_HASH.toUpperCase() });
+
+    await POST(request);
+
+    expect(isUploadBlocked).toHaveBeenCalledWith({
+      contentHash: VALID_HASH,
+      userId: 'user-1',
+      entryPoint: 'upload.presign',
+      request,
+      details: { driveId: 'drive-1' },
+    });
+  });
+
+  it('does not consult the blocklist for a caller without edit access to the drive', async () => {
+    vi.mocked(getUserDrivePermissions).mockResolvedValue({ hasAccess: true, isOwner: false, isAdmin: false, isMember: true, canEdit: false });
+
+    const res = await POST(makeRequest(VALID_BODY));
+
+    expect(res.status).toBe(403);
+    expect(isUploadBlocked).not.toHaveBeenCalled();
+  });
+
+  it('leaves an unblocked hash unaffected', async () => {
+    const res = await POST(makeRequest(VALID_BODY));
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ url: MOCK_URL, jobId: MOCK_SLOT });
   });
 });

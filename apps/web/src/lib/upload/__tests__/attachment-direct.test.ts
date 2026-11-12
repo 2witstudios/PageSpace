@@ -52,6 +52,11 @@ vi.mock('@pagespace/lib/services/attachment-upload-repository', () => ({
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
+
+const mockIsUploadBlocked = vi.fn();
+vi.mock('@pagespace/lib/content-safety/upload-gate', () => ({
+  isUploadBlocked: (...a: unknown[]) => mockIsUploadBlocked(...a),
+}));
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   getActorInfo: vi.fn().mockResolvedValue({}),
   logFileActivity: vi.fn(),
@@ -292,5 +297,125 @@ describe('cancelAttachment', () => {
     const res = await cancelAttachment({ userId: 'user-1', jobId: 'job-1' });
     expect(res.status).toBe(403);
     expect(mockRelease).not.toHaveBeenCalled();
+  });
+});
+
+describe('content blocklist', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveUploadQuotaTarget.mockResolvedValue(USER_TARGET);
+    mockCheckUploadQuotaTarget.mockResolvedValue({ allowed: true });
+    mockCheckObjectExists.mockResolvedValue(false);
+    mockAcquire.mockResolvedValue('job-1');
+    mockIssuePresignedPutUrl.mockResolvedValue('https://tigris/put');
+    mockReserveConcurrentUploadSlot.mockResolvedValue(true);
+    mockReleasePendingUpload.mockResolvedValue(undefined);
+    mockGetSlotMetadata.mockReturnValue({ contentHash: HASH, fileSize: 1024, mimeType: 'image/png', driveId: 'drive-1', attachmentTarget: PAGE_TARGET });
+    mockVerifyAttachmentBytes.mockResolvedValue({ ok: true, detectedMime: 'image/png', size: 1024 });
+    mockSaveFileRecordAndLink.mockResolvedValue({ inserted: true });
+    mockUpdateStorageUsage.mockResolvedValue(undefined);
+    mockIsUploadBlocked.mockResolvedValue(false);
+  });
+
+  const completeArgs = () => ({
+    actor: credentialActor('user-1', null),
+    target: PAGE_TARGET,
+    request: req(),
+    jobId: 'job-1',
+    filename: 'photo.png',
+  });
+
+  describe('presignAttachment', () => {
+    it('refuses a blocked hash with a neutral 422, before touching storage or reserving a slot', async () => {
+      mockIsUploadBlocked.mockResolvedValue(true);
+
+      const res = await presignAttachment(presignArgs());
+
+      expect(res).toEqual({ status: 422, body: { error: "This file can't be uploaded" } });
+      expect(mockCheckObjectExists).not.toHaveBeenCalled();
+      expect(mockAcquire).not.toHaveBeenCalled();
+      expect(mockIssuePresignedPutUrl).not.toHaveBeenCalled();
+    });
+
+    it('checks the canonical hash and records the channel target', async () => {
+      const args = presignArgs({ contentHash: HASH.toUpperCase() });
+
+      await presignAttachment(args);
+
+      expect(mockIsUploadBlocked).toHaveBeenCalledWith({
+        contentHash: HASH,
+        userId: 'user-1',
+        entryPoint: 'attachment.presign',
+        request: args.request,
+        details: { targetType: 'page', targetId: 'page-1' },
+      });
+    });
+
+    it('records the conversation target for a DM attachment', async () => {
+      await presignAttachment(presignArgs({ target: CONV_TARGET }));
+
+      expect(mockIsUploadBlocked).toHaveBeenCalledWith(
+        expect.objectContaining({ details: { targetType: 'conversation', targetId: 'conv-1' } }),
+      );
+    });
+
+    it('leaves an unblocked hash unaffected', async () => {
+      const res = await presignAttachment(presignArgs());
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ url: 'https://tigris/put', jobId: 'job-1' });
+    });
+  });
+
+  describe('completeAttachment', () => {
+    it('refuses a blocked hash with a neutral 422 and links nothing', async () => {
+      mockIsUploadBlocked.mockResolvedValue(true);
+
+      const res = await completeAttachment(completeArgs());
+
+      expect(res).toEqual({ status: 422, body: { error: "This file can't be uploaded" } });
+      expect(mockVerifyAttachmentBytes).not.toHaveBeenCalled();
+      expect(mockSaveFileRecordAndLink).not.toHaveBeenCalled();
+      expect(mockUpdateStorageUsage).not.toHaveBeenCalled();
+    });
+
+    it('releases the reserved slot and pending-upload row when it refuses', async () => {
+      mockIsUploadBlocked.mockResolvedValue(true);
+
+      await completeAttachment(completeArgs());
+
+      expect(mockRelease).toHaveBeenCalledWith('job-1');
+      expect(mockReleasePendingUpload).toHaveBeenCalledWith('job-1');
+    });
+
+    it('checks the hash reserved at presign', async () => {
+      const args = completeArgs();
+
+      await completeAttachment(args);
+
+      expect(mockIsUploadBlocked).toHaveBeenCalledWith({
+        contentHash: HASH,
+        userId: 'user-1',
+        entryPoint: 'attachment.complete',
+        request: args.request,
+        details: { targetType: 'page', targetId: 'page-1' },
+      });
+    });
+
+    it('does not consult the blocklist for a slot bound to another target', async () => {
+      mockGetSlotMetadata.mockReturnValue({ contentHash: HASH, fileSize: 1024, mimeType: 'image/png', driveId: '', attachmentTarget: CONV_TARGET });
+
+      const res = await completeAttachment(completeArgs());
+
+      expect(res.status).toBe(403);
+      expect(mockIsUploadBlocked).not.toHaveBeenCalled();
+    });
+
+    it('leaves an unblocked hash unaffected', async () => {
+      const res = await completeAttachment(completeArgs());
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ success: true, file: { id: HASH } });
+    });
   });
 });

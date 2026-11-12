@@ -48,6 +48,30 @@ describe('extractStructuredContentFromParts — S3-backed file parts', () => {
     expect(mediaType).toBe('image/png');
   });
 
+  it('given a sender, should pass the user id to the upload so a blocked attachment is attributable', async () => {
+    const filePart = {
+      type: 'file' as const,
+      url: 'data:image/png;base64,aGVsbG8gd29ybGQ=',
+      mediaType: 'image/png',
+    } as unknown as UIMessage['parts'][number];
+
+    await extractStructuredContentFromParts([filePart], '', { userId: 'user-1' });
+
+    expect(mockUploadChatAttachment.mock.calls[0][2]).toEqual({ userId: 'user-1' });
+  });
+
+  it('given the upload refuses the bytes, should propagate the error rather than persist the message', async () => {
+    const filePart = {
+      type: 'file' as const,
+      url: 'data:image/png;base64,aGVsbG8gd29ybGQ=',
+      mediaType: 'image/png',
+    } as unknown as UIMessage['parts'][number];
+    const refusal = new Error("This file can't be uploaded");
+    mockUploadChatAttachment.mockRejectedValue(refusal);
+
+    await expect(extractStructuredContentFromParts([filePart], '')).rejects.toBe(refusal);
+  });
+
   it('given a file part with an already-hosted (non-data) URL, should pass it through unchanged', async () => {
     const filePart = {
       type: 'file' as const,

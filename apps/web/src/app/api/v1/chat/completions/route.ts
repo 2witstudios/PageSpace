@@ -30,6 +30,7 @@ import { filterToolsForReadOnly, filterToolsForMcpScope, filterToolsForImageGen,
 import { resolveSandboxToolEligibilityForConversation } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { getModelCapabilities, hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { hasFileParts, validateUserMessageFileParts } from '@/lib/ai/core/validate-image-parts';
+import { contentBlockedResponseFor } from '@/lib/upload/content-blocked-response';
 import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
@@ -853,6 +854,10 @@ export async function POST(request: Request): Promise<Response> {
       },
     });
   } catch (setupError) {
+    // An attachment on the content blocklist was refused at persistence, before
+    // the model saw it: a neutral 4xx rather than the generic 500 below.
+    const blocked = contentBlockedResponseFor(setupError);
+    if (blocked) return blocked;
     // Pre-stream failure (capabilities / convertToModelMessages / persistence). No provider
     // tokens were billed; the finally frees the hold. Return 500 like the in-app chat route.
     // ...with the driver's own diagnostics, not just Drizzle's `Failed query:`
