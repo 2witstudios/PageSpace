@@ -48,8 +48,9 @@ export function revokeSubscription(userId: string, reason: string, cancelAtPerio
   return mutate<ActionResult>(`/api/admin/users/${userId}/gift-subscription`, 'DELETE', { reason, cancelAtPeriodEnd });
 }
 
-export function suspendUser(userId: string, reason: string) {
-  return mutate<ActionResult>(`/api/admin/users/${userId}/suspend`, 'POST', { reason });
+/** `parkSites` also takes the user's published sites off the web (drives they own). */
+export function suspendUser(userId: string, reason: string, parkSites = false) {
+  return mutate<ActionResult>(`/api/admin/users/${userId}/suspend`, 'POST', { reason, ...(parkSites ? { parkSites: true } : {}) });
 }
 
 export function unsuspendUser(userId: string, reason?: string) {

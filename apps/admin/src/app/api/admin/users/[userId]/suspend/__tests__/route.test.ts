@@ -1,6 +1,10 @@
 /**
  * Unit tests for the suspend/unsuspend admin route.
- * Mock-DB style mirroring the gift-subscription unit suite.
+ *
+ * The suspension itself lives in @pagespace/lib/auth/suspend-user (shared with
+ * content takedowns, and tested against Postgres there); this file covers what
+ * the route owns: validation, the self-suspension guard, status mapping, audit,
+ * and the "also unpublish this user's published sites" option.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -11,28 +15,25 @@ vi.mock('@/lib/auth', () => ({
     (req: Request, ctx: T) => handler({ id: 'admin-1' }, req, ctx),
 }));
 
-const { dbSelectMock, dbUpdateMock, setSpy, revokeAllUserSessionsMock } = vi.hoisted(() => {
-  const setSpy = vi.fn((_values: Record<string, unknown>) => ({ where: () => Promise.resolve() }));
-  return {
-    dbSelectMock: vi.fn(),
-    dbUpdateMock: vi.fn(() => ({ set: setSpy })),
-    setSpy,
-    revokeAllUserSessionsMock: vi.fn().mockResolvedValue(3),
-  };
-});
+const { suspendUserMock, unsuspendUserMock, callWebTakedownMock, holdRowsMock } = vi.hoisted(() => ({
+  suspendUserMock: vi.fn(),
+  unsuspendUserMock: vi.fn(),
+  callWebTakedownMock: vi.fn(),
+  holdRowsMock: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/auth/suspend-user', () => ({
+  suspendUser: suspendUserMock,
+  unsuspendUser: unsuspendUserMock,
+}));
+vi.mock('@/lib/content/web-takedown', () => ({ callWebTakedown: callWebTakedownMock }));
 
 vi.mock('@pagespace/db/db', () => ({
-  db: { select: dbSelectMock, update: dbUpdateMock },
+  db: { select: () => ({ from: () => ({ where: () => ({ limit: () => holdRowsMock() }) }) }) },
 }));
-vi.mock('@pagespace/db/operators', () => ({
-  eq: vi.fn(),
-}));
-vi.mock('@pagespace/db/schema/auth', () => ({
-  users: { id: 'id', suspendedAt: 'suspendedAt' },
-}));
-
-vi.mock('@pagespace/lib/auth/session-service', () => ({
-  sessionService: { revokeAllUserSessions: revokeAllUserSessionsMock },
+vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn(), and: vi.fn() }));
+vi.mock('@pagespace/db/schema/content-safety', () => ({
+  contentSiteHolds: { driveId: 'driveId', userId: 'userId', source: 'source' },
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
@@ -49,10 +50,6 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 import { POST, DELETE } from '../route';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
-const selectResult = (rows: unknown[]) => ({
-  from: () => ({ where: () => Promise.resolve(rows) }),
-});
-
 function request(method: 'POST' | 'DELETE', body?: unknown) {
   return new NextRequest('http://localhost/api/admin/users/user-1/suspend', {
     method,
@@ -65,26 +62,25 @@ const ctx = (userId = 'user-1') => ({ params: Promise.resolve({ userId }) });
 describe('/api/admin/users/[userId]/suspend', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    dbSelectMock.mockReset();
-    revokeAllUserSessionsMock.mockResolvedValue(3);
+    suspendUserMock.mockResolvedValue({ status: 'suspended', revokedSessions: 3 });
+    unsuspendUserMock.mockResolvedValue({ status: 'reactivated' });
+    holdRowsMock.mockResolvedValue([]);
+    callWebTakedownMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: { action: 'park_user_sites', caseId: 'case-1', status: 'actioned', parkedDriveIds: ['drive-1'], skippedDrives: [] },
+    });
   });
 
   describe('POST (suspend)', () => {
-    it('suspends the user, revokes all sessions, and audits reason + count', async () => {
-      dbSelectMock.mockReturnValueOnce(selectResult([{ id: 'user-1', suspendedAt: null }]));
-
+    it('suspends the user through the shared function, and audits reason + revoked session count', async () => {
       const res = await POST(request('POST', { reason: 'ToS violation' }), ctx());
       const body = await res.json();
 
       expect(res.status).toBe(200);
       expect(body.success).toBe(true);
       expect(body.revokedSessions).toBe(3);
-
-      const setArgs = setSpy.mock.calls[0][0] as unknown as { suspendedAt: Date; suspendedReason: string };
-      expect(setArgs.suspendedAt).toBeInstanceOf(Date);
-      expect(setArgs.suspendedReason).toBe('ToS violation');
-
-      expect(revokeAllUserSessionsMock).toHaveBeenCalledWith('user-1', 'admin_suspension');
+      expect(suspendUserMock).toHaveBeenCalledWith({ userId: 'user-1', reason: 'ToS violation' });
 
       expect(auditRequest).toHaveBeenCalledWith(
         expect.any(Request),
@@ -102,13 +98,19 @@ describe('/api/admin/users/[userId]/suspend', () => {
       );
     });
 
+    it('leaves published sites alone unless asked to park them', async () => {
+      const res = await POST(request('POST', { reason: 'ToS violation' }), ctx());
+
+      expect(callWebTakedownMock).not.toHaveBeenCalled();
+      expect((await res.json()).sites).toBeUndefined();
+    });
+
     it('requires a non-empty reason', async () => {
       for (const body of [undefined, {}, { reason: '   ' }]) {
         const res = await POST(request('POST', body), ctx());
         expect(res.status).toBe(400);
       }
-      expect(dbUpdateMock).not.toHaveBeenCalled();
-      expect(revokeAllUserSessionsMock).not.toHaveBeenCalled();
+      expect(suspendUserMock).not.toHaveBeenCalled();
     });
 
     it('blocks self-suspension', async () => {
@@ -117,34 +119,105 @@ describe('/api/admin/users/[userId]/suspend', () => {
 
       expect(res.status).toBe(400);
       expect(body.error).toContain('your own account');
-      expect(dbUpdateMock).not.toHaveBeenCalled();
+      expect(suspendUserMock).not.toHaveBeenCalled();
     });
 
     it('returns 404 for an unknown user', async () => {
-      dbSelectMock.mockReturnValueOnce(selectResult([]));
+      suspendUserMock.mockResolvedValue({ status: 'not_found' });
       const res = await POST(request('POST', { reason: 'spam' }), ctx());
       expect(res.status).toBe(404);
     });
 
-    it('returns 409 when the user is already suspended', async () => {
-      dbSelectMock.mockReturnValueOnce(selectResult([{ id: 'user-1', suspendedAt: new Date() }]));
-      const res = await POST(request('POST', { reason: 'again' }), ctx());
+    it('returns 409 when the user is already suspended, and parks nothing', async () => {
+      suspendUserMock.mockResolvedValue({ status: 'already_suspended' });
+      const res = await POST(request('POST', { reason: 'again', parkSites: true }), ctx());
+
       expect(res.status).toBe(409);
-      expect(dbUpdateMock).not.toHaveBeenCalled();
+      expect(callWebTakedownMock).not.toHaveBeenCalled();
+      expect(auditRequest).not.toHaveBeenCalled();
+    });
+
+    describe('with parkSites', () => {
+      it('parks the user\'s sites through the web app and reports what was parked', async () => {
+        const res = await POST(request('POST', { reason: 'abuse', parkSites: true }), ctx());
+        const body = await res.json();
+
+        expect(callWebTakedownMock).toHaveBeenCalledWith({ action: 'park_user_sites', userId: 'user-1', reason: 'abuse' }, 'admin-1');
+        expect(body.sites).toEqual({ caseId: 'case-1', parkedDriveIds: ['drive-1'], skippedDrives: [] });
+        expect(body.message).toContain('1 drive(s) had their published sites parked');
+      });
+
+      it('reports org drives with other members as skipped, for an admin to decide', async () => {
+        callWebTakedownMock.mockResolvedValue({
+          ok: true,
+          status: 200,
+          body: {
+            action: 'park_user_sites',
+            caseId: 'case-1',
+            status: 'actioned',
+            parkedDriveIds: [],
+            skippedDrives: [{ driveId: 'drive-9', reason: 'org_drive_with_other_members' }],
+          },
+        });
+
+        const body = await (await POST(request('POST', { reason: 'abuse', parkSites: true }), ctx())).json();
+
+        expect(body.sites.skippedDrives).toEqual([{ driveId: 'drive-9', reason: 'org_drive_with_other_members' }]);
+        expect(body.message).toContain('need a decision');
+      });
+
+      it('audits the parking as its own event, separate from the suspension', async () => {
+        await POST(request('POST', { reason: 'abuse', parkSites: true }), ctx());
+
+        expect(auditRequest).toHaveBeenCalledWith(
+          expect.any(Request),
+          expect.objectContaining({
+            eventType: 'content.takedown.sites_parked',
+            userId: 'admin-1',
+            resourceType: 'user',
+            resourceId: 'user-1',
+            details: expect.objectContaining({ caseId: 'case-1', parkedDriveIds: ['drive-1'], outcome: 'completed' }),
+          }),
+        );
+      });
+
+      it('keeps the suspension and says so plainly when the sites could not be parked', async () => {
+        callWebTakedownMock.mockResolvedValue({ ok: false, status: 503, error: 'Content takedown is not configured on this host.' });
+
+        const res = await POST(request('POST', { reason: 'abuse', parkSites: true }), ctx());
+        const body = await res.json();
+
+        expect(res.status).toBe(200);
+        expect(body.success).toBe(true);
+        expect(body.sites.error).toContain('not configured');
+        expect(body.message).toContain('could NOT be parked');
+        expect(auditRequest).toHaveBeenCalledWith(
+          expect.any(Request),
+          expect.objectContaining({ eventType: 'content.takedown.sites_parked', details: expect.objectContaining({ outcome: 'not_completed' }) }),
+        );
+      });
+
+      it('reports a parking step that failed part-way', async () => {
+        callWebTakedownMock.mockResolvedValue({
+          ok: true,
+          status: 200,
+          body: { action: 'park_user_sites', caseId: 'case-1', status: 'open', failedStep: 'park_sites', error: 'Could not park acme' },
+        });
+
+        const body = await (await POST(request('POST', { reason: 'abuse', parkSites: true }), ctx())).json();
+        expect(body.sites).toMatchObject({ caseId: 'case-1', error: 'Could not park acme' });
+      });
     });
   });
 
   describe('DELETE (unsuspend)', () => {
-    it('clears suspension fields and audits', async () => {
-      dbSelectMock.mockReturnValueOnce(selectResult([{ id: 'user-1', suspendedAt: new Date() }]));
-
+    it('lifts the suspension through the shared function and audits', async () => {
       const res = await DELETE(request('DELETE', { reason: 'appeal accepted' }), ctx());
       const body = await res.json();
 
       expect(res.status).toBe(200);
       expect(body.success).toBe(true);
-
-      expect(setSpy).toHaveBeenCalledWith({ suspendedAt: null, suspendedReason: null });
+      expect(unsuspendUserMock).toHaveBeenCalledWith('user-1');
 
       expect(auditRequest).toHaveBeenCalledWith(
         expect.any(Request),
@@ -160,22 +233,50 @@ describe('/api/admin/users/[userId]/suspend', () => {
     });
 
     it('works without a reason (defaults)', async () => {
-      dbSelectMock.mockReturnValueOnce(selectResult([{ id: 'user-1', suspendedAt: new Date() }]));
       const res = await DELETE(request('DELETE'), ctx());
       expect(res.status).toBe(200);
     });
 
     it('returns 409 when the user is not suspended', async () => {
-      dbSelectMock.mockReturnValueOnce(selectResult([{ id: 'user-1', suspendedAt: null }]));
+      unsuspendUserMock.mockResolvedValue({ status: 'not_suspended' });
       const res = await DELETE(request('DELETE'), ctx());
       expect(res.status).toBe(409);
-      expect(dbUpdateMock).not.toHaveBeenCalled();
     });
 
     it('returns 404 for an unknown user', async () => {
-      dbSelectMock.mockReturnValueOnce(selectResult([]));
+      unsuspendUserMock.mockResolvedValue({ status: 'not_found' });
       const res = await DELETE(request('DELETE'), ctx());
       expect(res.status).toBe(404);
+    });
+
+    it('does not call the web app when the suspension parked nothing', async () => {
+      await DELETE(request('DELETE'), ctx());
+      expect(callWebTakedownMock).not.toHaveBeenCalled();
+    });
+
+    it('restores the sites the suspension parked, and audits it', async () => {
+      holdRowsMock.mockResolvedValue([{ driveId: 'drive-1' }]);
+      callWebTakedownMock.mockResolvedValue({ ok: true, status: 200, body: { action: 'restore_user_sites', restoredDriveIds: ['drive-1'] } });
+
+      const body = await (await DELETE(request('DELETE'), ctx())).json();
+
+      expect(callWebTakedownMock).toHaveBeenCalledWith({ action: 'restore_user_sites', userId: 'user-1' }, 'admin-1');
+      expect(body.sites).toEqual({ restoredDriveIds: ['drive-1'] });
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({ eventType: 'content.takedown.sites_restored', resourceId: 'user-1' }),
+      );
+    });
+
+    it('still lifts the suspension, and says so, when the sites could not be restored', async () => {
+      holdRowsMock.mockResolvedValue([{ driveId: 'drive-1' }]);
+      callWebTakedownMock.mockResolvedValue({ ok: false, status: 502, error: 'Failed to reach the web app.' });
+
+      const res = await DELETE(request('DELETE'), ctx());
+      const body = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(body.message).toContain('could not be restored');
     });
   });
 });
