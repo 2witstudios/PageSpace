@@ -1,15 +1,10 @@
 import 'server-only';
 
-import {
-  CopyObjectCommand,
-  DeleteObjectsCommand,
-  HeadObjectCommand,
-  ListObjectsV2Command,
-  PutObjectCommand,
-} from '@aws-sdk/client-s3';
+import { CopyObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import type { TakedownOriginal, TakedownStorage } from '@pagespace/lib/content-safety/takedown';
 import { normalizeContentHash } from '@pagespace/lib/content-safety/policy';
 import { getS3Bucket, getS3Client } from '@/lib/presigned-url';
+import { deleteS3Keys, headS3Object, listS3Prefix, type S3ObjectInfo } from '@/lib/storage/s3-objects';
 import {
   deletePublishedAssetsForHash,
   headPublishedAsset,
@@ -57,22 +52,6 @@ export function getEvidenceBucket(): string | null {
   return bucket;
 }
 
-function isNotFound(err: unknown): boolean {
-  const anyErr = err as { name?: string; $metadata?: { httpStatusCode?: number } };
-  return anyErr?.name === 'NotFound' || anyErr?.name === 'NoSuchKey' || anyErr?.$metadata?.httpStatusCode === 404;
-}
-
-/** Size of an object, or null on a definite not-found. Any other failure throws. */
-async function headObject(bucket: string, key: string): Promise<{ size: number } | null> {
-  try {
-    const head = await getS3Client().send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
-    return { size: head.ContentLength ?? 0 };
-  } catch (err) {
-    if (isNotFound(err)) return null;
-    throw err;
-  }
-}
-
 function requireHash(contentHash: string): string {
   const hash = normalizeContentHash(contentHash);
   if (!hash) throw new Error('Invalid content hash');
@@ -85,35 +64,12 @@ function requireEvidenceBucket(): string {
   return bucket;
 }
 
-/** Every object under a prefix in the uploads bucket. */
-async function listUploadsPrefix(prefix: string): Promise<Array<{ key: string; size: number }>> {
-  const client = getS3Client();
-  const bucket = getS3Bucket();
-  const objects: Array<{ key: string; size: number }> = [];
-  let continuationToken: string | undefined;
-  do {
-    const listed = await client.send(
-      new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ContinuationToken: continuationToken }),
-    );
-    for (const obj of listed.Contents ?? []) if (obj.Key) objects.push({ key: obj.Key, size: obj.Size ?? 0 });
-    continuationToken = listed.IsTruncated ? listed.NextContinuationToken : undefined;
-  } while (continuationToken);
-  return objects;
-}
-
-/** Delete every object under a prefix in the uploads bucket. Returns the number deleted. */
-async function deleteUploadsPrefix(prefix: string): Promise<number> {
-  const keys = (await listUploadsPrefix(prefix)).map((object) => object.key);
-  for (let i = 0; i < keys.length; i += 1000) {
-    const result = await getS3Client().send(
-      new DeleteObjectsCommand({ Bucket: getS3Bucket(), Delete: { Objects: keys.slice(i, i + 1000).map((Key) => ({ Key })) } }),
-    );
-    // Not Quiet: a partial failure must fail the step so it is retried, not be counted as deleted.
-    if (result.Errors && result.Errors.length > 0) {
-      throw new Error(`Failed to delete ${result.Errors.length} object(s) under ${prefix}`);
-    }
-  }
-  return keys.length;
+/** Every object the uploads bucket holds for a hash. The three prefixes are independent, so they are listed together. */
+async function listUploadsObjects(hash: string): Promise<S3ObjectInfo[]> {
+  const perPrefix = await Promise.all(
+    uploadsPrefixesFor(hash).map((prefix) => listS3Prefix(getS3Client(), getS3Bucket(), prefix)),
+  );
+  return perPrefix.flat();
 }
 
 export function createTakedownStorage(): TakedownStorage {
@@ -123,8 +79,8 @@ export function createTakedownStorage(): TakedownStorage {
     async findOriginal(contentHash): Promise<TakedownOriginal | null> {
       const hash = requireHash(contentHash);
       for (const key of uploadsOriginalKeysFor(hash)) {
-        const head = await headObject(getS3Bucket(), key);
-        if (head) return { store: 'uploads', key, size: head.size };
+        const head = await headS3Object(getS3Client(), getS3Bucket(), key);
+        if (head) return { store: 'uploads', ...head };
       }
       // The private original may already have been reaped while its public copy
       // lives on (by now in quarantine, unless that step has not run yet).
@@ -137,14 +93,12 @@ export function createTakedownStorage(): TakedownStorage {
 
     async listObjects(contentHash) {
       const hash = requireHash(contentHash);
-      const objects: TakedownOriginal[] = [];
-      for (const prefix of uploadsPrefixesFor(hash)) {
-        for (const object of await listUploadsPrefix(prefix)) objects.push({ store: 'uploads', ...object });
-      }
-      if (isPublishConfigured()) {
-        for (const object of await listPublishedObjectsForHash(hash)) objects.push({ store: 'publish', ...object });
-      }
-      return objects;
+      const uploads = await listUploadsObjects(hash);
+      const published = isPublishConfigured() ? await listPublishedObjectsForHash(hash) : [];
+      return [
+        ...uploads.map((object) => ({ store: 'uploads' as const, ...object })),
+        ...published.map((object) => ({ store: 'publish' as const, ...object })),
+      ];
     },
 
     async quarantinePublic(contentHash) {
@@ -152,7 +106,10 @@ export function createTakedownStorage(): TakedownStorage {
       return isPublishConfigured() ? quarantinePublishedAssetsForHash(hash) : 0;
     },
 
-    headEvidence: (evidenceKey) => headObject(requireEvidenceBucket(), evidenceKey),
+    async headEvidence(evidenceKey) {
+      const head = await headS3Object(getS3Client(), requireEvidenceBucket(), evidenceKey);
+      return head ? { size: head.size } : null;
+    },
 
     async copyToEvidence(source, evidenceKey) {
       const evidenceBucket = requireEvidenceBucket();
@@ -184,10 +141,9 @@ export function createTakedownStorage(): TakedownStorage {
     },
 
     async deleteFromUploads(contentHash) {
-      const hash = requireHash(contentHash);
-      let deleted = 0;
-      for (const prefix of uploadsPrefixesFor(hash)) deleted += await deleteUploadsPrefix(prefix);
-      return deleted;
+      const keys = (await listUploadsObjects(requireHash(contentHash))).map((object) => object.key);
+      await deleteS3Keys(getS3Client(), getS3Bucket(), keys);
+      return keys.length;
     },
 
     async deleteFromPublish(contentHash) {

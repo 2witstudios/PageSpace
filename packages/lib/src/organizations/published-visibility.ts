@@ -89,12 +89,17 @@ export async function resolvePrefixOwner(prefix: string, executor: Executor = db
   return null;
 }
 
-/** Whether this owner's prefix should be public: no content-safety hold on the drive, and the org's live policy allows it. */
-async function ownerVisible(owner: PrefixOwner, executor: Executor): Promise<boolean> {
-  if (await isDriveSiteHeld(owner.driveId, executor)) return false;
-  if (!owner.orgId) return true;
-  return prefixVisible(await getOrgPolicies(owner.orgId, executor), owner.kind);
+/**
+ * Why an owner's prefix is or is not public: `held` by a content-safety hold on the drive (checked first, it
+ * overrides everything), hidden by the org's live `policy`, or `visible`. The one statement of the rule.
+ */
+async function ownerVisibility(owner: PrefixOwner, executor: Executor): Promise<'visible' | 'held' | 'policy'> {
+  if (await isDriveSiteHeld(owner.driveId, executor)) return 'held';
+  if (owner.orgId && !prefixVisible(await getOrgPolicies(owner.orgId, executor), owner.kind)) return 'policy';
+  return 'visible';
 }
+
+const ownerVisible = async (owner: PrefixOwner, executor: Executor) => (await ownerVisibility(owner, executor)) === 'visible';
 
 /**
  * Whether the prefix is publicly readable right now: its drive is not held, and the live policy of its owner's
@@ -102,16 +107,16 @@ async function ownerVisible(owner: PrefixOwner, executor: Executor): Promise<boo
  */
 export async function isPrefixVisible(prefix: string, executor: Executor = db): Promise<boolean> {
   const owner = await resolvePrefixOwner(prefix, executor);
-  if (!owner) return true;
-  return ownerVisible(owner, executor);
+  return owner ? ownerVisible(owner, executor) : true;
 }
 
 /** Refuse a write into a hidden site. Called before every PUT or COPY into `published/<prefix>/`. */
 export async function assertPrefixWritable(prefix: string, executor: Executor = db): Promise<void> {
   const owner = await resolvePrefixOwner(prefix, executor);
   if (!owner) return;
-  if (await isDriveSiteHeld(owner.driveId, executor)) throw new PublishHeldError(prefix);
-  if (owner.orgId && !prefixVisible(await getOrgPolicies(owner.orgId, executor), owner.kind)) throw new PublishHiddenError(prefix);
+  const visibility = await ownerVisibility(owner, executor);
+  if (visibility === 'held') throw new PublishHeldError(prefix);
+  if (visibility === 'policy') throw new PublishHiddenError(prefix);
 }
 
 export interface PrefixOutcome {

@@ -2,9 +2,10 @@
  * Content cases — the database edge for takedowns: open a case, record its
  * steps, write the block, and read cases back for the admin console.
  *
- * `steps` and `snapshot` are only ever appended to or merged in SQL, never
- * read-modified-written, so two runs of the same case cannot lose each other's
- * entries.
+ * While a case runs, `steps` and `snapshot` are only ever appended to or merged
+ * in SQL, never read-modified-written, so two runs of the same case cannot lose
+ * each other's entries. (Reopening a case merges its options in code first;
+ * that happens before a run starts, not during one.)
  */
 
 import { db } from '@pagespace/db/db';
@@ -20,15 +21,16 @@ import {
 } from '@pagespace/db/schema/content-safety';
 import { collectContentReferences } from './references';
 import type { TakedownCaseStore } from './takedown';
+import { RESWEEP_MARKER } from './takedown-plan';
 
 type TakedownOptions = NonNullable<ContentCaseSnapshot['takedown']>;
 
+/** Which takedown a case runs lives on its snapshot; this is the one place that knows where. */
+const takedownKindIs = (kind: TakedownOptions['kind']) => sql`${contentCases.snapshot} -> 'takedown' ->> 'kind' = ${kind}`;
+
 export function createTakedownCaseStore(): TakedownCaseStore {
   return {
-    async load(caseId) {
-      const [row] = await db.select().from(contentCases).where(eq(contentCases.id, caseId)).limit(1);
-      return row ?? null;
-    },
+    load: getContentCase,
     async appendStep(caseId, step) {
       await db
         .update(contentCases)
@@ -89,7 +91,7 @@ export async function openTakedownCase(input: OpenTakedownCaseInput): Promise<Op
         eq(contentCases.targetType, input.targetType),
         eq(contentCases.targetId, input.targetId),
         inArray(contentCases.status, ['open', 'awaiting_evidence']),
-        sql`${contentCases.snapshot} -> 'takedown' ->> 'kind' = ${input.takedown.kind}`,
+        takedownKindIs(input.takedown.kind),
       ),
     )
     .orderBy(desc(contentCases.createdAt))
@@ -180,10 +182,10 @@ export async function listCasesDueForResweep(input: { actionedBefore: Date; acti
     .where(
       and(
         eq(contentCases.status, 'actioned'),
-        sql`${contentCases.snapshot} -> 'takedown' ->> 'kind' = 'global'`,
+        takedownKindIs('global'),
         lte(contentCases.updatedAt, input.actionedBefore),
         gte(contentCases.updatedAt, input.actionedAfter),
-        sql`NOT (coalesce(${contentCases.steps}, '[]'::jsonb) @> '[{"step":"resweep"}]'::jsonb)`,
+        sql`NOT (coalesce(${contentCases.steps}, '[]'::jsonb) @> ${JSON.stringify([{ step: RESWEEP_MARKER }])}::jsonb)`,
       ),
     )
     .orderBy(contentCases.updatedAt)

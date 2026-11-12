@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import type { ContentTakedownKind } from '@pagespace/db/schema/content-safety';
 import type { SecurityEventType } from '@pagespace/db/schema/security-audit';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getContentCase } from '@pagespace/lib/content-safety/case-store';
@@ -25,37 +26,37 @@ import { callWebTakedown } from '@/lib/content/web-takedown';
 
 type AuditTarget = { eventType: SecurityEventType; resourceType: string; resourceId: string };
 
-const KIND_EVENT: Record<string, SecurityEventType> = {
+const KIND_EVENT: Record<ContentTakedownKind, SecurityEventType> = {
   global: 'content.takedown.global',
   unpublish_page: 'content.takedown.page_unpublished',
   park_drive: 'content.takedown.sites_parked',
   park_user_sites: 'content.takedown.sites_parked',
   avatar: 'content.takedown.avatar',
 };
+const RESTORED: SecurityEventType = 'content.takedown.sites_restored';
 
 async function auditTargetFor(request: TakedownRequest): Promise<AuditTarget> {
   switch (request.action) {
     case 'global':
-      return { eventType: 'content.takedown.global', resourceType: 'file', resourceId: request.contentHash.toLowerCase() };
+      return { eventType: KIND_EVENT.global, resourceType: 'file', resourceId: request.contentHash.toLowerCase() };
     case 'unpublish_page':
-      return { eventType: 'content.takedown.page_unpublished', resourceType: 'page', resourceId: request.pageId };
+      return { eventType: KIND_EVENT.unpublish_page, resourceType: 'page', resourceId: request.pageId };
     case 'park_drive':
-      return { eventType: 'content.takedown.sites_parked', resourceType: 'drive', resourceId: request.driveId };
+      return { eventType: KIND_EVENT.park_drive, resourceType: 'drive', resourceId: request.driveId };
     case 'restore_drive':
-      return { eventType: 'content.takedown.sites_restored', resourceType: 'drive', resourceId: request.driveId };
+      return { eventType: RESTORED, resourceType: 'drive', resourceId: request.driveId };
     case 'avatar':
-      return { eventType: 'content.takedown.avatar', resourceType: 'user', resourceId: request.userId };
+      return { eventType: KIND_EVENT.avatar, resourceType: 'user', resourceId: request.userId };
     case 'park_user_sites':
-      return { eventType: 'content.takedown.sites_parked', resourceType: 'user', resourceId: request.userId };
+      return { eventType: KIND_EVENT.park_user_sites, resourceType: 'user', resourceId: request.userId };
     case 'restore_user_sites':
-      return { eventType: 'content.takedown.sites_restored', resourceType: 'user', resourceId: request.userId };
+      return { eventType: RESTORED, resourceType: 'user', resourceId: request.userId };
     case 'resweep':
-      return { eventType: 'content.takedown.global', resourceType: 'content_case', resourceId: request.caseId };
+      return { eventType: KIND_EVENT.global, resourceType: 'content_case', resourceId: request.caseId };
     case 'resume': {
       // A resume is the same action as the case it continues, so it is audited as that action.
-      const row = await getContentCase(request.caseId);
-      const eventType = KIND_EVENT[row?.snapshot?.takedown?.kind ?? ''] ?? 'content.takedown.global';
-      return { eventType, resourceType: 'content_case', resourceId: request.caseId };
+      const kind = (await getContentCase(request.caseId))?.snapshot?.takedown?.kind ?? 'global';
+      return { eventType: KIND_EVENT[kind], resourceType: 'content_case', resourceId: request.caseId };
     }
   }
 }

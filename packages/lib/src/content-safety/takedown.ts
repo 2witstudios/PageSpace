@@ -19,6 +19,7 @@ import type {
   ContentCaseStatus,
   ContentCaseStep,
 } from '@pagespace/db/schema/content-safety';
+import type { SuspendUserResult } from '../auth/suspend-user';
 import { allowsGlobalTakedown } from './policy';
 import {
   RESWEEP_MARKER,
@@ -80,12 +81,8 @@ export interface TakedownCaseStore {
   collectReferences(contentHash: string): Promise<ContentReferences>;
 }
 
-export type SuspendUserOutcome =
-  | { status: 'suspended'; revokedSessions: number }
-  | { status: 'already_suspended' }
-  | { status: 'not_found' }
-  /** The account is an admin: a takedown never suspends one automatically. */
-  | { status: 'skipped_admin' };
+/** `skipped_admin`: the account is an admin, and a takedown never suspends one automatically. */
+export type SuspendUserOutcome = SuspendUserResult | { status: 'skipped_admin' };
 
 /**
  * The most accounts one takedown will suspend on its own. Storage is shared by
@@ -110,6 +107,9 @@ export interface TakedownDeps {
   now?: () => Date;
 }
 
+/** What recording a case needs: the store, alerting and the clock. No storage. */
+type CaseDeps = Pick<TakedownDeps, 'cases' | 'alert' | 'now'>;
+
 export interface TakedownRunResult {
   caseId: string;
   status: ContentCaseStatus;
@@ -125,9 +125,14 @@ export function evidenceKeyFor(caseId: string, contentHash: string): string {
   return `cases/${caseId}/${contentHash}/original`;
 }
 
-/** Where a derived object is preserved when the original itself no longer exists. */
+/** The prefix a case's derived objects are preserved under when the original itself no longer exists. */
+function derivedEvidencePrefixFor(caseId: string, contentHash: string): string {
+  return `cases/${caseId}/${contentHash}/derived/`;
+}
+
+/** Where one derived object is preserved. */
 export function derivedEvidenceKeyFor(caseId: string, contentHash: string, source: TakedownOriginal): string {
-  return `cases/${caseId}/${contentHash}/derived/${source.store}/${source.key}`;
+  return `${derivedEvidencePrefixFor(caseId, contentHash)}${source.store}/${source.key}`;
 }
 
 /** Copy one object to the evidence bucket and prove the copy is whole. Throws if it is not. */
@@ -143,26 +148,23 @@ async function copyAndVerify(source: TakedownOriginal, evidenceKey: string, deps
 
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
-async function loadCase(caseId: string, deps: TakedownDeps): Promise<ContentCase> {
+async function loadCase(caseId: string, deps: CaseDeps): Promise<ContentCase> {
   const row = await deps.cases.load(caseId);
   if (!row) throw new Error(`Content case ${caseId} not found`);
   return row;
 }
 
-async function safeAlert(deps: TakedownDeps, alert: TakedownAlert): Promise<void> {
+/** Send an alert, best-effort: an unsent email must not undo or fail a takedown; the case row is the record. */
+export async function safeAlert(deps: Pick<TakedownDeps, 'alert'>, alert: TakedownAlert): Promise<void> {
   try {
     await deps.alert(alert);
   } catch {
-    // An unsent email must not undo or fail a takedown; the case row is the record.
+    // Swallowed by design; the alert sender logs its own failure.
   }
 }
 
 /** Set the status and, only when it actually changed, send the matching alert. */
-async function settle(
-  row: ContentCase,
-  status: ContentCaseStatus,
-  deps: TakedownDeps,
-): Promise<void> {
+async function settle(row: ContentCase, status: ContentCaseStatus, deps: CaseDeps): Promise<void> {
   if (row.status === status) return;
   await deps.cases.setStatus(row.id, status);
   if (status === 'actioned' || status === 'awaiting_evidence') {
@@ -170,7 +172,7 @@ async function settle(
   }
 }
 
-function stepEntry(step: string, status: ContentCaseStep['status'], detail: string | undefined, deps: TakedownDeps): ContentCaseStep {
+function stepEntry(step: string, status: ContentCaseStep['status'], detail: string | undefined, deps: CaseDeps): ContentCaseStep {
   const at = (deps.now?.() ?? new Date()).toISOString();
   return detail ? { step, status, detail, at } : { step, status, at };
 }
@@ -201,23 +203,18 @@ async function executeGlobalStep(
       const existing = await deps.storage.headEvidence(evidenceKey);
       const source = await deps.storage.findOriginal(contentHash);
 
+      // A copy from an earlier attempt counts only if it is whole: one that failed
+      // verification is copied again, not trusted because it exists. With the
+      // original gone there is nothing to compare against, and the deletes only
+      // ever run after a verified copy, so that copy was verified.
+      if (existing && (!source || existing.size === source.size)) {
+        await deps.cases.mergeSnapshot(row.id, { evidenceKey });
+        return { detail: 'already_preserved' };
+      }
       if (source) {
-        // A copy left by an earlier attempt counts only if it is whole. One that
-        // failed verification is copied again rather than trusted because it exists.
-        if (existing && existing.size === source.size) {
-          await deps.cases.mergeSnapshot(row.id, { evidenceKey });
-          return { detail: 'already_preserved' };
-        }
         const bytes = await copyAndVerify(source, evidenceKey, deps);
         await deps.cases.mergeSnapshot(row.id, { evidenceKey });
         return { detail: `source=${source.store} bytes=${bytes}` };
-      }
-
-      if (existing) {
-        // The original is gone, so there is nothing left to compare against; the
-        // deletes only ever run after a verified copy, so this one was verified.
-        await deps.cases.mergeSnapshot(row.id, { evidenceKey });
-        return { detail: 'already_preserved' };
       }
 
       // No original anywhere. For CSAM, whatever derived objects remain
@@ -229,7 +226,7 @@ async function executeGlobalStep(
           for (const object of derived) {
             await copyAndVerify(object, derivedEvidenceKeyFor(row.id, contentHash, object), deps);
           }
-          await deps.cases.mergeSnapshot(row.id, { evidenceKey: `cases/${row.id}/${contentHash}/derived/` });
+          await deps.cases.mergeSnapshot(row.id, { evidenceKey: derivedEvidencePrefixFor(row.id, contentHash) });
           return { detail: `no_original derived_preserved=${derived.length}` };
         }
       }
@@ -349,13 +346,8 @@ export interface LinearStep {
  * rules as the global takedown. Used by the scoped, avatar and site-parking
  * takedowns, whose plans have no branching.
  */
-export async function runLinearCase(
-  caseId: string,
-  plan: readonly LinearStep[],
-  deps: Pick<TakedownDeps, 'cases' | 'alert' | 'now'>,
-): Promise<TakedownRunResult> {
-  const fullDeps = deps as TakedownDeps;
-  const row = await loadCase(caseId, fullDeps);
+export async function runLinearCase(caseId: string, plan: readonly LinearStep[], deps: CaseDeps): Promise<TakedownRunResult> {
+  const row = await loadCase(caseId, deps);
   const steps = row.steps ?? [];
 
   for (const { step, run } of plan) {
@@ -363,15 +355,15 @@ export async function runLinearCase(
     if (latest && latest.status !== 'failed') continue;
     try {
       const detail = (await run()) ?? undefined;
-      await deps.cases.appendStep(caseId, stepEntry(step, 'ok', detail, fullDeps));
+      await deps.cases.appendStep(caseId, stepEntry(step, 'ok', detail, deps));
     } catch (error) {
       const message = errorMessage(error);
-      await deps.cases.appendStep(caseId, stepEntry(step, 'failed', message, fullDeps));
-      await settle(row, 'open', fullDeps);
+      await deps.cases.appendStep(caseId, stepEntry(step, 'failed', message, deps));
+      await settle(row, 'open', deps);
       return { caseId, status: 'open', failedStep: step, error: message };
     }
   }
 
-  await settle(row, 'actioned', fullDeps);
+  await settle(row, 'actioned', deps);
   return { caseId, status: 'actioned' };
 }

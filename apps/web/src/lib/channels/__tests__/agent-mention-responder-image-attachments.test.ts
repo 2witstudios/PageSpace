@@ -99,9 +99,9 @@ vi.mock('@pagespace/lib/permissions/file-access', () => ({
   canUserAccessFile: (...args: unknown[]) => mockCanUserAccessFile(...args),
 }));
 
-const mockIsHashBlocked = vi.fn();
+const mockFindBlockedHashes = vi.fn();
 vi.mock('@pagespace/lib/content-safety/blocklist', () => ({
-  isHashBlocked: (...args: unknown[]) => mockIsHashBlocked(...args),
+  findBlockedHashes: (...args: unknown[]) => mockFindBlockedHashes(...args),
 }));
 
 const mockGeneratePresignedUrl = vi.fn();
@@ -169,12 +169,12 @@ describe('triggerMentionedAgentResponses — image attachment plumbing', () => {
     mockAskAgentExecute.mockResolvedValue({ success: true, response: 'Reply' });
     mockSendChannelExecute.mockResolvedValue({ success: true });
     mockCanUserAccessFile.mockResolvedValue(true);
-    mockIsHashBlocked.mockResolvedValue(false);
+    mockFindBlockedHashes.mockResolvedValue(new Set());
     mockGeneratePresignedUrl.mockResolvedValue('https://example.com/signed/screenshot.png');
   });
 
   it('given an image attachment that was taken down, signs no URL for it and passes the agent no image', async () => {
-    mockIsHashBlocked.mockResolvedValue(true);
+    mockFindBlockedHashes.mockResolvedValue(new Set([STORED_CONTENT_HASH]));
     mockPagesFindMany.mockResolvedValue([
       { id: 'agent-1', title: 'Vision Agent', enabledTools: ['send_channel_message'], aiProvider: 'anthropic', aiModel: 'claude-sonnet-4.5' },
     ]);
@@ -184,7 +184,9 @@ describe('triggerMentionedAgentResponses — image attachment plumbing', () => {
       content: '@[Vision Agent](agent-1:page) look at this',
     });
 
-    expect(mockIsHashBlocked).toHaveBeenCalledWith(STORED_CONTENT_HASH);
+    expect(mockFindBlockedHashes).toHaveBeenCalledTimes(1);
+    expect(mockFindBlockedHashes).toHaveBeenCalledWith([STORED_CONTENT_HASH]);
+    expect(mockCanUserAccessFile).not.toHaveBeenCalled();
     expect(mockGeneratePresignedUrl).not.toHaveBeenCalled();
     expect(mockAskAgentExecute).toHaveBeenCalledTimes(1);
     expect(mockAskAgentExecute.mock.calls[0][0].imageAttachments ?? []).toEqual([]);

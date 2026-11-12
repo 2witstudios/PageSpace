@@ -7,12 +7,18 @@ import type { ContentCase } from '@pagespace/db/schema/content-safety';
 import { audit } from '@pagespace/lib/audit/audit-log';
 import { suspendUser } from '@pagespace/lib/auth/suspend-user';
 import { sendContentSafetyAlert } from '@pagespace/lib/content-safety/alerts';
-import { createTakedownCaseStore, getContentCase, openTakedownCase } from '@pagespace/lib/content-safety/case-store';
+import {
+  createTakedownCaseStore,
+  getContentCase,
+  openTakedownCase,
+  type OpenTakedownCaseInput,
+} from '@pagespace/lib/content-safety/case-store';
 import { normalizeContentHash } from '@pagespace/lib/content-safety/policy';
 import {
   resweepGlobalTakedown,
   runGlobalTakedown,
   runLinearCase,
+  safeAlert,
   type LinearStep,
   type TakedownDeps,
   type TakedownRunResult,
@@ -95,14 +101,6 @@ function createTakedownDeps(actorUserId: string | null): TakedownDeps {
     },
     alert: sendContentSafetyAlert,
   };
-}
-
-async function alertOpened(row: ContentCase, deps: TakedownDeps): Promise<void> {
-  try {
-    await deps.alert({ event: 'opened', caseId: row.id, category: row.category });
-  } catch {
-    // Best-effort, like every other alert: the case row is the record.
-  }
 }
 
 /**
@@ -239,6 +237,55 @@ async function requireCase(caseId: string): Promise<ContentCase> {
   return row;
 }
 
+type CaseOpeningRequest = Extract<TakedownRequest, { action: 'global' | 'unpublish_page' | 'park_drive' | 'avatar' | 'park_user_sites' }>;
+
+/** The case a request opens: its target, and the takedown it will run. Pure. */
+function caseInputFor(request: CaseOpeningRequest, actorUserId: string | undefined): OpenTakedownCaseInput {
+  const { reason } = request;
+  switch (request.action) {
+    case 'global': {
+      const contentHash = normalizeContentHash(request.contentHash);
+      if (!contentHash) throw new TakedownRequestError('Invalid content hash', 400);
+      return {
+        targetType: 'content_hash',
+        targetId: contentHash,
+        contentHash,
+        category: request.category,
+        reason,
+        takedown: {
+          kind: 'global',
+          actorUserId,
+          skipPreservation: request.skipPreservation === true,
+          skipPreservationReason: request.skipPreservationReason,
+          suspendUploader: request.suspendUploader === true,
+        },
+      };
+    }
+    case 'unpublish_page':
+      return { targetType: 'page', targetId: request.pageId, category: request.category, reason, takedown: { kind: 'unpublish_page', actorUserId } };
+    case 'park_drive':
+      return { targetType: 'drive', targetId: request.driveId, category: request.category, reason, takedown: { kind: 'park_drive', actorUserId } };
+    case 'avatar':
+      return {
+        targetType: 'avatar',
+        targetId: request.userId,
+        category: request.category,
+        reason,
+        takedown: { kind: 'avatar', actorUserId },
+        snapshot: { uploaderUserId: request.userId },
+      };
+    case 'park_user_sites':
+      return {
+        targetType: 'user',
+        targetId: request.userId,
+        category: 'policy',
+        reason,
+        takedown: { kind: 'park_user_sites', actorUserId },
+        snapshot: { uploaderUserId: request.userId },
+      };
+  }
+}
+
 /**
  * Execute a validated takedown request on behalf of an admin (or, with a null
  * actor, the system). Throws `TakedownRequestError` for a request that cannot
@@ -247,78 +294,18 @@ async function requireCase(caseId: string): Promise<ContentCase> {
  */
 export async function executeTakedown(request: TakedownRequest, actorUserId: string | null): Promise<TakedownResponse> {
   const deps = createTakedownDeps(actorUserId);
-  const open = async (input: Parameters<typeof openTakedownCase>[0]): Promise<ContentCase> => {
-    const opened = await openTakedownCase(input);
-    if (opened.created) await alertOpened(opened.case, deps);
-    return opened.case;
-  };
-  const actor = actorUserId ?? undefined;
 
   switch (request.action) {
-    case 'global': {
-      const contentHash = normalizeContentHash(request.contentHash);
-      if (!contentHash) throw new TakedownRequestError('Invalid content hash', 400);
-      const row = await open({
-        targetType: 'content_hash',
-        targetId: contentHash,
-        contentHash,
-        category: request.category,
-        reason: request.reason,
-        takedown: {
-          kind: 'global',
-          actorUserId: actor,
-          skipPreservation: request.skipPreservation === true,
-          skipPreservationReason: request.skipPreservationReason,
-          suspendUploader: request.suspendUploader === true,
-        },
-      });
-      return toResponse(request.action, await runCase(row, deps));
-    }
-
-    case 'unpublish_page': {
-      const row = await open({
-        targetType: 'page',
-        targetId: request.pageId,
-        category: request.category,
-        reason: request.reason,
-        takedown: { kind: 'unpublish_page', actorUserId: actor },
-      });
-      return toResponse(request.action, await runCase(row, deps));
-    }
-
-    case 'park_drive': {
-      const row = await open({
-        targetType: 'drive',
-        targetId: request.driveId,
-        category: request.category,
-        reason: request.reason,
-        takedown: { kind: 'park_drive', actorUserId: actor },
-      });
-      return toResponse(request.action, await runCase(row, deps));
-    }
-
-    case 'avatar': {
-      const row = await open({
-        targetType: 'avatar',
-        targetId: request.userId,
-        category: request.category,
-        reason: request.reason,
-        takedown: { kind: 'avatar', actorUserId: actor },
-        snapshot: { uploaderUserId: request.userId },
-      });
-      return toResponse(request.action, await runCase(row, deps));
-    }
-
+    case 'global':
+    case 'unpublish_page':
+    case 'park_drive':
+    case 'avatar':
     case 'park_user_sites': {
-      const row = await open({
-        targetType: 'user',
-        targetId: request.userId,
-        category: 'policy',
-        reason: request.reason,
-        takedown: { kind: 'park_user_sites', actorUserId: actor },
-        snapshot: { uploaderUserId: request.userId },
-      });
-      return toResponse(request.action, await runCase(row, deps));
+      const opened = await openTakedownCase(caseInputFor(request, actorUserId ?? undefined));
+      if (opened.created) {
+        await safeAlert(deps, { event: 'opened', caseId: opened.case.id, category: opened.case.category });
+      }
+      return toResponse(request.action, await runCase(opened.case, deps));
     }
 
     case 'restore_drive': {

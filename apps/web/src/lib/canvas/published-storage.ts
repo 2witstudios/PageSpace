@@ -11,6 +11,7 @@ import {
   ListObjectsV2Command,
 } from '@aws-sdk/client-s3';
 import { getS3Client, getS3Bucket } from '@/lib/presigned-url';
+import { deleteS3Keys, headS3Object, isS3NotFound, listS3Prefix, type S3ObjectInfo } from '@/lib/storage/s3-objects';
 import { isHashBlocked } from '@pagespace/lib/content-safety/blocklist';
 import { assertPrefixWritable } from '@pagespace/lib/organizations/published-visibility';
 import { PARKED_PREFIX, PUBLISHED_PREFIX, parkedKeyOf, type PublishedObjectStore } from '@pagespace/lib/organizations/published-visibility-core';
@@ -251,12 +252,7 @@ export async function publishedArtifactExists(key: string): Promise<boolean> {
     );
     return true;
   } catch (err: unknown) {
-    const anyErr = err as { name?: string; $metadata?: { httpStatusCode?: number } };
-    const is404 =
-      anyErr?.name === 'NotFound' ||
-      anyErr?.name === 'NoSuchKey' ||
-      anyErr?.$metadata?.httpStatusCode === 404;
-    if (is404) return false;
+    if (isS3NotFound(err)) return false;
     throw err;
   }
 }
@@ -412,12 +408,7 @@ export async function copyObjectToPublishBucket(params: {
     await getPublishClient().send(new HeadObjectCommand({ Bucket: publishBucket, Key: assetKey }));
     return;
   } catch (err: unknown) {
-    const anyErr = err as { name?: string; $metadata?: { httpStatusCode?: number } };
-    const is404 =
-      anyErr?.name === 'NotFound' ||
-      anyErr?.name === 'NoSuchKey' ||
-      anyErr?.$metadata?.httpStatusCode === 404;
-    if (!is404) throw err;
+    if (!isS3NotFound(err)) throw err;
   }
 
   const getResult = await getS3Client().send(
@@ -460,12 +451,6 @@ export async function copyAssetToPublishBucket(params: {
   });
 }
 
-/** Not-found from HeadObject / GetObject, in any of the shapes the SDK reports it. */
-function isS3NotFound(err: unknown): boolean {
-  const anyErr = err as { name?: string; $metadata?: { httpStatusCode?: number } };
-  return anyErr?.name === 'NotFound' || anyErr?.name === 'NoSuchKey' || anyErr?.$metadata?.httpStatusCode === 404;
-}
-
 // ---------------------------------------------------------------------------
 // Content takedown: the public objects of one content hash
 // ---------------------------------------------------------------------------
@@ -487,52 +472,30 @@ function assetCachePrefix(contentHash: string): string {
   return `assets/cache/${assertContentHash(contentHash)}/`;
 }
 
-export interface PublishedHashObject {
-  key: string;
-  size: number;
-}
+export type PublishedHashObject = S3ObjectInfo;
 
-async function headPublishKey(key: string): Promise<PublishedHashObject | null> {
-  try {
-    const head = await getPublishClient().send(new HeadObjectCommand({ Bucket: getPublishBucket(), Key: key }));
-    return { key, size: head.ContentLength ?? 0 };
-  } catch (err) {
-    // Anything other than not-found throws: "couldn't check" must never read as "nothing there".
-    if (isS3NotFound(err)) return null;
-    throw err;
-  }
-}
+const headPublishKey = (key: string) => headS3Object(getPublishClient(), getPublishBucket(), key);
 
-async function listPublishPrefix(prefix: string): Promise<PublishedHashObject[]> {
-  const client = getPublishClient();
-  const bucket = getPublishBucket();
-  const objects: PublishedHashObject[] = [];
-  let continuationToken: string | undefined;
-  do {
-    const listed = await client.send(
-      new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ContinuationToken: continuationToken }),
-    );
-    for (const obj of listed.Contents ?? []) if (obj.Key) objects.push({ key: obj.Key, size: obj.Size ?? 0 });
-    continuationToken = listed.IsTruncated ? listed.NextContinuationToken : undefined;
-  } while (continuationToken);
-  return objects;
-}
-
-/** The hash's objects still under the PUBLIC prefix: `assets/<hash>` and `assets/cache/<hash>/*`. */
-async function listPublicHashObjects(contentHash: string): Promise<PublishedHashObject[]> {
-  const asset = await headPublishKey(buildAssetKey(contentHash));
-  return [...(asset ? [asset] : []), ...(await listPublishPrefix(assetCachePrefix(contentHash)))];
-}
-
-/** The hash's objects in quarantine. */
-async function listQuarantinedHashObjects(contentHash: string): Promise<PublishedHashObject[]> {
-  const asset = await headPublishKey(QUARANTINE_PREFIX + buildAssetKey(contentHash));
-  return [...(asset ? [asset] : []), ...(await listPublishPrefix(QUARANTINE_PREFIX + assetCachePrefix(contentHash)))];
+/**
+ * The hash's objects under one root of the publish bucket: '' for the public
+ * keys (`assets/<hash>`, `assets/cache/<hash>/*`), `QUARANTINE_PREFIX` for
+ * their quarantined copies.
+ */
+async function listHashObjects(contentHash: string, root: '' | typeof QUARANTINE_PREFIX): Promise<PublishedHashObject[]> {
+  const [asset, derived] = await Promise.all([
+    headPublishKey(root + buildAssetKey(contentHash)),
+    listS3Prefix(getPublishClient(), getPublishBucket(), root + assetCachePrefix(contentHash)),
+  ]);
+  return [...(asset ? [asset] : []), ...derived];
 }
 
 /** Every object the publish bucket holds for a content hash, public or quarantined. */
 export async function listPublishedObjectsForHash(contentHash: string): Promise<PublishedHashObject[]> {
-  return [...(await listQuarantinedHashObjects(contentHash)), ...(await listPublicHashObjects(contentHash))];
+  const [quarantined, live] = await Promise.all([
+    listHashObjects(contentHash, QUARANTINE_PREFIX),
+    listHashObjects(contentHash, ''),
+  ]);
+  return [...quarantined, ...live];
 }
 
 /**
@@ -575,7 +538,7 @@ export async function quarantinePublishedAssetsForHash(contentHash: string): Pro
   const client = getPublishClient();
   const bucket = getPublishBucket();
   let moved = 0;
-  for (const object of await listPublicHashObjects(contentHash)) {
+  for (const object of await listHashObjects(contentHash, '')) {
     const quarantinedKey = QUARANTINE_PREFIX + object.key;
     await client.send(
       new CopyObjectCommand({ Bucket: bucket, CopySource: `${bucket}/${object.key}`, Key: quarantinedKey, MetadataDirective: 'COPY' }),
@@ -605,22 +568,15 @@ export async function deletePublishedAssetsForHash(contentHash: string): Promise
   const bucket = getPublishBucket();
   const objects = await listPublishedObjectsForHash(contentHash);
 
-  for (let i = 0; i < objects.length; i += 1000) {
-    const batch = objects.slice(i, i + 1000);
-    const result = await client.send(
-      new DeleteObjectsCommand({ Bucket: bucket, Delete: { Objects: batch.map(({ key }) => ({ Key: key })) } }),
-    );
-    // Not Quiet: a partial failure must fail the step so it is retried, not be counted as deleted.
-    if (result.Errors && result.Errors.length > 0) {
-      throw new Error(`Failed to delete ${result.Errors.length} public object(s) for a content hash`);
-    }
-  }
+  await deleteS3Keys(client, bucket, objects.map((object) => object.key));
   // The full-size keys are also deleted unconditionally: a DELETE of a missing
   // key is a no-op, and this closes the gap between the listing above and a
   // publish that was already in flight.
   const assetKey = buildAssetKey(contentHash);
-  await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: assetKey }));
-  await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: QUARANTINE_PREFIX + assetKey }));
+  await Promise.all([
+    client.send(new DeleteObjectCommand({ Bucket: bucket, Key: assetKey })),
+    client.send(new DeleteObjectCommand({ Bucket: bucket, Key: QUARANTINE_PREFIX + assetKey })),
+  ]);
 
   return objects.length;
 }

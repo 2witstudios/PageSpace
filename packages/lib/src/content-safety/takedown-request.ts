@@ -5,6 +5,8 @@
  */
 
 import { z } from 'zod';
+import type { ContentCaseStatus } from '@pagespace/db/schema/content-safety';
+import type { TakedownHaltReason } from './takedown-plan';
 
 const reason = z.string().trim().min(1, 'A reason is required').max(1000);
 const id = z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/, 'Invalid ID');
@@ -52,10 +54,10 @@ export type TakedownRequest = z.infer<typeof takedownRequestSchema>;
 export interface TakedownResponse {
   action: TakedownRequest['action'];
   caseId?: string;
-  status?: 'open' | 'awaiting_evidence' | 'actioned' | 'dismissed';
+  status?: ContentCaseStatus;
   failedStep?: string;
   error?: string;
-  haltReason?: 'awaiting_evidence' | 'preservation_decision_required';
+  haltReason?: TakedownHaltReason;
   /** `park_user_sites`: what was parked and what was left for an admin to decide. */
   parkedDriveIds?: string[];
   skippedDrives?: Array<{ driveId: string; reason: string }>;
