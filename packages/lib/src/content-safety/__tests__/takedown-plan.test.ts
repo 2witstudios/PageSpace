@@ -3,6 +3,7 @@ import type { ContentCaseStep } from '@pagespace/db/schema/content-safety';
 import {
   GLOBAL_TAKEDOWN_STEPS,
   RESWEEP_MARKER,
+  describeCaseProgress,
   nextGlobalTakedownStep,
   statusForDecision,
   summarizeSteps,
@@ -155,5 +156,58 @@ describe('summarizeSteps', () => {
       { step: 'record_references', status: 'pending' },
       { step: 'suspend_uploader', status: 'pending' },
     ]);
+  });
+});
+
+describe('describeCaseProgress', () => {
+  it('shows a global case part-way through as resumable, without the suspension it was not asked for', () => {
+    const progress = describeCaseProgress({
+      status: 'open',
+      steps: [ok('block'), ok('preserve'), failed('delete_uploads')],
+      snapshot: { takedown: { kind: 'global' } },
+    });
+
+    expect(progress.kind).toBe('global');
+    expect(progress.resumable).toBe(true);
+    expect(progress.resweepable).toBe(false);
+    expect(progress.steps.map((s) => `${s.step}:${s.status}`)).toEqual([
+      'block:ok',
+      'preserve:ok',
+      'delete_uploads:failed',
+      'delete_public:pending',
+      'record_references:pending',
+    ]);
+  });
+
+  it('includes the suspension step when the case asked for it', () => {
+    const progress = describeCaseProgress({ status: 'open', steps: [], snapshot: { takedown: { kind: 'global', suspendUploader: true } } });
+    expect(progress.steps.at(-1)).toEqual({ step: 'suspend_uploader', status: 'pending' });
+  });
+
+  it('shows a case waiting for evidence storage as resumable', () => {
+    const progress = describeCaseProgress({ status: 'awaiting_evidence', steps: [ok('block')], snapshot: { takedown: { kind: 'global' } } });
+    expect(progress.resumable).toBe(true);
+  });
+
+  it('offers a re-sweep, not a resume, for a finished global case', () => {
+    const progress = describeCaseProgress({ status: 'actioned', steps: [], snapshot: { takedown: { kind: 'global' } } });
+    expect(progress).toMatchObject({ resumable: false, resweepable: true });
+  });
+
+  it('uses the avatar plan for an avatar case', () => {
+    const progress = describeCaseProgress({ status: 'open', steps: [ok('delete_avatar')], snapshot: { takedown: { kind: 'avatar' } } });
+    expect(progress.steps).toEqual([
+      { step: 'delete_avatar', status: 'ok' },
+      { step: 'clear_profile_image', status: 'pending' },
+    ]);
+  });
+
+  it('has nothing to resume for a case that is only a report', () => {
+    expect(describeCaseProgress({ status: 'open', steps: null, snapshot: null })).toEqual({
+      kind: null,
+      steps: [],
+      resumable: false,
+      resweepable: false,
+    });
   });
 });

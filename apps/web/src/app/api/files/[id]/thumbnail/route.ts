@@ -9,6 +9,7 @@ import { PageType } from '@pagespace/lib/utils/enums';
 import { generatePresignedUrl } from '@/lib/presigned-url';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { actorFromVerifiedUser, deniedResponse } from '@/lib/auth/request-actor';
+import { refuseRemovedContent } from '@/lib/content-safety/removed-response';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -48,6 +49,9 @@ export async function GET(request: NextRequest, context: RouteParams) {
     }
 
     const [, contentHash, preset] = match;
+    // The thumbnail is derived from the original, so it is gone when the original's hash is blocked.
+    const removed = await refuseRemovedContent(contentHash);
+    if (removed) return removed;
     const presignedUrl = await generatePresignedUrl(contentHash, preset, 3600);
 
     auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'file', resourceId: page.id, details: { source: 'thumbnail', mimeType: page.mimeType } });

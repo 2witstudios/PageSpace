@@ -444,6 +444,95 @@ export async function copyAssetToPublishBucket(params: {
   });
 }
 
+/** Not-found from HeadObject / GetObject, in any of the shapes the SDK reports it. */
+function isS3NotFound(err: unknown): boolean {
+  const anyErr = err as { name?: string; $metadata?: { httpStatusCode?: number } };
+  return anyErr?.name === 'NotFound' || anyErr?.name === 'NoSuchKey' || anyErr?.$metadata?.httpStatusCode === 404;
+}
+
+/** Key prefix of the derived public objects for a hash (`assets/cache/<hash>/thumbnail.webp`). */
+function assetCachePrefix(contentHash: string): string {
+  return `assets/cache/${assertContentHash(contentHash)}/`;
+}
+
+/**
+ * Size of the public asset for a content hash, or null when there is none.
+ * Anything other than not-found throws: "couldn't check" must never read as
+ * "nothing public".
+ */
+export async function headPublishedAsset(contentHash: string): Promise<{ key: string; size: number } | null> {
+  const key = buildAssetKey(contentHash);
+  try {
+    const head = await getPublishClient().send(new HeadObjectCommand({ Bucket: getPublishBucket(), Key: key }));
+    return { key, size: head.ContentLength ?? 0 };
+  } catch (err) {
+    if (isS3NotFound(err)) return null;
+    throw err;
+  }
+}
+
+/** The bytes of the public asset for a content hash. Used to preserve it when the private original is gone. */
+export async function readPublishedAsset(contentHash: string): Promise<{ body: Uint8Array; contentType?: string }> {
+  const result = await getPublishClient().send(
+    new GetObjectCommand({ Bucket: getPublishBucket(), Key: buildAssetKey(contentHash) }),
+  );
+  const body = result.Body
+    ? await (result.Body as { transformToByteArray(): Promise<Uint8Array> }).transformToByteArray()
+    : new Uint8Array(0);
+  return { body, contentType: result.ContentType };
+}
+
+/** Whether any public object exists for the hash: the asset itself or anything derived from it. */
+export async function publishedAssetObjectsExist(contentHash: string): Promise<boolean> {
+  if (await headPublishedAsset(contentHash)) return true;
+  const listed = await getPublishClient().send(
+    new ListObjectsV2Command({ Bucket: getPublishBucket(), Prefix: assetCachePrefix(contentHash), MaxKeys: 1 }),
+  );
+  return (listed.Contents ?? []).length > 0;
+}
+
+/**
+ * Delete every public object for a content hash: `assets/<hash>` and
+ * everything under `assets/cache/<hash>/` (the public thumbnail copy).
+ *
+ * This is the content-takedown delete. `clearPublishedPrefix` does not cover
+ * these keys: assets are content-addressed and shared by every site that embeds
+ * the file, so they live outside any site's `published/<prefix>/`.
+ *
+ * Idempotent; returns how many objects existed and were deleted.
+ */
+export async function deletePublishedAssetsForHash(contentHash: string): Promise<number> {
+  const client = getPublishClient();
+  const bucket = getPublishBucket();
+  const assetKey = buildAssetKey(contentHash);
+
+  let deleted = 0;
+  if (await headPublishedAsset(contentHash)) deleted += 1;
+  // Deleted unconditionally: a DELETE of a missing key is a no-op, and this
+  // closes the gap between the HEAD above and a concurrent publish.
+  await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: assetKey }));
+
+  let continuationToken: string | undefined;
+  do {
+    const listed = await client.send(
+      new ListObjectsV2Command({ Bucket: bucket, Prefix: assetCachePrefix(contentHash), ContinuationToken: continuationToken }),
+    );
+    const keys = (listed.Contents ?? []).flatMap((obj) => (obj.Key ? [obj.Key] : []));
+    if (keys.length > 0) {
+      const result = await client.send(
+        new DeleteObjectsCommand({ Bucket: bucket, Delete: { Objects: keys.map((Key) => ({ Key })) } }),
+      );
+      if (result.Errors && result.Errors.length > 0) {
+        throw new Error(`Failed to delete ${result.Errors.length} public object(s) for a content hash`);
+      }
+      deleted += keys.length;
+    }
+    continuationToken = listed.IsTruncated ? listed.NextContinuationToken : undefined;
+  } while (continuationToken);
+
+  return deleted;
+}
+
 /**
  * Delete every object whose key starts with `published/<hostPrefix>/` from the
  * public publish bucket. Used to wipe a custom-domain host's artifacts when the

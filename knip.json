@@ -396,6 +396,7 @@
         "src/content-safety/policy.ts",
         "src/content-safety/upload-gate.ts",
         "src/content-safety/takedown-plan.ts",
+        "src/content-safety/takedown-request.ts",
         "src/content-safety/takedown.ts",
         "src/content-safety/case-store.ts",
         "src/content-safety/references.ts",

@@ -2909,6 +2909,11 @@
       "import": "./dist/content-safety/upload-gate.js",
       "require": "./dist/content-safety/upload-gate.js"
     },
+    "./content-safety/takedown-request": {
+      "types": "./dist/content-safety/takedown-request.d.ts",
+      "import": "./dist/content-safety/takedown-request.js",
+      "require": "./dist/content-safety/takedown-request.js"
+    },
     "./content-safety/takedown-plan": {
       "types": "./dist/content-safety/takedown-plan.d.ts",
       "import": "./dist/content-safety/takedown-plan.js",

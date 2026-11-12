@@ -17,8 +17,10 @@
 
 import type {
   ContentBlockCategory,
+  ContentCase,
   ContentCaseStatus,
   ContentCaseStep,
+  ContentTakedownKind,
 } from '@pagespace/db/schema/content-safety';
 
 export const GLOBAL_TAKEDOWN_STEPS = [
@@ -118,4 +120,40 @@ export function summarizeSteps(steps: readonly ContentCaseStep[], plan: readonly
       ? { step, status: latest.status, detail: latest.detail }
       : { step, status: latest.status };
   });
+}
+
+/** The steps of the takedowns that have no branching. The global plan is `GLOBAL_TAKEDOWN_STEPS`. */
+export const LINEAR_TAKEDOWN_STEPS = {
+  unpublish_page: ['unpublish'],
+  park_drive: ['park_sites'],
+  avatar: ['delete_avatar', 'clear_profile_image'],
+  park_user_sites: ['park_sites'],
+} as const satisfies Record<Exclude<ContentTakedownKind, 'global'>, readonly string[]>;
+
+export interface CaseProgress {
+  /** Null for a case that is only a report, with no takedown attached. */
+  kind: ContentTakedownKind | null;
+  steps: StepSummary[];
+  /** True when running the case again would do something: it has a takedown and has not finished. */
+  resumable: boolean;
+  /** True for a finished global takedown, which can be passed over storage again. */
+  resweepable: boolean;
+}
+
+/** What a case list shows for one case: which takedown it is and how far it got. */
+export function describeCaseProgress(row: Pick<ContentCase, 'status' | 'steps' | 'snapshot'>): CaseProgress {
+  const takedown = row.snapshot?.takedown;
+  const kind = takedown?.kind ?? null;
+  if (!kind) return { kind: null, steps: [], resumable: false, resweepable: false };
+
+  const plan: readonly string[] =
+    kind === 'global'
+      ? GLOBAL_TAKEDOWN_STEPS.filter((step) => step !== 'suspend_uploader' || takedown?.suspendUploader === true)
+      : LINEAR_TAKEDOWN_STEPS[kind];
+  return {
+    kind,
+    steps: summarizeSteps(row.steps ?? [], plan),
+    resumable: row.status === 'open' || row.status === 'awaiting_evidence',
+    resweepable: kind === 'global' && row.status === 'actioned',
+  };
 }

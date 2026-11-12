@@ -90,6 +90,42 @@ describe('reapOrphanedFiles', () => {
     vi.unstubAllGlobals();
   });
 
+  // Content takedown deletes a hash's objects directly and leaves its `files` rows. Once the
+  // pages and messages that referenced it are gone the row is an ordinary orphan, and the reaper
+  // must be able to finish it even though there is no blob left to delete.
+  it('reaps a row whose blob a takedown already deleted: the processor answers 200 for the missing objects', async () => {
+    const hash = 'b'.repeat(64);
+    mockFindOrphans.mockResolvedValue([orphan({ id: hash, storagePath: hash, sizeBytes: 4096, createdBy: 'u1' })]);
+    mockDeleteRecords.mockResolvedValue([hash]);
+    // What the processor returns when S3 reports the (idempotent) deletes as done.
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ success: true, contentHash: hash, originalDeleted: true, cacheDeleted: true }), { status: 200 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await reapOrphanedFiles(db, { fileIds: [hash] });
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain(`/api/files/${hash}`);
+    expect(result).toEqual({ orphansFound: 1, physicalFilesDeleted: 1, dbRecordsDeleted: 1, failedPhysicalDeletes: [] });
+    expect(mockDeleteRecords).toHaveBeenCalledWith(db, [hash]);
+
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps the row for the next run, without failing the sweep, if the processor cannot confirm the delete', async () => {
+    const hash = 'c'.repeat(64);
+    mockFindOrphans.mockResolvedValue([orphan({ id: hash, storagePath: hash })]);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 404 })));
+
+    const result = await reapOrphanedFiles(db, { fileIds: [hash] });
+
+    expect(result).toEqual({ orphansFound: 1, physicalFilesDeleted: 0, dbRecordsDeleted: 0, failedPhysicalDeletes: [hash] });
+    expect(mockDeleteRecords).not.toHaveBeenCalled();
+    expect(mockUpdateStorageUsage).not.toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
+  });
+
   it('credits the uploader only for rows this call actually deleted (race-safe)', async () => {
     mockFindOrphans.mockResolvedValue([orphan({ id: 'f1', sizeBytes: 2048, createdBy: 'u1' })]);
     mockDeleteRecords.mockResolvedValue(['f1']);
