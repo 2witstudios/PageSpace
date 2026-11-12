@@ -2894,6 +2894,21 @@
       "import": "./dist/compliance/erasure/drive-disposition.js",
       "require": "./dist/compliance/erasure/drive-disposition.js"
     },
+    "./content-safety/policy": {
+      "types": "./dist/content-safety/policy.d.ts",
+      "import": "./dist/content-safety/policy.js",
+      "require": "./dist/content-safety/policy.js"
+    },
+    "./content-safety/blocklist": {
+      "types": "./dist/content-safety/blocklist.d.ts",
+      "import": "./dist/content-safety/blocklist.js",
+      "require": "./dist/content-safety/blocklist.js"
+    },
+    "./content-safety/upload-gate": {
+      "types": "./dist/content-safety/upload-gate.d.ts",
+      "import": "./dist/content-safety/upload-gate.js",
+      "require": "./dist/content-safety/upload-gate.js"
+    },
     "./compliance/erasure/erasure-plan": {
       "types": "./dist/compliance/erasure/erasure-plan.d.ts",
       "import": "./dist/compliance/erasure/erasure-plan.js",

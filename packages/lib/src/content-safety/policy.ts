@@ -1,0 +1,98 @@
+/**
+ * Content-safety policy — pure functions and types, no I/O.
+ *
+ * The blocklist is keyed by content hash because storage is content-addressed in
+ * one global namespace (`files/<hash>/original`): the hash IS the identity of the
+ * bytes for every tenant. Keeping these decisions pure keeps them unit-testable
+ * and reusable by the takedown (PR 2), reporting (PR 3) and scanning (PR 4) code.
+ */
+
+import type { ContentBlockCategory } from '@pagespace/db/schema/content-safety';
+
+export type {
+  ContentBlockCategory,
+  ContentBlockSource,
+  ContentScanVerdict,
+  ContentCaseTargetType,
+  ContentCaseStatus,
+} from '@pagespace/db/schema/content-safety';
+
+/**
+ * The only thing a refused uploader is told. It deliberately gives no reason:
+ * confirming that a specific file is on a blocklist tells an abuser exactly
+ * which bytes to alter.
+ */
+export const CONTENT_BLOCKED_MESSAGE = "This file can't be uploaded";
+
+/** An ordinary client error — indistinguishable in kind from other upload refusals. */
+export const CONTENT_BLOCKED_STATUS = 422;
+
+export const CONTENT_BLOCK_CATEGORIES = [
+  'csam',
+  'malware',
+  'illegal_other',
+  'policy',
+] as const satisfies readonly ContentBlockCategory[];
+
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+
+/**
+ * Canonical form of a content hash: trimmed, lowercase sha256 hex. Returns null
+ * for anything that isn't one, so a caller can't look up (or block) a value that
+ * could never match a stored object.
+ */
+export function normalizeContentHash(input: unknown): string | null {
+  if (typeof input !== 'string') return null;
+  const candidate = input.trim().toLowerCase();
+  return SHA256_HEX.test(candidate) ? candidate : null;
+}
+
+export function isValidContentHash(input: unknown): boolean {
+  return normalizeContentHash(input) !== null;
+}
+
+/** Normalize a batch: invalid entries dropped, duplicates collapsed, order kept. */
+export function normalizeContentHashes(inputs: readonly unknown[]): string[] {
+  const seen = new Set<string>();
+  for (const input of inputs) {
+    const hash = normalizeContentHash(input);
+    if (hash) seen.add(hash);
+  }
+  return [...seen];
+}
+
+export function isContentBlockCategory(value: unknown): value is ContentBlockCategory {
+  return typeof value === 'string' && (CONTENT_BLOCK_CATEGORIES as readonly string[]).includes(value);
+}
+
+/**
+ * Whether a takedown in this category removes the bytes for EVERY tenant.
+ * CSAM and malware are illegal or harmful wherever they sit. Other categories
+ * depend on who is using the file and how, so they stay scoped to the reported
+ * page — an identical file in another tenant's drive is left alone.
+ */
+export function requiresGlobalPurge(category: ContentBlockCategory): boolean {
+  switch (category) {
+    case 'csam':
+    case 'malware':
+      return true;
+    case 'illegal_other':
+    case 'policy':
+      return false;
+  }
+}
+
+/**
+ * Thrown by server-side writers when the bytes are on the blocklist. `message`
+ * is the neutral user-facing text; `contentHash` is for logs and case tooling
+ * and must not be shown to the uploader.
+ */
+export class ContentBlockedError extends Error {
+  readonly contentHash: string;
+
+  constructor(contentHash: string) {
+    super(CONTENT_BLOCKED_MESSAGE);
+    this.name = 'ContentBlockedError';
+    this.contentHash = contentHash;
+  }
+}
