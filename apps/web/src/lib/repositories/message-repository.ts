@@ -131,12 +131,10 @@ async function savePageMessageRow({
   dbClient: DbExecutor;
   /** The `source` the row actually holds — see the return of the upsert. */
 }): Promise<string | null> {
-  // No parts → the text is stored raw, so it must not be readable as an
-  // envelope (see neutralizeEnvelopeShapedText).
-  let structuredContent = neutralizeEnvelopeShapedText(content);
-  if (uiMessage?.parts && uiMessage.parts.length > 0) {
-    structuredContent = await extractStructuredContentFromParts(uiMessage.parts, content);
-  }
+  // No parts → the text is stored raw, so it must not read back as an envelope.
+  const structuredContent = uiMessage?.parts && uiMessage.parts.length > 0
+    ? await extractStructuredContentFromParts(uiMessage.parts, content)
+    : neutralizeEnvelopeShapedText(content);
 
   const toolCallsJson = serializeJsonColumn(toolCalls);
   const toolResultsJson = serializeJsonColumn(toolResults);
@@ -214,12 +212,10 @@ async function saveGlobalMessageRow({
   dbClient: DbExecutor;
   /** The `source` the row actually holds — insert-only, so not always the argument. */
 }): Promise<string | null> {
-  // No parts → the text is stored raw, so it must not be readable as an
-  // envelope (see neutralizeEnvelopeShapedText).
-  let structuredContent = neutralizeEnvelopeShapedText(content);
-  if (uiMessage?.parts && uiMessage.parts.length > 0) {
-    structuredContent = await extractStructuredContentFromParts(uiMessage.parts, content);
-  }
+  // No parts → the text is stored raw, so it must not read back as an envelope.
+  const structuredContent = uiMessage?.parts && uiMessage.parts.length > 0
+    ? await extractStructuredContentFromParts(uiMessage.parts, content)
+    : neutralizeEnvelopeShapedText(content);
 
   const toolCallsJson = serializeJsonColumn(toolCalls);
   const toolResultsJson = serializeJsonColumn(toolResults);

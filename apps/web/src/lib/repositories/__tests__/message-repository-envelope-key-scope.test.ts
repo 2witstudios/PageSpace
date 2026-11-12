@@ -157,6 +157,16 @@ const readBack = (content: string, role: 'user' | 'assistant' = 'user') =>
     isActive: true,
   });
 
+const savePage = (content: string, role: 'user' | 'assistant' = 'user') =>
+  messageRepository.savePageMessage({
+    messageId: 'msg-1',
+    pageId: 'page-1',
+    conversationId: 'conv-1',
+    userId: role === 'user' ? 'attacker' : null,
+    role,
+    content,
+  });
+
 const storedContent = (): string => {
   expect(mockValues).toHaveBeenCalledTimes(1);
   return (mockValues.mock.calls[0][0] as { content: string }).content;
@@ -180,14 +190,7 @@ beforeEach(() => {
 
 describe('exploit chain: envelope-shaped text → presigned GET for a foreign key', () => {
   it('page message (the /api/ai/page-agents/consult shape): save then read signs nothing', async () => {
-    await messageRepository.savePageMessage({
-      messageId: 'msg-1',
-      pageId: 'page-1',
-      conversationId: 'conv-1',
-      userId: 'attacker',
-      role: 'user',
-      content: exploitText(),
-    });
+    await savePage(exploitText());
 
     const ui = await readBack(storedContent());
 
@@ -214,14 +217,7 @@ describe('exploit chain: envelope-shaped text → presigned GET for a foreign ke
   });
 
   it('assistant text (prompt-injected model output saved without parts) is neutralized too', async () => {
-    await messageRepository.savePageMessage({
-      messageId: 'msg-1',
-      pageId: 'page-1',
-      conversationId: 'conv-1',
-      userId: null,
-      role: 'assistant',
-      content: exploitText(),
-    });
+    await savePage(exploitText(), 'assistant');
 
     const ui = await readBack(storedContent(), 'assistant');
 
@@ -230,14 +226,7 @@ describe('exploit chain: envelope-shaped text → presigned GET for a foreign ke
   });
 
   it('envelope-shaped text naming one of OUR keys is still text — typing a key is not attaching a file', async () => {
-    await messageRepository.savePageMessage({
-      messageId: 'msg-1',
-      pageId: 'page-1',
-      conversationId: 'conv-1',
-      userId: 'attacker',
-      role: 'user',
-      content: exploitText(OWN_KEY),
-    });
+    await savePage(exploitText(OWN_KEY));
 
     const ui = await readBack(storedContent());
 
@@ -246,14 +235,7 @@ describe('exploit chain: envelope-shaped text → presigned GET for a foreign ke
   });
 
   it('the stored row reads back as the typed text through readMessageText as well', async () => {
-    await messageRepository.savePageMessage({
-      messageId: 'msg-1',
-      pageId: 'page-1',
-      conversationId: 'conv-1',
-      userId: 'attacker',
-      role: 'user',
-      content: exploitText(),
-    });
+    await savePage(exploitText());
 
     expect(readMessageText(storedContent())).toBe(exploitText());
   });
@@ -261,14 +243,7 @@ describe('exploit chain: envelope-shaped text → presigned GET for a foreign ke
   it('ordinary text and ordinary JSON are stored byte-for-byte unchanged', async () => {
     for (const content of ['hello', '{"a":1}', '{"textParts":["value"]}', '[1,2,3]', 'null']) {
       mockValues.mockClear();
-      await messageRepository.savePageMessage({
-        messageId: 'msg-1',
-        pageId: 'page-1',
-        conversationId: 'conv-1',
-        userId: 'u',
-        role: 'user',
-        content,
-      });
+      await savePage(content);
       expect(storedContent()).toBe(content);
     }
   });

@@ -47,7 +47,7 @@ Not affected: the page and global chat pipelines (`page-chat-turn.ts`,
 content.
 
 Read side: both converters (`convertDbMessageToUIMessage` and its global twin,
-`message-utils.ts:307` and `:610`) go through the same
+`message-utils.ts:307` and `:595`) go through the same
 `reconstructFromStructuredContent`, so one change covers both.
 
 ## The fix
@@ -59,13 +59,13 @@ Read side: both converters (`convertDbMessageToUIMessage` and its global twin,
    `getChatAttachmentUrl` throws for anything else. The existing unanchored
    `CHAT_ATTACHMENT_KEY_PATTERN` is untouched and still only used to find a key
    inside a URL.
-2. **Reconstruct drops the part, not the read** — `message-utils.ts:462-479`.
+2. **Reconstruct drops the part, not the read** — `message-utils.ts:454-464`.
    A refused key skips that file part, logs
-   `loggers.security.warn('Refused to sign chat attachment…', { messageId, role, keyType, keyPreview })`,
+   `loggers.security.warn('Refused to sign chat attachment…', { messageId, role, keyPreview })`,
    and the remaining parts render normally.
 3. **Typed text can't become an envelope** — new
-   `neutralizeEnvelopeShapedText` (`message-utils.ts:410`), applied in both raw
-   savers (`message-repository.ts:136` and `:219`). Text that
+   `neutralizeEnvelopeShapedText` (`message-utils.ts:402`), applied in both raw
+   savers (`message-repository.ts:137` and `:218`). Text that
    `parseStructuredContent` would accept is wrapped in a real envelope whose
    single text part is the raw string, so it reads back as exactly what was
    typed. Everything else is stored byte-for-byte as before. It reuses the
@@ -73,7 +73,7 @@ Read side: both converters (`convertDbMessageToUIMessage` and its global twin,
    envelope is. Because it sits in the repository's private savers, it covers
    routes 1 and 5–8 and any future caller.
 4. **Edit routes** — `processMessageContentUpdate`
-   (`message-repository.ts:1493`), shared by all three edit routes, now
+   (`message-repository.ts:1489`), shared by all three edit routes, now
    neutralizes new content on the plain-text branch. Editing an existing
    envelope already nested the new text as a string. I wrapped rather than
    returned a 400: a user who pastes JSON into an edit should get their JSON
@@ -113,7 +113,7 @@ Nothing else of the same shape was found, so nothing else was changed.
 
 One thing next to this that I did not change: a persisted file part with a
 legacy `url` and no `storageKey` is passed through as-is on read
-(`message-utils.ts:480`). It signs nothing, so it's outside this fix, but
+(`message-utils.ts:465`). It signs nothing, so it's outside this fix, but
 rows written before this change could carry an arbitrary URL in a file part.
 
 ## Tests

@@ -392,20 +392,12 @@ function parseStructuredContent(content: string | null | undefined): StructuredC
 }
 
 /**
- * Make text that is about to be stored RAW in a message `content` column safe
- * from being read back as one of our envelopes.
- *
- * `parseStructuredContent` recognises an envelope by shape alone, and the
- * column holds both envelopes and bare prose, so a message whose text is
- * `{"textParts":[…],"partsOrder":[…],"fileParts":[{"storageKey":…}]}` — which
- * anyone can type — used to come back as an attachment envelope the server
- * then acted on. Text that has that shape is wrapped in a REAL envelope whose
- * single text part is the raw string, so it reads back as exactly what was
- * typed. Everything else is returned untouched (byte-for-byte), so ordinary
- * messages and existing rows are unaffected.
- *
- * Uses `parseStructuredContent` itself as the test so the writer and the
- * reader cannot disagree about what counts as an envelope.
+ * Make text that will be stored RAW in a message `content` column safe from
+ * being read back as an envelope: the reader recognises envelopes by shape
+ * alone, and anyone can type that shape. Such text is wrapped in a real
+ * envelope whose single text part is the raw string; anything else is returned
+ * unchanged. Tests with `parseStructuredContent` itself, so writer and reader
+ * cannot disagree about what counts as an envelope.
  */
 export function neutralizeEnvelopeShapedText(text: string): string {
   if (!parseStructuredContent(text)) return text;
@@ -460,20 +452,13 @@ async function reconstructFromStructuredContent(
       if (filePartIndex < fileParts.length) {
         const fp = fileParts[filePartIndex];
         filePartIndex++;
-        // A persisted storageKey is data a user can influence (envelope-shaped
-        // text saved before the write path neutralized it). Only a key this
-        // app mints is ever signed; anything else drops THIS part — not the
-        // whole read — and is logged. getChatAttachmentUrl enforces the same
-        // rule and throws; checking here keeps one bad part from costing the
-        // message its other parts.
+        // A key the signer would refuse (see getChatAttachmentUrl) drops this
+        // part rather than failing the whole read.
         if (fp.storageKey && !isChatAttachmentStorageKey(fp.storageKey)) {
-          // Persisted JSON, so the declared `string` type is a hope, not a fact.
-          const refusedKey: unknown = fp.storageKey;
           loggers.security.warn('Refused to sign chat attachment: storage key outside chat-attachments prefix', {
             messageId: msg.id,
             role: msg.role,
-            keyType: typeof refusedKey,
-            keyPreview: typeof refusedKey === 'string' ? refusedKey.slice(0, 96) : undefined,
+            keyPreview: String(fp.storageKey).slice(0, 96),
           });
           continue;
         }

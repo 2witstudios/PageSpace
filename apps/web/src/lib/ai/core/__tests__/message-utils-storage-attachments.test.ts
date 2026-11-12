@@ -9,16 +9,10 @@ const mockGetChatAttachmentUrl = vi.fn();
 // the real predicate.
 const PERSISTED_KEY = `chat-attachments/${'d'.repeat(64)}/original`;
 
-vi.mock('@/lib/upload/chat-attachment-storage', async () => ({
-  isChatAttachmentStorageKey: (
-    await vi.importActual<typeof import('@/lib/upload/chat-attachment-storage')>('@/lib/upload/chat-attachment-storage')
-  ).isChatAttachmentStorageKey,
+vi.mock('@/lib/upload/chat-attachment-storage', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/upload/chat-attachment-storage')>()),
   uploadChatAttachment: (...args: unknown[]) => mockUploadChatAttachment(...args),
   getChatAttachmentUrl: (...args: unknown[]) => mockGetChatAttachmentUrl(...args),
-  parseChatAttachmentStorageKey: (url: string) => {
-    const match = /(chat-attachments\/[0-9a-f]{64}\/original)/.exec(url);
-    return match ? match[1] : null;
-  },
 }));
 
 import { extractStructuredContentFromParts, convertDbMessageToUIMessage } from '../message-utils';
