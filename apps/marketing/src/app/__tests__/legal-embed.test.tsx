@@ -47,6 +47,16 @@ describe('legal pages embedded in the iOS app', () => {
     expect(html).toContain('pricing page');
   });
 
+  it('the Terms link the public report page on the web, and name it without a link when embedded', async () => {
+    const { TermsDocument } = await import('../terms/TermsDocument');
+    const web = renderToStaticMarkup(<TermsDocument embed={false} />);
+    expect(web).toMatch(/href="https:\/\/pagespace\.ai\/report"/);
+    expect(web).toContain('CyberTipline');
+    const embedded = renderToStaticMarkup(<TermsDocument embed />);
+    expect(embedded).not.toContain('/report"');
+    expect(embedded).toContain('pagespace.ai/report');
+  });
+
   it('the Terms and Privacy Policy cover purchases made through Apple', async () => {
     const { TermsDocument } = await import('../terms/TermsDocument');
     const { PrivacyDocument } = await import('../privacy/PrivacyDocument');

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { LegalPageShell } from "@/components/LegalPageShell";
 import { legalHref } from "@/lib/legal-embed";
-import { LEGAL_LAST_UPDATED } from "@/lib/metadata";
+import { APP_URL, LEGAL_LAST_UPDATED } from "@/lib/metadata";
 import { formatDollars, planFacts } from "@/lib/credits";
 import { TIER_PLAN_LIMITS, formatTierBytes } from "@pagespace/lib/billing/subscription-tiers";
 
@@ -11,6 +11,9 @@ const BUSINESS = planFacts("business");
 const BUSINESS_SEATS = BUSINESS.org?.includedSeats;
 const storageOf = (tier: keyof typeof TIER_PLAN_LIMITS) => formatTierBytes(TIER_PLAN_LIMITS[tier].quotaBytes);
 const EXTRA_SEAT_PRICE = BUSINESS.org ? formatDollars(BUSINESS.org.extraSeatPriceCents) : "";
+// The public report page lives in the web app (apps/web/src/app/report), not on this site.
+const REPORT_PAGE_URL = `${APP_URL}/report`;
+const REPORT_PAGE_LABEL = REPORT_PAGE_URL.replace(/^https?:\/\//, "");
 
 /** The terms page's text. `embed` drops the site navigation and footer for the iOS app (`?embed=1`). */
 export function TermsDocument({ embed }: { embed: boolean }) {
@@ -86,8 +89,23 @@ export function TermsDocument({ embed }: { embed: boolean }) {
             </p>
             <p className="mb-4">
               You can report objectionable content or abusive users through Feedback in the app or by
-              emailing hello@pagespace.ai. We review reports, remove content that violates this section,
-              and may suspend or terminate the accounts responsible without notice.
+              emailing hello@pagespace.ai. Anyone, with or without an account, can report a site published
+              with PageSpace through our{" "}
+              {/* Embedded in the iOS app, nothing may link out of the legal pages: name the page instead. */}
+              {embed ? (
+                <>report page ({REPORT_PAGE_LABEL})</>
+              ) : (
+                <a href={REPORT_PAGE_URL} className="underline underline-offset-2" data-testid="terms-report-link">
+                  report page
+                </a>
+              )}
+              . We review reports, remove content that violates this section, and may suspend or
+              terminate the accounts responsible without notice.
+            </p>
+            <p className="mb-4">
+              If you come across child sexual abuse material, report it to us and, if you can, to the National
+              Center for Missing &amp; Exploited Children through its CyberTipline (report.cybertip.org). Please do
+              not download, screenshot or forward the material, even to report it.
             </p>
           </section>
 
