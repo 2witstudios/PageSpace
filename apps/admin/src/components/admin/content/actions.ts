@@ -22,6 +22,9 @@ export async function runTakedown(request: TakedownRequest): Promise<TakedownRes
 /** One line an admin can read for what a takedown did. */
 export function describeTakedownResult(result: TakedownResponse): { message: string; ok: boolean } {
   const caseRef = result.caseId ? ` Case ${result.caseId}.` : '';
+  if (result.inProgress) {
+    return { ok: false, message: `This case is already running; nothing was changed.${caseRef} Check the Cases tab in a moment.` };
+  }
   if (result.failedStep) {
     return { ok: false, message: `Stopped at step "${result.failedStep}": ${result.error ?? 'unknown error'}.${caseRef} Resume it from the Cases tab.` };
   }

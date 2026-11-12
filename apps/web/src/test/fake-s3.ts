@@ -92,7 +92,14 @@ export class FakeS3 {
         return {
           ContentLength: object.body.byteLength,
           ContentType: object.contentType,
-          Body: { transformToByteArray: async () => object.body },
+          // Both ways the SDK's Node body is read: whole, or streamed (in small chunks here, so a reader that
+          // assumes one chunk is caught).
+          Body: {
+            transformToByteArray: async () => object.body,
+            async *[Symbol.asyncIterator]() {
+              for (let i = 0; i < object.body.byteLength; i += 4) yield object.body.subarray(i, i + 4);
+            },
+          },
         };
       }
       case 'PutObjectCommand': {

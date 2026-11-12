@@ -33,6 +33,22 @@ import {
 
 export type ContentReferences = NonNullable<ContentCaseSnapshot['references']>;
 
+/**
+ * What reading an object once tells us about its bytes.
+ *
+ * `sha256` is the hash of the bytes as stored; two objects with the same one
+ * are byte-for-byte the same, which is how a copy is checked against its
+ * source. `contentSha256` is the hash of the content those bytes hold: the same
+ * as `sha256` for a plaintext object, and the hash of the decrypted bytes for
+ * one encrypted at rest. A content hash names that content, so an object whose
+ * `contentSha256` equals the case's hash IS the content, whoever wrote it.
+ */
+export interface ObjectDigest {
+  size: number;
+  sha256: string;
+  contentSha256: string;
+}
+
 /** The object a preserved copy is made from. Always in the private uploads bucket. */
 export interface TakedownOriginal {
   key: string;
@@ -65,7 +81,10 @@ export interface TakedownStorage {
    * destroys the only copy. `held` says whether that copy was made.
    */
   takePublicOffline(contentHash: string, caseId: string): Promise<{ deleted: number; held: boolean }>;
-  headEvidence(evidenceKey: string): Promise<{ size: number } | null>;
+  /** Read an uploads-bucket object once and hash it. Null only on a definite not-found. */
+  digestSource(key: string): Promise<ObjectDigest | null>;
+  /** Read an evidence-bucket object once and hash it. Null only on a definite not-found. */
+  digestEvidence(evidenceKey: string): Promise<ObjectDigest | null>;
   copyToEvidence(source: TakedownOriginal, evidenceKey: string): Promise<void>;
   /**
    * Delete `files/<hash>/*`, `cache/<hash>/*`, `chat-attachments/<hash>/*` and
@@ -95,6 +114,13 @@ export interface TakedownCaseStore {
   collectReferences(contentHash: string): Promise<ContentReferences>;
   /** The AI-chat messages carrying the file and their authors, with a long timeout. Throws rather than return a partial list. */
   collectAiReferences(contentHash: string): Promise<AiMessageReferences>;
+  /**
+   * Run `fn` holding the case's run lock, or return `{ acquired: false }` at
+   * once when another run holds it. One run of a case at a time: two runs that
+   * each read the case and act on it can each act on a version the other has
+   * already made stale. `signal` aborts if the lock is lost while `fn` runs.
+   */
+  withCaseLock<T>(caseId: string, fn: (signal?: AbortSignal) => Promise<T>): Promise<{ acquired: true; value: T } | { acquired: false }>;
 }
 
 /** `skipped_admin`: the account is an admin, and a takedown never suspends one automatically. */
@@ -139,6 +165,8 @@ export interface TakedownRunResult {
   error?: string;
   /** Set when the run stopped by design rather than by failure. */
   haltReason?: TakedownHaltReason;
+  /** Set when another run of the case was already under way: this one did nothing. */
+  inProgress?: true;
 }
 
 /** Where a case's preserved copy lives in the evidence bucket. Includes the case ID. */
@@ -146,15 +174,78 @@ export function evidenceKeyFor(caseId: string, contentHash: string): string {
   return `cases/${caseId}/${contentHash}/original`;
 }
 
-/** Copy one object to the evidence bucket and prove the copy is whole. Throws if it is not. */
-async function copyAndVerify(source: TakedownOriginal, evidenceKey: string, deps: TakedownDeps): Promise<number> {
+/**
+ * Copy one object to the evidence bucket and prove the copy holds exactly the
+ * bytes that were read from the source. Compared by checksum, never by size: a
+ * copy of the same length with different bytes is not a copy. Throws if it is not.
+ */
+async function copyAndVerify(source: TakedownOriginal, expected: ObjectDigest, evidenceKey: string, deps: TakedownDeps): Promise<void> {
   await deps.storage.copyToEvidence(source, evidenceKey);
-  const copy = await deps.storage.headEvidence(evidenceKey);
+  const copy = await deps.storage.digestEvidence(evidenceKey);
   if (!copy) throw new Error('Evidence copy not found after copying');
-  if (copy.size !== source.size) {
-    throw new Error(`Evidence copy size ${copy.size} does not match source size ${source.size}`);
+  if (copy.sha256 !== expected.sha256) {
+    throw new Error('Evidence copy checksum does not match the source; the source was left in place');
   }
-  return copy.size;
+}
+
+/**
+ * Preserve the hash's private original in the evidence bucket, or recognise a
+ * copy already there.
+ *
+ * The case's content hash is the proof. The primary evidence key holds the
+ * content the hash names, or it does not: an object there whose content hashes
+ * to the case's hash IS the preserved copy, whether or not recording it on the
+ * case got as far as succeeding. Nothing else is trusted, and a primary copy
+ * that verifies is never overwritten.
+ *
+ * Bytes at the source that are NOT that content (a presigned PUT of something
+ * else to a blocked key) are kept too, under a key named by their own checksum,
+ * never at the primary key.
+ */
+async function preserve(row: ContentCase, contentHash: string, deps: TakedownDeps): Promise<{ detail?: string; skipped?: boolean }> {
+  const primaryKey = evidenceKeyFor(row.id, contentHash);
+  const snapshot = row.snapshot;
+  const recordPrimary = async () => {
+    if (snapshot?.evidenceKey !== primaryKey) await deps.cases.mergeSnapshot(row.id, { evidenceKey: primaryKey });
+  };
+  const primary = await deps.storage.digestEvidence(primaryKey);
+  const primaryVerified = primary?.contentSha256 === contentHash;
+  const source = await deps.storage.findOriginal(contentHash, row.id);
+
+  if (!source) {
+    if (primaryVerified) {
+      await recordPrimary();
+      return { detail: 'already_preserved' };
+    }
+    if (primary) throw new Error('An unverified evidence copy exists and there is no source left to verify it against');
+    // The case says a copy was preserved, but it is not there. Stop: going on
+    // would delete what is left with the evidence missing.
+    if (snapshot?.evidenceKey) throw new Error('The preserved evidence copy recorded on this case is missing');
+    return { detail: 'no_source_object', skipped: true };
+  }
+
+  const read = await deps.storage.digestSource(source.key);
+  if (!read) throw new Error('The source object disappeared before it could be checked');
+
+  if (read.contentSha256 === contentHash) {
+    if (primaryVerified) {
+      await recordPrimary();
+      return { detail: 'already_preserved' };
+    }
+    // Nothing preserved yet, or only an object that is not the content: (re)write it.
+    await copyAndVerify(source, read, primaryKey, deps);
+    await recordPrimary();
+    return { detail: `bytes=${read.size}` };
+  }
+
+  const additionalKey = `${primaryKey}.${read.sha256}`;
+  const existing = await deps.storage.digestEvidence(additionalKey);
+  if (existing?.sha256 !== read.sha256) await copyAndVerify(source, read, additionalKey, deps);
+  const known = snapshot?.additionalEvidenceKeys ?? [];
+  if (!known.includes(additionalKey)) {
+    await deps.cases.mergeSnapshot(row.id, { additionalEvidenceKeys: [...known, additionalKey] });
+  }
+  return { detail: `additional_copy sha256=${read.sha256} bytes=${read.size}` };
 }
 
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -211,43 +302,8 @@ async function executeGlobalStep(
       const { deleted, held } = await deps.storage.takePublicOffline(contentHash, row.id);
       return { detail: `deleted=${deleted}${held ? ' held_private_copy' : ''}` };
     }
-    case 'preserve': {
-      const evidenceKey = evidenceKeyFor(row.id, contentHash);
-      // The key is written to the snapshot only after a copy passed verification,
-      // so its presence there is what "verified" means.
-      const snapshot = (await loadCase(row.id, deps)).snapshot;
-      const verified = snapshot?.evidenceKey === evidenceKey;
-      const existing = await deps.storage.headEvidence(evidenceKey);
-      const source = await deps.storage.findOriginal(contentHash, row.id);
-
-      if (!source) {
-        if (existing && verified) return { detail: 'already_preserved' };
-        if (existing) throw new Error('An unverified evidence copy exists and there is no source left to verify it against');
-        // The case says a copy was preserved, but it is not there. Stop: going on
-        // would delete what is left with the evidence missing.
-        if (verified) throw new Error('The preserved evidence copy recorded on this case is missing');
-        return { detail: 'no_source_object', skipped: true };
-      }
-      if (!existing || !verified) {
-        // Nothing preserved yet, or only a copy that never passed verification: (re)write it.
-        const bytes = await copyAndVerify(source, evidenceKey, deps);
-        await deps.cases.mergeSnapshot(row.id, { evidenceKey });
-        return { detail: `bytes=${bytes}` };
-      }
-      if (existing.size === source.size) return { detail: 'already_preserved' };
-
-      // A VERIFIED copy is never overwritten. Different bytes have since landed at
-      // the source key (a re-sweep after an old presigned PUT): they are preserved
-      // beside the first copy, under their own key, and both stay on the case.
-      const additionalKey = `${evidenceKey}.${source.size}`;
-      const additional = await deps.storage.headEvidence(additionalKey);
-      if (!additional || additional.size !== source.size) await copyAndVerify(source, additionalKey, deps);
-      const known = snapshot?.additionalEvidenceKeys ?? [];
-      if (!known.includes(additionalKey)) {
-        await deps.cases.mergeSnapshot(row.id, { additionalEvidenceKeys: [...known, additionalKey] });
-      }
-      return { detail: `additional_copy bytes=${source.size}` };
-    }
+    case 'preserve':
+      return preserve(row, contentHash, deps);
     case 'delete_uploads':
       return { detail: `deleted=${await deps.storage.deleteFromUploads(contentHash, row.id)}` };
     case 'delete_public':
@@ -271,8 +327,8 @@ async function executeGlobalStep(
       const ai = await deps.cases.collectAiReferences(contentHash);
       // UNION with what the earlier step stored, never replace it: a message the
       // early attempt found may have been deleted since, and its author must stay
-      // on the case. (A resumed run has nothing in memory, hence the reload.)
-      const stored = (await loadCase(row.id, deps)).snapshot?.references;
+      // on the case. (`row` is read fresh before every step.)
+      const stored = row.snapshot?.references;
       const union = (a: readonly string[] = [], b: readonly string[]) => [...new Set([...a, ...b])];
       const references: ContentReferences = {
         pageIds: stored?.pageIds ?? [],
@@ -289,10 +345,8 @@ async function executeGlobalStep(
       return { detail: `ai_messages=${ai.aiMessageIds.length} uploaders=${ai.uploaderUserIds.length}` };
     }
     case 'suspend_uploader': {
-      // Read the references the previous step stored, not the ones in memory:
-      // a resumed run starts here with none.
-      const fresh = await loadCase(row.id, deps);
-      const uploaders = (fresh.snapshot?.references?.uploaderUserIds ?? []).filter(
+      // The references the previous steps stored (`row` is read fresh before every step).
+      const uploaders = (row.snapshot?.references?.uploaderUserIds ?? []).filter(
         (userId) => userId !== takedown?.actorUserId,
       );
       if (uploaders.length === 0) return { detail: 'no_uploader_found', skipped: true };
@@ -312,34 +366,59 @@ async function executeGlobalStep(
   }
 }
 
-/**
- * Run (or continue) a global takedown. Safe to call any number of times on the
- * same case: it starts at the first step that has not succeeded and does
- * nothing at all on a finished one.
- */
-export async function runGlobalTakedown(caseId: string, deps: TakedownDeps): Promise<TakedownRunResult> {
+/** Run `fn` under the case's run lock; a second run while one holds it answers "in progress" and does nothing. */
+async function exclusive(
+  caseId: string,
+  deps: CaseDeps,
+  fn: (signal?: AbortSignal) => Promise<TakedownRunResult>,
+): Promise<TakedownRunResult> {
+  const locked = await deps.cases.withCaseLock(caseId, fn);
+  if (locked.acquired) return locked.value;
   const row = await loadCase(caseId, deps);
-  const takedown = row.snapshot?.takedown;
-  if (takedown?.kind !== 'global') throw new Error(`Content case ${caseId} is not a global takedown`);
+  return { caseId, status: row.status, inProgress: true };
+}
+
+/** The case as a global takedown may run it, or a throw. Checked again on every reload. */
+function requireGlobal(row: ContentCase): { category: ContentBlockCategory; contentHash: string } {
+  if (row.snapshot?.takedown?.kind !== 'global') throw new Error(`Content case ${row.id} is not a global takedown`);
   if (!row.category || !allowsGlobalTakedown(row.category)) {
     throw new Error(`A ${row.category ?? 'uncategorised'} case cannot purge a hash globally; use a scoped takedown for policy`);
   }
-  const contentHash = row.contentHash;
-  if (!contentHash) throw new Error(`Content case ${caseId} has no content hash`);
+  if (!row.contentHash) throw new Error(`Content case ${row.id} has no content hash`);
+  return { category: row.category, contentHash: row.contentHash };
+}
 
-  const steps: ContentCaseStep[] = [...(row.steps ?? [])];
-  const record = async (entry: ContentCaseStep) => {
-    await deps.cases.appendStep(caseId, entry);
-    steps.push(entry);
-  };
+/**
+ * Run (or continue) a global takedown. Safe to call any number of times on the
+ * same case: it starts at the first step that has not succeeded and does
+ * nothing at all on a finished one. One run at a time: while a run holds the
+ * case, another answers `inProgress` and does nothing.
+ */
+export async function runGlobalTakedown(caseId: string, deps: TakedownDeps): Promise<TakedownRunResult> {
+  return exclusive(caseId, deps, (signal) => runGlobalTakedownLocked(caseId, deps, signal));
+}
 
+/** Thrown before a step when the run lock was lost: another run may now hold the case, so this one stops. */
+function assertLockHeld(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new Error('The run lock on this case was lost; the step was not started. Run the case again.');
+}
+
+async function runGlobalTakedownLocked(caseId: string, deps: TakedownDeps, signal?: AbortSignal): Promise<TakedownRunResult> {
   for (;;) {
+    // The case is read again before EVERY step. It can be re-filed while this
+    // run is under way (the re-file does not wait for the run): a new category,
+    // a withdrawn "skip preservation". Whether preservation may be skipped, and
+    // whether a delete may go ahead, is decided on what the case says now, not
+    // on what it said when the run began.
+    const row = await loadCase(caseId, deps);
+    const { category, contentHash } = requireGlobal(row);
+    const takedown = row.snapshot?.takedown;
     const decision = nextGlobalTakedownStep({
-      steps,
-      category: row.category,
+      steps: row.steps ?? [],
+      category,
       evidenceConfigured: deps.storage.evidenceConfigured(),
-      skipPreservation: takedown.skipPreservation === true,
-      suspendUploader: takedown.suspendUploader === true,
+      skipPreservation: takedown?.skipPreservation === true,
+      suspendUploader: takedown?.suspendUploader === true,
     });
 
     if (decision.kind === 'done' || decision.kind === 'halt') {
@@ -349,16 +428,17 @@ export async function runGlobalTakedown(caseId: string, deps: TakedownDeps): Pro
     }
 
     if (decision.kind === 'skip') {
-      await record(stepEntry(decision.step, 'skipped', decision.detail, deps));
+      await deps.cases.appendStep(caseId, stepEntry(decision.step, 'skipped', decision.detail, deps));
       continue;
     }
 
     try {
+      assertLockHeld(signal);
       const outcome = await executeGlobalStep(decision.step, row, contentHash, deps);
-      await record(stepEntry(decision.step, outcome.skipped ? 'skipped' : 'ok', outcome.detail, deps));
+      await deps.cases.appendStep(caseId, stepEntry(decision.step, outcome.skipped ? 'skipped' : 'ok', outcome.detail, deps));
     } catch (error) {
       const message = errorMessage(error);
-      await record(stepEntry(decision.step, 'failed', message, deps));
+      await deps.cases.appendStep(caseId, stepEntry(decision.step, 'failed', message, deps));
       await settle(row, 'open', deps);
       return { caseId, status: 'open', failedStep: decision.step, error: message };
     }
@@ -366,30 +446,34 @@ export async function runGlobalTakedown(caseId: string, deps: TakedownDeps): Pro
 }
 
 /**
- * Pass over storage again for a finished global takedown: preserve whatever is
- * there now and delete it. For bytes that reached a blocked key after the first
- * pass through a presigned PUT issued before the block.
+ * Pass over storage again for a finished global takedown: take public copies
+ * down, preserve whatever is there now and delete it. For bytes that reached a
+ * blocked key after the first pass through a presigned PUT issued before the
+ * block, or a public copy written by a publish already in flight.
  *
  * A pass that fails leaves the case `open` with its marker in place; calling
  * this again continues that pass rather than starting another. Every failure
  * alerts, and the attempt count on the case is what lets the cron retry a
- * bounded number of times (`MAX_RESWEEP_ATTEMPTS`).
+ * bounded number of times (`MAX_RESWEEP_ATTEMPTS`). Holds the case's run lock
+ * for the whole pass, the bookkeeping included.
  */
 export async function resweepGlobalTakedown(caseId: string, deps: TakedownDeps): Promise<TakedownRunResult> {
-  const row = await loadCase(caseId, deps);
-  const attempts = (row.snapshot?.resweep?.attempts ?? 0) + 1;
-  if (row.status === 'actioned') {
-    await deps.cases.appendStep(caseId, stepEntry(RESWEEP_MARKER, 'ok', undefined, deps));
-  }
-  await deps.cases.mergeSnapshot(caseId, { resweep: { attempts, done: false } });
+  return exclusive(caseId, deps, async (signal) => {
+    const row = await loadCase(caseId, deps);
+    const attempts = (row.snapshot?.resweep?.attempts ?? 0) + 1;
+    if (row.status === 'actioned') {
+      await deps.cases.appendStep(caseId, stepEntry(RESWEEP_MARKER, 'ok', undefined, deps));
+    }
+    await deps.cases.mergeSnapshot(caseId, { resweep: { attempts, done: false } });
 
-  const result = await runGlobalTakedown(caseId, deps);
-  if (result.status === 'actioned') {
-    await deps.cases.mergeSnapshot(caseId, { resweep: { attempts, done: true } });
-  } else {
-    await safeAlert(deps, { event: 'resweep_failed', caseId, category: row.category, attempt: attempts });
-  }
-  return result;
+    const result = await runGlobalTakedownLocked(caseId, deps, signal);
+    if (result.status === 'actioned') {
+      await deps.cases.mergeSnapshot(caseId, { resweep: { attempts, done: true } });
+    } else {
+      await safeAlert(deps, { event: 'resweep_failed', caseId, category: row.category, attempt: attempts });
+    }
+    return result;
+  });
 }
 
 export interface LinearStep {
@@ -404,6 +488,10 @@ export interface LinearStep {
  * takedowns, whose plans have no branching.
  */
 export async function runLinearCase(caseId: string, plan: readonly LinearStep[], deps: CaseDeps): Promise<TakedownRunResult> {
+  return exclusive(caseId, deps, () => runLinearCaseLocked(caseId, plan, deps));
+}
+
+async function runLinearCaseLocked(caseId: string, plan: readonly LinearStep[], deps: CaseDeps): Promise<TakedownRunResult> {
   const row = await loadCase(caseId, deps);
   const steps = row.steps ?? [];
 

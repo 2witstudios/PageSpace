@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { createHash } from 'crypto';
 import type {
   ContentCase,
   ContentCaseSnapshot,
@@ -14,13 +15,25 @@ import {
   runGlobalTakedown,
   runLinearCase,
   type ContentReferences,
+  type ObjectDigest,
   type TakedownAlert,
   type TakedownDeps,
   type TakedownOriginal,
 } from '../takedown';
 
-const HASH = 'a'.repeat(64);
+const ORIGINAL = 'original-bytes';
+const sha = (bytes: string) => createHash('sha256').update(bytes).digest('hex');
+const HASH = sha(ORIGINAL);
 const CASE_ID = 'case-1';
+/** The same number of bytes, different bytes. */
+const sameSizeOther = (bytes: string) => (bytes[0] === 'X' ? 'Y' : 'X') + bytes.slice(1);
+/** How the fake stores an object encrypted at rest: the content a hash names sits behind the envelope. */
+const ENVELOPE = 'ENC:';
+const digestOf = (stored: string): ObjectDigest => ({
+  size: stored.length,
+  sha256: sha(stored),
+  contentSha256: sha(stored.startsWith(ENVELOPE) ? stored.slice(ENVELOPE.length) : stored),
+});
 
 const emptyRefs = (): ContentReferences => ({
   pageIds: [],
@@ -34,22 +47,23 @@ const emptyRefs = (): ContentReferences => ({
   truncated: false,
 });
 
-/** In-memory world: two buckets, an evidence bucket, a blocklist and one case. */
+/** In-memory world: two buckets, an evidence bucket, a blocklist and one case. Objects are their bytes. */
 function createWorld(options: { category?: ContentCase['category']; evidence?: boolean; snapshot?: ContentCaseSnapshot } = {}) {
-  const uploads = new Map<string, number>([
-    [`files/${HASH}/original`, 1234],
-    [`cache/${HASH}/thumbnail.webp`, 50],
+  const uploads = new Map<string, string>([
+    [`files/${HASH}/original`, ORIGINAL],
+    [`cache/${HASH}/thumbnail.webp`, 'thumb'],
   ]);
-  const publish = new Map<string, number>([
-    [`assets/${HASH}`, 1234],
-    [`assets/cache/${HASH}/thumbnail.webp`, 50],
+  const publish = new Map<string, string>([
+    [`assets/${HASH}`, ORIGINAL],
+    [`assets/cache/${HASH}/thumbnail.webp`, 'thumb'],
   ]);
-  const evidence = new Map<string, number>();
+  const evidence = new Map<string, string>();
   const blocks = new Map<string, { category: string; caseId: string | null }>();
   const alerts: TakedownAlert[] = [];
   const suspended: string[] = [];
   const failNext = new Set<GlobalTakedownStep>();
   const calls: string[] = [];
+  const locks = new Set<string>();
   const world = {
     uploads,
     publish,
@@ -62,8 +76,15 @@ function createWorld(options: { category?: ContentCase['category']; evidence?: b
     evidenceConfigured: options.evidence ?? true,
     references: { ...emptyRefs(), pageIds: ['page-1'], driveIds: ['drive-1'], uploaderUserIds: ['user-1', 'user-2'] },
     aiReferences: { aiMessageIds: [] as string[], conversationIds: [] as string[], uploaderUserIds: [] as string[], truncated: false },
+    /** The evidence copy comes out with the same size and different bytes. */
     corruptCopy: false,
     copies: [] as string[],
+    /** Fail the next snapshot write that sets this field. */
+    failSnapshotWriteOf: null as string | null,
+    /** Called as each storage or store effect starts, before it does anything. */
+    onCall: null as null | ((step: GlobalTakedownStep) => Promise<void> | void),
+    /** Called after a step is recorded on the case. */
+    onRecord: null as null | ((step: ContentCaseStep) => void),
     row: {
       id: CASE_ID,
       targetType: 'content_hash',
@@ -81,8 +102,9 @@ function createWorld(options: { category?: ContentCase['category']; evidence?: b
     } as ContentCase,
   };
 
-  const boom = (step: GlobalTakedownStep) => {
+  const boom = async (step: GlobalTakedownStep) => {
     calls.push(step);
+    await world.onCall?.(step);
     if (failNext.delete(step)) throw new Error(`${step} failed`);
   };
 
@@ -91,66 +113,82 @@ function createWorld(options: { category?: ContentCase['category']; evidence?: b
       load: async (id) => (id === CASE_ID ? structuredClone(world.row) : null),
       appendStep: async (_id, step) => {
         world.row.steps = [...(world.row.steps ?? []), step];
+        world.onRecord?.(step);
       },
       setStatus: async (_id, status) => {
         world.row.status = status;
       },
       mergeSnapshot: async (_id, patch) => {
+        if (world.failSnapshotWriteOf && world.failSnapshotWriteOf in patch) {
+          world.failSnapshotWriteOf = null;
+          throw new Error('snapshot write failed');
+        }
         world.row.snapshot = { ...world.row.snapshot, ...patch };
       },
       upsertBlock: async (block) => {
-        boom('block');
+        await boom('block');
         if (!blocks.has(block.contentHash)) blocks.set(block.contentHash, { category: block.category, caseId: block.caseId });
       },
       collectReferences: async () => {
-        boom('record_references');
+        await boom('record_references');
         return world.references;
       },
       collectAiReferences: async () => {
-        boom('record_ai_references');
+        await boom('record_ai_references');
         return world.aiReferences;
+      },
+      withCaseLock: async (id, fn) => {
+        if (locks.has(id)) return { acquired: false };
+        locks.add(id);
+        try {
+          return { acquired: true, value: await fn() };
+        } finally {
+          locks.delete(id);
+        }
       },
     },
     storage: {
       evidenceConfigured: () => world.evidenceConfigured,
       findOriginal: async (hash, caseId): Promise<TakedownOriginal | null> => {
         for (const key of [`files/${hash}/original`, holdKeyFor(caseId, hash)]) {
-          const size = uploads.get(key);
-          if (size !== undefined) return { key, size };
+          const bytes = uploads.get(key);
+          if (bytes !== undefined) return { key, size: bytes.length };
         }
         return null;
       },
       takePublicOffline: async (hash, caseId) => {
-        boom('unpublish_public');
+        await boom('unpublish_public');
         // The fake mirrors the real rule: a public-only file is copied into private storage before its key goes.
-        const assetSize = publish.get(`assets/${hash}`);
-        const held = assetSize !== undefined && !uploads.has(`files/${hash}/original`);
-        if (held) uploads.set(holdKeyFor(caseId, hash), assetSize);
+        const asset = publish.get(`assets/${hash}`);
+        const held = asset !== undefined && !uploads.has(`files/${hash}/original`);
+        if (held) uploads.set(holdKeyFor(caseId, hash), asset);
         let deleted = 0;
         for (const key of [...publish.keys()]) if (key.includes(hash) && publish.delete(key)) deleted += 1;
         return { deleted, held };
       },
-      headEvidence: async (key) => (evidence.has(key) ? { size: evidence.get(key)! } : null),
+      digestSource: async (key) => (uploads.has(key) ? digestOf(uploads.get(key)!) : null),
+      digestEvidence: async (key) => (evidence.has(key) ? digestOf(evidence.get(key)!) : null),
       copyToEvidence: async (source, key) => {
-        boom('preserve');
-        evidence.set(key, world.corruptCopy ? source.size - 1 : source.size);
+        await boom('preserve');
+        const bytes = uploads.get(source.key)!;
+        evidence.set(key, world.corruptCopy ? sameSizeOther(bytes) : bytes);
         world.copies.push(key);
       },
       deleteFromUploads: async (hash) => {
-        boom('delete_uploads');
+        await boom('delete_uploads');
         let deleted = 0;
         for (const key of [...uploads.keys()]) if (key.includes(hash) && uploads.delete(key)) deleted += 1;
         return deleted;
       },
       deleteFromPublish: async (hash) => {
-        boom('delete_public');
+        await boom('delete_public');
         let deleted = 0;
         for (const key of [...publish.keys()]) if (key.includes(hash) && publish.delete(key)) deleted += 1;
         return deleted;
       },
     },
     suspendUser: async ({ userId }) => {
-      boom('suspend_uploader');
+      await boom('suspend_uploader');
       if (suspended.includes(userId)) return { status: 'already_suspended' };
       suspended.push(userId);
       return { status: 'suspended', revokedSessions: 1 };
@@ -177,7 +215,7 @@ describe('runGlobalTakedown', () => {
 
     expect(result).toMatchObject({ status: 'actioned', caseId: CASE_ID });
     expect(world.blocks.get(HASH)).toEqual({ category: 'csam', caseId: CASE_ID });
-    expect(world.evidence.get(evidenceKeyFor(CASE_ID, HASH))).toBe(1234);
+    expect(world.evidence.get(evidenceKeyFor(CASE_ID, HASH))).toBe(ORIGINAL);
     expect([...world.uploads.keys()]).toEqual([]);
     expect([...world.publish.keys()]).toEqual([]);
     expect(world.row.status).toBe('actioned');
@@ -250,7 +288,7 @@ describe('runGlobalTakedown', () => {
     expect(world.alerts.length).toBe(alerts);
   });
 
-  it('refuses to delete from private storage when the evidence copy does not match the source size', async () => {
+  it('refuses to delete from private storage when the evidence copy has the same size as the source but different bytes', async () => {
     world.corruptCopy = true;
     const result = await runGlobalTakedown(CASE_ID, deps);
 
@@ -263,14 +301,162 @@ describe('runGlobalTakedown', () => {
   it('does not trust an unverified copy left by an earlier attempt: a resume writes it again and verifies', async () => {
     world.corruptCopy = true;
     await runGlobalTakedown(CASE_ID, deps);
-    expect(world.evidence.get(evidenceKeyFor(CASE_ID, HASH))).toBe(1233);
+    expect(world.evidence.get(evidenceKeyFor(CASE_ID, HASH))).toBe(sameSizeOther(ORIGINAL));
 
     world.corruptCopy = false;
     const result = await runGlobalTakedown(CASE_ID, deps);
 
     expect(result.status).toBe('actioned');
     expect(world.copies).toEqual([evidenceKeyFor(CASE_ID, HASH), evidenceKeyFor(CASE_ID, HASH)]);
-    expect(world.evidence.get(evidenceKeyFor(CASE_ID, HASH))).toBe(1234);
+    expect(world.evidence.get(evidenceKeyFor(CASE_ID, HASH))).toBe(ORIGINAL);
+  });
+
+  it('verifies the copy against the content hash itself, so a copy that verifies is recognised on resume even when recording it failed', async () => {
+    world.failSnapshotWriteOf = 'evidenceKey';
+    const first = await runGlobalTakedown(CASE_ID, deps);
+    expect(first).toMatchObject({ status: 'open', failedStep: 'preserve' });
+    expect(world.evidence.get(evidenceKeyFor(CASE_ID, HASH))).toBe(ORIGINAL);
+    expect(world.row.snapshot?.evidenceKey).toBeUndefined();
+
+    const second = await runGlobalTakedown(CASE_ID, deps);
+
+    expect(second.status).toBe('actioned');
+    // Not written again: the bytes there hash to the content hash, so they ARE the preserved copy.
+    expect(world.copies).toEqual([evidenceKeyFor(CASE_ID, HASH)]);
+    expect(world.row.snapshot?.evidenceKey).toBe(evidenceKeyFor(CASE_ID, HASH));
+    expect(world.row.steps?.filter((s) => s.step === 'preserve').map((s) => s.detail)).toEqual(['snapshot write failed', 'already_preserved']);
+  });
+
+  it('recognises that copy even when no source is left to compare it with', async () => {
+    world.failSnapshotWriteOf = 'evidenceKey';
+    await runGlobalTakedown(CASE_ID, deps);
+    world.uploads.clear();
+
+    expect((await runGlobalTakedown(CASE_ID, deps)).status).toBe('actioned');
+    expect(world.row.snapshot?.evidenceKey).toBe(evidenceKeyFor(CASE_ID, HASH));
+  });
+
+  it('preserves an original stored encrypted at rest, verifying the content behind the envelope', async () => {
+    world.uploads.set(`files/${HASH}/original`, `${ENVELOPE}${ORIGINAL}`);
+    const result = await runGlobalTakedown(CASE_ID, deps);
+
+    expect(result.status).toBe('actioned');
+    expect(world.evidence.get(evidenceKeyFor(CASE_ID, HASH))).toBe(`${ENVELOPE}${ORIGINAL}`);
+    expect(world.row.snapshot?.evidenceKey).toBe(evidenceKeyFor(CASE_ID, HASH));
+  });
+
+  it('keeps bytes at the source that are not the content the hash names apart from the evidence copy, under their own checksum', async () => {
+    const other = 'not-what-the-hash-names';
+    world.uploads.set(`files/${HASH}/original`, other);
+    const result = await runGlobalTakedown(CASE_ID, deps);
+
+    expect(result.status).toBe('actioned');
+    const key = `${evidenceKeyFor(CASE_ID, HASH)}.${sha(other)}`;
+    expect([...world.evidence.keys()]).toEqual([key]);
+    expect(world.evidence.get(key)).toBe(other);
+    expect(world.row.snapshot?.evidenceKey).toBeUndefined();
+    expect(world.row.snapshot?.additionalEvidenceKeys).toEqual([key]);
+  });
+
+  describe('one run at a time', () => {
+    it('answers "in progress" to a second run of the same case, which does nothing', async () => {
+      let concurrent: Awaited<ReturnType<typeof runGlobalTakedown>> | undefined;
+      let callsDuringConcurrent = -1;
+      world.onCall = async (step) => {
+        if (step !== 'record_references' || concurrent) return;
+        const callsBefore = world.calls.length;
+        concurrent = await runGlobalTakedown(CASE_ID, deps);
+        callsDuringConcurrent = world.calls.length - callsBefore;
+      };
+
+      const result = await runGlobalTakedown(CASE_ID, deps);
+
+      expect(concurrent).toEqual({ caseId: CASE_ID, status: 'open', inProgress: true });
+      expect(callsDuringConcurrent).toBe(0);
+      expect(result.status).toBe('actioned');
+      expect(world.copies).toEqual([evidenceKeyFor(CASE_ID, HASH)]);
+      expect(world.row.steps?.filter((s) => s.step === 'preserve')).toHaveLength(1);
+    });
+
+    it('answers "in progress" to a re-sweep while a run holds the case, and counts no attempt', async () => {
+      let concurrent: Awaited<ReturnType<typeof resweepGlobalTakedown>> | undefined;
+      world.onCall = async (step) => {
+        if (step === 'record_references' && !concurrent) concurrent = await resweepGlobalTakedown(CASE_ID, deps);
+      };
+
+      await runGlobalTakedown(CASE_ID, deps);
+
+      expect(concurrent).toMatchObject({ inProgress: true });
+      expect(world.row.snapshot?.resweep).toBeUndefined();
+      expect(world.row.steps?.some((s) => s.step === 'resweep')).toBe(false);
+    });
+
+    it('lets the next run in once the first has finished', async () => {
+      world.failNext.add('delete_uploads');
+      await runGlobalTakedown(CASE_ID, deps);
+      expect((await runGlobalTakedown(CASE_ID, deps)).status).toBe('actioned');
+    });
+  });
+
+  describe('re-filed as CSAM while a malware run with "skip preservation" is under way', () => {
+    const refileAsCsam = () => {
+      // What openTakedownCase does to a reused case: the new category, and the skip withdrawn.
+      world.row.category = 'csam';
+      world.row.snapshot = { ...world.row.snapshot, takedown: { kind: 'global', skipPreservation: false } };
+    };
+
+    beforeEach(() => {
+      ({ world, deps } = createWorld({
+        category: 'malware',
+        snapshot: { takedown: { kind: 'global', skipPreservation: true, skipPreservationReason: 'known sample' } },
+      }));
+    });
+
+    it('preserves, because the category is read again just before preservation is decided', async () => {
+      world.onCall = (step) => {
+        if (step === 'record_references') refileAsCsam();
+      };
+      const result = await runGlobalTakedown(CASE_ID, deps);
+
+      expect(result.status).toBe('actioned');
+      expect(world.evidence.get(evidenceKeyFor(CASE_ID, HASH))).toBe(ORIGINAL);
+      expect(world.calls.indexOf('preserve')).toBeLessThan(world.calls.indexOf('delete_uploads'));
+      expect(stepStates(world.row.steps)).not.toContain('preserve:skipped');
+    });
+
+    it('preserves after the skip was recorded, because the category is read again before each delete', async () => {
+      world.onRecord = (entry) => {
+        if (entry.step === 'preserve' && entry.status === 'skipped') refileAsCsam();
+      };
+      const result = await runGlobalTakedown(CASE_ID, deps);
+
+      expect(result.status).toBe('actioned');
+      expect(world.evidence.get(evidenceKeyFor(CASE_ID, HASH))).toBe(ORIGINAL);
+      expect(world.calls.filter((c) => c === 'delete_uploads')).toHaveLength(1);
+      expect(world.calls.indexOf('preserve')).toBeLessThan(world.calls.indexOf('delete_uploads'));
+      expect(stepStates(world.row.steps)).toEqual([
+        'block:ok',
+        'unpublish_public:ok',
+        'record_references:ok',
+        'preserve:skipped',
+        'preserve:ok',
+        'delete_uploads:ok',
+        'delete_public:ok',
+        'record_ai_references:ok',
+      ]);
+    });
+
+    it('waits, deleting nothing private, when the re-filed case has no evidence storage', async () => {
+      world.evidenceConfigured = false;
+      world.onRecord = (entry) => {
+        if (entry.step === 'preserve' && entry.status === 'skipped') refileAsCsam();
+      };
+      const result = await runGlobalTakedown(CASE_ID, deps);
+
+      expect(result).toMatchObject({ status: 'awaiting_evidence', haltReason: 'awaiting_evidence' });
+      expect(world.calls).not.toContain('delete_uploads');
+      expect(world.uploads.get(`files/${HASH}/original`)).toBe(ORIGINAL);
+    });
   });
 
   it('preserves a public-only file from the private hold copy, then deletes that copy too', async () => {
@@ -279,7 +465,7 @@ describe('runGlobalTakedown', () => {
 
     expect(result.status).toBe('actioned');
     expect(world.row.steps?.find((s) => s.step === 'unpublish_public')?.detail).toContain('held_private_copy');
-    expect(world.evidence.get(evidenceKeyFor(CASE_ID, HASH))).toBe(1234);
+    expect(world.evidence.get(evidenceKeyFor(CASE_ID, HASH))).toBe(ORIGINAL);
     expect(world.publish.size).toBe(0);
     expect(world.uploads.size).toBe(0);
   });
@@ -297,7 +483,7 @@ describe('runGlobalTakedown', () => {
   it('refuses to go on when an unverified copy exists and there is no source left to check it against', async () => {
     world.uploads.clear();
     world.publish.clear();
-    world.evidence.set(evidenceKeyFor(CASE_ID, HASH), 7);
+    world.evidence.set(evidenceKeyFor(CASE_ID, HASH), 'partial');
     const result = await runGlobalTakedown(CASE_ID, deps);
 
     expect(result).toMatchObject({ status: 'open', failedStep: 'preserve' });
@@ -307,7 +493,7 @@ describe('runGlobalTakedown', () => {
     await runGlobalTakedown(CASE_ID, deps);
     // The evidence object disappears; a re-sweep finds no source either.
     world.evidence.clear();
-    world.uploads.set(`cache/${HASH}/thumbnail.webp`, 50);
+    world.uploads.set(`cache/${HASH}/thumbnail.webp`, 'thumb');
 
     const result = await resweepGlobalTakedown(CASE_ID, deps);
 
@@ -333,7 +519,7 @@ describe('runGlobalTakedown', () => {
 
     expect(second.status).toBe('actioned');
     expect(world.calls.slice(callsBefore, callsBefore + 2)).toEqual(['preserve', 'delete_uploads']);
-    expect(world.evidence.get(evidenceKeyFor(CASE_ID, HASH))).toBe(1234);
+    expect(world.evidence.get(evidenceKeyFor(CASE_ID, HASH))).toBe(ORIGINAL);
   });
 
   it('re-filed as CSAM with no evidence storage: the resume waits and deletes nothing', async () => {
@@ -378,7 +564,7 @@ describe('runGlobalTakedown', () => {
       await runGlobalTakedown(CASE_ID, deps);
 
       expect(world.publish.size).toBe(0);
-      expect(world.uploads.get(holdKeyFor(CASE_ID, HASH))).toBe(1234);
+      expect(world.uploads.get(holdKeyFor(CASE_ID, HASH))).toBe(ORIGINAL);
     });
 
     it('has already recorded who uploaded it, so that survives the uploader deleting their page while the case waits', async () => {
@@ -582,58 +768,77 @@ describe('resweepGlobalTakedown', () => {
     expect(world.evidence.size).toBe(0);
 
     // A presigned PUT issued before the block lands its bytes afterwards.
-    world.uploads.set(`files/${HASH}/original`, 999);
+    world.uploads.set(`files/${HASH}/original`, ORIGINAL);
     const result = await resweepGlobalTakedown(CASE_ID, deps);
 
     expect(result.status).toBe('actioned');
-    expect(world.evidence.get(evidenceKeyFor(CASE_ID, HASH))).toBe(999);
+    expect(world.evidence.get(evidenceKeyFor(CASE_ID, HASH))).toBe(ORIGINAL);
     expect(world.uploads.size).toBe(0);
     expect(world.row.snapshot?.resweep).toEqual({ attempts: 1, done: true });
+  });
+
+  it('takes a public copy that reappeared off the web before anything else in the pass', async () => {
+    const { world, deps } = createWorld();
+    await runGlobalTakedown(CASE_ID, deps);
+    // A publish in flight at block time put the asset back.
+    world.publish.set(`assets/${HASH}`, ORIGINAL);
+    const callsBefore = world.calls.length;
+
+    const result = await resweepGlobalTakedown(CASE_ID, deps);
+
+    expect(result.status).toBe('actioned');
+    // No original is left, so the asset is held privately, preserved beside the
+    // first copy (same bytes: nothing new to write), and only then deleted.
+    expect(world.calls.slice(callsBefore)).toEqual(['unpublish_public', 'delete_uploads', 'delete_public']);
+    expect(world.publish.size).toBe(0);
+    expect(world.copies).toEqual([evidenceKeyFor(CASE_ID, HASH)]);
+    expect(world.uploads.size).toBe(0);
   });
 
   it('keeps the first preserved copy when the same bytes reappear, and still deletes them', async () => {
     const { world, deps } = createWorld();
     await runGlobalTakedown(CASE_ID, deps);
-    world.uploads.set(`files/${HASH}/original`, 1234);
+    world.uploads.set(`files/${HASH}/original`, ORIGINAL);
 
     await resweepGlobalTakedown(CASE_ID, deps);
     expect(world.copies).toEqual([evidenceKeyFor(CASE_ID, HASH)]);
     expect(world.uploads.size).toBe(0);
   });
 
-  it('never overwrites a verified copy: different bytes are preserved under their own key, and both are on the case', async () => {
+  it('never overwrites a verified copy: different bytes of the SAME size are preserved under their own checksum, and both are on the case', async () => {
     const { world, deps } = createWorld();
     await runGlobalTakedown(CASE_ID, deps);
     const first = evidenceKeyFor(CASE_ID, HASH);
-    world.uploads.set(`files/${HASH}/original`, 4321);
+    const late = sameSizeOther(ORIGINAL);
+    world.uploads.set(`files/${HASH}/original`, late);
 
     const result = await resweepGlobalTakedown(CASE_ID, deps);
 
     expect(result.status).toBe('actioned');
-    expect(world.evidence.get(first)).toBe(1234);
-    expect(world.evidence.get(`${first}.4321`)).toBe(4321);
+    expect(world.evidence.get(first)).toBe(ORIGINAL);
+    expect(world.evidence.get(`${first}.${sha(late)}`)).toBe(late);
     expect(world.row.snapshot?.evidenceKey).toBe(first);
-    expect(world.row.snapshot?.additionalEvidenceKeys).toEqual([`${first}.4321`]);
+    expect(world.row.snapshot?.additionalEvidenceKeys).toEqual([`${first}.${sha(late)}`]);
     expect(world.uploads.size).toBe(0);
   });
 
   it('does not delete the late bytes when their own copy cannot be verified', async () => {
     const { world, deps } = createWorld();
     await runGlobalTakedown(CASE_ID, deps);
-    world.uploads.set(`files/${HASH}/original`, 4321);
+    world.uploads.set(`files/${HASH}/original`, sameSizeOther(ORIGINAL));
     world.corruptCopy = true;
 
     const result = await resweepGlobalTakedown(CASE_ID, deps);
 
     expect(result).toMatchObject({ status: 'open', failedStep: 'preserve' });
-    expect(world.evidence.get(evidenceKeyFor(CASE_ID, HASH))).toBe(1234);
+    expect(world.evidence.get(evidenceKeyFor(CASE_ID, HASH))).toBe(ORIGINAL);
     expect(world.uploads.has(`files/${HASH}/original`)).toBe(true);
   });
 
   it('alerts when a pass fails, and the next call continues that pass instead of starting another', async () => {
     const { world, deps } = createWorld();
     await runGlobalTakedown(CASE_ID, deps);
-    world.uploads.set(`files/${HASH}/original`, 1234);
+    world.uploads.set(`files/${HASH}/original`, ORIGINAL);
     world.failNext.add('delete_uploads');
 
     const failed = await resweepGlobalTakedown(CASE_ID, deps);

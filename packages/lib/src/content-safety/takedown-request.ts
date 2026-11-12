@@ -59,6 +59,8 @@ export interface TakedownResponse {
   failedStep?: string;
   error?: string;
   haltReason?: TakedownHaltReason;
+  /** Another run of the case was already under way, so this request changed nothing. Ask again once it is done. */
+  inProgress?: boolean;
   /** `park_user_sites`: what was parked and what was left for an admin to decide. */
   parkedDriveIds?: string[];
   skippedDrives?: Array<{ driveId: string; reason: string }>;

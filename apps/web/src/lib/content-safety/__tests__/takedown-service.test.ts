@@ -20,6 +20,8 @@ const mocks = vi.hoisted(() => ({
   listAvatars: vi.fn(),
   openCreated: { value: true },
   openThrows: { value: null as Error | null },
+  /** Case IDs another run holds the lock on. */
+  locked: new Set<string>(),
 }));
 
 const CaseCategoryDowngradeError = vi.hoisted(() => class CaseCategoryDowngradeError extends Error {});
@@ -40,6 +42,8 @@ vi.mock('@pagespace/lib/content-safety/case-store', () => ({
     },
     upsertBlock: vi.fn(),
     collectReferences: vi.fn(),
+    withCaseLock: async <T,>(id: string, fn: () => Promise<T>) =>
+      mocks.locked.has(id) ? { acquired: false as const } : { acquired: true as const, value: await fn() },
   }),
   getContentCase: async (id: string) => (cases.has(id) ? structuredClone(cases.get(id)) : null),
   openTakedownCase: async (input: { targetType: string; targetId: string; category: string; reason: string; takedown: { kind: string }; snapshot?: object }) => {
@@ -106,6 +110,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.openCreated.value = true;
   mocks.openThrows.value = null;
+  mocks.locked.clear();
   mocks.unpublishPage.mockResolvedValue({ unpublished: true, driveId: 'drive-1', path: 'docs' });
   mocks.parkDriveSites.mockResolvedValue({ driveId: 'drive-1', prefixes: [{ prefix: 'acme', action: 'parked', objects: 3 }] });
   mocks.parkUserSites.mockResolvedValue({
@@ -312,6 +317,18 @@ describe('requests that cannot be acted on', () => {
       executeTakedown({ action: 'unpublish_page', pageId: 'page-1', category: 'policy', reason: 'r' }, 'admin-1'),
     ).rejects.toMatchObject({ status: 409 });
     expect(mocks.unpublishPage).not.toHaveBeenCalled();
+  });
+
+  it('answers "in progress", changing nothing, when another run of the case is under way', async () => {
+    mocks.unpublishPage.mockRejectedValueOnce(new Error('S3 unavailable'));
+    const first = await executeTakedown({ action: 'unpublish_page', pageId: 'page-1', category: 'policy', reason: 'DMCA' }, 'admin-1');
+    mocks.locked.add(first.caseId!);
+
+    const resumed = await executeTakedown({ action: 'resume', caseId: first.caseId! }, 'admin-1');
+
+    expect(resumed).toEqual({ action: 'resume', caseId: first.caseId, status: 'open', inProgress: true });
+    expect(mocks.unpublishPage).toHaveBeenCalledTimes(1);
+    expect(stepsOf(first.caseId!)).toEqual(['unpublish:failed']);
   });
 
   it('answers 404 for a case that does not exist', async () => {

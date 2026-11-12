@@ -11,6 +11,7 @@ import { describe, it, expect } from 'vitest';
 import {
   encryptBuffer,
   decryptBuffer,
+  hasEnvelopeMagic,
   isEnvelope,
   maybeEncryptBuffer,
   maybeDecryptBuffer,
@@ -73,5 +74,14 @@ describe('maybeDecryptBuffer (policy)', () => {
   });
   it('given legacy plaintext (no envelope), should pass through unchanged', () => {
     expect(maybeDecryptBuffer(PLAIN, { masterKey: KEY }).equals(PLAIN)).toBe(true);
+  });
+});
+
+describe('hasEnvelopeMagic', () => {
+  it('recognises an envelope from its first four bytes alone', () => {
+    const env = encryptBuffer(PLAIN, KEY);
+    expect(hasEnvelopeMagic(env.subarray(0, 4))).toBe(true);
+    expect(hasEnvelopeMagic(PLAIN)).toBe(false);
+    expect(hasEnvelopeMagic(Buffer.from('PS'))).toBe(false);
   });
 });

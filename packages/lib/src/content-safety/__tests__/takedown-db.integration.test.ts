@@ -23,6 +23,7 @@ import {
   listCasesForTarget,
   listContentCases,
   openTakedownCase,
+  withContentCaseRunLock,
 } from '../case-store';
 import { collectContentReferences } from '../references';
 import { resolveTakedownTarget } from '../targets';
@@ -300,6 +301,36 @@ describe('takedown database edge — real Postgres', () => {
         const early = { ...window(), quietBefore: new Date(Date.now() - 30_000) };
         expect((await listCasesDueForResweep(early)).map((c) => c.id)).not.toContain(id);
       });
+    });
+  });
+
+  describe('withContentCaseRunLock', () => {
+    const caseA = `lock-a-${run}`;
+    const caseB = `lock-b-${run}`;
+
+    it('lets one run hold a case at a time, without blocking another case, and frees it afterwards', async () => {
+      let second: unknown;
+      let other: unknown;
+      const first = await withContentCaseRunLock(caseA, async () => {
+        // From another connection, as a second web instance or the cron would.
+        second = await withContentCaseRunLock(caseA, async () => 'second run');
+        other = await withContentCaseRunLock(caseB, async () => 'another case');
+        return 'first run';
+      });
+
+      expect(first).toEqual({ acquired: true, value: 'first run' });
+      expect(second).toEqual({ acquired: false });
+      expect(other).toEqual({ acquired: true, value: 'another case' });
+      expect(await withContentCaseRunLock(caseA, async () => 'later run')).toEqual({ acquired: true, value: 'later run' });
+    });
+
+    it('frees the lock when the run throws', async () => {
+      await expect(withContentCaseRunLock(caseA, async () => { throw new Error('step blew up'); })).rejects.toThrow('step blew up');
+      expect(await withContentCaseRunLock(caseA, async () => 'next')).toEqual({ acquired: true, value: 'next' });
+    });
+
+    it('is what the case store hands the takedown', () => {
+      expect(createTakedownCaseStore().withCaseLock).toBe(withContentCaseRunLock);
     });
   });
 

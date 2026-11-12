@@ -8,7 +8,8 @@
  * that happens before a run starts, not during one.)
  */
 
-import { db } from '@pagespace/db/db';
+import { withAdvisoryLock } from '@pagespace/db/advisory-lock';
+import { db, getAdvisoryLockPool } from '@pagespace/db/db';
 import { and, desc, eq, gte, inArray, lte, or, sql } from '@pagespace/db/operators';
 import {
   contentBlocks,
@@ -60,7 +61,25 @@ export function createTakedownCaseStore(): TakedownCaseStore {
     },
     collectReferences: collectContentReferences,
     collectAiReferences: (contentHash) => collectAiMessageReferences(contentHash, { extendedTimeout: true }),
+    withCaseLock: withContentCaseRunLock,
   };
+}
+
+/**
+ * Run `fn` holding a case's run lock: a Postgres session advisory lock, so it
+ * serialises runs across every web instance and the cron, and a crashed run's
+ * lock goes with its connection. It is held on the dedicated lock pool, never
+ * on a connection the run's own queries need. A run that cannot take the lock
+ * at once does not wait: it is told another run is under way.
+ */
+export async function withContentCaseRunLock<T>(
+  caseId: string,
+  fn: (signal?: AbortSignal) => Promise<T>,
+): Promise<{ acquired: true; value: T } | { acquired: false }> {
+  const locked = await withAdvisoryLock(getAdvisoryLockPool(), `content_case_run:${caseId}`, fn);
+  if (locked.outcome === 'lock_busy') return { acquired: false };
+  if (locked.outcome === 'connection_error') throw locked.error;
+  return { acquired: true, value: locked.result };
 }
 
 /** Thrown when content with an open CSAM case, or a hash blocked as CSAM, is re-filed under a different category. */

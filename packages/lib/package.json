@@ -1034,6 +1034,11 @@
       "import": "./dist/encryption/blind-index.js",
       "require": "./dist/encryption/blind-index.js"
     },
+    "./encryption/envelope-crypto": {
+      "types": "./dist/encryption/envelope-crypto.d.ts",
+      "import": "./dist/encryption/envelope-crypto.js",
+      "require": "./dist/encryption/envelope-crypto.js"
+    },
     "./encryption/field-crypto": {
       "types": "./dist/encryption/field-crypto.d.ts",
       "import": "./dist/encryption/field-crypto.js",
@@ -3412,6 +3417,9 @@
       ],
       "encryption/blind-index": [
         "./dist/encryption/blind-index.d.ts"
+      ],
+      "encryption/envelope-crypto": [
+        "./dist/encryption/envelope-crypto.d.ts"
       ],
       "encryption/field-crypto": [
         "./dist/encryption/field-crypto.d.ts"

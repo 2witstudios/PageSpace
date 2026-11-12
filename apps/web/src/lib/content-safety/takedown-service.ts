@@ -229,6 +229,7 @@ function toResponse(action: TakedownRequest['action'], run: CaseRun): TakedownRe
     status: result.status,
     ...(result.failedStep ? { failedStep: result.failedStep, error: result.error } : {}),
     ...(result.haltReason ? { haltReason: result.haltReason } : {}),
+    ...(result.inProgress ? { inProgress: true } : {}),
     ...(userSites
       ? { parkedDriveIds: userSites.parked.map((d) => d.driveId), skippedDrives: userSites.skipped }
       : {}),

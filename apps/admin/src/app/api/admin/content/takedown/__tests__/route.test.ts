@@ -76,6 +76,12 @@ describe('POST /api/admin/content/takedown', () => {
       expect(lastAudit().details).toMatchObject({ outcome: 'awaiting_evidence', status: 'awaiting_evidence' });
     });
 
+    it('audits a request that found another run of the case under way as that, not as completed', async () => {
+      callWebTakedownMock.mockResolvedValue(ok({ action: 'global', caseId: 'case-1', status: 'open', inProgress: true }));
+      await post(body);
+      expect(lastAudit().details).toMatchObject({ outcome: 'in_progress', status: 'open' });
+    });
+
     it('audits a failed step and still returns the case so the UI can offer resume', async () => {
       callWebTakedownMock.mockResolvedValue(ok({ action: 'global', caseId: 'case-1', status: 'open', failedStep: 'delete_public', error: 'S3 down' }));
       const res = await post(body);

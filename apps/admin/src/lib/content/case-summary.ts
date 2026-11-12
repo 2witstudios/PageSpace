@@ -55,7 +55,8 @@ export function toCaseSummary(row: ContentCase): CaseSummary {
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     actorUserId: snapshot?.takedown?.actorUserId ?? null,
-    evidencePreserved: typeof snapshot?.evidenceKey === 'string',
+    // Any preserved copy counts, including one of bytes that were not the hashed content.
+    evidencePreserved: typeof snapshot?.evidenceKey === 'string' || (snapshot?.additionalEvidenceKeys?.length ?? 0) > 0,
     progress: describeCaseProgress(row),
     references: refs
       ? {

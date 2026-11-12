@@ -108,7 +108,9 @@ export const POST = withAdminAuth(async (adminUser, request) => {
           ? {
               outcome: result.body.failedStep
                 ? 'step_failed'
-                : (result.body.haltReason ?? (result.body.stillHeldDriveIds?.length ? 'hold_lifted_drive_still_held' : 'completed')),
+                : result.body.inProgress
+                  ? 'in_progress'
+                  : (result.body.haltReason ?? (result.body.stillHeldDriveIds?.length ? 'hold_lifted_drive_still_held' : 'completed')),
               restoredDriveIds: result.body.restoredDriveIds,
               stillHeldDriveIds: result.body.stillHeldDriveIds,
               caseId: result.body.caseId ?? ('caseId' in takedown ? takedown.caseId : undefined),

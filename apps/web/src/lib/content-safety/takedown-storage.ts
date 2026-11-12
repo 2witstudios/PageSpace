@@ -1,10 +1,17 @@
 import 'server-only';
 
-import { CopyObjectCommand, DeleteObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
-import { holdKeyFor, type TakedownOriginal, type TakedownStorage } from '@pagespace/lib/content-safety/takedown';
+import { createHash } from 'crypto';
+import { CopyObjectCommand, DeleteObjectCommand, GetObjectCommand, PutObjectCommand, type S3Client } from '@aws-sdk/client-s3';
+import {
+  holdKeyFor,
+  type ObjectDigest,
+  type TakedownOriginal,
+  type TakedownStorage,
+} from '@pagespace/lib/content-safety/takedown';
+import { hasEnvelopeMagic, maybeDecryptBuffer } from '@pagespace/lib/encryption/envelope-crypto';
 import { normalizeContentHash } from '@pagespace/lib/content-safety/policy';
 import { getS3Bucket, getS3Client } from '@/lib/presigned-url';
-import { deleteS3Keys, headS3Object, listS3Prefix, type S3ObjectInfo } from '@/lib/storage/s3-objects';
+import { deleteS3Keys, headS3Object, isS3NotFound, listS3Prefix, type S3ObjectInfo } from '@/lib/storage/s3-objects';
 import {
   deletePublishedAssetsForHash,
   headPublishedAsset,
@@ -79,18 +86,74 @@ async function findPrivateOriginal(hash: string): Promise<TakedownOriginal | nul
   return null;
 }
 
+/** The chunks of an S3 object body: streamed when the SDK gives a stream, whole otherwise. */
+async function* bodyChunks(body: unknown): AsyncIterable<Uint8Array> {
+  if (body === undefined || body === null) return;
+  if (typeof (body as AsyncIterable<Uint8Array>)[Symbol.asyncIterator] === 'function') {
+    yield* body as AsyncIterable<Uint8Array>;
+    return;
+  }
+  const whole = body as { transformToByteArray?: () => Promise<Uint8Array> };
+  if (typeof whole.transformToByteArray === 'function') {
+    yield await whole.transformToByteArray();
+    return;
+  }
+  throw new Error('Unreadable object body');
+}
+
+const sha256Hex = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
+
+/**
+ * Read an object once and hash it: the bytes as stored, and the content they
+ * hold. An original the processor stored encrypted at rest is an envelope
+ * whose content is the plaintext the content hash was computed over, so that
+ * one object is kept in memory and decrypted (originals are size-capped);
+ * anything else is hashed as it streams. An envelope that cannot be opened
+ * throws: a copy is never called verified on a guess. Null only on not-found.
+ */
+async function digestS3Object(client: S3Client, bucket: string, key: string): Promise<ObjectDigest | null> {
+  let body: unknown;
+  try {
+    ({ Body: body } = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key })));
+  } catch (err) {
+    if (isS3NotFound(err)) return null;
+    throw err;
+  }
+  const stored = createHash('sha256');
+  let size = 0;
+  // Kept until the first bytes show whether this is an envelope; dropped at once if not.
+  let kept: Buffer[] | null = [];
+  for await (const chunk of bodyChunks(body)) {
+    const bytes = Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+    stored.update(bytes);
+    size += bytes.length;
+    if (kept) {
+      kept.push(bytes);
+      const head = Buffer.concat(kept);
+      if (head.length >= 4 && !hasEnvelopeMagic(head)) kept = null;
+    }
+  }
+  const sha256 = stored.digest('hex');
+  if (!kept) return { size, sha256, contentSha256: sha256 };
+  const whole = Buffer.concat(kept);
+  const content = maybeDecryptBuffer(whole, { masterKey: process.env.ENCRYPTION_KEY ?? '' });
+  return { size, sha256, contentSha256: content === whole ? sha256 : sha256Hex(content) };
+}
+
 /**
  * Copy the public asset into the PRIVATE uploads bucket at the case's hold key,
- * and prove the copy is whole. GET with the publish client and PUT with the
- * uploads client, because the two buckets may sit behind different credentials.
- * Nothing suspected of being illegal is ever parked in the public bucket.
+ * and prove the copy holds the same bytes (by checksum, not size). GET with the
+ * publish client and PUT with the uploads client, because the two buckets may
+ * sit behind different credentials. Nothing suspected of being illegal is ever
+ * parked in the public bucket.
  */
-async function holdPublicAssetPrivately(hash: string, caseId: string, expectedSize: number): Promise<void> {
+async function holdPublicAssetPrivately(hash: string, caseId: string): Promise<void> {
   const holdKey = holdKeyFor(caseId, hash);
-  const existing = await headS3Object(getS3Client(), getS3Bucket(), holdKey);
-  if (existing?.size === expectedSize) return;
-
   const asset = await readPublishedAsset(hash);
+  const expected = sha256Hex(asset.body);
+  const existing = await digestS3Object(getS3Client(), getS3Bucket(), holdKey);
+  if (existing?.sha256 === expected) return;
+
   await getS3Client().send(
     new PutObjectCommand({
       Bucket: getS3Bucket(),
@@ -99,8 +162,8 @@ async function holdPublicAssetPrivately(hash: string, caseId: string, expectedSi
       ContentType: asset.contentType ?? 'application/octet-stream',
     }),
   );
-  const copy = await headS3Object(getS3Client(), getS3Bucket(), holdKey);
-  if (!copy || copy.size !== expectedSize) {
+  const copy = await digestS3Object(getS3Client(), getS3Bucket(), holdKey);
+  if (copy?.sha256 !== expected) {
     throw new Error('Private hold copy could not be verified; the public object was left in place');
   }
 }
@@ -124,16 +187,15 @@ export function createTakedownStorage(): TakedownStorage {
       let held = false;
       const asset = await headPublishedAsset(hash);
       if (asset && !(await findPrivateOriginal(hash))) {
-        await holdPublicAssetPrivately(hash, caseId, asset.size);
+        await holdPublicAssetPrivately(hash, caseId);
         held = true;
       }
       return { deleted: await deletePublishedAssetsForHash(hash), held };
     },
 
-    async headEvidence(evidenceKey) {
-      const head = await headS3Object(getS3Client(), requireEvidenceBucket(), evidenceKey);
-      return head ? { size: head.size } : null;
-    },
+    digestSource: (key) => digestS3Object(getS3Client(), getS3Bucket(), key),
+
+    digestEvidence: (evidenceKey) => digestS3Object(getS3Client(), requireEvidenceBucket(), evidenceKey),
 
     async copyToEvidence(source, evidenceKey) {
       // Server-side copy within the uploads credentials: the bytes never pass through this process.

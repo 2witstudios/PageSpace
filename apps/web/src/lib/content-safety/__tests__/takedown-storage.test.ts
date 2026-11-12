@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { createHash } from 'crypto';
+import { encryptBuffer } from '@pagespace/lib/encryption/envelope-crypto';
 import { FakeS3 } from '@/test/fake-s3';
 
 const fakeS3 = vi.hoisted(() => ({ current: null as null | { send(command: unknown): Promise<unknown> } }));
@@ -114,6 +116,16 @@ describe('takePublicOffline', () => {
     expect(put).toBeLessThan(firstPublicDelete);
   });
 
+  it('does not trust an earlier hold copy of the same size but different bytes: it is written again', async () => {
+    s3.bucket(UPLOADS).delete(`files/${HASH}/original`);
+    s3.bucket(UPLOADS).delete(`chat-attachments/${HASH}/original`);
+    s3.put(UPLOADS, HOLD, 'Xriginal-bytes');
+
+    await createTakedownStorage().takePublicOffline(HASH, CASE);
+
+    expect(new TextDecoder().decode(s3.bucket(UPLOADS).get(HOLD)!.body)).toBe('original-bytes');
+  });
+
   it('parks nothing in the publish bucket: no key is written there at all', async () => {
     s3.bucket(UPLOADS).delete(`files/${HASH}/original`);
     s3.bucket(UPLOADS).delete(`chat-attachments/${HASH}/original`);
@@ -141,17 +153,63 @@ describe('takePublicOffline', () => {
   });
 });
 
+const sha = (bytes: string | Uint8Array) => createHash('sha256').update(bytes).digest('hex');
+
+describe('digestSource / digestEvidence', () => {
+  const MASTER_KEY = 'file-master-key-at-least-32-characters-long!';
+
+  it('hashes the whole object as stored; for a plaintext object that is also the content hash', async () => {
+    const digest = await createTakedownStorage().digestSource(`files/${HASH}/original`);
+    expect(digest).toEqual({ size: 'original-bytes'.length, sha256: sha('original-bytes'), contentSha256: sha('original-bytes') });
+  });
+
+  it('tells two objects of the same size apart', async () => {
+    s3.put(UPLOADS, 'files/x/a', 'aaaa');
+    s3.put(UPLOADS, 'files/x/b', 'aaab');
+    const storage = createTakedownStorage();
+    const [a, b] = await Promise.all([storage.digestSource('files/x/a'), storage.digestSource('files/x/b')]);
+    expect(a!.size).toBe(b!.size);
+    expect(a!.sha256).not.toBe(b!.sha256);
+  });
+
+  it('hashes the content behind an at-rest envelope, so an encrypted original still matches its content hash', async () => {
+    vi.stubEnv('ENCRYPTION_KEY', MASTER_KEY);
+    const stored = encryptBuffer(Buffer.from('original-bytes'), MASTER_KEY);
+    s3.put(UPLOADS, `files/${HASH}/original`, stored);
+
+    const digest = await createTakedownStorage().digestSource(`files/${HASH}/original`);
+
+    expect(digest).toEqual({ size: stored.length, sha256: sha(stored), contentSha256: sha('original-bytes') });
+  });
+
+  it('fails, rather than guesses, on an envelope it cannot open', async () => {
+    vi.stubEnv('ENCRYPTION_KEY', 'a-different-key-that-is-also-32-chars-long');
+    s3.put(UPLOADS, `files/${HASH}/original`, encryptBuffer(Buffer.from('original-bytes'), MASTER_KEY));
+    await expect(createTakedownStorage().digestSource(`files/${HASH}/original`)).rejects.toThrow();
+  });
+
+  it('reads the evidence bucket for evidence, and returns null only for a missing object', async () => {
+    const storage = createTakedownStorage();
+    expect(await storage.digestEvidence('cases/c/h/original')).toBeNull();
+    s3.put(EVIDENCE, 'cases/c/h/original', 'kept');
+    expect(await storage.digestEvidence('cases/c/h/original')).toMatchObject({ sha256: sha('kept') });
+
+    s3.failOn = { match: `GetObjectCommand ${EVIDENCE}`, error: new Error('503 Slow Down') };
+    await expect(storage.digestEvidence('cases/c/h/original')).rejects.toThrow('503 Slow Down');
+  });
+});
+
 describe('copyToEvidence', () => {
   const evidenceKey = `cases/${CASE}/${HASH}/original`;
 
-  it('copies the private original into the evidence bucket and can verify its size', async () => {
+  it('copies the private original into the evidence bucket, byte for byte', async () => {
     const storage = createTakedownStorage();
     const source = (await storage.findOriginal(HASH, CASE))!;
-    expect(await storage.headEvidence(evidenceKey)).toBeNull();
+    expect(await storage.digestEvidence(evidenceKey)).toBeNull();
 
     await storage.copyToEvidence(source, evidenceKey);
 
-    expect(await storage.headEvidence(evidenceKey)).toEqual({ size: source.size });
+    expect(await storage.digestEvidence(evidenceKey)).toEqual(await storage.digestSource(source.key));
     expect(s3.keys(EVIDENCE)).toEqual([evidenceKey]);
     expect(s3.has(UPLOADS, `files/${HASH}/original`)).toBe(true);
   });
@@ -163,7 +221,7 @@ describe('copyToEvidence', () => {
     await storage.takePublicOffline(HASH, CASE);
 
     await storage.copyToEvidence((await storage.findOriginal(HASH, CASE))!, evidenceKey);
-    expect(await storage.headEvidence(evidenceKey)).toEqual({ size: 'original-bytes'.length });
+    expect(await storage.digestEvidence(evidenceKey)).toMatchObject({ sha256: sha('original-bytes') });
   });
 
   it('fails when no evidence bucket is configured', async () => {
