@@ -42,12 +42,32 @@ export function Mono({ children }: { children: React.ReactNode }) {
   return <span className="break-all font-mono text-xs">{children}</span>;
 }
 
+const DIALOG_COPY: Record<NonNullable<Pending>['action'], { title: string; description: string; confirmLabel: string }> = {
+  resume: {
+    title: 'Resume this case?',
+    description: 'Continues the takedown from the first step that has not succeeded. Steps already done are not repeated.',
+    confirmLabel: 'Resume case',
+  },
+  resweep: {
+    title: 'Pass over storage again?',
+    description:
+      'Checks both buckets again for this hash and deletes anything that arrived after the takedown. This also runs automatically about 20 minutes after a takedown finishes.',
+    confirmLabel: 'Re-sweep',
+  },
+  restore_drive: {
+    title: "Lift this case's hold on the drive?",
+    description:
+      "Removes the hold this case placed. The drive's sites go back on the web only if nothing else holds them: another takedown case, or the owner's suspension, keeps them parked.",
+    confirmLabel: 'Restore sites',
+  },
+};
+
 interface CaseListProps {
   cases: CaseSummary[];
   onChanged: () => void;
 }
 
-type Pending = { caseId: string; action: 'resume' | 'resweep' } | null;
+type Pending = { caseId: string; action: 'resume' | 'resweep' | 'restore_drive' } | null;
 
 /** Cases with status and step progress, and "resume" for the ones that stopped part-way. */
 export function CaseList({ cases, onChanged }: CaseListProps) {
@@ -56,12 +76,16 @@ export function CaseList({ cases, onChanged }: CaseListProps) {
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ message: string; ok: boolean } | null>(null);
 
-  const run = async () => {
+  const run = async (reason: string) => {
     if (!dialog) return;
     setPending(true);
     setDialogError(null);
     try {
-      const result = await runTakedown({ action: dialog.action, caseId: dialog.caseId });
+      const result = await runTakedown(
+        dialog.action === 'restore_drive'
+          ? { action: 'restore_drive', caseId: dialog.caseId, reason }
+          : { action: dialog.action, caseId: dialog.caseId },
+      );
       setNotice(describeTakedownResult(result));
       setDialog(null);
       onChanged();
@@ -143,6 +167,11 @@ export function CaseList({ cases, onChanged }: CaseListProps) {
                       <RotateCw className="mr-1.5 h-3.5 w-3.5" /> Resume
                     </Button>
                   )}
+                  {item.progress.restorable && (
+                    <Button size="sm" variant="outline" onClick={() => { setDialogError(null); setDialog({ caseId: item.id, action: 'restore_drive' }); }}>
+                      Restore sites
+                    </Button>
+                  )}
                   {item.progress.resweepable && (
                     <Button size="sm" variant="ghost" onClick={() => { setDialogError(null); setDialog({ caseId: item.id, action: 'resweep' }); }}>
                       Re-sweep
@@ -158,24 +187,14 @@ export function CaseList({ cases, onChanged }: CaseListProps) {
       <ConfirmActionDialog
         open={dialog !== null}
         onOpenChange={(open) => !open && setDialog(null)}
-        title={dialog?.action === 'resweep' ? 'Pass over storage again?' : 'Resume this case?'}
-        description={
-          dialog?.action === 'resweep' ? (
-            <span>
-              Checks both buckets again for this hash and deletes anything that arrived after the takedown. This also
-              runs automatically about 20 minutes after a takedown finishes.
-            </span>
-          ) : (
-            <span>
-              Continues the takedown from the first step that has not succeeded. Steps already done are not repeated.
-            </span>
-          )
-        }
-        confirmLabel={dialog?.action === 'resweep' ? 'Re-sweep' : 'Resume case'}
-        requireReason={false}
+        title={DIALOG_COPY[dialog?.action ?? 'resume'].title}
+        description={<span>{DIALOG_COPY[dialog?.action ?? 'resume'].description}</span>}
+        confirmLabel={DIALOG_COPY[dialog?.action ?? 'resume'].confirmLabel}
+        destructive={dialog?.action !== 'restore_drive'}
+        requireReason={dialog?.action === 'restore_drive'}
         pending={pending}
         error={dialogError}
-        onConfirm={() => void run()}
+        onConfirm={({ reason }) => void run(reason)}
       />
     </div>
   );

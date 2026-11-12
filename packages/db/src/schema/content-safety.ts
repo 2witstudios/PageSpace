@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, jsonb, index } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, index, uniqueIndex } from 'drizzle-orm/pg-core';
 import { createId } from '@paralleldrive/cuid2';
 
 /**
@@ -80,6 +80,13 @@ export type ContentCaseSnapshot = {
   };
   /** Where the preserved copy is, when one was made. Bucket-relative key, never a URL. */
   evidenceKey?: string;
+  /**
+   * Further preserved copies, made when different bytes later appeared at the
+   * same key (a re-sweep). The first verified copy is never overwritten.
+   */
+  additionalEvidenceKeys?: string[];
+  /** Re-sweep bookkeeping for a global takedown: passes attempted, and whether the last one finished. */
+  resweep?: { attempts: number; done: boolean };
   [key: string]: unknown;
 };
 
@@ -155,26 +162,33 @@ export const contentCases = pgTable(
 );
 
 /**
- * Drives whose published sites are held off the public bucket by a takedown or
- * a user suspension. The sites are parked under `suspended/<prefix>/`, and this
- * row is what keeps them there: the visibility reconciler and every publish
- * write consult it (packages/lib/src/organizations/published-visibility.ts), so
- * neither the retry sweep nor a republish can put a held site back.
+ * Holds that keep a drive's published sites off the public bucket. The sites
+ * are parked under `suspended/<prefix>/`, and these rows are what keep them
+ * there: the visibility reconciler and every publish write consult them
+ * (packages/lib/src/organizations/published-visibility.ts), so neither the retry
+ * sweep nor a republish can put a held site back.
  *
- * Plain text IDs, no FK (see file header): the hold is part of the case record.
+ * A drive can be held more than once — by a takedown case AND by its owner's
+ * suspension, or by two cases. Each holder owns one row (`holder` is
+ * `case:<caseId>` or `user:<userId>`), lifting a hold removes only that row,
+ * and the drive stays parked until its last hold is gone.
+ *
+ * Plain text IDs, no FK (see file header): a hold is part of the case record.
  */
 export const contentSiteHolds = pgTable(
   'content_site_holds',
   {
-    driveId: text('drive_id').primaryKey(),
+    id: text('id').primaryKey().$defaultFn(() => createId()),
+    driveId: text('drive_id').notNull(),
+    holder: text('holder').notNull(),
     source: text('source').$type<ContentSiteHoldSource>().notNull(),
     caseId: text('case_id'),
-    // For `user_suspension`: whose suspension parked the drive, so lifting it can restore exactly those.
     userId: text('user_id'),
     createdBy: text('created_by'),
     createdAt: timestamp('created_at', { mode: 'date' }).notNull().defaultNow(),
   },
   (table) => ({
+    driveHolderKey: uniqueIndex('content_site_holds_drive_holder_key').on(table.driveId, table.holder),
     userIdx: index('content_site_holds_user_id_idx').on(table.userId),
   }),
 );

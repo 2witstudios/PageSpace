@@ -44,13 +44,15 @@ describe('content-safety schema', () => {
     ]);
   });
 
-  it('content_site_holds is keyed by drive, one hold per drive', () => {
+  it('content_site_holds allows several holds per drive, one per holder', () => {
     const config = getTableConfig(contentSiteHolds);
     expect(config.name).toBe('content_site_holds');
-    expect(config.columns.find((c) => c.primary)?.name).toBe('drive_id');
+    expect(config.columns.find((c) => c.primary)?.name).toBe('id');
     expect(columnNames(contentSiteHolds)).toEqual(
-      ['case_id', 'created_at', 'created_by', 'drive_id', 'source', 'user_id'],
+      ['case_id', 'created_at', 'created_by', 'drive_id', 'holder', 'id', 'source', 'user_id'],
     );
+    const unique = config.indexes.find((i) => i.config.unique);
+    expect(unique?.config.columns.map((c) => ('name' in c ? c.name : ''))).toEqual(['drive_id', 'holder']);
   });
 
   // Legal preservation: a case, block or verdict must outlive the user, page and

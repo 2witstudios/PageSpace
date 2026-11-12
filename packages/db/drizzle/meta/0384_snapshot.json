@@ -1,5 +1,5 @@
 {
-  "id": "dc49462b-9a9c-440c-b6ba-a43645c0c396",
+  "id": "36089e98-cd12-4d9d-8ee1-808bf1a2643a",
   "prevId": "b6a40141-5381-428b-8d82-e1116049e511",
   "version": "7",
   "dialect": "postgresql",
@@ -21984,10 +21984,22 @@
       "name": "content_site_holds",
       "schema": "",
       "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
         "drive_id": {
           "name": "drive_id",
           "type": "text",
-          "primaryKey": true,
+          "primaryKey": false,
+          "notNull": true
+        },
+        "holder": {
+          "name": "holder",
+          "type": "text",
+          "primaryKey": false,
           "notNull": true
         },
         "source": {
@@ -22023,6 +22035,27 @@
         }
       },
       "indexes": {
+        "content_site_holds_drive_holder_key": {
+          "name": "content_site_holds_drive_holder_key",
+          "columns": [
+            {
+              "expression": "drive_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "holder",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "content_site_holds_user_id_idx": {
           "name": "content_site_holds_user_id_idx",
           "columns": [

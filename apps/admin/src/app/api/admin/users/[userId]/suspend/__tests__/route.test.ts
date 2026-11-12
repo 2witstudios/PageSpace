@@ -31,9 +31,9 @@ vi.mock('@/lib/content/web-takedown', () => ({ callWebTakedown: callWebTakedownM
 vi.mock('@pagespace/db/db', () => ({
   db: { select: () => ({ from: () => ({ where: () => ({ limit: () => holdRowsMock() }) }) }) },
 }));
-vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn(), and: vi.fn() }));
+vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn() }));
 vi.mock('@pagespace/db/schema/content-safety', () => ({
-  contentSiteHolds: { driveId: 'driveId', userId: 'userId', source: 'source' },
+  contentSiteHolds: { driveId: 'driveId', holder: 'holder' },
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
@@ -193,8 +193,24 @@ describe('/api/admin/users/[userId]/suspend', () => {
         expect(body.message).toContain('could NOT be parked');
         expect(auditRequest).toHaveBeenCalledWith(
           expect.any(Request),
-          expect.objectContaining({ eventType: 'content.takedown.sites_parked', details: expect.objectContaining({ outcome: 'not_completed' }) }),
+          expect.objectContaining({ eventType: 'content.takedown.sites_parked', details: expect.objectContaining({ outcome: 'not_configured' }) }),
         );
+      });
+
+      it('stores a code in the audit log, never the raw error with its hostnames and storage text', async () => {
+        callWebTakedownMock.mockResolvedValue({
+          ok: true,
+          status: 200,
+          body: { action: 'park_user_sites', caseId: 'case-1', status: 'open', failedStep: 'park_sites', error: 'Could not park acme.example.com: SlowDown at s3://bucket' },
+        });
+
+        await POST(request('POST', { reason: 'abuse', parkSites: true }), ctx());
+
+        const audited = JSON.stringify(vi.mocked(auditRequest).mock.calls.map(([, event]) => event));
+        expect(audited).not.toContain('acme.example.com');
+        expect(audited).not.toContain('SlowDown');
+        expect(audited).toContain('"sitesError":"step_failed"');
+        expect(audited).toContain('"outcome":"step_failed"');
       });
 
       it('reports a parking step that failed part-way', async () => {
@@ -261,11 +277,23 @@ describe('/api/admin/users/[userId]/suspend', () => {
       const body = await (await DELETE(request('DELETE'), ctx())).json();
 
       expect(callWebTakedownMock).toHaveBeenCalledWith({ action: 'restore_user_sites', userId: 'user-1' }, 'admin-1');
-      expect(body.sites).toEqual({ restoredDriveIds: ['drive-1'] });
+      expect(body.sites).toEqual({ restoredDriveIds: ['drive-1'], stillHeldDriveIds: [] });
       expect(auditRequest).toHaveBeenCalledWith(
         expect.any(Request),
         expect.objectContaining({ eventType: 'content.takedown.sites_restored', resourceId: 'user-1' }),
       );
+    });
+
+    it('says so when a takedown still holds one of the drives', async () => {
+      holdRowsMock.mockResolvedValue([{ driveId: 'drive-1' }]);
+      callWebTakedownMock.mockResolvedValue({
+        ok: true,
+        status: 200,
+        body: { action: 'restore_user_sites', restoredDriveIds: [], stillHeldDriveIds: ['drive-1'] },
+      });
+
+      const body = await (await DELETE(request('DELETE'), ctx())).json();
+      expect(body.message).toContain('stay parked');
     });
 
     it('still lifts the suspension, and says so, when the sites could not be restored', async () => {

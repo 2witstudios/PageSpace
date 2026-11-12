@@ -32,37 +32,46 @@ import {
 
 export type ContentReferences = NonNullable<ContentCaseSnapshot['references']>;
 
-/** The object a preserved copy is made from. */
+/** The object a preserved copy is made from. Always in the private uploads bucket. */
 export interface TakedownOriginal {
-  store: 'uploads' | 'publish';
   key: string;
   size: number;
+}
+
+/**
+ * Where a public-only file is copied, inside the PRIVATE uploads bucket, before
+ * its public key is deleted. It is the preserve step's source when no private
+ * original exists, and is deleted with the rest of the hash's private objects.
+ */
+export function holdKeyFor(caseId: string, contentHash: string): string {
+  return `content-hold/${caseId}/${contentHash}`;
 }
 
 export interface TakedownStorage {
   evidenceConfigured(): boolean;
   /**
-   * The first original that exists for the hash: `files/<hash>/original`, then
-   * `chat-attachments/<hash>/original`, then the public asset (in quarantine or,
-   * if it has not been moved yet, at `assets/<hash>`). Null only on a definite
-   * not-found; any other error must throw, so "couldn't check" is never read as
-   * "nothing to preserve".
+   * The private original for the hash: `files/<hash>/original`, then
+   * `chat-attachments/<hash>/original`, then this case's hold copy. Null only on
+   * a definite not-found; any other error must throw, so "couldn't check" is
+   * never read as "nothing to preserve".
    */
-  findOriginal(contentHash: string): Promise<TakedownOriginal | null>;
-  /** Every object that exists for the hash, original or derived, in either bucket and in quarantine. */
-  listObjects(contentHash: string): Promise<TakedownOriginal[]>;
+  findOriginal(contentHash: string, caseId: string): Promise<TakedownOriginal | null>;
   /**
-   * Move the hash's public objects (`assets/<hash>`, `assets/cache/<hash>/*`)
-   * out of the public prefix into a private quarantine prefix of the same
-   * bucket: copy, verify, then delete the public key. Nothing is lost. Returns
-   * the number moved.
+   * Take the hash off the web now: delete `assets/<hash>` and
+   * `assets/cache/<hash>/*` from the public bucket. If no private original
+   * exists, the public asset is first copied to the case's hold key in the
+   * private uploads bucket and the copy's size verified, so the delete never
+   * destroys the only copy. `held` says whether that copy was made.
    */
-  quarantinePublic(contentHash: string): Promise<number>;
+  takePublicOffline(contentHash: string, caseId: string): Promise<{ deleted: number; held: boolean }>;
   headEvidence(evidenceKey: string): Promise<{ size: number } | null>;
   copyToEvidence(source: TakedownOriginal, evidenceKey: string): Promise<void>;
-  /** Delete `files/<hash>/*`, `cache/<hash>/*`, `chat-attachments/<hash>/*`. Returns the number deleted. */
-  deleteFromUploads(contentHash: string): Promise<number>;
-  /** Delete `assets/<hash>`, `assets/cache/<hash>/*` and their quarantined copies. Returns the number deleted. */
+  /**
+   * Delete `files/<hash>/*`, `cache/<hash>/*`, `chat-attachments/<hash>/*` and
+   * the case's hold copy. Returns the number deleted.
+   */
+  deleteFromUploads(contentHash: string, caseId: string): Promise<number>;
+  /** Delete `assets/<hash>` and `assets/cache/<hash>/*`. Returns the number deleted. */
   deleteFromPublish(contentHash: string): Promise<number>;
 }
 
@@ -93,10 +102,15 @@ export type SuspendUserOutcome = SuspendUserResult | { status: 'skipped_admin' }
 export const MAX_AUTO_SUSPENSIONS = 5;
 
 export interface TakedownAlert {
-  event: 'opened' | 'actioned' | 'awaiting_evidence';
+  event: 'opened' | 'actioned' | 'awaiting_evidence' | 'resweep_failed';
   caseId: string;
   category: ContentBlockCategory | null;
+  /** `resweep_failed`: which attempt this was, out of `MAX_RESWEEP_ATTEMPTS`. */
+  attempt?: number;
 }
+
+/** How many times the cron passes over a finished takedown's storage before leaving it to a person. */
+export const MAX_RESWEEP_ATTEMPTS = 3;
 
 export interface TakedownDeps {
   cases: TakedownCaseStore;
@@ -123,16 +137,6 @@ export interface TakedownRunResult {
 /** Where a case's preserved copy lives in the evidence bucket. Includes the case ID. */
 export function evidenceKeyFor(caseId: string, contentHash: string): string {
   return `cases/${caseId}/${contentHash}/original`;
-}
-
-/** The prefix a case's derived objects are preserved under when the original itself no longer exists. */
-function derivedEvidencePrefixFor(caseId: string, contentHash: string): string {
-  return `cases/${caseId}/${contentHash}/derived/`;
-}
-
-/** Where one derived object is preserved. */
-export function derivedEvidenceKeyFor(caseId: string, contentHash: string, source: TakedownOriginal): string {
-  return `${derivedEvidencePrefixFor(caseId, contentHash)}${source.store}/${source.key}`;
 }
 
 /** Copy one object to the evidence bucket and prove the copy is whole. Throws if it is not. */
@@ -196,44 +200,46 @@ async function executeGlobalStep(
       });
       return {};
     }
-    case 'quarantine_public':
-      return { detail: `moved=${await deps.storage.quarantinePublic(contentHash)}` };
+    case 'unpublish_public': {
+      const { deleted, held } = await deps.storage.takePublicOffline(contentHash, row.id);
+      return { detail: `deleted=${deleted}${held ? ' held_private_copy' : ''}` };
+    }
     case 'preserve': {
       const evidenceKey = evidenceKeyFor(row.id, contentHash);
+      // The key is written to the snapshot only after a copy passed verification,
+      // so its presence there is what "verified" means.
+      const snapshot = (await loadCase(row.id, deps)).snapshot;
+      const verified = snapshot?.evidenceKey === evidenceKey;
       const existing = await deps.storage.headEvidence(evidenceKey);
-      const source = await deps.storage.findOriginal(contentHash);
+      const source = await deps.storage.findOriginal(contentHash, row.id);
 
-      // A copy from an earlier attempt counts only if it is whole: one that failed
-      // verification is copied again, not trusted because it exists. With the
-      // original gone there is nothing to compare against, and the deletes only
-      // ever run after a verified copy, so that copy was verified.
-      if (existing && (!source || existing.size === source.size)) {
-        await deps.cases.mergeSnapshot(row.id, { evidenceKey });
-        return { detail: 'already_preserved' };
+      if (!source) {
+        if (existing && verified) return { detail: 'already_preserved' };
+        if (existing) throw new Error('An unverified evidence copy exists and there is no source left to verify it against');
+        return { detail: 'no_source_object', skipped: true };
       }
-      if (source) {
+      if (!existing || !verified) {
+        // Nothing preserved yet, or only a copy that never passed verification: (re)write it.
         const bytes = await copyAndVerify(source, evidenceKey, deps);
         await deps.cases.mergeSnapshot(row.id, { evidenceKey });
-        return { detail: `source=${source.store} bytes=${bytes}` };
+        return { detail: `bytes=${bytes}` };
       }
+      if (existing.size === source.size) return { detail: 'already_preserved' };
 
-      // No original anywhere. For CSAM, whatever derived objects remain
-      // (thumbnails, previews) are the material: preserve each of them before
-      // the deletes run, so nothing is ever deleted unpreserved.
-      if (row.category === 'csam') {
-        const derived = await deps.storage.listObjects(contentHash);
-        if (derived.length > 0) {
-          for (const object of derived) {
-            await copyAndVerify(object, derivedEvidenceKeyFor(row.id, contentHash, object), deps);
-          }
-          await deps.cases.mergeSnapshot(row.id, { evidenceKey: derivedEvidencePrefixFor(row.id, contentHash) });
-          return { detail: `no_original derived_preserved=${derived.length}` };
-        }
+      // A VERIFIED copy is never overwritten. Different bytes have since landed at
+      // the source key (a re-sweep after an old presigned PUT): they are preserved
+      // beside the first copy, under their own key, and both stay on the case.
+      const additionalKey = `${evidenceKey}.${source.size}`;
+      const additional = await deps.storage.headEvidence(additionalKey);
+      if (!additional || additional.size !== source.size) await copyAndVerify(source, additionalKey, deps);
+      const known = snapshot?.additionalEvidenceKeys ?? [];
+      if (!known.includes(additionalKey)) {
+        await deps.cases.mergeSnapshot(row.id, { additionalEvidenceKeys: [...known, additionalKey] });
       }
-      return { detail: 'no_source_object', skipped: true };
+      return { detail: `additional_copy bytes=${source.size}` };
     }
     case 'delete_uploads':
-      return { detail: `deleted=${await deps.storage.deleteFromUploads(contentHash)}` };
+      return { detail: `deleted=${await deps.storage.deleteFromUploads(contentHash, row.id)}` };
     case 'delete_public':
       return { detail: `deleted=${await deps.storage.deleteFromPublish(contentHash)}` };
     case 'record_references': {
@@ -326,13 +332,30 @@ export async function runGlobalTakedown(caseId: string, deps: TakedownDeps): Pro
 }
 
 /**
- * Pass over storage again for a finished global takedown: preserve (if nothing
- * was preserved yet) and delete. For bytes that reached a blocked key after the
- * first pass through a presigned PUT issued before the block.
+ * Pass over storage again for a finished global takedown: preserve whatever is
+ * there now and delete it. For bytes that reached a blocked key after the first
+ * pass through a presigned PUT issued before the block.
+ *
+ * A pass that fails leaves the case `open` with its marker in place; calling
+ * this again continues that pass rather than starting another. Every failure
+ * alerts, and the attempt count on the case is what lets the cron retry a
+ * bounded number of times (`MAX_RESWEEP_ATTEMPTS`).
  */
 export async function resweepGlobalTakedown(caseId: string, deps: TakedownDeps): Promise<TakedownRunResult> {
-  await deps.cases.appendStep(caseId, stepEntry(RESWEEP_MARKER, 'ok', undefined, deps));
-  return runGlobalTakedown(caseId, deps);
+  const row = await loadCase(caseId, deps);
+  const attempts = (row.snapshot?.resweep?.attempts ?? 0) + 1;
+  if (row.status === 'actioned') {
+    await deps.cases.appendStep(caseId, stepEntry(RESWEEP_MARKER, 'ok', undefined, deps));
+  }
+  await deps.cases.mergeSnapshot(caseId, { resweep: { attempts, done: false } });
+
+  const result = await runGlobalTakedown(caseId, deps);
+  if (result.status === 'actioned') {
+    await deps.cases.mergeSnapshot(caseId, { resweep: { attempts, done: true } });
+  } else {
+    await safeAlert(deps, { event: 'resweep_failed', caseId, category: row.category, attempt: attempts });
+  }
+  return result;
 }
 
 export interface LinearStep {

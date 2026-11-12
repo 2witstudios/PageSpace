@@ -30,7 +30,7 @@ describe('nextGlobalTakedownStep', () => {
     expect(nextGlobalTakedownStep(input())).toEqual({ kind: 'run', step: 'block' });
   });
 
-  it('walks block, quarantine, preserve, delete uploads, delete public, record references in order', () => {
+  it('walks block, unpublish, preserve, delete uploads, delete public, record references in order', () => {
     const steps: ContentCaseStep[] = [];
     const order: GlobalTakedownStep[] = [];
     for (;;) {
@@ -42,7 +42,7 @@ describe('nextGlobalTakedownStep', () => {
       order.push(decision.step);
       steps.push(ok(decision.step));
     }
-    expect(order).toEqual(['block', 'quarantine_public', 'preserve', 'delete_uploads', 'delete_public', 'record_references']);
+    expect(order).toEqual(['block', 'unpublish_public', 'preserve', 'delete_uploads', 'delete_public', 'record_references']);
   });
 
   it('adds the suspension as the last step only when asked for', () => {
@@ -61,22 +61,22 @@ describe('nextGlobalTakedownStep', () => {
   });
 
   it('moves past a step whose retry succeeded after a failure', () => {
-    const steps = [ok('block'), ok('quarantine_public'), failed('preserve'), ok('preserve')];
+    const steps = [ok('block'), ok('unpublish_public'), failed('preserve'), ok('preserve')];
     expect(nextGlobalTakedownStep(input({ steps }))).toEqual({ kind: 'run', step: 'delete_uploads' });
   });
 
   it('treats a skipped step as settled', () => {
-    const steps = [ok('block'), ok('quarantine_public'), skipped('preserve')];
+    const steps = [ok('block'), ok('unpublish_public'), skipped('preserve')];
     expect(nextGlobalTakedownStep(input({ steps }))).toEqual({ kind: 'run', step: 'delete_uploads' });
   });
 
   describe('preservation', () => {
-    const blocked = [ok('block'), ok('quarantine_public')];
+    const blocked = [ok('block'), ok('unpublish_public')];
 
     it('takes the public copies offline before a CSAM case can halt for evidence storage', () => {
       expect(nextGlobalTakedownStep(input({ steps: [ok('block')], evidenceConfigured: false }))).toEqual({
         kind: 'run',
-        step: 'quarantine_public',
+        step: 'unpublish_public',
       });
     });
 
@@ -118,8 +118,45 @@ describe('nextGlobalTakedownStep', () => {
     });
   });
 
+  describe('a case re-filed under a different category', () => {
+    // Malware, admin skipped preservation, the run failed at delete_uploads — then the hash is re-filed as CSAM.
+    const refiled = [ok('block'), ok('unpublish_public'), { ...skipped('preserve'), detail: 'skipped_by_admin' }, failed('delete_uploads')];
+
+    it('resumes at preserve, not at the deletes: a skip granted under malware is void under CSAM', () => {
+      expect(nextGlobalTakedownStep(input({ steps: refiled, category: 'csam', skipPreservation: true }))).toEqual({
+        kind: 'run',
+        step: 'preserve',
+      });
+    });
+
+    it('waits for evidence storage when there is none, deleting nothing', () => {
+      expect(
+        nextGlobalTakedownStep(input({ steps: refiled, category: 'csam', skipPreservation: true, evidenceConfigured: false })),
+      ).toEqual({ kind: 'halt', reason: 'awaiting_evidence' });
+    });
+
+    it('still honours the skip while the category permits it', () => {
+      expect(nextGlobalTakedownStep(input({ steps: refiled, category: 'malware', skipPreservation: true }))).toEqual({
+        kind: 'run',
+        step: 'delete_uploads',
+      });
+    });
+
+    it('voids the skip when the admin option is withdrawn, too', () => {
+      expect(nextGlobalTakedownStep(input({ steps: refiled, category: 'malware', skipPreservation: false }))).toEqual({
+        kind: 'run',
+        step: 'preserve',
+      });
+    });
+
+    it('does not re-open a preserve that was skipped because there was nothing to preserve', () => {
+      const steps = [ok('block'), ok('unpublish_public'), { ...skipped('preserve'), detail: 'no_source_object' }, failed('delete_uploads')];
+      expect(nextGlobalTakedownStep(input({ steps, category: 'csam' }))).toEqual({ kind: 'run', step: 'delete_uploads' });
+    });
+  });
+
   describe('re-sweep', () => {
-    const finished = ['block', 'quarantine_public', 'preserve', 'delete_uploads', 'delete_public', 'record_references'].map(ok);
+    const finished = ['block', 'unpublish_public', 'preserve', 'delete_uploads', 'delete_public', 'record_references'].map(ok);
 
     it('repeats preserve and both deletes after a re-sweep marker, and nothing else', () => {
       const steps = [...finished, ok(RESWEEP_MARKER)];
@@ -154,10 +191,10 @@ describe('statusForDecision', () => {
 
 describe('summarizeSteps', () => {
   it('reports the latest state of each step in plan order, pending when never run', () => {
-    const steps = [ok('block'), ok('quarantine_public'), failed('preserve'), ok('preserve'), failed('delete_uploads')];
+    const steps = [ok('block'), ok('unpublish_public'), failed('preserve'), ok('preserve'), failed('delete_uploads')];
     expect(summarizeSteps(steps, GLOBAL_TAKEDOWN_STEPS)).toEqual([
       { step: 'block', status: 'ok' },
-      { step: 'quarantine_public', status: 'ok' },
+      { step: 'unpublish_public', status: 'ok' },
       { step: 'preserve', status: 'ok' },
       { step: 'delete_uploads', status: 'failed', detail: 'boom' },
       { step: 'delete_public', status: 'pending' },
@@ -171,7 +208,7 @@ describe('describeCaseProgress', () => {
   it('shows a global case part-way through as resumable, without the suspension it was not asked for', () => {
     const progress = describeCaseProgress({
       status: 'open',
-      steps: [ok('block'), ok('quarantine_public'), ok('preserve'), failed('delete_uploads')],
+      steps: [ok('block'), ok('unpublish_public'), ok('preserve'), failed('delete_uploads')],
       snapshot: { takedown: { kind: 'global' } },
     });
 
@@ -180,7 +217,7 @@ describe('describeCaseProgress', () => {
     expect(progress.resweepable).toBe(false);
     expect(progress.steps.map((s) => `${s.step}:${s.status}`)).toEqual([
       'block:ok',
-      'quarantine_public:ok',
+      'unpublish_public:ok',
       'preserve:ok',
       'delete_uploads:failed',
       'delete_public:pending',
@@ -200,7 +237,7 @@ describe('describeCaseProgress', () => {
 
   it('offers a re-sweep, not a resume, for a finished global case', () => {
     const progress = describeCaseProgress({ status: 'actioned', steps: [], snapshot: { takedown: { kind: 'global' } } });
-    expect(progress).toMatchObject({ resumable: false, resweepable: true });
+    expect(progress).toMatchObject({ resumable: false, resweepable: true, restorable: false });
   });
 
   it('uses the avatar plan for an avatar case', () => {
@@ -217,6 +254,29 @@ describe('describeCaseProgress', () => {
       steps: [],
       resumable: false,
       resweepable: false,
+      restorable: false,
     });
+  });
+
+  it('offers a re-sweep for a case left open by a failed re-sweep', () => {
+    const progress = describeCaseProgress({
+      status: 'open',
+      steps: [],
+      snapshot: { takedown: { kind: 'global' }, resweep: { attempts: 1, done: false } },
+    });
+    expect(progress).toMatchObject({ resumable: true, resweepable: true });
+  });
+
+  it('offers to lift a drive-parking hold once, and shows the restore after it', () => {
+    const parked = describeCaseProgress({ status: 'actioned', steps: [ok('park_sites')], snapshot: { takedown: { kind: 'park_drive' } } });
+    expect(parked.restorable).toBe(true);
+
+    const restored = describeCaseProgress({
+      status: 'actioned',
+      steps: [ok('park_sites'), ok('restore_sites')],
+      snapshot: { takedown: { kind: 'park_drive' } },
+    });
+    expect(restored.restorable).toBe(false);
+    expect(restored.steps.map((s) => s.step)).toEqual(['park_sites', 'restore_sites']);
   });
 });

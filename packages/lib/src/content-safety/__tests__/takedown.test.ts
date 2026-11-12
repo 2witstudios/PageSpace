@@ -7,8 +7,9 @@ import type {
 import { GLOBAL_TAKEDOWN_STEPS, type GlobalTakedownStep } from '../takedown-plan';
 import {
   MAX_AUTO_SUSPENSIONS,
-  derivedEvidenceKeyFor,
+  MAX_RESWEEP_ATTEMPTS,
   evidenceKeyFor,
+  holdKeyFor,
   resweepGlobalTakedown,
   runGlobalTakedown,
   runLinearCase,
@@ -107,30 +108,22 @@ function createWorld(options: { category?: ContentCase['category']; evidence?: b
     },
     storage: {
       evidenceConfigured: () => world.evidenceConfigured,
-      findOriginal: async (hash): Promise<TakedownOriginal | null> => {
-        const key = `files/${hash}/original`;
-        const size = uploads.get(key);
-        if (size !== undefined) return { store: 'uploads', key, size };
-        for (const assetKey of [`quarantine/assets/${hash}`, `assets/${hash}`]) {
-          const assetSize = publish.get(assetKey);
-          if (assetSize !== undefined) return { store: 'publish', key: assetKey, size: assetSize };
+      findOriginal: async (hash, caseId): Promise<TakedownOriginal | null> => {
+        for (const key of [`files/${hash}/original`, holdKeyFor(caseId, hash)]) {
+          const size = uploads.get(key);
+          if (size !== undefined) return { key, size };
         }
         return null;
       },
-      listObjects: async (hash) => [
-        ...[...uploads.entries()].filter(([key]) => key.includes(hash)).map(([key, size]) => ({ store: 'uploads' as const, key, size })),
-        ...[...publish.entries()].filter(([key]) => key.includes(hash)).map(([key, size]) => ({ store: 'publish' as const, key, size })),
-      ],
-      quarantinePublic: async (hash) => {
-        boom('quarantine_public');
-        let moved = 0;
-        for (const [key, size] of [...publish.entries()]) {
-          if (!key.startsWith('assets/') || !key.includes(hash)) continue;
-          publish.set(`quarantine/${key}`, size);
-          publish.delete(key);
-          moved += 1;
-        }
-        return moved;
+      takePublicOffline: async (hash, caseId) => {
+        boom('unpublish_public');
+        // The fake mirrors the real rule: a public-only file is copied into private storage before its key goes.
+        const assetSize = publish.get(`assets/${hash}`);
+        const held = assetSize !== undefined && !uploads.has(`files/${hash}/original`);
+        if (held) uploads.set(holdKeyFor(caseId, hash), assetSize);
+        let deleted = 0;
+        for (const key of [...publish.keys()]) if (key.includes(hash) && publish.delete(key)) deleted += 1;
+        return { deleted, held };
       },
       headEvidence: async (key) => (evidence.has(key) ? { size: evidence.get(key)! } : null),
       copyToEvidence: async (source, key) => {
@@ -187,7 +180,7 @@ describe('runGlobalTakedown', () => {
     expect(world.row.snapshot?.evidenceKey).toBe(evidenceKeyFor(CASE_ID, HASH));
     expect(stepStates(world.row.steps)).toEqual([
       'block:ok',
-      'quarantine_public:ok',
+      'unpublish_public:ok',
       'preserve:ok',
       'delete_uploads:ok',
       'delete_public:ok',
@@ -196,9 +189,9 @@ describe('runGlobalTakedown', () => {
     expect(world.suspended).toEqual([]);
   });
 
-  it('moves the public copies out of the public prefix before anything is preserved or deleted', async () => {
+  it('takes the public copies off the web before anything is preserved', async () => {
     await runGlobalTakedown(CASE_ID, deps);
-    expect(world.calls.slice(0, 3)).toEqual(['block', 'quarantine_public', 'preserve']);
+    expect(world.calls.slice(0, 3)).toEqual(['block', 'unpublish_public', 'preserve']);
   });
 
   it('runs the block before any other effect', async () => {
@@ -251,16 +244,17 @@ describe('runGlobalTakedown', () => {
     expect(world.alerts.length).toBe(alerts);
   });
 
-  it('refuses to delete when the evidence copy does not match the source size', async () => {
+  it('refuses to delete from private storage when the evidence copy does not match the source size', async () => {
     world.corruptCopy = true;
     const result = await runGlobalTakedown(CASE_ID, deps);
 
     expect(result).toMatchObject({ status: 'open', failedStep: 'preserve' });
     expect(world.uploads.has(`files/${HASH}/original`)).toBe(true);
     expect(world.uploads.size).toBe(2);
+    expect(world.row.snapshot?.evidenceKey).toBeUndefined();
   });
 
-  it('does not trust a bad copy left by an earlier attempt: a resume copies again and verifies', async () => {
+  it('does not trust an unverified copy left by an earlier attempt: a resume writes it again and verifies', async () => {
     world.corruptCopy = true;
     await runGlobalTakedown(CASE_ID, deps);
     expect(world.evidence.get(evidenceKeyFor(CASE_ID, HASH))).toBe(1233);
@@ -269,17 +263,19 @@ describe('runGlobalTakedown', () => {
     const result = await runGlobalTakedown(CASE_ID, deps);
 
     expect(result.status).toBe('actioned');
-    expect(world.copies).toHaveLength(2);
+    expect(world.copies).toEqual([evidenceKeyFor(CASE_ID, HASH), evidenceKeyFor(CASE_ID, HASH)]);
     expect(world.evidence.get(evidenceKeyFor(CASE_ID, HASH))).toBe(1234);
   });
 
-  it('preserves from the public copy when the private original is already gone', async () => {
+  it('preserves a public-only file from the private hold copy, then deletes that copy too', async () => {
     world.uploads.clear();
     const result = await runGlobalTakedown(CASE_ID, deps);
 
     expect(result.status).toBe('actioned');
+    expect(world.row.steps?.find((s) => s.step === 'unpublish_public')?.detail).toContain('held_private_copy');
     expect(world.evidence.get(evidenceKeyFor(CASE_ID, HASH))).toBe(1234);
     expect(world.publish.size).toBe(0);
+    expect(world.uploads.size).toBe(0);
   });
 
   it('skips preservation when no object exists for the hash at all', async () => {
@@ -292,30 +288,49 @@ describe('runGlobalTakedown', () => {
     expect(world.blocks.has(HASH)).toBe(true);
   });
 
-  it('preserves every derived CSAM object when no original is left, and only then deletes them', async () => {
-    world.uploads.delete(`files/${HASH}/original`);
-    world.publish.delete(`assets/${HASH}`);
-    const result = await runGlobalTakedown(CASE_ID, deps);
-
-    expect(result.status).toBe('actioned');
-    expect([...world.evidence.keys()].sort()).toEqual(
-      [
-        derivedEvidenceKeyFor(CASE_ID, HASH, { store: 'uploads', key: `cache/${HASH}/thumbnail.webp`, size: 50 }),
-        derivedEvidenceKeyFor(CASE_ID, HASH, { store: 'publish', key: `quarantine/assets/cache/${HASH}/thumbnail.webp`, size: 50 }),
-      ].sort(),
-    );
-    expect(world.uploads.size).toBe(0);
-    expect(world.publish.size).toBe(0);
-  });
-
-  it('deletes nothing when a derived CSAM object cannot be preserved', async () => {
-    world.uploads.delete(`files/${HASH}/original`);
-    world.publish.delete(`assets/${HASH}`);
-    world.corruptCopy = true;
+  it('refuses to go on when an unverified copy exists and there is no source left to check it against', async () => {
+    world.uploads.clear();
+    world.publish.clear();
+    world.evidence.set(evidenceKeyFor(CASE_ID, HASH), 7);
     const result = await runGlobalTakedown(CASE_ID, deps);
 
     expect(result).toMatchObject({ status: 'open', failedStep: 'preserve' });
-    expect(world.uploads.has(`cache/${HASH}/thumbnail.webp`)).toBe(true);
+  });
+
+  it('re-filed as CSAM after a skipped preserve and a failed delete: the resume preserves before it deletes', async () => {
+    ({ world, deps } = createWorld({
+      category: 'malware',
+      snapshot: { takedown: { kind: 'global', skipPreservation: true, skipPreservationReason: 'known sample' } },
+    }));
+    world.failNext.add('delete_uploads');
+    const first = await runGlobalTakedown(CASE_ID, deps);
+    expect(first).toMatchObject({ status: 'open', failedStep: 'delete_uploads' });
+    expect(world.evidence.size).toBe(0);
+
+    world.row.category = 'csam'; // what reopening the case with the new category does
+    const callsBefore = world.calls.length;
+    const second = await runGlobalTakedown(CASE_ID, deps);
+
+    expect(second.status).toBe('actioned');
+    expect(world.calls.slice(callsBefore, callsBefore + 2)).toEqual(['preserve', 'delete_uploads']);
+    expect(world.evidence.get(evidenceKeyFor(CASE_ID, HASH))).toBe(1234);
+  });
+
+  it('re-filed as CSAM with no evidence storage: the resume waits and deletes nothing', async () => {
+    ({ world, deps } = createWorld({
+      category: 'malware',
+      evidence: false,
+      snapshot: { takedown: { kind: 'global', skipPreservation: true, skipPreservationReason: 'known sample' } },
+    }));
+    world.failNext.add('delete_uploads');
+    await runGlobalTakedown(CASE_ID, deps);
+
+    world.row.category = 'csam';
+    const second = await runGlobalTakedown(CASE_ID, deps);
+
+    expect(second).toMatchObject({ status: 'awaiting_evidence', haltReason: 'awaiting_evidence' });
+    expect(world.uploads.has(`files/${HASH}/original`)).toBe(true);
+    expect(world.calls.filter((c) => c === 'delete_uploads')).toHaveLength(1);
   });
 
   describe('CSAM with no evidence storage', () => {
@@ -323,24 +338,27 @@ describe('runGlobalTakedown', () => {
       ({ world, deps } = createWorld({ evidence: false }));
     });
 
-    it('blocks the hash, deletes nothing, and waits', async () => {
+    it('blocks the hash, keeps every private object, and waits', async () => {
       const result = await runGlobalTakedown(CASE_ID, deps);
 
       expect(result).toMatchObject({ status: 'awaiting_evidence', haltReason: 'awaiting_evidence' });
       expect(world.blocks.has(HASH)).toBe(true);
       expect(world.uploads.size).toBe(2);
-      expect(world.publish.size).toBe(2);
+      expect(world.calls).not.toContain('delete_uploads');
       expect(world.row.status).toBe('awaiting_evidence');
     });
 
-    it('still takes the public copies offline while it waits: nothing stays world-readable', async () => {
+    it('still takes the public copies off the web while it waits: nothing stays world-readable', async () => {
+      await runGlobalTakedown(CASE_ID, deps);
+      expect(world.publish.size).toBe(0);
+    });
+
+    it('keeps a public-only file in private storage while it waits, never losing the only copy', async () => {
+      world.uploads.clear();
       await runGlobalTakedown(CASE_ID, deps);
 
-      expect([...world.publish.keys()].filter((key) => key.startsWith('assets/'))).toEqual([]);
-      expect([...world.publish.keys()].sort()).toEqual([
-        `quarantine/assets/${HASH}`,
-        `quarantine/assets/cache/${HASH}/thumbnail.webp`,
-      ]);
+      expect(world.publish.size).toBe(0);
+      expect(world.uploads.get(holdKeyFor(CASE_ID, HASH))).toBe(1234);
     });
 
     it('alerts once that the case stopped at the evidence step', async () => {
@@ -462,16 +480,76 @@ describe('resweepGlobalTakedown', () => {
     expect(result.status).toBe('actioned');
     expect(world.evidence.get(evidenceKeyFor(CASE_ID, HASH))).toBe(999);
     expect(world.uploads.size).toBe(0);
+    expect(world.row.snapshot?.resweep).toEqual({ attempts: 1, done: true });
   });
 
-  it('keeps the first preserved copy and still deletes', async () => {
+  it('keeps the first preserved copy when the same bytes reappear, and still deletes them', async () => {
     const { world, deps } = createWorld();
     await runGlobalTakedown(CASE_ID, deps);
     world.uploads.set(`files/${HASH}/original`, 1234);
 
     await resweepGlobalTakedown(CASE_ID, deps);
-    expect(world.evidence.get(evidenceKeyFor(CASE_ID, HASH))).toBe(1234);
+    expect(world.copies).toEqual([evidenceKeyFor(CASE_ID, HASH)]);
     expect(world.uploads.size).toBe(0);
+  });
+
+  it('never overwrites a verified copy: different bytes are preserved under their own key, and both are on the case', async () => {
+    const { world, deps } = createWorld();
+    await runGlobalTakedown(CASE_ID, deps);
+    const first = evidenceKeyFor(CASE_ID, HASH);
+    world.uploads.set(`files/${HASH}/original`, 4321);
+
+    const result = await resweepGlobalTakedown(CASE_ID, deps);
+
+    expect(result.status).toBe('actioned');
+    expect(world.evidence.get(first)).toBe(1234);
+    expect(world.evidence.get(`${first}.4321`)).toBe(4321);
+    expect(world.row.snapshot?.evidenceKey).toBe(first);
+    expect(world.row.snapshot?.additionalEvidenceKeys).toEqual([`${first}.4321`]);
+    expect(world.uploads.size).toBe(0);
+  });
+
+  it('does not delete the late bytes when their own copy cannot be verified', async () => {
+    const { world, deps } = createWorld();
+    await runGlobalTakedown(CASE_ID, deps);
+    world.uploads.set(`files/${HASH}/original`, 4321);
+    world.corruptCopy = true;
+
+    const result = await resweepGlobalTakedown(CASE_ID, deps);
+
+    expect(result).toMatchObject({ status: 'open', failedStep: 'preserve' });
+    expect(world.evidence.get(evidenceKeyFor(CASE_ID, HASH))).toBe(1234);
+    expect(world.uploads.has(`files/${HASH}/original`)).toBe(true);
+  });
+
+  it('alerts when a pass fails, and the next call continues that pass instead of starting another', async () => {
+    const { world, deps } = createWorld();
+    await runGlobalTakedown(CASE_ID, deps);
+    world.uploads.set(`files/${HASH}/original`, 1234);
+    world.failNext.add('delete_uploads');
+
+    const failed = await resweepGlobalTakedown(CASE_ID, deps);
+    expect(failed).toMatchObject({ status: 'open', failedStep: 'delete_uploads' });
+    expect(world.alerts[world.alerts.length - 1]).toEqual({ event: 'resweep_failed', caseId: CASE_ID, category: 'csam', attempt: 1 });
+    expect(world.row.snapshot?.resweep).toEqual({ attempts: 1, done: false });
+
+    const retried = await resweepGlobalTakedown(CASE_ID, deps);
+    expect(retried.status).toBe('actioned');
+    expect(world.row.snapshot?.resweep).toEqual({ attempts: 2, done: true });
+    expect(world.row.steps?.filter((s) => s.step === 'resweep')).toHaveLength(1);
+    expect(world.uploads.size).toBe(0);
+  });
+
+  it('counts every failed attempt so a caller can stop at the cap', async () => {
+    const { world, deps } = createWorld();
+    await runGlobalTakedown(CASE_ID, deps);
+    for (let attempt = 1; attempt <= MAX_RESWEEP_ATTEMPTS; attempt += 1) {
+      world.failNext.add('delete_uploads');
+      await resweepGlobalTakedown(CASE_ID, deps);
+    }
+
+    expect(world.row.snapshot?.resweep).toEqual({ attempts: MAX_RESWEEP_ATTEMPTS, done: false });
+    expect(world.alerts.filter((a) => a.event === 'resweep_failed').map((a) => a.attempt)).toEqual([1, 2, 3]);
   });
 });
 

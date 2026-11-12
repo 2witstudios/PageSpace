@@ -1,7 +1,7 @@
 import 'server-only';
 
-import { CopyObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
-import type { TakedownOriginal, TakedownStorage } from '@pagespace/lib/content-safety/takedown';
+import { CopyObjectCommand, DeleteObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { holdKeyFor, type TakedownOriginal, type TakedownStorage } from '@pagespace/lib/content-safety/takedown';
 import { normalizeContentHash } from '@pagespace/lib/content-safety/policy';
 import { getS3Bucket, getS3Client } from '@/lib/presigned-url';
 import { deleteS3Keys, headS3Object, listS3Prefix, type S3ObjectInfo } from '@/lib/storage/s3-objects';
@@ -9,9 +9,7 @@ import {
   deletePublishedAssetsForHash,
   headPublishedAsset,
   isPublishConfigured,
-  listPublishedObjectsForHash,
-  quarantinePublishedAssetsForHash,
-  readPublishedHashObject,
+  readPublishedAsset,
 } from '@/lib/canvas/published-storage';
 
 /**
@@ -72,38 +70,64 @@ async function listUploadsObjects(hash: string): Promise<S3ObjectInfo[]> {
   return perPrefix.flat();
 }
 
+/** The private original for a hash, if one exists: the page-file original, else the chat attachment. */
+async function findPrivateOriginal(hash: string): Promise<TakedownOriginal | null> {
+  for (const key of uploadsOriginalKeysFor(hash)) {
+    const head = await headS3Object(getS3Client(), getS3Bucket(), key);
+    if (head) return head;
+  }
+  return null;
+}
+
+/**
+ * Copy the public asset into the PRIVATE uploads bucket at the case's hold key,
+ * and prove the copy is whole. GET with the publish client and PUT with the
+ * uploads client, because the two buckets may sit behind different credentials.
+ * Nothing suspected of being illegal is ever parked in the public bucket.
+ */
+async function holdPublicAssetPrivately(hash: string, caseId: string, expectedSize: number): Promise<void> {
+  const holdKey = holdKeyFor(caseId, hash);
+  const existing = await headS3Object(getS3Client(), getS3Bucket(), holdKey);
+  if (existing?.size === expectedSize) return;
+
+  const asset = await readPublishedAsset(hash);
+  await getS3Client().send(
+    new PutObjectCommand({
+      Bucket: getS3Bucket(),
+      Key: holdKey,
+      Body: asset.body,
+      ContentType: asset.contentType ?? 'application/octet-stream',
+    }),
+  );
+  const copy = await headS3Object(getS3Client(), getS3Bucket(), holdKey);
+  if (!copy || copy.size !== expectedSize) {
+    throw new Error('Private hold copy could not be verified; the public object was left in place');
+  }
+}
+
 export function createTakedownStorage(): TakedownStorage {
   return {
     evidenceConfigured: () => getEvidenceBucket() !== null,
 
-    async findOriginal(contentHash): Promise<TakedownOriginal | null> {
+    async findOriginal(contentHash, caseId): Promise<TakedownOriginal | null> {
       const hash = requireHash(contentHash);
-      for (const key of uploadsOriginalKeysFor(hash)) {
-        const head = await headS3Object(getS3Client(), getS3Bucket(), key);
-        if (head) return { store: 'uploads', ...head };
-      }
-      // The private original may already have been reaped while its public copy
-      // lives on (by now in quarantine, unless that step has not run yet).
-      if (isPublishConfigured()) {
-        const asset = await headPublishedAsset(hash);
-        if (asset) return { store: 'publish', key: asset.key, size: asset.size };
-      }
-      return null;
+      return (await findPrivateOriginal(hash)) ?? headS3Object(getS3Client(), getS3Bucket(), holdKeyFor(caseId, hash));
     },
 
-    async listObjects(contentHash) {
+    async takePublicOffline(contentHash, caseId) {
       const hash = requireHash(contentHash);
-      const uploads = await listUploadsObjects(hash);
-      const published = isPublishConfigured() ? await listPublishedObjectsForHash(hash) : [];
-      return [
-        ...uploads.map((object) => ({ store: 'uploads' as const, ...object })),
-        ...published.map((object) => ({ store: 'publish' as const, ...object })),
-      ];
-    },
+      if (!isPublishConfigured()) return { deleted: 0, held: false };
 
-    async quarantinePublic(contentHash) {
-      const hash = requireHash(contentHash);
-      return isPublishConfigured() ? quarantinePublishedAssetsForHash(hash) : 0;
+      // The public copy is deleted at once. That is only safe if a private copy
+      // exists: the uploaded original, or — for a file whose original was already
+      // reaped — a copy made here first.
+      let held = false;
+      const asset = await headPublishedAsset(hash);
+      if (asset && !(await findPrivateOriginal(hash))) {
+        await holdPublicAssetPrivately(hash, caseId, asset.size);
+        held = true;
+      }
+      return { deleted: await deletePublishedAssetsForHash(hash), held };
     },
 
     async headEvidence(evidenceKey) {
@@ -112,38 +136,28 @@ export function createTakedownStorage(): TakedownStorage {
     },
 
     async copyToEvidence(source, evidenceKey) {
-      const evidenceBucket = requireEvidenceBucket();
-      if (source.store === 'uploads') {
-        // Server-side copy: the bytes never pass through this process.
-        await getS3Client().send(
-          new CopyObjectCommand({
-            Bucket: evidenceBucket,
-            CopySource: `${getS3Bucket()}/${source.key}`,
-            Key: evidenceKey,
-            MetadataDirective: 'COPY',
-          }),
-        );
-        return;
-      }
-      // The publish bucket may sit behind different credentials, so read it with
-      // its own client and write the bytes with the uploads client.
-      const hash = source.key.match(/([0-9a-f]{64})/)?.[1];
-      if (!hash) throw new Error('Publish-bucket evidence source has no content hash in its key');
-      const object = await readPublishedHashObject(hash, source.key);
+      // Server-side copy within the uploads credentials: the bytes never pass through this process.
       await getS3Client().send(
-        new PutObjectCommand({
-          Bucket: evidenceBucket,
+        new CopyObjectCommand({
+          Bucket: requireEvidenceBucket(),
+          CopySource: `${getS3Bucket()}/${source.key}`,
           Key: evidenceKey,
-          Body: object.body,
-          ContentType: object.contentType ?? 'application/octet-stream',
+          MetadataDirective: 'COPY',
         }),
       );
     },
 
-    async deleteFromUploads(contentHash) {
-      const keys = (await listUploadsObjects(requireHash(contentHash))).map((object) => object.key);
+    async deleteFromUploads(contentHash, caseId) {
+      const hash = requireHash(contentHash);
+      const keys = (await listUploadsObjects(hash)).map((object) => object.key);
       await deleteS3Keys(getS3Client(), getS3Bucket(), keys);
-      return keys.length;
+
+      // The hold copy goes last, and only here: by the planner's order this step
+      // runs after preservation is settled, so the copy has served its purpose.
+      const holdKey = holdKeyFor(caseId, hash);
+      const hold = await headS3Object(getS3Client(), getS3Bucket(), holdKey);
+      if (hold) await getS3Client().send(new DeleteObjectCommand({ Bucket: getS3Bucket(), Key: holdKey }));
+      return keys.length + (hold ? 1 : 0);
     },
 
     async deleteFromPublish(contentHash) {

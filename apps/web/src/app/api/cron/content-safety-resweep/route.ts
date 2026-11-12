@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { audit } from '@pagespace/lib/audit/audit-log';
 import { listCasesDueForResweep } from '@pagespace/lib/content-safety/case-store';
+import { MAX_RESWEEP_ATTEMPTS } from '@pagespace/lib/content-safety/takedown';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { executeTakedown } from '@/lib/content-safety/takedown-service';
@@ -16,7 +17,10 @@ import { executeTakedown } from '@/lib/content-safety/takedown-service';
  * the bucket. Once the TTL window has closed, each case gets one more
  * preserve-and-delete pass.
  *
- * A case is swept once: the pass leaves a `resweep` marker in its steps.
+ * A pass that completes is not repeated. One that fails alerts the abuse inbox
+ * (the lib does that) and is retried on later ticks, at least 20 minutes apart,
+ * up to MAX_RESWEEP_ATTEMPTS; after that the case is left `open` for a person
+ * to resume. A failed case also makes this run answer 500.
  *
  * Authentication: HMAC-signed request with X-Cron-Timestamp, X-Cron-Nonce, X-Cron-Signature.
  */
@@ -33,8 +37,9 @@ export async function GET(request: Request) {
   try {
     const now = Date.now();
     const due = await listCasesDueForResweep({
-      actionedBefore: new Date(now - PRESIGN_WINDOW_MS),
-      actionedAfter: new Date(now - LOOKBACK_MS),
+      quietBefore: new Date(now - PRESIGN_WINDOW_MS),
+      notOlderThan: new Date(now - LOOKBACK_MS),
+      maxAttempts: MAX_RESWEEP_ATTEMPTS,
     });
 
     let swept = 0;

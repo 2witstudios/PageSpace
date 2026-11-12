@@ -197,16 +197,46 @@ describe('takedown database edge — real Postgres', () => {
       expect(forTarget.some((c) => c.targetType === 'content_hash')).toBe(true);
     });
 
-    it('offers a finished global case for one re-sweep, and not again after it', async () => {
+    describe('listCasesDueForResweep', () => {
+      const window = () => ({ quietBefore: new Date(Date.now() + 1000), notOlderThan: new Date(Date.now() - 60_000), maxAttempts: 3, limit: 200 });
+      const due = async () => (await listCasesDueForResweep(window())).map((c) => c.id);
+      const finished = async () => {
+        const hash = freshHash();
+        const { case: row } = await open({ targetId: hash, contentHash: hash });
+        await store.setStatus(row.id, 'actioned');
+        return row.id;
+      };
       const store = createTakedownCaseStore();
-      const hash = freshHash();
-      const { case: row } = await open({ targetId: hash, contentHash: hash });
-      await store.setStatus(row.id, 'actioned');
-      const window = { actionedBefore: new Date(Date.now() + 1000), actionedAfter: new Date(Date.now() - 60_000), limit: 200 };
 
-      expect((await listCasesDueForResweep(window)).map((c) => c.id)).toContain(row.id);
-      await store.appendStep(row.id, { step: 'resweep', status: 'ok', at: 'c' });
-      expect((await listCasesDueForResweep(window)).map((c) => c.id)).not.toContain(row.id);
+      it('offers a finished global case, and not again once a pass completed', async () => {
+        const id = await finished();
+        expect(await due()).toContain(id);
+
+        await store.mergeSnapshot(id, { resweep: { attempts: 1, done: true } });
+        expect(await due()).not.toContain(id);
+      });
+
+      it('keeps offering a case whose re-sweep failed, until the attempt cap', async () => {
+        const id = await finished();
+        await store.setStatus(id, 'open');
+        await store.mergeSnapshot(id, { resweep: { attempts: 1, done: false } });
+        expect(await due()).toContain(id);
+
+        await store.mergeSnapshot(id, { resweep: { attempts: 3, done: false } });
+        expect(await due()).not.toContain(id);
+      });
+
+      it('does not offer an open case that has never been swept: that one is resumed, not swept', async () => {
+        const hash = freshHash();
+        const { case: row } = await open({ targetId: hash, contentHash: hash });
+        expect(await due()).not.toContain(row.id);
+      });
+
+      it('waits for the quiet window', async () => {
+        const id = await finished();
+        const early = { ...window(), quietBefore: new Date(Date.now() - 30_000) };
+        expect((await listCasesDueForResweep(early)).map((c) => c.id)).not.toContain(id);
+      });
     });
   });
 
@@ -232,9 +262,14 @@ describe('takedown database edge — real Postgres', () => {
       });
     });
 
-    it('resolves a published URL to its page and drive', async () => {
+    it('resolves a published URL to its page, as a page target', async () => {
       const resolved = await resolveTakedownTarget(`https://${SITE}.pagespace.site/Gallery/cat/`);
-      expect(resolved).toMatchObject({ targetType: 'published_url', page: { id: filePageId }, drive: { id: driveId }, contentHash: HASH });
+      expect(resolved).toMatchObject({ targetType: 'page', targetId: filePageId, page: { id: filePageId }, drive: { id: driveId }, contentHash: HASH });
+    });
+
+    it('resolves a published URL with no matching page to its drive', async () => {
+      const resolved = await resolveTakedownTarget(`https://${SITE}.pagespace.site/no/such/page`);
+      expect(resolved).toMatchObject({ targetType: 'drive', targetId: driveId, page: null, contentHash: null });
     });
 
     it('resolves a public asset URL to its content hash', async () => {
@@ -248,10 +283,16 @@ describe('takedown database edge — real Postgres', () => {
       expect((await resolveTakedownTarget(HASH))?.block).toMatchObject({ category: 'malware', caseId: 'case-z' });
     });
 
-    it('never returns a title, filename or URL', async () => {
-      const resolved = await resolveTakedownTarget(filePageId);
+    it.each([
+      ['a page ID', () => filePageId],
+      ['a published URL', () => `https://${SITE}.pagespace.site/gallery/cat`],
+      ['a published URL with no matching page', () => `https://${SITE}.pagespace.site/elsewhere`],
+      ['a public asset URL', () => `https://cdn.example.test/assets/${HASH}`],
+    ])('never returns a title, filename or URL, given %s', async (_label, input) => {
+      const resolved = await resolveTakedownTarget(input());
+      expect(resolved).not.toBeNull();
       const json = JSON.stringify(resolved);
-      expect(json).not.toMatch(/title|fileName|filename|https?:/i);
+      expect(json).not.toMatch(/title|fileName|filename|https?:|pagespace\.site|example\.test/i);
     });
 
     it('returns null for input that matches nothing', async () => {
@@ -261,7 +302,7 @@ describe('takedown database edge — real Postgres', () => {
     });
 
     it('does not throw on a URL with a malformed escape', async () => {
-      await expect(resolveTakedownTarget(`https://${SITE}.pagespace.site/bad%zzpath`)).resolves.toMatchObject({ targetType: 'published_url', page: null });
+      await expect(resolveTakedownTarget(`https://${SITE}.pagespace.site/bad%zzpath`)).resolves.toMatchObject({ targetType: 'drive', page: null });
     });
   });
 

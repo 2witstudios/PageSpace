@@ -3,7 +3,10 @@
  * the SDK boundary (one in-memory store standing in for the uploads, publish
  * and evidence buckets).
  *
- *   1. upload a file and publish it
+ *   1. upload a file and publish it — through the real route handlers:
+ *      POST /api/upload/presign, the client's PUT (into the fake bucket),
+ *      POST /api/upload/complete, then POST /api/pages/[pageId]/publish for a
+ *      canvas page that embeds the file
  *   2. run a global takedown
  *   3. the public asset is deleted and the evidence copy exists
  *   4. the view route answers 410
@@ -38,14 +41,23 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(async () => ({ userId: session.userId, authentication: null, tokenType: 'session' })),
   isAuthError: () => false,
   checkMCPCreateScope: () => null,
+  checkMCPPageScope: async () => null,
   isScopedMCPAuth: () => false,
+  // The signed-in user is the drive owner in every call below; the permission
+  // rules themselves have their own suites.
+  canPrincipalEditPage: async () => true,
+  canPrincipalViewPage: async () => true,
 }));
 
 // Route-level audit calls are silenced. The lib's own calls (the upload gate's
 // `content.upload.blocked`, the alert email) run for real: a workspace package
 // is not transformed by vitest, so they cannot be intercepted from here, and
 // they are covered by packages/lib/src/content-safety/__tests__/.
-vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn(), auditRequest: vi.fn() }));
+const auditCalls = vi.hoisted(() => [] as Array<{ eventType: string; resourceId?: string; userId?: string; details?: Record<string, unknown> }>);
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  audit: vi.fn((event: (typeof auditCalls)[number]) => void auditCalls.push(event)),
+  auditRequest: vi.fn(),
+}));
 
 import { db } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
@@ -61,6 +73,9 @@ import { copyAssetToPublishBucket } from '@/lib/canvas/published-storage';
 import { GET as viewFile } from '@/app/api/files/[id]/view/route';
 import { GET as downloadFile } from '@/app/api/files/[id]/download/route';
 import { POST as presignUpload } from '@/app/api/upload/presign/route';
+import { POST as completeUpload } from '@/app/api/upload/complete/route';
+import { POST as publishPage } from '@/app/api/pages/[pageId]/publish/route';
+import { publishedPages } from '@pagespace/db/schema/published-pages';
 import { executeTakedown } from '../takedown-service';
 
 const UPLOADS = 'it-uploads';
@@ -76,13 +91,18 @@ const created = { userIds: [] as string[], driveIds: [] as string[] };
 let admin: string;
 let uploader: string;
 let otherTenant: string;
+let adminHolder: string;
 let driveId: string;
 let pageId: string;
+let canvasPageId: string;
 let otherPageId: string;
 let caseId: string;
 
 const view = (id: string) =>
   viewFile(new Request(`http://localhost/api/files/${id}/view`) as never, { params: Promise.resolve({ id }) });
+
+const json = (url: string, body: unknown) =>
+  new Request(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
 describe('content takedown — upload, publish, take down, removed, re-upload refused', () => {
   beforeAll(async () => {
@@ -92,36 +112,37 @@ describe('content takedown — upload, publish, take down, removed, re-upload re
     vi.stubEnv('EVIDENCE_BUCKET', EVIDENCE);
     // No email leaves a test run: on-prem mode makes sendEmail a no-op.
     vi.stubEnv('DEPLOYMENT_MODE', 'onprem');
+    // The processor is a separate service: upload-complete only enqueues a job there.
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ ok: true })));
 
     try {
-      const [a, u, o] = await Promise.all([factories.createUser({ role: 'admin' }), factories.createUser(), factories.createUser()]);
+      const [a, u, o, h] = await Promise.all([
+        factories.createUser({ role: 'admin' }),
+        factories.createUser(),
+        factories.createUser(),
+        factories.createUser({ role: 'admin' }),
+      ]);
       admin = a.id;
       uploader = u.id;
       otherTenant = o.id;
-      created.userIds.push(admin, uploader, otherTenant);
+      adminHolder = h.id;
+      created.userIds.push(admin, uploader, otherTenant, adminHolder);
     } catch (error) {
       requireDb('takedown.integration.test.ts', error);
       throw error;
     }
 
-    // 1a. Upload: the bytes land in the uploads bucket, with the rows an upload writes.
     const drive = await factories.createDrive(uploader);
     driveId = drive.id;
     const otherDrive = await factories.createDrive(otherTenant);
-    created.driveIds.push(driveId, otherDrive.id);
+    const adminDrive = await factories.createDrive(adminHolder);
+    created.driveIds.push(driveId, otherDrive.id, adminDrive.id);
 
-    s3.put(UPLOADS, `files/${HASH}/original`, BYTES, 'image/png');
-    s3.put(UPLOADS, `cache/${HASH}/thumbnail.webp`, 'thumbnail');
-    await db.insert(files).values({ id: HASH, driveId, sizeBytes: BYTES.length, mimeType: 'image/png', storagePath: HASH, createdBy: uploader });
-    const page = await factories.createPage(driveId, { type: 'FILE', filePath: HASH, contentHash: HASH, mimeType: 'image/png', createdBy: uploader });
-    pageId = page.id;
-    // A second tenant holds the same bytes: storage is deduplicated by hash.
+    // Two more accounts already hold the same bytes (storage is deduplicated by
+    // hash): another tenant, and an admin. These are fixtures, seeded directly.
     const otherPage = await factories.createPage(otherDrive.id, { type: 'FILE', filePath: HASH, contentHash: HASH, mimeType: 'image/png', createdBy: otherTenant });
     otherPageId = otherPage.id;
-
-    // 1b. Publish: the real promotion to the public bucket.
-    await copyAssetToPublishBucket({ contentHash: HASH, mimeType: 'image/png' });
-    s3.put(PUBLISH, `assets/cache/${HASH}/thumbnail.webp`, 'thumbnail');
+    await factories.createPage(adminDrive.id, { type: 'FILE', filePath: HASH, contentHash: HASH, mimeType: 'image/png', createdBy: adminHolder });
   });
 
   afterAll(async () => {
@@ -131,11 +152,55 @@ describe('content takedown — upload, publish, take down, removed, re-upload re
     if (created.driveIds.length) await db.delete(drives).where(inArray(drives.id, created.driveIds));
     if (created.userIds.length) await db.delete(users).where(inArray(users.id, created.userIds));
     vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
   });
 
-  it('1. before the takedown the file is published and viewable', async () => {
-    expect(s3.has(PUBLISH, `assets/${HASH}`)).toBe(true);
+  it('1a. uploads the file through presign, the PUT, and complete', async () => {
+    session.userId = uploader;
 
+    const presign = await presignUpload(
+      json('http://localhost/api/upload/presign', { contentHash: HASH, driveId, filename: 'photo.png', mimeType: 'image/png', fileSize: BYTES.length }),
+    );
+    expect(presign.status).toBe(200);
+    const { jobId, url } = (await presign.json()) as { jobId: string; url: string };
+    expect(url).toContain(`files/${HASH}/original`);
+
+    // The browser's PUT to the presigned URL.
+    s3.put(UPLOADS, `files/${HASH}/original`, BYTES, 'image/png');
+
+    const complete = await completeUpload(json('http://localhost/api/upload/complete', { jobId, title: 'photo.png' }));
+    expect(complete.status).toBeLessThan(300);
+
+    const [page] = await db.select({ id: pages.id }).from(pages).where(eq(pages.driveId, driveId));
+    pageId = page.id;
+    const [file] = await db.select({ id: files.id, createdBy: files.createdBy }).from(files).where(eq(files.id, HASH));
+    expect(file).toEqual({ id: HASH, createdBy: uploader });
+  });
+
+  it('1b. publishes a canvas page that embeds it, which promotes the file to the public bucket', async () => {
+    session.userId = uploader;
+    const canvas = await factories.createPage(driveId, {
+      type: 'CANVAS',
+      title: 'Gallery',
+      content: `<html><body><img src="/api/files/${pageId}/view"></body></html>`,
+      createdBy: uploader,
+    });
+    canvasPageId = canvas.id;
+
+    const response = await publishPage(json(`http://localhost/api/pages/${canvasPageId}/publish`, {}), {
+      params: Promise.resolve({ pageId: canvasPageId }),
+    });
+    expect(response.status).toBe(200);
+
+    expect(s3.has(PUBLISH, `assets/${HASH}`)).toBe(true);
+    const [published] = await db.select({ key: publishedPages.artifactKey }).from(publishedPages).where(eq(publishedPages.pageId, canvasPageId));
+    expect(s3.has(PUBLISH, published.key)).toBe(true);
+    // A derived thumbnail the processor would have made and publish would have promoted.
+    s3.put(UPLOADS, `cache/${HASH}/thumbnail.webp`, 'thumbnail');
+    s3.put(PUBLISH, `assets/cache/${HASH}/thumbnail.webp`, 'thumbnail');
+  });
+
+  it('1c. before the takedown the file is viewable', async () => {
     session.userId = uploader;
     const response = await view(pageId);
     expect(response.status).toBe(307);
@@ -156,7 +221,7 @@ describe('content takedown — upload, publish, take down, removed, re-upload re
     expect(row.status).toBe('actioned');
     expect(row.steps?.map((s) => `${s.step}:${s.status}`)).toEqual([
       'block:ok',
-      'quarantine_public:ok',
+      'unpublish_public:ok',
       'preserve:ok',
       'delete_uploads:ok',
       'delete_public:ok',
@@ -166,7 +231,7 @@ describe('content takedown — upload, publish, take down, removed, re-upload re
   });
 
   it('3. the public asset and the private objects are deleted, and the evidence copy exists with the same bytes', async () => {
-    expect(s3.keys(PUBLISH)).toEqual([]);
+    expect(s3.keys(PUBLISH).filter((key) => key.includes(HASH))).toEqual([]);
     expect(s3.keys(UPLOADS)).toEqual([]);
 
     const evidenceKey = evidenceKeyFor(caseId, HASH);
@@ -175,21 +240,17 @@ describe('content takedown — upload, publish, take down, removed, re-upload re
     expect(new TextDecoder().decode(s3.bucket(EVIDENCE).get(evidenceKey)!.body)).toBe(BYTES);
   });
 
-  it('3b. the block was written before anything was deleted', async () => {
+  it('3b. the block came first, and nothing private was deleted before the evidence copy was made', async () => {
     const [block] = await db.select().from(contentBlocks).where(eq(contentBlocks.contentHash, HASH));
     expect(block).toMatchObject({ category: 'csam', source: 'admin', caseId, createdBy: admin });
 
-    // The only thing removed before the evidence copy is the PUBLIC key, and only
-    // after its bytes were copied into quarantine. Every destructive delete (the
-    // batch deletes of both buckets) comes after the verified evidence copy.
-    const quarantineCopy = s3.log.findIndex((line) => line === `CopyObjectCommand ${PUBLISH} quarantine/assets/${HASH}`);
-    const publicKeyRemoved = s3.log.findIndex((line) => line === `DeleteObjectCommand ${PUBLISH} assets/${HASH}`);
     const evidenceCopy = s3.log.findIndex((line) => line.startsWith(`CopyObjectCommand ${EVIDENCE}`));
-    const firstDestructiveDelete = s3.log.findIndex((line) => line.startsWith('DeleteObjectsCommand'));
-    expect(quarantineCopy).toBeGreaterThan(-1);
-    expect(quarantineCopy).toBeLessThan(publicKeyRemoved);
-    expect(evidenceCopy).toBeGreaterThan(publicKeyRemoved);
-    expect(evidenceCopy).toBeLessThan(firstDestructiveDelete);
+    const firstPrivateDelete = s3.log.findIndex((line) => line.startsWith('Delete') && line.includes(` ${UPLOADS} `));
+    expect(evidenceCopy).toBeGreaterThan(-1);
+    expect(evidenceCopy).toBeLessThan(firstPrivateDelete);
+    // A private original existed, so the public copy needed no hold copy and nothing was ever parked in the public bucket.
+    expect(s3.log.some((line) => line.startsWith('PutObjectCommand') && line.includes('content-hold/'))).toBe(false);
+    expect(s3.log.some((line) => /^(Put|Copy)ObjectCommand/.test(line) && line.includes(` ${PUBLISH} `) && line.includes(HASH) && s3.log.indexOf(line) > evidenceCopy)).toBe(false);
   });
 
   it('4. the view and download routes answer a neutral 410 instead of a dead link', async () => {
@@ -211,7 +272,7 @@ describe('content takedown — upload, publish, take down, removed, re-upload re
 
   it('5. a re-upload of the same bytes is refused by the upload gate', async () => {
     session.userId = otherTenant;
-    const [otherDriveId] = created.driveIds.filter((id) => id !== driveId);
+    const otherDriveId = created.driveIds[1];
 
     const response = await presignUpload(
       new Request('http://localhost/api/upload/presign', {
@@ -229,10 +290,11 @@ describe('content takedown — upload, publish, take down, removed, re-upload re
     const [row] = await db.select().from(contentCases).where(eq(contentCases.id, caseId));
     const refs = row.snapshot?.references;
 
-    expect(refs?.pageIds.sort()).toEqual([pageId, otherPageId].sort());
+    expect(refs?.pageIds).toEqual(expect.arrayContaining([pageId, otherPageId]));
+    expect(refs?.pageIds).toHaveLength(3);
     expect(refs?.fileIds).toEqual([HASH]);
     expect(refs?.driveIds.sort()).toEqual([...created.driveIds].sort());
-    expect(refs?.uploaderUserIds.sort()).toEqual([uploader, otherTenant].sort());
+    expect(refs?.uploaderUserIds.sort()).toEqual([uploader, otherTenant, adminHolder].sort());
 
     const [page] = await db.select({ filePath: pages.filePath }).from(pages).where(eq(pages.id, pageId));
     expect(page.filePath).toBe(HASH);
@@ -240,10 +302,25 @@ describe('content takedown — upload, publish, take down, removed, re-upload re
     expect(file.id).toBe(HASH);
   });
 
-  it('suspends the uploaders when asked to, and never the acting admin', async () => {
+  it('suspends the uploaders when asked to — but never an admin, and never the acting admin', async () => {
     const rows = await db.select({ id: users.id, suspendedAt: users.suspendedAt }).from(users).where(inArray(users.id, created.userIds));
     const suspended = rows.filter((r) => r.suspendedAt !== null).map((r) => r.id);
     expect(suspended.sort()).toEqual([uploader, otherTenant].sort());
+
+    const [row] = await db.select().from(contentCases).where(eq(contentCases.id, caseId));
+    const detail = row.steps?.find((s) => s.step === 'suspend_uploader')?.detail ?? '';
+    expect(detail).toContain(`${adminHolder}:skipped_admin`);
+    expect(detail).toContain(`${uploader}:suspended`);
+  });
+
+  it('audits each suspension the takedown made as the acting admin, and none for the admin it skipped', async () => {
+    const suspensions = auditCalls.filter((event) => event.eventType === 'admin.user.suspended');
+
+    expect(suspensions.map((event) => event.resourceId).sort()).toEqual([uploader, otherTenant].sort());
+    for (const event of suspensions) {
+      expect(event.userId).toBe(admin);
+      expect(event.details).toMatchObject({ source: 'content_takedown', action: 'suspend' });
+    }
   });
 
   it('is idempotent: resuming the finished case touches no storage', async () => {
@@ -311,9 +388,9 @@ describe('content takedown — CSAM with no evidence storage configured', () => 
     expect(s3.log.some((line) => line.startsWith('DeleteObjectsCommand') && line.includes(hash))).toBe(false);
   });
 
-  it('but the content is already off the web: the public copy is in quarantine, not under assets/', async () => {
-    expect(s3.has(PUBLISH, `assets/${hash}`)).toBe(false);
-    expect(s3.has(PUBLISH, `quarantine/assets/${hash}`)).toBe(true);
+  it('but the content is already off the web: its public copy is deleted, and nothing was parked in the public bucket', async () => {
+    expect(s3.keys(PUBLISH).filter((key) => key.includes(hash))).toEqual([]);
+    expect(s3.has(UPLOADS, `files/${hash}/original`)).toBe(true);
   });
 
   it('and already unreadable in the app: the view route answers 410 while the bytes still exist', async () => {

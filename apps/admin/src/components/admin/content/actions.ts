@@ -37,6 +37,9 @@ export function describeTakedownResult(result: TakedownResponse): { message: str
       message: `Blocked, but nothing was deleted: no evidence storage is configured. Run it again with "skip preservation" and a reason, or configure EVIDENCE_BUCKET and resume.${caseRef}`,
     };
   }
+  if (result.stillHeldDriveIds?.length) {
+    return { ok: true, message: `Hold lifted, but ${result.stillHeldDriveIds.length} drive(s) stay parked: another case or the owner's suspension still holds them.` };
+  }
   if (result.restoredDriveIds) return { ok: true, message: `Restored the published sites of ${result.restoredDriveIds.length} drive(s).` };
   return { ok: true, message: `Done.${caseRef}` };
 }

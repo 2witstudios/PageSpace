@@ -29,8 +29,8 @@ export const GET = withAdminAuth(async (adminUser, request) => {
       eventType: 'content.case.read',
       userId: adminUser.id,
       resourceType: target?.targetType ?? 'content_lookup',
-      // The resolved ID, not the raw query: a pasted URL does not belong in the audit log.
-      resourceId: target?.targetType === 'published_url' ? (target.page?.id ?? target.drive?.id ?? 'unresolved') : (target?.targetId ?? 'not_found'),
+      // The resolved ID, never the raw query: a pasted URL does not belong in the audit log.
+      resourceId: target?.targetId ?? 'not_found',
       details: { source: 'admin', action: 'resolve', found: target !== null },
     });
 

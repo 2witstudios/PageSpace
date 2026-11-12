@@ -11,7 +11,7 @@ import { emailStyles } from './shared-styles';
  * indexed and previewed, and none of that may travel with it.
  */
 export interface ContentSafetyAlertEmailProps {
-  event: 'opened' | 'actioned' | 'awaiting_evidence';
+  event: 'opened' | 'actioned' | 'awaiting_evidence' | 'resweep_failed';
   caseId: string;
   category: string;
   /** Link to the case in the admin console; omitted when no admin URL is configured. */
@@ -22,6 +22,7 @@ const HEADLINES: Record<ContentSafetyAlertEmailProps['event'], string> = {
   opened: 'Content case opened',
   actioned: 'Content case actioned',
   awaiting_evidence: 'Content case is waiting for evidence storage',
+  resweep_failed: 'Content case re-sweep failed',
 };
 
 const EXPLANATIONS: Record<ContentSafetyAlertEmailProps['event'], string> = {
@@ -29,6 +30,8 @@ const EXPLANATIONS: Record<ContentSafetyAlertEmailProps['event'], string> = {
   actioned: 'Every step of this case’s takedown has finished.',
   awaiting_evidence:
     'The content is blocked and can no longer be uploaded or served, but nothing has been deleted: this category must be preserved first and no evidence storage is configured. Configure EVIDENCE_BUCKET, then resume the case.',
+  resweep_failed:
+    'The follow-up pass over storage for this finished takedown did not complete, so late-arriving copies may still be in storage. The content stays blocked and cannot be served. The pass is retried automatically a limited number of times; if this keeps arriving, resume the case from the admin console.',
 };
 
 export function contentSafetyAlertSubject(props: Pick<ContentSafetyAlertEmailProps, 'event' | 'caseId'>): string {

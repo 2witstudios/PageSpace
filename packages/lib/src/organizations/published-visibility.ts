@@ -11,7 +11,8 @@
 import { db } from '@pagespace/db/db';
 import { and, eq, inArray, isNotNull, ne } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
-import { contentSiteHolds, type ContentSiteHoldSource } from '@pagespace/db/schema/content-safety';
+import { users } from '@pagespace/db/schema/auth';
+import { contentSiteHolds } from '@pagespace/db/schema/content-safety';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { loggers } from '../logging/logger-config';
@@ -214,7 +215,7 @@ export async function reconcileAllPublishedVisibility(store: PublishedObjectStor
   }
   // (3) Every drive held by a takedown or a suspension is re-parked. A publish that passed the write guard just
   // before its hold was written can land an object after the move; this puts it back within one tick.
-  const held = await executor.select({ id: contentSiteHolds.driveId, sub: drives.publishSubdomain }).from(contentSiteHolds).innerJoin(drives, eq(drives.id, contentSiteHolds.driveId));
+  const held = await executor.selectDistinct({ id: contentSiteHolds.driveId, sub: drives.publishSubdomain }).from(contentSiteHolds).innerJoin(drives, eq(drives.id, contentSiteHolds.driveId));
   for (const { prefix } of await prefixesOfDrives(held, executor)) {
     if (seen.has(prefix)) continue;
     outcomes.push(await reconcilePrefix(store, prefix, false));
@@ -231,70 +232,84 @@ export interface DriveSitesOutcome {
   prefixes: PrefixOutcome[];
 }
 
+/** Who owns a hold: a takedown case or a suspended user. One hold per holder per drive. */
+export type SiteHoldHolder = { caseId: string } | { userId: string };
+
+const holderKey = (holder: SiteHoldHolder): string => ('caseId' in holder ? `case:${holder.caseId}` : `user:${holder.userId}`);
+
 const failedPrefixes = (outcome: DriveSitesOutcome) => outcome.prefixes.filter((p) => p.action === 'failed');
 
+/** Move every prefix of a drive to where `visible` says it belongs. Throws if any prefix could not be moved. */
+async function moveDriveSites(driveId: string, verb: 'park' | 'restore', store: PublishedObjectStore, executor: Executor): Promise<DriveSitesOutcome> {
+  const [drive] = await executor.select({ id: drives.id, sub: drives.publishSubdomain, orgId: drives.orgId }).from(drives).where(eq(drives.id, driveId)).limit(1);
+  const outcome: DriveSitesOutcome = { driveId, prefixes: [] };
+  if (drive) {
+    const policies = verb === 'restore' && drive.orgId ? await getOrgPolicies(drive.orgId, executor) : null;
+    for (const { prefix, kind } of await prefixesOfDrives([drive], executor)) {
+      outcome.prefixes.push(await reconcilePrefix(store, prefix, verb === 'restore' && prefixVisible(policies, kind)));
+    }
+  }
+  const failed = failedPrefixes(outcome);
+  if (failed.length > 0) throw new Error(`Could not ${verb} ${failed.map((p) => p.prefix).join(', ')}: ${failed[0].error ?? 'unknown error'}`);
+  return outcome;
+}
+
 /**
- * Take every published site of a drive off the public bucket and keep it off.
+ * Take every published site of a drive off the public bucket and keep it off, on behalf of one holder.
  *
  * The hold row is written FIRST: from that moment every publish write into the drive's prefixes is refused and
  * the reconcile sweep will not restore them, so a failure part-way through the move leaves a site that can only
  * get more hidden, never less. Rerunning finishes the move. Throws when a prefix could not be moved, so the
  * caller's step is recorded as failed and retried; the hold stays.
+ *
+ * Holding a drive that someone else already holds adds a second, independent hold.
  */
 export async function parkDriveSites(
-  input: { driveId: string; source: ContentSiteHoldSource; caseId?: string | null; userId?: string | null; createdBy?: string | null },
+  input: { driveId: string; holder: SiteHoldHolder; createdBy?: string | null },
   store: PublishedObjectStore,
   executor: Executor = db,
 ): Promise<DriveSitesOutcome> {
-  const hold = {
-    driveId: input.driveId,
-    source: input.source,
-    caseId: input.caseId ?? null,
-    userId: input.userId ?? null,
-    createdBy: input.createdBy ?? null,
-  };
-  if (input.source === 'takedown') {
-    // A takedown's hold supersedes a suspension's on the same drive. Otherwise the row would stay labelled
-    // `user_suspension` and lifting the suspension would put a taken-down site back on the web.
-    await executor
-      .insert(contentSiteHolds)
-      .values(hold)
-      .onConflictDoUpdate({
-        target: contentSiteHolds.driveId,
-        set: { source: 'takedown', caseId: hold.caseId, userId: null, createdBy: hold.createdBy },
-      });
-  } else {
-    // A suspension never relabels an existing hold: a takedown's hold must outlive the suspension.
-    await executor.insert(contentSiteHolds).values(hold).onConflictDoNothing({ target: contentSiteHolds.driveId });
-  }
+  const { holder } = input;
+  await executor
+    .insert(contentSiteHolds)
+    .values({
+      driveId: input.driveId,
+      holder: holderKey(holder),
+      source: 'caseId' in holder ? 'takedown' : 'user_suspension',
+      caseId: 'caseId' in holder ? holder.caseId : null,
+      userId: 'userId' in holder ? holder.userId : null,
+      createdBy: input.createdBy ?? null,
+    })
+    .onConflictDoNothing({ target: [contentSiteHolds.driveId, contentSiteHolds.holder] });
+  return moveDriveSites(input.driveId, 'park', store, executor);
+}
 
-  const [drive] = await executor.select({ id: drives.id, sub: drives.publishSubdomain }).from(drives).where(eq(drives.id, input.driveId)).limit(1);
-  const prefixes = drive ? await prefixesOfDrives([drive], executor) : [];
-  const outcome: DriveSitesOutcome = { driveId: input.driveId, prefixes: [] };
-  for (const { prefix } of prefixes) outcome.prefixes.push(await reconcilePrefix(store, prefix, false));
-
-  const failed = failedPrefixes(outcome);
-  if (failed.length > 0) throw new Error(`Could not park ${failed.map((p) => p.prefix).join(', ')}: ${failed[0].error ?? 'unknown error'}`);
-  return outcome;
+export interface ReleaseHoldOutcome extends DriveSitesOutcome {
+  /** False when this holder had no hold on the drive: nothing was changed. */
+  released: boolean;
+  /** Holds other holders still have on the drive. While any remain, the sites stay parked. */
+  remainingHolds: number;
 }
 
 /**
- * Lift a drive's hold and put back whatever its org's live policy allows. The objects move back BEFORE the hold
+ * Lift ONE holder's hold on a drive. The sites come back only when it was the last hold; while a takedown case
+ * or a suspension still holds the drive, they stay parked. When it is the last, the objects move back BEFORE the
  * row is deleted, so a failure leaves the drive held (and hidden) rather than half-restored and unprotected.
  */
-export async function restoreDriveSites(driveId: string, store: PublishedObjectStore, executor: Executor = db): Promise<DriveSitesOutcome> {
-  const [drive] = await executor.select({ id: drives.id, sub: drives.publishSubdomain, orgId: drives.orgId }).from(drives).where(eq(drives.id, driveId)).limit(1);
-  const outcome: DriveSitesOutcome = { driveId, prefixes: [] };
-  if (drive) {
-    const policies = drive.orgId ? await getOrgPolicies(drive.orgId, executor) : null;
-    for (const { prefix, kind } of await prefixesOfDrives([drive], executor)) {
-      outcome.prefixes.push(await reconcilePrefix(store, prefix, prefixVisible(policies, kind)));
-    }
+export async function releaseDriveHold(
+  input: { driveId: string; holder: SiteHoldHolder },
+  store: PublishedObjectStore,
+  executor: Executor = db,
+): Promise<ReleaseHoldOutcome> {
+  const key = holderKey(input.holder);
+  const holds = await executor.select({ holder: contentSiteHolds.holder }).from(contentSiteHolds).where(eq(contentSiteHolds.driveId, input.driveId));
+  if (!holds.some((hold) => hold.holder === key)) {
+    return { driveId: input.driveId, prefixes: [], released: false, remainingHolds: holds.length };
   }
-  const failed = failedPrefixes(outcome);
-  if (failed.length > 0) throw new Error(`Could not restore ${failed.map((p) => p.prefix).join(', ')}: ${failed[0].error ?? 'unknown error'}`);
-  await executor.delete(contentSiteHolds).where(eq(contentSiteHolds.driveId, driveId));
-  return outcome;
+  const remainingHolds = holds.length - 1;
+  const outcome = remainingHolds === 0 ? await moveDriveSites(input.driveId, 'restore', store, executor) : { driveId: input.driveId, prefixes: [] };
+  await executor.delete(contentSiteHolds).where(and(eq(contentSiteHolds.driveId, input.driveId), eq(contentSiteHolds.holder, key)));
+  return { ...outcome, released: true, remainingHolds };
 }
 
 export interface UserSitesOutcome {
@@ -309,7 +324,7 @@ export interface UserSitesOutcome {
  * Only drives that publish something are considered.
  */
 export async function parkUserSites(
-  input: { userId: string; caseId?: string | null; createdBy?: string | null },
+  input: { userId: string; createdBy?: string | null },
   store: PublishedObjectStore,
   executor: Executor = db,
 ): Promise<UserSitesOutcome> {
@@ -343,20 +358,32 @@ export async function parkUserSites(
         continue;
       }
     }
-    result.parked.push(
-      await parkDriveSites({ driveId: drive.id, source: 'user_suspension', caseId: input.caseId, userId: input.userId, createdBy: input.createdBy }, store, executor),
-    );
+    result.parked.push(await parkDriveSites({ driveId: drive.id, holder: { userId: input.userId }, createdBy: input.createdBy }, store, executor));
   }
   return result;
 }
 
-/** Restore the sites a user's suspension parked. Holds placed by a takedown on the same drives are left in place. */
-export async function restoreUserSites(userId: string, store: PublishedObjectStore, executor: Executor = db): Promise<DriveSitesOutcome[]> {
+/** Thrown when a suspension's holds are asked to be lifted while the suspension is still in force. */
+export class UserStillSuspendedError extends Error {
+  constructor(readonly userId: string) {
+    super('The user is still suspended; lift the suspension before restoring their sites.');
+    this.name = 'UserStillSuspendedError';
+  }
+}
+
+/**
+ * Lift the holds a user's suspension placed. Refused while the user is still suspended. A drive that a takedown
+ * case also holds stays parked: only the suspension's own hold is removed.
+ */
+export async function restoreUserSites(userId: string, store: PublishedObjectStore, executor: Executor = db): Promise<ReleaseHoldOutcome[]> {
+  const [user] = await executor.select({ suspendedAt: users.suspendedAt }).from(users).where(eq(users.id, userId)).limit(1);
+  if (user?.suspendedAt) throw new UserStillSuspendedError(userId);
+
   const holds = await executor
     .select({ driveId: contentSiteHolds.driveId })
     .from(contentSiteHolds)
-    .where(and(eq(contentSiteHolds.userId, userId), eq(contentSiteHolds.source, 'user_suspension')));
-  const outcomes: DriveSitesOutcome[] = [];
-  for (const hold of holds) outcomes.push(await restoreDriveSites(hold.driveId, store, executor));
+    .where(eq(contentSiteHolds.holder, holderKey({ userId })));
+  const outcomes: ReleaseHoldOutcome[] = [];
+  for (const hold of holds) outcomes.push(await releaseDriveHold({ driveId: hold.driveId, holder: { userId } }, store, executor));
   return outcomes;
 }

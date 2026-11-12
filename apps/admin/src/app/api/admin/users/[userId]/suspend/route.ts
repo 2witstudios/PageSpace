@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { db } from '@pagespace/db/db';
-import { and, eq } from '@pagespace/db/operators';
+import { eq } from '@pagespace/db/operators';
 import { contentSiteHolds } from '@pagespace/db/schema/content-safety';
 import { withAdminAuth } from '@/lib/auth';
 import { suspendUser, unsuspendUser } from '@pagespace/lib/auth/suspend-user';
@@ -18,12 +18,20 @@ const suspendSchema = z.object({
   parkSites: z.boolean().optional(),
 });
 
+/** Why parking did not complete, as a code safe to store in the audit log. */
+type SitesErrorCode = 'not_configured' | 'unreachable' | 'refused' | 'step_failed';
+
 interface SitesOutcome {
   caseId?: string;
   parkedDriveIds: string[];
   skippedDrives: Array<{ driveId: string; reason: string }>;
+  /** For the admin in front of the screen. Never stored. */
   error?: string;
+  errorCode?: SitesErrorCode;
 }
+
+const proxyErrorCode = (status: number): SitesErrorCode =>
+  status === 503 ? 'not_configured' : status === 502 ? 'unreachable' : 'refused';
 
 function sitesMessage(sites: SitesOutcome | undefined): string {
   const base = 'User suspended and all sessions revoked';
@@ -90,9 +98,11 @@ export const POST = withAdminAuth<RouteContext>(async (adminUser, request, conte
             caseId: parked.body.caseId,
             parkedDriveIds: parked.body.parkedDriveIds ?? [],
             skippedDrives: parked.body.skippedDrives ?? [],
-            ...(parked.body.failedStep ? { error: parked.body.error ?? 'Parking did not finish; resume the case' } : {}),
+            ...(parked.body.failedStep
+              ? { error: parked.body.error ?? 'Parking did not finish; resume the case', errorCode: 'step_failed' as const }
+              : {}),
           }
-        : { parkedDriveIds: [], skippedDrives: [], error: parked.error };
+        : { parkedDriveIds: [], skippedDrives: [], error: parked.error, errorCode: proxyErrorCode(parked.status) };
     }
 
     // Free-text reason stays in the audit event only — not in general API logs.
@@ -112,7 +122,8 @@ export const POST = withAdminAuth<RouteContext>(async (adminUser, request, conte
         action: 'suspend',
         reason,
         revokedSessions,
-        ...(sites ? { parkSites: true, sitesCaseId: sites.caseId, sitesError: sites.error } : {}),
+        // A code, not the message: the message can carry site hostnames and storage error text.
+        ...(sites ? { parkSites: true, sitesCaseId: sites.caseId, sitesError: sites.errorCode } : {}),
       },
     });
 
@@ -129,7 +140,7 @@ export const POST = withAdminAuth<RouteContext>(async (adminUser, request, conte
           caseId: sites.caseId,
           parkedDriveIds: sites.parkedDriveIds,
           skippedDrives: sites.skippedDrives,
-          outcome: sites.error ? 'not_completed' : 'completed',
+          outcome: sites.errorCode ?? 'completed',
         },
       });
     }
@@ -174,17 +185,17 @@ export const DELETE = withAdminAuth<RouteContext>(async (adminUser, request, con
     // Put back the sites this user's suspension parked. Holds a takedown placed
     // on the same drives are a separate decision and stay. Only asked of the web
     // app when there is something to restore.
-    let sitesRestore: { restoredDriveIds: string[]; error?: string } | undefined;
+    let sitesRestore: { restoredDriveIds: string[]; stillHeldDriveIds: string[]; error?: string; errorCode?: SitesErrorCode } | undefined;
     const [hold] = await db
       .select({ driveId: contentSiteHolds.driveId })
       .from(contentSiteHolds)
-      .where(and(eq(contentSiteHolds.userId, targetUserId), eq(contentSiteHolds.source, 'user_suspension')))
+      .where(eq(contentSiteHolds.holder, `user:${targetUserId}`))
       .limit(1);
     if (hold) {
       const restored = await callWebTakedown({ action: 'restore_user_sites', userId: targetUserId }, adminUser.id);
       sitesRestore = restored.ok
-        ? { restoredDriveIds: restored.body.restoredDriveIds ?? [] }
-        : { restoredDriveIds: [], error: restored.error };
+        ? { restoredDriveIds: restored.body.restoredDriveIds ?? [], stillHeldDriveIds: restored.body.stillHeldDriveIds ?? [] }
+        : { restoredDriveIds: [], stillHeldDriveIds: [], error: restored.error, errorCode: proxyErrorCode(restored.status) };
       auditRequest(request, {
         eventType: 'content.takedown.sites_restored',
         userId: adminUser.id,
@@ -194,7 +205,8 @@ export const DELETE = withAdminAuth<RouteContext>(async (adminUser, request, con
           source: 'admin',
           action: 'restore_user_sites',
           restoredDriveIds: sitesRestore.restoredDriveIds,
-          outcome: sitesRestore.error ? 'not_completed' : 'completed',
+          stillHeldDriveIds: sitesRestore.stillHeldDriveIds,
+          outcome: sitesRestore.errorCode ?? 'completed',
         },
       });
     }
@@ -221,7 +233,9 @@ export const DELETE = withAdminAuth<RouteContext>(async (adminUser, request, con
       ...(sitesRestore ? { sites: sitesRestore } : {}),
       message: sitesRestore?.error
         ? `Suspension lifted, but the user's published sites could not be restored: ${sitesRestore.error}`
-        : 'Suspension lifted. The user can sign in again.',
+        : sitesRestore?.stillHeldDriveIds.length
+          ? `Suspension lifted. ${sitesRestore.stillHeldDriveIds.length} drive(s) stay parked: a content takedown also holds them.`
+          : 'Suspension lifted. The user can sign in again.',
     });
   } catch (error) {
     loggers.api.error('Error unsuspending user', error instanceof Error ? error : undefined);

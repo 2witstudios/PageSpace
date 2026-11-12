@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { queryAuditEvents } from '@pagespace/lib/audit/audit-query';
 import { normalizeContentHash } from '@pagespace/lib/content-safety/policy';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -20,7 +21,7 @@ import { parseBoundedIntParam } from '@/lib/utils/query-params';
 /** IDs the gates attach to the event. Anything else in `details` is not passed on. */
 const DETAIL_KEYS = ['entryPoint', 'reason', 'driveId', 'pageId', 'conversationId', 'targetId'] as const;
 
-export const GET = withAdminAuth(async (_adminUser, request) => {
+export const GET = withAdminAuth(async (adminUser, request) => {
   try {
     const params = new URL(request.url).searchParams;
     const hashParam = params.get('hash')?.trim();
@@ -34,6 +35,15 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       eventType: 'content.upload.blocked',
       ...(hash ? { resourceId: hash } : {}),
       limit,
+    });
+
+    // This lists who tried to upload blocked content, so reading it is audited like its sibling routes.
+    auditRequest(request, {
+      eventType: 'content.case.read',
+      userId: adminUser.id,
+      resourceType: 'content_blocked_uploads',
+      resourceId: hash ?? 'list',
+      details: { source: 'admin', action: 'list_blocked_uploads', filtered: hash !== null, count: events.length },
     });
 
     return NextResponse.json({

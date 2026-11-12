@@ -15,6 +15,7 @@ const { mockDue, mockExecute, mockAudit, mockLogError } = vi.hoisted(() => ({
 vi.mock('@/lib/auth/cron-auth', () => ({ validateSignedCronRequest: vi.fn() }));
 vi.mock('@pagespace/lib/content-safety/case-store', () => ({ listCasesDueForResweep: mockDue }));
 vi.mock('@/lib/content-safety/takedown-service', () => ({ executeTakedown: mockExecute }));
+vi.mock('@pagespace/lib/content-safety/takedown', () => ({ MAX_RESWEEP_ATTEMPTS: 3 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: mockAudit }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { system: { error: mockLogError } } }));
 
@@ -38,13 +39,14 @@ describe('/api/cron/content-safety-resweep', () => {
     expect(mockDue).not.toHaveBeenCalled();
   });
 
-  it('asks only for cases finished after the presigned-PUT window closed, within the last day', async () => {
+  it('asks for cases quiet since the presigned-PUT window closed, within the last day, under the attempt cap', async () => {
     const before = Date.now();
     await GET(request());
 
-    const { actionedBefore, actionedAfter } = mockDue.mock.calls[0][0] as { actionedBefore: Date; actionedAfter: Date };
-    expect(before - actionedBefore.getTime()).toBeGreaterThanOrEqual(20 * 60 * 1000 - 5);
-    expect(before - actionedAfter.getTime()).toBeGreaterThanOrEqual(24 * 60 * 60 * 1000 - 5);
+    const { quietBefore, notOlderThan, maxAttempts } = mockDue.mock.calls[0][0] as { quietBefore: Date; notOlderThan: Date; maxAttempts: number };
+    expect(before - quietBefore.getTime()).toBeGreaterThanOrEqual(20 * 60 * 1000 - 5);
+    expect(before - notOlderThan.getTime()).toBeGreaterThanOrEqual(24 * 60 * 60 * 1000 - 5);
+    expect(maxAttempts).toBe(3);
   });
 
   it('re-sweeps each due case once, as the system, and reports the count', async () => {

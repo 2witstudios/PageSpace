@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   unpublishPage: vi.fn(),
   parkDriveSites: vi.fn(),
   parkUserSites: vi.fn(),
-  restoreDriveSites: vi.fn(),
+  releaseDriveHold: vi.fn(),
   restoreUserSites: vi.fn(),
   createToken: vi.fn(),
   sendAlert: vi.fn(),
@@ -60,12 +60,16 @@ vi.mock('@pagespace/lib/content-safety/case-store', () => ({
 }));
 
 vi.mock('@pagespace/lib/content-safety/alerts', () => ({ sendContentSafetyAlert: mocks.sendAlert }));
-vi.mock('@pagespace/lib/organizations/published-visibility', () => ({
-  parkDriveSites: mocks.parkDriveSites,
-  parkUserSites: mocks.parkUserSites,
-  restoreDriveSites: mocks.restoreDriveSites,
-  restoreUserSites: mocks.restoreUserSites,
-}));
+vi.mock('@pagespace/lib/organizations/published-visibility', () => {
+  class UserStillSuspendedError extends Error {}
+  return {
+    UserStillSuspendedError,
+    parkDriveSites: mocks.parkDriveSites,
+    parkUserSites: mocks.parkUserSites,
+    releaseDriveHold: mocks.releaseDriveHold,
+    restoreUserSites: mocks.restoreUserSites,
+  };
+});
 vi.mock('@pagespace/lib/services/validated-service-token', () => ({ createSystemAvatarDeleteToken: mocks.createToken }));
 vi.mock('@pagespace/lib/auth/suspend-user', () => ({ suspendUser: vi.fn() }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn() }));
@@ -103,8 +107,8 @@ beforeEach(() => {
     parked: [{ driveId: 'drive-1', prefixes: [] }],
     skipped: [{ driveId: 'drive-2', reason: 'org_drive_with_other_members' }],
   });
-  mocks.restoreDriveSites.mockResolvedValue({ driveId: 'drive-1', prefixes: [] });
-  mocks.restoreUserSites.mockResolvedValue([{ driveId: 'drive-1', prefixes: [] }]);
+  mocks.releaseDriveHold.mockResolvedValue({ driveId: 'drive-1', prefixes: [], released: true, remainingHolds: 0 });
+  mocks.restoreUserSites.mockResolvedValue([{ driveId: 'drive-1', prefixes: [], released: true, remainingHolds: 0 }]);
   mocks.createToken.mockResolvedValue({ token: 'ps_svc_token', grantedScopes: [] });
   mocks.clearImage.mockResolvedValue([{ id: 'user-1' }]);
   mocks.listAvatars.mockResolvedValue({ Contents: [] });
@@ -167,7 +171,7 @@ describe('scoped takedown: park a drive', () => {
 
     expect(result.status).toBe('actioned');
     expect(mocks.parkDriveSites).toHaveBeenCalledWith(
-      { driveId: 'drive-1', source: 'takedown', caseId: result.caseId, createdBy: 'admin-1' },
+      { driveId: 'drive-1', holder: { caseId: result.caseId }, createdBy: 'admin-1' },
       { real: true },
     );
     expect(cases.get(result.caseId!)).toMatchObject({ targetType: 'drive', targetId: 'drive-1' });
@@ -179,10 +183,43 @@ describe('scoped takedown: park a drive', () => {
     expect(result).toMatchObject({ status: 'open', failedStep: 'park_sites' });
   });
 
-  it('restores a drive on request', async () => {
-    const result = await executeTakedown({ action: 'restore_drive', driveId: 'drive-1', reason: 'counter-notice accepted' }, 'admin-1');
-    expect(mocks.restoreDriveSites).toHaveBeenCalledWith('drive-1', { real: true });
-    expect(result).toEqual({ action: 'restore_drive', restoredDriveIds: ['drive-1'] });
+  describe('restoring', () => {
+    const park = () => executeTakedown({ action: 'park_drive', driveId: 'drive-1', category: 'policy', reason: 'terms' }, 'admin-1');
+
+    it('lifts the hold this case placed, and records the restore on the case', async () => {
+      const { caseId } = await park();
+      const result = await executeTakedown({ action: 'restore_drive', caseId: caseId!, reason: 'counter-notice accepted' }, 'admin-2');
+
+      expect(mocks.releaseDriveHold).toHaveBeenCalledWith({ driveId: 'drive-1', holder: { caseId } }, { real: true });
+      expect(result).toMatchObject({ action: 'restore_drive', caseId, restoredDriveIds: ['drive-1'] });
+      expect(stepsOf(caseId!)).toEqual(['park_sites:ok', 'restore_sites:ok']);
+      expect((cases.get(caseId!) as unknown as ContentCase).snapshot).toMatchObject({
+        restore: { actorUserId: 'admin-2', reason: 'counter-notice accepted' },
+      });
+    });
+
+    it('says the drive is still parked when another hold remains', async () => {
+      const { caseId } = await park();
+      mocks.releaseDriveHold.mockResolvedValue({ driveId: 'drive-1', prefixes: [], released: true, remainingHolds: 1 });
+
+      const result = await executeTakedown({ action: 'restore_drive', caseId: caseId!, reason: 'r' }, 'admin-1');
+
+      expect(result).toMatchObject({ restoredDriveIds: [], stillHeldDriveIds: ['drive-1'] });
+    });
+
+    it('refuses when the case no longer holds the drive, recording nothing', async () => {
+      const { caseId } = await park();
+      mocks.releaseDriveHold.mockResolvedValue({ driveId: 'drive-1', prefixes: [], released: false, remainingHolds: 1 });
+
+      await expect(executeTakedown({ action: 'restore_drive', caseId: caseId!, reason: 'r' }, 'admin-1')).rejects.toMatchObject({ status: 409 });
+      expect(stepsOf(caseId!)).toEqual(['park_sites:ok']);
+    });
+
+    it('refuses a case that is not a drive-parking case', async () => {
+      cases.set('c9', { id: 'c9', status: 'actioned', targetId: 'user-1', snapshot: { takedown: { kind: 'avatar' } }, steps: [] });
+      await expect(executeTakedown({ action: 'restore_drive', caseId: 'c9', reason: 'r' }, 'admin-1')).rejects.toMatchObject({ status: 409 });
+      expect(mocks.releaseDriveHold).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -231,7 +268,7 @@ describe('suspension parks the user\'s sites', () => {
   it('parks owned drives and reports the ones left for an admin to decide', async () => {
     const result = await executeTakedown({ action: 'park_user_sites', userId: 'user-1', reason: 'suspended for abuse' }, 'admin-1');
 
-    expect(mocks.parkUserSites).toHaveBeenCalledWith({ userId: 'user-1', caseId: result.caseId, createdBy: 'admin-1' }, { real: true });
+    expect(mocks.parkUserSites).toHaveBeenCalledWith({ userId: 'user-1', createdBy: 'admin-1' }, { real: true });
     expect(result).toMatchObject({
       status: 'actioned',
       parkedDriveIds: ['drive-1'],
@@ -243,10 +280,22 @@ describe('suspension parks the user\'s sites', () => {
     });
   });
 
-  it('restores them when the suspension is lifted', async () => {
+  it('restores them when the suspension is lifted, reporting drives another hold still keeps parked', async () => {
+    mocks.restoreUserSites.mockResolvedValue([
+      { driveId: 'drive-1', prefixes: [], released: true, remainingHolds: 0 },
+      { driveId: 'drive-2', prefixes: [], released: true, remainingHolds: 1 },
+    ]);
     const result = await executeTakedown({ action: 'restore_user_sites', userId: 'user-1' }, 'admin-1');
+
     expect(mocks.restoreUserSites).toHaveBeenCalledWith('user-1', { real: true });
-    expect(result).toEqual({ action: 'restore_user_sites', restoredDriveIds: ['drive-1'] });
+    expect(result).toEqual({ action: 'restore_user_sites', restoredDriveIds: ['drive-1'], stillHeldDriveIds: ['drive-2'] });
+  });
+
+  it('refuses to restore while the user is still suspended', async () => {
+    const { UserStillSuspendedError } = await import('@pagespace/lib/organizations/published-visibility');
+    mocks.restoreUserSites.mockRejectedValue(new UserStillSuspendedError('user-1'));
+
+    await expect(executeTakedown({ action: 'restore_user_sites', userId: 'user-1' }, 'admin-1')).rejects.toMatchObject({ status: 409 });
   });
 });
 
@@ -271,7 +320,7 @@ describe('requests that cannot be acted on', () => {
     await expect(executeTakedown({ action: 'resweep', caseId: 'c3' }, null)).rejects.toMatchObject({ status: 409 });
   });
 
-  it.each(['dismissed', 'open', 'awaiting_evidence'])('refuses to re-sweep a %s case: only a finished takedown is swept', async (status) => {
+  it.each(['dismissed', 'open', 'awaiting_evidence'])('refuses to re-sweep a %s case that was never swept: only a finished takedown is swept', async (status) => {
     cases.set('c4', { id: 'c4', status, snapshot: { takedown: { kind: 'global' } }, steps: [] });
     await expect(executeTakedown({ action: 'resweep', caseId: 'c4' }, null)).rejects.toMatchObject({ status: 409 });
     expect((cases.get('c4')!.steps as unknown[]).length).toBe(0);

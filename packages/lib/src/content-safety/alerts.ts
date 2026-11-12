@@ -1,6 +1,6 @@
 /**
- * Alerts to the abuse inbox when a case opens, is actioned, or stops at the
- * evidence step.
+ * Alerts to the abuse inbox when a case opens, is actioned, stops at the
+ * evidence step, or has a re-sweep fail.
  *
  * The email carries a case ID, a category and an admin link — never a file URL,
  * filename, hash or content (see ContentSafetyAlertEmail). On-prem deployments
@@ -46,7 +46,8 @@ export async function sendContentSafetyAlert(alert: TakedownAlert): Promise<void
       }),
       // An abuse alert must not be dropped by the per-recipient cap shared with every other email.
       skipRateLimit: true,
-      idempotencyKey: `content-case:${alert.caseId}:${alert.event}`,
+      // The attempt keeps each failed re-sweep's alert distinct; without it a retry's alert would collapse into the first.
+      idempotencyKey: `content-case:${alert.caseId}:${alert.event}${alert.attempt ? `:${alert.attempt}` : ''}`,
     });
   } catch (error) {
     loggers.security.error('Content safety alert email failed', error instanceof Error ? error : undefined, {

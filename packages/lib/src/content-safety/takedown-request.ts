@@ -37,7 +37,8 @@ export const takedownRequestSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('unpublish_page'), pageId: id, category, reason }),
   // Scoped: every published site of a drive parked and held.
   z.object({ action: z.literal('park_drive'), driveId: id, category, reason }),
-  z.object({ action: z.literal('restore_drive'), driveId: id, reason }),
+  // Lift the hold ONE drive-parking case placed. The drive stays parked while any other hold remains.
+  z.object({ action: z.literal('restore_drive'), caseId: id, reason }),
   z.object({ action: z.literal('avatar'), userId: id, category, reason }),
   // Used by the suspend action's "also unpublish this user's published sites".
   z.object({ action: z.literal('park_user_sites'), userId: id, reason }),
@@ -62,4 +63,6 @@ export interface TakedownResponse {
   parkedDriveIds?: string[];
   skippedDrives?: Array<{ driveId: string; reason: string }>;
   restoredDriveIds?: string[];
+  /** `restore_*`: drives whose hold was lifted but which another hold still keeps parked. */
+  stillHeldDriveIds?: string[];
 }

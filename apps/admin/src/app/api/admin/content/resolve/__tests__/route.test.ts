@@ -88,13 +88,18 @@ describe('GET /api/admin/content/resolve', () => {
     expect(json).not.toMatch(/https?:\/\//);
   });
 
-  it('audits the lookup against the resolved target, not the raw input', async () => {
-    resolveMock.mockResolvedValue({ ...TARGET, targetType: 'published_url', targetId: 'https://acme.pagespace.site/secret-page' });
+  it('audits the lookup against the resolved target, never the raw input', async () => {
     await get('https://acme.pagespace.site/secret-page');
 
     const event = vi.mocked(auditRequest).mock.calls[0][1];
-    expect(event).toMatchObject({ eventType: 'content.case.read', userId: 'admin-1', resourceId: 'page-1' });
+    expect(event).toMatchObject({ eventType: 'content.case.read', userId: 'admin-1', resourceType: 'page', resourceId: 'page-1' });
     expect(JSON.stringify(event)).not.toContain('secret-page');
+  });
+
+  it('does not echo a pasted URL back in the response', async () => {
+    const json = JSON.stringify(await (await get('https://acme.pagespace.site/secret-page')).json());
+    expect(json).not.toContain('secret-page');
+    expect(json).not.toContain('pagespace.site');
   });
 
   it('answers 404 when nothing matches, and still audits the lookup', async () => {

@@ -21,7 +21,6 @@ import {
 } from '@pagespace/db/schema/content-safety';
 import { collectContentReferences } from './references';
 import type { TakedownCaseStore } from './takedown';
-import { RESWEEP_MARKER } from './takedown-plan';
 
 type TakedownOptions = NonNullable<ContentCaseSnapshot['takedown']>;
 
@@ -171,21 +170,33 @@ export async function listCasesForTarget(input: {
 }
 
 /**
- * Finished global takedowns whose storage has not been passed over again since
- * `actionedBefore`. Used by the re-sweep cron: a presigned PUT issued before a
- * block outlives it, so each case gets one more pass once that window closed.
+ * Global takedowns due a pass over storage, for the re-sweep cron. A presigned
+ * PUT issued before a block outlives it, so each finished case gets a pass once
+ * that window has closed (`quietBefore`).
+ *
+ * Due means: finished and never swept, OR left `open` by a re-sweep that
+ * failed — in both cases with fewer than `maxAttempts` passes so far, and not
+ * touched since `quietBefore` (which also spaces retries apart). A case whose
+ * last pass completed (`resweep.done`) is not due again.
  */
-export async function listCasesDueForResweep(input: { actionedBefore: Date; actionedAfter: Date; limit?: number }): Promise<ContentCase[]> {
+export async function listCasesDueForResweep(input: {
+  quietBefore: Date;
+  notOlderThan: Date;
+  maxAttempts: number;
+  limit?: number;
+}): Promise<ContentCase[]> {
+  const attempts = sql`coalesce((${contentCases.snapshot} -> 'resweep' ->> 'attempts')::int, 0)`;
   return db
     .select()
     .from(contentCases)
     .where(
       and(
-        eq(contentCases.status, 'actioned'),
         takedownKindIs('global'),
-        lte(contentCases.updatedAt, input.actionedBefore),
-        gte(contentCases.updatedAt, input.actionedAfter),
-        sql`NOT (coalesce(${contentCases.steps}, '[]'::jsonb) @> ${JSON.stringify([{ step: RESWEEP_MARKER }])}::jsonb)`,
+        lte(contentCases.updatedAt, input.quietBefore),
+        gte(contentCases.updatedAt, input.notOlderThan),
+        sql`${attempts} < ${input.maxAttempts}`,
+        sql`coalesce(${contentCases.snapshot} -> 'resweep' ->> 'done', 'false') <> 'true'`,
+        or(eq(contentCases.status, 'actioned'), and(eq(contentCases.status, 'open'), sql`${attempts} > 0`)),
       ),
     )
     .orderBy(contentCases.updatedAt)

@@ -141,7 +141,7 @@ async function finish(partial: Partial_): Promise<ResolvedTarget> {
   };
 }
 
-async function resolveUrl(url: URL, raw: string): Promise<ResolvedTarget | null> {
+async function resolveUrl(url: URL): Promise<ResolvedTarget | null> {
   const asset = url.pathname.match(ASSET_PATH) ?? url.pathname.match(STORAGE_KEY);
   if (asset) return finish({ targetType: 'content_hash', targetId: asset[1].toLowerCase(), contentHash: asset[1].toLowerCase() });
 
@@ -178,7 +178,11 @@ async function resolveUrl(url: URL, raw: string): Promise<ResolvedTarget | null>
     pageId = row?.pageId ?? null;
   }
   const loaded = pageId ? await loadPage(pageId) : null;
-  return finish({ targetType: 'published_url', targetId: raw, drive, page: loaded?.page ?? null, contentHash: loaded?.contentHash ?? null });
+  // The target is what the URL resolved to — its page, or failing that its drive.
+  // The URL itself is never stored or returned: it is a link to the content.
+  return loaded
+    ? finish({ targetType: 'page', targetId: loaded.page.id, drive, ...loaded })
+    : finish({ targetType: 'drive', targetId: drive.id, drive });
 }
 
 /**
@@ -200,7 +204,7 @@ export async function resolveTakedownTarget(input: string): Promise<ResolvedTarg
     } catch {
       return null;
     }
-    return resolveUrl(url, raw);
+    return resolveUrl(url);
   }
 
   if (!ID_PATTERN.test(raw)) return null;

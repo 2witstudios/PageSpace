@@ -30,7 +30,7 @@ describe('sendContentSafetyAlert', () => {
     vi.stubEnv('ADMIN_APP_URL', 'https://admin.x.test');
   });
 
-  it.each(['opened', 'actioned', 'awaiting_evidence'] as const)(
+  it.each(['opened', 'actioned', 'awaiting_evidence', 'resweep_failed'] as const)(
     'emails the abuse inbox for a case that is %s, with the case ID, category and admin link',
     async (event) => {
       await sendContentSafetyAlert({ event, caseId: 'case-123', category: 'csam' });
@@ -57,6 +57,11 @@ describe('sendContentSafetyAlert', () => {
     expect(links).toEqual(['https://admin.x.test/content?case=case-123']);
     expect(html).not.toMatch(/[0-9a-f]{64}/);
     expect(html).not.toMatch(/files\/|assets\/|chat-attachments\/|cache\//);
+  });
+
+  it('keeps each failed re-sweep attempt\'s alert distinct, so a retry is not collapsed into the first', async () => {
+    await sendContentSafetyAlert({ event: 'resweep_failed', caseId: 'case-123', category: 'csam', attempt: 2 });
+    expect(sendEmail.mock.calls[0][0].idempotencyKey).toBe('content-case:case-123:resweep_failed:2');
   });
 
   it('surfaces a send failure to the caller', async () => {

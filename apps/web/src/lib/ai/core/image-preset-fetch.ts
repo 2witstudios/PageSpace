@@ -36,8 +36,9 @@ async function isRemoved(contentHash: string, isBlocked: (contentHash: string) =
   try {
     return await isBlocked(contentHash);
   } catch (err) {
+    // No content hash in the log: this function is given nothing else that
+    // identifies the file, and the hash of a possibly-blocked file stays out of logs.
     loggers.ai.warn('fetchCachedImagePreset: blocklist lookup failed, treating the image as unavailable', {
-      contentHash,
       error: err instanceof Error ? err.message : String(err),
     });
     return true;

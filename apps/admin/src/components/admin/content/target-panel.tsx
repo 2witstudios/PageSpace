@@ -12,7 +12,6 @@ import { Input } from '@/components/ui/input';
 import { DataState } from '@/components/admin/kit';
 import { useAdminQuery } from '@/hooks/use-admin-query';
 import type { CaseSummary } from '@/lib/content/case-summary';
-import { ConfirmActionDialog } from '@/components/admin/users/confirm-action-dialog';
 import { describeTakedownResult, runTakedown } from './actions';
 import { CaseList, Mono } from './case-list';
 import { TakedownDialog, type TakedownCategory, type TakedownDialogValues } from './takedown-dialog';
@@ -62,7 +61,6 @@ export function TargetPanel() {
   const { data, isLoading, error, refetch } = useAdminQuery<ResolveResponse>(url);
 
   const [dialog, setDialog] = useState<ActionKind | null>(null);
-  const [restoreOpen, setRestoreOpen] = useState(false);
   const [pending, setPending] = useState(false);
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ message: string; ok: boolean } | null>(null);
@@ -246,7 +244,12 @@ export function TargetPanel() {
                           </Field>
                           <Field label="Published sites">
                             {target.drive.sitesHeld ? (
-                              <Badge variant="destructive">Parked and held</Badge>
+                              <span>
+                                <Badge variant="destructive">Parked and held</Badge>
+                                <span className="ml-2 text-xs text-muted-foreground">
+                                  Lift a hold from the case that placed it (look up the drive ID to see its cases).
+                                </span>
+                              </span>
                             ) : target.drive.publishes ? 'Live' : 'None'}
                           </Field>
                         </>
@@ -302,15 +305,9 @@ export function TargetPanel() {
                   <Button variant="outline" disabled={!target.page?.isPublished} onClick={() => open('unpublish_page')}>
                     Unpublish page
                   </Button>
-                  {target.drive?.sitesHeld ? (
-                    <Button variant="outline" onClick={() => { setDialogError(null); setRestoreOpen(true); }}>
-                      Restore drive sites
-                    </Button>
-                  ) : (
-                    <Button variant="outline" disabled={!target.drive?.publishes} onClick={() => open('park_drive')}>
-                      Park drive sites
-                    </Button>
-                  )}
+                  <Button variant="outline" disabled={!target.drive?.publishes} onClick={() => open('park_drive')}>
+                    Park drive sites
+                  </Button>
                   <Button variant="outline" disabled={!target.user?.hasAvatar} onClick={() => open('avatar')}>
                     Remove avatar
                   </Button>
@@ -352,19 +349,6 @@ export function TargetPanel() {
         />
       )}
 
-      <ConfirmActionDialog
-        open={restoreOpen}
-        onOpenChange={(next) => !next && setRestoreOpen(false)}
-        title="Restore this drive's published sites?"
-        description={<span>Lifts the hold and puts the sites back on the web, as far as the organization&rsquo;s own publishing policy allows.</span>}
-        confirmLabel="Restore sites"
-        destructive={false}
-        pending={pending}
-        error={dialogError}
-        onConfirm={({ reason }) => {
-          if (target?.drive) void submit({ action: 'restore_drive', driveId: target.drive.id, reason }, () => setRestoreOpen(false));
-        }}
-      />
     </div>
   );
 }

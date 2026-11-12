@@ -44,7 +44,7 @@ async function auditTargetFor(request: TakedownRequest): Promise<AuditTarget> {
     case 'park_drive':
       return { eventType: KIND_EVENT.park_drive, resourceType: 'drive', resourceId: request.driveId };
     case 'restore_drive':
-      return { eventType: RESTORED, resourceType: 'drive', resourceId: request.driveId };
+      return { eventType: RESTORED, resourceType: 'content_case', resourceId: request.caseId };
     case 'avatar':
       return { eventType: KIND_EVENT.avatar, resourceType: 'user', resourceId: request.userId };
     case 'park_user_sites':
@@ -106,7 +106,11 @@ export const POST = withAdminAuth(async (adminUser, request) => {
         ...auditDetailsFor(takedown),
         ...(result.ok
           ? {
-              outcome: result.body.failedStep ? 'step_failed' : (result.body.haltReason ?? 'completed'),
+              outcome: result.body.failedStep
+                ? 'step_failed'
+                : (result.body.haltReason ?? (result.body.stillHeldDriveIds?.length ? 'hold_lifted_drive_still_held' : 'completed')),
+              restoredDriveIds: result.body.restoredDriveIds,
+              stillHeldDriveIds: result.body.stillHeldDriveIds,
               caseId: result.body.caseId ?? ('caseId' in takedown ? takedown.caseId : undefined),
               status: result.body.status,
               failedStep: result.body.failedStep,

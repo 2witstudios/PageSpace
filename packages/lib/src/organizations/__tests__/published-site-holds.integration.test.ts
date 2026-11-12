@@ -26,8 +26,9 @@ import {
   parkUserSites,
   reconcileAllPublishedVisibility,
   reconcileOrgPublishedVisibility,
-  restoreDriveSites,
+  releaseDriveHold,
   restoreUserSites,
+  UserStillSuspendedError,
 } from '../published-visibility';
 
 class MemoryStore implements PublishedObjectStore {
@@ -146,7 +147,7 @@ const parkedKeys = (prefix: string) => [...w.store.objects.keys()].filter((k) =>
 
 describe('parkDriveSites', () => {
   it('moves the drive subdomain and every custom domain off the public prefix', async () => {
-    await parkDriveSites({ driveId: w.personalDrive, source: 'takedown', caseId: 'case-1', createdBy: 'admin-1' }, w.store);
+    await parkDriveSites({ driveId: w.personalDrive, holder: { caseId: 'case-1' }, createdBy: 'admin-1' }, w.store);
 
     expect(publicKeys(w.personalSite)).toEqual([]);
     expect(publicKeys(w.personalDomain)).toEqual([]);
@@ -156,7 +157,7 @@ describe('parkDriveSites', () => {
   });
 
   it('refuses every later publish write into the held drive, with a message that gives no reason', async () => {
-    await parkDriveSites({ driveId: w.personalDrive, source: 'takedown' }, w.store);
+    await parkDriveSites({ driveId: w.personalDrive, holder: { caseId: 'case-1' } }, w.store);
 
     expect(await isPrefixVisible(w.personalSite)).toBe(false);
     await expect(assertPrefixWritable(w.personalSite)).rejects.toBeInstanceOf(PublishHeldError);
@@ -166,7 +167,7 @@ describe('parkDriveSites', () => {
   });
 
   it('survives the reconcile sweep: a held personal drive is not restored', async () => {
-    await parkDriveSites({ driveId: w.personalDrive, source: 'takedown' }, w.store);
+    await parkDriveSites({ driveId: w.personalDrive, holder: { caseId: 'case-1' } }, w.store);
     await reconcileAllPublishedVisibility(w.store);
 
     expect(publicKeys(w.personalSite)).toEqual([]);
@@ -174,7 +175,7 @@ describe('parkDriveSites', () => {
   });
 
   it('survives an org policy reconcile that would otherwise make the site visible', async () => {
-    await parkDriveSites({ driveId: w.soloOrgDrive, source: 'takedown' }, w.store);
+    await parkDriveSites({ driveId: w.soloOrgDrive, holder: { caseId: 'case-1' } }, w.store);
     await reconcileOrgPublishedVisibility(w.orgId, w.store);
 
     expect(publicKeys(w.soloOrgSite)).toEqual([]);
@@ -183,16 +184,16 @@ describe('parkDriveSites', () => {
 
   it('keeps the hold and reports failure when the store fails part-way, and a rerun finishes', async () => {
     w.store.failCopyOn = w.personalDomain;
-    await expect(parkDriveSites({ driveId: w.personalDrive, source: 'takedown' }, w.store)).rejects.toThrow(/Could not park/);
+    await expect(parkDriveSites({ driveId: w.personalDrive, holder: { caseId: 'case-1' } }, w.store)).rejects.toThrow(/Could not park/);
     await expect(assertPrefixWritable(w.personalDomain)).rejects.toBeInstanceOf(PublishHeldError);
 
     w.store.failCopyOn = null;
-    await parkDriveSites({ driveId: w.personalDrive, source: 'takedown' }, w.store);
+    await parkDriveSites({ driveId: w.personalDrive, holder: { caseId: 'case-1' } }, w.store);
     expect(publicKeys(w.personalDomain)).toEqual([]);
   });
 
   it('is re-parked by the sweep if a publish slipped an object in after the move', async () => {
-    await parkDriveSites({ driveId: w.personalDrive, source: 'takedown' }, w.store);
+    await parkDriveSites({ driveId: w.personalDrive, holder: { caseId: 'case-1' } }, w.store);
     // A publish that passed the write guard just before the hold existed lands now.
     w.store.objects.set(`published/${w.personalSite}/late/index.html`, 'late');
 
@@ -203,15 +204,46 @@ describe('parkDriveSites', () => {
   });
 });
 
-describe('restoreDriveSites', () => {
-  it('puts every object back and lifts the hold', async () => {
-    await parkDriveSites({ driveId: w.personalDrive, source: 'takedown' }, w.store);
-    await restoreDriveSites(w.personalDrive, w.store);
+describe('releaseDriveHold', () => {
+  it('puts every object back and lifts the hold when it was the only one', async () => {
+    await parkDriveSites({ driveId: w.personalDrive, holder: { caseId: 'case-1' } }, w.store);
+    const outcome = await releaseDriveHold({ driveId: w.personalDrive, holder: { caseId: 'case-1' } }, w.store);
 
+    expect(outcome).toMatchObject({ released: true, remainingHolds: 0 });
     expect(publicKeys(w.personalSite)).toHaveLength(2);
     expect(publicKeys(w.personalDomain)).toHaveLength(2);
     expect(parkedKeys(w.personalSite)).toEqual([]);
     await expect(assertPrefixWritable(w.personalSite)).resolves.toBeUndefined();
+  });
+
+  it('keeps the drive parked while another takedown case still holds it', async () => {
+    await parkDriveSites({ driveId: w.personalDrive, holder: { caseId: 'case-1' } }, w.store);
+    await parkDriveSites({ driveId: w.personalDrive, holder: { caseId: 'case-2' } }, w.store);
+
+    const first = await releaseDriveHold({ driveId: w.personalDrive, holder: { caseId: 'case-1' } }, w.store);
+    expect(first).toMatchObject({ released: true, remainingHolds: 1 });
+    expect(publicKeys(w.personalSite)).toEqual([]);
+    await expect(assertPrefixWritable(w.personalSite)).rejects.toBeInstanceOf(PublishHeldError);
+
+    const second = await releaseDriveHold({ driveId: w.personalDrive, holder: { caseId: 'case-2' } }, w.store);
+    expect(second).toMatchObject({ released: true, remainingHolds: 0 });
+    expect(publicKeys(w.personalSite)).toHaveLength(2);
+  });
+
+  it('changes nothing for a holder that has no hold on the drive', async () => {
+    await parkDriveSites({ driveId: w.personalDrive, holder: { caseId: 'case-1' } }, w.store);
+    const outcome = await releaseDriveHold({ driveId: w.personalDrive, holder: { caseId: 'someone-elses-case' } }, w.store);
+
+    expect(outcome).toMatchObject({ released: false, remainingHolds: 1 });
+    expect(publicKeys(w.personalSite)).toEqual([]);
+  });
+
+  it('keeps the hold when the store fails while restoring', async () => {
+    await parkDriveSites({ driveId: w.personalDrive, holder: { caseId: 'case-1' } }, w.store);
+    w.store.failCopyOn = w.personalSite;
+
+    await expect(releaseDriveHold({ driveId: w.personalDrive, holder: { caseId: 'case-1' } }, w.store)).rejects.toThrow(/Could not restore/);
+    await expect(assertPrefixWritable(w.personalSite)).rejects.toBeInstanceOf(PublishHeldError);
   });
 });
 
@@ -237,32 +269,53 @@ describe('parkUserSites', () => {
     expect(touched).not.toContain(w.unpublishedDrive);
   });
 
-  it('is undone by restoreUserSites, which leaves a takedown hold on the same user\'s drive alone', async () => {
-    await parkDriveSites({ driveId: w.soloOrgDrive, source: 'takedown', caseId: 'case-9' }, w.store);
+  it('is undone by restoreUserSites once the suspension is lifted', async () => {
     await parkUserSites({ userId: w.owner }, w.store);
-
     const restored = await restoreUserSites(w.owner, w.store);
-    expect(restored.map((d) => d.driveId)).toEqual([w.personalDrive]);
+
+    expect(restored.map((d) => d.driveId).sort()).toEqual([w.personalDrive, w.soloOrgDrive].sort());
     expect(publicKeys(w.personalSite)).toHaveLength(2);
-    expect(publicKeys(w.soloOrgSite)).toEqual([]);
   });
 
-  it('a takedown placed AFTER the suspension takes over the hold, so lifting the suspension does not republish', async () => {
+  it('refuses to restore while the user is still suspended, and leaves the sites parked', async () => {
     await parkUserSites({ userId: w.owner }, w.store);
-    await parkDriveSites({ driveId: w.personalDrive, source: 'takedown', caseId: 'case-7' }, w.store);
+    await db.update(users).set({ suspendedAt: new Date(), suspendedReason: 'abuse' }).where(eq(users.id, w.owner));
 
+    await expect(restoreUserSites(w.owner, w.store)).rejects.toBeInstanceOf(UserStillSuspendedError);
+    expect(publicKeys(w.personalSite)).toEqual([]);
+  });
+
+  it.each([
+    ['the takedown came first', async () => {
+      await parkDriveSites({ driveId: w.personalDrive, holder: { caseId: 'case-7' } }, w.store);
+      await parkUserSites({ userId: w.owner }, w.store);
+    }],
+    ['the suspension came first', async () => {
+      await parkUserSites({ userId: w.owner }, w.store);
+      await parkDriveSites({ driveId: w.personalDrive, holder: { caseId: 'case-7' } }, w.store);
+    }],
+  ])('lifting the suspension does not republish a drive a takedown also holds (%s)', async (_label, arrange) => {
+    await arrange();
     const restored = await restoreUserSites(w.owner, w.store);
 
-    expect(restored.map((d) => d.driveId)).toEqual([w.soloOrgDrive]);
+    expect(restored.find((d) => d.driveId === w.personalDrive)).toMatchObject({ released: true, remainingHolds: 1 });
     expect(publicKeys(w.personalSite)).toEqual([]);
     await expect(assertPrefixWritable(w.personalSite)).rejects.toBeInstanceOf(PublishHeldError);
+    // The drive only the suspension held is back.
+    expect(publicKeys(w.soloOrgSite)).toHaveLength(2);
+
+    // And the takedown's own restore then brings it back.
+    await releaseDriveHold({ driveId: w.personalDrive, holder: { caseId: 'case-7' } }, w.store);
+    expect(publicKeys(w.personalSite)).toHaveLength(2);
   });
 
-  it('a suspension placed after a takedown does not relabel the takedown hold', async () => {
-    await parkDriveSites({ driveId: w.personalDrive, source: 'takedown', caseId: 'case-7' }, w.store);
+  it('lifting a takedown hold does not republish a drive whose owner is still suspended', async () => {
     await parkUserSites({ userId: w.owner }, w.store);
-    await restoreUserSites(w.owner, w.store);
+    await parkDriveSites({ driveId: w.personalDrive, holder: { caseId: 'case-7' } }, w.store);
 
+    const outcome = await releaseDriveHold({ driveId: w.personalDrive, holder: { caseId: 'case-7' } }, w.store);
+
+    expect(outcome).toMatchObject({ released: true, remainingHolds: 1 });
     expect(publicKeys(w.personalSite)).toEqual([]);
   });
 });

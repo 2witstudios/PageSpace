@@ -96,12 +96,29 @@ describe('POST /api/admin/content/takedown', () => {
   it.each([
     [{ action: 'unpublish_page', pageId: 'page-1', category: 'policy', reason: 'DMCA' }, 'content.takedown.page_unpublished', 'page', 'page-1'],
     [{ action: 'park_drive', driveId: 'drive-1', category: 'policy', reason: 'terms' }, 'content.takedown.sites_parked', 'drive', 'drive-1'],
-    [{ action: 'restore_drive', driveId: 'drive-1', reason: 'counter-notice' }, 'content.takedown.sites_restored', 'drive', 'drive-1'],
+    [{ action: 'restore_drive', caseId: 'case-3', reason: 'counter-notice' }, 'content.takedown.sites_restored', 'content_case', 'case-3'],
     [{ action: 'avatar', userId: 'user-1', category: 'csam', reason: 'report' }, 'content.takedown.avatar', 'user', 'user-1'],
     [{ action: 'resweep', caseId: 'case-1' }, 'content.takedown.global', 'content_case', 'case-1'],
   ])('audits %j under its own event type', async (body, eventType, resourceType, resourceId) => {
     await post(body);
     expect(lastAudit()).toMatchObject({ eventType, resourceType, resourceId, userId: 'admin-1' });
+  });
+
+  it('audits a restore that left the drive parked as exactly that', async () => {
+    callWebTakedownMock.mockResolvedValue(ok({ action: 'restore_drive', caseId: 'case-3', status: 'actioned', restoredDriveIds: [], stillHeldDriveIds: ['drive-1'] }));
+    await post({ action: 'restore_drive', caseId: 'case-3', reason: 'counter-notice' });
+
+    expect(lastAudit().details).toMatchObject({
+      reason: 'counter-notice',
+      outcome: 'hold_lifted_drive_still_held',
+      stillHeldDriveIds: ['drive-1'],
+    });
+  });
+
+  it('refuses a restore that names no case: a hold is lifted by the case that placed it', async () => {
+    const res = await post({ action: 'restore_drive', driveId: 'drive-1', reason: 'counter-notice' });
+    expect(res.status).toBe(400);
+    expect(callWebTakedownMock).not.toHaveBeenCalled();
   });
 
   it('audits a resume as the action of the case it continues', async () => {

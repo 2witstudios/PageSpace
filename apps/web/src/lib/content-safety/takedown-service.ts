@@ -26,12 +26,15 @@ import {
 import type { TakedownRequest, TakedownResponse } from '@pagespace/lib/content-safety/takedown-request';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
+  UserStillSuspendedError,
   parkDriveSites,
   parkUserSites,
-  restoreDriveSites,
+  releaseDriveHold,
   restoreUserSites,
+  type ReleaseHoldOutcome,
   type UserSitesOutcome,
 } from '@pagespace/lib/organizations/published-visibility';
+import { RESTORE_SITES_STEP } from '@pagespace/lib/content-safety/takedown-plan';
 import type { PublishedObjectStore } from '@pagespace/lib/organizations/published-visibility-core';
 import { createSystemAvatarDeleteToken } from '@pagespace/lib/services/validated-service-token';
 import { ListObjectsV2Command } from '@aws-sdk/client-s3';
@@ -175,7 +178,7 @@ async function runCase(row: ContentCase, deps: TakedownDeps): Promise<CaseRun> {
           step: 'park_sites',
           run: async () => {
             const outcome = await parkDriveSites(
-              { driveId: row.targetId, source: 'takedown', caseId: row.id, createdBy: actor },
+              { driveId: row.targetId, holder: { caseId: row.id }, createdBy: actor },
               publishedStore(),
             );
             await deps.cases.mergeSnapshot(row.id, { driveIds: [row.targetId] });
@@ -198,7 +201,7 @@ async function runCase(row: ContentCase, deps: TakedownDeps): Promise<CaseRun> {
           {
             step: 'park_sites',
             run: async () => {
-              userSites = await parkUserSites({ userId: row.targetId, caseId: row.id, createdBy: actor }, publishedStore());
+              userSites = await parkUserSites({ userId: row.targetId, createdBy: actor }, publishedStore());
               await deps.cases.mergeSnapshot(row.id, {
                 driveIds: userSites.parked.map((d) => d.driveId),
                 skippedDrives: userSites.skipped,
@@ -309,14 +312,45 @@ export async function executeTakedown(request: TakedownRequest, actorUserId: str
     }
 
     case 'restore_drive': {
-      await restoreDriveSites(request.driveId, publishedStore());
-      loggers.security.info('Content safety: drive sites restored', { driveId: request.driveId, actorUserId });
-      return { action: request.action, restoredDriveIds: [request.driveId] };
+      // Lifts only the hold THIS case placed. If another case or the owner's
+      // suspension also holds the drive, it stays parked and the response says so.
+      const row = await requireCase(request.caseId);
+      if (row.snapshot?.takedown?.kind !== 'park_drive') {
+        throw new TakedownRequestError('Only a drive-parking case has a hold to lift', 409);
+      }
+      const driveId = row.targetId;
+      const released = await releaseDriveHold({ driveId, holder: { caseId: row.id } }, publishedStore());
+      if (!released.released) throw new TakedownRequestError('This case no longer holds the drive', 409);
+
+      await deps.cases.appendStep(row.id, {
+        step: RESTORE_SITES_STEP,
+        status: 'ok',
+        detail: `remaining_holds=${released.remainingHolds}`,
+        at: new Date().toISOString(),
+      });
+      await deps.cases.mergeSnapshot(row.id, { restore: { actorUserId: actorUserId ?? undefined, reason: request.reason } });
+      loggers.security.info('Content safety: drive hold lifted', { caseId: row.id, driveId, actorUserId, remainingHolds: released.remainingHolds });
+      return {
+        action: request.action,
+        caseId: row.id,
+        status: row.status,
+        ...(released.remainingHolds === 0 ? { restoredDriveIds: [driveId] } : { restoredDriveIds: [], stillHeldDriveIds: [driveId] }),
+      };
     }
 
     case 'restore_user_sites': {
-      const restored = await restoreUserSites(request.userId, publishedStore());
-      return { action: request.action, restoredDriveIds: restored.map((d) => d.driveId) };
+      let released: ReleaseHoldOutcome[];
+      try {
+        released = await restoreUserSites(request.userId, publishedStore());
+      } catch (error) {
+        if (error instanceof UserStillSuspendedError) throw new TakedownRequestError(error.message, 409);
+        throw error;
+      }
+      return {
+        action: request.action,
+        restoredDriveIds: released.filter((d) => d.remainingHolds === 0).map((d) => d.driveId),
+        stillHeldDriveIds: released.filter((d) => d.remainingHolds > 0).map((d) => d.driveId),
+      };
     }
 
     case 'resume': {
@@ -331,8 +365,11 @@ export async function executeTakedown(request: TakedownRequest, actorUserId: str
         throw new TakedownRequestError('Only a global takedown can be re-swept', 409);
       }
       // A re-sweep runs the whole sequence from wherever it is. On a dismissed case
-      // that would be a takedown nobody decided on; an unfinished one is resumed instead.
-      if (row.status !== 'actioned') {
+      // that would be a takedown nobody decided on, and a case that never finished
+      // is resumed instead. The one unfinished case that IS swept is one a failed
+      // re-sweep left open: sweeping again continues that pass.
+      const failedResweep = row.status === 'open' && (row.snapshot?.resweep?.attempts ?? 0) > 0;
+      if (row.status !== 'actioned' && !failedResweep) {
         throw new TakedownRequestError('Only a finished takedown can be re-swept; resume this case instead', 409);
       }
       return toResponse(request.action, { result: await resweepGlobalTakedown(row.id, deps) });

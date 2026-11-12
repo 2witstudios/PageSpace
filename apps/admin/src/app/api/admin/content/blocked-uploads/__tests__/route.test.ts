@@ -7,11 +7,13 @@ vi.mock('@/lib/auth', () => ({
 
 const { queryMock } = vi.hoisted(() => ({ queryMock: vi.fn() }));
 vi.mock('@pagespace/lib/audit/audit-query', () => ({ queryAuditEvents: queryMock }));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } },
 }));
 
 import { GET } from '../route';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const HASH = 'a'.repeat(64);
 const get = (query = '') => GET(new Request(`http://localhost/api/admin/content/blocked-uploads${query}`));
@@ -50,6 +52,23 @@ describe('GET /api/admin/content/blocked-uploads', () => {
         driveId: 'drive-1',
       },
     ]);
+  });
+
+  it('audits the read, like the case list and the lookup', async () => {
+    await get();
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.any(Request),
+      expect.objectContaining({
+        eventType: 'content.case.read',
+        userId: 'admin-1',
+        resourceType: 'content_blocked_uploads',
+        resourceId: 'list',
+        details: expect.objectContaining({ action: 'list_blocked_uploads', filtered: false, count: 1 }),
+      }),
+    );
+
+    await get(`?hash=${HASH}`);
+    expect(vi.mocked(auditRequest).mock.calls[1][1]).toMatchObject({ resourceId: HASH, details: { filtered: true } });
   });
 
   it('filters by content hash, normalising its case', async () => {
