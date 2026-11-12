@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { buildTree } from '@pagespace/lib/content/tree-utils';
+import { buildTree, pageTreeColumns, toTreeNodes } from '@pagespace/lib/content/tree-utils';
 import { db } from '@pagespace/db/db'
 import { and, eq, inArray, asc, sql, isNotNull } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core'
@@ -49,6 +49,7 @@ async function getPermittedPages(driveId: string, actor: AccessActor) {
 
   // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   return db.query.pages.findMany({
+    columns: pageTreeColumns,
     where: and(
       inArray(pages.id, allVisiblePageIds),
       eq(pages.isTrashed, false)
@@ -99,6 +100,7 @@ export async function GET(
       const accessibleIds = new Set(accessible.map(p => p.id));
       // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
       const allPages = await db.query.pages.findMany({
+        columns: pageTreeColumns,
         where: and(
           eq(pages.driveId, drive.id),
           eq(pages.isTrashed, false)
@@ -111,6 +113,7 @@ export async function GET(
       if (canAdministerDrive(await loadDriveRelationship(actorFromAuth(auth), drive))) {
         // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
         pageResults = await db.query.pages.findMany({
+          columns: pageTreeColumns,
           where: and(
             eq(pages.driveId, drive.id),
             eq(pages.isTrashed, false)
@@ -274,16 +277,10 @@ export async function GET(
       }
     }
 
-    // Add isTaskLinked and hasChanges flags to each page
-    const pagesWithFlags = pageResults.map(page => {
-      return {
-        ...page,
-        isTaskLinked: taskLinkedSet.has(page.id),
-        hasChanges: pagesWithActivityChanges.has(page.id),
-      };
-    });
-
-    const pageTree = buildTree(pagesWithFlags);
+    const pageTree = buildTree(toTreeNodes(pageResults, {
+      taskLinkedIds: taskLinkedSet,
+      changedIds: pagesWithActivityChanges,
+    }));
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'drive_page_tree', resourceId: driveId, details: { action: 'list_pages', count: pageResults.length } });
     return jsonResponse(pageTree);
   } catch (error) {
