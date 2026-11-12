@@ -1,6 +1,6 @@
 # Content safety PR 1 — data model and re-upload block
 
-Branch `pu/cs-blocklist`. Brief: `~/.claude/plans/cs-pr1-brief.md`. Review fixes: `~/.claude/plans/cs-pr1-fixes.md`.
+Branch `pu/cs-blocklist`. Brief: `~/.claude/plans/cs-pr1-brief.md`. Review fixes: `~/.claude/plans/cs-pr1-fixes.md`, `~/.claude/plans/cs-pr1-fixes-2.md`.
 Nothing pushed, no PR opened.
 
 ## What exists now
@@ -18,10 +18,14 @@ Nothing pushed, no PR opened.
     blocklist query, and one audit event per blocked hash.
   - Exported as `@pagespace/lib/content-safety/{policy,blocklist,upload-gate}`.
 - **Refusal**: HTTP 422, body `{ "error": "This file can't be uploaded" }`. Same in every deployment mode.
+  A refused page copy uses the same status with `{ "error": "One or more files can't be copied" }`.
 - **Audit event on a hit**: its own type, `content.upload.blocked` (added to `SecurityEventType` in
   `packages/db/src/schema/security-audit.ts`; the column is `text`, so no migration). `resourceType: 'file'`,
   `resourceId: <hash>`, `userId`, `riskScore: 0.9`, `details: { …ids, entryPoint }`. PR 2 finds attempts with
   `event_type = 'content.upload.blocked'`, optionally by `resource_id`.
+- **Audit event when a file can't be verified** (copy and send only, see "Legacy key form"): the same type,
+  with `details.reason: 'unverifiable_file_reference'`, `riskScore: 0.5`, and `resourceId` set to the page or
+  file id rather than a hash. Filter on `details->>'reason' is null` for true blocklist hits.
 
 ## Entry points gated
 
@@ -41,7 +45,7 @@ An existing hash attached to something new, with no upload (added after review):
 | # | Entry point | Gate at | On a blocked hash |
 |---|---|---|---|
 | 7 | AI chat attachments — echoed storage keys | same screen as 6 | see below |
-| 8 | Bulk copy of pages | `apps/web/src/app/api/pages/bulk-copy/route.ts:159` (top level), `:351` (each level of descendants) | 422; a descendant hit rolls the whole copy back |
+| 8 | Bulk copy of pages | `apps/web/src/app/api/pages/bulk-copy/route.ts:160` (`refuseUnsafeCopy`, whole tree) | 422 before the transaction opens; nothing is written |
 | 9 | Channel message send | `apps/web/src/app/api/channels/[pageId]/messages/route.ts:253` | 422 before any insert |
 | 10 | DM send | `apps/web/src/app/api/messages/[conversationId]/route.ts:328` | 422 before any insert |
 
@@ -62,13 +66,60 @@ Notes:
     sees the file.
   - An **assistant or system** message is saved without the blocked part rather than failed.
   - The interrupted-stream materializer (`apps/web/src/lib/ai/core/materialize-interrupted-stream.ts:204`)
-    treats a block as terminal: it drops the part, materializes the rest and settles the row, so no later sweep
-    retries or re-audits it.
-- **8** checks the top-level pages before the transaction. Descendants are only discovered as the copy walks
-  the tree inside the transaction, so each level is checked there (one query per level, sequential) and a hit
-  throws, which rolls the copy back. This matches how the route already refuses on org-lapse and model policy.
+    treats a block as terminal: it drops the part, materializes the rest and settles the row instead of being
+    retried by every sweep. The audit event is written before the terminal write, so if that write fails the
+    next sweep audits the same part once more.
+  - An assistant save has no `userId`; the audit event for a dropped part names `triggeredBy.userId`, the user
+    who drove the turn, when the caller supplies it.
+- **8** reads the whole tree before the transaction (`collectDescendants`, `route.ts:324`: one query per tree
+  level, three columns), then makes **one** blocklist query for every hash in it. No lookup runs while the
+  copy holds its connection. The transaction copies only the descendants that screen saw (`route.ts:402`), so a
+  page created or moved into the tree after the screen is left out rather than copied unchecked.
+  - One blocked or unverifiable file anywhere in the tree refuses the whole copy. The response does not name
+    the page: that would point at the blocked file. A user who needs to know which page can copy the children
+    one at a time; support can read the audit event.
+- **9 and 10** normally receive a file id that is the content hash. For any other id the gate reads the row's
+  `storagePath` (one extra query, only for such ids) and resolves it the way the file readers do.
 - **10**: the DM validator already required the sender to have uploaded the file into this conversation; the
   gate adds the case of a hash blocked after that upload. **9** had no such check at all — see Follow-ups.
+
+## Legacy key form
+
+The file readers still accept a `filePath` / `storagePath` of the form `files/<hash>/original` as well as a
+bare hash (`toContentHash`, `apps/web/src/lib/presigned-url.ts:32`; mirrored in the view and download routes).
+The copy and send gates now resolve references the same way, through `resolveStoredContentHash`
+(`apps/web/src/lib/upload/stored-content-hash.ts`), which is `toContentHash` followed by the blocklist's own
+`normalizeContentHash`.
+
+A reference that resolves to nothing can't be checked against a hash blocklist at all, so both gates **fail
+closed** and audit it:
+
+- **Copy**: a page whose `filePath` is set but is neither form refuses the whole copy.
+- **Send**: a `files` row whose `storagePath` (or, if that is null, id) is neither form refuses the send. The
+  fixes file specified fail-closed for copy; I applied the same rule to send because the reasoning is
+  identical. An id with no `files` row is passed on to the send's own validation, which already rejects it.
+
+`pages.contentHash` is looked up when it is a hash and ignored otherwise: readers serve from `filePath`, so
+that is the column that decides whether a page is verifiable.
+
+### Needs a production check
+
+If either count is above zero, those rows can no longer be copied (first query) or attached to a new message
+(second query) until they are rewritten to a bare hash. Run both before this ships:
+
+```sql
+-- FILE pages whose filePath is not a bare sha256. Legacy-form rows are still checked; the rest are refused.
+select count(*) filter (where "filePath" ~* '^files/[0-9a-f]{64}/original$') as legacy_form_still_checked,
+       count(*) filter (where "filePath" !~* '^files/[0-9a-f]{64}/original$') as unverifiable_copy_refused
+from pages
+where "filePath" is not null and "filePath" !~* '^[0-9a-f]{64}$';
+
+-- files rows whose id is not a bare sha256, split the same way by storagePath.
+select count(*) filter (where coalesce(nullif("storagePath", ''), id) ~* '^(files/[0-9a-f]{64}/original|[0-9a-f]{64})$') as legacy_form_still_checked,
+       count(*) filter (where coalesce(nullif("storagePath", ''), id) !~* '^(files/[0-9a-f]{64}/original|[0-9a-f]{64})$') as unverifiable_send_refused
+from files
+where id !~* '^[0-9a-f]{64}$';
+```
 
 ## Found but not gated, and why
 
@@ -87,7 +138,7 @@ Paths that carry an existing hash, swept across `apps/web`, `apps/processor`, `a
 
 | Path | Finding |
 |---|---|
-| AI message edit — `apps/web/src/app/api/ai/chat/messages/[messageId]/route.ts:120`, `.../ai/global/[id]/messages/[messageId]/route.ts:74`, `.../ai/page-agents/[agentId]/conversations/[conversationId]/messages/[messageId]/route.ts:87` | **Not gated.** Not a blocklist-shaped problem: see Follow-ups 2. |
+| AI message edit — `apps/web/src/app/api/ai/chat/messages/[messageId]/route.ts:120`, `.../ai/global/[id]/messages/[messageId]/route.ts:74`, `.../ai/page-agents/[agentId]/conversations/[conversationId]/messages/[messageId]/route.ts:87` | **Not gated on this branch.** It does attach an existing hash to new content, so it is a blocklist bypass; it is being fixed on `sec/chat-attachment-key-scope`. See Follow-ups 2. |
 | Cross-drive move — `apps/web/src/services/api/page-cross-drive-move-service.ts:199,335` | No new row: rewrites `driveId`/`parentId` on the existing page. The reference predates the move, so it is PR 2's "existing references". |
 | Page create (`page-service.ts:941`, `page-repository.ts:179`), AI `create_page`, `copy_content`, convert-to-document, drive backup restore, trash restore, version rollback, page PATCH, reorder, share links, task/agent/memory/starter seeding | Cannot carry `filePath`/`contentHash`, or compute nothing from a client-supplied hash. |
 | Channel and DM message edit | Only `content` is written. |
@@ -126,18 +177,37 @@ written only by the web app.
      on read, a one-hour presigned GET is issued for the stored key.
    - Chat attachments are in a global content-addressed namespace with no per-user record of who uploaded what,
      so there is nothing to check ownership against today.
-2. **AI message edit can store an arbitrary storage key, and reads will presign it.** More serious than 1.
-   - `apps/web/src/lib/repositories/message-repository.ts:1499` — `processMessageContentUpdate` returns the
-     client's `newContent` verbatim when the existing content is not structured JSON (a plain-text message).
-   - Reached from the three PATCH routes listed above.
-   - A client can therefore PATCH content of the form `{"textParts":[…],"fileParts":[{"storageKey":"<key>"}],"partsOrder":[…]}`.
-   - `apps/web/src/lib/ai/core/message-utils.ts:444` then calls `getChatAttachmentUrl(fp.storageKey)`
-     (`chat-attachment-storage.ts:52`), which signs a GET for **whatever key is stored** — it does not require the
-     `chat-attachments/` prefix. That includes `files/<hash>/original` belonging to another tenant.
-   - I verified the code path by reading it; I did not exercise it against a running app. It bypasses the
-     blocklist, and the wider issue is cross-tenant read by hash. Suggested fix: never accept structured JSON
-     from the edit body, and make `getChatAttachmentUrl` refuse keys that do not match the anchored
-     chat-attachment pattern.
+2. **Any text a user can get saved as a message can make the server presign a GET for an arbitrary storage
+   key.** More serious than 1: it is a cross-tenant read by hash and a blocklist bypass, it exists on `master`,
+   and it needs no message edit. **Not fixed here by decision: it is being fixed on
+   `sec/chat-attachment-key-scope`.** To keep that merge clean, this branch does not touch
+   `getChatAttachmentUrl` or `parseStructuredContent` beyond what it already had.
+
+   The chain:
+   1. **Write.** A message saved without a `uiMessage` stores its `content` string verbatim
+      (`apps/web/src/lib/repositories/message-repository.ts:135`). The blocklist screen
+      (`message-repository.ts:667`, `:739`) only looks at `uiMessage.parts`, so it never sees this text.
+   2. **Reach.** `POST /api/ai/page-agents/consult` saves the caller's `question` that way
+      (`apps/web/src/app/api/ai/page-agents/consult/route.ts:560`). So do the three message-edit PATCH routes
+      listed above, through `processMessageContentUpdate` (`message-repository.ts`), which returns the client's
+      `newContent` verbatim when the existing content is plain text, and v1 assistant replies.
+   3. **Payload.** The attacker sends, as ordinary text,
+      `{"textParts":["x"],"fileParts":[{"storageKey":"files/<hash>/original","mediaType":"image/png"}],"partsOrder":["text","file"]}`.
+   4. **Read.** `parseStructuredContent` (`apps/web/src/lib/ai/core/message-utils.ts:391`) accepts any JSON
+      with `textParts` and `partsOrder` as our own attachment envelope. It cannot tell an envelope the server
+      wrote from one a user typed.
+   5. **Sign.** `message-utils.ts:444` calls `getChatAttachmentUrl(fp.storageKey)`
+      (`apps/web/src/lib/upload/chat-attachment-storage.ts:52`), which signs a one-hour GET for whatever key is
+      stored. It does not require the `chat-attachments/` prefix.
+   6. **Result.** Loading the conversation returns a working download URL for any object in the bucket whose
+      key the attacker can name, including another tenant's `files/<hash>/original` and any blocked hash.
+
+   What the attacker needs: an account that can use any one of those routes, and the target's sha256 (or any
+   other key). Verified by reading the code; not exercised against a running app.
+
+   Suggested fix, for the security branch: `getChatAttachmentUrl` refuses any key that does not fully match
+   `chat-attachments/<64 hex>/original`; text saved without a `uiMessage` is never parsed as an envelope; edits
+   never accept one.
 3. **Channel send accepts any stored file by hash.** `lockAndValidateChannelAttachments`
    (`packages/lib/src/services/channel-message-repository.ts:212`) only checks that each `fileId` has a `files`
    row — not that the sender uploaded it or that it is linked to this channel. The DM validator checks both.
@@ -145,6 +215,8 @@ written only by the web app.
    The blocklist gate (entry point 9) is in place; the ownership check is not.
 4. **A bulk-copied FILE page gets no `files`/`file_pages` row** (`apps/web/src/app/api/pages/bulk-copy/route.ts`),
    so storage accounting and file-link permissions don't see the copy.
+5. **Bulk copy reads the tree twice**: once for the blocklist screen, once inside the transaction. Copying
+   from the first read would remove the second; it means restructuring the route's copy loop, so it is left.
 
 ## Erasure
 
@@ -192,6 +264,19 @@ foreign keys, so no cascade can reach them and there was nothing to exclude. Two
 | nit — test did not assert `checkObjectExists` was skipped | Superseded: `uploadChatAttachment` no longer checks. The screening test asserts nothing is uploaded on a block. |
 | nit — no test runs the real blocklist query | Fixed: `blocklist.integration.test.ts`, run against Postgres. |
 
+Second review (at `b27f8b0ce`):
+
+| Finding | Outcome |
+|---|---|
+| major — arbitrary-key presign through the message envelope (predates the branch) | Not fixed here by decision; `sec/chat-attachment-key-scope`. Follow-ups 2 now gives the full chain. |
+| minor — bulk-copy descendant lookups inside the transaction | Fixed: whole tree read first, one blocklist query, before the transaction. |
+| minor — copy and send gates ignored the legacy key form | Fixed: both resolve `files/<hash>/original`; unverifiable references fail closed and are audited. See "Legacy key form" and its production check. |
+| minor — channel send has no ownership check | Left as Follow-ups 3, by decision. |
+| nit — assistant-side drop audited with no user | Fixed: falls back to `triggeredBy.userId`. |
+| nit — vacuous "no upload" assertion | Fixed: removed; `savePageMessage` now has a test that a blocked `data:` upload writes no bytes. |
+| nit — materializer comment overclaimed "no re-audit" | Fixed: comment and this report say when a second audit can happen. |
+| nit — refused copy said "can't be uploaded" and named no page | Wording fixed (`One or more files can't be copied`). Still names no page, deliberately; see note on entry point 8. |
+
 ## Commands and results
 
 Test database: `docker compose -f docker-compose.test.yml up -d postgres-test`, then
@@ -200,12 +285,15 @@ applied, including `0382`.
 
 | Command | Result |
 |---|---|
-| `bun run typecheck` | PASS, 23 of 23 tasks |
+| `bun run typecheck` | PASS, 23 of 23 tasks (rerun after the second round) |
 | `bun run --filter @pagespace/lib test -- src/content-safety` (no database) | PASS: 3 files, 35 tests |
 | `packages/lib`: `bunx vitest run --config vitest.integration.config.ts src/content-safety` (test database) | PASS: 2 files, 5 tests |
 | `packages/lib`: `bunx vitest run src/content-safety src/compliance/erasure src/audit` (test database, before the two new tests moved to the integration config) | PASS: 46 files, 503 tests — includes the erasure integration suites |
 | `packages/db`: `bunx vitest run src/schema/__tests__ src/__tests__` (test database) | PASS: 56 files, 780 tests |
-| `apps/web`: `bunx vitest run src/lib/repositories src/lib/ai/core src/lib/ai/chat-pipeline src/lib/upload src/app/api/upload src/app/api/channels src/app/api/messages src/app/api/pages src/app/api/v1/chat src/app/api/ai` (test database) | PASS: 268 files, 4,390 tests |
+| `apps/web`: `bunx vitest run src/lib/repositories src/lib/ai/core src/lib/ai/chat-pipeline src/lib/upload src/app/api/upload src/app/api/channels src/app/api/messages src/app/api/pages src/app/api/v1/chat src/app/api/ai` (test database) | PASS: 268 files, 4,402 tests (rerun after the second round) |
 | `eslint` on every changed or new file in `apps/web`, `packages/lib`, `packages/db` | Clean |
+
+The second round changed only `apps/web`, so the `packages/lib` and `packages/db` rows are from the first
+round and were not rerun.
 
 Not run: the whole-repo `bun run test`, `bun run lint`, `bun run test:security`, `knip`.

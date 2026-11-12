@@ -105,6 +105,11 @@ vi.mock('@pagespace/lib/content-safety/upload-gate', () => ({
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
+// Legacy (non-hash) file ids resolve through `files.storagePath`; no such rows here.
+vi.mock('@/lib/upload/stored-content-hash', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/upload/stored-content-hash')>()),
+  loadFileStoragePaths: vi.fn(async () => new Map<string, string | null>()),
+}));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -800,13 +805,15 @@ describe('POST /api/channels/[pageId]/messages (top-level — existing path)', (
   });
 
   it('refuses a send whose attachment is on the content blocklist, with a neutral 422 and no insert', async () => {
-    mockFindBlockedUploads.mockResolvedValueOnce(new Set(['file-2']));
+    const HASH_1 = '1'.repeat(64);
+    const HASH_2 = '2'.repeat(64);
+    mockFindBlockedUploads.mockResolvedValueOnce(new Set([HASH_2]));
 
     const res = await callPost({
       content: 'look at these',
       attachments: [
-        { fileId: 'file-1', attachmentMeta: IMAGE_META },
-        { fileId: 'file-2', attachmentMeta: IMAGE_META },
+        { fileId: HASH_1, attachmentMeta: IMAGE_META },
+        { fileId: HASH_2, attachmentMeta: IMAGE_META },
       ],
     });
 
@@ -814,7 +821,7 @@ describe('POST /api/channels/[pageId]/messages (top-level — existing path)', (
     expect(await res.json()).toEqual({ error: "This file can't be uploaded" });
     expect(mockInsertChannelMessageWithAttachment).not.toHaveBeenCalled();
     expect(mockFindBlockedUploads).toHaveBeenCalledWith(
-      ['file-1', 'file-2'],
+      [HASH_1, HASH_2],
       expect.objectContaining({ entryPoint: 'attachment.send', details: expect.objectContaining({ targetType: 'page' }) }),
     );
   });

@@ -620,11 +620,17 @@ function emitMaterialized(
  *     every recovery sweep retry — and re-audit — the same doomed write.
  */
 async function withScreenedAttachments<
-  T extends { uiMessage?: UIMessage; role: 'user' | 'assistant' | 'system'; userId: string | null },
+  T extends {
+    uiMessage?: UIMessage;
+    role: 'user' | 'assistant' | 'system';
+    userId: string | null;
+    triggeredBy?: ConversationEventTriggeredBy;
+  },
 >(args: T): Promise<T> {
   if (!args.uiMessage?.parts?.length) return args;
   const { parts, blockedHashes } = await screenFilePartsAgainstBlocklist(args.uiMessage.parts, {
-    userId: args.userId,
+    // An assistant save carries no userId; the audit event still names whoever drove the turn.
+    userId: args.userId ?? args.triggeredBy?.userId,
   });
   if (blockedHashes.length === 0) return args;
   if (args.role === 'user') throw new ContentBlockedError(blockedHashes[0]);

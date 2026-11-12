@@ -66,6 +66,11 @@ vi.mock('@pagespace/lib/content-safety/upload-gate', () => ({
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: (...args: unknown[]) => mockAuditRequest(...args),
 }));
+// Legacy (non-hash) file ids resolve through `files.storagePath`; no such rows here.
+vi.mock('@/lib/upload/stored-content-hash', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/upload/stored-content-hash')>()),
+  loadFileStoragePaths: vi.fn(async () => new Map<string, string | null>()),
+}));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -294,15 +299,16 @@ describe('POST /api/messages/[conversationId]', () => {
     });
 
     it('refuses a send whose attachment is on the content blocklist, with a neutral 422 and no insert', async () => {
-      mockFindBlockedUploads.mockResolvedValueOnce(new Set([FILE_ID]));
+      const BLOCKED_FILE_ID = 'b'.repeat(64);
+      mockFindBlockedUploads.mockResolvedValueOnce(new Set([BLOCKED_FILE_ID]));
 
-      const res = await callRoute({ fileId: FILE_ID, attachmentMeta: imageMeta });
+      const res = await callRoute({ fileId: BLOCKED_FILE_ID, attachmentMeta: imageMeta });
 
       expect(res.status).toBe(422);
       expect(await res.json()).toEqual({ error: "This file can't be uploaded" });
       expect(mockInsertDmMessageWithAttachment).not.toHaveBeenCalled();
       expect(mockFindBlockedUploads).toHaveBeenCalledWith(
-        [FILE_ID],
+        [BLOCKED_FILE_ID],
         expect.objectContaining({
           entryPoint: 'attachment.send',
           details: { targetType: 'conversation', targetId: CONVERSATION_ID },

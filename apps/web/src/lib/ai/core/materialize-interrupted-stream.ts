@@ -200,7 +200,9 @@ export const materializeInterruptedStream = async ({
     const recovered = buildAssistantPersistencePayload(row.messageId, await recoverParts(row));
     // Content blocklist: a blocked attachment is TERMINAL here, not a failure. The
     // part is dropped and the rest of the reply is materialized, so the row settles
-    // and no later sweep retries (or re-audits) it.
+    // instead of being retried by every later sweep. The audit event is written
+    // here, before the terminal write: if that write then fails, the next sweep
+    // screens — and audits — the same part again.
     const screened = await screenFilePartsAgainstBlocklist(recovered.uiMessage.parts, { userId: row.userId });
     const payload = { ...recovered, uiMessage: { ...recovered.uiMessage, parts: screened.parts } };
     const structuredContent = payload.uiMessage.parts.length > 0

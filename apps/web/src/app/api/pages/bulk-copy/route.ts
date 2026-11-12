@@ -22,8 +22,8 @@ import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 import { assertAgentModelAllowed, orgModelPolicyErrorResponse } from '@/services/api/page-mutation-service';
 import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 import { findBlockedUploads } from '@pagespace/lib/content-safety/upload-gate';
-import { ContentBlockedError } from '@pagespace/lib/content-safety/policy';
-import { contentBlockedResponseFor } from '@/lib/upload/content-blocked-response';
+import { contentCopyRefusedResponse } from '@/lib/upload/content-blocked-response';
+import { auditUnverifiableFileReference, resolveStoredContentHash } from '@/lib/upload/stored-content-hash';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -153,10 +153,13 @@ export async function POST(request: Request) {
     });
 
     // Content blocklist: a copy attaches each source file's bytes to a new page
-    // without an upload, so it gets the upload gate. Top-level pages are checked
-    // here, before the transaction; descendants as the copy walks them.
-    const copyGate: CopyGate = { request, userId, targetDriveId };
-    await assertCopyNotBlocked(sourcePages, copyGate);
+    // without an upload, so it gets the upload gate. The whole tree is read and
+    // checked here with ONE blocklist query, before the transaction opens; the
+    // transaction then copies only the pages this screen saw.
+    const descendants = includeChildren ? await collectDescendants(sourcePages.map((p) => p.id)) : [];
+    const copyRefusal = await refuseUnsafeCopy([...sourcePages, ...descendants], { request, userId, targetDriveId });
+    if (copyRefusal) return copyRefusal;
+    const screenedIds = new Set(descendants.map((p) => p.id));
 
     let nextPosition = (lastPage?.position || 0) + 1;
     let copiedCount = 0;
@@ -240,7 +243,7 @@ export async function POST(request: Request) {
             newPageId,
             targetDriveId,
             userId,
-            copyGate
+            screenedIds
           );
           copiedCount += childCount;
         }
@@ -282,8 +285,6 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     if (isOrgLapsedError(error)) return orgLapsedResponse();
-    const blocked = contentBlockedResponseFor(error);
-    if (blocked) return blocked;
     const refused = orgModelPolicyErrorResponse(error);
     if (refused) return NextResponse.json(refused.body, { status: refused.status });
     loggers.api.error('Error bulk copying pages:', error as Error);
@@ -309,26 +310,75 @@ interface CopyGate {
   targetDriveId: string;
 }
 
+interface CopyScreenRow {
+  id: string;
+  contentHash: string | null;
+  filePath: string | null;
+}
+
 /**
- * Refuse the whole copy (ContentBlockedError → neutral 422, transaction rolled
- * back) if any of these pages carries a content hash on the blocklist. One
- * blocklist query per call; each blocked hash is audited by the gate.
+ * Every non-trashed descendant of `rootIds`, one query per tree level, read
+ * before the copy transaction opens. The `seen` set also ends the walk on a
+ * parent cycle.
  */
-async function assertCopyNotBlocked(
-  rows: ReadonlyArray<{ contentHash: string | null; filePath: string | null }>,
-  gate: CopyGate,
-): Promise<void> {
-  // A FILE page carries its hash in both columns; non-hash values are ignored by the lookup.
-  const hashes = rows.flatMap((row) => [row.contentHash, row.filePath]).filter((h): h is string => !!h);
-  if (hashes.length === 0) return;
-  const blocked = await findBlockedUploads(hashes, {
-    entryPoint: 'page.copy',
-    userId: gate.userId,
-    request: gate.request,
-    details: { driveId: gate.targetDriveId },
-  });
-  const [first] = blocked;
-  if (first) throw new ContentBlockedError(first);
+async function collectDescendants(rootIds: readonly string[]): Promise<CopyScreenRow[]> {
+  const seen = new Set(rootIds);
+  const descendants: CopyScreenRow[] = [];
+  let level = [...rootIds];
+  while (level.length > 0) {
+    // eslint-disable-next-line no-restricted-syntax -- bounded by the copied tree; mirrors the copy's own unbounded child read
+    const children: CopyScreenRow[] = await db.query.pages.findMany({
+      where: and(inArray(pages.parentId, level), eq(pages.isTrashed, false)),
+      columns: { id: true, contentHash: true, filePath: true },
+    });
+    const fresh = children.filter((child) => !seen.has(child.id));
+    for (const child of fresh) seen.add(child.id);
+    descendants.push(...fresh);
+    level = fresh.map((child) => child.id);
+  }
+  return descendants;
+}
+
+/**
+ * Refuse the whole copy (neutral 422, nothing written) when any page in it
+ *   - carries a content hash on the blocklist, or
+ *   - has a `filePath` that can't be resolved to a content hash, so its bytes
+ *     can't be checked at all (fail closed).
+ * One blocklist query for the whole tree. Blocked hashes are audited by the
+ * gate; unverifiable pages are audited here.
+ */
+async function refuseUnsafeCopy(rows: readonly CopyScreenRow[], gate: CopyGate): Promise<NextResponse | null> {
+  const hashes = new Set<string>();
+  let unverifiable = false;
+  for (const row of rows) {
+    // `filePath` is what the file readers serve from, in bare or legacy
+    // `files/<hash>/original` form. `contentHash` is checked too when it is one.
+    const fromPath = row.filePath ? resolveStoredContentHash(row.filePath) : null;
+    const fromColumn = row.contentHash ? resolveStoredContentHash(row.contentHash) : null;
+    if (fromPath) hashes.add(fromPath);
+    if (fromColumn) hashes.add(fromColumn);
+    if (row.filePath && !fromPath) {
+      unverifiable = true;
+      auditUnverifiableFileReference({
+        request: gate.request,
+        userId: gate.userId,
+        entryPoint: 'page.copy',
+        resourceType: 'page',
+        resourceId: row.id,
+        details: { driveId: gate.targetDriveId },
+      });
+    }
+  }
+
+  const blocked = hashes.size === 0
+    ? hashes
+    : await findBlockedUploads([...hashes], {
+        entryPoint: 'page.copy',
+        userId: gate.userId,
+        request: gate.request,
+        details: { driveId: gate.targetDriveId },
+      });
+  return blocked.size > 0 || unverifiable ? contentCopyRefusedResponse() : null;
 }
 
 // Recursively copy children
@@ -338,17 +388,18 @@ async function copyChildrenRecursively(
   newParentId: string,
   targetDriveId: string,
   userId: string,
-  copyGate: CopyGate
+  screenedIds: ReadonlySet<string>
 ): Promise<number> {
   // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
-  const children = await tx.query.pages.findMany({
+  const allChildren = await tx.query.pages.findMany({
     where: and(
       eq(pages.parentId, sourceParentId),
       eq(pages.isTrashed, false)
     ),
   });
-
-  await assertCopyNotBlocked(children, copyGate);
+  // Only pages the blocklist screen saw are copied: one created or moved into
+  // the tree after the screen ran was never checked, so it is left out.
+  const children = allChildren.filter((child) => screenedIds.has(child.id));
 
   let copiedCount = 0;
 
@@ -416,7 +467,7 @@ async function copyChildrenRecursively(
       newChildId,
       targetDriveId,
       userId,
-      copyGate
+      screenedIds
     );
     copiedCount += grandchildCount;
   }

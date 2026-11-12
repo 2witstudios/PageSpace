@@ -118,6 +118,12 @@ vi.mock('@/lib/repositories/conversation-rev', () => ({
   })),
 }));
 
+const mockUploadChatAttachment = vi.fn();
+vi.mock('@/lib/upload/chat-attachment-storage', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/upload/chat-attachment-storage')>()),
+  uploadChatAttachment: (...args: unknown[]) => mockUploadChatAttachment(...args),
+}));
+
 const mockFindBlockedUploads = vi.fn();
 vi.mock('@pagespace/lib/content-safety/upload-gate', () => ({
   findBlockedUploads: (...args: unknown[]) => mockFindBlockedUploads(...args),
@@ -431,6 +437,37 @@ describe('message saves — content blocklist screen', () => {
     ).rejects.toBeInstanceOf(ContentBlockedError);
 
     expect(db.transaction).not.toHaveBeenCalled();
+  });
+
+  it('writes no attachment bytes when a USER message carries a blocked new upload', async () => {
+    // sha256('hello world')
+    const HELLO_WORLD_SHA256 = 'b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9';
+    mockFindBlockedUploads.mockResolvedValue(new Set([HELLO_WORLD_SHA256]));
+    const uiMessage = {
+      id: 'msg-1',
+      role: 'user',
+      parts: [{ type: 'file', url: 'data:image/png;base64,aGVsbG8gd29ybGQ=', mediaType: 'image/png' }],
+    } as unknown as UIMessage;
+
+    await expect(
+      messageRepository.savePageMessage({ ...baseArgs, userId: 'user-1', uiMessage }),
+    ).rejects.toBeInstanceOf(ContentBlockedError);
+
+    expect(mockUploadChatAttachment).not.toHaveBeenCalled();
+    expect(db.transaction).not.toHaveBeenCalled();
+  });
+
+  it('attributes a dropped ASSISTANT part to the user who drove the turn', async () => {
+    mockFindBlockedUploads.mockResolvedValue(new Set([BLOCKED_HASH]));
+
+    await messageRepository.savePageMessage({
+      ...baseArgs,
+      role: 'assistant',
+      triggeredBy: { userId: 'user-7', browserSessionId: 'session-1' },
+      uiMessage: { ...withAttachment('msg-1'), role: 'assistant' } as UIMessage,
+    });
+
+    expect(mockFindBlockedUploads).toHaveBeenCalledWith([BLOCKED_HASH], { entryPoint: 'chat-attachment', userId: 'user-7' });
   });
 
   it('saves an ASSISTANT message without the blocked part instead of failing the terminal write', async () => {

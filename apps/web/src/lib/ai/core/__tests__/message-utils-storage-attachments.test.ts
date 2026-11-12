@@ -214,14 +214,13 @@ describe('screenFilePartsAgainstBlocklist', () => {
     expect(result).toEqual({ parts, blockedHashes: [] });
   });
 
-  it('given a blocked new upload, should drop that part, report its hash, and write nothing', async () => {
+  it('given a blocked new upload, should drop that part and report its hash', async () => {
     mockFindBlockedUploads.mockResolvedValue(new Set([HELLO_WORLD_SHA256]));
 
     const result = await screenFilePartsAgainstBlocklist([text, newUpload, echoed]);
 
     expect(result.parts).toEqual([text, echoed]);
     expect(result.blockedHashes).toEqual([HELLO_WORLD_SHA256]);
-    expect(mockUploadChatAttachment).not.toHaveBeenCalled();
   });
 
   it('given a blocked ECHOED key, should drop it — a reference to stored bytes is checked like the bytes', async () => {
