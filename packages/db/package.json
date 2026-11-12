@@ -315,6 +315,10 @@
       "types": "./dist/schema/custom-domains.d.ts",
       "default": "./dist/schema/custom-domains.js"
     },
+    "./schema/content-safety": {
+      "types": "./dist/schema/content-safety.d.ts",
+      "default": "./dist/schema/content-safety.js"
+    },
     "./schema/data-subject-requests": {
       "types": "./dist/schema/data-subject-requests.d.ts",
       "default": "./dist/schema/data-subject-requests.js"
