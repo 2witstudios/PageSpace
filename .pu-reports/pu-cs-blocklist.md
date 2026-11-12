@@ -38,7 +38,7 @@ Bytes entering storage:
 | 3 | Channel + DM attachment presign | `apps/web/src/lib/upload/attachment-direct.ts:92` | 422 before the storage probe, slot or presigned URL |
 | 4 | Channel + DM attachment complete | `apps/web/src/lib/upload/attachment-direct.ts:187` | 422 before processor verify, slot released, no `files` row |
 | 5 | Server-side image writer (AI image generation) | `apps/web/src/lib/upload/create-file-page.ts:260` | throws `ContentBlockedError` before `putObject` |
-| 6 | AI chat attachments — new uploads | `apps/web/src/lib/repositories/message-repository.ts:661`, `:733` | see below |
+| 6 | AI chat attachments — new uploads | `apps/web/src/lib/repositories/message-repository.ts:667`, `:739` | see below |
 
 An existing hash attached to something new, with no upload (added after review):
 
@@ -65,7 +65,7 @@ Notes:
     completions (`api/v1/chat/completions/route.ts:859`) return the neutral 422; the turn stops before the model
     sees the file.
   - An **assistant or system** message is saved without the blocked part rather than failed.
-  - The interrupted-stream materializer (`apps/web/src/lib/ai/core/materialize-interrupted-stream.ts:204`)
+  - The interrupted-stream materializer (`apps/web/src/lib/ai/core/materialize-interrupted-stream.ts:206`)
     treats a block as terminal: it drops the part, materializes the rest and settles the row instead of being
     retried by every sweep. The audit event is written before the terminal write, so if that write fails the
     next sweep audits the same part once more.
@@ -74,7 +74,9 @@ Notes:
 - **8** reads the whole tree before the transaction (`collectDescendants`, `route.ts:324`: one query per tree
   level, three columns), then makes **one** blocklist query for every hash in it. No lookup runs while the
   copy holds its connection. The transaction copies only the descendants that screen saw (`route.ts:402`), so a
-  page created or moved into the tree after the screen is left out rather than copied unchecked.
+  page created or moved into the tree after the screen is left out rather than copied unchecked. The
+  transaction re-reads each screened page, so the screen relies on `filePath` never changing on an existing
+  page; no writer changes it today (only the two create paths set it).
   - One blocked or unverifiable file anywhere in the tree refuses the whole copy. The response does not name
     the page: that would point at the blocked file. A user who needs to know which page can copy the children
     one at a time; support can read the audit event.
@@ -104,15 +106,17 @@ that is the column that decides whether a page is verifiable.
 
 ### Needs a production check
 
-If either count is above zero, those rows can no longer be copied (first query) or attached to a new message
-(second query) until they are rewritten to a bare hash. Run both before this ships:
+If either `unverifiable_*` count is above zero, those rows can no longer be copied (first query) or attached
+to a new message (second query) until they are rewritten to a bare hash. The `legacy_form_still_checked`
+counts are informational: those rows keep working. The first query slightly overcounts: it includes a
+whitespace-padded hash, which the gate trims and accepts. Run both before this ships:
 
 ```sql
 -- FILE pages whose filePath is not a bare sha256. Legacy-form rows are still checked; the rest are refused.
 select count(*) filter (where "filePath" ~* '^files/[0-9a-f]{64}/original$') as legacy_form_still_checked,
        count(*) filter (where "filePath" !~* '^files/[0-9a-f]{64}/original$') as unverifiable_copy_refused
 from pages
-where "filePath" is not null and "filePath" !~* '^[0-9a-f]{64}$';
+where "filePath" is not null and "filePath" <> '' and "filePath" !~* '^[0-9a-f]{64}$';
 
 -- files rows whose id is not a bare sha256, split the same way by storagePath.
 select count(*) filter (where coalesce(nullif("storagePath", ''), id) ~* '^(files/[0-9a-f]{64}/original|[0-9a-f]{64})$') as legacy_form_still_checked,
@@ -187,12 +191,12 @@ written only by the web app.
    1. **Write.** A message saved without a `uiMessage` stores its `content` string verbatim
       (`apps/web/src/lib/repositories/message-repository.ts:135`). The blocklist screen
       (`message-repository.ts:667`, `:739`) only looks at `uiMessage.parts`, so it never sees this text.
-   2. **Reach.** `POST /api/ai/page-agents/consult` saves the caller's `question` that way
+   2. **Reach.** `POST /api/ai/page-agents/consult` saves the caller's `question` that way when no `context` is sent
       (`apps/web/src/app/api/ai/page-agents/consult/route.ts:560`). So do the three message-edit PATCH routes
       listed above, through `processMessageContentUpdate` (`message-repository.ts`), which returns the client's
       `newContent` verbatim when the existing content is plain text, and v1 assistant replies.
    3. **Payload.** The attacker sends, as ordinary text,
-      `{"textParts":["x"],"fileParts":[{"storageKey":"files/<hash>/original","mediaType":"image/png"}],"partsOrder":["text","file"]}`.
+      `{"textParts":["x"],"fileParts":[{"storageKey":"files/<hash>/original","mediaType":"image/png"}],"partsOrder":[{"type":"text"},{"type":"file"}]}`.
    4. **Read.** `parseStructuredContent` (`apps/web/src/lib/ai/core/message-utils.ts:391`) accepts any JSON
       with `textParts` and `partsOrder` as our own attachment envelope. It cannot tell an envelope the server
       wrote from one a user typed.
@@ -275,6 +279,7 @@ Second review (at `b27f8b0ce`):
 | nit — assistant-side drop audited with no user | Fixed: falls back to `triggeredBy.userId`. |
 | nit — vacuous "no upload" assertion | Fixed: removed; `savePageMessage` now has a test that a blocked `data:` upload writes no bytes. |
 | nit — materializer comment overclaimed "no re-audit" | Fixed: comment and this report say when a second audit can happen. |
+| third review, major — a page selected together with its ancestor was dropped from the ancestor's copy (regression from the tree screen) | Fixed: the screened set includes the selected pages; test added. |
 | nit — refused copy said "can't be uploaded" and named no page | Wording fixed (`One or more files can't be copied`). Still names no page, deliberately; see note on entry point 8. |
 
 ## Commands and results

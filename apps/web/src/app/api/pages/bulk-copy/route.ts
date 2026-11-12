@@ -157,9 +157,12 @@ export async function POST(request: Request) {
     // checked here with ONE blocklist query, before the transaction opens; the
     // transaction then copies only the pages this screen saw.
     const descendants = includeChildren ? await collectDescendants(sourcePages.map((p) => p.id)) : [];
-    const copyRefusal = await refuseUnsafeCopy([...sourcePages, ...descendants], { request, userId, targetDriveId });
+    const screened = [...sourcePages, ...descendants];
+    const copyRefusal = await refuseUnsafeCopy(screened, { request, userId, targetDriveId });
     if (copyRefusal) return copyRefusal;
-    const screenedIds = new Set(descendants.map((p) => p.id));
+    // Includes the selected pages themselves: one selected together with its
+    // ancestor is also a child in that ancestor's copy.
+    const screenedIds = new Set(screened.map((p) => p.id));
 
     let nextPosition = (lastPage?.position || 0) + 1;
     let copiedCount = 0;

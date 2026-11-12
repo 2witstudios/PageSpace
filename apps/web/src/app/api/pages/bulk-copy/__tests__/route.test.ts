@@ -863,6 +863,18 @@ describe('POST /api/pages/bulk-copy — content blocklist', () => {
     expect(txInsertValues).toHaveBeenCalledTimes(1);
   });
 
+  it('still copies a selected page inside its selected ancestor', async () => {
+    // page-1 and its child page-2 are both selected: page-2 is copied under
+    // page-1's copy and once more at the top level.
+    mockTree([mockSourcePage({ id: 'page-1' }), mockSourcePage({ id: 'page-2' })], [{ id: 'page-2', contentHash: null, filePath: null }]);
+    txQueryPagesFindMany.mockResolvedValueOnce([mockSourcePage({ id: 'page-2' })]).mockResolvedValue([]);
+
+    const response = await POST(createRequest({ ...validBody, pageIds: ['page-1', 'page-2'] }));
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).copiedCount).toBe(3);
+  });
+
   it('does not query the blocklist when no copied page carries a hash', async () => {
     await POST(createRequest(validBody));
 
