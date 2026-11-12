@@ -180,7 +180,7 @@ describe('nextGlobalTakedownStep', () => {
   describe('re-sweep', () => {
     const finished = ['block', 'unpublish_public', 'record_references', 'preserve', 'delete_uploads', 'delete_public', 'record_ai_references'].map(ok);
 
-    it('repeats preserve and both deletes after a re-sweep marker, and nothing else', () => {
+    it('takes the public copies off the web again before anything else, then repeats preserve and both deletes, and nothing else', () => {
       const steps = [...finished, ok(RESWEEP_MARKER)];
       const order: string[] = [];
       for (;;) {
@@ -189,11 +189,12 @@ describe('nextGlobalTakedownStep', () => {
         order.push(decision.step);
         steps.push(ok(decision.step));
       }
-      expect(order).toEqual(['preserve', 'delete_uploads', 'delete_public']);
+      // A publish in flight when the hash was blocked can have put a public copy back.
+      expect(order).toEqual(['unpublish_public', 'preserve', 'delete_uploads', 'delete_public']);
     });
 
-    it('still halts a CSAM re-sweep that has no evidence storage', () => {
-      const steps = [...finished, ok(RESWEEP_MARKER)];
+    it('still halts a CSAM re-sweep that has no evidence storage, once the public copies are off again', () => {
+      const steps = [...finished, ok(RESWEEP_MARKER), ok('unpublish_public')];
       expect(nextGlobalTakedownStep(input({ steps, evidenceConfigured: false }))).toEqual({
         kind: 'halt',
         reason: 'awaiting_evidence',

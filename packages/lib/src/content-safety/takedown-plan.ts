@@ -58,12 +58,18 @@ export type GlobalTakedownStep = (typeof GLOBAL_TAKEDOWN_STEPS)[number];
 /**
  * Appended to the step log to ask for another pass over storage. A presigned
  * PUT issued before the block stays valid for its TTL, so bytes can land at a
- * blocked key AFTER the delete ran; a re-sweep preserves and deletes again.
+ * blocked key AFTER the delete ran; a re-sweep takes public copies down,
+ * preserves and deletes again.
  */
 export const RESWEEP_MARKER = 'resweep';
 
-/** The steps a re-sweep repeats. Blocking, recording and suspending are not storage passes. */
-const RESWEEP_STEPS: ReadonlySet<GlobalTakedownStep> = new Set(['preserve', 'delete_uploads', 'delete_public']);
+/**
+ * The steps a re-sweep repeats, in plan order. Blocking, recording and
+ * suspending are not storage passes. Taking the public copies off the web comes
+ * first: a publish already in flight when the hash was blocked can have put a
+ * public copy back, and it must not stay live while the rest of the pass waits.
+ */
+const RESWEEP_STEPS: ReadonlySet<GlobalTakedownStep> = new Set(['unpublish_public', 'preserve', 'delete_uploads', 'delete_public']);
 
 export interface GlobalTakedownPlanInput {
   steps: readonly ContentCaseStep[];
