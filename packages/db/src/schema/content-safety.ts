@@ -78,8 +78,10 @@ export type ContentCaseSnapshot = {
     /** True when a list hit its cap and is incomplete. */
     truncated: boolean;
     /**
-     * Lookup only: the AI-message search could not finish, so `aiMessageIds` (and their authors) may be missing.
-     * A takedown never stores this — its AI-message step fails and is retried instead.
+     * The quick AI-message search could not finish, so `aiMessageIds` (and their authors) may be missing.
+     * A takedown stores it with the references it records early (`record_references`), and drops it when the
+     * mandatory search (`record_ai_references`, which fails and is retried rather than set this) rewrites the
+     * references. So a finished case never carries it; a case still waiting at preservation can.
      */
     aiMessageScanFailed?: boolean;
   };
