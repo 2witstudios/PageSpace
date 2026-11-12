@@ -9,7 +9,7 @@
  *  - reconcileAllPublishedVisibility: the sweep that retries anything a failed object-store call left behind.
  */
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray, isNotNull, ne } from '@pagespace/db/operators';
+import { and, eq, inArray, isNotNull, ne, sql } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { contentSiteHolds } from '@pagespace/db/schema/content-safety';
@@ -237,6 +237,11 @@ export type SiteHoldHolder = { caseId: string } | { userId: string };
 
 const holderKey = (holder: SiteHoldHolder): string => ('caseId' in holder ? `case:${holder.caseId}` : `user:${holder.userId}`);
 
+/** Serialises every change to one drive's holds: a hold being placed, and a hold being counted and lifted. */
+async function lockDriveHolds(tx: Tx, driveId: string): Promise<void> {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`content_site_holds:${driveId}`}, 0))`);
+}
+
 const failedPrefixes = (outcome: DriveSitesOutcome) => outcome.prefixes.filter((p) => p.action === 'failed');
 
 /** Move every prefix of a drive to where `visible` says it belongs. Throws if any prefix could not be moved. */
@@ -270,17 +275,22 @@ export async function parkDriveSites(
   executor: Executor = db,
 ): Promise<DriveSitesOutcome> {
   const { holder } = input;
-  await executor
-    .insert(contentSiteHolds)
-    .values({
-      driveId: input.driveId,
-      holder: holderKey(holder),
-      source: 'caseId' in holder ? 'takedown' : 'user_suspension',
-      caseId: 'caseId' in holder ? holder.caseId : null,
-      userId: 'userId' in holder ? holder.userId : null,
-      createdBy: input.createdBy ?? null,
-    })
-    .onConflictDoNothing({ target: [contentSiteHolds.driveId, contentSiteHolds.holder] });
+  // Under the drive's hold lock, so a release that is counting the holds either
+  // sees this one or has finished (and restored) before it is written.
+  await executor.transaction(async (tx) => {
+    await lockDriveHolds(tx, input.driveId);
+    await tx
+      .insert(contentSiteHolds)
+      .values({
+        driveId: input.driveId,
+        holder: holderKey(holder),
+        source: 'caseId' in holder ? 'takedown' : 'user_suspension',
+        caseId: 'caseId' in holder ? holder.caseId : null,
+        userId: 'userId' in holder ? holder.userId : null,
+        createdBy: input.createdBy ?? null,
+      })
+      .onConflictDoNothing({ target: [contentSiteHolds.driveId, contentSiteHolds.holder] });
+  });
   return moveDriveSites(input.driveId, 'park', store, executor);
 }
 
@@ -302,14 +312,21 @@ export async function releaseDriveHold(
   executor: Executor = db,
 ): Promise<ReleaseHoldOutcome> {
   const key = holderKey(input.holder);
-  const holds = await executor.select({ holder: contentSiteHolds.holder }).from(contentSiteHolds).where(eq(contentSiteHolds.driveId, input.driveId));
-  if (!holds.some((hold) => hold.holder === key)) {
-    return { driveId: input.driveId, prefixes: [], released: false, remainingHolds: holds.length };
-  }
-  const remainingHolds = holds.length - 1;
-  const outcome = remainingHolds === 0 ? await moveDriveSites(input.driveId, 'restore', store, executor) : { driveId: input.driveId, prefixes: [] };
-  await executor.delete(contentSiteHolds).where(and(eq(contentSiteHolds.driveId, input.driveId), eq(contentSiteHolds.holder, key)));
-  return { ...outcome, released: true, remainingHolds };
+  // Count and delete in ONE transaction, under the drive's hold lock. Apart, two
+  // holders lifting the last two holds at once would each count two, each leave
+  // "one remaining", and the drive would end with no hold and its sites parked.
+  return executor.transaction(async (tx) => {
+    await lockDriveHolds(tx, input.driveId);
+    const holds = await tx.select({ holder: contentSiteHolds.holder }).from(contentSiteHolds).where(eq(contentSiteHolds.driveId, input.driveId));
+    if (!holds.some((hold) => hold.holder === key)) {
+      return { driveId: input.driveId, prefixes: [], released: false, remainingHolds: holds.length };
+    }
+    const remainingHolds = holds.length - 1;
+    // A failed restore throws and rolls the delete back: the drive stays held.
+    const outcome = remainingHolds === 0 ? await moveDriveSites(input.driveId, 'restore', store, tx) : { driveId: input.driveId, prefixes: [] };
+    await tx.delete(contentSiteHolds).where(and(eq(contentSiteHolds.driveId, input.driveId), eq(contentSiteHolds.holder, key)));
+    return { ...outcome, released: true, remainingHolds };
+  });
 }
 
 export interface UserSitesOutcome {

@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { factories } from '@pagespace/db/test/factories';
 import { db, pool } from '@pagespace/db/db';
-import { eq, inArray } from '@pagespace/db/operators';
+import { eq, inArray, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { contentSiteHolds } from '@pagespace/db/schema/content-safety';
@@ -228,6 +228,26 @@ describe('releaseDriveHold', () => {
     const second = await releaseDriveHold({ driveId: w.personalDrive, holder: { caseId: 'case-2' } }, w.store);
     expect(second).toMatchObject({ released: true, remainingHolds: 0 });
     expect(publicKeys(w.personalSite)).toHaveLength(2);
+  });
+
+  it('restores the sites when the last two holds are lifted at the same moment: one of the two sees it is last', async () => {
+    await parkDriveSites({ driveId: w.personalDrive, holder: { caseId: 'case-1' } }, w.store);
+    await parkDriveSites({ driveId: w.personalDrive, holder: { caseId: 'case-2' } }, w.store);
+    // Open pool connections first, so the two releases really do run side by side.
+    await Promise.all(Array.from({ length: 4 }, () => db.execute(sql`select pg_sleep(0.05)`)));
+
+    const outcomes = await Promise.all([
+      releaseDriveHold({ driveId: w.personalDrive, holder: { caseId: 'case-1' } }, w.store),
+      releaseDriveHold({ driveId: w.personalDrive, holder: { caseId: 'case-2' } }, w.store),
+    ]);
+
+    // Counted and deleted apart, both releases count two holds, both leave "one
+    // remaining", and the drive ends up with no hold and its sites still parked.
+    expect(outcomes.map((o) => o.remainingHolds).sort()).toEqual([0, 1]);
+    const holds = await db.select().from(contentSiteHolds).where(eq(contentSiteHolds.driveId, w.personalDrive));
+    expect(holds).toEqual([]);
+    expect(publicKeys(w.personalSite)).toHaveLength(2);
+    expect(parkedKeys(w.personalSite)).toEqual([]);
   });
 
   it('changes nothing for a holder that has no hold on the drive', async () => {
