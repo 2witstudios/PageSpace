@@ -49,3 +49,16 @@ export function describeTakedownResult(result: TakedownResponse): { message: str
   if (result.restoredDriveIds) return { ok: true, message: `Restored the published sites of ${result.restoredDriveIds.length} drive(s).` };
   return { ok: true, message: `Done.${caseRef}` };
 }
+
+/** Close a case under review: `actioned` once a takedown has been run for it, `dismissed` for no violation. */
+export async function closeReportedCase(input: { caseId: string; outcome: 'dismissed' | 'actioned'; note: string }): Promise<void> {
+  const res = await fetchWithAuth('/api/admin/content/reports', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(data?.error ?? `Request failed (${res.status})`);
+  }
+}

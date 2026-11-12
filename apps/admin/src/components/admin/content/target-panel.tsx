@@ -64,9 +64,10 @@ function IdList({ ids }: { ids: string[] }) {
  * page. An admin has to be able to act on suspected CSAM without seeing it —
  * IDs, hashes and URLs appear here as inert monospace text and nothing else.
  */
-export function TargetPanel() {
-  const [input, setInput] = useState('');
-  const [query, setQuery] = useState('');
+export function TargetPanel({ initialQuery = '' }: { initialQuery?: string } = {}) {
+  // `initialQuery`: a reported case's target, sent here from the Reports tab to act on it.
+  const [input, setInput] = useState(initialQuery);
+  const [query, setQuery] = useState(initialQuery);
   const url = query ? `/api/admin/content/resolve?q=${encodeURIComponent(query)}` : null;
   const resolved = useAdminQuery<ResolveResponse>(url);
   const { error, refetch } = resolved;
