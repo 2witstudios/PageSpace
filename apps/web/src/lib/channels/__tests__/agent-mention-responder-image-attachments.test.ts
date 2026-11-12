@@ -99,6 +99,11 @@ vi.mock('@pagespace/lib/permissions/file-access', () => ({
   canUserAccessFile: (...args: unknown[]) => mockCanUserAccessFile(...args),
 }));
 
+const mockIsHashBlocked = vi.fn();
+vi.mock('@pagespace/lib/content-safety/blocklist', () => ({
+  isHashBlocked: (...args: unknown[]) => mockIsHashBlocked(...args),
+}));
+
 const mockGeneratePresignedUrl = vi.fn();
 vi.mock('@/lib/presigned-url', () => ({
   generatePresignedUrl: (...args: unknown[]) => mockGeneratePresignedUrl(...args),
@@ -164,7 +169,25 @@ describe('triggerMentionedAgentResponses — image attachment plumbing', () => {
     mockAskAgentExecute.mockResolvedValue({ success: true, response: 'Reply' });
     mockSendChannelExecute.mockResolvedValue({ success: true });
     mockCanUserAccessFile.mockResolvedValue(true);
+    mockIsHashBlocked.mockResolvedValue(false);
     mockGeneratePresignedUrl.mockResolvedValue('https://example.com/signed/screenshot.png');
+  });
+
+  it('given an image attachment that was taken down, signs no URL for it and passes the agent no image', async () => {
+    mockIsHashBlocked.mockResolvedValue(true);
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Vision Agent', enabledTools: ['send_channel_message'], aiProvider: 'anthropic', aiModel: 'claude-sonnet-4.5' },
+    ]);
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      content: '@[Vision Agent](agent-1:page) look at this',
+    });
+
+    expect(mockIsHashBlocked).toHaveBeenCalledWith(STORED_CONTENT_HASH);
+    expect(mockGeneratePresignedUrl).not.toHaveBeenCalled();
+    expect(mockAskAgentExecute).toHaveBeenCalledTimes(1);
+    expect(mockAskAgentExecute.mock.calls[0][0].imageAttachments ?? []).toEqual([]);
   });
 
   it('given an eligible agent with vision and a recent image attachment, passes resolved imageAttachments to ask_agent', async () => {

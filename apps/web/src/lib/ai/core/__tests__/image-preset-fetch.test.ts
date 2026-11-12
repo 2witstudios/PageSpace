@@ -114,4 +114,38 @@ describe('fetchCachedImagePreset', () => {
 
     expect(result).toBeNull();
   });
+
+  describe('content that was taken down', () => {
+    const fetchBytes = async () => JPEG_BYTES;
+
+    it('given a blocked hash, should return null without reading any bytes — nothing is sent to a model', async () => {
+      let reads = 0;
+      const result = await fetchCachedImagePreset('a'.repeat(64), 'image/png', {
+        fetchBytes: async () => {
+          reads += 1;
+          return JPEG_BYTES;
+        },
+        isBlocked: async () => true,
+      });
+
+      expect(result).toBeNull();
+      expect(reads).toBe(0);
+    });
+
+    it('given the blocklist cannot be read, should treat the image as unavailable rather than serve it', async () => {
+      const result = await fetchCachedImagePreset('a'.repeat(64), 'image/png', {
+        fetchBytes,
+        isBlocked: async () => {
+          throw new Error('db down');
+        },
+      });
+
+      expect(result).toBeNull();
+    });
+
+    it('given a hash that is not blocked, should serve it as before', async () => {
+      const result = await fetchCachedImagePreset('a'.repeat(64), 'image/png', { fetchBytes, isBlocked: async () => false });
+      expect(result?.preset).toBe('ai-vision');
+    });
+  });
 });

@@ -28,7 +28,8 @@ export interface ResolvedTarget {
   block: { category: ContentBlockCategory; caseId: string | null; createdAt: string } | null;
   page: { id: string; driveId: string; type: string; mimeType: string | null; isPublished: boolean; isTrashed: boolean } | null;
   drive: { id: string; ownerId: string; orgId: string | null; publishes: boolean; sitesHeld: boolean } | null;
-  user: { id: string; suspended: boolean; hasUploadedAvatar: boolean } | null;
+  /** `hasAvatar`: a profile image is set. `hasUploadedAvatar`: it is stored by us rather than an external URL. */
+  user: { id: string; suspended: boolean; hasAvatar: boolean; hasUploadedAvatar: boolean } | null;
   /** Everything referencing the hash. Null when the target has no content hash. */
   references: ContentReferences | null;
 }
@@ -53,7 +54,13 @@ export function isUploadedAvatar(image: string | null | undefined): boolean {
 
 /** The same normalisation `buildPublishedKey` applies to a request path. */
 function publishedPathOf(pathname: string): string {
-  return decodeURIComponent(pathname)
+  let decoded = pathname;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    // A malformed escape is not a path we published; match it as typed.
+  }
+  return decoded
     .toLowerCase()
     .split('/')
     .filter((segment) => segment !== '' && segment !== '.' && segment !== '..' && segment !== 'index.html')
@@ -104,7 +111,9 @@ async function loadUser(userId: string): Promise<ResolvedTarget['user']> {
     .from(users)
     .where(eq(users.id, userId))
     .limit(1);
-  return row ? { id: row.id, suspended: row.suspendedAt !== null, hasUploadedAvatar: isUploadedAvatar(row.image) } : null;
+  return row
+    ? { id: row.id, suspended: row.suspendedAt !== null, hasAvatar: Boolean(row.image), hasUploadedAvatar: isUploadedAvatar(row.image) }
+    : null;
 }
 
 type Partial_ = Pick<ResolvedTarget, 'targetType' | 'targetId'> & Partial<Pick<ResolvedTarget, 'contentHash' | 'page' | 'drive' | 'user'>>;

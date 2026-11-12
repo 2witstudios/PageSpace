@@ -155,20 +155,81 @@ describe('deleteFromPublish', () => {
   });
 });
 
-describe('hasAnyObjects', () => {
-  it('sees derived objects even after both originals are gone', async () => {
+describe('quarantinePublic', () => {
+  it('moves the public asset and its derived copies out of the public prefix, losing nothing', async () => {
+    const moved = await createTakedownStorage().quarantinePublic(HASH);
+
+    expect(moved).toBe(2);
+    expect(s3.keys(PUBLISH)).toEqual([
+      `assets/${OTHER}`,
+      `published/site/index.html`,
+      `quarantine/assets/${HASH}`,
+      `quarantine/assets/cache/${HASH}/thumbnail.webp`,
+    ]);
+    expect(new TextDecoder().decode(s3.bucket(PUBLISH).get(`quarantine/assets/${HASH}`)!.body)).toBe('original-bytes');
+  });
+
+  it('never moves anything under suspended/, where the site reconciler would restore it', async () => {
+    await createTakedownStorage().quarantinePublic(HASH);
+    expect(s3.keys(PUBLISH).some((key) => key.startsWith('suspended/'))).toBe(false);
+  });
+
+  it('is a no-op the second time, and when publishing is not configured', async () => {
+    const storage = createTakedownStorage();
+    await storage.quarantinePublic(HASH);
+    expect(await storage.quarantinePublic(HASH)).toBe(0);
+
+    vi.stubEnv('PUBLISH_BUCKET', '');
+    expect(await createTakedownStorage().quarantinePublic(OTHER)).toBe(0);
+  });
+
+  it('leaves the public object in place when the copy fails', async () => {
+    s3.failOn = { match: 'CopyObjectCommand', error: new Error('copy failed') };
+    await expect(createTakedownStorage().quarantinePublic(HASH)).rejects.toThrow('copy failed');
+    expect(s3.has(PUBLISH, `assets/${HASH}`)).toBe(true);
+  });
+
+  it('is found as the original afterwards, and can still be preserved and deleted', async () => {
     const storage = createTakedownStorage();
     s3.bucket(UPLOADS).delete(`files/${HASH}/original`);
-    s3.bucket(UPLOADS).delete(`files/${HASH}/original.meta.json`);
     s3.bucket(UPLOADS).delete(`chat-attachments/${HASH}/original`);
-    s3.bucket(PUBLISH).delete(`assets/${HASH}`);
-    expect(await storage.hasAnyObjects(HASH)).toBe(true);
+    await storage.quarantinePublic(HASH);
 
-    s3.bucket(UPLOADS).delete(`cache/${HASH}/thumbnail.webp`);
-    s3.bucket(UPLOADS).delete(`cache/${HASH}/extracted.txt`);
-    expect(await storage.hasAnyObjects(HASH)).toBe(true);
+    const source = await storage.findOriginal(HASH);
+    expect(source).toMatchObject({ store: 'publish', key: `quarantine/assets/${HASH}` });
+    await storage.copyToEvidence(source!, 'cases/c/x/original');
+    expect(await storage.headEvidence('cases/c/x/original')).toEqual({ size: 'original-bytes'.length });
 
-    s3.bucket(PUBLISH).delete(`assets/cache/${HASH}/thumbnail.webp`);
-    expect(await storage.hasAnyObjects(HASH)).toBe(false);
+    expect(await storage.deleteFromPublish(HASH)).toBe(2);
+    expect(s3.keys(PUBLISH)).toEqual([`assets/${OTHER}`, `published/site/index.html`]);
+  });
+});
+
+describe('listObjects', () => {
+  it('lists every object for the hash in both buckets, with sizes, and nothing of another hash', async () => {
+    const objects = await createTakedownStorage().listObjects(HASH);
+
+    expect(objects.map((o) => `${o.store}:${o.key}`).sort()).toEqual(
+      [
+        `uploads:files/${HASH}/original`,
+        `uploads:files/${HASH}/original.meta.json`,
+        `uploads:cache/${HASH}/thumbnail.webp`,
+        `uploads:cache/${HASH}/extracted.txt`,
+        `uploads:chat-attachments/${HASH}/original`,
+        `publish:assets/${HASH}`,
+        `publish:assets/cache/${HASH}/thumbnail.webp`,
+      ].sort(),
+    );
+    expect(objects.find((o) => o.key === `cache/${HASH}/thumbnail.webp`)?.size).toBe('thumb'.length);
+  });
+
+  it('includes quarantined objects and is empty once everything is deleted', async () => {
+    const storage = createTakedownStorage();
+    await storage.quarantinePublic(HASH);
+    expect((await storage.listObjects(HASH)).some((o) => o.key === `quarantine/assets/${HASH}`)).toBe(true);
+
+    await storage.deleteFromUploads(HASH);
+    await storage.deleteFromPublish(HASH);
+    expect(await storage.listObjects(HASH)).toEqual([]);
   });
 });

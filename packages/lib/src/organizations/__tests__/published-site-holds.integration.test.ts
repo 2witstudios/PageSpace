@@ -116,8 +116,15 @@ beforeEach(async () => {
   const personalDrive = await mkDrive(owner, { publishSubdomain: personalSite });
   await db.insert(customDomains).values({ driveId: personalDrive, hostname: personalDomain });
   const sharedOrgDrive = await mkDrive(owner, { orgId, orgVisibility: 'OPEN', publishSubdomain: sharedOrgSite });
-  await db.insert(driveMembers).values({ driveId: sharedOrgDrive, userId: colleague, role: 'MEMBER' });
+  await db.insert(driveMembers).values({ driveId: sharedOrgDrive, userId: colleague, role: 'MEMBER', acceptedAt: new Date() });
   const soloOrgDrive = await mkDrive(owner, { orgId, orgVisibility: 'OPEN', publishSubdomain: soloOrgSite });
+  // Neither of these makes the drive shared: a pending invitation and a guest (a redeemed page link) are not members.
+  const invitee = await mkUser();
+  const guest = await mkUser();
+  await db.insert(driveMembers).values([
+    { driveId: soloOrgDrive, userId: invitee, role: 'MEMBER', acceptedAt: null },
+    { driveId: soloOrgDrive, userId: guest, role: 'GUEST', acceptedAt: new Date() },
+  ]);
   const unpublishedDrive = await mkDrive(owner, {});
 
   const store = new MemoryStore();
@@ -183,6 +190,17 @@ describe('parkDriveSites', () => {
     await parkDriveSites({ driveId: w.personalDrive, source: 'takedown' }, w.store);
     expect(publicKeys(w.personalDomain)).toEqual([]);
   });
+
+  it('is re-parked by the sweep if a publish slipped an object in after the move', async () => {
+    await parkDriveSites({ driveId: w.personalDrive, source: 'takedown' }, w.store);
+    // A publish that passed the write guard just before the hold existed lands now.
+    w.store.objects.set(`published/${w.personalSite}/late/index.html`, 'late');
+
+    await reconcileAllPublishedVisibility(w.store);
+
+    expect(publicKeys(w.personalSite)).toEqual([]);
+    expect(parkedKeys(w.personalSite)).toHaveLength(3);
+  });
 });
 
 describe('restoreDriveSites', () => {
@@ -208,6 +226,11 @@ describe('parkUserSites', () => {
     expect(publicKeys(w.sharedOrgSite)).toHaveLength(2);
   });
 
+  it('still parks an org drive whose only other rows are a pending invitation and a guest', async () => {
+    const result = await parkUserSites({ userId: w.owner }, w.store);
+    expect(result.parked.map((d) => d.driveId)).toContain(w.soloOrgDrive);
+  });
+
   it('ignores drives that publish nothing', async () => {
     const result = await parkUserSites({ userId: w.owner }, w.store);
     const touched = [...result.parked.map((d) => d.driveId), ...result.skipped.map((d) => d.driveId)];
@@ -222,5 +245,24 @@ describe('parkUserSites', () => {
     expect(restored.map((d) => d.driveId)).toEqual([w.personalDrive]);
     expect(publicKeys(w.personalSite)).toHaveLength(2);
     expect(publicKeys(w.soloOrgSite)).toEqual([]);
+  });
+
+  it('a takedown placed AFTER the suspension takes over the hold, so lifting the suspension does not republish', async () => {
+    await parkUserSites({ userId: w.owner }, w.store);
+    await parkDriveSites({ driveId: w.personalDrive, source: 'takedown', caseId: 'case-7' }, w.store);
+
+    const restored = await restoreUserSites(w.owner, w.store);
+
+    expect(restored.map((d) => d.driveId)).toEqual([w.soloOrgDrive]);
+    expect(publicKeys(w.personalSite)).toEqual([]);
+    await expect(assertPrefixWritable(w.personalSite)).rejects.toBeInstanceOf(PublishHeldError);
+  });
+
+  it('a suspension placed after a takedown does not relabel the takedown hold', async () => {
+    await parkDriveSites({ driveId: w.personalDrive, source: 'takedown', caseId: 'case-7' }, w.store);
+    await parkUserSites({ userId: w.owner }, w.store);
+    await restoreUserSites(w.owner, w.store);
+
+    expect(publicKeys(w.personalSite)).toEqual([]);
   });
 });

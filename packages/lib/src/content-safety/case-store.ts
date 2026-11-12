@@ -74,6 +74,11 @@ export interface OpenedCase {
  * target and action so a repeated request continues it instead of starting a
  * second sequence. A reused case takes on options the new request adds
  * (`suspendUploader`, `skipPreservation`); it never drops ones it already had.
+ *
+ * It also takes the new request's CATEGORY. The category decides whether
+ * preservation may be skipped, so a case first filed as malware with
+ * "skip preservation" and then re-filed as CSAM must run under the CSAM rule,
+ * not the one it was opened with.
  */
 export async function openTakedownCase(input: OpenTakedownCaseInput): Promise<OpenedCase> {
   const [existing] = await db
@@ -101,7 +106,10 @@ export async function openTakedownCase(input: OpenTakedownCaseInput): Promise<Op
     };
     const [updated] = await db
       .update(contentCases)
-      .set({ snapshot: sql`coalesce(${contentCases.snapshot}, '{}'::jsonb) || ${JSON.stringify({ takedown: merged })}::jsonb` })
+      .set({
+        category: input.category,
+        snapshot: sql`coalesce(${contentCases.snapshot}, '{}'::jsonb) || ${JSON.stringify({ takedown: merged })}::jsonb`,
+      })
       .where(eq(contentCases.id, existing.id))
       .returning();
     return { case: updated, created: false };

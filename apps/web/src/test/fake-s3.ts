@@ -120,7 +120,7 @@ export class FakeS3 {
         const prefix = String(input.Prefix ?? '');
         const matching = [...bucket.keys()].filter((k) => k.startsWith(prefix)).sort();
         const limit = typeof input.MaxKeys === 'number' ? input.MaxKeys : 1000;
-        return { Contents: matching.slice(0, limit).map((Key) => ({ Key })), IsTruncated: false };
+        return { Contents: matching.slice(0, limit).map((Key) => ({ Key, Size: bucket.get(Key)!.body.byteLength })), IsTruncated: false };
       }
       default:
         throw new Error(`FakeS3: unsupported command ${constructor.name}`);

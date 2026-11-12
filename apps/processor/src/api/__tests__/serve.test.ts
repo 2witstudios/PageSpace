@@ -69,6 +69,11 @@ vi.mock('../../utils/security', () => ({
   isDangerousMimeType: (...args: unknown[]) => mockIsDangerousMimeType(...args),
 }));
 
+const mockIsHashBlocked = vi.fn().mockResolvedValue(false);
+vi.mock('@pagespace/lib/content-safety/blocklist', () => ({
+  isHashBlocked: (...args: unknown[]) => mockIsHashBlocked(...args),
+}));
+
 vi.mock('../../middleware/rate-limit', () => ({
   rateLimitRead: (req: Request, res: Response, next: NextFunction) => next(),
 }));
@@ -490,5 +495,50 @@ describe('GET /files/:contentHash/original — content-type lockdown', () => {
     expect(response.status).toBe(200);
     expect(response.headers['content-type']).toMatch(/^image\/png/);
     expect(response.headers['content-disposition']).toMatch(/^inline/);
+  });
+});
+
+describe('content that was taken down', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsValidContentHash.mockReturnValue(true);
+    mockIsValidPreset.mockReturnValue(true);
+    mockAssertFileAccess.mockResolvedValue({ allowed: true });
+    mockAuthorizeFileAccess.mockResolvedValue({ allowed: true, context: { pageId: 'page-1' } });
+    mockIsHashBlocked.mockResolvedValue(true);
+  });
+
+  it.each(['original', 'metadata', 'thumbnail.webp'])('answers 410 for /:contentHash/%s of a blocked hash and reads nothing', async (suffix) => {
+    const app = createApp({ userId: 'user-1' });
+
+    const response = await request(app).get(`/files/${VALID_HASH}/${suffix}`);
+
+    expect(response.status).toBe(410);
+    expect(response.body).toEqual({ error: 'This file has been removed' });
+    expect(mockIsHashBlocked).toHaveBeenCalledWith(VALID_HASH);
+    expect(mockGetOriginal).not.toHaveBeenCalled();
+    expect(mockGetCache).not.toHaveBeenCalled();
+    expect(mockGetCacheMetadata).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the blocklist cannot be read', async () => {
+    mockIsHashBlocked.mockRejectedValue(new Error('db down'));
+    const app = createApp({ userId: 'user-1' });
+
+    const response = await request(app).get(`/files/${VALID_HASH}/original`);
+
+    expect(response.status).toBe(500);
+    expect(mockGetOriginal).not.toHaveBeenCalled();
+  });
+
+  it('serves a hash that is not blocked as before', async () => {
+    mockIsHashBlocked.mockResolvedValue(false);
+    mockGetOriginal.mockResolvedValue(Buffer.from('file-data'));
+    mockFilesQuery.mockResolvedValue({ sizeBytes: 1024, mimeType: 'application/pdf' });
+    mockPagesQuery.mockResolvedValue({ originalFileName: 'test.pdf', title: 'Test', mimeType: 'application/pdf' });
+    const app = createApp({ userId: 'user-1' });
+
+    const response = await request(app).get(`/files/${VALID_HASH}/original`);
+    expect(response.status).toBe(200);
   });
 });

@@ -46,7 +46,7 @@ describe('POST /api/internal/content-safety/takedown', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubEnv('SERVICE_API_SECRET', SECRET);
-    mockSelectRows.mockResolvedValue([{ role: 'admin' }]);
+    mockSelectRows.mockResolvedValue([{ role: 'admin', suspendedAt: null }]);
     mockExecuteTakedown.mockResolvedValue({ action: 'global', caseId: 'case-1', status: 'actioned' });
   });
 
@@ -76,8 +76,11 @@ describe('POST /api/internal/content-safety/takedown', () => {
       expect(mockExecuteTakedown).not.toHaveBeenCalled();
     });
 
-    it('refuses an acting user who is not an admin in the database', async () => {
-      mockSelectRows.mockResolvedValue([{ role: 'user' }]);
+    it('refuses an acting user who is not an active admin in the database', async () => {
+      mockSelectRows.mockResolvedValue([{ role: 'user', suspendedAt: null }]);
+      expect((await POST(request(authed))).status).toBe(403);
+
+      mockSelectRows.mockResolvedValue([{ role: 'admin', suspendedAt: new Date() }]);
       expect((await POST(request(authed))).status).toBe(403);
 
       mockSelectRows.mockResolvedValue([]);

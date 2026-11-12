@@ -30,6 +30,7 @@ import { DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { files, type AttachmentMeta } from '@pagespace/db/schema/storage';
 import type { ChannelMessageAiMeta } from '@pagespace/db/schema/chat';
 import { canUserAccessFile } from '@pagespace/lib/permissions/file-access';
+import { isHashBlocked } from '@pagespace/lib/content-safety/blocklist';
 import { generatePresignedUrl, getPresignedUrlTtl, toContentHash } from '@/lib/presigned-url';
 import { isAllowedImageType } from '@/lib/validation/image-validation';
 import {
@@ -379,7 +380,10 @@ async function resolveImageAttachmentsForContext(
         };
       }
 
-      const accessible = await canUserAccessFile(actor, file.id, file.driveId);
+      // A taken-down attachment is treated like one the agent cannot access: no
+      // URL is signed for it, so the model never receives the bytes or a dead link.
+      const accessible =
+        (await canUserAccessFile(actor, file.id, file.driveId)) && !(await isHashBlocked(toContentHash(file.storagePath)));
       const url = accessible
         ? await generatePresignedUrl(
             toContentHash(file.storagePath),

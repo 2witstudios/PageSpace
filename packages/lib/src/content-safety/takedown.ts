@@ -42,18 +42,26 @@ export interface TakedownStorage {
   evidenceConfigured(): boolean;
   /**
    * The first original that exists for the hash: `files/<hash>/original`, then
-   * `chat-attachments/<hash>/original`, then the public `assets/<hash>`. Null
-   * only on a definite not-found; any other error must throw, so "couldn't
-   * check" is never read as "nothing to preserve".
+   * `chat-attachments/<hash>/original`, then the public asset (in quarantine or,
+   * if it has not been moved yet, at `assets/<hash>`). Null only on a definite
+   * not-found; any other error must throw, so "couldn't check" is never read as
+   * "nothing to preserve".
    */
   findOriginal(contentHash: string): Promise<TakedownOriginal | null>;
-  /** Whether any object at all (original or derived, either bucket) exists for the hash. */
-  hasAnyObjects(contentHash: string): Promise<boolean>;
+  /** Every object that exists for the hash, original or derived, in either bucket and in quarantine. */
+  listObjects(contentHash: string): Promise<TakedownOriginal[]>;
+  /**
+   * Move the hash's public objects (`assets/<hash>`, `assets/cache/<hash>/*`)
+   * out of the public prefix into a private quarantine prefix of the same
+   * bucket: copy, verify, then delete the public key. Nothing is lost. Returns
+   * the number moved.
+   */
+  quarantinePublic(contentHash: string): Promise<number>;
   headEvidence(evidenceKey: string): Promise<{ size: number } | null>;
   copyToEvidence(source: TakedownOriginal, evidenceKey: string): Promise<void>;
   /** Delete `files/<hash>/*`, `cache/<hash>/*`, `chat-attachments/<hash>/*`. Returns the number deleted. */
   deleteFromUploads(contentHash: string): Promise<number>;
-  /** Delete `assets/<hash>` and `assets/cache/<hash>/*`. Returns the number deleted. */
+  /** Delete `assets/<hash>`, `assets/cache/<hash>/*` and their quarantined copies. Returns the number deleted. */
   deleteFromPublish(contentHash: string): Promise<number>;
 }
 
@@ -75,7 +83,17 @@ export interface TakedownCaseStore {
 export type SuspendUserOutcome =
   | { status: 'suspended'; revokedSessions: number }
   | { status: 'already_suspended' }
-  | { status: 'not_found' };
+  | { status: 'not_found' }
+  /** The account is an admin: a takedown never suspends one automatically. */
+  | { status: 'skipped_admin' };
+
+/**
+ * The most accounts one takedown will suspend on its own. Storage is shared by
+ * hash, so a widely held file (a common malware sample, a false positive) can
+ * have many uploaders; past this number the takedown suspends nobody and leaves
+ * the decision to a person, who has the list on the case.
+ */
+export const MAX_AUTO_SUSPENSIONS = 5;
 
 export interface TakedownAlert {
   event: 'opened' | 'actioned' | 'awaiting_evidence';
@@ -105,6 +123,22 @@ export interface TakedownRunResult {
 /** Where a case's preserved copy lives in the evidence bucket. Includes the case ID. */
 export function evidenceKeyFor(caseId: string, contentHash: string): string {
   return `cases/${caseId}/${contentHash}/original`;
+}
+
+/** Where a derived object is preserved when the original itself no longer exists. */
+export function derivedEvidenceKeyFor(caseId: string, contentHash: string, source: TakedownOriginal): string {
+  return `cases/${caseId}/${contentHash}/derived/${source.store}/${source.key}`;
+}
+
+/** Copy one object to the evidence bucket and prove the copy is whole. Throws if it is not. */
+async function copyAndVerify(source: TakedownOriginal, evidenceKey: string, deps: TakedownDeps): Promise<number> {
+  await deps.storage.copyToEvidence(source, evidenceKey);
+  const copy = await deps.storage.headEvidence(evidenceKey);
+  if (!copy) throw new Error('Evidence copy not found after copying');
+  if (copy.size !== source.size) {
+    throw new Error(`Evidence copy size ${copy.size} does not match source size ${source.size}`);
+  }
+  return copy.size;
 }
 
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -160,30 +194,46 @@ async function executeGlobalStep(
       });
       return {};
     }
+    case 'quarantine_public':
+      return { detail: `moved=${await deps.storage.quarantinePublic(contentHash)}` };
     case 'preserve': {
       const evidenceKey = evidenceKeyFor(row.id, contentHash);
-      if (await deps.storage.headEvidence(evidenceKey)) {
+      const existing = await deps.storage.headEvidence(evidenceKey);
+      const source = await deps.storage.findOriginal(contentHash);
+
+      if (source) {
+        // A copy left by an earlier attempt counts only if it is whole. One that
+        // failed verification is copied again rather than trusted because it exists.
+        if (existing && existing.size === source.size) {
+          await deps.cases.mergeSnapshot(row.id, { evidenceKey });
+          return { detail: 'already_preserved' };
+        }
+        const bytes = await copyAndVerify(source, evidenceKey, deps);
+        await deps.cases.mergeSnapshot(row.id, { evidenceKey });
+        return { detail: `source=${source.store} bytes=${bytes}` };
+      }
+
+      if (existing) {
+        // The original is gone, so there is nothing left to compare against; the
+        // deletes only ever run after a verified copy, so this one was verified.
         await deps.cases.mergeSnapshot(row.id, { evidenceKey });
         return { detail: 'already_preserved' };
       }
-      const source = await deps.storage.findOriginal(contentHash);
-      if (!source) {
-        // Derived objects (thumbnails, previews) of the same material may still
-        // exist. Deleting them with nothing preserved is exactly what must not
-        // happen for CSAM, so stop and leave them for a person to decide.
-        if (row.category === 'csam' && (await deps.storage.hasAnyObjects(contentHash))) {
-          throw new Error('No original left to preserve, but derived objects exist; nothing was deleted');
+
+      // No original anywhere. For CSAM, whatever derived objects remain
+      // (thumbnails, previews) are the material: preserve each of them before
+      // the deletes run, so nothing is ever deleted unpreserved.
+      if (row.category === 'csam') {
+        const derived = await deps.storage.listObjects(contentHash);
+        if (derived.length > 0) {
+          for (const object of derived) {
+            await copyAndVerify(object, derivedEvidenceKeyFor(row.id, contentHash, object), deps);
+          }
+          await deps.cases.mergeSnapshot(row.id, { evidenceKey: `cases/${row.id}/${contentHash}/derived/` });
+          return { detail: `no_original derived_preserved=${derived.length}` };
         }
-        return { detail: 'no_source_object', skipped: true };
       }
-      await deps.storage.copyToEvidence(source, evidenceKey);
-      const copy = await deps.storage.headEvidence(evidenceKey);
-      if (!copy) throw new Error('Evidence copy not found after copying');
-      if (copy.size !== source.size) {
-        throw new Error(`Evidence copy size ${copy.size} does not match source size ${source.size}`);
-      }
-      await deps.cases.mergeSnapshot(row.id, { evidenceKey });
-      return { detail: `source=${source.store} bytes=${copy.size}` };
+      return { detail: 'no_source_object', skipped: true };
     }
     case 'delete_uploads':
       return { detail: `deleted=${await deps.storage.deleteFromUploads(contentHash)}` };
@@ -208,12 +258,19 @@ async function executeGlobalStep(
       const uploaders = (fresh.snapshot?.references?.uploaderUserIds ?? []).filter(
         (userId) => userId !== takedown?.actorUserId,
       );
+      if (uploaders.length === 0) return { detail: 'no_uploader_found', skipped: true };
+      if (uploaders.length > MAX_AUTO_SUSPENSIONS) {
+        return {
+          detail: `too_many_uploaders=${uploaders.length} max=${MAX_AUTO_SUSPENSIONS}; nobody was suspended, review the list on the case`,
+          skipped: true,
+        };
+      }
       const outcomes: string[] = [];
       for (const userId of uploaders) {
         const outcome = await deps.suspendUser({ userId, reason: `Content takedown, case ${row.id}` });
         outcomes.push(`${userId}:${outcome.status}`);
       }
-      return { detail: outcomes.length > 0 ? outcomes.join(' ') : 'no_uploader_found' };
+      return { detail: outcomes.join(' ') };
     }
   }
 }

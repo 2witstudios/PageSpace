@@ -30,7 +30,7 @@ describe('nextGlobalTakedownStep', () => {
     expect(nextGlobalTakedownStep(input())).toEqual({ kind: 'run', step: 'block' });
   });
 
-  it('walks block, preserve, delete uploads, delete public, record references in order', () => {
+  it('walks block, quarantine, preserve, delete uploads, delete public, record references in order', () => {
     const steps: ContentCaseStep[] = [];
     const order: GlobalTakedownStep[] = [];
     for (;;) {
@@ -42,7 +42,7 @@ describe('nextGlobalTakedownStep', () => {
       order.push(decision.step);
       steps.push(ok(decision.step));
     }
-    expect(order).toEqual(['block', 'preserve', 'delete_uploads', 'delete_public', 'record_references']);
+    expect(order).toEqual(['block', 'quarantine_public', 'preserve', 'delete_uploads', 'delete_public', 'record_references']);
   });
 
   it('adds the suspension as the last step only when asked for', () => {
@@ -61,17 +61,24 @@ describe('nextGlobalTakedownStep', () => {
   });
 
   it('moves past a step whose retry succeeded after a failure', () => {
-    const steps = [ok('block'), failed('preserve'), ok('preserve')];
+    const steps = [ok('block'), ok('quarantine_public'), failed('preserve'), ok('preserve')];
     expect(nextGlobalTakedownStep(input({ steps }))).toEqual({ kind: 'run', step: 'delete_uploads' });
   });
 
   it('treats a skipped step as settled', () => {
-    const steps = [ok('block'), skipped('preserve')];
+    const steps = [ok('block'), ok('quarantine_public'), skipped('preserve')];
     expect(nextGlobalTakedownStep(input({ steps }))).toEqual({ kind: 'run', step: 'delete_uploads' });
   });
 
   describe('preservation', () => {
-    const blocked = [ok('block')];
+    const blocked = [ok('block'), ok('quarantine_public')];
+
+    it('takes the public copies offline before a CSAM case can halt for evidence storage', () => {
+      expect(nextGlobalTakedownStep(input({ steps: [ok('block')], evidenceConfigured: false }))).toEqual({
+        kind: 'run',
+        step: 'quarantine_public',
+      });
+    });
 
     it('halts a CSAM case that has no evidence storage, before any delete', () => {
       expect(nextGlobalTakedownStep(input({ steps: blocked, evidenceConfigured: false }))).toEqual({
@@ -112,7 +119,7 @@ describe('nextGlobalTakedownStep', () => {
   });
 
   describe('re-sweep', () => {
-    const finished = ['block', 'preserve', 'delete_uploads', 'delete_public', 'record_references'].map(ok);
+    const finished = ['block', 'quarantine_public', 'preserve', 'delete_uploads', 'delete_public', 'record_references'].map(ok);
 
     it('repeats preserve and both deletes after a re-sweep marker, and nothing else', () => {
       const steps = [...finished, ok(RESWEEP_MARKER)];
@@ -147,9 +154,10 @@ describe('statusForDecision', () => {
 
 describe('summarizeSteps', () => {
   it('reports the latest state of each step in plan order, pending when never run', () => {
-    const steps = [ok('block'), failed('preserve'), ok('preserve'), failed('delete_uploads')];
+    const steps = [ok('block'), ok('quarantine_public'), failed('preserve'), ok('preserve'), failed('delete_uploads')];
     expect(summarizeSteps(steps, GLOBAL_TAKEDOWN_STEPS)).toEqual([
       { step: 'block', status: 'ok' },
+      { step: 'quarantine_public', status: 'ok' },
       { step: 'preserve', status: 'ok' },
       { step: 'delete_uploads', status: 'failed', detail: 'boom' },
       { step: 'delete_public', status: 'pending' },
@@ -163,7 +171,7 @@ describe('describeCaseProgress', () => {
   it('shows a global case part-way through as resumable, without the suspension it was not asked for', () => {
     const progress = describeCaseProgress({
       status: 'open',
-      steps: [ok('block'), ok('preserve'), failed('delete_uploads')],
+      steps: [ok('block'), ok('quarantine_public'), ok('preserve'), failed('delete_uploads')],
       snapshot: { takedown: { kind: 'global' } },
     });
 
@@ -172,6 +180,7 @@ describe('describeCaseProgress', () => {
     expect(progress.resweepable).toBe(false);
     expect(progress.steps.map((s) => `${s.step}:${s.status}`)).toEqual([
       'block:ok',
+      'quarantine_public:ok',
       'preserve:ok',
       'delete_uploads:failed',
       'delete_public:pending',
@@ -181,7 +190,7 @@ describe('describeCaseProgress', () => {
 
   it('includes the suspension step when the case asked for it', () => {
     const progress = describeCaseProgress({ status: 'open', steps: [], snapshot: { takedown: { kind: 'global', suspendUploader: true } } });
-    expect(progress.steps.at(-1)).toEqual({ step: 'suspend_uploader', status: 'pending' });
+    expect(progress.steps[progress.steps.length - 1]).toEqual({ step: 'suspend_uploader', status: 'pending' });
   });
 
   it('shows a case waiting for evidence storage as resumable', () => {

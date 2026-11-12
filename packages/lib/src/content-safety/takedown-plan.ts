@@ -7,12 +7,15 @@
  * Every executor is idempotent, which is what makes rerunning safe.
  *
  * The order is the safety property:
- *   1. block     — the gates close before anything else happens.
- *   2. preserve  — nothing is deleted until a copy is verified (or, outside
- *                  CSAM, an admin has explicitly declined one).
- *   3. deletes   — uploads bucket, then the public bucket.
- *   4. record    — who and what referenced the hash.
- *   5. suspend   — only when asked for.
+ *   1. block       — the gates close before anything else happens.
+ *   2. quarantine  — public copies are MOVED out of the public prefix. Nothing
+ *                    is lost, and the content stops being served to the world
+ *                    even if the case then has to wait at the next step.
+ *   3. preserve    — nothing is deleted until a copy is verified (or, outside
+ *                    CSAM, an admin has explicitly declined one).
+ *   4. deletes     — uploads bucket, then the public bucket and the quarantine.
+ *   5. record      — who and what referenced the hash.
+ *   6. suspend     — only when asked for.
  */
 
 import type {
@@ -25,6 +28,7 @@ import type {
 
 export const GLOBAL_TAKEDOWN_STEPS = [
   'block',
+  'quarantine_public',
   'preserve',
   'delete_uploads',
   'delete_public',

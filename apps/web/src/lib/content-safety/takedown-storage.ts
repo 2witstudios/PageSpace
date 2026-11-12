@@ -14,8 +14,9 @@ import {
   deletePublishedAssetsForHash,
   headPublishedAsset,
   isPublishConfigured,
-  publishedAssetObjectsExist,
-  readPublishedAsset,
+  listPublishedObjectsForHash,
+  quarantinePublishedAssetsForHash,
+  readPublishedHashObject,
 } from '@/lib/canvas/published-storage';
 
 /**
@@ -84,30 +85,35 @@ function requireEvidenceBucket(): string {
   return bucket;
 }
 
-/** Delete every object under a prefix in the uploads bucket. Returns the number deleted. */
-async function deleteUploadsPrefix(prefix: string): Promise<number> {
+/** Every object under a prefix in the uploads bucket. */
+async function listUploadsPrefix(prefix: string): Promise<Array<{ key: string; size: number }>> {
   const client = getS3Client();
   const bucket = getS3Bucket();
-  let deleted = 0;
+  const objects: Array<{ key: string; size: number }> = [];
   let continuationToken: string | undefined;
   do {
     const listed = await client.send(
       new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ContinuationToken: continuationToken }),
     );
-    const keys = (listed.Contents ?? []).flatMap((obj) => (obj.Key ? [obj.Key] : []));
-    if (keys.length > 0) {
-      const result = await client.send(
-        new DeleteObjectsCommand({ Bucket: bucket, Delete: { Objects: keys.map((Key) => ({ Key })) } }),
-      );
-      // Not Quiet: a partial failure must fail the step so it is retried, not be counted as deleted.
-      if (result.Errors && result.Errors.length > 0) {
-        throw new Error(`Failed to delete ${result.Errors.length} object(s) under ${prefix}`);
-      }
-      deleted += keys.length;
-    }
+    for (const obj of listed.Contents ?? []) if (obj.Key) objects.push({ key: obj.Key, size: obj.Size ?? 0 });
     continuationToken = listed.IsTruncated ? listed.NextContinuationToken : undefined;
   } while (continuationToken);
-  return deleted;
+  return objects;
+}
+
+/** Delete every object under a prefix in the uploads bucket. Returns the number deleted. */
+async function deleteUploadsPrefix(prefix: string): Promise<number> {
+  const keys = (await listUploadsPrefix(prefix)).map((object) => object.key);
+  for (let i = 0; i < keys.length; i += 1000) {
+    const result = await getS3Client().send(
+      new DeleteObjectsCommand({ Bucket: getS3Bucket(), Delete: { Objects: keys.slice(i, i + 1000).map((Key) => ({ Key })) } }),
+    );
+    // Not Quiet: a partial failure must fail the step so it is retried, not be counted as deleted.
+    if (result.Errors && result.Errors.length > 0) {
+      throw new Error(`Failed to delete ${result.Errors.length} object(s) under ${prefix}`);
+    }
+  }
+  return keys.length;
 }
 
 export function createTakedownStorage(): TakedownStorage {
@@ -120,7 +126,8 @@ export function createTakedownStorage(): TakedownStorage {
         const head = await headObject(getS3Bucket(), key);
         if (head) return { store: 'uploads', key, size: head.size };
       }
-      // The private original may already have been reaped while its public copy lives on.
+      // The private original may already have been reaped while its public copy
+      // lives on (by now in quarantine, unless that step has not run yet).
       if (isPublishConfigured()) {
         const asset = await headPublishedAsset(hash);
         if (asset) return { store: 'publish', key: asset.key, size: asset.size };
@@ -128,15 +135,21 @@ export function createTakedownStorage(): TakedownStorage {
       return null;
     },
 
-    async hasAnyObjects(contentHash) {
+    async listObjects(contentHash) {
       const hash = requireHash(contentHash);
+      const objects: TakedownOriginal[] = [];
       for (const prefix of uploadsPrefixesFor(hash)) {
-        const listed = await getS3Client().send(
-          new ListObjectsV2Command({ Bucket: getS3Bucket(), Prefix: prefix, MaxKeys: 1 }),
-        );
-        if ((listed.Contents ?? []).length > 0) return true;
+        for (const object of await listUploadsPrefix(prefix)) objects.push({ store: 'uploads', ...object });
       }
-      return isPublishConfigured() ? publishedAssetObjectsExist(hash) : false;
+      if (isPublishConfigured()) {
+        for (const object of await listPublishedObjectsForHash(hash)) objects.push({ store: 'publish', ...object });
+      }
+      return objects;
+    },
+
+    async quarantinePublic(contentHash) {
+      const hash = requireHash(contentHash);
+      return isPublishConfigured() ? quarantinePublishedAssetsForHash(hash) : 0;
     },
 
     headEvidence: (evidenceKey) => headObject(requireEvidenceBucket(), evidenceKey),
@@ -157,14 +170,15 @@ export function createTakedownStorage(): TakedownStorage {
       }
       // The publish bucket may sit behind different credentials, so read it with
       // its own client and write the bytes with the uploads client.
-      const hash = source.key.slice('assets/'.length);
-      const asset = await readPublishedAsset(hash);
+      const hash = source.key.match(/([0-9a-f]{64})/)?.[1];
+      if (!hash) throw new Error('Publish-bucket evidence source has no content hash in its key');
+      const object = await readPublishedHashObject(hash, source.key);
       await getS3Client().send(
         new PutObjectCommand({
           Bucket: evidenceBucket,
           Key: evidenceKey,
-          Body: asset.body,
-          ContentType: asset.contentType ?? 'application/octet-stream',
+          Body: object.body,
+          ContentType: object.contentType ?? 'application/octet-stream',
         }),
       );
     },

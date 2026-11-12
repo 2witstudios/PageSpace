@@ -11,6 +11,7 @@ import {
   ListObjectsV2Command,
 } from '@aws-sdk/client-s3';
 import { getS3Client, getS3Bucket } from '@/lib/presigned-url';
+import { isHashBlocked } from '@pagespace/lib/content-safety/blocklist';
 import { assertPrefixWritable } from '@pagespace/lib/organizations/published-visibility';
 import { PARKED_PREFIX, PUBLISHED_PREFIX, parkedKeyOf, type PublishedObjectStore } from '@pagespace/lib/organizations/published-visibility-core';
 
@@ -99,6 +100,12 @@ function assertAssetKey(assetKey: string): string {
     throw new Error('Invalid public asset key');
   }
   return assetKey;
+}
+
+/** The content hash a private source key (`files/<hash>/original`, `cache/<hash>/thumbnail.webp`) belongs to. */
+function hashOfPrivateSourceKey(sourceKey: string): string | null {
+  const match = sourceKey.match(/^(?:files|cache)\/([0-9a-f]{64})\//i);
+  return match ? match[1].toLowerCase() : null;
 }
 
 function assertPrivateSourceKey(sourceKey: string): string {
@@ -391,6 +398,15 @@ export async function copyObjectToPublishBucket(params: {
   const { contentType } = params;
   const publishBucket = getPublishBucket();
 
+  // A blocked hash is never promoted to the public bucket. This matters most
+  // while a takedown is waiting to delete (its bytes still exist privately):
+  // without it, republishing a page that embeds the file would put it back on
+  // the web. Checked before the dedup HEAD, which would otherwise return early.
+  const contentHash = hashOfPrivateSourceKey(sourceKey);
+  if (contentHash && (await isHashBlocked(contentHash))) {
+    throw new Error('This file is not available for publishing');
+  }
+
   // Dedup check — existence at the resolved public key means it was already promoted.
   try {
     await getPublishClient().send(new HeadObjectCommand({ Bucket: publishBucket, Key: assetKey }));
@@ -450,50 +466,133 @@ function isS3NotFound(err: unknown): boolean {
   return anyErr?.name === 'NotFound' || anyErr?.name === 'NoSuchKey' || anyErr?.$metadata?.httpStatusCode === 404;
 }
 
+// ---------------------------------------------------------------------------
+// Content takedown: the public objects of one content hash
+// ---------------------------------------------------------------------------
+
+/**
+ * Where a taken-down hash's public objects are moved while its case is open.
+ *
+ * It is a top-level prefix of the publish bucket that is NOT publicly readable
+ * (the bucket policy grants anonymous read to the served prefixes only), so a
+ * move here takes the content off the web without destroying it. It is
+ * deliberately not under `suspended/`: the visibility reconciler treats every
+ * name under `suspended/` as a site and restores it to `published/` when its
+ * owner's policy allows, which must never happen to quarantined content.
+ */
+const QUARANTINE_PREFIX = 'quarantine/';
+
 /** Key prefix of the derived public objects for a hash (`assets/cache/<hash>/thumbnail.webp`). */
 function assetCachePrefix(contentHash: string): string {
   return `assets/cache/${assertContentHash(contentHash)}/`;
 }
 
-/**
- * Size of the public asset for a content hash, or null when there is none.
- * Anything other than not-found throws: "couldn't check" must never read as
- * "nothing public".
- */
-export async function headPublishedAsset(contentHash: string): Promise<{ key: string; size: number } | null> {
-  const key = buildAssetKey(contentHash);
+export interface PublishedHashObject {
+  key: string;
+  size: number;
+}
+
+async function headPublishKey(key: string): Promise<PublishedHashObject | null> {
   try {
     const head = await getPublishClient().send(new HeadObjectCommand({ Bucket: getPublishBucket(), Key: key }));
     return { key, size: head.ContentLength ?? 0 };
   } catch (err) {
+    // Anything other than not-found throws: "couldn't check" must never read as "nothing there".
     if (isS3NotFound(err)) return null;
     throw err;
   }
 }
 
-/** The bytes of the public asset for a content hash. Used to preserve it when the private original is gone. */
-export async function readPublishedAsset(contentHash: string): Promise<{ body: Uint8Array; contentType?: string }> {
-  const result = await getPublishClient().send(
-    new GetObjectCommand({ Bucket: getPublishBucket(), Key: buildAssetKey(contentHash) }),
-  );
+async function listPublishPrefix(prefix: string): Promise<PublishedHashObject[]> {
+  const client = getPublishClient();
+  const bucket = getPublishBucket();
+  const objects: PublishedHashObject[] = [];
+  let continuationToken: string | undefined;
+  do {
+    const listed = await client.send(
+      new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ContinuationToken: continuationToken }),
+    );
+    for (const obj of listed.Contents ?? []) if (obj.Key) objects.push({ key: obj.Key, size: obj.Size ?? 0 });
+    continuationToken = listed.IsTruncated ? listed.NextContinuationToken : undefined;
+  } while (continuationToken);
+  return objects;
+}
+
+/** The hash's objects still under the PUBLIC prefix: `assets/<hash>` and `assets/cache/<hash>/*`. */
+async function listPublicHashObjects(contentHash: string): Promise<PublishedHashObject[]> {
+  const asset = await headPublishKey(buildAssetKey(contentHash));
+  return [...(asset ? [asset] : []), ...(await listPublishPrefix(assetCachePrefix(contentHash)))];
+}
+
+/** The hash's objects in quarantine. */
+async function listQuarantinedHashObjects(contentHash: string): Promise<PublishedHashObject[]> {
+  const asset = await headPublishKey(QUARANTINE_PREFIX + buildAssetKey(contentHash));
+  return [...(asset ? [asset] : []), ...(await listPublishPrefix(QUARANTINE_PREFIX + assetCachePrefix(contentHash)))];
+}
+
+/** Every object the publish bucket holds for a content hash, public or quarantined. */
+export async function listPublishedObjectsForHash(contentHash: string): Promise<PublishedHashObject[]> {
+  return [...(await listQuarantinedHashObjects(contentHash)), ...(await listPublicHashObjects(contentHash))];
+}
+
+/**
+ * The full-size public copy of a content hash — in quarantine or, if it has not
+ * been moved yet, at `assets/<hash>` — or null when there is none.
+ */
+export async function headPublishedAsset(contentHash: string): Promise<PublishedHashObject | null> {
+  const assetKey = buildAssetKey(contentHash);
+  return (await headPublishKey(QUARANTINE_PREFIX + assetKey)) ?? (await headPublishKey(assetKey));
+}
+
+/**
+ * The bytes of one of a hash's objects in the publish bucket, for preserving it.
+ * `key` must be one that `listPublishedObjectsForHash` / `headPublishedAsset`
+ * returned for this hash; anything else is refused.
+ */
+export async function readPublishedHashObject(contentHash: string, key: string): Promise<{ body: Uint8Array; contentType?: string }> {
+  const assetKey = buildAssetKey(contentHash);
+  const cachePrefix = assetCachePrefix(contentHash);
+  const publicKey = key.startsWith(QUARANTINE_PREFIX) ? key.slice(QUARANTINE_PREFIX.length) : key;
+  if (publicKey !== assetKey && !publicKey.startsWith(cachePrefix)) {
+    throw new Error('Not a publish-bucket object of this content hash');
+  }
+  const result = await getPublishClient().send(new GetObjectCommand({ Bucket: getPublishBucket(), Key: key }));
   const body = result.Body
     ? await (result.Body as { transformToByteArray(): Promise<Uint8Array> }).transformToByteArray()
     : new Uint8Array(0);
   return { body, contentType: result.ContentType };
 }
 
-/** Whether any public object exists for the hash: the asset itself or anything derived from it. */
-export async function publishedAssetObjectsExist(contentHash: string): Promise<boolean> {
-  if (await headPublishedAsset(contentHash)) return true;
-  const listed = await getPublishClient().send(
-    new ListObjectsV2Command({ Bucket: getPublishBucket(), Prefix: assetCachePrefix(contentHash), MaxKeys: 1 }),
-  );
-  return (listed.Contents ?? []).length > 0;
+/**
+ * Take a content hash off the web without destroying it: move each of its
+ * public objects into quarantine. Per object: copy, verify the copy's size,
+ * then delete the public key — so a failure part-way leaves both copies, never
+ * neither, and a rerun finishes the job.
+ *
+ * Returns how many objects were moved. Idempotent.
+ */
+export async function quarantinePublishedAssetsForHash(contentHash: string): Promise<number> {
+  const client = getPublishClient();
+  const bucket = getPublishBucket();
+  let moved = 0;
+  for (const object of await listPublicHashObjects(contentHash)) {
+    const quarantinedKey = QUARANTINE_PREFIX + object.key;
+    await client.send(
+      new CopyObjectCommand({ Bucket: bucket, CopySource: `${bucket}/${object.key}`, Key: quarantinedKey, MetadataDirective: 'COPY' }),
+    );
+    const copy = await headPublishKey(quarantinedKey);
+    if (!copy || copy.size !== object.size) {
+      throw new Error('Quarantine copy could not be verified; the public object was left in place');
+    }
+    await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: object.key }));
+    moved += 1;
+  }
+  return moved;
 }
 
 /**
- * Delete every public object for a content hash: `assets/<hash>` and
- * everything under `assets/cache/<hash>/` (the public thumbnail copy).
+ * Delete every object the publish bucket holds for a content hash: the public
+ * `assets/<hash>` and `assets/cache/<hash>/*`, and their quarantined copies.
  *
  * This is the content-takedown delete. `clearPublishedPrefix` does not cover
  * these keys: assets are content-addressed and shared by every site that embeds
@@ -504,33 +603,26 @@ export async function publishedAssetObjectsExist(contentHash: string): Promise<b
 export async function deletePublishedAssetsForHash(contentHash: string): Promise<number> {
   const client = getPublishClient();
   const bucket = getPublishBucket();
-  const assetKey = buildAssetKey(contentHash);
+  const objects = await listPublishedObjectsForHash(contentHash);
 
-  let deleted = 0;
-  if (await headPublishedAsset(contentHash)) deleted += 1;
-  // Deleted unconditionally: a DELETE of a missing key is a no-op, and this
-  // closes the gap between the HEAD above and a concurrent publish.
-  await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: assetKey }));
-
-  let continuationToken: string | undefined;
-  do {
-    const listed = await client.send(
-      new ListObjectsV2Command({ Bucket: bucket, Prefix: assetCachePrefix(contentHash), ContinuationToken: continuationToken }),
+  for (let i = 0; i < objects.length; i += 1000) {
+    const batch = objects.slice(i, i + 1000);
+    const result = await client.send(
+      new DeleteObjectsCommand({ Bucket: bucket, Delete: { Objects: batch.map(({ key }) => ({ Key: key })) } }),
     );
-    const keys = (listed.Contents ?? []).flatMap((obj) => (obj.Key ? [obj.Key] : []));
-    if (keys.length > 0) {
-      const result = await client.send(
-        new DeleteObjectsCommand({ Bucket: bucket, Delete: { Objects: keys.map((Key) => ({ Key })) } }),
-      );
-      if (result.Errors && result.Errors.length > 0) {
-        throw new Error(`Failed to delete ${result.Errors.length} public object(s) for a content hash`);
-      }
-      deleted += keys.length;
+    // Not Quiet: a partial failure must fail the step so it is retried, not be counted as deleted.
+    if (result.Errors && result.Errors.length > 0) {
+      throw new Error(`Failed to delete ${result.Errors.length} public object(s) for a content hash`);
     }
-    continuationToken = listed.IsTruncated ? listed.NextContinuationToken : undefined;
-  } while (continuationToken);
+  }
+  // The full-size keys are also deleted unconditionally: a DELETE of a missing
+  // key is a no-op, and this closes the gap between the listing above and a
+  // publish that was already in flight.
+  const assetKey = buildAssetKey(contentHash);
+  await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: assetKey }));
+  await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: QUARANTINE_PREFIX + assetKey }));
 
-  return deleted;
+  return objects.length;
 }
 
 /**

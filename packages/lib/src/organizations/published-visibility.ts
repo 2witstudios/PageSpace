@@ -9,7 +9,7 @@
  *  - reconcileAllPublishedVisibility: the sweep that retries anything a failed object-store call left behind.
  */
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray, ne } from '@pagespace/db/operators';
+import { and, eq, inArray, isNotNull, ne } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { contentSiteHolds, type ContentSiteHoldSource } from '@pagespace/db/schema/content-safety';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
@@ -187,6 +187,7 @@ export async function listOrgsRestrictingPublishing(executor: Executor = db): Pr
  * only if it should be visible again, which is what finishes a restore whose object-store call failed after the
  * policy changed; a prefix that should stay hidden is left alone (never restored and re-parked). (2) Every org that
  * restricts publishing is reconciled, re-parking anything that reappeared in a hidden site's public prefix.
+ * (3) Every drive under a content-safety hold is re-parked the same way.
  */
 export async function reconcileAllPublishedVisibility(store: PublishedObjectStore, executor: Executor = db): Promise<PrefixOutcome[]> {
   const outcomes: PrefixOutcome[] = [];
@@ -200,8 +201,18 @@ export async function reconcileAllPublishedVisibility(store: PublishedObjectStor
   }
   for (const orgId of await listOrgsRestrictingPublishing(executor)) {
     for (const o of await reconcileOrgPublishedVisibility(orgId, store, executor)) {
-      if (!seen.has(o.prefix)) outcomes.push(o);
+      if (!seen.has(o.prefix)) {
+        outcomes.push(o);
+        seen.add(o.prefix);
+      }
     }
+  }
+  // (3) Every drive held by a takedown or a suspension is re-parked. A publish that passed the write guard just
+  // before its hold was written can land an object after the move; this puts it back within one tick.
+  const held = await executor.select({ id: contentSiteHolds.driveId, sub: drives.publishSubdomain }).from(contentSiteHolds).innerJoin(drives, eq(drives.id, contentSiteHolds.driveId));
+  for (const { prefix } of await prefixesOfDrives(held, executor)) {
+    if (seen.has(prefix)) continue;
+    outcomes.push(await reconcilePrefix(store, prefix, false));
   }
   return outcomes;
 }
@@ -230,17 +241,27 @@ export async function parkDriveSites(
   store: PublishedObjectStore,
   executor: Executor = db,
 ): Promise<DriveSitesOutcome> {
-  await executor
-    .insert(contentSiteHolds)
-    .values({
-      driveId: input.driveId,
-      source: input.source,
-      caseId: input.caseId ?? null,
-      userId: input.userId ?? null,
-      createdBy: input.createdBy ?? null,
-    })
-    // An existing hold wins: a takedown's hold must not be relabelled as a suspension's and later lifted with it.
-    .onConflictDoNothing({ target: contentSiteHolds.driveId });
+  const hold = {
+    driveId: input.driveId,
+    source: input.source,
+    caseId: input.caseId ?? null,
+    userId: input.userId ?? null,
+    createdBy: input.createdBy ?? null,
+  };
+  if (input.source === 'takedown') {
+    // A takedown's hold supersedes a suspension's on the same drive. Otherwise the row would stay labelled
+    // `user_suspension` and lifting the suspension would put a taken-down site back on the web.
+    await executor
+      .insert(contentSiteHolds)
+      .values(hold)
+      .onConflictDoUpdate({
+        target: contentSiteHolds.driveId,
+        set: { source: 'takedown', caseId: hold.caseId, userId: null, createdBy: hold.createdBy },
+      });
+  } else {
+    // A suspension never relabels an existing hold: a takedown's hold must outlive the suspension.
+    await executor.insert(contentSiteHolds).values(hold).onConflictDoNothing({ target: contentSiteHolds.driveId });
+  }
 
   const [drive] = await executor.select({ id: drives.id, sub: drives.publishSubdomain }).from(drives).where(eq(drives.id, input.driveId)).limit(1);
   const prefixes = drive ? await prefixesOfDrives([drive], executor) : [];
@@ -297,10 +318,20 @@ export async function parkUserSites(
   for (const drive of owned) {
     if (!publishing.has(drive.id)) continue;
     if (drive.orgId) {
+      // "Other members" means people who really are members: an accepted row with a membership role. A pending
+      // invitation or a GUEST row (a redeemed page share link) is not one, so a drive with only those is still
+      // this user's alone and is parked.
       const [other] = await executor
         .select({ id: driveMembers.id })
         .from(driveMembers)
-        .where(and(eq(driveMembers.driveId, drive.id), ne(driveMembers.userId, input.userId)))
+        .where(
+          and(
+            eq(driveMembers.driveId, drive.id),
+            ne(driveMembers.userId, input.userId),
+            isNotNull(driveMembers.acceptedAt),
+            ne(driveMembers.role, 'GUEST'),
+          ),
+        )
         .limit(1);
       if (other) {
         result.skipped.push({ driveId: drive.id, reason: 'org_drive_with_other_members' });

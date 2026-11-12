@@ -77,27 +77,24 @@ export async function collectContentReferences(rawHash: string): Promise<Content
   if (fileIds.length > 0) {
     const linkedPages = capped(
       await db
-        .select({ pageId: filePages.pageId, linkedBy: filePages.linkedBy })
+        .select({ pageId: filePages.pageId })
         .from(filePages)
         .where(inArray(filePages.fileId, fileIds))
         .limit(fetchLimit),
     );
-    for (const row of linkedPages) {
-      pageIds.add(row.pageId);
-      if (row.linkedBy) uploaders.add(row.linkedBy);
-    }
+    // A link attaches a file that is already stored. The linker is recorded
+    // through the page, not as an uploader: `uploaderUserIds` drives the
+    // optional suspension, and it names only who brought the bytes in.
+    for (const row of linkedPages) pageIds.add(row.pageId);
 
     const linkedConversations = capped(
       await db
-        .select({ conversationId: fileConversations.conversationId, linkedBy: fileConversations.linkedBy })
+        .select({ conversationId: fileConversations.conversationId })
         .from(fileConversations)
         .where(inArray(fileConversations.fileId, fileIds))
         .limit(fetchLimit),
     );
-    for (const row of linkedConversations) {
-      conversationIds.add(row.conversationId);
-      if (row.linkedBy) uploaders.add(row.linkedBy);
-    }
+    for (const row of linkedConversations) conversationIds.add(row.conversationId);
 
     for (const row of capped(
       await db.select({ id: channelMessages.id }).from(channelMessages).where(inArray(channelMessages.fileId, fileIds)).limit(fetchLimit),

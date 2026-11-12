@@ -12,6 +12,7 @@ import { getS3Client, getS3Bucket } from '@/lib/presigned-url';
 import { isAllowedImageType, validateMagicBytes, type AllowedImageType } from '@/lib/validation/image-validation';
 import { MAX_IMAGE_SIZE_BYTES } from '@/lib/ai/shared/utils/image-resize';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { isHashBlocked } from '@pagespace/lib/content-safety/blocklist';
 
 export interface FetchedImagePreset {
   base64: string;
@@ -21,6 +22,26 @@ export interface FetchedImagePreset {
 
 export interface FetchCachedImagePresetDeps {
   fetchBytes?: (contentHash: string, preset: string) => Promise<Buffer | null>;
+  /** Whether the hash is on the content blocklist. Injectable like `fetchBytes`. */
+  isBlocked?: (contentHash: string) => Promise<boolean>;
+}
+
+/**
+ * A taken-down file is never read or sent to a model provider — including while
+ * its takedown is still waiting to delete the bytes. A failed lookup counts as
+ * blocked: this function's contract is "an image, or nothing", and nothing is
+ * the safe answer when we cannot tell.
+ */
+async function isRemoved(contentHash: string, isBlocked: (contentHash: string) => Promise<boolean>): Promise<boolean> {
+  try {
+    return await isBlocked(contentHash);
+  } catch (err) {
+    loggers.ai.warn('fetchCachedImagePreset: blocklist lookup failed, treating the image as unavailable', {
+      contentHash,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return true;
+  }
 }
 
 async function defaultFetchBytes(contentHash: string, preset: string): Promise<Buffer | null> {
@@ -58,6 +79,8 @@ export async function fetchCachedImagePreset(
   deps: FetchCachedImagePresetDeps = {},
 ): Promise<FetchedImagePreset | null> {
   const fetchBytes = deps.fetchBytes ?? defaultFetchBytes;
+
+  if (await isRemoved(contentHash, deps.isBlocked ?? isHashBlocked)) return null;
 
   for (const candidate of buildFallbackChain(mimeType)) {
     if (!isAllowedImageType(candidate.mediaType)) continue;

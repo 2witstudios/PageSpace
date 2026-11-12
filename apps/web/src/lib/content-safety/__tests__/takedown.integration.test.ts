@@ -156,6 +156,7 @@ describe('content takedown — upload, publish, take down, removed, re-upload re
     expect(row.status).toBe('actioned');
     expect(row.steps?.map((s) => `${s.step}:${s.status}`)).toEqual([
       'block:ok',
+      'quarantine_public:ok',
       'preserve:ok',
       'delete_uploads:ok',
       'delete_public:ok',
@@ -178,10 +179,17 @@ describe('content takedown — upload, publish, take down, removed, re-upload re
     const [block] = await db.select().from(contentBlocks).where(eq(contentBlocks.contentHash, HASH));
     expect(block).toMatchObject({ category: 'csam', source: 'admin', caseId, createdBy: admin });
 
-    const firstDelete = s3.log.findIndex((line) => line.startsWith('DeleteObject'));
+    // The only thing removed before the evidence copy is the PUBLIC key, and only
+    // after its bytes were copied into quarantine. Every destructive delete (the
+    // batch deletes of both buckets) comes after the verified evidence copy.
+    const quarantineCopy = s3.log.findIndex((line) => line === `CopyObjectCommand ${PUBLISH} quarantine/assets/${HASH}`);
+    const publicKeyRemoved = s3.log.findIndex((line) => line === `DeleteObjectCommand ${PUBLISH} assets/${HASH}`);
     const evidenceCopy = s3.log.findIndex((line) => line.startsWith(`CopyObjectCommand ${EVIDENCE}`));
-    expect(evidenceCopy).toBeGreaterThan(-1);
-    expect(evidenceCopy).toBeLessThan(firstDelete);
+    const firstDestructiveDelete = s3.log.findIndex((line) => line.startsWith('DeleteObjectsCommand'));
+    expect(quarantineCopy).toBeGreaterThan(-1);
+    expect(quarantineCopy).toBeLessThan(publicKeyRemoved);
+    expect(evidenceCopy).toBeGreaterThan(publicKeyRemoved);
+    expect(evidenceCopy).toBeLessThan(firstDestructiveDelete);
   });
 
   it('4. the view and download routes answer a neutral 410 instead of a dead link', async () => {
@@ -254,5 +262,80 @@ describe('content takedown — upload, publish, take down, removed, re-upload re
     expect(result.status).toBe('actioned');
     expect(s3.keys(UPLOADS)).toEqual([]);
     expect(s3.keys(EVIDENCE)).toEqual([evidenceKeyFor(caseId, HASH)]);
+  });
+});
+
+describe('content takedown — CSAM with no evidence storage configured', () => {
+  const bytes = `harmless test file ${randomUUID()}`;
+  const hash = createHash('sha256').update(bytes).digest('hex');
+  const ids = { users: [] as string[], drives: [] as string[] };
+  let adminId: string;
+  let ownerId: string;
+  let filePageId: string;
+  let waitingCaseId: string;
+
+  beforeAll(async () => {
+    fakeS3.current = s3;
+    vi.stubEnv('BUCKET_NAME', UPLOADS);
+    vi.stubEnv('PUBLISH_BUCKET', PUBLISH);
+    vi.stubEnv('EVIDENCE_BUCKET', '');
+    vi.stubEnv('DEPLOYMENT_MODE', 'onprem');
+
+    const [a, u] = await Promise.all([factories.createUser({ role: 'admin' }), factories.createUser()]);
+    adminId = a.id;
+    ownerId = u.id;
+    ids.users.push(adminId, ownerId);
+    const drive = await factories.createDrive(ownerId);
+    ids.drives.push(drive.id);
+
+    s3.put(UPLOADS, `files/${hash}/original`, bytes, 'image/png');
+    const page = await factories.createPage(drive.id, { type: 'FILE', filePath: hash, contentHash: hash, mimeType: 'image/png', createdBy: ownerId });
+    filePageId = page.id;
+    await copyAssetToPublishBucket({ contentHash: hash, mimeType: 'image/png' });
+  });
+
+  afterAll(async () => {
+    await db.delete(contentCases).where(eq(contentCases.contentHash, hash));
+    await db.delete(contentBlocks).where(eq(contentBlocks.contentHash, hash));
+    if (ids.drives.length) await db.delete(drives).where(inArray(drives.id, ids.drives));
+    if (ids.users.length) await db.delete(users).where(inArray(users.id, ids.users));
+    vi.unstubAllEnvs();
+  });
+
+  it('blocks the hash and waits, deleting nothing', async () => {
+    const result = await executeTakedown({ action: 'global', contentHash: hash, category: 'csam', reason: 'integration test' }, adminId);
+
+    expect(result).toMatchObject({ status: 'awaiting_evidence', haltReason: 'awaiting_evidence' });
+    waitingCaseId = result.caseId!;
+    expect(s3.has(UPLOADS, `files/${hash}/original`)).toBe(true);
+    expect(s3.log.some((line) => line.startsWith('DeleteObjectsCommand') && line.includes(hash))).toBe(false);
+  });
+
+  it('but the content is already off the web: the public copy is in quarantine, not under assets/', async () => {
+    expect(s3.has(PUBLISH, `assets/${hash}`)).toBe(false);
+    expect(s3.has(PUBLISH, `quarantine/assets/${hash}`)).toBe(true);
+  });
+
+  it('and already unreadable in the app: the view route answers 410 while the bytes still exist', async () => {
+    session.userId = ownerId;
+    expect((await view(filePageId)).status).toBe(410);
+  });
+
+  it('and cannot be published again while it waits', async () => {
+    await expect(copyAssetToPublishBucket({ contentHash: hash, mimeType: 'image/png' })).rejects.toThrow(
+      'This file is not available for publishing',
+    );
+    expect(s3.has(PUBLISH, `assets/${hash}`)).toBe(false);
+  });
+
+  it('finishes when evidence storage is configured and the case is resumed', async () => {
+    vi.stubEnv('EVIDENCE_BUCKET', EVIDENCE);
+
+    const result = await executeTakedown({ action: 'resume', caseId: waitingCaseId }, adminId);
+
+    expect(result).toMatchObject({ status: 'actioned', caseId: waitingCaseId });
+    expect(new TextDecoder().decode(s3.bucket(EVIDENCE).get(evidenceKeyFor(waitingCaseId, hash))!.body)).toBe(bytes);
+    expect(s3.keys(UPLOADS).filter((key) => key.includes(hash))).toEqual([]);
+    expect(s3.keys(PUBLISH).filter((key) => key.includes(hash))).toEqual([]);
   });
 });

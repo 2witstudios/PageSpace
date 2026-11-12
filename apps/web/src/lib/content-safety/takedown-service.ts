@@ -1,7 +1,7 @@
 import 'server-only';
 
 import { db } from '@pagespace/db/db';
-import { and, eq, isNotNull, not, like } from '@pagespace/db/operators';
+import { and, eq, isNotNull } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import type { ContentCase } from '@pagespace/db/schema/content-safety';
 import { audit } from '@pagespace/lib/audit/audit-log';
@@ -28,7 +28,9 @@ import {
 } from '@pagespace/lib/organizations/published-visibility';
 import type { PublishedObjectStore } from '@pagespace/lib/organizations/published-visibility-core';
 import { createSystemAvatarDeleteToken } from '@pagespace/lib/services/validated-service-token';
+import { ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { createPublishedObjectStore, isPublishConfigured } from '@/lib/canvas/published-storage';
+import { getS3Bucket, getS3Client } from '@/lib/presigned-url';
 import { unpublishPage } from '@/lib/canvas/unpublish-page';
 import { createTakedownStorage } from './takedown-storage';
 
@@ -73,6 +75,10 @@ function createTakedownDeps(actorUserId: string | null): TakedownDeps {
     cases: createTakedownCaseStore(),
     storage: createTakedownStorage(),
     async suspendUser({ userId, reason }) {
+      // A takedown never suspends an admin on its own: that is a decision for a person.
+      const [target] = await db.select({ role: users.role }).from(users).where(eq(users.id, userId)).limit(1);
+      if (target?.role === 'admin') return { status: 'skipped_admin' };
+
       const outcome = await suspendUser({ userId, reason });
       if (outcome.status === 'suspended') {
         // The same event the admin suspend route writes, so a user's audit
@@ -99,7 +105,12 @@ async function alertOpened(row: ContentCase, deps: TakedownDeps): Promise<void> 
   }
 }
 
-/** Ask the processor to delete a user's avatar objects, through its existing service-auth route. */
+/**
+ * Ask the processor to delete a user's avatar objects, through its existing
+ * service-auth route, then check for ourselves that none are left: the
+ * processor's delete does not report per-object failures, and "done" on a case
+ * has to mean the objects are gone.
+ */
 async function deleteAvatarObjects(userId: string): Promise<string> {
   const { token } = await createSystemAvatarDeleteToken({ userId });
   const response = await fetch(`${PROCESSOR_URL}/api/avatar/${encodeURIComponent(userId)}`, {
@@ -108,17 +119,28 @@ async function deleteAvatarObjects(userId: string): Promise<string> {
     signal: AbortSignal.timeout(10_000),
   });
   if (!response.ok) throw new Error(`Processor refused the avatar delete (${response.status})`);
+
+  const remaining = await getS3Client().send(
+    new ListObjectsV2Command({ Bucket: getS3Bucket(), Prefix: `avatars/${userId}/`, MaxKeys: 1 }),
+  );
+  if ((remaining.Contents ?? []).length > 0) {
+    throw new Error('Avatar objects are still present after the processor delete');
+  }
   return 'processor_deleted';
 }
 
-/** Clear the profile image when it points at our own storage, so nothing renders a dead avatar link. */
-async function clearUploadedProfileImage(userId: string): Promise<string> {
+/**
+ * Clear the profile image so nothing renders the removed avatar. An image we
+ * host is now a dead link; an external one (an OAuth provider's URL) is not ours
+ * to delete, but we stop displaying it.
+ */
+async function clearProfileImage(userId: string): Promise<string> {
   const cleared = await db
     .update(users)
     .set({ image: null })
-    .where(and(eq(users.id, userId), isNotNull(users.image), not(like(users.image, 'http%'))))
+    .where(and(eq(users.id, userId), isNotNull(users.image)))
     .returning({ id: users.id });
-  return cleared.length > 0 ? 'cleared' : 'no_uploaded_image';
+  return cleared.length > 0 ? 'cleared' : 'no_image';
 }
 
 interface CaseRun {
@@ -167,7 +189,7 @@ async function runCase(row: ContentCase, deps: TakedownDeps): Promise<CaseRun> {
     case 'avatar':
       return linear([
         { step: 'delete_avatar', run: () => deleteAvatarObjects(row.targetId) },
-        { step: 'clear_profile_image', run: () => clearUploadedProfileImage(row.targetId) },
+        { step: 'clear_profile_image', run: () => clearProfileImage(row.targetId) },
       ]);
 
     case 'park_user_sites': {
@@ -320,6 +342,11 @@ export async function executeTakedown(request: TakedownRequest, actorUserId: str
       const row = await requireCase(request.caseId);
       if (row.snapshot?.takedown?.kind !== 'global') {
         throw new TakedownRequestError('Only a global takedown can be re-swept', 409);
+      }
+      // A re-sweep runs the whole sequence from wherever it is. On a dismissed case
+      // that would be a takedown nobody decided on; an unfinished one is resumed instead.
+      if (row.status !== 'actioned') {
+        throw new TakedownRequestError('Only a finished takedown can be re-swept; resume this case instead', 409);
       }
       return toResponse(request.action, { result: await resweepGlobalTakedown(row.id, deps) });
     }

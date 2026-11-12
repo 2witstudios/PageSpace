@@ -69,6 +69,11 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
+const mockIsHashBlocked = vi.fn().mockResolvedValue(false);
+vi.mock('@pagespace/lib/content-safety/blocklist', () => ({
+  isHashBlocked: (...args: unknown[]) => mockIsHashBlocked(...args),
+}));
+
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
     audit: vi.fn(),
     auditRequest: vi.fn(),
@@ -114,6 +119,21 @@ describe('POST /api/files/[id]/convert-to-document audit', () => {
       ok: true,
       arrayBuffer: vi.fn().mockResolvedValue(new ArrayBuffer(10)),
     });
+  });
+
+  it('answers a neutral 410 for a file that was taken down, without asking the processor for it', async () => {
+    mockIsHashBlocked.mockResolvedValueOnce(true);
+    const request = new Request('http://localhost/api/files/file-1/convert-to-document', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Converted Document' }),
+    });
+
+    const response = await POST(request as never, { params: Promise.resolve({ id: mockFileId }) });
+
+    expect(response.status).toBe(410);
+    expect(await response.json()).toEqual({ error: 'This file has been removed' });
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
   it('logs write audit event with convert action', async () => {

@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   createToken: vi.fn(),
   sendAlert: vi.fn(),
   clearImage: vi.fn(),
+  listAvatars: vi.fn(),
   openCreated: { value: true },
 }));
 
@@ -77,6 +78,10 @@ vi.mock('@/lib/canvas/published-storage', () => ({
   isPublishConfigured: () => true,
 }));
 vi.mock('../takedown-storage', () => ({ createTakedownStorage: () => ({ evidenceConfigured: () => true }) }));
+vi.mock('@/lib/presigned-url', () => ({
+  getS3Bucket: () => 'uploads',
+  getS3Client: () => ({ send: (command: { input: { Prefix?: string } }) => mocks.listAvatars(command.input) }),
+}));
 vi.mock('@pagespace/db/db', () => ({
   db: {
     update: () => ({ set: () => ({ where: () => ({ returning: () => mocks.clearImage() }) }) }),
@@ -102,6 +107,7 @@ beforeEach(() => {
   mocks.restoreUserSites.mockResolvedValue([{ driveId: 'drive-1', prefixes: [] }]);
   mocks.createToken.mockResolvedValue({ token: 'ps_svc_token', grantedScopes: [] });
   mocks.clearImage.mockResolvedValue([{ id: 'user-1' }]);
+  mocks.listAvatars.mockResolvedValue({ Contents: [] });
   mocks.sendAlert.mockResolvedValue(undefined);
   fetchMock.mockResolvedValue(new Response('{}', { status: 200 }));
   vi.stubGlobal('fetch', fetchMock);
@@ -190,6 +196,7 @@ describe('avatar takedown', () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(String(url)).toMatch(/\/api\/avatar\/user-1$/);
     expect(init).toMatchObject({ method: 'DELETE', headers: { Authorization: 'Bearer ps_svc_token' } });
+    expect(mocks.listAvatars).toHaveBeenCalledWith(expect.objectContaining({ Prefix: 'avatars/user-1/' }));
     expect(result.status).toBe('actioned');
     expect(stepsOf(result.caseId!)).toEqual(['delete_avatar:ok', 'clear_profile_image:ok']);
     expect(cases.get(result.caseId!)).toMatchObject({ targetType: 'avatar', targetId: 'user-1' });
@@ -206,6 +213,17 @@ describe('avatar takedown', () => {
     expect(resumed.status).toBe('actioned');
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(mocks.clearImage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('avatar takedown verification', () => {
+  it('does not call the case done while avatar objects are still in storage', async () => {
+    mocks.listAvatars.mockResolvedValue({ Contents: [{ Key: 'avatars/user-1/avatar.png' }] });
+
+    const result = await executeTakedown({ action: 'avatar', userId: 'user-1', category: 'csam', reason: 'r' }, 'admin-1');
+
+    expect(result).toMatchObject({ status: 'open', failedStep: 'delete_avatar' });
+    expect(mocks.clearImage).not.toHaveBeenCalled();
   });
 });
 
@@ -251,5 +269,11 @@ describe('requests that cannot be acted on', () => {
   it('refuses to re-sweep anything but a global takedown', async () => {
     cases.set('c3', { id: 'c3', status: 'actioned', snapshot: { takedown: { kind: 'avatar' } }, steps: [] });
     await expect(executeTakedown({ action: 'resweep', caseId: 'c3' }, null)).rejects.toMatchObject({ status: 409 });
+  });
+
+  it.each(['dismissed', 'open', 'awaiting_evidence'])('refuses to re-sweep a %s case: only a finished takedown is swept', async (status) => {
+    cases.set('c4', { id: 'c4', status, snapshot: { takedown: { kind: 'global' } }, steps: [] });
+    await expect(executeTakedown({ action: 'resweep', caseId: 'c4' }, null)).rejects.toMatchObject({ status: 409 });
+    expect((cases.get('c4')!.steps as unknown[]).length).toBe(0);
   });
 });

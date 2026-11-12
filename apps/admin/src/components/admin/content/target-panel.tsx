@@ -152,8 +152,9 @@ export function TargetPanel() {
       title: "Remove this user's avatar?",
       description: (
         <span>
-          Deletes the uploaded avatar image and clears it from their profile. Copies already cached by browsers or
-          a CDN may persist until those caches expire.
+          Deletes the uploaded avatar image and clears it from their profile. An external image from a sign-in
+          provider is not ours to delete, but stops being shown. Copies already cached by browsers or a CDN may
+          persist until those caches expire.
         </span>
       ),
       confirmLabel: 'Remove avatar',
@@ -254,7 +255,9 @@ export function TargetPanel() {
                         <>
                           <Field label="User"><Mono>{target.user.id}</Mono></Field>
                           <Field label="Account">{target.user.suspended ? 'Suspended' : 'Active'}</Field>
-                          <Field label="Uploaded avatar">{target.user.hasUploadedAvatar ? 'Yes' : 'No'}</Field>
+                          <Field label="Avatar">
+                            {!target.user.hasAvatar ? 'None' : target.user.hasUploadedAvatar ? 'Uploaded to PageSpace' : 'External image (sign-in provider)'}
+                          </Field>
                         </>
                       )}
                     </dl>
@@ -308,7 +311,7 @@ export function TargetPanel() {
                       Park drive sites
                     </Button>
                   )}
-                  <Button variant="outline" disabled={!target.user?.hasUploadedAvatar} onClick={() => open('avatar')}>
+                  <Button variant="outline" disabled={!target.user?.hasAvatar} onClick={() => open('avatar')}>
                     Remove avatar
                   </Button>
                 </CardContent>

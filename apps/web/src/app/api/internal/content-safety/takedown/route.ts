@@ -18,8 +18,9 @@ import { TakedownRequestError, executeTakedown } from '@/lib/content-safety/take
  * credentials for both. The admin app has no S3 access at all.
  *
  * Auth: the shared service secret (see lib/auth/service-secret.ts). As defence
- * in depth the acting user must also be an admin in the database, so a leaked
- * secret alone cannot run a takedown in an arbitrary user's name.
+ * in depth the acting user must also be an admin in the database who is not
+ * suspended, so a leaked secret alone cannot run a takedown in an arbitrary
+ * user's name.
  *
  * A step that fails is not an HTTP error: the response is 200 with
  * `status: 'open'` and `failedStep`, and the case is left resumable.
@@ -28,8 +29,12 @@ export async function POST(request: Request): Promise<Response> {
   const auth = authenticateServiceSecret(request);
   if (!auth.ok) return auth.response;
 
-  const [actor] = await db.select({ role: users.role }).from(users).where(eq(users.id, auth.userId)).limit(1);
-  if (actor?.role !== 'admin') {
+  const [actor] = await db
+    .select({ role: users.role, suspendedAt: users.suspendedAt })
+    .from(users)
+    .where(eq(users.id, auth.userId))
+    .limit(1);
+  if (actor?.role !== 'admin' || actor.suspendedAt !== null) {
     return Response.json({ error: 'Forbidden' }, { status: 403 });
   }
 

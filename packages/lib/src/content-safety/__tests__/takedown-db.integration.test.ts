@@ -87,14 +87,16 @@ describe('takedown database edge — real Postgres', () => {
   });
 
   describe('collectContentReferences', () => {
-    it('finds pages by file path and by file link, the file row, the drive and everyone who put it there', async () => {
+    it('finds pages by file path and by file link, the file row, the drive and the uploader', async () => {
       const refs = await collectContentReferences(HASH);
 
       expect(refs.pageIds.sort()).toEqual([filePageId, linkedPageId].sort());
       expect(refs.fileIds).toEqual([HASH]);
       expect(refs.driveIds).toEqual([driveId]);
-      expect(refs.uploaderUserIds.sort()).toEqual([uploader, linker].sort());
       expect(refs.truncated).toBe(false);
+      // Whoever only LINKED the stored file to another page did not bring the
+      // bytes in: they are found through the page, not listed as an uploader.
+      expect(refs.uploaderUserIds).toEqual([uploader]);
     });
 
     it('finds a page that stores the legacy files/<hash>/original form', async () => {
@@ -142,6 +144,15 @@ describe('takedown database edge — real Postgres', () => {
       expect(first.created).toBe(true);
       expect(second).toMatchObject({ created: false, case: { id: first.case.id } });
       expect(third.case.snapshot?.takedown?.suspendUploader).toBe(true);
+    });
+
+    it('gives a reused case the new request\'s category, so re-filing as CSAM runs under the CSAM rule', async () => {
+      const hash = freshHash();
+      const first = await open({ targetId: hash, contentHash: hash, category: 'malware', takedown: { kind: 'global', skipPreservation: true, skipPreservationReason: 'known sample' } });
+      const second = await open({ targetId: hash, contentHash: hash, category: 'csam' });
+
+      expect(second.case.id).toBe(first.case.id);
+      expect(second.case.category).toBe('csam');
     });
 
     it('opens a separate case for a different action on the same target', async () => {
@@ -231,7 +242,7 @@ describe('takedown database edge — real Postgres', () => {
     });
 
     it('resolves a user ID, and reports the block once the hash is blocked', async () => {
-      expect(await resolveTakedownTarget(uploader)).toMatchObject({ targetType: 'user', user: { id: uploader, suspended: false, hasUploadedAvatar: false } });
+      expect(await resolveTakedownTarget(uploader)).toMatchObject({ targetType: 'user', user: { id: uploader, suspended: false, hasAvatar: false, hasUploadedAvatar: false } });
 
       await createTakedownCaseStore().upsertBlock({ contentHash: HASH, category: 'malware', source: 'admin', caseId: 'case-z', createdBy: null });
       expect((await resolveTakedownTarget(HASH))?.block).toMatchObject({ category: 'malware', caseId: 'case-z' });
@@ -247,6 +258,10 @@ describe('takedown database edge — real Postgres', () => {
       expect(await resolveTakedownTarget('no-such-thing')).toBeNull();
       expect(await resolveTakedownTarget('   ')).toBeNull();
       expect(await resolveTakedownTarget('https://nobody-here.example.test/x')).toBeNull();
+    });
+
+    it('does not throw on a URL with a malformed escape', async () => {
+      await expect(resolveTakedownTarget(`https://${SITE}.pagespace.site/bad%zzpath`)).resolves.toMatchObject({ targetType: 'published_url', page: null });
     });
   });
 

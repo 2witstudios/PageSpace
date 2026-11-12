@@ -6,6 +6,8 @@ import type {
 } from '@pagespace/db/schema/content-safety';
 import { GLOBAL_TAKEDOWN_STEPS, type GlobalTakedownStep } from '../takedown-plan';
 import {
+  MAX_AUTO_SUSPENSIONS,
+  derivedEvidenceKeyFor,
   evidenceKeyFor,
   resweepGlobalTakedown,
   runGlobalTakedown,
@@ -59,6 +61,7 @@ function createWorld(options: { category?: ContentCase['category']; evidence?: b
     evidenceConfigured: options.evidence ?? true,
     references: { ...emptyRefs(), pageIds: ['page-1'], driveIds: ['drive-1'], uploaderUserIds: ['user-1', 'user-2'] },
     corruptCopy: false,
+    copies: [] as string[],
     row: {
       id: CASE_ID,
       targetType: 'content_hash',
@@ -108,15 +111,32 @@ function createWorld(options: { category?: ContentCase['category']; evidence?: b
         const key = `files/${hash}/original`;
         const size = uploads.get(key);
         if (size !== undefined) return { store: 'uploads', key, size };
-        const assetSize = publish.get(`assets/${hash}`);
-        return assetSize === undefined ? null : { store: 'publish', key: `assets/${hash}`, size: assetSize };
+        for (const assetKey of [`quarantine/assets/${hash}`, `assets/${hash}`]) {
+          const assetSize = publish.get(assetKey);
+          if (assetSize !== undefined) return { store: 'publish', key: assetKey, size: assetSize };
+        }
+        return null;
       },
-      hasAnyObjects: async (hash) =>
-        [...uploads.keys(), ...publish.keys()].some((key) => key.includes(hash)),
+      listObjects: async (hash) => [
+        ...[...uploads.entries()].filter(([key]) => key.includes(hash)).map(([key, size]) => ({ store: 'uploads' as const, key, size })),
+        ...[...publish.entries()].filter(([key]) => key.includes(hash)).map(([key, size]) => ({ store: 'publish' as const, key, size })),
+      ],
+      quarantinePublic: async (hash) => {
+        boom('quarantine_public');
+        let moved = 0;
+        for (const [key, size] of [...publish.entries()]) {
+          if (!key.startsWith('assets/') || !key.includes(hash)) continue;
+          publish.set(`quarantine/${key}`, size);
+          publish.delete(key);
+          moved += 1;
+        }
+        return moved;
+      },
       headEvidence: async (key) => (evidence.has(key) ? { size: evidence.get(key)! } : null),
       copyToEvidence: async (source, key) => {
         boom('preserve');
         evidence.set(key, world.corruptCopy ? source.size - 1 : source.size);
+        world.copies.push(key);
       },
       deleteFromUploads: async (hash) => {
         boom('delete_uploads');
@@ -167,12 +187,18 @@ describe('runGlobalTakedown', () => {
     expect(world.row.snapshot?.evidenceKey).toBe(evidenceKeyFor(CASE_ID, HASH));
     expect(stepStates(world.row.steps)).toEqual([
       'block:ok',
+      'quarantine_public:ok',
       'preserve:ok',
       'delete_uploads:ok',
       'delete_public:ok',
       'record_references:ok',
     ]);
     expect(world.suspended).toEqual([]);
+  });
+
+  it('moves the public copies out of the public prefix before anything is preserved or deleted', async () => {
+    await runGlobalTakedown(CASE_ID, deps);
+    expect(world.calls.slice(0, 3)).toEqual(['block', 'quarantine_public', 'preserve']);
   });
 
   it('runs the block before any other effect', async () => {
@@ -199,7 +225,7 @@ describe('runGlobalTakedown', () => {
     expect(first).toMatchObject({ status: 'open', failedStep: step });
     expect(world.row.status).toBe('open');
     const callsBeforeResume = [...world.calls];
-    expect(callsBeforeResume.at(-1)).toBe(step);
+    expect(callsBeforeResume[callsBeforeResume.length - 1]).toBe(step);
 
     const second = await runGlobalTakedown(CASE_ID, deps);
     expect(second.status).toBe('actioned');
@@ -231,10 +257,23 @@ describe('runGlobalTakedown', () => {
 
     expect(result).toMatchObject({ status: 'open', failedStep: 'preserve' });
     expect(world.uploads.has(`files/${HASH}/original`)).toBe(true);
-    expect(world.publish.has(`assets/${HASH}`)).toBe(true);
+    expect(world.uploads.size).toBe(2);
   });
 
-  it('preserves from the public bucket when the private original is already gone', async () => {
+  it('does not trust a bad copy left by an earlier attempt: a resume copies again and verifies', async () => {
+    world.corruptCopy = true;
+    await runGlobalTakedown(CASE_ID, deps);
+    expect(world.evidence.get(evidenceKeyFor(CASE_ID, HASH))).toBe(1233);
+
+    world.corruptCopy = false;
+    const result = await runGlobalTakedown(CASE_ID, deps);
+
+    expect(result.status).toBe('actioned');
+    expect(world.copies).toHaveLength(2);
+    expect(world.evidence.get(evidenceKeyFor(CASE_ID, HASH))).toBe(1234);
+  });
+
+  it('preserves from the public copy when the private original is already gone', async () => {
     world.uploads.clear();
     const result = await runGlobalTakedown(CASE_ID, deps);
 
@@ -253,9 +292,26 @@ describe('runGlobalTakedown', () => {
     expect(world.blocks.has(HASH)).toBe(true);
   });
 
-  it('does not delete derived CSAM objects when there is no original left to preserve', async () => {
+  it('preserves every derived CSAM object when no original is left, and only then deletes them', async () => {
     world.uploads.delete(`files/${HASH}/original`);
     world.publish.delete(`assets/${HASH}`);
+    const result = await runGlobalTakedown(CASE_ID, deps);
+
+    expect(result.status).toBe('actioned');
+    expect([...world.evidence.keys()].sort()).toEqual(
+      [
+        derivedEvidenceKeyFor(CASE_ID, HASH, { store: 'uploads', key: `cache/${HASH}/thumbnail.webp`, size: 50 }),
+        derivedEvidenceKeyFor(CASE_ID, HASH, { store: 'publish', key: `quarantine/assets/cache/${HASH}/thumbnail.webp`, size: 50 }),
+      ].sort(),
+    );
+    expect(world.uploads.size).toBe(0);
+    expect(world.publish.size).toBe(0);
+  });
+
+  it('deletes nothing when a derived CSAM object cannot be preserved', async () => {
+    world.uploads.delete(`files/${HASH}/original`);
+    world.publish.delete(`assets/${HASH}`);
+    world.corruptCopy = true;
     const result = await runGlobalTakedown(CASE_ID, deps);
 
     expect(result).toMatchObject({ status: 'open', failedStep: 'preserve' });
@@ -275,6 +331,16 @@ describe('runGlobalTakedown', () => {
       expect(world.uploads.size).toBe(2);
       expect(world.publish.size).toBe(2);
       expect(world.row.status).toBe('awaiting_evidence');
+    });
+
+    it('still takes the public copies offline while it waits: nothing stays world-readable', async () => {
+      await runGlobalTakedown(CASE_ID, deps);
+
+      expect([...world.publish.keys()].filter((key) => key.startsWith('assets/'))).toEqual([]);
+      expect([...world.publish.keys()].sort()).toEqual([
+        `quarantine/assets/${HASH}`,
+        `quarantine/assets/cache/${HASH}/thumbnail.webp`,
+      ]);
     });
 
     it('alerts once that the case stopped at the evidence step', async () => {
@@ -333,6 +399,30 @@ describe('runGlobalTakedown', () => {
     await runGlobalTakedown(CASE_ID, deps);
 
     expect(world.suspended).toEqual(['user-1']);
+  });
+
+  it('suspends nobody when the hash has more uploaders than one takedown may suspend, and says so on the case', async () => {
+    world.row.snapshot = { takedown: { kind: 'global', actorUserId: 'admin-1', suspendUploader: true } };
+    world.references = {
+      ...world.references,
+      uploaderUserIds: Array.from({ length: MAX_AUTO_SUSPENSIONS + 1 }, (_, i) => `user-${i}`),
+    };
+    const result = await runGlobalTakedown(CASE_ID, deps);
+
+    expect(result.status).toBe('actioned');
+    expect(world.suspended).toEqual([]);
+    const step = world.row.steps?.find((s) => s.step === 'suspend_uploader');
+    expect(step).toMatchObject({ status: 'skipped' });
+    expect(step?.detail).toContain(`too_many_uploaders=${MAX_AUTO_SUSPENSIONS + 1}`);
+  });
+
+  it('records, rather than fails, when there is no uploader to suspend', async () => {
+    world.row.snapshot = { takedown: { kind: 'global', suspendUploader: true } };
+    world.references = { ...world.references, uploaderUserIds: [] };
+    const result = await runGlobalTakedown(CASE_ID, deps);
+
+    expect(result.status).toBe('actioned');
+    expect(stepStates(world.row.steps)).toContain('suspend_uploader:skipped');
   });
 
   it('alerts when the case is actioned', async () => {
