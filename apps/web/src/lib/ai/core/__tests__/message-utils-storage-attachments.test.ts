@@ -4,7 +4,15 @@ import type { UIMessage } from 'ai';
 const mockUploadChatAttachment = vi.fn();
 const mockGetChatAttachmentUrl = vi.fn();
 
-vi.mock('@/lib/upload/chat-attachment-storage', () => ({
+// A persisted key must be the exact shape the storage module mints, or
+// reconstruct refuses to sign it — so the read-side fixtures use a real one and
+// the real predicate.
+const PERSISTED_KEY = `chat-attachments/${'d'.repeat(64)}/original`;
+
+vi.mock('@/lib/upload/chat-attachment-storage', async () => ({
+  isChatAttachmentStorageKey: (
+    await vi.importActual<typeof import('@/lib/upload/chat-attachment-storage')>('@/lib/upload/chat-attachment-storage')
+  ).isChatAttachmentStorageKey,
   uploadChatAttachment: (...args: unknown[]) => mockUploadChatAttachment(...args),
   getChatAttachmentUrl: (...args: unknown[]) => mockGetChatAttachmentUrl(...args),
   parseChatAttachmentStorageKey: (url: string) => {
@@ -115,14 +123,14 @@ describe('convertDbMessageToUIMessage — S3-backed file parts', () => {
   it('given a persisted storageKey file part, should regenerate a fresh presigned URL', async () => {
     const structuredContent = JSON.stringify({
       textParts: [],
-      fileParts: [{ storageKey: 'chat-attachments/deadbeef/original', mediaType: 'image/png', filename: 'a.png' }],
+      fileParts: [{ storageKey: PERSISTED_KEY, mediaType: 'image/png', filename: 'a.png' }],
       partsOrder: [{ index: 0, type: 'file' }],
       originalContent: '',
     });
 
     const result = await convertDbMessageToUIMessage({ ...baseMeta, content: structuredContent });
 
-    expect(mockGetChatAttachmentUrl).toHaveBeenCalledWith('chat-attachments/deadbeef/original');
+    expect(mockGetChatAttachmentUrl).toHaveBeenCalledWith(PERSISTED_KEY);
     expect(result.parts[0]).toEqual({
       type: 'file',
       url: 'https://signed.example.com/get/deadbeef',
@@ -154,7 +162,7 @@ describe('convertDbMessageToUIMessage — S3-backed file parts', () => {
     mockGetChatAttachmentUrl.mockRejectedValue(new Error('S3 unavailable'));
     const structuredContent = JSON.stringify({
       textParts: [],
-      fileParts: [{ storageKey: 'chat-attachments/deadbeef/original', mediaType: 'image/png', filename: 'a.png' }],
+      fileParts: [{ storageKey: PERSISTED_KEY, mediaType: 'image/png', filename: 'a.png' }],
       partsOrder: [{ index: 0, type: 'file' }],
       originalContent: 'my message',
     });

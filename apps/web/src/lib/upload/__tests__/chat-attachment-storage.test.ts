@@ -8,11 +8,28 @@ vi.mock('@/lib/upload/s3-effects', () => ({
   putObject: (...args: unknown[]) => mockPutObject(...args),
 }));
 
-import { buildChatAttachmentKey, uploadChatAttachment, parseChatAttachmentStorageKey } from '../chat-attachment-storage';
+const mockGetSignedUrl = vi.fn();
+vi.mock('@aws-sdk/s3-request-presigner', () => ({
+  getSignedUrl: (...args: unknown[]) => mockGetSignedUrl(...args),
+}));
+
+vi.mock('@/lib/presigned-url', () => ({
+  getS3Client: () => ({}),
+  getS3Bucket: () => 'test-bucket',
+}));
+
+import {
+  buildChatAttachmentKey,
+  uploadChatAttachment,
+  parseChatAttachmentStorageKey,
+  getChatAttachmentUrl,
+  isChatAttachmentStorageKey,
+} from '../chat-attachment-storage';
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockPutObject.mockResolvedValue(undefined);
+  mockGetSignedUrl.mockResolvedValue('https://signed.example.com/get');
 });
 
 describe('buildChatAttachmentKey', () => {
@@ -110,5 +127,53 @@ describe('parseChatAttachmentStorageKey', () => {
   it('given a hash of the wrong length, should return null', () => {
     const url = 'https://bucket.example.com/chat-attachments/deadbeef/original';
     expect(parseChatAttachmentStorageKey(url)).toBeNull();
+  });
+});
+
+describe('getChatAttachmentUrl — key scope', () => {
+  const HASH = 'a'.repeat(64);
+  const OWN_KEY = `chat-attachments/${HASH}/original`;
+
+  it('given a key this module minted, should sign a GET for exactly that key', async () => {
+    const url = await getChatAttachmentUrl(OWN_KEY);
+
+    expect(url).toBe('https://signed.example.com/get');
+    expect(mockGetSignedUrl).toHaveBeenCalledTimes(1);
+    const command = mockGetSignedUrl.mock.calls[0][1] as { input: { Bucket: string; Key: string } };
+    expect(command.input).toEqual({ Bucket: 'test-bucket', Key: OWN_KEY });
+  });
+
+  it('given the key uploadChatAttachment returns, should accept it (mint and check agree)', async () => {
+    mockCheckObjectExists.mockResolvedValue(true);
+    const { storageKey } = await uploadChatAttachment(Buffer.from('hello world'), 'image/png');
+
+    expect(isChatAttachmentStorageKey(storageKey)).toBe(true);
+  });
+
+  const refused: Array<[string, unknown]> = [
+    ["another tenant's page file", `files/${HASH}/original`],
+    ['a processor cache object', `cache/${HASH}/ai-vision`],
+    ['an avatar', 'avatars/user-1/avatar.png'],
+    ['a valid prefix followed by /../ traversal', `chat-attachments/${HASH}/original/../../../files/${HASH}/original`],
+    ['traversal in place of the hash', `chat-attachments/../files/${HASH}/original`],
+    ['a non-hex hash', `chat-attachments/${'g'.repeat(64)}/original`],
+    ['an uppercase-hex hash', `chat-attachments/${'A'.repeat(64)}/original`],
+    ['a short hash', 'chat-attachments/deadbeef/original'],
+    ['a long hash', `chat-attachments/${'a'.repeat(65)}/original`],
+    ['a different leaf', `chat-attachments/${HASH}/thumbnail`],
+    ['a leading path segment', `files/${OWN_KEY}`],
+    ['a leading slash', `/${OWN_KEY}`],
+    ['a trailing suffix', `${OWN_KEY}/extra`],
+    ['a trailing newline', `${OWN_KEY}\n`],
+    ['a full URL containing a valid key', `https://bucket.example.com/${OWN_KEY}`],
+    ['a query string after a valid key', `${OWN_KEY}?versionId=1`],
+    ['an empty string', ''],
+    ['a non-string', { toString: () => OWN_KEY }],
+  ];
+
+  it.each(refused)('given %s, should throw without signing anything', async (_label, key) => {
+    expect(isChatAttachmentStorageKey(key)).toBe(false);
+    await expect(getChatAttachmentUrl(key as string)).rejects.toThrow(/refusing to sign/i);
+    expect(mockGetSignedUrl).not.toHaveBeenCalled();
   });
 });

@@ -55,6 +55,7 @@ import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
 import {
   extractStructuredContentFromParts,
+  neutralizeEnvelopeShapedText,
   convertDbMessageToUIMessage,
   MessageConversationConflictError,
   type ToolCall,
@@ -130,7 +131,9 @@ async function savePageMessageRow({
   dbClient: DbExecutor;
   /** The `source` the row actually holds — see the return of the upsert. */
 }): Promise<string | null> {
-  let structuredContent = content;
+  // No parts → the text is stored raw, so it must not be readable as an
+  // envelope (see neutralizeEnvelopeShapedText).
+  let structuredContent = neutralizeEnvelopeShapedText(content);
   if (uiMessage?.parts && uiMessage.parts.length > 0) {
     structuredContent = await extractStructuredContentFromParts(uiMessage.parts, content);
   }
@@ -211,7 +214,9 @@ async function saveGlobalMessageRow({
   dbClient: DbExecutor;
   /** The `source` the row actually holds — insert-only, so not always the argument. */
 }): Promise<string | null> {
-  let structuredContent = content;
+  // No parts → the text is stored raw, so it must not be readable as an
+  // envelope (see neutralizeEnvelopeShapedText).
+  let structuredContent = neutralizeEnvelopeShapedText(content);
   if (uiMessage?.parts && uiMessage.parts.length > 0) {
     structuredContent = await extractStructuredContentFromParts(uiMessage.parts, content);
   }
@@ -1484,5 +1489,6 @@ export function processMessageContentUpdate(
   } catch {
     // Plain text, use as-is
   }
-  return newContent;
+  // Stored raw, so an edit must not be able to turn a message INTO an envelope.
+  return neutralizeEnvelopeShapedText(newContent);
 }

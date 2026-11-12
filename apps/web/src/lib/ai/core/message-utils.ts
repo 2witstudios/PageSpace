@@ -6,7 +6,7 @@ import {
   type ToolUIPart,
 } from 'ai';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { uploadChatAttachment, getChatAttachmentUrl, parseChatAttachmentStorageKey } from '@/lib/upload/chat-attachment-storage';
+import { uploadChatAttachment, getChatAttachmentUrl, parseChatAttachmentStorageKey, isChatAttachmentStorageKey } from '@/lib/upload/chat-attachment-storage';
 
 /** Parse a `data:<mediaType>;base64,<data>` URL into its raw bytes and media type. */
 function decodeDataUrl(dataUrl: string): { buffer: Buffer; mediaType: string } | null {
@@ -392,6 +392,31 @@ function parseStructuredContent(content: string | null | undefined): StructuredC
 }
 
 /**
+ * Make text that is about to be stored RAW in a message `content` column safe
+ * from being read back as one of our envelopes.
+ *
+ * `parseStructuredContent` recognises an envelope by shape alone, and the
+ * column holds both envelopes and bare prose, so a message whose text is
+ * `{"textParts":[…],"partsOrder":[…],"fileParts":[{"storageKey":…}]}` — which
+ * anyone can type — used to come back as an attachment envelope the server
+ * then acted on. Text that has that shape is wrapped in a REAL envelope whose
+ * single text part is the raw string, so it reads back as exactly what was
+ * typed. Everything else is returned untouched (byte-for-byte), so ordinary
+ * messages and existing rows are unaffected.
+ *
+ * Uses `parseStructuredContent` itself as the test so the writer and the
+ * reader cannot disagree about what counts as an envelope.
+ */
+export function neutralizeEnvelopeShapedText(text: string): string {
+  if (!parseStructuredContent(text)) return text;
+  return JSON.stringify({
+    textParts: [text],
+    partsOrder: [{ index: 0, type: 'text' }],
+    originalContent: text,
+  });
+}
+
+/**
  * Shared helper: reconstruct a UIMessage from structured content data and
  * the common fields present on both DatabaseMessage and GlobalAssistantMessage.
  */
@@ -434,6 +459,24 @@ async function reconstructFromStructuredContent(
     } else if (partOrder.type === 'file') {
       if (filePartIndex < fileParts.length) {
         const fp = fileParts[filePartIndex];
+        filePartIndex++;
+        // A persisted storageKey is data a user can influence (envelope-shaped
+        // text saved before the write path neutralized it). Only a key this
+        // app mints is ever signed; anything else drops THIS part — not the
+        // whole read — and is logged. getChatAttachmentUrl enforces the same
+        // rule and throws; checking here keeps one bad part from costing the
+        // message its other parts.
+        if (fp.storageKey && !isChatAttachmentStorageKey(fp.storageKey)) {
+          // Persisted JSON, so the declared `string` type is a hope, not a fact.
+          const refusedKey: unknown = fp.storageKey;
+          loggers.security.warn('Refused to sign chat attachment: storage key outside chat-attachments prefix', {
+            messageId: msg.id,
+            role: msg.role,
+            keyType: typeof refusedKey,
+            keyPreview: typeof refusedKey === 'string' ? refusedKey.slice(0, 96) : undefined,
+          });
+          continue;
+        }
         const url = fp.storageKey ? await getChatAttachmentUrl(fp.storageKey) : fp.url;
         parts.push({
           type: 'file',
@@ -441,7 +484,6 @@ async function reconstructFromStructuredContent(
           mediaType: fp.mediaType || 'application/octet-stream',
           filename: fp.filename,
         });
-        filePartIndex++;
       }
     } else if (partOrder.type.startsWith('tool-') && partOrder.toolCallId) {
       const toolCall = toolCallsMap.get(partOrder.toolCallId);
