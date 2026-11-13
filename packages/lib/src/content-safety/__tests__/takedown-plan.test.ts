@@ -3,6 +3,7 @@ import type { ContentCaseStep } from '@pagespace/db/schema/content-safety';
 import {
   GLOBAL_TAKEDOWN_STEPS,
   RESWEEP_MARKER,
+  UNPRESERVED_OBJECT,
   describeCaseProgress,
   nextGlobalTakedownStep,
   statusForDecision,
@@ -122,6 +123,29 @@ describe('nextGlobalTakedownStep', () => {
       expect(
         nextGlobalTakedownStep(input({ steps: blocked, category: 'malware', evidenceConfigured: false })),
       ).toEqual({ kind: 'halt', reason: 'preservation_decision_required' });
+    });
+  });
+
+  describe('a delete that found an object preservation did not copy', () => {
+    const upToDelete = ['block', 'unpublish_public', 'record_references', 'preserve'].map(ok);
+    const unpreserved: ContentCaseStep = { step: 'delete_uploads', status: 'failed', detail: `${UNPRESERVED_OBJECT}: x`, at };
+
+    it('goes back to preservation, not straight to the delete again', () => {
+      expect(nextGlobalTakedownStep(input({ steps: [...upToDelete, unpreserved] }))).toEqual({ kind: 'run', step: 'preserve' });
+    });
+
+    it('retries the delete once preservation has run again', () => {
+      expect(nextGlobalTakedownStep(input({ steps: [...upToDelete, unpreserved, ok('preserve')] }))).toEqual({ kind: 'run', step: 'delete_uploads' });
+    });
+
+    it('retries only the delete after any other delete failure', () => {
+      expect(nextGlobalTakedownStep(input({ steps: [...upToDelete, failed('delete_uploads')] }))).toEqual({ kind: 'run', step: 'delete_uploads' });
+    });
+
+    it('goes back to preservation within a re-sweep too', () => {
+      const finished = ['block', 'unpublish_public', 'record_references', 'preserve', 'delete_uploads', 'delete_public', 'record_ai_references'].map(ok);
+      const steps = [...finished, ok(RESWEEP_MARKER), ok('unpublish_public'), ok('preserve'), unpreserved];
+      expect(nextGlobalTakedownStep(input({ steps }))).toEqual({ kind: 'run', step: 'preserve' });
     });
   });
 

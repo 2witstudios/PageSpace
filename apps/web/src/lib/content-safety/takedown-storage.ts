@@ -3,6 +3,7 @@ import 'server-only';
 import { createHash } from 'crypto';
 import { CopyObjectCommand, DeleteObjectCommand, GetObjectCommand, PutObjectCommand, type S3Client } from '@aws-sdk/client-s3';
 import {
+  UnpreservedObjectError,
   holdKeyFor,
   type ObjectDigest,
   type TakedownOriginal,
@@ -236,15 +237,27 @@ export function createTakedownStorage(): TakedownStorage {
       );
     },
 
-    async deleteFromUploads(contentHash, caseId) {
+    async deleteFromUploads(contentHash, caseId, isPreserved) {
       const hash = requireHash(contentHash);
       const keys = (await listUploadsObjects(hash)).map((object) => object.key);
-      await deleteS3Keys(getS3Client(), getS3Bucket(), keys);
-
-      // The hold copy goes last, and only here: by the planner's order this step
-      // runs after preservation is settled, so the copy has served its purpose.
       const holdKey = holdKeyFor(caseId, hash);
       const hold = await headS3Object(getS3Client(), getS3Bucket(), holdKey);
+
+      // Every original about to go is read and hashed first, and one that holds
+      // bytes preservation did not copy stops the whole delete: a presigned PUT
+      // issued before the block can have written it since preservation settled.
+      // What remains is the moment between this read and the delete below.
+      if (isPreserved) {
+        const originals = [...uploadsOriginalKeysFor(hash).filter((key) => keys.includes(key)), ...(hold ? [holdKey] : [])];
+        for (const key of originals) {
+          const digest = await digestS3Object(getS3Client(), getS3Bucket(), key);
+          if (digest && !isPreserved(digest)) throw new UnpreservedObjectError();
+        }
+      }
+
+      await deleteS3Keys(getS3Client(), getS3Bucket(), keys);
+      // The hold copy goes last, and only here: by the planner's order this step
+      // runs after preservation is settled, so the copy has served its purpose.
       if (hold) await getS3Client().send(new DeleteObjectCommand({ Bucket: getS3Bucket(), Key: holdKey }));
       return keys.length + (hold ? 1 : 0);
     },

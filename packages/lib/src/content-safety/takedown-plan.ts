@@ -21,7 +21,10 @@
  *                    their page meanwhile; the rows that say who uploaded it
  *                    must be captured before then.
  *   4. preserve    — nothing private is deleted until a copy is verified (or,
- *                    outside CSAM, an admin has explicitly declined one).
+ *                    outside CSAM, an admin has explicitly declined one). The
+ *                    delete checks every private original against what this
+ *                    step recorded; one it did not copy stops the delete and
+ *                    sends the case back here (`UNPRESERVED_OBJECT`).
  *   5. deletes     — uploads bucket, then the public bucket.
  *   6. record AI   — the AI-chat messages that carry the file, and their authors,
  *                    searched again with a long timeout. That search cannot use
@@ -100,6 +103,14 @@ export function latestEntry(steps: readonly ContentCaseStep[], step: string): Co
   return undefined;
 }
 
+/**
+ * How a failed `delete_uploads` begins its detail when it stopped because a
+ * private original was not one preservation copied: bytes a presigned PUT
+ * issued before the block wrote after preservation settled. Preservation is
+ * then unsettled again, so the next run copies them before it deletes.
+ */
+export const UNPRESERVED_OBJECT = 'unpreserved_object';
+
 /** The detail recorded when an admin's "skip preservation" is honoured. */
 export const SKIPPED_BY_ADMIN = 'skipped_by_admin';
 
@@ -136,7 +147,19 @@ function isSettled(step: GlobalTakedownStep, input: GlobalTakedownPlanInput): bo
   if (step === 'preserve' && latest.status === 'skipped' && latest.detail === SKIPPED_BY_ADMIN) {
     return preservationRule(input).kind === 'skip';
   }
+  if (step === 'preserve' && foundUnpreservedSince(scope, latest)) return false;
   return true;
+}
+
+/** True when a delete after this preservation stopped at an object it had not copied. */
+function foundUnpreservedSince(scope: readonly ContentCaseStep[], preserved: ContentCaseStep): boolean {
+  const deleted = latestEntry(scope, 'delete_uploads');
+  return (
+    deleted !== undefined &&
+    deleted.status === 'failed' &&
+    deleted.detail?.startsWith(UNPRESERVED_OBJECT) === true &&
+    scope.lastIndexOf(deleted) > scope.lastIndexOf(preserved)
+  );
 }
 
 export function nextGlobalTakedownStep(input: GlobalTakedownPlanInput): TakedownDecision {

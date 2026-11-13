@@ -13,6 +13,7 @@ vi.mock('@aws-sdk/client-s3', async (importOriginal) => ({
   },
 }));
 
+import { UnpreservedObjectError } from '@pagespace/lib/content-safety/takedown';
 import { createTakedownStorage, getEvidenceBucket } from '../takedown-storage';
 
 const HASH = 'a'.repeat(64);
@@ -282,6 +283,37 @@ describe('deleteFromUploads', () => {
     expect(await createTakedownStorage().deleteFromUploads(HASH, CASE)).toBe(6);
     expect(s3.has(UPLOADS, HOLD)).toBe(false);
     expect(s3.has(UPLOADS, `content-hold/another-case/${HASH}`)).toBe(true);
+  });
+
+  describe('checked against what preservation recorded', () => {
+    const sha = (bytes: string) => createHash('sha256').update(bytes).digest('hex');
+    const accepting = (...shas: string[]) => vi.fn((digest: { sha256: string }) => shas.includes(digest.sha256));
+
+    it('hashes every private original, and the hold copy, before deleting', async () => {
+      s3.put(UPLOADS, HOLD, 'original-bytes');
+      const isPreserved = accepting(sha('original-bytes'));
+
+      expect(await createTakedownStorage().deleteFromUploads(HASH, CASE, isPreserved)).toBe(6);
+      expect(isPreserved).toHaveBeenCalledTimes(3);
+      expect(s3.has(UPLOADS, HOLD)).toBe(false);
+    });
+
+    it.each([
+      ['the page file', `files/${'a'.repeat(64)}/original`],
+      ['the chat attachment', `chat-attachments/${'a'.repeat(64)}/original`],
+      ['the hold copy', `content-hold/case-1/${'a'.repeat(64)}`],
+    ])('deletes nothing, and throws, when %s holds bytes that were not preserved', async (_label, key) => {
+      s3.put(UPLOADS, key, 'written-after-preservation');
+      const before = s3.keys(UPLOADS);
+
+      await expect(createTakedownStorage().deleteFromUploads(HASH, CASE, accepting(sha('original-bytes')))).rejects.toBeInstanceOf(UnpreservedObjectError);
+      expect(s3.keys(UPLOADS)).toEqual(before);
+    });
+
+    it('does not read anything when no check is asked for', async () => {
+      s3.put(UPLOADS, `files/${HASH}/original`, 'anything');
+      expect(await createTakedownStorage().deleteFromUploads(HASH, CASE)).toBe(5);
+    });
   });
 
   it('is a no-op the second time', async () => {

@@ -24,6 +24,8 @@ import { allowsGlobalTakedown } from './policy';
 import type { AiMessageReferences } from './references';
 import {
   RESWEEP_MARKER,
+  SKIPPED_BY_ADMIN,
+  UNPRESERVED_OBJECT,
   latestEntry,
   nextGlobalTakedownStep,
   statusForDecision,
@@ -92,8 +94,15 @@ export interface TakedownStorage {
   /**
    * Delete `files/<hash>/*`, `cache/<hash>/*`, `chat-attachments/<hash>/*` and
    * the case's hold copy. Returns the number deleted.
+   *
+   * With `isPreserved`, every private original (`files/<hash>/original`,
+   * `chat-attachments/<hash>/original` and the hold copy) is read and hashed
+   * first, and if any is not one `isPreserved` accepts, NOTHING is deleted and
+   * the call throws `UnpreservedObjectError`. A presigned PUT issued before the
+   * block can write an original after preservation settled; those bytes are
+   * not deleted uncopied.
    */
-  deleteFromUploads(contentHash: string, caseId: string): Promise<number>;
+  deleteFromUploads(contentHash: string, caseId: string, isPreserved?: (digest: ObjectDigest) => boolean): Promise<number>;
   /** Delete `assets/<hash>` and `assets/cache/<hash>/*`. Returns the number deleted. */
   deleteFromPublish(contentHash: string): Promise<number>;
 }
@@ -170,6 +179,35 @@ export interface TakedownRunResult {
   haltReason?: TakedownHaltReason;
   /** Set when another run of the case was already under way: this one did nothing. */
   inProgress?: true;
+}
+
+/**
+ * Thrown by `deleteFromUploads` when a private original holds bytes that
+ * preservation did not copy. Its message starts with `UNPRESERVED_OBJECT`,
+ * which is what sends the case back to preservation on the next run.
+ */
+export class UnpreservedObjectError extends Error {
+  constructor() {
+    super(`${UNPRESERVED_OBJECT}: a private original holds bytes that were not preserved (written after preservation); nothing was deleted, and the next run preserves them first`);
+    this.name = 'UnpreservedObjectError';
+  }
+}
+
+/**
+ * What the delete accepts as preserved, from what preservation recorded on the
+ * case: the content itself once its copy is recorded at the primary key, and
+ * any other bytes whose own checksum names a recorded additional copy. None
+ * when an admin skipped preservation (a category that allows it): there is
+ * nothing to check against, and the skip is the admin's decision.
+ */
+function preservedCheck(row: ContentCase, contentHash: string): ((digest: ObjectDigest) => boolean) | undefined {
+  const preserved = latestEntry(row.steps ?? [], 'preserve');
+  if (preserved?.status === 'skipped' && preserved.detail === SKIPPED_BY_ADMIN) return undefined;
+  const primaryKey = evidenceKeyFor(row.id, contentHash);
+  const primaryRecorded = row.snapshot?.evidenceKey === primaryKey;
+  const additional = new Set(row.snapshot?.additionalEvidenceKeys ?? []);
+  return (digest) =>
+    (primaryRecorded && digest.contentSha256 === contentHash) || additional.has(`${primaryKey}.${digest.sha256}`);
 }
 
 /** Where a case's preserved copy lives in the evidence bucket. Includes the case ID. */
@@ -314,7 +352,8 @@ async function executeGlobalStep(
     case 'preserve':
       return preserve(row, contentHash, deps);
     case 'delete_uploads':
-      return { detail: `deleted=${await deps.storage.deleteFromUploads(contentHash, row.id)}` };
+      // `row` is read fresh before every step, so this is what preservation recorded.
+      return { detail: `deleted=${await deps.storage.deleteFromUploads(contentHash, row.id, preservedCheck(row, contentHash))}` };
     case 'delete_public':
       return { detail: `deleted=${await deps.storage.deleteFromPublish(contentHash)}` };
     case 'record_references': {
@@ -407,7 +446,7 @@ export async function runGlobalTakedown(caseId: string, deps: TakedownDeps): Pro
   return exclusive(caseId, deps, (signal) => runGlobalTakedownLocked(caseId, deps, signal));
 }
 
-const LOCK_LOST = 'The run lock on this case was lost; the step was not started. Run the case again.';
+const LOCK_LOST = 'The run lock on this case was lost; this run stopped without writing anything more. Run the case again.';
 
 async function runGlobalTakedownLocked(caseId: string, deps: TakedownDeps, signal?: AbortSignal): Promise<TakedownRunResult> {
   for (;;) {
@@ -427,6 +466,13 @@ async function runGlobalTakedownLocked(caseId: string, deps: TakedownDeps, signa
       suspendUploader: takedown?.suspendUploader === true,
     });
 
+    // Lost the lock: another run may hold the case now. Stop without writing
+    // anything, not a step, a skip, a failure or a status, which could
+    // overwrite its work.
+    if (signal?.aborted) {
+      return { caseId, status: row.status, ...('step' in decision ? { failedStep: decision.step } : {}), error: LOCK_LOST };
+    }
+
     if (decision.kind === 'done' || decision.kind === 'halt') {
       const status = statusForDecision(decision);
       await settle(row, status, deps);
@@ -438,11 +484,6 @@ async function runGlobalTakedownLocked(caseId: string, deps: TakedownDeps, signa
       continue;
     }
 
-    // Lost the lock: another run may hold the case now. Stop without writing
-    // anything, not even a failure or a status, which could overwrite its work.
-    if (signal?.aborted) {
-      return { caseId, status: row.status, failedStep: decision.step, error: LOCK_LOST };
-    }
     try {
       const outcome = await executeGlobalStep(decision.step, row, contentHash, deps);
       await deps.cases.appendStep(caseId, stepEntry(decision.step, outcome.skipped ? 'skipped' : 'ok', outcome.detail, deps));
@@ -470,6 +511,7 @@ async function runGlobalTakedownLocked(caseId: string, deps: TakedownDeps, signa
 export async function resweepGlobalTakedown(caseId: string, deps: TakedownDeps): Promise<TakedownRunResult> {
   return exclusive(caseId, deps, async (signal) => {
     const row = await loadCase(caseId, deps);
+    if (signal?.aborted) return { caseId, status: row.status, error: LOCK_LOST };
     const attempts = (row.snapshot?.resweep?.attempts ?? 0) + 1;
     if (row.status === 'actioned') {
       await deps.cases.appendStep(caseId, stepEntry(RESWEEP_MARKER, 'ok', undefined, deps));
@@ -477,6 +519,8 @@ export async function resweepGlobalTakedown(caseId: string, deps: TakedownDeps):
     await deps.cases.mergeSnapshot(caseId, { resweep: { attempts, done: false } });
 
     const result = await runGlobalTakedownLocked(caseId, deps, signal);
+    // Another run may hold the case now: neither "done" nor a failure is this pass's to record.
+    if (signal?.aborted) return result;
     if (result.status === 'actioned') {
       await deps.cases.mergeSnapshot(caseId, { resweep: { attempts, done: true } });
     } else {
