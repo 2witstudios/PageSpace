@@ -14,7 +14,7 @@ import type { ReportedCaseSummary } from '@/lib/content/report-summary';
 const item = (overrides: Partial<ReportedCaseSummary> = {}): ReportedCaseSummary => ({
   case: {
     id: 'case-r', targetType: 'page', targetId: 'page_1', contentHash: null, status: 'reported', category: 'csam', reason: null,
-    createdAt: '2026-11-12T00:00:00.000Z', updatedAt: '2026-11-12T00:00:00.000Z', actorUserId: null, evidencePreserved: false,
+    createdAt: '2026-11-12T00:00:00.000Z', updatedAt: '2026-11-12T00:00:00.000Z', actorUserId: null, evidencePreserved: false, otherObjectsPreserved: 0,
     progress: { kind: null, steps: [], resumable: false, resweepable: false, restorable: false } as unknown as ReportedCaseSummary['case']['progress'],
     references: null, skippedDrives: [],
   },

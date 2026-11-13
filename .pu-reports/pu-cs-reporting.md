@@ -135,6 +135,25 @@ Test database: the running `pagespace-postgres-test` (port 5433);
 `DATABASE_URL=postgresql://user:password@localhost:5433/pagespace_test bun run db:migrate` applied `0384`.
 `bun install` was needed first (this worktree had no `node_modules`).
 
+### After rebasing onto `pu/cs-takedown` at `7ee882998`
+
+The rebase applied cleanly; the two new takedown commits add no migration. The takedown side's `CaseSummary`
+gained `otherObjectsPreserved`, so the admin report-queue test fixture now sets it (typecheck only; no behaviour change).
+
+| Command | Result |
+|---|---|
+| `bun run db:generate` | "No schema changes"; `0384_content_reports` is still the latest migration |
+| `bun run typecheck` (`NODE_OPTIONS=--max-old-space-size=8192`, `--concurrency=3`) | PASS, 23 of 23 (failed in `admin` on the fixture before the fix) |
+| `packages/lib`: `bunx vitest run src/content-safety src/email-templates` | PASS, 14 files, 331 tests |
+| `packages/lib`: `bunx vitest run --config vitest.integration.config.ts src/content-safety` (test DB) | PASS, 4 files, 54 tests |
+| `apps/web`: `src/lib/content-safety`, `src/app/api/{report,user-reports}`, `src/components/content-safety`, `src/app/api/__tests__/security-audit-coverage.test.ts`, `src/middleware` | PASS, 19 files, 265 tests |
+| `apps/admin`: `src/components/admin/content`, `src/lib/content`, `src/app/api/admin/content` | PASS, 11 files, 76 tests |
+| `eslint` on the changed fixture | Clean |
+
+Not rerun after the rebase: `packages/db` schema tests, `apps/marketing`, and the whole admin suite.
+
+### Before the rebase
+
 | Command | Result |
 |---|---|
 | `bun run db:generate` (second run) | "No schema changes" |
