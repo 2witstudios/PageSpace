@@ -9,8 +9,10 @@ const {
   mockNormalizeIdentifier,
   mockSanitizeExtension,
   mockHasAuthScope,
+  mockIsHashBlocked,
 } = vi.hoisted(() => ({
   mockS3Send: vi.fn(),
+  mockIsHashBlocked: vi.fn(),
   mockNormalizeIdentifier: vi.fn().mockImplementation((value: unknown) => {
     if (typeof value !== 'string' || !value) return null;
     return value;
@@ -33,6 +35,10 @@ vi.mock('../../utils/security', () => ({
   IDENTIFIER_PATTERN: /^[A-Za-z0-9_-]{3,64}$/,
   normalizeIdentifier: (...args: unknown[]) => mockNormalizeIdentifier(...args),
   sanitizeExtension: (...args: unknown[]) => mockSanitizeExtension(...args),
+}));
+
+vi.mock('@pagespace/lib/content-safety/blocklist', () => ({
+  isHashBlocked: (...args: unknown[]) => mockIsHashBlocked(...args),
 }));
 
 vi.mock('../../logger', () => ({
@@ -74,6 +80,10 @@ vi.mock('multer', () => {
 
 import avatarRouter from '../avatar';
 
+/** A real JPEG header: the upload gate checks magic bytes, not the declared type. */
+const JPEG_BYTES = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01]);
+const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]);
+
 type MockAuth = {
   userId?: string;
   resourceBinding?: { type: string; id: string };
@@ -102,7 +112,7 @@ function createMockFile(overrides: Partial<Express.Multer.File> = {}): Express.M
     filename: 'avatar.jpg',
     path: '',
     size: 1024,
-    buffer: Buffer.from('fake-image-data'),
+    buffer: JPEG_BYTES,
     stream: null!,
     ...overrides,
   };
@@ -133,6 +143,10 @@ describe('POST /avatar/upload', () => {
       return value;
     });
     mockSanitizeExtension.mockReturnValue('.jpg');
+    mockIsHashBlocked.mockResolvedValue(false);
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    vi.stubEnv('CONTENT_SCAN_MODE', 'off');
   });
 
   it('returns 401 when no auth', async () => {
@@ -185,7 +199,7 @@ describe('POST /avatar/upload', () => {
     expect(putCall).toBeDefined();
     const putInput = (putCall![0] as { input: { Key: string; Body: Buffer } }).input;
     expect(putInput.Key).toContain('avatars/user-1/avatar');
-    expect(putInput.Body).toEqual(Buffer.from('fake-image-data'));
+    expect(putInput.Body).toEqual(JPEG_BYTES);
   });
 
   it('lists and deletes old avatars before saving new one', async () => {
@@ -248,6 +262,100 @@ describe('POST /avatar/upload', () => {
     const response = await request(app).post('/avatar/upload').send({ userId: 'user-1' });
     expect(response.status).toBe(500);
     expect(response.body.error).toContain('Failed to upload avatar');
+  });
+});
+
+describe('POST /avatar/upload content safety', () => {
+  const s3Tags = () => mockS3Send.mock.calls.map((call: unknown[]) => (call[0] as { _tag: string })._tag);
+  const webGate = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    defaultS3Behavior();
+    mockNormalizeIdentifier.mockImplementation((value: unknown) => (typeof value === 'string' && value ? value : null));
+    mockSanitizeExtension.mockReturnValue('.jpg');
+    mockIsHashBlocked.mockResolvedValue(false);
+    vi.unstubAllEnvs();
+    vi.stubEnv('CONTENT_SCAN_MODE', 'enforce');
+    vi.stubEnv('WEB_APP_INTERNAL_URL', 'http://web:3000');
+    vi.stubEnv('SERVICE_API_SECRET', 'secret');
+    webGate.mockResolvedValue(new Response(JSON.stringify({ accept: true }), { status: 200 }));
+    vi.stubGlobal('fetch', webGate);
+  });
+
+  const upload = (file: Express.Multer.File) => request(createApp({ userId: 'user-1' }, file)).post('/avatar/upload').send({ userId: 'user-1' });
+
+  it('a refused upload leaves the old avatar in place: nothing is listed, deleted or written', async () => {
+    webGate.mockResolvedValue(new Response(JSON.stringify({ accept: false }), { status: 200 }));
+    const response = await upload(createMockFile());
+    expect(response.status).toBe(422);
+    expect(response.body.error).toBe("This image can't be used as a profile picture. Please try a different image.");
+    expect(JSON.stringify(response.body)).not.toMatch(/scan|flag|block|csam|hash/i);
+    expect(s3Tags()).toEqual([]);
+  });
+
+  it('a magic-byte mismatch is refused before the gate or any storage call, whatever was declared', async () => {
+    const html = Buffer.from('<html><script>alert(1)</script></html>');
+    const response = await upload(createMockFile({ buffer: html, mimetype: 'image/png', originalname: 'avatar.png' }));
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe('Please upload a JPEG, PNG, GIF or WebP image.');
+    expect(webGate).not.toHaveBeenCalled();
+    expect(s3Tags()).toEqual([]);
+  });
+
+  it('sends the bytes to the web gate with service auth, then replaces the avatar', async () => {
+    const response = await upload(createMockFile());
+    expect(response.status).toBe(200);
+    const [url, init] = webGate.mock.calls[0] as [string, RequestInit & { headers: Record<string, string> }];
+    expect(url).toBe('http://web:3000/api/internal/content-safety/avatar-gate');
+    expect(init.headers['x-service-secret']).toBe('secret');
+    expect(init.headers['x-service-user-id']).toBe('user-1');
+    expect(Buffer.from(init.body as Buffer)).toEqual(JPEG_BYTES);
+    expect(s3Tags()).toEqual(['ListObjectsV2', 'PutObject']);
+  });
+
+  it('the stored extension and type come from the bytes, not the file name or declared type', async () => {
+    const response = await upload(createMockFile({ buffer: PNG_BYTES, mimetype: 'image/jpeg', originalname: 'me.jpg' }));
+    expect(response.status).toBe(200);
+    expect(response.body.filename).toBe('avatar.png');
+    const put = mockS3Send.mock.calls.find((call: unknown[]) => (call[0] as { _tag: string })._tag === 'PutObject');
+    expect((put![0] as { input: { Key: string; ContentType: string } }).input).toMatchObject({ Key: 'avatars/user-1/avatar.png', ContentType: 'image/png' });
+  });
+
+  it('enforce refuses when the web gate cannot be reached, and touches nothing', async () => {
+    webGate.mockRejectedValue(new TypeError('fetch failed'));
+    expect((await upload(createMockFile())).status).toBe(422);
+    expect(s3Tags()).toEqual([]);
+  });
+
+  it('enforce refuses when the gate is not configured', async () => {
+    vi.stubEnv('SERVICE_API_SECRET', '');
+    expect((await upload(createMockFile())).status).toBe(422);
+    expect(webGate).not.toHaveBeenCalled();
+  });
+
+  it('shadow accepts when the web gate cannot be reached (logged)', async () => {
+    vi.stubEnv('CONTENT_SCAN_MODE', 'shadow');
+    webGate.mockResolvedValue(new Response('nope', { status: 503 }));
+    expect((await upload(createMockFile())).status).toBe(200);
+  });
+
+  it('shadow: whatever the web gate accepts (it records and opens cases) is stored', async () => {
+    vi.stubEnv('CONTENT_SCAN_MODE', 'shadow');
+    expect((await upload(createMockFile())).status).toBe(200);
+    expect(webGate).toHaveBeenCalledTimes(1);
+    expect(s3Tags()).toContain('PutObject');
+  });
+
+  it('off: no gate call; a blocked hash is still refused, and a blocklist failure refuses', async () => {
+    vi.stubEnv('CONTENT_SCAN_MODE', 'off');
+    mockIsHashBlocked.mockResolvedValueOnce(true);
+    expect((await upload(createMockFile())).status).toBe(422);
+    mockIsHashBlocked.mockRejectedValueOnce(new Error('db down'));
+    expect((await upload(createMockFile())).status).toBe(422);
+    expect(webGate).not.toHaveBeenCalled();
+    expect(s3Tags()).toEqual([]);
+    expect((await upload(createMockFile())).status).toBe(200);
   });
 });
 

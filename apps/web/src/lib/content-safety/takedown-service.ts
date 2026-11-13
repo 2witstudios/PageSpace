@@ -401,3 +401,14 @@ export async function executeTakedown(request: TakedownRequest, actorUserId: str
 export async function sweepPublicForUnfinishedCase(caseId: string): Promise<PublicSweepResult> {
   return sweepPublicIfUnfinished(caseId, createTakedownDeps(null));
 }
+
+/**
+ * Take a user's avatar off the web without opening a takedown case: the
+ * backfill does this, under enforce, for an avatar the classifier flagged (the
+ * review case is already open for its hash). Deletes the objects, checks none
+ * are left, and clears the profile image.
+ */
+export async function removeUserAvatar(userId: string): Promise<void> {
+  await deleteAvatarObjects(userId);
+  await clearProfileImage(userId);
+}

@@ -212,103 +212,38 @@ describe('POST /api/account/avatar', () => {
     });
   });
 
-  describe('old avatar deletion', () => {
-    it('deletes old local avatar before upload', async () => {
+  describe('old avatar is never deleted before the processor accepts the new one', () => {
+    it('makes no DELETE call: the processor replaces the avatar only after its content-safety gate passes', async () => {
       mockSelectChain([{ image: '/api/avatar/user-1/old.png' }]);
       mockUpdateChain();
-      mockFetch
-        .mockResolvedValueOnce({ ok: true }) // DELETE old avatar
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({ filename: 'new.png' }),
-        }); // POST new avatar
+      mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ filename: 'new.png' }) });
 
-      const file = createMockFile('image/png', 1024);
-      await POST(createUploadRequest(file));
-
-      // First fetch call is DELETE of old avatar
-      const deleteCall = mockFetch.mock.calls.find(
-        (call: unknown[]) => (call[1] as { method: string }).method === 'DELETE'
-      );
-      expect(deleteCall).not.toBeUndefined();
-      expect(deleteCall![0]).toContain('/api/avatar/user-1');
-      expect((deleteCall![1] as { method: string }).method).toBe('DELETE');
-    });
-
-    it('skips deletion when old avatar is external URL (http)', async () => {
-      mockSelectChain([{ image: 'http://example.com/avatar.png' }]);
-      mockUpdateChain();
-      mockFetch.mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ filename: 'new.png' }),
-      });
-
-      const file = createMockFile('image/png', 1024);
-      await POST(createUploadRequest(file));
-
-      // Only one fetch call (the upload), no delete
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-    });
-
-    it('skips deletion when old avatar is external URL (https)', async () => {
-      mockSelectChain([{ image: 'https://example.com/avatar.png' }]);
-      mockUpdateChain();
-      mockFetch.mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ filename: 'new.png' }),
-      });
-
-      const file = createMockFile('image/png', 1024);
-      await POST(createUploadRequest(file));
-
-      // Only one fetch call (the upload), no delete
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-    });
-
-    it('skips deletion when no old avatar exists', async () => {
-      mockSelectChain([{ image: null }]);
-      mockUpdateChain();
-      mockFetch.mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ filename: 'new.png' }),
-      });
-
-      const file = createMockFile('image/png', 1024);
-      await POST(createUploadRequest(file));
-
-      // Only one fetch call (the upload)
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-    });
-
-    it('continues upload when old avatar deletion fails', async () => {
-      mockSelectChain([{ image: '/api/avatar/user-1/old.png' }]);
-      mockUpdateChain();
-      mockFetch
-        .mockRejectedValueOnce(new Error('Network error')) // DELETE fails
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({ filename: 'new.png' }),
-        }); // POST succeeds
-
-      const file = createMockFile('image/png', 1024);
-      const response = await POST(createUploadRequest(file));
+      const response = await POST(createUploadRequest(createMockFile('image/png', 1024)));
 
       expect(response.status).toBe(200);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect((mockFetch.mock.calls[0][1] as { method: string }).method).toBe('POST');
     });
 
-    it('handles empty old user array (no user record)', async () => {
-      mockSelectChain([]);
-      mockUpdateChain();
-      mockFetch.mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ filename: 'new.png' }),
-      });
+    it('a refused upload leaves the profile image untouched and returns a neutral message', async () => {
+      mockSelectChain([{ image: '/api/avatar/user-1/old.png' }]);
+      const update = mockUpdateChain();
+      mockFetch.mockResolvedValue({ ok: false, status: 422, json: () => Promise.resolve({ error: 'flagged by scan' }) });
 
-      const file = createMockFile('image/png', 1024);
-      await POST(createUploadRequest(file));
+      const response = await POST(createUploadRequest(createMockFile('image/png', 1024)));
+      const body = await response.json();
 
-      // Only one fetch call (the upload), no delete
+      expect(response.status).toBe(422);
+      expect(body.error).toBe("This image can't be used as a profile picture. Please try a different image.");
+      expect(update.update).not.toHaveBeenCalled();
       expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('bytes that are not an image get the file-type message', async () => {
+      mockFetch.mockResolvedValue({ ok: false, status: 400, json: () => Promise.resolve({ error: 'x' }) });
+      const response = await POST(createUploadRequest(createMockFile('image/png', 1024)));
+      expect(response.status).toBe(400);
+      expect((await response.json()).error).toBe('Please upload a JPEG, PNG, GIF or WebP image.');
     });
   });
 
@@ -332,11 +267,11 @@ describe('POST /api/account/avatar', () => {
       expect((uploadCall![1] as { headers: Record<string, string> }).headers.Authorization).toBe('Bearer mock-service-token');
     });
 
-    it('returns 500 when processor rejects upload', async () => {
+    it('returns 500 when processor fails the upload', async () => {
       mockSelectChain([{ image: null }]);
       mockFetch.mockResolvedValue({
         ok: false,
-        status: 422,
+        status: 403,
         json: () => Promise.resolve({ error: 'Invalid image' }),
       });
 

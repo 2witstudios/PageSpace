@@ -1,6 +1,7 @@
 import 'server-only';
 
-import { GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
+import { createHash } from 'node:crypto';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
 import { audit } from '@pagespace/lib/audit/audit-log';
 import { sendContentSafetyAlert } from '@pagespace/lib/content-safety/alerts';
 import { isHashBlocked } from '@pagespace/lib/content-safety/blocklist';
@@ -19,7 +20,7 @@ import { createHiveScanner } from '@pagespace/lib/content-safety/scanner-hive';
 import type { ContentScanner } from '@pagespace/lib/content-safety/scanner';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getS3Bucket, getS3Client } from '@/lib/presigned-url';
-import { isS3NotFound } from '@/lib/storage/s3-objects';
+import { readS3ObjectBounded } from '@/lib/storage/s3-objects';
 
 /**
  * The publish gate with its real dependencies: the blocklist and verdict
@@ -37,14 +38,12 @@ import { isS3NotFound } from '@/lib/storage/s3-objects';
  * type published unscanned is remembered for the verdict TTL, so it is not re-read on every republish.
  */
 
-/** Bytes read from a file over the size bound: enough to recognise its type. */
-const SNIFF_BYTES = 4096;
-
 /** A read of the original that takes longer than this is abandoned (the asset is held as unreadable). */
-const READ_TIMEOUT_MS = 30_000;
+export const READ_TIMEOUT_MS = 30_000;
 
 const RISK: Record<ScanAuditEvent['eventType'], number> = {
   'content.scan.clean': 0,
+  'content.scan.unverified': 0.2,
   'content.scan.unscanned': 0.1,
   'content.scan.error': 0.3,
   'content.scan.flagged': 0.8,
@@ -71,40 +70,49 @@ function reportMisconfiguration(config: ScanGateConfig, problem: string): void {
   }
 }
 
-async function readBody(body: unknown): Promise<Uint8Array> {
-  const whole = body as { transformToByteArray?: () => Promise<Uint8Array> } | undefined;
-  if (whole && typeof whole.transformToByteArray === 'function') return whole.transformToByteArray();
-  return new Uint8Array(0);
+/** The original's bytes when they fit under `maxBytes`, else its first bytes. Null on not-found. */
+export function readPrivateSource(key: string, maxBytes: number): Promise<SourceRead | null> {
+  return readS3ObjectBounded(getS3Client(), getS3Bucket(), key, maxBytes, READ_TIMEOUT_MS);
 }
 
-/** The original's bytes when they fit under `maxBytes`, else its first bytes. Null on not-found. */
-export async function readPrivateSource(key: string, maxBytes: number): Promise<SourceRead | null> {
-  const client = getS3Client();
-  const bucket = getS3Bucket();
-  let size: number;
-  try {
-    const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }), { abortSignal: AbortSignal.timeout(READ_TIMEOUT_MS) });
-    // An unknown size is treated as too large: the GET below must stay bounded.
-    size = head.ContentLength ?? Number.MAX_SAFE_INTEGER;
-  } catch (err) {
-    if (isS3NotFound(err)) return null;
-    throw err;
+/**
+ * A known-CSAM match is acted on in every mode: the system (no admin) runs PR 2's global takedown, which
+ * writes the block first, preserves the bytes, removes every copy and alerts.
+ */
+export async function runHashMatchTakedown({ contentHash, lists, source }: { contentHash: string; lists: string[]; source: string }): Promise<{ caseId?: string }> {
+  // Loaded lazily: the takedown service reaches back into the publish code (unpublish → publish-page),
+  // which imports this gate.
+  const { executeTakedown } = await import('./takedown-service');
+  const response = await executeTakedown(
+    {
+      action: 'global',
+      contentHash,
+      category: 'csam',
+      reason: `Hash match from ${source} (lists: ${lists.join(', ').slice(0, 200) || 'unspecified'})`,
+    },
+    null,
+  );
+  if (response.failedStep) {
+    loggers.security.error('Content scan: the hash-match takedown stopped part-way; resume the case', undefined, {
+      caseId: response.caseId ?? null,
+      failedStep: response.failedStep,
+    });
   }
-  const head = { size };
-  const tooLarge = head.size > maxBytes;
-  try {
-    const result = await client.send(
-      new GetObjectCommand({ Bucket: bucket, Key: key, ...(tooLarge ? { Range: `bytes=0-${SNIFF_BYTES - 1}` } : {}) }),
-      { abortSignal: AbortSignal.timeout(READ_TIMEOUT_MS) },
-    );
-    const bytes = await readBody(result.Body);
-    // The object may have been replaced between the HEAD and the GET.
-    if (bytes.length > maxBytes) return { bytes: bytes.subarray(0, SNIFF_BYTES), complete: false };
-    return { bytes, complete: !tooLarge };
-  } catch (err) {
-    if (isS3NotFound(err)) return null;
-    throw err;
-  }
+  return { caseId: response.caseId };
+}
+
+/**
+ * Write bytes that are only in memory (an avatar upload, an avatar read for the backfill) to their
+ * content-addressed private key, `files/<hash>/original`, so the global takedown's preserve step finds
+ * them, copies them to evidence and then deletes them. Without this a refused avatar upload would leave
+ * nothing to preserve. The hash is checked against the bytes first.
+ */
+export async function stageBytesForTakedown(contentHash: string, bytes: Uint8Array): Promise<void> {
+  const actual = createHash('sha256').update(bytes).digest('hex');
+  if (actual !== contentHash.toLowerCase()) throw new Error('Staged bytes do not match their content hash');
+  await getS3Client().send(
+    new PutObjectCommand({ Bucket: getS3Bucket(), Key: `files/${actual}/original`, Body: bytes, ContentType: 'application/octet-stream' }),
+  );
 }
 
 function buildScanner(config: ScanGateConfig): ContentScanner | null {
@@ -113,7 +121,7 @@ function buildScanner(config: ScanGateConfig): ContentScanner | null {
   return createHiveScanner({ apiKey, flagThreshold: config.flagThreshold, includeTestSets: config.includeTestSets });
 }
 
-export function createPublishGateDeps(config: ScanGateConfig = resolveScanConfigFromEnv()): PublishGateDeps {
+export function createPublishGateDeps(config: ScanGateConfig = resolveScanConfigFromEnv(), overrides: Partial<PublishGateDeps> = {}): PublishGateDeps {
   return {
     config,
     scanner: buildScanner(config),
@@ -122,29 +130,9 @@ export function createPublishGateDeps(config: ScanGateConfig = resolveScanConfig
     readSource: readPrivateSource,
     // A fresh classifier flag is kept for as long as the gate trusts it.
     recordVerdict: (record) => recordScanVerdict(record, { flagTtlMs: config.verdictTtlMs }),
-    async takedownHashMatch({ contentHash, lists }) {
-      // A known-CSAM match is acted on in every mode: the system (no admin) runs PR 2's global takedown,
-      // which writes the block first, preserves the bytes, removes every copy and alerts.
-      // Loaded lazily: the takedown service reaches back into the publish code (unpublish → publish-page),
-      // which imports this gate.
-      const { executeTakedown } = await import('./takedown-service');
-      const response = await executeTakedown(
-        {
-          action: 'global',
-          contentHash,
-          category: 'csam',
-          reason: `Hash match from the publish scan (lists: ${lists.join(', ').slice(0, 200) || 'unspecified'})`,
-        },
-        null,
-      );
-      if (response.failedStep) {
-        loggers.security.error('Publish gate: the hash-match takedown stopped part-way; resume the case', undefined, {
-          caseId: response.caseId ?? null,
-          failedStep: response.failedStep,
-        });
-      }
-      return { caseId: response.caseId };
-    },
+    // A known-CSAM match is acted on in every mode: the system (no admin) runs PR 2's global takedown, which
+    // writes the block first, preserves the bytes, removes every copy and alerts.
+    takedownHashMatch: ({ contentHash, lists }) => runHashMatchTakedown({ contentHash, lists, source: 'the publish scan' }),
     openReviewCase: (input) => openScanReviewCase(input),
     alert: sendContentSafetyAlert,
     audit(event) {
@@ -162,6 +150,7 @@ export function createPublishGateDeps(config: ScanGateConfig = resolveScanConfig
       loggers.security.error(message, undefined, context);
     },
     now: () => new Date(),
+    ...overrides,
   };
 }
 

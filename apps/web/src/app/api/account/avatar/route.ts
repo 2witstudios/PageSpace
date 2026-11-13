@@ -4,6 +4,7 @@ import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { AVATAR_NOT_AN_IMAGE_MESSAGE, AVATAR_REJECTED_MESSAGE } from '@pagespace/lib/content-safety/avatar-gate';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 import { createUserServiceToken, type ServiceScope } from '@pagespace/lib/services/validated-service-token';
@@ -67,29 +68,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Delete old avatar if it exists and is a local file
-    const oldUser = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-    if (oldUser[0]?.image) {
-      // Check if it's a local file (not an external URL)
-      if (!oldUser[0].image.startsWith('http://') && !oldUser[0].image.startsWith('https://')) {
-        // Send delete request to processor
-        try {
-          const { token: serviceToken } = await createAvatarServiceToken(actorFromAuth(auth), '2m');
-
-          await fetch(`${PROCESSOR_URL}/api/avatar/${userId}`, {
-            method: 'DELETE',
-            headers: {
-              'Authorization': `Bearer ${serviceToken}`
-            },
-            // Best-effort cleanup; bounded so a stalled processor can't pin
-            // the request slot before the upload fetch below is reached.
-            signal: AbortSignal.timeout(10_000),
-          });
-        } catch (error) {
-          console.log('Could not delete old avatar:', error);
-        }
-      }
-    }
+    // The old avatar is NOT deleted here. The processor replaces it only after the new upload passes
+    // the content-safety gate, so a refused upload leaves the current avatar in place.
 
     // Forward the file to processor service
     const processorFormData = new FormData();
@@ -126,6 +106,16 @@ export async function POST(request: NextRequest) {
         );
       }
       throw err;
+    }
+
+    // A refusal by the processor's gate. The message is fixed here, never the processor's text, and
+    // never says why (not an image, or refused by the content-safety gate).
+    if (processorResponse.status === 400 || processorResponse.status === 422) {
+      const notAnImage = processorResponse.status === 400;
+      return NextResponse.json(
+        { error: notAnImage ? AVATAR_NOT_AN_IMAGE_MESSAGE : AVATAR_REJECTED_MESSAGE },
+        { status: processorResponse.status },
+      );
     }
 
     if (!processorResponse.ok) {
