@@ -75,6 +75,8 @@ out/
 .history/
 .roo/
 reports/
+# ...but not the admin console's content-report API route.
+!apps/admin/src/app/api/admin/content/reports/
 archive/
 
 # Security - Additional protections
