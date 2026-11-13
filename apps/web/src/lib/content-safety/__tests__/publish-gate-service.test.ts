@@ -41,7 +41,7 @@ describe('readPrivateSource', () => {
       .mockResolvedValueOnce({ ContentLength: 3 })
       .mockResolvedValueOnce({ Body: { transformToByteArray: async () => new Uint8Array([1, 2, 3]) } });
     await expect(readPrivateSource('k', 100)).resolves.toEqual({ bytes: new Uint8Array([1, 2, 3]), complete: true });
-    expect(send.mock.calls[1][0].input).toEqual({ Bucket: 'private', Key: 'k' });
+    expect(send.mock.calls[1][0].input).toEqual({ Bucket: 'private', Key: 'k', Range: 'bytes=0-100' });
   });
 
   it('reads only the first bytes of a file over the bound, never all of it', async () => {

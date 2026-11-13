@@ -368,6 +368,10 @@ describe('evaluatePublishAsset findings', () => {
     await expect(evaluatePublishAsset(input, setup({ result: flag }).deps)).resolves.toMatchObject({ finding: 'flagged', scanned: true, caseId: 'case-rv' });
     await expect(evaluatePublishAsset(input, setup({ result: match }).deps)).resolves.toMatchObject({ finding: 'hash_match', caseId: 'case-td' });
     await expect(evaluatePublishAsset(input, setup({ key: false }).deps)).resolves.toMatchObject({ finding: 'unavailable', scanned: false });
+    const unreadable = setup();
+    unreadable.deps.readSource.mockResolvedValueOnce(null as never);
+    await expect(evaluatePublishAsset(input, unreadable.deps)).resolves.toMatchObject({ finding: 'error', scanned: false });
+    await expect(evaluatePublishAsset(input, setup({ complete: false }).deps)).resolves.toMatchObject({ finding: 'error', scanned: false });
     const cached = setup({ verdict: { verdict: 'clean', outcome: 'clean', scannedAt: new Date('2026-11-01T00:00:00Z') } });
     await expect(evaluatePublishAsset(input, cached.deps)).resolves.toMatchObject({ finding: 'clean', scanned: false });
   });

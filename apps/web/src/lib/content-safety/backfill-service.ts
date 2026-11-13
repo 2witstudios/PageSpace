@@ -98,13 +98,26 @@ export function createBackfillDeps(
 
   async function processAsset(target: Extract<BackfillTarget, { kind: 'asset' }>): Promise<BackfillItemOutcome> {
     const originalKey = target.derived ? `files/${target.contentHash}/original` : target.key;
+    let takenDown = false;
     const evaluation = await evaluatePublishAsset(
       { contentHash: target.contentHash, originalKey, declaredContentType: null, fileId: null, userId: null, entryPoint: 'backfill' },
       gateDeps({
         readSource: (key, maxBytes) => (target.derived ? readPrivateSource(key, maxBytes) : readPublishedObjectBounded(key, maxBytes, READ_TIMEOUT_MS)),
+        async takedownHashMatch({ contentHash, lists }) {
+          const result = await runHashMatchTakedown({ contentHash, lists, source: 'the backfill scan' });
+          // A takedown that stopped part-way may not have taken the public copy down yet: do it here.
+          if (result.failedStep) await actions.removePublicAsset(contentHash);
+          takenDown = true;
+          return { caseId: result.caseId };
+        },
       }),
     );
-    let removed = evaluation.finding === 'hash_match' && evaluation.caseId !== null;
+    let removed = takenDown;
+    if (evaluation.finding === 'hash_match' && !takenDown) {
+      // The takedown threw: the gate logged it. The public copy still comes down now.
+      await actions.removePublicAsset(target.contentHash);
+      removed = true;
+    }
     if (evaluation.finding === 'blocked' || (evaluation.finding === 'flagged' && config.mode === 'enforce')) {
       await actions.removePublicAsset(target.contentHash);
       removed = true;
@@ -117,19 +130,24 @@ export function createBackfillDeps(
 
   async function processAvatar(target: Extract<BackfillTarget, { kind: 'avatar' }>): Promise<BackfillItemOutcome | null> {
     const read = await readS3ObjectBounded(getS3Client(), getS3Bucket(), target.key, MAX_AVATAR_READ_BYTES, READ_TIMEOUT_MS);
-    if (!read) return null;
+    // Gone since the listing, or larger than any avatar the processor accepts (its hash would be meaningless).
+    if (!read || !read.complete) return null;
     const { bytes } = read;
     const contentHash = createHash('sha256').update(bytes).digest('hex');
     let avatarTakenDown = false;
+    let stagingFailed = false;
     const evaluation = await evaluatePublishAsset(
       { contentHash, originalKey: target.key, declaredContentType: AVATAR_TYPES[target.extension] ?? null, fileId: null, userId: target.userId, entryPoint: 'backfill' },
       gateDeps({
         readSource: async () => read,
         async takedownHashMatch({ contentHash: hash, lists }) {
-          if (read.complete) {
-            await stageBytesForTakedown(hash, bytes).catch((error: unknown) =>
-              loggers.security.error('Backfill: could not stage a hash-matched avatar for preservation', undefined, { error: errorLabel(error) }),
-            );
+          try {
+            await stageBytesForTakedown(hash, bytes);
+          } catch (error) {
+            // The avatar is the only copy: nothing is deleted until it is preserved. The item is retried next tick.
+            loggers.security.error('Backfill: could not stage a hash-matched avatar for preservation; retrying next tick', undefined, { error: errorLabel(error) });
+            stagingFailed = true;
+            throw error;
           }
           try {
             return await runHashMatchTakedown({ contentHash: hash, lists, source: 'the backfill scan of an avatar' });
@@ -141,6 +159,7 @@ export function createBackfillDeps(
         },
       }),
     );
+    if (stagingFailed) throw new Error('Hash-matched avatar not staged for preservation');
     let removed = avatarTakenDown;
     if (evaluation.finding === 'blocked' || (evaluation.finding === 'flagged' && config.mode === 'enforce')) {
       await actions.removeAvatar(target.userId);

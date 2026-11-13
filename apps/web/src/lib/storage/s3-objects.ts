@@ -107,7 +107,8 @@ export async function readS3ObjectBounded(
   const tooLarge = size > maxBytes;
   try {
     const result = await client.send(
-      new GetObjectCommand({ Bucket: bucket, Key: key, ...(tooLarge ? { Range: `bytes=0-${SNIFF_BYTES - 1}` } : {}) }),
+      // Ranged either way: an object that grew after the HEAD is never buffered past the bound.
+      new GetObjectCommand({ Bucket: bucket, Key: key, Range: tooLarge ? `bytes=0-${SNIFF_BYTES - 1}` : `bytes=0-${maxBytes}` }),
       { abortSignal: AbortSignal.timeout(timeoutMs) },
     );
     const bytes = await bodyBytes(result.Body);

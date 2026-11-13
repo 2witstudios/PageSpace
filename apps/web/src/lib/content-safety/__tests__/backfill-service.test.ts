@@ -66,6 +66,8 @@ function build(mode: 'shadow' | 'enforce', result?: ScanResult) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  send.mockReset();
+  executeTakedown.mockReset();
   isHashBlocked.mockResolvedValue(false);
   send.mockResolvedValue({});
   readPublishedObjectBounded.mockResolvedValue({ bytes: PNG, complete: true });
@@ -84,7 +86,6 @@ describe('backfill service: public assets', () => {
 
   it('gates a derived copy as its private original', async () => {
     const { deps } = build('enforce');
-    send.mockResolvedValueOnce({ ContentLength: PNG.length }).mockResolvedValueOnce({ Body: { transformToByteArray: async () => PNG } });
     readS3ObjectBounded.mockResolvedValueOnce({ bytes: PNG, complete: true });
     await deps.process(thumbnail, listed);
     expect(readS3ObjectBounded).toHaveBeenCalledWith(expect.anything(), 'private', `files/${HASH}/original`, expect.any(Number), expect.any(Number));
@@ -98,6 +99,24 @@ describe('backfill service: public assets', () => {
       await expect(deps.process(asset, listed)).resolves.toEqual({ finding: 'hash_match', scanned: true, removed: true });
       expect(executeTakedown).toHaveBeenCalledWith(expect.objectContaining({ action: 'global', contentHash: HASH, category: 'csam' }), null);
     }
+  });
+
+  it('a hash-match takedown that stopped part-way, or threw, still takes the public copy down', async () => {
+    executeTakedown.mockResolvedValueOnce({ action: 'global', caseId: 'case-td', status: 'open', failedStep: 'unpublish_public' });
+    const partial = build('enforce', match);
+    await expect(partial.deps.process(asset, listed)).resolves.toMatchObject({ finding: 'hash_match', removed: true });
+    expect(partial.actions.removePublicAsset).toHaveBeenCalledWith(HASH);
+
+    executeTakedown.mockRejectedValueOnce(new Error('db down'));
+    const thrown = build('enforce', match);
+    await expect(thrown.deps.process(asset, listed)).resolves.toMatchObject({ finding: 'hash_match', removed: true });
+    expect(thrown.actions.removePublicAsset).toHaveBeenCalledWith(HASH);
+  });
+
+  it('a completed takedown does not delete again', async () => {
+    const { deps, actions } = build('enforce', match);
+    await deps.process(asset, listed);
+    expect(actions.removePublicAsset).not.toHaveBeenCalled();
   });
 
   it('enforce: a classifier flag opens the case and takes the public copy down, with no block', async () => {
@@ -141,6 +160,19 @@ describe('backfill service: avatars', () => {
     await expect(deps.process(avatar, listed)).resolves.toEqual({ finding: 'clean', scanned: true, removed: false });
     expect(readS3ObjectBounded).toHaveBeenCalledWith(expect.anything(), 'private', 'avatars/user-1/avatar.png', expect.any(Number), expect.any(Number));
     expect(scanner.calls).toEqual([PNG_HASH]);
+  });
+
+  it('a hash-matched avatar that cannot be staged for preservation is not deleted; the walk retries it', async () => {
+    send.mockRejectedValueOnce(new Error('s3 down'));
+    const { deps, actions } = build('enforce', match);
+    await expect(deps.process(avatar, listed)).rejects.toThrow('not staged');
+    expect(executeTakedown).not.toHaveBeenCalled();
+    expect(actions.takedownAvatar).not.toHaveBeenCalled();
+  });
+
+  it('an avatar larger than any upload is skipped, not hashed from its first bytes', async () => {
+    readS3ObjectBounded.mockResolvedValueOnce({ bytes: PNG, complete: false });
+    await expect(build('enforce').deps.process(avatar, listed)).resolves.toBeNull();
   });
 
   it('an avatar gone since the listing is skipped', async () => {

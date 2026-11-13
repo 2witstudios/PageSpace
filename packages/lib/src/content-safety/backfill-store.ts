@@ -19,7 +19,16 @@ function toCursor(row: ContentScanBackfillRow): BackfillCursor {
     lastPassCounts: row.lastPassCounts ? { ...emptyBackfillCounts(), ...row.lastPassCounts } : null,
     passStartedAt: row.passStartedAt,
     lastCompletedAt: row.lastCompletedAt,
+    lease: row.leaseUntil,
   };
+}
+
+/** A save by a run whose lease was taken over. Its work is safe to repeat; its cursor is not written. */
+export class BackfillLeaseLostError extends Error {
+  constructor() {
+    super('The backfill lease was taken over by another run');
+    this.name = 'BackfillLeaseLostError';
+  }
 }
 
 /** Take the lease on the walker's cursor, creating it at the start of pass 1. Null when another run holds it. */
@@ -37,7 +46,7 @@ export async function claimBackfillCursor(now: Date, leaseMs: number, id: string
 }
 
 export async function saveBackfillCursor(cursor: BackfillCursor, { release }: { release: boolean }, id: string = BACKFILL_ID, now: Date = new Date()): Promise<void> {
-  await db
+  const saved = await db
     .update(contentScanBackfill)
     .set({
       phase: cursor.phase,
@@ -50,7 +59,10 @@ export async function saveBackfillCursor(cursor: BackfillCursor, { release }: { 
       updatedAt: now,
       ...(release ? { leaseUntil: null } : {}),
     })
-    .where(eq(contentScanBackfill.id, id));
+    // Only the run that holds the lease writes. A cursor with no lease (a test, a manual fix) writes unconditionally.
+    .where(cursor.lease ? and(eq(contentScanBackfill.id, id), eq(contentScanBackfill.leaseUntil, cursor.lease)) : eq(contentScanBackfill.id, id))
+    .returning({ id: contentScanBackfill.id });
+  if (saved.length === 0) throw new BackfillLeaseLostError();
 }
 
 /** The walker's state for the admin console, or null before the first tick. */

@@ -102,6 +102,11 @@ export interface BackfillCursor {
   lastPassCounts: ContentScanBackfillCounts | null;
   passStartedAt: Date;
   lastCompletedAt: Date | null;
+  /**
+   * The lease this run holds (set by `claim`). A save is refused unless the row still carries it, so a run
+   * whose lease expired and was taken over cannot overwrite the new holder's cursor.
+   */
+  lease?: Date | null;
 }
 
 export function emptyBackfillCounts(): ContentScanBackfillCounts {
@@ -178,7 +183,7 @@ export interface ListedObject {
 export interface BackfillDeps {
   /** Take the lease on the cursor (creating it at the start of pass 1). Null when another run holds it. */
   claim(now: Date, leaseMs: number): Promise<BackfillCursor | null>;
-  /** Persist the cursor; `release` gives the lease up. */
+  /** Persist the cursor; `release` gives the lease up. Throws when the run no longer holds the lease. */
   save(cursor: BackfillCursor, options: { release: boolean }): Promise<void>;
   /** Keys under the phase's prefix, after `startAfter`, in key order. */
   list(phase: BackfillWalkPhase, startAfter: string | null, maxKeys: number): Promise<{ objects: ListedObject[]; truncated: boolean }>;
@@ -235,10 +240,13 @@ export async function runBackfillTick(deps: BackfillDeps, config: BackfillConfig
     let processed = 0;
     let scanned = 0;
     let completed = false;
-    while (processed < config.itemsPerTick && cursor.phase !== 'done') {
+    // A tick stops well inside its lease, so the lease cannot expire under it and be taken over.
+    const deadline = deps.now().getTime() + config.leaseMs / 2;
+    while (processed < config.itemsPerTick && cursor.phase !== 'done' && deps.now().getTime() < deadline) {
       const phase = cursor.phase;
       const page = await deps.list(phase, cursor.startAfter, config.itemsPerTick - processed);
       for (const object of page.objects) {
+        if (deps.now().getTime() >= deadline) break;
         const target = parseBackfillKey(phase, object.key);
         let outcome: BackfillItemOutcome | null = null;
         if (target) {
@@ -253,12 +261,15 @@ export async function runBackfillTick(deps: BackfillDeps, config: BackfillConfig
         processed += 1;
         if (outcome?.scanned) scanned += 1;
       }
+      const handledPage = page.objects.length === 0 || cursor.startAfter === page.objects[page.objects.length - 1].key;
       // The listing ran out: every key in the phase has been handled.
-      if (!page.truncated) {
+      if (!page.truncated && handledPage) {
         cursor = finishPhase(cursor, deps.now());
         if (cursor.phase === 'done') completed = true;
       }
       await deps.save(cursor, { release: false });
+      // A truncated listing that returned nothing would otherwise be asked for again forever.
+      if (page.truncated && page.objects.length === 0) break;
     }
 
     await release();

@@ -147,6 +147,26 @@ describe('runBackfillTick', () => {
     expect(due.row?.counts.listed).toBe(2);
   });
 
+  it('stops inside half its lease, mid-page, without finishing the phase', async () => {
+    const w = world({ assets });
+    let clock = NOW.getTime();
+    w.deps.now = () => new Date(clock);
+    vi.mocked(w.deps.process).mockImplementation(async (target) => {
+      w.processed.push(target.key);
+      clock += 20_000; // each object takes 20 s against a 60 s lease
+      return { finding: 'clean', scanned: true, removed: false };
+    });
+    await expect(runBackfillTick(w.deps, config(10))).resolves.toMatchObject({ processed: 2, completed: false });
+    expect(w.row).toMatchObject({ phase: 'assets', startAfter: assets[1] });
+  });
+
+  it('a truncated listing that returns nothing ends the tick instead of looping', async () => {
+    const w = world({ assets });
+    vi.mocked(w.deps.list).mockResolvedValue({ objects: [], truncated: true });
+    await expect(runBackfillTick(w.deps, config(5))).resolves.toMatchObject({ processed: 0, completed: false });
+    expect(w.deps.list).toHaveBeenCalledTimes(1);
+  });
+
   it('keys it does not know are counted and left alone', async () => {
     const w = world({ assets: ['assets/readme.txt', assets[0]] });
     await runBackfillTick(w.deps, config(5));

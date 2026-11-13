@@ -38,6 +38,8 @@ describe('assessEnforceReadiness', () => {
     ['backfill', { ...ready, backfill: { ...ready.backfill!, phase: 'avatars' as const, lastCompletedAt: null } }],
     ['shadow_results', { ...ready, shadow: { days: 14, counts: [] } }],
     ['flagged_reviewed', { ...ready, openFlaggedCases: 3 }],
+    // A pass where every object errored (a revoked key) checked nothing.
+    ['backfill', { ...ready, backfill: { ...ready.backfill!, lastPassCounts: { ...emptyBackfillCounts(), listed: 10, errors: 10 } } }],
   ])('%s blocks enforce', (id, facts) => {
     expect(status(facts, id)).toBe('blocking');
     expect(assessEnforceReadiness(facts).ready).toBe(false);

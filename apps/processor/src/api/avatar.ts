@@ -141,7 +141,7 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
     if (!decision.accept) {
       processorLogger.warn('Avatar upload refused', { userId, reason: decision.reason });
       return decision.reason === 'not_an_image'
-        ? res.status(400).json({ error: AVATAR_NOT_AN_IMAGE_MESSAGE })
+        ? res.status(400).json({ error: AVATAR_NOT_AN_IMAGE_MESSAGE, code: 'not_an_image' })
         : res.status(422).json({ error: AVATAR_REJECTED_MESSAGE });
     }
 

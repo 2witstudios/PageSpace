@@ -110,8 +110,11 @@ export async function POST(request: NextRequest) {
 
     // A refusal by the processor's gate. The message is fixed here, never the processor's text, and
     // never says why (not an image, or refused by the content-safety gate).
-    if (processorResponse.status === 400 || processorResponse.status === 422) {
-      const notAnImage = processorResponse.status === 400;
+    const refusal = processorResponse.status === 400 || processorResponse.status === 422
+      ? ((await processorResponse.clone().json().catch(() => ({}))) as { code?: unknown })
+      : null;
+    if (processorResponse.status === 422 || refusal?.code === 'not_an_image') {
+      const notAnImage = refusal?.code === 'not_an_image';
       return NextResponse.json(
         { error: notAnImage ? AVATAR_NOT_AN_IMAGE_MESSAGE : AVATAR_REJECTED_MESSAGE },
         { status: processorResponse.status },

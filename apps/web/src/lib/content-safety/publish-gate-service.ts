@@ -79,7 +79,7 @@ export function readPrivateSource(key: string, maxBytes: number): Promise<Source
  * A known-CSAM match is acted on in every mode: the system (no admin) runs PR 2's global takedown, which
  * writes the block first, preserves the bytes, removes every copy and alerts.
  */
-export async function runHashMatchTakedown({ contentHash, lists, source }: { contentHash: string; lists: string[]; source: string }): Promise<{ caseId?: string }> {
+export async function runHashMatchTakedown({ contentHash, lists, source }: { contentHash: string; lists: string[]; source: string }): Promise<{ caseId?: string; failedStep?: string }> {
   // Loaded lazily: the takedown service reaches back into the publish code (unpublish → publish-page),
   // which imports this gate.
   const { executeTakedown } = await import('./takedown-service');
@@ -98,7 +98,7 @@ export async function runHashMatchTakedown({ contentHash, lists, source }: { con
       failedStep: response.failedStep,
     });
   }
-  return { caseId: response.caseId };
+  return { caseId: response.caseId, ...(response.failedStep ? { failedStep: response.failedStep } : {}) };
 }
 
 /**
@@ -132,7 +132,7 @@ export function createPublishGateDeps(config: ScanGateConfig = resolveScanConfig
     recordVerdict: (record) => recordScanVerdict(record, { flagTtlMs: config.verdictTtlMs }),
     // A known-CSAM match is acted on in every mode: the system (no admin) runs PR 2's global takedown, which
     // writes the block first, preserves the bytes, removes every copy and alerts.
-    takedownHashMatch: ({ contentHash, lists }) => runHashMatchTakedown({ contentHash, lists, source: 'the publish scan' }),
+    takedownHashMatch: async ({ contentHash, lists }) => ({ caseId: (await runHashMatchTakedown({ contentHash, lists, source: 'the publish scan' })).caseId }),
     openReviewCase: (input) => openScanReviewCase(input),
     alert: sendContentSafetyAlert,
     audit(event) {

@@ -87,13 +87,27 @@ export function assessEnforceReadiness(facts: ReadinessFacts): ReadinessReport {
     });
   } else {
     const last = backfill.lastPassCounts;
-    const retry = last && last.errors > 0 ? ` ${last.errors} could not be checked and are retried on the next pass.` : '';
+    const errors = last?.errors ?? 0;
+    // A pass whose objects errored (a revoked key answers 401 for every one) checked nothing: not ready.
     items.push({
       id: 'backfill',
       label: 'Backfill of already-public content',
-      status: 'ok',
-      detail: `Completed ${backfill.lastCompletedAt.toISOString()}${last ? `: ${last.listed} objects, ${last.scanned} scanned` : ''}.${retry}`,
+      status: errors > 0 ? 'blocking' : 'ok',
+      detail:
+        `Last pass completed ${backfill.lastCompletedAt.toISOString()}${last ? `: ${last.listed} objects, ${last.scanned} sent to the scanner` : ''}.` +
+        (errors > 0 ? ` ${errors} could not be checked; they are retried on the next pass, which must finish with none.` : ''),
     });
+    if (last && last.ignored > 0) {
+      items.push({
+        id: 'backfill_ignored',
+        label: 'Objects the backfill does not recognise',
+        status: 'info',
+        detail: `${last.ignored} keys under assets/ or avatars/ were not a shape the backfill checks, and were left alone.`,
+      });
+    }
+  }
+  if (env && !env.publishBucketSet) {
+    items.push({ id: 'publish_bucket', label: 'PUBLISH_BUCKET', status: 'info', detail: 'Not set on the web app: there are no public assets to backfill, only avatars.' });
   }
 
   const shadow = facts.shadow.counts;
@@ -126,7 +140,7 @@ export function assessEnforceReadiness(facts: ReadinessFacts): ReadinessReport {
   }
 
   items.push(
-    { id: 'processor_env', label: 'Processor environment', status: 'manual', detail: 'Avatar uploads are scanned by the processor: give it the same CONTENT_SCAN_MODE, HIVE_API_KEY, SERVICE_API_SECRET and WEB_APP_INTERNAL_URL.' },
+    { id: 'processor_env', label: 'Processor environment', status: 'manual', detail: 'Avatar uploads are gated by the web app at the processor\'s request: the processor needs SERVICE_API_SECRET and WEB_APP_INTERNAL_URL, and CONTENT_SCAN_MODE set like the web app\'s (used only when the web app cannot be reached).' },
     { id: 'counsel', label: 'Counsel sign-off', status: 'manual', detail: 'Runbook, evidence retention, who may view flagged content, vendor scanning, legal holds and GDPR erasure.' },
   );
 

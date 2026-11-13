@@ -194,7 +194,7 @@ export function errorLabel(error: unknown): string {
 async function learn(
   input: PublishGateInput,
   deps: PublishGateDeps,
-): Promise<{ outcome: GateOutcome; contentType: string | null; sniffedText?: boolean }> {
+): Promise<{ outcome: GateOutcome; contentType: string | null; sniffedText?: boolean; vendorCalled?: boolean }> {
   const { config } = deps;
   if (!deps.scanner) return { outcome: { kind: 'scanner_unavailable' }, contentType: null };
 
@@ -231,7 +231,7 @@ async function learn(
     { contentHash: input.contentHash, mediaKind: media.mediaKind, contentType: media.contentType, bytes: source.bytes },
     config.timeoutMs,
   );
-  return { outcome: refineScanOutcome(media.mediaKind, result, config), contentType: media.contentType };
+  return { outcome: refineScanOutcome(media.mediaKind, result, config), contentType: media.contentType, vendorCalled: true };
 }
 
 /**
@@ -252,7 +252,7 @@ export async function evaluatePublishAsset(input: PublishGateInput, deps: Publis
   const mode = config.mode;
   for (const problem of config.problems) deps.reportMisconfiguration(problem);
 
-  const { outcome, contentType, sniffedText } = await learn(input, deps);
+  const { outcome, contentType, sniffedText, vendorCalled } = await learn(input, deps);
   const decision = decideGate(mode, outcome);
   const provider = deps.scanner?.provider ?? 'none';
   const context = { fileId: input.fileId, entryPoint: input.entryPoint, mode };
@@ -327,7 +327,8 @@ export async function evaluatePublishAsset(input: PublishGateInput, deps: Publis
     deps.audit({ eventType: decision.audit, contentHash: input.contentHash, userId: input.userId, details });
   }
 
-  const scanned = outcome.kind === 'scanned' || outcome.kind === 'unverified';
+  // Only a call that reached the vendor counts: an unreadable or oversized source is an error with no call.
+  const scanned = vendorCalled === true;
   const finding = findingFor(outcome);
   return promote
     ? { promote: true, finding, scanned, caseId }

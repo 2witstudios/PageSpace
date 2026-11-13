@@ -146,7 +146,8 @@ describe('POST /avatar/upload', () => {
     mockIsHashBlocked.mockResolvedValue(false);
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
-    vi.stubEnv('CONTENT_SCAN_MODE', 'off');
+    // The generic upload tests run as on-prem: the gate is the local blocklist only.
+    vi.stubEnv('DEPLOYMENT_MODE', 'onprem');
   });
 
   it('returns 401 when no auth', async () => {
@@ -334,10 +335,25 @@ describe('POST /avatar/upload content safety', () => {
     expect(webGate).not.toHaveBeenCalled();
   });
 
-  it('shadow accepts when the web gate cannot be reached (logged)', async () => {
+  it('shadow accepts when the web gate cannot be reached, after a local blocklist check', async () => {
     vi.stubEnv('CONTENT_SCAN_MODE', 'shadow');
     webGate.mockResolvedValue(new Response('nope', { status: 503 }));
     expect((await upload(createMockFile())).status).toBe(200);
+    expect(mockIsHashBlocked).toHaveBeenCalled();
+  });
+
+  it('with no answer, a hash blocked meanwhile (a takedown in flight) is refused in every mode', async () => {
+    for (const mode of ['off', 'shadow', 'enforce']) {
+      vi.stubEnv('CONTENT_SCAN_MODE', mode);
+      webGate.mockRejectedValueOnce(Object.assign(new Error('timeout'), { name: 'TimeoutError' }));
+      mockIsHashBlocked.mockResolvedValueOnce(true);
+      expect((await upload(createMockFile())).status).toBe(422);
+    }
+    webGate.mockRejectedValueOnce(new TypeError('fetch failed'));
+    mockIsHashBlocked.mockRejectedValueOnce(new Error('db down'));
+    vi.stubEnv('CONTENT_SCAN_MODE', 'shadow');
+    expect((await upload(createMockFile())).status).toBe(422);
+    expect(s3Tags()).toEqual([]);
   });
 
   it('shadow: whatever the web gate accepts (it records and opens cases) is stored', async () => {
@@ -347,8 +363,15 @@ describe('POST /avatar/upload content safety', () => {
     expect(s3Tags()).toContain('PutObject');
   });
 
-  it('off: no gate call; a blocked hash is still refused, and a blocklist failure refuses', async () => {
-    vi.stubEnv('CONTENT_SCAN_MODE', 'off');
+  it('the web app decides even when the processor has no CONTENT_SCAN_MODE (it cannot skip the scan)', async () => {
+    vi.stubEnv('CONTENT_SCAN_MODE', '');
+    webGate.mockResolvedValue(new Response(JSON.stringify({ accept: false }), { status: 200 }));
+    expect((await upload(createMockFile())).status).toBe(422);
+    expect(webGate).toHaveBeenCalledTimes(1);
+  });
+
+  it('on-prem: no gate call; a blocked hash is refused, and a blocklist failure refuses', async () => {
+    vi.stubEnv('DEPLOYMENT_MODE', 'onprem');
     mockIsHashBlocked.mockResolvedValueOnce(true);
     expect((await upload(createMockFile())).status).toBe(422);
     mockIsHashBlocked.mockRejectedValueOnce(new Error('db down'));
@@ -356,6 +379,11 @@ describe('POST /avatar/upload content safety', () => {
     expect(webGate).not.toHaveBeenCalled();
     expect(s3Tags()).toEqual([]);
     expect((await upload(createMockFile())).status).toBe(200);
+  });
+
+  it('a non-image answers 400 with a code the web app can tell apart from other 400s', async () => {
+    const response = await upload(createMockFile({ buffer: Buffer.from('not an image at all') }));
+    expect(response.body).toMatchObject({ code: 'not_an_image' });
   });
 });
 

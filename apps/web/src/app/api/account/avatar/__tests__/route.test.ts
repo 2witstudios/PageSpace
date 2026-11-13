@@ -228,7 +228,8 @@ describe('POST /api/account/avatar', () => {
     it('a refused upload leaves the profile image untouched and returns a neutral message', async () => {
       mockSelectChain([{ image: '/api/avatar/user-1/old.png' }]);
       const update = mockUpdateChain();
-      mockFetch.mockResolvedValue({ ok: false, status: 422, json: () => Promise.resolve({ error: 'flagged by scan' }) });
+      const refused = { error: 'flagged by scan' };
+      mockFetch.mockResolvedValue({ ok: false, status: 422, json: () => Promise.resolve(refused), clone: () => ({ json: () => Promise.resolve(refused) }) });
 
       const response = await POST(createUploadRequest(createMockFile('image/png', 1024)));
       const body = await response.json();
@@ -240,10 +241,19 @@ describe('POST /api/account/avatar', () => {
     });
 
     it('bytes that are not an image get the file-type message', async () => {
-      mockFetch.mockResolvedValue({ ok: false, status: 400, json: () => Promise.resolve({ error: 'x' }) });
+      const body = { error: 'x', code: 'not_an_image' };
+      mockFetch.mockResolvedValue({ ok: false, status: 400, json: () => Promise.resolve(body), clone: () => ({ json: () => Promise.resolve(body) }) });
       const response = await POST(createUploadRequest(createMockFile('image/png', 1024)));
       expect(response.status).toBe(400);
       expect((await response.json()).error).toBe('Please upload a JPEG, PNG, GIF or WebP image.');
+    });
+
+    it('any other processor 400 (no file, bad user ID) is not shown as a file-type problem', async () => {
+      const body = { error: 'Invalid user ID format' };
+      mockFetch.mockResolvedValue({ ok: false, status: 400, json: () => Promise.resolve(body), clone: () => ({ json: () => Promise.resolve(body) }) });
+      const response = await POST(createUploadRequest(createMockFile('image/png', 1024)));
+      expect(response.status).toBe(500);
+      expect((await response.json()).error).toBe('Failed to upload avatar');
     });
   });
 

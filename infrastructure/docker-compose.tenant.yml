@@ -154,6 +154,11 @@ services:
       PROCESSOR_AUTH_REQUIRED: ${PROCESSOR_AUTH_REQUIRED:-true}
       PROCESSOR_UPLOAD_RATE_LIMIT: ${PROCESSOR_UPLOAD_RATE_LIMIT:-100}
       PROCESSOR_UPLOAD_RATE_WINDOW: ${PROCESSOR_UPLOAD_RATE_WINDOW:-3600}
+      # Content safety (PR 5): avatar uploads ask the web app to run the scan gate before the old
+      # avatar is replaced. CONTENT_SCAN_MODE is used only when the web app can't be reached.
+      CONTENT_SCAN_MODE: ${CONTENT_SCAN_MODE:-off}
+      SERVICE_API_SECRET: ${SERVICE_API_SECRET:-}
+      WEB_APP_INTERNAL_URL: http://web:3000
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:3003/health', (r) => {r.statusCode === 200 ? process.exit(0) : process.exit(1)})"]
       interval: 30s
