@@ -403,15 +403,21 @@ export async function sweepPublicForUnfinishedCase(caseId: string): Promise<Publ
 }
 
 /**
- * Take a user's avatar off the web without opening a takedown case: the
- * backfill does this, under enforce, for an avatar the classifier flagged (the
- * review case is already open for its hash). Deletes the objects, checks none
- * are left, and clears the profile image.
+ * Stop showing a user's avatar without deleting it: clears the profile image.
+ * The objects stay, and their URL still answers. The backfill uses this only
+ * when the avatar's bytes could not be preserved yet, and retries the delete.
  */
 export async function hideUserAvatar(userId: string): Promise<void> {
   await clearProfileImage(userId);
 }
 
+/**
+ * Take a user's avatar off the web without opening a takedown case: the
+ * backfill does this, under enforce, for an avatar the classifier flagged (the
+ * review case is already open for its hash), and for a blocklisted avatar once
+ * its bytes are staged. Deletes the objects, checks none are left, and clears
+ * the profile image.
+ */
 export async function removeUserAvatar(userId: string): Promise<void> {
   await deleteAvatarObjects(userId);
   await clearProfileImage(userId);

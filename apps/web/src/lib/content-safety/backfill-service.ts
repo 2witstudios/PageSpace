@@ -158,8 +158,12 @@ export function createBackfillDeps(
     }
     if (evaluation.finding === 'blocked') {
       // A blocklisted hash still served: off the web, keeping a private copy under its case (it may be the only one).
-      const caseId = (await actions.findBlockCaseId(target.contentHash)) ?? UNCASED_HOLD;
-      await actions.takePublicOffline(target.contentHash, caseId);
+      const blockCaseId = await actions.findBlockCaseId(target.contentHash);
+      if (!blockCaseId) {
+        // No case will ever preserve or clean this hold: someone must open one (a global takedown of the hash).
+        loggers.security.error('Backfill: a blocked hash with no case was still public; it is held under content-hold/backfill-uncased/ and needs a case', undefined, {});
+      }
+      await actions.takePublicOffline(target.contentHash, blockCaseId ?? UNCASED_HOLD);
       removed = true;
     }
     if (evaluation.finding === 'flagged' && config.mode === 'enforce') {
@@ -214,16 +218,20 @@ export function createBackfillDeps(
         },
       }),
     );
-    let removed = avatarTakenDown || avatarHidden;
     if (evaluation.finding === 'blocked') {
       // A blocklisted avatar: its bytes go to the hash's private, blocked key before the avatar is deleted.
       if (await stage(contentHash)) {
         await actions.removeAvatar(target.userId);
+        avatarTakenDown = true;
       } else {
         await actions.hideAvatar(target.userId);
+        avatarHidden = true;
       }
-      removed = true;
     }
+    // Hidden is not removed: the avatar's URL still answers from storage. Stop before this object so the next
+    // tick (10 minutes) retries; by then the hash is blocked, and the blocked path stages before it deletes.
+    if (avatarHidden && !avatarTakenDown) throw new Error('Avatar hidden but not yet deleted: staging for preservation failed');
+    let removed = avatarTakenDown;
     if (evaluation.finding === 'flagged' && config.mode === 'enforce') {
       await actions.removeAvatar(target.userId);
       removed = true;

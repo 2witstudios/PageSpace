@@ -178,7 +178,8 @@ describe('backfill service: avatars', () => {
   it('a hash-matched avatar that cannot be staged is blocked and hidden, never deleted', async () => {
     send.mockRejectedValueOnce(new Error('s3 down'));
     const { deps, actions } = build('enforce', match);
-    await expect(deps.process(avatar, listed)).resolves.toMatchObject({ finding: 'hash_match', removed: true });
+    // Hidden is not removed (its URL still answers): the walk stops before it and retries next tick.
+    await expect(deps.process(avatar, listed)).rejects.toThrow('hidden but not yet deleted');
     expect(executeTakedown).toHaveBeenCalledWith(expect.objectContaining({ action: 'global', contentHash: PNG_HASH }), null);
     expect(actions.hideAvatar).toHaveBeenCalledWith('user-1');
     expect(actions.takedownAvatar).not.toHaveBeenCalled();
@@ -195,7 +196,7 @@ describe('backfill service: avatars', () => {
 
     send.mockRejectedValueOnce(new Error('s3 down'));
     const unstaged = build('enforce');
-    await unstaged.deps.process(avatar, listed);
+    await expect(unstaged.deps.process(avatar, listed)).rejects.toThrow('hidden but not yet deleted');
     expect(unstaged.actions.hideAvatar).toHaveBeenCalledWith('user-1');
     expect(unstaged.actions.removeAvatar).not.toHaveBeenCalled();
   });
