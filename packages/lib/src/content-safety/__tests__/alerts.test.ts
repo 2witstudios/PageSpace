@@ -111,4 +111,13 @@ describe('sendContentSafetyAlert', () => {
     expect(options.headers).toEqual({ 'X-Priority': '1', Importance: 'high', Priority: 'urgent' });
     expect(options.idempotencyKey).toBe('content-case:case-s:scan_flagged');
   });
+
+  it('marks a CSAM case opening urgent (a known-hash match from the publish scan), but not other categories', async () => {
+    await sendContentSafetyAlert({ event: 'opened', caseId: 'case-h', category: 'csam' });
+    expect(sendEmail.mock.calls[0][0].subject).toBe('[URGENT] CSAM case: [Content safety] Content case opened (case-h)');
+    expect(sendEmail.mock.calls[0][0].headers).toEqual({ 'X-Priority': '1', Importance: 'high', Priority: 'urgent' });
+    sendEmail.mockClear();
+    await sendContentSafetyAlert({ event: 'opened', caseId: 'case-m', category: 'malware' });
+    expect(sendEmail.mock.calls[0][0].subject).not.toMatch(/URGENT/);
+  });
 });

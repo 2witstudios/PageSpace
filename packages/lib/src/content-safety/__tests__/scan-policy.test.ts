@@ -23,9 +23,36 @@ describe('sniffContentType', () => {
     expect(sniffContentType(text('\0\0\0\x18ftypheic'))).toBe('image/heic');
   });
 
-  it('does not mistake text for a bitmap', () => {
-    expect(sniffContentType(text('BMW owners club notes'))).toBeNull();
-    expect(sniffContentType(text('hello'))).toBeNull();
+  it('reads text as text, and does not mistake it for a bitmap', () => {
+    expect(sniffContentType(text('BMW owners club notes'))).toBe('text');
+    expect(sniffContentType(text('héllo — ünïcode'))).toBe('text');
+    expect(sniffContentType(text('body { color: red }\n'))).toBe('text');
+  });
+
+  it('a multi-byte character cut at the end of the read is still text', () => {
+    const full = text('ab€');
+    expect(sniffContentType(full.subarray(0, full.length - 1))).toBe('text');
+  });
+
+  it('opaque bytes are recognised as nothing', () => {
+    expect(sniffContentType(bytes(0x00, 0x13, 0x88, 0xfe, 0x01, 0x02))).toBeNull();
+    expect(sniffContentType(bytes(0xc3, 0x28, 0x41, 0x42))).toBeNull(); // invalid UTF-8
+  });
+
+  it('recognises the image and video containers a scanner cannot read', () => {
+    expect(sniffContentType(bytes(0, 0, 1, 0, 1, 0, 16, 16))).toBe('image/x-icon');
+    expect(sniffContentType(bytes(0xff, 0x0a, 0xfa))).toBe('image/jxl');
+    expect(sniffContentType(bytes(0, 0, 0, 0x0c, 0x6a, 0x50, 0x20, 0x20))).toBe('image/jp2');
+    expect(sniffContentType(text('OggS\0\x02' + '\0'.repeat(22) + '\x80theora'))).toBe('video/ogg');
+    expect(sniffContentType(text('OggS\0\x02' + '\0'.repeat(22) + 'unknown'))).toBe('video/ogg');
+  });
+
+  it('recognises audio and fonts by their bytes', () => {
+    expect(sniffContentType(text('OggS\0\x02' + '\0'.repeat(22) + '\x01vorbis'))).toBe('audio');
+    expect(sniffContentType(text('ID3\x04'))).toBe('audio');
+    expect(sniffContentType(bytes(0xff, 0xfb, 0x90, 0x00))).toBe('audio');
+    expect(sniffContentType(text('\0\0\0\x20ftypM4A '))).toBe('audio');
+    expect(sniffContentType(text('wOF2\0\x01'))).toBe('font');
   });
 });
 
@@ -57,10 +84,34 @@ describe('classifyMedia', () => {
     expect(classifyMedia(null, 'image/png').class).toBe('never_promote');
   });
 
-  it('allows text, audio, fonts and SVG unscanned', () => {
-    for (const type of ['text/plain', 'text/css; charset=utf-8', 'audio/mpeg', 'font/woff2', 'image/svg+xml', 'application/json']) {
-      expect(classifyMedia(null, type).class).toBe('unscanned_allowed');
+  it('allows text, SVG, audio and fonts unscanned when the bytes are what they claim', () => {
+    for (const type of ['text/plain', 'text/css; charset=utf-8', 'image/svg+xml', 'application/json']) {
+      expect(classifyMedia('text', type).class).toBe('unscanned_allowed');
     }
+    expect(classifyMedia('audio', 'audio/mpeg').class).toBe('unscanned_allowed');
+    expect(classifyMedia('font', 'font/woff2').class).toBe('unscanned_allowed');
+  });
+
+  it('never trusts a declared text, audio or font type over opaque bytes', () => {
+    for (const type of ['text/plain', 'audio/mpeg', 'audio/ogg', 'font/woff', 'application/pdf', 'image/svg+xml']) {
+      expect(classifyMedia(null, type).class).toBe('never_promote');
+    }
+  });
+
+  it('holds Ogg video, ICO, JPEG XL and JPEG 2000 whatever they are declared as', () => {
+    expect(classifyMedia('video/ogg', 'audio/ogg').class).toBe('never_promote');
+    expect(classifyMedia('image/x-icon', 'text/plain').class).toBe('never_promote');
+    expect(classifyMedia('image/jxl', 'text/plain').class).toBe('never_promote');
+    expect(classifyMedia('image/jp2', 'audio/mpeg').class).toBe('never_promote');
+  });
+
+  it('holds text that claims to be a raster picture', () => {
+    expect(classifyMedia('text', 'image/png').class).toBe('never_promote');
+  });
+
+  it('allows legacy Office documents only when declared as such', () => {
+    expect(classifyMedia('ole_document', 'application/msword').class).toBe('unscanned_allowed');
+    expect(classifyMedia('ole_document', 'application/octet-stream').class).toBe('never_promote');
   });
 });
 
@@ -108,6 +159,12 @@ describe('decideGate', () => {
   it('a cached flag holds under enforce without a new case', () => {
     expect(decideGate('enforce', { kind: 'cached_flagged' })).toMatchObject({ promote: false, reviewCase: false, record: null });
     expect(decideGate('enforce', { kind: 'cached_clean' })).toMatchObject({ promote: true, record: null });
+  });
+
+  it('a cached unscanned classification promotes only what is allowed unscanned', () => {
+    expect(decideGate('enforce', { kind: 'cached_unscanned', allowed: true })).toMatchObject({ promote: true, record: null, audit: null });
+    expect(decideGate('enforce', { kind: 'cached_unscanned', allowed: false })).toMatchObject({ promote: false, record: null });
+    expect(decideGate('shadow', { kind: 'cached_unscanned', allowed: false }).promote).toBe(true);
   });
 });
 

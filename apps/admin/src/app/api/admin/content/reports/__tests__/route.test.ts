@@ -18,9 +18,7 @@ vi.mock('@pagespace/lib/content-safety/report-store', () => {
   return { listReportedCases: listMock, getReportedCase: reportedMock, listCaseReports: pageMock, closeReportedCase: closeMock, ReportedCaseNotFoundError, ReportedCaseChangedError };
 });
 vi.mock('@pagespace/lib/content-safety/case-store', () => ({ getContentCase: getMock }));
-const { reviewedCleanMock } = vi.hoisted(() => ({ reviewedCleanMock: vi.fn() }));
 vi.mock('@pagespace/lib/content-safety/scan-store', () => ({
-  recordReviewedClean: reviewedCleanMock,
   isScanFlaggedCase: (row: { snapshot?: { scan?: { source?: string } } }) => row.snapshot?.scan?.source === 'scan_flagged',
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
@@ -139,7 +137,7 @@ describe('POST /api/admin/content/reports', () => {
   it('dismisses a case under review and audits it as resolved', async () => {
     const res = await post({ caseId: 'case-r', outcome: 'dismissed', expectedReportCount: 2, note: 'not a violation' });
     expect(res.status).toBe(200);
-    expect(closeMock).toHaveBeenCalledWith({ caseId: 'case-r', outcome: 'dismissed', actorUserId: 'admin-1', expectedReportCount: 2, note: 'not a violation' });
+    expect(closeMock).toHaveBeenCalledWith({ caseId: 'case-r', outcome: 'dismissed', actorUserId: 'admin-1', expectedReportCount: 2, expectedScanFlaggedAt: null, note: 'not a violation' });
     expect(auditRequest).toHaveBeenCalledWith(
       expect.any(Request),
       expect.objectContaining({ eventType: 'content.report.resolved', userId: 'admin-1', resourceId: 'case-r', details: { outcome: 'dismissed', scanFlagged: false, clearedScan: false } }),
@@ -164,24 +162,18 @@ describe('POST /api/admin/content/reports', () => {
     expect(auditRequest).not.toHaveBeenCalled();
   });
 
-  it('dismissing a flagged-scan case with no reports records its hash clean', async () => {
+  it('passes the scan flag the admin saw to the close, and audits a cleared flag', async () => {
     const hash = 'a'.repeat(64);
     closeMock.mockResolvedValue(caseRow({ status: 'dismissed', targetType: 'content_hash', targetId: hash, contentHash: hash, snapshot: { scan: { source: 'scan_flagged' } } }));
-    const res = await post({ caseId: 'case-r', outcome: 'dismissed', expectedReportCount: 0 });
+    const res = await post({ caseId: 'case-r', outcome: 'dismissed', expectedReportCount: 0, expectedScanFlaggedAt: '2026-11-12T00:00:00.000Z' });
     expect(res.status).toBe(200);
-    expect(reviewedCleanMock).toHaveBeenCalledWith(hash, 'admin-1');
+    expect(closeMock).toHaveBeenCalledWith(expect.objectContaining({ expectedReportCount: 0, expectedScanFlaggedAt: '2026-11-12T00:00:00.000Z' }));
     expect(auditRequest).toHaveBeenCalledWith(expect.any(Request), expect.objectContaining({ details: { outcome: 'dismissed', scanFlagged: true, clearedScan: true } }));
   });
 
-  it('marking a flagged-scan case actioned does not clear the hash', async () => {
-    const hash = 'a'.repeat(64);
-    closeMock.mockResolvedValue(caseRow({ status: 'actioned', contentHash: hash, snapshot: { scan: { source: 'scan_flagged' } } }));
+  it('an actioned flagged-scan case is not a cleared flag', async () => {
+    closeMock.mockResolvedValue(caseRow({ status: 'actioned', contentHash: 'a'.repeat(64), snapshot: { scan: { source: 'scan_flagged' } } }));
     await post({ caseId: 'case-r', outcome: 'actioned', expectedReportCount: 0 });
-    expect(reviewedCleanMock).not.toHaveBeenCalled();
-  });
-
-  it('dismissing an ordinary report never touches scan verdicts', async () => {
-    await post({ caseId: 'case-r', outcome: 'dismissed', expectedReportCount: 2 });
-    expect(reviewedCleanMock).not.toHaveBeenCalled();
+    expect(auditRequest).toHaveBeenCalledWith(expect.any(Request), expect.objectContaining({ details: { outcome: 'actioned', scanFlagged: true, clearedScan: false } }));
   });
 });

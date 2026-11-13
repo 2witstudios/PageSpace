@@ -49,7 +49,9 @@ const EXPLANATIONS: Record<ContentSafetyAlertEmailProps['event'], string> = {
 export function contentSafetyAlertSubject(props: Pick<ContentSafetyAlertEmailProps, 'event' | 'caseId'> & { urgent?: boolean }): string {
   const subject = `[Content safety] ${HEADLINES[props.event]} (${props.caseId})`;
   if (!props.urgent) return subject;
-  return props.event === 'scan_flagged' ? `[URGENT] Suspected CSAM: ${subject}` : `[URGENT] CSAM report: ${subject}`;
+  if (props.event === 'scan_flagged') return `[URGENT] Suspected CSAM: ${subject}`;
+  if (props.event === 'opened') return `[URGENT] CSAM case: ${subject}`;
+  return `[URGENT] CSAM report: ${subject}`;
 }
 
 export function ContentSafetyAlertEmail({ event, caseId, category, reportCount, adminUrl }: ContentSafetyAlertEmailProps) {

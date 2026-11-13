@@ -32,12 +32,15 @@ import { headS3Object, isS3NotFound } from '@/lib/storage/s3-objects';
  *   - we sniff the same bytes we send, so the declared type cannot steer the scan;
  *   - the read is bounded by `CONTENT_SCAN_MAX_BYTES` (HEAD first): a larger file
  *     is never buffered, and an image or video over the bound is a scan error.
- * The copy to the public bucket already buffers the whole object, so this adds
- * no new memory ceiling.
+ * Assets are gated at most four at a time per publish (asset-pipeline), and a
+ * type published unscanned is remembered for the verdict TTL, so it is not re-read on every republish.
  */
 
 /** Bytes read from a file over the size bound: enough to recognise its type. */
 const SNIFF_BYTES = 4096;
+
+/** A read of the original that takes longer than this is abandoned (the asset is held as unreadable). */
+const READ_TIMEOUT_MS = 30_000;
 
 const RISK: Record<ScanAuditEvent['eventType'], number> = {
   'content.scan.clean': 0,
@@ -83,6 +86,7 @@ export async function readPrivateSource(key: string, maxBytes: number): Promise<
   try {
     const result = await client.send(
       new GetObjectCommand({ Bucket: bucket, Key: key, ...(tooLarge ? { Range: `bytes=0-${SNIFF_BYTES - 1}` } : {}) }),
+      { abortSignal: AbortSignal.timeout(READ_TIMEOUT_MS) },
     );
     const bytes = await readBody(result.Body);
     // The object may have been replaced between the HEAD and the GET.

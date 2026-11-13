@@ -22,11 +22,20 @@ import type { StoredVerdict, VerdictRecord } from './publish-gate';
 
 export async function findScanVerdict(contentHash: string): Promise<StoredVerdict | null> {
   const [row] = await db
-    .select({ verdict: contentScans.verdict, outcome: contentScans.outcome, scannedAt: contentScans.scannedAt })
+    .select({ verdict: contentScans.verdict, outcome: contentScans.outcome, scannedAt: contentScans.scannedAt, scores: contentScans.scores })
     .from(contentScans)
     .where(eq(contentScans.contentHash, contentHash))
     .limit(1);
-  return row ?? null;
+  if (!row) return null;
+  const media = row.scores?.media;
+  return {
+    verdict: row.verdict,
+    outcome: row.outcome,
+    scannedAt: row.scannedAt,
+    ...(row.verdict === 'unscanned' && (media === 'unscanned_allowed' || media === 'never_promote')
+      ? { unscannedAllowed: media === 'unscanned_allowed' }
+      : {}),
+  };
 }
 
 /** The latest verdict for a hash replaces the previous one. */
@@ -46,25 +55,6 @@ export async function recordScanVerdict(record: VerdictRecord, now: Date = new D
 }
 
 /**
- * Staff reviewed a flagged scan and found nothing: the hash is recorded clean,
- * so the gate stops holding it (it is rescanned when the clean verdict expires).
- */
-export async function recordReviewedClean(contentHash: string, actorUserId: string, now: Date = new Date()): Promise<void> {
-  const values = {
-    verdict: 'clean' as const,
-    outcome: 'clean' as const,
-    provider: 'admin_review',
-    mode: null,
-    scores: { reviewedBy: actorUserId },
-    scannedAt: now,
-  };
-  await db
-    .insert(contentScans)
-    .values({ contentHash, ...values })
-    .onConflictDoUpdate({ target: contentScans.contentHash, set: values });
-}
-
-/**
  * Open the review case for a flagged hash, or join the one already under
  * review for it (a report or an earlier flag). The case is categorised CSAM,
  * which puts it at the top of the queue; that is a triage label, not a finding.
@@ -75,7 +65,7 @@ export async function openScanReviewCase(input: {
   category: string;
   score: number;
   mode: ContentScanMode;
-}, now: Date = new Date()): Promise<{ caseId: string; created: boolean }> {
+}, now: Date = new Date()): Promise<{ caseId: string; created: boolean; firstFlag: boolean }> {
   const scan: NonNullable<ContentCaseSnapshot['scan']> = {
     source: 'scan_flagged',
     provider: input.provider,
@@ -102,7 +92,17 @@ export async function openScanReviewCase(input: {
         where: sql`${contentCases.status} = 'reported'`,
       })
       .returning({ id: contentCases.id });
-    if (opened) return { caseId: opened.id, created: true };
+    if (opened) return { caseId: opened.id, created: true, firstFlag: true };
+
+    // Lock the case under review, as a report does, and see whether it was already flagged.
+    const [current] = await tx
+      .select({ id: contentCases.id, snapshot: contentCases.snapshot })
+      .from(contentCases)
+      .where(and(eq(contentCases.targetType, 'content_hash'), eq(contentCases.targetId, input.contentHash), eq(contentCases.status, 'reported')))
+      .limit(1)
+      .for('update');
+    if (!current) throw new Error('The case under review for this hash closed while a scan flag was being filed');
+    const firstFlag = current.snapshot?.scan?.source !== 'scan_flagged';
 
     const [existing] = await tx
       .update(contentCases)
@@ -111,10 +111,9 @@ export async function openScanReviewCase(input: {
         snapshot: sql`coalesce(${contentCases.snapshot}, '{}'::jsonb) || ${JSON.stringify({ scan })}::jsonb`,
         updatedAt: now,
       })
-      .where(and(eq(contentCases.targetType, 'content_hash'), eq(contentCases.targetId, input.contentHash), eq(contentCases.status, 'reported')))
+      .where(eq(contentCases.id, current.id))
       .returning({ id: contentCases.id });
-    if (!existing) throw new Error('The case under review for this hash closed while a scan flag was being filed');
-    return { caseId: existing.id, created: false };
+    return { caseId: existing.id, created: false, firstFlag };
   });
 }
 

@@ -8,8 +8,8 @@ import { createHash, randomUUID } from 'crypto';
 import { db } from '@pagespace/db/db';
 import { inArray } from '@pagespace/db/operators';
 import { contentCases, contentReports, contentScans } from '@pagespace/db/schema/content-safety';
-import { countScanVerdicts, findScanVerdict, openScanReviewCase, recordReviewedClean, recordScanVerdict } from '../scan-store';
-import { fileContentReport, listReportedCases } from '../report-store';
+import { countScanVerdicts, findScanVerdict, openScanReviewCase, recordScanVerdict } from '../scan-store';
+import { closeReportedCase, fileContentReport, listReportedCases, ReportedCaseChangedError } from '../report-store';
 
 const hashes: string[] = [];
 const newHash = () => {
@@ -39,8 +39,8 @@ describe('scan store', () => {
     const hash = newHash();
     const first = await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.95, mode: 'shadow' });
     const second = await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.97, mode: 'shadow' });
-    expect(first.created).toBe(true);
-    expect(second).toEqual({ caseId: first.caseId, created: false });
+    expect(first).toMatchObject({ created: true, firstFlag: true });
+    expect(second).toEqual({ caseId: first.caseId, created: false, firstFlag: false });
 
     const listed = (await listReportedCases({ limit: 200 })).find((c) => c.case.id === first.caseId);
     expect(listed).toBeDefined();
@@ -60,14 +60,59 @@ describe('scan store', () => {
       contactEmail: null,
     });
     const flagged = await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.99, mode: 'enforce' });
-    expect(flagged).toEqual({ caseId: reported.caseId, created: false });
+    // The report's case had no flag: this is its first, so the gate alerts.
+    expect(flagged).toEqual({ caseId: reported.caseId, created: false, firstFlag: true });
   });
 
-  it('an admin review records the hash clean', async () => {
+  it('remembers whether an unscanned file was allowed', async () => {
     const hash = newHash();
+    await recordScanVerdict({ contentHash: hash, verdict: 'unscanned', outcome: 'unsupported_type', provider: 'hive', mode: 'enforce', scores: { media: 'unscanned_allowed' } });
+    expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'unscanned', unscannedAllowed: true });
+  });
+
+  it('dismissing a flagged case records the hash clean in the same close', async () => {
+    const hash = newHash();
+    const opened = await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.95, mode: 'enforce' });
     await recordScanVerdict({ contentHash: hash, verdict: 'flagged', outcome: 'classifier_flag', provider: 'hive', mode: 'enforce', scores: {} });
-    await recordReviewedClean(hash, 'admin-1');
+    const [listed] = (await listReportedCases({ limit: 200 })).filter((c) => c.case.id === opened.caseId);
+    const flaggedAt = listed.case.snapshot?.scan?.flaggedAt ?? null;
+
+    await closeReportedCase({ caseId: opened.caseId, outcome: 'dismissed', actorUserId: 'admin-1', expectedReportCount: 0, expectedScanFlaggedAt: flaggedAt });
     expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'clean', outcome: 'clean' });
+  });
+
+  it('refuses a dismissal when a scan flag joined after the admin looked, and clears nothing', async () => {
+    const hash = newHash();
+    const reported = await fileContentReport({
+      target: { targetType: 'content_hash', targetId: hash, contentHash: hash },
+      category: 'other',
+      description: 'spam',
+      source: 'anonymous',
+      reporterUserId: null,
+      contactEmail: null,
+    });
+    // The admin opens the one-report case (no flag)... then the publish gate flags the hash.
+    await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.98, mode: 'shadow' });
+    await recordScanVerdict({ contentHash: hash, verdict: 'flagged', outcome: 'classifier_flag', provider: 'hive', mode: 'shadow', scores: {} });
+
+    await expect(
+      closeReportedCase({ caseId: reported.caseId, outcome: 'dismissed', actorUserId: 'admin-1', expectedReportCount: 1, expectedScanFlaggedAt: null }),
+    ).rejects.toBeInstanceOf(ReportedCaseChangedError);
+    expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'flagged' });
+  });
+
+  it('closing an ordinary report never writes a verdict', async () => {
+    const hash = newHash();
+    const reported = await fileContentReport({
+      target: { targetType: 'content_hash', targetId: hash, contentHash: hash },
+      category: 'other',
+      description: null,
+      source: 'anonymous',
+      reporterUserId: null,
+      contactEmail: null,
+    });
+    await closeReportedCase({ caseId: reported.caseId, outcome: 'dismissed', actorUserId: 'admin-1', expectedReportCount: 1 });
+    expect(await findScanVerdict(hash)).toBeNull();
   });
 
   it('counts verdicts by mode and outcome', async () => {

@@ -60,6 +60,8 @@ export async function closeReportedCase(input: {
   outcome: 'dismissed' | 'actioned';
   /** The count the admin was shown; the server refuses the close if more reports arrived since. */
   expectedReportCount: number;
+  /** The publish-scan flag the admin was shown (its time), or null; the server refuses the close if it changed. */
+  expectedScanFlaggedAt: string | null;
   note: string;
 }): Promise<void> {
   const res = await fetchWithAuth('/api/admin/content/reports', {

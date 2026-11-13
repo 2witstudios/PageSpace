@@ -42,6 +42,11 @@ export interface HiveMappingOptions {
 
 const score = z.number().finite();
 
+const classifierPrediction = z
+  .object({ csam_classifier: z.object({ csam: score, pornography: score.optional(), other: score.optional() }) })
+  .nullable()
+  .optional();
+
 const hiveResponseSchema = z.object({
   status: z
     .array(
@@ -53,12 +58,7 @@ const hiveResponseSchema = z.object({
               file: z.object({
                 fileType: z.string().optional(),
                 reasons: z.array(z.string()).default([]),
-                classifierPrediction: z
-                  .object({
-                    csam_classifier: z.object({ csam: score, pornography: score.optional(), other: score.optional() }),
-                  })
-                  .nullable()
-                  .optional(),
+                classifierPrediction,
               }),
               hashes: z
                 .array(
@@ -67,6 +67,8 @@ const hiveResponseSchema = z.object({
                     matchTypes: z.array(z.string()).default([]),
                     reasons: z.array(z.string()).default([]),
                     sources: z.array(z.object({ hashSet: z.string() })).default([]),
+                    // Video: a per-scene entry may carry its own classifier output and reasons.
+                    classifierPrediction,
                   }),
                 )
                 .default([]),
@@ -98,41 +100,49 @@ export function mapHiveResponse(httpStatus: number, body: unknown, options: Hive
   const { file, hashes } = entry.response.output;
 
   // Hash matches first: a match is decisive and the classifier does not run after one.
-  const counted = hashes
-    .map((hash) => ({
-      ...hash,
-      sources: hash.sources.filter((source) => options.includeTestSets || !TEST_HASH_SETS.has(source.hashSet)),
-    }))
-    .filter((hash) => hash.sources.length > 0 && (hash.reasons.includes('matched') || hash.matchTypes.length > 0));
-  if (counted.length > 0) {
+  // ANY source on a hash entry that is not a test list is a match, whatever its reasons or match types say:
+  // reading an unexpected shape as "no match" would let known material through.
+  const isTestSet = (hashSet: string) => !options.includeTestSets && TEST_HASH_SETS.has(hashSet);
+  const realSources = hashes.flatMap((hash) => hash.sources.filter((source) => !isTestSet(source.hashSet)));
+  if (realSources.length > 0) {
     return {
       kind: 'hash_match',
       provider,
-      lists: [...new Set(counted.flatMap((hash) => hash.sources.map((source) => source.hashSet)))],
-      matchTypes: [...new Set(counted.flatMap((hash) => hash.matchTypes))],
+      lists: [...new Set(realSources.map((source) => source.hashSet))],
+      matchTypes: [...new Set(hashes.filter((hash) => hash.sources.some((s) => !isTestSet(s.hashSet))).flatMap((hash) => hash.matchTypes))],
     };
   }
-  // ASSUMPTION: a file-level "matched" with no listed real source can only be a test-list match.
-  // With test lists excluded it is ignored; anything else is unexplained, so it is an error, not clean.
-  if (file.reasons.includes('matched') && !hashes.some((hash) => hash.sources.some((s) => TEST_HASH_SETS.has(s.hashSet)))) {
+  // A hash entry that says it matched but names no source, or a file-level "matched" with no hash entry that
+  // explains it (only test-list entries do), is unexplained: an error, never clean. Checked per entry, so a
+  // test-list entry cannot cover for a real one.
+  const claimsMatch = (hash: (typeof hashes)[number]) => hash.reasons.includes('matched') || hash.matchTypes.length > 0;
+  const unexplainedEntry = hashes.some((hash) => claimsMatch(hash) && hash.sources.length === 0);
+  const explainedByTestList = hashes.some((hash) => hash.sources.some((source) => TEST_HASH_SETS.has(source.hashSet)));
+  if (unexplainedEntry || (file.reasons.includes('matched') && !explainedByTestList)) {
     return { kind: 'error', provider, reason: 'bad_response', detail: 'match_without_source' };
   }
 
-  const prediction = file.classifierPrediction?.csam_classifier;
-  if (prediction) {
-    const scores: Record<string, number> = { csam: prediction.csam };
-    if (prediction.pornography !== undefined) scores.pornography = prediction.pornography;
-    if (prediction.other !== undefined) scores.other = prediction.other;
-    if (file.reasons.includes('csam') || prediction.csam >= options.flagThreshold) {
-      return { kind: 'classifier_flag', provider, category: 'csam', score: prediction.csam, scores };
+  // The classifier: the file-level prediction and every per-scene prediction (video). The highest csam score
+  // decides, and a `csam` reason anywhere flags.
+  const predictions = [file.classifierPrediction, ...hashes.map((hash) => hash.classifierPrediction)]
+    .map((prediction) => prediction?.csam_classifier)
+    .filter((prediction): prediction is NonNullable<typeof prediction> => Boolean(prediction));
+  const csamReason = file.reasons.includes('csam') || hashes.some((hash) => hash.reasons.includes('csam'));
+  if (predictions.length > 0) {
+    const top = predictions.reduce((best, next) => (next.csam > best.csam ? next : best));
+    const scores: Record<string, number> = { csam: top.csam };
+    if (top.pornography !== undefined) scores.pornography = top.pornography;
+    if (top.other !== undefined) scores.other = top.other;
+    if (csamReason || top.csam >= options.flagThreshold) {
+      return { kind: 'classifier_flag', provider, category: 'csam', score: top.csam, scores };
     }
     return { kind: 'clean', provider, scores };
   }
 
-  if (file.reasons.includes('csam')) {
+  if (csamReason) {
     return { kind: 'classifier_flag', provider, category: 'csam', score: 1 };
   }
-  // ASSUMPTION: a null prediction with no match means the hash pass ran and the classifier did not
+  // ASSUMPTION: no prediction anywhere and no match means the hash pass ran and the classifier did not
   // (too small after de-letterboxing, or video, where the docs show no classifier output). That is
   // reported as clean with no scores; the verdict row records `classifier: false`.
   return { kind: 'clean', provider };

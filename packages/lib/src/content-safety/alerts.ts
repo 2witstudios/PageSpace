@@ -53,8 +53,12 @@ export function contentCaseAdminUrl(caseId: string, env: Env = process.env): str
 export async function sendContentSafetyAlert(alert: ContentSafetyAlert): Promise<void> {
   const category = alert.category ?? 'uncategorised';
   const reportCount = isReportAlert(alert) ? alert.reportCount : undefined;
-  // A CSAM report, and suspected CSAM found by the publish scan (live on the web in shadow mode), are urgent.
-  const urgent = (isReportAlert(alert) && alert.category === 'csam') || alert.event === 'scan_flagged';
+  // Urgent: a CSAM report; suspected CSAM found by the publish scan (live on the web in shadow mode); and a CSAM
+  // case opening, which is how a confirmed known-hash match from the publish scan arrives (reporting deadlines apply).
+  const urgent =
+    (isReportAlert(alert) && alert.category === 'csam') ||
+    alert.event === 'scan_flagged' ||
+    (alert.event === 'opened' && alert.category === 'csam');
   loggers.security.warn('Content safety case alert', { event: alert.event, caseId: alert.caseId, category, reportCount });
 
   // Each report is its own alert: the count keeps a later report from collapsing into the first.

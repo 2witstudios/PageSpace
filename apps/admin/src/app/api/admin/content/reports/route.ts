@@ -10,7 +10,7 @@ import {
   ReportedCaseChangedError,
   ReportedCaseNotFoundError,
 } from '@pagespace/lib/content-safety/report-store';
-import { isScanFlaggedCase, recordReviewedClean } from '@pagespace/lib/content-safety/scan-store';
+import { isScanFlaggedCase } from '@pagespace/lib/content-safety/scan-store';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { withAdminAuth } from '@/lib/auth';
 import { toReportedCaseSummary, toReportSummary } from '@/lib/content/report-summary';
@@ -84,6 +84,8 @@ const closeSchema = z.object({
   // The report count the admin was shown: a report that arrived since refuses the close.
   // Zero for a case the publish scan flagged with no reports.
   expectedReportCount: z.number().int().min(0).max(1_000_000),
+  // The publish-scan flag the admin was shown (its time), or null: a flag that joined since refuses the close.
+  expectedScanFlaggedAt: z.string().max(64).nullable().optional(),
   note: z.string().trim().max(1000).optional(),
 });
 
@@ -98,14 +100,20 @@ export const POST = withAdminAuth(async (adminUser, request) => {
   if (!parsed.success) {
     return NextResponse.json({ error: 'Validation failed', details: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
-  const { caseId, outcome, expectedReportCount, note } = parsed.data;
+  const { caseId, outcome, expectedReportCount, expectedScanFlaggedAt, note } = parsed.data;
   try {
-    const row = await closeReportedCase({ caseId, outcome, actorUserId: adminUser.id, expectedReportCount, note: note || undefined });
-    // Dismissing a flagged scan is a reviewed false positive: record the hash clean so the publish gate
-    // stops holding it. Actioned changes nothing here; the takedown ran as its own case.
+    const row = await closeReportedCase({
+      caseId,
+      outcome,
+      actorUserId: adminUser.id,
+      expectedReportCount,
+      expectedScanFlaggedAt: expectedScanFlaggedAt ?? null,
+      note: note || undefined,
+    });
+    // Dismissing a flagged scan records the hash clean, in the close's own transaction (a reviewed false
+    // positive). Actioned changes nothing here; the takedown ran as its own case.
     const scanFlagged = isScanFlaggedCase(row);
     const clearedScan = scanFlagged && outcome === 'dismissed' && row.contentHash !== null;
-    if (clearedScan && row.contentHash) await recordReviewedClean(row.contentHash, adminUser.id);
     auditRequest(request, {
       eventType: 'content.report.resolved',
       userId: adminUser.id,
@@ -116,7 +124,7 @@ export const POST = withAdminAuth(async (adminUser, request) => {
     return NextResponse.json({ caseId: row.id, status: row.status });
   } catch (error) {
     if (error instanceof ReportedCaseChangedError) {
-      return NextResponse.json({ error: 'New reports arrived on this case. Refresh and review them first.' }, { status: 409 });
+      return NextResponse.json({ error: 'This case changed (new reports or a new scan flag). Refresh and review it first.' }, { status: 409 });
     }
     if (error instanceof ReportedCaseNotFoundError) {
       return NextResponse.json({ error: 'That case is not waiting for review' }, { status: 404 });

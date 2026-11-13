@@ -283,6 +283,9 @@ export async function resolveUploadedImageAssetUrl(params: {
   return buildAssetUrlFromKey(asset.assetKey);
 }
 
+/** How many assets one publish gates and copies at a time. */
+const PROMOTE_CONCURRENCY = 4;
+
 /** The hash a public asset's bytes derive from: the original's, for a thumbnail too. */
 const ASSET_SOURCE_HASH_RE = /^(?:files|cache)\/([a-f0-9]{64})\//i;
 
@@ -395,13 +398,18 @@ export async function rewriteCanvasAssets(params: {
 
   // Gate and copy each distinct source object; only promoted assets are rewritten. The rest keep
   // their private reference (it won't load publicly) and are reported by file ID, never with a reason.
+  // At most PROMOTE_CONCURRENCY at once: each one may read a file of up to the scan bound and call the vendor.
   const copiedAssetKeys = new Set<string>();
   const held = new Set<string>();
+  const queue = Array.from(uniqueAssets.values());
   await Promise.all(
-    Array.from(uniqueAssets.values()).map(async ({ asset, row }) => {
-      const promoted = await promoteAsset(asset, row, actor, asset.kind === 'thumbnail' ? 'canvas_thumbnail' : 'canvas_asset');
-      if (promoted) copiedAssetKeys.add(asset.assetKey);
-      else held.add(asset.id);
+    Array.from({ length: Math.min(PROMOTE_CONCURRENCY, queue.length) }, async () => {
+      for (let next = queue.shift(); next; next = queue.shift()) {
+        const { asset, row } = next;
+        const promoted = await promoteAsset(asset, row, actor, asset.kind === 'thumbnail' ? 'canvas_thumbnail' : 'canvas_asset');
+        if (promoted) copiedAssetKeys.add(asset.assetKey);
+        else held.add(asset.id);
+      }
     }),
   );
 

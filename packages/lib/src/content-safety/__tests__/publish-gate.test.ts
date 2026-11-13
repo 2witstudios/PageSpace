@@ -43,7 +43,7 @@ function setup(options: {
     readSource: vi.fn(async () => ({ bytes: options.bytes ?? PNG, complete: options.complete ?? true })),
     recordVerdict: vi.fn(async () => undefined),
     takedownHashMatch: vi.fn(async () => ({ caseId: 'case-td' })),
-    openReviewCase: vi.fn(async () => ({ caseId: 'case-rv', created: true })),
+    openReviewCase: vi.fn(async () => ({ caseId: 'case-rv', created: true, firstFlag: true })),
     alert: vi.fn(async () => undefined),
     audit: vi.fn(),
     reportMisconfiguration: vi.fn(),
@@ -109,11 +109,56 @@ describe('gatePublishAsset', () => {
     expect(deps.audit).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'content.scan.flagged', details: expect.objectContaining({ caseId: 'case-rv', promoted: false }) }));
   });
 
-  it('a flag joining a case already under review does not alert again', async () => {
+  it('a flag joining a case that was already flagged does not alert again', async () => {
     const { deps } = setup({ result: flag });
-    deps.openReviewCase.mockResolvedValueOnce({ caseId: 'case-rv', created: false });
+    deps.openReviewCase.mockResolvedValueOnce({ caseId: 'case-rv', created: false, firstFlag: false });
     await gatePublishAsset(input, deps);
     expect(deps.alert).not.toHaveBeenCalled();
+  });
+
+  it('a first flag joining a case a report opened alerts', async () => {
+    const { deps } = setup({ result: flag });
+    deps.openReviewCase.mockResolvedValueOnce({ caseId: 'case-rep', created: false, firstFlag: true });
+    await gatePublishAsset(input, deps);
+    expect(deps.alert).toHaveBeenCalledWith({ event: 'scan_flagged', caseId: 'case-rep', category: 'csam' });
+  });
+
+  it('when the review case cannot be opened, the flag is not cached: an error is recorded so the next publish retries', async () => {
+    const { deps } = setup({ result: flag });
+    deps.openReviewCase.mockRejectedValueOnce(new Error('db down'));
+    await expect(gatePublishAsset(input, deps)).resolves.toEqual({ promote: false, reason: 'held' });
+    expect(deps.recordVerdict).toHaveBeenCalledWith(expect.objectContaining({ verdict: 'error', outcome: 'error', scores: expect.objectContaining({ reason: 'review_case_failed' }) }));
+    expect(deps.recordVerdict).not.toHaveBeenCalledWith(expect.objectContaining({ verdict: 'flagged' }));
+    expect(deps.alert).not.toHaveBeenCalled();
+  });
+
+  it('the review case is opened before the flag is recorded, and the verdict names the case', async () => {
+    const { deps } = setup({ result: flag });
+    await gatePublishAsset(input, deps);
+    expect(deps.openReviewCase.mock.invocationCallOrder[0]).toBeLessThan(deps.recordVerdict.mock.invocationCallOrder[0]);
+    expect(deps.recordVerdict).toHaveBeenCalledWith(expect.objectContaining({ verdict: 'flagged', scores: expect.objectContaining({ caseId: 'case-rv' }) }));
+  });
+
+  it('logs only an error name, never its message (a query error carries the hash)', async () => {
+    const { deps } = setup({ result: flag });
+    deps.openReviewCase.mockRejectedValueOnce(new Error(`insert failed params: ${HASH}`));
+    await gatePublishAsset(input, deps);
+    expect(JSON.stringify(deps.logError.mock.calls)).not.toContain(HASH);
+  });
+
+  it('a fresh unscanned verdict is not re-read: allowed promotes, never-promote holds', async () => {
+    const allowed = setup({ verdict: { verdict: 'unscanned', outcome: 'unsupported_type', scannedAt: new Date('2026-11-12T00:00:00Z'), unscannedAllowed: true } });
+    await expect(gatePublishAsset(input, allowed.deps)).resolves.toEqual({ promote: true });
+    expect(allowed.deps.readSource).not.toHaveBeenCalled();
+    const opaque = setup({ verdict: { verdict: 'unscanned', outcome: 'unsupported_type', scannedAt: new Date('2026-11-12T00:00:00Z'), unscannedAllowed: false } });
+    await expect(gatePublishAsset(input, opaque.deps)).resolves.toEqual({ promote: false, reason: 'held' });
+    expect(opaque.deps.readSource).not.toHaveBeenCalled();
+  });
+
+  it('records whether an unscanned file was allowed, so the next publish can skip the read', async () => {
+    const { deps } = setup({ bytes: PDF });
+    await gatePublishAsset({ ...input, declaredContentType: 'application/pdf' }, deps);
+    expect(deps.recordVerdict).toHaveBeenCalledWith(expect.objectContaining({ scores: expect.objectContaining({ media: 'unscanned_allowed' }) }));
   });
 
   it('shadow promotes a flag but records it and opens the case exactly as enforce does', async () => {

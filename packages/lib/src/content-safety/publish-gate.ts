@@ -41,6 +41,8 @@ export interface StoredVerdict {
   verdict: ContentScanVerdict;
   outcome: ContentScanOutcome | null;
   scannedAt: Date;
+  /** For an `unscanned` verdict: whether the file was a type published unscanned (PDF, text, …). */
+  unscannedAllowed?: boolean;
 }
 
 export interface VerdictRecord {
@@ -82,8 +84,11 @@ export interface PublishGateDeps {
   recordVerdict(record: VerdictRecord): Promise<void>;
   /** PR 2's global takedown, category csam. Opens its own case and alerts. Returns the case ID. */
   takedownHashMatch(input: { contentHash: string; lists: string[] }): Promise<{ caseId?: string }>;
-  /** Open, or join, the case under review for the hash. */
-  openReviewCase(input: { contentHash: string; provider: string; category: string; score: number; mode: 'shadow' | 'enforce' }): Promise<{ caseId: string; created: boolean }>;
+  /**
+   * Open, or join, the case under review for the hash. `firstFlag` is true when the case had no scan flag
+   * before (it was opened now, or by a report): that is when staff must be alerted.
+   */
+  openReviewCase(input: { contentHash: string; provider: string; category: string; score: number; mode: 'shadow' | 'enforce' }): Promise<{ caseId: string; created: boolean; firstFlag: boolean }>;
   alert(alert: ScanAlert): Promise<void>;
   audit(event: ScanAuditEvent): void;
   /** Called with a configuration problem, every time; the caller logs it once. */
@@ -95,6 +100,7 @@ export interface PublishGateDeps {
 /** Keeps the vendor's numbers and our bookkeeping; never a URL, filename or response body. */
 function scoresFor(outcome: GateOutcome, contentType: string | null): Record<string, unknown> {
   const base: Record<string, unknown> = contentType ? { contentType } : {};
+  if (outcome.kind === 'not_scanned') return { ...base, media: outcome.media.class };
   if (outcome.kind !== 'scanned') return base;
   const { result } = outcome;
   switch (result.kind) {
@@ -111,6 +117,17 @@ function scoresFor(outcome: GateOutcome, contentType: string | null): Record<str
   }
 }
 
+/**
+ * What a failure is, for a log line: its name and, for a database error, its code. Never its message: a
+ * query error's message carries the SQL parameters, which are the content hash and the scores.
+ */
+function errorLabel(error: unknown): string {
+  if (!(error instanceof Error)) return 'unknown';
+  const cause = (error as { cause?: unknown }).cause;
+  const code = cause && typeof cause === 'object' && 'code' in cause ? String((cause as { code: unknown }).code) : null;
+  return code ? `${error.name}:${code}` : error.name;
+}
+
 async function learn(input: PublishGateInput, deps: PublishGateDeps): Promise<{ outcome: GateOutcome; contentType: string | null }> {
   const { config } = deps;
   if (!deps.scanner) return { outcome: { kind: 'scanner_unavailable' }, contentType: null };
@@ -119,6 +136,9 @@ async function learn(input: PublishGateInput, deps: PublishGateDeps): Promise<{ 
   if (stored && isVerdictFresh(stored.scannedAt, config.verdictTtlMs, deps.now())) {
     if (stored.verdict === 'clean') return { outcome: { kind: 'cached_clean' }, contentType: null };
     if (stored.verdict === 'flagged' && stored.outcome === 'classifier_flag') return { outcome: { kind: 'cached_flagged' }, contentType: null };
+    if (stored.verdict === 'unscanned' && stored.unscannedAllowed !== undefined) {
+      return { outcome: { kind: 'cached_unscanned', allowed: stored.unscannedAllowed }, contentType: null };
+    }
   }
 
   const provider = deps.scanner.provider;
@@ -162,29 +182,22 @@ export async function gatePublishAsset(input: PublishGateInput, deps: PublishGat
   const provider = deps.scanner?.provider ?? 'none';
   const context = { fileId: input.fileId, entryPoint: input.entryPoint, mode };
 
-  if (decision.record) {
-    await deps
-      .recordVerdict({
-        contentHash: input.contentHash,
-        verdict: decision.record.verdict,
-        outcome: decision.record.outcome,
-        provider: outcome.kind === 'scanned' ? outcome.result.provider : provider,
-        mode,
-        scores: scoresFor(outcome, contentType),
-      })
-      .catch((error: unknown) => deps.logError('Publish gate: could not record a scan verdict', { ...context, error: String(error) }));
-  }
-
   let caseId: string | null = null;
   if (decision.takedown && outcome.kind === 'scanned' && outcome.result.kind === 'hash_match') {
     try {
       caseId = (await deps.takedownHashMatch({ contentHash: input.contentHash, lists: outcome.result.lists })).caseId ?? null;
     } catch (error) {
-      // The case (if it opened) is resumable from the admin console. The file is still not promoted.
-      deps.logError('Publish gate: the takedown for a hash match did not complete', { ...context, error: String(error) });
+      // The case (if it opened) is resumable from the admin console. The file is still not promoted, and the
+      // verdict is not cached as flagged-by-classifier, so the next publish scans and takes it down again.
+      deps.logError('Publish gate: the takedown for a hash match did not complete', { ...context, error: errorLabel(error) });
     }
   }
 
+  // The case is opened BEFORE the flag is recorded. A recorded flag short-circuits later publishes with no new
+  // case, so a flag recorded without its case would never reach a person until the verdict expired. If the case
+  // cannot be opened, an error verdict is recorded instead: the next publish scans again and retries the case.
+  let record = decision.record;
+  let scores = scoresFor(outcome, contentType);
   if (decision.reviewCase && outcome.kind === 'scanned' && outcome.result.kind === 'classifier_flag') {
     try {
       const opened = await deps.openReviewCase({
@@ -195,14 +208,30 @@ export async function gatePublishAsset(input: PublishGateInput, deps: PublishGat
         mode,
       });
       caseId = opened.caseId;
-      if (opened.created) {
+      scores = { ...scores, caseId: opened.caseId };
+      if (opened.created || opened.firstFlag) {
         await deps.alert({ event: 'scan_flagged', caseId: opened.caseId, category: 'csam' }).catch((error: unknown) =>
-          deps.logError('Publish gate: the alert for a flagged scan failed', { ...context, caseId: opened.caseId, error: String(error) }),
+          deps.logError('Publish gate: the alert for a flagged scan failed', { ...context, caseId: opened.caseId, error: errorLabel(error) }),
         );
       }
     } catch (error) {
-      deps.logError('Publish gate: could not open a review case for a flagged scan', { ...context, error: String(error) });
+      deps.logError('Publish gate: could not open a review case for a flagged scan', { ...context, error: errorLabel(error) });
+      record = { verdict: 'error', outcome: 'error' };
+      scores = { ...scores, reason: 'review_case_failed' };
     }
+  }
+
+  if (record) {
+    await deps
+      .recordVerdict({
+        contentHash: input.contentHash,
+        verdict: record.verdict,
+        outcome: record.outcome,
+        provider: outcome.kind === 'scanned' ? outcome.result.provider : provider,
+        mode,
+        scores,
+      })
+      .catch((error: unknown) => deps.logError('Publish gate: could not record a scan verdict', { ...context, error: errorLabel(error) }));
   }
 
   if (decision.audit) {

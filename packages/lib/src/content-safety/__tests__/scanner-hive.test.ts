@@ -115,6 +115,56 @@ describe('mapHiveResponse', () => {
   });
 });
 
+describe('mapHiveResponse never reads an unexpected match as clean', () => {
+  it('a real source counts as a match even with no reasons or match types', () => {
+    const body = envelope({ file: { reasons: [], classifierPrediction: null }, hashes: [{ hashType: 'md5', matchTypes: [], reasons: [], sources: [{ hashSet: 'ncmec' }] }] });
+    expect(mapHiveResponse(200, body, options)).toMatchObject({ kind: 'hash_match', lists: ['ncmec'] });
+  });
+
+  it('a test-list entry does not cover for a real one', () => {
+    const body = envelope({
+      file: { reasons: ['matched'], classifierPrediction: null },
+      hashes: [
+        { matchTypes: ['CSAM'], reasons: ['matched'], sources: [{ hashSet: 'test' }] },
+        { matchTypes: [], reasons: [], sources: [{ hashSet: 'ncmec' }] },
+      ],
+    });
+    expect(mapHiveResponse(200, body, options)).toMatchObject({ kind: 'hash_match', lists: ['ncmec'] });
+  });
+
+  it('a hash entry that claims a match with no source is an error, even beside a test-list entry', () => {
+    const body = envelope({
+      file: { reasons: ['matched'], classifierPrediction: null },
+      hashes: [
+        { matchTypes: ['CSAM'], reasons: ['matched'], sources: [{ hashSet: 'test' }] },
+        { matchTypes: ['CSAM'], reasons: ['matched'], sources: [] },
+      ],
+    });
+    expect(mapHiveResponse(200, body, options)).toMatchObject({ kind: 'error', reason: 'bad_response' });
+  });
+
+  it('a video scene classifier score flags even with no file-level prediction', () => {
+    const body = envelope({
+      file: { fileType: 'video', reasons: [], classifierPrediction: null },
+      hashes: [{ hashType: 'videoSaferhashv0', matchTypes: [], reasons: [], sources: [], classifierPrediction: { csam_classifier: { csam: 0.96, pornography: 0.02, other: 0.02 } }, frameIndex: 120 }],
+    });
+    expect(mapHiveResponse(200, body, options)).toMatchObject({ kind: 'classifier_flag', score: 0.96 });
+  });
+
+  it('a csam reason on a scene flags', () => {
+    const body = envelope({ file: { fileType: 'video', reasons: [], classifierPrediction: null }, hashes: [{ reasons: ['csam'], sources: [] }] });
+    expect(mapHiveResponse(200, body, options).kind).toBe('classifier_flag');
+  });
+
+  it('the highest score across file and scenes decides', () => {
+    const body = envelope({
+      file: { reasons: [], classifierPrediction: { csam_classifier: { csam: 0.1, pornography: 0.1, other: 0.8 } } },
+      hashes: [{ reasons: [], sources: [], classifierPrediction: { csam_classifier: { csam: 0.4, pornography: 0.1, other: 0.5 } } }],
+    });
+    expect(mapHiveResponse(200, body, options)).toMatchObject({ kind: 'clean', scores: { csam: 0.4 } });
+  });
+});
+
 describe('createHiveScanner', () => {
   const input = { contentHash: 'a'.repeat(64), mediaKind: 'image' as const, contentType: 'image/png', bytes: new Uint8Array([1, 2, 3]) };
 

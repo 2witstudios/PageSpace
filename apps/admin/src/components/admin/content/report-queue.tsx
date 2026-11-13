@@ -24,7 +24,7 @@ export interface ReviewTarget {
   reportedHash: string | null;
 }
 
-type CloseRequest = { caseId: string; outcome: 'dismissed' | 'actioned'; reportCount: number; scanFlagged: boolean };
+type CloseRequest = { caseId: string; outcome: 'dismissed' | 'actioned'; reportCount: number; scanFlaggedAt: string | null };
 type Pending = CloseRequest | null;
 
 const DIALOG_COPY: Record<NonNullable<Pending>['outcome'], { title: string; description: string; confirmLabel: string }> = {
@@ -50,7 +50,7 @@ const SCAN_DISMISS_COPY = {
 };
 
 const dialogCopy = (pending: Pending) =>
-  pending?.scanFlagged && pending.outcome === 'dismissed' ? SCAN_DISMISS_COPY : DIALOG_COPY[pending?.outcome ?? 'dismissed'];
+  pending?.scanFlaggedAt && pending.outcome === 'dismissed' ? SCAN_DISMISS_COPY : DIALOG_COPY[pending?.outcome ?? 'dismissed'];
 
 /** What the publish scan found: a classifier score, never the file. */
 function ScanFlag({ scan }: { scan: ScanFlagSummary }) {
@@ -167,10 +167,10 @@ function ReportedCaseCard({
               <Button size="sm" onClick={() => onReview({ targetId: item.targetId, reportedHash: item.contentHash })}>
                 Review and act
               </Button>
-              <Button size="sm" variant="outline" disabled={remaining > 0} onClick={() => onClose({ caseId: item.id, outcome: 'actioned', reportCount, scanFlagged: scan !== null })}>
+              <Button size="sm" variant="outline" disabled={remaining > 0} onClick={() => onClose({ caseId: item.id, outcome: 'actioned', reportCount, scanFlaggedAt: scan?.flaggedAt ?? null })}>
                 Mark actioned
               </Button>
-              <Button size="sm" variant="ghost" disabled={remaining > 0} onClick={() => onClose({ caseId: item.id, outcome: 'dismissed', reportCount, scanFlagged: scan !== null })}>
+              <Button size="sm" variant="ghost" disabled={remaining > 0} onClick={() => onClose({ caseId: item.id, outcome: 'dismissed', reportCount, scanFlaggedAt: scan?.flaggedAt ?? null })}>
                 Dismiss
               </Button>
             </div>
@@ -228,7 +228,13 @@ export function ReportQueue({ items, onChanged, onReview }: ReportQueueProps) {
     setDialogError(null);
     setNotice(null);
     try {
-      await closeReportedCase({ caseId: dialog.caseId, outcome: dialog.outcome, expectedReportCount: dialog.reportCount, note });
+      await closeReportedCase({
+        caseId: dialog.caseId,
+        outcome: dialog.outcome,
+        expectedReportCount: dialog.reportCount,
+        expectedScanFlaggedAt: dialog.scanFlaggedAt,
+        note,
+      });
       setDialog(null);
       onChanged();
     } catch (error) {
