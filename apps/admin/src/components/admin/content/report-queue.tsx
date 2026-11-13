@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ConfirmActionDialog } from '@/components/admin/users/confirm-action-dialog';
 import type { ReportedCaseSummary, ReportSummary } from '@/lib/content/report-summary';
-import { closeReportedCase } from './actions';
+import { closeReportedCase, ReportedCaseChangedError } from './actions';
 import { Mono } from './case-list';
 
 const CATEGORY_LABELS: Record<ReportSummary['category'], string> = {
@@ -82,19 +82,27 @@ export function ReportQueue({ items, onChanged, onReview }: ReportQueueProps) {
   const [dialog, setDialog] = useState<Pending>(null);
   const [pending, setPending] = useState(false);
   const [dialogError, setDialogError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const close = async (note: string) => {
     if (!dialog) return;
     setPending(true);
     setDialogError(null);
+    setNotice(null);
     try {
       await closeReportedCase({ caseId: dialog.caseId, outcome: dialog.outcome, expectedReportCount: dialog.reportCount, note });
       setDialog(null);
       onChanged();
     } catch (error) {
-      setDialogError(error instanceof Error ? error.message : 'Request failed');
-      // Show any new reports behind the dialog, so the admin can see what arrived.
-      onChanged();
+      const message = error instanceof Error ? error.message : 'Request failed';
+      if (error instanceof ReportedCaseChangedError) {
+        // The count this dialog holds is stale: close it and show the new reports, so a retry starts fresh.
+        setDialog(null);
+        setNotice(message);
+        onChanged();
+      } else {
+        setDialogError(message);
+      }
     } finally {
       setPending(false);
     }
@@ -102,6 +110,11 @@ export function ReportQueue({ items, onChanged, onReview }: ReportQueueProps) {
 
   return (
     <div className="space-y-4">
+      {notice && (
+        <p className="text-sm text-amber-700 dark:text-amber-400" role="status">
+          {notice}
+        </p>
+      )}
       {items.map(({ case: item, reportCount, reports }) => (
         <Card key={item.id} data-testid="reported-case">
           <CardHeader>

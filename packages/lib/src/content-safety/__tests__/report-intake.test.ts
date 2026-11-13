@@ -124,10 +124,20 @@ describe('submitContentReport', () => {
     ['an avatar path behind a double slash', 'https://acme.pagespace.site//api/avatar/user_bad/a.png'],
     ['a storage key anywhere in the path', `https://acme.pagespace.site/q/files/${HASH}/original`],
     ['a dashboard path under a prefix', 'https://acme.pagespace.site/x/dashboard/d1/page_1'],
-  ])('refuses %s without resolving it', async (_label, url) => {
+  ])('refuses %s', async (_label, url) => {
     const result = await submitContentReport({ reporter: anonymous, target: { type: 'published_url', url }, ...report() }, ctx.deps);
     expect(result).toEqual({ ok: false, reason: 'not_pagespace_url' });
-    expect(ctx.deps.resolveTarget).not.toHaveBeenCalled();
+    expect(ctx.deps.fileReport).not.toHaveBeenCalled();
+  });
+
+  it('refuses a URL that resolves to a user or avatar, even on a real site', async () => {
+    const deps = makeDeps({ resolveTarget: vi.fn(async () => target({ targetType: 'avatar', targetId: 'user_bad' })) }).deps;
+    const result = await submitContentReport(
+      { reporter: anonymous, target: { type: 'published_url', url: 'https://acme.pagespace.site/x/api/avatar/user_bad/a.png' }, ...report() },
+      deps,
+    );
+    expect(result).toEqual({ ok: false, reason: 'not_pagespace_url' });
+    expect(deps.fileReport).not.toHaveBeenCalled();
   });
 
   it('refuses a host with no visible published site before resolving anything, even with a valid asset path', async () => {

@@ -48,10 +48,11 @@ export type ClassifiedReportUrl = {
   url: string;
 };
 
-// Paths a published site never serves: the app's own routes and raw storage keys, ANYWHERE in the path. The
-// target resolver matches avatar and storage-key shapes anywhere in a path, so `/x/api/avatar/<userId>/` would
-// otherwise name any user, and `/q/files/<hash>/` any stored file, from a URL that only looks like a site.
-const APP_PATH = /(?:^|\/)(?:dashboard|api)(?:\/|$)/i;
+// Paths a published site never serves: the app's own routes at the root, and raw storage keys ANYWHERE in the
+// path (the target resolver matches storage-key shapes anywhere). `api` or `dashboard` deeper in a path is an
+// ordinary page name (`/docs/api`); a crafted `/x/api/avatar/<id>/` is stopped by the intake instead, which only
+// accepts a target that belongs to the site's own drive, and a user or avatar never does.
+const APP_PATH = /^\/+(?:dashboard|api)(?:\/|$)/i;
 const STORAGE_KEY_PATH = /(?:^|\/)(?:files|chat-attachments)\/[0-9a-f]{64}(?:\/|$)/i;
 // `cache/<hash>` is only ours under the root `/assets/cache/`.
 const BARE_CACHE_PATH = /(?:^|\/)cache\/[0-9a-f]{64}(?:\/|$)/i;

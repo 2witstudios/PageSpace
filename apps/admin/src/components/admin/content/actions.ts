@@ -50,6 +50,9 @@ export function describeTakedownResult(result: TakedownResponse): { message: str
   return { ok: true, message: `Done.${caseRef}` };
 }
 
+/** The server refused a close because reports arrived after the admin opened the case (409). */
+export class ReportedCaseChangedError extends Error {}
+
 /** Close a case under review: `actioned` once a takedown has been run for it, `dismissed` for no violation. */
 export async function closeReportedCase(input: {
   caseId: string;
@@ -65,6 +68,7 @@ export async function closeReportedCase(input: {
   });
   if (!res.ok) {
     const data = (await res.json().catch(() => null)) as { error?: string } | null;
-    throw new Error(data?.error ?? `Request failed (${res.status})`);
+    const message = data?.error ?? `Request failed (${res.status})`;
+    throw res.status === 409 ? new ReportedCaseChangedError(message) : new Error(message);
   }
 }
