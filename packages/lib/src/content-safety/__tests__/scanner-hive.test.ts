@@ -116,9 +116,14 @@ describe('mapHiveResponse', () => {
 });
 
 describe('mapHiveResponse never reads an unexpected match as clean', () => {
-  it('a real source counts as a match even with no reasons or match types', () => {
-    const body = envelope({ file: { reasons: [], classifierPrediction: null }, hashes: [{ hashType: 'md5', matchTypes: [], reasons: [], sources: [{ hashSet: 'ncmec' }] }] });
+  it('a real source with its own matches counts as a match even with no reasons or match types', () => {
+    const body = envelope({ file: { reasons: [], classifierPrediction: null }, hashes: [{ hashType: 'md5', matchTypes: [], reasons: [], sources: [{ hashSet: 'ncmec', matches: [{ sourceId: 's' }] }] }] });
     expect(mapHiveResponse(200, body, options)).toMatchObject({ kind: 'hash_match', lists: ['ncmec'] });
+  });
+
+  it('a real source with no match marker anywhere is an error: never clean, never a takedown', () => {
+    const body = envelope({ file: { reasons: [], classifierPrediction: null }, hashes: [{ hashType: 'md5', matchTypes: [], reasons: [], sources: [{ hashSet: 'ncmec', matches: [] }] }] });
+    expect(mapHiveResponse(200, body, options)).toMatchObject({ kind: 'error', reason: 'bad_response', detail: 'source_without_match' });
   });
 
   it('a test-list entry does not cover for a real one', () => {
@@ -126,7 +131,7 @@ describe('mapHiveResponse never reads an unexpected match as clean', () => {
       file: { reasons: ['matched'], classifierPrediction: null },
       hashes: [
         { matchTypes: ['CSAM'], reasons: ['matched'], sources: [{ hashSet: 'test' }] },
-        { matchTypes: [], reasons: [], sources: [{ hashSet: 'ncmec' }] },
+        { matchTypes: ['CSAM'], reasons: [], sources: [{ hashSet: 'ncmec' }] },
       ],
     });
     expect(mapHiveResponse(200, body, options)).toMatchObject({ kind: 'hash_match', lists: ['ncmec'] });

@@ -1,10 +1,11 @@
 import 'server-only';
 
-import { GetObjectCommand } from '@aws-sdk/client-s3';
+import { GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
 import { audit } from '@pagespace/lib/audit/audit-log';
 import { sendContentSafetyAlert } from '@pagespace/lib/content-safety/alerts';
 import { isHashBlocked } from '@pagespace/lib/content-safety/blocklist';
 import {
+  errorLabel,
   gatePublishAsset,
   type PublishGateDeps,
   type PublishGateInput,
@@ -18,7 +19,7 @@ import { createHiveScanner } from '@pagespace/lib/content-safety/scanner-hive';
 import type { ContentScanner } from '@pagespace/lib/content-safety/scanner';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getS3Bucket, getS3Client } from '@/lib/presigned-url';
-import { headS3Object, isS3NotFound } from '@/lib/storage/s3-objects';
+import { isS3NotFound } from '@/lib/storage/s3-objects';
 
 /**
  * The publish gate with its real dependencies: the blocklist and verdict
@@ -80,8 +81,15 @@ async function readBody(body: unknown): Promise<Uint8Array> {
 export async function readPrivateSource(key: string, maxBytes: number): Promise<SourceRead | null> {
   const client = getS3Client();
   const bucket = getS3Bucket();
-  const head = await headS3Object(client, bucket, key);
-  if (!head) return null;
+  let size: number;
+  try {
+    const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }), { abortSignal: AbortSignal.timeout(READ_TIMEOUT_MS) });
+    size = head.ContentLength ?? 0;
+  } catch (err) {
+    if (isS3NotFound(err)) return null;
+    throw err;
+  }
+  const head = { size };
   const tooLarge = head.size > maxBytes;
   try {
     const result = await client.send(
@@ -164,9 +172,11 @@ export async function gateAssetForPublish(input: PublishGateInput, deps: Publish
   try {
     return await gatePublishAsset(input, deps);
   } catch (error) {
-    loggers.security.error('Publish gate failed; the asset is held', error instanceof Error ? error : undefined, {
+    // The name and code only: a failed query's message carries the content hash as a parameter.
+    loggers.security.error('Publish gate failed; the asset is held', undefined, {
       fileId: input.fileId,
       entryPoint: input.entryPoint,
+      error: errorLabel(error),
     });
     return { promote: false, reason: 'held' };
   }

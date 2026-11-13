@@ -36,7 +36,7 @@ describe('sniffContentType', () => {
 
   it('opaque bytes are recognised as nothing', () => {
     expect(sniffContentType(bytes(0x00, 0x13, 0x88, 0xfe, 0x01, 0x02))).toBeNull();
-    expect(sniffContentType(bytes(0xc3, 0x28, 0x41, 0x42))).toBeNull(); // invalid UTF-8
+    expect(sniffContentType(bytes(0xc3, 0x28, 0x41, 0x42))).toBeNull(); // short and not UTF-8: proves nothing
   });
 
   it('recognises the image and video containers a scanner cannot read', () => {
@@ -48,10 +48,8 @@ describe('sniffContentType', () => {
   });
 
   it('recognises audio and fonts by their bytes', () => {
-    expect(sniffContentType(text('OggS\0\x02' + '\0'.repeat(22) + '\x01vorbis'))).toBe('audio');
     expect(sniffContentType(text('ID3\x04'))).toBe('audio');
     expect(sniffContentType(bytes(0xff, 0xfb, 0x90, 0x00))).toBe('audio');
-    expect(sniffContentType(text('\0\0\0\x20ftypM4A '))).toBe('audio');
     expect(sniffContentType(text('wOF2\0\x01'))).toBe('font');
   });
 });
@@ -74,8 +72,10 @@ describe('classifyMedia', () => {
     expect(classifyMedia('encrypted_envelope', 'image/png').class).toBe('never_promote');
   });
 
-  it('allows zip-based office documents declared as such', () => {
-    expect(classifyMedia('archive', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document').class).toBe('unscanned_allowed');
+  it('a zip is a document only by its first entry, never by its declared type', () => {
+    const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    expect(classifyMedia('archive', DOCX).class).toBe('never_promote');
+    expect(classifyMedia('zip_document', 'application/zip').class).toBe('unscanned_allowed');
   });
 
   it('holds images and video the vendor cannot read, and claimed pictures with unrecognised bytes', () => {
@@ -109,9 +109,8 @@ describe('classifyMedia', () => {
     expect(classifyMedia('text', 'image/png').class).toBe('never_promote');
   });
 
-  it('allows legacy Office documents only when declared as such', () => {
+  it('allows legacy Office (OLE) documents unscanned (a known gap, like PDFs)', () => {
     expect(classifyMedia('ole_document', 'application/msword').class).toBe('unscanned_allowed');
-    expect(classifyMedia('ole_document', 'application/octet-stream').class).toBe('never_promote');
   });
 });
 
@@ -174,5 +173,81 @@ describe('isVerdictFresh', () => {
     expect(isVerdictFresh(new Date('2026-11-12T00:00:00Z'), 2 * 86_400_000, now)).toBe(true);
     expect(isVerdictFresh(new Date('2026-11-10T00:00:00Z'), 2 * 86_400_000, now)).toBe(false);
     expect(isVerdictFresh(new Date('2026-11-14T00:00:00Z'), 2 * 86_400_000, now)).toBe(false);
+  });
+});
+
+/** One Ogg page: "OggS", version, header type, granule, serial, sequence, CRC, one segment, then the packet. */
+function oggPage(packet: string, beginningOfStream: boolean): Uint8Array {
+  const data = new TextEncoder().encode(packet);
+  const header = new Uint8Array(27 + 1);
+  header.set(new TextEncoder().encode('OggS'), 0);
+  header[5] = beginningOfStream ? 0x02 : 0x00;
+  header[26] = 1;
+  header[27] = data.length;
+  const page = new Uint8Array(header.length + data.length);
+  page.set(header, 0);
+  page.set(data, header.length);
+  return page;
+}
+const concat = (...parts: Uint8Array[]) => {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let at = 0;
+  for (const part of parts) {
+    out.set(part, at);
+    at += part.length;
+  }
+  return out;
+};
+
+/** A minimal ISO-BMFF file with the given brand and handler boxes. */
+function isoFile(brand: string, handlers: string[]): Uint8Array {
+  const ftyp = `\0\0\0\x14ftyp${brand}\0\0\0\0${brand}`;
+  const hdlrs = handlers.map((handler) => `\0\0\0\x21hdlr\0\0\0\0\0\0\0\0${handler}\0\0\0\0\0\0\0\0\0\0\0\0\0`).join('');
+  return Uint8Array.from(`${ftyp}\0\0\0\x08moov${hdlrs}`, (c) => c.charCodeAt(0));
+}
+
+describe('sniffContentType: containers that can hide a video', () => {
+  it('an MP4 with an audio brand is audio only when complete and every track is sound', () => {
+    expect(sniffContentType(isoFile('M4A ', ['soun']), { complete: true })).toBe('audio');
+    expect(sniffContentType(isoFile('M4A ', ['soun', 'vide']), { complete: true })).toBe('video/mp4');
+    expect(sniffContentType(isoFile('M4A ', ['soun']), { complete: false })).toBe('video/mp4');
+    expect(sniffContentType(isoFile('M4A ', []), { complete: true })).toBe('video/mp4');
+  });
+
+  it('an Ogg file is audio only when every stream it opens is audio', () => {
+    const vorbis = oggPage('\x01vorbis' + 'x'.repeat(20), true);
+    const opus = oggPage('OpusHead' + 'x'.repeat(10), true);
+    const theora = oggPage('\x80theora' + 'x'.repeat(20), true);
+    const data = oggPage('audio data', false);
+    expect(sniffContentType(concat(vorbis, data))).toBe('audio');
+    expect(sniffContentType(concat(vorbis, opus, data))).toBe('audio');
+    expect(sniffContentType(concat(vorbis, theora, data))).toBe('video/ogg');
+    expect(sniffContentType(concat(theora, vorbis, data))).toBe('video/ogg');
+    // The headers run past the bytes read: unknown, so video.
+    expect(sniffContentType(vorbis)).toBe('video/ogg');
+  });
+
+  it('a zip is a document only when its first entry is the format manifest', () => {
+    const zipWith = (name: string) => {
+      const head = new Uint8Array(30 + name.length);
+      head.set([0x50, 0x4b, 0x03, 0x04], 0);
+      head[26] = name.length;
+      head.set(new TextEncoder().encode(name), 30);
+      return head;
+    };
+    expect(sniffContentType(zipWith('[Content_Types].xml'))).toBe('zip_document');
+    expect(sniffContentType(zipWith('mimetype'))).toBe('zip_document');
+    expect(sniffContentType(zipWith('photo1.jpg'))).toBe('archive');
+  });
+
+  it('reads Latin-1 text as text, but only from a sample long enough to mean something', () => {
+    const latin1 = Uint8Array.from('Jos\xe9,M\xfcnchen,'.repeat(6), (c) => c.charCodeAt(0));
+    expect(sniffContentType(latin1)).toBe('text');
+    expect(sniffContentType(Uint8Array.from('Jos\xe9!', (c) => c.charCodeAt(0)))).toBeNull();
+  });
+
+  it('needs a plausible table count to call something a TrueType or OpenType font', () => {
+    expect(sniffContentType(text('true story, told plainly'))).toBe('text');
+    expect(sniffContentType(bytes(0, 1, 0, 0, 0, 12, 0, 128))).toBe('font');
   });
 });

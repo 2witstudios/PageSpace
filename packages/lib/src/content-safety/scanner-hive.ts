@@ -66,7 +66,7 @@ const hiveResponseSchema = z.object({
                     hashType: z.string().optional(),
                     matchTypes: z.array(z.string()).default([]),
                     reasons: z.array(z.string()).default([]),
-                    sources: z.array(z.object({ hashSet: z.string() })).default([]),
+                    sources: z.array(z.object({ hashSet: z.string(), matches: z.array(z.unknown()).optional() })).default([]),
                     // Video: a per-scene entry may carry its own classifier output and reasons.
                     classifierPrediction,
                   }),
@@ -99,18 +99,27 @@ export function mapHiveResponse(httpStatus: number, body: unknown, options: Hive
   }
   const { file, hashes } = entry.response.output;
 
-  // Hash matches first: a match is decisive and the classifier does not run after one.
-  // ANY source on a hash entry that is not a test list is a match, whatever its reasons or match types say:
-  // reading an unexpected shape as "no match" would let known material through.
+  // Hash matches first: a match is decisive and the classifier does not run after one. A match is a non-test
+  // source on an entry that SAYS it matched (`matched` reason, a match type, or the source's own matches). It runs
+  // the irreversible global takedown, so a listed source with no such marker is not one; it is not clean either
+  // (an unexplained shape): it is an error, held under enforce, with no takedown.
   const isTestSet = (hashSet: string) => !options.includeTestSets && TEST_HASH_SETS.has(hashSet);
-  const realSources = hashes.flatMap((hash) => hash.sources.filter((source) => !isTestSet(source.hashSet)));
-  if (realSources.length > 0) {
+  const entryMarked = (hash: (typeof hashes)[number]) => hash.reasons.includes('matched') || hash.matchTypes.length > 0;
+  const matched = hashes.flatMap((hash) =>
+    hash.sources
+      .filter((source) => !isTestSet(source.hashSet) && (entryMarked(hash) || (source.matches?.length ?? 0) > 0))
+      .map((source) => ({ hash, source })),
+  );
+  if (matched.length > 0) {
     return {
       kind: 'hash_match',
       provider,
-      lists: [...new Set(realSources.map((source) => source.hashSet))],
-      matchTypes: [...new Set(hashes.filter((hash) => hash.sources.some((s) => !isTestSet(s.hashSet))).flatMap((hash) => hash.matchTypes))],
+      lists: [...new Set(matched.map(({ source }) => source.hashSet))],
+      matchTypes: [...new Set(matched.flatMap(({ hash }) => hash.matchTypes))],
     };
+  }
+  if (hashes.some((hash) => hash.sources.some((source) => !isTestSet(source.hashSet)))) {
+    return { kind: 'error', provider, reason: 'bad_response', detail: 'source_without_match' };
   }
   // A hash entry that says it matched but names no source, or a file-level "matched" with no hash entry that
   // explains it (only test-list entries do), is unexplained: an error, never clean. Checked per entry, so a

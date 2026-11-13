@@ -27,6 +27,8 @@ export type SniffedType =
   | 'font'
   /** Legacy Office (OLE compound file). */
   | 'ole_document'
+  /** OOXML, ODF or EPUB: a zip whose first entry is the format's manifest. Can embed images (a known gap). */
+  | 'zip_document'
   /** No NUL or stray control bytes, valid UTF-8 (or UTF-16 with a BOM). */
   | 'text'
   | 'archive' | 'executable' | 'encrypted_envelope';
@@ -37,15 +39,55 @@ const ascii = (bytes: Uint8Array, start: number, length: number): string =>
 const startsWith = (bytes: Uint8Array, signature: readonly number[], offset = 0): boolean =>
   bytes.length >= offset + signature.length && signature.every((byte, i) => bytes[offset + i] === byte);
 
-/** An Ogg stream's first codec header: audio codecs are named; anything else (Theora, VP8, Skeleton, unknown) is video. */
-function oggKind(head: Uint8Array): 'audio' | 'video/ogg' {
-  const firstPage = ascii(head, 0, Math.min(head.length, 128));
-  return /\x01vorbis|OpusHead|Speex {3}|\x7fFLAC/.test(firstPage) ? 'audio' : 'video/ogg';
+const OGG_AUDIO_CODECS = ['\x01vorbis', 'OpusHead', 'Speex   ', '\x7fFLAC'];
+
+/**
+ * Audio only when EVERY stream in an Ogg file is an audio codec. A multiplexed file opens all its streams
+ * first (pages flagged "beginning of stream"), so they are all walked: any other codec (Theora, VP8, Daala,
+ * Skeleton, unknown), a malformed page, or running out of bytes before the first non-opening page means video.
+ */
+function oggKind(bytes: Uint8Array): 'audio' | 'video/ogg' {
+  let offset = 0;
+  let streams = 0;
+  while (offset + 27 <= bytes.length) {
+    if (ascii(bytes, offset, 4) !== 'OggS') return 'video/ogg';
+    const headerType = bytes[offset + 5];
+    const segments = bytes[offset + 26];
+    const dataStart = offset + 27 + segments;
+    if (dataStart > bytes.length) return 'video/ogg';
+    let dataLength = 0;
+    for (let i = 0; i < segments; i++) dataLength += bytes[offset + 27 + i];
+    if ((headerType & 0x02) === 0) return streams > 0 ? 'audio' : 'video/ogg'; // every stream has been opened
+    streams++;
+    if (!OGG_AUDIO_CODECS.some((codec) => ascii(bytes, dataStart, codec.length) === codec)) return 'video/ogg';
+    offset = dataStart + dataLength;
+  }
+  return 'video/ogg';
+}
+
+/**
+ * Audio only when the WHOLE file is in hand and every track handler in it is sound. An MP4 with an audio
+ * brand plays as video if it has a video track, so the brand alone decides nothing; a partial read is video.
+ */
+function isoAudioOnly(bytes: Uint8Array, complete: boolean): boolean {
+  if (!complete) return false;
+  const text = LATIN1.decode(bytes); // one char per byte, without spreading a large file into arguments
+  let sound = false;
+  for (let at = text.indexOf('hdlr'); at !== -1; at = text.indexOf('hdlr', at + 4)) {
+    const handler = text.slice(at + 12, at + 16);
+    if (handler === 'soun') sound = true;
+    else if (handler !== 'meta' && handler !== 'hint' && handler !== 'text' && handler !== 'sbtl' && handler !== 'mdir') return false;
+  }
+  return sound;
 }
 
 const UTF8 = new TextDecoder('utf-8', { fatal: true });
+const LATIN1 = new TextDecoder('latin1');
 
-/** Whether bytes read as text: no NUL or stray control bytes, and valid UTF-8 (a cut-off last character is allowed). */
+/**
+ * Whether bytes read as text: no NUL or stray control bytes, and valid UTF-8 (a cut-off last character is
+ * allowed) — or, for at least 64 bytes, a single-byte encoding such as Latin-1 or Windows-1252.
+ */
 export function looksLikeText(head: Uint8Array): boolean {
   if (startsWith(head, [0xff, 0xfe]) || startsWith(head, [0xfe, 0xff])) {
     // UTF-16 with a BOM: every other byte is commonly NUL, so check the code units instead.
@@ -60,6 +102,11 @@ export function looksLikeText(head: Uint8Array): boolean {
     if (byte === 0x7f) return false;
   }
   for (let trim = 0; trim <= 3 && trim <= head.length; trim++) {
+    // Only a cut-off multi-byte character may be dropped: a lead byte followed only by continuation bytes.
+    if (trim > 0) {
+      const tail = head.subarray(head.length - trim);
+      if (tail[0] < 0xc0 || tail.subarray(1).some((byte) => byte < 0x80 || byte > 0xbf)) continue;
+    }
     try {
       UTF8.decode(head.subarray(0, head.length - trim));
       return true;
@@ -67,11 +114,30 @@ export function looksLikeText(head: Uint8Array): boolean {
       // A multi-byte character may have been cut at the end of the read; try without it.
     }
   }
-  return false;
+  // Not UTF-8 but free of control bytes: a legacy single-byte text encoding. Too short a sample proves nothing.
+  return head.length >= 64;
 }
 
-/** Sniff the first bytes of a file. Null when nothing is recognised: the bytes are opaque. */
-export function sniffContentType(head: Uint8Array): SniffedType | null {
+/** A TrueType/OpenType table count that a real font would have. */
+const plausibleTables = (head: Uint8Array): boolean => {
+  const tables = head.length >= 6 ? (head[4] << 8) | head[5] : 0;
+  return tables >= 1 && tables <= 64;
+};
+
+const OOXML_FIRST_ENTRIES = ['[Content_Types].xml', '_rels/.rels'];
+
+/** The name of a zip's first entry, from its local file header. */
+function firstZipEntry(head: Uint8Array): string | null {
+  if (!startsWith(head, [0x50, 0x4b, 0x03, 0x04]) || head.length < 30) return null;
+  const nameLength = head[26] | (head[27] << 8);
+  return head.length >= 30 + nameLength ? ascii(head, 30, nameLength) : null;
+}
+
+/**
+ * Sniff a file. `complete` says whether `head` is the whole file (some answers need it all, e.g. whether an
+ * MP4 has a video track). Null when nothing is recognised: the bytes are opaque.
+ */
+export function sniffContentType(head: Uint8Array, { complete = false }: { complete?: boolean } = {}): SniffedType | null {
   if (startsWith(head, [0x50, 0x53, 0x45, 0x31])) return 'encrypted_envelope'; // our at-rest envelope, "PSE1"
   if (startsWith(head, [0xff, 0xd8, 0xff])) return 'image/jpeg';
   if (startsWith(head, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return 'image/png';
@@ -91,12 +157,15 @@ export function sniffContentType(head: Uint8Array): SniffedType | null {
     if (brand === 'qt  ') return 'video/quicktime';
     if (['heic', 'heix', 'hevc', 'heim', 'heis', 'mif1', 'msf1'].includes(brand)) return 'image/heic';
     if (brand === 'avif' || brand === 'avis') return 'image/avif';
-    if (['M4A ', 'M4B ', 'M4P ', 'F4A ', 'F4B '].includes(brand)) return 'audio';
+    if (['M4A ', 'M4B ', 'M4P ', 'F4A ', 'F4B '].includes(brand) && isoAudioOnly(head, complete)) return 'audio';
     return 'video/mp4';
   }
   if (startsWith(head, [0x1a, 0x45, 0xdf, 0xa3])) return 'video/webm';
   if (ascii(head, 0, 4) === 'OggS') return oggKind(head);
   if (ascii(head, 0, 5) === '%PDF-') return 'application/pdf';
+  // A document in a zip container, by its first entry (the formats require it). Any other zip is an archive.
+  const firstEntry = firstZipEntry(head);
+  if (firstEntry !== null && (OOXML_FIRST_ENTRIES.includes(firstEntry) || firstEntry === 'mimetype')) return 'zip_document';
   if (
     startsWith(head, [0x50, 0x4b, 0x03, 0x04]) || // zip (and every zip-based format)
     startsWith(head, [0x50, 0x4b, 0x05, 0x06]) ||
@@ -114,7 +183,8 @@ export function sniffContentType(head: Uint8Array): SniffedType | null {
     startsWith(head, [0xca, 0xfe, 0xba, 0xbe])
   ) return 'executable';
   if (startsWith(head, [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1])) return 'ole_document';
-  if (['wOFF', 'wOF2', 'OTTO', 'true', 'ttcf'].includes(ascii(head, 0, 4)) || startsWith(head, [0, 1, 0, 0, 0])) return 'font';
+  if (['wOFF', 'wOF2', 'ttcf'].includes(ascii(head, 0, 4))) return 'font';
+  if ((['OTTO', 'true'].includes(ascii(head, 0, 4)) || startsWith(head, [0, 1, 0, 0])) && plausibleTables(head)) return 'font';
   if (
     ascii(head, 0, 3) === 'ID3' ||
     ascii(head, 0, 4) === 'fLaC' ||
@@ -138,22 +208,12 @@ const SCANNABLE: Partial<Record<SniffedType, ScanMediaKind>> = {
   'video/quicktime': 'video',
 };
 
-/** Zip-based document formats published as files, not archives. They can hold images: a known gap, like PDFs. */
-const ZIP_DOCUMENT_TYPES = new Set([
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  'application/vnd.oasis.opendocument.text',
-  'application/vnd.oasis.opendocument.spreadsheet',
-  'application/vnd.oasis.opendocument.presentation',
-  'application/epub+zip',
-]);
-
-/** Legacy Office types, an OLE compound file on disk. They can hold images: a known gap, like PDFs. */
-const OLE_DOCUMENT_TYPES = new Set(['application/msword', 'application/vnd.ms-excel', 'application/vnd.ms-powerpoint']);
-
-/** Published without a scan: these cannot be a picture or a video (a known gap for PDFs, documents and SVG). */
-const ALLOWED_UNSCANNED: ReadonlySet<SniffedType> = new Set(['application/pdf', 'audio', 'font']);
+/**
+ * Published without a scan: these cannot be a picture or a video themselves (PDFs and documents can embed
+ * images: a known gap, like SVG). Decided by the bytes alone, so a cached classification holds for every
+ * file with the same hash whatever it is declared as.
+ */
+const ALLOWED_UNSCANNED: ReadonlySet<SniffedType> = new Set(['application/pdf', 'audio', 'font', 'zip_document', 'ole_document']);
 
 export type MediaClass =
   | { class: 'scan'; mediaKind: ScanMediaKind; contentType: string }
@@ -178,8 +238,6 @@ export function classifyMedia(sniffed: SniffedType | null, declaredContentType: 
   const kind = SCANNABLE[sniffed];
   if (kind) return { class: 'scan', mediaKind: kind, contentType: sniffed };
   if (ALLOWED_UNSCANNED.has(sniffed)) return { class: 'unscanned_allowed', contentType: sniffed === 'application/pdf' ? sniffed : declared };
-  if (sniffed === 'archive' && ZIP_DOCUMENT_TYPES.has(declared)) return { class: 'unscanned_allowed', contentType: declared };
-  if (sniffed === 'ole_document' && OLE_DOCUMENT_TYPES.has(declared)) return { class: 'unscanned_allowed', contentType: declared };
   if (sniffed === 'text') {
     // Text that claims to be a raster image or video cannot be checked; SVG is text and a known gap.
     const claimsPicture = (declared.startsWith('image/') && declared !== 'image/svg+xml') || declared.startsWith('video/');

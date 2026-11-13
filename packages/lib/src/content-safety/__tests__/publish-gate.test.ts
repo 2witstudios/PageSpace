@@ -250,6 +250,13 @@ describe('gatePublishAsset', () => {
     expect(deps.recordVerdict).toHaveBeenCalledWith(expect.objectContaining({ verdict: 'error', scores: expect.objectContaining({ reason: 'too_large' }) }));
   });
 
+  it('an audio-branded MP4 read only in part is treated as video: too large to scan, held, never published unscanned', async () => {
+    const m4aHead = Uint8Array.from('\0\0\0\x14ftypM4A \0\0\0\0M4A ', (c) => c.charCodeAt(0));
+    const { deps } = setup({ bytes: m4aHead, complete: false });
+    await expect(gatePublishAsset({ ...input, declaredContentType: 'audio/mp4' }, deps)).resolves.toEqual({ promote: false, reason: 'held' });
+    expect(deps.recordVerdict).toHaveBeenCalledWith(expect.objectContaining({ verdict: 'error', scores: expect.objectContaining({ reason: 'too_large' }) }));
+  });
+
   it('a missing or unreadable original is an error', async () => {
     const { deps } = setup();
     deps.readSource.mockResolvedValueOnce(null as never);

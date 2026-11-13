@@ -121,7 +121,7 @@ function scoresFor(outcome: GateOutcome, contentType: string | null): Record<str
  * What a failure is, for a log line: its name and, for a database error, its code. Never its message: a
  * query error's message carries the SQL parameters, which are the content hash and the scores.
  */
-function errorLabel(error: unknown): string {
+export function errorLabel(error: unknown): string {
   if (!(error instanceof Error)) return 'unknown';
   const cause = (error as { cause?: unknown }).cause;
   const code = cause && typeof cause === 'object' && 'code' in cause ? String((cause as { code: unknown }).code) : null;
@@ -152,7 +152,7 @@ async function learn(input: PublishGateInput, deps: PublishGateDeps): Promise<{ 
     return { outcome: { kind: 'scanned', result: { kind: 'error', provider, reason: 'unreadable_source' } }, contentType: null };
   }
 
-  const media = classifyMedia(sniffContentType(source.bytes), input.declaredContentType);
+  const media = classifyMedia(sniffContentType(source.bytes, { complete: source.complete }), input.declaredContentType);
   if (media.class !== 'scan') return { outcome: { kind: 'not_scanned', media }, contentType: media.contentType };
   if (!source.complete) {
     return { outcome: { kind: 'scanned', result: { kind: 'error', provider, reason: 'too_large' } }, contentType: media.contentType };
