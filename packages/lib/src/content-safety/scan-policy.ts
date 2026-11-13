@@ -46,7 +46,22 @@ const OGG_AUDIO_CODECS = ['\x01vorbis', 'OpusHead', 'Speex   ', '\x7fFLAC'];
  * first (pages flagged "beginning of stream"), so they are all walked: any other codec (Theora, VP8, Daala,
  * Skeleton, unknown), a malformed page, or running out of bytes before the first non-opening page means video.
  */
-function oggKind(bytes: Uint8Array): 'audio' | 'video/ogg' {
+function oggKind(bytes: Uint8Array, complete: boolean): 'audio' | 'video/ogg' {
+  const first = firstOggLink(bytes);
+  if (first !== 'audio') return first;
+  // A chained file can open new streams in a later link. Audio only if the whole file is in hand and every
+  // stream-opening page anywhere in it is audio; a partial read could hide a later video link.
+  if (!complete) return 'video/ogg';
+  const text = LATIN1.decode(bytes);
+  for (let at = text.indexOf('OggS'); at !== -1; at = text.indexOf('OggS', at + 4)) {
+    if (at + 27 > bytes.length || (bytes[at + 5] & 0x02) === 0) continue;
+    const dataStart = at + 27 + bytes[at + 26];
+    if (!OGG_AUDIO_CODECS.some((codec) => ascii(bytes, dataStart, codec.length) === codec)) return 'video/ogg';
+  }
+  return 'audio';
+}
+
+function firstOggLink(bytes: Uint8Array): 'audio' | 'video/ogg' {
   let offset = 0;
   let streams = 0;
   while (offset + 27 <= bytes.length) {
@@ -161,7 +176,7 @@ export function sniffContentType(head: Uint8Array, { complete = false }: { compl
     return 'video/mp4';
   }
   if (startsWith(head, [0x1a, 0x45, 0xdf, 0xa3])) return 'video/webm';
-  if (ascii(head, 0, 4) === 'OggS') return oggKind(head);
+  if (ascii(head, 0, 4) === 'OggS') return oggKind(head, complete);
   if (ascii(head, 0, 5) === '%PDF-') return 'application/pdf';
   // A document in a zip container, by its first entry (the formats require it). Any other zip is an archive.
   const firstEntry = firstZipEntry(head);
@@ -192,7 +207,8 @@ export function sniffContentType(head: Uint8Array, { complete = false }: { compl
     ascii(head, 0, 5) === '#!AMR' ||
     (ascii(head, 0, 4) === 'FORM' && ['AIFF', 'AIFC'].includes(ascii(head, 8, 4)))
   ) return 'audio';
-  if (looksLikeText(head)) return 'text';
+  // Text is judged on the whole file only: a large file read in part could be an archive behind a text prefix.
+  if (complete && looksLikeText(head)) return 'text';
   // MPEG audio / AAC ADTS frame sync. Checked after text: text never starts 0xFF.
   if (head.length >= 2 && head[0] === 0xff && (head[1] & 0xe0) === 0xe0) return 'audio';
   return null;

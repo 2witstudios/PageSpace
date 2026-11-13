@@ -2,55 +2,57 @@ import { describe, expect, it } from 'vitest';
 import { classifyMedia, decideGate, isVerdictFresh, sniffContentType, type GateOutcome } from '../scan-policy';
 
 const bytes = (...values: number[]) => new Uint8Array(values);
+/** Sniff a whole (small) file. */
+const sniff = (head: Uint8Array) => sniffContentType(head, { complete: true });
 const text = (value: string) => new TextEncoder().encode(value);
 
 describe('sniffContentType', () => {
   it('recognises the scannable image and video types', () => {
-    expect(sniffContentType(bytes(0xff, 0xd8, 0xff, 0xe0))).toBe('image/jpeg');
-    expect(sniffContentType(bytes(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a))).toBe('image/png');
-    expect(sniffContentType(text('GIF89a'))).toBe('image/gif');
-    expect(sniffContentType(text('RIFF\0\0\0\0WEBPVP8 '))).toBe('image/webp');
-    expect(sniffContentType(text('\0\0\0\x18ftypisom'))).toBe('video/mp4');
-    expect(sniffContentType(text('\0\0\0\x14ftypqt  '))).toBe('video/quicktime');
+    expect(sniff(bytes(0xff, 0xd8, 0xff, 0xe0))).toBe('image/jpeg');
+    expect(sniff(bytes(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a))).toBe('image/png');
+    expect(sniff(text('GIF89a'))).toBe('image/gif');
+    expect(sniff(text('RIFF\0\0\0\0WEBPVP8 '))).toBe('image/webp');
+    expect(sniff(text('\0\0\0\x18ftypisom'))).toBe('video/mp4');
+    expect(sniff(text('\0\0\0\x14ftypqt  '))).toBe('video/quicktime');
   });
 
   it('recognises documents, archives, executables and our encrypted envelope', () => {
-    expect(sniffContentType(text('%PDF-1.7'))).toBe('application/pdf');
-    expect(sniffContentType(bytes(0x50, 0x4b, 0x03, 0x04))).toBe('archive');
-    expect(sniffContentType(bytes(0x1f, 0x8b, 0x08))).toBe('archive');
-    expect(sniffContentType(bytes(0x7f, 0x45, 0x4c, 0x46))).toBe('executable');
-    expect(sniffContentType(text('PSE1xxxx'))).toBe('encrypted_envelope');
-    expect(sniffContentType(text('\0\0\0\x18ftypheic'))).toBe('image/heic');
+    expect(sniff(text('%PDF-1.7'))).toBe('application/pdf');
+    expect(sniff(bytes(0x50, 0x4b, 0x03, 0x04))).toBe('archive');
+    expect(sniff(bytes(0x1f, 0x8b, 0x08))).toBe('archive');
+    expect(sniff(bytes(0x7f, 0x45, 0x4c, 0x46))).toBe('executable');
+    expect(sniff(text('PSE1xxxx'))).toBe('encrypted_envelope');
+    expect(sniff(text('\0\0\0\x18ftypheic'))).toBe('image/heic');
   });
 
   it('reads text as text, and does not mistake it for a bitmap', () => {
-    expect(sniffContentType(text('BMW owners club notes'))).toBe('text');
-    expect(sniffContentType(text('héllo — ünïcode'))).toBe('text');
-    expect(sniffContentType(text('body { color: red }\n'))).toBe('text');
+    expect(sniff(text('BMW owners club notes'))).toBe('text');
+    expect(sniff(text('héllo — ünïcode'))).toBe('text');
+    expect(sniff(text('body { color: red }\n'))).toBe('text');
   });
 
   it('a multi-byte character cut at the end of the read is still text', () => {
     const full = text('ab€');
-    expect(sniffContentType(full.subarray(0, full.length - 1))).toBe('text');
+    expect(sniff(full.subarray(0, full.length - 1))).toBe('text');
   });
 
   it('opaque bytes are recognised as nothing', () => {
-    expect(sniffContentType(bytes(0x00, 0x13, 0x88, 0xfe, 0x01, 0x02))).toBeNull();
-    expect(sniffContentType(bytes(0xc3, 0x28, 0x41, 0x42))).toBeNull(); // short and not UTF-8: proves nothing
+    expect(sniff(bytes(0x00, 0x13, 0x88, 0xfe, 0x01, 0x02))).toBeNull();
+    expect(sniff(bytes(0xc3, 0x28, 0x41, 0x42))).toBeNull(); // short and not UTF-8: proves nothing
   });
 
   it('recognises the image and video containers a scanner cannot read', () => {
-    expect(sniffContentType(bytes(0, 0, 1, 0, 1, 0, 16, 16))).toBe('image/x-icon');
-    expect(sniffContentType(bytes(0xff, 0x0a, 0xfa))).toBe('image/jxl');
-    expect(sniffContentType(bytes(0, 0, 0, 0x0c, 0x6a, 0x50, 0x20, 0x20))).toBe('image/jp2');
-    expect(sniffContentType(text('OggS\0\x02' + '\0'.repeat(22) + '\x80theora'))).toBe('video/ogg');
-    expect(sniffContentType(text('OggS\0\x02' + '\0'.repeat(22) + 'unknown'))).toBe('video/ogg');
+    expect(sniff(bytes(0, 0, 1, 0, 1, 0, 16, 16))).toBe('image/x-icon');
+    expect(sniff(bytes(0xff, 0x0a, 0xfa))).toBe('image/jxl');
+    expect(sniff(bytes(0, 0, 0, 0x0c, 0x6a, 0x50, 0x20, 0x20))).toBe('image/jp2');
+    expect(sniff(text('OggS\0\x02' + '\0'.repeat(22) + '\x80theora'))).toBe('video/ogg');
+    expect(sniff(text('OggS\0\x02' + '\0'.repeat(22) + 'unknown'))).toBe('video/ogg');
   });
 
   it('recognises audio and fonts by their bytes', () => {
-    expect(sniffContentType(text('ID3\x04'))).toBe('audio');
-    expect(sniffContentType(bytes(0xff, 0xfb, 0x90, 0x00))).toBe('audio');
-    expect(sniffContentType(text('wOF2\0\x01'))).toBe('font');
+    expect(sniff(text('ID3\x04'))).toBe('audio');
+    expect(sniff(bytes(0xff, 0xfb, 0x90, 0x00))).toBe('audio');
+    expect(sniff(text('wOF2\0\x01'))).toBe('font');
   });
 });
 
@@ -219,12 +221,12 @@ describe('sniffContentType: containers that can hide a video', () => {
     const opus = oggPage('OpusHead' + 'x'.repeat(10), true);
     const theora = oggPage('\x80theora' + 'x'.repeat(20), true);
     const data = oggPage('audio data', false);
-    expect(sniffContentType(concat(vorbis, data))).toBe('audio');
-    expect(sniffContentType(concat(vorbis, opus, data))).toBe('audio');
-    expect(sniffContentType(concat(vorbis, theora, data))).toBe('video/ogg');
-    expect(sniffContentType(concat(theora, vorbis, data))).toBe('video/ogg');
+    expect(sniff(concat(vorbis, data))).toBe('audio');
+    expect(sniff(concat(vorbis, opus, data))).toBe('audio');
+    expect(sniff(concat(vorbis, theora, data))).toBe('video/ogg');
+    expect(sniff(concat(theora, vorbis, data))).toBe('video/ogg');
     // The headers run past the bytes read: unknown, so video.
-    expect(sniffContentType(vorbis)).toBe('video/ogg');
+    expect(sniff(vorbis)).toBe('video/ogg');
   });
 
   it('a zip is a document only when its first entry is the format manifest', () => {
@@ -235,19 +237,34 @@ describe('sniffContentType: containers that can hide a video', () => {
       head.set(new TextEncoder().encode(name), 30);
       return head;
     };
-    expect(sniffContentType(zipWith('[Content_Types].xml'))).toBe('zip_document');
-    expect(sniffContentType(zipWith('mimetype'))).toBe('zip_document');
-    expect(sniffContentType(zipWith('photo1.jpg'))).toBe('archive');
+    expect(sniff(zipWith('[Content_Types].xml'))).toBe('zip_document');
+    expect(sniff(zipWith('mimetype'))).toBe('zip_document');
+    expect(sniff(zipWith('photo1.jpg'))).toBe('archive');
   });
 
   it('reads Latin-1 text as text, but only from a sample long enough to mean something', () => {
     const latin1 = Uint8Array.from('Jos\xe9,M\xfcnchen,'.repeat(6), (c) => c.charCodeAt(0));
-    expect(sniffContentType(latin1)).toBe('text');
-    expect(sniffContentType(Uint8Array.from('Jos\xe9!', (c) => c.charCodeAt(0)))).toBeNull();
+    expect(sniff(latin1)).toBe('text');
+    expect(sniff(Uint8Array.from('Jos\xe9!', (c) => c.charCodeAt(0)))).toBeNull();
   });
 
   it('needs a plausible table count to call something a TrueType or OpenType font', () => {
-    expect(sniffContentType(text('true story, told plainly'))).toBe('text');
-    expect(sniffContentType(bytes(0, 1, 0, 0, 0, 12, 0, 128))).toBe('font');
+    expect(sniff(text('true story, told plainly'))).toBe('text');
+    expect(sniff(bytes(0, 1, 0, 0, 0, 12, 0, 128))).toBe('font');
+  });
+});
+
+describe('sniffContentType: partial reads', () => {
+  it('a large file read in part is never text, however its first bytes read', () => {
+    expect(sniffContentType(new TextEncoder().encode('a'.repeat(4096)), { complete: false })).toBeNull();
+  });
+
+  it('a chained Ogg file with a later video link is video; an incomplete Ogg read is video', () => {
+    const vorbis = oggPage('\x01vorbis' + 'x'.repeat(20), true);
+    const data = oggPage('audio data', false);
+    const theora = oggPage('\x80theora' + 'x'.repeat(20), true);
+    expect(sniffContentType(concat(vorbis, data, theora, data), { complete: true })).toBe('video/ogg');
+    expect(sniffContentType(concat(vorbis, data), { complete: false })).toBe('video/ogg');
+    expect(sniffContentType(concat(vorbis, data), { complete: true })).toBe('audio');
   });
 });

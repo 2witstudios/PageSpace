@@ -84,7 +84,8 @@ export async function readPrivateSource(key: string, maxBytes: number): Promise<
   let size: number;
   try {
     const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }), { abortSignal: AbortSignal.timeout(READ_TIMEOUT_MS) });
-    size = head.ContentLength ?? 0;
+    // An unknown size is treated as too large: the GET below must stay bounded.
+    size = head.ContentLength ?? Number.MAX_SAFE_INTEGER;
   } catch (err) {
     if (isS3NotFound(err)) return null;
     throw err;
