@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { getTableConfig } from 'drizzle-orm/pg-core';
-import { contentBlocks, contentScans, contentCases, contentReports, contentSiteHolds } from '../content-safety';
+import { contentBlocks, contentScans, contentCases, contentReports, contentSiteHolds, contentScanBackfill } from '../content-safety';
 
 const columnNames = (table: Parameters<typeof getTableConfig>[0]) =>
   getTableConfig(table).columns.map((c) => c.name).sort();
@@ -55,6 +55,14 @@ describe('content-safety schema', () => {
     expect(unique?.config.columns.map((c) => ('name' in c ? c.name : ''))).toEqual(['drive_id', 'holder']);
   });
 
+  it('content_scan_backfill keeps a resumable cursor and a lease, and names no object or user', () => {
+    const config = getTableConfig(contentScanBackfill);
+    expect(config.name).toBe('content_scan_backfill');
+    expect(columnNames(contentScanBackfill)).toEqual(
+      ['counts', 'id', 'last_completed_at', 'last_pass_counts', 'lease_until', 'pass', 'pass_started_at', 'phase', 'start_after', 'updated_at'],
+    );
+  });
+
   it('content_cases allows one case under review per target, so concurrent reports share it', () => {
     const config = getTableConfig(contentCases);
     const unique = config.indexes.find((i) => i.config.name === 'content_cases_reported_target_key');
@@ -81,6 +89,7 @@ describe('content-safety schema', () => {
     ['content_cases', contentCases],
     ['content_site_holds', contentSiteHolds],
     ['content_reports', contentReports],
+    ['content_scan_backfill', contentScanBackfill],
   ])('%s has no foreign keys, so erasure cannot reach it', (_name, table) => {
     expect(getTableConfig(table).foreignKeys).toHaveLength(0);
   });

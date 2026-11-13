@@ -2989,6 +2989,26 @@
       "import": "./dist/content-safety/scan-store.js",
       "require": "./dist/content-safety/scan-store.js"
     },
+    "./content-safety/avatar-gate": {
+      "types": "./dist/content-safety/avatar-gate.d.ts",
+      "import": "./dist/content-safety/avatar-gate.js",
+      "require": "./dist/content-safety/avatar-gate.js"
+    },
+    "./content-safety/backfill": {
+      "types": "./dist/content-safety/backfill.d.ts",
+      "import": "./dist/content-safety/backfill.js",
+      "require": "./dist/content-safety/backfill.js"
+    },
+    "./content-safety/backfill-store": {
+      "types": "./dist/content-safety/backfill-store.d.ts",
+      "import": "./dist/content-safety/backfill-store.js",
+      "require": "./dist/content-safety/backfill-store.js"
+    },
+    "./content-safety/readiness": {
+      "types": "./dist/content-safety/readiness.d.ts",
+      "import": "./dist/content-safety/readiness.js",
+      "require": "./dist/content-safety/readiness.js"
+    },
     "./content-safety/held-assets": {
       "types": "./dist/content-safety/held-assets.d.ts",
       "import": "./dist/content-safety/held-assets.js",

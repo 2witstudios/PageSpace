@@ -17,11 +17,14 @@
 
 import type { ContentScanVerdict, ContentScanOutcome } from '@pagespace/db/schema/content-safety';
 import type { ScanGateConfig } from './scan-mode';
-import { classifyMedia, decideGate, isVerdictFresh, sniffContentType, type GateOutcome, type ScanAuditEventType } from './scan-policy';
+import { classifyMedia, decideGate, isVerdictFresh, refineScanOutcome, sniffContentType, type GateOutcome, type ScanAuditEventType } from './scan-policy';
 import { scanWithTimeout, type ContentScanner, type ScanResult } from './scanner';
 
-/** Where in the publish flow the asset is being promoted. Recorded on the audit event. */
-export type PublishGateEntryPoint = 'canvas_asset' | 'canvas_thumbnail' | 'uploaded_image';
+/**
+ * Where the asset is being made public. Recorded on the audit event. `user_avatar` is a profile picture
+ * upload (PR 5); `backfill` is the walk over content that was already public before the gate existed.
+ */
+export type PublishGateEntryPoint = 'canvas_asset' | 'canvas_thumbnail' | 'uploaded_image' | 'user_avatar' | 'backfill';
 
 export interface PublishGateInput {
   /** Canonical sha256 of the ORIGINAL bytes. A thumbnail is gated by its original's hash. */
@@ -29,13 +32,59 @@ export interface PublishGateInput {
   /** Private key of the original: `files/<hash>/original`. Never the derived image. */
   originalKey: string;
   declaredContentType: string | null;
-  /** The page ID of the file. Recorded; never shown to the publisher with a reason. */
-  fileId: string;
+  /** The page ID of the file, when there is one (an avatar or a backfilled object has none). Recorded; never shown with a reason. */
+  fileId: string | null;
   userId: string | null;
   entryPoint: PublishGateEntryPoint;
 }
 
 export type PublishGateResult = { promote: true } | { promote: false; reason: 'blocked' | 'held' };
+
+/**
+ * What the gate found, for callers that act on more than promote-or-not (the avatar upload, the backfill).
+ * `off`: scanning is off. `unavailable`: no vendor key. `fresh`: decided from a stored verdict, no new scan.
+ */
+export type GateFinding =
+  | 'off' | 'blocked' | 'unavailable'
+  | 'clean' | 'hash_match' | 'flagged' | 'error' | 'unscanned' | 'unverified';
+
+export type PublishGateEvaluation = PublishGateResult & {
+  finding: GateFinding;
+  /** The vendor was called for this decision. */
+  scanned: boolean;
+  /** The case opened for a flag or a hash match, when there is one. */
+  caseId: string | null;
+};
+
+function findingFor(outcome: GateOutcome): GateFinding {
+  switch (outcome.kind) {
+    case 'cached_clean':
+      return 'clean';
+    case 'cached_flagged':
+      return 'flagged';
+    case 'cached_unscanned':
+    case 'not_scanned':
+      return 'unscanned';
+    case 'cached_unverified':
+    case 'unverified':
+      return 'unverified';
+    case 'scanner_unavailable':
+      return 'unavailable';
+    case 'scanned':
+      switch (outcome.result.kind) {
+        case 'clean':
+          return 'clean';
+        case 'hash_match':
+          return 'hash_match';
+        case 'classifier_flag':
+          return 'flagged';
+        case 'error':
+          return 'error';
+        case 'unsupported_type':
+          return 'unscanned';
+      }
+  }
+}
 
 export interface StoredVerdict {
   verdict: ContentScanVerdict;
@@ -114,6 +163,7 @@ export interface PublishGateDeps {
 function scoresFor(outcome: GateOutcome, contentType: string | null, sniffedText = false): Record<string, unknown> {
   const base: Record<string, unknown> = contentType ? { contentType } : {};
   if (outcome.kind === 'not_scanned') return { ...base, media: sniffedText ? 'text' : outcome.media.class };
+  if (outcome.kind === 'unverified') return { ...base, classifier: false };
   if (outcome.kind !== 'scanned') return base;
   const { result } = outcome;
   switch (result.kind) {
@@ -155,6 +205,8 @@ async function learn(
     if (stored.verdict === 'unscanned' && stored.unscannedAllowed !== undefined) {
       return { outcome: { kind: 'cached_unscanned', allowed: stored.unscannedAllowed }, contentType: null };
     }
+    // Once unclassified video is accepted, a stored `unverified` is scanned again (and comes back clean).
+    if (stored.verdict === 'unverified' && !config.allowUnclassifiedVideo) return { outcome: { kind: 'cached_unverified' }, contentType: null };
   }
 
   const provider = deps.scanner.provider;
@@ -179,7 +231,7 @@ async function learn(
     { contentHash: input.contentHash, mediaKind: media.mediaKind, contentType: media.contentType, bytes: source.bytes },
     config.timeoutMs,
   );
-  return { outcome: { kind: 'scanned', result }, contentType: media.contentType };
+  return { outcome: refineScanOutcome(media.mediaKind, result, config), contentType: media.contentType };
 }
 
 /**
@@ -187,10 +239,16 @@ async function learn(
  * must treat that as "not promoted", never as "not blocked".
  */
 export async function gatePublishAsset(input: PublishGateInput, deps: PublishGateDeps): Promise<PublishGateResult> {
-  if (await deps.isBlocked(input.contentHash)) return { promote: false, reason: 'blocked' };
+  const evaluation = await evaluatePublishAsset(input, deps);
+  return evaluation.promote ? { promote: true } : { promote: false, reason: evaluation.reason };
+}
+
+/** The gate, with what it found. Same order, effects and errors as `gatePublishAsset`. */
+export async function evaluatePublishAsset(input: PublishGateInput, deps: PublishGateDeps): Promise<PublishGateEvaluation> {
+  if (await deps.isBlocked(input.contentHash)) return { promote: false, reason: 'blocked', finding: 'blocked', scanned: false, caseId: null };
 
   const { config } = deps;
-  if (config.mode === 'off') return { promote: true };
+  if (config.mode === 'off') return { promote: true, finding: 'off', scanned: false, caseId: null };
   const mode = config.mode;
   for (const problem of config.problems) deps.reportMisconfiguration(problem);
 
@@ -248,7 +306,7 @@ export async function gatePublishAsset(input: PublishGateInput, deps: PublishGat
         contentHash: input.contentHash,
         verdict: record.verdict,
         outcome: record.outcome,
-        provider: outcome.kind === 'scanned' ? outcome.result.provider : provider,
+        provider: outcome.kind === 'scanned' || outcome.kind === 'unverified' ? (outcome.kind === 'scanned' ? outcome.result.provider : outcome.provider) : provider,
         mode,
         scores,
       })
@@ -269,5 +327,9 @@ export async function gatePublishAsset(input: PublishGateInput, deps: PublishGat
     deps.audit({ eventType: decision.audit, contentHash: input.contentHash, userId: input.userId, details });
   }
 
-  return promote ? { promote: true } : { promote: false, reason: 'held' };
+  const scanned = outcome.kind === 'scanned' || outcome.kind === 'unverified';
+  const finding = findingFor(outcome);
+  return promote
+    ? { promote: true, finding, scanned, caseId }
+    : { promote: false, reason: 'held', finding, scanned, caseId };
 }

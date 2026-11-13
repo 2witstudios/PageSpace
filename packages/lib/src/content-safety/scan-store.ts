@@ -8,7 +8,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, count, eq, lte, or, sql } from '@pagespace/db/operators';
+import { and, count, eq, gte, inArray, lte, or, sql } from '@pagespace/db/operators';
 import { DEFAULT_VERDICT_TTL_DAYS } from './scan-mode';
 import {
   contentCases,
@@ -21,13 +21,9 @@ import {
 } from '@pagespace/db/schema/content-safety';
 import type { StoredVerdict, VerdictRecord } from './publish-gate';
 
-export async function findScanVerdict(contentHash: string): Promise<StoredVerdict | null> {
-  const [row] = await db
-    .select({ verdict: contentScans.verdict, outcome: contentScans.outcome, scannedAt: contentScans.scannedAt, scores: contentScans.scores })
-    .from(contentScans)
-    .where(eq(contentScans.contentHash, contentHash))
-    .limit(1);
-  if (!row) return null;
+type VerdictRow = Pick<typeof contentScans.$inferSelect, 'verdict' | 'outcome' | 'scannedAt' | 'scores'>;
+
+function toStoredVerdict(row: VerdictRow): StoredVerdict {
   const media = row.scores?.media;
   return {
     verdict: row.verdict,
@@ -37,6 +33,47 @@ export async function findScanVerdict(contentHash: string): Promise<StoredVerdic
       ? { unscannedAllowed: media === 'unscanned_allowed' }
       : {}),
   };
+}
+
+export async function findScanVerdict(contentHash: string): Promise<StoredVerdict | null> {
+  const [row] = await db
+    .select({ verdict: contentScans.verdict, outcome: contentScans.outcome, scannedAt: contentScans.scannedAt, scores: contentScans.scores })
+    .from(contentScans)
+    .where(eq(contentScans.contentHash, contentHash))
+    .limit(1);
+  return row ? toStoredVerdict(row) : null;
+}
+
+/** The stored verdicts of many hashes at once (the backfill's dry run). */
+export async function findScanVerdicts(contentHashes: string[]): Promise<Map<string, StoredVerdict>> {
+  const found = new Map<string, StoredVerdict>();
+  for (let i = 0; i < contentHashes.length; i += 500) {
+    const rows = await db
+      .select({ contentHash: contentScans.contentHash, verdict: contentScans.verdict, outcome: contentScans.outcome, scannedAt: contentScans.scannedAt, scores: contentScans.scores })
+      .from(contentScans)
+      .where(inArray(contentScans.contentHash, contentHashes.slice(i, i + 500)));
+    for (const row of rows) found.set(row.contentHash, toStoredVerdict(row));
+  }
+  return found;
+}
+
+/** Shadow-mode verdicts recorded since `since`, by outcome: what enforce would have held. Counts only. */
+export async function countShadowOutcomesSince(since: Date): Promise<Array<{ outcome: ContentScanOutcome | null; count: number }>> {
+  const rows = await db
+    .select({ outcome: contentScans.outcome, count: count() })
+    .from(contentScans)
+    .where(and(eq(contentScans.mode, 'shadow'), gte(contentScans.scannedAt, since)))
+    .groupBy(contentScans.outcome);
+  return rows.map((row) => ({ outcome: row.outcome, count: Number(row.count) }));
+}
+
+/** Flagged-scan cases nobody has reviewed yet (still `reported`). */
+export async function countOpenScanFlaggedCases(): Promise<number> {
+  const [row] = await db
+    .select({ count: count() })
+    .from(contentCases)
+    .where(and(eq(contentCases.status, 'reported'), sql`${contentCases.snapshot} -> 'scan' ->> 'source' = 'scan_flagged'`));
+  return Number(row?.count ?? 0);
 }
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];

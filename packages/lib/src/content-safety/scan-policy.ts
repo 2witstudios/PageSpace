@@ -295,6 +295,10 @@ export type GateOutcome =
   | { kind: 'cached_flagged' }
   /** A recent "not scanned" classification: the bytes of a hash never change, so it is not re-read. */
   | { kind: 'cached_unscanned'; allowed: boolean }
+  /** A recent `unverified` video (hash pass clean, never classified), while unclassified video is not accepted. */
+  | { kind: 'cached_unverified' }
+  /** A video the scan ran on whose hash pass was clean but which the classifier never scored. */
+  | { kind: 'unverified'; provider: string }
   /** Enforce or shadow with no vendor key. */
   | { kind: 'scanner_unavailable' }
   | { kind: 'not_scanned'; media: Extract<MediaClass, { class: 'unscanned_allowed' | 'never_promote' }> }
@@ -305,7 +309,8 @@ export type ScanAuditEventType =
   | 'content.scan.hash_match'
   | 'content.scan.flagged'
   | 'content.scan.error'
-  | 'content.scan.unscanned';
+  | 'content.scan.unscanned'
+  | 'content.scan.unverified';
 
 export interface GateDecision {
   promote: boolean;
@@ -340,7 +345,11 @@ export function decideGate(mode: GateMode, outcome: GateOutcome): GateDecision {
     case 'cached_unscanned':
       return decision({ promote: shadow || outcome.allowed });
     case 'cached_flagged':
+    case 'cached_unverified':
       return decision({ promote: shadow });
+    case 'unverified':
+      // Not clean: nothing classified it. Held under enforce; shadow publishes it and records why.
+      return decision({ promote: shadow, record: { verdict: 'unverified', outcome: 'unverified' }, audit: 'content.scan.unverified' });
     case 'scanner_unavailable':
       // Enforce without a key fails closed; shadow cannot scan, so it changes nothing.
       return decision({ promote: shadow });
@@ -366,6 +375,22 @@ export function decideGate(mode: GateMode, outcome: GateOutcome): GateDecision {
       }
     }
   }
+}
+
+/**
+ * A scan that came back clean is only clean if something looked at the content. For a video, the hash pass
+ * alone (a clean result with no classifier scores) is `unverified` unless unclassified video is accepted.
+ * Images keep the old reading: the classifier legitimately skips tiny images, and the hash pass still ran.
+ */
+export function refineScanOutcome(
+  mediaKind: ScanMediaKind,
+  result: ScanResult,
+  { allowUnclassifiedVideo }: { allowUnclassifiedVideo: boolean },
+): GateOutcome {
+  if (mediaKind === 'video' && result.kind === 'clean' && !result.scores && !allowUnclassifiedVideo) {
+    return { kind: 'unverified', provider: result.provider };
+  }
+  return { kind: 'scanned', result };
 }
 
 /** Whether a stored verdict is recent enough to trust. */
