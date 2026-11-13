@@ -9,7 +9,7 @@ import { db } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
 import { contentScanBackfill, contentScans } from '@pagespace/db/schema/content-safety';
 import { emptyBackfillCounts, runBackfillTick, type BackfillDeps, type BackfillTarget } from '../backfill';
-import { claimBackfillCursor, readBackfillCursor, saveBackfillCursor } from '../backfill-store';
+import { BackfillLeaseLostError, claimBackfillCursor, readBackfillCursor, saveBackfillCursor } from '../backfill-store';
 import { countShadowOutcomesSince, findScanVerdicts, recordScanVerdict } from '../scan-store';
 
 const ids: string[] = [];
@@ -44,6 +44,17 @@ describe('backfill store', () => {
     // Not released: a crashed tick's lease expires.
     expect(await claimBackfillCursor(new Date(now.getTime() + 3000), 60_000, id)).toBeNull();
     expect(await claimBackfillCursor(new Date(now.getTime() + 120_000), 60_000, id)).not.toBeNull();
+  });
+
+  it('a run whose lease expired and was taken over cannot save over the new holder', async () => {
+    const id = newId();
+    const now = new Date('2026-11-13T00:00:00Z');
+    const stale = await claimBackfillCursor(now, 60_000, id);
+    const fresh = await claimBackfillCursor(new Date(now.getTime() + 120_000), 60_000, id);
+    expect(fresh).not.toBeNull();
+    await expect(saveBackfillCursor({ ...stale!, startAfter: 'assets/stale' }, { release: true }, id)).rejects.toBeInstanceOf(BackfillLeaseLostError);
+    await saveBackfillCursor({ ...fresh!, startAfter: 'assets/fresh' }, { release: false }, id);
+    expect(await readBackfillCursor(id)).toMatchObject({ startAfter: 'assets/fresh', leased: false });
   });
 
   it('a tick against the real cursor resumes where the previous one stopped and respects the limit', async () => {

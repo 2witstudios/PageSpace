@@ -108,7 +108,8 @@ export async function readS3ObjectBounded(
   try {
     const result = await client.send(
       // Ranged either way: an object that grew after the HEAD is never buffered past the bound.
-      new GetObjectCommand({ Bucket: bucket, Key: key, Range: tooLarge ? `bytes=0-${SNIFF_BYTES - 1}` : `bytes=0-${maxBytes}` }),
+      // An empty object takes no Range: S3 answers a ranged GET of zero bytes with 416.
+      new GetObjectCommand({ Bucket: bucket, Key: key, ...(size === 0 ? {} : { Range: tooLarge ? `bytes=0-${SNIFF_BYTES - 1}` : `bytes=0-${maxBytes}` }) }),
       { abortSignal: AbortSignal.timeout(timeoutMs) },
     );
     const bytes = await bodyBytes(result.Body);

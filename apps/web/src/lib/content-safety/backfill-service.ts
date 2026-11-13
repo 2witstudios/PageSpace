@@ -6,6 +6,7 @@ import type { BackfillDeps, BackfillItemOutcome, BackfillTarget, DryRunDeps, Lis
 import { claimBackfillCursor, saveBackfillCursor } from '@pagespace/lib/content-safety/backfill-store';
 import { errorLabel, evaluatePublishAsset, type PublishGateDeps, type PublishGateEvaluation } from '@pagespace/lib/content-safety/publish-gate';
 import type { ScanGateConfig } from '@pagespace/lib/content-safety/scan-mode';
+import { findBlockCaseId } from '@pagespace/lib/content-safety/blocklist';
 import { findScanVerdicts } from '@pagespace/lib/content-safety/scan-store';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
@@ -53,9 +54,20 @@ const MAX_AVATAR_READ_BYTES = 6 * 1024 * 1024;
 const AVATAR_TYPES: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
 
 export interface BackfillActions {
+  /**
+   * Take the public copies of a hash off the web, keeping a verified private copy first (the global
+   * takedown's own `takePublicOffline`), under the case's hold key. Never a bare delete: on a hash match or a
+   * block, the public copy can be the only one left.
+   */
+  takePublicOffline(contentHash: string, caseId: string): Promise<void>;
+  /** Delete the public copies of a hash: a classifier flag under enforce, where the private original stays. */
   removePublicAsset(contentHash: string): Promise<number>;
   removeAvatar(userId: string): Promise<void>;
+  /** Stop showing an avatar without deleting it (clear the profile image), for when its bytes can't be preserved yet. */
+  hideAvatar(userId: string): Promise<void>;
   takedownAvatar(userId: string, reason: string): Promise<void>;
+  /** The case that blocked a hash, if any. */
+  findBlockCaseId(contentHash: string): Promise<string | null>;
 }
 
 async function defaultRemoveAvatar(userId: string): Promise<void> {
@@ -69,10 +81,26 @@ async function defaultTakedownAvatar(userId: string, reason: string): Promise<vo
   if (response.failedStep) throw new Error(`Avatar takedown stopped at ${response.failedStep}`);
 }
 
+async function defaultHideAvatar(userId: string): Promise<void> {
+  const { hideUserAvatar } = await import('./takedown-service');
+  await hideUserAvatar(userId);
+}
+
+async function defaultTakePublicOffline(contentHash: string, caseId: string): Promise<void> {
+  const { createTakedownStorage } = await import('./takedown-storage');
+  await createTakedownStorage().takePublicOffline(contentHash, caseId);
+}
+
+/** Hold key namespace for a public copy whose block has no case (an old or hand-made block). */
+const UNCASED_HOLD = 'backfill-uncased';
+
 const defaultActions: BackfillActions = {
+  takePublicOffline: defaultTakePublicOffline,
   removePublicAsset: deletePublishedAssetsForHash,
   removeAvatar: defaultRemoveAvatar,
+  hideAvatar: defaultHideAvatar,
   takedownAvatar: defaultTakedownAvatar,
+  findBlockCaseId,
 };
 
 function auditUnpublished(details: { kind: 'asset' | 'avatar'; contentHash: string; mode: string; finding: string; caseId: string | null; userId?: string }): void {
@@ -98,75 +126,108 @@ export function createBackfillDeps(
 
   async function processAsset(target: Extract<BackfillTarget, { kind: 'asset' }>): Promise<BackfillItemOutcome> {
     const originalKey = target.derived ? `files/${target.contentHash}/original` : target.key;
-    let takenDown = false;
+    let takedown: 'done' | 'needs_public_hold' | 'no_case' | null = null;
+    let takedownCaseId: string | null = null;
     const evaluation = await evaluatePublishAsset(
       { contentHash: target.contentHash, originalKey, declaredContentType: null, fileId: null, userId: null, entryPoint: 'backfill' },
       gateDeps({
         readSource: (key, maxBytes) => (target.derived ? readPrivateSource(key, maxBytes) : readPublishedObjectBounded(key, maxBytes, READ_TIMEOUT_MS)),
         async takedownHashMatch({ contentHash, lists }) {
+          takedown = 'no_case';
           const result = await runHashMatchTakedown({ contentHash, lists, source: 'the backfill scan' });
-          // A takedown that stopped part-way may not have taken the public copy down yet: do it here.
-          if (result.failedStep) await actions.removePublicAsset(contentHash);
-          takenDown = true;
+          takedownCaseId = result.caseId ?? null;
+          takedown = !takedownCaseId ? 'no_case' : result.failedStep ? 'needs_public_hold' : 'done';
           return { caseId: result.caseId };
         },
       }),
     );
-    let removed = takenDown;
-    if (evaluation.finding === 'hash_match' && !takenDown) {
-      // The takedown threw: the gate logged it. The public copy still comes down now.
-      await actions.removePublicAsset(target.contentHash);
+
+    let removed = false;
+    if (evaluation.finding === 'hash_match') {
+      if (takedown === 'done') {
+        removed = true;
+      } else if (takedown === 'needs_public_hold' && takedownCaseId) {
+        // The takedown stopped part-way, possibly before its own unpublish step. Take the public copy down
+        // the same way that step does: a verified private hold under the case first, then the delete.
+        await actions.takePublicOffline(target.contentHash, takedownCaseId);
+        removed = true;
+      } else {
+        // No case to hold the copy under (the takedown threw): nothing is deleted, and the walk retries the item.
+        throw new Error('Hash-match takedown did not open its case');
+      }
+    }
+    if (evaluation.finding === 'blocked') {
+      // A blocklisted hash still served: off the web, keeping a private copy under its case (it may be the only one).
+      const caseId = (await actions.findBlockCaseId(target.contentHash)) ?? UNCASED_HOLD;
+      await actions.takePublicOffline(target.contentHash, caseId);
       removed = true;
     }
-    if (evaluation.finding === 'blocked' || (evaluation.finding === 'flagged' && config.mode === 'enforce')) {
+    if (evaluation.finding === 'flagged' && config.mode === 'enforce') {
+      // Not a block: the private original stays, and the review case decides.
       await actions.removePublicAsset(target.contentHash);
       removed = true;
-      if (evaluation.finding === 'flagged') {
-        auditUnpublished({ kind: 'asset', contentHash: target.contentHash, mode: config.mode, finding: evaluation.finding, caseId: evaluation.caseId });
-      }
+      auditUnpublished({ kind: 'asset', contentHash: target.contentHash, mode: config.mode, finding: evaluation.finding, caseId: evaluation.caseId });
     }
     return outcome(evaluation, removed);
   }
 
   async function processAvatar(target: Extract<BackfillTarget, { kind: 'avatar' }>): Promise<BackfillItemOutcome | null> {
     const read = await readS3ObjectBounded(getS3Client(), getS3Bucket(), target.key, MAX_AVATAR_READ_BYTES, READ_TIMEOUT_MS);
-    // Gone since the listing, or larger than any avatar the processor accepts (its hash would be meaningless).
-    if (!read || !read.complete) return null;
+    // Gone since the listing.
+    if (!read) return null;
+    // Larger than any avatar the processor accepts: unchecked, so counted as an error (readiness blocks on it).
+    if (!read.complete) return { finding: 'error', scanned: false, removed: false };
     const { bytes } = read;
     const contentHash = createHash('sha256').update(bytes).digest('hex');
     let avatarTakenDown = false;
-    let stagingFailed = false;
+    let avatarHidden = false;
+    const stage = async (hash: string): Promise<boolean> => {
+      try {
+        await stageBytesForTakedown(hash, bytes);
+        return true;
+      } catch (error) {
+        loggers.security.error('Backfill: could not stage an avatar for preservation; it is hidden, not deleted', undefined, { error: errorLabel(error) });
+        return false;
+      }
+    };
     const evaluation = await evaluatePublishAsset(
       { contentHash, originalKey: target.key, declaredContentType: AVATAR_TYPES[target.extension] ?? null, fileId: null, userId: target.userId, entryPoint: 'backfill' },
       gateDeps({
         readSource: async () => read,
         async takedownHashMatch({ contentHash: hash, lists }) {
+          const staged = await stage(hash);
           try {
-            await stageBytesForTakedown(hash, bytes);
-          } catch (error) {
-            // The avatar is the only copy: nothing is deleted until it is preserved. The item is retried next tick.
-            loggers.security.error('Backfill: could not stage a hash-matched avatar for preservation; retrying next tick', undefined, { error: errorLabel(error) });
-            stagingFailed = true;
-            throw error;
-          }
-          try {
+            // Block, case and alert run either way: the global takedown never touches avatars/ objects.
             return await runHashMatchTakedown({ contentHash: hash, lists, source: 'the backfill scan of an avatar' });
           } finally {
-            // The avatar comes down even if the global takedown stopped part-way (its case is resumable).
-            await actions.takedownAvatar(target.userId, 'Hash match from the backfill scan of this avatar');
-            avatarTakenDown = true;
+            if (staged) {
+              // The avatar comes down even if the global takedown stopped part-way (its case is resumable).
+              await actions.takedownAvatar(target.userId, 'Hash match from the backfill scan of this avatar');
+              avatarTakenDown = true;
+            } else {
+              // The avatar is the only copy: it stops being shown, and is deleted once a later pass can stage it
+              // (the hash is then blocked, and the blocked path below stages before it deletes).
+              await actions.hideAvatar(target.userId);
+              avatarHidden = true;
+            }
           }
         },
       }),
     );
-    if (stagingFailed) throw new Error('Hash-matched avatar not staged for preservation');
-    let removed = avatarTakenDown;
-    if (evaluation.finding === 'blocked' || (evaluation.finding === 'flagged' && config.mode === 'enforce')) {
+    let removed = avatarTakenDown || avatarHidden;
+    if (evaluation.finding === 'blocked') {
+      // A blocklisted avatar: its bytes go to the hash's private, blocked key before the avatar is deleted.
+      if (await stage(contentHash)) {
+        await actions.removeAvatar(target.userId);
+      } else {
+        await actions.hideAvatar(target.userId);
+      }
+      removed = true;
+    }
+    if (evaluation.finding === 'flagged' && config.mode === 'enforce') {
       await actions.removeAvatar(target.userId);
       removed = true;
-      if (evaluation.finding === 'flagged') {
-        auditUnpublished({ kind: 'avatar', contentHash, mode: config.mode, finding: evaluation.finding, caseId: evaluation.caseId, userId: target.userId });
-      }
+      auditUnpublished({ kind: 'avatar', contentHash, mode: config.mode, finding: evaluation.finding, caseId: evaluation.caseId, userId: target.userId });
     }
     return outcome(evaluation, removed);
   }

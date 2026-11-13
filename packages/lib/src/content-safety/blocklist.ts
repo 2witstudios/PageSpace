@@ -30,3 +30,15 @@ export async function isHashBlocked(hash: string): Promise<boolean> {
   const blocked = await findBlockedHashes([hash]);
   return blocked.size > 0;
 }
+
+/** The case that blocked a hash, when there is one. Null when the hash is not blocked or the block has no case. */
+export async function findBlockCaseId(hash: string): Promise<string | null> {
+  const [candidate] = normalizeContentHashes([hash]);
+  if (!candidate) return null;
+  const rows = await db
+    .select({ caseId: contentBlocks.caseId })
+    .from(contentBlocks)
+    .where(inArray(contentBlocks.contentHash, [candidate]))
+    .limit(1);
+  return rows[0]?.caseId ?? null;
+}

@@ -32,7 +32,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { security: se
 const audit = vi.fn();
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: (...args: unknown[]) => audit(...args) }));
 const isHashBlocked = vi.fn();
-vi.mock('@pagespace/lib/content-safety/blocklist', () => ({ isHashBlocked: (...args: unknown[]) => isHashBlocked(...args) }));
+vi.mock('@pagespace/lib/content-safety/blocklist', () => ({ isHashBlocked: (...args: unknown[]) => isHashBlocked(...args), findBlockCaseId: vi.fn(async () => null) }));
 vi.mock('@pagespace/lib/content-safety/scan-store', () => ({
   findScanVerdict: vi.fn(async () => null),
   findScanVerdicts: vi.fn(),
@@ -59,7 +59,14 @@ const match: ScanResult = { kind: 'hash_match', provider: 'hive', lists: ['ncmec
 function build(mode: 'shadow' | 'enforce', result?: ScanResult) {
   const config = resolveScanConfig({ CONTENT_SCAN_MODE: mode, HIVE_API_KEY: 'k' }, { onPrem: false });
   const scanner = createFakeScanner({ defaultResult: result, provider: 'hive' });
-  const actions = { removePublicAsset: vi.fn(async () => 1), removeAvatar: vi.fn(async () => undefined), takedownAvatar: vi.fn(async () => undefined) };
+  const actions = {
+    takePublicOffline: vi.fn(async () => undefined),
+    removePublicAsset: vi.fn(async () => 1),
+    removeAvatar: vi.fn(async () => undefined),
+    hideAvatar: vi.fn(async () => undefined),
+    takedownAvatar: vi.fn(async () => undefined),
+    findBlockCaseId: vi.fn(async () => 'case-block'),
+  };
   const deps = createBackfillDeps(config, { actions, gateDeps: (overrides) => ({ ...createPublishGateDeps(config, overrides), scanner }) });
   return { deps, actions, scanner };
 }
@@ -101,22 +108,27 @@ describe('backfill service: public assets', () => {
     }
   });
 
-  it('a hash-match takedown that stopped part-way, or threw, still takes the public copy down', async () => {
+  it('a takedown that stopped part-way takes the public copy down with a private hold under its case, never a bare delete', async () => {
     executeTakedown.mockResolvedValueOnce({ action: 'global', caseId: 'case-td', status: 'open', failedStep: 'unpublish_public' });
     const partial = build('enforce', match);
     await expect(partial.deps.process(asset, listed)).resolves.toMatchObject({ finding: 'hash_match', removed: true });
-    expect(partial.actions.removePublicAsset).toHaveBeenCalledWith(HASH);
+    expect(partial.actions.takePublicOffline).toHaveBeenCalledWith(HASH, 'case-td');
+    expect(partial.actions.removePublicAsset).not.toHaveBeenCalled();
+  });
 
+  it('a takedown that threw (no case) deletes nothing and stops the walk before the item, to retry it', async () => {
     executeTakedown.mockRejectedValueOnce(new Error('db down'));
     const thrown = build('enforce', match);
-    await expect(thrown.deps.process(asset, listed)).resolves.toMatchObject({ finding: 'hash_match', removed: true });
-    expect(thrown.actions.removePublicAsset).toHaveBeenCalledWith(HASH);
+    await expect(thrown.deps.process(asset, listed)).rejects.toThrow('did not open its case');
+    expect(thrown.actions.takePublicOffline).not.toHaveBeenCalled();
+    expect(thrown.actions.removePublicAsset).not.toHaveBeenCalled();
   });
 
   it('a completed takedown does not delete again', async () => {
     const { deps, actions } = build('enforce', match);
     await deps.process(asset, listed);
     expect(actions.removePublicAsset).not.toHaveBeenCalled();
+    expect(actions.takePublicOffline).not.toHaveBeenCalled();
   });
 
   it('enforce: a classifier flag opens the case and takes the public copy down, with no block', async () => {
@@ -138,7 +150,8 @@ describe('backfill service: public assets', () => {
     isHashBlocked.mockResolvedValue(true);
     const { deps, actions, scanner } = build('shadow');
     await expect(deps.process(asset, listed)).resolves.toEqual({ finding: 'blocked', scanned: false, removed: true });
-    expect(actions.removePublicAsset).toHaveBeenCalledWith(HASH);
+    expect(actions.takePublicOffline).toHaveBeenCalledWith(HASH, 'case-block');
+    expect(actions.removePublicAsset).not.toHaveBeenCalled();
     expect(scanner.calls).toEqual([]);
   });
 
@@ -162,17 +175,36 @@ describe('backfill service: avatars', () => {
     expect(scanner.calls).toEqual([PNG_HASH]);
   });
 
-  it('a hash-matched avatar that cannot be staged for preservation is not deleted; the walk retries it', async () => {
+  it('a hash-matched avatar that cannot be staged is blocked and hidden, never deleted', async () => {
     send.mockRejectedValueOnce(new Error('s3 down'));
     const { deps, actions } = build('enforce', match);
-    await expect(deps.process(avatar, listed)).rejects.toThrow('not staged');
-    expect(executeTakedown).not.toHaveBeenCalled();
+    await expect(deps.process(avatar, listed)).resolves.toMatchObject({ finding: 'hash_match', removed: true });
+    expect(executeTakedown).toHaveBeenCalledWith(expect.objectContaining({ action: 'global', contentHash: PNG_HASH }), null);
+    expect(actions.hideAvatar).toHaveBeenCalledWith('user-1');
     expect(actions.takedownAvatar).not.toHaveBeenCalled();
+    expect(actions.removeAvatar).not.toHaveBeenCalled();
   });
 
-  it('an avatar larger than any upload is skipped, not hashed from its first bytes', async () => {
+  it('a blocklisted avatar is staged before it is deleted; if it cannot be staged it is only hidden', async () => {
+    isHashBlocked.mockResolvedValue(true);
+    const staged = build('enforce');
+    await expect(staged.deps.process(avatar, listed)).resolves.toMatchObject({ finding: 'blocked', removed: true });
+    const put = send.mock.calls.find((call) => call[0].constructor.name === 'PutObjectCommand');
+    expect(put?.[0].input).toMatchObject({ Key: `files/${PNG_HASH}/original` });
+    expect(send.mock.invocationCallOrder[0]).toBeLessThan(staged.actions.removeAvatar.mock.invocationCallOrder[0]);
+
+    send.mockRejectedValueOnce(new Error('s3 down'));
+    const unstaged = build('enforce');
+    await unstaged.deps.process(avatar, listed);
+    expect(unstaged.actions.hideAvatar).toHaveBeenCalledWith('user-1');
+    expect(unstaged.actions.removeAvatar).not.toHaveBeenCalled();
+  });
+
+  it('an avatar larger than any upload is counted as an error, not hashed from its first bytes', async () => {
     readS3ObjectBounded.mockResolvedValueOnce({ bytes: PNG, complete: false });
-    await expect(build('enforce').deps.process(avatar, listed)).resolves.toBeNull();
+    const { deps, scanner } = build('enforce');
+    await expect(deps.process(avatar, listed)).resolves.toEqual({ finding: 'error', scanned: false, removed: false });
+    expect(scanner.calls).toEqual([]);
   });
 
   it('an avatar gone since the listing is skipped', async () => {

@@ -408,6 +408,10 @@ export async function sweepPublicForUnfinishedCase(caseId: string): Promise<Publ
  * review case is already open for its hash). Deletes the objects, checks none
  * are left, and clears the profile image.
  */
+export async function hideUserAvatar(userId: string): Promise<void> {
+  await clearProfileImage(userId);
+}
+
 export async function removeUserAvatar(userId: string): Promise<void> {
   await deleteAvatarObjects(userId);
   await clearProfileImage(userId);
