@@ -75,7 +75,7 @@ vi.mock('marked', () => ({
 }));
 
 vi.mock('../asset-pipeline', () => ({
-  rewriteCanvasAssets: vi.fn(async ({ html }: { html: string }) => ({ html })),
+  rewriteCanvasAssets: vi.fn(async ({ html }: { html: string }) => ({ html, heldAssets: [] })),
   rewriteInterPageLinksForDrive: vi.fn(async ({ html }: { html: string }) => ({ html })),
   extractAndStripOgMeta: vi.fn((html: string) => ({
     meta: { ogTitle: null, faviconHref: null, ogImageUrl: null, ogDescription: null },

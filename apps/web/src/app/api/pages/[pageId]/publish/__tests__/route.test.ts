@@ -148,7 +148,7 @@ beforeEach(() => {
   allocatePublishSubdomain.mockResolvedValue('acme');
   isPublishConfigured.mockReturnValue(true);
   getPublishAssetBaseUrl.mockReturnValue('https://test-publish.t3.tigrisfiles.io');
-  rewriteCanvasAssets.mockImplementation(async ({ html }: { html: string }) => ({ html }));
+  rewriteCanvasAssets.mockImplementation(async ({ html }: { html: string }) => ({ html, heldAssets: [] }));
   rewriteInterPageLinksForDrive.mockImplementation(async ({ html }: { html: string }) => ({ html }));
   extractAndStripOgMeta.mockImplementation((html: string) => ({ meta: {}, html }));
   buildPublishedKey.mockImplementation((subdomain: string, path: string) => `published/${subdomain}/${path}/index.html`);
@@ -294,6 +294,7 @@ describe('POST /api/pages/[pageId]/publish', () => {
       ogImageUrl: null,
       noindex: false,
       themeBridgeEnabled: true,
+      heldAssets: [],
     });
   });
 
@@ -318,6 +319,7 @@ describe('POST /api/pages/[pageId]/publish', () => {
       ogImageUrl: null,
       noindex: false,
       themeBridgeEnabled: true,
+      heldAssets: [],
     });
   });
 
@@ -348,6 +350,7 @@ describe('POST /api/pages/[pageId]/publish', () => {
       ogImageUrl: null,
       noindex: false,
       themeBridgeEnabled: true,
+      heldAssets: [],
     });
   });
 

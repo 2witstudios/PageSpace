@@ -411,6 +411,7 @@
         "src/content-safety/scan-policy.ts",
         "src/content-safety/publish-gate.ts",
         "src/content-safety/scan-store.ts",
+        "src/content-safety/held-assets.ts",
         "src/auth/suspend-user.ts",
         "src/config/env-validation.ts",
         "src/consent/index.ts",

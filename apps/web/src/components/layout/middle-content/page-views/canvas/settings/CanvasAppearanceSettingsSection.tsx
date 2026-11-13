@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
+import { HELD_ASSETS_DESCRIPTION, HELD_ASSETS_MESSAGE, heldAssetCount } from '@pagespace/lib/content-safety/held-assets';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
@@ -82,6 +83,7 @@ export function CanvasAppearanceSettingsSection({ pageId }: CanvasAppearanceSett
         });
       }
       toast.success('Appearance settings saved');
+      if (heldAssetCount(data) > 0) toast.warning(HELD_ASSETS_MESSAGE, { description: HELD_ASSETS_DESCRIPTION });
     } catch {
       toast.error('Failed to save appearance settings');
     } finally {

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams } from '@/retained-adapters/navigation';
 import { toast } from 'sonner';
+import { HELD_ASSETS_DESCRIPTION, HELD_ASSETS_MESSAGE, heldAssetCount } from '@pagespace/lib/content-safety/held-assets';
 import { fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
 import { Button } from '@/retained/components/ui/button';
 import { PublishSettingsFields, EMPTY_SETTINGS, type PublishSettings } from '../../../content-header/PublishSettingsFields';
@@ -143,6 +144,7 @@ export function CanvasPublishSettingsSection({ pageId }: CanvasPublishSettingsSe
       // safe to reseed from without clobbering an edit that no longer exists.
       setIsDirty(false);
       toast.success('Publish settings saved');
+      if (heldAssetCount(data) > 0) toast.warning(HELD_ASSETS_MESSAGE, { description: HELD_ASSETS_DESCRIPTION });
     } catch {
       toast.error('Failed to save publish settings');
     } finally {

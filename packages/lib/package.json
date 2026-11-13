@@ -2989,6 +2989,11 @@
       "import": "./dist/content-safety/scan-store.js",
       "require": "./dist/content-safety/scan-store.js"
     },
+    "./content-safety/held-assets": {
+      "types": "./dist/content-safety/held-assets.d.ts",
+      "import": "./dist/content-safety/held-assets.js",
+      "require": "./dist/content-safety/held-assets.js"
+    },
     "./content-safety/alerts": {
       "types": "./dist/content-safety/alerts.d.ts",
       "import": "./dist/content-safety/alerts.js",

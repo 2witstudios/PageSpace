@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from '@/retained-adapters/navigation';
 import { toast } from 'sonner';
+import { HELD_ASSETS_DESCRIPTION, HELD_ASSETS_MESSAGE, heldAssetCount } from '@pagespace/lib/content-safety/held-assets';
 import { fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
 import { Settings2 } from 'lucide-react';
 import {
@@ -144,6 +145,7 @@ const PublishControls = ({ pageId, contentDirty, variant = 'header' }: PublishCo
         settings: publishStatusFromResponse(data).settings,
       });
       toast.success(isUpdate ? 'Page updated' : 'Page published');
+      if (heldAssetCount(data) > 0) toast.warning(HELD_ASSETS_MESSAGE, { description: HELD_ASSETS_DESCRIPTION });
       return true;
     } catch {
       toast.error('Failed to publish page');
