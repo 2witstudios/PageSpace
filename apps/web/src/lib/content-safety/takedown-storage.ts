@@ -8,7 +8,7 @@ import {
   type TakedownOriginal,
   type TakedownStorage,
 } from '@pagespace/lib/content-safety/takedown';
-import { hasEnvelopeMagic, maybeDecryptBuffer } from '@pagespace/lib/encryption/envelope-crypto';
+import { ENVELOPE_HEADER_LENGTH, createEnvelopeDecipher, hasEnvelopeMagic } from '@pagespace/lib/encryption/envelope-crypto';
 import { normalizeContentHash } from '@pagespace/lib/content-safety/policy';
 import { getS3Bucket, getS3Client } from '@/lib/presigned-url';
 import { deleteS3Keys, headS3Object, isS3NotFound, listS3Prefix, type S3ObjectInfo } from '@/lib/storage/s3-objects';
@@ -77,15 +77,6 @@ async function listUploadsObjects(hash: string): Promise<S3ObjectInfo[]> {
   return perPrefix.flat();
 }
 
-/** The private original for a hash, if one exists: the page-file original, else the chat attachment. */
-async function findPrivateOriginal(hash: string): Promise<TakedownOriginal | null> {
-  for (const key of uploadsOriginalKeysFor(hash)) {
-    const head = await headS3Object(getS3Client(), getS3Bucket(), key);
-    if (head) return head;
-  }
-  return null;
-}
-
 /** The chunks of an S3 object body: streamed when the SDK gives a stream, whole otherwise. */
 async function* bodyChunks(body: unknown): AsyncIterable<Uint8Array> {
   if (body === undefined || body === null) return;
@@ -104,12 +95,16 @@ async function* bodyChunks(body: unknown): AsyncIterable<Uint8Array> {
 const sha256Hex = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 
 /**
- * Read an object once and hash it: the bytes as stored, and the content they
- * hold. An original the processor stored encrypted at rest is an envelope
- * whose content is the plaintext the content hash was computed over, so that
- * one object is kept in memory and decrypted (originals are size-capped);
- * anything else is hashed as it streams. An envelope that cannot be opened
- * throws: a copy is never called verified on a guess. Null only on not-found.
+ * Read an object once, as it streams, and hash it: the bytes as stored, and
+ * the content they hold. An original the processor stored encrypted at rest is
+ * an envelope whose content is the plaintext the content hash was computed
+ * over; it is decrypted chunk by chunk (the GCM tag is in its header), so
+ * nothing is held in memory beyond the header.
+ *
+ * An envelope that cannot be opened (a wrong key, tampered bytes, or a plain
+ * file that merely starts with the magic) reports its stored hash as its
+ * content: it is then never taken for the content, and is preserved byte for
+ * byte like any other object that is not. Null only on not-found.
  */
 async function digestS3Object(client: S3Client, bucket: string, key: string): Promise<ObjectDigest | null> {
   let body: unknown;
@@ -120,24 +115,54 @@ async function digestS3Object(client: S3Client, bucket: string, key: string): Pr
     throw err;
   }
   const stored = createHash('sha256');
+  const content = createHash('sha256');
   let size = 0;
-  // Kept until the first bytes show whether this is an envelope; dropped at once if not.
-  let kept: Buffer[] | null = [];
+  let header: Buffer[] | null = [];
+  let headerLength = 0;
+  let decipher: ReturnType<typeof createEnvelopeDecipher> | null = null;
+  let unreadable = false;
+  const decrypt = (bytes: Buffer) => {
+    if (!decipher || unreadable) return;
+    try {
+      content.update(decipher.update(bytes));
+    } catch {
+      unreadable = true;
+    }
+  };
+
   for await (const chunk of bodyChunks(body)) {
     const bytes = Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
     stored.update(bytes);
     size += bytes.length;
-    if (kept) {
-      kept.push(bytes);
-      const head = Buffer.concat(kept);
-      if (head.length >= 4 && !hasEnvelopeMagic(head)) kept = null;
+    if (!header) {
+      decrypt(bytes);
+      continue;
+    }
+    // Until the header is complete: collect it, then decide once.
+    header.push(bytes);
+    headerLength += bytes.length;
+    if (headerLength < ENVELOPE_HEADER_LENGTH) continue;
+    const head = Buffer.concat(header);
+    header = null;
+    if (!hasEnvelopeMagic(head)) continue;
+    try {
+      decipher = createEnvelopeDecipher(head.subarray(0, ENVELOPE_HEADER_LENGTH), process.env.ENCRYPTION_KEY ?? '');
+    } catch {
+      unreadable = true;
+    }
+    decrypt(head.subarray(ENVELOPE_HEADER_LENGTH));
+  }
+
+  const sha256 = stored.digest('hex');
+  if (!decipher) return { size, sha256, contentSha256: sha256 };
+  if (!unreadable) {
+    try {
+      content.update(decipher.final());
+    } catch {
+      unreadable = true;
     }
   }
-  const sha256 = stored.digest('hex');
-  if (!kept) return { size, sha256, contentSha256: sha256 };
-  const whole = Buffer.concat(kept);
-  const content = maybeDecryptBuffer(whole, { masterKey: process.env.ENCRYPTION_KEY ?? '' });
-  return { size, sha256, contentSha256: content === whole ? sha256 : sha256Hex(content) };
+  return { size, sha256, contentSha256: unreadable ? sha256 : content.digest('hex') };
 }
 
 /**
@@ -172,25 +197,27 @@ export function createTakedownStorage(): TakedownStorage {
   return {
     evidenceConfigured: () => getEvidenceBucket() !== null,
 
-    async findOriginal(contentHash, caseId): Promise<TakedownOriginal | null> {
+    async findOriginals(contentHash, caseId): Promise<TakedownOriginal[]> {
       const hash = requireHash(contentHash);
-      return (await findPrivateOriginal(hash)) ?? headS3Object(getS3Client(), getS3Bucket(), holdKeyFor(caseId, hash));
+      const found: TakedownOriginal[] = [];
+      for (const key of [...uploadsOriginalKeysFor(hash), holdKeyFor(caseId, hash)]) {
+        const head = await headS3Object(getS3Client(), getS3Bucket(), key);
+        if (head) found.push(head);
+      }
+      return found;
     },
 
     async takePublicOffline(contentHash, caseId) {
       const hash = requireHash(contentHash);
       if (!isPublishConfigured()) return { deleted: 0, held: false };
 
-      // The public copy is deleted at once. That is only safe if a private copy
-      // exists: the uploaded original, or — for a file whose original was already
-      // reaped — a copy made here first.
-      let held = false;
+      // The public copy is deleted at once, and always kept privately first. A
+      // private original's KEY says nothing about its bytes (a presigned PUT
+      // need not match the hash), so its existence is no proof the content is
+      // safe elsewhere; the copy made here is checked by checksum instead.
       const asset = await headPublishedAsset(hash);
-      if (asset && !(await findPrivateOriginal(hash))) {
-        await holdPublicAssetPrivately(hash, caseId);
-        held = true;
-      }
-      return { deleted: await deletePublishedAssetsForHash(hash), held };
+      if (asset) await holdPublicAssetPrivately(hash, caseId);
+      return { deleted: await deletePublishedAssetsForHash(hash), held: asset !== null };
     },
 
     digestSource: (key) => digestS3Object(getS3Client(), getS3Bucket(), key),

@@ -43,11 +43,14 @@ export async function GET(request: Request) {
     });
 
     let swept = 0;
+    // Another run held the case: this tick did nothing to it, and the case stays due.
+    let inProgress = 0;
     const failed: string[] = [];
     for (const row of due) {
       try {
         const result = await executeTakedown({ action: 'resweep', caseId: row.id }, null);
-        if (result.status === 'actioned') swept += 1;
+        if (result.inProgress) inProgress += 1;
+        else if (result.status === 'actioned') swept += 1;
         else failed.push(row.id);
       } catch (error) {
         failed.push(row.id);
@@ -59,13 +62,13 @@ export async function GET(request: Request) {
       eventType: 'data.write',
       resourceType: 'cron_job',
       resourceId: 'content_safety_resweep',
-      details: { due: due.length, swept, failed: failed.length },
+      details: { due: due.length, swept, failed: failed.length, inProgress },
     });
 
     if (failed.length > 0) {
       return NextResponse.json({ success: false, due: due.length, swept, failedCaseIds: failed }, { status: 500 });
     }
-    return NextResponse.json({ success: true, due: due.length, swept });
+    return NextResponse.json({ success: true, due: due.length, swept, ...(inProgress > 0 ? { inProgress } : {}) });
   } catch (error) {
     loggers.system.error('[Cron] Content-safety re-sweep failed', error instanceof Error ? error : undefined);
     return NextResponse.json({ success: false, error: 'Re-sweep failed' }, { status: 500 });

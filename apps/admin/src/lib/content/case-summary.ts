@@ -17,7 +17,10 @@ export interface CaseSummary {
   createdAt: string;
   updatedAt: string;
   actorUserId: string | null;
+  /** The content the hash names has a verified copy in the evidence bucket. */
   evidencePreserved: boolean;
+  /** Further objects found under the hash's keys that were NOT that content, each kept byte for byte. */
+  otherObjectsPreserved: number;
   progress: CaseProgress;
   references: {
     pageIds: string[];
@@ -55,8 +58,8 @@ export function toCaseSummary(row: ContentCase): CaseSummary {
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     actorUserId: snapshot?.takedown?.actorUserId ?? null,
-    // Any preserved copy counts, including one of bytes that were not the hashed content.
-    evidencePreserved: typeof snapshot?.evidenceKey === 'string' || (snapshot?.additionalEvidenceKeys?.length ?? 0) > 0,
+    evidencePreserved: typeof snapshot?.evidenceKey === 'string',
+    otherObjectsPreserved: snapshot?.additionalEvidenceKeys?.length ?? 0,
     progress: describeCaseProgress(row),
     references: refs
       ? {

@@ -147,6 +147,11 @@ export function CaseList({ cases, onChanged }: CaseListProps) {
                 <TableCell>
                   <Badge variant={statusVariant(item.status)}>{STATUS_LABELS[item.status]}</Badge>
                   {item.evidencePreserved && <div className="mt-1 text-xs text-muted-foreground">Copy preserved</div>}
+                  {item.otherObjectsPreserved > 0 && (
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {item.otherObjectsPreserved} other object{item.otherObjectsPreserved === 1 ? '' : 's'} kept (not the reported content)
+                    </div>
+                  )}
                 </TableCell>
                 <TableCell>
                   <ul className="space-y-0.5">

@@ -64,6 +64,26 @@ export function hasEnvelopeMagic(buf: Buffer): boolean {
   return buf.length >= MAGIC.length && buf.subarray(0, MAGIC.length).equals(MAGIC);
 }
 
+/** The bytes before the ciphertext: magic, salt, IV and GCM tag. */
+export const ENVELOPE_HEADER_LENGTH = HEADER_LEN;
+
+/**
+ * Decrypt an envelope as it streams, without holding it: the GCM tag is in the
+ * header, so the ciphertext that follows can be fed through `update` in chunks.
+ * `final()` throws if the bytes were tampered with or the key is wrong, so
+ * nothing read through it counts until `final()` has returned.
+ */
+export function createEnvelopeDecipher(header: Buffer, masterKey: string): { update(chunk: Buffer): Buffer; final(): Buffer } {
+  if (header.length !== HEADER_LEN || !hasEnvelopeMagic(header)) throw new Error('Not a PageSpace envelope header');
+  let offset = MAGIC.length;
+  const salt = header.subarray(offset, (offset += SALT_LEN));
+  const iv = header.subarray(offset, (offset += IV_LEN));
+  const tag = header.subarray(offset, (offset += TAG_LEN));
+  const decipher = createDecipheriv('aes-256-gcm', deriveDataKey(masterKey, salt), iv);
+  decipher.setAuthTag(tag);
+  return decipher;
+}
+
 /** True iff `buf` carries the envelope magic prefix and a full header. */
 export function isEnvelope(buf: Buffer): boolean {
   return (

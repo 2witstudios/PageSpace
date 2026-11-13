@@ -23,13 +23,15 @@ describe('toCaseSummary evidencePreserved', () => {
     expect(toCaseSummary(row({ evidenceKey: 'cases/case-1/h/original' })).evidencePreserved).toBe(true);
   });
 
-  it('is true for a case whose only copies are of bytes that were not the hashed content', () => {
-    expect(toCaseSummary(row({ additionalEvidenceKeys: ['cases/case-1/h/original.abc'] })).evidencePreserved).toBe(true);
+  it('is false for a case whose only copies are of bytes that were not the hashed content, which are counted apart', () => {
+    const summary = toCaseSummary(row({ additionalEvidenceKeys: ['cases/case-1/h/original.abc', 'cases/case-1/h/original.def'] }));
+    expect(summary.evidencePreserved).toBe(false);
+    expect(summary.otherObjectsPreserved).toBe(2);
   });
 
   it('is false for a case with no copy at all', () => {
-    expect(toCaseSummary(row({ additionalEvidenceKeys: [] })).evidencePreserved).toBe(false);
-    expect(toCaseSummary(row(null)).evidencePreserved).toBe(false);
+    expect(toCaseSummary(row({ additionalEvidenceKeys: [] }))).toMatchObject({ evidencePreserved: false, otherObjectsPreserved: 0 });
+    expect(toCaseSummary(row(null))).toMatchObject({ evidencePreserved: false, otherObjectsPreserved: 0 });
   });
 
   it('never returns the evidence keys themselves', () => {

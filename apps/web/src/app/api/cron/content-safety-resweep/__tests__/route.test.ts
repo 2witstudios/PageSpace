@@ -60,7 +60,7 @@ describe('/api/cron/content-safety-resweep', () => {
       [{ action: 'resweep', caseId: 'case-1' }, null],
       [{ action: 'resweep', caseId: 'case-2' }, null],
     ]);
-    expect(mockAudit).toHaveBeenCalledWith(expect.objectContaining({ resourceId: 'content_safety_resweep', details: { due: 2, swept: 2, failed: 0 } }));
+    expect(mockAudit).toHaveBeenCalledWith(expect.objectContaining({ resourceId: 'content_safety_resweep', details: { due: 2, swept: 2, failed: 0, inProgress: 0 } }));
   });
 
   it('keeps going past a case that fails and answers 500 so the run pages', async () => {
@@ -75,5 +75,18 @@ describe('/api/cron/content-safety-resweep', () => {
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ success: false, due: 3, swept: 1, failedCaseIds: ['case-1', 'case-2'] });
     expect(mockExecute).toHaveBeenCalledTimes(3);
+  });
+
+  it('counts a case another run is already sweeping as neither swept nor failed: this tick did nothing to it', async () => {
+    mockDue.mockResolvedValue([{ id: 'case-1' }, { id: 'case-2' }]);
+    mockExecute
+      .mockResolvedValueOnce({ action: 'resweep', caseId: 'case-1', status: 'open', inProgress: true })
+      .mockResolvedValueOnce({ action: 'resweep', caseId: 'case-2', status: 'actioned', inProgress: true });
+
+    const response = await GET(request());
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ success: true, due: 2, swept: 0, inProgress: 2 });
+    expect(mockAudit).toHaveBeenCalledWith(expect.objectContaining({ details: { due: 2, swept: 0, failed: 0, inProgress: 2 } }));
   });
 });

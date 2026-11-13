@@ -67,18 +67,21 @@ export function holdKeyFor(caseId: string, contentHash: string): string {
 export interface TakedownStorage {
   evidenceConfigured(): boolean;
   /**
-   * The private original for the hash: `files/<hash>/original`, then
-   * `chat-attachments/<hash>/original`, then this case's hold copy. Null only on
-   * a definite not-found; any other error must throw, so "couldn't check" is
-   * never read as "nothing to preserve".
+   * EVERY private object that may hold the hash's content, whatever it holds:
+   * `files/<hash>/original`, `chat-attachments/<hash>/original` and this case's
+   * hold copy, those that exist. A key says nothing about the bytes at it (a
+   * presigned PUT need not match the hash), so the preserve step reads them
+   * all. Any error other than a definite not-found throws, so "couldn't check"
+   * is never read as "nothing to preserve".
    */
-  findOriginal(contentHash: string, caseId: string): Promise<TakedownOriginal | null>;
+  findOriginals(contentHash: string, caseId: string): Promise<TakedownOriginal[]>;
   /**
    * Take the hash off the web now: delete `assets/<hash>` and
-   * `assets/cache/<hash>/*` from the public bucket. If no private original
-   * exists, the public asset is first copied to the case's hold key in the
-   * private uploads bucket and the copy's size verified, so the delete never
-   * destroys the only copy. `held` says whether that copy was made.
+   * `assets/cache/<hash>/*` from the public bucket. The public asset, when
+   * there is one, is first copied to the case's hold key in the private uploads
+   * bucket and the copy verified by checksum, so the delete never destroys the
+   * only copy of those bytes, whatever the private keys hold. `held` says
+   * whether that copy was made.
    */
   takePublicOffline(contentHash: string, caseId: string): Promise<{ deleted: number; held: boolean }>;
   /** Read an uploads-bucket object once and hash it. Null only on a definite not-found. */
@@ -189,32 +192,31 @@ async function copyAndVerify(source: TakedownOriginal, expected: ObjectDigest, e
 }
 
 /**
- * Preserve the hash's private original in the evidence bucket, or recognise a
- * copy already there.
+ * Preserve every private object for the hash in the evidence bucket, or
+ * recognise copies already there. Nothing private is deleted until this step
+ * has succeeded, so every object `findOriginals` lists gets a copy verified by
+ * checksum, whatever it holds.
  *
- * The case's content hash is the proof. The primary evidence key holds the
- * content the hash names, or it does not: an object there whose content hashes
- * to the case's hash IS the preserved copy, whether or not recording it on the
- * case got as far as succeeding. Nothing else is trusted, and a primary copy
- * that verifies is never overwritten.
+ * The case's content hash is the proof of which one is the content. The
+ * primary evidence key holds the content the hash names, or it does not: an
+ * object there whose content hashes to the case's hash IS the preserved copy,
+ * whether or not recording it on the case got as far as succeeding, and it is
+ * never overwritten.
  *
- * Bytes at the source that are NOT that content (a presigned PUT of something
- * else to a blocked key) are kept too, under a key named by their own checksum,
- * never at the primary key.
+ * Objects that are NOT that content (a presigned PUT of something else to a
+ * blocked key, an envelope that cannot be opened) are kept too, byte for byte,
+ * under a key named by their own checksum, never at the primary key.
  */
 async function preserve(row: ContentCase, contentHash: string, deps: TakedownDeps): Promise<{ detail?: string; skipped?: boolean }> {
   const primaryKey = evidenceKeyFor(row.id, contentHash);
   const snapshot = row.snapshot;
-  const recordPrimary = async () => {
-    if (snapshot?.evidenceKey !== primaryKey) await deps.cases.mergeSnapshot(row.id, { evidenceKey: primaryKey });
-  };
   const primary = await deps.storage.digestEvidence(primaryKey);
-  const primaryVerified = primary?.contentSha256 === contentHash;
-  const source = await deps.storage.findOriginal(contentHash, row.id);
+  let primaryVerified = primary?.contentSha256 === contentHash;
+  const sources = await deps.storage.findOriginals(contentHash, row.id);
 
-  if (!source) {
+  if (sources.length === 0) {
     if (primaryVerified) {
-      await recordPrimary();
+      if (snapshot?.evidenceKey !== primaryKey) await deps.cases.mergeSnapshot(row.id, { evidenceKey: primaryKey });
       return { detail: 'already_preserved' };
     }
     if (primary) throw new Error('An unverified evidence copy exists and there is no source left to verify it against');
@@ -224,28 +226,35 @@ async function preserve(row: ContentCase, contentHash: string, deps: TakedownDep
     return { detail: 'no_source_object', skipped: true };
   }
 
-  const read = await deps.storage.digestSource(source.key);
-  if (!read) throw new Error('The source object disappeared before it could be checked');
-
-  if (read.contentSha256 === contentHash) {
-    if (primaryVerified) {
-      await recordPrimary();
-      return { detail: 'already_preserved' };
-    }
-    // Nothing preserved yet, or only an object that is not the content: (re)write it.
-    await copyAndVerify(source, read, primaryKey, deps);
-    await recordPrimary();
-    return { detail: `bytes=${read.size}` };
-  }
-
-  const additionalKey = `${primaryKey}.${read.sha256}`;
-  const existing = await deps.storage.digestEvidence(additionalKey);
-  if (existing?.sha256 !== read.sha256) await copyAndVerify(source, read, additionalKey, deps);
   const known = snapshot?.additionalEvidenceKeys ?? [];
-  if (!known.includes(additionalKey)) {
-    await deps.cases.mergeSnapshot(row.id, { additionalEvidenceKeys: [...known, additionalKey] });
+  const additional = new Set(known);
+  const done: string[] = [];
+  for (const source of sources) {
+    const read = await deps.storage.digestSource(source.key);
+    if (!read) throw new Error('A source object disappeared before it could be checked');
+    if (read.contentSha256 === contentHash) {
+      // The content itself. One verified copy of it is enough, however many keys hold it.
+      if (!primaryVerified) {
+        await copyAndVerify(source, read, primaryKey, deps);
+        primaryVerified = true;
+        done.push(`bytes=${read.size}`);
+      }
+      continue;
+    }
+    const additionalKey = `${primaryKey}.${read.sha256}`;
+    const existing = await deps.storage.digestEvidence(additionalKey);
+    if (existing?.sha256 !== read.sha256) {
+      await copyAndVerify(source, read, additionalKey, deps);
+      done.push(`additional_copy sha256=${read.sha256} bytes=${read.size}`);
+    }
+    additional.add(additionalKey);
   }
-  return { detail: `additional_copy sha256=${read.sha256} bytes=${read.size}` };
+
+  if (primaryVerified && snapshot?.evidenceKey !== primaryKey) await deps.cases.mergeSnapshot(row.id, { evidenceKey: primaryKey });
+  if (additional.size > known.length) await deps.cases.mergeSnapshot(row.id, { additionalEvidenceKeys: [...additional] });
+  // Recorded as preserved, but neither there nor at any source any more: the content went missing.
+  if (!primaryVerified && snapshot?.evidenceKey) throw new Error('The preserved evidence copy recorded on this case is missing');
+  return { detail: done.length > 0 ? done.join(' ') : 'already_preserved' };
 }
 
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -398,10 +407,7 @@ export async function runGlobalTakedown(caseId: string, deps: TakedownDeps): Pro
   return exclusive(caseId, deps, (signal) => runGlobalTakedownLocked(caseId, deps, signal));
 }
 
-/** Thrown before a step when the run lock was lost: another run may now hold the case, so this one stops. */
-function assertLockHeld(signal: AbortSignal | undefined): void {
-  if (signal?.aborted) throw new Error('The run lock on this case was lost; the step was not started. Run the case again.');
-}
+const LOCK_LOST = 'The run lock on this case was lost; the step was not started. Run the case again.';
 
 async function runGlobalTakedownLocked(caseId: string, deps: TakedownDeps, signal?: AbortSignal): Promise<TakedownRunResult> {
   for (;;) {
@@ -432,8 +438,12 @@ async function runGlobalTakedownLocked(caseId: string, deps: TakedownDeps, signa
       continue;
     }
 
+    // Lost the lock: another run may hold the case now. Stop without writing
+    // anything, not even a failure or a status, which could overwrite its work.
+    if (signal?.aborted) {
+      return { caseId, status: row.status, failedStep: decision.step, error: LOCK_LOST };
+    }
     try {
-      assertLockHeld(signal);
       const outcome = await executeGlobalStep(decision.step, row, contentHash, deps);
       await deps.cases.appendStep(caseId, stepEntry(decision.step, outcome.skipped ? 'skipped' : 'ok', outcome.detail, deps));
     } catch (error) {

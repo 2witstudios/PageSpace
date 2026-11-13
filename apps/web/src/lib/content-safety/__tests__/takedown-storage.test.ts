@@ -60,45 +60,53 @@ describe('evidence bucket configuration', () => {
 const CASE = 'case-1';
 const HOLD = `content-hold/${CASE}/${HASH}`;
 
-describe('findOriginal', () => {
-  it('prefers the page-file original', async () => {
-    expect(await createTakedownStorage().findOriginal(HASH, CASE)).toEqual({
-      key: `files/${HASH}/original`,
-      size: 'original-bytes'.length,
-    });
+describe('findOriginals', () => {
+  it('lists every private object that may hold the content: page file, chat attachment, then this case\'s hold copy', async () => {
+    const storage = createTakedownStorage();
+    s3.put(UPLOADS, HOLD, 'original-bytes');
+    s3.put(UPLOADS, `content-hold/another-case/${HASH}`, 'original-bytes');
+
+    expect(await storage.findOriginals(HASH, CASE)).toEqual([
+      { key: `files/${HASH}/original`, size: 'original-bytes'.length },
+      { key: `chat-attachments/${HASH}/original`, size: 'original-bytes'.length },
+      { key: HOLD, size: 'original-bytes'.length },
+    ]);
   });
 
-  it('falls back to the chat attachment, then to this case\'s private hold copy, and never to the public bucket', async () => {
-    const storage = createTakedownStorage();
+  it('never lists the public bucket, and is empty when nothing private is left', async () => {
     s3.bucket(UPLOADS).delete(`files/${HASH}/original`);
-    expect(await storage.findOriginal(HASH, CASE)).toMatchObject({ key: `chat-attachments/${HASH}/original` });
-
     s3.bucket(UPLOADS).delete(`chat-attachments/${HASH}/original`);
-    expect(await storage.findOriginal(HASH, CASE)).toBeNull();
-
-    s3.put(UPLOADS, HOLD, 'original-bytes');
-    expect(await storage.findOriginal(HASH, CASE)).toEqual({ key: HOLD, size: 'original-bytes'.length });
-    expect(await storage.findOriginal(HASH, 'another-case')).toBeNull();
+    expect(await createTakedownStorage().findOriginals(HASH, CASE)).toEqual([]);
   });
 
   it('throws rather than reporting "nothing to preserve" when storage cannot be read', async () => {
     s3.failOn = { match: 'HeadObjectCommand', error: new Error('503 Slow Down') };
-    await expect(createTakedownStorage().findOriginal(HASH, CASE)).rejects.toThrow('503 Slow Down');
+    await expect(createTakedownStorage().findOriginals(HASH, CASE)).rejects.toThrow('503 Slow Down');
   });
 
   it('rejects a value that is not a content hash', async () => {
-    await expect(createTakedownStorage().findOriginal('../etc', CASE)).rejects.toThrow('Invalid content hash');
+    await expect(createTakedownStorage().findOriginals('../etc', CASE)).rejects.toThrow('Invalid content hash');
   });
 });
 
 describe('takePublicOffline', () => {
-  it('deletes the public asset and its thumbnail at once when a private original exists, making no extra copy', async () => {
+  it('keeps a private copy of the public asset even when a private original exists, then deletes the public keys', async () => {
     const result = await createTakedownStorage().takePublicOffline(HASH, CASE);
 
-    expect(result).toEqual({ deleted: 2, held: false });
+    expect(result).toEqual({ deleted: 2, held: true });
     expect(s3.keys(PUBLISH)).toEqual([`assets/${OTHER}`, `published/site/index.html`]);
-    expect(s3.has(UPLOADS, HOLD)).toBe(false);
+    expect(new TextDecoder().decode(s3.bucket(UPLOADS).get(HOLD)!.body)).toBe('original-bytes');
     expect(s3.has(UPLOADS, `files/${HASH}/original`)).toBe(true);
+  });
+
+  it('does not trust the private key to hold the content: with other bytes there, the public asset is still kept privately', async () => {
+    s3.put(UPLOADS, `files/${HASH}/original`, 'junk written after the block');
+    s3.bucket(UPLOADS).delete(`chat-attachments/${HASH}/original`);
+
+    await createTakedownStorage().takePublicOffline(HASH, CASE);
+
+    expect(new TextDecoder().decode(s3.bucket(UPLOADS).get(HOLD)!.body)).toBe('original-bytes');
+    expect(s3.has(PUBLISH, `assets/${HASH}`)).toBe(false);
   });
 
   it('copies a public-only file into the PRIVATE uploads bucket before deleting its public key', async () => {
@@ -146,6 +154,7 @@ describe('takePublicOffline', () => {
   it('is a no-op the second time, and when publishing is not configured', async () => {
     const storage = createTakedownStorage();
     await storage.takePublicOffline(HASH, CASE);
+    // The second time there is no public asset left to hold.
     expect(await storage.takePublicOffline(HASH, CASE)).toEqual({ deleted: 0, held: false });
 
     vi.stubEnv('PUBLISH_BUCKET', '');
@@ -182,10 +191,36 @@ describe('digestSource / digestEvidence', () => {
     expect(digest).toEqual({ size: stored.length, sha256: sha(stored), contentSha256: sha('original-bytes') });
   });
 
-  it('fails, rather than guesses, on an envelope it cannot open', async () => {
+  it('treats an envelope it cannot open as bytes that are not the content: never a match, never stuck', async () => {
     vi.stubEnv('ENCRYPTION_KEY', 'a-different-key-that-is-also-32-chars-long');
-    s3.put(UPLOADS, `files/${HASH}/original`, encryptBuffer(Buffer.from('original-bytes'), MASTER_KEY));
-    await expect(createTakedownStorage().digestSource(`files/${HASH}/original`)).rejects.toThrow();
+    const stored = encryptBuffer(Buffer.from('original-bytes'), MASTER_KEY);
+    s3.put(UPLOADS, `files/${HASH}/original`, stored);
+
+    expect(await createTakedownStorage().digestSource(`files/${HASH}/original`)).toEqual({
+      size: stored.length,
+      sha256: sha(stored),
+      contentSha256: sha(stored),
+    });
+  });
+
+  it('does not get stuck on a plain file that merely starts like an envelope', async () => {
+    vi.stubEnv('ENCRYPTION_KEY', MASTER_KEY);
+    const lookalike = `PSE1${'x'.repeat(100)}`;
+    s3.put(UPLOADS, 'files/x/lookalike', lookalike);
+
+    expect(await createTakedownStorage().digestSource('files/x/lookalike')).toEqual({
+      size: lookalike.length,
+      sha256: sha(lookalike),
+      contentSha256: sha(lookalike),
+    });
+  });
+
+  it('decrypts as it streams: a large envelope arriving in many small chunks hashes to its plaintext', async () => {
+    vi.stubEnv('ENCRYPTION_KEY', MASTER_KEY);
+    const plain = Buffer.alloc(256 * 1024, 7);
+    s3.put(UPLOADS, 'files/x/large', encryptBuffer(plain, MASTER_KEY));
+
+    expect((await createTakedownStorage().digestSource('files/x/large'))?.contentSha256).toBe(sha(plain));
   });
 
   it('reads the evidence bucket for evidence, and returns null only for a missing object', async () => {
@@ -204,7 +239,7 @@ describe('copyToEvidence', () => {
 
   it('copies the private original into the evidence bucket, byte for byte', async () => {
     const storage = createTakedownStorage();
-    const source = (await storage.findOriginal(HASH, CASE))!;
+    const source = (await storage.findOriginals(HASH, CASE))[0];
     expect(await storage.digestEvidence(evidenceKey)).toBeNull();
 
     await storage.copyToEvidence(source, evidenceKey);
@@ -220,7 +255,7 @@ describe('copyToEvidence', () => {
     s3.bucket(UPLOADS).delete(`chat-attachments/${HASH}/original`);
     await storage.takePublicOffline(HASH, CASE);
 
-    await storage.copyToEvidence((await storage.findOriginal(HASH, CASE))!, evidenceKey);
+    await storage.copyToEvidence((await storage.findOriginals(HASH, CASE))[0], evidenceKey);
     expect(await storage.digestEvidence(evidenceKey)).toMatchObject({ sha256: sha('original-bytes') });
   });
 

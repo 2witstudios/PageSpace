@@ -23,7 +23,10 @@ export async function runTakedown(request: TakedownRequest): Promise<TakedownRes
 export function describeTakedownResult(result: TakedownResponse): { message: string; ok: boolean } {
   const caseRef = result.caseId ? ` Case ${result.caseId}.` : '';
   if (result.inProgress) {
-    return { ok: false, message: `This case is already running; nothing was changed.${caseRef} Check the Cases tab in a moment.` };
+    return {
+      ok: false,
+      message: `This case is already running, so this request did not start another run. Any new category or options were saved, and the running takedown reads them before its next step.${caseRef} Check the Cases tab in a moment.`,
+    };
   }
   if (result.failedStep) {
     return { ok: false, message: `Stopped at step "${result.failedStep}": ${result.error ?? 'unknown error'}.${caseRef} Resume it from the Cases tab.` };

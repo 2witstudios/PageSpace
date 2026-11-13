@@ -249,8 +249,12 @@ describe('content takedown — upload, publish, take down, removed, re-upload re
     const firstPrivateDelete = s3.log.findIndex((line) => line.startsWith('Delete') && line.includes(` ${UPLOADS} `));
     expect(evidenceCopy).toBeGreaterThan(-1);
     expect(evidenceCopy).toBeLessThan(firstPrivateDelete);
-    // A private original existed, so the public copy needed no hold copy and nothing was ever parked in the public bucket.
-    expect(s3.log.some((line) => line.startsWith('PutObjectCommand') && line.includes('content-hold/'))).toBe(false);
+    // The public asset was kept in PRIVATE storage before its public key went (a private key's existence proves
+    // nothing about its bytes), and nothing was ever parked in the public bucket.
+    const hold = s3.log.findIndex((line) => line === `PutObjectCommand ${UPLOADS} content-hold/${caseId}/${HASH}`);
+    const firstPublicDelete = s3.log.findIndex((line) => line.startsWith('Delete') && line.includes(` ${PUBLISH} `));
+    expect(hold).toBeGreaterThan(-1);
+    expect(hold).toBeLessThan(firstPublicDelete);
     expect(s3.log.some((line) => /^(Put|Copy)ObjectCommand/.test(line) && line.includes(` ${PUBLISH} `) && line.includes(HASH) && s3.log.indexOf(line) > evidenceCopy)).toBe(false);
   });
 
