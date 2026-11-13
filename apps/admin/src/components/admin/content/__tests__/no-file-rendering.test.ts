@@ -36,7 +36,7 @@ describe('content-safety console never renders or links to a file', () => {
   it('covers every component of the console', () => {
     const names = SOURCES.map((file) => path.basename(file));
     expect(names).toEqual(
-      expect.arrayContaining(['target-panel.tsx', 'case-list.tsx', 'blocked-uploads.tsx', 'takedown-dialog.tsx', 'report-queue.tsx', 'page.tsx']),
+      expect.arrayContaining(['target-panel.tsx', 'case-list.tsx', 'blocked-uploads.tsx', 'takedown-dialog.tsx', 'report-queue.tsx', 'scan-verdicts.tsx', 'page.tsx']),
     );
   });
 

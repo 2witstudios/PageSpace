@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyMedia, decideGate, isVerdictFresh, sniffContentType } from '../scan-policy';
+import { classifyMedia, decideGate, isVerdictFresh, sniffContentType, type GateOutcome } from '../scan-policy';
 
 const bytes = (...values: number[]) => new Uint8Array(values);
 const text = (value: string) => new TextEncoder().encode(value);
@@ -65,12 +65,12 @@ describe('classifyMedia', () => {
 });
 
 describe('decideGate', () => {
-  const clean = { kind: 'scanned', result: { kind: 'clean', provider: 'p' } } as const;
-  const match = { kind: 'scanned', result: { kind: 'hash_match', provider: 'p', lists: ['l'], matchTypes: ['CSAM'] } } as const;
-  const flag = { kind: 'scanned', result: { kind: 'classifier_flag', provider: 'p', category: 'csam', score: 0.97 } } as const;
-  const error = { kind: 'scanned', result: { kind: 'error', provider: 'p', reason: 'timeout' } } as const;
-  const archive = { kind: 'not_scanned', media: { class: 'never_promote', contentType: 'archive' } } as const;
-  const pdf = { kind: 'not_scanned', media: { class: 'unscanned_allowed', contentType: 'application/pdf' } } as const;
+  const clean: GateOutcome = { kind: 'scanned', result: { kind: 'clean', provider: 'p' } };
+  const match: GateOutcome = { kind: 'scanned', result: { kind: 'hash_match', provider: 'p', lists: ['l'], matchTypes: ['CSAM'] } };
+  const flag: GateOutcome = { kind: 'scanned', result: { kind: 'classifier_flag', provider: 'p', category: 'csam', score: 0.97 } };
+  const error: GateOutcome = { kind: 'scanned', result: { kind: 'error', provider: 'p', reason: 'timeout' } };
+  const archive: GateOutcome = { kind: 'not_scanned', media: { class: 'never_promote', contentType: 'archive' } };
+  const pdf: GateOutcome = { kind: 'not_scanned', media: { class: 'unscanned_allowed', contentType: 'application/pdf' } };
 
   it('clean promotes and records in both modes', () => {
     for (const mode of ['shadow', 'enforce'] as const) {

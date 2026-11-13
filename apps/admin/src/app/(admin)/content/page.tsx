@@ -11,12 +11,13 @@ import { BlockedUploads } from "@/components/admin/content/blocked-uploads";
 import { CaseList } from "@/components/admin/content/case-list";
 import type { ReviewTarget } from "@/components/admin/content/report-queue";
 import { LinkedCaseReports, ReportsTab } from "@/components/admin/content/reports-tab";
+import { ScanVerdicts } from "@/components/admin/content/scan-verdicts";
 import { TargetPanel } from "@/components/admin/content/target-panel";
 import { useAdminQuery } from "@/hooks/use-admin-query";
 import { useUrlTab } from "@/hooks/use-url-tab";
 import type { CaseSummary } from "@/lib/content/case-summary";
 
-const TABS = ["reports", "takedown", "cases", "blocked"] as const;
+const TABS = ["reports", "takedown", "cases", "blocked", "scans"] as const;
 type Tab = (typeof TABS)[number];
 
 const STATUS_FILTERS = [
@@ -92,7 +93,7 @@ function ContentSafety() {
     <div className="space-y-6">
       <PageHeader
         title="Content Safety"
-        description="Review reports, take down illegal or violating content, follow cases, and see attempts to re-upload blocked files. Metadata only: files are never displayed."
+        description="Review reports and publish-scan flags, take down illegal or violating content, follow cases, see attempts to re-upload blocked files, and see publish-scan verdicts. Metadata only: files are never displayed."
       />
 
       <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)}>
@@ -101,6 +102,7 @@ function ContentSafety() {
           <TabsTrigger value="takedown">Take down</TabsTrigger>
           <TabsTrigger value="cases">Cases</TabsTrigger>
           <TabsTrigger value="blocked">Blocked uploads</TabsTrigger>
+          <TabsTrigger value="scans">Publish scans</TabsTrigger>
         </TabsList>
         <TabsContent value="reports" className="mt-4">
           <ReportsTab onReview={review} />
@@ -117,6 +119,9 @@ function ContentSafety() {
         </TabsContent>
         <TabsContent value="blocked" className="mt-4">
           <BlockedUploads />
+        </TabsContent>
+        <TabsContent value="scans" className="mt-4">
+          <ScanVerdicts />
         </TabsContent>
       </Tabs>
     </div>

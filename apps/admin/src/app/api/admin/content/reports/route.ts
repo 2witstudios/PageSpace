@@ -10,6 +10,7 @@ import {
   ReportedCaseChangedError,
   ReportedCaseNotFoundError,
 } from '@pagespace/lib/content-safety/report-store';
+import { isScanFlaggedCase, recordReviewedClean } from '@pagespace/lib/content-safety/scan-store';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { withAdminAuth } from '@/lib/auth';
 import { toReportedCaseSummary, toReportSummary } from '@/lib/content/report-summary';
@@ -81,14 +82,16 @@ const closeSchema = z.object({
   caseId: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/),
   outcome: z.enum(['dismissed', 'actioned']),
   // The report count the admin was shown: a report that arrived since refuses the close.
-  expectedReportCount: z.number().int().min(1).max(1_000_000),
+  // Zero for a case the publish scan flagged with no reports.
+  expectedReportCount: z.number().int().min(0).max(1_000_000),
   note: z.string().trim().max(1000).optional(),
 });
 
 /**
  * POST /api/admin/content/reports — close a case under review.
  * `actioned`: staff took action (a takedown runs as its own case, from the Take down tab).
- * `dismissed`: no violation. The next report on the same target opens a new case.
+ * `dismissed`: no violation. The next report on the same target opens a new case. Dismissing a case the
+ * publish scan flagged also records its hash clean, so the gate stops holding it until that verdict expires.
  */
 export const POST = withAdminAuth(async (adminUser, request) => {
   const parsed = closeSchema.safeParse(await request.json().catch(() => null));
@@ -98,12 +101,17 @@ export const POST = withAdminAuth(async (adminUser, request) => {
   const { caseId, outcome, expectedReportCount, note } = parsed.data;
   try {
     const row = await closeReportedCase({ caseId, outcome, actorUserId: adminUser.id, expectedReportCount, note: note || undefined });
+    // Dismissing a flagged scan is a reviewed false positive: record the hash clean so the publish gate
+    // stops holding it. Actioned changes nothing here; the takedown ran as its own case.
+    const scanFlagged = isScanFlaggedCase(row);
+    const clearedScan = scanFlagged && outcome === 'dismissed' && row.contentHash !== null;
+    if (clearedScan && row.contentHash) await recordReviewedClean(row.contentHash, adminUser.id);
     auditRequest(request, {
       eventType: 'content.report.resolved',
       userId: adminUser.id,
       resourceType: 'content_case',
       resourceId: caseId,
-      details: { outcome },
+      details: { outcome, scanFlagged, clearedScan },
     });
     return NextResponse.json({ caseId: row.id, status: row.status });
   } catch (error) {

@@ -18,11 +18,22 @@ export interface ReportSummary {
   createdAt: string;
 }
 
+/** Set when the publish scan flagged the case's hash: scores and when, never the file. */
+export interface ScanFlagSummary {
+  provider: string;
+  category: string;
+  score: number;
+  mode: 'shadow' | 'enforce';
+  flaggedAt: string;
+}
+
 export interface ReportedCaseSummary {
   case: CaseSummary;
   reportCount: number;
   /** Newest first; may be fewer than `reportCount`. */
   reports: ReportSummary[];
+  /** The publish scan flagged this case's hash (a flagged-scan case may have no reports at all). */
+  scan: ScanFlagSummary | null;
 }
 
 export function toReportSummary(report: ContentReport): ReportSummary {
@@ -38,7 +49,15 @@ export function toReportSummary(report: ContentReport): ReportSummary {
 }
 
 export function toReportedCaseSummary(row: ReportedCase): ReportedCaseSummary {
-  return { case: toCaseSummary(row.case), reportCount: row.reportCount, reports: row.reports.map(toReportSummary) };
+  const scan = row.case.snapshot?.scan;
+  return {
+    case: toCaseSummary(row.case),
+    reportCount: row.reportCount,
+    scan: scan?.source === 'scan_flagged'
+      ? { provider: scan.provider, category: scan.category, score: scan.score, mode: scan.mode, flaggedAt: scan.flaggedAt }
+      : null,
+    reports: row.reports.map(toReportSummary),
+  };
 }
 
 /**
