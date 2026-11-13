@@ -104,4 +104,11 @@ describe('sendContentSafetyAlert', () => {
     expect(options.subject).toMatch(/CSAM/);
     expect(options.headers).toEqual({ 'X-Priority': '1', Importance: 'high', Priority: 'urgent' });
   });
+  it('marks a flagged publish scan urgent, as suspected CSAM, with no file details', async () => {
+    await sendContentSafetyAlert({ event: 'scan_flagged', caseId: 'case-s', category: 'csam' });
+    const options = sendEmail.mock.calls[0][0];
+    expect(options.subject).toBe('[URGENT] Suspected CSAM: [Content safety] Publish scan flagged a file (case-s)');
+    expect(options.headers).toEqual({ 'X-Priority': '1', Importance: 'high', Priority: 'urgent' });
+    expect(options.idempotencyKey).toBe('content-case:case-s:scan_flagged');
+  });
 });

@@ -104,6 +104,14 @@ export type SecurityEventType =
   | 'content.report.created'
   | 'content.report.attached'
   | 'content.report.resolved'
+  // Publish-gate scans (PR 4), one type per scanner outcome. resourceId is the content
+  // hash; details carry the mode, whether the asset was promoted, the file ID and, for a
+  // flag or match, the case ID. Never a URL, filename or vendor response body.
+  | 'content.scan.clean'
+  | 'content.scan.hash_match'
+  | 'content.scan.flagged'
+  | 'content.scan.error'
+  | 'content.scan.unscanned'
   // Agent-account credential brokering (L1·G1b, ADR 0004 §5). The `allowed`
   // row is written and durably accepted BEFORE the operation runs, and the
   // outcome row is keyed by the same grant id, so the chain carries both

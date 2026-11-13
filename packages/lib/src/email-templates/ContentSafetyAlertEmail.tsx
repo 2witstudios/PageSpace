@@ -12,7 +12,7 @@ import { emailStyles } from './shared-styles';
  * indexed and previewed, and none of that may travel with it.
  */
 export interface ContentSafetyAlertEmailProps {
-  event: 'opened' | 'actioned' | 'awaiting_evidence' | 'resweep_failed' | 'report_opened' | 'report_added';
+  event: 'opened' | 'actioned' | 'awaiting_evidence' | 'resweep_failed' | 'report_opened' | 'report_added' | 'scan_flagged';
   caseId: string;
   category: string;
   /** Reports on the case so far. Report alerts only. */
@@ -28,6 +28,7 @@ const HEADLINES: Record<ContentSafetyAlertEmailProps['event'], string> = {
   resweep_failed: 'Content case re-sweep failed',
   report_opened: 'New content report',
   report_added: 'Another report on a content case',
+  scan_flagged: 'Publish scan flagged a file',
 };
 
 const EXPLANATIONS: Record<ContentSafetyAlertEmailProps['event'], string> = {
@@ -40,12 +41,15 @@ const EXPLANATIONS: Record<ContentSafetyAlertEmailProps['event'], string> = {
   report_opened:
     'Someone reported content and a case is waiting for review. Nothing has been taken down or blocked: review the case in the admin console.',
   report_added: 'Another report was filed on a case that is already waiting for review. Nothing has been taken down or blocked.',
+  scan_flagged:
+    'The publish scan’s classifier flagged a file someone tried to publish. It is a classifier score, not a confirmed match, so nothing has been blocked or taken down. In enforce mode the file was held back from the web; in shadow mode it was published. Review the case in the admin console.',
 };
 
 /** `urgent`: a CSAM report, which must be acted on immediately. The subject says so before anything else. */
 export function contentSafetyAlertSubject(props: Pick<ContentSafetyAlertEmailProps, 'event' | 'caseId'> & { urgent?: boolean }): string {
   const subject = `[Content safety] ${HEADLINES[props.event]} (${props.caseId})`;
-  return props.urgent ? `[URGENT] CSAM report: ${subject}` : subject;
+  if (!props.urgent) return subject;
+  return props.event === 'scan_flagged' ? `[URGENT] Suspected CSAM: ${subject}` : `[URGENT] CSAM report: ${subject}`;
 }
 
 export function ContentSafetyAlertEmail({ event, caseId, category, reportCount, adminUrl }: ContentSafetyAlertEmailProps) {

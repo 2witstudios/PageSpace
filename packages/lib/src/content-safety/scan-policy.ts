@@ -1,0 +1,221 @@
+/**
+ * Publish-gate policy — pure: what the bytes are, and what the gate does with
+ * each outcome in each mode. No I/O.
+ */
+
+import type { ContentScanOutcome, ContentScanVerdict } from '@pagespace/db/schema/content-safety';
+import type { ScanMediaKind, ScanResult } from './scanner';
+
+// ---------------------------------------------------------------------------
+// What the bytes are
+// ---------------------------------------------------------------------------
+
+/**
+ * Content type read from the first bytes. The declared type comes from the
+ * uploader and decides nothing on its own: a JPEG labelled `application/pdf`
+ * would otherwise skip the scan and still render in an `<img>`.
+ */
+export type SniffedType =
+  | 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' | 'image/bmp' | 'image/tiff' | 'image/heic' | 'image/avif'
+  | 'video/mp4' | 'video/quicktime' | 'video/webm' | 'video/x-msvideo'
+  | 'application/pdf'
+  | 'archive' | 'executable' | 'encrypted_envelope';
+
+const ascii = (bytes: Uint8Array, start: number, length: number): string =>
+  String.fromCharCode(...bytes.subarray(start, start + length));
+
+const startsWith = (bytes: Uint8Array, signature: readonly number[], offset = 0): boolean =>
+  bytes.length >= offset + signature.length && signature.every((byte, i) => bytes[offset + i] === byte);
+
+/** Sniff the first bytes of a file. Null when nothing is recognised. */
+export function sniffContentType(head: Uint8Array): SniffedType | null {
+  if (startsWith(head, [0x50, 0x53, 0x45, 0x31])) return 'encrypted_envelope'; // our at-rest envelope, "PSE1"
+  if (startsWith(head, [0xff, 0xd8, 0xff])) return 'image/jpeg';
+  if (startsWith(head, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return 'image/png';
+  if (ascii(head, 0, 4) === 'GIF8') return 'image/gif';
+  if (ascii(head, 0, 4) === 'RIFF' && ascii(head, 8, 4) === 'WEBP') return 'image/webp';
+  if (ascii(head, 0, 4) === 'RIFF' && ascii(head, 8, 4) === 'AVI ') return 'video/x-msvideo';
+  // BMP: "BM", then a size, then four reserved zero bytes.
+  if (ascii(head, 0, 2) === 'BM' && startsWith(head, [0, 0, 0, 0], 6)) return 'image/bmp';
+  if (startsWith(head, [0x49, 0x49, 0x2a, 0x00]) || startsWith(head, [0x4d, 0x4d, 0x00, 0x2a])) return 'image/tiff';
+  if (ascii(head, 4, 4) === 'ftyp') {
+    const brand = ascii(head, 8, 4);
+    if (brand === 'qt  ') return 'video/quicktime';
+    if (['heic', 'heix', 'hevc', 'heim', 'heis', 'mif1', 'msf1'].includes(brand)) return 'image/heic';
+    if (brand === 'avif' || brand === 'avis') return 'image/avif';
+    return 'video/mp4';
+  }
+  if (startsWith(head, [0x1a, 0x45, 0xdf, 0xa3])) return 'video/webm';
+  if (ascii(head, 0, 5) === '%PDF-') return 'application/pdf';
+  if (
+    startsWith(head, [0x50, 0x4b, 0x03, 0x04]) || // zip (and every zip-based format)
+    startsWith(head, [0x50, 0x4b, 0x05, 0x06]) ||
+    startsWith(head, [0x1f, 0x8b]) || // gzip
+    startsWith(head, [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c]) || // 7z
+    ascii(head, 0, 4) === 'Rar!' ||
+    ascii(head, 0, 3) === 'BZh' ||
+    startsWith(head, [0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00]) || // xz
+    ascii(head, 257, 5) === 'ustar' // tar
+  ) return 'archive';
+  if (
+    startsWith(head, [0x7f, 0x45, 0x4c, 0x46]) || // ELF
+    ascii(head, 0, 2) === 'MZ' || // PE
+    startsWith(head, [0xcf, 0xfa, 0xed, 0xfe]) || startsWith(head, [0xfe, 0xed, 0xfa, 0xcf]) || // Mach-O
+    startsWith(head, [0xca, 0xfe, 0xba, 0xbe])
+  ) return 'executable';
+  return null;
+}
+
+/** Types the vendor can scan. Everything else that is an image or video can't be checked. */
+const SCANNABLE: Partial<Record<SniffedType, ScanMediaKind>> = {
+  'image/jpeg': 'image',
+  'image/png': 'image',
+  'image/gif': 'image',
+  'image/webp': 'image',
+  'video/mp4': 'video',
+  'video/quicktime': 'video',
+};
+
+/** Zip-based document formats published as files, not archives. They can hold images: a known gap, like PDFs. */
+const ZIP_DOCUMENT_TYPES = new Set([
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.oasis.opendocument.text',
+  'application/vnd.oasis.opendocument.spreadsheet',
+  'application/vnd.oasis.opendocument.presentation',
+  'application/epub+zip',
+]);
+
+/** Declared types that are text or otherwise not pictures, published unscanned. */
+const UNSCANNED_ALLOWED_PREFIXES = ['text/', 'audio/', 'font/'];
+const UNSCANNED_ALLOWED_TYPES = new Set([
+  'application/pdf',
+  'application/json',
+  'application/xml',
+  'application/javascript',
+  'application/rtf',
+  'application/msword',
+  'application/vnd.ms-excel',
+  'application/vnd.ms-powerpoint',
+  // An SVG can embed a raster image; like inline `data:` images it is a known gap.
+  'image/svg+xml',
+]);
+
+export type MediaClass =
+  | { class: 'scan'; mediaKind: ScanMediaKind; contentType: string }
+  /** Published without a scan and logged: PDFs, text, audio, office documents, SVG. */
+  | { class: 'unscanned_allowed'; contentType: string }
+  /** Never promoted under enforce: archives, executables, opaque binaries, images or video the vendor can't read. */
+  | { class: 'never_promote'; contentType: string };
+
+const baseType = (declared: string | null | undefined): string =>
+  (declared ?? '').split(';')[0].trim().toLowerCase() || 'application/octet-stream';
+
+/** Decide how to treat a file from its sniffed and declared types. The sniffed type wins. */
+export function classifyMedia(sniffed: SniffedType | null, declaredContentType: string | null | undefined): MediaClass {
+  const declared = baseType(declaredContentType);
+  if (sniffed) {
+    const kind = SCANNABLE[sniffed];
+    if (kind) return { class: 'scan', mediaKind: kind, contentType: sniffed };
+    if (sniffed === 'application/pdf') return { class: 'unscanned_allowed', contentType: sniffed };
+    if (sniffed === 'archive' && ZIP_DOCUMENT_TYPES.has(declared)) return { class: 'unscanned_allowed', contentType: declared };
+    return { class: 'never_promote', contentType: sniffed };
+  }
+  // Nothing recognised in the bytes. A claimed picture we cannot recognise cannot be checked.
+  if (declared.startsWith('image/') && declared !== 'image/svg+xml') return { class: 'never_promote', contentType: declared };
+  if (declared.startsWith('video/')) return { class: 'never_promote', contentType: declared };
+  if (UNSCANNED_ALLOWED_TYPES.has(declared) || UNSCANNED_ALLOWED_PREFIXES.some((prefix) => declared.startsWith(prefix))) {
+    return { class: 'unscanned_allowed', contentType: declared };
+  }
+  return { class: 'never_promote', contentType: declared };
+}
+
+// ---------------------------------------------------------------------------
+// What the gate does
+// ---------------------------------------------------------------------------
+
+export type GateMode = 'shadow' | 'enforce';
+
+/** Everything the gate can learn about one asset before it decides. */
+export type GateOutcome =
+  /** A recent `clean` verdict: no scan needed. */
+  | { kind: 'cached_clean' }
+  /** A recent classifier flag nobody has cleared: no new scan, no new case. */
+  | { kind: 'cached_flagged' }
+  /** Enforce or shadow with no vendor key. */
+  | { kind: 'scanner_unavailable' }
+  | { kind: 'not_scanned'; media: Extract<MediaClass, { class: 'unscanned_allowed' | 'never_promote' }> }
+  | { kind: 'scanned'; result: ScanResult };
+
+export type ScanAuditEventType =
+  | 'content.scan.clean'
+  | 'content.scan.hash_match'
+  | 'content.scan.flagged'
+  | 'content.scan.error'
+  | 'content.scan.unscanned';
+
+export interface GateDecision {
+  promote: boolean;
+  /** The verdict to record, or null when nothing new was learned. */
+  record: { verdict: ContentScanVerdict; outcome: ContentScanOutcome } | null;
+  /** Run the global takedown (category csam): blocks the hash, preserves, removes it everywhere. */
+  takedown: boolean;
+  /** Open (or join) a case in the review queue and alert. */
+  reviewCase: boolean;
+  audit: ScanAuditEventType | null;
+}
+
+const decision = (partial: Partial<GateDecision> & Pick<GateDecision, 'promote'>): GateDecision => ({
+  record: null,
+  takedown: false,
+  reviewCase: false,
+  audit: null,
+  ...partial,
+});
+
+/**
+ * The gate's decision. Shadow mode does everything enforce does — records,
+ * cases, alerts, and the takedown on a hash match — but promotes. A known-CSAM
+ * match is never "shadow": the takedown runs and the file is not promoted in
+ * either mode. (A blocklisted hash never gets this far: it is refused first.)
+ */
+export function decideGate(mode: GateMode, outcome: GateOutcome): GateDecision {
+  const shadow = mode === 'shadow';
+  switch (outcome.kind) {
+    case 'cached_clean':
+      return decision({ promote: true });
+    case 'cached_flagged':
+      return decision({ promote: shadow });
+    case 'scanner_unavailable':
+      // Enforce without a key fails closed; shadow cannot scan, so it changes nothing.
+      return decision({ promote: shadow });
+    case 'not_scanned':
+      return decision({
+        promote: shadow || outcome.media.class === 'unscanned_allowed',
+        record: { verdict: 'unscanned', outcome: 'unsupported_type' },
+        audit: 'content.scan.unscanned',
+      });
+    case 'scanned': {
+      const { result } = outcome;
+      switch (result.kind) {
+        case 'clean':
+          return decision({ promote: true, record: { verdict: 'clean', outcome: 'clean' }, audit: 'content.scan.clean' });
+        case 'hash_match':
+          return decision({ promote: false, record: { verdict: 'flagged', outcome: 'hash_match' }, takedown: true, audit: 'content.scan.hash_match' });
+        case 'classifier_flag':
+          return decision({ promote: shadow, record: { verdict: 'flagged', outcome: 'classifier_flag' }, reviewCase: true, audit: 'content.scan.flagged' });
+        case 'error':
+          return decision({ promote: shadow, record: { verdict: 'error', outcome: 'error' }, audit: 'content.scan.error' });
+        case 'unsupported_type':
+          return decision({ promote: shadow, record: { verdict: 'unscanned', outcome: 'unsupported_type' }, audit: 'content.scan.unscanned' });
+      }
+    }
+  }
+}
+
+/** Whether a stored verdict is recent enough to trust. */
+export function isVerdictFresh(scannedAt: Date, ttlMs: number, now: Date): boolean {
+  const age = now.getTime() - scannedAt.getTime();
+  return age >= 0 && age < ttlMs;
+}
