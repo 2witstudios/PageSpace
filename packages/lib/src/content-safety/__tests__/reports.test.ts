@@ -15,6 +15,11 @@ describe('classifyReportUrl', () => {
     expect(result).toEqual({ kind: 'publish_subdomain', host: 'acme.pagespace.site', url: 'https://acme.pagespace.site/about' });
   });
 
+  it('accepts a root-anchored published asset path', () => {
+    expect(classifyReportUrl(`https://acme.pagespace.site/assets/${'a'.repeat(64)}`, HOST)?.kind).toBe('publish_subdomain');
+    expect(classifyReportUrl(`https://acme.pagespace.site/assets/cache/${'a'.repeat(64)}/thumb`, HOST)?.kind).toBe('publish_subdomain');
+  });
+
   it('accepts a published asset path and ignores case and port in the host', () => {
     expect(classifyReportUrl('http://ACME.pagespace.site:443/assets/abc', HOST)?.kind).toBe('publish_subdomain');
   });
@@ -39,6 +44,11 @@ describe('classifyReportUrl', () => {
     ['a single-label host', 'https://localhost/'],
     ['an app path, not published content', 'https://acme.pagespace.site/dashboard/d1/p1'],
     ['an API path', 'https://acme.pagespace.site/api/avatar/u1/a.png'],
+    ['an API path under a prefix', 'https://acme.pagespace.site/x/api/avatar/u1/a.png'],
+    ['an API path behind a double slash', 'https://acme.pagespace.site//api/avatar/u1/a.png'],
+    ['a dashboard path under a prefix', 'https://acme.pagespace.site/x/dashboard/d1/p1'],
+    ['a storage key anywhere in the path', `https://acme.pagespace.site/q/files/${'a'.repeat(64)}/original`],
+    ['a chat-attachment key', `https://acme.pagespace.site/chat-attachments/${'a'.repeat(64)}/original`],
     ['an over-long URL', `https://acme.pagespace.site/${'a'.repeat(2100)}`],
   ])('rejects %s', (_label, input) => {
     expect(classifyReportUrl(input, HOST)).toBeNull();

@@ -18,7 +18,7 @@ const CATEGORY_LABELS: Record<ReportSummary['category'], string> = {
   other: 'Other',
 };
 
-type Pending = { caseId: string; outcome: 'dismissed' | 'actioned' } | null;
+type Pending = { caseId: string; outcome: 'dismissed' | 'actioned'; reportCount: number } | null;
 
 const DIALOG_COPY: Record<NonNullable<Pending>['outcome'], { title: string; description: string; confirmLabel: string }> = {
   actioned: {
@@ -88,11 +88,13 @@ export function ReportQueue({ items, onChanged, onReview }: ReportQueueProps) {
     setPending(true);
     setDialogError(null);
     try {
-      await closeReportedCase({ caseId: dialog.caseId, outcome: dialog.outcome, note });
+      await closeReportedCase({ caseId: dialog.caseId, outcome: dialog.outcome, expectedReportCount: dialog.reportCount, note });
       setDialog(null);
       onChanged();
     } catch (error) {
       setDialogError(error instanceof Error ? error.message : 'Request failed');
+      // Show any new reports behind the dialog, so the admin can see what arrived.
+      onChanged();
     } finally {
       setPending(false);
     }
@@ -125,10 +127,10 @@ export function ReportQueue({ items, onChanged, onReview }: ReportQueueProps) {
                   <Button size="sm" onClick={() => onReview(item.targetId)}>
                     Review and act
                   </Button>
-                  <Button size="sm" variant="outline" onClick={() => { setDialogError(null); setDialog({ caseId: item.id, outcome: 'actioned' }); }}>
+                  <Button size="sm" variant="outline" onClick={() => { setDialogError(null); setDialog({ caseId: item.id, outcome: 'actioned', reportCount }); }}>
                     Mark actioned
                   </Button>
-                  <Button size="sm" variant="ghost" onClick={() => { setDialogError(null); setDialog({ caseId: item.id, outcome: 'dismissed' }); }}>
+                  <Button size="sm" variant="ghost" onClick={() => { setDialogError(null); setDialog({ caseId: item.id, outcome: 'dismissed', reportCount }); }}>
                     Dismiss
                   </Button>
                 </div>

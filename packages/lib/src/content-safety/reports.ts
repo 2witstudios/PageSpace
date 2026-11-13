@@ -48,16 +48,22 @@ export type ClassifiedReportUrl = {
   url: string;
 };
 
-// Paths a published site never serves: the app's own routes. A URL that names one is not published content,
-// and resolving it would let a report name a private page or user by ID.
-const APP_PATH = /^\/(?:dashboard|api)(?:\/|$)/i;
+// Paths a published site never serves: the app's own routes and raw storage keys, ANYWHERE in the path. The
+// target resolver matches avatar and storage-key shapes anywhere in a path, so `/x/api/avatar/<userId>/` would
+// otherwise name any user, and `/q/files/<hash>/` any stored file, from a URL that only looks like a site.
+const APP_PATH = /(?:^|\/)(?:dashboard|api)(?:\/|$)/i;
+const STORAGE_KEY_PATH = /(?:^|\/)(?:files|chat-attachments)\/[0-9a-f]{64}(?:\/|$)/i;
+// `cache/<hash>` is only ours under the root `/assets/cache/`.
+const BARE_CACHE_PATH = /(?:^|\/)cache\/[0-9a-f]{64}(?:\/|$)/i;
+const ASSET_CACHE_PATH = /^\/assets\/cache\/[0-9a-f]{64}(?:\/|$)/i;
 const IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;
 
 /**
  * Is this a URL a report may be about? Only http(s), no credentials, a real
- * hostname (no IP literal, no single label), and not an app path. Returns null
- * for anything else. A hostname outside the publish host is only a candidate:
- * the caller must confirm it is a custom domain registered to a drive.
+ * hostname (no IP literal, no single label), and no app path or storage key
+ * anywhere in the path. Returns null for anything else. Passing this is not
+ * enough: the caller must confirm the host serves a visible published site, and
+ * that what the URL resolves to belongs to that site's drive.
  */
 export function classifyReportUrl(raw: string, publishHost: string): ClassifiedReportUrl | null {
   const trimmed = raw.trim();
@@ -72,7 +78,9 @@ export function classifyReportUrl(raw: string, publishHost: string): ClassifiedR
   if (parsed.username || parsed.password) return null;
   const host = parsed.hostname.toLowerCase().replace(/\.$/, '');
   if (!host || host.startsWith('[') || IPV4.test(host) || !host.includes('.')) return null;
-  if (APP_PATH.test(parsed.pathname)) return null;
+  const path = parsed.pathname;
+  if (APP_PATH.test(path) || STORAGE_KEY_PATH.test(path)) return null;
+  if (BARE_CACHE_PATH.test(path) && !ASSET_CACHE_PATH.test(path)) return null;
 
   const base = publishHost.toLowerCase();
   if (host === base) return null;

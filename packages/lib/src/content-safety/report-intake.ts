@@ -13,7 +13,7 @@
 
 import type { ContentCaseTargetType, ContentReportCategory, ContentReportSource } from '@pagespace/db/schema/content-safety';
 import { loggers } from '../logging/logger-config';
-import { CSAM_REPORT_GUIDANCE, classifyReportUrl, type CsamReportGuidance, type ReportTargetInput } from './reports';
+import { CSAM_REPORT_GUIDANCE, classifyReportUrl, type ClassifiedReportUrl, type CsamReportGuidance, type ReportTargetInput } from './reports';
 import type { ResolvedTarget } from './targets';
 
 export type Reporter = { kind: 'user'; userId: string } | { kind: 'anonymous'; contactEmail?: string };
@@ -64,8 +64,11 @@ export interface ReportIntakeDeps {
   /** The root publish hostname, e.g. `pagespace.site`. */
   publishHost: string;
   resolveTarget(input: string): Promise<ResolvedTarget | null>;
-  /** Is this hostname a custom domain attached to one of our drives? */
-  isCustomDomainHost(host: string): Promise<boolean>;
+  /**
+   * The drive whose published site this host serves, or null when it serves none that is publicly visible
+   * (unknown label or domain, held, or hidden by its org's policy).
+   */
+  publishedSiteDrive(site: { kind: ClassifiedReportUrl['kind']; host: string }): Promise<string | null>;
   /** Permission checks for the signed-in reporter. Never called for an anonymous report. */
   canViewPage(pageId: string): Promise<boolean>;
   canAccessFile(fileId: string): Promise<boolean>;
@@ -77,25 +80,43 @@ export interface ReportIntakeDeps {
 
 export type ReportRefusal = 'not_pagespace_url' | 'not_found' | 'self_report';
 
+/**
+ * `filed: false` is a report accepted but not filed — a user that does not exist. The reporter gets the same
+ * answer as for a filed report, so a report can't be used to test whether a user ID exists.
+ */
 export type ReportOutcome =
-  | { ok: true; caseId: string; created: boolean; reportCount: number; csamGuidance: CsamReportGuidance | null }
+  | { ok: true; filed: true; caseId: string; created: boolean; reportCount: number; csamGuidance: CsamReportGuidance | null }
+  | { ok: true; filed: false; csamGuidance: CsamReportGuidance | null }
   | { ok: false; reason: ReportRefusal };
 
-type Resolution = { ok: true; target: ResolvedTarget } | { ok: false; reason: ReportRefusal };
+type Resolution = { ok: true; target: ResolvedTarget } | { ok: true; target: null } | { ok: false; reason: ReportRefusal };
+
+/** Does what the URL resolved to belong to the site's own drive? */
+function belongsToDrive(target: ResolvedTarget, driveId: string): boolean {
+  switch (target.targetType) {
+    case 'page':
+      return target.page?.driveId === driveId;
+    case 'drive':
+      return target.targetId === driveId;
+    // A published asset: only if this drive holds it, not any hash named under the site's address.
+    case 'content_hash':
+      return target.references?.driveIds.includes(driveId) === true;
+    default:
+      return false;
+  }
+}
 
 const refuse = (reason: ReportRefusal): { ok: false; reason: ReportRefusal } => ({ ok: false, reason });
 
 async function resolvePublishedUrl(raw: string, deps: ReportIntakeDeps): Promise<Resolution> {
   const classified = classifyReportUrl(raw, deps.publishHost);
   if (!classified) return refuse('not_pagespace_url');
-  // Confirm a custom domain before resolving: the resolver also tries a host's first label as a subdomain,
-  // which would let `acme.evil.test` name the drive published at `acme.<publish host>`.
-  if (classified.kind === 'custom_domain_candidate' && !(await deps.isCustomDomainHost(classified.host))) {
-    return refuse('not_pagespace_url');
-  }
+  // Host first: a visible published site, before the path is looked at at all. Every refusal from here on is the
+  // same answer as a host that is not ours, so a report says nothing about sites that are not public.
+  const driveId = await deps.publishedSiteDrive({ kind: classified.kind, host: classified.host });
+  if (!driveId) return refuse('not_pagespace_url');
   const resolved = await deps.resolveTarget(classified.url);
-  // A host of ours with nothing published there gets the same answer as a host that is not ours.
-  return resolved ? { ok: true, target: resolved } : refuse('not_pagespace_url');
+  return resolved && belongsToDrive(resolved, driveId) ? { ok: true, target: resolved } : refuse('not_pagespace_url');
 }
 
 async function resolveSubmissionTarget(submission: ReportSubmission, deps: ReportIntakeDeps): Promise<Resolution> {
@@ -122,7 +143,8 @@ async function resolveSubmissionTarget(submission: ReportSubmission, deps: Repor
     case 'user': {
       if (target.userId === reporter.userId) return refuse('self_report');
       const resolved = await deps.resolveTarget(target.userId);
-      return resolved?.targetType === 'user' ? { ok: true, target: resolved } : refuse('not_found');
+      if (!resolved) return { ok: true, target: null };
+      return resolved.targetType === 'user' ? { ok: true, target: resolved } : { ok: true, target: null };
     }
   }
 }
@@ -131,6 +153,8 @@ export async function submitContentReport(submission: ReportSubmission, deps: Re
   const resolution = await resolveSubmissionTarget(submission, deps);
   if (!resolution.ok) return resolution;
   const { target } = resolution;
+  const csamGuidance = submission.category === 'csam' ? CSAM_REPORT_GUIDANCE : null;
+  if (!target) return { ok: true, filed: false, csamGuidance };
 
   const source: ContentReportSource = submission.reporter.kind === 'user' ? 'signed_in' : 'anonymous';
   const reporterUserId = submission.reporter.kind === 'user' ? submission.reporter.userId : null;
@@ -167,11 +191,5 @@ export async function submitContentReport(submission: ReportSubmission, deps: Re
     loggers.security.error('Content report alert failed', error instanceof Error ? error : undefined, { caseId: filed.caseId });
   }
 
-  return {
-    ok: true,
-    caseId: filed.caseId,
-    created: filed.created,
-    reportCount: filed.reportCount,
-    csamGuidance: submission.category === 'csam' ? CSAM_REPORT_GUIDANCE : null,
-  };
+  return { ok: true, filed: true, caseId: filed.caseId, created: filed.created, reportCount: filed.reportCount, csamGuidance };
 }

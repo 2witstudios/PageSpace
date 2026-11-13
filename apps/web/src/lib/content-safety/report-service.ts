@@ -10,10 +10,10 @@
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { files } from '@pagespace/db/schema/storage';
-import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { audit, auditRequest } from '@pagespace/lib/audit/audit-log';
 import { sendContentSafetyAlert } from '@pagespace/lib/content-safety/alerts';
 import { submitContentReport, type ReportIntakeDeps, type ReportOutcome, type ReportSubmission } from '@pagespace/lib/content-safety/report-intake';
-import { fileContentReport, isRegisteredCustomDomain } from '@pagespace/lib/content-safety/report-store';
+import { fileContentReport, findPublishedSiteDrive } from '@pagespace/lib/content-safety/report-store';
 import { resolveTakedownTarget } from '@pagespace/lib/content-safety/targets';
 import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 import { canUserAccessFile } from '@pagespace/lib/permissions/file-access';
@@ -24,7 +24,7 @@ function intakeDeps(request: Request, actor: AccessActor | null): ReportIntakeDe
   return {
     publishHost: PUBLISH_HOST,
     resolveTarget: resolveTakedownTarget,
-    isCustomDomainHost: isRegisteredCustomDomain,
+    publishedSiteDrive: findPublishedSiteDrive,
     canViewPage: async (pageId) => (actor ? canUserViewPage(actor, pageId) : false),
     canAccessFile: async (fileId) => {
       if (!actor) return false;
@@ -33,8 +33,8 @@ function intakeDeps(request: Request, actor: AccessActor | null): ReportIntakeDe
     },
     fileReport: fileContentReport,
     alert: sendContentSafetyAlert,
-    audit: (event) =>
-      auditRequest(request, {
+    audit: (event) => {
+      const entry = {
         eventType: event.eventType,
         userId: event.reporterUserId ?? undefined,
         resourceType: 'content_case',
@@ -42,7 +42,12 @@ function intakeDeps(request: Request, actor: AccessActor | null): ReportIntakeDe
         // IDs and counts only: never the reporter's text, contact email or the URL they typed.
         details: { category: event.category, reportCount: event.reportCount, source: event.source, targetType: event.targetType },
         riskScore: event.category === 'csam' ? 0.9 : 0.5,
-      }),
+      };
+      // A visitor's report is audited WITHOUT their IP or user agent: nothing ties an anonymous reporter to the
+      // case. (`auditRequest` would add both from the request.) A signed-in report is attributed as usual.
+      if (event.source === 'anonymous') audit(entry);
+      else auditRequest(request, entry);
+    },
   };
 }
 

@@ -40,7 +40,7 @@ describe('POST /api/user-reports', () => {
     vi.clearAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(auth());
     checkDistributedRateLimit.mockResolvedValue({ allowed: true });
-    fileReport.mockResolvedValue({ ok: true, caseId: 'case_1', created: true, reportCount: 1, csamGuidance: null });
+    fileReport.mockResolvedValue({ ok: true, filed: true, caseId: 'case_1', created: true, reportCount: 1, csamGuidance: null });
   });
 
   it('given a report about another user, should store it and notify the team with the reported user and conversation', async () => {
@@ -122,7 +122,7 @@ describe('POST /api/user-reports', () => {
 
     it('given a CSAM report, should return the CyberTipline guidance', async () => {
       fileReport.mockResolvedValue({
-        ok: true, caseId: 'c', created: true, reportCount: 1,
+        ok: true, filed: true, caseId: 'c', created: true, reportCount: 1,
         csamGuidance: { cyberTiplineUrl: 'https://report.cybertip.org/', message: 'm' },
       });
       const res = await call({ target: { type: 'file', fileId: 'a'.repeat(64) }, category: 'csam' });

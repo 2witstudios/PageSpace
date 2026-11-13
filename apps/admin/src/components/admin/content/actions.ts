@@ -51,7 +51,13 @@ export function describeTakedownResult(result: TakedownResponse): { message: str
 }
 
 /** Close a case under review: `actioned` once a takedown has been run for it, `dismissed` for no violation. */
-export async function closeReportedCase(input: { caseId: string; outcome: 'dismissed' | 'actioned'; note: string }): Promise<void> {
+export async function closeReportedCase(input: {
+  caseId: string;
+  outcome: 'dismissed' | 'actioned';
+  /** The count the admin was shown; the server refuses the close if more reports arrived since. */
+  expectedReportCount: number;
+  note: string;
+}): Promise<void> {
   const res = await fetchWithAuth('/api/admin/content/reports', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

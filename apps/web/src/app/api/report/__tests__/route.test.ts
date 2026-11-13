@@ -28,7 +28,7 @@ describe('POST /api/report (public)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     checkDistributedRateLimit.mockResolvedValue({ allowed: true });
-    fileReport.mockResolvedValue({ ok: true, caseId: 'case_1', created: true, reportCount: 1, csamGuidance: null });
+    fileReport.mockResolvedValue({ ok: true, filed: true, caseId: 'case_1', created: true, reportCount: 1, csamGuidance: null });
   });
 
   it('files an anonymous report of a published URL with the optional contact email, and never the IP', async () => {
@@ -83,7 +83,7 @@ describe('POST /api/report (public)', () => {
 
   it('returns the CyberTipline guidance for a CSAM report', async () => {
     fileReport.mockResolvedValue({
-      ok: true, caseId: 'c', created: true, reportCount: 1,
+      ok: true, filed: true, caseId: 'c', created: true, reportCount: 1,
       csamGuidance: { cyberTiplineUrl: 'https://report.cybertip.org/', message: 'm' },
     });
     const res = await post({ url: URL_OK, category: 'csam' });

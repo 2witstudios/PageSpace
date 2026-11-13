@@ -11,9 +11,17 @@
 import { db } from '@pagespace/db/db';
 import { and, count, desc, eq, inArray, sql } from '@pagespace/db/operators';
 import { contentCases, contentReports, type ContentCase, type ContentReport } from '@pagespace/db/schema/content-safety';
-import { customDomains } from '@pagespace/db/schema/custom-domains';
 import type { FiledReport, FileReportInput } from './report-intake';
-import { caseCategoryAfterReport } from './reports';
+import { isPrefixVisible, resolvePrefixOwner } from '../organizations/published-visibility';
+import { caseCategoryAfterReport, type ClassifiedReportUrl } from './reports';
+
+/** More reports arrived on the case than the admin saw when they closed it. */
+export class ReportedCaseChangedError extends Error {
+  constructor(readonly caseId: string) {
+    super('New reports arrived on this case; review them before closing it');
+    this.name = 'ReportedCaseChangedError';
+  }
+}
 
 /** The case was not under review: it does not exist, or staff already closed it. */
 export class ReportedCaseNotFoundError extends Error {
@@ -96,14 +104,19 @@ export async function fileContentReport(input: FileReportInput): Promise<FiledRe
   throw new Error('Could not file the report: its case kept closing');
 }
 
-/** Is this hostname a custom domain attached to one of our drives? Any status: a report about it is still ours to review. */
-export async function isRegisteredCustomDomain(host: string): Promise<boolean> {
-  const [row] = await db
-    .select({ id: customDomains.id })
-    .from(customDomains)
-    .where(eq(customDomains.hostname, host.toLowerCase()))
-    .limit(1);
-  return Boolean(row);
+/**
+ * The drive whose published site `host` serves, when that site is publicly visible: a `<label>.<publish host>`
+ * subdomain or a custom domain, not held by a content-safety case and not hidden by its org's policy. Null
+ * otherwise, so a report never confirms that a hidden or unpublished site exists.
+ */
+export async function findPublishedSiteDrive(site: { kind: ClassifiedReportUrl['kind']; host: string }): Promise<string | null> {
+  const host = site.host.toLowerCase();
+  const prefix = site.kind === 'publish_subdomain' ? host.split('.')[0] : host;
+  const owner = await resolvePrefixOwner(prefix);
+  if (!owner) return null;
+  // A subdomain label must name a site, and a custom hostname a domain — never the other way round.
+  if ((site.kind === 'publish_subdomain') !== (owner.kind === 'site')) return null;
+  return (await isPrefixVisible(prefix)) ? owner.driveId : null;
 }
 
 export interface ReportedCase {
@@ -168,17 +181,30 @@ export async function closeReportedCase(input: {
   caseId: string;
   outcome: 'dismissed' | 'actioned';
   actorUserId: string;
+  /** How many reports the admin saw. The close is refused if more have arrived since. */
+  expectedReportCount: number;
   note?: string;
 }): Promise<ContentCase> {
   const review = { outcome: input.outcome, actorUserId: input.actorUserId, note: input.note, at: new Date().toISOString() };
-  const [row] = await db
-    .update(contentCases)
-    .set({
-      status: input.outcome,
-      snapshot: sql`coalesce(${contentCases.snapshot}, '{}'::jsonb) || ${JSON.stringify({ review })}::jsonb`,
-    })
-    .where(and(eq(contentCases.id, input.caseId), eq(contentCases.status, 'reported')))
-    .returning();
-  if (!row) throw new ReportedCaseNotFoundError(input.caseId);
-  return row;
+  return db.transaction(async (tx) => {
+    // The same row lock a report takes to attach, so a report lands either before the count check or on a new case.
+    const [locked] = await tx
+      .select({ id: contentCases.id })
+      .from(contentCases)
+      .where(and(eq(contentCases.id, input.caseId), eq(contentCases.status, 'reported')))
+      .limit(1)
+      .for('update');
+    if (!locked) throw new ReportedCaseNotFoundError(input.caseId);
+    const [{ total }] = await tx.select({ total: count() }).from(contentReports).where(eq(contentReports.caseId, input.caseId));
+    if (Number(total) !== input.expectedReportCount) throw new ReportedCaseChangedError(input.caseId);
+    const [row] = await tx
+      .update(contentCases)
+      .set({
+        status: input.outcome,
+        snapshot: sql`coalesce(${contentCases.snapshot}, '{}'::jsonb) || ${JSON.stringify({ review })}::jsonb`,
+      })
+      .where(eq(contentCases.id, input.caseId))
+      .returning();
+    return row;
+  });
 }

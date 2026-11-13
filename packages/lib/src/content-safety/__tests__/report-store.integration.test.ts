@@ -4,13 +4,24 @@
  * the case category follows the CSAM-wins rule, and closing a case lets the next
  * report open a fresh one.
  */
-import { describe, it, expect, afterAll } from 'vitest';
+import { describe, it, expect, afterAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { inArray } from '@pagespace/db/operators';
-import { contentCases, contentReports } from '@pagespace/db/schema/content-safety';
-import { closeReportedCase, fileContentReport, listReportedCases, ReportedCaseNotFoundError } from '../report-store';
-import type { FileReportInput } from '../report-intake';
+import { eq, inArray } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
+import { contentCases, contentReports, contentSiteHolds } from '@pagespace/db/schema/content-safety';
+import { drives } from '@pagespace/db/schema/core';
+import { factories } from '@pagespace/db/test/factories';
+import {
+  closeReportedCase,
+  fileContentReport,
+  findPublishedSiteDrive,
+  listReportedCases,
+  ReportedCaseChangedError,
+  ReportedCaseNotFoundError,
+} from '../report-store';
+import { submitContentReport, type FileReportInput, type ReportIntakeDeps } from '../report-intake';
+import { resolveTakedownTarget } from '../targets';
 
 const caseIds = new Set<string>();
 
@@ -83,7 +94,7 @@ describe('report store', () => {
   it('closes a reported case, and the next report on the target opens a new one', async () => {
     const target = `page_${createId()}`;
     const { caseId } = await file(input(target));
-    const closed = await closeReportedCase({ caseId, outcome: 'dismissed', actorUserId: 'admin_1', note: 'not a violation' });
+    const closed = await closeReportedCase({ caseId, outcome: 'dismissed', actorUserId: 'admin_1', expectedReportCount: 1, note: 'not a violation' });
     expect(closed.status).toBe('dismissed');
     expect(closed.snapshot?.review).toEqual({ outcome: 'dismissed', actorUserId: 'admin_1', note: 'not a violation', at: expect.any(String) });
 
@@ -91,6 +102,76 @@ describe('report store', () => {
     expect(again.created).toBe(true);
     expect(again.caseId).not.toBe(caseId);
 
-    await expect(closeReportedCase({ caseId, outcome: 'actioned', actorUserId: 'admin_1' })).rejects.toBeInstanceOf(ReportedCaseNotFoundError);
+    await expect(closeReportedCase({ caseId, outcome: 'actioned', actorUserId: 'admin_1', expectedReportCount: 1 })).rejects.toBeInstanceOf(
+      ReportedCaseNotFoundError,
+    );
+  });
+
+  it('refuses to close a case that received reports the admin has not seen', async () => {
+    const target = `page_${createId()}`;
+    const { caseId } = await file(input(target));
+    await file(input(target));
+    await expect(closeReportedCase({ caseId, outcome: 'dismissed', actorUserId: 'admin_1', expectedReportCount: 1 })).rejects.toBeInstanceOf(
+      ReportedCaseChangedError,
+    );
+    const closed = await closeReportedCase({ caseId, outcome: 'dismissed', actorUserId: 'admin_1', expectedReportCount: 2 });
+    expect(closed.status).toBe('dismissed');
+  });
+
+  it('finds the drive of a published subdomain, and nothing once the site is held', async () => {
+    const owner = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    const label = `rp-${createId().slice(0, 8).toLowerCase()}`;
+    await db.update(drives).set({ publishSubdomain: label }).where(eq(drives.id, drive.id));
+    try {
+      expect(await findPublishedSiteDrive({ kind: 'publish_subdomain', host: `${label}.pagespace.site` })).toBe(drive.id);
+      // The label as a custom hostname is not the same thing.
+      expect(await findPublishedSiteDrive({ kind: 'custom_domain_candidate', host: label })).toBeNull();
+      await db.insert(contentSiteHolds).values({ driveId: drive.id, holder: `case:test-${label}`, source: 'takedown' });
+      expect(await findPublishedSiteDrive({ kind: 'publish_subdomain', host: `${label}.pagespace.site` })).toBeNull();
+    } finally {
+      await db.delete(contentSiteHolds).where(eq(contentSiteHolds.driveId, drive.id));
+      await db.delete(drives).where(eq(drives.id, drive.id));
+      await db.delete(users).where(eq(users.id, owner.id));
+    }
+  });
+
+  it('finds nothing for an unknown host', async () => {
+    expect(await findPublishedSiteDrive({ kind: 'publish_subdomain', host: `nobody-${createId()}.pagespace.site` })).toBeNull();
+    expect(await findPublishedSiteDrive({ kind: 'custom_domain_candidate', host: `${createId()}.example.com` })).toBeNull();
+  });
+
+  it('a crafted avatar or storage path on a published host files nothing about a real user or hash (real resolver)', async () => {
+    const victim = await factories.createUser();
+    const owner = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    const label = `rp-${createId().slice(0, 8).toLowerCase()}`;
+    await db.update(drives).set({ publishSubdomain: label }).where(eq(drives.id, drive.id));
+    const fileReport = vi.fn();
+    const deps: ReportIntakeDeps = {
+      publishHost: 'pagespace.site',
+      resolveTarget: resolveTakedownTarget,
+      publishedSiteDrive: findPublishedSiteDrive,
+      canViewPage: async () => false,
+      canAccessFile: async () => false,
+      fileReport,
+      alert: async () => undefined,
+      audit: () => undefined,
+    };
+    try {
+      for (const host of [`${label}.pagespace.site`, `nobody-${createId().slice(0, 8)}.pagespace.site`]) {
+        for (const path of [`/x/api/avatar/${victim.id}/a.png`, `//api/avatar/${victim.id}/a.png`, `/q/files/${'d'.repeat(64)}/`, `/assets/${'d'.repeat(64)}`]) {
+          const outcome = await submitContentReport(
+            { reporter: { kind: 'anonymous' }, target: { type: 'published_url', url: `https://${host}${path}` }, category: 'csam' },
+            deps,
+          );
+          expect(outcome, `${host}${path}`).toEqual({ ok: false, reason: 'not_pagespace_url' });
+        }
+      }
+      expect(fileReport).not.toHaveBeenCalled();
+    } finally {
+      await db.delete(drives).where(eq(drives.id, drive.id));
+      await db.delete(users).where(inArray(users.id, [victim.id, owner.id]));
+    }
   });
 });
