@@ -18,6 +18,7 @@ import { requireDb } from '@pagespace/db/test/require-db';
 import { suspendUser, unsuspendUser } from '../../auth/suspend-user';
 import {
   CaseCategoryDowngradeError,
+  CaseRunInProgressError,
   createTakedownCaseStore,
   listCasesDueForResweep,
   listCasesForTarget,
@@ -155,6 +156,62 @@ describe('takedown database edge — real Postgres', () => {
 
       expect(second.case.id).toBe(first.case.id);
       expect(second.case.category).toBe('csam');
+    });
+
+    describe('re-filing a case while a run holds it', () => {
+      const skipMalware = (hash: string) =>
+        open({ targetId: hash, contentHash: hash, category: 'malware', takedown: { kind: 'global', skipPreservation: true, skipPreservationReason: 'known sample' } });
+      const categoryOf = async (caseId: string) =>
+        (await db.select({ category: contentCases.category }).from(contentCases).where(eq(contentCases.id, caseId)))[0]?.category;
+
+      it('waits for the run to finish, so the new category cannot land between its reload and a delete', async () => {
+        const hash = freshHash();
+        const first = await skipMalware(hash);
+        let refile: Promise<Awaited<ReturnType<typeof open>>> | undefined;
+        let whileRunning: string | null | undefined;
+
+        await withContentCaseRunLock(first.case.id, async () => {
+          // From another request, as an admin re-filing the case would.
+          refile = open({ targetId: hash, contentHash: hash, category: 'csam' });
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          whileRunning = await categoryOf(first.case.id);
+        });
+        const second = await refile;
+
+        expect(whileRunning).toBe('malware');
+        expect(second).toMatchObject({ created: false, case: { id: first.case.id, category: 'csam' } });
+        expect(second?.case.snapshot?.takedown?.skipPreservation).toBe(false);
+      });
+
+      it('gives up after the timeout and changes nothing', async () => {
+        const hash = freshHash();
+        const first = await skipMalware(hash);
+
+        await withContentCaseRunLock(first.case.id, async () => {
+          await expect(
+            openTakedownCase(
+              { targetType: 'content_hash', targetId: hash, contentHash: hash, category: 'csam', reason: 'r', takedown: { kind: 'global' } },
+              { lockTimeoutMs: 50 },
+            ),
+          ).rejects.toBeInstanceOf(CaseRunInProgressError);
+        });
+
+        expect(await categoryOf(first.case.id)).toBe('malware');
+      });
+
+      it('applies two concurrent re-files of the same case one after the other, to the same case', async () => {
+        const hash = freshHash();
+        const first = await skipMalware(hash);
+        const [a, b] = await Promise.all([
+          open({ targetId: hash, contentHash: hash, category: 'csam' }),
+          open({ targetId: hash, contentHash: hash, category: 'csam', takedown: { kind: 'global', actorUserId: 'admin-1', suspendUploader: true } }),
+        ]);
+
+        expect([a.case.id, b.case.id]).toEqual([first.case.id, first.case.id]);
+        const [row] = await db.select().from(contentCases).where(eq(contentCases.id, first.case.id));
+        expect(row.category).toBe('csam');
+        expect(row.snapshot?.takedown?.suspendUploader).toBe(true);
+      });
     });
 
     it('refuses to re-file an open CSAM case under another category: that would be a way around preservation', async () => {

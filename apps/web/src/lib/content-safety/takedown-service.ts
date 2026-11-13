@@ -9,6 +9,7 @@ import { suspendUser } from '@pagespace/lib/auth/suspend-user';
 import { sendContentSafetyAlert } from '@pagespace/lib/content-safety/alerts';
 import {
   CaseCategoryDowngradeError,
+  CaseRunInProgressError,
   createTakedownCaseStore,
   getContentCase,
   openTakedownCase,
@@ -310,7 +311,9 @@ export async function executeTakedown(request: TakedownRequest, actorUserId: str
       try {
         opened = await openTakedownCase(caseInputFor(request, actorUserId ?? undefined));
       } catch (error) {
-        if (error instanceof CaseCategoryDowngradeError) throw new TakedownRequestError(error.message, 409);
+        if (error instanceof CaseCategoryDowngradeError || error instanceof CaseRunInProgressError) {
+          throw new TakedownRequestError(error.message, 409);
+        }
         throw error;
       }
       if (opened.created) {

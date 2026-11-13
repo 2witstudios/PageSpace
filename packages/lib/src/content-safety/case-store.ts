@@ -4,11 +4,11 @@
  *
  * While a case runs, `steps` and `snapshot` are only ever appended to or merged
  * in SQL, never read-modified-written, so two runs of the same case cannot lose
- * each other's entries. (Reopening a case merges its options in code first;
- * that happens before a run starts, not during one.)
+ * each other's entries. Reopening a case merges its options in code first, and
+ * does so holding the case's run lock, so it never lands while a run is under way.
  */
 
-import { withAdvisoryLock } from '@pagespace/db/advisory-lock';
+import { withAdvisoryLock, withBlockingAdvisoryLock } from '@pagespace/db/advisory-lock';
 import { db, getAdvisoryLockPool } from '@pagespace/db/db';
 import { and, desc, eq, gte, inArray, lte, or, sql } from '@pagespace/db/operators';
 import {
@@ -72,11 +72,13 @@ export function createTakedownCaseStore(): TakedownCaseStore {
  * on a connection the run's own queries need. A run that cannot take the lock
  * at once does not wait: it is told another run is under way.
  */
+const caseRunLockKey = (caseId: string) => `content_case_run:${caseId}`;
+
 export async function withContentCaseRunLock<T>(
   caseId: string,
   fn: (signal?: AbortSignal) => Promise<T>,
 ): Promise<{ acquired: true; value: T } | { acquired: false }> {
-  const locked = await withAdvisoryLock(getAdvisoryLockPool(), `content_case_run:${caseId}`, fn);
+  const locked = await withAdvisoryLock(getAdvisoryLockPool(), caseRunLockKey(caseId), fn);
   if (locked.outcome === 'lock_busy') return { acquired: false };
   if (locked.outcome === 'connection_error') throw locked.error;
   return { acquired: true, value: locked.result };
@@ -89,6 +91,17 @@ export class CaseCategoryDowngradeError extends Error {
     this.name = 'CaseCategoryDowngradeError';
   }
 }
+
+/** Thrown when a re-file waited for a run of the case to finish and the run outlasted the wait. Nothing was changed. */
+export class CaseRunInProgressError extends Error {
+  constructor(readonly caseId: string) {
+    super('This case is running a takedown now. Nothing was changed; try again when the run has finished.');
+    this.name = 'CaseRunInProgressError';
+  }
+}
+
+/** How long a re-file waits for a run of the case to finish. It is part of an admin's request, so it stays short. */
+export const REFILE_LOCK_TIMEOUT_MS = 10_000;
 
 export interface OpenTakedownCaseInput {
   targetType: ContentCaseTargetType;
@@ -117,8 +130,17 @@ export interface OpenedCase {
  * "skip preservation" and then re-filed as CSAM must run under the CSAM rule,
  * not the one it was opened with. The reverse is refused: a CSAM case cannot be
  * re-filed under another category (`CaseCategoryDowngradeError`).
+ *
+ * A re-file takes the case's run lock, WAITING for it (up to `lockTimeoutMs`),
+ * the same lock a run holds from its first read to its last write. So a new
+ * category or a withdrawn skip lands before a run or after it, never between a
+ * run's read of the case and a delete it decided on. A run that outlasts the
+ * wait gets `CaseRunInProgressError`, and the case is left as it was.
  */
-export async function openTakedownCase(input: OpenTakedownCaseInput): Promise<OpenedCase> {
+export async function openTakedownCase(
+  input: OpenTakedownCaseInput,
+  { lockTimeoutMs = REFILE_LOCK_TIMEOUT_MS }: { lockTimeoutMs?: number } = {},
+): Promise<OpenedCase> {
   // A hash once blocked as CSAM is CSAM for every later case, finished or not:
   // a new malware case with "skip preservation" must not be a way to delete
   // late-arriving copies of it unpreserved.
@@ -131,49 +153,31 @@ export async function openTakedownCase(input: OpenTakedownCaseInput): Promise<Op
     if (block?.category === 'csam') throw new CaseCategoryDowngradeError(block.caseId ?? 'unknown');
   }
 
-  const [existing] = await db
-    .select()
-    .from(contentCases)
-    .where(
-      and(
-        eq(contentCases.targetType, input.targetType),
-        eq(contentCases.targetId, input.targetId),
-        inArray(contentCases.status, ['open', 'awaiting_evidence']),
-        takedownKindIs(input.takedown.kind),
-      ),
-    )
-    .orderBy(desc(contentCases.createdAt))
-    .limit(1);
+  const unfinished = and(
+    eq(contentCases.targetType, input.targetType),
+    eq(contentCases.targetId, input.targetId),
+    inArray(contentCases.status, ['open', 'awaiting_evidence']),
+    takedownKindIs(input.takedown.kind),
+  );
 
-  if (existing) {
-    // A case that is CSAM stays CSAM. Re-filing it under a category that allows
-    // "skip preservation" would be a way to delete it unpreserved.
-    if (existing.category === 'csam' && input.category !== 'csam') {
-      throw new CaseCategoryDowngradeError(existing.id);
-    }
-    // The block step has usually already run for a reused case, so upgrade the
-    // block row here when the case becomes CSAM.
-    if (input.category === 'csam' && existing.category !== 'csam' && input.contentHash) {
-      await db.update(contentBlocks).set({ category: 'csam' }).where(eq(contentBlocks.contentHash, existing.contentHash ?? input.contentHash));
-    }
-    const previous = existing.snapshot?.takedown;
-    const merged: TakedownOptions = {
-      ...previous,
-      ...input.takedown,
-      // The latest request decides whether preservation is skipped, so a skip can be withdrawn.
-      skipPreservation: input.takedown.skipPreservation === true,
-      skipPreservationReason: input.takedown.skipPreservation === true ? input.takedown.skipPreservationReason : undefined,
-      suspendUploader: previous?.suspendUploader === true || input.takedown.suspendUploader === true,
-    };
-    const [updated] = await db
-      .update(contentCases)
-      .set({
-        category: input.category,
-        snapshot: sql`coalesce(${contentCases.snapshot}, '{}'::jsonb) || ${JSON.stringify({ takedown: merged })}::jsonb`,
-      })
-      .where(eq(contentCases.id, existing.id))
-      .returning();
-    return { case: updated, created: false };
+  for (;;) {
+    const [found] = await db.select({ id: contentCases.id }).from(contentCases).where(unfinished).orderBy(desc(contentCases.createdAt)).limit(1);
+    if (!found) break;
+
+    const locked = await withBlockingAdvisoryLock(
+      getAdvisoryLockPool(),
+      caseRunLockKey(found.id),
+      async () => {
+        // Read again under the lock: the run just waited for may have changed it, or finished it.
+        const [existing] = await db.select().from(contentCases).where(and(eq(contentCases.id, found.id), unfinished)).limit(1);
+        return existing ? refile(existing, input) : null;
+      },
+      { timeoutMs: lockTimeoutMs },
+    );
+    if (locked.outcome === 'lock_busy') throw new CaseRunInProgressError(found.id);
+    if (locked.outcome === 'connection_error') throw locked.error;
+    if (locked.result) return { case: locked.result, created: false };
+    // The run finished the case while this waited: look again, and open a new one if none is left.
   }
 
   const [created] = await db
@@ -190,6 +194,38 @@ export async function openTakedownCase(input: OpenTakedownCaseInput): Promise<Op
     })
     .returning();
   return { case: created, created: true };
+}
+
+/** Apply a re-file to an unfinished case. Called holding the case's run lock. */
+async function refile(existing: ContentCase, input: OpenTakedownCaseInput): Promise<ContentCase> {
+  // A case that is CSAM stays CSAM. Re-filing it under a category that allows
+  // "skip preservation" would be a way to delete it unpreserved.
+  if (existing.category === 'csam' && input.category !== 'csam') {
+    throw new CaseCategoryDowngradeError(existing.id);
+  }
+  // The block step has usually already run for a reused case, so upgrade the
+  // block row here when the case becomes CSAM.
+  if (input.category === 'csam' && existing.category !== 'csam' && input.contentHash) {
+    await db.update(contentBlocks).set({ category: 'csam' }).where(eq(contentBlocks.contentHash, existing.contentHash ?? input.contentHash));
+  }
+  const previous = existing.snapshot?.takedown;
+  const merged: TakedownOptions = {
+    ...previous,
+    ...input.takedown,
+    // The latest request decides whether preservation is skipped, so a skip can be withdrawn.
+    skipPreservation: input.takedown.skipPreservation === true,
+    skipPreservationReason: input.takedown.skipPreservation === true ? input.takedown.skipPreservationReason : undefined,
+    suspendUploader: previous?.suspendUploader === true || input.takedown.suspendUploader === true,
+  };
+  const [updated] = await db
+    .update(contentCases)
+    .set({
+      category: input.category,
+      snapshot: sql`coalesce(${contentCases.snapshot}, '{}'::jsonb) || ${JSON.stringify({ takedown: merged })}::jsonb`,
+    })
+    .where(eq(contentCases.id, existing.id))
+    .returning();
+  return updated;
 }
 
 export interface ListCasesOptions {

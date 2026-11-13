@@ -25,8 +25,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 const CaseCategoryDowngradeError = vi.hoisted(() => class CaseCategoryDowngradeError extends Error {});
+const CaseRunInProgressError = vi.hoisted(() => class CaseRunInProgressError extends Error {});
 vi.mock('@pagespace/lib/content-safety/case-store', () => ({
   CaseCategoryDowngradeError,
+  CaseRunInProgressError,
   createTakedownCaseStore: () => ({
     load: async (id: string) => (cases.has(id) ? structuredClone(cases.get(id)) : null),
     appendStep: async (id: string, step: ContentCaseStep) => {
@@ -316,6 +318,15 @@ describe('requests that cannot be acted on', () => {
     await expect(
       executeTakedown({ action: 'unpublish_page', pageId: 'page-1', category: 'policy', reason: 'r' }, 'admin-1'),
     ).rejects.toMatchObject({ status: 409 });
+    expect(mocks.unpublishPage).not.toHaveBeenCalled();
+  });
+
+  it('answers 409, starting no run, when a re-file waited for a running takedown and the run outlasted the wait', async () => {
+    mocks.openThrows.value = new CaseRunInProgressError('This case is running a takedown now. Nothing was changed; try again when the run has finished.');
+
+    await expect(
+      executeTakedown({ action: 'unpublish_page', pageId: 'page-1', category: 'policy', reason: 'r' }, 'admin-1'),
+    ).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/Nothing was changed/) });
     expect(mocks.unpublishPage).not.toHaveBeenCalled();
   });
 
