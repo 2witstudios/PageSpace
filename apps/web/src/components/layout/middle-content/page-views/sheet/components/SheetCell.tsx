@@ -37,6 +37,11 @@ export interface SheetCellProps {
   /** Numbers right-align and use tabular figures unless the format says otherwise. */
   isNumeric: boolean;
   wraps: boolean;
+  /**
+   * Extra px this cell's unwrapped text may paint into empty cells to its
+   * right. Zero means the text is clipped to the cell.
+   */
+  spillWidth: number;
   isReadOnly: boolean;
   /** Presentation resolved by the evaluator (`cellFormatToStyle`). */
   formatStyle: React.CSSProperties;
@@ -66,6 +71,7 @@ const SheetCellComponent: React.FC<SheetCellProps> = ({
   isCurrentFind,
   isNumeric,
   wraps,
+  spillWidth,
   isReadOnly,
   formatStyle,
   bar,
@@ -97,7 +103,11 @@ const SheetCellComponent: React.FC<SheetCellProps> = ({
       'flex items-center px-2 text-sm leading-tight',
       'cursor-cell select-none touch-manipulation',
       isNumeric && 'text-right font-mono tabular-nums',
-      wraps ? 'whitespace-pre-wrap break-words' : 'overflow-hidden whitespace-nowrap',
+      // Content never paints outside the cell, except a deliberate spill into
+      // empty neighbours. Wrapped text that is taller than a hand-set row
+      // height is clipped rather than drawn over the rows around it.
+      wraps ? 'whitespace-pre-wrap break-words' : 'whitespace-nowrap',
+      spillWidth > 0 ? 'overflow-visible z-[1]' : 'overflow-hidden',
       hasError && 'text-destructive',
       isSelected && !isPrimary && 'bg-primary/10',
       isCurrentFind && 'find-highlight-current',
@@ -131,6 +141,15 @@ const SheetCellComponent: React.FC<SheetCellProps> = ({
     )}
     {wraps ? (
       <span className="relative">{display}</span>
+    ) : spillWidth > 0 ? (
+      // Sized past the cell's right edge by exactly the empty run it may
+      // cover; `truncate` still ellipsizes where that run ends.
+      <span
+        className="relative block shrink-0 truncate"
+        style={{ width: `calc(100% + ${spillWidth}px)` }}
+      >
+        {display}
+      </span>
     ) : (
       <span className="relative block w-full truncate">{display}</span>
     )}

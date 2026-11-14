@@ -79,6 +79,8 @@ import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu';
 import { SheetMobileActionSheet } from './components/SheetMobileActionSheet';
 import { SheetFormulaBar } from './components/SheetFormulaBar';
 import { SheetGrid } from './components/SheetGrid';
+import { computeAutoRowHeights } from './core/text-layout';
+import { clearMeasureCache, measureCellText, resolveFontFamilies } from './core/text-measure';
 import { SheetToolbar } from './components/SheetToolbar';
 import { SheetTabBar } from './components/SheetTabBar';
 import { SheetConditionalPanel } from './components/SheetConditionalPanel';
@@ -277,9 +279,40 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     () => buildColumnAxis(sheet, columnResize),
     [sheet, columnResize]
   );
+  // Canvas measurement needs concrete font families (it cannot resolve CSS
+  // variables), and widths measured before web fonts load are for the fallback
+  // face — so families are read after mount and re-read once fonts are ready.
+  const [fontFamilies, setFontFamilies] = useState(() => resolveFontFamilies(null));
+  useEffect(() => {
+    let cancelled = false;
+    setFontFamilies(resolveFontFamilies(gridRef.current));
+    document.fonts?.ready.then(() => {
+      if (cancelled) return;
+      clearMeasureCache();
+      setFontFamilies({ ...resolveFontFamilies(gridRef.current) });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Rows holding wrapped text grow to fit it, unless the user set a height.
+  const autoRowHeights = useMemo(
+    () =>
+      computeAutoRowHeights(
+        sheet,
+        evaluation,
+        columnAxis,
+        DENSITY_ROW_HEIGHTS[density],
+        fontFamilies.sans,
+        measureCellText,
+        fontFamilies.mono,
+      ),
+    [sheet, evaluation, columnAxis, density, fontFamilies]
+  );
   const rowAxis = useMemo(
-    () => buildRowAxis(sheet, DENSITY_ROW_HEIGHTS[density], rowResize),
-    [sheet, density, rowResize]
+    () => buildRowAxis(sheet, DENSITY_ROW_HEIGHTS[density], rowResize, autoRowHeights),
+    [sheet, density, rowResize, autoRowHeights]
   );
   const { viewport, scrollTo } = useGridViewport(scrollContainerRef);
 
@@ -1392,6 +1425,8 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
               onPreviewColumnWidth={handlePreviewColumnWidth}
               onPreviewRowHeight={handlePreviewRowHeight}
               onAutoFitColumn={handleAutoFitColumn}
+              fontFamilies={fontFamilies}
+              measureText={measureCellText}
                   handlers={cellHandlers}
                 />
               </div>

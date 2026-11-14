@@ -21,6 +21,7 @@ import {
   type AxisGeometry,
   type GridViewportState,
 } from '../core/grid-metrics';
+import { spillExtent, spillSourceLeftOf, type MeasureText } from '../core/text-layout';
 import { SheetCell, type SheetCellHandlers } from './SheetCell';
 
 /** Extra rows/columns rendered beyond the window, so a fast scroll stays filled. */
@@ -51,6 +52,9 @@ export interface SheetGridProps {
   onPreviewColumnWidth: (column: number, width: number | null) => void;
   onPreviewRowHeight: (row: number, height: number | null) => void;
   onAutoFitColumn: (column: number) => void;
+  /** Concrete families for canvas text measurement (spill extents). */
+  fontFamilies: { sans: string; mono: string };
+  measureText: MeasureText;
   handlers: SheetCellHandlers;
 }
 
@@ -182,6 +186,8 @@ export const SheetGrid: React.FC<SheetGridProps> = ({
   onPreviewColumnWidth,
   onPreviewRowHeight,
   onAutoFitColumn,
+  fontFamilies,
+  measureText,
   handlers,
 }) => {
   const frozenRows = frozenCount(sheet.frozenRows, rowAxis.count);
@@ -229,10 +235,31 @@ export const SheetGrid: React.FC<SheetGridProps> = ({
     ) => {
       const output: React.ReactNode[] = [];
 
+      // Long unwrapped text runs on into empty neighbours. The cell being
+      // edited counts as occupied so text does not draw under the editor.
+      const spillContext = {
+        evaluation,
+        columnAxis,
+        frozenColumns,
+        fontFamily: fontFamilies.sans,
+        monoFamily: fontFamilies.mono,
+        measure: measureText,
+        isOccupied: (row: number, column: number) =>
+          !!editingCell && editingCell.row === row && editingCell.column === column,
+      };
+      // Only the scrolling body can have a spill source left of its window;
+      // the frozen band always starts at column 0.
+      const isBodyBand = columnStart >= frozenColumns && columnStart > 0;
+
       for (let row = rowStart; row <= rowEnd; row++) {
         const cells: React.ReactNode[] = [];
+        const source = isBodyBand ? spillSourceLeftOf({ ...spillContext, row, columnStart }) : null;
+        const firstColumn = source ?? columnStart;
 
-        for (let column = columnStart; column <= columnEnd; column++) {
+        for (let column = firstColumn; column <= columnEnd; column++) {
+          // Columns between an off-screen spill source and the window are
+          // empty by construction, so only the source itself is rendered.
+          if (column > firstColumn && column < columnStart) continue;
           const address = encodeCellAddress(row, column);
           const cell = evaluation.byAddress[address];
           const isPrimary = currentSelection.row === row && currentSelection.column === column;
@@ -267,6 +294,7 @@ export const SheetGrid: React.FC<SheetGridProps> = ({
               // unless the cell's own format has an opinion.
               isNumeric={cell?.type === 'number' && !format?.align}
               wraps={!!format?.wrap}
+              spillWidth={spillExtent({ ...spillContext, row, column })}
               isReadOnly={isReadOnly}
               formatStyle={cellFormatToStyle(format) as React.CSSProperties}
               bar={evaluation.bars?.[address]}
@@ -301,11 +329,13 @@ export const SheetGrid: React.FC<SheetGridProps> = ({
       currentSelection.column,
       currentSelection.row,
       editingCell,
-      evaluation.byAddress,
-      evaluation.bars,
+      evaluation,
       findAddressSet,
+      fontFamilies,
+      frozenColumns,
       handlers,
       isReadOnly,
+      measureText,
       rowAxis,
       selection,
       sheet,

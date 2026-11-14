@@ -349,3 +349,23 @@ describe('frozen edge cases', () => {
     expect(scrollOffsetToReveal(axis, 50, 300, 30, 4)).toBe(300);
   });
 });
+
+describe('auto row heights', () => {
+  const auto = new Map([[0, 90], [1, 90]]);
+
+  it('uses the auto height when nothing is stored', () => {
+    expect(rowHeightAt(sheet(), 0, DEFAULT_ROW_HEIGHT, auto)).toBe(90);
+    expect(rowHeightAt(sheet(), 5, DEFAULT_ROW_HEIGHT, auto)).toBe(DEFAULT_ROW_HEIGHT);
+  });
+
+  it('lets a stored height win over the auto height', () => {
+    expect(rowHeightAt(sheet({ rowHeights: { '1': 40 } }), 0, DEFAULT_ROW_HEIGHT, auto)).toBe(40);
+  });
+
+  it('lets a drag preview win over both', () => {
+    const axis = buildRowAxis(sheet({ rowCount: 3 }), DEFAULT_ROW_HEIGHT, { index: 1, size: 50 }, auto);
+    expect(axisSize(axis, 0)).toBe(90);
+    expect(axisSize(axis, 1)).toBe(50);
+    expect(axisSize(axis, 2)).toBe(DEFAULT_ROW_HEIGHT);
+  });
+});
