@@ -37,17 +37,48 @@ const LINE_HEIGHT_RATIO = 1.25;
  */
 const MAX_SPILL_COLUMNS = 50;
 
+/**
+ * Whether a cell renders as a number: right-aligned with tabular mono figures,
+ * unless its format sets an alignment. The grid and the measurer both use
+ * this, so a wrapped number is measured in the face it is drawn in.
+ */
+export const rendersAsNumber = (
+  type: SheetEvaluationCell['type'] | undefined,
+  format: CellFormat | undefined,
+): boolean => type === 'number' && !format?.align;
+
+/**
+ * The canvas font a cell is drawn in. An explicit `fontFamily` wins (it is an
+ * inline style, which beats the cell's `font-mono` class); otherwise numbers
+ * are mono and everything else is sans.
+ */
 export const cellFont = (
   format: CellFormat | undefined,
   sansFamily: string,
   monoFamily: string = sansFamily,
+  isNumber: boolean = false,
 ): string => {
   const style = format?.italic ? 'italic' : 'normal';
   const weight = format?.bold ? 600 : 400;
   const size = format?.fontSize ?? DEFAULT_CELL_FONT_SIZE;
-  const family = format?.fontFamily === 'mono' ? monoFamily : sansFamily;
-  return `${style} ${weight} ${size}px ${family}`;
+  const isMono = format?.fontFamily ? format.fontFamily === 'mono' : isNumber;
+  return `${style} ${weight} ${size}px ${isMono ? monoFamily : sansFamily}`;
 };
+
+/**
+ * A paragraph as the units a line may break between: words split on spaces,
+ * and each word further split after its hyphens, which CSS also treats as a
+ * break opportunity. `joiner` is what precedes a unit when it shares a line
+ * with the previous one. Empty units stand for runs of spaces, which
+ * `pre-wrap` keeps.
+ */
+const breakUnits = (paragraph: string): Array<{ text: string; joiner: string }> =>
+  paragraph.split(' ').flatMap((word, wordIndex) =>
+    word.split(/(?<=-)/).map((text, segmentIndex) => ({
+      text,
+      joiner: segmentIndex > 0 ? '' : wordIndex > 0 ? ' ' : '',
+    })),
+  );
 
 /**
  * Lines `text` occupies at `maxWidth`, matching the cell's CSS: `pre-wrap`
@@ -62,25 +93,30 @@ export const countWrappedLines = (
 ): number => {
   let lines = 0;
   for (const paragraph of text.split('\n')) {
+    // `started` rather than `current !== ''`: leading spaces are content
+    // under `pre-wrap`, so a line that so far holds only them has begun.
     let current = '';
-    for (const word of paragraph.split(' ')) {
-      const candidate = current ? `${current} ${word}` : word;
+    let started = false;
+    for (const { text: unit, joiner } of breakUnits(paragraph)) {
+      const candidate = started ? current + joiner + unit : unit;
       if (measure(candidate, font) <= maxWidth) {
         current = candidate;
+        started = true;
         continue;
       }
-      if (current) {
-        lines++;
-        current = '';
-      }
-      if (measure(word, font) <= maxWidth) {
-        current = word;
+      // A space that does not fit hangs past the line end, as in CSS,
+      // rather than forcing a break of its own.
+      if (unit === '') continue;
+      if (current !== '') lines++;
+      if (measure(unit, font) <= maxWidth) {
+        current = unit;
+        started = true;
         continue;
       }
-      // A word wider than the line breaks by character; at least one
+      // A unit wider than the line breaks by character; at least one
       // character always goes on a line, so a zero width cannot loop.
       let chunk = '';
-      for (const character of word) {
+      for (const character of unit) {
         if (chunk && measure(chunk + character, font) > maxWidth) {
           lines++;
           chunk = character;
@@ -89,10 +125,11 @@ export const countWrappedLines = (
         }
       }
       current = chunk;
+      started = true;
     }
     lines++;
   }
-  return Math.max(1, lines);
+  return lines;
 };
 
 export const wrappedCellHeight = (lines: number, fontSize: number = DEFAULT_CELL_FONT_SIZE): number =>
@@ -136,7 +173,7 @@ export const computeAutoRowHeights = (
     if (hasStoredRowHeight(sheet, row)) continue;
 
     const contentWidth = axisSize(columnAxis, column) - CELL_HORIZONTAL_PADDING;
-    const font = cellFont(cell.format, fontFamily, monoFamily);
+    const font = cellFont(cell.format, fontFamily, monoFamily, rendersAsNumber(cell.type, cell.format));
     const lines = countWrappedLines(cell.display, contentWidth, font, measure);
     const height = Math.min(
       MAX_ROW_HEIGHT,
@@ -168,7 +205,9 @@ const cellAt = (
 const isEmptyAt = (context: SpillContext, row: number, column: number): boolean => {
   if (context.isOccupied?.(row, column)) return false;
   const cell = cellAt(context.evaluation, row, column);
-  return !cell || (!cell.error && cell.display === '');
+  // Judged on what is stored, not what is shown: a formula that evaluates to
+  // "" still occupies its cell and must stop a spill.
+  return !cell || (!cell.error && cell.raw.trim() === '');
 };
 
 const canSpill = (cell: SheetEvaluationCell | undefined): cell is SheetEvaluationCell =>
@@ -191,6 +230,7 @@ export const spillExtent = (context: SpillContext & { row: number; column: numbe
   if (!canSpill(cell)) return 0;
 
   const width = axisSize(columnAxis, column);
+  // `canSpill` has already excluded numbers, so this is always the text face.
   const font = cellFont(cell.format, context.fontFamily, context.monoFamily);
   const needed = context.measure(cell.display, font) + CELL_HORIZONTAL_PADDING;
   if (needed <= width) return 0;

@@ -12,6 +12,7 @@ import {
   cellFont,
   computeAutoRowHeights,
   countWrappedLines,
+  rendersAsNumber,
   spillExtent,
   spillSourceLeftOf,
   wrappedCellHeight,
@@ -58,6 +59,20 @@ describe('cellFont', () => {
     const format: CellFormat = { bold: true, italic: true, fontSize: 18, fontFamily: 'mono' };
     expect(cellFont(format, 'Inter', 'Menlo')).toBe('italic 600 18px Menlo');
   });
+
+  it('uses mono for numbers unless the format names a family', () => {
+    expect(cellFont(undefined, 'Inter', 'Menlo', true)).toBe('normal 400 14px Menlo');
+    expect(cellFont({ fontFamily: 'sans' }, 'Inter', 'Menlo', true)).toBe('normal 400 14px Inter');
+  });
+});
+
+describe('rendersAsNumber', () => {
+  it('is true for an unaligned number only', () => {
+    expect(rendersAsNumber('number', undefined)).toBe(true);
+    expect(rendersAsNumber('number', { align: 'left' })).toBe(false);
+    expect(rendersAsNumber('string', undefined)).toBe(false);
+    expect(rendersAsNumber(undefined, undefined)).toBe(false);
+  });
 });
 
 describe('countWrappedLines', () => {
@@ -81,6 +96,20 @@ describe('countWrappedLines', () => {
   it('breaks a word longer than the line by character', () => {
     // 25 chars, 10 per line.
     expect(countWrappedLines('a'.repeat(25), 70, 'f', measure)).toBe(3);
+  });
+
+  it('keeps leading spaces, as pre-wrap does', () => {
+    // "  aa bb" is 49px; at 35px it needs two lines.
+    expect(countWrappedLines('  aa bb', 35, 'f', measure)).toBe(2);
+  });
+
+  it('breaks after hyphens before breaking by character', () => {
+    // 7 chars per line: "aaaa-" / "bbbb-" / "cccc".
+    expect(countWrappedLines('aaaa-bbbb-cccc', 49, 'f', measure)).toBe(3);
+  });
+
+  it('lets trailing spaces hang instead of adding a line', () => {
+    expect(countWrappedLines('aaaaa   ', 35, 'f', measure)).toBe(1);
   });
 
   it('treats a non-positive width as one character per line rather than looping', () => {
@@ -148,6 +177,24 @@ describe('computeAutoRowHeights', () => {
     expect(both).toBe(tall);
   });
 
+  it('measures a wrapped number in the mono face', () => {
+    const data = sheet();
+    const fonts: string[] = [];
+    const spy: MeasureText = (text, font) => {
+      fonts.push(font);
+      return measure(text, font);
+    };
+    const evaluation = evaluationOf(cell('A1', '12345', { type: 'number', format: { wrap: true } }));
+    computeAutoRowHeights(data, evaluation, columns(data), 32, 'Inter', spy, 'Menlo');
+    expect(fonts.every((font) => font.endsWith('Menlo'))).toBe(true);
+  });
+
+  it('ignores keys that are not cell addresses', () => {
+    const data = sheet();
+    const evaluation = evaluationOf(cell('not-an-address', long, { format: { wrap: true } }));
+    expect(computeAutoRowHeights(data, evaluation, columns(data), 32, 'f', measure).size).toBe(0);
+  });
+
   it('clamps to the maximum row height', () => {
     const data = sheet();
     const huge = 'x\n'.repeat(2000);
@@ -183,6 +230,16 @@ describe('spillExtent', () => {
   it('stops at the first non-empty neighbour', () => {
     const evaluation = evaluationOf(cell('A1', text), cell('C1', 'z'));
     expect(spillExtent({ ...base, evaluation, row: 0, column: 0 })).toBe(112);
+  });
+
+  it('stops at a formula that displays as empty', () => {
+    const evaluation = evaluationOf(cell('A1', text), cell('C1', '', { raw: '=""' }));
+    expect(spillExtent({ ...base, evaluation, row: 0, column: 0 })).toBe(112);
+  });
+
+  it('spills over a cell holding only whitespace', () => {
+    const evaluation = evaluationOf(cell('A1', text), cell('B1', '', { raw: '  ' }));
+    expect(spillExtent({ ...base, evaluation, row: 0, column: 0 })).toBe(224);
   });
 
   it('treats the editing cell as occupied', () => {

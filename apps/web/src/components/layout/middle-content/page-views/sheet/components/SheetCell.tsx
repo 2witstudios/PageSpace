@@ -93,6 +93,9 @@ const SheetCellComponent: React.FC<SheetCellProps> = ({
       width,
       height,
       ...formatStyle,
+      // A spill may only run sideways: clip to the row's own height so a tall
+      // font in a short row cannot paint over the rows above and below.
+      ...(spillWidth > 0 ? { clipPath: `inset(0 -${spillWidth}px 0 0)` } : null),
     }}
     className={cn(
       // A single hairline per cell, drawn on two sides only. The old surface put
@@ -143,9 +146,11 @@ const SheetCellComponent: React.FC<SheetCellProps> = ({
       <span className="relative">{display}</span>
     ) : spillWidth > 0 ? (
       // Sized past the cell's right edge by exactly the empty run it may
-      // cover; `truncate` still ellipsizes where that run ends.
+      // cover; `truncate` still ellipsizes where that run ends. It ignores the
+      // pointer so a click on the spilled part reaches the empty cell under
+      // it, not this one; the cell's own box still takes its own clicks.
       <span
-        className="relative block shrink-0 truncate"
+        className="pointer-events-none relative block shrink-0 truncate"
         style={{ width: `calc(100% + ${spillWidth}px)` }}
       >
         {display}

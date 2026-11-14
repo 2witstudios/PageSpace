@@ -21,7 +21,7 @@ import {
   type AxisGeometry,
   type GridViewportState,
 } from '../core/grid-metrics';
-import { spillExtent, spillSourceLeftOf, type MeasureText } from '../core/text-layout';
+import { rendersAsNumber, spillExtent, spillSourceLeftOf, type MeasureText } from '../core/text-layout';
 import { SheetCell, type SheetCellHandlers } from './SheetCell';
 
 /** Extra rows/columns rendered beyond the window, so a fast scroll stays filled. */
@@ -292,7 +292,7 @@ export const SheetGrid: React.FC<SheetGridProps> = ({
               // Right-alignment is the single strongest cue that a grid is a
               // spreadsheet and not a table, so numbers get it by default —
               // unless the cell's own format has an opinion.
-              isNumeric={cell?.type === 'number' && !format?.align}
+              isNumeric={rendersAsNumber(cell?.type, format)}
               wraps={!!format?.wrap}
               spillWidth={spillExtent({ ...spillContext, row, column })}
               isReadOnly={isReadOnly}
