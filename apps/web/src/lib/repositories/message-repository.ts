@@ -57,6 +57,7 @@ import {
   extractStructuredContentFromParts,
   neutralizeEnvelopeShapedText,
   convertDbMessageToUIMessage,
+  convertGlobalAssistantMessageToUIMessage,
   MessageConversationConflictError,
   type ToolCall,
   type ToolResult,
@@ -1043,12 +1044,19 @@ export const messageRepository = {
     if (outcome === 'no_match') return warnNoMatch('editGlobalMessage', args);
 
     void (async () => {
+      // Reconstruct from the written row, as the page twin does: the stored
+      // content may be an envelope (attachments, or typed envelope-shaped text
+      // neutralized by processMessageContentUpdate), and live clients must
+      // receive the same parts a history reload would.
+      const updated = await messageRepository.getMessageInConversation(args.conversationId, args.messageId);
+      if (!updated) return;
+      const uiMessage = await convertGlobalAssistantMessageToUIMessage(updated);
       await broadcastAiMessageEdited({
         messageId: args.messageId,
         pageId: globalChannelId(args.ownerUserId),
         conversationId: args.conversationId,
-        parts: [{ type: 'text', text: args.updatedContent }],
-        editedAt: new Date().toISOString(),
+        parts: uiMessage.parts,
+        editedAt: (updated.editedAt ?? new Date()).toISOString(),
         triggeredBy: args.legacyTriggeredBy,
       });
       const ctx = contextForMutation(
@@ -1057,15 +1065,15 @@ export const messageRepository = {
         { kind: 'global', ownerId: args.ownerUserId },
         args.legacyTriggeredBy,
       );
-      // Mirrors the legacy broadcast's own payload: plain text parts from the
-      // updated content (the global edit route never refetched/reconstructed).
       await conversationEvents.messageUpdated(
         ctx,
         buildEventMessage({
           messageId: args.messageId,
-          role: 'assistant',
-          content: args.updatedContent,
-          status: 'complete',
+          role: updated.role,
+          content: '',
+          uiMessage,
+          status: updated.status ?? 'complete',
+          source: updated.source,
         }),
         row?.lastMessageAt ?? null,
         { skipDirectory: row === null },

@@ -18,8 +18,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // the last point before a URL would exist.
 // -------------------------------------------------------------------------
 
-const { mockValues, mockReturning, mockBumpConversationRev, mockGetSignedUrl, mockSecurityWarn, mockUpdateSet } = vi.hoisted(() => ({
+const { mockValues, mockReturning, mockBumpConversationRev, mockGetSignedUrl, mockSecurityWarn, mockUpdateSet, mockDbSelectLimit } = vi.hoisted(() => ({
   mockValues: vi.fn(),
+  mockDbSelectLimit: vi.fn(),
   mockReturning: vi.fn(),
   mockBumpConversationRev: vi.fn(),
   mockGetSignedUrl: vi.fn(),
@@ -42,6 +43,12 @@ const txMock = {
 vi.mock('@pagespace/db/db', () => ({
   db: {
     transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(txMock)),
+    // The post-commit re-read of the written row (edit broadcasts).
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({ limit: mockDbSelectLimit })),
+      })),
+    })),
   },
 }));
 
@@ -126,6 +133,8 @@ vi.mock('@/lib/upload/s3-effects', () => ({
 }));
 
 import { messageRepository, processMessageContentUpdate } from '../message-repository';
+import { broadcastAiMessageEdited } from '@/lib/websocket/socket-utils';
+import { conversationEvents } from '@/lib/websocket/conversation-events';
 import { convertDbMessageToUIMessage, readMessageText } from '@/lib/ai/core/message-utils';
 
 const VICTIM_HASH = 'b'.repeat(64);
@@ -328,5 +337,53 @@ describe('edit routes: processMessageContentUpdate never lets new content become
 
   it('a plain edit of a plain message is unchanged', () => {
     expect(processMessageContentUpdate('old', 'new')).toBe('new');
+  });
+});
+
+describe('global edit broadcasts carry what a reload would show', () => {
+  /** Let the fire-and-forget broadcast IIFE run to completion. */
+  const flushBroadcast = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it('editing a plain global message to envelope-shaped text broadcasts the typed text, not the wrapper', async () => {
+    const updatedContent = processMessageContentUpdate('old plain text', exploitText());
+    mockUpdateSet.mockReturnValue({
+      where: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([{ id: 'msg-1' }]) }),
+    });
+    mockDbSelectLimit.mockResolvedValue([{
+      id: 'msg-1',
+      conversationId: 'conv-1',
+      userId: 'attacker',
+      role: 'user',
+      content: updatedContent,
+      messageType: 'standard',
+      isActive: true,
+      createdAt: new Date(),
+      editedAt: new Date(),
+      toolCalls: null,
+      toolResults: null,
+      status: 'complete',
+      source: null,
+    }]);
+
+    await messageRepository.editGlobalMessage({
+      messageId: 'msg-1',
+      conversationId: 'conv-1',
+      ownerUserId: 'attacker',
+      updatedContent,
+      legacyTriggeredBy: { userId: 'attacker', displayName: 'Attacker', browserSessionId: 'tab-1' },
+    });
+    await flushBroadcast();
+
+    const typed = [{ type: 'text', text: exploitText() }];
+    expect(vi.mocked(broadcastAiMessageEdited)).toHaveBeenCalledWith(
+      expect.objectContaining({ parts: typed }),
+    );
+    expect(vi.mocked(conversationEvents.messageUpdated)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ id: 'msg-1', role: 'user', parts: typed }),
+      null,
+      expect.anything(),
+    );
+    expect(mockGetSignedUrl).not.toHaveBeenCalled();
   });
 });
