@@ -1,7 +1,7 @@
 import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { NextResponse } from 'next/server';
 import { streamText, convertToModelMessages, hasToolCall, stepCountIs, tool, jsonSchema } from 'ai';
-import type { ToolSet, ModelMessage } from 'ai';
+import type { ToolSet, ModelMessage, UIMessage, FileUIPart } from 'ai';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
@@ -33,7 +33,7 @@ import { hasFileParts, validateUserMessageFileParts } from '@/lib/ai/core/valida
 import { contentBlockedResponse, contentBlockedResponseFor } from '@/lib/upload/content-blocked-response';
 import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
-import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
+import { guardReadPageToolForVision, isVisualContentDelivered } from '@/lib/ai/tools/read-page-vision-output';
 import { validateInferenceRequest } from '@/lib/ai/openai-api/validate-inference-request';
 import { adaptToOpenAIChunk } from '@/lib/ai/openai-api/adapt-to-openai-chunk';
 import { buildToolSummaryEvent } from '@/lib/ai/openai-api/build-tool-summary-event';
@@ -148,20 +148,23 @@ export async function POST(request: Request): Promise<Response> {
   }
   const requestHasImageParts = messagesWithFileParts.length > 0;
 
-  // 5b'. Content blocklist — every `file` part of every request message, in ONE
+  // 5b'. Content blocklist — every image the request body carries, in ONE
   // lookup. Persistence screens only the newest message, and only on a threaded
   // call: a stateless call persists nothing and a client_manages_history call
   // resends earlier turns the server never saw. Refused the same way persistence
-  // refuses it, before the credit hold. Scope: `data:` bytes and echoed
-  // chat-attachment keys, as screenFilePartsAgainstBlocklist defines them. An
-  // echoed key is trusted by its path (the key pattern is unanchored), and
-  // client-built tool outputs are not file parts; both predate this gate and
-  // are recorded in the content-safety report's Follow-ups.
-  if (requestHasImageParts) {
-    const { blockedHashes } = await screenFilePartsAgainstBlocklist(
-      messagesWithFileParts.flatMap(m => m.parts),
-      { userId: authResult.userId },
-    );
+  // refuses it, before the credit hold. Covers `file` parts (`data:` bytes and
+  // echoed chat-attachment keys, as screenFilePartsAgainstBlocklist defines
+  // them) and the image bytes of client-supplied `read_page` visual results,
+  // which pass through normalization as pre-built parts and reach a vision
+  // model as image data. An echoed key is trusted by its path (the key pattern
+  // is unanchored); that predates this gate and is Follow-up 1 in the
+  // content-safety report.
+  const screenableParts = [
+    ...messagesWithFileParts.flatMap(m => m.parts),
+    ...visualToolResultImageParts(messages),
+  ];
+  if (screenableParts.length > 0) {
+    const { blockedHashes } = await screenFilePartsAgainstBlocklist(screenableParts, { userId: authResult.userId });
     if (blockedHashes.length > 0) return contentBlockedResponse();
   }
 
@@ -895,4 +898,24 @@ export async function POST(request: Request): Promise<Response> {
       await releaseHold(holdId).catch(() => {});
     }
   }
+}
+
+/**
+ * The image bytes of every `read_page` visual result in the request, as `data:`
+ * file parts, so the blocklist screen hashes them exactly as it hashes an
+ * attachment. Only output-available tool parts whose output is a
+ * `visual_content_delivered` payload carry bytes.
+ */
+function visualToolResultImageParts(messages: readonly UIMessage[]): FileUIPart[] {
+  const parts: FileUIPart[] = [];
+  for (const message of messages) {
+    for (const part of message.parts ?? []) {
+      if (!part.type.startsWith('tool-') || !('state' in part) || part.state !== 'output-available') continue;
+      const output: unknown = 'output' in part ? part.output : undefined;
+      if (!isVisualContentDelivered(output)) continue;
+      const mediaType = output.mimeType || 'application/octet-stream';
+      parts.push({ type: 'file', mediaType, url: `data:${mediaType};base64,${output.imageBase64}` });
+    }
+  }
+  return parts;
 }

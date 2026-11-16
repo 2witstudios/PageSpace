@@ -559,6 +559,48 @@ describe('POST /api/v1/chat/completions', () => {
     });
   });
 
+  test('screens the image bytes of a client-supplied read_page visual result, and refuses a blocked one', async () => {
+    const imageBase64 = Buffer.from('blocked-bytes').toString('base64');
+    vi.mocked(screenFilePartsAgainstBlocklist).mockResolvedValueOnce({ parts: [], blockedHashes: ['ab'.repeat(32)] });
+    const body = {
+      model: 'ps-agent://page-123',
+      client_manages_history: true,
+      messages: [
+        {
+          role: 'assistant',
+          id: 'msg-1',
+          content: '',
+          parts: [{
+            type: 'tool-read_page',
+            toolCallId: 'call-1',
+            state: 'output-available',
+            input: { pageId: 'p' },
+            output: { success: true, type: 'visual_content_delivered', mimeType: 'image/png', imageBase64, message: 'here' },
+          }],
+        },
+        { role: 'user', id: 'msg-2', content: 'Thanks!', parts: [{ type: 'text', text: 'Thanks!' }] },
+      ],
+    };
+    const response = await POST(makeRequest(body));
+    const screened = vi.mocked(screenFilePartsAgainstBlocklist).mock.calls[0]?.[0] as Array<{ type: string; url?: string }> | undefined;
+    assert({
+      given: 'a resent history whose assistant turn carries a read_page visual result with image bytes (no file parts at all)',
+      should: 'screen those bytes as a data: file part and return the neutral 422 before the credit gate and the model',
+      actual: {
+        screened: screened?.map(p => ({ type: p.type, url: p.url })),
+        status: response.status,
+        creditGateCalled: vi.mocked(canConsumeAI).mock.calls.length > 0,
+        streamTextCalls: vi.mocked(streamText).mock.calls.length,
+      },
+      expected: {
+        screened: [{ type: 'file', url: `data:image/png;base64,${imageBase64}` }],
+        status: 422,
+        creditGateCalled: false,
+        streamTextCalls: 0,
+      },
+    });
+  });
+
   test('applies the vision-capability gate to images in earlier user messages', async () => {
     vi.mocked(hasFileParts).mockImplementation((message: UIMessage) => message.id === 'msg-1');
     vi.mocked(hasVisionCapability).mockReturnValue(false);

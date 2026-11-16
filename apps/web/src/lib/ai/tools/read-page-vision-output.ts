@@ -30,7 +30,7 @@ export interface VisualContentDeliveredOutput {
   metadata: Record<string, unknown>;
 }
 
-function isVisualContentDelivered(output: unknown): output is VisualContentDeliveredOutput {
+export function isVisualContentDelivered(output: unknown): output is VisualContentDeliveredOutput {
   return (
     typeof output === 'object' &&
     output !== null &&
