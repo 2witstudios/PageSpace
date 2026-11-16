@@ -479,6 +479,16 @@ describe('POST /api/upload/complete — content blocklist', () => {
     expect(releasePendingUpload).toHaveBeenCalledWith(MOCK_JOB_ID);
   });
 
+  it('releases the reserved slot and pending-upload row when the blocklist lookup throws, and rethrows', async () => {
+    vi.mocked(isUploadBlocked).mockRejectedValue(new Error('db down'));
+
+    await expect(POST(makeRequest(VALID_BODY))).rejects.toThrow('db down');
+
+    expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_JOB_ID);
+    expect(releasePendingUpload).toHaveBeenCalledWith(MOCK_JOB_ID);
+    expect(mockTransaction).not.toHaveBeenCalled();
+  });
+
   it('checks the hash reserved at presign, never one from the body', async () => {
     const request = makeRequest({ ...VALID_BODY, contentHash: 'f'.repeat(64) });
 

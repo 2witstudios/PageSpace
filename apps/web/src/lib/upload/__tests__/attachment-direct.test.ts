@@ -343,6 +343,16 @@ describe('completeAttachment', () => {
       expect(mockReleasePendingUpload).toHaveBeenCalledWith('job-1');
     });
 
+    it('releases the reserved slot and pending-upload row when the lookup throws, and rethrows', async () => {
+      mockIsUploadBlocked.mockRejectedValue(new Error('db down'));
+
+      await expect(completeAttachment(completeArgs())).rejects.toThrow('db down');
+
+      expect(mockRelease).toHaveBeenCalledWith('job-1');
+      expect(mockReleasePendingUpload).toHaveBeenCalledWith('job-1');
+      expect(mockVerifyAttachmentBytes).not.toHaveBeenCalled();
+    });
+
     it('checks the hash reserved at presign', async () => {
       const args = completeArgs();
 

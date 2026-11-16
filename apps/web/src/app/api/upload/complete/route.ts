@@ -221,8 +221,17 @@ export async function POST(request: Request) {
   }
 
   // Content blocklist, re-checked: the hash may have been blocked since presign,
-  // and the dedup fast-path reaches here without any PUT.
-  if (await isUploadBlocked({ contentHash, userId, entryPoint: 'upload.complete', request, details: { driveId } })) {
+  // and the dedup fast-path reaches here without any PUT. A lookup that throws
+  // must still release both reservations, then propagate.
+  let blocked: boolean;
+  try {
+    blocked = await isUploadBlocked({ contentHash, userId, entryPoint: 'upload.complete', request, details: { driveId } });
+  } catch (err) {
+    uploadSemaphore.releaseUploadSlot(jobId);
+    await releasePendingUpload(jobId).catch(() => undefined);
+    throw err;
+  }
+  if (blocked) {
     uploadSemaphore.releaseUploadSlot(jobId);
     await releasePendingUpload(jobId).catch(() => undefined);
     return contentBlockedResponse();

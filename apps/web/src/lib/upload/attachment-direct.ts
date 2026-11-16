@@ -184,7 +184,17 @@ export async function completeAttachment(args: CompleteAttachmentArgs): Promise<
 
   // Content blocklist, re-checked: the hash may have been blocked since presign,
   // and the dedup path reaches here without any PUT. Before the processor reads it.
-  if (await isUploadBlocked({ contentHash, userId, entryPoint: 'attachment.complete', request, details: blockedAttemptDetails(target) })) {
+  // A lookup that throws must still release both reservations, like every other
+  // failure below, then propagate.
+  let blocked: boolean;
+  try {
+    blocked = await isUploadBlocked({ contentHash, userId, entryPoint: 'attachment.complete', request, details: blockedAttemptDetails(target) });
+  } catch (err) {
+    uploadSemaphore.releaseUploadSlot(jobId);
+    await releasePendingUpload(jobId).catch(() => undefined);
+    throw err;
+  }
+  if (blocked) {
     uploadSemaphore.releaseUploadSlot(jobId);
     await releasePendingUpload(jobId).catch(() => undefined);
     return contentBlockedResult();
