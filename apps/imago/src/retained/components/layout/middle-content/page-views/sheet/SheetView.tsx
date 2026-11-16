@@ -213,6 +213,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page, renderTools }) => 
 
   const {
     documentState,
+    isLoaded,
     loadError,
     updateContent,
     updateContentFromServer,
@@ -226,13 +227,17 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page, renderTools }) => 
   // Editing is blocked either by permissions or by a load failure. When the
   // stored content could not be parsed we must not let edits through: saving
   // would overwrite content we were unable to read.
-  const isReadOnly = lacksEditPermission || loadError !== null;
+  // Until the stored content loads, the grid is an empty placeholder; an edit
+  // to it would autosave over the stored cells.
+  const isReadOnly = lacksEditPermission || loadError !== null || !isLoaded;
 
   // Two different reasons to refuse an edit deserve two different messages;
   // blaming permissions for a load failure sends the user to the wrong place.
   const readOnlyReason = loadError
     ? 'This sheet could not be loaded, so editing is disabled'
-    : "You don't have permission to edit this sheet";
+    : !isLoaded
+      ? 'This sheet is still loading'
+      : "You don't have permission to edit this sheet";
 
   // Pull-to-refresh handler
   const handleRefresh = useCallback(async () => {

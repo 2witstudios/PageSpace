@@ -21,7 +21,7 @@ vi.mock('@/hooks/useDocument', () => ({
     document: { content: documentContent.current, isDirty: false },
     isLoading: false,
     isSaving: false,
-    initializeAndActivate: vi.fn(),
+    initializeAndActivate: vi.fn(() => Promise.resolve(true)),
     updateContent: vi.fn(),
     updateContentFromServer: vi.fn(),
     saveWithDebounce: vi.fn(),

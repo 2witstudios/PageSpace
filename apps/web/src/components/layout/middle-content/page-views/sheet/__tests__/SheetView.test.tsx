@@ -31,6 +31,8 @@ const documentState: { current: { content: string; isDirty: boolean } | undefine
   current: undefined,
 };
 const lacksEditPermission = { current: false };
+// What the content fetch reports: true when stored content is available.
+const contentLoads = { current: true };
 
 /**
  * `useSheetPersistence` runs for real; only its boundary to the store and the
@@ -44,7 +46,7 @@ vi.mock('@/hooks/useDocument', () => ({
     document: documentState.current ? { ...documentState.current } : undefined,
     isLoading: false,
     isSaving: false,
-    initializeAndActivate: vi.fn(),
+    initializeAndActivate: vi.fn(() => Promise.resolve(contentLoads.current)),
     updateContent: vi.fn(),
     updateContentFromServer: vi.fn(),
     saveWithDebounce: vi.fn(),
@@ -105,7 +107,7 @@ type SheetViewProps = React.ComponentProps<typeof SheetView>;
 type TestPage = SheetViewProps['page'];
 
 /** A minimal TreePage; SheetView reads only these fields. */
-const makePage = (content: string): TestPage =>
+const makePage = (content: string | undefined): TestPage =>
   ({
     id: 'page-1',
     title: 'Budget',
@@ -131,6 +133,7 @@ const cellText = (address: string): string =>
 describe('SheetView', () => {
   beforeEach(() => {
     lacksEditPermission.current = false;
+    contentLoads.current = true;
     // A primed `mockImplementationOnce` that never fires would leak into the
     // next test's setup, so clear any leftover between tests.
     vi.mocked(serializeSheetContent).mockClear();
@@ -500,6 +503,29 @@ describe('SheetView', () => {
 
     render(<SheetView page={makePage(contentWith({ A1: 'hello' }))} />);
 
+    expect(screen.getAllByRole('gridcell')[0].getAttribute('aria-readonly')).toBe('true');
+  });
+
+  it('stays read-only until the stored content has loaded', () => {
+    // Tree pages carry no content. Before the fetch lands the grid is an empty
+    // placeholder, and an edit to it would autosave over the stored cells.
+    documentState.current = undefined;
+
+    render(<SheetView page={makePage(undefined)} />);
+
+    expect(screen.getAllByRole('gridcell')[0].getAttribute('aria-readonly')).toBe('true');
+    expect((screen.getAllByRole('button', { name: 'Add row' })[0] as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('shows the load-failure banner when the content fetch fails', async () => {
+    documentState.current = undefined;
+    contentLoads.current = false;
+
+    render(<SheetView page={makePage(undefined)} />);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('could not be loaded');
     expect(screen.getAllByRole('gridcell')[0].getAttribute('aria-readonly')).toBe('true');
   });
 

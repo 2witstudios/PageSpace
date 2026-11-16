@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { type Editor } from '@tiptap/react';
 import { useDocument } from '@/retained/hooks/useDocument';
 import DocumentConflictGate from '@/retained/components/layout/middle-content/page-views/document/DocumentConflictGate';
 import { useDocumentManagerStore } from '@/retained/stores/useDocumentManagerStore';
 import { useEditingStore } from '@/retained/stores/useEditingStore';
+import { Button } from '@/retained/components/ui/button';
 import { resolveDescriptionSeed } from './description-seed';
 
 const RichEditor = dynamic(() => import('@/retained/components/editors/RichEditor'), { ssr: false });
@@ -37,6 +38,15 @@ export function TaskListDescriptionContent({
     isResolvingConflict,
   } = useDocument(pageId);
 
+  // Set when the fetch failed with nothing cached. Nothing is stored in that case, so the next attempt
+  // fetches again instead of finding an empty description cached as if it were real.
+  const [loadFailed, setLoadFailed] = useState(false);
+  const loadDescription = useCallback(async () => {
+    setLoadFailed(false);
+    const loaded = await initializeAndActivate({ emptyOnFailure: false });
+    setLoadFailed(!loaded);
+  }, [initializeAndActivate]);
+
   // Seed the store from caller-provided content when there is some; otherwise fetch it.
   useEffect(() => {
     const seed = resolveDescriptionSeed({
@@ -46,7 +56,7 @@ export function TaskListDescriptionContent({
     if (seed.kind === 'seed') {
       useDocumentManagerStore.getState().upsertDocument(pageId, seed.content, 'html');
     } else if (seed.kind === 'fetch') {
-      initializeAndActivate();
+      void loadDescription();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageId]);
@@ -76,6 +86,19 @@ export function TaskListDescriptionContent({
 
   const content = docState?.content ?? initialContent ?? '';
 
+  if (loadFailed && !docState) {
+    return (
+      <div className={className}>
+        <div role="alert" className="flex items-center gap-3 text-sm text-muted-foreground">
+          <span>The description could not be loaded.</span>
+          <Button variant="outline" size="sm" onClick={() => void loadDescription()}>
+            Retry
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={className}>
       <DocumentConflictGate
@@ -86,7 +109,8 @@ export function TaskListDescriptionContent({
       <RichEditor
         value={content}
         onChange={handleChange}
-        readOnly={!canEdit}
+        // No document record yet means the content is still loading; edits to the placeholder would be lost.
+        readOnly={!canEdit || !docState}
         contentMode="html"
         onEditorChange={onEditorChange}
       />

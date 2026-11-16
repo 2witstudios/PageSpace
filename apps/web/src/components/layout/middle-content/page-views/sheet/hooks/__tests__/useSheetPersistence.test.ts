@@ -22,7 +22,7 @@ vi.mock('@/hooks/useDocument', () => ({
     document: documentRef.current ? { ...documentRef.current } : undefined,
     isLoading: false,
     isSaving: false,
-    initializeAndActivate: vi.fn(),
+    initializeAndActivate: vi.fn(() => Promise.resolve(true)),
     updateContent: updateContentSpy,
     updateContentFromServer: vi.fn(),
     saveWithDebounce: vi.fn(),

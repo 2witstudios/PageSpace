@@ -360,7 +360,7 @@ describe('useDocument false conflicts', () => {
       vi.mocked(fetchWithAuth).mockResolvedValueOnce(answer({ contentRevision: 8 }));
       const { result } = renderHook(() => useDocument(pageId));
 
-      let loading!: Promise<void>;
+      let loading!: Promise<boolean>;
       act(() => {
         loading = result.current.initializeAndActivate();
       });
