@@ -7,7 +7,7 @@ Nothing pushed, no PR opened.
 
 - **Schema** `packages/db/src/schema/content-safety.ts`: `content_blocks`, `content_scans`, `content_cases`.
   No foreign keys on any of them (a schema test enforces it).
-- **Migration** `packages/db/drizzle/0382_content_safety.sql` (three `CREATE TABLE`, four indexes). Applied
+- **Migration** `packages/db/drizzle/0383_content_safety.sql` (three `CREATE TABLE`, four indexes). Applied
   cleanly to a fresh Postgres 17 test database.
 - **Lib module** `packages/lib/src/content-safety/`:
   - `policy.ts` — pure: `normalizeContentHash`, `normalizeContentHashes`, `requiresGlobalPurge`,
@@ -238,10 +238,10 @@ foreign keys, so no cascade can reach them and there was nothing to exclude. Two
 
 ## Things you might not expect in the diff
 
-- **Migration numbering.** `drizzle-kit generate` named the file `0351_lethal_annihilus` and overwrote
-  `meta/0351_snapshot.json`, because the journal index (351) is behind the file numbering (0381). I restored
-  the old `0351` snapshot from git and renamed the new files to `0382_content_safety.sql` /
-  `meta/0382_snapshot.json`, with the journal tag to match — the same thing the `0381` commit did. The SQL
+- **Migration numbering.** `drizzle-kit generate` named the file `0352_content_safety` and overwrote
+  `meta/0352_snapshot.json`, because the journal index (352) is behind the file numbering (0382). I restored
+  the old `0352` snapshot from git and renamed the new files to `0383_content_safety.sql` /
+  `meta/0383_snapshot.json`, with the journal tag to match — the same thing master's `0382` commit did. The SQL
   itself is untouched. A second `bun run db:generate` reports "No schema changes".
 - **Duplication ratchet 153 → 154.** The page and global chat turns share the save-failure mapping through
   `chat-pipeline/user-message-save-refusal.ts` rather than copying it; the net change is +1. The figure is
@@ -289,7 +289,7 @@ Second review (at `b27f8b0ce`):
 
 Test database: `docker compose -f docker-compose.test.yml up -d postgres-test`, then
 `DATABASE_URL=postgresql://user:password@localhost:5433/pagespace_test bun run db:migrate` — all migrations
-applied, including `0382`.
+applied, including `0383`.
 
 | Command | Result |
 |---|---|
@@ -305,3 +305,28 @@ The second round changed only `apps/web`, so the `packages/lib` and `packages/db
 round and were not rerun.
 
 Not run: the whole-repo `bun run test`, `bun run lint`, `bun run test:security`, `knip`.
+
+## Rebased onto master at `4ef25e9f4`
+
+The stack was cut from `b18d504aa` and rebased onto `origin/master` at `4ef25e9f4` (52 commits newer). Master added
+`0382_page_content_revision`, so every content-safety migration moved up one: `0382_content_safety` is now `0383_content_safety`. Each was regenerated with
+`bun run db:generate --name <same name>` at the commit that first added it, on top of master's snapshot, then renamed
+to the next file number as before (journal index is still behind the file numbers). The regenerated DDL is
+byte-identical to the original; only the numbers changed.
+
+Conflicts: `apps/web/src/lib/upload/__tests__/create-file-page.test.ts` (master moved the riteway helper to
+`@/test/riteway`; kept that path and this branch's `beforeEach` import), and the drizzle journal and snapshot.
+
+Test DB recreated from empty and migrated: 353 migrations applied. Then:
+
+| Command | Result |
+|---|---|
+| `bun run db:generate` | "No schema changes" |
+| `bun run typecheck` (`NODE_OPTIONS=--max-old-space-size=8192`, `--concurrency=4`) | PASS, 23 of 23 |
+| packages/db unit | PASS, 1 file, 6 tests |
+| packages/lib unit | PASS, 3 files, 35 tests |
+| packages/lib integration | PASS, 2 files, 5 tests |
+| apps/web unit | PASS, 17 files, 564 tests |
+
+Test runs cover every test file this stack adds or changes in each package, with
+`DATABASE_URL=postgresql://user:password@localhost:5433/pagespace_test`.
