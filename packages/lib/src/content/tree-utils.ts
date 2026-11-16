@@ -1,5 +1,53 @@
 export type TreeNode<T> = T & { children: TreeNode<T>[] };
 
+/**
+ * The page columns a drive tree carries — exactly what tree consumers read (sidebar, files views,
+ * file viewers, header, drag-reorder). Never `content` or other heavy columns: a tree is sized by
+ * page count, and AI drives hold thousands of pages and tens of MB of content.
+ * Shaped as a Drizzle `columns` projection.
+ */
+export const pageTreeColumns = {
+  id: true,
+  title: true,
+  type: true,
+  parentId: true,
+  position: true,
+  driveId: true,
+  isPrivate: true,
+  isTrashed: true,
+  createdAt: true,
+  updatedAt: true,
+  mimeType: true,
+  originalFileName: true,
+  fileSize: true,
+} as const;
+
+export type PageTreeColumn = keyof typeof pageTreeColumns;
+
+const PAGE_TREE_COLUMN_KEYS = Object.keys(pageTreeColumns) as PageTreeColumn[];
+
+type TreeFlags = { isTaskLinked: boolean; hasChanges?: boolean };
+
+/**
+ * Narrow page rows to `pageTreeColumns` and attach the tree flags. Keys outside the projection are
+ * dropped even when present on the input, so a full row can never leak into a tree response.
+ * `hasChanges` is set only when `changedIds` is given.
+ */
+export function toTreeNodes<R extends { id: string }>(
+  rows: readonly R[],
+  { taskLinkedIds, changedIds }: { taskLinkedIds: ReadonlySet<string>; changedIds?: ReadonlySet<string> }
+): Array<Pick<R, Extract<keyof R, PageTreeColumn>> & TreeFlags> {
+  return rows.map(row => {
+    const node: Record<string, unknown> = {};
+    for (const key of PAGE_TREE_COLUMN_KEYS) {
+      if (key in row) node[key] = row[key as keyof R];
+    }
+    node.isTaskLinked = taskLinkedIds.has(row.id);
+    if (changedIds) node.hasChanges = changedIds.has(row.id);
+    return node as Pick<R, Extract<keyof R, PageTreeColumn>> & TreeFlags;
+  });
+}
+
 export function buildTree<T extends { id: string; parentId: string | null; position?: number }>(nodes: T[]): TreeNode<T>[] {
     // Deduplicate nodes by ID - last occurrence wins
     const nodeMap = new Map<string, T>();

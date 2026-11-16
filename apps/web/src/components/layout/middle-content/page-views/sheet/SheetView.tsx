@@ -112,7 +112,8 @@ import {
 } from './core/format-commands';
 
 interface SheetViewProps {
-  page: TreePage;
+  // Tree nodes carry no content; a page fetched from /api/pages (CenterPanel's fallback) does.
+  page: TreePage & { content?: string | null };
 }
 
 /** Ctrl/Cmd chords that apply a format to the selection. */
@@ -201,7 +202,9 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
 
   const {
     documentState,
+    isLoaded,
     loadError,
+    retryLoad,
     updateContent,
     updateContentFromServer,
     saveWithDebounce,
@@ -214,13 +217,17 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
   // Editing is blocked either by permissions or by a load failure. When the
   // stored content could not be parsed we must not let edits through: saving
   // would overwrite content we were unable to read.
-  const isReadOnly = lacksEditPermission || loadError !== null;
+  // Until the stored content loads, the grid is an empty placeholder; an edit
+  // to it would autosave over the stored cells.
+  const isReadOnly = lacksEditPermission || loadError !== null || !isLoaded;
 
   // Two different reasons to refuse an edit deserve two different messages;
   // blaming permissions for a load failure sends the user to the wrong place.
   const readOnlyReason = loadError
     ? 'This sheet could not be loaded, so editing is disabled'
-    : "You don't have permission to edit this sheet";
+    : !isLoaded
+      ? 'This sheet is still loading'
+      : "You don't have permission to edit this sheet";
 
   // Pull-to-refresh handler
   const handleRefresh = useCallback(async () => {
@@ -1320,8 +1327,19 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
           role="alert"
           className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive"
         >
-          This sheet could not be loaded, so editing is disabled to protect your data. Reload the
-          page to try again; if it keeps failing, the stored content needs repair.
+          {documentState !== undefined ? (
+            <>
+              This sheet could not be loaded, so editing is disabled to protect your data. Reload the
+              page to try again; if it keeps failing, the stored content needs repair.
+            </>
+          ) : (
+            <>
+              This sheet could not be loaded, so editing is disabled to protect your data.{' '}
+              <button type="button" className="font-medium underline" onClick={retryLoad}>
+                Retry
+              </button>
+            </>
+          )}
         </div>
       )}
       <motion.div

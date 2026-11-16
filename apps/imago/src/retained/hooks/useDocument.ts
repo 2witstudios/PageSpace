@@ -273,7 +273,14 @@ export const useDocument = (pageId: string) => {
     useCallback((state) => state.resolvingConflicts.has(pageId), [pageId])
   );
 
-  const initializeAndActivate = useCallback(async () => {
+  /**
+   * Fetch the page and make it the active document. Resolves true when real content is available afterwards
+   * (fetched, or already cached when the fetch fails). With `emptyOnFailure: false` a failed fetch stores
+   * nothing, so a caller can show the failure instead of an empty document an autosave could write back.
+   */
+  const initializeAndActivate = useCallback(async (options?: { emptyOnFailure?: boolean }): Promise<boolean> => {
+    const emptyOnFailure = options?.emptyOnFailure ?? true;
+    const hasCachedDocument = () => useDocumentManagerStore.getState().documents.has(pageId);
     setIsLoading(true);
     try {
       const response = await fetchWithAuth(`/api/pages/${pageId}`);
@@ -286,24 +293,21 @@ export const useDocument = (pageId: string) => {
           page.contentRevision
         );
         setActiveDocument(pageId);
-      } else {
-        console.error('Failed to fetch page content:', response.status);
-        // Only fall back to empty when there is no existing cached content —
-        // a transient failure should not blank a valid in-memory document
-        if (!useDocumentManagerStore.getState().documents.get(pageId)) {
-          useDocumentManagerStore.getState().upsertDocument(pageId, '', 'html');
-        }
-        setActiveDocument(pageId);
+        return true;
       }
+      console.error('Failed to fetch page content:', response.status);
     } catch (error) {
       console.error('Failed to fetch page content:', error);
-      if (!useDocumentManagerStore.getState().documents.get(pageId)) {
-        useDocumentManagerStore.getState().upsertDocument(pageId, '', 'html');
-      }
-      setActiveDocument(pageId);
     } finally {
       setIsLoading(false);
     }
+    // A transient failure must not blank a valid in-memory document.
+    const loaded = hasCachedDocument();
+    if (!loaded && emptyOnFailure) {
+      useDocumentManagerStore.getState().upsertDocument(pageId, '', 'html');
+    }
+    if (loaded || emptyOnFailure) setActiveDocument(pageId);
+    return loaded;
   }, [setActiveDocument, pageId]);
 
   const updateContent = useCallback(

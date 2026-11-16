@@ -79,8 +79,10 @@ vi.mock('@pagespace/db/schema/tasks', () => ({
   taskLists: { id: 'tl.id', pageId: 'tl.pageId' },
 }));
 
-vi.mock('@pagespace/lib/content/tree-utils', () => ({
-    buildTree: vi.fn((items: unknown[]) => items),
+// Real projection helpers (pure); only buildTree is stubbed so tests can capture its input.
+vi.mock('@pagespace/lib/content/tree-utils', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/content/tree-utils')>()),
+  buildTree: vi.fn((items: unknown[]) => items),
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
@@ -117,8 +119,8 @@ vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => ({
 // ---------- imports (after mocks) ----------
 
 import { GET } from '../route';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
-import { buildTree } from '@pagespace/lib/content/tree-utils'
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isScopedMCPAuth, getPrincipalAccessiblePagesInDrive } from '@/lib/auth';
+import { buildTree, pageTreeColumns } from '@pagespace/lib/content/tree-utils'
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getUserAccessiblePagesInDrive } from '@pagespace/lib/permissions/permissions';
 import type { DriveRelationship } from '@pagespace/lib/permissions/drive-relationship';
@@ -272,9 +274,31 @@ describe('GET /api/drives/[driveId]/pages', () => {
 
       expect(response.status).toBe(200);
       expect(mockFindMany).toHaveBeenCalledWith({
+        columns: pageTreeColumns,
         where: { type: 'and' },
         orderBy: [{ type: 'asc' }],
       });
+    });
+  });
+
+  describe('scoped MCP token access', () => {
+    it("lists the token's accessible pages from a projected drive query", async () => {
+      vi.mocked(isScopedMCPAuth).mockReturnValueOnce(true);
+      vi.mocked(getPrincipalAccessiblePagesInDrive).mockResolvedValue([{ id: 'page_1' }] as never);
+      mockFindMany.mockResolvedValue([
+        { id: 'page_1', parentId: null, position: 0 },
+        { id: 'page_2', parentId: null, position: 1 },
+      ]);
+
+      const response = await GET(createRequest() as never, createContext(mockDriveId));
+      const nodes = await response.json();
+
+      expect(mockFindMany).toHaveBeenCalledWith({
+        columns: pageTreeColumns,
+        where: { type: 'and' },
+        orderBy: [{ type: 'asc' }],
+      });
+      expect(nodes.map((n: { id: string }) => n.id)).toEqual(['page_1']);
     });
   });
 
@@ -294,6 +318,7 @@ describe('GET /api/drives/[driveId]/pages', () => {
 
       expect(response.status).toBe(200);
       expect(mockFindMany).toHaveBeenCalledWith({
+        columns: pageTreeColumns,
         where: { type: 'and' },
         orderBy: [{ type: 'asc' }],
       });
@@ -363,6 +388,7 @@ describe('GET /api/drives/[driveId]/pages', () => {
 
       expect(response.status).toBe(200);
       expect(mockFindMany).toHaveBeenCalledWith({
+        columns: pageTreeColumns,
         where: { type: 'and' },
         orderBy: [{ type: 'asc' }],
       });
@@ -480,6 +506,17 @@ describe('GET /api/drives/[driveId]/pages', () => {
       expect(buildTree).toHaveBeenCalledWith([
         { id: 'page_1', parentId: null, position: 0, isTaskLinked: false, hasChanges: false },
       ]);
+    });
+
+    it('never returns heavy page columns, even when the rows carry them', async () => {
+      mockFindMany.mockResolvedValue([
+        { id: 'page_1', parentId: null, position: 0, title: 'A', content: 'x'.repeat(10_000), systemPrompt: 'p', fileMetadata: {} },
+      ]);
+
+      const response = await GET(createRequest() as never, createContext(mockDriveId));
+      const [node] = await response.json();
+
+      expect(node).toEqual({ id: 'page_1', parentId: null, position: 0, title: 'A', isTaskLinked: false, hasChanges: false });
     });
   });
 

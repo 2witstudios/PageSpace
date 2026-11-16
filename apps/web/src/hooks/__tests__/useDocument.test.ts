@@ -680,5 +680,56 @@ describe('useDocument dirty flag integration', () => {
       expect(doc?.content).toBe('unsaved user edits');
       expect(doc?.isDirty).toBe(true);
     });
+
+    it('given a successful fetch, should report that content loaded', async () => {
+      const { result } = renderHook(() => useDocument('page-ok'));
+
+      let loaded: boolean | undefined;
+      await act(async () => {
+        loaded = await result.current.initializeAndActivate();
+      });
+
+      expect(loaded).toBe(true);
+    });
+
+    it('given a failed fetch and no cache, should keep the empty fallback by default but report no content', async () => {
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce({ ok: false, status: 500 } as Response);
+      const { result } = renderHook(() => useDocument('page-fail'));
+
+      let loaded: boolean | undefined;
+      await act(async () => {
+        loaded = await result.current.initializeAndActivate();
+      });
+
+      expect(loaded).toBe(false);
+      expect(useDocumentManagerStore.getState().documents.get('page-fail')?.content).toBe('');
+    });
+
+    it('given a failed fetch, no cache and emptyOnFailure false, should store no document', async () => {
+      vi.mocked(fetchWithAuth).mockRejectedValueOnce(new Error('offline'));
+      const { result } = renderHook(() => useDocument('page-fail'));
+
+      let loaded: boolean | undefined;
+      await act(async () => {
+        loaded = await result.current.initializeAndActivate({ emptyOnFailure: false });
+      });
+
+      expect(loaded).toBe(false);
+      expect(useDocumentManagerStore.getState().documents.has('page-fail')).toBe(false);
+    });
+
+    it('given a failed fetch over a cached document, should keep the cache and report content loaded', async () => {
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce({ ok: false, status: 503 } as Response);
+      useDocumentManagerStore.getState().upsertDocument('page-cached', 'cached', 'html');
+      const { result } = renderHook(() => useDocument('page-cached'));
+
+      let loaded: boolean | undefined;
+      await act(async () => {
+        loaded = await result.current.initializeAndActivate({ emptyOnFailure: false });
+      });
+
+      expect(loaded).toBe(true);
+      expect(useDocumentManagerStore.getState().documents.get('page-cached')?.content).toBe('cached');
+    });
   });
 });

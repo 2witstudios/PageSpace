@@ -149,7 +149,8 @@ export interface TaskListToolsControls {
 }
 
 interface TaskListViewProps {
-  page: TreePage;
+  // Tree nodes carry no content; a page fetched from /api/pages does.
+  page: TreePage & { content?: string | null };
   /** When given, the page type supplies the list controls and the page's title, description and progress sit above the list. */
   readonly renderTools?: (controls: TaskListToolsControls) => React.ReactNode;
 }

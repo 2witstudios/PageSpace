@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildTree, calculateSafeDepth, formatTreeAsMarkdown, filterToSubtree, filterTreeNodesByAccess } from '../content/tree-utils'
+import { buildTree, calculateSafeDepth, formatTreeAsMarkdown, filterToSubtree, filterTreeNodesByAccess, pageTreeColumns, toTreeNodes } from '../content/tree-utils'
 
 describe('tree-utils', () => {
   describe('buildTree', () => {
@@ -828,6 +828,68 @@ describe('tree-utils', () => {
 
       // n0..n49 visible; n50 (inaccessible) and all below hidden.
       expect(result).toEqual(Array.from({ length: 50 }, (_, i) => `n${i}`))
+    })
+  })
+
+  describe('pageTreeColumns', () => {
+    it('selects exactly the fields tree consumers read', () => {
+      expect(Object.keys(pageTreeColumns).sort()).toEqual([
+        'createdAt', 'driveId', 'fileSize', 'id', 'isPrivate', 'isTrashed', 'mimeType',
+        'originalFileName', 'parentId', 'position', 'title', 'type', 'updatedAt',
+      ])
+      expect(Object.values(pageTreeColumns).every(v => v === true)).toBe(true)
+    })
+
+    it('never selects heavy page columns', () => {
+      for (const heavy of ['content', 'systemPrompt', 'agentDefinition', 'enabledTools', 'description', 'fileMetadata', 'extractionMetadata']) {
+        expect(pageTreeColumns).not.toHaveProperty(heavy)
+      }
+    })
+  })
+
+  describe('toTreeNodes', () => {
+    const row = (id: string, extra: Record<string, unknown> = {}) => ({
+      id, title: `T${id}`, type: 'DOCUMENT', parentId: null, position: 0, driveId: 'd1',
+      isPrivate: false, isTrashed: false, createdAt: 'c', updatedAt: 'u',
+      mimeType: null, originalFileName: null, fileSize: null, ...extra,
+    })
+
+    it('flags task-linked and changed pages', () => {
+      const nodes = toTreeNodes([row('a'), row('b')], {
+        taskLinkedIds: new Set(['a']),
+        changedIds: new Set(['b']),
+      })
+
+      expect(nodes.map(n => [n.id, n.isTaskLinked, n.hasChanges])).toEqual([
+        ['a', true, false],
+        ['b', false, true],
+      ])
+    })
+
+    it('drops every key outside pageTreeColumns, so heavy columns cannot leak', () => {
+      const [node] = toTreeNodes([row('a', { content: 'x'.repeat(1000), systemPrompt: 'p', fileMetadata: {} })], {
+        taskLinkedIds: new Set(),
+        changedIds: new Set(),
+      })
+
+      expect(node).not.toHaveProperty('content')
+      expect(node).not.toHaveProperty('systemPrompt')
+      expect(node).not.toHaveProperty('fileMetadata')
+      expect(node).toEqual({ ...row('a'), isTaskLinked: false, hasChanges: false })
+    })
+
+    it('omits hasChanges when changedIds is not given', () => {
+      const [node] = toTreeNodes([row('a')], { taskLinkedIds: new Set() })
+
+      expect(node).not.toHaveProperty('hasChanges')
+      expect(node.isTaskLinked).toBe(false)
+    })
+
+    it('does not mutate its input', () => {
+      const input = row('a', { content: 'keep' })
+      toTreeNodes([input], { taskLinkedIds: new Set(['a']), changedIds: new Set() })
+
+      expect(input).toEqual(row('a', { content: 'keep' }))
     })
   })
 })

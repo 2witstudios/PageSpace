@@ -154,9 +154,7 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
     }
   }
 
-  const page: TreePage = pageResult
-    ? pageResult.node
-    : { ...fallbackPage!, aiChat: null };
+  const page: TreePage = pageResult ? pageResult.node : fallbackPage!;
 
   // Dynamic component selection using centralized config
   const componentMap = {
