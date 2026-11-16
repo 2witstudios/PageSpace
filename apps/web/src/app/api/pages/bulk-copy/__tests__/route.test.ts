@@ -86,6 +86,11 @@ vi.mock('@pagespace/lib/permissions/org-lapse-guard', async (importOriginal) => 
   ...(await importOriginal<typeof import('@pagespace/lib/permissions/org-lapse-guard')>()),
   checkDriveMayLoosen,
 }));
+const mockLoadFileStoragePaths = vi.fn();
+vi.mock('@/lib/upload/stored-content-hash', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/upload/stored-content-hash')>()),
+  loadFileStoragePaths: (...args: unknown[]) => mockLoadFileStoragePaths(...args),
+}));
 vi.mock('@pagespace/db/db', () => {
   const txInsertValues = vi.fn().mockResolvedValue(undefined);
   const txInsert = vi.fn().mockReturnValue({ values: txInsertValues });
@@ -888,6 +893,113 @@ describe('POST /api/pages/bulk-copy — content blocklist', () => {
 
     expect(response.status).toBe(200);
     expect((await response.json()).copiedCount).toBe(2);
+  });
+
+  describe('files embedded in document and canvas content', () => {
+    const CLEAN_HASH = 'cd'.repeat(32);
+    beforeEach(() => {
+      mockLoadFileStoragePaths.mockResolvedValue(new Map());
+    });
+
+    it('refuses a DOCUMENT whose content embeds a FILE page with a blocked hash, before the transaction', async () => {
+      // source fetch → tree walk (no children) → the referenced pages
+      mockTree(
+        [mockSourcePage({ content: '<p><img src="/api/files/file-page-1/view"></p>' })],
+        [],
+        [{ id: 'file-page-1', filePath: BLOCKED_HASH, contentHash: BLOCKED_HASH }],
+      );
+      mockFindBlockedUploads.mockResolvedValue(new Set([BLOCKED_HASH]));
+      const request = createRequest(validBody);
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(422);
+      expect(await response.json()).toEqual(COPY_REFUSED);
+      expect(mockFindBlockedUploads).toHaveBeenCalledWith([BLOCKED_HASH], gateContext(request));
+      expect(mockTransaction).not.toHaveBeenCalled();
+    });
+
+    it('resolves an embedded channel/DM attachment through its files row, in the same single blocklist call', async () => {
+      mockTree(
+        [mockSourcePage({ type: 'CANVAS', content: "<div style=\"background:url('/api/files/att-1/view')\"></div>", filePath: CLEAN_HASH, contentHash: null })],
+        [],
+        [],
+      );
+      mockLoadFileStoragePaths.mockResolvedValue(new Map([['att-1', `files/${BLOCKED_HASH}/original`]]));
+      mockFindBlockedUploads.mockResolvedValue(new Set([BLOCKED_HASH]));
+
+      const response = await POST(createRequest(validBody));
+
+      expect(response.status).toBe(422);
+      expect(mockLoadFileStoragePaths).toHaveBeenCalledWith(['att-1']);
+      expect(mockFindBlockedUploads).toHaveBeenCalledTimes(1);
+      expect([...mockFindBlockedUploads.mock.calls[0][0]].sort()).toEqual([BLOCKED_HASH, CLEAN_HASH].sort());
+    });
+
+    it('fails closed and audits when an embedded page has a file reference that cannot be resolved', async () => {
+      mockTree(
+        [mockSourcePage({ content: '![x](/api/files/legacy-1/view)' })],
+        [],
+        [{ id: 'legacy-1', filePath: 'uploads/2021/cat.png', contentHash: null }],
+      );
+      const request = createRequest(validBody);
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(422);
+      expect(mockTransaction).not.toHaveBeenCalled();
+      expect(auditRequest).toHaveBeenCalledWith(request, expect.objectContaining({
+        resourceType: 'file',
+        resourceId: 'legacy-1',
+        details: expect.objectContaining({ entryPoint: 'page.copy', reason: 'unverifiable_file_reference', pageId: 'page-1' }),
+      }));
+    });
+
+    it('copies a DOCUMENT whose embedded reference points at nothing stored (no bytes to serve)', async () => {
+      mockTree([mockSourcePage({ content: '<img src="/api/files/gone-1/view">' })], [], []);
+
+      const response = await POST(createRequest(validBody));
+
+      expect(response.status).toBe(200);
+      expect(mockFindBlockedUploads).not.toHaveBeenCalled();
+    });
+
+    it('does not parse content of page types that cannot embed files', async () => {
+      mockTree([mockSourcePage({ type: 'AI_CHAT', content: '/api/files/file-page-1/view' })], []);
+
+      await POST(createRequest(validBody));
+
+      expect(mockLoadFileStoragePaths).not.toHaveBeenCalled();
+      expect(vi.mocked(db.query.pages.findMany)).toHaveBeenCalledTimes(2);
+    });
+
+    it("aborts with a 409 when a child document's content gained an embedded file after the screen", async () => {
+      mockTree([mockSourcePage()], [{ id: 'child-1', type: 'DOCUMENT', content: '<p>plain</p>', contentHash: null, filePath: null }]);
+      txQueryPagesFindMany
+        .mockResolvedValueOnce([mockSourcePage({ id: 'child-1', content: '<img src="/api/files/file-page-1/view">' })])
+        .mockResolvedValue([]);
+
+      const response = await POST(createRequest(validBody));
+
+      expect(response.status).toBe(409);
+      expect(txInsertValues).toHaveBeenCalledTimes(1);
+    });
+
+    it('copies a child document whose embedded files are unchanged since the screen', async () => {
+      const content = '<img src="/api/files/file-page-1/view">';
+      mockTree(
+        [mockSourcePage()],
+        [{ id: 'child-1', type: 'DOCUMENT', content, contentHash: null, filePath: null }],
+        [],
+        [{ id: 'file-page-1', filePath: CLEAN_HASH, contentHash: CLEAN_HASH }],
+      );
+      txQueryPagesFindMany.mockResolvedValueOnce([mockSourcePage({ id: 'child-1', content: `${content}<p>edited text</p>` })]).mockResolvedValue([]);
+
+      const response = await POST(createRequest(validBody));
+
+      expect(response.status).toBe(200);
+      expect((await response.json()).copiedCount).toBe(2);
+    });
   });
 
   it('still copies a selected page inside its selected ancestor', async () => {

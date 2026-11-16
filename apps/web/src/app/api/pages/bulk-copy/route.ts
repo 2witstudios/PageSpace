@@ -23,7 +23,8 @@ import { assertAgentModelAllowed, orgModelPolicyErrorResponse } from '@/services
 import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 import { findBlockedUploads } from '@pagespace/lib/content-safety/upload-gate';
 import { contentCopyRefusedResponse } from '@/lib/upload/content-blocked-response';
-import { auditUnverifiableFileReference, resolveStoredContentHash } from '@/lib/upload/stored-content-hash';
+import { auditUnverifiableFileReference, loadFileStoragePaths, resolveStoredContentHash } from '@/lib/upload/stored-content-hash';
+import { extractStoredFileReferenceIds, pageContentCanReferenceFiles } from '@/lib/upload/stored-file-references';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -153,13 +154,15 @@ export async function POST(request: Request) {
     });
 
     // Content blocklist: a copy attaches each source file's bytes to a new page
-    // without an upload, so it gets the upload gate. The whole tree is read and
-    // checked here with ONE blocklist query, before the transaction opens; the
-    // transaction then copies only the pages this screen saw.
+    // without an upload, so it gets the upload gate — and so does every stored
+    // file a copied document or canvas embeds by reference. The whole tree is
+    // read and checked here with ONE blocklist query, before the transaction
+    // opens; the transaction then copies only the pages this screen saw.
     const descendants = includeChildren ? await collectDescendants(sourcePages.map((p) => p.id)) : [];
     const screened = [...sourcePages, ...descendants];
-    const copyRefusal = await refuseUnsafeCopy(screened, { request, userId, targetDriveId });
-    if (copyRefusal) return copyRefusal;
+    const screen = await screenCopy(screened, { request, userId, targetDriveId });
+    if (screen.refusal) return screen.refusal;
+    const screenedEmbeds = screen.embeddedIds;
     // Includes the selected pages themselves: one selected together with its
     // ancestor is also a child in that ancestor's copy. Keyed by id, holding the
     // file reference the screen checked, so the copy can tell a page whose
@@ -248,7 +251,8 @@ export async function POST(request: Request) {
             newPageId,
             targetDriveId,
             userId,
-            screenedRefs
+            screenedRefs,
+            screenedEmbeds
           );
           copiedCount += childCount;
         }
@@ -323,8 +327,15 @@ interface CopyGate {
 
 interface CopyScreenRow {
   id: string;
+  type: string;
+  content: string;
   contentHash: string | null;
   filePath: string | null;
+}
+
+/** The stored-file ids a copied page's content embeds; none for types that can't embed. */
+function embeddedFileIds(row: Pick<CopyScreenRow, 'type' | 'content'>): string[] {
+  return pageContentCanReferenceFiles(row.type) && row.content ? extractStoredFileReferenceIds(row.content) : [];
 }
 
 /** Page id → the file reference the blocklist screen checked for it. */
@@ -359,7 +370,7 @@ async function collectDescendants(rootIds: readonly string[]): Promise<CopyScree
     // eslint-disable-next-line no-restricted-syntax -- bounded by the copied tree; mirrors the copy's own unbounded child read
     const children: CopyScreenRow[] = await db.query.pages.findMany({
       where: and(inArray(pages.parentId, level), eq(pages.isTrashed, false)),
-      columns: { id: true, contentHash: true, filePath: true },
+      columns: { id: true, type: true, content: true, contentHash: true, filePath: true },
     });
     const fresh = children.filter((child) => !seen.has(child.id));
     for (const child of fresh) seen.add(child.id);
@@ -371,32 +382,72 @@ async function collectDescendants(rootIds: readonly string[]): Promise<CopyScree
 
 /**
  * Refuse the whole copy (neutral 422, nothing written) when any page in it
- *   - carries a content hash on the blocklist, or
+ *   - carries a content hash on the blocklist,
  *   - has a `filePath` that can't be resolved to a content hash, so its bytes
- *     can't be checked at all (fail closed).
+ *     can't be checked at all (fail closed), or
+ *   - is a DOCUMENT or CANVAS whose content embeds a stored file
+ *     (`/api/files/{id}/view` and the like) that is blocked or whose bytes can't
+ *     be resolved to a hash. An embedded id that matches no page and no `files`
+ *     row is skipped: nothing is stored under it, so nothing can be served.
  * One blocklist query for the whole tree. Blocked hashes are audited by the
- * gate; unverifiable pages are audited here.
+ * gate; unverifiable references are audited here.
+ *
+ * Returns every embedded id it screened, so the copy can tell a reference added
+ * to a page's content after the screen from one it checked.
  */
-async function refuseUnsafeCopy(rows: readonly CopyScreenRow[], gate: CopyGate): Promise<NextResponse | null> {
+async function screenCopy(
+  rows: readonly CopyScreenRow[],
+  gate: CopyGate,
+): Promise<{ refusal: NextResponse | null; embeddedIds: ReadonlySet<string> }> {
   const hashes = new Set<string>();
   let unverifiable = false;
+  const auditUnverifiable = (resourceType: 'page' | 'file', resourceId: string, extra: Record<string, unknown> = {}) => {
+    unverifiable = true;
+    auditUnverifiableFileReference({
+      request: gate.request,
+      userId: gate.userId,
+      entryPoint: 'page.copy',
+      resourceType,
+      resourceId,
+      details: { driveId: gate.targetDriveId, ...extra },
+    });
+  };
+
+  // id of an embedded reference → the copied page that embeds it (first seen).
+  const embeddedBy = new Map<string, string>();
   for (const row of rows) {
-    // `filePath` is what the file readers serve from, in bare or legacy
-    // `files/<hash>/original` form. `contentHash` is checked too when it is one.
-    const fromPath = row.filePath ? resolveStoredContentHash(row.filePath) : null;
-    const fromColumn = row.contentHash ? resolveStoredContentHash(row.contentHash) : null;
-    if (fromPath) hashes.add(fromPath);
-    if (fromColumn) hashes.add(fromColumn);
-    if (row.filePath && !fromPath) {
-      unverifiable = true;
-      auditUnverifiableFileReference({
-        request: gate.request,
-        userId: gate.userId,
-        entryPoint: 'page.copy',
-        resourceType: 'page',
-        resourceId: row.id,
-        details: { driveId: gate.targetDriveId },
-      });
+    addFileRefHashes(row, hashes, () => auditUnverifiable('page', row.id));
+    for (const id of embeddedFileIds(row)) {
+      if (!embeddedBy.has(id)) embeddedBy.set(id, row.id);
+    }
+  }
+
+  if (embeddedBy.size > 0) {
+    const ids = [...embeddedBy.keys()];
+    // eslint-disable-next-line no-restricted-syntax -- bounded by the references in the copied tree
+    const pageRows: Array<Pick<CopyScreenRow, 'id' | 'contentHash' | 'filePath'>> = await db.query.pages.findMany({
+      where: inArray(pages.id, ids),
+      columns: { id: true, contentHash: true, filePath: true },
+    });
+    const pagesById = new Map(pageRows.map((row) => [row.id, row]));
+    const storagePaths = await loadFileStoragePaths(ids.filter((id) => !pagesById.has(id)));
+    for (const id of ids) {
+      const extra = { pageId: embeddedBy.get(id) };
+      const page = pagesById.get(id);
+      if (page) {
+        addFileRefHashes(page, hashes, () => auditUnverifiable('file', id, extra));
+        continue;
+      }
+      if (storagePaths.has(id)) {
+        const hash = resolveStoredContentHash(storagePaths.get(id) || id);
+        if (hash) hashes.add(hash);
+        else auditUnverifiable('file', id, extra);
+        continue;
+      }
+      // No row at all. An id that is itself a content hash is still checked:
+      // it names the bytes directly.
+      const direct = resolveStoredContentHash(id);
+      if (direct) hashes.add(direct);
     }
   }
 
@@ -408,7 +459,28 @@ async function refuseUnsafeCopy(rows: readonly CopyScreenRow[], gate: CopyGate):
         request: gate.request,
         details: { driveId: gate.targetDriveId },
       });
-  return blocked.size > 0 || unverifiable ? contentCopyRefusedResponse() : null;
+  return {
+    refusal: blocked.size > 0 || unverifiable ? contentCopyRefusedResponse() : null,
+    embeddedIds: new Set(embeddedBy.keys()),
+  };
+}
+
+/**
+ * Add the hashes a page row's own file columns point at. `filePath` is what the
+ * file readers serve from, in bare or legacy `files/<hash>/original` form;
+ * `contentHash` is checked too when it is one. A `filePath` that resolves to no
+ * hash calls `onUnverifiable`.
+ */
+function addFileRefHashes(
+  row: Pick<CopyScreenRow, 'contentHash' | 'filePath'>,
+  hashes: Set<string>,
+  onUnverifiable: () => void,
+): void {
+  const fromPath = row.filePath ? resolveStoredContentHash(row.filePath) : null;
+  const fromColumn = row.contentHash ? resolveStoredContentHash(row.contentHash) : null;
+  if (fromPath) hashes.add(fromPath);
+  if (fromColumn) hashes.add(fromColumn);
+  if (row.filePath && !fromPath) onUnverifiable();
 }
 
 // Recursively copy children
@@ -418,7 +490,8 @@ async function copyChildrenRecursively(
   newParentId: string,
   targetDriveId: string,
   userId: string,
-  screenedRefs: ScreenedRefs
+  screenedRefs: ScreenedRefs,
+  screenedEmbeds: ReadonlySet<string>
 ): Promise<number> {
   // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const allChildren = await tx.query.pages.findMany({
@@ -435,6 +508,8 @@ async function copyChildrenRecursively(
     const screenedRef = screenedRefs.get(child.id);
     if (screenedRef === undefined) return false;
     if (screenedRef !== fileRefKey(child)) throw new CopyReferenceChangedError(child.id);
+    // Text edits since the screen are fine; a stored file embedded since is not.
+    if (embeddedFileIds(child).some((id) => !screenedEmbeds.has(id))) throw new CopyReferenceChangedError(child.id);
     return true;
   });
 
@@ -504,7 +579,8 @@ async function copyChildrenRecursively(
       newChildId,
       targetDriveId,
       userId,
-      screenedRefs
+      screenedRefs,
+      screenedEmbeds
     );
     copiedCount += grandchildCount;
   }
