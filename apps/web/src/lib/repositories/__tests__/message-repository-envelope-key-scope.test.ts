@@ -349,6 +349,7 @@ describe('global edit broadcasts carry what a reload would show', () => {
     mockUpdateSet.mockReturnValue({
       where: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([{ id: 'msg-1' }]) }),
     });
+    const createdAt = new Date('2026-01-01T00:00:00.000Z');
     mockDbSelectLimit.mockResolvedValue([{
       id: 'msg-1',
       conversationId: 'conv-1',
@@ -357,7 +358,7 @@ describe('global edit broadcasts carry what a reload would show', () => {
       content: updatedContent,
       messageType: 'standard',
       isActive: true,
-      createdAt: new Date(),
+      createdAt,
       editedAt: new Date(),
       toolCalls: null,
       toolResults: null,
@@ -380,7 +381,8 @@ describe('global edit broadcasts carry what a reload would show', () => {
     );
     expect(vi.mocked(conversationEvents.messageUpdated)).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ id: 'msg-1', role: 'user', parts: typed }),
+      // createdAt is the row's, not the edit time — the event replaces the message in place.
+      expect.objectContaining({ id: 'msg-1', role: 'user', parts: typed, createdAt }),
       null,
       expect.anything(),
     );

@@ -1067,14 +1067,9 @@ export const messageRepository = {
       );
       await conversationEvents.messageUpdated(
         ctx,
-        buildEventMessage({
-          messageId: args.messageId,
-          role: updated.role,
-          content: '',
-          uiMessage,
-          status: updated.status ?? 'complete',
-          source: updated.source,
-        }),
+        // Spread like the page twin, not buildEventMessage: the event replaces
+        // the message in place, so it must keep the row's own createdAt.
+        { ...uiMessage, id: args.messageId, source: updated.source } as UIMessage,
         row?.lastMessageAt ?? null,
         { skipDirectory: row === null },
       );
