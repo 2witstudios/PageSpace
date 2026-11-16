@@ -6,7 +6,7 @@ import {
   type ToolUIPart,
 } from 'ai';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { uploadChatAttachment, getChatAttachmentUrl, parseChatAttachmentStorageKey } from '@/lib/upload/chat-attachment-storage';
+import { uploadChatAttachment, getChatAttachmentUrl, parseChatAttachmentStorageKey, isChatAttachmentStorageKey } from '@/lib/upload/chat-attachment-storage';
 
 /** Parse a `data:<mediaType>;base64,<data>` URL into its raw bytes and media type. */
 function decodeDataUrl(dataUrl: string): { buffer: Buffer; mediaType: string } | null {
@@ -392,6 +392,23 @@ function parseStructuredContent(content: string | null | undefined): StructuredC
 }
 
 /**
+ * Make text that will be stored RAW in a message `content` column safe from
+ * being read back as an envelope: the reader recognises envelopes by shape
+ * alone, and anyone can type that shape. Such text is wrapped in a real
+ * envelope whose single text part is the raw string; anything else is returned
+ * unchanged. Tests with `parseStructuredContent` itself, so writer and reader
+ * cannot disagree about what counts as an envelope.
+ */
+export function neutralizeEnvelopeShapedText(text: string): string {
+  if (!parseStructuredContent(text)) return text;
+  return JSON.stringify({
+    textParts: [text],
+    partsOrder: [{ index: 0, type: 'text' }],
+    originalContent: text,
+  });
+}
+
+/**
  * Shared helper: reconstruct a UIMessage from structured content data and
  * the common fields present on both DatabaseMessage and GlobalAssistantMessage.
  */
@@ -434,6 +451,17 @@ async function reconstructFromStructuredContent(
     } else if (partOrder.type === 'file') {
       if (filePartIndex < fileParts.length) {
         const fp = fileParts[filePartIndex];
+        filePartIndex++;
+        // A key the signer would refuse (see getChatAttachmentUrl) drops this
+        // part rather than failing the whole read.
+        if (fp.storageKey && !isChatAttachmentStorageKey(fp.storageKey)) {
+          loggers.security.warn('Refused to sign chat attachment: storage key outside chat-attachments prefix', {
+            messageId: msg.id,
+            role: msg.role,
+            keyPreview: String(fp.storageKey).slice(0, 96),
+          });
+          continue;
+        }
         const url = fp.storageKey ? await getChatAttachmentUrl(fp.storageKey) : fp.url;
         parts.push({
           type: 'file',
@@ -441,7 +469,6 @@ async function reconstructFromStructuredContent(
           mediaType: fp.mediaType || 'application/octet-stream',
           filename: fp.filename,
         });
-        filePartIndex++;
       }
     } else if (partOrder.type.startsWith('tool-') && partOrder.toolCallId) {
       const toolCall = toolCallsMap.get(partOrder.toolCallId);

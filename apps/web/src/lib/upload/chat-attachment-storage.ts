@@ -43,7 +43,29 @@ export async function uploadChatAttachment(
   return { storageKey, contentHash };
 }
 
+// The ONLY key shape this module may sign a GET for: exactly what
+// buildChatAttachmentKey mints from a sha256. Anchored at both ends, and `\z`
+// is spelled `(?![\s\S])` because JS `$` would also match before a trailing
+// newline. Deliberately separate from the unanchored CHAT_ATTACHMENT_KEY_PATTERN
+// above, which has to find a key inside a URL.
+const CHAT_ATTACHMENT_STORAGE_KEY_EXACT = /^chat-attachments\/[0-9a-f]{64}\/original(?![\s\S])/;
+
+/** Whether `value` is exactly a storage key this module mints — nothing before, nothing after. */
+export function isChatAttachmentStorageKey(value: unknown): value is string {
+  return typeof value === 'string' && CHAT_ATTACHMENT_STORAGE_KEY_EXACT.test(value);
+}
+
+/**
+ * Presign a GET for a chat attachment. Throws for any key outside this module's
+ * own prefix: the key arrives from a persisted message envelope, which is data a
+ * user can influence, and the uploads bucket also holds every tenant's
+ * `files/<hash>/original`. The signer is the last point before a URL exists, so
+ * the scope check lives here rather than in each caller.
+ */
 export async function getChatAttachmentUrl(storageKey: string): Promise<string> {
+  if (!isChatAttachmentStorageKey(storageKey)) {
+    throw new Error('Refusing to sign a URL for a storage key outside the chat-attachments prefix');
+  }
   const command = new GetObjectCommand({ Bucket: getS3Bucket(), Key: storageKey });
   return getSignedUrl(getS3Client(), command, { expiresIn: GET_URL_TTL_SECONDS });
 }
