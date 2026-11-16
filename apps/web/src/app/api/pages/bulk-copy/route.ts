@@ -161,8 +161,10 @@ export async function POST(request: Request) {
     const copyRefusal = await refuseUnsafeCopy(screened, { request, userId, targetDriveId });
     if (copyRefusal) return copyRefusal;
     // Includes the selected pages themselves: one selected together with its
-    // ancestor is also a child in that ancestor's copy.
-    const screenedIds = new Set(screened.map((p) => p.id));
+    // ancestor is also a child in that ancestor's copy. Keyed by id, holding the
+    // file reference the screen checked, so the copy can tell a page whose
+    // reference changed since from one it may copy.
+    const screenedRefs: ScreenedRefs = new Map(screened.map((p) => [p.id, fileRefKey(p)]));
 
     let nextPosition = (lastPage?.position || 0) + 1;
     let copiedCount = 0;
@@ -246,7 +248,7 @@ export async function POST(request: Request) {
             newPageId,
             targetDriveId,
             userId,
-            screenedIds
+            screenedRefs
           );
           copiedCount += childCount;
         }
@@ -287,6 +289,12 @@ export async function POST(request: Request) {
       copiedCount,
     });
   } catch (error) {
+    if (error instanceof CopyReferenceChangedError) {
+      return NextResponse.json(
+        { error: 'Some pages changed while they were being copied. Please try again.' },
+        { status: 409 }
+      );
+    }
     if (isOrgLapsedError(error)) return orgLapsedResponse();
     const refused = orgModelPolicyErrorResponse(error);
     if (refused) return NextResponse.json(refused.body, { status: refused.status });
@@ -317,6 +325,25 @@ interface CopyScreenRow {
   id: string;
   contentHash: string | null;
   filePath: string | null;
+}
+
+/** Page id → the file reference the blocklist screen checked for it. */
+type ScreenedRefs = ReadonlyMap<string, string>;
+
+function fileRefKey(row: Pick<CopyScreenRow, 'contentHash' | 'filePath'>): string {
+  return JSON.stringify([row.filePath, row.contentHash]);
+}
+
+/**
+ * A screened page's `filePath` or `contentHash` changed between the screen and
+ * the transaction's read, so what would be copied is not what was checked.
+ * Thrown inside the transaction: the whole copy rolls back.
+ */
+class CopyReferenceChangedError extends Error {
+  constructor(pageId: string) {
+    super(`Page ${pageId} changed its file reference during the copy`);
+    this.name = 'CopyReferenceChangedError';
+  }
 }
 
 /**
@@ -391,7 +418,7 @@ async function copyChildrenRecursively(
   newParentId: string,
   targetDriveId: string,
   userId: string,
-  screenedIds: ReadonlySet<string>
+  screenedRefs: ScreenedRefs
 ): Promise<number> {
   // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const allChildren = await tx.query.pages.findMany({
@@ -401,8 +428,15 @@ async function copyChildrenRecursively(
     ),
   });
   // Only pages the blocklist screen saw are copied: one created or moved into
-  // the tree after the screen ran was never checked, so it is left out.
-  const children = allChildren.filter((child) => screenedIds.has(child.id));
+  // the tree after the screen ran was never checked, so it is left out. One the
+  // screen saw whose file reference has changed since aborts the whole copy:
+  // its new bytes were never checked, and dropping it would lose its subtree.
+  const children = allChildren.filter((child) => {
+    const screenedRef = screenedRefs.get(child.id);
+    if (screenedRef === undefined) return false;
+    if (screenedRef !== fileRefKey(child)) throw new CopyReferenceChangedError(child.id);
+    return true;
+  });
 
   let copiedCount = 0;
 
@@ -470,7 +504,7 @@ async function copyChildrenRecursively(
       newChildId,
       targetDriveId,
       userId,
-      screenedIds
+      screenedRefs
     );
     copiedCount += grandchildCount;
   }

@@ -863,6 +863,33 @@ describe('POST /api/pages/bulk-copy — content blocklist', () => {
     expect(txInsertValues).toHaveBeenCalledTimes(1);
   });
 
+  it("aborts the copy with a 409 when a screened child's file reference changed before the transaction read it", async () => {
+    const CLEAN_HASH = 'cd'.repeat(32);
+    // The screen sees child-1 pointing at a clean hash...
+    mockTree([mockSourcePage()], [{ id: 'child-1', contentHash: CLEAN_HASH, filePath: CLEAN_HASH }]);
+    // ...but by the time the transaction reads it, the same id points at the blocked hash.
+    txQueryPagesFindMany.mockResolvedValueOnce([filePage({ id: 'child-1' })]).mockResolvedValue([]);
+
+    const response = await POST(createRequest(validBody));
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: 'Some pages changed while they were being copied. Please try again.' });
+    // The changed child is never inserted: only the top-level page was, before
+    // the throw that (in the real transaction) rolls it back.
+    expect(txInsertValues).toHaveBeenCalledTimes(1);
+  });
+
+  it('copies a screened child whose file reference is unchanged', async () => {
+    const CLEAN_HASH = 'cd'.repeat(32);
+    mockTree([mockSourcePage()], [{ id: 'child-1', contentHash: CLEAN_HASH, filePath: CLEAN_HASH }]);
+    txQueryPagesFindMany.mockResolvedValueOnce([filePage({ id: 'child-1', contentHash: CLEAN_HASH, filePath: CLEAN_HASH })]).mockResolvedValue([]);
+
+    const response = await POST(createRequest(validBody));
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).copiedCount).toBe(2);
+  });
+
   it('still copies a selected page inside its selected ancestor', async () => {
     // page-1 and its child page-2 are both selected: page-2 is copied under
     // page-1's copy and once more at the top level.
