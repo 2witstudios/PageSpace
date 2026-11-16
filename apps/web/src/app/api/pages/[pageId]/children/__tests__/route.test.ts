@@ -48,6 +48,7 @@ vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a: unknown, b: unknown) => [a, b]),
   asc: vi.fn((col: unknown) => col),
   isNotNull: vi.fn((col: unknown) => col),
+  inArray: vi.fn((col: unknown, vals: unknown[]) => ({ inArray: col, vals })),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { parentId: 'parentId', isTrashed: 'isTrashed', position: 'position', id: 'id' },
@@ -64,6 +65,8 @@ import { GET } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { canUserViewPage, getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
+import { inArray } from '@pagespace/db/operators';
+import { pageTreeColumns } from '@pagespace/lib/content/tree-utils';
 import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // Test helpers
@@ -157,6 +160,43 @@ describe('GET /api/pages/[pageId]/children', () => {
       expect(response.status).toBe(200);
       expect(body.map((child: { id: string }) => child.id)).toEqual(['child_1']);
       expect(getBatchPagePermissions).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), ['child_1', 'child_2']);
+    });
+
+    it('selects only the tree projection, never full rows', async () => {
+      await GET(createRequest(), mockParams);
+
+      expect(db.query.pages.findMany).toHaveBeenCalledWith(expect.objectContaining({ columns: pageTreeColumns }));
+    });
+
+    it('never returns heavy page columns, even when the rows carry them', async () => {
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([
+        // @ts-expect-error - partial mock data
+        { id: 'child_1', title: 'Child 1', parentId: mockPageId, isTrashed: false, position: 0, content: 'x'.repeat(10_000), systemPrompt: 'p' },
+      ]);
+
+      const response = await GET(createRequest(), mockParams);
+      const [child] = await response.json();
+
+      expect(child).toEqual({ id: 'child_1', title: 'Child 1', parentId: mockPageId, isTrashed: false, position: 0, isTaskLinked: true });
+    });
+
+    it('looks up task links for the visible children only, not every task item', async () => {
+      const whereMock = vi.fn().mockResolvedValue([{ pageId: 'child_1' }]);
+      vi.mocked(db.selectDistinct).mockReturnValue({ from: vi.fn().mockReturnValue({ where: whereMock }) } as never);
+
+      await GET(createRequest(), mockParams);
+
+      expect(inArray).toHaveBeenCalledWith('taskItems.pageId', ['child_1', 'child_2']);
+      expect(whereMock).toHaveBeenCalledWith({ inArray: 'taskItems.pageId', vals: ['child_1', 'child_2'] });
+    });
+
+    it('skips the task-link query when no child is visible', async () => {
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([]);
+
+      const response = await GET(createRequest(), mockParams);
+
+      expect(await response.json()).toEqual([]);
+      expect(db.selectDistinct).not.toHaveBeenCalled();
     });
 
     it('returns empty array when no children exist', async () => {

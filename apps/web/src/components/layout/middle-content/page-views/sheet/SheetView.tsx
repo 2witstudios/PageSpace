@@ -79,6 +79,8 @@ import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu';
 import { SheetMobileActionSheet } from './components/SheetMobileActionSheet';
 import { SheetFormulaBar } from './components/SheetFormulaBar';
 import { SheetGrid } from './components/SheetGrid';
+import { computeAutoRowHeights } from './core/text-layout';
+import { clearMeasureCache, measureCellText, resolveFontFamilies } from './core/text-measure';
 import { SheetToolbar } from './components/SheetToolbar';
 import { SheetTabBar } from './components/SheetTabBar';
 import { SheetConditionalPanel } from './components/SheetConditionalPanel';
@@ -110,7 +112,8 @@ import {
 } from './core/format-commands';
 
 interface SheetViewProps {
-  page: TreePage;
+  // Tree nodes carry no content; a page fetched from /api/pages (CenterPanel's fallback) does.
+  page: TreePage & { content?: string | null };
 }
 
 /** Ctrl/Cmd chords that apply a format to the selection. */
@@ -199,7 +202,9 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
 
   const {
     documentState,
+    isLoaded,
     loadError,
+    retryLoad,
     updateContent,
     updateContentFromServer,
     saveWithDebounce,
@@ -212,13 +217,17 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
   // Editing is blocked either by permissions or by a load failure. When the
   // stored content could not be parsed we must not let edits through: saving
   // would overwrite content we were unable to read.
-  const isReadOnly = lacksEditPermission || loadError !== null;
+  // Until the stored content loads, the grid is an empty placeholder; an edit
+  // to it would autosave over the stored cells.
+  const isReadOnly = lacksEditPermission || loadError !== null || !isLoaded;
 
   // Two different reasons to refuse an edit deserve two different messages;
   // blaming permissions for a load failure sends the user to the wrong place.
   const readOnlyReason = loadError
     ? 'This sheet could not be loaded, so editing is disabled'
-    : "You don't have permission to edit this sheet";
+    : !isLoaded
+      ? 'This sheet is still loading'
+      : "You don't have permission to edit this sheet";
 
   // Pull-to-refresh handler
   const handleRefresh = useCallback(async () => {
@@ -277,9 +286,40 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     () => buildColumnAxis(sheet, columnResize),
     [sheet, columnResize]
   );
+  // Canvas measurement needs concrete font families (it cannot resolve CSS
+  // variables), and widths measured before web fonts load are for the fallback
+  // face — so families are read after mount and re-read once fonts are ready.
+  const [fontFamilies, setFontFamilies] = useState(() => resolveFontFamilies(null));
+  useEffect(() => {
+    let cancelled = false;
+    setFontFamilies(resolveFontFamilies(gridRef.current));
+    document.fonts?.ready.then(() => {
+      if (cancelled) return;
+      clearMeasureCache();
+      setFontFamilies({ ...resolveFontFamilies(gridRef.current) });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Rows holding wrapped text grow to fit it, unless the user set a height.
+  const autoRowHeights = useMemo(
+    () =>
+      computeAutoRowHeights(
+        sheet,
+        evaluation,
+        columnAxis,
+        DENSITY_ROW_HEIGHTS[density],
+        fontFamilies.sans,
+        measureCellText,
+        fontFamilies.mono,
+      ),
+    [sheet, evaluation, columnAxis, density, fontFamilies]
+  );
   const rowAxis = useMemo(
-    () => buildRowAxis(sheet, DENSITY_ROW_HEIGHTS[density], rowResize),
-    [sheet, density, rowResize]
+    () => buildRowAxis(sheet, DENSITY_ROW_HEIGHTS[density], rowResize, autoRowHeights),
+    [sheet, density, rowResize, autoRowHeights]
   );
   const { viewport, scrollTo } = useGridViewport(scrollContainerRef);
 
@@ -1287,8 +1327,19 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
           role="alert"
           className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive"
         >
-          This sheet could not be loaded, so editing is disabled to protect your data. Reload the
-          page to try again; if it keeps failing, the stored content needs repair.
+          {documentState !== undefined ? (
+            <>
+              This sheet could not be loaded, so editing is disabled to protect your data. Reload the
+              page to try again; if it keeps failing, the stored content needs repair.
+            </>
+          ) : (
+            <>
+              This sheet could not be loaded, so editing is disabled to protect your data.{' '}
+              <button type="button" className="font-medium underline" onClick={retryLoad}>
+                Retry
+              </button>
+            </>
+          )}
         </div>
       )}
       <motion.div
@@ -1392,6 +1443,8 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
               onPreviewColumnWidth={handlePreviewColumnWidth}
               onPreviewRowHeight={handlePreviewRowHeight}
               onAutoFitColumn={handleAutoFitColumn}
+              fontFamilies={fontFamilies}
+              measureText={measureCellText}
                   handlers={cellHandlers}
                 />
               </div>

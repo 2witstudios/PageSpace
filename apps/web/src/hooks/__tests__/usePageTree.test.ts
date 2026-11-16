@@ -78,17 +78,12 @@ const createMockTreePage = (overrides: Partial<TreePage> = {}): TreePage => ({
   title: 'Test Page',
   type: 'DOCUMENT' as import('@pagespace/lib/utils/enums').PageType,
   parentId: null,
-  originalParentId: null,
   driveId: 'drive-123',
   position: 0,
-  content: '',
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
   isTrashed: false,
-  trashedAt: null,
   children: [],
-  aiChat: null,
-  messages: [],
   ...overrides,
 });
 

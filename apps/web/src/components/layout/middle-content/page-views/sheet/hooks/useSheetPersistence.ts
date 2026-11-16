@@ -36,7 +36,11 @@ export const useSheetPersistence = ({ pageId, socket, resetHistory }: UseSheetPe
 
   // Non-null when the stored content could not be parsed; the view uses this to
   // disable editing rather than overwrite content it failed to read.
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [parseError, setParseError] = useState<string | null>(null);
+  // The page whose content fetch failed with nothing cached, so there is no stored content to show or edit.
+  const [fetchFailedPageId, setFetchFailedPageId] = useState<string | null>(null);
+  // The page whose stored sheet has been handed to resetHistory, i.e. is what the grid shows.
+  const [appliedPageId, setAppliedPageId] = useState<string | null>(null);
 
   // Keep forceSave/isDirty/content in refs so the empty-dep listeners below never
   // re-subscribe and always see the latest values.
@@ -53,9 +57,22 @@ export const useSheetPersistence = ({ pageId, socket, resetHistory }: UseSheetPe
   }, [documentState?.isDirty, documentState?.content]);
 
   // Initialize/activate the document when the page changes.
+  // Bumped by retryLoad to run the fetch again after a failure.
+  const [loadAttempt, setLoadAttempt] = useState(0);
+
+  // No empty fallback on failure: an empty sheet in the store would autosave over the stored cells.
   useEffect(() => {
-    initializeAndActivate();
-  }, [initializeAndActivate, pageId]);
+    let cancelled = false;
+    setFetchFailedPageId(null);
+    void initializeAndActivate({ emptyOnFailure: false }).then((loaded) => {
+      if (!cancelled) setFetchFailedPageId(loaded ? null : pageId);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [initializeAndActivate, pageId, loadAttempt]);
+
+  const retryLoad = useCallback(() => setLoadAttempt((attempt) => attempt + 1), []);
 
   // Content this hook has already reconciled — either loaded from the server or
   // echoed back from a local edit. Used to tell those two apart below.
@@ -102,12 +119,13 @@ export const useSheetPersistence = ({ pageId, socket, resetHistory }: UseSheetPe
       // The content exists but cannot be read. Do NOT hand an empty sheet to
       // the editor: it would autosave that empty sheet straight over the user's
       // data. Surface the failure and let the view disable editing.
-      setLoadError(parsed.message);
+      setParseError(parsed.message);
       return;
     }
 
-    setLoadError(null);
+    setParseError(null);
     resetHistory(sanitizeSheetData(parsed.sheet));
+    setAppliedPageId(pageId);
   }, [pageId, documentState?.content, resetHistory]);
 
   // Socket updates — uses refs to avoid re-subscribing on every content change.
@@ -167,9 +185,16 @@ export const useSheetPersistence = ({ pageId, socket, resetHistory }: UseSheetPe
     forceSaveRef.current().catch(console.error);
   }, []);
 
+  // Editing waits until the stored sheet is in history; before that the grid is an empty placeholder.
+  const isLoaded = documentState !== undefined && appliedPageId === pageId;
+  const loadError =
+    parseError ?? (!isLoaded && fetchFailedPageId === pageId ? 'Failed to load sheet content' : null);
+
   return {
     documentState,
+    isLoaded,
     loadError,
+    retryLoad,
     updateContent,
     updateContentFromServer,
     saveWithDebounce,

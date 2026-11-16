@@ -123,14 +123,21 @@ export const columnWidthAt = (sheet: Pick<SheetData, 'columnWidths'>, index: num
   return clamp(stored, MIN_COLUMN_WIDTH, MAX_COLUMN_WIDTH);
 };
 
-/** The effective height of a row, with the density preset as the fallback. */
+/**
+ * The effective height of a row: a stored (hand-set) height wins, then the
+ * height its wrapped content needs, then the density preset.
+ */
 export const rowHeightAt = (
   sheet: Pick<SheetData, 'rowHeights'>,
   index: number,
   baseHeight: number = DEFAULT_ROW_HEIGHT,
+  autoHeights?: ReadonlyMap<number, number>,
 ): number => {
   const stored = sheet.rowHeights?.[String(index + 1)];
-  if (typeof stored !== 'number' || !Number.isFinite(stored)) return baseHeight;
+  if (typeof stored !== 'number' || !Number.isFinite(stored)) {
+    const auto = autoHeights?.get(index);
+    return auto === undefined ? baseHeight : clamp(auto, MIN_ROW_HEIGHT, MAX_ROW_HEIGHT);
+  }
   return clamp(stored, MIN_ROW_HEIGHT, MAX_ROW_HEIGHT);
 };
 
@@ -167,9 +174,16 @@ export const buildRowAxis = (
   sheet: Pick<SheetData, 'rowCount' | 'rowHeights'>,
   baseHeight: number = DEFAULT_ROW_HEIGHT,
   override?: SizeOverride,
+  autoHeights?: ReadonlyMap<number, number>,
 ): AxisGeometry =>
   buildAxis(sheet.rowCount, (index) =>
-    overriddenSize(override, index, rowHeightAt(sheet, index, baseHeight), MIN_ROW_HEIGHT, MAX_ROW_HEIGHT),
+    overriddenSize(
+      override,
+      index,
+      rowHeightAt(sheet, index, baseHeight, autoHeights),
+      MIN_ROW_HEIGHT,
+      MAX_ROW_HEIGHT,
+    ),
   );
 
 /** How many leading indices are frozen, clamped to something renderable. */

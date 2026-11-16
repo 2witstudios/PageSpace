@@ -1133,7 +1133,6 @@ function TaskListView({ page }: TaskListViewProps) {
         <TaskListDescriptionContent
           pageId={page.id}
           canEdit={canEdit}
-          initialContent={page.content}
           className="flex-1 overflow-auto px-4 py-3"
           onEditorChange={setEditorInstance}
         />
@@ -1177,7 +1176,6 @@ function TaskListView({ page }: TaskListViewProps) {
         <TaskListDescriptionContent
           pageId={page.id}
           canEdit={canEdit}
-          initialContent={page.content}
           className="h-[40%] shrink-0 overflow-auto px-4 py-3 border-b"
         />
       )}

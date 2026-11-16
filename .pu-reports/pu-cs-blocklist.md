@@ -149,7 +149,7 @@ Paths that carry an existing hash, swept across `apps/web`, `apps/processor`, `a
 
 | Path | Finding |
 |---|---|
-| AI message edit — `apps/web/src/app/api/ai/chat/messages/[messageId]/route.ts:120`, `.../ai/global/[id]/messages/[messageId]/route.ts:74`, `.../ai/page-agents/[agentId]/conversations/[conversationId]/messages/[messageId]/route.ts:87` | **Not gated on this branch.** It does attach an existing hash to new content, so it is a blocklist bypass; it is being fixed on `sec/chat-attachment-key-scope`. See Follow-ups 2. |
+| AI message edit — `apps/web/src/app/api/ai/chat/messages/[messageId]/route.ts:120`, `.../ai/global/[id]/messages/[messageId]/route.ts:74`, `.../ai/page-agents/[agentId]/conversations/[conversationId]/messages/[messageId]/route.ts:87` | Closed by #2975 (`931dc7457`, merged in). An edit of an envelope replaces only its text parts, and `processMessageContentUpdate` neutralizes envelope-shaped text, so an edit can no longer attach a hash. |
 | Cross-drive move — `apps/web/src/services/api/page-cross-drive-move-service.ts:199,335` | No new row: rewrites `driveId`/`parentId` on the existing page. The reference predates the move, so it is PR 2's "existing references". |
 | Page create (`page-service.ts:941`, `page-repository.ts:179`), AI `create_page`, `copy_content`, convert-to-document, drive backup restore, trash restore, version rollback, page PATCH, reorder, share links, task/agent/memory/starter seeding | Cannot carry `filePath`/`contentHash`, or compute nothing from a client-supplied hash. |
 | Channel and DM message edit | Only `content` is written. |
@@ -178,47 +178,21 @@ written only by the web app.
 ## Follow-ups (out of scope; predate this branch; not fixed)
 
 1. **Any client that knows a chat-attachment hash can get a presigned GET for it, with no proof it ever
-   uploaded those bytes.**
-   - `apps/web/src/lib/upload/chat-attachment-storage.ts:12` — `CHAT_ATTACHMENT_KEY_PATTERN` is unanchored, so
-     any URL on any host that merely contains `chat-attachments/<hash>/original` is recognised as "ours".
-   - `apps/web/src/lib/ai/core/validate-image-parts.ts:104` — such a part skips validation as "already persisted".
-   - `apps/web/src/lib/ai/core/message-utils.ts` (`extractStructuredContentFromParts`, echoed-key branch) —
-     it is saved as `{ storageKey }` with no ownership check. This branch adds only the blocklist check.
-   - `apps/web/src/lib/ai/core/message-utils.ts:444` → `apps/web/src/lib/upload/chat-attachment-storage.ts:52` —
+   uploaded those bytes.** #2975 narrowed this: the signer now refuses every key except an exact
+   `chat-attachments/<64 hex>/original`, so it is confined to chat attachments. It is not closed.
+   - `apps/web/src/lib/upload/chat-attachment-storage.ts:12`: `CHAT_ATTACHMENT_KEY_PATTERN` is still unanchored,
+     because it has to find a key inside a URL. So any URL, on any host, that contains
+     `chat-attachments/<hash>/original` is recognised as "ours".
+   - `apps/web/src/lib/ai/core/validate-image-parts.ts:104`: such a part skips validation as "already persisted".
+   - `apps/web/src/lib/ai/core/message-utils.ts:588` (`extractStructuredContentFromParts`, echoed-key branch):
+     it is saved as `{ storageKey }` with no ownership check. This branch adds only the blocklist check, which
+     reads the hash from the path.
+   - `apps/web/src/lib/ai/core/message-utils.ts:473` → `apps/web/src/lib/upload/chat-attachment-storage.ts:71`:
      on read, a one-hour presigned GET is issued for the stored key.
    - Chat attachments are in a global content-addressed namespace with no per-user record of who uploaded what,
      so there is nothing to check ownership against today.
-2. **Any text a user can get saved as a message can make the server presign a GET for an arbitrary storage
-   key.** More serious than 1: it is a cross-tenant read by hash and a blocklist bypass, it exists on `master`,
-   and it needs no message edit. **Not fixed here by decision: it is being fixed on
-   `sec/chat-attachment-key-scope`.** To keep that merge clean, this branch does not touch
-   `getChatAttachmentUrl` or `parseStructuredContent` beyond what it already had.
-
-   The chain:
-   1. **Write.** A message saved without a `uiMessage` stores its `content` string verbatim
-      (`apps/web/src/lib/repositories/message-repository.ts:135`). The blocklist screen
-      (`message-repository.ts:667`, `:739`) only looks at `uiMessage.parts`, so it never sees this text.
-   2. **Reach.** `POST /api/ai/page-agents/consult` saves the caller's `question` that way when no `context` is sent
-      (`apps/web/src/app/api/ai/page-agents/consult/route.ts:560`). So do the three message-edit PATCH routes
-      listed above, through `processMessageContentUpdate` (`message-repository.ts`), which returns the client's
-      `newContent` verbatim when the existing content is plain text, and v1 assistant replies.
-   3. **Payload.** The attacker sends, as ordinary text,
-      `{"textParts":["x"],"fileParts":[{"storageKey":"files/<hash>/original","mediaType":"image/png"}],"partsOrder":[{"type":"text"},{"type":"file"}]}`.
-   4. **Read.** `parseStructuredContent` (`apps/web/src/lib/ai/core/message-utils.ts:391`) accepts any JSON
-      with `textParts` and `partsOrder` as our own attachment envelope. It cannot tell an envelope the server
-      wrote from one a user typed.
-   5. **Sign.** `message-utils.ts:444` calls `getChatAttachmentUrl(fp.storageKey)`
-      (`apps/web/src/lib/upload/chat-attachment-storage.ts:52`), which signs a one-hour GET for whatever key is
-      stored. It does not require the `chat-attachments/` prefix.
-   6. **Result.** Loading the conversation returns a working download URL for any object in the bucket whose
-      key the attacker can name, including another tenant's `files/<hash>/original` and any blocked hash.
-
-   What the attacker needs: an account that can use any one of those routes, and the target's sha256 (or any
-   other key). Verified by reading the code; not exercised against a running app.
-
-   Suggested fix, for the security branch: `getChatAttachmentUrl` refuses any key that does not fully match
-   `chat-attachments/<64 hex>/original`; text saved without a `uiMessage` is never parsed as an envelope; edits
-   never accept one.
+2. *(Resolved by #2975, merged in at `931dc7457`: the signer refuses keys outside the chat-attachments shape,
+   and text stored raw or written by an edit is neutralized so it can't be read back as an envelope.)*
 3. **Channel send accepts any stored file by hash.** `lockAndValidateChannelAttachments`
    (`packages/lib/src/services/channel-message-repository.ts:212`) only checks that each `fileId` has a `files`
    row — not that the sender uploaded it or that it is linked to this channel. The DM validator checks both.
@@ -285,7 +259,7 @@ foreign keys, so no cascade can reach them and there was nothing to exclude. Two
 | Finding | Outcome |
 |---|---|
 | major — echoed chat-attachment key not gated | Fixed: entry point 7. |
-| major — bulk copy not gated | Fixed: entry point 8. Sweep for other copiers found channel send (fixed, 9) and message edit (Follow-ups 2). |
+| major — bulk copy not gated | Fixed: entry point 8. Sweep for other copiers found channel send (fixed, 9) and message edit (closed by #2975). |
 | minor — blocklist lookup inside the save transaction; stranded sibling attachments | Fixed: one query before the transaction and before any write. |
 | minor — membership oracle | Accepted; comment and "Decisions recorded". |
 | minor — blocked attachment on an assistant message retried forever | Fixed: terminal in the materializer; assistant saves drop the part. |
@@ -301,7 +275,7 @@ Second review (at `b27f8b0ce`):
 
 | Finding | Outcome |
 |---|---|
-| major — arbitrary-key presign through the message envelope (predates the branch) | Not fixed here by decision; `sec/chat-attachment-key-scope`. Follow-ups 2 now gives the full chain. |
+| major — arbitrary-key presign through the message envelope (predates the branch) | Fixed by #2975 on master (`931dc7457`), merged into this branch. |
 | minor — bulk-copy descendant lookups inside the transaction | Fixed: whole tree read first, one blocklist query, before the transaction. |
 | minor — copy and send gates ignored the legacy key form | Fixed: both resolve `files/<hash>/original`; unverifiable references fail closed and are audited. See "Legacy key form" and its production check. |
 | minor — channel send has no ownership check | Left as Follow-ups 3, by decision. |
@@ -377,3 +351,21 @@ Test DB recreated from empty and migrated: 353 migrations applied. Then:
 
 Test runs cover every test file this stack adds or changes in each package, with
 `DATABASE_URL=postgresql://user:password@localhost:5433/pagespace_test`.
+
+## Merged master at `931dc7457` (#2975, chat-attachment key scope)
+
+Merged, not rebased. Conflicts in `message-utils.ts`, `message-repository.ts`, and their tests and
+`chat-attachment-storage.test.ts`. Both behaviours are kept:
+- #2975's anchored-key refusal: the signer, the reconstruct drop, and envelope neutralization.
+- This branch's blocklist screen and blocked-hash drop.
+
+The import lists were unioned. The storage-attachments test now takes master's `importOriginal` mock, which
+passes the real `parseChatAttachmentContentHash` and `hashAttachmentBuffer` through, so the hand-written
+stand-ins were dropped. Both describe blocks are kept in `chat-attachment-storage.test.ts`. Follow-up 2 and
+the message-edit gap are closed by #2975. Follow-up 1 is narrowed but still open: the URL recognizer is
+unanchored and there is no ownership record.
+
+| Command | Result |
+|---|---|
+| `bun run typecheck` (`NODE_OPTIONS=--max-old-space-size=8192`, `--concurrency=4`) | PASS, 23 of 23 |
+| `apps/web`: `bunx vitest run src/lib/repositories src/lib/ai/core src/lib/ai/chat-pipeline src/lib/upload src/app/api/upload src/app/api/channels src/app/api/messages src/app/api/pages src/app/api/v1/chat src/app/api/ai` (test database, migrated to head) | PASS: 269 files, 4,455 tests |

@@ -57,7 +57,9 @@ import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
 import {
   extractStructuredContentFromParts,
   screenFilePartsAgainstBlocklist,
+  neutralizeEnvelopeShapedText,
   convertDbMessageToUIMessage,
+  convertGlobalAssistantMessageToUIMessage,
   MessageConversationConflictError,
   type ToolCall,
   type ToolResult,
@@ -132,10 +134,10 @@ async function savePageMessageRow({
   dbClient: DbExecutor;
   /** The `source` the row actually holds — see the return of the upsert. */
 }): Promise<string | null> {
-  let structuredContent = content;
-  if (uiMessage?.parts && uiMessage.parts.length > 0) {
-    structuredContent = await extractStructuredContentFromParts(uiMessage.parts, content);
-  }
+  // No parts → the text is stored raw, so it must not read back as an envelope.
+  const structuredContent = uiMessage?.parts && uiMessage.parts.length > 0
+    ? await extractStructuredContentFromParts(uiMessage.parts, content)
+    : neutralizeEnvelopeShapedText(content);
 
   const toolCallsJson = serializeJsonColumn(toolCalls);
   const toolResultsJson = serializeJsonColumn(toolResults);
@@ -213,10 +215,10 @@ async function saveGlobalMessageRow({
   dbClient: DbExecutor;
   /** The `source` the row actually holds — insert-only, so not always the argument. */
 }): Promise<string | null> {
-  let structuredContent = content;
-  if (uiMessage?.parts && uiMessage.parts.length > 0) {
-    structuredContent = await extractStructuredContentFromParts(uiMessage.parts, content);
-  }
+  // No parts → the text is stored raw, so it must not read back as an envelope.
+  const structuredContent = uiMessage?.parts && uiMessage.parts.length > 0
+    ? await extractStructuredContentFromParts(uiMessage.parts, content)
+    : neutralizeEnvelopeShapedText(content);
 
   const toolCallsJson = serializeJsonColumn(toolCalls);
   const toolResultsJson = serializeJsonColumn(toolResults);
@@ -1075,12 +1077,19 @@ export const messageRepository = {
     if (outcome === 'no_match') return warnNoMatch('editGlobalMessage', args);
 
     void (async () => {
+      // Reconstruct from the written row, as the page twin does: the stored
+      // content may be an envelope (attachments, or typed envelope-shaped text
+      // neutralized by processMessageContentUpdate), and live clients must
+      // receive the same parts a history reload would.
+      const updated = await messageRepository.getMessageInConversation(args.conversationId, args.messageId);
+      if (!updated) return;
+      const uiMessage = await convertGlobalAssistantMessageToUIMessage(updated);
       await broadcastAiMessageEdited({
         messageId: args.messageId,
         pageId: globalChannelId(args.ownerUserId),
         conversationId: args.conversationId,
-        parts: [{ type: 'text', text: args.updatedContent }],
-        editedAt: new Date().toISOString(),
+        parts: uiMessage.parts,
+        editedAt: (updated.editedAt ?? new Date()).toISOString(),
         triggeredBy: args.legacyTriggeredBy,
       });
       const ctx = contextForMutation(
@@ -1089,16 +1098,11 @@ export const messageRepository = {
         { kind: 'global', ownerId: args.ownerUserId },
         args.legacyTriggeredBy,
       );
-      // Mirrors the legacy broadcast's own payload: plain text parts from the
-      // updated content (the global edit route never refetched/reconstructed).
       await conversationEvents.messageUpdated(
         ctx,
-        buildEventMessage({
-          messageId: args.messageId,
-          role: 'assistant',
-          content: args.updatedContent,
-          status: 'complete',
-        }),
+        // Spread like the page twin, not buildEventMessage: the event replaces
+        // the message in place, so it must keep the row's own createdAt.
+        { ...uiMessage, id: args.messageId, source: updated.source } as UIMessage,
         row?.lastMessageAt ?? null,
         { skipDirectory: row === null },
       );
@@ -1517,5 +1521,6 @@ export function processMessageContentUpdate(
   } catch {
     // Plain text, use as-is
   }
-  return newContent;
+  // Stored raw, so an edit must not be able to turn a message INTO an envelope.
+  return neutralizeEnvelopeShapedText(newContent);
 }

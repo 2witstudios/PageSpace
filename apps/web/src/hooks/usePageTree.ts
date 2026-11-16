@@ -2,6 +2,7 @@ import useSWR, { useSWRConfig } from 'swr';
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { mergeChildren } from '@/lib/tree/tree-utils';
 import { Page } from '@pagespace/lib/types';
+import type { PageTreeColumn } from '@pagespace/lib/content/tree-utils';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 
@@ -22,20 +23,10 @@ type ChatMessage = {
   toolResults: unknown;
 };
 
-type AiChat = {
-  id: string;
-  model: string;
-  pageId: string;
-  providerOverride?: string;
-  temperature?: number;
-  systemPrompt?: string;
-};
-
 export type MessageWithUser = ChatMessage & { user: User | null };
-export type TreePage = Page & {
+// A tree node carries only the projected tree columns — never content. Read a page's content via /api/pages/[id].
+export type TreePage = Pick<Page, PageTreeColumn> & {
   children: TreePage[];
-  aiChat: AiChat | null;
-  messages: MessageWithUser[];
   isTaskLinked?: boolean;
   hasChanges?: boolean;
 };
