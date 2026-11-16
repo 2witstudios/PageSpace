@@ -40,12 +40,15 @@ export function TaskListDescriptionContent({
 
   // Set when the fetch failed with nothing cached. Nothing is stored in that case, so the next attempt
   // fetches again instead of finding an empty description cached as if it were real.
-  const [loadFailed, setLoadFailed] = useState(false);
+  // Keyed by page: the component survives a pageId change, and a late result for the page it left must not
+  // clear or set the failure shown for the current one.
+  const [failedPageId, setFailedPageId] = useState<string | null>(null);
+  const loadFailed = failedPageId === pageId;
   const loadDescription = useCallback(async () => {
-    setLoadFailed(false);
+    setFailedPageId((failed) => (failed === pageId ? null : failed));
     const loaded = await initializeAndActivate({ emptyOnFailure: false });
-    setLoadFailed(!loaded);
-  }, [initializeAndActivate]);
+    setFailedPageId((failed) => (loaded ? (failed === pageId ? null : failed) : pageId));
+  }, [initializeAndActivate, pageId]);
 
   // Seed the store from caller-provided content when there is some; otherwise fetch it.
   useEffect(() => {

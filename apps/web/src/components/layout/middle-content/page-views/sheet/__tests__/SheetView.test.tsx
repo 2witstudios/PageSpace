@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import {
   MAX_CONDITIONAL_RULES,
   createEmptySheet,
@@ -33,6 +33,8 @@ const documentState: { current: { content: string; isDirty: boolean } | undefine
 const lacksEditPermission = { current: false };
 // What the content fetch reports: true when stored content is available.
 const contentLoads = { current: true };
+// One stable function, like the real memoized callback, so calls can be counted.
+const initializeAndActivate = vi.fn(() => Promise.resolve(contentLoads.current));
 
 /**
  * `useSheetPersistence` runs for real; only its boundary to the store and the
@@ -46,7 +48,7 @@ vi.mock('@/hooks/useDocument', () => ({
     document: documentState.current ? { ...documentState.current } : undefined,
     isLoading: false,
     isSaving: false,
-    initializeAndActivate: vi.fn(() => Promise.resolve(contentLoads.current)),
+    initializeAndActivate,
     updateContent: vi.fn(),
     updateContentFromServer: vi.fn(),
     saveWithDebounce: vi.fn(),
@@ -134,6 +136,7 @@ describe('SheetView', () => {
   beforeEach(() => {
     lacksEditPermission.current = false;
     contentLoads.current = true;
+    initializeAndActivate.mockClear();
     // A primed `mockImplementationOnce` that never fires would leak into the
     // next test's setup, so clear any leftover between tests.
     vi.mocked(serializeSheetContent).mockClear();
@@ -527,6 +530,18 @@ describe('SheetView', () => {
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toContain('could not be loaded');
     expect(screen.getAllByRole('gridcell')[0].getAttribute('aria-readonly')).toBe('true');
+  });
+
+  it('retries a failed content fetch from the banner', async () => {
+    documentState.current = undefined;
+    contentLoads.current = false;
+
+    render(<SheetView page={makePage(undefined)} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => expect(initializeAndActivate).toHaveBeenCalledTimes(2));
+    expect(initializeAndActivate).toHaveBeenLastCalledWith({ emptyOnFailure: false });
   });
 
   it('survives a serialization failure instead of blanking the page', () => {

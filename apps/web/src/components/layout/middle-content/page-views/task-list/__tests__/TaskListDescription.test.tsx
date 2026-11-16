@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { useDocumentManagerStore } from '@/stores/useDocumentManagerStore';
 
 /**
@@ -87,5 +87,20 @@ describe('TaskListDescriptionContent', () => {
     fireEvent.click(retry);
     await waitFor(() => expect(initializeAndActivate).toHaveBeenCalledTimes(2));
     expect(initializeAndActivate).toHaveBeenLastCalledWith({ emptyOnFailure: false });
+  });
+
+  it('ignores a late fetch result for a description it has already left', async () => {
+    let finishA!: (loaded: boolean) => void;
+    initializeAndActivate
+      .mockReturnValueOnce(new Promise<boolean>((resolve) => { finishA = resolve; }))
+      .mockResolvedValueOnce(false);
+
+    const { rerender } = render(<TaskListDescriptionContent pageId="tl-a" canEdit />);
+    rerender(<TaskListDescriptionContent pageId="tl-b" canEdit />);
+    await screen.findByRole('button', { name: /retry/i });
+
+    await act(async () => { finishA(true); });
+
+    expect(screen.getByRole('button', { name: /retry/i })).toBeTruthy();
   });
 });

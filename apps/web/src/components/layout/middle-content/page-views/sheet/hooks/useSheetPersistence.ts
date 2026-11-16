@@ -55,16 +55,22 @@ export const useSheetPersistence = ({ pageId, socket, resetHistory }: UseSheetPe
   }, [documentState?.isDirty, documentState?.content]);
 
   // Initialize/activate the document when the page changes.
+  // Bumped by retryLoad to run the fetch again after a failure.
+  const [loadAttempt, setLoadAttempt] = useState(0);
+
   // No empty fallback on failure: an empty sheet in the store would autosave over the stored cells.
   useEffect(() => {
     let cancelled = false;
+    setFetchFailedPageId(null);
     void initializeAndActivate({ emptyOnFailure: false }).then((loaded) => {
       if (!cancelled) setFetchFailedPageId(loaded ? null : pageId);
     });
     return () => {
       cancelled = true;
     };
-  }, [initializeAndActivate, pageId]);
+  }, [initializeAndActivate, pageId, loadAttempt]);
+
+  const retryLoad = useCallback(() => setLoadAttempt((attempt) => attempt + 1), []);
 
   // Content this hook has already reconciled — either loaded from the server or
   // echoed back from a local edit. Used to tell those two apart below.
@@ -185,6 +191,7 @@ export const useSheetPersistence = ({ pageId, socket, resetHistory }: UseSheetPe
     documentState,
     isLoaded,
     loadError,
+    retryLoad,
     updateContent,
     updateContentFromServer,
     saveWithDebounce,
