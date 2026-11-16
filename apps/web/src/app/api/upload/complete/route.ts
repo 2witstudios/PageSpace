@@ -18,7 +18,7 @@ import { contentBlockedResponse } from '@/lib/upload/content-blocked-response';
 import { getActorInfo, logFileActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { enqueueProcessorJob } from '@/lib/upload/processor-effects';
-import { checkObjectExists } from '@/lib/upload/s3-effects';
+import { deleteStoredObject, digestStoredObject } from '@/lib/upload/s3-effects';
 import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -166,6 +166,30 @@ function buildPageRecord(params: {
   };
 }
 
+/**
+ * Delete an object whose bytes don't match its key — but only while nothing
+ * owns it. A `files` row means earlier completions committed pages on this key;
+ * those are left alone (and logged), since deleting would break them, and the
+ * processor's own re-hash of their pages deals with a corrupt object.
+ */
+async function discardUnverifiedObject(
+  s3Key: string,
+  contentHash: string,
+  context: { userId: string; driveId: string; jobId: string },
+): Promise<void> {
+  try {
+    const owned = await db.query.files.findFirst({ where: eq(files.id, contentHash), columns: { id: true } });
+    if (owned) {
+      loggers.security.warn('Upload verify: stored bytes do not match an owned key; object left in place', { ...context, contentHash });
+      return;
+    }
+    await deleteStoredObject(s3Key);
+    loggers.security.warn('Upload verify: stored bytes do not match the declared hash; object deleted', { ...context, contentHash });
+  } catch (err) {
+    loggers.api.error('Failed to discard unverified upload object', err instanceof Error ? err : new Error(String(err)), { ...context, contentHash });
+  }
+}
+
 export async function POST(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
   if (isAuthError(auth)) return auth.error;
@@ -250,14 +274,32 @@ export async function POST(request: Request) {
   }
 
   // The UI uploads straight to S3, so /complete can be reached without the PUT
-  // ever happening. Confirm the object is actually present before creating a
-  // page/file record and charging storage, so a skipped or failed upload can't
-  // leave an orphaned file page pointing at a missing object.
-  const objectExists = await checkObjectExists(buildS3Key(contentHash));
-  if (!objectExists) {
+  // ever happening, and the PUT itself is bound only to a key and a length —
+  // never to the bytes. So the stored object is hashed HERE, before any page or
+  // `files` row exists: a client that declared a clean hash and PUT other bytes
+  // (blocked content included) is refused before anything can serve them. The
+  // blocklist check above ran on the declared hash; equal hashes mean the same
+  // bytes, so that check covered the verified bytes too.
+  const s3Key = buildS3Key(contentHash);
+  let digest: Awaited<ReturnType<typeof digestStoredObject>>;
+  try {
+    digest = await digestStoredObject(s3Key, fileSize);
+  } catch (err) {
+    uploadSemaphore.releaseUploadSlot(jobId);
+    await releasePendingUpload(jobId).catch(() => undefined);
+    loggers.api.error('Upload verify read failed', err instanceof Error ? err : new Error(String(err)), { jobId });
+    return NextResponse.json({ error: 'File verification is temporarily unavailable. Please try again.' }, { status: 503 });
+  }
+  if (digest.status === 'missing') {
     uploadSemaphore.releaseUploadSlot(jobId);
     await releasePendingUpload(jobId).catch(() => undefined);
     return NextResponse.json({ error: 'Uploaded object not found in storage' }, { status: 409 });
+  }
+  if (digest.status === 'oversize' || digest.sha256 !== contentHash) {
+    uploadSemaphore.releaseUploadSlot(jobId);
+    await releasePendingUpload(jobId).catch(() => undefined);
+    await discardUnverifiedObject(s3Key, contentHash, { userId, driveId, jobId });
+    return NextResponse.json({ error: 'Uploaded file failed integrity verification' }, { status: 422 });
   }
 
   let newPage: typeof pages.$inferSelect;

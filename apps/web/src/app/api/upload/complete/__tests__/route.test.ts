@@ -32,6 +32,9 @@ vi.mock('@pagespace/db/db', () => ({
         findFirst: (...args: unknown[]) => mockFindFirst(...args),
         findMany: (...args: unknown[]) => mockFindMany(...args),
       },
+      files: {
+        findFirst: (...args: unknown[]) => mockFilesFindFirst(...args),
+      },
     },
   },
 }));
@@ -91,9 +94,11 @@ vi.mock('@/lib/upload/processor-effects', () => ({
   enqueueProcessorJob: vi.fn(),
 }));
 
-const mockCheckObjectExists = vi.fn();
+const mockDigestStoredObject = vi.fn();
+const mockDeleteStoredObject = vi.fn();
 vi.mock('@/lib/upload/s3-effects', () => ({
-  checkObjectExists: (...args: unknown[]) => mockCheckObjectExists(...args),
+  digestStoredObject: (...args: unknown[]) => mockDigestStoredObject(...args),
+  deleteStoredObject: (...args: unknown[]) => mockDeleteStoredObject(...args),
 }));
 
 vi.mock('@pagespace/lib/services/upload-validation', () => ({
@@ -192,8 +197,9 @@ beforeEach(() => {
   // Default: the files-row insert succeeds (first physical store → fileWasInserted).
   filesInsertReturning = [{ id: VALID_HASH }];
   mockFilesFindFirst.mockResolvedValue(undefined);
-  // Default: the uploaded object is present in storage.
-  mockCheckObjectExists.mockResolvedValue(true);
+  // Default: the stored object is present and its bytes hash to the declared hash.
+  mockDigestStoredObject.mockResolvedValue({ status: 'ok', sha256: VALID_HASH, size: 2048 });
+  mockDeleteStoredObject.mockResolvedValue(undefined);
 
   mockTransaction.mockImplementation(makeTxImpl());
 });
@@ -251,16 +257,81 @@ describe('POST /api/upload/complete', () => {
 
   describe('object verification', () => {
     it('returns 409 and creates no page when the uploaded object is missing from storage', async () => {
-      mockCheckObjectExists.mockResolvedValue(false);
+      mockDigestStoredObject.mockResolvedValue({ status: 'missing' });
       const res = await POST(makeRequest(VALID_BODY));
       expect(res.status).toBe(409);
       expect(mockTransaction).not.toHaveBeenCalled();
     });
 
     it('releases the slot when the object is missing', async () => {
-      mockCheckObjectExists.mockResolvedValue(false);
+      mockDigestStoredObject.mockResolvedValue({ status: 'missing' });
       await POST(makeRequest(VALID_BODY));
       expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_JOB_ID);
+    });
+
+    it('hashes the stored object under the declared key, bounded by the size reserved at presign', async () => {
+      await POST(makeRequest(VALID_BODY));
+      expect(mockDigestStoredObject).toHaveBeenCalledWith(`files/${VALID_HASH}/original`, SLOT_META.fileSize);
+    });
+  });
+
+  describe('stored bytes verified before the page commits', () => {
+    const BLOCKED_BYTES_HASH = 'e'.repeat(64);
+
+    it('given a clean declared hash but different (blocked) stored bytes, should refuse, delete the object and serve nothing', async () => {
+      mockDigestStoredObject.mockResolvedValue({ status: 'ok', sha256: BLOCKED_BYTES_HASH, size: 2048 });
+
+      const res = await POST(makeRequest(VALID_BODY));
+
+      expect(res.status).toBe(422);
+      expect(await res.json()).toEqual({ error: 'Uploaded file failed integrity verification' });
+      // No page, no files row, no processor job: nothing exists that could serve the bytes.
+      expect(mockTransaction).not.toHaveBeenCalled();
+      expect(enqueueProcessorJob).not.toHaveBeenCalled();
+      expect(chargeStorageForStore).not.toHaveBeenCalled();
+      expect(mockDeleteStoredObject).toHaveBeenCalledWith(`files/${VALID_HASH}/original`);
+      expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_JOB_ID);
+      expect(releasePendingUpload).toHaveBeenCalledWith(MOCK_JOB_ID);
+    });
+
+    it('given stored bytes larger than the reserved size, should refuse and delete the object the same way', async () => {
+      mockDigestStoredObject.mockResolvedValue({ status: 'oversize' });
+
+      const res = await POST(makeRequest(VALID_BODY));
+
+      expect(res.status).toBe(422);
+      expect(mockTransaction).not.toHaveBeenCalled();
+      expect(mockDeleteStoredObject).toHaveBeenCalledWith(`files/${VALID_HASH}/original`);
+    });
+
+    it('given a mismatch on an object an existing files row already owns, should refuse but leave the object for the existing pages', async () => {
+      mockDigestStoredObject.mockResolvedValue({ status: 'ok', sha256: BLOCKED_BYTES_HASH, size: 2048 });
+      mockFilesFindFirst.mockResolvedValue({ id: VALID_HASH });
+
+      const res = await POST(makeRequest(VALID_BODY));
+
+      expect(res.status).toBe(422);
+      expect(mockTransaction).not.toHaveBeenCalled();
+      expect(mockDeleteStoredObject).not.toHaveBeenCalled();
+    });
+
+    it('given the stored-object read throws, should release both reservations and answer a retryable 503', async () => {
+      mockDigestStoredObject.mockRejectedValue(new Error('s3 timeout'));
+
+      const res = await POST(makeRequest(VALID_BODY));
+
+      expect(res.status).toBe(503);
+      expect(mockTransaction).not.toHaveBeenCalled();
+      expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_JOB_ID);
+      expect(releasePendingUpload).toHaveBeenCalledWith(MOCK_JOB_ID);
+    });
+
+    it('does not read the stored object when the declared hash is already blocked', async () => {
+      vi.mocked(isUploadBlocked).mockResolvedValue(true);
+
+      await POST(makeRequest(VALID_BODY));
+
+      expect(mockDigestStoredObject).not.toHaveBeenCalled();
     });
   });
 
