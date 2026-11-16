@@ -532,6 +532,20 @@ describe('SheetView', () => {
     expect(screen.getAllByRole('gridcell')[0].getAttribute('aria-readonly')).toBe('true');
   });
 
+  it('becomes editable only once the fetched sheet is on screen', () => {
+    // The fetch lands after the first render: the grid must show the stored
+    // cells, not the placeholder, by the time editing is allowed.
+    documentState.current = undefined;
+    const { rerender } = render(<SheetView page={makePage(undefined)} />);
+    expect(screen.getAllByRole('gridcell')[0].getAttribute('aria-readonly')).toBe('true');
+
+    documentState.current = { content: contentWith({ A1: 'stored' }), isDirty: false };
+    rerender(<SheetView page={makePage(undefined)} />);
+
+    expect(cellText('A1')).toBe('stored');
+    expect(screen.getAllByRole('gridcell')[0].getAttribute('aria-readonly')).toBe('false');
+  });
+
   it('retries a failed content fetch from the banner', async () => {
     documentState.current = undefined;
     contentLoads.current = false;

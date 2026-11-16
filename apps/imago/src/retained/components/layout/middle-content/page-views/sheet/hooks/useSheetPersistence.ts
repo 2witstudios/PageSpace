@@ -39,6 +39,8 @@ export const useSheetPersistence = ({ pageId, socket, resetHistory }: UseSheetPe
   const [parseError, setParseError] = useState<string | null>(null);
   // The page whose content fetch failed with nothing cached, so there is no stored content to show or edit.
   const [fetchFailedPageId, setFetchFailedPageId] = useState<string | null>(null);
+  // The page whose stored sheet has been handed to resetHistory, i.e. is what the grid shows.
+  const [appliedPageId, setAppliedPageId] = useState<string | null>(null);
 
   // Keep forceSave/isDirty/content in refs so the empty-dep listeners below never
   // re-subscribe and always see the latest values.
@@ -123,6 +125,7 @@ export const useSheetPersistence = ({ pageId, socket, resetHistory }: UseSheetPe
 
     setParseError(null);
     resetHistory(sanitizeSheetData(parsed.sheet));
+    setAppliedPageId(pageId);
   }, [pageId, documentState?.content, resetHistory]);
 
   // Socket updates — uses refs to avoid re-subscribing on every content change.
@@ -182,8 +185,8 @@ export const useSheetPersistence = ({ pageId, socket, resetHistory }: UseSheetPe
     forceSaveRef.current().catch(console.error);
   }, []);
 
-  // Editing waits for a document record: before it exists the grid is an empty placeholder.
-  const isLoaded = documentState !== undefined;
+  // Editing waits until the stored sheet is in history; before that the grid is an empty placeholder.
+  const isLoaded = documentState !== undefined && appliedPageId === pageId;
   const loadError =
     parseError ?? (!isLoaded && fetchFailedPageId === pageId ? 'Failed to load sheet content' : null);
 

@@ -176,4 +176,24 @@ describe('useSheetPersistence', () => {
     expect(result.current.loadError).toBeNull();
     expect(resetHistory).toHaveBeenCalledTimes(1);
   });
+
+  it('reports loaded only after the stored sheet has been handed to history', () => {
+    const resetHistory = vi.fn();
+    const { result, rerender } = renderPersistence(resetHistory);
+    expect(result.current.isLoaded).toBe(false);
+
+    documentRef.current = { content: sheetContent({ A1: '1' }), isDirty: false };
+    rerender();
+
+    expect(resetHistory).toHaveBeenCalledTimes(1);
+    expect(result.current.isLoaded).toBe(true);
+  });
+
+  it('is not loaded while the stored content cannot be read', () => {
+    documentRef.current = { content: '#%PAGESPACE_SHEETDOC v1\nthis is [not toml', isDirty: false };
+
+    const { result } = renderPersistence(vi.fn());
+
+    expect(result.current.isLoaded).toBe(false);
+  });
 });

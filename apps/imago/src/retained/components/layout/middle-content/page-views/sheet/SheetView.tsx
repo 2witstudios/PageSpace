@@ -1307,7 +1307,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page, renderTools }) => 
           role="alert"
           className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive"
         >
-          {isLoaded ? (
+          {documentState !== undefined ? (
             <>
               This sheet could not be loaded, so editing is disabled to protect your data. Reload the
               page to try again; if it keeps failing, the stored content needs repair.
