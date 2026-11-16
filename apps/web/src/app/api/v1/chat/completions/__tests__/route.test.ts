@@ -114,6 +114,7 @@ vi.mock('@/lib/ai/core/message-utils', () => ({
   }),
   extractMessageContent: vi.fn().mockReturnValue('Hello'),
   extractToolResults: vi.fn().mockReturnValue([]),
+  screenFilePartsAgainstBlocklist: vi.fn(async (parts: unknown[]) => ({ parts, blockedHashes: [] })),
 }));
 vi.mock('@/lib/ai/core/ai-tools', async () => {
   const { toModelOutputForReadPage } = await import('@/lib/ai/tools/read-page-vision-output');
@@ -207,7 +208,7 @@ import { db } from '@pagespace/db/db';
 import { canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 
-import { sanitizeMessagesForModel, extractMessageContent } from '@/lib/ai/core/message-utils';
+import { sanitizeMessagesForModel, extractMessageContent, screenFilePartsAgainstBlocklist } from '@/lib/ai/core/message-utils';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import type { UIMessage } from 'ai';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
@@ -492,6 +493,69 @@ describe('POST /api/v1/chat/completions', () => {
       should: 'still return 400 from file-part validation and never call the prepaid credit gate',
       actual: { status: response.status, error: body.error, creditGateCalled: vi.mocked(canConsumeAI).mock.calls.length > 0 },
       expected: { status: 400, error: 'Image "cat.png" exceeds the 4MB size limit', creditGateCalled: false },
+    });
+  });
+
+  test('refuses a blocklisted attachment in a stateless call (no conversation_id) before the credit gate and the model', async () => {
+    vi.mocked(hasFileParts).mockImplementation((message: UIMessage) => message.id === 'msg-1');
+    vi.mocked(screenFilePartsAgainstBlocklist).mockResolvedValueOnce({ parts: [], blockedHashes: ['ab'.repeat(32)] });
+    const body = {
+      model: 'ps-agent://page-123',
+      messages: [
+        {
+          role: 'user',
+          id: 'msg-1',
+          content: 'What is in this image?',
+          parts: [{ type: 'file', url: 'data:image/png;base64,aGVsbG8=', mediaType: 'image/png' }],
+        },
+        { role: 'user', id: 'msg-3', content: 'Thanks!', parts: [{ type: 'text', text: 'Thanks!' }] },
+      ],
+    };
+    const response = await POST(makeRequest(body));
+    assert({
+      given: 'a stateless request whose EARLIER message carries an attachment on the content blocklist',
+      should: 'return the neutral 422, never reserve credit, and never call the model',
+      actual: {
+        status: response.status,
+        body: await response.json(),
+        screenedUser: vi.mocked(screenFilePartsAgainstBlocklist).mock.calls[0]?.[1],
+        creditGateCalled: vi.mocked(canConsumeAI).mock.calls.length > 0,
+        streamTextCalls: vi.mocked(streamText).mock.calls.length,
+      },
+      expected: {
+        status: 422,
+        body: { error: "This file can't be uploaded" },
+        screenedUser: { userId: mcpAuth.userId },
+        creditGateCalled: false,
+        streamTextCalls: 0,
+      },
+    });
+  });
+
+  test('screens the file parts of every request message against the blocklist in ONE lookup', async () => {
+    vi.mocked(hasFileParts).mockImplementation((message: UIMessage) => message.parts.some(p => p.type === 'file'));
+    const first = { type: 'file', url: 'data:image/png;base64,aGVsbG8=', mediaType: 'image/png' };
+    const second = { type: 'file', url: 'data:image/png;base64,d29ybGQ=', mediaType: 'image/png' };
+    const body = {
+      model: 'ps-agent://page-123',
+      client_manages_history: true,
+      messages: [
+        { role: 'user', id: 'msg-1', content: 'one', parts: [first] },
+        { role: 'assistant', id: 'msg-2', content: 'two', parts: [second] },
+        { role: 'user', id: 'msg-3', content: 'Thanks!', parts: [{ type: 'text', text: 'Thanks!' }] },
+      ],
+    };
+    const response = await POST(makeRequest(body));
+    const calls = vi.mocked(screenFilePartsAgainstBlocklist).mock.calls;
+    assert({
+      given: 'a resent history with file parts on a user AND an assistant message, none blocked',
+      should: 'screen both parts in a single blocklist call and carry on to the model',
+      actual: {
+        calls: calls.length,
+        screenedUrls: (calls[0]?.[0] as Array<{ url?: string }> | undefined)?.map(p => p.url),
+        status: response.status,
+      },
+      expected: { calls: 1, screenedUrls: [first.url, second.url], status: 200 },
     });
   });
 

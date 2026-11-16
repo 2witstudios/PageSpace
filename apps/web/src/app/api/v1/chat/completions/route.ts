@@ -23,14 +23,14 @@ import {
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { toolModelContext } from '@/lib/ai/core/tool-model-context';
 import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
-import { sanitizeMessagesForModel, extractMessageContent, convertDbMessageToUIMessage, extractToolResults } from '@/lib/ai/core/message-utils';
+import { sanitizeMessagesForModel, extractMessageContent, convertDbMessageToUIMessage, extractToolResults, screenFilePartsAgainstBlocklist } from '@/lib/ai/core/message-utils';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForReadOnly, filterToolsForMcpScope, filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibilityForConversation } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { getModelCapabilities, hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { hasFileParts, validateUserMessageFileParts } from '@/lib/ai/core/validate-image-parts';
-import { contentBlockedResponseFor } from '@/lib/upload/content-blocked-response';
+import { contentBlockedResponse, contentBlockedResponseFor } from '@/lib/upload/content-blocked-response';
 import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
@@ -147,6 +147,23 @@ export async function POST(request: Request): Promise<Response> {
     }
   }
   const requestHasImageParts = messagesWithFileParts.length > 0;
+
+  // 5b'. Content blocklist — every `file` part of every request message, in ONE
+  // lookup. Persistence screens only the newest message, and only on a threaded
+  // call: a stateless call persists nothing and a client_manages_history call
+  // resends earlier turns the server never saw. Refused the same way persistence
+  // refuses it, before the credit hold. Scope: `data:` bytes and echoed
+  // chat-attachment keys, as screenFilePartsAgainstBlocklist defines them. An
+  // echoed key is trusted by its path (the key pattern is unanchored), and
+  // client-built tool outputs are not file parts; both predate this gate and
+  // are recorded in the content-safety report's Follow-ups.
+  if (requestHasImageParts) {
+    const { blockedHashes } = await screenFilePartsAgainstBlocklist(
+      messagesWithFileParts.flatMap(m => m.parts),
+      { userId: authResult.userId },
+    );
+    if (blockedHashes.length > 0) return contentBlockedResponse();
+  }
 
   // 5c. Conversation ownership check — if a conversation_id is provided the caller
   // must own the conversations row. This prevents one user from appending messages
