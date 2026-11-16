@@ -140,6 +140,11 @@ import { ContentBlockedError } from '@pagespace/lib/content-safety/policy';
 import { db } from '@pagespace/db/db';
 import type { UIMessage } from 'ai';
 
+// Echoed attachment URLs are recognised only on our own storage host: make
+// `https://bucket.example.com/...` (virtual-hosted) that host for this file.
+vi.stubEnv('AWS_ENDPOINT_URL_S3', 'https://example.com');
+vi.stubEnv('BUCKET_NAME', 'bucket');
+
 const baseArgs = {
   messageId: 'msg-1',
   pageId: 'page-1',

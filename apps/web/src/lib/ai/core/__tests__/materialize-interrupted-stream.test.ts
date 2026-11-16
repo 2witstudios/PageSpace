@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { assert } from '@/test/riteway';
 
+// Echoed attachment URLs are recognised only on our own storage host: make
+// `https://bucket.example.com/...` (virtual-hosted) that host for this file.
+vi.stubEnv('AWS_ENDPOINT_URL_S3', 'https://example.com');
+vi.stubEnv('BUCKET_NAME', 'bucket');
+
 const {
   mockInsert,
   mockInsertValues,

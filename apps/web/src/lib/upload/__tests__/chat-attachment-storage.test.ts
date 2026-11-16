@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const mockCheckObjectExists = vi.fn();
 const mockPutObject = vi.fn();
@@ -101,51 +101,59 @@ describe('uploadChatAttachment', () => {
   });
 });
 
-describe('parseChatAttachmentStorageKey', () => {
-  it('given a presigned GET URL for a chat attachment, should recover the storage key', () => {
-    const url = 'https://bucket.example.com/chat-attachments/' +
-      'a'.repeat(64) +
-      '/original?X-Amz-Signature=abc&X-Amz-Expires=3600';
-
-    expect(parseChatAttachmentStorageKey(url)).toBe(`chat-attachments/${'a'.repeat(64)}/original`);
-  });
-
-  it('given a path-style S3 URL with a bucket prefix, should still recover the storage key', () => {
-    const url = 'https://s3.example.com/my-bucket/chat-attachments/' +
-      'b'.repeat(64) +
-      '/original?X-Amz-Signature=abc';
-
-    expect(parseChatAttachmentStorageKey(url)).toBe(`chat-attachments/${'b'.repeat(64)}/original`);
-  });
-
-  it('given an arbitrary external URL, should return null', () => {
-    expect(parseChatAttachmentStorageKey('https://example.com/img.png')).toBeNull();
-  });
-
-  it('given a data: URL, should return null', () => {
-    expect(parseChatAttachmentStorageKey('data:image/png;base64,aGVsbG8=')).toBeNull();
-  });
-
-  it('given a hash of the wrong length, should return null', () => {
-    const url = 'https://bucket.example.com/chat-attachments/deadbeef/original';
-    expect(parseChatAttachmentStorageKey(url)).toBeNull();
-  });
-});
-
-describe('parseChatAttachmentContentHash', () => {
+describe('echoed chat-attachment recognition — anchored to our storage', () => {
+  // getS3Bucket is mocked to 'test-bucket' above; the endpoint is read from env.
   const HASH = 'ab'.repeat(32);
+  const KEY = `chat-attachments/${HASH}/original`;
 
-  it('given a storage key, should return the content hash inside it', () => {
-    expect(parseChatAttachmentContentHash(buildChatAttachmentKey(HASH))).toBe(HASH);
+  beforeEach(() => {
+    vi.stubEnv('AWS_ENDPOINT_URL_S3', 'https://s3.example.com');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
-  it('given a presigned URL for a chat attachment, should return the content hash', () => {
-    expect(parseChatAttachmentContentHash(`https://bucket.example.com/chat-attachments/${HASH}/original?X-Amz-Signature=x`)).toBe(HASH);
+  const accepted: Array<[string, string]> = [
+    ['the exact storage key', KEY],
+    ['a virtual-hosted presigned URL on our endpoint', `https://test-bucket.s3.example.com/${KEY}?X-Amz-Signature=abc&X-Amz-Expires=3600`],
+    ['a path-style presigned URL on our endpoint', `https://s3.example.com/test-bucket/${KEY}?X-Amz-Signature=abc`],
+  ];
+
+  it.each(accepted)('given %s, should recover the key and its hash', (_label, value) => {
+    expect(parseChatAttachmentStorageKey(value)).toBe(KEY);
+    expect(parseChatAttachmentContentHash(value)).toBe(HASH);
   });
 
-  it('given anything else, should return null', () => {
-    expect(parseChatAttachmentContentHash('https://example.com/cat.png')).toBeNull();
-    expect(parseChatAttachmentContentHash(`files/${HASH}/original`)).toBeNull();
+  const rejected: Array<[string, string]> = [
+    ['an attacker host with the key in its query string', `https://attacker.example/image.png?ref=${KEY}`],
+    ['an attacker host with the key as its path', `https://attacker.example/${KEY}`],
+    ['an attacker host with our bucket and the key as its path', `https://attacker.example/test-bucket/${KEY}`],
+    ['a look-alike host that merely ends with our endpoint', `https://test-bucket.s3.example.com.attacker.example/${KEY}`],
+    ['our endpoint with credentials in the URL', `https://user:pw@test-bucket.s3.example.com/${KEY}`],
+    ['our endpoint with the key behind a fragment', `https://test-bucket.s3.example.com/x#/${KEY}`],
+    ['our endpoint with a different bucket (path-style)', `https://s3.example.com/other-bucket/${KEY}`],
+    ['our endpoint with a key suffix', `https://test-bucket.s3.example.com/${KEY}/extra`],
+    ['our endpoint over plain http when the endpoint is https', `http://test-bucket.s3.example.com/${KEY}`],
+    ['a hash of the wrong length', 'https://test-bucket.s3.example.com/chat-attachments/deadbeef/original'],
+    ['an arbitrary external URL', 'https://example.com/img.png'],
+    ['a data: URL', 'data:image/png;base64,aGVsbG8='],
+    ['a page-file key', `files/${HASH}/original`],
+    ['a key with leading text', `x${KEY}`],
+  ];
+
+  it.each(rejected)('given %s, should not treat it as ours', (_label, value) => {
+    expect(parseChatAttachmentStorageKey(value)).toBeNull();
+    expect(parseChatAttachmentContentHash(value)).toBeNull();
+  });
+
+  it('given no custom endpoint, should accept the AWS virtual-hosted and path-style hosts for the region only', () => {
+    vi.stubEnv('AWS_ENDPOINT_URL_S3', '');
+    vi.stubEnv('AWS_REGION', 'eu-west-2');
+
+    expect(parseChatAttachmentStorageKey(`https://test-bucket.s3.eu-west-2.amazonaws.com/${KEY}?X-Amz-Signature=x`)).toBe(KEY);
+    expect(parseChatAttachmentStorageKey(`https://s3.eu-west-2.amazonaws.com/test-bucket/${KEY}`)).toBe(KEY);
+    expect(parseChatAttachmentStorageKey(`https://test-bucket.s3.us-east-1.amazonaws.com/${KEY}`)).toBeNull();
+    expect(parseChatAttachmentStorageKey(`https://attacker.example/${KEY}`)).toBeNull();
   });
 });
 

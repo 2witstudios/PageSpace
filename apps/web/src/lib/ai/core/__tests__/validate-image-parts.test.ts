@@ -1,6 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { UIMessage } from 'ai';
 import { validateUserMessageFileParts, hasFileParts } from '../validate-image-parts';
+
+// Echoed attachment URLs are recognised only on our own storage host: make
+// `https://bucket.example.com/...` (virtual-hosted) that host for this file.
+vi.stubEnv('AWS_ENDPOINT_URL_S3', 'https://example.com');
+vi.stubEnv('BUCKET_NAME', 'bucket');
 
 // Real valid base64 image data for testing
 const VALID_PNG_DATA_URL = 'data:image/png;base64,iVBORw0KGgo=';
@@ -139,6 +144,24 @@ describe('validate-image-parts', () => {
       ]);
       const result = validateUserMessageFileParts(msg);
       expect(result.valid).toBe(true);
+    });
+
+    it('given an attacker URL that merely carries a chat-attachment key in its query, should return invalid', () => {
+      const hash = 'c'.repeat(64);
+      const msg = makeUserMessage([
+        makeFilePart({ url: `https://attacker.example/image.png?ref=chat-attachments/${hash}/original` }),
+      ]);
+      const result = validateUserMessageFileParts(msg);
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('not a valid data URL');
+    });
+
+    it('given an attacker host serving a chat-attachment key path, should return invalid', () => {
+      const hash = 'c'.repeat(64);
+      const msg = makeUserMessage([
+        makeFilePart({ url: `https://attacker.example/chat-attachments/${hash}/original` }),
+      ]);
+      expect(validateUserMessageFileParts(msg).valid).toBe(false);
     });
 
     it('given an invalid data URL format, should return invalid', () => {

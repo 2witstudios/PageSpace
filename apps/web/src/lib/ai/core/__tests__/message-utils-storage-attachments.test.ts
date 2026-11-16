@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { UIMessage } from 'ai';
 
+// Echoed attachment URLs are recognised only on our own storage host: make
+// `https://bucket.example.com/...` (virtual-hosted) that host for this file.
+vi.stubEnv('AWS_ENDPOINT_URL_S3', 'https://example.com');
+vi.stubEnv('BUCKET_NAME', 'bucket');
+
 const mockUploadChatAttachment = vi.fn();
 const mockGetChatAttachmentUrl = vi.fn();
 

@@ -6,10 +6,6 @@ import { checkObjectExists, putObject } from '@/lib/upload/s3-effects';
 
 const CHAT_ATTACHMENT_PREFIX = 'chat-attachments';
 const GET_URL_TTL_SECONDS = 3600;
-// Matches the storage key this module mints in buildChatAttachmentKey, wherever
-// it appears in a URL path — virtual-hosted (bucket.host/key) and path-style
-// (host/bucket/key) presigned URLs both put the key verbatim in the pathname.
-const CHAT_ATTACHMENT_KEY_PATTERN = /(chat-attachments\/([0-9a-f]{64})\/original)/;
 // Defense-in-depth mirror of MAX_DATA_URL_LENGTH in validate-image-parts.ts: the
 // chat route validates inbound data URLs, but this helper must stay safe for any
 // future caller that skips route-level validation.
@@ -52,8 +48,8 @@ export async function uploadChatAttachment(
 // The ONLY key shape this module may sign a GET for: exactly what
 // buildChatAttachmentKey mints from a sha256. Anchored at both ends, and `\z`
 // is spelled `(?![\s\S])` because JS `$` would also match before a trailing
-// newline. Deliberately separate from the unanchored CHAT_ATTACHMENT_KEY_PATTERN
-// above, which has to find a key inside a URL.
+// newline. An echoed URL counts as ours only when its path on our own storage
+// host is exactly such a key (ownChatAttachmentKey below).
 const CHAT_ATTACHMENT_STORAGE_KEY_EXACT = /^chat-attachments\/[0-9a-f]{64}\/original(?![\s\S])/;
 
 /** Whether `value` is exactly a storage key this module mints — nothing before, nothing after. */
@@ -77,18 +73,73 @@ export async function getChatAttachmentUrl(storageKey: string): Promise<string> 
 }
 
 /**
- * Recover a chat-attachment storage key from a URL, if it is one of our own
- * presigned GET URLs for this prefix. Used to recognize an attachment echoed
- * back by a client (e.g. on resend/regenerate) so it can be re-persisted by
- * its stable storageKey instead of its expiring presigned URL.
+ * The hosts our own presigned GET URLs are served from, with the path prefix
+ * that comes before the key on each: virtual-hosted (`bucket.host/key`) and
+ * path-style (`host/bucket/key`). Read at call time from the same settings the
+ * S3 client is built from (`@/lib/presigned-url`).
  */
-export function parseChatAttachmentStorageKey(url: string): string | null {
-  const match = CHAT_ATTACHMENT_KEY_PATTERN.exec(url);
-  return match ? match[1] : null;
+function ownStorageLocations(): Array<{ protocol: string; host: string; pathPrefix: string }> {
+  const bucket = getS3Bucket();
+  const endpoint = process.env.AWS_ENDPOINT_URL_S3;
+  let protocol = 'https:';
+  let hosts: string[];
+  if (endpoint) {
+    let parsed: URL;
+    try {
+      parsed = new URL(endpoint);
+    } catch {
+      return [];
+    }
+    protocol = parsed.protocol;
+    hosts = [parsed.host];
+  } else {
+    const region = process.env.AWS_REGION;
+    if (!region || region === 'auto') return [];
+    hosts = [`s3.${region}.amazonaws.com`, ...(region === 'us-east-1' ? ['s3.amazonaws.com'] : [])];
+  }
+  return hosts.flatMap((host) => [
+    { protocol, host: `${bucket}.${host}`, pathPrefix: '/' },
+    { protocol, host, pathPrefix: `/${bucket}/` },
+  ]);
 }
 
-/** The content hash inside a chat-attachment storage key or URL, if it is one. */
+/**
+ * The chat-attachment storage key `value` refers to, if it is one of ours:
+ * either exactly a key this module mints, or a URL on our own storage host
+ * whose path is exactly that key. Any query string is allowed (the presign
+ * signature lives there). Everything else is an external reference, even when
+ * the key text appears somewhere inside it.
+ */
+function ownChatAttachmentKey(value: string): string | null {
+  if (isChatAttachmentStorageKey(value)) return value;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  if (url.username || url.password || url.hash) return null;
+  for (const location of ownStorageLocations()) {
+    if (url.protocol !== location.protocol || url.host !== location.host) continue;
+    if (!url.pathname.startsWith(location.pathPrefix)) continue;
+    const key = url.pathname.slice(location.pathPrefix.length);
+    if (isChatAttachmentStorageKey(key)) return key;
+  }
+  return null;
+}
+
+/**
+ * Recover a chat-attachment storage key from a value echoed back by a client
+ * (e.g. on resend/regenerate), so it can be re-persisted by its stable key
+ * instead of its expiring presigned URL. Only our own key or our own storage
+ * URL counts — see ownChatAttachmentKey.
+ */
+export function parseChatAttachmentStorageKey(url: string): string | null {
+  return ownChatAttachmentKey(url);
+}
+
+/** The content hash inside one of our chat-attachment keys or storage URLs, if it is one. */
 export function parseChatAttachmentContentHash(keyOrUrl: string): string | null {
-  const match = CHAT_ATTACHMENT_KEY_PATTERN.exec(keyOrUrl);
-  return match ? match[2] : null;
+  const key = ownChatAttachmentKey(keyOrUrl);
+  return key ? key.slice(CHAT_ATTACHMENT_PREFIX.length + 1, CHAT_ATTACHMENT_PREFIX.length + 65) : null;
 }
