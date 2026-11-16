@@ -34,9 +34,9 @@ Bytes entering storage:
 | # | Entry point | Gate at | On a blocked hash |
 |---|---|---|---|
 | 1 | Page-file presign | `apps/web/src/app/api/upload/presign/route.ts:80` | 422 before the storage probe, slot or presigned URL |
-| 2 | Page-file complete | `apps/web/src/app/api/upload/complete/route.ts:225` | 422, slot and pending-upload row released, no page or `files` row |
+| 2 | Page-file complete | `apps/web/src/app/api/upload/complete/route.ts:228` | 422, slot and pending-upload row released, no page or `files` row |
 | 3 | Channel + DM attachment presign | `apps/web/src/lib/upload/attachment-direct.ts:92` | 422 before the storage probe, slot or presigned URL |
-| 4 | Channel + DM attachment complete | `apps/web/src/lib/upload/attachment-direct.ts:187` | 422 before processor verify, slot released, no `files` row |
+| 4 | Channel + DM attachment complete | `apps/web/src/lib/upload/attachment-direct.ts:191` | 422 before processor verify, slot released, no `files` row |
 | 5 | Server-side image writer (AI image generation) | `apps/web/src/lib/upload/create-file-page.ts:260` | throws `ContentBlockedError` before `putObject` |
 | 6 | AI chat attachments — new uploads | `apps/web/src/lib/repositories/message-repository.ts:667`, `:739` | see below |
 
@@ -48,6 +48,7 @@ An existing hash attached to something new, with no upload (added after review):
 | 8 | Bulk copy of pages | `apps/web/src/app/api/pages/bulk-copy/route.ts:160` (`refuseUnsafeCopy`, whole tree) | 422 before the transaction opens; nothing is written |
 | 9 | Channel message send | `apps/web/src/app/api/channels/[pageId]/messages/route.ts:253` | 422 before any insert |
 | 10 | DM send | `apps/web/src/app/api/messages/[conversationId]/route.ts:328` | 422 before any insert |
+| 11 | v1 chat completions — every request message | `apps/web/src/app/api/v1/chat/completions/route.ts:158` | 422 before the credit hold; the model is never called |
 
 Notes:
 
@@ -62,7 +63,7 @@ Notes:
   written when one is blocked. `uploadChatAttachment` itself no longer checks.
   - A **user** message with a blocked attachment is refused. The page turn
     (`chat-pipeline/page-chat-turn.ts:1066`), the global turn (`chat-pipeline/global-chat-turn.ts:606`) and v1
-    completions (`api/v1/chat/completions/route.ts:859`) return the neutral 422; the turn stops before the model
+    completions (`api/v1/chat/completions/route.ts:873`) return the neutral 422; the turn stops before the model
     sees the file.
   - An **assistant or system** message is saved without the blocked part rather than failed.
   - The interrupted-stream materializer (`apps/web/src/lib/ai/core/materialize-interrupted-stream.ts:206`)
@@ -71,15 +72,21 @@ Notes:
     next sweep audits the same part once more.
   - An assistant save has no `userId`; the audit event for a dropped part names `triggeredBy.userId`, the user
     who drove the turn, when the caller supplies it.
-- **8** reads the whole tree before the transaction (`collectDescendants`, `route.ts:324`: one query per tree
+- **8** reads the whole tree before the transaction (`collectDescendants`, `route.ts:354`: one query per tree
   level, three columns), then makes **one** blocklist query for every hash in it. No lookup runs while the
-  copy holds its connection. The transaction copies only the descendants that screen saw (`route.ts:402`), so a
+  copy holds its connection. The transaction copies only the descendants that screen saw (`route.ts:434`), so a
   page created or moved into the tree after the screen is left out rather than copied unchecked. The
-  transaction re-reads each screened page, so the screen relies on `filePath` never changing on an existing
-  page; no writer changes it today (only the two create paths set it).
+  transaction re-reads each screened page and compares its `filePath` and `contentHash` with what the screen
+  checked; if either changed, the whole copy rolls back with a retryable 409.
   - One blocked or unverifiable file anywhere in the tree refuses the whole copy. The response does not name
     the page: that would point at the blocked file. A user who needs to know which page can copy the children
     one at a time; support can read the audit event.
+- **11** screens the `file` parts of every message in the request body with one query, whether or not the
+  call is threaded. Persistence (6, 7) only sees the newest message of a threaded call; a stateless call
+  saves nothing, and a `client_manages_history` call resends earlier turns the server never stored. Its
+  coverage is that of 6 and 7: `data:` bytes and echoed keys. Two pre-existing gaps remain, in Follow-ups 1
+  and 8. A threaded call with attachments makes two blocklist queries, the route's and persistence's.
+  The route's audit event has no IP or user agent, because the screen takes no `Request`.
 - **9 and 10** normally receive a file id that is the content hash. For any other id the gate reads the row's
   `storagePath` (one extra query, only for such ids) and resolves it the way the file readers do.
 - **10**: the DM validator already required the sender to have uploaded the file into this conversation; the
@@ -225,6 +232,25 @@ written only by the web app.
 5. **Bulk copy reads the tree twice**: once for the blocklist screen, once inside the transaction. Copying
    from the first read would remove the second; it means restructuring the route's copy loop, so it is left.
 
+7. **Page-file uploads are served before the stored bytes are verified.** `upload/complete` checks the
+   blocklist against the hash declared at presign and commits the page; the processor re-hashes the stored
+   object afterwards and deletes it on a mismatch. Until then the object is reachable through the page's
+   download and view routes, which don't look at `processingStatus`. If the enqueue fails, the window stays
+   open. So a client that declares a clean hash and PUTs blocked bytes gets them served for that window. The
+   presigned PUT signs `ContentLength` but no checksum. The commit-then-process order predates this branch.
+   Closing it means either verifying synchronously before the commit, which the attachment path already does
+   (`verifyAttachmentBytes`; the drive path would need a processor auth scope it doesn't have), or gating
+   serving on processing status. Both change the upload flow, so it is not done here.
+8. **v1 completions accepts client-built tool outputs with image bytes.** `normalizeMessage`
+   (`apps/web/src/lib/ai/core/validate-inference-request.ts`) passes a client's `parts` through unchanged. An
+   assistant part `tool-read_page` with `output.type: 'visual_content_delivered'` and its own `imageBase64`
+   reaches the provider as image data through `toModelOutputForReadPage`. Neither file validation nor the
+   blocklist screen sees it: both look only at `type: 'file'`. On a threaded `client_manages_history` call,
+   the tool-result back-fill can also write that output to the caller's own row (`updateMessageToolResults`).
+   This predates the branch. The fix is to drop or degrade client-supplied `visual_content_delivered` outputs
+   in normalization. Also, entry point 11 trusts an echoed key by its path, so Follow-up 1's unanchored
+   pattern lets an attacker-hosted URL reach the provider. That is fixed with Follow-up 1.
+
 ## Erasure
 
 `packages/lib/src/compliance/erasure` does not enumerate tables. It runs a fixed list of steps
@@ -285,6 +311,18 @@ Second review (at `b27f8b0ce`):
 | third review, major — a page selected together with its ancestor was dropped from the ancestor's copy (regression from the tree screen) | Fixed: the screened set includes the selected pages; test added. |
 | nit — refused copy said "can't be uploaded" and named no page | Wording fixed (`One or more files can't be copied`). Still names no page, deliberately; see note on entry point 8. |
 
+PR #2976 review (at `d0c276eac`):
+
+| Finding | Outcome |
+|---|---|
+| CI — GDPR export coverage: `content_blocks`, `content_cases`, `content_scans` had no Art 15 decision | Fixed: each excluded with its own reason in `gdpr-export-coverage.ts`. |
+| major — v1 completions sends unscreened attachments to the model when stateless or `client_manages_history` | Fixed: entry point 11. |
+| minor — a throwing blocklist lookup in attachment complete leaked the slot and pending-upload row | Fixed, along with the same leak in page-file complete. |
+| major (unverified) — bulk copy keyed the screen by id only, so a changed `filePath`/`contentHash` slipped through | Fixed: the reference is compared, and a change aborts with a 409. |
+| major — page-file bytes are served before the processor verifies the hash | Not fixed: predates this branch and needs a design decision. See Follow-ups 7. |
+| independent review — an attacker-hosted URL matching the key pattern, and forged `read_page` tool outputs, get past 11 | Both predate the branch. The claim is narrowed in the code and here; see Follow-ups 1 and 8. |
+| independent review — the `content_cases` exclusion ignored the subject as reporter | Reason rewritten: either subject's request is answered by hand through the case process. Needs legal sign-off. |
+
 ## Commands and results
 
 Test database: `docker compose -f docker-compose.test.yml up -d postgres-test`, then
@@ -305,6 +343,15 @@ The second round changed only `apps/web`, so the `packages/lib` and `packages/db
 round and were not rerun.
 
 Not run: the whole-repo `bun run test`, `bun run lint`, `bun run test:security`, `knip`.
+
+PR #2976 review round (test database as above):
+
+| Command | Result |
+|---|---|
+| `bun run typecheck` (`NODE_OPTIONS=--max-old-space-size=8192`, `--concurrency=4`) | PASS, 23 of 23 |
+| `eslint` on the 8 changed `apps/web` files | Clean |
+| `apps/web`: the v1 completions, bulk-copy, upload complete and attachment-direct suites | PASS: 4 files, 187 tests |
+| `packages/lib`: `bunx vitest run src/compliance src/content-safety` | PASS: 355 tests. One file, `gdpr-eraser.integration.test.ts`, can't start locally without `ADMIN_DATABASE_URL`; CI runs it. |
 
 ## Rebased onto master at `4ef25e9f4`
 
