@@ -34,7 +34,7 @@ Bytes entering storage:
 | # | Entry point | Gate at | On a blocked hash |
 |---|---|---|---|
 | 1 | Page-file presign | `apps/web/src/app/api/upload/presign/route.ts:80` | 422 before the storage probe, slot or presigned URL |
-| 2 | Page-file complete | `apps/web/src/app/api/upload/complete/route.ts:228` | 422, slot and pending-upload row released, no page or `files` row |
+| 2 | Page-file complete | `apps/web/src/app/api/upload/complete/route.ts:252` (declared hash), `:286` (stored bytes re-hashed before the commit) | 422, slot and pending-upload row released, no page or `files` row; bytes that don't match the declared hash are refused and deleted |
 | 3 | Channel + DM attachment presign | `apps/web/src/lib/upload/attachment-direct.ts:92` | 422 before the storage probe, slot or presigned URL |
 | 4 | Channel + DM attachment complete | `apps/web/src/lib/upload/attachment-direct.ts:191` | 422 before processor verify, slot released, no `files` row |
 | 5 | Server-side image writer (AI image generation) | `apps/web/src/lib/upload/create-file-page.ts:260` | throws `ContentBlockedError` before `putObject` |
@@ -45,10 +45,10 @@ An existing hash attached to something new, with no upload (added after review):
 | # | Entry point | Gate at | On a blocked hash |
 |---|---|---|---|
 | 7 | AI chat attachments — echoed storage keys | same screen as 6 | see below |
-| 8 | Bulk copy of pages | `apps/web/src/app/api/pages/bulk-copy/route.ts:160` (`refuseUnsafeCopy`, whole tree) | 422 before the transaction opens; nothing is written |
+| 8 | Bulk copy of pages, including files embedded in copied documents and canvases | `apps/web/src/app/api/pages/bulk-copy/route.ts:163` (`screenCopy`, whole tree) | 422 before the transaction opens; nothing is written |
 | 9 | Channel message send | `apps/web/src/app/api/channels/[pageId]/messages/route.ts:253` | 422 before any insert |
 | 10 | DM send | `apps/web/src/app/api/messages/[conversationId]/route.ts:328` | 422 before any insert |
-| 11 | v1 chat completions — every request message | `apps/web/src/app/api/v1/chat/completions/route.ts:158` | 422 before the credit hold; the model is never called |
+| 11 | v1 chat completions — every request message | `apps/web/src/app/api/v1/chat/completions/route.ts:167` | 422 before the credit hold; the model is never called |
 
 Notes:
 
@@ -81,12 +81,34 @@ Notes:
   - One blocked or unverifiable file anywhere in the tree refuses the whole copy. The response does not name
     the page: that would point at the blocked file. A user who needs to know which page can copy the children
     one at a time; support can read the audit event.
-- **11** screens the `file` parts of every message in the request body with one query, whether or not the
-  call is threaded. Persistence (6, 7) only sees the newest message of a threaded call; a stateless call
-  saves nothing, and a `client_manages_history` call resends earlier turns the server never stored. Its
-  coverage is that of 6 and 7: `data:` bytes and echoed keys. Two pre-existing gaps remain, in Follow-ups 1
-  and 8. A threaded call with attachments makes two blocklist queries, the route's and persistence's.
+- **11** screens, in one query, every image the request body carries, whether or not the call is threaded:
+  - the `file` parts of every message (`data:` bytes and echoed keys, as in 6 and 7);
+  - the `imageBase64` of every client-supplied `read_page` visual result.
+
+  Persistence (6, 7) only sees the newest message of a threaded call; a stateless call saves nothing, and a
+  `client_manages_history` call resends earlier turns the server never stored. Visual results are screened
+  rather than dropped, because those callers legitimately resend the `read_page` results the server gave them.
+  A threaded call with attachments makes two blocklist queries, the route's and persistence's.
   The route's audit event has no IP or user agent, because the screen takes no `Request`.
+- **2** hashes the stored object (`digestStoredObject`, `apps/web/src/lib/upload/s3-effects.ts`) before
+  anything is committed. A presigned PUT binds a key and a length, never the bytes, so this is the only point
+  where the declared hash is proven.
+  - The read is streamed and stops past the size reserved at presign. SHA-256 runs at ~2 GB/s in constant
+    memory (measured: 1 GB in ~0.5 s), so the S3 read dominates: about 10 s for the 1 GB tier limit at
+    100 MB/s, less than the client's own upload of the same bytes.
+  - On a mismatch the object is deleted, unless a `files` row already owns the key; then earlier pages
+    depend on it, and it is logged and left alone.
+  - The blocklist check runs first, on the declared hash, so a blocked hash is refused without reading
+    anything. Equal hashes mean that check covered the verified bytes.
+  - `create-file-page` (5) has no such gap: it hashes the bytes it writes itself.
+- **8** also reads the `content` of every copied DOCUMENT and CANVAS for embedded stored files
+  (`/api/files/{id}/view|thumbnail|download`, `/dashboard/{driveId}/{pageId}/view`;
+  `apps/web/src/lib/upload/stored-file-references.ts`). Each id is resolved: a page's own file columns,
+  else the `files` row's `storagePath`, else an id that is itself a hash. The hashes go into the same
+  single blocklist query. A reference that resolves to stored bytes it can't hash fails closed and is
+  audited; an id that matches nothing stored is skipped, since nothing can be served under it. Inside the
+  transaction, a child whose content now embeds an id the screen didn't see aborts the copy with a 409. Text
+  edits alone don't.
 - **9 and 10** normally receive a file id that is the content hash. For any other id the gate reads the row's
   `storagePath` (one extra query, only for such ids) and resolves it the way the file readers do.
 - **10**: the DM validator already required the sender to have uploaded the file into this conversation; the
@@ -178,19 +200,16 @@ written only by the web app.
 ## Follow-ups (out of scope; predate this branch; not fixed)
 
 1. **Any client that knows a chat-attachment hash can get a presigned GET for it, with no proof it ever
-   uploaded those bytes.** #2975 narrowed this: the signer now refuses every key except an exact
-   `chat-attachments/<64 hex>/original`, so it is confined to chat attachments. It is not closed.
-   - `apps/web/src/lib/upload/chat-attachment-storage.ts:12`: `CHAT_ATTACHMENT_KEY_PATTERN` is still unanchored,
-     because it has to find a key inside a URL. So any URL, on any host, that contains
-     `chat-attachments/<hash>/original` is recognised as "ours".
-   - `apps/web/src/lib/ai/core/validate-image-parts.ts:104`: such a part skips validation as "already persisted".
-   - `apps/web/src/lib/ai/core/message-utils.ts:588` (`extractStructuredContentFromParts`, echoed-key branch):
-     it is saved as `{ storageKey }` with no ownership check. This branch adds only the blocklist check, which
-     reads the hash from the path.
-   - `apps/web/src/lib/ai/core/message-utils.ts:473` → `apps/web/src/lib/upload/chat-attachment-storage.ts:71`:
-     on read, a one-hour presigned GET is issued for the stored key.
-   - Chat attachments are in a global content-addressed namespace with no per-user record of who uploaded what,
-     so there is nothing to check ownership against today.
+   uploaded those bytes.** Narrowed twice; the ownership part is still open.
+   - #2975: the signer refuses every key except an exact `chat-attachments/<64 hex>/original`.
+   - This PR: an echoed value counts as ours only when it is exactly such a key, or a URL on the configured
+     storage endpoint (virtual-hosted or path-style, same protocol, no credentials or fragment) whose path is
+     exactly that key (`ownChatAttachmentKey`, `apps/web/src/lib/upload/chat-attachment-storage.ts`). An
+     attacker-hosted URL is an external URL again and fails validation as one.
+   - Still open: a client that knows a chat attachment's hash can build our own storage URL for it. That URL
+     is saved as `{ storageKey }` with no ownership check and signed on read, because chat attachments live
+     in a global content-addressed namespace with no per-user record of who uploaded what. The blocklist
+     still applies to that hash.
 2. *(Resolved by #2975, merged in at `931dc7457`: the signer refuses keys outside the chat-attachments shape,
    and text stored raw or written by an edit is neutralized so it can't be read back as an envelope.)*
 3. **Channel send accepts any stored file by hash.** `lockAndValidateChannelAttachments`
@@ -206,24 +225,15 @@ written only by the web app.
 5. **Bulk copy reads the tree twice**: once for the blocklist screen, once inside the transaction. Copying
    from the first read would remove the second; it means restructuring the route's copy loop, so it is left.
 
-7. **Page-file uploads are served before the stored bytes are verified.** `upload/complete` checks the
-   blocklist against the hash declared at presign and commits the page; the processor re-hashes the stored
-   object afterwards and deletes it on a mismatch. Until then the object is reachable through the page's
-   download and view routes, which don't look at `processingStatus`. If the enqueue fails, the window stays
-   open. So a client that declares a clean hash and PUTs blocked bytes gets them served for that window. The
-   presigned PUT signs `ContentLength` but no checksum. The commit-then-process order predates this branch.
-   Closing it means either verifying synchronously before the commit, which the attachment path already does
-   (`verifyAttachmentBytes`; the drive path would need a processor auth scope it doesn't have), or gating
-   serving on processing status. Both change the upload flow, so it is not done here.
-8. **v1 completions accepts client-built tool outputs with image bytes.** `normalizeMessage`
-   (`apps/web/src/lib/ai/core/validate-inference-request.ts`) passes a client's `parts` through unchanged. An
-   assistant part `tool-read_page` with `output.type: 'visual_content_delivered'` and its own `imageBase64`
-   reaches the provider as image data through `toModelOutputForReadPage`. Neither file validation nor the
-   blocklist screen sees it: both look only at `type: 'file'`. On a threaded `client_manages_history` call,
-   the tool-result back-fill can also write that output to the caller's own row (`updateMessageToolResults`).
-   This predates the branch. The fix is to drop or degrade client-supplied `visual_content_delivered` outputs
-   in normalization. Also, entry point 11 trusts an echoed key by its path, so Follow-up 1's unanchored
-   pattern lets an attacker-hosted URL reach the provider. That is fixed with Follow-up 1.
+7. *(Fixed in this PR: `upload/complete` re-hashes the stored object before the commit. See the note on
+   entry point 2.)*
+8. *(Fixed in this PR: v1 completions screens the `imageBase64` of client-supplied `read_page` visual
+   results in the same lookup as file parts. See the note on entry point 11. For the record, the bypass was
+   in `normalizeMessage` (`apps/web/src/lib/ai/openai-api/validate-inference-request.ts:44-49`), which passes
+   a client's `parts` through unchanged. It applied only to vision-capable models: for any other,
+   `guardReadPageToolForVision` degrades the result to metadata before conversion. The back-fill note stands,
+   because `extractToolResults` reads the `parts` of every assistant message in the request. A refused
+   request now returns before the back-fill runs.)*
 
 ## Erasure
 
@@ -293,8 +303,8 @@ PR #2976 review (at `d0c276eac`):
 | major — v1 completions sends unscreened attachments to the model when stateless or `client_manages_history` | Fixed: entry point 11. |
 | minor — a throwing blocklist lookup in attachment complete leaked the slot and pending-upload row | Fixed, along with the same leak in page-file complete. |
 | major (unverified) — bulk copy keyed the screen by id only, so a changed `filePath`/`contentHash` slipped through | Fixed: the reference is compared, and a change aborts with a 409. |
-| major — page-file bytes are served before the processor verifies the hash | Not fixed: predates this branch and needs a design decision. See Follow-ups 7. |
-| independent review — an attacker-hosted URL matching the key pattern, and forged `read_page` tool outputs, get past 11 | Both predate the branch. The claim is narrowed in the code and here; see Follow-ups 1 and 8. |
+| major — page-file bytes are served before the processor verifies the hash | Deferred, then fixed in round 2 (`bde61e0d2`). |
+| independent review — an attacker-hosted URL matching the key pattern, and forged `read_page` tool outputs, get past 11 | Both fixed in round 2 (`24734195c`, `634ed6f07`). |
 | independent review — the `content_cases` exclusion ignored the subject as reporter | Reason rewritten: either subject's request is answered by hand through the case process. Needs legal sign-off. |
 
 ## Commands and results
@@ -362,10 +372,30 @@ Merged, not rebased. Conflicts in `message-utils.ts`, `message-repository.ts`, a
 The import lists were unioned. The storage-attachments test now takes master's `importOriginal` mock, which
 passes the real `parseChatAttachmentContentHash` and `hashAttachmentBuffer` through, so the hand-written
 stand-ins were dropped. Both describe blocks are kept in `chat-attachment-storage.test.ts`. Follow-up 2 and
-the message-edit gap are closed by #2975. Follow-up 1 is narrowed but still open: the URL recognizer is
-unanchored and there is no ownership record.
+the message-edit gap are closed by #2975. Follow-up 1 is narrowed but still open. At that point the URL recognizer was
+still unanchored (it was anchored in round 2 below), and there is no ownership record.
 
 | Command | Result |
 |---|---|
 | `bun run typecheck` (`NODE_OPTIONS=--max-old-space-size=8192`, `--concurrency=4`) | PASS, 23 of 23 |
 | `apps/web`: `bunx vitest run src/lib/repositories src/lib/ai/core src/lib/ai/chat-pipeline src/lib/upload src/app/api/upload src/app/api/channels src/app/api/messages src/app/api/pages src/app/api/v1/chat src/app/api/ai` (test database, migrated to head) | PASS: 269 files, 4,455 tests |
+
+## PR #2976 review, round 2 (at `7b9775063`)
+
+The merge owner ruled that all five are fixed in this PR.
+
+| Finding | Outcome |
+|---|---|
+| major — a clean declared hash can serve blocked bytes before verification | Fixed in `bde61e0d2`: stored bytes are re-hashed before the commit. Entry point 2. |
+| major — Follow-up 8: wrong path, vision-only condition missing | Corrected and recorded as fixed; the underlying gap is closed by the next row. |
+| major — bulk copy ignores files embedded in document `content` | Fixed in `bfe7a6c05`. Entry point 8. |
+| major — v1 completions doesn't screen `read_page` `imageBase64` | Fixed in `634ed6f07`: screened in the same pre-hold lookup, neutral 422. |
+| major — echoed-attachment match not anchored to our storage | Fixed in `24734195c`. Follow-up 1. |
+
+Commands, round 2 (test database migrated to head):
+
+| Command | Result |
+|---|---|
+| `bun run typecheck` (`NODE_OPTIONS=--max-old-space-size=8192`, `--concurrency=4`) | PASS, 23 of 23 |
+| `eslint` on every `apps/web` file changed since `7b9775063` | Clean |
+| `apps/web`: `bunx vitest run src/lib/repositories src/lib/ai src/lib/upload src/app/api/upload src/app/api/channels src/app/api/messages src/app/api/pages src/app/api/v1 src/app/api/ai src/app/api/files` | PASS: 446 files, 7,848 tests |

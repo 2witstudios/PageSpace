@@ -156,9 +156,8 @@ export async function POST(request: Request): Promise<Response> {
   // echoed chat-attachment keys, as screenFilePartsAgainstBlocklist defines
   // them) and the image bytes of client-supplied `read_page` visual results,
   // which pass through normalization as pre-built parts and reach a vision
-  // model as image data. An echoed key is trusted by its path (the key pattern
-  // is unanchored); that predates this gate and is Follow-up 1 in the
-  // content-safety report.
+  // model as image data. Screened rather than dropped: client_manages_history
+  // callers legitimately resend read_page results the server delivered earlier.
   const screenableParts = [
     ...messagesWithFileParts.flatMap(m => m.parts),
     ...visualToolResultImageParts(messages),
