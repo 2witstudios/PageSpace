@@ -196,4 +196,25 @@ describe('useSheetPersistence', () => {
 
     expect(result.current.isLoaded).toBe(false);
   });
+
+  it('never renders loaded before history holds the stored sheet, across a deferred fetch', () => {
+    // Every render is recorded, so an intermediate commit with an editable
+    // placeholder would show up here, not just the settled final state.
+    let historyHasStoredSheet = false;
+    const resetHistory = vi.fn(() => {
+      historyHasStoredSheet = true;
+    });
+    const renders: Array<{ isLoaded: boolean; historyHasStoredSheet: boolean }> = [];
+    const { rerender } = renderHook(() => {
+      const value = useSheetPersistence({ pageId: 'page-1', socket: null, resetHistory: resetHistory as never });
+      renders.push({ isLoaded: value.isLoaded, historyHasStoredSheet });
+      return value;
+    });
+
+    documentRef.current = { content: sheetContent({ A1: 'stored' }), isDirty: false };
+    rerender();
+
+    expect(renders.some((r) => r.isLoaded)).toBe(true);
+    expect(renders.filter((r) => r.isLoaded && !r.historyHasStoredSheet)).toEqual([]);
+  });
 });
