@@ -6,7 +6,8 @@
  * type (already a direct dependency) rather than imported by name from
  * `@ai-sdk/provider-utils`, which only reaches this package transitively.
  */
-import type { Tool } from 'ai';
+import { isToolUIPart } from 'ai';
+import type { Tool, UIMessage, FileUIPart } from 'ai';
 
 type ToolModelOutputFn = NonNullable<Tool['toModelOutput']>;
 type ToolResultOutput = Awaited<ReturnType<ToolModelOutputFn>>;
@@ -127,4 +128,41 @@ export function guardReadPageToolForVision<T extends ToolWithModelOutput>(tool: 
   const toModelOutput: ToolModelOutputFn = ({ output }) =>
     toModelOutputForReadPage(degradeVisualContentToMetadata(output));
   return { ...tool, toModelOutput } as T;
+}
+
+// Strict base64 (standard alphabet, optional padding). The provider decodes the
+// same string, so anything that doesn't decode cleanly can't be hashed into
+// what the model would see — callers fail closed on it.
+const STRICT_BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+/**
+ * The image bytes of every output-available `read_page` visual result in
+ * `messages` (static or dynamic tool parts), as `data:` file parts for the
+ * content blocklist screen. The
+ * client-supplied `mimeType` is deliberately ignored — the hash depends only on
+ * the bytes, and a crafted type (`image/png;charset=utf-8`) must not stop the
+ * screen from decoding them. `undecodable` is true when any `imageBase64` is
+ * not strict base64.
+ */
+export function visualToolResultScreenParts(
+  messages: readonly UIMessage[],
+): { parts: FileUIPart[]; undecodable: boolean } {
+  const parts: FileUIPart[] = [];
+  let undecodable = false;
+  for (const message of messages) {
+    for (const part of message.parts ?? []) {
+      // Static (`tool-read_page`) and dynamic (`dynamic-tool`) parts alike, whatever
+      // tool name they claim: any visual payload reaching the model is screened.
+      if (!isToolUIPart(part) || part.state !== 'output-available') continue;
+      const output: unknown = part.output;
+      if (!isVisualContentDelivered(output)) continue;
+      if (output.imageBase64.length === 0) continue;
+      if (!STRICT_BASE64.test(output.imageBase64)) {
+        undecodable = true;
+        continue;
+      }
+      parts.push({ type: 'file', mediaType: 'application/octet-stream', url: `data:application/octet-stream;base64,${output.imageBase64}` });
+    }
+  }
+  return { parts, undecodable };
 }

@@ -34,9 +34,16 @@ vi.mock('@pagespace/lib/services/upload-semaphore', () => ({
 
 const mockCheckObjectExists = vi.fn();
 const mockIssuePresignedPutUrl = vi.fn();
+const mockDeleteStoredObject = vi.fn();
 vi.mock('../s3-effects', () => ({
   checkObjectExists: (...a: unknown[]) => mockCheckObjectExists(...a),
   issuePresignedPutUrl: (...a: unknown[]) => mockIssuePresignedPutUrl(...a),
+  deleteStoredObject: (...a: unknown[]) => mockDeleteStoredObject(...a),
+}));
+
+const mockPromoteStagedUpload = vi.fn();
+vi.mock('../promote-staged-upload', () => ({
+  promoteStagedUpload: (...a: unknown[]) => mockPromoteStagedUpload(...a),
 }));
 
 const mockVerifyAttachmentBytes = vi.fn();
@@ -52,6 +59,11 @@ vi.mock('@pagespace/lib/services/attachment-upload-repository', () => ({
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
+
+const mockIsUploadBlocked = vi.fn();
+vi.mock('@pagespace/lib/content-safety/upload-gate', () => ({
+  isUploadBlocked: (...a: unknown[]) => mockIsUploadBlocked(...a),
+}));
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   getActorInfo: vi.fn().mockResolvedValue({}),
   logFileActivity: vi.fn(),
@@ -97,6 +109,13 @@ describe('presignAttachment', () => {
     mockIssuePresignedPutUrl.mockResolvedValue('https://tigris/put');
     mockReserveConcurrentUploadSlot.mockResolvedValue(true);
     mockReleasePendingUpload.mockResolvedValue(undefined);
+    mockIsUploadBlocked.mockResolvedValue(false);
+  });
+
+  it('signs the PUT for the job staging key, never the served content-addressed key', async () => {
+    await presignAttachment(presignArgs());
+    expect(mockIssuePresignedPutUrl).toHaveBeenCalledWith('uploads/staging/job-1', expect.anything(), expect.anything(), expect.anything());
+    expect(mockIssuePresignedPutUrl.mock.calls.map((c) => c[0])).not.toContain(`files/${HASH}/original`);
   });
 
   it('issues a presigned URL and reserves a target-bound slot', async () => {
@@ -179,6 +198,48 @@ describe('presignAttachment', () => {
     expect(mockRelease).toHaveBeenCalledWith('job-1');
     expect(mockReleasePendingUpload).toHaveBeenCalledWith('job-1');
   });
+
+  describe('content blocklist', () => {
+    it('refuses a blocked hash with a neutral 422, before touching storage or reserving a slot', async () => {
+      mockIsUploadBlocked.mockResolvedValue(true);
+
+      const res = await presignAttachment(presignArgs());
+
+      expect(res).toEqual({ status: 422, body: { error: "This file can't be uploaded" } });
+      expect(mockCheckObjectExists).not.toHaveBeenCalled();
+      expect(mockAcquire).not.toHaveBeenCalled();
+      expect(mockIssuePresignedPutUrl).not.toHaveBeenCalled();
+    });
+
+    it('checks the canonical hash and records the channel target', async () => {
+      const args = presignArgs({ contentHash: HASH.toUpperCase() });
+
+      await presignAttachment(args);
+
+      expect(mockIsUploadBlocked).toHaveBeenCalledWith({
+        contentHash: HASH,
+        userId: 'user-1',
+        entryPoint: 'attachment.presign',
+        request: args.request,
+        details: { targetType: 'page', targetId: 'page-1' },
+      });
+    });
+
+    it('records the conversation target for a DM attachment', async () => {
+      await presignAttachment(presignArgs({ target: CONV_TARGET }));
+
+      expect(mockIsUploadBlocked).toHaveBeenCalledWith(
+        expect.objectContaining({ details: { targetType: 'conversation', targetId: 'conv-1' } }),
+      );
+    });
+
+    it('leaves an unblocked hash unaffected', async () => {
+      const res = await presignAttachment(presignArgs());
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ url: 'https://tigris/put', jobId: 'job-1' });
+    });
+  });
 });
 
 describe('completeAttachment', () => {
@@ -186,9 +247,11 @@ describe('completeAttachment', () => {
     vi.clearAllMocks();
     mockGetSlotMetadata.mockReturnValue({ contentHash: HASH, fileSize: 1024, mimeType: 'image/png', driveId: 'drive-1', attachmentTarget: PAGE_TARGET });
     mockVerifyAttachmentBytes.mockResolvedValue({ ok: true, detectedMime: 'image/png', size: 1024 });
+    mockPromoteStagedUpload.mockResolvedValue({ status: 'promoted' });
     mockSaveFileRecordAndLink.mockResolvedValue({ inserted: true });
     mockReleasePendingUpload.mockResolvedValue(undefined);
     mockUpdateStorageUsage.mockResolvedValue(undefined);
+    mockIsUploadBlocked.mockResolvedValue(false);
   });
 
   function completeArgs(over: Partial<Parameters<typeof completeAttachment>[0]> = {}) {
@@ -206,6 +269,50 @@ describe('completeAttachment', () => {
       userId: 'user-1',
     }));
     expect(mockRelease).toHaveBeenCalledWith('job-1');
+  });
+
+  it('publishes the staged bytes through the verified promotion before the processor verify and any row', async () => {
+    const order: string[] = [];
+    mockPromoteStagedUpload.mockImplementation(async () => { order.push('promote'); return { status: 'promoted' }; });
+    mockVerifyAttachmentBytes.mockImplementation(async () => { order.push('verify'); return { ok: true, detectedMime: 'image/png', size: 1024 }; });
+    mockSaveFileRecordAndLink.mockImplementation(async () => { order.push('save'); return { inserted: true }; });
+
+    await completeAttachment(completeArgs());
+
+    expect(mockPromoteStagedUpload).toHaveBeenCalledWith({ jobId: 'job-1', contentHash: HASH, maxBytes: 1024, servedKey: `files/${HASH}/original` });
+    expect(order).toEqual(['promote', 'verify', 'save']);
+  });
+
+  it('given staged bytes that do not match the declared hash, should refuse before the processor verify, creating nothing', async () => {
+    mockPromoteStagedUpload.mockResolvedValue({ status: 'mismatch' });
+
+    const res = await completeAttachment(completeArgs());
+
+    expect(res).toEqual({ status: 422, body: { error: 'Uploaded file failed integrity verification' } });
+    expect(mockVerifyAttachmentBytes).not.toHaveBeenCalled();
+    expect(mockSaveFileRecordAndLink).not.toHaveBeenCalled();
+    expect(mockRelease).toHaveBeenCalledWith('job-1');
+    expect(mockReleasePendingUpload).toHaveBeenCalledWith('job-1');
+  });
+
+  it('given no staged object (dedup fast-path), should go on to the processor verify of the served object', async () => {
+    mockPromoteStagedUpload.mockResolvedValue({ status: 'no_staging' });
+
+    const res = await completeAttachment(completeArgs());
+
+    expect(res.status).toBe(200);
+    expect(mockVerifyAttachmentBytes).toHaveBeenCalled();
+  });
+
+  it('given the promotion throws, should release both reservations and answer a retryable 503', async () => {
+    mockPromoteStagedUpload.mockRejectedValue(new Error('s3 down'));
+
+    const res = await completeAttachment(completeArgs());
+
+    expect(res.status).toBe(503);
+    expect(mockSaveFileRecordAndLink).not.toHaveBeenCalled();
+    expect(mockRelease).toHaveBeenCalledWith('job-1');
+    expect(mockReleasePendingUpload).toHaveBeenCalledWith('job-1');
   });
 
   it('returns 403 for an unknown/expired jobId', async () => {
@@ -272,6 +379,68 @@ describe('completeAttachment', () => {
     expect(mockRelease).toHaveBeenCalledWith('job-1');
     expect(mockReleasePendingUpload).toHaveBeenCalledWith('job-1');
   });
+
+  describe('content blocklist', () => {
+    it('refuses a blocked hash with a neutral 422 and links nothing', async () => {
+      mockIsUploadBlocked.mockResolvedValue(true);
+
+      const res = await completeAttachment(completeArgs());
+
+      expect(res).toEqual({ status: 422, body: { error: "This file can't be uploaded" } });
+      expect(mockVerifyAttachmentBytes).not.toHaveBeenCalled();
+      expect(mockSaveFileRecordAndLink).not.toHaveBeenCalled();
+      expect(mockUpdateStorageUsage).not.toHaveBeenCalled();
+    });
+
+    it('releases the reserved slot and pending-upload row when it refuses', async () => {
+      mockIsUploadBlocked.mockResolvedValue(true);
+
+      await completeAttachment(completeArgs());
+
+      expect(mockRelease).toHaveBeenCalledWith('job-1');
+      expect(mockReleasePendingUpload).toHaveBeenCalledWith('job-1');
+    });
+
+    it('releases the reserved slot and pending-upload row when the lookup throws, and rethrows', async () => {
+      mockIsUploadBlocked.mockRejectedValue(new Error('db down'));
+
+      await expect(completeAttachment(completeArgs())).rejects.toThrow('db down');
+
+      expect(mockRelease).toHaveBeenCalledWith('job-1');
+      expect(mockReleasePendingUpload).toHaveBeenCalledWith('job-1');
+      expect(mockVerifyAttachmentBytes).not.toHaveBeenCalled();
+    });
+
+    it('checks the hash reserved at presign', async () => {
+      const args = completeArgs();
+
+      await completeAttachment(args);
+
+      expect(mockIsUploadBlocked).toHaveBeenCalledWith({
+        contentHash: HASH,
+        userId: 'user-1',
+        entryPoint: 'attachment.complete',
+        request: args.request,
+        details: { targetType: 'page', targetId: 'page-1' },
+      });
+    });
+
+    it('does not consult the blocklist for a slot bound to another target', async () => {
+      mockGetSlotMetadata.mockReturnValue({ contentHash: HASH, fileSize: 1024, mimeType: 'image/png', driveId: '', attachmentTarget: CONV_TARGET });
+
+      const res = await completeAttachment(completeArgs());
+
+      expect(res.status).toBe(403);
+      expect(mockIsUploadBlocked).not.toHaveBeenCalled();
+    });
+
+    it('leaves an unblocked hash unaffected', async () => {
+      const res = await completeAttachment(completeArgs());
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ success: true, file: { id: HASH } });
+    });
+  });
 });
 
 describe('cancelAttachment', () => {
@@ -285,6 +454,14 @@ describe('cancelAttachment', () => {
     const res = await cancelAttachment({ userId: 'user-1', jobId: 'job-1' });
     expect(res.status).toBe(200);
     expect(mockRelease).toHaveBeenCalledWith('job-1');
+  });
+
+  it("deletes the job's staging object, and still succeeds if that fails", async () => {
+    mockVerifySlotOwner.mockReturnValue(true);
+    mockDeleteStoredObject.mockRejectedValue(new Error('s3 down'));
+    const res = await cancelAttachment({ userId: 'user-1', jobId: 'job-1' });
+    expect(res.status).toBe(200);
+    expect(mockDeleteStoredObject).toHaveBeenCalledWith('uploads/staging/job-1');
   });
 
   it('returns 403 and releases nothing for a slot the user does not own', async () => {

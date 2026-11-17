@@ -54,6 +54,7 @@ export * from './schema/ai-compaction';
 export * from './schema/custom-domains';
 export * from './schema/incidents';
 export * from './schema/data-subject-requests';
+export * from './schema/content-safety';
 export * from './schema/oauth';
 export * from './schema/form-targets';
 export * from './schema/machine-sprite-reclaims';
@@ -130,6 +131,7 @@ import * as aiCompaction from './schema/ai-compaction';
 import * as customDomains from './schema/custom-domains';
 import * as incidents from './schema/incidents';
 import * as dataSubjectRequests from './schema/data-subject-requests';
+import * as contentSafety from './schema/content-safety';
 import * as oauth from './schema/oauth';
 import * as formTargets from './schema/form-targets';
 import * as machineSpriteReclaims from './schema/machine-sprite-reclaims';
@@ -207,6 +209,7 @@ export const schema = {
   ...customDomains,
   ...incidents,
   ...dataSubjectRequests,
+  ...contentSafety,
   ...oauth,
   ...formTargets,
   ...machineSpriteReclaims,

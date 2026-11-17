@@ -114,6 +114,7 @@ vi.mock('@/lib/ai/core/message-utils', () => ({
   }),
   extractMessageContent: vi.fn().mockReturnValue('Hello'),
   extractToolResults: vi.fn().mockReturnValue([]),
+  screenFilePartsAgainstBlocklist: vi.fn(async (parts: unknown[]) => ({ parts, blockedHashes: [] })),
 }));
 vi.mock('@/lib/ai/core/ai-tools', async () => {
   const { toModelOutputForReadPage } = await import('@/lib/ai/tools/read-page-vision-output');
@@ -201,12 +202,13 @@ vi.mock('ai', async (importOriginal) => {
 import { NextResponse } from 'next/server';
 import { streamText } from 'ai';
 import { POST } from '../route';
+import { ContentBlockedError } from '@pagespace/lib/content-safety/policy';
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 
-import { sanitizeMessagesForModel, extractMessageContent } from '@/lib/ai/core/message-utils';
+import { sanitizeMessagesForModel, extractMessageContent, screenFilePartsAgainstBlocklist } from '@/lib/ai/core/message-utils';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import type { UIMessage } from 'ai';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
@@ -491,6 +493,144 @@ describe('POST /api/v1/chat/completions', () => {
       should: 'still return 400 from file-part validation and never call the prepaid credit gate',
       actual: { status: response.status, error: body.error, creditGateCalled: vi.mocked(canConsumeAI).mock.calls.length > 0 },
       expected: { status: 400, error: 'Image "cat.png" exceeds the 4MB size limit', creditGateCalled: false },
+    });
+  });
+
+  test('refuses a blocklisted attachment in a stateless call (no conversation_id) before the credit gate and the model', async () => {
+    vi.mocked(hasFileParts).mockImplementation((message: UIMessage) => message.id === 'msg-1');
+    vi.mocked(screenFilePartsAgainstBlocklist).mockResolvedValueOnce({ parts: [], blockedHashes: ['ab'.repeat(32)] });
+    const body = {
+      model: 'ps-agent://page-123',
+      messages: [
+        {
+          role: 'user',
+          id: 'msg-1',
+          content: 'What is in this image?',
+          parts: [{ type: 'file', url: 'data:image/png;base64,aGVsbG8=', mediaType: 'image/png' }],
+        },
+        { role: 'user', id: 'msg-3', content: 'Thanks!', parts: [{ type: 'text', text: 'Thanks!' }] },
+      ],
+    };
+    const response = await POST(makeRequest(body));
+    assert({
+      given: 'a stateless request whose EARLIER message carries an attachment on the content blocklist',
+      should: 'return the neutral 422, never reserve credit, and never call the model',
+      actual: {
+        status: response.status,
+        body: await response.json(),
+        screenedUser: vi.mocked(screenFilePartsAgainstBlocklist).mock.calls[0]?.[1],
+        creditGateCalled: vi.mocked(canConsumeAI).mock.calls.length > 0,
+        streamTextCalls: vi.mocked(streamText).mock.calls.length,
+      },
+      expected: {
+        status: 422,
+        body: { error: "This file can't be uploaded" },
+        screenedUser: { userId: mcpAuth.userId },
+        creditGateCalled: false,
+        streamTextCalls: 0,
+      },
+    });
+  });
+
+  test('screens the file parts of every request message against the blocklist in ONE lookup', async () => {
+    vi.mocked(hasFileParts).mockImplementation((message: UIMessage) => message.parts.some(p => p.type === 'file'));
+    const first = { type: 'file', url: 'data:image/png;base64,aGVsbG8=', mediaType: 'image/png' };
+    const second = { type: 'file', url: 'data:image/png;base64,d29ybGQ=', mediaType: 'image/png' };
+    const body = {
+      model: 'ps-agent://page-123',
+      client_manages_history: true,
+      messages: [
+        { role: 'user', id: 'msg-1', content: 'one', parts: [first] },
+        { role: 'assistant', id: 'msg-2', content: 'two', parts: [second] },
+        { role: 'user', id: 'msg-3', content: 'Thanks!', parts: [{ type: 'text', text: 'Thanks!' }] },
+      ],
+    };
+    const response = await POST(makeRequest(body));
+    const calls = vi.mocked(screenFilePartsAgainstBlocklist).mock.calls;
+    assert({
+      given: 'a resent history with file parts on a user AND an assistant message, none blocked',
+      should: 'screen both parts in a single blocklist call and carry on to the model',
+      actual: {
+        calls: calls.length,
+        screenedUrls: (calls[0]?.[0] as Array<{ url?: string }> | undefined)?.map(p => p.url),
+        status: response.status,
+      },
+      expected: { calls: 1, screenedUrls: [first.url, second.url], status: 200 },
+    });
+  });
+
+  test('screens the image bytes of a client-supplied read_page visual result, and refuses a blocked one', async () => {
+    const imageBase64 = Buffer.from('blocked-bytes').toString('base64');
+    vi.mocked(screenFilePartsAgainstBlocklist).mockResolvedValueOnce({ parts: [], blockedHashes: ['ab'.repeat(32)] });
+    const body = {
+      model: 'ps-agent://page-123',
+      client_manages_history: true,
+      messages: [
+        {
+          role: 'assistant',
+          id: 'msg-1',
+          content: '',
+          parts: [{
+            type: 'tool-read_page',
+            toolCallId: 'call-1',
+            state: 'output-available',
+            input: { pageId: 'p' },
+            output: { success: true, type: 'visual_content_delivered', mimeType: 'image/png', imageBase64, message: 'here' },
+          }],
+        },
+        { role: 'user', id: 'msg-2', content: 'Thanks!', parts: [{ type: 'text', text: 'Thanks!' }] },
+      ],
+    };
+    const response = await POST(makeRequest(body));
+    const screened = vi.mocked(screenFilePartsAgainstBlocklist).mock.calls[0]?.[0] as Array<{ type: string; url?: string }> | undefined;
+    assert({
+      given: 'a resent history whose assistant turn carries a read_page visual result with image bytes (no file parts at all)',
+      should: 'screen those bytes as a data: file part and return the neutral 422 before the credit gate and the model',
+      actual: {
+        screened: screened?.map(p => ({ type: p.type, url: p.url })),
+        status: response.status,
+        creditGateCalled: vi.mocked(canConsumeAI).mock.calls.length > 0,
+        streamTextCalls: vi.mocked(streamText).mock.calls.length,
+      },
+      expected: {
+        screened: [{ type: 'file', url: `data:application/octet-stream;base64,${imageBase64}` }],
+        status: 422,
+        creditGateCalled: false,
+        streamTextCalls: 0,
+      },
+    });
+  });
+
+  test('refuses a client-supplied read_page visual result whose imageBase64 is not decodable, before the gate and the model', async () => {
+    const body = {
+      model: 'ps-agent://page-123',
+      client_manages_history: true,
+      messages: [
+        {
+          role: 'assistant',
+          id: 'msg-1',
+          content: '',
+          parts: [{
+            type: 'tool-read_page',
+            toolCallId: 'call-1',
+            state: 'output-available',
+            input: { pageId: 'p' },
+            output: { success: true, type: 'visual_content_delivered', mimeType: 'image/png;charset=utf-8', imageBase64: '%%%not-base64%%%', message: 'here' },
+          }],
+        },
+        { role: 'user', id: 'msg-2', content: 'Thanks!', parts: [{ type: 'text', text: 'Thanks!' }] },
+      ],
+    };
+    const response = await POST(makeRequest(body));
+    assert({
+      given: 'a read_page visual result whose bytes cannot be decoded, so cannot be hashed',
+      should: 'fail closed with the neutral 422 and never reserve credit or call the model',
+      actual: {
+        status: response.status,
+        creditGateCalled: vi.mocked(canConsumeAI).mock.calls.length > 0,
+        streamTextCalls: vi.mocked(streamText).mock.calls.length,
+      },
+      expected: { status: 422, creditGateCalled: false, streamTextCalls: 0 },
     });
   });
 
@@ -1374,6 +1514,30 @@ describe('POST /api/v1/chat/completions', () => {
   });
 
   // --- Credit-hold leak regressions (audit findings L6, L7) ---
+
+  test('a blocklisted attachment refused at user-message persistence returns the neutral 422, not a 500', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValueOnce({ allowed: true, reason: 'unlimited', holdId: 'hold-blocked' });
+    vi.mocked(messageRepository.savePageMessage).mockRejectedValueOnce(new ContentBlockedError('ab'.repeat(32)));
+
+    const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
+
+    assert({
+      given: 'a user message whose attachment is on the content blocklist',
+      should: 'return 422 with the neutral message, release the hold, and never call the model',
+      actual: {
+        status: response.status,
+        body: await response.json(),
+        releasedHoldId: vi.mocked(releaseHold).mock.calls[0]?.[0],
+        streamTextCalls: vi.mocked(streamText).mock.calls.length,
+      },
+      expected: {
+        status: 422,
+        body: { error: "This file can't be uploaded" },
+        releasedHoldId: 'hold-blocked',
+        streamTextCalls: 0,
+      },
+    });
+  });
 
   test('L6: a pre-stream setup throw releases the hold and never reaches the model', async () => {
     vi.mocked(canConsumeAI).mockResolvedValueOnce({ allowed: true, reason: 'unlimited', holdId: 'hold-setup' });

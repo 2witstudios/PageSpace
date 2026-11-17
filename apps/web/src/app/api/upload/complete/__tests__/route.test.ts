@@ -32,6 +32,9 @@ vi.mock('@pagespace/db/db', () => ({
         findFirst: (...args: unknown[]) => mockFindFirst(...args),
         findMany: (...args: unknown[]) => mockFindMany(...args),
       },
+      files: {
+        findFirst: (...args: unknown[]) => mockFilesFindFirst(...args),
+      },
     },
   },
 }));
@@ -75,10 +78,15 @@ vi.mock('@pagespace/lib/services/upload-semaphore', () => ({
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-  loggers: { api: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } },
+  loggers: {
+    api: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    security: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  },
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
+
+vi.mock('@pagespace/lib/content-safety/upload-gate', () => ({ isUploadBlocked: vi.fn() }));
 
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   getActorInfo: vi.fn().mockResolvedValue({}),
@@ -89,9 +97,15 @@ vi.mock('@/lib/upload/processor-effects', () => ({
   enqueueProcessorJob: vi.fn(),
 }));
 
-const mockCheckObjectExists = vi.fn();
+const mockDigestStoredObject = vi.fn();
+const mockDeleteStoredObject = vi.fn();
 vi.mock('@/lib/upload/s3-effects', () => ({
-  checkObjectExists: (...args: unknown[]) => mockCheckObjectExists(...args),
+  digestStoredObject: (...args: unknown[]) => mockDigestStoredObject(...args),
+  deleteStoredObject: (...args: unknown[]) => mockDeleteStoredObject(...args),
+}));
+const mockPromoteStagedUpload = vi.fn();
+vi.mock('@/lib/upload/promote-staged-upload', () => ({
+  promoteStagedUpload: (...args: unknown[]) => mockPromoteStagedUpload(...args),
 }));
 
 vi.mock('@pagespace/lib/services/upload-validation', () => ({
@@ -108,6 +122,7 @@ import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { chargeStorageForStore } from '@pagespace/lib/services/storage-limits';
 import { releasePendingUpload } from '@pagespace/lib/services/pending-uploads';
 import { enqueueProcessorJob } from '@/lib/upload/processor-effects';
+import { isUploadBlocked } from '@pagespace/lib/content-safety/upload-gate';
 
 // Captures the values passed to tx.insert(pages).values(...) for assertion
 let capturedPageValues: Record<string, unknown> | undefined;
@@ -145,6 +160,7 @@ function makeTxImpl() {
 }
 
 const VALID_HASH = 'b'.repeat(64);
+const FINAL_KEY = `files/${VALID_HASH}/original`;
 const MOCK_JOB_ID = 'user-1-slot-xyz';
 
 function makeAuth(userId = 'user-1') {
@@ -181,6 +197,7 @@ beforeEach(() => {
   vi.mocked(uploadSemaphore.getSlotMetadata).mockReturnValue(SLOT_META);
   vi.mocked(enqueueProcessorJob).mockResolvedValue(undefined);
   vi.mocked(releasePendingUpload).mockResolvedValue(undefined);
+  vi.mocked(isUploadBlocked).mockResolvedValue(false);
 
   // Default sibling lookups: empty list (new page lands at position 0).
   mockFindFirst.mockResolvedValue(undefined);
@@ -188,8 +205,10 @@ beforeEach(() => {
   // Default: the files-row insert succeeds (first physical store → fileWasInserted).
   filesInsertReturning = [{ id: VALID_HASH }];
   mockFilesFindFirst.mockResolvedValue(undefined);
-  // Default: the uploaded object is present in storage.
-  mockCheckObjectExists.mockResolvedValue(true);
+  // Default: the client PUT the declared bytes to its staging key, and they were published.
+  mockPromoteStagedUpload.mockResolvedValue({ status: 'promoted' });
+  mockDigestStoredObject.mockResolvedValue({ status: 'missing' });
+  mockDeleteStoredObject.mockResolvedValue(undefined);
 
   mockTransaction.mockImplementation(makeTxImpl());
 });
@@ -247,16 +266,93 @@ describe('POST /api/upload/complete', () => {
 
   describe('object verification', () => {
     it('returns 409 and creates no page when the uploaded object is missing from storage', async () => {
-      mockCheckObjectExists.mockResolvedValue(false);
+      mockPromoteStagedUpload.mockResolvedValue({ status: 'no_staging' });
+      mockDigestStoredObject.mockResolvedValue({ status: 'missing' });
       const res = await POST(makeRequest(VALID_BODY));
       expect(res.status).toBe(409);
       expect(mockTransaction).not.toHaveBeenCalled();
     });
 
     it('releases the slot when the object is missing', async () => {
-      mockCheckObjectExists.mockResolvedValue(false);
+      mockPromoteStagedUpload.mockResolvedValue({ status: 'no_staging' });
+      mockDigestStoredObject.mockResolvedValue({ status: 'missing' });
       await POST(makeRequest(VALID_BODY));
       expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_JOB_ID);
+    });
+
+    it('publishes the staged upload through the verified promotion, bounded by the size reserved at presign, before committing', async () => {
+      const order: string[] = [];
+      mockPromoteStagedUpload.mockImplementation(async () => { order.push('promote'); return { status: 'promoted' }; });
+      mockTransaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => { order.push('commit'); return makeTxImpl()(fn); });
+
+      const res = await POST(makeRequest(VALID_BODY));
+
+      expect(res.status).toBe(200);
+      expect(mockPromoteStagedUpload).toHaveBeenCalledWith({ jobId: MOCK_JOB_ID, contentHash: VALID_HASH, maxBytes: SLOT_META.fileSize, servedKey: FINAL_KEY });
+      expect(order).toEqual(['promote', 'commit']);
+    });
+
+    it('given no staging object (the dedup fast-path skipped the PUT), should verify the existing served object instead', async () => {
+      mockPromoteStagedUpload.mockResolvedValue({ status: 'no_staging' });
+      mockDigestStoredObject.mockResolvedValue({ status: 'ok', sha256: VALID_HASH, size: 2048 });
+
+      const res = await POST(makeRequest(VALID_BODY));
+
+      expect(res.status).toBe(200);
+      expect(mockDigestStoredObject).toHaveBeenCalledWith(FINAL_KEY, SLOT_META.fileSize);
+    });
+  });
+
+  describe('stored bytes verified before the page commits', () => {
+    const BLOCKED_BYTES_HASH = 'e'.repeat(64);
+
+    it('given a clean declared hash but different (blocked) staged bytes, should refuse and serve nothing', async () => {
+      mockPromoteStagedUpload.mockResolvedValue({ status: 'mismatch' });
+
+      const res = await POST(makeRequest(VALID_BODY));
+
+      expect(res.status).toBe(422);
+      expect(await res.json()).toEqual({ error: 'Uploaded file failed integrity verification' });
+      // No page, no files row, no processor job: nothing exists that could serve the bytes.
+      expect(mockTransaction).not.toHaveBeenCalled();
+      expect(enqueueProcessorJob).not.toHaveBeenCalled();
+      expect(chargeStorageForStore).not.toHaveBeenCalled();
+      expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_JOB_ID);
+      expect(releasePendingUpload).toHaveBeenCalledWith(MOCK_JOB_ID);
+    });
+
+    it.each([
+      ['different bytes', { status: 'ok', sha256: BLOCKED_BYTES_HASH, size: 2048 }],
+      ['more bytes than reserved', { status: 'oversize' }],
+    ])('given an existing served object with %s, should refuse but never delete the shared served key', async (_label, digest) => {
+      mockPromoteStagedUpload.mockResolvedValue({ status: 'no_staging' });
+      mockDigestStoredObject.mockResolvedValue(digest);
+
+      const res = await POST(makeRequest(VALID_BODY));
+
+      expect(res.status).toBe(422);
+      expect(mockTransaction).not.toHaveBeenCalled();
+      expect(mockDeleteStoredObject).not.toHaveBeenCalled();
+    });
+
+    it('given the promotion throws, should release both reservations and answer a retryable 503', async () => {
+      mockPromoteStagedUpload.mockRejectedValue(new Error('s3 timeout'));
+
+      const res = await POST(makeRequest(VALID_BODY));
+
+      expect(res.status).toBe(503);
+      expect(mockTransaction).not.toHaveBeenCalled();
+      expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_JOB_ID);
+      expect(releasePendingUpload).toHaveBeenCalledWith(MOCK_JOB_ID);
+    });
+
+    it('does not read the stored object when the declared hash is already blocked', async () => {
+      vi.mocked(isUploadBlocked).mockResolvedValue(true);
+
+      await POST(makeRequest(VALID_BODY));
+
+      expect(mockPromoteStagedUpload).not.toHaveBeenCalled();
+      expect(mockDigestStoredObject).not.toHaveBeenCalled();
     });
   });
 
@@ -448,5 +544,61 @@ describe('POST /api/upload/complete', () => {
       // Response may vary but slot must be released
       expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_JOB_ID);
     });
+  });
+});
+
+describe('POST /api/upload/complete — content blocklist', () => {
+  // The hash can be blocked between presign and complete, and the dedup
+  // fast-path reaches /complete without a PUT, so presign's check is not enough.
+  it('refuses a blocked hash with a neutral 422 and creates no page or file row', async () => {
+    vi.mocked(isUploadBlocked).mockResolvedValue(true);
+
+    const res = await POST(makeRequest(VALID_BODY));
+
+    expect(res.status).toBe(422);
+    expect(await res.json()).toEqual({ error: "This file can't be uploaded" });
+    expect(mockTransaction).not.toHaveBeenCalled();
+    expect(chargeStorageForStore).not.toHaveBeenCalled();
+    expect(enqueueProcessorJob).not.toHaveBeenCalled();
+  });
+
+  it('releases the reserved slot and pending-upload row when it refuses', async () => {
+    vi.mocked(isUploadBlocked).mockResolvedValue(true);
+
+    await POST(makeRequest(VALID_BODY));
+
+    expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_JOB_ID);
+    expect(releasePendingUpload).toHaveBeenCalledWith(MOCK_JOB_ID);
+  });
+
+  it('releases the reserved slot and pending-upload row when the blocklist lookup throws, and rethrows', async () => {
+    vi.mocked(isUploadBlocked).mockRejectedValue(new Error('db down'));
+
+    await expect(POST(makeRequest(VALID_BODY))).rejects.toThrow('db down');
+
+    expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_JOB_ID);
+    expect(releasePendingUpload).toHaveBeenCalledWith(MOCK_JOB_ID);
+    expect(mockTransaction).not.toHaveBeenCalled();
+  });
+
+  it('checks the hash reserved at presign, never one from the body', async () => {
+    const request = makeRequest({ ...VALID_BODY, contentHash: 'f'.repeat(64) });
+
+    await POST(request);
+
+    expect(isUploadBlocked).toHaveBeenCalledWith({
+      contentHash: VALID_HASH,
+      userId: 'user-1',
+      entryPoint: 'upload.complete',
+      request,
+      details: { driveId: 'drive-1' },
+    });
+  });
+
+  it('leaves an unblocked hash unaffected', async () => {
+    const res = await POST(makeRequest(VALID_BODY));
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).success).toBe(true);
   });
 });

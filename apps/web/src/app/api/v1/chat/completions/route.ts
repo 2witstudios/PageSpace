@@ -23,16 +23,17 @@ import {
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { toolModelContext } from '@/lib/ai/core/tool-model-context';
 import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
-import { sanitizeMessagesForModel, extractMessageContent, convertDbMessageToUIMessage, extractToolResults } from '@/lib/ai/core/message-utils';
+import { sanitizeMessagesForModel, extractMessageContent, convertDbMessageToUIMessage, extractToolResults, screenFilePartsAgainstBlocklist } from '@/lib/ai/core/message-utils';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForReadOnly, filterToolsForMcpScope, filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibilityForConversation } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { getModelCapabilities, hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { hasFileParts, validateUserMessageFileParts } from '@/lib/ai/core/validate-image-parts';
+import { contentBlockedResponse, contentBlockedResponseFor } from '@/lib/upload/content-blocked-response';
 import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
-import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
+import { guardReadPageToolForVision, visualToolResultScreenParts } from '@/lib/ai/tools/read-page-vision-output';
 import { validateInferenceRequest } from '@/lib/ai/openai-api/validate-inference-request';
 import { adaptToOpenAIChunk } from '@/lib/ai/openai-api/adapt-to-openai-chunk';
 import { buildToolSummaryEvent } from '@/lib/ai/openai-api/build-tool-summary-event';
@@ -146,6 +147,25 @@ export async function POST(request: Request): Promise<Response> {
     }
   }
   const requestHasImageParts = messagesWithFileParts.length > 0;
+
+  // 5b'. Content blocklist — every image the request body carries, in ONE
+  // lookup. Persistence screens only the newest message, and only on a threaded
+  // call: a stateless call persists nothing and a client_manages_history call
+  // resends earlier turns the server never saw. Refused the same way persistence
+  // refuses it, before the credit hold. Covers `file` parts (`data:` bytes and
+  // echoed chat-attachment keys, as screenFilePartsAgainstBlocklist defines
+  // them) and the image bytes of client-supplied `read_page` visual results,
+  // which pass through normalization as pre-built parts and reach a vision
+  // model as image data. Screened rather than dropped: client_manages_history
+  // callers legitimately resend read_page results the server delivered earlier.
+  const visualResults = visualToolResultScreenParts(messages);
+  // Bytes that can't be decoded can't be checked: refused like a block.
+  if (visualResults.undecodable) return contentBlockedResponse();
+  const screenableParts = [...messagesWithFileParts.flatMap(m => m.parts), ...visualResults.parts];
+  if (screenableParts.length > 0) {
+    const { blockedHashes } = await screenFilePartsAgainstBlocklist(screenableParts, { userId: authResult.userId });
+    if (blockedHashes.length > 0) return contentBlockedResponse();
+  }
 
   // 5c. Conversation ownership check — if a conversation_id is provided the caller
   // must own the conversations row. This prevents one user from appending messages
@@ -853,6 +873,10 @@ export async function POST(request: Request): Promise<Response> {
       },
     });
   } catch (setupError) {
+    // An attachment on the content blocklist was refused at persistence, before
+    // the model saw it: a neutral 4xx rather than the generic 500 below.
+    const blocked = contentBlockedResponseFor(setupError);
+    if (blocked) return blocked;
     // Pre-stream failure (capabilities / convertToModelMessages / persistence). No provider
     // tokens were billed; the finally frees the hold. Return 500 like the in-app chat route.
     // ...with the driver's own diagnostics, not just Drizzle's `Failed query:`

@@ -13,10 +13,13 @@ import { releasePendingUpload } from '@pagespace/lib/services/pending-uploads';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { buildS3Key, canLinkExistingFileRow } from '@pagespace/lib/services/upload-validation';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { isUploadBlocked } from '@pagespace/lib/content-safety/upload-gate';
+import { contentBlockedResponse } from '@/lib/upload/content-blocked-response';
 import { getActorInfo, logFileActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { enqueueProcessorJob } from '@/lib/upload/processor-effects';
-import { checkObjectExists } from '@/lib/upload/s3-effects';
+import { digestStoredObject } from '@/lib/upload/s3-effects';
+import { promoteStagedUpload } from '@/lib/upload/promote-staged-upload';
 import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -218,6 +221,23 @@ export async function POST(request: Request) {
     }
   }
 
+  // Content blocklist, re-checked: the hash may have been blocked since presign,
+  // and the dedup fast-path reaches here without any PUT. A lookup that throws
+  // must still release both reservations, then propagate.
+  let blocked: boolean;
+  try {
+    blocked = await isUploadBlocked({ contentHash, userId, entryPoint: 'upload.complete', request, details: { driveId } });
+  } catch (err) {
+    uploadSemaphore.releaseUploadSlot(jobId);
+    await releasePendingUpload(jobId).catch(() => undefined);
+    throw err;
+  }
+  if (blocked) {
+    uploadSemaphore.releaseUploadSlot(jobId);
+    await releasePendingUpload(jobId).catch(() => undefined);
+    return contentBlockedResponse();
+  }
+
   // A client-supplied parentId is only gated by drive-level edit access above, so
   // confirm the parent actually lives in this (reserved) drive and isn't trashed —
   // otherwise an editor of one drive could nest the upload under a page in another
@@ -230,15 +250,43 @@ export async function POST(request: Request) {
     }
   }
 
-  // The UI uploads straight to S3, so /complete can be reached without the PUT
-  // ever happening. Confirm the object is actually present before creating a
-  // page/file record and charging storage, so a skipped or failed upload can't
-  // leave an orphaned file page pointing at a missing object.
-  const objectExists = await checkObjectExists(buildS3Key(contentHash));
-  if (!objectExists) {
+  // The stored bytes are proven HERE, before any page or `files` row exists. A
+  // presigned PUT binds a key and a length, never the bytes, and stays valid
+  // for its whole TTL, so presign signs it for a per-job staging key the client
+  // can keep rewriting. promoteStagedUpload copies staging to a server-only
+  // holding key, hashes that copy, and publishes exactly it to the served key —
+  // so only bytes this server hashed are ever written there. With no staging
+  // object (the dedup fast-path skipped the PUT), the existing served object is
+  // hashed instead; a mismatch there is refused but never deleted, since other
+  // completions may own that shared key. The blocklist check above ran on the
+  // declared hash; equal hashes mean it covered the verified bytes too.
+  const s3Key = buildS3Key(contentHash);
+  const refuse = async (body: { error: string }, status: number) => {
     uploadSemaphore.releaseUploadSlot(jobId);
     await releasePendingUpload(jobId).catch(() => undefined);
-    return NextResponse.json({ error: 'Uploaded object not found in storage' }, { status: 409 });
+    return NextResponse.json(body, { status });
+  };
+  const VERIFY_FAILED = { error: 'Uploaded file failed integrity verification' };
+  const logContext = { userId, driveId, jobId, contentHash };
+  try {
+    const promoted = await promoteStagedUpload({ jobId, contentHash, maxBytes: fileSize, servedKey: s3Key });
+    if (promoted.status === 'mismatch') {
+      loggers.security.warn('Upload verify: staged bytes do not match the declared hash', logContext);
+      return await refuse(VERIFY_FAILED, 422);
+    }
+    if (promoted.status === 'no_staging') {
+      const existing = await digestStoredObject(s3Key, fileSize);
+      if (existing.status === 'missing') {
+        return await refuse({ error: 'Uploaded object not found in storage' }, 409);
+      }
+      if (existing.status === 'oversize' || existing.sha256 !== contentHash) {
+        loggers.security.warn('Upload verify: served object does not match its key; left in place', logContext);
+        return await refuse(VERIFY_FAILED, 422);
+      }
+    }
+  } catch (err) {
+    loggers.api.error('Upload verify failed', err instanceof Error ? err : new Error(String(err)), logContext);
+    return await refuse({ error: 'File verification is temporarily unavailable. Please try again.' }, 503);
   }
 
   let newPage: typeof pages.$inferSelect;

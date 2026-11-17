@@ -72,6 +72,7 @@ import { actorFromAuth } from '../../auth/request-actor';
  * other.
  */
 import { ConversationHistoryDeletedError } from '@/lib/repositories/resolve-or-create-conversation';
+import { userMessageSaveRefusal } from './user-message-save-refusal';
 // Mention-notification RECIPIENTS are an audience (third parties), so they resolve through getUsersWhoCanViewPage.
 import { getUsersWhoCanViewPage } from '@pagespace/lib/permissions/permissions';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
@@ -1062,9 +1063,8 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
             .catch((err) => loggers.ai.error('AI Chat: Failed to expand mentions', err as Error));
         }
       } catch (error) {
-        if (error instanceof ConversationHistoryDeletedError) {
-          return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
-        }
+        const refusal = userMessageSaveRefusal(error);
+        if (refusal) return refusal;
         loggers.ai.error('AI Chat API: Failed to save user message', error as Error);
         return NextResponse.json({
           error: 'Failed to save message to database',

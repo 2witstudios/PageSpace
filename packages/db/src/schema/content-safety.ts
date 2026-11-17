@@ -1,0 +1,125 @@
+import { pgTable, text, timestamp, jsonb, index } from 'drizzle-orm/pg-core';
+import { createId } from '@paralleldrive/cuid2';
+
+/**
+ * Content safety: the hash blocklist, the scan-verdict cache, and the case
+ * record behind every takedown or report.
+ *
+ * NO FOREIGN KEYS — deliberately. Every reference to a user, page, drive or
+ * case in these tables is a plain text ID. These rows exist for legal
+ * preservation, so they must survive the things they point at: GDPR erasure
+ * deletes the `users` row and relies on FK cascades to sweep the rest
+ * (packages/lib/src/compliance/erasure), and a cascading or restricting FK here
+ * would either destroy the evidence or block the erasure. With no FK, neither
+ * can happen. Do not "tidy" these into `.references(...)`; the
+ * content-safety schema test fails if you do.
+ */
+
+/** Why a hash is blocked. `csam` and `malware` are purged globally; see lib policy. */
+export type ContentBlockCategory = 'csam' | 'malware' | 'illegal_other' | 'policy';
+
+/** What put the hash on the blocklist. */
+export type ContentBlockSource = 'admin' | 'hash_match' | 'report';
+
+export type ContentScanVerdict = 'clean' | 'flagged' | 'error';
+
+export type ContentCaseTargetType =
+  | 'content_hash'
+  | 'file'
+  | 'page'
+  | 'published_url'
+  | 'user'
+  | 'avatar';
+
+export type ContentCaseStatus = 'open' | 'actioned' | 'dismissed';
+
+/**
+ * Who and what was involved at the moment the case was opened, copied here so
+ * it stays readable after the live rows are erased or deleted.
+ */
+export type ContentCaseSnapshot = {
+  uploaderUserId?: string;
+  driveIds?: string[];
+  pageIds?: string[];
+  ipAddress?: string;
+  userAgent?: string;
+  [key: string]: unknown;
+};
+
+/** One recorded takedown step, so an interrupted takedown can resume (PR 2). */
+export type ContentCaseStep = {
+  step: string;
+  status: 'ok' | 'skipped' | 'failed';
+  detail?: string;
+  at: string;
+};
+
+/** Hashes that must never be stored or served again. */
+export const contentBlocks = pgTable(
+  'content_blocks',
+  {
+    // Lowercase sha256 hex — the same value as `files.id`.
+    contentHash: text('content_hash').primaryKey(),
+    category: text('category').$type<ContentBlockCategory>().notNull(),
+    source: text('source').$type<ContentBlockSource>().notNull(),
+    // Plain text, no FK (see file header).
+    caseId: text('case_id'),
+    // Admin user ID. Plain text, no FK: the block outlives the admin's account.
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    caseIdx: index('content_blocks_case_id_idx').on(table.caseId),
+  }),
+);
+
+/** Scan verdicts cached by hash. Filled by the publish gate (PR 4). */
+export const contentScans = pgTable('content_scans', {
+  contentHash: text('content_hash').primaryKey(),
+  verdict: text('verdict').$type<ContentScanVerdict>().notNull(),
+  provider: text('provider').notNull(),
+  providerVersion: text('provider_version'),
+  scores: jsonb('scores').$type<Record<string, unknown>>(),
+  scannedAt: timestamp('scanned_at', { mode: 'date' }).notNull().defaultNow(),
+});
+
+/** The record behind every takedown or report. */
+export const contentCases = pgTable(
+  'content_cases',
+  {
+    id: text('id').primaryKey().$defaultFn(() => createId()),
+
+    // Target. `targetId` is a hash, file/page/user ID or URL depending on
+    // `targetType` — plain text, no FK (see file header).
+    targetType: text('target_type').$type<ContentCaseTargetType>().notNull(),
+    targetId: text('target_id').notNull(),
+    contentHash: text('content_hash'),
+
+    status: text('status').$type<ContentCaseStatus>().notNull().default('open'),
+    // Null until triaged: a visitor's report doesn't arrive with a category.
+    category: text('category').$type<ContentBlockCategory>(),
+
+    // Reporter. Plain text, no FK; null for system-opened or anonymous cases.
+    reporterUserId: text('reporter_user_id'),
+    reporterContact: text('reporter_contact'),
+    reason: text('reason'),
+
+    snapshot: jsonb('snapshot').$type<ContentCaseSnapshot>(),
+    steps: jsonb('steps').$type<ContentCaseStep[]>(),
+
+    createdAt: timestamp('created_at', { mode: 'date' }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { mode: 'date' }).notNull().defaultNow().$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    targetIdx: index('content_cases_target_idx').on(table.targetType, table.targetId),
+    contentHashIdx: index('content_cases_content_hash_idx').on(table.contentHash),
+    statusCreatedIdx: index('content_cases_status_created_at_idx').on(table.status, table.createdAt),
+  }),
+);
+
+export type ContentBlock = typeof contentBlocks.$inferSelect;
+export type NewContentBlock = typeof contentBlocks.$inferInsert;
+export type ContentScan = typeof contentScans.$inferSelect;
+export type NewContentScan = typeof contentScans.$inferInsert;
+export type ContentCase = typeof contentCases.$inferSelect;
+export type NewContentCase = typeof contentCases.$inferInsert;

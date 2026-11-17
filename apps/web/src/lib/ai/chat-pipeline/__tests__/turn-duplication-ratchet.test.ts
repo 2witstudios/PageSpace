@@ -93,8 +93,14 @@ const SPEC = path.join(repoRoot(), 'docs/2.0-architecture/agent-sessions.md');
  * 163 → 153 (assistant-surface extraction): master's Imago work extracted the
  * assistant context/tool assembly the Global Assistant shared with Imago into
  * `assistant-surface.ts`; ten formerly duplicated lines now have one home.
+ *
+ * 153 → 154 (content-safety PR 1, re-upload block): a blocklisted chat attachment is refused
+ * at the user-message save. That mapping was EXTRACTED to `user-message-save-refusal.ts`
+ * together with the deleted-conversation 404 both turns already copied, so one identical
+ * line (the `instanceof` branch) left and two arrived: the shared module's import and its
+ * one call.
  */
-const RECORDED_IDENTICAL_LINES = 153;
+const RECORDED_IDENTICAL_LINES = 154;
 
 /** Substantive lines: no blanks, no comments, trimmed. */
 const substantiveLines = (file: string): string[] =>

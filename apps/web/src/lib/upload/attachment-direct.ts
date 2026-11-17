@@ -29,13 +29,31 @@ import {
 } from '@pagespace/lib/services/attachment-upload-core';
 import { sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { isUploadBlocked } from '@pagespace/lib/content-safety/upload-gate';
+import { CONTENT_BLOCKED_MESSAGE, CONTENT_BLOCKED_STATUS } from '@pagespace/lib/content-safety/policy';
 import { getActorInfo, logFileActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { checkObjectExists, issuePresignedPutUrl } from './s3-effects';
+import { checkObjectExists, deleteStoredObject, issuePresignedPutUrl } from './s3-effects';
+import { promoteStagedUpload } from './promote-staged-upload';
+import { buildUploadStagingKey } from './upload-staging';
 import { verifyAttachmentBytes, type AttachmentVerifyResult } from './attachment-verify-effect';
 import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 const PRESIGN_TTL = 900;
+
+/** Neutral refusal for a blocklisted hash — never says why. */
+const contentBlockedResult = (): OrchestratorResult => ({
+  status: CONTENT_BLOCKED_STATUS,
+  body: { error: CONTENT_BLOCKED_MESSAGE },
+});
+
+/** IDs recorded on the audit event when a blocked attachment is refused. */
+function blockedAttemptDetails(target: AttachmentTarget): Record<string, unknown> {
+  return {
+    targetType: target.type,
+    targetId: target.type === 'page' ? target.pageId : target.conversationId,
+  };
+}
 
 export interface OrchestratorResult {
   status: number;
@@ -71,6 +89,11 @@ export async function presignAttachment(args: PresignAttachmentArgs): Promise<Or
   const validation = validateAttachmentPresign({ contentHash, mimeType, fileSize, tier: quota.tier });
   if (!validation.ok) return { status: validation.status, body: { error: validation.error } };
   const canonicalHash = validation.canonicalHash;
+
+  // Content blocklist — before any storage probe, slot or presigned URL.
+  if (await isUploadBlocked({ contentHash: canonicalHash, userId, entryPoint: 'attachment.presign', request, details: blockedAttemptDetails(target) })) {
+    return contentBlockedResult();
+  }
 
   const quotaCheck = await checkUploadQuotaTarget(quotaTarget, fileSize);
   if (!quotaCheck.allowed) {
@@ -113,7 +136,9 @@ export async function presignAttachment(args: PresignAttachmentArgs): Promise<Or
       return { status: 200, body: { alreadyExists: true, jobId, key } };
     }
 
-    const url = await issuePresignedPutUrl(key, mimeType, fileSize, PRESIGN_TTL);
+    // A per-job staging key, never `key` itself: completion publishes only bytes
+    // it hashed, so a re-PUT later can't overwrite the served object.
+    const url = await issuePresignedPutUrl(buildUploadStagingKey(jobId), mimeType, fileSize, PRESIGN_TTL);
     const expiresAt = new Date(Date.now() + PRESIGN_TTL * 1000).toISOString();
 
     auditRequest(request, {
@@ -159,7 +184,43 @@ export async function completeAttachment(args: CompleteAttachmentArgs): Promise<
   // Only the content hash is read from the slot: the MIME and byte length are
   // taken from the processor's verification result (authoritative), not the
   // client-declared presign values.
-  const { contentHash } = reserved;
+  const { contentHash, fileSize: reservedSize } = reserved;
+
+  // Content blocklist, re-checked: the hash may have been blocked since presign,
+  // and the dedup path reaches here without any PUT. Before the processor reads it.
+  // A lookup that throws must still release both reservations, like every other
+  // failure below, then propagate.
+  let blocked: boolean;
+  try {
+    blocked = await isUploadBlocked({ contentHash, userId, entryPoint: 'attachment.complete', request, details: blockedAttemptDetails(target) });
+  } catch (err) {
+    uploadSemaphore.releaseUploadSlot(jobId);
+    await releasePendingUpload(jobId).catch(() => undefined);
+    throw err;
+  }
+  if (blocked) {
+    uploadSemaphore.releaseUploadSlot(jobId);
+    await releasePendingUpload(jobId).catch(() => undefined);
+    return contentBlockedResult();
+  }
+
+  // Publish the staged bytes to the served key, but only a server-only copy this
+  // server hashed (promote-staged-upload.ts). With no staging object (dedup
+  // fast-path) the served object is already there; the processor verify below
+  // re-hashes it either way and supplies the true MIME type.
+  try {
+    const promoted = await promoteStagedUpload({ jobId, contentHash, maxBytes: reservedSize, servedKey: buildS3Key(contentHash) });
+    if (promoted.status === 'mismatch') {
+      uploadSemaphore.releaseUploadSlot(jobId);
+      await releasePendingUpload(jobId).catch(() => undefined);
+      return { status: 422, body: { error: 'Uploaded file failed integrity verification' } };
+    }
+  } catch (err) {
+    uploadSemaphore.releaseUploadSlot(jobId);
+    await releasePendingUpload(jobId).catch(() => undefined);
+    loggers.api.error('Attachment staging promotion failed', err as Error);
+    return { status: 503, body: { error: 'File verification is temporarily unavailable. Please try again.' } };
+  }
 
   // Synchronous byte verification before any rows exist. The processor re-hashes
   // the stored object (deleting it on mismatch) and returns the true MIME type and
@@ -275,5 +336,7 @@ export async function cancelAttachment(args: { userId: string; jobId: string }):
 
   uploadSemaphore.releaseUploadSlot(jobId);
   await releasePendingUpload(jobId).catch(() => undefined);
+  // Whatever was PUT for this job is served by nothing; best-effort removal.
+  await Promise.resolve().then(() => deleteStoredObject(buildUploadStagingKey(jobId))).catch(() => undefined);
   return { status: 200, body: { success: true } };
 }
