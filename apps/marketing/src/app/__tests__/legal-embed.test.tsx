@@ -4,7 +4,19 @@
  * pricing or out of the embedded set — App Store Guideline 3.1.1 (no route to web prices).
  */
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+
+// A fixed web-app origin (the production default), set before any document or metadata.ts is evaluated: the report
+// link assertions, and the pagespace.ai match in sameSiteHrefs, must not depend on the runner's NEXT_PUBLIC_APP_URL.
+const { previousAppUrl } = vi.hoisted(() => {
+  const previous = process.env.NEXT_PUBLIC_APP_URL;
+  process.env.NEXT_PUBLIC_APP_URL = 'https://pagespace.ai';
+  return { previousAppUrl: previous };
+});
+afterAll(() => {
+  if (previousAppUrl === undefined) delete process.env.NEXT_PUBLIC_APP_URL;
+  else process.env.NEXT_PUBLIC_APP_URL = previousAppUrl;
+});
 import { isEmbedded, isEmbeddedSearch, legalHref } from '@/lib/legal-embed';
 
 vi.mock('@/components/SiteNavbar', () => ({ SiteNavbar: () => <nav data-testid="site-navbar" /> }));

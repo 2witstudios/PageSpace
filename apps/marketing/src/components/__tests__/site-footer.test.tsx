@@ -1,5 +1,17 @@
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+
+// A fixed web-app origin (the production default), set before the footer (and metadata.ts) are evaluated, so the assertion does not depend
+// on the NEXT_PUBLIC_APP_URL of whoever runs the tests.
+const { previousAppUrl } = vi.hoisted(() => {
+  const previous = process.env.NEXT_PUBLIC_APP_URL;
+  process.env.NEXT_PUBLIC_APP_URL = 'https://pagespace.ai';
+  return { previousAppUrl: previous };
+});
+afterAll(() => {
+  if (previousAppUrl === undefined) delete process.env.NEXT_PUBLIC_APP_URL;
+  else process.env.NEXT_PUBLIC_APP_URL = previousAppUrl;
+});
 
 vi.mock('@/components/ThemeToggle', () => ({ ThemeToggle: () => null }));
 
