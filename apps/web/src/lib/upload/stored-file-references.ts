@@ -51,16 +51,25 @@ function decodeCssEscapes(text: string): string {
   });
 }
 
+/** What a JavaScript single-character escape stands for; any other escaped character is itself. */
+const JS_SINGLE_ESCAPES: Readonly<Record<string, string>> = { n: '\n', t: '\t', r: '\r', b: '\b', f: '\f', v: '\v', '0': '\0' };
+
 /**
- * JavaScript string escapes (`\u002f`, `\u{2f}`, `\x2f`) resolved. Only the
- * backstop uses this: a reference spelled that way in script text can't be
- * resolved statically, but it must not hide from the count.
+ * JavaScript string-literal escapes resolved as the engine resolves them:
+ * `\u002f`, `\u{2f}`, `\x2f`, single-character escapes (`\/`, `\t`, `\q`),
+ * and line continuations dropped. One pass, left to right, so `\\` is one
+ * backslash. A malformed `\u`/`\x` is left as written.
  */
 function decodeJsEscapes(text: string): string {
-  return text.replace(/\\u\{([0-9a-fA-F]{1,6})\}|\\u([0-9a-fA-F]{4})|\\x([0-9a-fA-F]{2})/g, (whole, braced: string | undefined, u4: string | undefined, x2: string | undefined) => {
-    const codePoint = parseInt(braced ?? u4 ?? x2 ?? '', 16);
-    return codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : whole;
-  });
+  return text.replace(
+    /\\(?:u\{([0-9a-fA-F]{1,6})\}|u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2})|(\r\n|[\n\r\u2028\u2029])|([^ux]))/g,
+    (whole, braced: string | undefined, u4: string | undefined, x2: string | undefined, continuation: string | undefined, single: string | undefined) => {
+      if (continuation !== undefined) return '';
+      if (single !== undefined) return JS_SINGLE_ESCAPES[single] ?? single;
+      const codePoint = parseInt(braced ?? u4 ?? x2 ?? '', 16);
+      return codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : whole;
+    },
+  );
 }
 
 /**
@@ -103,9 +112,10 @@ function servedIdOf(candidate: string): string | null {
   return match ? (match[1] ?? match[2]) : null;
 }
 
+type ParsedContent = ReturnType<typeof load>;
+
 /** Ids referenced from the parsed document: every attribute on every element, and every `<style>` block. */
-function parsedReferenceIds(content: string): string[] {
-  const $ = load(content);
+function parsedReferenceIds($: ParsedContent): string[] {
   const ids: string[] = [];
   const consider = (candidate: string) => {
     const id = servedIdOf(candidate);
@@ -121,6 +131,25 @@ function parsedReferenceIds(content: string): string[] {
     for (const candidate of cssUrls($(element).text())) consider(candidate);
   });
   return ids;
+}
+
+/**
+ * The parts of the document a browser runs as JavaScript: `<script>` bodies,
+ * `on*` handler attributes, and `javascript:` URLs. Only these are read with
+ * JavaScript escape rules; read that way, CSS (`\70 `) would yield junk.
+ */
+function scriptRegions($: ParsedContent): string[] {
+  const regions: string[] = [];
+  $('script').each((_, element) => {
+    regions.push($(element).text());
+  });
+  $('*').each((_, element) => {
+    if (!('attribs' in element)) return;
+    for (const [name, value] of Object.entries(element.attribs)) {
+      if (/^on/i.test(name) || /^[\s\p{Cc}]*javascript:/iu.test(value)) regions.push(value);
+    }
+  });
+  return regions;
 }
 
 /** Free text split into URL-like tokens: anything between whitespace, quotes, brackets and separators. */
@@ -141,9 +170,10 @@ function textReferenceIds(content: string): string[] {
   const ids: string[] = [];
   for (const text of forms) {
     for (const match of text.matchAll(STORED_FILE_REFERENCE)) ids.push(match[1] ?? match[2]);
-    for (const token of text.split(TEXT_TOKEN_SEPARATOR)) {
-      if (!/files|dashboard/i.test(token)) continue;
-      const id = servedIdOf(token);
+    const literals = [...text.matchAll(/"([^"]*)"|'([^']*)'|`([^`]*)`/g)].map((match) => match[1] ?? match[2] ?? match[3] ?? '');
+    for (const candidate of [...text.split(TEXT_TOKEN_SEPARATOR), ...literals]) {
+      if (!/files|dashboard/i.test(candidate)) continue;
+      const id = servedIdOf(candidate.trim());
       if (id) ids.push(id);
     }
   }
@@ -170,18 +200,30 @@ function collapsePathSegments(text: string): string {
 
 /**
  * `content` reduced to the skeleton the backstop counts in: every encoding
- * peeled (HTML references, percent, CSS and JavaScript escapes, repeatedly), backslashes
+ * peeled (HTML references, percent escapes, and CSS escapes, or JavaScript escapes in script regions, repeatedly), backslashes
  * turned into slashes, every whitespace, control and format character
  * (zero-width included) removed, and dot segments and repeated slashes collapsed.
  */
-function backstopSkeleton(content: string): string {
-  let text = content;
-  for (let round = 0; round < 4; round++) {
-    const next = decodePercentEscapes(decodeHTML(decodeCssEscapes(decodeJsEscapes(text))));
-    if (next === text) break;
-    text = next;
-  }
-  return collapsePathSegments(text.replace(/\\/g, '/').replace(/[\s\p{Cc}\p{Cf}]/gu, ''));
+function backstopSkeletons(content: string, scripts: readonly string[]): string[] {
+  // CSS and JavaScript read a backslash differently (`\70 ` is `p` in CSS, `70 `
+  // in a script): the whole content is read with CSS rules, each script region
+  // also with JavaScript rules.
+  const decodings: Array<[string, (text: string) => string]> = [
+    [content, decodeCssEscapes],
+    ...scripts.map((script): [string, (text: string) => string] => [script, decodeJsEscapes]),
+  ];
+  const chains = decodings.map(([source, decodeEscapes]) => {
+    let text = source;
+    for (let round = 0; round < 4; round++) {
+      const next = decodePercentEscapes(decodeHTML(decodeEscapes(text)));
+      if (next === text) break;
+      text = next;
+    }
+    return text.replace(/\\/g, '/').replace(/[\s\p{Cc}\p{Cf}]/gu, '');
+  });
+  // Collapsing can join separate regions of the document (`x/../` across
+  // markup) and erase a mention, so the uncollapsed forms are counted too.
+  return [...chains, ...chains.map(collapsePathSegments)];
 }
 
 export interface StoredFileReferenceScan {
@@ -206,13 +248,13 @@ export interface StoredFileReferenceScan {
  * No static scan can see one.
  */
 export function scanStoredFileReferences(content: string): StoredFileReferenceScan {
-  const ids = [...new Set([...parsedReferenceIds(content), ...textReferenceIds(content)])];
+  const $ = load(content);
+  const ids = [...new Set([...parsedReferenceIds($), ...textReferenceIds(content)])];
   const accounted = new Set(ids.map((id) => id.toLowerCase()));
-  const skeleton = backstopSkeleton(content);
-  const mentioned = [
+  const mentioned = backstopSkeletons(content, scriptRegions($)).flatMap((skeleton) => [
     ...[...skeleton.matchAll(/api\/files\/([a-zA-Z0-9_-]*)/gi)].map((match) => match[1]),
     ...[...skeleton.matchAll(/dashboard\/[a-zA-Z0-9_-]*\/([a-zA-Z0-9_-]*)\/view/gi)].map((match) => match[1]),
-  ];
+  ]);
   const complete = mentioned.every((id) => accounted.has(id.toLowerCase()));
   return { ids, complete };
 }

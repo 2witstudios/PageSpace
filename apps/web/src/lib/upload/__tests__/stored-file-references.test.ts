@@ -182,8 +182,12 @@ describe('scanStoredFileReferences', () => {
     expect(scan.complete).toBe(true);
   });
 
-  it('given a line continuation the URL candidates cannot resolve, should report the scan incomplete', () => {
-    expect(scanStoredFileReferences('<p>/api/fi\\\nles/page-a/view</p>').complete).toBe(false);
+  it('given a line continuation in free text, should join it (over-finding is safe) and return the id', () => {
+    expect(scanStoredFileReferences('<p>/api/fi\\\nles/page-a/view</p>')).toEqual({ ids: ['page-a'], complete: true });
+  });
+
+  it('given a JavaScript escape in a handler attribute that the token scan cannot resolve, should report the scan incomplete', () => {
+    expect(scanStoredFileReferences('<img onerror="this.src=\'/api/\\u0066iles/ page-a/view\'">').complete).toBe(false);
   });
 
   it('given dot segments in free text (script bodies, markdown), should normalise them as the browser does and return the id', () => {
@@ -202,6 +206,27 @@ describe('scanStoredFileReferences', () => {
     expect(scanStoredFileReferences('<p>api/ ./files/page-a/view</p>').complete).toBe(false);
     expect(scanStoredFileReferences('<p>/api//files/page-a/view</p>').complete).toBe(false);
     expect(scanStoredFileReferences('<p>/dashboard/d/x/../ page-a/view</p>').complete).toBe(false);
+  });
+
+  it('given escaped slashes in a script URL followed by parent segments elsewhere, should still return the id', () => {
+    const content = '<script>new Image().src="/api\\/files\\/page-a\\/view"</script><p>/../../../../</p>';
+    expect(scanStoredFileReferences(content)).toEqual({ ids: ['page-a'], complete: true });
+  });
+
+  it('given a mention that only the uncollapsed skeleton shows, should report the scan incomplete', () => {
+    // Collapsing `x/../` across the two regions would erase the first mention.
+    expect(scanStoredFileReferences('<p>/api/ files/page-a/view</p><p>/../../../../</p>').complete).toBe(false);
+  });
+
+  it('given JavaScript single-character escapes inside a string literal, should resolve them as the script does', () => {
+    const content = [
+      '<script>a = "/api/fi\\les/page-a/view"</script>',
+      '<script>b = "/api/files/page-b/vi\\tew"</script>',
+      "<script>c = '/dashboard/d/page-c\\/view'</script>",
+    ].join('\n');
+    const scan = scanStoredFileReferences(content);
+    expect(scan.ids.sort()).toEqual(['page-a', 'page-b', 'page-c']);
+    expect(scan.complete).toBe(true);
   });
 
   it('given every occurrence accounted for, should report the scan complete', () => {
