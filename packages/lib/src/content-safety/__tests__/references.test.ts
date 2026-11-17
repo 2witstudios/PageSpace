@@ -10,19 +10,23 @@ import { pages } from '@pagespace/db/schema/core';
 const state = vi.hoisted(() => ({
   failMessages: false,
   pageRows: [] as Array<{ id: string; driveId: string; createdBy: string | null }>,
+  /** What the reference scan (ids and conversations) returns. */
   messageRows: [] as Array<{ id: string; conversationId: string; userId: string | null; role: string; content: string }>,
+  /** What the uploader scan (user messages whose body names the key as a storageKey) returns; defaults to messageRows. */
+  uploaderRows: null as Array<{ userId: string | null; role: string; content: string }> | null,
   transactions: 0,
   statements: [] as string[],
 }));
 
 vi.mock('@pagespace/db/db', () => {
-  const select = () => ({
+  const select = (fields?: Record<string, unknown>) => ({
     from: (table: unknown) => ({
       where: () => ({
         limit: async () => {
           if (table === messages) {
             if (state.failMessages) throw new Error('canceling statement due to statement timeout');
-            return state.messageRows;
+            const uploaderScan = fields !== undefined && 'content' in fields;
+            return uploaderScan ? state.uploaderRows ?? state.messageRows : state.messageRows;
           }
           return table === pages ? state.pageRows : [];
         },
@@ -101,6 +105,7 @@ describe('collectAiMessageReferences (the takedown step)', () => {
     state.failMessages = false;
     state.transactions = 0;
     state.statements = [];
+    state.uploaderRows = null;
     state.messageRows = [
       { id: 'msg-1', conversationId: 'conv-1', userId: 'chat-user', role: 'user', content: attachedEnvelope() },
       { id: 'msg-2', conversationId: 'conv-1', userId: null, role: 'user', content: attachedEnvelope() },
@@ -130,6 +135,17 @@ describe('collectAiMessageReferences (the takedown step)', () => {
     expect((await collectAiMessageReferences(HASH)).uploaderUserIds).toEqual([]);
   });
 
+  it('finds the real uploader even when messages quoting the key fill the reference window', async () => {
+    state.messageRows = Array.from({ length: 1001 }, (_, i) => ({
+      id: `quote-${i}`, conversationId: 'spam', userId: 'spammer', role: 'user', content: `raw ${KEY}`,
+    }));
+    state.uploaderRows = [{ userId: 'uploader', role: 'user', content: attachedEnvelope() }];
+    const refs = await collectAiMessageReferences(HASH);
+    expect(refs.uploaderUserIds).toEqual(['uploader']);
+    expect(refs.aiMessageIds).toHaveLength(1000);
+    expect(refs.truncated).toBe(true);
+  });
+
   it('names no uploader for an assistant message, even one carrying the attachment', async () => {
     state.messageRows = [
       { id: 'm1', conversationId: 'c', userId: 'human-in-chat', role: 'assistant', content: attachedEnvelope() },
@@ -152,6 +168,7 @@ describe('collectAiMessageReferences (the takedown step)', () => {
 
     await collectAiMessageReferences(HASH, { extendedTimeout: true });
     expect(state.transactions).toBe(1);
+    // One transaction holds both scans, so the longer timeout covers each of them.
     expect(state.statements).toEqual(["set local statement_timeout = '120s'"]);
   });
 

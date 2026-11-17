@@ -45,6 +45,7 @@ let filePageId: string;
 let legacyPageId: string;
 let linkedPageId: string;
 let chatMessageId: string;
+let quotingMessageId: string;
 
 describe('takedown database edge — real Postgres', () => {
   beforeAll(async () => {
@@ -79,6 +80,13 @@ describe('takedown database edge — real Postgres', () => {
       content: JSON.stringify({ textParts: ['x'], fileParts: [{ storageKey: `chat-attachments/${CHAT_HASH}/original` }], partsOrder: [{ type: 'file' }] }),
     });
     chatMessageId = message.id;
+    // Someone else only QUOTES the key, both as raw text and inside a real envelope's text part.
+    const quoting = await factories.createChatMessage(linkedPageId, {
+      conversationId: message.conversationId,
+      userId: uploader,
+      content: JSON.stringify({ textParts: [`"storageKey":"chat-attachments/${CHAT_HASH}/original"`], partsOrder: [{ index: 0, type: 'text' }] }),
+    });
+    quotingMessageId = quoting.id;
   });
 
   afterAll(async () => {
@@ -109,7 +117,8 @@ describe('takedown database edge — real Postgres', () => {
 
     it('finds an AI chat message by the attachment key in its body, and its author', async () => {
       const refs = await collectContentReferences(CHAT_HASH);
-      expect(refs.aiMessageIds).toEqual([chatMessageId]);
+      expect(refs.aiMessageIds.sort()).toEqual([chatMessageId, quotingMessageId].sort());
+      // Only the message that really attaches the file names an uploader; the one quoting its key does not.
       expect(refs.uploaderUserIds).toEqual([linker]);
       expect(refs.conversationIds).toHaveLength(1);
     });

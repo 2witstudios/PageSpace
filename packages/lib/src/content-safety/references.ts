@@ -8,7 +8,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, inArray, like, or, sql } from '@pagespace/db/operators';
+import { and, eq, inArray, isNotNull, like, or, sql } from '@pagespace/db/operators';
 import { channelMessageAttachments, channelMessages } from '@pagespace/db/schema/chat';
 import { messages } from '@pagespace/db/schema/conversations';
 import { pages } from '@pagespace/db/schema/core';
@@ -199,7 +199,7 @@ const EXTENDED_AI_SCAN_TIMEOUT = '120s';
  * this is the ONLY record of who uploaded it.
  *
  * `extendedTimeout` runs the scan in its own transaction with a longer
- * statement timeout, so it applies to this one statement and nothing else on
+ * statement timeout, so it applies to these two statements and nothing else on
  * the connection. Without it the scan runs at the pool's ordinary timeout.
  */
 export async function collectAiMessageReferences(
@@ -210,21 +210,28 @@ export async function collectAiMessageReferences(
   if (!contentHash) throw new Error('Invalid content hash');
   const attachmentKey = `chat-attachments/${contentHash}/original`;
   const pattern = `%${escapeLikePattern(attachmentKey)}%`;
+  // The web app writes the envelope with JSON.stringify, so a real attachment appears as exactly this
+  // member. Typed text cannot produce it: inside a JSON string its quotes are escaped.
+  const storageKeyPattern = `%${escapeLikePattern(JSON.stringify({ storageKey: attachmentKey }).slice(1, -1))}%`;
   type Executor = Pick<typeof db, 'select'>;
-  const scan = (executor: Executor) =>
-    executor
-      .select({
-        id: messages.id,
-        conversationId: messages.conversationId,
-        userId: messages.userId,
-        role: messages.role,
-        content: messages.content,
-      })
+  const scan = async (executor: Executor) => {
+    // Every message whose body carries the key: all are recorded on the case.
+    const references = await executor
+      .select({ id: messages.id, conversationId: messages.conversationId })
       .from(messages)
       .where(like(messages.content, pattern))
       .limit(REFERENCE_LIMIT + 1);
+    // Uploader candidates, scanned separately so messages that merely quote the key can never crowd a
+    // real attachment out of the window above.
+    const uploads = await executor
+      .select({ userId: messages.userId, role: messages.role, content: messages.content })
+      .from(messages)
+      .where(and(eq(messages.role, 'user'), isNotNull(messages.userId), like(messages.content, storageKeyPattern)))
+      .limit(REFERENCE_LIMIT + 1);
+    return { references, uploads };
+  };
 
-  let rows: Array<{ id: string; conversationId: string; userId: string | null; role: string; content: string }>;
+  let rows: Awaited<ReturnType<typeof scan>>;
   try {
     rows = options.extendedTimeout
       ? await db.transaction(async (tx) => {
@@ -238,18 +245,20 @@ export async function collectAiMessageReferences(
     throw error;
   }
 
-  const truncated = rows.length > REFERENCE_LIMIT;
-  const kept = truncated ? rows.slice(0, REFERENCE_LIMIT) : rows;
+  const truncated = rows.references.length > REFERENCE_LIMIT || rows.uploads.length > REFERENCE_LIMIT;
+  const kept = rows.references.slice(0, REFERENCE_LIMIT);
   return {
     aiMessageIds: kept.map((row) => row.id),
     conversationIds: [...new Set(kept.map((row) => row.conversationId))],
-    // The substring search only finds CANDIDATES: anyone can type the key into a message. An author is an
-    // uploader only of a user message whose persisted envelope really attaches it.
+    // A LIKE match is only a candidate: an author is an uploader of a user message whose persisted
+    // envelope really attaches the file.
     uploaderUserIds: [
       ...new Set(
-        kept.flatMap((row) =>
-          row.userId && row.role === 'user' && attachesStorageKey(row.content, attachmentKey) ? row.userId : [],
-        ),
+        rows.uploads
+          .slice(0, REFERENCE_LIMIT)
+          .flatMap((row) =>
+            row.userId && row.role === 'user' && attachesStorageKey(row.content, attachmentKey) ? row.userId : [],
+          ),
       ),
     ],
     truncated,
