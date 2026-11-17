@@ -92,6 +92,8 @@ export type ContentCaseSnapshot = {
    * same key (a re-sweep). The first verified copy is never overwritten.
    */
   additionalEvidenceKeys?: string[];
+  /** An avatar takedown's preserved copies, one per avatar object, each named by its own checksum. */
+  avatarEvidenceKeys?: string[];
   /** Re-sweep bookkeeping for a global takedown: passes attempted, and whether the last one finished. */
   resweep?: { attempts: number; done: boolean };
   [key: string]: unknown;

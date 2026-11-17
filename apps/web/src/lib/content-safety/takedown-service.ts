@@ -17,6 +17,7 @@ import {
 } from '@pagespace/lib/content-safety/case-store';
 import { normalizeContentHash } from '@pagespace/lib/content-safety/policy';
 import {
+  avatarTakedownPlan,
   resweepGlobalTakedown,
   runGlobalTakedown,
   runLinearCase,
@@ -190,10 +191,13 @@ async function runCase(row: ContentCase, deps: TakedownDeps): Promise<CaseRun> {
       ]);
 
     case 'avatar':
-      return linear([
-        { step: 'delete_avatar', run: () => deleteAvatarObjects(row.targetId) },
-        { step: 'clear_profile_image', run: () => clearProfileImage(row.targetId) },
-      ]);
+      // Preserved to evidence before anything is deleted; CSAM with no evidence storage stops at awaiting_evidence.
+      return linear(
+        avatarTakedownPlan(row, deps, {
+          deleteAvatar: () => deleteAvatarObjects(row.targetId),
+          clearProfileImage: () => clearProfileImage(row.targetId),
+        }),
+      );
 
     case 'park_user_sites': {
       let userSites: UserSitesOutcome | undefined;

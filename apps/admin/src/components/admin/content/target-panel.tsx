@@ -169,7 +169,9 @@ export function TargetPanel() {
       title: "Remove this user's avatar?",
       description: (
         <span>
-          Deletes the uploaded avatar image and clears it from their profile. An external image from a sign-in
+          Copies the uploaded avatar to evidence storage (checked by checksum), then deletes it and clears it
+          from their profile. For CSAM with no evidence storage configured, the case waits instead and nothing is
+          deleted. An external image from a sign-in
           provider is not ours to delete, but stops being shown. Copies already cached by browsers or a CDN may
           persist until those caches expire.
         </span>

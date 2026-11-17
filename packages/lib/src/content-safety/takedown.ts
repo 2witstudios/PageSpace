@@ -105,6 +105,11 @@ export interface TakedownStorage {
   deleteFromUploads(contentHash: string, caseId: string, isPreserved?: (digest: ObjectDigest) => boolean): Promise<number>;
   /** Delete `assets/<hash>` and `assets/cache/<hash>/*`. Returns the number deleted. */
   deleteFromPublish(contentHash: string): Promise<number>;
+  /**
+   * Every object under `avatars/<userId>/` in the uploads bucket: what an avatar takedown preserves before
+   * it deletes. Throws on any error, so "couldn't list" is never read as "nothing to preserve".
+   */
+  listAvatarObjects(userId: string): Promise<TakedownOriginal[]>;
 }
 
 export interface TakedownCaseStore {
@@ -220,7 +225,12 @@ export function evidenceKeyFor(caseId: string, contentHash: string): string {
  * bytes that were read from the source. Compared by checksum, never by size: a
  * copy of the same length with different bytes is not a copy. Throws if it is not.
  */
-async function copyAndVerify(source: TakedownOriginal, expected: ObjectDigest, evidenceKey: string, deps: TakedownDeps): Promise<void> {
+async function copyAndVerify(
+  source: TakedownOriginal,
+  expected: ObjectDigest,
+  evidenceKey: string,
+  deps: Pick<TakedownDeps, 'storage'>,
+): Promise<void> {
   await deps.storage.copyToEvidence(source, evidenceKey);
   const copy = await deps.storage.digestEvidence(evidenceKey);
   if (!copy) throw new Error('Evidence copy not found after copying');
@@ -534,6 +544,11 @@ export interface LinearStep {
   step: string;
   /** Returns an optional detail string for the case record. Must be idempotent. */
   run(): Promise<string | undefined | void>;
+  /**
+   * Asked before the step runs: a reason here stops the case, by design, at that step with nothing run
+   * (CSAM with nowhere to preserve it). The case is left at the status the global plan gives that reason.
+   */
+  halt?: () => TakedownHaltReason | null;
 }
 
 /**
@@ -549,9 +564,15 @@ async function runLinearCaseLocked(caseId: string, plan: readonly LinearStep[], 
   const row = await loadCase(caseId, deps);
   const steps = row.steps ?? [];
 
-  for (const { step, run } of plan) {
+  for (const { step, run, halt } of plan) {
     const latest = latestEntry(steps, step);
     if (latest && latest.status !== 'failed') continue;
+    const reason = halt?.() ?? null;
+    if (reason) {
+      const status = statusForDecision({ kind: 'halt', reason });
+      await settle(row, status, deps);
+      return { caseId, status, haltReason: reason };
+    }
     try {
       const detail = (await run()) ?? undefined;
       await deps.cases.appendStep(caseId, stepEntry(step, 'ok', detail, deps));
@@ -565,4 +586,69 @@ async function runLinearCaseLocked(caseId: string, plan: readonly LinearStep[], 
 
   await settle(row, 'actioned', deps);
   return { caseId, status: 'actioned' };
+}
+
+/** Where an avatar object is preserved: under the case, named by its own checksum, so no copy is ever overwritten. */
+export function avatarEvidenceKeyFor(caseId: string, userId: string, sourceKey: string, sha256: string): string {
+  const prefix = `avatars/${userId}/`;
+  if (!sourceKey.startsWith(prefix)) throw new Error('Not an object of this user\'s avatar');
+  return `cases/${caseId}/avatar/${sourceKey.slice(prefix.length)}.${sha256}`;
+}
+
+/**
+ * Copy every object under the user's avatar folder to the evidence bucket, each verified by checksum, and
+ * record the copies on the case. Idempotent: a copy already there with the same checksum is kept. Run before
+ * the delete AND again inside it, so an avatar uploaded between the two is preserved too.
+ */
+async function preserveAvatarObjects(row: ContentCase, deps: Pick<TakedownDeps, 'storage' | 'cases'>): Promise<string> {
+  const userId = row.targetId;
+  const recorded = new Set(row.snapshot?.avatarEvidenceKeys ?? []);
+  const before = recorded.size;
+  let copied = 0;
+  const objects = await deps.storage.listAvatarObjects(userId);
+  for (const source of objects) {
+    const read = await deps.storage.digestSource(source.key);
+    if (!read) continue; // Gone since it was listed: there is nothing left of it to delete either.
+    const evidenceKey = avatarEvidenceKeyFor(row.id, userId, source.key, read.sha256);
+    const existing = await deps.storage.digestEvidence(evidenceKey);
+    if (existing?.sha256 !== read.sha256) {
+      await copyAndVerify(source, read, evidenceKey, deps);
+      copied += 1;
+    }
+    recorded.add(evidenceKey);
+  }
+  if (recorded.size > before) await deps.cases.mergeSnapshot(row.id, { avatarEvidenceKeys: [...recorded] });
+  return `objects=${objects.length} copied=${copied}`;
+}
+
+/**
+ * The avatar takedown: preserve, delete, clear the profile image. Nothing is deleted before every avatar
+ * object has a verified evidence copy; for CSAM with no evidence storage the case stops at
+ * `awaiting_evidence` instead, as a global takedown does. Outside CSAM, with no evidence storage, the
+ * avatar is deleted and the case records that nothing was preserved.
+ */
+export function avatarTakedownPlan(
+  row: ContentCase,
+  deps: Pick<TakedownDeps, 'storage' | 'cases'>,
+  effects: { deleteAvatar(): Promise<string>; clearProfileImage(): Promise<string> },
+): LinearStep[] {
+  const halt = (): TakedownHaltReason | null =>
+    row.category === 'csam' && !deps.storage.evidenceConfigured() ? 'awaiting_evidence' : null;
+  // The row is read again for each preservation, so copies made by an earlier attempt are known.
+  const preserveNow = async () => {
+    if (!deps.storage.evidenceConfigured()) return 'no_evidence_storage';
+    return preserveAvatarObjects((await deps.cases.load(row.id)) ?? row, deps);
+  };
+  return [
+    { step: 'preserve_avatar', halt, run: preserveNow },
+    {
+      step: 'delete_avatar',
+      halt,
+      run: async () => {
+        const preserved = await preserveNow();
+        return `${await effects.deleteAvatar()} ${preserved}`;
+      },
+    },
+    { step: 'clear_profile_image', run: effects.clearProfileImage },
+  ];
 }

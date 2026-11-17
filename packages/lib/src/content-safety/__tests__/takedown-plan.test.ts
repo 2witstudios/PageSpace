@@ -290,8 +290,9 @@ describe('describeCaseProgress', () => {
   });
 
   it('uses the avatar plan for an avatar case', () => {
-    const progress = describeCaseProgress({ status: 'open', steps: [ok('delete_avatar')], snapshot: { takedown: { kind: 'avatar' } } });
+    const progress = describeCaseProgress({ status: 'open', steps: [ok('preserve_avatar'), ok('delete_avatar')], snapshot: { takedown: { kind: 'avatar' } } });
     expect(progress.steps).toEqual([
+      { step: 'preserve_avatar', status: 'ok' },
       { step: 'delete_avatar', status: 'ok' },
       { step: 'clear_profile_image', status: 'pending' },
     ]);

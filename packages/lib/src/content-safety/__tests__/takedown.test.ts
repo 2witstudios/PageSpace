@@ -9,6 +9,8 @@ import { GLOBAL_TAKEDOWN_STEPS, type GlobalTakedownStep } from '../takedown-plan
 import {
   MAX_AUTO_SUSPENSIONS,
   MAX_RESWEEP_ATTEMPTS,
+  avatarEvidenceKeyFor,
+  avatarTakedownPlan,
   evidenceKeyFor,
   holdKeyFor,
   resweepGlobalTakedown,
@@ -188,6 +190,8 @@ function createWorld(options: { category?: ContentCase['category']; evidence?: b
         for (const key of [...uploads.keys()]) if (key.includes(hash) && uploads.delete(key)) deleted += 1;
         return deleted;
       },
+      listAvatarObjects: async (userId) =>
+        [...uploads.keys()].filter((key) => key.startsWith(`avatars/${userId}/`)).map((key) => ({ key, size: uploads.get(key)!.length })),
       deleteFromPublish: async (hash) => {
         await boom('delete_public');
         let deleted = 0;
@@ -1087,5 +1091,114 @@ describe('runLinearCase', () => {
     expect(ran).toEqual(['one', 'two', 'two']);
     expect(stepStates(world.row.steps)).toEqual(['one:ok', 'two:failed', 'two:ok']);
     expect(world.alerts).toEqual([{ event: 'actioned', caseId: CASE_ID, category: 'policy' }]);
+  });
+});
+
+describe('avatar takedown plan', () => {
+  const USER = 'user-9';
+  const AVATAR = 'avatar-bytes';
+  const avatarWorld = (category: ContentCase['category'], evidence: boolean) => {
+    const created = createWorld({ category, evidence, snapshot: { takedown: { kind: 'avatar' } } });
+    created.world.row.targetType = 'avatar';
+    created.world.row.targetId = USER;
+    created.world.row.contentHash = null;
+    created.world.uploads.set(`avatars/${USER}/avatar.png`, AVATAR);
+    created.world.uploads.set(`avatars/${USER}/avatar-small.webp`, 'small');
+    return created;
+  };
+  const effects = (world: ReturnType<typeof createWorld>['world']) => ({
+    deleteAvatar: async () => {
+      for (const key of [...world.uploads.keys()]) if (key.startsWith(`avatars/${USER}/`)) world.uploads.delete(key);
+      return 'processor_deleted';
+    },
+    clearProfileImage: async () => 'cleared',
+  });
+
+  it('halts a CSAM avatar case at awaiting_evidence with nothing deleted when there is no evidence storage', async () => {
+    const { world, deps } = avatarWorld('csam', false);
+    const result = await runLinearCase(CASE_ID, avatarTakedownPlan(world.row, deps, effects(world)), deps);
+
+    expect(result).toMatchObject({ status: 'awaiting_evidence', haltReason: 'awaiting_evidence' });
+    expect(world.row.status).toBe('awaiting_evidence');
+    expect(world.uploads.get(`avatars/${USER}/avatar.png`)).toBe(AVATAR);
+    expect(stepStates(world.row.steps)).toEqual([]);
+    expect(world.alerts).toEqual([{ event: 'awaiting_evidence', caseId: CASE_ID, category: 'csam' }]);
+  });
+
+  it('copies every avatar object to evidence, verified by checksum, before anything is deleted', async () => {
+    const { world, deps } = avatarWorld('csam', true);
+    const order: string[] = [];
+    const fx = effects(world);
+    const result = await runLinearCase(
+      CASE_ID,
+      avatarTakedownPlan(world.row, deps, {
+        deleteAvatar: async () => {
+          order.push(`delete with ${world.evidence.size} evidence copies`);
+          return fx.deleteAvatar();
+        },
+        clearProfileImage: fx.clearProfileImage,
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe('actioned');
+    expect(order).toEqual(['delete with 2 evidence copies']);
+    const big = avatarEvidenceKeyFor(CASE_ID, USER, `avatars/${USER}/avatar.png`, sha(AVATAR));
+    expect(big).toBe(`cases/${CASE_ID}/avatar/avatar.png.${sha(AVATAR)}`);
+    expect(world.evidence.get(big)).toBe(AVATAR);
+    expect(world.row.snapshot?.avatarEvidenceKeys).toHaveLength(2);
+    expect(stepStates(world.row.steps)).toEqual(['preserve_avatar:ok', 'delete_avatar:ok', 'clear_profile_image:ok']);
+  });
+
+  it('never finishes a CSAM avatar case on an unverified copy: a bad copy stops it before the delete', async () => {
+    const { world, deps } = avatarWorld('csam', true);
+    world.corruptCopy = true;
+    const result = await runLinearCase(CASE_ID, avatarTakedownPlan(world.row, deps, effects(world)), deps);
+
+    expect(result).toMatchObject({ status: 'open', failedStep: 'preserve_avatar' });
+    expect(world.uploads.get(`avatars/${USER}/avatar.png`)).toBe(AVATAR);
+  });
+
+  it('resumes a halted CSAM case once evidence storage exists, preserving first', async () => {
+    const { world, deps } = avatarWorld('csam', false);
+    const plan = () => avatarTakedownPlan(world.row, deps, effects(world));
+    await runLinearCase(CASE_ID, plan(), deps);
+    world.evidenceConfigured = true;
+    const result = await runLinearCase(CASE_ID, plan(), deps);
+
+    expect(result.status).toBe('actioned');
+    expect(world.evidence.size).toBe(2);
+  });
+
+  it('preserves an avatar uploaded after the preserve step, before the delete takes it', async () => {
+    const { world, deps } = avatarWorld('csam', true);
+    const fx = effects(world);
+    let uploadedLate = false;
+    const result = await runLinearCase(
+      CASE_ID,
+      [
+        ...avatarTakedownPlan(world.row, deps, {
+          deleteAvatar: fx.deleteAvatar,
+          clearProfileImage: fx.clearProfileImage,
+        }).map((step) =>
+          step.step === 'preserve_avatar'
+            ? { ...step, run: async () => { const detail = await step.run(); world.uploads.set(`avatars/${USER}/late.png`, 'late'); uploadedLate = true; return detail; } }
+            : step,
+        ),
+      ],
+      deps,
+    );
+
+    expect(uploadedLate).toBe(true);
+    expect(result.status).toBe('actioned');
+    expect(world.evidence.get(avatarEvidenceKeyFor(CASE_ID, USER, `avatars/${USER}/late.png`, sha('late')))).toBe('late');
+  });
+
+  it('deletes a non-CSAM avatar without evidence storage, recording that nothing was preserved', async () => {
+    const { world, deps } = avatarWorld('policy', false);
+    const result = await runLinearCase(CASE_ID, avatarTakedownPlan(world.row, deps, effects(world)), deps);
+
+    expect(result.status).toBe('actioned');
+    expect(world.row.steps?.[0]).toMatchObject({ step: 'preserve_avatar', status: 'ok', detail: 'no_evidence_storage' });
   });
 });

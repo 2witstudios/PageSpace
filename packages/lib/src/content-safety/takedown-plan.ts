@@ -199,7 +199,7 @@ export function summarizeSteps(steps: readonly ContentCaseStep[], plan: readonly
 export const LINEAR_TAKEDOWN_STEPS = {
   unpublish_page: ['unpublish'],
   park_drive: ['park_sites'],
-  avatar: ['delete_avatar', 'clear_profile_image'],
+  avatar: ['preserve_avatar', 'delete_avatar', 'clear_profile_image'],
   park_user_sites: ['park_sites'],
 } as const satisfies Record<Exclude<ContentTakedownKind, 'global'>, readonly string[]>;
 

@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   sendAlert: vi.fn(),
   clearImage: vi.fn(),
   listAvatars: vi.fn(),
+  evidenceConfigured: { value: true },
   openCreated: { value: true },
   openThrows: { value: null as Error | null },
   /** Case IDs another run holds the lock on. */
@@ -91,7 +92,12 @@ vi.mock('@/lib/canvas/published-storage', () => ({
   createPublishedObjectStore: () => ({ real: true }),
   isPublishConfigured: () => true,
 }));
-vi.mock('../takedown-storage', () => ({ createTakedownStorage: () => ({ evidenceConfigured: () => true }) }));
+vi.mock('../takedown-storage', () => ({
+  createTakedownStorage: () => ({
+    evidenceConfigured: () => mocks.evidenceConfigured.value,
+    listAvatarObjects: async () => [],
+  }),
+}));
 vi.mock('@/lib/presigned-url', () => ({
   getS3Bucket: () => 'uploads',
   getS3Client: () => ({ send: (command: { input: { Prefix?: string } }) => mocks.listAvatars(command.input) }),
@@ -111,6 +117,7 @@ beforeEach(() => {
   cases.clear();
   vi.clearAllMocks();
   mocks.openCreated.value = true;
+  mocks.evidenceConfigured.value = true;
   mocks.openThrows.value = null;
   mocks.locked.clear();
   mocks.unpublishPage.mockResolvedValue({ unpublished: true, driveId: 'drive-1', path: 'docs' });
@@ -247,7 +254,7 @@ describe('avatar takedown', () => {
     expect(init).toMatchObject({ method: 'DELETE', headers: { Authorization: 'Bearer ps_svc_token' } });
     expect(mocks.listAvatars).toHaveBeenCalledWith(expect.objectContaining({ Prefix: 'avatars/user-1/' }));
     expect(result.status).toBe('actioned');
-    expect(stepsOf(result.caseId!)).toEqual(['delete_avatar:ok', 'clear_profile_image:ok']);
+    expect(stepsOf(result.caseId!)).toEqual(['preserve_avatar:ok', 'delete_avatar:ok', 'clear_profile_image:ok']);
     expect(cases.get(result.caseId!)).toMatchObject({ targetType: 'avatar', targetId: 'user-1' });
   });
 
@@ -262,6 +269,19 @@ describe('avatar takedown', () => {
     expect(resumed.status).toBe('actioned');
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(mocks.clearImage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('avatar takedown preservation', () => {
+  it('stops a CSAM avatar case at awaiting_evidence, deleting nothing, when there is no evidence storage', async () => {
+    mocks.evidenceConfigured.value = false;
+
+    const result = await executeTakedown({ action: 'avatar', userId: 'user-1', category: 'csam', reason: 'r' }, 'admin-1');
+
+    expect(result).toMatchObject({ status: 'awaiting_evidence', haltReason: 'awaiting_evidence' });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(mocks.clearImage).not.toHaveBeenCalled();
+    expect(stepsOf(result.caseId!)).toEqual([]);
   });
 });
 

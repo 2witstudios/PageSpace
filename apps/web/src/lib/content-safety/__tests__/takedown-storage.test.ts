@@ -347,3 +347,17 @@ describe('deleteFromPublish', () => {
     expect(await createTakedownStorage().deleteFromPublish(OTHER)).toBe(0);
   });
 });
+
+describe('listAvatarObjects', () => {
+  it("lists every object in the user's avatar folder and nothing else", async () => {
+    s3.put(UPLOADS, `avatars/u1/avatar-small.webp`, 'small');
+    s3.put(UPLOADS, `avatars/u10/avatar.png`, 'another user');
+    const listed = await createTakedownStorage().listAvatarObjects('u1');
+    expect(listed.map((o) => o.key).sort()).toEqual(['avatars/u1/avatar-small.webp', 'avatars/u1/avatar.png']);
+  });
+
+  it('refuses a user ID that could widen the prefix', async () => {
+    await expect(createTakedownStorage().listAvatarObjects('../files')).rejects.toThrow('Invalid user ID');
+    await expect(createTakedownStorage().listAvatarObjects('')).rejects.toThrow('Invalid user ID');
+  });
+});

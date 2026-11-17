@@ -262,6 +262,12 @@ export function createTakedownStorage(): TakedownStorage {
       return keys.length + (hold ? 1 : 0);
     },
 
+    async listAvatarObjects(userId) {
+      // The request schema already limits IDs to this alphabet; checked again because it becomes a key prefix.
+      if (!/^[A-Za-z0-9_-]+$/.test(userId)) throw new Error('Invalid user ID');
+      return listS3Prefix(getS3Client(), getS3Bucket(), `avatars/${userId}/`);
+    },
+
     async deleteFromPublish(contentHash) {
       const hash = requireHash(contentHash);
       return isPublishConfigured() ? deletePublishedAssetsForHash(hash) : 0;
