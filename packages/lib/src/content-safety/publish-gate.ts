@@ -81,7 +81,8 @@ export interface PublishGateDeps {
   isBlocked(contentHash: string): Promise<boolean>;
   findVerdict(contentHash: string): Promise<StoredVerdict | null>;
   readSource(key: string, maxBytes: number): Promise<SourceRead | null>;
-  recordVerdict(record: VerdictRecord): Promise<void>;
+  /** `keptFlag`: the write was skipped because a classifier flag on the hash still stands. */
+  recordVerdict(record: VerdictRecord): Promise<{ keptFlag: boolean }>;
   /** PR 2's global takedown, category csam. Opens its own case and alerts. Returns the case ID. */
   takedownHashMatch(input: { contentHash: string; lists: string[] }): Promise<{ caseId?: string }>;
   /**
@@ -240,8 +241,9 @@ export async function gatePublishAsset(input: PublishGateInput, deps: PublishGat
     }
   }
 
+  let promote = decision.promote;
   if (record) {
-    await deps
+    const written = await deps
       .recordVerdict({
         contentHash: input.contentHash,
         verdict: record.verdict,
@@ -250,15 +252,20 @@ export async function gatePublishAsset(input: PublishGateInput, deps: PublishGat
         mode,
         scores,
       })
-      .catch((error: unknown) => deps.logError('Publish gate: could not record a scan verdict', { ...context, error: errorLabel(error) }));
+      .catch((error: unknown) => {
+        deps.logError('Publish gate: could not record a scan verdict', { ...context, error: errorLabel(error) });
+        return null;
+      });
+    // Another publish flagged this hash and its flag stands: this result does not override it. Enforce holds.
+    if (written?.keptFlag && mode === 'enforce') promote = false;
   }
 
   if (decision.audit) {
-    const details: ScanAuditEvent['details'] = { ...context, promoted: decision.promote, provider, caseId, contentType };
+    const details: ScanAuditEvent['details'] = { ...context, promoted: promote, provider, caseId, contentType };
     if (outcome.kind === 'scanned' && outcome.result.kind === 'error') details.reason = outcome.result.reason;
     if (outcome.kind === 'scanned' && outcome.result.kind === 'classifier_flag') details.score = outcome.result.score;
     deps.audit({ eventType: decision.audit, contentHash: input.contentHash, userId: input.userId, details });
   }
 
-  return decision.promote ? { promote: true } : { promote: false, reason: 'held' };
+  return promote ? { promote: true } : { promote: false, reason: 'held' };
 }

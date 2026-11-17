@@ -41,7 +41,8 @@ export async function findScanVerdict(contentHash: string): Promise<StoredVerdic
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-async function upsertVerdict(executor: typeof db | Tx, record: VerdictRecord, now: Date, keepFlagSince?: Date): Promise<void> {
+/** Whether the write stood (false: a standing classifier flag was kept instead). */
+async function upsertVerdict(executor: typeof db | Tx, record: VerdictRecord, now: Date, keepFlagSince?: Date): Promise<boolean> {
   const values = {
     verdict: record.verdict,
     outcome: record.outcome,
@@ -50,33 +51,46 @@ async function upsertVerdict(executor: typeof db | Tx, record: VerdictRecord, no
     scores: record.scores,
     scannedAt: now,
   };
-  await executor
+  const written = await executor
     .insert(contentScans)
     .values({ contentHash: record.contentHash, ...values })
     .onConflictDoUpdate({
       target: contentScans.contentHash,
       set: values,
-      // Evaluated on the locked row, so a concurrent flag that committed first is seen.
+      // A classifier flag stands while it is fresh, or while a case on its hash is under review. The freshness
+      // test runs on the locked row, so a concurrent flag that committed first is always seen; the case test
+      // covers a flag older than the TTL whose case nobody has closed.
       ...(keepFlagSince
-        ? { setWhere: or(sql`${contentScans.outcome} is distinct from 'classifier_flag'`, lte(contentScans.scannedAt, keepFlagSince)) }
+        ? {
+            setWhere: or(
+              sql`${contentScans.outcome} is distinct from 'classifier_flag'`,
+              and(
+                lte(contentScans.scannedAt, keepFlagSince),
+                sql`not exists (select 1 from ${contentCases} where ${contentCases.contentHash} = ${contentScans.contentHash} and ${contentCases.status} = 'reported')`,
+              ),
+            ),
+          }
         : {}),
-    });
+    })
+    .returning({ contentHash: contentScans.contentHash });
+  return written.length > 0;
 }
 
 const DEFAULT_FLAG_TTL_MS = DEFAULT_VERDICT_TTL_DAYS * 24 * 60 * 60 * 1000;
 
 /**
- * The latest verdict for a hash replaces the previous one, except a fresh classifier flag: that stands until a
- * dismissal records the hash clean (`closeReportedCase`), a hash match replaces it, or it expires. Two publishes
- * of one hash can scan at once; a clean or failed result from one must not undo the other's flag and let the
- * hash publish while its case is still under review. A classifier flag itself goes through `openScanReviewCase`.
+ * The latest verdict for a hash replaces the previous one, except a standing classifier flag: one that is fresh,
+ * or whose case is still under review. That stands until a dismissal records the hash clean
+ * (`closeReportedCase`) or a hash match replaces it. Two publishes of one hash can scan at once; a clean or
+ * failed result from one must not undo the other's flag. `keptFlag` tells the gate its result lost to a flag,
+ * so it holds the file. A classifier flag itself goes through `openScanReviewCase`.
  */
 export async function recordScanVerdict(
   record: VerdictRecord,
   { now = new Date(), flagTtlMs = DEFAULT_FLAG_TTL_MS }: { now?: Date; flagTtlMs?: number } = {},
-): Promise<void> {
+): Promise<{ keptFlag: boolean }> {
   const keepFlagSince = record.outcome === 'hash_match' ? undefined : new Date(now.getTime() - flagTtlMs);
-  await upsertVerdict(db, record, now, keepFlagSince);
+  return { keptFlag: !(await upsertVerdict(db, record, now, keepFlagSince)) };
 }
 
 /**

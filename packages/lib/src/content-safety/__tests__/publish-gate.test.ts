@@ -41,7 +41,7 @@ function setup(options: {
     isBlocked: vi.fn(async () => options.blocked ?? false),
     findVerdict: vi.fn(async () => options.verdict ?? null),
     readSource: vi.fn(async () => ({ bytes: options.bytes ?? PNG, complete: options.complete ?? true })),
-    recordVerdict: vi.fn(async () => undefined),
+    recordVerdict: vi.fn(async () => ({ keptFlag: false })),
     takedownHashMatch: vi.fn(async () => ({ caseId: 'case-td' })),
     openReviewCase: vi.fn(async () => ({ caseId: 'case-rv', created: true, firstFlag: true })),
     alert: vi.fn(async () => undefined),
@@ -90,6 +90,18 @@ describe('gatePublishAsset', () => {
     const { deps, scanner } = setup({ verdict: { verdict: 'clean', outcome: 'clean', scannedAt: new Date('2026-01-01T00:00:00Z') } });
     await gatePublishAsset(input, deps);
     expect((scanner as ReturnType<typeof createFakeScanner>).calls).toEqual([HASH]);
+  });
+
+  it('a clean scan that lost to a standing flag (another publish flagged the hash) is held under enforce', async () => {
+    const enforce = setup();
+    enforce.deps.recordVerdict.mockResolvedValueOnce({ keptFlag: true });
+    await expect(gatePublishAsset(input, enforce.deps)).resolves.toEqual({ promote: false, reason: 'held' });
+    expect(enforce.deps.audit).toHaveBeenCalledWith(expect.objectContaining({ details: expect.objectContaining({ promoted: false }) }));
+
+    // Shadow publishes everything anyway.
+    const shadow = setup({ mode: 'shadow' });
+    shadow.deps.recordVerdict.mockResolvedValueOnce({ keptFlag: true });
+    await expect(gatePublishAsset(input, shadow.deps)).resolves.toEqual({ promote: true });
   });
 
   it('clean: records the verdict, audits and promotes', async () => {

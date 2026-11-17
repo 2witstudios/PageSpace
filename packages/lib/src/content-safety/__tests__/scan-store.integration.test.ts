@@ -10,6 +10,9 @@ import { eq, inArray, sql } from '@pagespace/db/operators';
 import { contentCases, contentReports, contentScans } from '@pagespace/db/schema/content-safety';
 import { countScanVerdicts, findScanVerdict, openScanReviewCase, recordScanVerdict } from '../scan-store';
 import { closeReportedCase, fileContentReport, listReportedCases, ReportedCaseChangedError } from '../report-store';
+import { gatePublishAsset, type PublishGateDeps } from '../publish-gate';
+import { resolveScanConfig } from '../scan-mode';
+import { createFakeScanner, type ScanResult } from '../scanner';
 
 const hashes: string[] = [];
 const newHash = () => {
@@ -140,14 +143,31 @@ describe('scan store', () => {
   it('a later scan cannot overwrite a fresh classifier flag; only a dismissal, a hash match or expiry replaces it', async () => {
     const hash = newHash();
     await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.95, mode: 'enforce', scores: {} });
-    // A concurrent publish's scan came back clean (or failed) after the flag: the flag stands.
-    await recordScanVerdict({ contentHash: hash, verdict: 'clean', outcome: 'clean', provider: 'hive', mode: 'enforce', scores: {} });
+    // A concurrent publish's scan came back clean (or failed) after the flag: the flag stands, and the caller
+    // is told, so the gate holds that publish too.
+    await expect(
+      recordScanVerdict({ contentHash: hash, verdict: 'clean', outcome: 'clean', provider: 'hive', mode: 'enforce', scores: {} }),
+    ).resolves.toEqual({ keptFlag: true });
     await recordScanVerdict({ contentHash: hash, verdict: 'error', outcome: 'error', provider: 'hive', mode: 'enforce', scores: {} });
     expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'flagged', outcome: 'classifier_flag' });
 
-    // Once the flag has expired, a new verdict replaces it.
+    // Past its TTL, the flag still stands while its case is under review: only staff clear it.
     const later = new Date(Date.now() + 60_000);
-    await recordScanVerdict({ contentHash: hash, verdict: 'clean', outcome: 'clean', provider: 'hive', mode: 'enforce', scores: {} }, { now: later, flagTtlMs: 30_000 });
+    await expect(
+      recordScanVerdict({ contentHash: hash, verdict: 'clean', outcome: 'clean', provider: 'hive', mode: 'enforce', scores: {} }, { now: later, flagTtlMs: 30_000 }),
+    ).resolves.toEqual({ keptFlag: true });
+    expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'flagged' });
+  });
+
+  it('an expired flag whose case is closed is replaced by the next verdict', async () => {
+    const hash = newHash();
+    const opened = await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.95, mode: 'enforce', scores: {} });
+    // Closed as actioned (no takedown): the flag is left, and expires like any verdict.
+    await db.update(contentCases).set({ status: 'actioned' }).where(eq(contentCases.id, opened.caseId));
+    const later = new Date(Date.now() + 60_000);
+    await expect(
+      recordScanVerdict({ contentHash: hash, verdict: 'clean', outcome: 'clean', provider: 'hive', mode: 'enforce', scores: {} }, { now: later, flagTtlMs: 30_000 }),
+    ).resolves.toEqual({ keptFlag: false });
     expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'clean' });
   });
 
@@ -223,5 +243,36 @@ describe('scan store', () => {
     const counts = await countScanVerdicts();
     const row = counts.find((c) => c.mode === 'enforce' && c.outcome === 'unsupported_type' && c.verdict === 'unscanned');
     expect(row?.count).toBeGreaterThanOrEqual(1);
+  });
+
+  it('two publishes of one hash that both missed the cache: the one scanned clean after the flag is held, and the flag stands', async () => {
+    const hash = newHash();
+    const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+    const config = resolveScanConfig({ CONTENT_SCAN_MODE: 'enforce', HIVE_API_KEY: 'k' }, { onPrem: false });
+    const results: ScanResult[] = [
+      { kind: 'classifier_flag', provider: 'fake', category: 'csam', score: 0.97 },
+      { kind: 'clean', provider: 'fake' },
+    ];
+    const deps: PublishGateDeps = {
+      config,
+      scanner: createFakeScanner({ results: { [hash]: () => results.shift() ?? { kind: 'clean', provider: 'fake' } } }),
+      isBlocked: async () => false,
+      // Both publishes read the verdict before either recorded one.
+      findVerdict: async () => null,
+      readSource: async () => ({ bytes: PNG, complete: true }),
+      recordVerdict: (record) => recordScanVerdict(record, { flagTtlMs: config.verdictTtlMs }),
+      takedownHashMatch: async () => ({}),
+      openReviewCase: (input) => openScanReviewCase(input),
+      alert: async () => undefined,
+      audit: () => undefined,
+      reportMisconfiguration: () => undefined,
+      logError: () => undefined,
+      now: () => new Date(),
+    };
+    const input = { contentHash: hash, originalKey: `files/${hash}/original`, declaredContentType: 'image/png', fileId: 'f', userId: null, entryPoint: 'canvas_asset' as const };
+
+    await expect(gatePublishAsset(input, deps)).resolves.toEqual({ promote: false, reason: 'held' });
+    await expect(gatePublishAsset(input, deps)).resolves.toEqual({ promote: false, reason: 'held' });
+    expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'flagged', outcome: 'classifier_flag' });
   });
 });

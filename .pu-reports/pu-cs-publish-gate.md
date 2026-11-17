@@ -146,7 +146,7 @@ These are real ways around the gate, stated openly:
 
 - **Shadow mode still refuses blocklisted hashes and still acts on hash matches**, per the brief: "a known-CSAM match is never shadow".
 - **Flag alerts are urgent.** In shadow mode the file is live on the web.
-- **A fresh classifier flag stands.** A clean, failed or unscanned result from a concurrent publish of the same hash cannot overwrite it (the upsert's condition is checked on the locked row). Only a dismissal, a hash match or expiry replaces it.
+- **A classifier flag stands while it is fresh or its case is under review.** A clean, failed or unscanned result from another publish of the same hash cannot overwrite it; the write reports that it kept the flag and enforce holds that publish too. Only a dismissal or a hash match replaces it; an expired flag whose case is closed is replaced by the next verdict.
 - **Text is never cached as allowed or held.** Whether text may publish depends on each upload's declared type, so it is re-read each time. Other unscanned classes are decided by the bytes alone and stay cached.
 - **A `mimetype` first entry counts only when it is a real ODF/EPUB marker** (stored, naming a document type). Any other zip is an archive. A zip with `[Content_Types].xml` first is still trusted as OOXML: proving more would mean inflating the archive, and a real document can embed images anyway (the known gap).
 - **One review case per hash.** A flag on a hash that already has a reported case (from a user report or an earlier flag) joins it. The category becomes CSAM, a triage label, not a finding.
