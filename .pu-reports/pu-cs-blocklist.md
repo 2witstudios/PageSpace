@@ -488,3 +488,9 @@ Independent review of `e63a214bf` (fresh subagent), fixed in `a2e5a4716`:
 | major — `cssUrls` backtracked cubically on `url(` plus a long whitespace run (1,500 spaces ≈ 2 s) | Fixed: each CSS pattern is linear; a 20,000-space regression test must finish under 500 ms. |
 | major — the backstop counted only `api/files/`, so a `/dashboard/{d}/{id}/view` reference in `image-set()` with CSS escapes, or in a meta refresh with `&#9;`, passed as complete with no id | Fixed: every quoted CSS string and each `url=` target is a URL candidate, and the backstop also requires each `dashboard/{d}/{id}/view` to name an extracted id. |
 | major — canvas script (`allow-scripts`) can build a reference at runtime, e.g. `"/api\u002ffiles\u002f…"` | Partly fixed: the backstop now peels JavaScript string escapes, so escaped literals fail closed. A URL assembled by string joining at runtime can't be seen by any static scan; flagged for the merge owner (refuse scripted canvases, or enforce at serve time in #2977). |
+
+Round 8: CodeRabbit's review of `48045d278`:
+
+| Finding | Outcome |
+|---|---|
+| major — a CSS string line continuation (`url("/api/fi\\<newline>les/…")`) splits a reference: the extractor missed it and the backstop read the backslash as `/` | Fixed in `c828704ae`: the CSS decoder drops backslash-newline (`\n`, `\r\n`, `\r`, `\f`) in the same left-to-right pass as escapes, so both the extractor and the backstop see the joined path. Scanner tests cover inline style, `<style>` and `image-set`, plus a fail-closed case outside CSS. A CANVAS copy route test checks the blocked hash is refused. |
