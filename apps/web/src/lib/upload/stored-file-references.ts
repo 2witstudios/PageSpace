@@ -36,9 +36,15 @@ function decodePercentEscapes(text: string): string {
   return text.replace(/%([0-9A-Fa-f]{2})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)));
 }
 
-/** CSS escapes (`\70 `, `\/`) resolved, as the CSS tokenizer does before `url()` fetches. */
+/**
+ * CSS escapes (`\70 `, `\/`) resolved, and string line continuations (a
+ * backslash before a newline, which the tokenizer drops along with the newline)
+ * removed, as the CSS tokenizer does before `url()` fetches. One pass, left to
+ * right, so an escaped backslash (`\\`) is never read as a continuation.
+ */
 function decodeCssEscapes(text: string): string {
-  return text.replace(/\\(?:([0-9a-fA-F]{1,6})[ \t\n\r\f]?|([^\n\r\f0-9a-fA-F]))/g, (_, hex: string | undefined, char: string | undefined) => {
+  return text.replace(/\\(?:(\r\n|[\n\r\f])|([0-9a-fA-F]{1,6})[ \t\n\r\f]?|([^\n\r\f0-9a-fA-F]))/g, (_, continuation: string | undefined, hex: string | undefined, char: string | undefined) => {
+    if (continuation !== undefined) return '';
     if (hex === undefined) return char ?? '';
     const codePoint = parseInt(hex, 16);
     return codePoint > 0 && codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : '�';

@@ -167,6 +167,21 @@ describe('scanStoredFileReferences', () => {
     expect(scanStoredFileReferences('<script>x="\\x2fdashboard\\x2fd\\x2fpage-a\\x2fview"</script>').complete).toBe(false);
   });
 
+  it('given CSS string line continuations (backslash-newline, removed by the CSS tokenizer), should return the id', () => {
+    const content = [
+      '<div style="background-image: url(&quot;/api/fi\\\nles/page-a/view&quot;)"></div>',
+      "<style>.x { background: url('/api/files/page-b/vi\\\r\new') }</style>",
+      '<style>.y { background: image-set("/dashboard/d/page-c/vi\\\few" 1x) }</style>',
+    ].join('\n');
+    const scan = scanStoredFileReferences(content);
+    expect(scan.ids.sort()).toEqual(['page-a', 'page-b', 'page-c']);
+    expect(scan.complete).toBe(true);
+  });
+
+  it('given a line continuation the URL candidates cannot resolve, should report the scan incomplete', () => {
+    expect(scanStoredFileReferences('<p>/api/fi\\\nles/page-a/view</p>').complete).toBe(false);
+  });
+
   it('given every occurrence accounted for, should report the scan complete', () => {
     const scan = scanStoredFileReferences('<img src="/api/files/page-a/view"> ![a](/api/files/page-a/view) <img src="/api/files/page-b/thumbnail">');
     expect(scan.complete).toBe(true);
