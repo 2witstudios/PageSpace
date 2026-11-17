@@ -238,4 +238,13 @@ describe('runBackfillDryRun', () => {
     expect(verdictSkipsScan({ ...fresh, verdict: 'flagged', outcome: 'hash_match' }, 30 * DAY, NOW)).toBe(false);
     expect(verdictSkipsScan({ ...fresh, verdict: 'flagged', outcome: 'classifier_flag' }, 30 * DAY, NOW)).toBe(true);
   });
+
+  it('a video stored clean with no classifier output is scanned again unless unclassified video is allowed; a stored unverified once it is', () => {
+    const unclassified = { ...fresh, verdict: 'clean' as const, outcome: 'clean' as const, unclassifiedVideo: true as const };
+    expect(verdictSkipsScan(unclassified, 30 * DAY, NOW)).toBe(false);
+    expect(verdictSkipsScan(unclassified, 30 * DAY, NOW, true)).toBe(true);
+    const unverified = { ...fresh, verdict: 'unverified' as const, outcome: 'unverified' as const };
+    expect(verdictSkipsScan(unverified, 30 * DAY, NOW)).toBe(true);
+    expect(verdictSkipsScan(unverified, 30 * DAY, NOW, true)).toBe(false);
+  });
 });

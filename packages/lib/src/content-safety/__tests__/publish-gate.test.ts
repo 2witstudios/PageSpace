@@ -349,6 +349,17 @@ describe('video with no classifier output (PR 5)', () => {
     expect(deps.recordVerdict).toHaveBeenCalledWith(expect.objectContaining({ verdict: 'clean' }));
   });
 
+  it('a video stored clean with no classifier output (before this policy, or while it was relaxed) is scanned again and held', async () => {
+    const verdict: StoredVerdict = { verdict: 'clean', outcome: 'clean', scannedAt: new Date('2026-11-10T00:00:00Z'), unclassifiedVideo: true };
+    const strict = setup({ bytes: MP4, result: hashOnly, verdict });
+    await expect(evaluatePublishAsset(videoInput, strict.deps)).resolves.toMatchObject({ promote: false, finding: 'unverified', scanned: true });
+    expect((strict.scanner as ReturnType<typeof createFakeScanner>).calls).toEqual([HASH]);
+
+    const relaxed = setup({ bytes: MP4, result: hashOnly, verdict, env: { CONTENT_SCAN_ALLOW_UNCLASSIFIED_VIDEO: 'true' } });
+    await expect(evaluatePublishAsset(videoInput, relaxed.deps)).resolves.toMatchObject({ promote: true, finding: 'clean', scanned: false });
+    expect(relaxed.deps.readSource).not.toHaveBeenCalled();
+  });
+
   it('a fresh unverified verdict is held without a rescan; once relaxed, it is scanned again', async () => {
     const verdict: StoredVerdict = { verdict: 'unverified', outcome: 'unverified', scannedAt: new Date('2026-11-10T00:00:00Z') };
     const held = setup({ bytes: MP4, result: hashOnly, verdict });

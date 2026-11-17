@@ -243,6 +243,11 @@ const SCANNABLE: Partial<Record<SniffedType, ScanMediaKind>> = {
   'video/quicktime': 'video',
 };
 
+/** Whether a recorded content type (the sniffed type the gate stores with a verdict) is a video the vendor scans. */
+export function isVideoContentType(contentType: unknown): boolean {
+  return typeof contentType === 'string' && SCANNABLE[contentType as SniffedType] === 'video';
+}
+
 /**
  * Published without a scan: these cannot be a picture or a video themselves (PDFs and documents can embed
  * images: a known gap, like SVG). Decided by the bytes alone, so a cached classification holds for every

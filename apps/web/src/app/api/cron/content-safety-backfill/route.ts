@@ -57,7 +57,7 @@ export async function GET(request: Request) {
   try {
     if (dryRun) {
       const pages = Math.min(Math.max(1, Number(url.searchParams.get('maxPages')) || DEFAULT_DRY_RUN_PAGES), MAX_DRY_RUN_PAGES);
-      const result = await runBackfillDryRun(createDryRunDeps(), { verdictTtlMs: config.verdictTtlMs, maxPages: pages, from: dryRunFrom(url) });
+      const result = await runBackfillDryRun(createDryRunDeps(), { verdictTtlMs: config.verdictTtlMs, allowUnclassifiedVideo: config.allowUnclassifiedVideo, maxPages: pages, from: dryRunFrom(url) });
       return NextResponse.json({ success: true, dryRun: true, mode: config.mode, ...result });
     }
 

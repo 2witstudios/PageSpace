@@ -20,6 +20,7 @@ import {
   type ContentScanVerdict,
 } from '@pagespace/db/schema/content-safety';
 import type { StoredVerdict, VerdictRecord } from './publish-gate';
+import { isVideoContentType } from './scan-policy';
 
 type VerdictRow = Pick<typeof contentScans.$inferSelect, 'verdict' | 'outcome' | 'scannedAt' | 'scores'>;
 
@@ -31,6 +32,9 @@ function toStoredVerdict(row: VerdictRow): StoredVerdict {
     scannedAt: row.scannedAt,
     ...(row.verdict === 'unscanned' && (media === 'unscanned_allowed' || media === 'never_promote')
       ? { unscannedAllowed: media === 'unscanned_allowed' }
+      : {}),
+    ...(row.verdict === 'clean' && row.scores?.classifier === false && isVideoContentType(row.scores.contentType)
+      ? { unclassifiedVideo: true as const }
       : {}),
   };
 }

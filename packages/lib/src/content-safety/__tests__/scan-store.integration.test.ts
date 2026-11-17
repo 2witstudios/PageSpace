@@ -9,7 +9,7 @@ import { createHash, randomUUID } from 'crypto';
 import { db } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
 import { contentCases, contentReports, contentScans } from '@pagespace/db/schema/content-safety';
-import { countScanVerdicts, findScanVerdict, openScanReviewCase, recordScanVerdict } from '../scan-store';
+import { countScanVerdicts, findScanVerdict, findScanVerdicts, openScanReviewCase, recordScanVerdict } from '../scan-store';
 import { closeReportedCase, fileContentReport, listReportedCases, ReportedCaseChangedError } from '../report-store';
 import { gatePublishAsset, type PublishGateDeps } from '../publish-gate';
 import { resolveScanConfig } from '../scan-mode';
@@ -202,6 +202,21 @@ describe('scan store', () => {
     const counts = await countScanVerdicts();
     expect(counts.find((c) => c.reviewed && c.verdict === 'clean')?.count).toBeGreaterThanOrEqual(1);
     expect(counts.every((c) => !c.reviewed || c.mode === null)).toBe(true);
+  });
+
+  it('marks a clean video the classifier did not score, and nothing else', async () => {
+    const video = newHash();
+    await recordScanVerdict({ contentHash: video, verdict: 'clean', outcome: 'clean', provider: 'hive', mode: 'enforce', scores: { contentType: 'video/mp4', classifier: false } });
+    expect(await findScanVerdict(video)).toMatchObject({ verdict: 'clean', unclassifiedVideo: true });
+    expect((await findScanVerdicts([video])).get(video)).toMatchObject({ unclassifiedVideo: true });
+
+    const scored = newHash();
+    await recordScanVerdict({ contentHash: scored, verdict: 'clean', outcome: 'clean', provider: 'hive', mode: 'enforce', scores: { contentType: 'video/mp4', classifier: { csam: 0.01 } } });
+    expect(await findScanVerdict(scored)).not.toHaveProperty('unclassifiedVideo');
+
+    const image = newHash();
+    await recordScanVerdict({ contentHash: image, verdict: 'clean', outcome: 'clean', provider: 'hive', mode: 'enforce', scores: { contentType: 'image/png', classifier: false } });
+    expect(await findScanVerdict(image)).not.toHaveProperty('unclassifiedVideo');
   });
 
   it('remembers whether an unscanned file was allowed', async () => {

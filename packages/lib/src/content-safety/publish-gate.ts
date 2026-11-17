@@ -92,6 +92,30 @@ export interface StoredVerdict {
   scannedAt: Date;
   /** For an `unscanned` verdict: whether the file was a type published unscanned (PDF, text, …). */
   unscannedAllowed?: boolean;
+  /**
+   * For a `clean` verdict: a video the classifier returned no scores for (hash lists only). Recorded clean before
+   * unverified video existed, or while CONTENT_SCAN_ALLOW_UNCLASSIFIED_VIDEO was on; scanned again once it is off.
+   */
+  unclassifiedVideo?: true;
+}
+
+/**
+ * What a stored verdict decides without a new scan, or null when the gate must scan. The one rule for reusing a
+ * verdict: the gate and the backfill's dry run both use it.
+ */
+export function cachedOutcome(
+  stored: StoredVerdict | null | undefined,
+  config: Pick<ScanGateConfig, 'verdictTtlMs' | 'allowUnclassifiedVideo'>,
+  now: Date,
+): GateOutcome | null {
+  if (!stored || !isVerdictFresh(stored.scannedAt, config.verdictTtlMs, now)) return null;
+  // A clean video the classifier never scored is unverified under the strict policy: scan it again.
+  if (stored.verdict === 'clean') return stored.unclassifiedVideo && !config.allowUnclassifiedVideo ? null : { kind: 'cached_clean' };
+  if (stored.verdict === 'flagged' && stored.outcome === 'classifier_flag') return { kind: 'cached_flagged' };
+  if (stored.verdict === 'unscanned' && stored.unscannedAllowed !== undefined) return { kind: 'cached_unscanned', allowed: stored.unscannedAllowed };
+  // Once unclassified video is accepted, a stored `unverified` is scanned again (and comes back clean).
+  if (stored.verdict === 'unverified' && !config.allowUnclassifiedVideo) return { kind: 'cached_unverified' };
+  return null;
 }
 
 export interface VerdictRecord {
@@ -199,15 +223,8 @@ async function learn(
   if (!deps.scanner) return { outcome: { kind: 'scanner_unavailable' }, contentType: null };
 
   const stored = await deps.findVerdict(input.contentHash).catch(() => null);
-  if (stored && isVerdictFresh(stored.scannedAt, config.verdictTtlMs, deps.now())) {
-    if (stored.verdict === 'clean') return { outcome: { kind: 'cached_clean' }, contentType: null };
-    if (stored.verdict === 'flagged' && stored.outcome === 'classifier_flag') return { outcome: { kind: 'cached_flagged' }, contentType: null };
-    if (stored.verdict === 'unscanned' && stored.unscannedAllowed !== undefined) {
-      return { outcome: { kind: 'cached_unscanned', allowed: stored.unscannedAllowed }, contentType: null };
-    }
-    // Once unclassified video is accepted, a stored `unverified` is scanned again (and comes back clean).
-    if (stored.verdict === 'unverified' && !config.allowUnclassifiedVideo) return { outcome: { kind: 'cached_unverified' }, contentType: null };
-  }
+  const cached = cachedOutcome(stored, config, deps.now());
+  if (cached) return { outcome: cached, contentType: null };
 
   const provider = deps.scanner.provider;
   let source: SourceRead | null;

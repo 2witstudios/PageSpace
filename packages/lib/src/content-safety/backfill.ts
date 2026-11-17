@@ -20,8 +20,7 @@
  */
 
 import type { ContentScanBackfillCounts, ContentScanBackfillPhase } from '@pagespace/db/schema/content-safety';
-import type { GateFinding, StoredVerdict } from './publish-gate';
-import { isVerdictFresh } from './scan-policy';
+import { cachedOutcome, type GateFinding, type StoredVerdict } from './publish-gate';
 
 export const BACKFILL_ID = 'public-surfaces';
 
@@ -310,11 +309,8 @@ export interface DryRunResult {
 const DRY_RUN_PAGE = 1000;
 
 /** Whether a stored verdict would let the gate skip the scan, under `ttlMs`. Mirrors the gate's own short-circuits. */
-export function verdictSkipsScan(stored: StoredVerdict | undefined, ttlMs: number, now: Date): boolean {
-  if (!stored || !isVerdictFresh(stored.scannedAt, ttlMs, now)) return false;
-  if (stored.verdict === 'clean' || stored.verdict === 'unverified') return true;
-  if (stored.verdict === 'flagged') return stored.outcome === 'classifier_flag';
-  return stored.verdict === 'unscanned' && stored.unscannedAllowed !== undefined;
+export function verdictSkipsScan(stored: StoredVerdict | undefined, ttlMs: number, now: Date, allowUnclassifiedVideo = false): boolean {
+  return cachedOutcome(stored, { verdictTtlMs: ttlMs, allowUnclassifiedVideo }, now) !== null;
 }
 
 /**
@@ -324,7 +320,7 @@ export function verdictSkipsScan(stored: StoredVerdict | undefined, ttlMs: numbe
  */
 export async function runBackfillDryRun(
   deps: DryRunDeps,
-  options: { verdictTtlMs: number; maxPages: number; from?: { phase: BackfillWalkPhase; startAfter: string | null } },
+  options: { verdictTtlMs: number; allowUnclassifiedVideo?: boolean; maxPages: number; from?: { phase: BackfillWalkPhase; startAfter: string | null } },
 ): Promise<DryRunResult> {
   const counts: DryRunCounts = {
     assets: { objects: 0, hashes: 0, fresh: 0, needScan: 0, bytesToRead: 0, ignored: 0 },
@@ -360,7 +356,7 @@ export async function runBackfillDryRun(
       const verdicts = fresh.length > 0 ? await deps.findVerdicts(fresh.map((entry) => entry.hash)) : new Map<string, StoredVerdict>();
       for (const { hash, size } of fresh) {
         counts.assets.hashes += 1;
-        if (verdictSkipsScan(verdicts.get(hash), options.verdictTtlMs, now)) {
+        if (verdictSkipsScan(verdicts.get(hash), options.verdictTtlMs, now, options.allowUnclassifiedVideo)) {
           counts.assets.fresh += 1;
         } else {
           counts.assets.needScan += 1;
