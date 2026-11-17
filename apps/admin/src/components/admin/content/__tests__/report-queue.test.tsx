@@ -9,6 +9,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 vi.mock('@/lib/auth/auth-fetch', () => ({ fetchWithAuth: vi.fn() }));
 
 import { ReportQueue } from '../report-queue';
+import { ReportedHashNotice } from '../target-panel';
 import type { ReportedCaseSummary } from '@/lib/content/report-summary';
 
 const item = (overrides: Partial<ReportedCaseSummary> = {}): ReportedCaseSummary => ({
@@ -69,5 +70,26 @@ describe('ReportQueue', () => {
     const full = closeButtons(all);
     expect(full).toHaveLength(2);
     for (const button of full) expect(button).not.toMatch(/disabled=""/);
+  });
+});
+
+describe('ReportedHashNotice', () => {
+  const reported = 'a'.repeat(64);
+  it('says the content is still what was reported', () => {
+    const html = renderToStaticMarkup(<ReportedHashNotice reportedHash={reported} currentHash={reported} onLookUp={() => {}} />);
+    expect(html).toContain('matches the content that was reported');
+  });
+
+  it('warns when the content changed since it was reported, names both hashes, and offers the reported one', () => {
+    const html = renderToStaticMarkup(<ReportedHashNotice reportedHash={reported} currentHash={'b'.repeat(64)} onLookUp={() => {}} />);
+    expect(html).toContain('changed since it was reported');
+    expect(html).toContain(reported);
+    expect(html).toContain('b'.repeat(64));
+    expect(html).toContain('A global takedown here blocks the current content');
+    expect(html).toContain('Look up the reported content');
+  });
+
+  it('says nothing for a case that recorded no hash', () => {
+    expect(renderToStaticMarkup(<ReportedHashNotice reportedHash={null} currentHash={'b'.repeat(64)} onLookUp={() => {}} />)).toBe('');
   });
 });

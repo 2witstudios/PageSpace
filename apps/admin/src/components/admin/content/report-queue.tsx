@@ -18,6 +18,12 @@ const CATEGORY_LABELS: Record<ReportSummary['category'], string> = {
   other: 'Other',
 };
 
+/** A reported case's target and the content hash its report named, for the Take down tab. */
+export interface ReviewTarget {
+  targetId: string;
+  reportedHash: string | null;
+}
+
 type CloseRequest = { caseId: string; outcome: 'dismissed' | 'actioned'; reportCount: number };
 type Pending = CloseRequest | null;
 
@@ -83,7 +89,7 @@ function ReportedCaseCard({
 }: {
   summary: ReportedCaseSummary;
   onClose: (request: CloseRequest) => void;
-  onReview: (targetId: string) => void;
+  onReview: (target: ReviewTarget) => void;
 }) {
   const [later, setLater] = useState<ReportSummary[]>([]);
   const [loading, setLoading] = useState(false);
@@ -130,7 +136,7 @@ function ReportedCaseCard({
           </div>
           {item.status === 'reported' && (
             <div className="flex flex-wrap gap-2">
-              <Button size="sm" onClick={() => onReview(item.targetId)}>
+              <Button size="sm" onClick={() => onReview({ targetId: item.targetId, reportedHash: item.contentHash })}>
                 Review and act
               </Button>
               <Button size="sm" variant="outline" disabled={remaining > 0} onClick={() => onClose({ caseId: item.id, outcome: 'actioned', reportCount })}>
@@ -174,7 +180,7 @@ interface ReportQueueProps {
   items: ReportedCaseSummary[];
   onChanged: () => void;
   /** Open the Take down tab on this case's target, where the existing takedown actions are. */
-  onReview: (targetId: string) => void;
+  onReview: (target: ReviewTarget) => void;
 }
 
 /** Cases opened by reports and waiting for staff, CSAM first. Metadata and the reporters' words only. */

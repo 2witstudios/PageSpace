@@ -9,12 +9,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DataState, PageHeader } from "@/components/admin/kit";
 import { BlockedUploads } from "@/components/admin/content/blocked-uploads";
 import { CaseList } from "@/components/admin/content/case-list";
-import { ReportQueue } from "@/components/admin/content/report-queue";
+import type { ReviewTarget } from "@/components/admin/content/report-queue";
+import { LinkedCaseReports, ReportsTab } from "@/components/admin/content/reports-tab";
 import { TargetPanel } from "@/components/admin/content/target-panel";
 import { useAdminQuery } from "@/hooks/use-admin-query";
 import { useUrlTab } from "@/hooks/use-url-tab";
 import type { CaseSummary } from "@/lib/content/case-summary";
-import type { ReportedCaseSummary } from "@/lib/content/report-summary";
 
 const TABS = ["reports", "takedown", "cases", "blocked"] as const;
 type Tab = (typeof TABS)[number];
@@ -28,48 +28,7 @@ const STATUS_FILTERS = [
   { value: "dismissed", label: "Dismissed" },
 ] as const;
 
-/** Reports waiting for review. "Review and act" opens the Take down tab on the case's target. */
-function ReportsTab({ onReview }: { onReview: (targetId: string) => void }) {
-  const { data, isLoading, isFetching, error, refetch } = useAdminQuery<{ cases: ReportedCaseSummary[] }>(
-    "/api/admin/content/reports?limit=100",
-  );
-  const items = data?.cases ?? [];
-  return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <p className="text-sm text-muted-foreground">
-          A report never takes anything down by itself. Review the target, act from Take down, then close the report.
-        </p>
-        <Button variant="outline" size="sm" onClick={refetch} disabled={isFetching}>
-          <RefreshCw className={`mr-2 h-4 w-4 ${isFetching ? "animate-spin" : ""}`} />
-          Refresh
-        </Button>
-      </div>
-      <DataState
-        isLoading={isLoading}
-        error={error}
-        onRetry={refetch}
-        hasData={!!data}
-        isEmpty={!!data && items.length === 0}
-        emptyMessage="No reports waiting for review."
-      >
-        <ReportQueue items={items} onChanged={refetch} onReview={onReview} />
-      </DataState>
-    </div>
-  );
-}
-
-/** The reports on one linked case, if it has any (an alert about a report links here). */
-function LinkedCaseReports({ caseId, onReview }: { caseId: string; onReview: (targetId: string) => void }) {
-  const { data, refetch } = useAdminQuery<{ cases: ReportedCaseSummary[] }>(
-    `/api/admin/content/reports?id=${encodeURIComponent(caseId)}`,
-  );
-  const items = (data?.cases ?? []).filter((item) => item.reportCount > 0);
-  if (items.length === 0) return null;
-  return <ReportQueue items={items} onChanged={refetch} onReview={onReview} />;
-}
-
-function CasesTab({ caseId, onReview }: { caseId: string | null; onReview: (targetId: string) => void }) {
+function CasesTab({ caseId, onReview }: { caseId: string | null; onReview: (target: ReviewTarget) => void }) {
   const [status, setStatus] = useState<string>("all");
   const url = useMemo(() => {
     // An alert email links to one case: show just that one.
@@ -121,10 +80,11 @@ function ContentSafety() {
   const caseId = searchParams.get("case");
   // A link to a case opens on the Cases tab.
   const [tab, setTab] = useUrlTab<Tab>(TABS, caseId ? "cases" : "reports");
-  // A reported case's target, handed to the Take down tab. The key remounts the panel on it.
-  const [reviewTarget, setReviewTarget] = useState("");
-  const review = (targetId: string) => {
-    setReviewTarget(targetId);
+  // A reported case's target and the content hash its report named, handed to the Take down tab. The key
+  // remounts the panel on them.
+  const [reviewTarget, setReviewTarget] = useState<ReviewTarget>({ targetId: "", reportedHash: null });
+  const review = (target: ReviewTarget) => {
+    setReviewTarget(target);
     setTab("takedown");
   };
 
@@ -146,7 +106,11 @@ function ContentSafety() {
           <ReportsTab onReview={review} />
         </TabsContent>
         <TabsContent value="takedown" className="mt-4">
-          <TargetPanel key={reviewTarget} initialQuery={reviewTarget} />
+          <TargetPanel
+            key={`${reviewTarget.targetId}:${reviewTarget.reportedHash ?? ""}`}
+            initialQuery={reviewTarget.targetId}
+            reportedHash={reviewTarget.reportedHash}
+          />
         </TabsContent>
         <TabsContent value="cases" className="mt-4">
           <CasesTab caseId={caseId} onReview={review} />

@@ -57,6 +57,45 @@ function IdList({ ids }: { ids: string[] }) {
 }
 
 /**
+ * For a target opened from a report: is its content still what the report named? A page can change after it is
+ * reported, and a global takedown blocks the hash the target has NOW, so a difference is spelled out before any
+ * action, with a way to look up the reported content instead. Hashes only, never the content.
+ */
+export function ReportedHashNotice({
+  reportedHash,
+  currentHash,
+  onLookUp,
+}: {
+  reportedHash: string | null;
+  currentHash: string | null;
+  onLookUp: () => void;
+}) {
+  if (!reportedHash) return null;
+  if (currentHash === reportedHash) {
+    return (
+      <p className="text-sm text-muted-foreground" role="status">
+        This target&apos;s content hash matches the content that was reported.
+      </p>
+    );
+  }
+  return (
+    <Alert variant="destructive" role="alert">
+      <AlertTitle>The content has changed since it was reported</AlertTitle>
+      <AlertDescription className="space-y-2">
+        <p>
+          Reported: <Mono>{reportedHash}</Mono>
+        </p>
+        <p>Now: {currentHash ? <Mono>{currentHash}</Mono> : <span>no content hash</span>}</p>
+        <p>A global takedown here blocks the current content, not the content that was reported.</p>
+        <Button size="sm" variant="outline" onClick={onLookUp}>
+          Look up the reported content
+        </Button>
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+/**
  * Look up a takedown target and act on it.
  *
  * This panel shows METADATA ONLY. It must never render the file: no preview,
@@ -64,8 +103,9 @@ function IdList({ ids }: { ids: string[] }) {
  * page. An admin has to be able to act on suspected CSAM without seeing it —
  * IDs, hashes and URLs appear here as inert monospace text and nothing else.
  */
-export function TargetPanel({ initialQuery = '' }: { initialQuery?: string } = {}) {
-  // `initialQuery`: a reported case's target, sent here from the Reports tab to act on it.
+export function TargetPanel({ initialQuery = '', reportedHash = null }: { initialQuery?: string; reportedHash?: string | null } = {}) {
+  // `initialQuery`: a reported case's target, sent here from the Reports tab to act on it. `reportedHash`: the
+  // content hash that case recorded, checked against what the target holds now.
   const [input, setInput] = useState(initialQuery);
   const [query, setQuery] = useState(initialQuery);
   const url = query ? `/api/admin/content/resolve?q=${encodeURIComponent(query)}` : null;
@@ -321,6 +361,17 @@ export function TargetPanel({ initialQuery = '' }: { initialQuery?: string } = {
                   )}
                 </Card>
               </div>
+
+              <ReportedHashNotice
+                reportedHash={reportedHash}
+                currentHash={target.contentHash}
+                onLookUp={() => {
+                  if (!reportedHash) return;
+                  setNotice(null);
+                  setInput(reportedHash);
+                  setQuery(reportedHash);
+                }}
+              />
 
               <Card>
                 <CardHeader>
