@@ -64,7 +64,7 @@ function build(mode: 'shadow' | 'enforce', result?: ScanResult) {
     removePublicAsset: vi.fn(async () => 1),
     removeAvatar: vi.fn(async () => undefined),
     hideAvatar: vi.fn(async () => undefined),
-    takedownAvatar: vi.fn(async () => undefined),
+    takedownAvatar: vi.fn(async () => true),
     findBlockCaseId: vi.fn(async () => 'case-block'),
   };
   const deps = createBackfillDeps(config, { actions, gateDeps: (overrides) => ({ ...createPublishGateDeps(config, overrides), scanner }) });
@@ -222,6 +222,13 @@ describe('backfill service: avatars', () => {
     expect(actions.takedownAvatar).toHaveBeenCalledWith('user-1', expect.stringContaining('Hash match'));
   });
 
+  it('an avatar takedown that did not finish (awaiting evidence, or already running) hides the avatar and retries it', async () => {
+    const { deps, actions } = build('enforce', match);
+    actions.takedownAvatar.mockResolvedValueOnce(false);
+    await expect(deps.process(avatar, listed)).rejects.toThrow('hidden but not yet deleted');
+    expect(actions.hideAvatar).toHaveBeenCalledWith('user-1');
+  });
+
   it('the avatar comes down even when the global takedown fails', async () => {
     executeTakedown.mockRejectedValue(new Error('evidence bucket down'));
     const { deps, actions } = build('enforce', match);
@@ -286,6 +293,49 @@ describe('backfill service: avatars', () => {
       const { deps, actions } = build('enforce', match);
       actions.takedownAvatar.mockRejectedValueOnce(new Error('processor down'));
       await expect(deps.process(avatar, listed)).rejects.toThrow('processor down');
+    });
+
+    const puts = () => send.mock.calls.filter((call) => call[0].constructor.name === 'PutObjectCommand').length;
+
+    it('a hash-matched avatar replaced mid-scan is logged with its case, for staff to tie the uploader to it', async () => {
+      replacedAfterScan();
+      await build('enforce', match).deps.process(avatar, listed);
+      expect(securityLog.error).toHaveBeenCalledWith(expect.stringContaining('replaced'), undefined, expect.objectContaining({ caseId: 'case-td', userId: 'user-1' }));
+    });
+
+    it('a replaced avatar whose staging failed is staged again from memory: its stored copy is gone', async () => {
+      send.mockRejectedValueOnce(new Error('s3 blip'));
+      replacedAfterScan();
+      await expect(build('enforce', match).deps.process(avatar, listed)).resolves.toMatchObject({ removed: false });
+      expect(puts()).toBe(2);
+    });
+
+    it('a replaced avatar that cannot be staged at all is logged as lost evidence, naming the hash', async () => {
+      send.mockRejectedValue(new Error('s3 down'));
+      isHashBlocked.mockResolvedValue(true);
+      replacedAfterScan();
+      await expect(build('enforce').deps.process(avatar, listed)).resolves.toMatchObject({ finding: 'blocked', removed: false });
+      expect(securityLog.error).toHaveBeenCalledWith(expect.stringContaining('could not be preserved'), undefined, expect.objectContaining({ contentHash: PNG_HASH }));
+    });
+
+    it('a replacement read back too large to hash counts as replaced', async () => {
+      readS3ObjectBounded.mockResolvedValueOnce({ bytes: PNG, complete: true }).mockResolvedValue({ bytes: PNG, complete: false });
+      const { deps, actions } = build('enforce', flag);
+      await expect(deps.process(avatar, listed)).resolves.toMatchObject({ removed: false });
+      expect(actions.removeAvatar).not.toHaveBeenCalled();
+    });
+
+    it('a blocklisted avatar whose re-read fails after staging stops the walk and deletes nothing', async () => {
+      isHashBlocked.mockResolvedValue(true);
+      readS3ObjectBounded.mockResolvedValueOnce({ bytes: PNG, complete: true }).mockRejectedValue(new Error('s3 down'));
+      const { deps, actions } = build('enforce');
+      await expect(deps.process(avatar, listed)).rejects.toThrow('s3 down');
+      expect(actions.removeAvatar).not.toHaveBeenCalled();
+    });
+
+    it('shadow reads a flagged avatar once: nothing is removed, so nothing is re-read', async () => {
+      await build('shadow', flag).deps.process(avatar, listed);
+      expect(readS3ObjectBounded).toHaveBeenCalledTimes(1);
     });
 
     it('a failed re-read takes nothing down and stops the walk before the item, to retry it', async () => {

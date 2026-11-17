@@ -67,7 +67,11 @@ export interface BackfillActions {
   removeAvatar(userId: string): Promise<void>;
   /** Stop showing an avatar without deleting it (clear the profile image), for when its bytes can't be preserved yet. */
   hideAvatar(userId: string): Promise<void>;
-  takedownAvatar(userId: string, reason: string): Promise<void>;
+  /**
+   * Run an avatar takedown case. True once the case is actioned (the avatar is gone); false when it stopped
+   * without deleting it: CSAM waiting for evidence storage, or another run of the case under way.
+   */
+  takedownAvatar(userId: string, reason: string): Promise<boolean>;
   /** The case that blocked a hash, if any. */
   findBlockCaseId(contentHash: string): Promise<string | null>;
 }
@@ -77,10 +81,19 @@ async function defaultRemoveAvatar(userId: string): Promise<void> {
   await removeUserAvatar(userId);
 }
 
-async function defaultTakedownAvatar(userId: string, reason: string): Promise<void> {
+async function defaultTakedownAvatar(userId: string, reason: string): Promise<boolean> {
   const { executeTakedown } = await import('./takedown-service');
   const response = await executeTakedown({ action: 'avatar', userId, category: 'csam', reason }, null);
   if (response.failedStep) throw new Error(`Avatar takedown stopped at ${response.failedStep}`);
+  if (response.inProgress || response.status !== 'actioned') {
+    loggers.security.error('Backfill: the avatar takedown did not delete the avatar; it is hidden and retried', undefined, {
+      caseId: response.caseId ?? null,
+      status: response.status ?? null,
+      inProgress: response.inProgress ?? false,
+    });
+    return false;
+  }
+  return true;
 }
 
 async function defaultHideAvatar(userId: string): Promise<void> {
@@ -163,7 +176,7 @@ export function createBackfillDeps(
       const blockCaseId = await actions.findBlockCaseId(target.contentHash);
       if (!blockCaseId) {
         // No case will ever preserve or clean this hold: someone must open one (a global takedown of the hash).
-        loggers.security.error('Backfill: a blocked hash with no case was still public; it is held under content-hold/backfill-uncased/ and needs a case', undefined, {});
+        loggers.security.error('Backfill: a blocked hash with no case was still public; it is held under content-hold/backfill-uncased/ and needs a case', undefined, { contentHash: target.contentHash });
       }
       await actions.takePublicOffline(target.contentHash, blockCaseId ?? UNCASED_HOLD);
       removed = true;
@@ -204,9 +217,17 @@ export function createBackfillDeps(
         await stageBytesForTakedown(hash, bytes);
         return true;
       } catch (error) {
-        loggers.security.error('Backfill: could not stage an avatar for preservation; it is hidden, not deleted', undefined, { error: errorLabel(error) });
+        loggers.security.error('Backfill: could not stage an avatar for preservation; it is not deleted', undefined, { error: errorLabel(error) });
         return false;
       }
+    };
+    // Replaced after a failed staging: the upload already deleted the stored avatar, so the bytes read here are the
+    // only copy left. Try again before giving up on them; nothing else can preserve them later.
+    const stageLastCopy = async (hash: string): Promise<void> => {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if (await stage(hash)) return;
+      }
+      loggers.security.error('Backfill: a blocked or hash-matched avatar was replaced and its bytes could not be preserved', undefined, { contentHash: hash });
     };
     const evaluation = await evaluatePublishAsset(
       { contentHash, originalKey: target.key, declaredContentType: AVATAR_TYPES[target.extension] ?? null, fileId: null, userId: target.userId, entryPoint: 'backfill' },
@@ -214,19 +235,34 @@ export function createBackfillDeps(
         readSource: async () => read,
         async takedownHashMatch({ contentHash: hash, lists }) {
           const staged = await stage(hash);
+          let globalCaseId: string | null = null;
           try {
             // Block, case and alert run either way: the global takedown never touches avatars/ objects.
-            return await runHashMatchTakedown({ contentHash: hash, lists, source: 'the backfill scan of an avatar' });
+            const result = await runHashMatchTakedown({ contentHash: hash, lists, source: 'the backfill scan of an avatar' });
+            globalCaseId = result.caseId ?? null;
+            return result;
           } finally {
             // The gate swallows a throw from here (it logs a failed takedown), so a failure to take the avatar
             // down is carried out and thrown below: the walk stops before the item and retries it.
             try {
               if (!(await stillCurrent())) {
-                // Replaced: these bytes are no longer served, and the block above keeps them from coming back.
+                // Replaced: these bytes are no longer served, and the block above keeps them from coming back. No
+                // avatar case opens (there is nothing left to delete), so the global case is the only record: name
+                // the uploader beside it for staff.
+                loggers.security.error('Backfill: a hash-matched avatar was replaced before it could be taken down; its uploader is not on the case', undefined, {
+                  caseId: globalCaseId,
+                  userId: target.userId,
+                });
+                if (!staged) await stageLastCopy(hash);
               } else if (staged) {
                 // The avatar comes down even if the global takedown stopped part-way (its case is resumable).
-                await actions.takedownAvatar(target.userId, 'Hash match from the backfill scan of this avatar');
-                avatarTakenDown = true;
+                if (await actions.takedownAvatar(target.userId, 'Hash match from the backfill scan of this avatar')) {
+                  avatarTakenDown = true;
+                } else {
+                  // Not deleted (CSAM waiting for evidence storage, or a run already under way): stop showing it.
+                  await actions.hideAvatar(target.userId);
+                  avatarHidden = true;
+                }
               } else {
                 // The avatar is the only copy: it stops being shown, and is deleted once a later pass can stage it
                 // (the hash is then blocked, and the blocked path below stages before it deletes).
@@ -246,6 +282,7 @@ export function createBackfillDeps(
       const staged = await stage(contentHash);
       if (!(await stillCurrent())) {
         // Replaced since the read: nothing of the scanned avatar is left to take down.
+        if (!staged) await stageLastCopy(contentHash);
       } else if (staged) {
         await actions.removeAvatar(target.userId);
         avatarTakenDown = true;
@@ -256,7 +293,7 @@ export function createBackfillDeps(
     }
     // Hidden is not removed: the avatar's URL still answers from storage. Stop before this object so the next
     // tick (10 minutes) retries; by then the hash is blocked, and the blocked path stages before it deletes.
-    if (avatarHidden && !avatarTakenDown) throw new Error('Avatar hidden but not yet deleted: staging for preservation failed');
+    if (avatarHidden && !avatarTakenDown) throw new Error('Avatar hidden but not yet deleted: it could not be staged for preservation, or its takedown did not finish');
     let removed = avatarTakenDown;
     if (evaluation.finding === 'flagged' && config.mode === 'enforce' && (await stillCurrent())) {
       await actions.removeAvatar(target.userId);
