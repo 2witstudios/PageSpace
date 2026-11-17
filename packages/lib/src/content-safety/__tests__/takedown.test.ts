@@ -16,7 +16,7 @@ import {
   resweepGlobalTakedown,
   runGlobalTakedown,
   runLinearCase,
-  sweepPublicIfHalted,
+  sweepPublicIfUnfinished,
   UnpreservedObjectError,
   type ContentReferences,
   type ObjectDigest,
@@ -1115,14 +1115,49 @@ describe('public copies while a takedown is stopped', () => {
     expect(world.calls.filter((c) => c === 'unpublish_public')).toHaveLength(1);
   });
 
-  describe('sweepPublicIfHalted (the cron)', () => {
+  it('reports a failed public sweep on the way out of a halt, rather than a plain halt', async () => {
+    const { world, deps } = createWorld({ evidence: false });
+    await runGlobalTakedown(CASE_ID, deps);
+    republish(world);
+    world.failNext.add('unpublish_public');
+
+    const result = await runGlobalTakedown(CASE_ID, deps);
+
+    expect(result).toMatchObject({ status: 'awaiting_evidence', haltReason: 'awaiting_evidence', failedStep: 'unpublish_public' });
+    expect(result.error).toMatch(/unpublish_public failed/);
+  });
+
+  describe('sweepPublicIfUnfinished (the cron)', () => {
+    it('keeps sweeping a halted case after one sweep failed', async () => {
+      const { world, deps } = createWorld({ evidence: false });
+      await runGlobalTakedown(CASE_ID, deps);
+      republish(world);
+      world.failNext.add('unpublish_public');
+      expect(await sweepPublicIfUnfinished(CASE_ID, deps)).toMatchObject({ swept: true, error: expect.any(String) });
+
+      expect(await sweepPublicIfUnfinished(CASE_ID, deps)).toMatchObject({ swept: true, deleted: 1 });
+      expect(world.publish.has(`assets/${HASH}`)).toBe(false);
+    });
+
+    it('sweeps a case left open by a failed step, whose block is written', async () => {
+      const { world, deps } = createWorld();
+      world.failNext.add('preserve');
+      await runGlobalTakedown(CASE_ID, deps);
+      republish(world);
+      const before = world.calls.length;
+
+      expect(await sweepPublicIfUnfinished(CASE_ID, deps)).toMatchObject({ swept: true, deleted: 1 });
+      expect(world.calls.slice(before)).toEqual(['unpublish_public']);
+      expect(world.row.status).toBe('open');
+    });
+
     it('takes a halted case\'s re-published copy offline, and runs no other step', async () => {
       const { world, deps } = createWorld({ evidence: false });
       await runGlobalTakedown(CASE_ID, deps);
       republish(world);
       const before = world.calls.length;
 
-      const result = await sweepPublicIfHalted(CASE_ID, deps);
+      const result = await sweepPublicIfUnfinished(CASE_ID, deps);
 
       expect(result).toMatchObject({ swept: true, deleted: 1 });
       expect(world.publish.has(`assets/${HASH}`)).toBe(false);
@@ -1135,17 +1170,17 @@ describe('public copies while a takedown is stopped', () => {
       await runGlobalTakedown(CASE_ID, deps);
       const steps = world.row.steps?.length;
 
-      expect(await sweepPublicIfHalted(CASE_ID, deps)).toMatchObject({ swept: true, deleted: 0 });
+      expect(await sweepPublicIfUnfinished(CASE_ID, deps)).toMatchObject({ swept: true, deleted: 0 });
       expect(world.row.steps?.length).toBe(steps);
     });
 
-    it('leaves a case that is not halted alone: a finished one, or one that never blocked', async () => {
+    it('leaves a finished case alone, and one that never blocked', async () => {
       const finished = createWorld();
       await runGlobalTakedown(CASE_ID, finished.deps);
-      expect(await sweepPublicIfHalted(CASE_ID, finished.deps)).toEqual({ swept: false });
+      expect(await sweepPublicIfUnfinished(CASE_ID, finished.deps)).toEqual({ swept: false });
 
       const fresh = createWorld({ evidence: false });
-      expect(await sweepPublicIfHalted(CASE_ID, fresh.deps)).toEqual({ swept: false });
+      expect(await sweepPublicIfUnfinished(CASE_ID, fresh.deps)).toEqual({ swept: false });
       expect(fresh.world.calls).toEqual([]);
     });
   });
@@ -1238,6 +1273,28 @@ describe('avatar takedown plan', () => {
     expect(world.uploads.get(`avatars/${USER}/avatar.png`)).toBe(AVATAR);
     expect(stepStates(world.row.steps)).toEqual([]);
     expect(world.alerts).toEqual([{ event: 'awaiting_evidence', caseId: CASE_ID, category: 'csam' }]);
+  });
+
+  it('judges CSAM on the case as it is under the lock, not as it was when the plan was built', async () => {
+    // Filed as policy; re-filed as CSAM after this run built its plan but before it took the lock.
+    const { world, deps } = avatarWorld('policy', false);
+    const stale = structuredClone(world.row);
+    world.row.category = 'csam';
+
+    const result = await runLinearCase(CASE_ID, avatarTakedownPlan(stale, deps, effects(world)), deps);
+
+    expect(result).toMatchObject({ status: 'awaiting_evidence', haltReason: 'awaiting_evidence' });
+    expect(world.uploads.get(`avatars/${USER}/avatar.png`)).toBe(AVATAR);
+  });
+
+  it('refuses to delete a CSAM avatar with no evidence storage even if the halt was passed by', async () => {
+    const { world, deps } = avatarWorld('csam', false);
+    const plan = avatarTakedownPlan(world.row, deps, effects(world)).map((step) => ({ ...step, halt: undefined }));
+
+    const result = await runLinearCase(CASE_ID, plan, deps);
+
+    expect(result).toMatchObject({ status: 'open', failedStep: 'preserve_avatar' });
+    expect(world.uploads.get(`avatars/${USER}/avatar.png`)).toBe(AVATAR);
   });
 
   it('copies every avatar object to evidence, verified by checksum, before anything is deleted', async () => {

@@ -22,7 +22,7 @@ import {
   runGlobalTakedown,
   runLinearCase,
   safeAlert,
-  sweepPublicIfHalted,
+  sweepPublicIfUnfinished,
   type LinearStep,
   type PublicSweepResult,
   type TakedownDeps,
@@ -395,9 +395,9 @@ export async function executeTakedown(request: TakedownRequest, actorUserId: str
 }
 
 /**
- * The re-sweep cron's public pass over one case: if it is a halted global takedown, take its public copies
+ * The re-sweep cron's public pass over one case: if it is an unfinished global takedown whose hash is blocked, take its public copies
  * offline again (a publish in flight at the block can have put one back). Nothing else runs.
  */
-export async function sweepPublicForHaltedCase(caseId: string): Promise<PublicSweepResult> {
-  return sweepPublicIfHalted(caseId, createTakedownDeps(null));
+export async function sweepPublicForUnfinishedCase(caseId: string): Promise<PublicSweepResult> {
+  return sweepPublicIfUnfinished(caseId, createTakedownDeps(null));
 }

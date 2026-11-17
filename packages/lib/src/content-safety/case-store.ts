@@ -92,10 +92,16 @@ export class CaseCategoryDowngradeError extends Error {
   }
 }
 
-/** Thrown when a re-file waited for a run of the case to finish and the run outlasted the wait. Nothing was changed. */
+/**
+ * Thrown when a re-file waited for a run of the case to finish and the run outlasted the wait, or when
+ * another request for the same target held the open lock past it. Nothing was changed.
+ */
 export class CaseRunInProgressError extends Error {
-  constructor(readonly caseId: string) {
-    super('This case is running a takedown now. Nothing was changed; try again when the run has finished.');
+  constructor(
+    readonly caseId: string,
+    message = 'This case is running a takedown now. Nothing was changed; try again when the run has finished.',
+  ) {
+    super(message);
     this.name = 'CaseRunInProgressError';
   }
 }
@@ -167,7 +173,9 @@ export async function openTakedownCase(
     // Longer than the re-file's own wait inside, so a re-file that waits out a run is not cut short here.
     { timeoutMs: lockTimeoutMs + OPEN_LOCK_SLACK_MS },
   );
-  if (opening.outcome === 'lock_busy') throw new CaseRunInProgressError('pending');
+  if (opening.outcome === 'lock_busy') {
+    throw new CaseRunInProgressError('pending', 'Another request for this target is being handled now. Nothing was changed; try again in a moment.');
+  }
   if (opening.outcome === 'connection_error') throw opening.error;
   return opening.result;
 }
@@ -326,12 +334,12 @@ export async function listCasesDueForResweep(input: {
 }
 
 /**
- * Unfinished global takedowns touched within the window, for the re-sweep cron's public pass
- * (`sweepPublicIfHalted` decides which of them are really halted). A publish in flight when a hash is
- * blocked lands minutes after the block, so a day is ample; the pass records nothing when it finds nothing,
- * so a case that stays quiet ages out of the window.
+ * Unfinished global takedowns touched within the window, newest first, for the re-sweep cron's public
+ * pass (`sweepPublicIfUnfinished`, which skips one whose block is not written yet). A publish in flight
+ * when a hash is blocked lands minutes after the block, so the newest cases matter most and a day is
+ * ample; the pass records nothing when it finds nothing, so a case that stays quiet ages out of the window.
  */
-export async function listHaltedGlobalCases(input: { notOlderThan: Date; limit?: number }): Promise<ContentCase[]> {
+export async function listUnfinishedGlobalCases(input: { notOlderThan: Date; limit?: number }): Promise<ContentCase[]> {
   return db
     .select()
     .from(contentCases)
@@ -342,6 +350,6 @@ export async function listHaltedGlobalCases(input: { notOlderThan: Date; limit?:
         gte(contentCases.updatedAt, input.notOlderThan),
       ),
     )
-    .orderBy(contentCases.updatedAt)
-    .limit(input.limit ?? 50);
+    .orderBy(desc(contentCases.updatedAt))
+    .limit(input.limit ?? 200);
 }

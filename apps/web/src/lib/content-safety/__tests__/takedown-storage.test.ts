@@ -132,6 +132,16 @@ describe('takePublicOffline', () => {
     expect(hold).toEqual([{ bucket: UPLOADS, key: HOLD, streamed: true, contentLength: 'original-bytes'.length }]);
   });
 
+  it('treats a public asset that vanished between its HEAD and its GET as nothing to hold, not a failure', async () => {
+    // The publisher's own post-PUT recheck can delete it in that moment.
+    s3.failOn = { match: `GetObjectCommand ${PUBLISH} assets/${HASH}`, error: Object.assign(new Error('NoSuchKey'), { name: 'NoSuchKey', $metadata: { httpStatusCode: 404 } }) };
+
+    const result = await createTakedownStorage().takePublicOffline(HASH, CASE);
+
+    expect(result.held).toBe(false);
+    expect(s3.has(PUBLISH, `assets/${HASH}`)).toBe(false);
+  });
+
   it('does not trust an earlier hold copy of the same size but different bytes: it is written again', async () => {
     s3.bucket(UPLOADS).delete(`files/${HASH}/original`);
     s3.bucket(UPLOADS).delete(`chat-attachments/${HASH}/original`);

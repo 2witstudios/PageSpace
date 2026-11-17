@@ -176,9 +176,20 @@ async function digestS3Object(client: S3Client, bucket: string, key: string): Pr
  * up to 1 GB), and hashed on the way through. The copy is then read back and
  * must hash the same.
  */
-async function holdPublicAssetPrivately(hash: string, caseId: string): Promise<void> {
+async function holdPublicAssetPrivately(hash: string, caseId: string): Promise<boolean> {
   const holdKey = holdKeyFor(caseId, hash);
-  const asset = await openPublishedAsset(hash);
+  let asset: Awaited<ReturnType<typeof openPublishedAsset>>;
+  try {
+    asset = await openPublishedAsset(hash);
+  } catch (err) {
+    // Gone since its HEAD (a publish's own post-PUT recheck deletes it): nothing public to keep.
+    if (isS3NotFound(err)) return false;
+    throw err;
+  }
+  if (asset.contentLength === undefined) {
+    destroyBody(asset.body);
+    throw new Error('The public asset has no length; it was left in place');
+  }
   const streamed = createHash('sha256');
   const body = Readable.from(
     (async function* () {
@@ -189,20 +200,33 @@ async function holdPublicAssetPrivately(hash: string, caseId: string): Promise<v
     })(),
   );
 
-  await getS3Client().send(
-    new PutObjectCommand({
-      Bucket: getS3Bucket(),
-      Key: holdKey,
-      Body: body,
-      // A streamed PUT needs its length up front; S3 refuses one that delivers a different number of bytes.
-      ...(asset.contentLength !== undefined ? { ContentLength: asset.contentLength } : {}),
-      ContentType: asset.contentType ?? 'application/octet-stream',
-    }),
-  );
+  try {
+    await getS3Client().send(
+      new PutObjectCommand({
+        Bucket: getS3Bucket(),
+        Key: holdKey,
+        Body: body,
+        // A streamed PUT needs its length up front; S3 refuses one that delivers a different number of bytes.
+        ContentLength: asset.contentLength,
+        ContentType: asset.contentType ?? 'application/octet-stream',
+      }),
+    );
+  } finally {
+    // A PUT that failed before reading the body would otherwise leave the GET's socket open.
+    body.destroy();
+    destroyBody(asset.body);
+  }
   const copy = await digestS3Object(getS3Client(), getS3Bucket(), holdKey);
   if (copy?.sha256 !== streamed.digest('hex')) {
     throw new Error('Private hold copy could not be verified; the public object was left in place');
   }
+  return true;
+}
+
+/** Release an SDK object body that may not have been read to the end. */
+function destroyBody(body: unknown): void {
+  const stream = body as { destroy?: () => void } | null | undefined;
+  if (stream && typeof stream.destroy === 'function') stream.destroy();
 }
 
 export function createTakedownStorage(): TakedownStorage {
@@ -233,8 +257,8 @@ export function createTakedownStorage(): TakedownStorage {
       // need not match the hash), so its existence is no proof the content is
       // safe elsewhere; the copy made here is checked by checksum instead.
       const asset = await headPublishedAsset(hash);
-      if (asset) await holdPublicAssetPrivately(hash, caseId);
-      return { deleted: await deletePublishedAssetsForHash(hash), held: asset !== null };
+      const held = asset ? await holdPublicAssetPrivately(hash, caseId) : false;
+      return { deleted: await deletePublishedAssetsForHash(hash), held };
     },
 
     digestSource: (key) => digestS3Object(getS3Client(), getS3Bucket(), key),

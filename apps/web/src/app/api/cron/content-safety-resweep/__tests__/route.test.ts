@@ -5,9 +5,9 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const { mockDue, mockHalted, mockExecute, mockSweepPublic, mockAudit, mockLogError } = vi.hoisted(() => ({
+const { mockDue, mockUnfinished, mockExecute, mockSweepPublic, mockAudit, mockLogError } = vi.hoisted(() => ({
   mockDue: vi.fn(),
-  mockHalted: vi.fn(),
+  mockUnfinished: vi.fn(),
   mockExecute: vi.fn(),
   mockSweepPublic: vi.fn(),
   mockAudit: vi.fn(),
@@ -15,8 +15,8 @@ const { mockDue, mockHalted, mockExecute, mockSweepPublic, mockAudit, mockLogErr
 }));
 
 vi.mock('@/lib/auth/cron-auth', () => ({ validateSignedCronRequest: vi.fn() }));
-vi.mock('@pagespace/lib/content-safety/case-store', () => ({ listCasesDueForResweep: mockDue, listHaltedGlobalCases: mockHalted }));
-vi.mock('@/lib/content-safety/takedown-service', () => ({ executeTakedown: mockExecute, sweepPublicForHaltedCase: mockSweepPublic }));
+vi.mock('@pagespace/lib/content-safety/case-store', () => ({ listCasesDueForResweep: mockDue, listUnfinishedGlobalCases: mockUnfinished }));
+vi.mock('@/lib/content-safety/takedown-service', () => ({ executeTakedown: mockExecute, sweepPublicForUnfinishedCase: mockSweepPublic }));
 vi.mock('@pagespace/lib/content-safety/takedown', () => ({ MAX_RESWEEP_ATTEMPTS: 3 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: mockAudit }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { system: { error: mockLogError } } }));
@@ -31,28 +31,28 @@ describe('/api/cron/content-safety-resweep', () => {
     vi.clearAllMocks();
     vi.mocked(validateSignedCronRequest).mockReturnValue(null);
     mockDue.mockResolvedValue([]);
-    mockHalted.mockResolvedValue([]);
+    mockUnfinished.mockResolvedValue([]);
     mockExecute.mockResolvedValue({ action: 'resweep', status: 'actioned' });
     mockSweepPublic.mockResolvedValue({ swept: true, deleted: 0 });
   });
 
-  describe('halted takedowns', () => {
-    it('takes the public copies offline again for every halted case of the last day, every tick', async () => {
-      mockHalted.mockResolvedValue([{ id: 'halt-1' }, { id: 'halt-2' }]);
+  describe('unfinished takedowns', () => {
+    it('takes the public copies offline again for every unfinished case of the last day, every tick', async () => {
+      mockUnfinished.mockResolvedValue([{ id: 'halt-1' }, { id: 'halt-2' }]);
       mockSweepPublic.mockResolvedValueOnce({ swept: true, deleted: 1 }).mockResolvedValueOnce({ swept: false });
       const before = Date.now();
 
       const response = await GET(request());
 
       expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ success: true, due: 0, swept: 0, halted: 2, haltedPublicDeleted: 1 });
+      expect(await response.json()).toEqual({ success: true, due: 0, swept: 0, unfinished: 2, unfinishedPublicDeleted: 1 });
       expect(mockSweepPublic.mock.calls).toEqual([['halt-1'], ['halt-2']]);
-      const { notOlderThan } = mockHalted.mock.calls[0][0] as { notOlderThan: Date };
+      const { notOlderThan } = mockUnfinished.mock.calls[0][0] as { notOlderThan: Date };
       expect(before - notOlderThan.getTime()).toBeGreaterThanOrEqual(24 * 60 * 60 * 1000 - 5);
     });
 
-    it('answers 500 when a halted case\'s public copies could not be taken down', async () => {
-      mockHalted.mockResolvedValue([{ id: 'halt-1' }]);
+    it('answers 500 when an unfinished case\'s public copies could not be taken down', async () => {
+      mockUnfinished.mockResolvedValue([{ id: 'halt-1' }]);
       mockSweepPublic.mockResolvedValue({ swept: true, error: 'publish bucket down' });
 
       const response = await GET(request());
@@ -90,7 +90,7 @@ describe('/api/cron/content-safety-resweep', () => {
       [{ action: 'resweep', caseId: 'case-1' }, null],
       [{ action: 'resweep', caseId: 'case-2' }, null],
     ]);
-    expect(mockAudit).toHaveBeenCalledWith(expect.objectContaining({ resourceId: 'content_safety_resweep', details: { due: 2, swept: 2, failed: 0, inProgress: 0, halted: 0, haltedPublicDeleted: 0 } }));
+    expect(mockAudit).toHaveBeenCalledWith(expect.objectContaining({ resourceId: 'content_safety_resweep', details: { due: 2, swept: 2, failed: 0, inProgress: 0, unfinished: 0, unfinishedPublicDeleted: 0 } }));
   });
 
   it('keeps going past a case that fails and answers 500 so the run pages', async () => {
@@ -117,6 +117,6 @@ describe('/api/cron/content-safety-resweep', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ success: true, due: 2, swept: 0, inProgress: 2 });
-    expect(mockAudit).toHaveBeenCalledWith(expect.objectContaining({ details: { due: 2, swept: 0, failed: 0, inProgress: 2, halted: 0, haltedPublicDeleted: 0 } }));
+    expect(mockAudit).toHaveBeenCalledWith(expect.objectContaining({ details: { due: 2, swept: 0, failed: 0, inProgress: 2, unfinished: 0, unfinishedPublicDeleted: 0 } }));
   });
 });

@@ -23,7 +23,7 @@ import {
   createTakedownCaseStore,
   listCasesDueForResweep,
   listCasesForTarget,
-  listHaltedGlobalCases,
+  listUnfinishedGlobalCases,
   listContentCases,
   openTakedownCase,
   withContentCaseRunLock,
@@ -348,9 +348,9 @@ describe('takedown database edge — real Postgres', () => {
       expect(forTarget.some((c) => c.targetType === 'content_hash')).toBe(true);
     });
 
-    describe('listHaltedGlobalCases', () => {
+    describe('listUnfinishedGlobalCases', () => {
       const store = createTakedownCaseStore();
-      const halted = async () => (await listHaltedGlobalCases({ notOlderThan: new Date(Date.now() - 60_000), limit: 500 })).map((c) => c.id);
+      const halted = async () => (await listUnfinishedGlobalCases({ notOlderThan: new Date(Date.now() - 60_000), limit: 500 })).map((c) => c.id);
 
       it('offers unfinished global cases, waiting or open, and never a finished or dismissed one', async () => {
         const make = async (status: 'open' | 'awaiting_evidence' | 'actioned' | 'dismissed') => {

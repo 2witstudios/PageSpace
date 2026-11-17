@@ -533,9 +533,14 @@ async function runGlobalTakedownLocked(caseId: string, deps: TakedownDeps, signa
 
     if (decision.kind === 'done' || decision.kind === 'halt') {
       const status = statusForDecision(decision);
-      if (decision.kind === 'halt' && !unpublishedThisRun && blockWritten(row)) await takePublicOfflineAgain(row, contentHash, deps);
+      const swept =
+        decision.kind === 'halt' && !unpublishedThisRun && blockWritten(row) ? await takePublicOfflineAgain(row, contentHash, deps) : null;
       await settle(row, status, deps);
-      return decision.kind === 'halt' ? { caseId, status, haltReason: decision.reason } : { caseId, status };
+      if (decision.kind !== 'halt') return { caseId, status };
+      // A sweep that failed is reported with the halt: the case waits, and its public copy may still be up.
+      return swept && 'error' in swept
+        ? { caseId, status, haltReason: decision.reason, failedStep: 'unpublish_public', error: swept.error }
+        : { caseId, status, haltReason: decision.reason };
     }
 
     if (decision.kind === 'skip') {
@@ -597,26 +602,18 @@ export type PublicSweepResult =
   | { swept: true; error: string };
 
 /**
- * For the re-sweep cron: take the public copies offline again for a global takedown that is HALTED
- * (waiting for evidence storage or for an admin's preservation decision) and whose block is written.
- * Runs no other step and changes no status: the case still waits for a person. Any other case (finished,
- * failed part-way, never blocked) is left alone; a failed case is resumed by a person, which takes its
- * public copies offline on the way.
+ * For the re-sweep cron: take the public copies offline again for an UNFINISHED global takedown (open or
+ * awaiting evidence) whose block is written: one halted for evidence storage or an admin's decision, one
+ * a failed step left open, or one whose last public sweep failed. A publish in flight when the hash was
+ * blocked can have put a copy back, and none of those cases would otherwise touch the public bucket until
+ * a person resumes it. Runs no other step and changes no status.
  */
-export async function sweepPublicIfHalted(caseId: string, deps: TakedownDeps): Promise<PublicSweepResult> {
+export async function sweepPublicIfUnfinished(caseId: string, deps: TakedownDeps): Promise<PublicSweepResult> {
   const locked = await deps.cases.withCaseLock(caseId, async (): Promise<PublicSweepResult> => {
     const row = await loadCase(caseId, deps);
     if (row.snapshot?.takedown?.kind !== 'global' || !blockWritten(row)) return { swept: false };
     if (row.status !== 'open' && row.status !== 'awaiting_evidence') return { swept: false };
-    const { category, contentHash } = requireGlobal(row);
-    const decision = nextGlobalTakedownStep({
-      steps: row.steps ?? [],
-      category,
-      evidenceConfigured: deps.storage.evidenceConfigured(),
-      skipPreservation: row.snapshot?.takedown?.skipPreservation === true,
-      suspendUploader: row.snapshot?.takedown?.suspendUploader === true,
-    });
-    if (decision.kind !== 'halt') return { swept: false };
+    const { contentHash } = requireGlobal(row);
     return { swept: true, ...(await takePublicOfflineAgain(row, contentHash, deps)) };
   });
   return locked.acquired ? locked.value : { swept: false, inProgress: true };
@@ -627,10 +624,11 @@ export interface LinearStep {
   /** Returns an optional detail string for the case record. Must be idempotent. */
   run(): Promise<string | undefined | void>;
   /**
-   * Asked before the step runs: a reason here stops the case, by design, at that step with nothing run
-   * (CSAM with nowhere to preserve it). The case is left at the status the global plan gives that reason.
+   * Asked before the step runs, with the case as read under the run lock (a re-file may have changed it
+   * since the plan was built): a reason here stops the case, by design, at that step with nothing run (CSAM
+   * with nowhere to preserve it). The case is left at the status the global plan gives that reason.
    */
-  halt?: () => TakedownHaltReason | null;
+  halt?: (row: ContentCase) => TakedownHaltReason | null;
 }
 
 /**
@@ -649,7 +647,7 @@ async function runLinearCaseLocked(caseId: string, plan: readonly LinearStep[], 
   for (const { step, run, halt } of plan) {
     const latest = latestEntry(steps, step);
     if (latest && latest.status !== 'failed') continue;
-    const reason = halt?.() ?? null;
+    const reason = halt?.(row) ?? null;
     if (reason) {
       const status = statusForDecision({ kind: 'halt', reason });
       await settle(row, status, deps);
@@ -714,12 +712,19 @@ export function avatarTakedownPlan(
   deps: Pick<TakedownDeps, 'storage' | 'cases'>,
   effects: { deleteAvatar(): Promise<string>; clearProfileImage(): Promise<string> },
 ): LinearStep[] {
-  const halt = (): TakedownHaltReason | null =>
-    row.category === 'csam' && !deps.storage.evidenceConfigured() ? 'awaiting_evidence' : null;
-  // The row is read again for each preservation, so copies made by an earlier attempt are known.
+  // Judged on the case as the run reads it under its lock, never on `row`: the case can be re-filed as CSAM
+  // between building this plan and taking the lock.
+  const halt = (current: ContentCase): TakedownHaltReason | null =>
+    current.category === 'csam' && !deps.storage.evidenceConfigured() ? 'awaiting_evidence' : null;
+  // The case is read again for each preservation: copies made by an earlier attempt are known, and the
+  // CSAM rule is enforced here too, whatever the halt said.
   const preserveNow = async () => {
-    if (!deps.storage.evidenceConfigured()) return 'no_evidence_storage';
-    return preserveAvatarObjects((await deps.cases.load(row.id)) ?? row, deps);
+    const current = (await deps.cases.load(row.id)) ?? row;
+    if (!deps.storage.evidenceConfigured()) {
+      if (current.category === 'csam') throw new Error('A CSAM avatar is never deleted without evidence storage to preserve it');
+      return 'no_evidence_storage';
+    }
+    return preserveAvatarObjects(current, deps);
   };
   return [
     { step: 'preserve_avatar', halt, run: preserveNow },
