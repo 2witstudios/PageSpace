@@ -5,6 +5,11 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 export interface AdminQueryState<T> {
   data: T | null;
+  /**
+   * The URL that produced `data`. Data is kept across URL changes, so this can
+   * differ from the current URL; see dataForUrl.
+   */
+  dataUrl: string | null;
   /** True only while there is no data yet (initial load). */
   isLoading: boolean;
   /** True during any in-flight fetch, including background refreshes. */
@@ -21,6 +26,16 @@ interface AdminQueryOptions {
 }
 
 /**
+ * `state.data` only if it was fetched for `url`. A page that ACTS on the data
+ * (a destructive action against a looked-up target) must use this rather than
+ * `data`: the hook keeps the previous URL's data while the next one loads, and
+ * after the next one fails.
+ */
+export function dataForUrl<T>(url: string | null, state: Pick<AdminQueryState<T>, 'data' | 'dataUrl'>): T | null {
+  return url !== null && state.dataUrl === url ? state.data : null;
+}
+
+/**
  * Single data-fetching path for admin pages: fetchWithAuth + loud errors +
  * stale-data-preserving refresh. A failed fetch always surfaces in `error`
  * (never silently rendered as zeros) while previous data stays visible.
@@ -28,6 +43,7 @@ interface AdminQueryOptions {
 export function useAdminQuery<T>(url: string | null, options: AdminQueryOptions = {}): AdminQueryState<T> {
   const { refreshInterval, enabled = true } = options;
   const [data, setData] = useState<T | null>(null);
+  const [dataUrl, setDataUrl] = useState<string | null>(null);
   const [isFetching, setIsFetching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const hasDataRef = useRef(false);
@@ -47,6 +63,7 @@ export function useAdminQuery<T>(url: string | null, options: AdminQueryOptions 
       if (generation !== generationRef.current) return;
       hasDataRef.current = true;
       setData(json);
+      setDataUrl(url);
       setError(null);
     } catch (err) {
       if (generation !== generationRef.current) return;
@@ -73,6 +90,7 @@ export function useAdminQuery<T>(url: string | null, options: AdminQueryOptions 
 
   return {
     data,
+    dataUrl,
     isLoading: !hasDataRef.current && (isFetching || (!error && enabled && !!url)),
     isFetching,
     error,

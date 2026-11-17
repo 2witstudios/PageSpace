@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { DataState } from '@/components/admin/kit';
-import { useAdminQuery } from '@/hooks/use-admin-query';
+import { dataForUrl, useAdminQuery } from '@/hooks/use-admin-query';
 import type { CaseSummary } from '@/lib/content/case-summary';
 import { describeTakedownResult, runTakedown } from './actions';
 import { CaseList, Mono } from './case-list';
@@ -58,16 +58,21 @@ export function TargetPanel() {
   const [input, setInput] = useState('');
   const [query, setQuery] = useState('');
   const url = query ? `/api/admin/content/resolve?q=${encodeURIComponent(query)}` : null;
-  const { data, isLoading, error, refetch } = useAdminQuery<ResolveResponse>(url);
+  const resolved = useAdminQuery<ResolveResponse>(url);
+  const { error, refetch } = resolved;
 
   const [dialog, setDialog] = useState<ActionKind | null>(null);
   const [pending, setPending] = useState(false);
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ message: string; ok: boolean } | null>(null);
 
-  // Only show a result that belongs to the current query: useAdminQuery keeps the previous data while it refetches.
-  const target = query && data ? data.target : null;
-  const cases = query && data ? data.cases : [];
+  // Only show (and act on) a result fetched for the CURRENT query: useAdminQuery keeps the previous lookup's
+  // data while the next one loads and after it fails, and every action below is destructive.
+  const current = dataForUrl(url, resolved);
+  const target = current?.target ?? null;
+  const cases = current?.cases ?? [];
+  // The hook's own isLoading is false once ANY lookup has loaded; a new lookup still loading is loading here.
+  const isLoading = !!url && !current && !error;
   const refs = target?.references ?? null;
 
   const open = (kind: ActionKind) => {
