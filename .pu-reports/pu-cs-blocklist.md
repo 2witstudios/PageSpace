@@ -34,9 +34,9 @@ Bytes entering storage:
 | # | Entry point | Gate at | On a blocked hash |
 |---|---|---|---|
 | 1 | Page-file presign | `apps/web/src/app/api/upload/presign/route.ts:80` | 422 before the storage probe, slot or presigned URL |
-| 2 | Page-file complete | `apps/web/src/app/api/upload/complete/route.ts:260` (declared hash), `:305` (staged bytes hashed, then copied to the served key) | 422, slot and pending-upload row released, no page or `files` row; staged bytes that don't match the declared hash are refused and deleted |
+| 2 | Page-file complete | `apps/web/src/app/api/upload/complete/route.ts:229` (declared hash), `:272` (staged bytes hashed via a server-only copy, then published) | 422, slot and pending-upload row released, no page or `files` row; staged bytes that don't match the declared hash are never published |
 | 3 | Channel + DM attachment presign | `apps/web/src/lib/upload/attachment-direct.ts:92` | 422 before the storage probe, slot or presigned URL |
-| 4 | Channel + DM attachment complete | `apps/web/src/lib/upload/attachment-direct.ts:191` | 422 before processor verify, slot released, no `files` row |
+| 4 | Channel + DM attachment complete | `apps/web/src/lib/upload/attachment-direct.ts:195` (declared hash), `:212` (staged bytes published like 2, before processor verify) | 422 before processor verify, slot released, no `files` row |
 | 5 | Server-side image writer (AI image generation) | `apps/web/src/lib/upload/create-file-page.ts:260` | throws `ContentBlockedError` before `putObject` |
 | 6 | AI chat attachments — new uploads | `apps/web/src/lib/repositories/message-repository.ts:667`, `:739` | see below |
 
@@ -90,24 +90,29 @@ Notes:
   rather than dropped, because those callers legitimately resend the `read_page` results the server gave them.
   A threaded call with attachments makes two blocklist queries, the route's and persistence's.
   The route's audit event has no IP or user agent, because the screen takes no `Request`.
-- **2** proves the stored bytes before anything is committed.
+- **2 and 4** prove the stored bytes before anything is committed. Both use `promoteStagedUpload`
+  (`apps/web/src/lib/upload/promote-staged-upload.ts`).
   - A presigned PUT binds a key and a length, never the bytes, and stays valid for its 15-minute TTL. So
-    presign signs it for a per-job staging key, `uploads/staging/<jobId>`
-    (`apps/web/src/lib/upload/upload-staging.ts`), never for the served `files/<hash>/original`.
-  - `/complete` hashes the staging object (`digestStoredObject`, streamed, stopping past the size reserved at
-    presign). It then server-side copies exactly the version it hashed to the served key (`copyVerifiedObject`:
-    `CopySourceIfMatch` on that ETag, which Tigris evaluates against its latest state), then deletes staging.
-  - So only verified bytes are ever written to the served key, and a re-PUT after `/complete` lands on a
-    staging key nothing serves. A staging object changed between the hash and the copy copies nothing (409).
-    Two completions racing on one hash can only write identical, verified bytes.
-  - With no staging object (the dedup fast-path skips the PUT), the existing served object is hashed instead.
-    On a mismatch it is deleted, unless a `files` row owns it; then earlier pages depend on it, and it is
-    logged and left in place.
-  - `/cancel` deletes the job's staging object. A PUT that is never completed or cancelled leaves an orphan
-    staging object, nothing serves it; see Follow-up 9.
+    presign, for page files and for attachments, signs it for a per-job staging key `uploads/staging/<jobId>`
+    (`upload-staging.ts`). It never signs for the served `files/<hash>/original`, so no client-held URL of
+    either kind can write the served key.
+  - At completion, the staging object is copied server-side to a per-job holding key no client can write
+    (`uploads/verifying/<jobId>`), and staging is deleted. The holding copy is hashed (streamed, stopping past
+    the size reserved at presign); on a match exactly that copy is copied to the served key.
+  - No ETag or object version is relied on. The bytes hashed are the bytes published, because nothing else
+    can write the holding key. Concurrent completions of one hash can only publish identical verified bytes.
+  - On a mismatch, or on any error, only the per-job keys are deleted, never the served key: other
+    completions may own it, and an ownership read could be stale by the time a delete runs.
+  - With no staging object (the dedup fast-path skips the PUT), page-file complete hashes the existing served
+    object and refuses a mismatch without deleting it. Attachment complete goes on to the processor verify,
+    which re-hashes the served object either way and supplies the true MIME type.
+  - `/cancel` (both paths) deletes the job's staging object. The `sweep-expired` cron
+    (`upload-staging-sweep.ts`) deletes `uploads/staging/` and `uploads/verifying/` objects older than a day.
+    That covers PUTs never completed or cancelled, re-PUTs after completion, and holding copies a crash left
+    behind.
   - Cost: SHA-256 runs at ~2 GB/s in constant memory (measured: 1 GB in ~0.5 s), so the S3 read dominates:
-    about 10 s for the 1 GB tier limit at 100 MB/s, less than the client's own upload of the same bytes. The
-    copy is server-side and doesn't pass through the app.
+    about 10 s for the 1 GB tier limit at 100 MB/s, less than the client's own upload of the same bytes. Both
+    copies are server-side and don't pass through the app.
   - The blocklist check runs first, on the declared hash, so a blocked hash is refused without reading
     anything. Equal hashes mean that check covered the verified bytes.
   - `create-file-page` (5) has no such gap: it hashes the bytes it writes itself.
@@ -246,17 +251,15 @@ written only by the web app.
    because `extractToolResults` reads the `parts` of every assistant message in the request. A refused
    request now returns before the back-fill runs.)*
 
-9. **Orphaned staging objects.** A presigned PUT that is never completed or cancelled leaves an
-   `uploads/staging/<jobId>` object, and so does a re-PUT after `/complete`, until the URL expires. Nothing
-   serves these objects. Before this PR the same abandoned PUT left an unreferenced `files/<hash>/original`
-   instead. Add a bucket lifecycle rule that expires `uploads/staging/` after a day; it is infrastructure, not
-   app code.
-10. **Channel and DM attachment uploads still sign their PUT for the served key.**
-    `attachment-direct.ts` (entry points 3 and 4) verifies the bytes synchronously through the processor
-    before any row exists. But the presigned PUT stays valid for its TTL, so a re-PUT after completion can
-    overwrite the verified object, the same class as entry point 2's overwrite. This predates the branch. The
-    fix is the same staging-and-copy, but the processor's verify reads the served key, so it touches the
-    processor seam too.
+9. *(Fixed in this PR: the `sweep-expired` cron reclaims per-job upload objects older than a day. See the
+   note on entry points 2 and 4.)*
+10. *(Fixed in this PR: attachment PUTs are staged and published like page files. See the note on entry
+    points 2 and 4.)*
+11. **Stored thread history replays an attachment blocked after it was saved.** A v1 threaded call loads
+    history through `convertDbMessageToUIMessage`, which doesn't consult the blocklist. This is the
+    "existing references" work. It is already fixed on the next PR in the stack, #2977 (`pu/cs-takedown`):
+    `reconstructFromStructuredContent` drops every persisted attachment whose hash is blocked, for the client
+    and the model alike.
 
 ## Erasure
 
@@ -434,3 +437,18 @@ Round 3: CodeRabbit's replies on `fb9dedbbc`, inside the round-2 threads:
 
 Commands, round 3: `bun run typecheck` PASS, 23 of 23. `eslint` on the changed upload files is clean. The
 `apps/web` sweep above, rerun against the test database: PASS, 447 files, 7,873 tests.
+
+Round 4: CodeRabbit's review of `dab298c61`:
+
+| Finding | Outcome |
+|---|---|
+| major — attachment PUTs can overwrite a served key (also via a cancelled attachment URL on a page-file hash) | Fixed in `642973a1b`: attachments are staged and published through the same server-only hashed copy. |
+| major — the fallback path deletes the shared served key on a stale ownership read | Fixed in `642973a1b`: completion deletes only per-job keys. |
+| minor — no reclaim for `uploads/staging/` | Fixed in `642973a1b`: `sweep-expired` deletes per-job upload objects older than a day. |
+| major — `CopySourceIfMatch` trusts an ETag, which can be an MD5 open to collisions | Fixed in `642973a1b`: the ETag condition is gone; the server hashes and publishes a copy no client can write. |
+| major — `dynamic-tool` `read_page` results skip the visual screen | Fixed in `54ffa61a6`. |
+| major — percent-encoded file ids slip past the copy screen | Fixed in `54ffa61a6`. |
+| major — blocked attachments replayed from stored thread history | Won't fix here: it belongs to the stack's next PR, #2977, which already drops them on reconstruction. Follow-up 11. |
+
+Commands, round 4: `bun run typecheck` PASS, 23 of 23. `eslint` on the changed files is clean. The `apps/web`
+sweep plus `src/app/api/cron`, against the test database: PASS, 475 files, 8,120 tests.
