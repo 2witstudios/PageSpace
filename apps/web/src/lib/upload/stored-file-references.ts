@@ -288,8 +288,14 @@ export interface StoredFileReferenceScan {
  * encoding peeled and all whitespace and control characters removed, each
  * `api/files/` and each `dashboard/{d}/{id}/view` must name an id the scan extracted.
  *
- * Not covered: a URL that canvas script assembles at runtime (string joins).
- * No static scan can see one.
+ * Best effort inside `<script>`: script code can build a URL any way it likes
+ * (`"/api/fi" + "les/"`, `atob`, `String.fromCharCode`), so no text scan of
+ * script is complete, and further script-only encodings are not chased here.
+ * This scan is defence in depth, not the control that enforces a block: the
+ * serving routes (view, download, thumbnail, dashboard view) refuse a blocked
+ * content hash via `refuseRemovedContent` (#2977), and bulk copy duplicates
+ * text, not bytes, so a reference that slips past this scan still can't serve
+ * blocked bytes.
  */
 export function scanStoredFileReferences(content: string): StoredFileReferenceScan {
   const $ = load(content, { sourceCodeLocationInfo: true });

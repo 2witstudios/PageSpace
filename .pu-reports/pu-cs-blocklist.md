@@ -521,3 +521,23 @@ Round 12: CodeRabbit's review of `5c477c852`:
 | Finding | Outcome |
 |---|---|
 | major — a CSS value inside a script string (`style.backgroundImage = 'url("/api/fi\\\\6c es/page-a/view")'`) escaped both readings: script bodies were excluded from CSS decoding, and repeated JavaScript decoding consumed `\6` as octal | Fixed in `f74e37289`. A script region is now decoded as JavaScript exactly once, as the engine does, then read both as is and with CSS rules, on the extraction side as well as in the backstop. The example now resolves to `page-a`. Tests cover the scanner, a fail-closed variant and a CANVAS bulk-copy refusal. |
+
+## Embedded-reference scan is best effort; serving refuses blocked hashes (#2977)
+
+Merge owner's decision after round 11. Script code can build a file URL any way it likes: `"/api/fi" + "les/"`,
+`atob`, `String.fromCharCode`. So no text scanner of `<script>` can be complete, and rounds 6–12 were an
+escape-by-escape arms race inside script context.
+
+That is acceptable, because the bulk-copy scan is defence in depth, not the control that enforces a block.
+Serve-time refusal enforces it:
+
+- On `pu/cs-takedown` (#2977, which merges straight after this PR), the view, download, thumbnail and
+  dashboard-view routes all call `refuseRemovedContent(contentHash)`, so a copied reference to a blocked hash
+  can't be served.
+- Bulk copy duplicates text, not bytes.
+- Between this merge and #2977's, the production blocklist is empty, because no takedown tooling exists yet.
+
+The extractor (`scanStoredFileReferences` in `apps/web/src/lib/upload/stored-file-references.ts`) carries a code
+comment saying the same. From here on, a review finding that is purely another script-context encoding of a
+file URL is answered "won't fix" with this reasoning and its thread resolved. Findings in HTML attributes, CSS
+and markup parsing, and anything outside the scanner are still fixed.
