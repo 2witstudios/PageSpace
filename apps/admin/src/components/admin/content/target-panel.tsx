@@ -66,9 +66,11 @@ export function TargetPanel() {
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ message: string; ok: boolean } | null>(null);
 
-  // Only show (and act on) a result fetched for the CURRENT query: useAdminQuery keeps the previous lookup's
-  // data while the next one loads and after it fails, and every action below is destructive.
-  const current = dataForUrl(url, resolved);
+  // Only show (and act on) a result fetched for the CURRENT query, and only while it is fresh: useAdminQuery
+  // keeps the previous lookup's data while the next one loads and after it fails, and keeps this lookup's data
+  // after a failed refresh (say, the one after a takedown, whose old snapshot still reads "Live"). Every action
+  // below is destructive, so a failure hides the result until a retry succeeds.
+  const current = error ? null : dataForUrl(url, resolved);
   const target = current?.target ?? null;
   const cases = current?.cases ?? [];
   // The hook's own isLoading is false once ANY lookup has loaded; a new lookup still loading is loading here.
