@@ -114,8 +114,9 @@ describe('gateAvatarUpload', () => {
   it('shadow accepts a flag but records it and opens the case', async () => {
     const { deps } = setup({ mode: 'shadow', result: flag });
     await expect(gateAvatarUpload({ bytes: PNG, userId: 'user-1' }, deps)).resolves.toMatchObject({ accept: true, finding: 'flagged' });
-    expect(deps.recordVerdict).toHaveBeenCalledWith(expect.objectContaining({ verdict: 'flagged', mode: 'shadow' }));
-    expect(deps.openReviewCase).toHaveBeenCalledWith(expect.objectContaining({ mode: 'shadow' }));
+    // The flagged verdict is recorded with its case, in one transaction (openReviewCase), never on its own.
+    expect(deps.recordVerdict).not.toHaveBeenCalled();
+    expect(deps.openReviewCase).toHaveBeenCalledWith(expect.objectContaining({ mode: 'shadow', scores: expect.any(Object) }));
     expect(deps.alert).toHaveBeenCalled();
   });
 

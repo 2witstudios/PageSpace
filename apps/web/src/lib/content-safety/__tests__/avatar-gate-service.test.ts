@@ -23,10 +23,11 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: (...args: unknown[]) =
 const isHashBlocked = vi.fn();
 vi.mock('@pagespace/lib/content-safety/blocklist', () => ({ isHashBlocked: (...args: unknown[]) => isHashBlocked(...args) }));
 const recordScanVerdict = vi.fn();
+const openScanReviewCase = vi.fn();
 vi.mock('@pagespace/lib/content-safety/scan-store', () => ({
   findScanVerdict: vi.fn(async () => null),
   recordScanVerdict: (...args: unknown[]) => recordScanVerdict(...args),
-  openScanReviewCase: vi.fn(async () => ({ caseId: 'case-rv', created: true, firstFlag: true })),
+  openScanReviewCase: (...args: unknown[]) => openScanReviewCase(...args),
 }));
 vi.mock('@pagespace/lib/content-safety/alerts', () => ({ sendContentSafetyAlert: vi.fn(async () => undefined) }));
 
@@ -41,6 +42,7 @@ beforeEach(() => {
   isHashBlocked.mockResolvedValue(false);
   send.mockResolvedValue({});
   recordScanVerdict.mockResolvedValue(undefined);
+  openScanReviewCase.mockResolvedValue({ caseId: 'case-rv', created: true, firstFlag: true });
   executeTakedown.mockResolvedValue({ action: 'global', caseId: 'case-td', status: 'actioned' });
 });
 
@@ -72,10 +74,12 @@ describe('avatar gate service', () => {
     expect(securityLog.error).toHaveBeenCalledWith(expect.stringContaining('stage'), undefined, expect.anything());
   });
 
-  it('shadow accepts a flag, recording the verdict by the hash of the bytes', async () => {
+  it('shadow accepts a flag, recording the verdict with its case by the hash of the bytes', async () => {
     const deps = depsWith('shadow', { kind: 'classifier_flag', provider: 'hive', category: 'csam', score: 0.95 });
     await expect(gateAvatarBytes(PNG, 'user-1', deps)).resolves.toMatchObject({ accept: true });
-    expect(recordScanVerdict).toHaveBeenCalledWith(expect.objectContaining({ contentHash: HASH, verdict: 'flagged', mode: 'shadow' }));
+    // The flagged verdict is written with its review case, in one transaction, never on its own.
+    expect(openScanReviewCase).toHaveBeenCalledWith(expect.objectContaining({ contentHash: HASH, mode: 'shadow' }));
+    expect(recordScanVerdict).not.toHaveBeenCalled();
     expect(audit).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'content.scan.flagged', resourceId: HASH }));
   });
 
