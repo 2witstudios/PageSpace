@@ -17,6 +17,7 @@ import { customDomains } from '@pagespace/db/schema/custom-domains';
 import { isServingStatus } from '../canvas/cert-action';
 import { isPrefixVisible, resolvePrefixOwner } from '../organizations/published-visibility';
 import { caseCategoryAfterReport, type ClassifiedReportUrl } from './reports';
+import { ADMIN_REVIEW_PROVIDER } from './scan-store';
 
 /** The singleton or a transaction: anything that can run a select. */
 type Executor = Pick<typeof db, 'select'>;
@@ -262,7 +263,7 @@ export async function closeReportedCase(input: {
       const clean = {
         verdict: 'clean' as const,
         outcome: 'clean' as const,
-        provider: 'admin_review',
+        provider: ADMIN_REVIEW_PROVIDER,
         mode: null,
         scores: { reviewedBy: input.actorUserId, caseId: input.caseId },
         scannedAt: new Date(),

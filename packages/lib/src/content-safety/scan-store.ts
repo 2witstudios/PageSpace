@@ -8,7 +8,8 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, count, eq, sql } from '@pagespace/db/operators';
+import { and, count, eq, lte, or, sql } from '@pagespace/db/operators';
+import { DEFAULT_VERDICT_TTL_DAYS } from './scan-mode';
 import {
   contentCases,
   contentScans,
@@ -40,7 +41,7 @@ export async function findScanVerdict(contentHash: string): Promise<StoredVerdic
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-async function upsertVerdict(executor: typeof db | Tx, record: VerdictRecord, now: Date): Promise<void> {
+async function upsertVerdict(executor: typeof db | Tx, record: VerdictRecord, now: Date, keepFlagSince?: Date): Promise<void> {
   const values = {
     verdict: record.verdict,
     outcome: record.outcome,
@@ -52,12 +53,30 @@ async function upsertVerdict(executor: typeof db | Tx, record: VerdictRecord, no
   await executor
     .insert(contentScans)
     .values({ contentHash: record.contentHash, ...values })
-    .onConflictDoUpdate({ target: contentScans.contentHash, set: values });
+    .onConflictDoUpdate({
+      target: contentScans.contentHash,
+      set: values,
+      // Evaluated on the locked row, so a concurrent flag that committed first is seen.
+      ...(keepFlagSince
+        ? { setWhere: or(sql`${contentScans.outcome} is distinct from 'classifier_flag'`, lte(contentScans.scannedAt, keepFlagSince)) }
+        : {}),
+    });
 }
 
-/** The latest verdict for a hash replaces the previous one. Not for a classifier flag: that goes through `openScanReviewCase`. */
-export async function recordScanVerdict(record: VerdictRecord, now: Date = new Date()): Promise<void> {
-  await upsertVerdict(db, record, now);
+const DEFAULT_FLAG_TTL_MS = DEFAULT_VERDICT_TTL_DAYS * 24 * 60 * 60 * 1000;
+
+/**
+ * The latest verdict for a hash replaces the previous one, except a fresh classifier flag: that stands until a
+ * dismissal records the hash clean (`closeReportedCase`), a hash match replaces it, or it expires. Two publishes
+ * of one hash can scan at once; a clean or failed result from one must not undo the other's flag and let the
+ * hash publish while its case is still under review. A classifier flag itself goes through `openScanReviewCase`.
+ */
+export async function recordScanVerdict(
+  record: VerdictRecord,
+  { now = new Date(), flagTtlMs = DEFAULT_FLAG_TTL_MS }: { now?: Date; flagTtlMs?: number } = {},
+): Promise<void> {
+  const keepFlagSince = record.outcome === 'hash_match' ? undefined : new Date(now.getTime() - flagTtlMs);
+  await upsertVerdict(db, record, now, keepFlagSince);
 }
 
 /**
@@ -160,18 +179,26 @@ export function isScanFlaggedCase(row: Pick<ContentCase, 'snapshot'>): boolean {
   return row.snapshot?.scan?.source === 'scan_flagged';
 }
 
+/** The provider a staff dismissal records (`closeReportedCase`). */
+export const ADMIN_REVIEW_PROVIDER = 'admin_review';
+
 export interface ScanVerdictCount {
   mode: ContentScanMode | null;
   outcome: ContentScanOutcome | null;
   verdict: ContentScanVerdict;
+  /** Recorded by a staff review (a dismissed flag), not by the gate. */
+  reviewed: boolean;
+  /** Distinct contents (one verdict per hash), not files. */
   count: number;
 }
 
-/** Latest verdicts by mode and outcome, for the admin console. Counts only. */
+/** Latest verdicts by mode, outcome and whether staff recorded them, for the admin console. Counts only. */
 export async function countScanVerdicts(): Promise<ScanVerdictCount[]> {
+  // The constant inline, not a parameter: the select and the group by must be the same expression.
+  const reviewed = sql<boolean>`(${contentScans.provider} = ${sql.raw(`'${ADMIN_REVIEW_PROVIDER}'`)})`;
   const rows = await db
-    .select({ mode: contentScans.mode, outcome: contentScans.outcome, verdict: contentScans.verdict, count: count() })
+    .select({ mode: contentScans.mode, outcome: contentScans.outcome, verdict: contentScans.verdict, reviewed, count: count() })
     .from(contentScans)
-    .groupBy(contentScans.mode, contentScans.outcome, contentScans.verdict);
-  return rows.map((row) => ({ ...row, count: Number(row.count) }));
+    .groupBy(contentScans.mode, contentScans.outcome, contentScans.verdict, reviewed);
+  return rows.map((row) => ({ ...row, reviewed: Boolean(row.reviewed), count: Number(row.count) }));
 }

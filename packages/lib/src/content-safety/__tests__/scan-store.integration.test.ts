@@ -29,8 +29,8 @@ afterAll(async () => {
 describe('scan store', () => {
   it('records and replaces the latest verdict for a hash', async () => {
     const hash = newHash();
-    await recordScanVerdict({ contentHash: hash, verdict: 'error', outcome: 'error', provider: 'hive', mode: 'shadow', scores: { reason: 'timeout' } }, new Date('2026-11-01T00:00:00Z'));
-    await recordScanVerdict({ contentHash: hash, verdict: 'clean', outcome: 'clean', provider: 'hive', mode: 'shadow', scores: {} }, new Date('2026-11-02T00:00:00Z'));
+    await recordScanVerdict({ contentHash: hash, verdict: 'error', outcome: 'error', provider: 'hive', mode: 'shadow', scores: { reason: 'timeout' } }, { now: new Date('2026-11-01T00:00:00Z') });
+    await recordScanVerdict({ contentHash: hash, verdict: 'clean', outcome: 'clean', provider: 'hive', mode: 'shadow', scores: {} }, { now: new Date('2026-11-02T00:00:00Z') });
     expect(await findScanVerdict(hash)).toEqual({ verdict: 'clean', outcome: 'clean', scannedAt: new Date('2026-11-02T00:00:00Z') });
     expect(await findScanVerdict(newHash())).toBeNull();
   });
@@ -99,7 +99,10 @@ describe('scan store', () => {
     const held = new Promise<void>((resolve) => { release = resolve; });
     let locked!: () => void;
     const isLocked = new Promise<void>((resolve) => { locked = resolve; });
+    let closePid = 0;
     const close = db.transaction(async (tx) => {
+      const pid = await tx.execute(sql`select pg_backend_pid() as pid`);
+      closePid = Number((pid.rows[0] as { pid: number }).pid);
       await tx.select({ id: contentCases.id }).from(contentCases).where(eq(contentCases.id, first.caseId)).for('update');
       locked();
       await held;
@@ -109,12 +112,14 @@ describe('scan store', () => {
     });
     await isLocked;
     const late = openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.96, mode: 'enforce', scores: {} });
-    // Wait until the flag is blocked on the row lock, so the close commits between its insert and its lock.
-    for (let i = 0; i < 100; i++) {
-      const waiting = await db.execute(sql`select 1 from pg_stat_activity where wait_event_type = 'Lock' and datname = current_database()`);
-      if (waiting.rows.length > 0) break;
-      await new Promise((resolve) => setTimeout(resolve, 20));
+    // Wait until the flag is blocked by THIS close's lock, so the close commits between its insert and its lock.
+    let blocked = false;
+    for (let i = 0; i < 250 && !blocked; i++) {
+      const waiting = await db.execute(sql`select 1 from pg_stat_activity where ${closePid} = any(pg_blocking_pids(pid))`);
+      blocked = waiting.rows.length > 0;
+      if (!blocked) await new Promise((resolve) => setTimeout(resolve, 20));
     }
+    expect(blocked).toBe(true);
     release();
     await close;
 
@@ -122,6 +127,45 @@ describe('scan store', () => {
     expect(flagged).toMatchObject({ created: true, firstFlag: true });
     expect(flagged.caseId).not.toBe(first.caseId);
     expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'flagged', outcome: 'classifier_flag' });
+  });
+
+  it('never caches text as allowed or held: the next publish reads it and applies its own declared type', async () => {
+    const hash = newHash();
+    await recordScanVerdict({ contentHash: hash, verdict: 'unscanned', outcome: 'unsupported_type', provider: 'hive', mode: 'enforce', scores: { media: 'text' } });
+    const stored = await findScanVerdict(hash);
+    expect(stored).toMatchObject({ verdict: 'unscanned' });
+    expect(stored).not.toHaveProperty('unscannedAllowed');
+  });
+
+  it('a later scan cannot overwrite a fresh classifier flag; only a dismissal, a hash match or expiry replaces it', async () => {
+    const hash = newHash();
+    await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.95, mode: 'enforce', scores: {} });
+    // A concurrent publish's scan came back clean (or failed) after the flag: the flag stands.
+    await recordScanVerdict({ contentHash: hash, verdict: 'clean', outcome: 'clean', provider: 'hive', mode: 'enforce', scores: {} });
+    await recordScanVerdict({ contentHash: hash, verdict: 'error', outcome: 'error', provider: 'hive', mode: 'enforce', scores: {} });
+    expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'flagged', outcome: 'classifier_flag' });
+
+    // Once the flag has expired, a new verdict replaces it.
+    const later = new Date(Date.now() + 60_000);
+    await recordScanVerdict({ contentHash: hash, verdict: 'clean', outcome: 'clean', provider: 'hive', mode: 'enforce', scores: {} }, { now: later, flagTtlMs: 30_000 });
+    expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'clean' });
+  });
+
+  it('a hash match replaces a fresh classifier flag', async () => {
+    const hash = newHash();
+    await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.95, mode: 'enforce', scores: {} });
+    await recordScanVerdict({ contentHash: hash, verdict: 'flagged', outcome: 'hash_match', provider: 'hive', mode: 'enforce', scores: {} });
+    expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'flagged', outcome: 'hash_match' });
+  });
+
+  it('counts a staff dismissal apart from a verdict with no mode', async () => {
+    const hash = newHash();
+    const opened = await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.95, mode: 'enforce', scores: {} });
+    const [listed] = (await listReportedCases({ limit: 200 })).filter((c) => c.case.id === opened.caseId);
+    await closeReportedCase({ caseId: opened.caseId, outcome: 'dismissed', actorUserId: 'admin-1', expectedReportCount: 0, expectedScanFlaggedAt: listed.case.snapshot?.scan?.flaggedAt ?? null });
+    const counts = await countScanVerdicts();
+    expect(counts.find((c) => c.reviewed && c.verdict === 'clean')?.count).toBeGreaterThanOrEqual(1);
+    expect(counts.every((c) => !c.reviewed || c.mode === null)).toBe(true);
   });
 
   it('remembers whether an unscanned file was allowed', async () => {

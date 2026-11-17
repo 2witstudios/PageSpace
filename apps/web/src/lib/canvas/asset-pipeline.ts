@@ -400,7 +400,6 @@ export async function rewriteCanvasAssets(params: {
   // their private reference (it won't load publicly) and are reported by file ID, never with a reason.
   // At most PROMOTE_CONCURRENCY at once: each one may read a file of up to the scan bound and call the vendor.
   const copiedAssetKeys = new Set<string>();
-  const held = new Set<string>();
   const queue = Array.from(uniqueAssets.values());
   await Promise.all(
     Array.from({ length: Math.min(PROMOTE_CONCURRENCY, queue.length) }, async () => {
@@ -408,7 +407,6 @@ export async function rewriteCanvasAssets(params: {
         const { asset, row } = next;
         const promoted = await promoteAsset(asset, row, actor, asset.kind === 'thumbnail' ? 'canvas_thumbnail' : 'canvas_asset');
         if (promoted) copiedAssetKeys.add(asset.assetKey);
-        else held.add(asset.id);
       }
     }),
   );
@@ -428,6 +426,9 @@ export async function rewriteCanvasAssets(params: {
     return asset && copiedAssetKeys.has(asset.assetKey) ? buildAssetUrlFromKey(asset.assetKey) : match;
   });
 
+  // Every file whose asset was not copied, including files that share a hash with another: the gate ran once per
+  // distinct asset, but each of those files stays private.
+  const held = new Set([...resolved.values()].filter((asset) => !copiedAssetKeys.has(asset.assetKey)).map((asset) => asset.id));
   return { html: rewritten, heldAssets: [...held] };
 }
 

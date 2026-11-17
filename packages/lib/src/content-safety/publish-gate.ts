@@ -105,10 +105,14 @@ export interface PublishGateDeps {
   now(): Date;
 }
 
-/** Keeps the vendor's numbers and our bookkeeping; never a URL, filename or response body. */
-function scoresFor(outcome: GateOutcome, contentType: string | null): Record<string, unknown> {
+/**
+ * Keeps the vendor's numbers and our bookkeeping; never a URL, filename or response body. Text is recorded as
+ * `text`, not as allowed or held: whether it may publish depends on each upload's declared type (text claiming
+ * to be an image is held), so the next publish reads it and decides again instead of trusting a cached answer.
+ */
+function scoresFor(outcome: GateOutcome, contentType: string | null, sniffedText = false): Record<string, unknown> {
   const base: Record<string, unknown> = contentType ? { contentType } : {};
-  if (outcome.kind === 'not_scanned') return { ...base, media: outcome.media.class };
+  if (outcome.kind === 'not_scanned') return { ...base, media: sniffedText ? 'text' : outcome.media.class };
   if (outcome.kind !== 'scanned') return base;
   const { result } = outcome;
   switch (result.kind) {
@@ -136,7 +140,10 @@ export function errorLabel(error: unknown): string {
   return code ? `${error.name}:${code}` : error.name;
 }
 
-async function learn(input: PublishGateInput, deps: PublishGateDeps): Promise<{ outcome: GateOutcome; contentType: string | null }> {
+async function learn(
+  input: PublishGateInput,
+  deps: PublishGateDeps,
+): Promise<{ outcome: GateOutcome; contentType: string | null; sniffedText?: boolean }> {
   const { config } = deps;
   if (!deps.scanner) return { outcome: { kind: 'scanner_unavailable' }, contentType: null };
 
@@ -160,8 +167,9 @@ async function learn(input: PublishGateInput, deps: PublishGateDeps): Promise<{ 
     return { outcome: { kind: 'scanned', result: { kind: 'error', provider, reason: 'unreadable_source' } }, contentType: null };
   }
 
-  const media = classifyMedia(sniffContentType(source.bytes, { complete: source.complete }), input.declaredContentType);
-  if (media.class !== 'scan') return { outcome: { kind: 'not_scanned', media }, contentType: media.contentType };
+  const sniffed = sniffContentType(source.bytes, { complete: source.complete });
+  const media = classifyMedia(sniffed, input.declaredContentType);
+  if (media.class !== 'scan') return { outcome: { kind: 'not_scanned', media }, contentType: media.contentType, sniffedText: sniffed === 'text' };
   if (!source.complete) {
     return { outcome: { kind: 'scanned', result: { kind: 'error', provider, reason: 'too_large' } }, contentType: media.contentType };
   }
@@ -185,7 +193,7 @@ export async function gatePublishAsset(input: PublishGateInput, deps: PublishGat
   const mode = config.mode;
   for (const problem of config.problems) deps.reportMisconfiguration(problem);
 
-  const { outcome, contentType } = await learn(input, deps);
+  const { outcome, contentType, sniffedText } = await learn(input, deps);
   const decision = decideGate(mode, outcome);
   const provider = deps.scanner?.provider ?? 'none';
   const context = { fileId: input.fileId, entryPoint: input.entryPoint, mode };
@@ -207,7 +215,7 @@ export async function gatePublishAsset(input: PublishGateInput, deps: PublishGat
   // landing after an admin dismissed the case and recorded the hash clean. If the case cannot be opened, an error
   // verdict is recorded instead: the next publish scans again and retries the case.
   let record = decision.record;
-  let scores = scoresFor(outcome, contentType);
+  let scores = scoresFor(outcome, contentType, sniffedText);
   if (decision.reviewCase && outcome.kind === 'scanned' && outcome.result.kind === 'classifier_flag') {
     try {
       const opened = await deps.openReviewCase({

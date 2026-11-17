@@ -158,6 +158,14 @@ describe('gatePublishAsset', () => {
     expect(opaque.deps.readSource).not.toHaveBeenCalled();
   });
 
+  it('records text as text, not as allowed: whether text may publish depends on what each upload declares', async () => {
+    // The same bytes declared as text/plain publish, declared as image/png are held: a cached "allowed" would
+    // promote the second, and a cached "held" would hold a later text upload.
+    const { deps } = setup({ bytes: new TextEncoder().encode('plain words, nothing more, '.repeat(4)) });
+    await gatePublishAsset({ ...input, declaredContentType: 'text/plain' }, deps);
+    expect(deps.recordVerdict).toHaveBeenCalledWith(expect.objectContaining({ verdict: 'unscanned', scores: expect.objectContaining({ media: 'text' }) }));
+  });
+
   it('records whether an unscanned file was allowed, so the next publish can skip the read', async () => {
     const { deps } = setup({ bytes: PDF });
     await gatePublishAsset({ ...input, declaredContentType: 'application/pdf' }, deps);

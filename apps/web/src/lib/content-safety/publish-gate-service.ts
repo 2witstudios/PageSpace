@@ -120,7 +120,8 @@ export function createPublishGateDeps(config: ScanGateConfig = resolveScanConfig
     isBlocked: isHashBlocked,
     findVerdict: findScanVerdict,
     readSource: readPrivateSource,
-    recordVerdict: (record) => recordScanVerdict(record),
+    // A fresh classifier flag is kept for as long as the gate trusts it.
+    recordVerdict: (record) => recordScanVerdict(record, { flagTtlMs: config.verdictTtlMs }),
     async takedownHashMatch({ contentHash, lists }) {
       // A known-CSAM match is acted on in every mode: the system (no admin) runs PR 2's global takedown,
       // which writes the block first, preserves the bytes, removes every copy and alerts.

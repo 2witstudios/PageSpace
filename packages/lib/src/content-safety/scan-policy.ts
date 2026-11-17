@@ -148,6 +148,23 @@ function firstZipEntry(head: Uint8Array): string | null {
   return head.length >= 30 + nameLength ? ascii(head, 30, nameLength) : null;
 }
 
+/** Document types an ODF or EPUB `mimetype` entry may name. */
+const ZIP_DOCUMENT_MIMETYPE = /^(application\/vnd\.oasis\.opendocument\.[a-z0-9.+-]+|application\/epub\+zip)$/;
+
+/**
+ * Whether a zip's first entry is an ODF / EPUB `mimetype` entry: stored uncompressed, as those formats require,
+ * and naming a document type. A name alone proves nothing: any archive can put an empty `mimetype` first.
+ */
+function isDocumentMimetypeEntry(head: Uint8Array): boolean {
+  const method = head[8] | (head[9] << 8);
+  const size = (head[18] | (head[19] << 8) | (head[20] << 16)) + head[21] * 0x1000000;
+  const nameLength = head[26] | (head[27] << 8);
+  const extraLength = head[28] | (head[29] << 8);
+  const start = 30 + nameLength + extraLength;
+  if (method !== 0 || size === 0 || size > 100 || head.length < start + size) return false;
+  return ZIP_DOCUMENT_MIMETYPE.test(ascii(head, start, size));
+}
+
 /**
  * Sniff a file. `complete` says whether `head` is the whole file (some answers need it all, e.g. whether an
  * MP4 has a video track). Null when nothing is recognised: the bytes are opaque.
@@ -180,7 +197,9 @@ export function sniffContentType(head: Uint8Array, { complete = false }: { compl
   if (ascii(head, 0, 5) === '%PDF-') return 'application/pdf';
   // A document in a zip container, by its first entry (the formats require it). Any other zip is an archive.
   const firstEntry = firstZipEntry(head);
-  if (firstEntry !== null && (OOXML_FIRST_ENTRIES.includes(firstEntry) || firstEntry === 'mimetype')) return 'zip_document';
+  if (firstEntry !== null && (OOXML_FIRST_ENTRIES.includes(firstEntry) || (firstEntry === 'mimetype' && isDocumentMimetypeEntry(head)))) {
+    return 'zip_document';
+  }
   if (
     startsWith(head, [0x50, 0x4b, 0x03, 0x04]) || // zip (and every zip-based format)
     startsWith(head, [0x50, 0x4b, 0x05, 0x06]) ||

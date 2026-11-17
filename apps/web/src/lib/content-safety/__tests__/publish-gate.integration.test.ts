@@ -29,6 +29,7 @@ const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const newHash = () => createHash('sha256').update(randomUUID()).digest('hex');
 const FLAGGED = newHash();
 const CLEAN = newHash();
+const SHADOW_FIRST = newHash();
 
 // The vendor: the fake scanner, one result per hash.
 const scanResults = vi.hoisted(() => new Map<string, ScanResult>());
@@ -123,12 +124,12 @@ async function publishAs(userId: string, pageId: string) {
   );
 }
 
-async function seedSite(mode: 'shadow' | 'enforce') {
+async function seedSite(mode: 'shadow' | 'enforce', flaggedHash: string = FLAGGED) {
   process.env.CONTENT_SCAN_MODE = mode;
   const user = await factories.createUser();
   seededUserIds.push(user.id);
   const drive = await factories.createDrive(user.id, { name: `Site ${mode}` });
-  const flaggedFile = await factories.createPage(drive.id, { type: 'FILE', title: 'a.png', contentHash: FLAGGED, mimeType: 'image/png' });
+  const flaggedFile = await factories.createPage(drive.id, { type: 'FILE', title: 'a.png', contentHash: flaggedHash, mimeType: 'image/png' });
   const cleanFile = await factories.createPage(drive.id, { type: 'FILE', title: 'b.png', contentHash: CLEAN, mimeType: 'image/png' });
   const canvas = await factories.createPage(drive.id, {
     type: 'CANVAS',
@@ -151,6 +152,7 @@ beforeAll(async () => {
     sent.push(options);
   };
   scanResults.set(FLAGGED, { kind: 'classifier_flag', provider: 'fake', category: 'csam', score: 0.97 });
+  scanResults.set(SHADOW_FIRST, { kind: 'classifier_flag', provider: 'fake', category: 'csam', score: 0.96 });
 });
 
 beforeEach(() => {
@@ -165,8 +167,8 @@ afterAll(async () => {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
-  await db.delete(contentCases).where(inArray(contentCases.targetId, [FLAGGED, CLEAN]));
-  await db.delete(contentScans).where(inArray(contentScans.contentHash, [FLAGGED, CLEAN]));
+  await db.delete(contentCases).where(inArray(contentCases.targetId, [FLAGGED, CLEAN, SHADOW_FIRST]));
+  await db.delete(contentScans).where(inArray(contentScans.contentHash, [FLAGGED, CLEAN, SHADOW_FIRST]));
   if (seededUserIds.length > 0) await db.delete(users).where(inArray(users.id, seededUserIds));
 });
 
@@ -229,5 +231,20 @@ describe('publish gate (integration, fake scanner)', () => {
     const cases = await db.select().from(contentCases).where(eq(contentCases.targetId, FLAGGED));
     expect(cases).toHaveLength(1);
     expect(cases[0].snapshot?.scan).toMatchObject({ mode: 'shadow' });
+  });
+
+  it('shadow: a first flag on a hash with no case opens one and sends one urgent alert, though the file is published', async () => {
+    const { user, canvas } = await seedSite('shadow', SHADOW_FIRST);
+
+    const body = (await (await publishAs(user.id, canvas.id)).json()) as { heldAssets: string[] };
+
+    expect(body.heldAssets).toEqual([]);
+    expect(copied).toContain(`assets/${SHADOW_FIRST}`);
+    const cases = await db.select().from(contentCases).where(eq(contentCases.targetId, SHADOW_FIRST));
+    expect(cases).toHaveLength(1);
+    expect(cases[0]).toMatchObject({ status: 'reported', category: 'csam' });
+    expect(cases[0].snapshot?.scan).toMatchObject({ source: 'scan_flagged', mode: 'shadow' });
+    expect(sent).toHaveLength(1);
+    expect(sent[0].subject).toMatch(/^\[URGENT\] Suspected CSAM/);
   });
 });

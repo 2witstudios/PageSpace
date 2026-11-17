@@ -238,8 +238,29 @@ describe('sniffContentType: containers that can hide a video', () => {
       return head;
     };
     expect(sniff(zipWith('[Content_Types].xml'))).toBe('zip_document');
-    expect(sniff(zipWith('mimetype'))).toBe('zip_document');
     expect(sniff(zipWith('photo1.jpg'))).toBe('archive');
+  });
+
+  it('a zip whose first entry is "mimetype" is a document only when that entry is stored and names a document type', () => {
+    const mimetypeZip = (content: string, method = 0) => {
+      const name = new TextEncoder().encode('mimetype');
+      const body = new TextEncoder().encode(content);
+      const head = new Uint8Array(30 + name.length + body.length);
+      head.set([0x50, 0x4b, 0x03, 0x04], 0);
+      head[8] = method;
+      head[18] = body.length; // compressed size
+      head[22] = body.length; // uncompressed size
+      head[26] = name.length;
+      head.set(name, 30);
+      head.set(body, 30 + name.length);
+      return head;
+    };
+    expect(sniff(mimetypeZip('application/vnd.oasis.opendocument.text'))).toBe('zip_document');
+    expect(sniff(mimetypeZip('application/epub+zip'))).toBe('zip_document');
+    // An empty entry, another type, or a compressed entry proves nothing: an archive, held under enforce.
+    expect(sniff(mimetypeZip(''))).toBe('archive');
+    expect(sniff(mimetypeZip('image/png'))).toBe('archive');
+    expect(sniff(mimetypeZip('application/vnd.oasis.opendocument.text', 8))).toBe('archive');
   });
 
   it('reads Latin-1 text as text, but only from a sample long enough to mean something', () => {

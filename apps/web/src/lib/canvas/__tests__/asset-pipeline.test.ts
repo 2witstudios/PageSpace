@@ -353,6 +353,22 @@ describe('rewriteCanvasAssets', () => {
     expect(gateAssetForPublish).toHaveBeenCalledWith(expect.objectContaining({ contentHash: HASH_A, originalKey: `files/${HASH_A}/original`, entryPoint: 'canvas_asset' }));
   });
 
+  it('lists every file that shares a held hash, though the hash is gated once', async () => {
+    const html = '<img src="/api/files/fileId1/view"><img src="/api/files/fileId2/view">';
+    mockDb.query.pages.findMany.mockResolvedValue([
+      { id: 'fileId1', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null },
+      { id: 'fileId2', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null },
+    ]);
+    gateAssetForPublish.mockResolvedValue({ promote: false, reason: 'held' });
+
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
+
+    expect(gateAssetForPublish).toHaveBeenCalledTimes(1);
+    expect(result.heldAssets.sort()).toEqual(['fileId1', 'fileId2']);
+    expect(result.html).toContain('/api/files/fileId1/view');
+    expect(result.html).toContain('/api/files/fileId2/view');
+  });
+
   it('a blocked hash is refused even when its asset is already public (the copy, with its HEAD shortcut, never runs)', async () => {
     const html = '<img src="/api/files/fileId1/view">';
     mockDb.query.pages.findMany.mockResolvedValue([
