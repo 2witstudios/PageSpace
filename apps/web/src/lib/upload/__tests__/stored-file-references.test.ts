@@ -229,6 +229,36 @@ describe('scanStoredFileReferences', () => {
     expect(scan.complete).toBe(true);
   });
 
+  it('given braced Unicode escapes with leading zeros, should resolve them by value', () => {
+    const content = '<script>new Image().src="\\u{000002f}api\\u{000002f}files\\u{000002f}page-a\\u{0000000000002f}view"</script>';
+    expect(scanStoredFileReferences(content)).toEqual({ ids: ['page-a'], complete: true });
+  });
+
+  it('given legacy octal escapes (sloppy-mode scripts), should resolve them', () => {
+    const content = [
+      '<script>a = "\\57api\\57files\\57page-a\\57view"</script>',
+      '<script>b = "/api/files/page-b\\057view"</script>',
+      '<script>c = "/api/fil\\145s/page-c/view"</script>',
+    ].join('\n');
+    const scan = scanStoredFileReferences(content);
+    expect(scan.ids.sort()).toEqual(['page-a', 'page-b', 'page-c']);
+    expect(scan.complete).toBe(true);
+  });
+
+  it('given an octal-escaped mention the token scan cannot resolve, should report the scan incomplete', () => {
+    expect(scanStoredFileReferences('<script>x = "\\57api\\57files\\57 page-a\\57view"</script>').complete).toBe(false);
+  });
+
+  it('given CSS-escaped text outside a script, should still read it with CSS rules (only script bodies are blanked)', () => {
+    const content = '<script>var a = 1</script><p title="<script>">/api/fi\\6c es/ page-a/view</p>';
+    expect(scanStoredFileReferences(content).complete).toBe(false);
+  });
+
+  it('given an unclosed script, should read its body with JavaScript rules to the end of the content', () => {
+    expect(scanStoredFileReferences('<p>x</p><script>s = "\\57api\\57files\\57page-a\\57view"').ids).toEqual(['page-a']);
+    expect(scanStoredFileReferences('<p>x</p><script>s = "\\57api\\57files\\57 page-a\\57view"').complete).toBe(false);
+  });
+
   it('given every occurrence accounted for, should report the scan complete', () => {
     const scan = scanStoredFileReferences('<img src="/api/files/page-a/view"> ![a](/api/files/page-a/view) <img src="/api/files/page-b/thumbnail">');
     expect(scan.complete).toBe(true);

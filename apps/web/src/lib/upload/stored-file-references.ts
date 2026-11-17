@@ -52,20 +52,31 @@ function decodeCssEscapes(text: string): string {
 }
 
 /** What a JavaScript single-character escape stands for; any other escaped character is itself. */
-const JS_SINGLE_ESCAPES: Readonly<Record<string, string>> = { n: '\n', t: '\t', r: '\r', b: '\b', f: '\f', v: '\v', '0': '\0' };
+const JS_SINGLE_ESCAPES: Readonly<Record<string, string>> = { n: '\n', t: '\t', r: '\r', b: '\b', f: '\f', v: '\v' };
 
 /**
- * JavaScript string-literal escapes resolved as the engine resolves them:
- * `\u002f`, `\u{2f}`, `\x2f`, single-character escapes (`\/`, `\t`, `\q`),
- * and line continuations dropped. One pass, left to right, so `\\` is one
- * backslash. A malformed `\u`/`\x` is left as written.
+ * JavaScript string-literal escapes resolved as the engine resolves them, the
+ * whole escape grammar: `/`; `\u{2f}` with any number of leading zeros
+ * (bounded by value, not digit count); `\x2f`; legacy octal (`\57`, `\057`,
+ * `\0`), which classic sloppy-mode scripts accept; single-character escapes
+ * (`\/`, `\t`, `\q`); and line continuations dropped. One pass, left to right,
+ * so `\\` is one backslash. A malformed `\u`/`\x` is left as written.
  */
 function decodeJsEscapes(text: string): string {
   return text.replace(
-    /\\(?:u\{([0-9a-fA-F]{1,6})\}|u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2})|(\r\n|[\n\r\u2028\u2029])|([^ux]))/g,
-    (whole, braced: string | undefined, u4: string | undefined, x2: string | undefined, continuation: string | undefined, single: string | undefined) => {
+    /\\(?:u\{([0-9a-fA-F]+)\}|u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2})|([0-3][0-7]{0,2}|[4-7][0-7]?)|(\r\n|[\n\r\u2028\u2029])|([^ux]))/g,
+    (
+      whole,
+      braced: string | undefined,
+      u4: string | undefined,
+      x2: string | undefined,
+      octal: string | undefined,
+      continuation: string | undefined,
+      single: string | undefined,
+    ) => {
       if (continuation !== undefined) return '';
       if (single !== undefined) return JS_SINGLE_ESCAPES[single] ?? single;
+      if (octal !== undefined) return String.fromCharCode(parseInt(octal, 8));
       const codePoint = parseInt(braced ?? u4 ?? x2 ?? '', 16);
       return codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : whole;
     },
@@ -133,23 +144,48 @@ function parsedReferenceIds($: ParsedContent): string[] {
   return ids;
 }
 
+interface ScriptRegions {
+  /** `content` with each `<script>` body blanked, at the parser's own offsets. */
+  outsideScripts: string;
+  /** Text a browser runs as JavaScript: `<script>` bodies, `on*` handlers, `javascript:` URLs. */
+  scripts: string[];
+}
+
 /**
- * The parts of the document a browser runs as JavaScript: `<script>` bodies,
- * `on*` handler attributes, and `javascript:` URLs. Only these are read with
- * JavaScript escape rules; read that way, CSS (`\70 `) would yield junk.
+ * Where `content` holds JavaScript. Script bodies are found at the offsets
+ * parse5 itself reports, so what is blanked is exactly what the browser runs.
+ * Handler and `javascript:` attributes stay in `outsideScripts` too: read both
+ * ways, only over-reporting is possible.
  */
-function scriptRegions($: ParsedContent): string[] {
-  const regions: string[] = [];
+function scriptRegions($: ParsedContent, content: string): ScriptRegions {
+  const scripts: string[] = [];
+  const spans: Array<[number, number]> = [];
   $('script').each((_, element) => {
-    regions.push($(element).text());
+    const location = 'sourceCodeLocation' in element ? element.sourceCodeLocation : null;
+    const bodyStart = location?.startTag?.endOffset;
+    if (bodyStart === undefined) {
+      scripts.push($(element).text());
+      return;
+    }
+    const bodyEnd = location?.endTag?.startOffset ?? content.length;
+    scripts.push(content.slice(bodyStart, bodyEnd));
+    spans.push([bodyStart, bodyEnd]);
   });
   $('*').each((_, element) => {
     if (!('attribs' in element)) return;
     for (const [name, value] of Object.entries(element.attribs)) {
-      if (/^on/i.test(name) || /^[\s\p{Cc}]*javascript:/iu.test(value)) regions.push(value);
+      if (/^on/i.test(name) || /^[\s\p{Cc}]*javascript:/iu.test(value)) scripts.push(value);
     }
   });
-  return regions;
+  let outsideScripts = '';
+  let cursor = 0;
+  for (const [bodyStart, bodyEnd] of spans.sort((a, b) => a[0] - b[0])) {
+    if (bodyStart < cursor) continue;
+    outsideScripts += `${content.slice(cursor, bodyStart)} `;
+    cursor = bodyEnd;
+  }
+  outsideScripts += content.slice(cursor);
+  return { outsideScripts, scripts };
 }
 
 /** Free text split into URL-like tokens: anything between whitespace, quotes, brackets and separators. */
@@ -204,12 +240,12 @@ function collapsePathSegments(text: string): string {
  * turned into slashes, every whitespace, control and format character
  * (zero-width included) removed, and dot segments and repeated slashes collapsed.
  */
-function backstopSkeletons(content: string, scripts: readonly string[]): string[] {
-  // CSS and JavaScript read a backslash differently (`\70 ` is `p` in CSS, `70 `
-  // in a script): the whole content is read with CSS rules, each script region
-  // also with JavaScript rules.
+function backstopSkeletons({ outsideScripts, scripts }: ScriptRegions): string[] {
+  // CSS and JavaScript read a backslash differently (`\70 ` is `p` in CSS, `8` in
+  // a script): script bodies are read with JavaScript rules, everything else
+  // with CSS rules.
   const decodings: Array<[string, (text: string) => string]> = [
-    [content, decodeCssEscapes],
+    [outsideScripts, decodeCssEscapes],
     ...scripts.map((script): [string, (text: string) => string] => [script, decodeJsEscapes]),
   ];
   const chains = decodings.map(([source, decodeEscapes]) => {
@@ -248,10 +284,10 @@ export interface StoredFileReferenceScan {
  * No static scan can see one.
  */
 export function scanStoredFileReferences(content: string): StoredFileReferenceScan {
-  const $ = load(content);
+  const $ = load(content, { sourceCodeLocationInfo: true });
   const ids = [...new Set([...parsedReferenceIds($), ...textReferenceIds(content)])];
   const accounted = new Set(ids.map((id) => id.toLowerCase()));
-  const mentioned = backstopSkeletons(content, scriptRegions($)).flatMap((skeleton) => [
+  const mentioned = backstopSkeletons(scriptRegions($, content)).flatMap((skeleton) => [
     ...[...skeleton.matchAll(/api\/files\/([a-zA-Z0-9_-]*)/gi)].map((match) => match[1]),
     ...[...skeleton.matchAll(/dashboard\/[a-zA-Z0-9_-]*\/([a-zA-Z0-9_-]*)\/view/gi)].map((match) => match[1]),
   ]);

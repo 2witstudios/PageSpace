@@ -1029,6 +1029,24 @@ describe('POST /api/pages/bulk-copy — content blocklist', () => {
       expect(mockTransaction).not.toHaveBeenCalled();
     });
 
+    it.each([
+      ['braced Unicode escapes with leading zeros', '<script>new Image().src="\\u{000002f}api\\u{000002f}files\\u{000002f}file-page-1\\u{000002f}view"</script>'],
+      ['legacy octal escapes', '<script>new Image().src="\\57api\\57files\\57file-page-1\\57view"</script>'],
+    ])('refuses a CANVAS whose script spells a blocked reference with %s', async (_label, content) => {
+      mockTree(
+        [mockSourcePage({ type: 'CANVAS', content })],
+        [],
+        [{ id: 'file-page-1', filePath: BLOCKED_HASH, contentHash: BLOCKED_HASH }],
+      );
+      mockFindBlockedUploads.mockResolvedValue(new Set([BLOCKED_HASH]));
+
+      const response = await POST(createRequest(validBody));
+
+      expect(response.status).toBe(422);
+      expect(mockFindBlockedUploads).toHaveBeenCalledWith([BLOCKED_HASH], expect.anything());
+      expect(mockTransaction).not.toHaveBeenCalled();
+    });
+
     it('fails closed and audits when content mentions api/files/ in a form the scan cannot account for', async () => {
       mockTree([mockSourcePage({ content: '<img src="/api/files/file-&#8203;page-1/view">' })], [], []);
       const request = createRequest(validBody);
