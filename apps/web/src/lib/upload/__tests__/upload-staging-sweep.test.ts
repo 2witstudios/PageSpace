@@ -50,6 +50,18 @@ describe('sweepStaleUploadStaging', () => {
     expect(keys.sort()).toEqual(['uploads/staging/old-1', 'uploads/verifying/old-2']);
   });
 
+  it('counts only objects actually deleted, and reports per-object delete errors as a failure', async () => {
+    mockSend.mockImplementation(async (cmd: Sent) => {
+      if (cmd.kind === 'delete') return { Errors: [{ Key: 'uploads/staging/old-2', Code: 'AccessDenied', Message: 'denied' }] };
+      if (cmd.input.Prefix === 'uploads/staging/') {
+        return { Contents: [{ Key: 'uploads/staging/old-1', LastModified: old }, { Key: 'uploads/staging/old-2', LastModified: old }] };
+      }
+      return { Contents: [] };
+    });
+
+    await expect(sweepStaleUploadStaging(NOW)).rejects.toThrow(/1 of 2 .*not deleted.*AccessDenied/);
+  });
+
   it('only ever lists the two per-job prefixes, never the served files/ keys', async () => {
     mockSend.mockResolvedValue({ Contents: [] });
 

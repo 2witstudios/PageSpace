@@ -1,3 +1,4 @@
+import { decodeHTML } from 'entities';
 import { PageType } from '@pagespace/lib/utils/enums';
 
 /**
@@ -26,11 +27,20 @@ function decodePercentEscapes(content: string): string {
   return content.replace(/%([0-9A-Fa-f]{2})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)));
 }
 
-/** Every distinct file or page id that `content` references, in first-seen order. */
+/**
+ * Every distinct file or page id that `content` references, in first-seen order.
+ *
+ * Scanned in every form a reference can take on its way to a request: the raw
+ * text, the text with HTML character references resolved (the browser does
+ * that to an attribute before it fetches — `&#101;`, `&sol;`, any named or
+ * numeric reference, via the WHATWG decoder in `entities`), and the
+ * percent-decoding of each (the router decodes path segments).
+ */
 export function extractStoredFileReferenceIds(content: string): string[] {
+  const html = decodeHTML(content);
+  const forms = new Set([content, decodePercentEscapes(content), html, decodePercentEscapes(html)]);
   const ids = new Set<string>();
-  const decoded = decodePercentEscapes(content);
-  for (const text of decoded === content ? [content] : [content, decoded]) {
+  for (const text of forms) {
     for (const match of text.matchAll(STORED_FILE_REFERENCE)) {
       ids.add(match[1] ?? match[2]);
     }

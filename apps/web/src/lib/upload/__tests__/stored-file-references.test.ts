@@ -50,6 +50,18 @@ describe('extractStoredFileReferenceIds', () => {
     expect(extractStoredFileReferenceIds(content).sort()).toEqual(['page-a', 'page-b', 'page-c', 'page-d']);
   });
 
+  it('given HTML character references (resolved before the browser fetches), should return the decoded id', () => {
+    const content = [
+      '<img src="/api/files/pag&#101;-a/view">',
+      '<img src="/api/files/page-b/v&#x69;ew">',
+      '<img src="&sol;api&sol;files&sol;page-c&sol;view">',
+      '<img src="/api/files/page-d&#47;view">',
+      // An entity that decodes to a percent escape, which the router then decodes.
+      '<img src="/api/files/&#37;70age-e/view">',
+    ].join('\n');
+    expect(extractStoredFileReferenceIds(content).sort()).toEqual(['page-a', 'page-b', 'page-c', 'page-d', 'page-e']);
+  });
+
   it('given a longer path that merely starts like a reference, should not match it', () => {
     expect(extractStoredFileReferenceIds('/api/files/page-a/viewer')).toEqual([]);
   });

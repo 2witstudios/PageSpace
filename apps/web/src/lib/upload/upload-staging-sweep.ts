@@ -19,12 +19,18 @@ const PREFIXES = ['uploads/staging/', 'uploads/verifying/'] as const;
  */
 const MAX_PAGES_PER_PREFIX = 1000;
 
-/** Number of objects deleted. */
+/**
+ * Number of objects deleted. `DeleteObjects` reports per-object failures inside
+ * a successful response; those are not counted, and after the whole sweep has
+ * run they are thrown as one error so the cron reports a partial failure.
+ */
 export async function sweepStaleUploadStaging(now: Date = new Date()): Promise<number> {
   const client = getS3Client();
   const bucket = getS3Bucket();
   const cutoff = now.getTime() - UPLOAD_STAGING_MAX_AGE_MS;
   let deleted = 0;
+  let attempted = 0;
+  const errorCodes = new Set<string>();
 
   for (const prefix of PREFIXES) {
     let continuationToken: string | undefined;
@@ -34,12 +40,18 @@ export async function sweepStaleUploadStaging(now: Date = new Date()): Promise<n
         .filter((object) => object.Key?.startsWith(prefix) && object.LastModified && object.LastModified.getTime() < cutoff)
         .map((object) => ({ Key: object.Key as string }));
       if (stale.length > 0) {
-        await client.send(new DeleteObjectsCommand({ Bucket: bucket, Delete: { Objects: stale, Quiet: true } }));
-        deleted += stale.length;
+        const result = await client.send(new DeleteObjectsCommand({ Bucket: bucket, Delete: { Objects: stale, Quiet: true } }));
+        const failed = result.Errors ?? [];
+        for (const error of failed) errorCodes.add(error.Code ?? 'Unknown');
+        attempted += stale.length;
+        deleted += stale.length - failed.length;
       }
       if (!listed.IsTruncated || !listed.NextContinuationToken) break;
       continuationToken = listed.NextContinuationToken;
     }
+  }
+  if (errorCodes.size > 0) {
+    throw new Error(`${attempted - deleted} of ${attempted} stale upload objects were not deleted: ${[...errorCodes].join(', ')}`);
   }
   return deleted;
 }
