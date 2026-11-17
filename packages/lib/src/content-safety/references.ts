@@ -158,10 +158,33 @@ export async function collectContentReferences(rawHash: string): Promise<Content
   };
 }
 
+/**
+ * Whether a persisted AI-chat message body (the structured envelope the web app writes: `textParts`,
+ * `partsOrder` and `fileParts`) has a file part whose storage key is exactly `storageKey`. Text that
+ * merely contains the key, a file part pointing at some other URL, or a body that is not an envelope
+ * at all is no attachment. Only the stable `storageKey` counts: a URL in a file part is whatever the
+ * client sent, so it cannot attribute an upload.
+ */
+export function attachesStorageKey(content: string, storageKey: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return false;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return false;
+  const envelope = parsed as { textParts?: unknown; partsOrder?: unknown; fileParts?: unknown };
+  if (!envelope.textParts || !envelope.partsOrder || !Array.isArray(envelope.fileParts)) return false;
+  return envelope.fileParts.some(
+    (part: unknown) =>
+      typeof part === 'object' && part !== null && (part as { storageKey?: unknown }).storageKey === storageKey,
+  );
+}
+
 export interface AiMessageReferences {
   aiMessageIds: string[];
   conversationIds: string[];
-  /** Authors of the messages that carry the attachment: for a chat attachment, they are the uploaders. */
+  /** Human authors of the user messages whose envelope really attaches the file: for a chat attachment, the uploaders. */
   uploaderUserIds: string[];
   truncated: boolean;
 }
@@ -185,16 +208,23 @@ export async function collectAiMessageReferences(
 ): Promise<AiMessageReferences> {
   const contentHash = normalizeContentHash(rawHash);
   if (!contentHash) throw new Error('Invalid content hash');
-  const pattern = `%${escapeLikePattern(`chat-attachments/${contentHash}/original`)}%`;
+  const attachmentKey = `chat-attachments/${contentHash}/original`;
+  const pattern = `%${escapeLikePattern(attachmentKey)}%`;
   type Executor = Pick<typeof db, 'select'>;
   const scan = (executor: Executor) =>
     executor
-      .select({ id: messages.id, conversationId: messages.conversationId, userId: messages.userId })
+      .select({
+        id: messages.id,
+        conversationId: messages.conversationId,
+        userId: messages.userId,
+        role: messages.role,
+        content: messages.content,
+      })
       .from(messages)
       .where(like(messages.content, pattern))
       .limit(REFERENCE_LIMIT + 1);
 
-  let rows: Array<{ id: string; conversationId: string; userId: string | null }>;
+  let rows: Array<{ id: string; conversationId: string; userId: string | null; role: string; content: string }>;
   try {
     rows = options.extendedTimeout
       ? await db.transaction(async (tx) => {
@@ -213,7 +243,15 @@ export async function collectAiMessageReferences(
   return {
     aiMessageIds: kept.map((row) => row.id),
     conversationIds: [...new Set(kept.map((row) => row.conversationId))],
-    uploaderUserIds: [...new Set(kept.flatMap((row) => row.userId ?? []))],
+    // The substring search only finds CANDIDATES: anyone can type the key into a message. An author is an
+    // uploader only of a user message whose persisted envelope really attaches it.
+    uploaderUserIds: [
+      ...new Set(
+        kept.flatMap((row) =>
+          row.userId && row.role === 'user' && attachesStorageKey(row.content, attachmentKey) ? row.userId : [],
+        ),
+      ),
+    ],
     truncated,
   };
 }

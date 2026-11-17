@@ -10,7 +10,7 @@ import { pages } from '@pagespace/db/schema/core';
 const state = vi.hoisted(() => ({
   failMessages: false,
   pageRows: [] as Array<{ id: string; driveId: string; createdBy: string | null }>,
-  messageRows: [] as Array<{ id: string; conversationId: string; userId: string | null }>,
+  messageRows: [] as Array<{ id: string; conversationId: string; userId: string | null; role: string; content: string }>,
   transactions: 0,
   statements: [] as string[],
 }));
@@ -51,13 +51,20 @@ import { collectAiMessageReferences, collectContentReferences } from '../referen
 import { loggers } from '../../logging/logger-config';
 
 const HASH = 'a'.repeat(64);
+const KEY = `chat-attachments/${HASH}/original`;
+/** A persisted AI-chat message body that really attaches the file. */
+const attachedEnvelope = (filePart: Record<string, string> = { storageKey: KEY }) =>
+  JSON.stringify({ textParts: ['look'], fileParts: [filePart], partsOrder: [{ index: 0, type: 'text' }, { index: 0, type: 'file' }] });
+/** A message that only TALKS about the key: the substring is there, no attachment is. */
+const mentionEnvelope = () =>
+  JSON.stringify({ textParts: [`see ${KEY}`], partsOrder: [{ index: 0, type: 'text' }] });
 
 describe('collectContentReferences (a lookup) — when the AI-message search cannot finish', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     state.failMessages = false;
     state.pageRows = [{ id: 'page-1', driveId: 'drive-1', createdBy: 'user-1' }];
-    state.messageRows = [{ id: 'msg-1', conversationId: 'conv-1', userId: 'chat-user' }];
+    state.messageRows = [{ id: 'msg-1', conversationId: 'conv-1', userId: 'chat-user', role: 'user', content: attachedEnvelope() }];
   });
 
   it('still returns every other reference', async () => {
@@ -95,9 +102,39 @@ describe('collectAiMessageReferences (the takedown step)', () => {
     state.transactions = 0;
     state.statements = [];
     state.messageRows = [
-      { id: 'msg-1', conversationId: 'conv-1', userId: 'chat-user' },
-      { id: 'msg-2', conversationId: 'conv-1', userId: null },
+      { id: 'msg-1', conversationId: 'conv-1', userId: 'chat-user', role: 'user', content: attachedEnvelope() },
+      { id: 'msg-2', conversationId: 'conv-1', userId: null, role: 'user', content: attachedEnvelope() },
     ];
+  });
+
+  it('records a message that only mentions the key, but never names its author as an uploader', async () => {
+    state.messageRows = [
+      { id: 'msg-text', conversationId: 'conv-1', userId: 'talker', role: 'user', content: `raw ${KEY}` },
+      { id: 'msg-env', conversationId: 'conv-2', userId: 'quoter', role: 'user', content: mentionEnvelope() },
+      { id: 'msg-real', conversationId: 'conv-3', userId: 'uploader', role: 'user', content: attachedEnvelope() },
+    ];
+    expect(await collectAiMessageReferences(HASH)).toEqual({
+      aiMessageIds: ['msg-text', 'msg-env', 'msg-real'],
+      conversationIds: ['conv-1', 'conv-2', 'conv-3'],
+      uploaderUserIds: ['uploader'],
+      truncated: false,
+    });
+  });
+
+  it('names no uploader for a file part that is not exactly this attachment key', async () => {
+    state.messageRows = [
+      { id: 'm1', conversationId: 'c', userId: 'external-url', role: 'user', content: attachedEnvelope({ url: `https://evil.example/${KEY}` }) },
+      { id: 'm2', conversationId: 'c', userId: 'longer-key', role: 'user', content: attachedEnvelope({ storageKey: `x/${KEY}` }) },
+      { id: 'm3', conversationId: 'c', userId: 'other-hash', role: 'user', content: attachedEnvelope({ storageKey: `chat-attachments/${'b'.repeat(64)}/original` }) },
+    ];
+    expect((await collectAiMessageReferences(HASH)).uploaderUserIds).toEqual([]);
+  });
+
+  it('names no uploader for an assistant message, even one carrying the attachment', async () => {
+    state.messageRows = [
+      { id: 'm1', conversationId: 'c', userId: 'human-in-chat', role: 'assistant', content: attachedEnvelope() },
+    ];
+    expect((await collectAiMessageReferences(HASH)).uploaderUserIds).toEqual([]);
   });
 
   it('returns the messages, their conversations and their human authors', async () => {
