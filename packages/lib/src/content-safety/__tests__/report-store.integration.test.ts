@@ -10,7 +10,8 @@ import { db, pool } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { contentCases, contentReports, contentSiteHolds } from '@pagespace/db/schema/content-safety';
-import { drives } from '@pagespace/db/schema/core';
+import { drives, pages } from '@pagespace/db/schema/core';
+import { publishedPages } from '@pagespace/db/schema/published-pages';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
 import { factories } from '@pagespace/db/test/factories';
 import {
@@ -206,6 +207,32 @@ describe('report store', () => {
       expect(await findPublishedSiteDrive({ kind: 'custom_domain_candidate', host })).toBeNull();
     } finally {
       await db.delete(customDomains).where(eq(customDomains.id, domain.id));
+      await db.delete(drives).where(eq(drives.id, drive.id));
+      await db.delete(users).where(eq(users.id, owner.id));
+    }
+  });
+
+  it('files a report on a custom domain\'s root against the landing page that domain serves, not the drive home page', async () => {
+    const owner = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    const home = await factories.createPage(drive.id, { title: 'home' });
+    const landing = await factories.createPage(drive.id, { title: 'landing' });
+    for (const page of [home, landing]) {
+      await db.insert(publishedPages).values({ driveId: drive.id, pageId: page.id, path: page.title.toLowerCase(), artifactKey: `k/${page.id}` });
+    }
+    await db.update(drives).set({ homePageId: home.id }).where(eq(drives.id, drive.id));
+    const host = `rp-${createId().slice(0, 8).toLowerCase()}.example.com`;
+    const [domain] = await db.insert(customDomains).values({ driveId: drive.id, hostname: host, status: 'active', publishLandingPageId: landing.id }).returning();
+    try {
+      expect((await resolveTakedownTarget(`https://${host}/`))?.targetId).toBe(landing.id);
+      // A domain with no landing page of its own serves the drive's home page.
+      await db.update(customDomains).set({ publishLandingPageId: null }).where(eq(customDomains.id, domain.id));
+      expect((await resolveTakedownTarget(`https://${host}/`))?.targetId).toBe(home.id);
+    } finally {
+      await db.delete(customDomains).where(eq(customDomains.id, domain.id));
+      await db.delete(publishedPages).where(eq(publishedPages.driveId, drive.id));
+      await db.update(drives).set({ homePageId: null }).where(eq(drives.id, drive.id));
+      await db.delete(pages).where(inArray(pages.id, [home.id, landing.id]));
       await db.delete(drives).where(eq(drives.id, drive.id));
       await db.delete(users).where(eq(users.id, owner.id));
     }
