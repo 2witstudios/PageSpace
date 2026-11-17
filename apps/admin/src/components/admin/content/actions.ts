@@ -2,6 +2,7 @@
 
 import type { TakedownRequest, TakedownResponse } from '@pagespace/lib/content-safety/takedown-request';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import type { ReportSummary } from '@/lib/content/report-summary';
 
 /**
  * Run a takedown action. Throws with the server's message when the request was
@@ -71,4 +72,13 @@ export async function closeReportedCase(input: {
     const message = data?.error ?? `Request failed (${res.status})`;
     throw res.status === 409 ? new ReportedCaseChangedError(message) : new Error(message);
   }
+}
+
+/** A later page of one case's reports, newest first; `offset` is how many the queue already shows. */
+export async function fetchCaseReports(caseId: string, offset: number): Promise<ReportSummary[]> {
+  const query = new URLSearchParams({ id: caseId, reportsOffset: String(offset), reportsLimit: '50' });
+  const res = await fetchWithAuth(`/api/admin/content/reports?${query.toString()}`);
+  const data = (await res.json().catch(() => null)) as { reports?: ReportSummary[]; error?: string } | null;
+  if (!res.ok || !data?.reports) throw new Error(data?.error ?? `Request failed (${res.status})`);
+  return data.reports;
 }

@@ -5,8 +5,9 @@ vi.mock('@/lib/auth', () => ({
     (req: Request) => handler({ id: 'admin-1' }, req),
 }));
 
-const { listMock, attachMock, getMock, closeMock } = vi.hoisted(() => ({
+const { listMock, attachMock, pageMock, getMock, closeMock } = vi.hoisted(() => ({
   listMock: vi.fn(),
+  pageMock: vi.fn(),
   attachMock: vi.fn(),
   getMock: vi.fn(),
   closeMock: vi.fn(),
@@ -14,7 +15,7 @@ const { listMock, attachMock, getMock, closeMock } = vi.hoisted(() => ({
 vi.mock('@pagespace/lib/content-safety/report-store', () => {
   class ReportedCaseNotFoundError extends Error {}
   class ReportedCaseChangedError extends Error {}
-  return { listReportedCases: listMock, attachReports: attachMock, closeReportedCase: closeMock, ReportedCaseNotFoundError, ReportedCaseChangedError };
+  return { listReportedCases: listMock, attachReports: attachMock, listCaseReports: pageMock, closeReportedCase: closeMock, ReportedCaseNotFoundError, ReportedCaseChangedError };
 });
 vi.mock('@pagespace/lib/content-safety/case-store', () => ({ getContentCase: getMock }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
@@ -96,6 +97,25 @@ describe('GET /api/admin/content/reports', () => {
   it('answers 404 for an unknown case ID', async () => {
     getMock.mockResolvedValue(null);
     expect((await get('?id=nope')).status).toBe(404);
+  });
+
+  it('returns a later page of one case\'s reports, so none past the first page is out of reach', async () => {
+    getMock.mockResolvedValue(caseRow());
+    pageMock.mockResolvedValue([reportRow({ id: 'rep-21' })]);
+    const body = await (await get('?id=case-r&reportsOffset=20&reportsLimit=50')).json();
+    expect(pageMock).toHaveBeenCalledWith('case-r', { offset: 20, limit: 50 });
+    expect(attachMock).not.toHaveBeenCalled();
+    expect(body).toEqual({ reports: [expect.objectContaining({ id: 'rep-21', createdAt: '2026-11-12T00:00:30.000Z' })], offset: 20, limit: 50 });
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.any(Request),
+      expect.objectContaining({ eventType: 'content.case.read', resourceId: 'case-r', details: expect.objectContaining({ action: 'view_reports_page' }) }),
+    );
+  });
+
+  it('answers 404 for a report page of an unknown case', async () => {
+    getMock.mockResolvedValue(null);
+    expect((await get('?id=nope&reportsOffset=20')).status).toBe(404);
+    expect(pageMock).not.toHaveBeenCalled();
   });
 });
 

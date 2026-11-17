@@ -5,8 +5,8 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ConfirmActionDialog } from '@/components/admin/users/confirm-action-dialog';
-import type { ReportedCaseSummary, ReportSummary } from '@/lib/content/report-summary';
-import { closeReportedCase, ReportedCaseChangedError } from './actions';
+import { mergeReportPages, type ReportedCaseSummary, type ReportSummary } from '@/lib/content/report-summary';
+import { closeReportedCase, fetchCaseReports, ReportedCaseChangedError } from './actions';
 import { Mono } from './case-list';
 
 const CATEGORY_LABELS: Record<ReportSummary['category'], string> = {
@@ -67,6 +67,56 @@ function ReportItem({ report }: { report: ReportSummary }) {
         <p className="text-sm text-muted-foreground">No details given.</p>
       )}
     </li>
+  );
+}
+
+/**
+ * A case's reports: the first page from the queue, then later pages on request, so a report past the first page
+ * is never out of reach of the admin who closes the case.
+ */
+function CaseReports({ caseId, reportCount, firstPage }: { caseId: string; reportCount: number; firstPage: ReportSummary[] }) {
+  const [later, setLater] = useState<ReportSummary[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const reports = mergeReportPages(firstPage, later);
+  const remaining = reportCount - reports.length;
+
+  const loadMore = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const page = await fetchCaseReports(caseId, reports.length);
+      setLater((current) => mergeReportPages(current, page));
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : 'Request failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <>
+      <ul className="space-y-2">
+        {reports.map((report) => (
+          <ReportItem key={report.id} report={report} />
+        ))}
+      </ul>
+      {remaining > 0 && (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <p className="text-xs text-muted-foreground">
+            Showing the latest {reports.length} of {reportCount}.
+          </p>
+          <Button size="sm" variant="outline" disabled={loading} onClick={() => void loadMore()}>
+            {loading ? 'Loading…' : `Show ${Math.min(remaining, 50)} more report${Math.min(remaining, 50) === 1 ? '' : 's'}`}
+          </Button>
+          {error && (
+            <p className="text-xs text-destructive" role="alert">
+              {error}
+            </p>
+          )}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -151,14 +201,7 @@ export function ReportQueue({ items, onChanged, onReview }: ReportQueueProps) {
             </div>
           </CardHeader>
           <CardContent>
-            <ul className="space-y-2">
-              {reports.map((report) => (
-                <ReportItem key={report.id} report={report} />
-              ))}
-            </ul>
-            {reports.length < reportCount && (
-              <p className="mt-2 text-xs text-muted-foreground">Showing the latest {reports.length} of {reportCount}.</p>
-            )}
+            <CaseReports caseId={item.id} reportCount={reportCount} firstPage={reports} />
           </CardContent>
         </Card>
       ))}

@@ -46,6 +46,12 @@ describe('ReportQueue', () => {
     expect(html).toContain('Showing the latest 2 of 3.');
   });
 
+  it('offers the reports past the first page instead of leaving them out of reach', () => {
+    expect(html).toContain('Show 1 more report');
+    const all = renderToStaticMarkup(<ReportQueue items={[item({ reportCount: 2 })]} onChanged={() => {}} onReview={() => {}} />);
+    expect(all).not.toContain('more report');
+  });
+
   it('offers review, actioned and dismiss on a case under review', () => {
     expect(html).toContain('Review and act');
     expect(html).toContain('Mark actioned');

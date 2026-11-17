@@ -5,18 +5,21 @@ import { getContentCase } from '@pagespace/lib/content-safety/case-store';
 import {
   attachReports,
   closeReportedCase,
+  listCaseReports,
   listReportedCases,
   ReportedCaseChangedError,
   ReportedCaseNotFoundError,
 } from '@pagespace/lib/content-safety/report-store';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { withAdminAuth } from '@/lib/auth';
-import { toReportedCaseSummary } from '@/lib/content/report-summary';
+import { toReportedCaseSummary, toReportSummary } from '@/lib/content/report-summary';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 /**
  * GET /api/admin/content/reports[?limit=&offset=] — the review queue: cases opened by reports, CSAM first.
  * GET /api/admin/content/reports?id=<caseId> — one case with its reports (the link in a report alert).
+ * GET /api/admin/content/reports?id=<caseId>&reportsOffset=<n>[&reportsLimit=] — a later page of that case's
+ *   reports, newest first, so no report past the first page is out of reach.
  *
  * Metadata and the reporters' own words only. The text is returned as stored;
  * the console renders it as inert text.
@@ -26,6 +29,21 @@ export const GET = withAdminAuth(async (adminUser, request) => {
     const params = new URL(request.url).searchParams;
 
     const id = params.get('id');
+    if (id && params.has('reportsOffset')) {
+      const offset = parseBoundedIntParam(params.get('reportsOffset'), { defaultValue: 0, min: 0, max: 1_000_000 });
+      const limit = parseBoundedIntParam(params.get('reportsLimit'), { defaultValue: 50, min: 1, max: 100 });
+      const row = await getContentCase(id);
+      auditRequest(request, {
+        eventType: 'content.case.read',
+        userId: adminUser.id,
+        resourceType: 'content_case',
+        resourceId: id,
+        details: { source: 'admin', action: 'view_reports_page', found: row !== null, offset },
+      });
+      if (!row) return NextResponse.json({ error: 'Case not found' }, { status: 404 });
+      const reports = await listCaseReports(id, { offset, limit });
+      return NextResponse.json({ reports: reports.map(toReportSummary), offset, limit });
+    }
     if (id) {
       const row = await getContentCase(id);
       auditRequest(request, {

@@ -25,18 +25,27 @@ export interface ReportedCaseSummary {
   reports: ReportSummary[];
 }
 
-export function toReportedCaseSummary(row: ReportedCase): ReportedCaseSummary {
+export function toReportSummary(report: ContentReport): ReportSummary {
   return {
-    case: toCaseSummary(row.case),
-    reportCount: row.reportCount,
-    reports: row.reports.map((report) => ({
-      id: report.id,
-      category: report.category,
-      source: report.source,
-      reporterUserId: report.reporterUserId,
-      contactEmail: report.contactEmail,
-      description: report.description,
-      createdAt: report.createdAt.toISOString(),
-    })),
+    id: report.id,
+    category: report.category,
+    source: report.source,
+    reporterUserId: report.reporterUserId,
+    contactEmail: report.contactEmail,
+    description: report.description,
+    createdAt: report.createdAt.toISOString(),
   };
+}
+
+export function toReportedCaseSummary(row: ReportedCase): ReportedCaseSummary {
+  return { case: toCaseSummary(row.case), reportCount: row.reportCount, reports: row.reports.map(toReportSummary) };
+}
+
+/**
+ * Append a later page of a case's reports. Pages are newest first by offset, so a report filed since the last page
+ * shifts every offset by one and the next page repeats a report already shown; it is dropped, never shown twice.
+ */
+export function mergeReportPages(shown: ReportSummary[], page: ReportSummary[]): ReportSummary[] {
+  const seen = new Set(shown.map((report) => report.id));
+  return [...shown, ...page.filter((report) => !seen.has(report.id))];
 }
