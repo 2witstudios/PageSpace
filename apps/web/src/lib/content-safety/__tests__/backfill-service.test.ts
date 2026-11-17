@@ -229,6 +229,73 @@ describe('backfill service: avatars', () => {
     expect(actions.takedownAvatar).toHaveBeenCalled();
   });
 
+  describe('an avatar replaced while it was being scanned', () => {
+    const CLEAN = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+    // The first read is the bytes scanned; every later read sees the user's new, clean upload.
+    const replacedAfterScan = () => readS3ObjectBounded.mockResolvedValueOnce({ bytes: PNG, complete: true }).mockResolvedValue({ bytes: CLEAN, complete: true });
+
+    it('enforce: a flagged avatar replaced mid-scan is not removed, and the new one stays', async () => {
+      replacedAfterScan();
+      const { deps, actions } = build('enforce', flag);
+      await expect(deps.process(avatar, listed)).resolves.toEqual({ finding: 'flagged', scanned: true, removed: false });
+      expect(actions.removeAvatar).not.toHaveBeenCalled();
+      expect(audit).not.toHaveBeenCalledWith(expect.objectContaining({ eventType: 'content.backfill.unpublished' }));
+    });
+
+    it('an avatar deleted mid-scan is not removed again', async () => {
+      readS3ObjectBounded.mockResolvedValueOnce({ bytes: PNG, complete: true }).mockResolvedValue(null);
+      const { deps, actions } = build('enforce', flag);
+      await expect(deps.process(avatar, listed)).resolves.toMatchObject({ finding: 'flagged', removed: false });
+      expect(actions.removeAvatar).not.toHaveBeenCalled();
+    });
+
+    it('a blocklisted avatar replaced mid-scan is staged but neither deleted nor hidden', async () => {
+      isHashBlocked.mockResolvedValue(true);
+      replacedAfterScan();
+      const { deps, actions } = build('enforce');
+      await expect(deps.process(avatar, listed)).resolves.toMatchObject({ finding: 'blocked', removed: false });
+      expect(actions.removeAvatar).not.toHaveBeenCalled();
+      expect(actions.hideAvatar).not.toHaveBeenCalled();
+    });
+
+    it('a hash-matched avatar replaced mid-scan still blocks the hash, but takes no avatar down', async () => {
+      replacedAfterScan();
+      const { deps, actions } = build('enforce', match);
+      await expect(deps.process(avatar, listed)).resolves.toMatchObject({ finding: 'hash_match', removed: false });
+      expect(executeTakedown).toHaveBeenCalledWith(expect.objectContaining({ action: 'global', contentHash: PNG_HASH }), null);
+      expect(actions.takedownAvatar).not.toHaveBeenCalled();
+      expect(actions.hideAvatar).not.toHaveBeenCalled();
+    });
+
+    it('a hash-matched avatar that cannot be staged and was replaced is not hidden, and the walk goes on', async () => {
+      send.mockRejectedValueOnce(new Error('s3 down'));
+      replacedAfterScan();
+      const { deps, actions } = build('enforce', match);
+      await expect(deps.process(avatar, listed)).resolves.toMatchObject({ finding: 'hash_match', removed: false });
+      expect(actions.hideAvatar).not.toHaveBeenCalled();
+    });
+
+    it('a hash match whose re-read fails stops the walk before the item, rather than leaving the avatar up', async () => {
+      readS3ObjectBounded.mockResolvedValueOnce({ bytes: PNG, complete: true }).mockRejectedValue(new Error('s3 down'));
+      const { deps, actions } = build('enforce', match);
+      await expect(deps.process(avatar, listed)).rejects.toThrow('s3 down');
+      expect(actions.takedownAvatar).not.toHaveBeenCalled();
+    });
+
+    it('an avatar takedown that fails after a hash match stops the walk before the item', async () => {
+      const { deps, actions } = build('enforce', match);
+      actions.takedownAvatar.mockRejectedValueOnce(new Error('processor down'));
+      await expect(deps.process(avatar, listed)).rejects.toThrow('processor down');
+    });
+
+    it('a failed re-read takes nothing down and stops the walk before the item, to retry it', async () => {
+      readS3ObjectBounded.mockResolvedValueOnce({ bytes: PNG, complete: true }).mockRejectedValue(new Error('s3 down'));
+      const { deps, actions } = build('enforce', flag);
+      await expect(deps.process(avatar, listed)).rejects.toThrow('s3 down');
+      expect(actions.removeAvatar).not.toHaveBeenCalled();
+    });
+  });
+
   it('enforce: a flagged avatar is removed and audited; shadow leaves it', async () => {
     const enforce = build('enforce', flag);
     await expect(enforce.deps.process(avatar, listed)).resolves.toMatchObject({ finding: 'flagged', removed: true });

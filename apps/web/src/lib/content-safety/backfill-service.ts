@@ -42,6 +42,8 @@ import { READ_TIMEOUT_MS, createPublishGateDeps, readPrivateSource, runHashMatch
  * - **classifier flag** under enforce: the public copy, or the avatar, is taken
  *   off the web (`content.backfill.unpublished`). Nothing is blocked; the review
  *   case decides. Under shadow it stays up.
+ * - An avatar is re-read before any of that is done to it: the user may have
+ *   uploaded a new one while the scan ran, and that one was gated at upload.
  *
  * Errors, unscanned types and unverified video stay up and are counted: they
  * were public before the gate, and a vendor outage must not take sites down.
@@ -185,6 +187,18 @@ export function createBackfillDeps(
     const contentHash = createHash('sha256').update(bytes).digest('hex');
     let avatarTakenDown = false;
     let avatarHidden = false;
+    // The scan awaits the vendor, and the user can upload a new avatar meanwhile; the processor replaces the
+    // whole avatars/<userId>/ prefix. Every removal below is of the user's avatar, not of these bytes, so each
+    // first checks the bytes scanned are still the ones stored. A replacement was gated at upload.
+    let replaced = false;
+    const avatarStep: { failure: { error: unknown } | null } = { failure: null };
+    const stillCurrent = async (): Promise<boolean> => {
+      if (replaced) return false;
+      const now = await readS3ObjectBounded(getS3Client(), getS3Bucket(), target.key, MAX_AVATAR_READ_BYTES, READ_TIMEOUT_MS);
+      replaced = !now || !now.complete || createHash('sha256').update(now.bytes).digest('hex') !== contentHash;
+      if (replaced) loggers.security.info('Backfill: the avatar was replaced while it was scanned; the new one is left alone', {});
+      return !replaced;
+    };
     const stage = async (hash: string): Promise<boolean> => {
       try {
         await stageBytesForTakedown(hash, bytes);
@@ -204,23 +218,35 @@ export function createBackfillDeps(
             // Block, case and alert run either way: the global takedown never touches avatars/ objects.
             return await runHashMatchTakedown({ contentHash: hash, lists, source: 'the backfill scan of an avatar' });
           } finally {
-            if (staged) {
-              // The avatar comes down even if the global takedown stopped part-way (its case is resumable).
-              await actions.takedownAvatar(target.userId, 'Hash match from the backfill scan of this avatar');
-              avatarTakenDown = true;
-            } else {
-              // The avatar is the only copy: it stops being shown, and is deleted once a later pass can stage it
-              // (the hash is then blocked, and the blocked path below stages before it deletes).
-              await actions.hideAvatar(target.userId);
-              avatarHidden = true;
+            // The gate swallows a throw from here (it logs a failed takedown), so a failure to take the avatar
+            // down is carried out and thrown below: the walk stops before the item and retries it.
+            try {
+              if (!(await stillCurrent())) {
+                // Replaced: these bytes are no longer served, and the block above keeps them from coming back.
+              } else if (staged) {
+                // The avatar comes down even if the global takedown stopped part-way (its case is resumable).
+                await actions.takedownAvatar(target.userId, 'Hash match from the backfill scan of this avatar');
+                avatarTakenDown = true;
+              } else {
+                // The avatar is the only copy: it stops being shown, and is deleted once a later pass can stage it
+                // (the hash is then blocked, and the blocked path below stages before it deletes).
+                await actions.hideAvatar(target.userId);
+                avatarHidden = true;
+              }
+            } catch (error) {
+              avatarStep.failure = { error };
             }
           }
         },
       }),
     );
+    if (avatarStep.failure) throw avatarStep.failure.error;
     if (evaluation.finding === 'blocked') {
       // A blocklisted avatar: its bytes go to the hash's private, blocked key before the avatar is deleted.
-      if (await stage(contentHash)) {
+      const staged = await stage(contentHash);
+      if (!(await stillCurrent())) {
+        // Replaced since the read: nothing of the scanned avatar is left to take down.
+      } else if (staged) {
         await actions.removeAvatar(target.userId);
         avatarTakenDown = true;
       } else {
@@ -232,7 +258,7 @@ export function createBackfillDeps(
     // tick (10 minutes) retries; by then the hash is blocked, and the blocked path stages before it deletes.
     if (avatarHidden && !avatarTakenDown) throw new Error('Avatar hidden but not yet deleted: staging for preservation failed');
     let removed = avatarTakenDown;
-    if (evaluation.finding === 'flagged' && config.mode === 'enforce') {
+    if (evaluation.finding === 'flagged' && config.mode === 'enforce' && (await stillCurrent())) {
       await actions.removeAvatar(target.userId);
       removed = true;
       auditUnpublished({ kind: 'avatar', contentHash, mode: config.mode, finding: evaluation.finding, caseId: evaluation.caseId, userId: target.userId });
