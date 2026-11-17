@@ -472,3 +472,11 @@ Round 6: the requested CodeRabbit review of `b9628f16f`:
 |---|---|
 | major — HTML character references (`/api/files/pag&#101;-a/view`) slip past the copy screen | Fixed in `acd93c66a`: references are also read from the WHATWG-decoded text (`entities.decodeHTML`). Test covers numeric, hex and named references, plus an entity that decodes to a percent escape. |
 | minor — `DeleteObjects` per-object errors were counted as deletions | Fixed in `acd93c66a`: only real deletions are counted, and failures surface as a partial cron failure. |
+
+Round 7: CodeRabbit's review of `7354ca711`:
+
+| Finding | Outcome |
+|---|---|
+| major — tab/newline character references (`&#9;`, `&#10;`) inside a file id slip past the copy screen | Fixed in `e63a214bf`, for the whole class, not one encoding. Content is parsed with cheerio (parse5, already a dependency), so the browser's entity decoding applies. Every attribute on every element, each `srcset` candidate, inline-style and `<style>` `url()`/`@import` (CSS escapes resolved) is normalised through WHATWG `new URL`, which strips tab/newline, turns `\` into `/`, resolves dot segments and protocol-relative URLs; ids come from the percent-decoded pathname, matched case-insensitively. The free-text scan stays alongside it for markdown. A fail-closed backstop then peels every encoding, strips all whitespace, control and format characters, and requires each `api/files/` occurrence to be followed by an extracted id; otherwise the copy is refused as unverifiable (audited, `unaccountedReference: true`), and a child that gains such a mention during the copy aborts with 409. Tests: `&#9;`, `&#10;`, `&#13;`, `&Tab;`, literal tab/newline, mixed case, percent-encoding mixed with entities, protocol-relative, backslashed and dot-segment URLs, srcset, data attributes, style `url()` with CSS escapes, and zero-width / split-text mentions that must fail closed. |
+
+Trade-off: the backstop refuses copies of documents whose text mentions `api/files/` without a resolvable id (for example API documentation written as plain text). That is the intended fail-closed direction.
