@@ -508,3 +508,10 @@ Round 10: CodeRabbit's review of `53c342d0a`:
 | Finding | Outcome |
 |---|---|
 | major — collapsing `x/../` across markup erased a mention: `<script>…"/api\/files\/page-a\/view"</script><p>/../../../../</p>` returned complete with no id | Fixed in `be46b63d1`. Every backstop skeleton is now counted both collapsed and uncollapsed, so normalisation can only add mentions. JavaScript escapes are now fully resolved on the extraction side (`\/`, `\t`, unknown single-character escapes, line continuations), and quoted literals are tried as whole URLs, so this script URL resolves to `page-a`. The backstop reads JavaScript escapes only in script regions (`<script>`, `on*` handlers, `javascript:` URLs), because reading CSS that way (`\70 `) produced junk mentions. Tests: CodeRabbit's case in the scanner and in a CANVAS bulk-copy refusal; an uncollapsed-only mention fails closed; `\l`, `\t` and `\/` escapes in literals; a handler attribute escape fails closed. A line continuation in free text is now joined and found, which is stronger than the previous fail-closed result, and the test asserts that. |
+
+Round 11: CodeRabbit's review of `a5a6e48a5`:
+
+| Finding | Outcome |
+|---|---|
+| major — braced Unicode escapes with leading zeros (`\u{000002f}`) were left undecoded, so a script reference passed as complete | Fixed in `d51437b1e`: any number of hex digits, bounded by value (≤ 0x10FFFF). |
+| major — legacy octal escapes (`\57`, `\057`) in sloppy-mode scripts were left undecoded | Fixed in `d51437b1e`: decoded as the engine does. With this, the decoder covers the whole JavaScript string-escape grammar: `\uXXXX`, `\u{…}`, `\xXX`, legacy octal, single-character escapes and line continuations. Decoding octal exposed a CSS misreading (`\057` read as hex `W`), so the backstop's CSS reading now blanks `<script>` bodies at the offsets parse5 reports, and those bodies are read with JavaScript rules only. Handler and `javascript:` attributes are read both ways. Tests cover both escape forms in the scanner and in CANVAS bulk-copy refusals, octal fail-closed, CSS text after a script, and an unclosed script. |
