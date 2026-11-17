@@ -494,3 +494,11 @@ Round 8: CodeRabbit's review of `48045d278`:
 | Finding | Outcome |
 |---|---|
 | major — a CSS string line continuation (`url("/api/fi\\<newline>les/…")`) splits a reference: the extractor missed it and the backstop read the backslash as `/` | Fixed in `c828704ae`: the CSS decoder drops backslash-newline (`\n`, `\r\n`, `\r`, `\f`) in the same left-to-right pass as escapes, so both the extractor and the backstop see the joined path. Scanner tests cover inline style, `<style>` and `image-set`, plus a fail-closed case outside CSS. A CANVAS copy route test checks the blocked hash is refused. |
+
+Round 9: CodeRabbit's review of `bf18e6ec2`, an outside-diff finding:
+
+| Finding | Outcome |
+|---|---|
+| major — a dot segment in script text (`"/api/./files/file-page-1/view"`) passed the free-text scan and the backstop as complete with no id | Fixed in `12783ae98`: the free text (raw, HTML-decoded and JS-unescaped, each also percent-decoded) is split into URL-like tokens. Each token goes through the same `new URL` normalisation as attribute values, which resolves dot segments, `%2e` and backslashes. The backstop collapses dot segments and repeated slashes before counting. Tests cover literal, `%2e` and `%2E%2e` dot segments in script, markdown and template literals; fail-closed cases for split, doubled-slash and `..` mentions; and a CANVAS bulk-copy refusal. JS-escaped literals are now resolved to their ids, not just failed closed, and the test asserts that. |
+
+I measured the worst cases at about 50 KB myself, because the review subagent stopped early: repeated `url('` takes 190 ms, and dot-segment chains, many reference tokens, and many attributes or escapes each take under 70 ms. HTML comments, `<noscript>`, `<template>`, SVG `<image>` and `<style>`, `<textarea>`, query and fragment, and double percent-encoding are all either found or fail closed.
