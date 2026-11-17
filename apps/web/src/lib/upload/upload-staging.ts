@@ -1,3 +1,5 @@
+import { randomUUID } from 'crypto';
+
 /**
  * Where a client's presigned PUT lands: a per-job staging key, never the
  * content-addressed `files/<hash>/original` that pages are served from.
@@ -21,10 +23,15 @@ export function buildUploadStagingKey(jobId: string): string {
   return `uploads/staging/${jobId}`;
 }
 
-/** Server-only copy of a job's staged bytes, hashed before publication. Never signed for a client. */
+/**
+ * Server-only copy of a job's staged bytes, hashed before publication. Never
+ * signed for a client. Unique per promotion attempt: two concurrent completions
+ * of one job must never share it, or one could overwrite the copy the other
+ * already hashed before it is published.
+ */
 export function buildUploadHoldingKey(jobId: string): string {
   if (!SAFE_JOB_ID.test(jobId)) {
     throw new Error('Refusing to build a holding key from an unsafe job id');
   }
-  return `uploads/verifying/${jobId}`;
+  return `uploads/verifying/${jobId}/${randomUUID()}`;
 }

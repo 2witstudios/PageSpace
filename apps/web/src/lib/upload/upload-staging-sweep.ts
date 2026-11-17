@@ -11,8 +11,13 @@ import { getS3Bucket, getS3Client } from '@/lib/presigned-url';
  */
 const UPLOAD_STAGING_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const PREFIXES = ['uploads/staging/', 'uploads/verifying/'] as const;
-/** Listing pages per prefix per run; the next run picks up the rest. */
-const MAX_PAGES_PER_PREFIX = 10;
+/**
+ * Each run lists both prefixes to the end, so a stale object is always reached
+ * however many fresh ones sort before it. The prefixes hold at most a day of
+ * in-flight uploads plus what is due for deletion, so a full listing is small;
+ * this cap (1,000 pages = 1M objects) only stops a runaway loop.
+ */
+const MAX_PAGES_PER_PREFIX = 1000;
 
 /** Number of objects deleted. */
 export async function sweepStaleUploadStaging(now: Date = new Date()): Promise<number> {

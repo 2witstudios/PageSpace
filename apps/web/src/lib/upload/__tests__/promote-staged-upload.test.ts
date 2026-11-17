@@ -14,7 +14,8 @@ import { promoteStagedUpload } from '../promote-staged-upload';
 const HASH = 'a'.repeat(64);
 const SERVED = `files/${HASH}/original`;
 const STAGING = 'uploads/staging/job-1';
-const HOLDING = 'uploads/verifying/job-1';
+const HOLDING_PREFIX = 'uploads/verifying/job-1/';
+const isHolding = (key: unknown) => typeof key === 'string' && key.startsWith(HOLDING_PREFIX);
 const args = { jobId: 'job-1', contentHash: HASH, maxBytes: 100, servedKey: SERVED };
 
 beforeEach(() => {
@@ -32,14 +33,16 @@ describe('promoteStagedUpload', () => {
     mockDeleteStoredObject.mockImplementation(async (key: string) => { order.push(`delete:${key}`); });
 
     expect(await promoteStagedUpload(args)).toEqual({ status: 'promoted' });
+    const holding = mockDigestStoredObject.mock.calls[0][0] as string;
+    expect(isHolding(holding)).toBe(true);
     expect(order).toEqual([
-      `copy:${STAGING}->${HOLDING}`,
+      `copy:${STAGING}->${holding}`,
       `delete:${STAGING}`,
-      `digest:${HOLDING}`,
-      `copy:${HOLDING}->${SERVED}`,
-      `delete:${HOLDING}`,
+      `digest:${holding}`,
+      `copy:${holding}->${SERVED}`,
+      `delete:${holding}`,
     ]);
-    expect(mockDigestStoredObject).toHaveBeenCalledWith(HOLDING, 100);
+    expect(mockDigestStoredObject).toHaveBeenCalledWith(holding, 100);
   });
 
   it('never hashes or publishes from the client-writable staging key itself', async () => {
@@ -65,15 +68,64 @@ describe('promoteStagedUpload', () => {
 
     expect(await promoteStagedUpload(args)).toEqual({ status: 'mismatch' });
     expect(mockCopyStoredObject).toHaveBeenCalledTimes(1);
-    expect(mockDeleteStoredObject.mock.calls.map((c) => c[0]).sort()).toEqual([HOLDING, STAGING].sort());
+    const deleted = mockDeleteStoredObject.mock.calls.map((c) => c[0]);
+    expect(deleted).toHaveLength(2);
+    expect(deleted).toContain(STAGING);
+    expect(deleted.some(isHolding)).toBe(true);
     expect(mockDeleteStoredObject).not.toHaveBeenCalledWith(SERVED);
+  });
+
+  it('given the holding copy vanished before publication, should not report it published', async () => {
+    mockCopyStoredObject.mockResolvedValueOnce('copied').mockResolvedValueOnce('missing');
+
+    await expect(promoteStagedUpload(args)).rejects.toThrow(/holding copy/);
   });
 
   it('given a storage error mid-way, should clean up the per-job keys and rethrow', async () => {
     mockDigestStoredObject.mockRejectedValue(new Error('s3 down'));
 
     await expect(promoteStagedUpload(args)).rejects.toThrow('s3 down');
-    expect(mockDeleteStoredObject).toHaveBeenCalledWith(HOLDING);
+    expect(mockDeleteStoredObject.mock.calls.some((c) => isHolding(c[0]))).toBe(true);
     expect(mockDeleteStoredObject).not.toHaveBeenCalledWith(SERVED);
+  });
+  it('given two completions of one job interleaved with a re-PUT, should publish only bytes that were hashed (no shared holding key)', async () => {
+    const CLEAN = HASH;
+    const BLOCKED = 'b'.repeat(64);
+    // In-memory store: key -> the sha256 of the bytes stored there.
+    const store = new Map<string, string>([[STAGING, CLEAN]]);
+    let releaseA: () => void = () => undefined;
+    const aHashed = new Promise<void>((resolve) => { releaseA = resolve; });
+    let digestCalls = 0;
+    let resumeA: () => void = () => undefined;
+
+    mockCopyStoredObject.mockImplementation(async (from: string, to: string) => {
+      const bytes = store.get(from);
+      if (bytes === undefined) return 'missing';
+      store.set(to, bytes);
+      return 'copied';
+    });
+    mockDeleteStoredObject.mockImplementation(async (key: string) => { store.delete(key); });
+    mockDigestStoredObject.mockImplementation(async (key: string) => {
+      digestCalls += 1;
+      const sha256 = store.get(key);
+      if (digestCalls === 1) {
+        // Completion A has hashed its holding copy; pause it before it publishes.
+        releaseA();
+        await new Promise<void>((resolve) => { resumeA = resolve; });
+      }
+      return sha256 === undefined ? { status: 'missing' } : { status: 'ok', sha256, size: 10 };
+    });
+
+    const a = promoteStagedUpload(args);
+    await aHashed;
+    // The client re-PUTs blocked bytes to staging, and completion B runs in full.
+    store.set(STAGING, BLOCKED);
+    const b = await promoteStagedUpload(args);
+    resumeA();
+    const aResult = await a;
+
+    expect(b).toEqual({ status: 'mismatch' });
+    expect(aResult).toEqual({ status: 'promoted' });
+    expect(store.get(SERVED)).toBe(CLEAN);
   });
 });

@@ -67,18 +67,26 @@ describe('sweepStaleUploadStaging', () => {
     expect(sent().some((c) => c.kind === 'delete')).toBe(false);
   });
 
-  it('follows continuation tokens, bounded per run', async () => {
-    let page = 0;
+  it('reaches stale objects past many pages of fresh ones within a single run', async () => {
+    const PAGES = 15;
+    let staged = 0;
     mockSend.mockImplementation(async (cmd: Sent) => {
       if (cmd.kind === 'delete') return {};
       if (cmd.input.Prefix !== 'uploads/staging/') return { Contents: [] };
-      page += 1;
-      return { Contents: [{ Key: `uploads/staging/p${page}`, LastModified: old }], IsTruncated: true, NextContinuationToken: `t${page}` };
+      const page = cmd.input.ContinuationToken ? Number(String(cmd.input.ContinuationToken).slice(1)) : 0;
+      staged += 1;
+      const last = page === PAGES - 1;
+      return {
+        Contents: [{ Key: `uploads/staging/p${page}`, LastModified: last ? old : fresh }],
+        IsTruncated: !last,
+        NextContinuationToken: last ? undefined : `t${page + 1}`,
+      };
     });
 
-    const deleted = await sweepStaleUploadStaging(NOW);
-
-    expect(deleted).toBeGreaterThan(1);
-    expect(page).toBeLessThanOrEqual(20);
+    expect(await sweepStaleUploadStaging(NOW)).toBe(1);
+    expect(staged).toBe(PAGES);
+    const keys = sent().filter((c) => c.kind === 'delete')
+      .flatMap((c) => (c.input.Delete as { Objects: Array<{ Key: string }> }).Objects.map((o) => o.Key));
+    expect(keys).toEqual([`uploads/staging/p${PAGES - 1}`]);
   });
 });
