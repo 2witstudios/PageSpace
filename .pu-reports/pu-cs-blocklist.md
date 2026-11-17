@@ -126,7 +126,9 @@ Notes:
   `apps/web/src/lib/upload/stored-file-references.ts`). Each id is resolved: a page's own file columns,
   else the `files` row's `storagePath`, else an id that is itself a hash. The hashes go into the same
   single blocklist query. A reference that resolves to stored bytes it can't hash fails closed and is
-  audited; an id that matches nothing stored is skipped, since nothing can be served under it. Inside the
+  audited; an id that matches nothing stored is skipped, since nothing can be served under it. References
+  are read from the raw content, from the content with HTML character references resolved, and from the
+  percent-decoding of each. That is every form the browser and router turn into the same request. Inside the
   transaction, a child whose content now embeds an id the screen didn't see aborts the copy with a 409. Text
   edits alone don't.
 - **9 and 10** normally receive a file id that is the content hash. For any other id the gate reads the row's
@@ -463,3 +465,10 @@ Round 5: CodeRabbit's replies on `ff86c953b`:
 |---|---|
 | major — two concurrent completions of one job shared the holding key, so one could publish bytes the other never hashed | Fixed in `2922e4470`: the holding key is unique per attempt, and a vanished holding copy is an error. An interleaving regression test fails with a shared key and passes with the fix. |
 | minor — the staging sweep restarted at page one each run and could starve | Fixed in `2922e4470`: each run lists to the end, with a test for stale objects on page 15. |
+
+Round 6: the requested CodeRabbit review of `b9628f16f`:
+
+| Finding | Outcome |
+|---|---|
+| major — HTML character references (`/api/files/pag&#101;-a/view`) slip past the copy screen | Fixed in `acd93c66a`: references are also read from the WHATWG-decoded text (`entities.decodeHTML`). Test covers numeric, hex and named references, plus an entity that decodes to a percent escape. |
+| minor — `DeleteObjects` per-object errors were counted as deletions | Fixed in `acd93c66a`: only real deletions are counted, and failures surface as a partial cron failure. |
