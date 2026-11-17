@@ -38,8 +38,34 @@ function toBytes(body: unknown): Uint8Array {
   throw new Error('FakeS3: unsupported body type');
 }
 
+/** A streamed body (anything async-iterable that is not already bytes), drained the way the SDK would. */
+async function drain(body: unknown): Promise<Uint8Array> {
+  if (body && typeof body === 'object' && !ArrayBuffer.isView(body) && Symbol.asyncIterator in body) {
+    const chunks: Uint8Array[] = [];
+    for await (const chunk of body as AsyncIterable<Uint8Array | string>) chunks.push(toBytes(chunk));
+    const out = new Uint8Array(chunks.reduce((n, c) => n + c.byteLength, 0));
+    let offset = 0;
+    for (const chunk of chunks) {
+      out.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return out;
+  }
+  return toBytes(body);
+}
+
+export interface FakePut {
+  bucket: string;
+  key: string;
+  /** The body arrived as a stream, not as bytes held in memory. */
+  streamed: boolean;
+  contentLength?: number;
+}
+
 export class FakeS3 {
   readonly buckets = new Map<string, Map<string, StoredObject>>();
+  /** How each PutObject was sent. */
+  readonly puts: FakePut[] = [];
   /** Every command sent, in order, as `Name bucket key-or-prefix`. */
   readonly log: string[] = [];
   /** Throw this (once) from the next command whose log line contains the given text. */
@@ -103,7 +129,14 @@ export class FakeS3 {
         };
       }
       case 'PutObjectCommand': {
-        bucket.set(key!, { body: toBytes(input.Body), contentType: input.ContentType as string | undefined });
+        const streamed = !ArrayBuffer.isView(input.Body) && typeof input.Body === 'object' && input.Body !== null;
+        const body = await drain(input.Body);
+        // As S3 does: a streamed PUT with a declared length must deliver exactly that many bytes.
+        if (typeof input.ContentLength === 'number' && input.ContentLength !== body.byteLength) {
+          throw new Error(`FakeS3: ContentLength ${input.ContentLength} but ${body.byteLength} bytes sent`);
+        }
+        this.puts.push({ bucket: bucketName, key: key!, streamed, contentLength: input.ContentLength as number | undefined });
+        bucket.set(key!, { body, contentType: input.ContentType as string | undefined });
         return {};
       }
       case 'CopyObjectCommand': {

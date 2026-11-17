@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { createHash } from 'crypto';
+import { Readable } from 'stream';
 import { CopyObjectCommand, DeleteObjectCommand, GetObjectCommand, PutObjectCommand, type S3Client } from '@aws-sdk/client-s3';
 import {
   UnpreservedObjectError,
@@ -17,7 +18,7 @@ import {
   deletePublishedAssetsForHash,
   headPublishedAsset,
   isPublishConfigured,
-  readPublishedAsset,
+  openPublishedAsset,
 } from '@/lib/canvas/published-storage';
 
 /**
@@ -92,8 +93,6 @@ async function* bodyChunks(body: unknown): AsyncIterable<Uint8Array> {
   }
   throw new Error('Unreadable object body');
 }
-
-const sha256Hex = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 
 /**
  * Read an object once, as it streams, and hash it: the bytes as stored, and
@@ -172,24 +171,36 @@ async function digestS3Object(client: S3Client, bucket: string, key: string): Pr
  * publish client and PUT with the uploads client, because the two buckets may
  * sit behind different credentials. Nothing suspected of being illegal is ever
  * parked in the public bucket.
+ *
+ * Streamed: the GET body is piped into the PUT with its length (an asset can be
+ * up to 1 GB), and hashed on the way through. The copy is then read back and
+ * must hash the same.
  */
 async function holdPublicAssetPrivately(hash: string, caseId: string): Promise<void> {
   const holdKey = holdKeyFor(caseId, hash);
-  const asset = await readPublishedAsset(hash);
-  const expected = sha256Hex(asset.body);
-  const existing = await digestS3Object(getS3Client(), getS3Bucket(), holdKey);
-  if (existing?.sha256 === expected) return;
+  const asset = await openPublishedAsset(hash);
+  const streamed = createHash('sha256');
+  const body = Readable.from(
+    (async function* () {
+      for await (const chunk of bodyChunks(asset.body)) {
+        streamed.update(chunk);
+        yield chunk;
+      }
+    })(),
+  );
 
   await getS3Client().send(
     new PutObjectCommand({
       Bucket: getS3Bucket(),
       Key: holdKey,
-      Body: asset.body,
+      Body: body,
+      // A streamed PUT needs its length up front; S3 refuses one that delivers a different number of bytes.
+      ...(asset.contentLength !== undefined ? { ContentLength: asset.contentLength } : {}),
       ContentType: asset.contentType ?? 'application/octet-stream',
     }),
   );
   const copy = await digestS3Object(getS3Client(), getS3Bucket(), holdKey);
-  if (copy?.sha256 !== expected) {
+  if (copy?.sha256 !== streamed.digest('hex')) {
     throw new Error('Private hold copy could not be verified; the public object was left in place');
   }
 }

@@ -476,15 +476,17 @@ export function headPublishedAsset(contentHash: string): Promise<S3ObjectInfo | 
   return headS3Object(getPublishClient(), getPublishBucket(), buildAssetKey(contentHash));
 }
 
-/** The bytes of the public asset for a content hash. Used to keep a private copy of a public-only file. */
-export async function readPublishedAsset(contentHash: string): Promise<{ body: Uint8Array; contentType?: string }> {
+/**
+ * The public asset for a content hash, opened but not read: its body as the SDK returns it (a stream in
+ * Node) and its length. Used to stream a private copy of it without holding the file in memory.
+ */
+export async function openPublishedAsset(
+  contentHash: string,
+): Promise<{ body: unknown; contentLength?: number; contentType?: string }> {
   const result = await getPublishClient().send(
     new GetObjectCommand({ Bucket: getPublishBucket(), Key: buildAssetKey(contentHash) }),
   );
-  const body = result.Body
-    ? await (result.Body as { transformToByteArray(): Promise<Uint8Array> }).transformToByteArray()
-    : new Uint8Array(0);
-  return { body, contentType: result.ContentType };
+  return { body: result.Body, contentLength: result.ContentLength, contentType: result.ContentType };
 }
 
 /**

@@ -125,6 +125,13 @@ describe('takePublicOffline', () => {
     expect(put).toBeLessThan(firstPublicDelete);
   });
 
+  it('streams the public asset into the hold copy with its length, never holding the whole file in memory', async () => {
+    await createTakedownStorage().takePublicOffline(HASH, CASE);
+
+    const hold = s3.puts.filter((p) => p.key === HOLD);
+    expect(hold).toEqual([{ bucket: UPLOADS, key: HOLD, streamed: true, contentLength: 'original-bytes'.length }]);
+  });
+
   it('does not trust an earlier hold copy of the same size but different bytes: it is written again', async () => {
     s3.bucket(UPLOADS).delete(`files/${HASH}/original`);
     s3.bucket(UPLOADS).delete(`chat-attachments/${HASH}/original`);
