@@ -6,7 +6,7 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { createHash, randomUUID } from 'crypto';
 import { db } from '@pagespace/db/db';
-import { inArray } from '@pagespace/db/operators';
+import { eq, inArray, sql } from '@pagespace/db/operators';
 import { contentCases, contentReports, contentScans } from '@pagespace/db/schema/content-safety';
 import { countScanVerdicts, findScanVerdict, openScanReviewCase, recordScanVerdict } from '../scan-store';
 import { closeReportedCase, fileContentReport, listReportedCases, ReportedCaseChangedError } from '../report-store';
@@ -87,6 +87,41 @@ describe('scan store', () => {
     expect(late).toMatchObject({ created: true, firstFlag: true });
     expect(late.caseId).not.toBe(first.caseId);
     expect((await listReportedCases({ limit: 200 })).some((c) => c.case.id === late.caseId)).toBe(true);
+  });
+
+  it('a dismissal that commits while a flag waits on the case lock does not lose the flag: it opens a new case', async () => {
+    const hash = newHash();
+    const first = await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.95, mode: 'enforce', scores: {} });
+
+    // The admin's close holds the case row lock. The flag's insert sees the committed open case and does nothing,
+    // then waits on that lock; the close commits the case dismissed and the hash clean.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let locked!: () => void;
+    const isLocked = new Promise<void>((resolve) => { locked = resolve; });
+    const close = db.transaction(async (tx) => {
+      await tx.select({ id: contentCases.id }).from(contentCases).where(eq(contentCases.id, first.caseId)).for('update');
+      locked();
+      await held;
+      await tx.update(contentCases).set({ status: 'dismissed' }).where(eq(contentCases.id, first.caseId));
+      const clean = { verdict: 'clean' as const, outcome: 'clean' as const, provider: 'admin_review', mode: null, scores: {}, scannedAt: new Date() };
+      await tx.insert(contentScans).values({ contentHash: hash, ...clean }).onConflictDoUpdate({ target: contentScans.contentHash, set: clean });
+    });
+    await isLocked;
+    const late = openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.96, mode: 'enforce', scores: {} });
+    // Wait until the flag is blocked on the row lock, so the close commits between its insert and its lock.
+    for (let i = 0; i < 100; i++) {
+      const waiting = await db.execute(sql`select 1 from pg_stat_activity where wait_event_type = 'Lock' and datname = current_database()`);
+      if (waiting.rows.length > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    release();
+    await close;
+
+    const flagged = await late;
+    expect(flagged).toMatchObject({ created: true, firstFlag: true });
+    expect(flagged.caseId).not.toBe(first.caseId);
+    expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'flagged', outcome: 'classifier_flag' });
   });
 
   it('remembers whether an unscanned file was allowed', async () => {

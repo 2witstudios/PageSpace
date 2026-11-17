@@ -261,8 +261,8 @@ export function ReportQueue({ items, onChanged, onReview }: ReportQueueProps) {
       )}
       {items.map((summary) => (
         <ReportedCaseCard
-          // A refreshed first page (new reports, or a new count) remounts the card and drops pages loaded before it.
-          key={`${summary.case.id}:${summary.reportCount}:${summary.reports[0]?.id ?? ''}`}
+          // A refreshed first page (new reports, a new count or a new scan flag) remounts the card and drops pages loaded before it.
+          key={`${summary.case.id}:${summary.reportCount}:${summary.reports[0]?.id ?? ''}:${summary.scan?.flaggedAt ?? ''}`}
           summary={summary}
           onReview={onReview}
           onClose={(request) => {

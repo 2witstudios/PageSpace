@@ -103,49 +103,55 @@ export async function openScanReviewCase(input: {
       now,
     );
   return db.transaction(async (tx) => {
-    const [opened] = await tx
-      .insert(contentCases)
-      .values({
-        targetType: 'content_hash',
-        targetId: input.contentHash,
-        contentHash: input.contentHash,
-        status: 'reported',
-        category: 'csam',
-        reason: 'Flagged by the publish scan',
-        snapshot: { scan },
-        steps: [],
-      })
-      .onConflictDoNothing({
-        target: [contentCases.targetType, contentCases.targetId],
-        where: sql`${contentCases.status} = 'reported'`,
-      })
-      .returning({ id: contentCases.id });
-    if (opened) {
-      await recordFlag(tx, opened.id);
-      return { caseId: opened.id, created: true, firstFlag: true };
+    // A close can commit between the insert (which saw its case open and did nothing) and the lock (which then
+    // finds no case under review). Each statement reads a fresh snapshot, so trying the insert again opens a new
+    // case: the flag is never dropped, and no verdict is written outside this transaction.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const [opened] = await tx
+        .insert(contentCases)
+        .values({
+          targetType: 'content_hash',
+          targetId: input.contentHash,
+          contentHash: input.contentHash,
+          status: 'reported',
+          category: 'csam',
+          reason: 'Flagged by the publish scan',
+          snapshot: { scan },
+          steps: [],
+        })
+        .onConflictDoNothing({
+          target: [contentCases.targetType, contentCases.targetId],
+          where: sql`${contentCases.status} = 'reported'`,
+        })
+        .returning({ id: contentCases.id });
+      if (opened) {
+        await recordFlag(tx, opened.id);
+        return { caseId: opened.id, created: true, firstFlag: true };
+      }
+
+      // Lock the case under review, as a report does, and see whether it was already flagged.
+      const [current] = await tx
+        .select({ id: contentCases.id, snapshot: contentCases.snapshot })
+        .from(contentCases)
+        .where(and(eq(contentCases.targetType, 'content_hash'), eq(contentCases.targetId, input.contentHash), eq(contentCases.status, 'reported')))
+        .limit(1)
+        .for('update');
+      if (!current) continue;
+      const firstFlag = current.snapshot?.scan?.source !== 'scan_flagged';
+
+      const [existing] = await tx
+        .update(contentCases)
+        .set({
+          category: 'csam',
+          snapshot: sql`coalesce(${contentCases.snapshot}, '{}'::jsonb) || ${JSON.stringify({ scan })}::jsonb`,
+          updatedAt: now,
+        })
+        .where(eq(contentCases.id, current.id))
+        .returning({ id: contentCases.id });
+      await recordFlag(tx, existing.id);
+      return { caseId: existing.id, created: false, firstFlag };
     }
-
-    // Lock the case under review, as a report does, and see whether it was already flagged.
-    const [current] = await tx
-      .select({ id: contentCases.id, snapshot: contentCases.snapshot })
-      .from(contentCases)
-      .where(and(eq(contentCases.targetType, 'content_hash'), eq(contentCases.targetId, input.contentHash), eq(contentCases.status, 'reported')))
-      .limit(1)
-      .for('update');
-    if (!current) throw new Error('The case under review for this hash closed while a scan flag was being filed');
-    const firstFlag = current.snapshot?.scan?.source !== 'scan_flagged';
-
-    const [existing] = await tx
-      .update(contentCases)
-      .set({
-        category: 'csam',
-        snapshot: sql`coalesce(${contentCases.snapshot}, '{}'::jsonb) || ${JSON.stringify({ scan })}::jsonb`,
-        updatedAt: now,
-      })
-      .where(eq(contentCases.id, current.id))
-      .returning({ id: contentCases.id });
-    await recordFlag(tx, existing.id);
-    return { caseId: existing.id, created: false, firstFlag };
+    throw new Error('The case under review for this hash kept closing while a scan flag was being filed');
   });
 }
 
