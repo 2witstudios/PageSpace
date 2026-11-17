@@ -20,6 +20,14 @@ describe('contentCaseAdminUrl', () => {
     expect(contentCaseAdminUrl('c1', { NEXT_PUBLIC_ADMIN_APP_URL: 'https://admin.y.test' })).toBe('https://admin.y.test/content?case=c1');
     expect(contentCaseAdminUrl('c1', {})).toBeUndefined();
   });
+
+  it('drops every trailing slash, in time linear in the input', () => {
+    expect(contentCaseAdminUrl('c1', { ADMIN_APP_URL: 'https://admin.x.test///' })).toBe('https://admin.x.test/content?case=c1');
+    expect(contentCaseAdminUrl('c1', { ADMIN_APP_URL: '///' })).toBeUndefined();
+    const started = Date.now();
+    contentCaseAdminUrl('c1', { ADMIN_APP_URL: `https://a${'/'.repeat(200_000)}x` });
+    expect(Date.now() - started).toBeLessThan(500);
+  });
 });
 
 describe('sendContentSafetyAlert', () => {

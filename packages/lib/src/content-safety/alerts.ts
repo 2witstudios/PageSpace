@@ -23,9 +23,16 @@ export function resolveAbuseEmail(env: Env = process.env): string {
   return env.ABUSE_EMAIL?.trim() || env.CONTACT_EMAIL?.trim() || FALLBACK_ABUSE_EMAIL;
 }
 
+/** `value` with every trailing `/` removed, in one pass (an anchored `/\/+$/` backtracks quadratically). */
+function withoutTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === '/') end -= 1;
+  return value.slice(0, end);
+}
+
 /** The case's page in the admin console, or undefined when no admin URL is configured. */
 export function contentCaseAdminUrl(caseId: string, env: Env = process.env): string | undefined {
-  const base = (env.ADMIN_APP_URL || env.NEXT_PUBLIC_ADMIN_APP_URL)?.trim().replace(/\/+$/, '');
+  const base = withoutTrailingSlashes((env.ADMIN_APP_URL || env.NEXT_PUBLIC_ADMIN_APP_URL)?.trim() ?? '');
   return base ? `${base}/content?case=${encodeURIComponent(caseId)}` : undefined;
 }
 
