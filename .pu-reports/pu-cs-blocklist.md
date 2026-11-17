@@ -515,3 +515,9 @@ Round 11: CodeRabbit's review of `a5a6e48a5`:
 |---|---|
 | major — braced Unicode escapes with leading zeros (`\u{000002f}`) were left undecoded, so a script reference passed as complete | Fixed in `d51437b1e`: any number of hex digits, bounded by value (≤ 0x10FFFF). |
 | major — legacy octal escapes (`\57`, `\057`) in sloppy-mode scripts were left undecoded | Fixed in `d51437b1e`: decoded as the engine does. With this, the decoder covers the whole JavaScript string-escape grammar: `\uXXXX`, `\u{…}`, `\xXX`, legacy octal, single-character escapes and line continuations. Decoding octal exposed a CSS misreading (`\057` read as hex `W`), so the backstop's CSS reading now blanks `<script>` bodies at the offsets parse5 reports, and those bodies are read with JavaScript rules only. Handler and `javascript:` attributes are read both ways. Tests cover both escape forms in the scanner and in CANVAS bulk-copy refusals, octal fail-closed, CSS text after a script, and an unclosed script. |
+
+Round 12: CodeRabbit's review of `5c477c852`:
+
+| Finding | Outcome |
+|---|---|
+| major — a CSS value inside a script string (`style.backgroundImage = 'url("/api/fi\\\\6c es/page-a/view")'`) escaped both readings: script bodies were excluded from CSS decoding, and repeated JavaScript decoding consumed `\6` as octal | Fixed in `f74e37289`. A script region is now decoded as JavaScript exactly once, as the engine does, then read both as is and with CSS rules, on the extraction side as well as in the backstop. The example now resolves to `page-a`. Tests cover the scanner, a fail-closed variant and a CANVAS bulk-copy refusal. |
