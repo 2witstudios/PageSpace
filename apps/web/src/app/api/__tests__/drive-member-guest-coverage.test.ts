@@ -45,9 +45,9 @@ type Entry = { reads: number; decision: Decision; reason: string };
 
 const LEDGER = new Map<string, Entry>([
   // ── packages/lib/src ────────────────────────────────────────────────────
-  ['packages/lib/src/organizations/published-visibility.ts', {
+  ['packages/lib/src/permissions/led-drives-sharing.ts', {
     reads: 1, decision: 'excludes',
-    reason: "parkUserSites asks whether an org drive has members other than the suspended owner, to decide whether its sites are the owner's alone to lose. A GUEST row is not a member (role <> 'GUEST', alongside the acceptedAt gate), so a drive whose only other row is a guest is still parked.",
+    reason: "listLedDrivesWithSharing (for parkUserSites) asks whether an org drive has members other than the suspended owner, to decide whether its sites are the owner's alone to lose. A GUEST row is not a member (role <> 'GUEST', alongside the acceptedAt gate), so a drive whose only other row is a guest is still parked.",
   }],
   ['packages/lib/src/permissions/permissions.ts', {
     reads: 5, decision: 'excludes',

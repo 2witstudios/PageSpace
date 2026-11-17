@@ -9,13 +9,13 @@
  *  - reconcileAllPublishedVisibility: the sweep that retries anything a failed object-store call left behind.
  */
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray, isNotNull, ne, sql } from '@pagespace/db/operators';
+import { and, eq, inArray, sql } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { contentSiteHolds } from '@pagespace/db/schema/content-safety';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
-import { driveMembers } from '@pagespace/db/schema/members';
 import { loggers } from '../logging/logger-config';
+import { listLedDrivesWithSharing } from '../permissions/led-drives-sharing';
 import { getOrgPolicies, listOrgsSettingPolicyKeys } from './policy-reader';
 import {
   PARKED_PREFIX,
@@ -345,35 +345,17 @@ export async function parkUserSites(
   store: PublishedObjectStore,
   executor: Executor = db,
 ): Promise<UserSitesOutcome> {
-  const owned = await executor
-    .select({ id: drives.id, sub: drives.publishSubdomain, orgId: drives.orgId })
-    .from(drives)
-    .where(eq(drives.ownerId, input.userId));
+  const owned = await listLedDrivesWithSharing(input.userId, executor);
   const publishing = new Set((await prefixesOfDrives(owned, executor)).map((p) => p.driveId));
 
   const result: UserSitesOutcome = { parked: [], skipped: [] };
   for (const drive of owned) {
     if (!publishing.has(drive.id)) continue;
-    if (drive.orgId) {
-      // "Other members" means people who really are members: an accepted row with a membership role. A pending
-      // invitation or a GUEST row (a redeemed page share link) is not one, so a drive with only those is still
-      // this user's alone and is parked.
-      const [other] = await executor
-        .select({ id: driveMembers.id })
-        .from(driveMembers)
-        .where(
-          and(
-            eq(driveMembers.driveId, drive.id),
-            ne(driveMembers.userId, input.userId),
-            isNotNull(driveMembers.acceptedAt),
-            ne(driveMembers.role, 'GUEST'),
-          ),
-        )
-        .limit(1);
-      if (other) {
-        result.skipped.push({ driveId: drive.id, reason: 'org_drive_with_other_members' });
-        continue;
-      }
+    // An org drive with other real members is not this user's alone (see listLedDrivesWithSharing): a drive
+    // with only pending invitations or GUEST rows is, and is parked.
+    if (drive.sharedWithOthers) {
+      result.skipped.push({ driveId: drive.id, reason: 'org_drive_with_other_members' });
+      continue;
     }
     result.parked.push(await parkDriveSites({ driveId: drive.id, holder: { userId: input.userId }, createdBy: input.createdBy }, store, executor));
   }
