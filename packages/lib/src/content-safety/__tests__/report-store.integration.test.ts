@@ -11,12 +11,14 @@ import { eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { contentCases, contentReports, contentSiteHolds } from '@pagespace/db/schema/content-safety';
 import { drives } from '@pagespace/db/schema/core';
+import { customDomains } from '@pagespace/db/schema/custom-domains';
 import { factories } from '@pagespace/db/test/factories';
 import {
   attachReports,
   closeReportedCase,
   fileContentReport,
   findPublishedSiteDrive,
+  getReportedCase,
   listCaseReports,
   listReportedCases,
   ReportedCaseChangedError,
@@ -102,6 +104,23 @@ describe('report store', () => {
     }
   });
 
+  it('reads the queue\'s cases and their reports in one repeatable-read snapshot, so a case row never lags its reports', async () => {
+    const { caseId } = await file(input(`page_${createId()}`, { category: 'csam' }));
+    const transaction = vi.spyOn(db, 'transaction');
+    try {
+      const queue = await listReportedCases({ limit: 200 });
+      expect(queue.find((c) => c.case.id === caseId)?.reportCount).toBe(1);
+      const one = await getReportedCase(caseId);
+      expect(one?.case.category).toBe('csam');
+      expect(one?.reports).toHaveLength(1);
+      expect(transaction).toHaveBeenCalledTimes(2);
+      for (const call of transaction.mock.calls) expect(call[1]).toEqual({ isolationLevel: 'repeatable read', accessMode: 'read only' });
+    } finally {
+      transaction.mockRestore();
+    }
+    expect(await getReportedCase(`case_${createId()}`)).toBeNull();
+  });
+
   it('pages through every report on a case, oldest last, past the first page the queue shows', async () => {
     const target = `page_${createId()}`;
     let caseId = '';
@@ -169,6 +188,24 @@ describe('report store', () => {
       expect(await findPublishedSiteDrive({ kind: 'publish_subdomain', host: `${label}.pagespace.site` })).toBeNull();
     } finally {
       await db.delete(contentSiteHolds).where(eq(contentSiteHolds.driveId, drive.id));
+      await db.delete(drives).where(eq(drives.id, drive.id));
+      await db.delete(users).where(eq(users.id, owner.id));
+    }
+  });
+
+  it('finds the drive of a custom domain only while the domain serves the site, not while it is pending', async () => {
+    const owner = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    const host = `rp-${createId().slice(0, 8).toLowerCase()}.example.com`;
+    const [domain] = await db.insert(customDomains).values({ driveId: drive.id, hostname: host, status: 'pending' }).returning();
+    try {
+      expect(await findPublishedSiteDrive({ kind: 'custom_domain_candidate', host })).toBeNull();
+      await db.update(customDomains).set({ status: 'verified' }).where(eq(customDomains.id, domain.id));
+      expect(await findPublishedSiteDrive({ kind: 'custom_domain_candidate', host })).toBe(drive.id);
+      await db.update(customDomains).set({ status: 'dns_failed' }).where(eq(customDomains.id, domain.id));
+      expect(await findPublishedSiteDrive({ kind: 'custom_domain_candidate', host })).toBeNull();
+    } finally {
+      await db.delete(customDomains).where(eq(customDomains.id, domain.id));
       await db.delete(drives).where(eq(drives.id, drive.id));
       await db.delete(users).where(eq(users.id, owner.id));
     }

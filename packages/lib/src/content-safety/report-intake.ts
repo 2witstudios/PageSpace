@@ -91,11 +91,14 @@ export type ReportOutcome =
 
 type Resolution = { ok: true; target: ResolvedTarget } | { ok: true; target: null } | { ok: false; reason: ReportRefusal };
 
-/** Does what the URL resolved to belong to the site's own drive? */
+/**
+ * Does what the URL resolved to belong to the site's own drive, as something the site serves? A page must also be
+ * published and out of the trash: an anonymous report never files a case about content that is not public.
+ */
 function belongsToDrive(target: ResolvedTarget, driveId: string): boolean {
   switch (target.targetType) {
     case 'page':
-      return target.page?.driveId === driveId;
+      return target.page?.driveId === driveId && target.page.isPublished && !target.page.isTrashed;
     case 'drive':
       return target.targetId === driveId;
     // A published asset: only if this drive holds it, not any hash named under the site's address.

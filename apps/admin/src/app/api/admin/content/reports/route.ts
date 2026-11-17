@@ -3,8 +3,8 @@ import { z } from 'zod';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getContentCase } from '@pagespace/lib/content-safety/case-store';
 import {
-  attachReports,
   closeReportedCase,
+  getReportedCase,
   listCaseReports,
   listReportedCases,
   ReportedCaseChangedError,
@@ -48,16 +48,15 @@ export const GET = withAdminAuth(async (adminUser, request) => {
       return NextResponse.json({ reports: reports.map(toReportSummary), limit });
     }
     if (id) {
-      const row = await getContentCase(id);
+      const withReports = await getReportedCase(id);
       auditRequest(request, {
         eventType: 'content.case.read',
         userId: adminUser.id,
         resourceType: 'content_case',
         resourceId: id,
-        details: { source: 'admin', action: 'view_reports', found: row !== null },
+        details: { source: 'admin', action: 'view_reports', found: withReports !== null },
       });
-      if (!row) return NextResponse.json({ error: 'Case not found' }, { status: 404 });
-      const [withReports] = await attachReports([row]);
+      if (!withReports) return NextResponse.json({ error: 'Case not found' }, { status: 404 });
       return NextResponse.json({ cases: [toReportedCaseSummary(withReports)] });
     }
 

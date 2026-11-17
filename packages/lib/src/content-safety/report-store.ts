@@ -13,8 +13,13 @@ import { and, count, desc, eq, inArray, lte, sql } from '@pagespace/db/operators
 import { getTableColumns } from 'drizzle-orm';
 import { contentCases, contentReports, type ContentCase, type ContentReport } from '@pagespace/db/schema/content-safety';
 import type { FiledReport, FileReportInput } from './report-intake';
+import { customDomains } from '@pagespace/db/schema/custom-domains';
+import { isServingStatus } from '../canvas/cert-action';
 import { isPrefixVisible, resolvePrefixOwner } from '../organizations/published-visibility';
 import { caseCategoryAfterReport, type ClassifiedReportUrl } from './reports';
+
+/** The singleton or a transaction: anything that can run a select. */
+type Executor = Pick<typeof db, 'select'>;
 
 /** More reports arrived on the case than the admin saw when they closed it. */
 export class ReportedCaseChangedError extends Error {
@@ -107,7 +112,7 @@ export async function fileContentReport(input: FileReportInput): Promise<FiledRe
 
 /**
  * The drive whose published site `host` serves, when that site is publicly visible: a `<label>.<publish host>`
- * subdomain or a custom domain, not held by a content-safety case and not hidden by its org's policy. Null
+ * subdomain or a custom domain that is serving (DNS verified), not held by a content-safety case and not hidden by its org's policy. Null
  * otherwise, so a report never confirms that a hidden or unpublished site exists.
  */
 export async function findPublishedSiteDrive(site: { kind: ClassifiedReportUrl['kind']; host: string }): Promise<string | null> {
@@ -117,6 +122,12 @@ export async function findPublishedSiteDrive(site: { kind: ClassifiedReportUrl['
   if (!owner) return null;
   // A subdomain label must name a site, and a custom hostname a domain — never the other way round.
   if ((site.kind === 'publish_subdomain') !== (owner.kind === 'site')) return null;
+  // A custom domain serves the site only once its DNS is verified (the same rule the content mirror uses); a
+  // pending or failed domain is not a live site yet.
+  if (owner.kind !== 'site') {
+    const [domain] = await db.select({ status: customDomains.status }).from(customDomains).where(eq(customDomains.hostname, prefix)).limit(1);
+    if (!domain || !isServingStatus(domain.status)) return null;
+  }
   return (await isPrefixVisible(prefix)) ? owner.driveId : null;
 }
 
@@ -127,19 +138,37 @@ export interface ReportedCase {
   reports: ContentReport[];
 }
 
+/**
+ * The case rows and their reports are read in one repeatable-read snapshot. Read separately, a report committed
+ * between the two would be shown and counted under a case row from before it, say without the CSAM category that
+ * report gave the case, so the queue would not put it first.
+ */
+const CONSISTENT_READ = { isolationLevel: 'repeatable read', accessMode: 'read only' } as const;
+
 /** The review queue: CSAM first, then the most recently reported. */
 export async function listReportedCases(options: { limit?: number; offset?: number; reportsPerCase?: number } = {}): Promise<ReportedCase[]> {
   const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
   const perCase = Math.min(Math.max(options.reportsPerCase ?? 20, 1), 100);
-  const rows = await db
-    .select()
-    .from(contentCases)
-    .where(eq(contentCases.status, 'reported'))
-    .orderBy(desc(sql`coalesce(${contentCases.category} = 'csam', false)`), desc(contentCases.updatedAt))
-    .limit(limit)
-    .offset(Math.max(options.offset ?? 0, 0));
-  if (rows.length === 0) return [];
-  return attachReports(rows, perCase);
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .select()
+      .from(contentCases)
+      .where(eq(contentCases.status, 'reported'))
+      .orderBy(desc(sql`coalesce(${contentCases.category} = 'csam', false)`), desc(contentCases.updatedAt))
+      .limit(limit)
+      .offset(Math.max(options.offset ?? 0, 0));
+    return attachReports(rows, perCase, tx);
+  }, CONSISTENT_READ);
+}
+
+/** One case, in any status, with its first page of reports — for the case an alert links to. Null if there is none. */
+export async function getReportedCase(caseId: string, perCase = 20): Promise<ReportedCase | null> {
+  return db.transaction(async (tx) => {
+    const [row] = await tx.select().from(contentCases).where(eq(contentCases.id, caseId)).limit(1);
+    if (!row) return null;
+    const [withReports] = await attachReports([row], perCase, tx);
+    return withReports;
+  }, CONSISTENT_READ);
 }
 
 /**
@@ -149,10 +178,10 @@ export async function listReportedCases(options: { limit?: number; offset?: numb
  * case by sending back the count it was shown; read in two statements, a report committed between them would be
  * counted without being shown, and the close would acknowledge it unseen.
  */
-export async function attachReports(rows: ContentCase[], perCase = 20): Promise<ReportedCase[]> {
+export async function attachReports(rows: ContentCase[], perCase = 20, executor: Executor = db): Promise<ReportedCase[]> {
   if (rows.length === 0) return [];
   const ids = rows.map((row) => row.id);
-  const ranked = db
+  const ranked = executor
     .select({
       ...getTableColumns(contentReports),
       rank: sql<number>`row_number() over (partition by ${contentReports.caseId} order by ${contentReports.createdAt} desc, ${contentReports.id} desc)`.as('rank'),
@@ -161,7 +190,7 @@ export async function attachReports(rows: ContentCase[], perCase = 20): Promise<
     .from(contentReports)
     .where(inArray(contentReports.caseId, ids))
     .as('ranked');
-  const shown = await db
+  const shown = await executor
     .select()
     .from(ranked)
     .where(lte(ranked.rank, perCase))

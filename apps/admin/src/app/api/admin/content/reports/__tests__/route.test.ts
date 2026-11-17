@@ -5,17 +5,17 @@ vi.mock('@/lib/auth', () => ({
     (req: Request) => handler({ id: 'admin-1' }, req),
 }));
 
-const { listMock, attachMock, pageMock, getMock, closeMock } = vi.hoisted(() => ({
+const { listMock, reportedMock, pageMock, getMock, closeMock } = vi.hoisted(() => ({
   listMock: vi.fn(),
   pageMock: vi.fn(),
-  attachMock: vi.fn(),
+  reportedMock: vi.fn(),
   getMock: vi.fn(),
   closeMock: vi.fn(),
 }));
 vi.mock('@pagespace/lib/content-safety/report-store', () => {
   class ReportedCaseNotFoundError extends Error {}
   class ReportedCaseChangedError extends Error {}
-  return { listReportedCases: listMock, attachReports: attachMock, listCaseReports: pageMock, closeReportedCase: closeMock, ReportedCaseNotFoundError, ReportedCaseChangedError };
+  return { listReportedCases: listMock, getReportedCase: reportedMock, listCaseReports: pageMock, closeReportedCase: closeMock, ReportedCaseNotFoundError, ReportedCaseChangedError };
 });
 vi.mock('@pagespace/lib/content-safety/case-store', () => ({ getContentCase: getMock }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
@@ -86,12 +86,12 @@ describe('GET /api/admin/content/reports', () => {
     expect(auditRequest).toHaveBeenCalledWith(expect.any(Request), expect.objectContaining({ eventType: 'content.case.read', resourceId: 'reports' }));
   });
 
-  it('returns one case with its reports when linked by ID', async () => {
-    getMock.mockResolvedValue(caseRow());
-    attachMock.mockResolvedValue([{ case: caseRow(), reportCount: 1, reports: [reportRow()] }]);
+  it('returns one case with its reports when linked by ID, read together in one snapshot', async () => {
+    reportedMock.mockResolvedValue({ case: caseRow(), reportCount: 1, reports: [reportRow()] });
     const body = await (await get('?id=case-r')).json();
-    expect(attachMock).toHaveBeenCalledWith([expect.objectContaining({ id: 'case-r' })]);
+    expect(reportedMock).toHaveBeenCalledWith('case-r');
     expect(body.cases[0].reports).toHaveLength(1);
+    expect(auditRequest).toHaveBeenCalledWith(expect.any(Request), expect.objectContaining({ resourceId: 'case-r', details: expect.objectContaining({ action: 'view_reports', found: true }) }));
   });
 
   it('refuses a malformed report cursor', async () => {
@@ -101,7 +101,7 @@ describe('GET /api/admin/content/reports', () => {
   });
 
   it('answers 404 for an unknown case ID', async () => {
-    getMock.mockResolvedValue(null);
+    reportedMock.mockResolvedValue(null);
     expect((await get('?id=nope')).status).toBe(404);
   });
 
@@ -110,7 +110,7 @@ describe('GET /api/admin/content/reports', () => {
     pageMock.mockResolvedValue([reportRow({ id: 'rep-21' })]);
     const body = await (await get('?id=case-r&reportsBefore=rep-20&reportsLimit=50')).json();
     expect(pageMock).toHaveBeenCalledWith('case-r', { beforeId: 'rep-20', limit: 50 });
-    expect(attachMock).not.toHaveBeenCalled();
+    expect(reportedMock).not.toHaveBeenCalled();
     expect(body).toEqual({ reports: [expect.objectContaining({ id: 'rep-21', createdAt: '2026-11-12T00:00:30.000Z' })], limit: 50 });
     expect(auditRequest).toHaveBeenCalledWith(
       expect.any(Request),

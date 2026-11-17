@@ -165,6 +165,18 @@ describe('submitContentReport', () => {
     expect(result).toEqual({ ok: false, reason: 'not_pagespace_url' });
   });
 
+  it.each([
+    ['unpublished', { isPublished: false, isTrashed: false }],
+    ['trashed', { isPublished: true, isTrashed: true }],
+  ])('refuses a URL on the site that resolves to an %s page of its own drive', async (_label, state) => {
+    const deps = makeDeps({
+      resolveTarget: vi.fn(async () => target({ targetType: 'page', targetId: 'page_priv', page: { ...pageIn('page_priv', 'drive_acme'), ...state } })),
+    }).deps;
+    const result = await submitContentReport({ reporter: anonymous, target: { type: 'published_url', url: 'https://acme.pagespace.site/' }, ...report() }, deps);
+    expect(result).toEqual({ ok: false, reason: 'not_pagespace_url' });
+    expect(deps.fileReport).not.toHaveBeenCalled();
+  });
+
   it('accepts a custom domain that is registered to a drive', async () => {
     const result = await submitContentReport({ reporter: anonymous, target: { type: 'published_url', url: 'https://shop.example.com/' }, ...report() }, ctx.deps);
     expect(result).toMatchObject({ ok: true, caseId: 'case_1' });
