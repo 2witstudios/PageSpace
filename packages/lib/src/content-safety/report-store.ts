@@ -9,7 +9,8 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, count, desc, eq, inArray, sql } from '@pagespace/db/operators';
+import { and, count, desc, eq, inArray, lte, sql } from '@pagespace/db/operators';
+import { getTableColumns } from 'drizzle-orm';
 import { contentCases, contentReports, type ContentCase, type ContentReport } from '@pagespace/db/schema/content-safety';
 import type { FiledReport, FileReportInput } from './report-intake';
 import { isPrefixVisible, resolvePrefixOwner } from '../organizations/published-visibility';
@@ -141,35 +142,48 @@ export async function listReportedCases(options: { limit?: number; offset?: numb
   return attachReports(rows, perCase);
 }
 
-/** Reports for cases already loaded — for one case linked from an alert, or the review queue. */
+/**
+ * Reports for cases already loaded — for one case linked from an alert, or the review queue.
+ *
+ * The reports shown and the count are read in ONE statement (window functions over one snapshot). The admin closes a
+ * case by sending back the count it was shown; read in two statements, a report committed between them would be
+ * counted without being shown, and the close would acknowledge it unseen.
+ */
 export async function attachReports(rows: ContentCase[], perCase = 20): Promise<ReportedCase[]> {
   if (rows.length === 0) return [];
   const ids = rows.map((row) => row.id);
   const ranked = db
     .select({
-      id: contentReports.id,
+      ...getTableColumns(contentReports),
       rank: sql<number>`row_number() over (partition by ${contentReports.caseId} order by ${contentReports.createdAt} desc, ${contentReports.id} desc)`.as('rank'),
+      total: sql<number>`count(*) over (partition by ${contentReports.caseId})`.mapWith(Number).as('total'),
     })
     .from(contentReports)
     .where(inArray(contentReports.caseId, ids))
     .as('ranked');
-  const [reports, totals] = await Promise.all([
-    db
-      .select({ report: contentReports })
-      .from(contentReports)
-      .innerJoin(ranked, eq(ranked.id, contentReports.id))
-      .where(sql`${ranked.rank} <= ${perCase}`)
-      .orderBy(desc(contentReports.createdAt), desc(contentReports.id)),
-    db
-      .select({ caseId: contentReports.caseId, total: count() })
-      .from(contentReports)
-      .where(inArray(contentReports.caseId, ids))
-      .groupBy(contentReports.caseId),
-  ]);
+  const shown = await db
+    .select()
+    .from(ranked)
+    .where(lte(ranked.rank, perCase))
+    .orderBy(desc(ranked.createdAt), desc(ranked.id));
   const byCase = new Map<string, ContentReport[]>();
-  for (const { report } of reports) byCase.set(report.caseId, [...(byCase.get(report.caseId) ?? []), report]);
-  const totalByCase = new Map(totals.map((row) => [row.caseId, Number(row.total)]));
+  const totalByCase = new Map<string, number>();
+  for (const { rank: _rank, total, ...report } of shown) {
+    byCase.set(report.caseId, [...(byCase.get(report.caseId) ?? []), report]);
+    totalByCase.set(report.caseId, Number(total));
+  }
   return rows.map((row) => ({ case: row, reportCount: totalByCase.get(row.id) ?? 0, reports: byCase.get(row.id) ?? [] }));
+}
+
+/** One page of a case's reports, newest first in the same order as `attachReports` — for reports past its first page. */
+export async function listCaseReports(caseId: string, options: { limit?: number; offset?: number } = {}): Promise<ContentReport[]> {
+  return db
+    .select()
+    .from(contentReports)
+    .where(eq(contentReports.caseId, caseId))
+    .orderBy(desc(contentReports.createdAt), desc(contentReports.id))
+    .limit(Math.min(Math.max(options.limit ?? 20, 1), 100))
+    .offset(Math.max(options.offset ?? 0, 0));
 }
 
 /**

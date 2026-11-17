@@ -6,16 +6,18 @@
  */
 import { describe, it, expect, afterAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
-import { db } from '@pagespace/db/db';
+import { db, pool } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { contentCases, contentReports, contentSiteHolds } from '@pagespace/db/schema/content-safety';
 import { drives } from '@pagespace/db/schema/core';
 import { factories } from '@pagespace/db/test/factories';
 import {
+  attachReports,
   closeReportedCase,
   fileContentReport,
   findPublishedSiteDrive,
+  listCaseReports,
   listReportedCases,
   ReportedCaseChangedError,
   ReportedCaseNotFoundError,
@@ -82,6 +84,37 @@ describe('report store', () => {
     await file(input(target, { category: 'malware' }));
     const [row] = await db.select().from(contentCases).where(inArray(contentCases.id, [caseId]));
     expect(row.category).toBe('csam');
+  });
+
+  it('reads the reports it shows and the count it reports in ONE statement, so the count never covers a report it left out', async () => {
+    const { caseId } = await file(input(`page_${createId()}`));
+    const [row] = await db.select().from(contentCases).where(eq(contentCases.id, caseId));
+    const query = vi.spyOn(pool, 'query');
+    try {
+      const [withReports] = await attachReports([row]);
+      expect(withReports.reportCount).toBe(1);
+      expect(withReports.reports).toHaveLength(1);
+      // Two statements would each take their own snapshot: a report committed between them would be
+      // counted (and acknowledged by a close) without ever being shown.
+      expect(query).toHaveBeenCalledTimes(1);
+    } finally {
+      query.mockRestore();
+    }
+  });
+
+  it('pages through every report on a case, oldest last, past the first page the queue shows', async () => {
+    const target = `page_${createId()}`;
+    let caseId = '';
+    for (let i = 0; i < 25; i++) ({ caseId } = await file(input(target, { description: `report ${i}` })));
+    const [row] = await db.select().from(contentCases).where(eq(contentCases.id, caseId));
+
+    const [firstPage] = await attachReports([row]);
+    expect(firstPage.reportCount).toBe(25);
+    expect(firstPage.reports.map((r) => r.description)).toEqual(Array.from({ length: 20 }, (_, i) => `report ${24 - i}`));
+
+    const rest = await listCaseReports(caseId, { offset: 20, limit: 20 });
+    expect(rest.map((r) => r.description)).toEqual(['report 4', 'report 3', 'report 2', 'report 1', 'report 0']);
+    expect(await listCaseReports(caseId, { offset: 25, limit: 20 })).toEqual([]);
   });
 
   it('lists CSAM cases first', async () => {
