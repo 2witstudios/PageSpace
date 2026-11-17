@@ -11,6 +11,7 @@ import { eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { contentBlocks, contentCases } from '@pagespace/db/schema/content-safety';
 import { drives } from '@pagespace/db/schema/core';
+import { customDomains } from '@pagespace/db/schema/custom-domains';
 import { publishedPages } from '@pagespace/db/schema/published-pages';
 import { filePages, files } from '@pagespace/db/schema/storage';
 import { factories } from '@pagespace/db/test/factories';
@@ -36,6 +37,7 @@ const LEGACY_HASH = freshHash();
 const CHAT_HASH = freshHash();
 const run = createId().slice(0, 6).toLowerCase();
 const SITE = `cs-${run}`;
+const DOMAIN = `photos-${run}.example.test`;
 
 const ids = { users: [] as string[], drives: [] as string[], cases: [] as string[] };
 let uploader: string;
@@ -73,6 +75,7 @@ describe('takedown database edge — real Postgres', () => {
 
     await db.insert(files).values({ id: HASH, driveId, sizeBytes: 10, mimeType: 'image/png', storagePath: HASH, createdBy: uploader });
     await db.insert(filePages).values({ fileId: HASH, pageId: linkedPageId, linkedBy: linker });
+    await db.insert(customDomains).values({ driveId, hostname: DOMAIN, status: 'active' });
     await db.insert(publishedPages).values({ driveId, pageId: filePageId, path: 'gallery/cat', artifactKey: `published/${SITE}/gallery/cat/index.html`, updatedAt: new Date() });
 
     const message = await factories.createChatMessage(linkedPageId, {
@@ -430,6 +433,22 @@ describe('takedown database edge — real Postgres', () => {
     it('resolves a published URL with no matching page to its drive', async () => {
       const resolved = await resolveTakedownTarget(`https://${SITE}.pagespace.site/no/such/page`);
       expect(resolved).toMatchObject({ targetType: 'drive', targetId: driveId, page: null, contentHash: null });
+    });
+
+    it('resolves a registered custom domain to its drive', async () => {
+      expect(await resolveTakedownTarget(`https://${DOMAIN}/gallery/cat`)).toMatchObject({ targetType: 'page', targetId: filePageId, drive: { id: driveId } });
+    });
+
+    // Only `<subdomain>.pagespace.site` names a drive by its first label. Anywhere else the first label is
+    // someone else's text: taking it as a subdomain would hand the admin another tenant's drive to act on.
+    it.each([
+      ['a foreign host whose first label is a real subdomain', () => `https://${SITE}.evil.test/gallery/cat`],
+      ['www. in front of a registered custom domain', () => `https://www.${DOMAIN}/gallery/cat`],
+      ['an unregistered custom domain', () => `https://unregistered-${run}.example.test/`],
+      ['a host nested under a real subdomain', () => `https://a.${SITE}.pagespace.site/gallery/cat`],
+      ['a look-alike publish host', () => `https://${SITE}.pagespace.site.evil.test/gallery/cat`],
+    ])('resolves nothing for %s', async (_label, input) => {
+      expect(await resolveTakedownTarget(input())).toBeNull();
     });
 
     it('resolves a public asset URL to its content hash', async () => {

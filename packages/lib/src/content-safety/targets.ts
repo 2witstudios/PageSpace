@@ -15,6 +15,7 @@ import { contentBlocks, type ContentBlockCategory, type ContentCaseTargetType } 
 import { drives, pages } from '@pagespace/db/schema/core';
 import { publishedPages } from '@pagespace/db/schema/published-pages';
 import { files } from '@pagespace/db/schema/storage';
+import { PUBLISH_HOST } from '../canvas/primary-host';
 import { isDriveSiteHeld, resolvePrefixOwner } from '../organizations/published-visibility';
 import { normalizeContentHash } from './policy';
 import { collectContentReferences } from './references';
@@ -141,6 +142,18 @@ async function finish(partial: Partial_): Promise<ResolvedTarget> {
   };
 }
 
+/**
+ * The drive subdomain a host names, or null when it is not `<one label>.<publish host>`. Anywhere else
+ * the first label is somebody else's text (`<a real subdomain>.evil.test`, `www.` on a custom domain), and
+ * taking it as a subdomain would hand the admin another tenant's drive to act on.
+ */
+export function publishSubdomainOf(host: string): string | null {
+  const suffix = `.${PUBLISH_HOST}`;
+  if (!host.endsWith(suffix)) return null;
+  const label = host.slice(0, -suffix.length);
+  return label.length > 0 && !label.includes('.') ? label : null;
+}
+
 async function resolveUrl(url: URL): Promise<ResolvedTarget | null> {
   const asset = url.pathname.match(ASSET_PATH) ?? url.pathname.match(STORAGE_KEY);
   if (asset) return finish({ targetType: 'content_hash', targetId: asset[1].toLowerCase(), contentHash: asset[1].toLowerCase() });
@@ -157,9 +170,10 @@ async function resolveUrl(url: URL): Promise<ResolvedTarget | null> {
     if (loaded) return finish({ targetType: 'page', targetId: loaded.page.id, ...loaded });
   }
 
-  // A published site: the host is a custom domain, or `<subdomain>.<publish host>`.
+  // A published site: the host is a registered custom domain, or `<subdomain>.<publish host>`.
   const host = url.hostname.toLowerCase();
-  const owner = (await resolvePrefixOwner(host)) ?? (await resolvePrefixOwner(host.split('.')[0]));
+  const subdomain = publishSubdomainOf(host);
+  const owner = subdomain !== null ? await resolvePrefixOwner(subdomain) : await resolvePrefixOwner(host);
   if (!owner) return null;
   const drive = await loadDrive(owner.driveId);
   if (!drive) return null;

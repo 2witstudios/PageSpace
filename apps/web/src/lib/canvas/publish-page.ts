@@ -29,14 +29,14 @@ import {
 } from './published-storage';
 import { rewriteCanvasAssets, rewriteInterPageLinksForDrive, extractAndStripOgMeta, type OgMeta } from './asset-pipeline';
 import { buildRobotsTxt, buildSitemapXml, buildNotFoundHtml, resolveFaviconTags } from '@pagespace/lib/canvas/site-files';
-import { resolvePrimaryPublishedHost } from '@pagespace/lib/canvas/primary-host';
+import { PUBLISH_HOST, resolvePrimaryPublishedHost } from '@pagespace/lib/canvas/primary-host';
 import { mirrorPublishedPageToHosts, mirror404ToHosts, getActiveDomainRecords } from './custom-domain-mirror';
 import { checkOrgActive } from '@pagespace/lib/organizations/status';
 import { getOrgPolicies } from '@pagespace/lib/organizations/policy-reader';
 import { publishingDecision } from '@pagespace/lib/organizations/sharing-decisions';
 import { type AccessActor, automationActor, inDrives } from '@pagespace/lib/permissions/access-actor';
 
-export const PUBLISH_HOST = 'pagespace.site';
+export { PUBLISH_HOST };
 const FAVICON_BASE_URL = 'https://pagespace.ai';
 
 /**
