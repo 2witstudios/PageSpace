@@ -919,6 +919,20 @@ describe('POST /api/pages/bulk-copy — content blocklist', () => {
       expect(mockTransaction).not.toHaveBeenCalled();
     });
 
+    it('refuses an embedded reference written with a trailing slash the same way', async () => {
+      mockTree(
+        [mockSourcePage({ content: '<img src="/api/files/file-page-1/view/">' })],
+        [],
+        [{ id: 'file-page-1', filePath: BLOCKED_HASH, contentHash: BLOCKED_HASH }],
+      );
+      mockFindBlockedUploads.mockResolvedValue(new Set([BLOCKED_HASH]));
+
+      const response = await POST(createRequest(validBody));
+
+      expect(response.status).toBe(422);
+      expect(mockTransaction).not.toHaveBeenCalled();
+    });
+
     it('resolves an embedded channel/DM attachment through its files row, in the same single blocklist call', async () => {
       mockTree(
         [mockSourcePage({ type: 'CANVAS', content: "<div style=\"background:url('/api/files/att-1/view')\"></div>", filePath: CLEAN_HASH, contentHash: null })],

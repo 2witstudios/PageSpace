@@ -30,6 +30,8 @@ import {
   convertDbMessageToUIMessage,
   screenFilePartsAgainstBlocklist,
 } from '../message-utils';
+import { visualToolResultScreenParts } from '@/lib/ai/tools/read-page-vision-output';
+import { createHash } from 'crypto';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -246,5 +248,42 @@ describe('screenFilePartsAgainstBlocklist', () => {
     await screenFilePartsAgainstBlocklist([echoed], { userId: null });
 
     expect(mockFindBlockedUploads).toHaveBeenCalledWith([ECHOED_HASH], { entryPoint: 'chat-attachment', userId: undefined });
+  });
+});
+
+describe('read_page visual results through the real blocklist screen', () => {
+  const bytes = Buffer.from('blocked image bytes');
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  const message = (output: Record<string, unknown>): UIMessage => ({
+    id: 'a1',
+    role: 'assistant',
+    parts: [{ type: 'tool-read_page', toolCallId: 'c1', state: 'output-available', input: {}, output } as unknown as UIMessage['parts'][number]],
+  });
+  const visual = (overrides: Record<string, unknown> = {}) => ({
+    success: true, type: 'visual_content_delivered', mimeType: 'image/png', imageBase64: bytes.toString('base64'), message: 'm', ...overrides,
+  });
+
+  it.each([
+    ['a plain image MIME type', 'image/png'],
+    ['a MIME type with parameters', 'image/png;charset=utf-8'],
+    ['an empty MIME type', ''],
+    ['a MIME type with a comma', 'image/png,x'],
+  ])('given %s, should hash the decoded bytes and drop the blocked result', async (_label, mimeType) => {
+    mockFindBlockedUploads.mockResolvedValue(new Set([sha256]));
+    const { parts, undecodable } = visualToolResultScreenParts([message(visual({ mimeType }))]);
+
+    const result = await screenFilePartsAgainstBlocklist(parts, { userId: 'u1' });
+
+    expect(undecodable).toBe(false);
+    expect(mockFindBlockedUploads).toHaveBeenCalledWith([sha256], expect.anything());
+    expect(result.blockedHashes).toEqual([sha256]);
+  });
+
+  it('given imageBase64 that is not valid base64, should report it undecodable (callers fail closed)', () => {
+    expect(visualToolResultScreenParts([message(visual({ imageBase64: 'not base64!' }))]).undecodable).toBe(true);
+  });
+
+  it('given a non-visual read_page result or another tool, should yield nothing', () => {
+    expect(visualToolResultScreenParts([message({ type: 'text_content', text: 'x' })])).toEqual({ parts: [], undecodable: false });
   });
 });

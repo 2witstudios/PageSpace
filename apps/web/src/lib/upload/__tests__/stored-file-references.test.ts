@@ -31,6 +31,15 @@ describe('extractStoredFileReferenceIds', () => {
     expect(extractStoredFileReferenceIds('')).toEqual([]);
   });
 
+  it('given a trailing slash (Next.js redirects it to the slashless route), should still return the id', () => {
+    const content = [
+      '<img src="/api/files/page-a/view/">',
+      '<img src="/api/files/page-b/thumbnail/?w=1">',
+      "url('/dashboard/drive-1/page-c/view/')",
+    ].join('\n');
+    expect(extractStoredFileReferenceIds(content).sort()).toEqual(['page-a', 'page-b', 'page-c']);
+  });
+
   it('given a longer path that merely starts like a reference, should not match it', () => {
     expect(extractStoredFileReferenceIds('/api/files/page-a/viewer')).toEqual([]);
   });

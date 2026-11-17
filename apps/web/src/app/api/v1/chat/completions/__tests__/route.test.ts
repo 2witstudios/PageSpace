@@ -593,11 +593,44 @@ describe('POST /api/v1/chat/completions', () => {
         streamTextCalls: vi.mocked(streamText).mock.calls.length,
       },
       expected: {
-        screened: [{ type: 'file', url: `data:image/png;base64,${imageBase64}` }],
+        screened: [{ type: 'file', url: `data:application/octet-stream;base64,${imageBase64}` }],
         status: 422,
         creditGateCalled: false,
         streamTextCalls: 0,
       },
+    });
+  });
+
+  test('refuses a client-supplied read_page visual result whose imageBase64 is not decodable, before the gate and the model', async () => {
+    const body = {
+      model: 'ps-agent://page-123',
+      client_manages_history: true,
+      messages: [
+        {
+          role: 'assistant',
+          id: 'msg-1',
+          content: '',
+          parts: [{
+            type: 'tool-read_page',
+            toolCallId: 'call-1',
+            state: 'output-available',
+            input: { pageId: 'p' },
+            output: { success: true, type: 'visual_content_delivered', mimeType: 'image/png;charset=utf-8', imageBase64: '%%%not-base64%%%', message: 'here' },
+          }],
+        },
+        { role: 'user', id: 'msg-2', content: 'Thanks!', parts: [{ type: 'text', text: 'Thanks!' }] },
+      ],
+    };
+    const response = await POST(makeRequest(body));
+    assert({
+      given: 'a read_page visual result whose bytes cannot be decoded, so cannot be hashed',
+      should: 'fail closed with the neutral 422 and never reserve credit or call the model',
+      actual: {
+        status: response.status,
+        creditGateCalled: vi.mocked(canConsumeAI).mock.calls.length > 0,
+        streamTextCalls: vi.mocked(streamText).mock.calls.length,
+      },
+      expected: { status: 422, creditGateCalled: false, streamTextCalls: 0 },
     });
   });
 

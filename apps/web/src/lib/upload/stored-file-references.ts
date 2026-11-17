@@ -11,8 +11,9 @@ import { PageType } from '@pagespace/lib/utils/enums';
  * `download`. Kept separate because that module is `server-only` and pulls in the
  * publish storage; this one is pure.
  */
+// An optional trailing slash: Next.js redirects `/view/` to `/view`, so it serves too.
 const STORED_FILE_REFERENCE =
-  /\/api\/files\/([a-zA-Z0-9_-]+)\/(?:view|thumbnail|download)(?=$|[?#"')\s>\\])|\/dashboard\/[a-zA-Z0-9_-]+\/([a-zA-Z0-9_-]+)\/view(?=$|[?#"')\s>\\])/g;
+  /\/api\/files\/([a-zA-Z0-9_-]+)\/(?:view|thumbnail|download)\/?(?=$|[?#"')\s>\\])|\/dashboard\/[a-zA-Z0-9_-]+\/([a-zA-Z0-9_-]+)\/view\/?(?=$|[?#"')\s>\\])/g;
 
 /** Every distinct file or page id that `content` references, in first-seen order. */
 export function extractStoredFileReferenceIds(content: string): string[] {
