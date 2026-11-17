@@ -37,8 +37,8 @@ describe('scan store', () => {
 
   it('a flag opens a CSAM-category case in the review queue, and a second flag joins it', async () => {
     const hash = newHash();
-    const first = await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.95, mode: 'shadow' });
-    const second = await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.97, mode: 'shadow' });
+    const first = await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.95, mode: 'shadow', scores: {} });
+    const second = await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.97, mode: 'shadow', scores: {} });
     expect(first).toMatchObject({ created: true, firstFlag: true });
     expect(second).toEqual({ caseId: first.caseId, created: false, firstFlag: false });
 
@@ -59,9 +59,34 @@ describe('scan store', () => {
       reporterUserId: null,
       contactEmail: null,
     });
-    const flagged = await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.99, mode: 'enforce' });
+    const flagged = await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.99, mode: 'enforce', scores: {} });
     // The report's case had no flag: this is its first, so the gate alerts.
     expect(flagged).toEqual({ caseId: reported.caseId, created: false, firstFlag: true });
+  });
+
+  it('a flag records its verdict with its case, naming the case, in one write', async () => {
+    const hash = newHash();
+    const opened = await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.95, mode: 'enforce', scores: { score: 0.95 } });
+    expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'flagged', outcome: 'classifier_flag' });
+    const [row] = await db.select({ scores: contentScans.scores, mode: contentScans.mode }).from(contentScans).where(inArray(contentScans.contentHash, [hash]));
+    expect(row).toEqual({ mode: 'enforce', scores: { score: 0.95, caseId: opened.caseId } });
+  });
+
+  it('a dismissal stays clean: a flag that lands after it opens a new case instead of re-flagging the closed one', async () => {
+    const hash = newHash();
+    const first = await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.95, mode: 'enforce', scores: {} });
+    const [listed] = (await listReportedCases({ limit: 200 })).filter((c) => c.case.id === first.caseId);
+    await closeReportedCase({
+      caseId: first.caseId, outcome: 'dismissed', actorUserId: 'admin-1', expectedReportCount: 0,
+      expectedScanFlaggedAt: listed.case.snapshot?.scan?.flaggedAt ?? null,
+    });
+    expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'clean' });
+
+    // A scan that started before the dismissal and finishes after it: its flag never lands without a case under review.
+    const late = await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.96, mode: 'enforce', scores: {} });
+    expect(late).toMatchObject({ created: true, firstFlag: true });
+    expect(late.caseId).not.toBe(first.caseId);
+    expect((await listReportedCases({ limit: 200 })).some((c) => c.case.id === late.caseId)).toBe(true);
   });
 
   it('remembers whether an unscanned file was allowed', async () => {
@@ -72,8 +97,7 @@ describe('scan store', () => {
 
   it('dismissing a flagged case records the hash clean in the same close', async () => {
     const hash = newHash();
-    const opened = await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.95, mode: 'enforce' });
-    await recordScanVerdict({ contentHash: hash, verdict: 'flagged', outcome: 'classifier_flag', provider: 'hive', mode: 'enforce', scores: {} });
+    const opened = await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.95, mode: 'enforce', scores: {} });
     const [listed] = (await listReportedCases({ limit: 200 })).filter((c) => c.case.id === opened.caseId);
     const flaggedAt = listed.case.snapshot?.scan?.flaggedAt ?? null;
 
@@ -92,8 +116,7 @@ describe('scan store', () => {
       contactEmail: null,
     });
     // The admin opens the one-report case (no flag)... then the publish gate flags the hash.
-    await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.98, mode: 'shadow' });
-    await recordScanVerdict({ contentHash: hash, verdict: 'flagged', outcome: 'classifier_flag', provider: 'hive', mode: 'shadow', scores: {} });
+    await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.98, mode: 'shadow', scores: {} });
 
     await expect(
       closeReportedCase({ caseId: reported.caseId, outcome: 'dismissed', actorUserId: 'admin-1', expectedReportCount: 1, expectedScanFlaggedAt: null }),

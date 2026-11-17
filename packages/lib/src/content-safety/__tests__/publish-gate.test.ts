@@ -102,7 +102,6 @@ describe('gatePublishAsset', () => {
   it('enforce holds a classifier flag, opens a review case and alerts, with no takedown', async () => {
     const { deps } = setup({ result: flag });
     await expect(gatePublishAsset(input, deps)).resolves.toEqual({ promote: false, reason: 'held' });
-    expect(deps.recordVerdict).toHaveBeenCalledWith(expect.objectContaining({ verdict: 'flagged', outcome: 'classifier_flag' }));
     expect(deps.openReviewCase).toHaveBeenCalledWith(expect.objectContaining({ contentHash: HASH, score: 0.97, mode: 'enforce' }));
     expect(deps.alert).toHaveBeenCalledWith({ event: 'scan_flagged', caseId: 'case-rv', category: 'csam' });
     expect(deps.takedownHashMatch).not.toHaveBeenCalled();
@@ -132,11 +131,15 @@ describe('gatePublishAsset', () => {
     expect(deps.alert).not.toHaveBeenCalled();
   });
 
-  it('the review case is opened before the flag is recorded, and the verdict names the case', async () => {
+  it('the flag is recorded with its case, in one write, never on its own after it', async () => {
+    // A separate verdict write after the case opens could land after an admin dismissed the case and recorded the
+    // hash clean, putting back a flag no open case stands behind.
     const { deps } = setup({ result: flag });
     await gatePublishAsset(input, deps);
-    expect(deps.openReviewCase.mock.invocationCallOrder[0]).toBeLessThan(deps.recordVerdict.mock.invocationCallOrder[0]);
-    expect(deps.recordVerdict).toHaveBeenCalledWith(expect.objectContaining({ verdict: 'flagged', scores: expect.objectContaining({ caseId: 'case-rv' }) }));
+    expect(deps.openReviewCase).toHaveBeenCalledWith(
+      expect.objectContaining({ contentHash: HASH, scores: expect.objectContaining({ category: 'csam', score: 0.97 }) }),
+    );
+    expect(deps.recordVerdict).not.toHaveBeenCalled();
   });
 
   it('logs only an error name, never its message (a query error carries the hash)', async () => {
@@ -164,8 +167,8 @@ describe('gatePublishAsset', () => {
   it('shadow promotes a flag but records it and opens the case exactly as enforce does', async () => {
     const { deps } = setup({ mode: 'shadow', result: flag });
     await expect(gatePublishAsset(input, deps)).resolves.toEqual({ promote: true });
-    expect(deps.recordVerdict).toHaveBeenCalledWith(expect.objectContaining({ verdict: 'flagged', mode: 'shadow' }));
-    expect(deps.openReviewCase).toHaveBeenCalled();
+    expect(deps.openReviewCase).toHaveBeenCalledWith(expect.objectContaining({ mode: 'shadow' }));
+    expect(deps.recordVerdict).not.toHaveBeenCalled();
     expect(deps.alert).toHaveBeenCalled();
   });
 
@@ -265,9 +268,10 @@ describe('gatePublishAsset', () => {
 
   it('a failed verdict write never changes the decision', async () => {
     const { deps } = setup({ result: flag });
+    deps.openReviewCase.mockRejectedValueOnce(new Error('db down'));
     deps.recordVerdict.mockRejectedValueOnce(new Error('db down'));
     await expect(gatePublishAsset(input, deps)).resolves.toEqual({ promote: false, reason: 'held' });
-    expect(deps.openReviewCase).toHaveBeenCalled();
+    expect(deps.recordVerdict).toHaveBeenCalled();
   });
 
   it('audit details carry IDs and scores only', async () => {

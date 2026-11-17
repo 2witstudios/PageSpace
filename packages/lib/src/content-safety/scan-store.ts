@@ -38,8 +38,9 @@ export async function findScanVerdict(contentHash: string): Promise<StoredVerdic
   };
 }
 
-/** The latest verdict for a hash replaces the previous one. */
-export async function recordScanVerdict(record: VerdictRecord, now: Date = new Date()): Promise<void> {
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+async function upsertVerdict(executor: typeof db | Tx, record: VerdictRecord, now: Date): Promise<void> {
   const values = {
     verdict: record.verdict,
     outcome: record.outcome,
@@ -48,16 +49,28 @@ export async function recordScanVerdict(record: VerdictRecord, now: Date = new D
     scores: record.scores,
     scannedAt: now,
   };
-  await db
+  await executor
     .insert(contentScans)
     .values({ contentHash: record.contentHash, ...values })
     .onConflictDoUpdate({ target: contentScans.contentHash, set: values });
 }
 
+/** The latest verdict for a hash replaces the previous one. Not for a classifier flag: that goes through `openScanReviewCase`. */
+export async function recordScanVerdict(record: VerdictRecord, now: Date = new Date()): Promise<void> {
+  await upsertVerdict(db, record, now);
+}
+
 /**
  * Open the review case for a flagged hash, or join the one already under
- * review for it (a report or an earlier flag). The case is categorised CSAM,
- * which puts it at the top of the queue; that is a triage label, not a finding.
+ * review for it (a report or an earlier flag), and record the flagged verdict
+ * in the same transaction. The case is categorised CSAM, which puts it at the
+ * top of the queue; that is a triage label, not a finding.
+ *
+ * The verdict is written under the case's row lock, the lock a close takes. A
+ * dismissal records the hash clean under that lock too, so the two serialise:
+ * either the flag lands first and the dismissal clears it, or the dismissal
+ * lands first and this flag opens a new case. A flagged verdict is never left
+ * behind a closed case, holding the file with nobody reviewing it.
  */
 export async function openScanReviewCase(input: {
   contentHash: string;
@@ -65,6 +78,8 @@ export async function openScanReviewCase(input: {
   category: string;
   score: number;
   mode: ContentScanMode;
+  /** Stored on the verdict, with the case ID added. */
+  scores: Record<string, unknown>;
 }, now: Date = new Date()): Promise<{ caseId: string; created: boolean; firstFlag: boolean }> {
   const scan: NonNullable<ContentCaseSnapshot['scan']> = {
     source: 'scan_flagged',
@@ -74,6 +89,19 @@ export async function openScanReviewCase(input: {
     mode: input.mode,
     flaggedAt: now.toISOString(),
   };
+  const recordFlag = (tx: Tx, caseId: string) =>
+    upsertVerdict(
+      tx,
+      {
+        contentHash: input.contentHash,
+        verdict: 'flagged',
+        outcome: 'classifier_flag',
+        provider: input.provider,
+        mode: input.mode,
+        scores: { ...input.scores, caseId },
+      },
+      now,
+    );
   return db.transaction(async (tx) => {
     const [opened] = await tx
       .insert(contentCases)
@@ -92,7 +120,10 @@ export async function openScanReviewCase(input: {
         where: sql`${contentCases.status} = 'reported'`,
       })
       .returning({ id: contentCases.id });
-    if (opened) return { caseId: opened.id, created: true, firstFlag: true };
+    if (opened) {
+      await recordFlag(tx, opened.id);
+      return { caseId: opened.id, created: true, firstFlag: true };
+    }
 
     // Lock the case under review, as a report does, and see whether it was already flagged.
     const [current] = await tx
@@ -113,6 +144,7 @@ export async function openScanReviewCase(input: {
       })
       .where(eq(contentCases.id, current.id))
       .returning({ id: contentCases.id });
+    await recordFlag(tx, existing.id);
     return { caseId: existing.id, created: false, firstFlag };
   });
 }

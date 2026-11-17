@@ -85,10 +85,18 @@ export interface PublishGateDeps {
   /** PR 2's global takedown, category csam. Opens its own case and alerts. Returns the case ID. */
   takedownHashMatch(input: { contentHash: string; lists: string[] }): Promise<{ caseId?: string }>;
   /**
-   * Open, or join, the case under review for the hash. `firstFlag` is true when the case had no scan flag
-   * before (it was opened now, or by a report): that is when staff must be alerted.
+   * Open, or join, the case under review for the hash, and record the flagged verdict (with `scores` and the case
+   * ID) in the same transaction. `firstFlag` is true when the case had no scan flag before (it was opened now, or
+   * by a report): that is when staff must be alerted.
    */
-  openReviewCase(input: { contentHash: string; provider: string; category: string; score: number; mode: 'shadow' | 'enforce' }): Promise<{ caseId: string; created: boolean; firstFlag: boolean }>;
+  openReviewCase(input: {
+    contentHash: string;
+    provider: string;
+    category: string;
+    score: number;
+    mode: 'shadow' | 'enforce';
+    scores: Record<string, unknown>;
+  }): Promise<{ caseId: string; created: boolean; firstFlag: boolean }>;
   alert(alert: ScanAlert): Promise<void>;
   audit(event: ScanAuditEvent): void;
   /** Called with a configuration problem, every time; the caller logs it once. */
@@ -193,9 +201,11 @@ export async function gatePublishAsset(input: PublishGateInput, deps: PublishGat
     }
   }
 
-  // The case is opened BEFORE the flag is recorded. A recorded flag short-circuits later publishes with no new
-  // case, so a flag recorded without its case would never reach a person until the verdict expired. If the case
-  // cannot be opened, an error verdict is recorded instead: the next publish scans again and retries the case.
+  // A classifier flag is recorded WITH its case, in one transaction (`openReviewCase`). A recorded flag
+  // short-circuits later publishes with no new case, so a flag recorded without an open case would hold the file
+  // with nobody reviewing it until the verdict expired: that is what a separate write after the case could do,
+  // landing after an admin dismissed the case and recorded the hash clean. If the case cannot be opened, an error
+  // verdict is recorded instead: the next publish scans again and retries the case.
   let record = decision.record;
   let scores = scoresFor(outcome, contentType);
   if (decision.reviewCase && outcome.kind === 'scanned' && outcome.result.kind === 'classifier_flag') {
@@ -206,9 +216,10 @@ export async function gatePublishAsset(input: PublishGateInput, deps: PublishGat
         category: outcome.result.category,
         score: outcome.result.score,
         mode,
+        scores,
       });
       caseId = opened.caseId;
-      scores = { ...scores, caseId: opened.caseId };
+      record = null;
       if (opened.created || opened.firstFlag) {
         await deps.alert({ event: 'scan_flagged', caseId: opened.caseId, category: 'csam' }).catch((error: unknown) =>
           deps.logError('Publish gate: the alert for a flagged scan failed', { ...context, caseId: opened.caseId, error: errorLabel(error) }),
