@@ -34,7 +34,7 @@ Bytes entering storage:
 | # | Entry point | Gate at | On a blocked hash |
 |---|---|---|---|
 | 1 | Page-file presign | `apps/web/src/app/api/upload/presign/route.ts:80` | 422 before the storage probe, slot or presigned URL |
-| 2 | Page-file complete | `apps/web/src/app/api/upload/complete/route.ts:252` (declared hash), `:286` (stored bytes re-hashed before the commit) | 422, slot and pending-upload row released, no page or `files` row; bytes that don't match the declared hash are refused and deleted |
+| 2 | Page-file complete | `apps/web/src/app/api/upload/complete/route.ts:260` (declared hash), `:305` (staged bytes hashed, then copied to the served key) | 422, slot and pending-upload row released, no page or `files` row; staged bytes that don't match the declared hash are refused and deleted |
 | 3 | Channel + DM attachment presign | `apps/web/src/lib/upload/attachment-direct.ts:92` | 422 before the storage probe, slot or presigned URL |
 | 4 | Channel + DM attachment complete | `apps/web/src/lib/upload/attachment-direct.ts:191` | 422 before processor verify, slot released, no `files` row |
 | 5 | Server-side image writer (AI image generation) | `apps/web/src/lib/upload/create-file-page.ts:260` | throws `ContentBlockedError` before `putObject` |
@@ -48,7 +48,7 @@ An existing hash attached to something new, with no upload (added after review):
 | 8 | Bulk copy of pages, including files embedded in copied documents and canvases | `apps/web/src/app/api/pages/bulk-copy/route.ts:163` (`screenCopy`, whole tree) | 422 before the transaction opens; nothing is written |
 | 9 | Channel message send | `apps/web/src/app/api/channels/[pageId]/messages/route.ts:253` | 422 before any insert |
 | 10 | DM send | `apps/web/src/app/api/messages/[conversationId]/route.ts:328` | 422 before any insert |
-| 11 | v1 chat completions — every request message | `apps/web/src/app/api/v1/chat/completions/route.ts:167` | 422 before the credit hold; the model is never called |
+| 11 | v1 chat completions — every request message | `apps/web/src/app/api/v1/chat/completions/route.ts:166` | 422 before the credit hold; the model is never called |
 
 Notes:
 
@@ -90,17 +90,28 @@ Notes:
   rather than dropped, because those callers legitimately resend the `read_page` results the server gave them.
   A threaded call with attachments makes two blocklist queries, the route's and persistence's.
   The route's audit event has no IP or user agent, because the screen takes no `Request`.
-- **2** hashes the stored object (`digestStoredObject`, `apps/web/src/lib/upload/s3-effects.ts`) before
-  anything is committed. A presigned PUT binds a key and a length, never the bytes, so this is the only point
-  where the declared hash is proven.
-  - The read is streamed and stops past the size reserved at presign. SHA-256 runs at ~2 GB/s in constant
-    memory (measured: 1 GB in ~0.5 s), so the S3 read dominates: about 10 s for the 1 GB tier limit at
-    100 MB/s, less than the client's own upload of the same bytes.
-  - On a mismatch the object is deleted, unless a `files` row already owns the key; then earlier pages
-    depend on it, and it is logged and left alone.
+- **2** proves the stored bytes before anything is committed.
+  - A presigned PUT binds a key and a length, never the bytes, and stays valid for its 15-minute TTL. So
+    presign signs it for a per-job staging key, `uploads/staging/<jobId>`
+    (`apps/web/src/lib/upload/upload-staging.ts`), never for the served `files/<hash>/original`.
+  - `/complete` hashes the staging object (`digestStoredObject`, streamed, stopping past the size reserved at
+    presign). It then server-side copies exactly the version it hashed to the served key (`copyVerifiedObject`:
+    `CopySourceIfMatch` on that ETag, which Tigris evaluates against its latest state), then deletes staging.
+  - So only verified bytes are ever written to the served key, and a re-PUT after `/complete` lands on a
+    staging key nothing serves. A staging object changed between the hash and the copy copies nothing (409).
+    Two completions racing on one hash can only write identical, verified bytes.
+  - With no staging object (the dedup fast-path skips the PUT), the existing served object is hashed instead.
+    On a mismatch it is deleted, unless a `files` row owns it; then earlier pages depend on it, and it is
+    logged and left in place.
+  - `/cancel` deletes the job's staging object. A PUT that is never completed or cancelled leaves an orphan
+    staging object, nothing serves it; see Follow-up 9.
+  - Cost: SHA-256 runs at ~2 GB/s in constant memory (measured: 1 GB in ~0.5 s), so the S3 read dominates:
+    about 10 s for the 1 GB tier limit at 100 MB/s, less than the client's own upload of the same bytes. The
+    copy is server-side and doesn't pass through the app.
   - The blocklist check runs first, on the declared hash, so a blocked hash is refused without reading
     anything. Equal hashes mean that check covered the verified bytes.
   - `create-file-page` (5) has no such gap: it hashes the bytes it writes itself.
+  - Clients are unchanged: they PUT to the URL presign returns. The `key` field still names the served key.
 - **8** also reads the `content` of every copied DOCUMENT and CANVAS for embedded stored files
   (`/api/files/{id}/view|thumbnail|download`, `/dashboard/{driveId}/{pageId}/view`;
   `apps/web/src/lib/upload/stored-file-references.ts`). Each id is resolved: a page's own file columns,
@@ -234,6 +245,18 @@ written only by the web app.
    `guardReadPageToolForVision` degrades the result to metadata before conversion. The back-fill note stands,
    because `extractToolResults` reads the `parts` of every assistant message in the request. A refused
    request now returns before the back-fill runs.)*
+
+9. **Orphaned staging objects.** A presigned PUT that is never completed or cancelled leaves an
+   `uploads/staging/<jobId>` object, and so does a re-PUT after `/complete`, until the URL expires. Nothing
+   serves these objects. Before this PR the same abandoned PUT left an unreferenced `files/<hash>/original`
+   instead. Add a bucket lifecycle rule that expires `uploads/staging/` after a day; it is infrastructure, not
+   app code.
+10. **Channel and DM attachment uploads still sign their PUT for the served key.**
+    `attachment-direct.ts` (entry points 3 and 4) verifies the bytes synchronously through the processor
+    before any row exists. But the presigned PUT stays valid for its TTL, so a re-PUT after completion can
+    overwrite the verified object, the same class as entry point 2's overwrite. This predates the branch. The
+    fix is the same staging-and-copy, but the processor's verify reads the served key, so it touches the
+    processor seam too.
 
 ## Erasure
 
@@ -399,3 +422,15 @@ Commands, round 2 (test database migrated to head):
 | `bun run typecheck` (`NODE_OPTIONS=--max-old-space-size=8192`, `--concurrency=4`) | PASS, 23 of 23 |
 | `eslint` on every `apps/web` file changed since `7b9775063` | Clean |
 | `apps/web`: `bunx vitest run src/lib/repositories src/lib/ai src/lib/upload src/app/api/upload src/app/api/channels src/app/api/messages src/app/api/pages src/app/api/v1 src/app/api/ai src/app/api/files` | PASS: 446 files, 7,848 tests |
+
+Round 3: CodeRabbit's replies on `fb9dedbbc`, inside the round-2 threads:
+
+| Finding | Outcome |
+|---|---|
+| upload: the presigned PUT can overwrite the object after `/complete` verified it | Fixed in `7527ae7f4`: staging key plus a verified-version copy. Entry point 2. The same class in the attachment path is recorded as Follow-up 10. |
+| v1: a client `mimeType` like `image/png;charset=utf-8` made the synthetic `data:` URL unparseable, so the hash was skipped | Fixed in `707154478`. The bytes are hashed regardless of type, and invalid base64 fails closed. Tested through the real screen. |
+| bulk copy: `/api/files/{id}/view/` with a trailing slash wasn't parsed | Fixed in `707154478`, with parser and route tests. |
+| report: item 8 path, vision-only condition, back-fill sentence | CodeRabbit confirmed the correction and resolved the thread. |
+
+Commands, round 3: `bun run typecheck` PASS, 23 of 23. `eslint` on the changed upload files is clean. The
+`apps/web` sweep above, rerun against the test database: PASS, 447 files, 7,873 tests.
