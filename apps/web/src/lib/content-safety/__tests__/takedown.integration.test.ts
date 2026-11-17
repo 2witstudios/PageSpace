@@ -105,6 +105,8 @@ const json = (url: string, body: unknown) =>
   new Request(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
 describe('content takedown — upload, publish, take down, removed, re-upload refused', () => {
+  let takedownLogStart = 0;
+
   beforeAll(async () => {
     fakeS3.current = s3;
     vi.stubEnv('BUCKET_NAME', UPLOADS);
@@ -163,13 +165,18 @@ describe('content takedown — upload, publish, take down, removed, re-upload re
     );
     expect(presign.status).toBe(200);
     const { jobId, url } = (await presign.json()) as { jobId: string; url: string };
-    expect(url).toContain(`files/${HASH}/original`);
+    // The PUT is signed for the job's staging key, never the served key.
+    const stagingKey = `uploads/staging/${jobId}`;
+    expect(url).toBe(`https://signed.test/${stagingKey}`);
 
     // The browser's PUT to the presigned URL.
-    s3.put(UPLOADS, `files/${HASH}/original`, BYTES, 'image/png');
+    s3.put(UPLOADS, stagingKey, BYTES, 'image/png');
 
     const complete = await completeUpload(json('http://localhost/api/upload/complete', { jobId, title: 'photo.png' }));
     expect(complete.status).toBeLessThan(300);
+    // complete hashed the staged bytes and published them to the served key.
+    expect(s3.has(UPLOADS, `files/${HASH}/original`)).toBe(true);
+    expect(s3.has(UPLOADS, stagingKey)).toBe(false);
 
     const [page] = await db.select({ id: pages.id }).from(pages).where(eq(pages.driveId, driveId));
     pageId = page.id;
@@ -208,6 +215,7 @@ describe('content takedown — upload, publish, take down, removed, re-upload re
   });
 
   it('2. a global takedown runs every step and finishes the case', async () => {
+    takedownLogStart = s3.log.length;
     const result = await executeTakedown(
       { action: 'global', contentHash: HASH, category: 'csam', reason: 'integration test', suspendUploader: true },
       admin,
@@ -245,17 +253,19 @@ describe('content takedown — upload, publish, take down, removed, re-upload re
     const [block] = await db.select().from(contentBlocks).where(eq(contentBlocks.contentHash, HASH));
     expect(block).toMatchObject({ category: 'csam', source: 'admin', caseId, createdBy: admin });
 
-    const evidenceCopy = s3.log.findIndex((line) => line.startsWith(`CopyObjectCommand ${EVIDENCE}`));
-    const firstPrivateDelete = s3.log.findIndex((line) => line.startsWith('Delete') && line.includes(` ${UPLOADS} `));
+    // Only the takedown's own commands: the upload in 1a already copied and deleted its per-job staging keys.
+    const log = s3.log.slice(takedownLogStart);
+    const evidenceCopy = log.findIndex((line) => line.startsWith(`CopyObjectCommand ${EVIDENCE}`));
+    const firstPrivateDelete = log.findIndex((line) => line.startsWith('Delete') && line.includes(` ${UPLOADS} `));
     expect(evidenceCopy).toBeGreaterThan(-1);
     expect(evidenceCopy).toBeLessThan(firstPrivateDelete);
     // The public asset was kept in PRIVATE storage before its public key went (a private key's existence proves
     // nothing about its bytes), and nothing was ever parked in the public bucket.
-    const hold = s3.log.findIndex((line) => line === `PutObjectCommand ${UPLOADS} content-hold/${caseId}/${HASH}`);
-    const firstPublicDelete = s3.log.findIndex((line) => line.startsWith('Delete') && line.includes(` ${PUBLISH} `));
+    const hold = log.findIndex((line) => line === `PutObjectCommand ${UPLOADS} content-hold/${caseId}/${HASH}`);
+    const firstPublicDelete = log.findIndex((line) => line.startsWith('Delete') && line.includes(` ${PUBLISH} `));
     expect(hold).toBeGreaterThan(-1);
     expect(hold).toBeLessThan(firstPublicDelete);
-    expect(s3.log.some((line) => /^(Put|Copy)ObjectCommand/.test(line) && line.includes(` ${PUBLISH} `) && line.includes(HASH) && s3.log.indexOf(line) > evidenceCopy)).toBe(false);
+    expect(log.some((line) => /^(Put|Copy)ObjectCommand/.test(line) && line.includes(` ${PUBLISH} `) && line.includes(HASH) && log.indexOf(line) > evidenceCopy)).toBe(false);
   });
 
   it('4. the view and download routes answer a neutral 410 instead of a dead link', async () => {
