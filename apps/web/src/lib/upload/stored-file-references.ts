@@ -123,26 +123,56 @@ function parsedReferenceIds(content: string): string[] {
   return ids;
 }
 
+/** Free text split into URL-like tokens: anything between whitespace, quotes, brackets and separators. */
+const TEXT_TOKEN_SEPARATOR = /[\s"'`()<>[\]{},;=]+/;
+
 /**
- * Ids referenced from the raw text, in every form a reference can take on its
- * way to a request: raw, HTML character references resolved, and the
- * percent-decoding of each. Catches references outside attributes (markdown).
+ * Ids referenced from the raw text, outside attributes (markdown, script and
+ * style bodies), in every form a reference can take on its way to a request:
+ * raw, HTML character references resolved, JavaScript string escapes resolved,
+ * and the percent-decoding of each. Each form is matched by pattern, and each
+ * URL-like token in it is normalised through `new URL` as attribute values are,
+ * so dot segments, `%2e` and backslashes resolve as the browser resolves them.
  */
 function textReferenceIds(content: string): string[] {
   const html = decodeHTML(content);
-  const forms = new Set([content, decodePercentEscapes(content), html, decodePercentEscapes(html)]);
+  const unescaped = [content, html, decodeJsEscapes(content), decodeJsEscapes(html)];
+  const forms = new Set(unescaped.flatMap((text) => [text, decodePercentEscapes(text)]));
   const ids: string[] = [];
   for (const text of forms) {
     for (const match of text.matchAll(STORED_FILE_REFERENCE)) ids.push(match[1] ?? match[2]);
+    for (const token of text.split(TEXT_TOKEN_SEPARATOR)) {
+      if (!/files|dashboard/i.test(token)) continue;
+      const id = servedIdOf(token);
+      if (id) ids.push(id);
+    }
   }
   return ids;
 }
 
 /**
+ * Path dot segments and repeated slashes collapsed, as the URL parser and the
+ * router would collapse them (`api/./files`, `api/x/../files`, `api//files`).
+ * Over-collapsing is harmless here: it can only surface more mentions.
+ */
+function collapsePathSegments(text: string): string {
+  let current = text;
+  for (let round = 0; round < 64; round++) {
+    const next = current
+      .replace(/\/{2,}/g, '/')
+      .replace(/\/\.(?=\/)/g, '')
+      .replace(/\/(?!\.\.\/)[^/]+\/\.\.(?=\/)/g, '');
+    if (next === current) return next;
+    current = next;
+  }
+  return current;
+}
+
+/**
  * `content` reduced to the skeleton the backstop counts in: every encoding
  * peeled (HTML references, percent, CSS and JavaScript escapes, repeatedly), backslashes
- * turned into slashes, and every whitespace, control and format character
- * (zero-width included) removed.
+ * turned into slashes, every whitespace, control and format character
+ * (zero-width included) removed, and dot segments and repeated slashes collapsed.
  */
 function backstopSkeleton(content: string): string {
   let text = content;
@@ -151,7 +181,7 @@ function backstopSkeleton(content: string): string {
     if (next === text) break;
     text = next;
   }
-  return text.replace(/\\/g, '/').replace(/[\s\p{Cc}\p{Cf}]/gu, '');
+  return collapsePathSegments(text.replace(/\\/g, '/').replace(/[\s\p{Cc}\p{Cf}]/gu, ''));
 }
 
 export interface StoredFileReferenceScan {

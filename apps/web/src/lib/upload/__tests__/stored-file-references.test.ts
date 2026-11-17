@@ -162,9 +162,13 @@ describe('scanStoredFileReferences', () => {
     expect(scanStoredFileReferences('<a href="/dashboard/drive-1/page-a">open</a>')).toEqual({ ids: [], complete: true });
   });
 
-  it('given JavaScript string escapes in script text, should report the scan incomplete', () => {
-    expect(scanStoredFileReferences('<script>new Image().src="/api\\u002ffiles\\u002fpage-a/view"</script>').complete).toBe(false);
-    expect(scanStoredFileReferences('<script>x="\\x2fdashboard\\x2fd\\x2fpage-a\\x2fview"</script>').complete).toBe(false);
+  it('given JavaScript string escapes in script text, should resolve them and return the id', () => {
+    expect(scanStoredFileReferences('<script>new Image().src="/api\\u002ffiles\\u002fpage-a/view"</script>')).toEqual({ ids: ['page-a'], complete: true });
+    expect(scanStoredFileReferences('<script>x="\\x2fdashboard\\x2fd\\x2fpage-a\\x2fview"</script>')).toEqual({ ids: ['page-a'], complete: true });
+  });
+
+  it('given JavaScript escapes that only the backstop can peel, should report the scan incomplete', () => {
+    expect(scanStoredFileReferences('<script>x="/api\\u002f fil\\x65s/page-a/view"</script>').complete).toBe(false);
   });
 
   it('given CSS string line continuations (backslash-newline, removed by the CSS tokenizer), should return the id', () => {
@@ -180,6 +184,24 @@ describe('scanStoredFileReferences', () => {
 
   it('given a line continuation the URL candidates cannot resolve, should report the scan incomplete', () => {
     expect(scanStoredFileReferences('<p>/api/fi\\\nles/page-a/view</p>').complete).toBe(false);
+  });
+
+  it('given dot segments in free text (script bodies, markdown), should normalise them as the browser does and return the id', () => {
+    const content = [
+      '<script>new Image().src="/api/./files/page-a/view"</script>',
+      '<script>fetch(\'/api/%2e/files/page-b/thumbnail\')</script>',
+      '![x](/api/x/%2E%2e/files/page-c/download)',
+      '<script>u = `https://cdn.example.com/dashboard/d/./page-d/view`</script>',
+    ].join('\n');
+    const scan = scanStoredFileReferences(content);
+    expect(scan.ids.sort()).toEqual(['page-a', 'page-b', 'page-c', 'page-d']);
+    expect(scan.complete).toBe(true);
+  });
+
+  it('given a dot-segment or doubled-slash mention the tokens cannot resolve, should report the scan incomplete', () => {
+    expect(scanStoredFileReferences('<p>api/ ./files/page-a/view</p>').complete).toBe(false);
+    expect(scanStoredFileReferences('<p>/api//files/page-a/view</p>').complete).toBe(false);
+    expect(scanStoredFileReferences('<p>/dashboard/d/x/../ page-a/view</p>').complete).toBe(false);
   });
 
   it('given every occurrence accounted for, should report the scan complete', () => {

@@ -999,6 +999,21 @@ describe('POST /api/pages/bulk-copy — content blocklist', () => {
       expect(mockTransaction).not.toHaveBeenCalled();
     });
 
+    it('refuses a CANVAS whose script references a blocked file through a dot segment', async () => {
+      mockTree(
+        [mockSourcePage({ type: 'CANVAS', content: '<script>new Image().src="/api/./files/file-page-1/view"</script>' })],
+        [],
+        [{ id: 'file-page-1', filePath: BLOCKED_HASH, contentHash: BLOCKED_HASH }],
+      );
+      mockFindBlockedUploads.mockResolvedValue(new Set([BLOCKED_HASH]));
+
+      const response = await POST(createRequest(validBody));
+
+      expect(response.status).toBe(422);
+      expect(mockFindBlockedUploads).toHaveBeenCalledWith([BLOCKED_HASH], expect.anything());
+      expect(mockTransaction).not.toHaveBeenCalled();
+    });
+
     it('fails closed and audits when content mentions api/files/ in a form the scan cannot account for', async () => {
       mockTree([mockSourcePage({ content: '<img src="/api/files/file-&#8203;page-1/view">' })], [], []);
       const request = createRequest(validBody);
