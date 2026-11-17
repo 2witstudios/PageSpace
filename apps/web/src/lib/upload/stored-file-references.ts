@@ -45,23 +45,40 @@ function decodeCssEscapes(text: string): string {
   });
 }
 
-/** Every URL a CSS fragment fetches: `url(...)` and `@import "..."`, after escapes are resolved. */
+/**
+ * JavaScript string escapes (`\u002f`, `\u{2f}`, `\x2f`) resolved. Only the
+ * backstop uses this: a reference spelled that way in script text can't be
+ * resolved statically, but it must not hide from the count.
+ */
+function decodeJsEscapes(text: string): string {
+  return text.replace(/\\u\{([0-9a-fA-F]{1,6})\}|\\u([0-9a-fA-F]{4})|\\x([0-9a-fA-F]{2})/g, (whole, braced: string | undefined, u4: string | undefined, x2: string | undefined) => {
+    const codePoint = parseInt(braced ?? u4 ?? x2 ?? '', 16);
+    return codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : whole;
+  });
+}
+
+/**
+ * Every URL a CSS fragment can fetch, after escapes are resolved: each unquoted
+ * `url(...)`, and every quoted string (`url("...")`, `@import "..."`,
+ * `image-set("..." 1x)` and anything else that takes a string URL). Each
+ * pattern is linear: no two quantifiers compete for the same characters.
+ */
 function cssUrls(css: string): string[] {
   const decoded = decodeCssEscapes(css);
   const urls: string[] = [];
-  for (const match of decoded.matchAll(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*?))\s*\)/gi)) {
-    urls.push(match[1] ?? match[2] ?? match[3] ?? '');
-  }
-  for (const match of decoded.matchAll(/@import\s+(?:"([^"]*)"|'([^']*)')/gi)) {
-    urls.push(match[1] ?? match[2] ?? '');
-  }
+  for (const match of decoded.matchAll(/url\(\s*([^)\s"']*)/gi)) urls.push(match[1]);
+  for (const match of decoded.matchAll(/"([^"]*)"|'([^']*)'/g)) urls.push(match[1] ?? match[2] ?? '');
   return urls;
 }
 
-/** The URL candidates in one attribute value: the whole value, each `srcset` candidate, each CSS `url()`. */
+/**
+ * The URL candidates in one attribute value: the whole value, each `srcset`
+ * candidate, each CSS URL, and whatever follows a `url=` (a meta refresh target).
+ */
 function attributeUrlCandidates(value: string): string[] {
   const srcsetParts = value.split(',').map((part) => part.trim().split(/\s+/)[0] ?? '');
-  return [value, ...srcsetParts, ...cssUrls(value)];
+  const refreshTargets = value.split(/url\s*=\s*/i).slice(1).map((target) => target.replace(/^["']|["']$/g, ''));
+  return [value, ...srcsetParts, ...refreshTargets, ...cssUrls(value)];
 }
 
 /**
@@ -117,14 +134,14 @@ function textReferenceIds(content: string): string[] {
 
 /**
  * `content` reduced to the skeleton the backstop counts in: every encoding
- * peeled (HTML references, percent and CSS escapes, repeatedly), backslashes
+ * peeled (HTML references, percent, CSS and JavaScript escapes, repeatedly), backslashes
  * turned into slashes, and every whitespace, control and format character
  * (zero-width included) removed.
  */
 function backstopSkeleton(content: string): string {
   let text = content;
   for (let round = 0; round < 4; round++) {
-    const next = decodePercentEscapes(decodeHTML(decodeCssEscapes(text)));
+    const next = decodePercentEscapes(decodeHTML(decodeCssEscapes(decodeJsEscapes(text))));
     if (next === text) break;
     text = next;
   }
@@ -135,7 +152,7 @@ export interface StoredFileReferenceScan {
   /** Every distinct file or page id the content references, in first-seen order. */
   ids: string[];
   /**
-   * False when the content mentions `api/files/` in a way none of `ids`
+   * False when the content mentions `api/files/` or `dashboard/{d}/{id}/view` in a way none of `ids`
    * accounts for: an encoding this scan doesn't model. Callers must treat the
    * content as unverifiable and fail closed.
    */
@@ -147,13 +164,20 @@ export interface StoredFileReferenceScan {
  * (every attribute and inline style, normalised through `new URL`) and by
  * matching the free text, plus a fail-closed backstop: in the content with every
  * encoding peeled and all whitespace and control characters removed, each
- * `api/files/` must be followed by an id the scan extracted.
+ * `api/files/` and each `dashboard/{d}/{id}/view` must name an id the scan extracted.
+ *
+ * Not covered: a URL that canvas script assembles at runtime (string joins).
+ * No static scan can see one.
  */
 export function scanStoredFileReferences(content: string): StoredFileReferenceScan {
   const ids = [...new Set([...parsedReferenceIds(content), ...textReferenceIds(content)])];
   const accounted = new Set(ids.map((id) => id.toLowerCase()));
-  const complete = [...backstopSkeleton(content).matchAll(/api\/files\/([a-zA-Z0-9_-]*)/gi)]
-    .every((match) => accounted.has(match[1].toLowerCase()));
+  const skeleton = backstopSkeleton(content);
+  const mentioned = [
+    ...[...skeleton.matchAll(/api\/files\/([a-zA-Z0-9_-]*)/gi)].map((match) => match[1]),
+    ...[...skeleton.matchAll(/dashboard\/[a-zA-Z0-9_-]*\/([a-zA-Z0-9_-]*)\/view/gi)].map((match) => match[1]),
+  ];
+  const complete = mentioned.every((id) => accounted.has(id.toLowerCase()));
   return { ids, complete };
 }
 

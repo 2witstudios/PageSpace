@@ -136,6 +136,37 @@ describe('scanStoredFileReferences', () => {
     expect(scanStoredFileReferences('<p>/api/ files/page-a/view</p>').complete).toBe(false);
   });
 
+  it('given an unclosed url( followed by a long whitespace run, should return promptly (no catastrophic backtracking)', () => {
+    const started = performance.now();
+    scanStoredFileReferences(`<p style="background:url(${' '.repeat(20000)}"></p>`);
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+
+  it('given CSS string URLs (image-set) and meta refresh targets, should return the id', () => {
+    const content = [
+      "<div style=\"background-image:image-set('/dashboard/d/page-a/vi\\65 w' 1x)\"></div>",
+      '<style>div{background:-webkit-image-set("/api/files/page-b/view" 1x)}</style>',
+      '<meta http-equiv="refresh" content="0;url=/dashboard/d/page-c/vi&#9;ew">',
+    ].join('\n');
+    const scan = scanStoredFileReferences(content);
+    expect(scan.ids.sort()).toEqual(['page-a', 'page-b', 'page-c']);
+    expect(scan.complete).toBe(true);
+  });
+
+  it('given a dashboard /view reference no extracted id accounts for, should report the scan incomplete', () => {
+    expect(scanStoredFileReferences('<p>/dashboard/d/ page-a/view</p>').complete).toBe(false);
+    expect(scanStoredFileReferences('<div style="x:image-set(\'/dashboard/d/\\66 oo/view\' 1x)"></div>').ids).toEqual(['foo']);
+  });
+
+  it('given a dashboard link that is not a /view embed, should stay complete', () => {
+    expect(scanStoredFileReferences('<a href="/dashboard/drive-1/page-a">open</a>')).toEqual({ ids: [], complete: true });
+  });
+
+  it('given JavaScript string escapes in script text, should report the scan incomplete', () => {
+    expect(scanStoredFileReferences('<script>new Image().src="/api\\u002ffiles\\u002fpage-a/view"</script>').complete).toBe(false);
+    expect(scanStoredFileReferences('<script>x="\\x2fdashboard\\x2fd\\x2fpage-a\\x2fview"</script>').complete).toBe(false);
+  });
+
   it('given every occurrence accounted for, should report the scan complete', () => {
     const scan = scanStoredFileReferences('<img src="/api/files/page-a/view"> ![a](/api/files/page-a/view) <img src="/api/files/page-b/thumbnail">');
     expect(scan.complete).toBe(true);
