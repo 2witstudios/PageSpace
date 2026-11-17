@@ -96,18 +96,22 @@ Notes:
     presign, for page files and for attachments, signs it for a per-job staging key `uploads/staging/<jobId>`
     (`upload-staging.ts`). It never signs for the served `files/<hash>/original`, so no client-held URL of
     either kind can write the served key.
-  - At completion, the staging object is copied server-side to a per-job holding key no client can write
-    (`uploads/verifying/<jobId>`), and staging is deleted. The holding copy is hashed (streamed, stopping past
+  - At completion, the staging object is copied server-side to a holding key unique to that attempt
+    (`uploads/verifying/<jobId>/<uuid>`), which no client and no concurrent completion of the same job can
+    write, and staging is deleted. The holding copy is hashed (streamed, stopping past
     the size reserved at presign); on a match exactly that copy is copied to the served key.
   - No ETag or object version is relied on. The bytes hashed are the bytes published, because nothing else
-    can write the holding key. Concurrent completions of one hash can only publish identical verified bytes.
+    can write the holding key. Two completions of one job each hash and publish their own copy, so one can't
+    swap the other's bytes. Concurrent completions of one hash can only publish identical verified bytes. A
+    holding copy that vanishes before publication is an error, not a success.
   - On a mismatch, or on any error, only the per-job keys are deleted, never the served key: other
     completions may own it, and an ownership read could be stale by the time a delete runs.
   - With no staging object (the dedup fast-path skips the PUT), page-file complete hashes the existing served
     object and refuses a mismatch without deleting it. Attachment complete goes on to the processor verify,
     which re-hashes the served object either way and supplies the true MIME type.
   - `/cancel` (both paths) deletes the job's staging object. The `sweep-expired` cron
-    (`upload-staging-sweep.ts`) deletes `uploads/staging/` and `uploads/verifying/` objects older than a day.
+    (`upload-staging-sweep.ts`) deletes `uploads/staging/` and `uploads/verifying/` objects older than a day,
+    listing each prefix to the end every run.
     That covers PUTs never completed or cancelled, re-PUTs after completion, and holding copies a crash left
     behind.
   - Cost: SHA-256 runs at ~2 GB/s in constant memory (measured: 1 GB in ~0.5 s), so the S3 read dominates:
@@ -452,3 +456,10 @@ Round 4: CodeRabbit's review of `dab298c61`:
 
 Commands, round 4: `bun run typecheck` PASS, 23 of 23. `eslint` on the changed files is clean. The `apps/web`
 sweep plus `src/app/api/cron`, against the test database: PASS, 475 files, 8,120 tests.
+
+Round 5: CodeRabbit's replies on `ff86c953b`:
+
+| Finding | Outcome |
+|---|---|
+| major — two concurrent completions of one job shared the holding key, so one could publish bytes the other never hashed | Fixed in `2922e4470`: the holding key is unique per attempt, and a vanished holding copy is an error. An interleaving regression test fails with a shared key and passes with the fix. |
+| minor — the staging sweep restarted at page one each run and could starve | Fixed in `2922e4470`: each run lists to the end, with a test for stale objects on page 15. |
