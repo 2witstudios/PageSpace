@@ -13,6 +13,16 @@ const id = z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/, 'Invalid I
 const contentHash = z.string().trim().regex(/^[0-9a-fA-F]{64}$/, 'Invalid content hash');
 const category = z.enum(['csam', 'malware', 'illegal_other', 'policy']);
 
+/**
+ * What a scoped action (one page or one drive's sites off the web) may be filed under. It blocks nothing:
+ * identical bytes in other accounts, and a re-upload, stay live. CSAM and malware are purged by hash, so
+ * only the global takedown acts on them.
+ */
+export const SCOPED_TAKEDOWN_CATEGORIES = ['illegal_other', 'policy'] as const;
+const scopedCategory = z.enum(SCOPED_TAKEDOWN_CATEGORIES, {
+  error: 'CSAM and malware are removed with a global takedown of the content hash, which blocks it everywhere',
+});
+
 export const takedownRequestSchema = z.discriminatedUnion('action', [
   // Purge a hash for every tenant. Never `policy`.
   z
@@ -34,9 +44,9 @@ export const takedownRequestSchema = z.discriminatedUnion('action', [
       path: ['skipPreservation'],
     }),
   // Scoped: one page off the web; other tenants' identical bytes untouched.
-  z.object({ action: z.literal('unpublish_page'), pageId: id, category, reason }),
+  z.object({ action: z.literal('unpublish_page'), pageId: id, category: scopedCategory, reason }),
   // Scoped: every published site of a drive parked and held.
-  z.object({ action: z.literal('park_drive'), driveId: id, category, reason }),
+  z.object({ action: z.literal('park_drive'), driveId: id, category: scopedCategory, reason }),
   // Lift the hold ONE drive-parking case placed. The drive stays parked while any other hold remains.
   z.object({ action: z.literal('restore_drive'), caseId: id, reason }),
   z.object({ action: z.literal('avatar'), userId: id, category, reason }),

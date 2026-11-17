@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { EyeOff, Search } from 'lucide-react';
 import type { ResolvedTarget } from '@pagespace/lib/content-safety/targets';
-import type { TakedownRequest } from '@pagespace/lib/content-safety/takedown-request';
+import { SCOPED_TAKEDOWN_CATEGORIES, type TakedownRequest } from '@pagespace/lib/content-safety/takedown-request';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -25,6 +25,16 @@ type ActionKind = 'global' | 'unpublish_page' | 'park_drive' | 'avatar';
 
 const GLOBAL_CATEGORIES: readonly TakedownCategory[] = ['csam', 'malware', 'illegal_other'];
 const ALL_CATEGORIES: readonly TakedownCategory[] = ['csam', 'malware', 'illegal_other', 'policy'];
+/** Unpublishing a page or parking a drive blocks nothing, so CSAM and malware go through the global takedown. */
+const SCOPED_CATEGORIES: readonly TakedownCategory[] = SCOPED_TAKEDOWN_CATEGORIES;
+const isScopedCategory = (value: TakedownCategory): value is (typeof SCOPED_TAKEDOWN_CATEGORIES)[number] =>
+  SCOPED_CATEGORIES.includes(value);
+
+function categoriesFor(kind: ActionKind): readonly TakedownCategory[] {
+  if (kind === 'global') return GLOBAL_CATEGORIES;
+  if (kind === 'avatar') return ALL_CATEGORIES;
+  return SCOPED_CATEGORIES;
+}
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -113,9 +123,9 @@ export function TargetPanel() {
             : {}),
         };
       case 'unpublish_page':
-        return target.page ? { action: 'unpublish_page', pageId: target.page.id, category, reason } : null;
+        return target.page && isScopedCategory(category) ? { action: 'unpublish_page', pageId: target.page.id, category, reason } : null;
       case 'park_drive':
-        return target.drive ? { action: 'park_drive', driveId: target.drive.id, category, reason } : null;
+        return target.drive && isScopedCategory(category) ? { action: 'park_drive', driveId: target.drive.id, category, reason } : null;
       case 'avatar':
         return target.user ? { action: 'avatar', userId: target.user.id, category, reason } : null;
     }
@@ -138,7 +148,8 @@ export function TargetPanel() {
       description: (
         <span>
           Removes the page from the web. The file itself is not deleted or blocked, and identical files in other
-          accounts are untouched. The author can publish it again.
+          accounts are untouched. The author can publish it again. For CSAM or malware, use a global takedown
+          of the content hash instead.
         </span>
       ),
       confirmLabel: 'Unpublish page',
@@ -148,7 +159,8 @@ export function TargetPanel() {
       description: (
         <span>
           Takes the drive&rsquo;s subdomain and custom domains off the web and holds them: nothing can be published
-          to them again until the hold is lifted. No content is deleted.
+          to them again until the hold is lifted. No content is deleted or blocked; for CSAM or malware, use a
+          global takedown of the content hash instead.
         </span>
       ),
       confirmLabel: 'Park sites',
@@ -352,7 +364,7 @@ export function TargetPanel() {
           title={DIALOGS[dialog].title}
           description={DIALOGS[dialog].description}
           confirmLabel={DIALOGS[dialog].confirmLabel}
-          categories={dialog === 'global' ? GLOBAL_CATEGORIES : ALL_CATEGORIES}
+          categories={categoriesFor(dialog)}
           globalOptions={
             dialog === 'global'
               ? { uploaderCount: refs?.uploaderUserIds.length ?? 0, uploaderCountIncomplete: refs?.aiMessageScanFailed === true }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { takedownRequestSchema } from '../takedown-request';
+import { SCOPED_TAKEDOWN_CATEGORIES, takedownRequestSchema } from '../takedown-request';
 
 const HASH = 'a'.repeat(64);
 const parse = (value: unknown) => takedownRequestSchema.safeParse(value);
@@ -10,7 +10,7 @@ describe('takedownRequestSchema', () => {
   });
 
   it.each(['global', 'unpublish_page', 'park_drive', 'avatar'] as const)('requires a reason for %s', (action) => {
-    const base = { action, contentHash: HASH, pageId: 'p1', driveId: 'd1', userId: 'u1', category: 'malware' };
+    const base = { action, contentHash: HASH, pageId: 'p1', driveId: 'd1', userId: 'u1', category: 'illegal_other' };
     expect(parse({ ...base, reason: '   ' }).success).toBe(false);
     expect(parse(base).success).toBe(false);
     expect(parse({ ...base, reason: 'because' }).success).toBe(true);
@@ -18,6 +18,26 @@ describe('takedownRequestSchema', () => {
 
   it.each(['unpublish_page', 'park_drive', 'avatar'] as const)('requires a category for %s', (action) => {
     expect(parse({ action, pageId: 'p1', driveId: 'd1', userId: 'u1', reason: 'because' }).success).toBe(false);
+  });
+
+  // A scoped action takes one page or drive off the web and blocks nothing: identical bytes elsewhere, and a
+  // re-upload, stay live. CSAM and malware are purged by hash, so only the global takedown may act on them.
+  it.each(['unpublish_page', 'park_drive'] as const)('refuses %s under csam or malware, pointing to the global takedown', (action) => {
+    for (const category of ['csam', 'malware']) {
+      const result = parse({ action, pageId: 'p1', driveId: 'd1', reason: 'because', category });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]?.message).toMatch(/global takedown/i);
+    }
+    for (const category of SCOPED_TAKEDOWN_CATEGORIES) {
+      expect(parse({ action, pageId: 'p1', driveId: 'd1', reason: 'because', category }).success).toBe(true);
+    }
+    expect(SCOPED_TAKEDOWN_CATEGORIES).toEqual(['illegal_other', 'policy']);
+  });
+
+  it('accepts an avatar takedown under any category, CSAM included (it preserves before deleting)', () => {
+    for (const category of ['csam', 'malware', 'illegal_other', 'policy']) {
+      expect(parse({ action: 'avatar', userId: 'u1', reason: 'because', category }).success).toBe(true);
+    }
   });
 
   it('refuses a global takedown under the policy category', () => {
