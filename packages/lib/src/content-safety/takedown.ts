@@ -476,7 +476,37 @@ export async function runGlobalTakedown(caseId: string, deps: TakedownDeps): Pro
 
 const LOCK_LOST = 'The run lock on this case was lost; this run stopped without writing anything more. Run the case again.';
 
+/** True once the case's block has been written: from then on its public copies must stay off the web. */
+function blockWritten(row: ContentCase): boolean {
+  return latestEntry(row.steps ?? [], 'block')?.status === 'ok';
+}
+
+/**
+ * Take the hash's public copies offline again for a case that is stopping short of done. A publish
+ * already in flight when the hash was blocked can have put `assets/<hash>` back after the first
+ * unpublish, and a case waiting for evidence storage, an admin's decision or a resume would otherwise
+ * leave it live for as long as it waits. Records a step only when it took something down or failed, so a
+ * quiet case is not made to look busy; a failure leaves `unpublish_public` failed, and the next run
+ * starts there.
+ */
+async function takePublicOfflineAgain(row: ContentCase, contentHash: string, deps: TakedownDeps): Promise<{ deleted: number } | { error: string }> {
+  try {
+    const { deleted, held } = await deps.storage.takePublicOffline(contentHash, row.id);
+    if (deleted > 0) {
+      await deps.cases.appendStep(row.id, stepEntry('unpublish_public', 'ok', `deleted=${deleted}${held ? ' held_private_copy' : ''} while_stopped`, deps));
+    }
+    return { deleted };
+  } catch (error) {
+    const message = errorMessage(error);
+    await deps.cases.appendStep(row.id, stepEntry('unpublish_public', 'failed', message, deps));
+    return { error: message };
+  }
+}
+
 async function runGlobalTakedownLocked(caseId: string, deps: TakedownDeps, signal?: AbortSignal): Promise<TakedownRunResult> {
+  // Whether this run has already taken the public copies offline: a run that stops short of done does it
+  // once more on its way out (`takePublicOfflineAgain`) unless it just did.
+  let unpublishedThisRun = false;
   for (;;) {
     // The case is read again before EVERY step. It can be re-filed while this
     // run is under way (the re-file does not wait for the run): a new category,
@@ -503,6 +533,7 @@ async function runGlobalTakedownLocked(caseId: string, deps: TakedownDeps, signa
 
     if (decision.kind === 'done' || decision.kind === 'halt') {
       const status = statusForDecision(decision);
+      if (decision.kind === 'halt' && !unpublishedThisRun && blockWritten(row)) await takePublicOfflineAgain(row, contentHash, deps);
       await settle(row, status, deps);
       return decision.kind === 'halt' ? { caseId, status, haltReason: decision.reason } : { caseId, status };
     }
@@ -513,11 +544,13 @@ async function runGlobalTakedownLocked(caseId: string, deps: TakedownDeps, signa
     }
 
     try {
+      if (decision.step === 'unpublish_public') unpublishedThisRun = true;
       const outcome = await executeGlobalStep(decision.step, row, contentHash, deps);
       await deps.cases.appendStep(caseId, stepEntry(decision.step, outcome.skipped ? 'skipped' : 'ok', outcome.detail, deps));
     } catch (error) {
       const message = errorMessage(error);
       await deps.cases.appendStep(caseId, stepEntry(decision.step, 'failed', message, deps));
+      if (!unpublishedThisRun && blockWritten(row)) await takePublicOfflineAgain(row, contentHash, deps);
       await settle(row, 'open', deps);
       return { caseId, status: 'open', failedStep: decision.step, error: message };
     }
@@ -556,6 +589,37 @@ export async function resweepGlobalTakedown(caseId: string, deps: TakedownDeps):
     }
     return result;
   });
+}
+
+export type PublicSweepResult =
+  | { swept: false; inProgress?: true }
+  | { swept: true; deleted: number }
+  | { swept: true; error: string };
+
+/**
+ * For the re-sweep cron: take the public copies offline again for a global takedown that is HALTED
+ * (waiting for evidence storage or for an admin's preservation decision) and whose block is written.
+ * Runs no other step and changes no status: the case still waits for a person. Any other case (finished,
+ * failed part-way, never blocked) is left alone; a failed case is resumed by a person, which takes its
+ * public copies offline on the way.
+ */
+export async function sweepPublicIfHalted(caseId: string, deps: TakedownDeps): Promise<PublicSweepResult> {
+  const locked = await deps.cases.withCaseLock(caseId, async (): Promise<PublicSweepResult> => {
+    const row = await loadCase(caseId, deps);
+    if (row.snapshot?.takedown?.kind !== 'global' || !blockWritten(row)) return { swept: false };
+    if (row.status !== 'open' && row.status !== 'awaiting_evidence') return { swept: false };
+    const { category, contentHash } = requireGlobal(row);
+    const decision = nextGlobalTakedownStep({
+      steps: row.steps ?? [],
+      category,
+      evidenceConfigured: deps.storage.evidenceConfigured(),
+      skipPreservation: row.snapshot?.takedown?.skipPreservation === true,
+      suspendUploader: row.snapshot?.takedown?.suspendUploader === true,
+    });
+    if (decision.kind !== 'halt') return { swept: false };
+    return { swept: true, ...(await takePublicOfflineAgain(row, contentHash, deps)) };
+  });
+  return locked.acquired ? locked.value : { swept: false, inProgress: true };
 }
 
 export interface LinearStep {

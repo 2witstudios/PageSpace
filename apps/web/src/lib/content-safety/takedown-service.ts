@@ -22,7 +22,9 @@ import {
   runGlobalTakedown,
   runLinearCase,
   safeAlert,
+  sweepPublicIfHalted,
   type LinearStep,
+  type PublicSweepResult,
   type TakedownDeps,
   type TakedownRunResult,
 } from '@pagespace/lib/content-safety/takedown';
@@ -390,4 +392,12 @@ export async function executeTakedown(request: TakedownRequest, actorUserId: str
       return toResponse(request.action, { result: await resweepGlobalTakedown(row.id, deps) });
     }
   }
+}
+
+/**
+ * The re-sweep cron's public pass over one case: if it is a halted global takedown, take its public copies
+ * offline again (a publish in flight at the block can have put one back). Nothing else runs.
+ */
+export async function sweepPublicForHaltedCase(caseId: string): Promise<PublicSweepResult> {
+  return sweepPublicIfHalted(caseId, createTakedownDeps(null));
 }

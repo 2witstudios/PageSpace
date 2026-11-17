@@ -16,6 +16,7 @@ import {
   resweepGlobalTakedown,
   runGlobalTakedown,
   runLinearCase,
+  sweepPublicIfHalted,
   UnpreservedObjectError,
   type ContentReferences,
   type ObjectDigest,
@@ -1073,6 +1074,80 @@ describe('resweepGlobalTakedown', () => {
 
     expect(world.row.snapshot?.resweep).toEqual({ attempts: MAX_RESWEEP_ATTEMPTS, done: false });
     expect(world.alerts.filter((a) => a.event === 'resweep_failed').map((a) => a.attempt)).toEqual([1, 2, 3]);
+  });
+});
+
+describe('public copies while a takedown is stopped', () => {
+  // A publish already in flight when the hash was blocked can put assets/<hash> back after the first
+  // unpublish. A case that then waits (no evidence storage, or a failed step) must not leave it live.
+  const republish = (world: ReturnType<typeof createWorld>['world']) => world.publish.set(`assets/${HASH}`, ORIGINAL);
+
+  it('takes a re-published copy offline again when a halted case is run again', async () => {
+    const { world, deps } = createWorld({ evidence: false });
+    await runGlobalTakedown(CASE_ID, deps);
+    republish(world);
+
+    const result = await runGlobalTakedown(CASE_ID, deps);
+
+    expect(result).toMatchObject({ status: 'awaiting_evidence', haltReason: 'awaiting_evidence' });
+    expect(world.publish.has(`assets/${HASH}`)).toBe(false);
+    expect(world.uploads.get(holdKeyFor(CASE_ID, HASH))).toBe(ORIGINAL);
+    expect(world.uploads.get(`files/${HASH}/original`)).toBe(ORIGINAL);
+    expect(stepStates(world.row.steps).filter((s) => s.startsWith('unpublish_public'))).toEqual(['unpublish_public:ok', 'unpublish_public:ok']);
+  });
+
+  it('takes a re-published copy offline again when a run stops at a failed step', async () => {
+    const { world, deps } = createWorld();
+    world.failNext.add('preserve');
+    await runGlobalTakedown(CASE_ID, deps);
+    republish(world);
+    world.failNext.add('preserve');
+
+    const result = await runGlobalTakedown(CASE_ID, deps);
+
+    expect(result).toMatchObject({ status: 'open', failedStep: 'preserve' });
+    expect(world.publish.has(`assets/${HASH}`)).toBe(false);
+  });
+
+  it('does not unpublish twice in one run', async () => {
+    const { world, deps } = createWorld({ evidence: false });
+    await runGlobalTakedown(CASE_ID, deps);
+    expect(world.calls.filter((c) => c === 'unpublish_public')).toHaveLength(1);
+  });
+
+  describe('sweepPublicIfHalted (the cron)', () => {
+    it('takes a halted case\'s re-published copy offline, and runs no other step', async () => {
+      const { world, deps } = createWorld({ evidence: false });
+      await runGlobalTakedown(CASE_ID, deps);
+      republish(world);
+      const before = world.calls.length;
+
+      const result = await sweepPublicIfHalted(CASE_ID, deps);
+
+      expect(result).toMatchObject({ swept: true, deleted: 1 });
+      expect(world.publish.has(`assets/${HASH}`)).toBe(false);
+      expect(world.calls.slice(before)).toEqual(['unpublish_public']);
+      expect(world.row.status).toBe('awaiting_evidence');
+    });
+
+    it('records nothing when there was nothing to take down, so a quiet case is not kept busy', async () => {
+      const { world, deps } = createWorld({ evidence: false });
+      await runGlobalTakedown(CASE_ID, deps);
+      const steps = world.row.steps?.length;
+
+      expect(await sweepPublicIfHalted(CASE_ID, deps)).toMatchObject({ swept: true, deleted: 0 });
+      expect(world.row.steps?.length).toBe(steps);
+    });
+
+    it('leaves a case that is not halted alone: a finished one, or one that never blocked', async () => {
+      const finished = createWorld();
+      await runGlobalTakedown(CASE_ID, finished.deps);
+      expect(await sweepPublicIfHalted(CASE_ID, finished.deps)).toEqual({ swept: false });
+
+      const fresh = createWorld({ evidence: false });
+      expect(await sweepPublicIfHalted(CASE_ID, fresh.deps)).toEqual({ swept: false });
+      expect(fresh.world.calls).toEqual([]);
+    });
   });
 });
 

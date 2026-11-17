@@ -427,6 +427,13 @@ export async function copyObjectToPublishBucket(params: {
       ContentType: contentType,
     }),
   );
+
+  // Asked again now the copy exists: a takedown may have blocked the hash between the check above and this
+  // PUT, and its one pass over the public bucket may already be behind us. Take the copy back down here.
+  if (contentHash && (await isHashBlocked(contentHash))) {
+    await getPublishClient().send(new DeleteObjectCommand({ Bucket: publishBucket, Key: assetKey }));
+    throw new Error('This file is not available for publishing');
+  }
 }
 
 /**

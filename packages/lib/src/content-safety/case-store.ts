@@ -324,3 +324,24 @@ export async function listCasesDueForResweep(input: {
     .orderBy(contentCases.updatedAt)
     .limit(input.limit ?? 25);
 }
+
+/**
+ * Unfinished global takedowns touched within the window, for the re-sweep cron's public pass
+ * (`sweepPublicIfHalted` decides which of them are really halted). A publish in flight when a hash is
+ * blocked lands minutes after the block, so a day is ample; the pass records nothing when it finds nothing,
+ * so a case that stays quiet ages out of the window.
+ */
+export async function listHaltedGlobalCases(input: { notOlderThan: Date; limit?: number }): Promise<ContentCase[]> {
+  return db
+    .select()
+    .from(contentCases)
+    .where(
+      and(
+        takedownKindIs('global'),
+        inArray(contentCases.status, ['open', 'awaiting_evidence']),
+        gte(contentCases.updatedAt, input.notOlderThan),
+      ),
+    )
+    .orderBy(contentCases.updatedAt)
+    .limit(input.limit ?? 50);
+}

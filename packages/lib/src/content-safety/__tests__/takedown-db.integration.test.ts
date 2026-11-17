@@ -23,6 +23,7 @@ import {
   createTakedownCaseStore,
   listCasesDueForResweep,
   listCasesForTarget,
+  listHaltedGlobalCases,
   listContentCases,
   openTakedownCase,
   withContentCaseRunLock,
@@ -345,6 +346,31 @@ describe('takedown database edge — real Postgres', () => {
       const forTarget = await listCasesForTarget({ targetType: 'page', targetId: filePageId, contentHash: HASH });
       expect(forTarget.map((c) => c.id)).toContain(row.id);
       expect(forTarget.some((c) => c.targetType === 'content_hash')).toBe(true);
+    });
+
+    describe('listHaltedGlobalCases', () => {
+      const store = createTakedownCaseStore();
+      const halted = async () => (await listHaltedGlobalCases({ notOlderThan: new Date(Date.now() - 60_000), limit: 500 })).map((c) => c.id);
+
+      it('offers unfinished global cases, waiting or open, and never a finished or dismissed one', async () => {
+        const make = async (status: 'open' | 'awaiting_evidence' | 'actioned' | 'dismissed') => {
+          const hash = freshHash();
+          const { case: row } = await open({ targetId: hash, contentHash: hash });
+          await store.setStatus(row.id, status);
+          return row.id;
+        };
+        const [waiting, open_, done, dismissed] = [await make('awaiting_evidence'), await make('open'), await make('actioned'), await make('dismissed')];
+
+        const listed = await halted();
+        expect(listed).toEqual(expect.arrayContaining([waiting, open_]));
+        expect(listed).not.toContain(done);
+        expect(listed).not.toContain(dismissed);
+      });
+
+      it('never offers a scoped case', async () => {
+        const { case: row } = await open({ targetType: 'page', targetId: `page-${randomUUID()}`, contentHash: null, category: 'policy', takedown: { kind: 'unpublish_page' } });
+        expect(await halted()).not.toContain(row.id);
+      });
     });
 
     describe('listCasesDueForResweep', () => {

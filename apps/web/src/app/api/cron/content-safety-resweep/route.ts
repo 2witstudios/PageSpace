@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server';
 import { audit } from '@pagespace/lib/audit/audit-log';
-import { listCasesDueForResweep } from '@pagespace/lib/content-safety/case-store';
+import { listCasesDueForResweep, listHaltedGlobalCases } from '@pagespace/lib/content-safety/case-store';
 import { MAX_RESWEEP_ATTEMPTS } from '@pagespace/lib/content-safety/takedown';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
-import { executeTakedown } from '@/lib/content-safety/takedown-service';
+import { executeTakedown, sweepPublicForHaltedCase } from '@/lib/content-safety/takedown-service';
 
 /**
  * Cron endpoint: pass over storage once more for every recently finished
@@ -21,6 +21,10 @@ import { executeTakedown } from '@/lib/content-safety/takedown-service';
  * (the lib does that) and is retried on later ticks, at least 20 minutes apart,
  * up to MAX_RESWEEP_ATTEMPTS; after that the case is left `open` for a person
  * to resume. A failed case also makes this run answer 500.
+ *
+ * Halted takedowns (waiting for evidence storage or an admin's decision) are never re-swept, but a publish
+ * in flight when their hash was blocked can still put a public copy back. Every tick takes their public
+ * copies offline again, and nothing else (`sweepPublicIfHalted`).
  *
  * Authentication: HMAC-signed request with X-Cron-Timestamp, X-Cron-Nonce, X-Cron-Signature.
  */
@@ -58,17 +62,31 @@ export async function GET(request: Request) {
       }
     }
 
+    const halted = await listHaltedGlobalCases({ notOlderThan: new Date(now - LOOKBACK_MS) });
+    let haltedPublicDeleted = 0;
+    for (const row of halted) {
+      try {
+        const result = await sweepPublicForHaltedCase(row.id);
+        if (result.swept && 'error' in result) failed.push(row.id);
+        else if (result.swept) haltedPublicDeleted += result.deleted;
+      } catch (error) {
+        failed.push(row.id);
+        loggers.system.error('[Cron] Content-safety public sweep failed for a halted case', error instanceof Error ? error : undefined, { caseId: row.id });
+      }
+    }
+
     audit({
       eventType: 'data.write',
       resourceType: 'cron_job',
       resourceId: 'content_safety_resweep',
-      details: { due: due.length, swept, failed: failed.length, inProgress },
+      details: { due: due.length, swept, failed: failed.length, inProgress, halted: halted.length, haltedPublicDeleted },
     });
 
+    const haltedSummary = halted.length > 0 ? { halted: halted.length, haltedPublicDeleted } : {};
     if (failed.length > 0) {
-      return NextResponse.json({ success: false, due: due.length, swept, failedCaseIds: failed }, { status: 500 });
+      return NextResponse.json({ success: false, due: due.length, swept, ...haltedSummary, failedCaseIds: failed }, { status: 500 });
     }
-    return NextResponse.json({ success: true, due: due.length, swept, ...(inProgress > 0 ? { inProgress } : {}) });
+    return NextResponse.json({ success: true, due: due.length, swept, ...(inProgress > 0 ? { inProgress } : {}), ...haltedSummary });
   } catch (error) {
     loggers.system.error('[Cron] Content-safety re-sweep failed', error instanceof Error ? error : undefined);
     return NextResponse.json({ success: false, error: 'Re-sweep failed' }, { status: 500 });
