@@ -208,6 +208,11 @@ export function createTakedownStorage(): TakedownStorage {
       return found;
     },
 
+    async findDerived(contentHash) {
+      const hash = requireHash(contentHash);
+      return listS3Prefix(getS3Client(), getS3Bucket(), `cache/${hash}/`);
+    },
+
     async takePublicOffline(contentHash, caseId) {
       const hash = requireHash(contentHash);
       if (!isPublishConfigured()) return { deleted: 0, held: false };

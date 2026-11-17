@@ -78,6 +78,11 @@ export interface TakedownStorage {
    */
   findOriginals(contentHash: string, caseId: string): Promise<TakedownOriginal[]>;
   /**
+   * The derived objects for the hash (`cache/<hash>/*`: thumbnails, extracted text). Preserved only when
+   * no copy of the content itself could be, since they may then be the only bytes left. Throws on any error.
+   */
+  findDerived(contentHash: string): Promise<TakedownOriginal[]>;
+  /**
    * Take the hash off the web now: delete `assets/<hash>` and
    * `assets/cache/<hash>/*` from the public bucket. The public asset, when
    * there is one, is first copied to the case's hold key in the private uploads
@@ -271,12 +276,21 @@ async function preserve(row: ContentCase, contentHash: string, deps: TakedownDep
     // The case says a copy was preserved, but it is not there. Stop: going on
     // would delete what is left with the evidence missing.
     if (snapshot?.evidenceKey) throw new Error('The preserved evidence copy recorded on this case is missing');
-    return { detail: 'no_source_object', skipped: true };
   }
 
   const known = snapshot?.additionalEvidenceKeys ?? [];
   const additional = new Set(known);
   const done: string[] = [];
+  /** Keep bytes that are not the content, byte for byte, under a key named by their own checksum. */
+  const keepAdditional = async (source: TakedownOriginal, read: ObjectDigest, label: string) => {
+    const additionalKey = `${primaryKey}.${read.sha256}`;
+    const existing = await deps.storage.digestEvidence(additionalKey);
+    if (existing?.sha256 !== read.sha256) {
+      await copyAndVerify(source, read, additionalKey, deps);
+      done.push(`${label} sha256=${read.sha256} bytes=${read.size}`);
+    }
+    additional.add(additionalKey);
+  };
   for (const source of sources) {
     const read = await deps.storage.digestSource(source.key);
     if (!read) throw new Error('A source object disappeared before it could be checked');
@@ -289,14 +303,18 @@ async function preserve(row: ContentCase, contentHash: string, deps: TakedownDep
       }
       continue;
     }
-    const additionalKey = `${primaryKey}.${read.sha256}`;
-    const existing = await deps.storage.digestEvidence(additionalKey);
-    if (existing?.sha256 !== read.sha256) {
-      await copyAndVerify(source, read, additionalKey, deps);
-      done.push(`additional_copy sha256=${read.sha256} bytes=${read.size}`);
-    }
-    additional.add(additionalKey);
+    await keepAdditional(source, read, 'additional_copy');
   }
+
+  // No copy of the content itself exists anywhere: what was derived from it (a thumbnail, extracted text)
+  // may be the only bytes left, and delete_uploads takes those too. Keep them first.
+  if (!primaryVerified) {
+    for (const source of await deps.storage.findDerived(contentHash)) {
+      const read = await deps.storage.digestSource(source.key);
+      if (read) await keepAdditional(source, read, 'derived_copy');
+    }
+  }
+  if (sources.length === 0 && additional.size === 0) return { detail: 'no_source_object', skipped: true };
 
   if (primaryVerified && snapshot?.evidenceKey !== primaryKey) await deps.cases.mergeSnapshot(row.id, { evidenceKey: primaryKey });
   if (additional.size > known.length) await deps.cases.mergeSnapshot(row.id, { additionalEvidenceKeys: [...additional] });

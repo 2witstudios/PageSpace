@@ -361,3 +361,10 @@ describe('listAvatarObjects', () => {
     await expect(createTakedownStorage().listAvatarObjects('')).rejects.toThrow('Invalid user ID');
   });
 });
+
+describe('findDerived', () => {
+  it('lists the derived objects of the hash only', async () => {
+    const listed = await createTakedownStorage().findDerived(HASH);
+    expect(listed.map((o) => o.key).sort()).toEqual([`cache/${HASH}/extracted.txt`, `cache/${HASH}/thumbnail.webp`]);
+  });
+});

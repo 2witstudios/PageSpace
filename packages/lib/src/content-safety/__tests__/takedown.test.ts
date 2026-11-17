@@ -190,6 +190,8 @@ function createWorld(options: { category?: ContentCase['category']; evidence?: b
         for (const key of [...uploads.keys()]) if (key.includes(hash) && uploads.delete(key)) deleted += 1;
         return deleted;
       },
+      findDerived: async (hash) =>
+        [...uploads.keys()].filter((key) => key.startsWith(`cache/${hash}/`)).map((key) => ({ key, size: uploads.get(key)!.length })),
       listAvatarObjects: async (userId) =>
         [...uploads.keys()].filter((key) => key.startsWith(`avatars/${userId}/`)).map((key) => ({ key, size: uploads.get(key)!.length })),
       deleteFromPublish: async (hash) => {
@@ -365,10 +367,12 @@ describe('runGlobalTakedown', () => {
 
     expect(result.status).toBe('actioned');
     const key = `${evidenceKeyFor(CASE_ID, HASH)}.${sha(other)}`;
-    expect([...world.evidence.keys()]).toEqual([key]);
+    // With no copy of the content itself anywhere, the derived thumbnail is kept as well (it may be all that is left of it).
+    const thumbKey = `${evidenceKeyFor(CASE_ID, HASH)}.${sha('thumb')}`;
+    expect([...world.evidence.keys()]).toEqual([key, thumbKey]);
     expect(world.evidence.get(key)).toBe(other);
     expect(world.row.snapshot?.evidenceKey).toBeUndefined();
-    expect(world.row.snapshot?.additionalEvidenceKeys).toEqual([key]);
+    expect(world.row.snapshot?.additionalEvidenceKeys).toEqual([key, thumbKey]);
   });
 
   it('preserves the real content wherever it is, when other bytes sit at the page-file key: nothing private is deleted uncopied', async () => {
@@ -1069,6 +1073,42 @@ describe('resweepGlobalTakedown', () => {
 
     expect(world.row.snapshot?.resweep).toEqual({ attempts: MAX_RESWEEP_ATTEMPTS, done: false });
     expect(world.alerts.filter((a) => a.event === 'resweep_failed').map((a) => a.attempt)).toEqual([1, 2, 3]);
+  });
+});
+
+describe('derived copies when the original is gone', () => {
+  it('preserves cache/<hash>/* before deleting it, so a CSAM case never deletes its only remaining bytes unpreserved', async () => {
+    const { world, deps } = createWorld();
+    world.uploads.delete(`files/${HASH}/original`);
+    world.publish.clear();
+    let evidenceAtDelete = -1;
+    world.onCall = (step) => {
+      if (step === 'delete_uploads') evidenceAtDelete = world.evidence.size;
+    };
+
+    const result = await runGlobalTakedown(CASE_ID, deps);
+
+    expect(result.status).toBe('actioned');
+    const thumbKey = `${evidenceKeyFor(CASE_ID, HASH)}.${sha('thumb')}`;
+    expect(world.evidence.get(thumbKey)).toBe('thumb');
+    expect(evidenceAtDelete).toBe(1);
+    expect(world.row.snapshot?.additionalEvidenceKeys).toContain(thumbKey);
+    expect(world.row.steps?.find((s) => s.step === 'preserve')).toMatchObject({ status: 'ok' });
+    expect([...world.uploads.keys()]).toEqual([]);
+  });
+
+  it('does not copy derived objects when the content itself was preserved', async () => {
+    const { world, deps } = createWorld();
+    await runGlobalTakedown(CASE_ID, deps);
+    expect([...world.evidence.keys()]).toEqual([evidenceKeyFor(CASE_ID, HASH)]);
+  });
+
+  it('halts a CSAM case with only derived bytes at awaiting_evidence when there is no evidence storage', async () => {
+    const { world, deps } = createWorld({ evidence: false });
+    world.uploads.delete(`files/${HASH}/original`);
+    const result = await runGlobalTakedown(CASE_ID, deps);
+    expect(result).toMatchObject({ status: 'awaiting_evidence' });
+    expect(world.uploads.has(`cache/${HASH}/thumbnail.webp`)).toBe(true);
   });
 });
 
