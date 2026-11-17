@@ -30,6 +30,7 @@ const summary = (id: string): ReportedCaseSummary => ({
     references: null, skippedDrives: [],
   },
   reportCount: 1,
+  scan: null,
   reports: [{ id: `r_${id}`, category: 'other', source: 'anonymous', reporterUserId: null, contactEmail: null, description: `about ${id}`, createdAt: '2026-11-12T00:00:01.000Z' }],
 });
 
@@ -73,6 +74,20 @@ describe('LinkedCaseReports', () => {
     expect(renderToStaticMarkup(<LinkedCaseReports caseId="B" onReview={() => {}} />)).not.toContain('about A');
     query.current = { ...query.current, isFetching: false, error: 'Request failed (500)' };
     expect(renderToStaticMarkup(<LinkedCaseReports caseId="B" onReview={() => {}} />)).not.toContain('about A');
+  });
+
+  it('shows a linked case the publish scan flagged even when it has no reports, and hides a case with neither', () => {
+    const flagged: ReportedCaseSummary = {
+      ...summary('S'),
+      reportCount: 0,
+      reports: [],
+      scan: { provider: 'hive', category: 'csam', score: 0.97, mode: 'enforce', flaggedAt: '2026-11-12T00:00:00.000Z' },
+    };
+    query.current = { data: { cases: [flagged] }, dataUrl: urlFor('S'), error: null, isLoading: false, isFetching: false };
+    expect(renderToStaticMarkup(<LinkedCaseReports caseId="S" onReview={() => {}} />)).toContain('Flagged by publish scan');
+
+    query.current = { ...query.current, data: { cases: [{ ...flagged, scan: null }] } };
+    expect(renderToStaticMarkup(<LinkedCaseReports caseId="S" onReview={() => {}} />)).toBe('');
   });
 
   it('says when the reports could not be loaded, with a retry, instead of looking like a case with no reports', () => {
