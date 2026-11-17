@@ -74,9 +74,12 @@ out/
 *.swp
 .history/
 .roo/
-reports/
-# ...but not the admin console's content-report API route.
-!apps/admin/src/app/api/admin/content/reports/
+# Generated report output (at the root or in an app/package root). Anchored, not a
+# bare `reports/`: that also matched source such as the admin content-reports API
+# route, and knip ignores .gitignore negations, so it could not see that route.
+/reports/
+/*/reports/
+/*/*/reports/
 archive/
 
 # Security - Additional protections
