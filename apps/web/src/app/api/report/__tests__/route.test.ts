@@ -70,8 +70,34 @@ describe('POST /api/report (public)', () => {
   });
 
   it('refuses an oversized body before parsing it', async () => {
-    const res = await post({ url: URL_OK, category: 'other', description: 'x'.repeat(9000) });
+    const res = await post({ url: URL_OK, category: 'other', description: 'x'.repeat(40_000) });
     expect(res.status).toBe(413);
+    expect(fileReport).not.toHaveBeenCalled();
+  });
+
+  it('accepts the largest report the form allows: a 2048-character URL, 2000 CJK characters and a long email', async () => {
+    const url = `https://acme.pagespace.site/${'a'.repeat(2048 - 'https://acme.pagespace.site/'.length)}`;
+    const contactEmail = `${'m'.repeat(64)}@${'e'.repeat(30)}.example`;
+    const res = await post({ url, category: 'other', description: '漢'.repeat(2000), contactEmail, _hp: '' });
+    expect(res.status).toBe(201);
+    expect(fileReport).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops reading a body with no Content-Length once it passes the cap, instead of buffering all of it', async () => {
+    let sent = 0;
+    const chunk = new TextEncoder().encode('x'.repeat(1024));
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent >= 1024 * 1024) return controller.close();
+        sent += chunk.byteLength;
+        controller.enqueue(chunk);
+      },
+    });
+    const res = await POST(
+      new Request('http://localhost/api/report', { method: 'POST', body, headers: { 'content-type': 'application/json' }, duplex: 'half' } as RequestInit),
+    );
+    expect(res.status).toBe(413);
+    expect(sent).toBeLessThan(64 * 1024);
     expect(fileReport).not.toHaveBeenCalled();
   });
 

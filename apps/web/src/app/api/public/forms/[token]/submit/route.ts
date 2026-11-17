@@ -24,6 +24,7 @@ import { lookupActiveFormTarget, appendFormSubmission } from '@/services/api/for
 import { sendFormSubmissionNotification } from '@/lib/forms/send-form-notification';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { after } from 'next/server';
+import { readBodyWithCap } from '@/lib/http/read-body-with-cap';
 
 const MAX_PAYLOAD_BYTES = 8 * 1024;
 
@@ -47,35 +48,6 @@ function corsJson(body: unknown, init?: ResponseInit): Response {
 
 export function OPTIONS(): Response {
   return new Response(null, { status: 204, headers: CORS_HEADERS });
-}
-
-/**
- * Reads a request body as text, aborting as soon as the byte cap is exceeded
- * instead of buffering the whole stream first — bounds memory use for a
- * caller that omits Content-Length (or uses chunked transfer-encoding).
- * Returns null if the cap is exceeded.
- */
-async function readBodyWithCap(request: Request, maxBytes: number): Promise<string | null> {
-  const reader = request.body?.getReader();
-  if (!reader) {
-    return '';
-  }
-
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    totalBytes += value.byteLength;
-    if (totalBytes > maxBytes) {
-      await reader.cancel();
-      return null;
-    }
-    chunks.push(value);
-  }
-
-  return Buffer.concat(chunks).toString('utf-8');
 }
 
 export async function POST(request: Request, context: { params: Promise<{ token: string }> }) {
