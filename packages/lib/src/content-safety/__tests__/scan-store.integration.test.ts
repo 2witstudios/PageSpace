@@ -275,4 +275,59 @@ describe('scan store', () => {
     await expect(gatePublishAsset(input, deps)).resolves.toEqual({ promote: false, reason: 'held' });
     expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'flagged', outcome: 'classifier_flag' });
   });
+
+  it('a clean publish that waits on a flag being recorded for the same hash is held, and the flag stands', async () => {
+    const hash = newHash();
+    const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+    const config = resolveScanConfig({ CONTENT_SCAN_MODE: 'enforce', HIVE_API_KEY: 'k' }, { onPrem: false });
+    // The other publish's flag: its verdict row is written and locked, its transaction not yet committed.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let written!: () => void;
+    const isWritten = new Promise<void>((resolve) => { written = resolve; });
+    let flagPid = 0;
+    const flagTx = db.transaction(async (tx) => {
+      const pid = await tx.execute(sql`select pg_backend_pid() as pid`);
+      flagPid = Number((pid.rows[0] as { pid: number }).pid);
+      const values = { verdict: 'flagged' as const, outcome: 'classifier_flag' as const, provider: 'fake', mode: 'enforce' as const, scores: {}, scannedAt: new Date() };
+      await tx.insert(contentScans).values({ contentHash: hash, ...values }).onConflictDoUpdate({ target: contentScans.contentHash, set: values });
+      written();
+      await held;
+    });
+    await isWritten;
+
+    const deps: PublishGateDeps = {
+      config,
+      scanner: createFakeScanner({ defaultResult: { kind: 'clean', provider: 'fake' } }),
+      isBlocked: async () => false,
+      findVerdict: async () => null,
+      readSource: async () => ({ bytes: PNG, complete: true }),
+      recordVerdict: (record) => recordScanVerdict(record, { flagTtlMs: config.verdictTtlMs }),
+      takedownHashMatch: async () => ({}),
+      openReviewCase: (input) => openScanReviewCase(input),
+      alert: async () => undefined,
+      audit: () => undefined,
+      reportMisconfiguration: () => undefined,
+      logError: () => undefined,
+      now: () => new Date(),
+    };
+    const clean = gatePublishAsset(
+      { contentHash: hash, originalKey: `files/${hash}/original`, declaredContentType: 'image/png', fileId: 'f', userId: null, entryPoint: 'canvas_asset' },
+      deps,
+    );
+
+    // The clean publish's verdict write must be blocked by the flag's row lock before the flag commits.
+    let blocked = false;
+    for (let i = 0; i < 250 && !blocked; i++) {
+      const waiting = await db.execute(sql`select 1 from pg_stat_activity where ${flagPid} = any(pg_blocking_pids(pid))`);
+      blocked = waiting.rows.length > 0;
+      if (!blocked) await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(blocked).toBe(true);
+    release();
+    await flagTx;
+
+    await expect(clean).resolves.toEqual({ promote: false, reason: 'held' });
+    expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'flagged', outcome: 'classifier_flag' });
+  });
 });

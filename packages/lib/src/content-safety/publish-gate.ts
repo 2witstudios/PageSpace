@@ -256,8 +256,10 @@ export async function gatePublishAsset(input: PublishGateInput, deps: PublishGat
         deps.logError('Publish gate: could not record a scan verdict', { ...context, error: errorLabel(error) });
         return null;
       });
-    // Another publish flagged this hash and its flag stands: this result does not override it. Enforce holds.
-    if (written?.keptFlag && mode === 'enforce') promote = false;
+    // Another publish flagged this hash and its flag stands: this result does not override it. Enforce holds,
+    // and holds too when the write failed: whether a flag stands could not be told, and couldn't-check is never
+    // read as allowed.
+    if ((written === null || written.keptFlag) && mode === 'enforce') promote = false;
   }
 
   if (decision.audit) {

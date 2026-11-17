@@ -286,12 +286,22 @@ describe('gatePublishAsset', () => {
     await expect(gatePublishAsset(input, deps)).resolves.toEqual({ promote: false, reason: 'held' });
   });
 
-  it('a failed verdict write never changes the decision', async () => {
+  it('a failed verdict write never makes the gate promote', async () => {
     const { deps } = setup({ result: flag });
     deps.openReviewCase.mockRejectedValueOnce(new Error('db down'));
     deps.recordVerdict.mockRejectedValueOnce(new Error('db down'));
     await expect(gatePublishAsset(input, deps)).resolves.toEqual({ promote: false, reason: 'held' });
     expect(deps.recordVerdict).toHaveBeenCalled();
+  });
+
+  it('a clean scan whose verdict cannot be recorded is held under enforce: a standing flag could not be ruled out', async () => {
+    const enforce = setup();
+    enforce.deps.recordVerdict.mockRejectedValueOnce(new Error('db down'));
+    await expect(gatePublishAsset(input, enforce.deps)).resolves.toEqual({ promote: false, reason: 'held' });
+
+    const shadow = setup({ mode: 'shadow' });
+    shadow.deps.recordVerdict.mockRejectedValueOnce(new Error('db down'));
+    await expect(gatePublishAsset(input, shadow.deps)).resolves.toEqual({ promote: true });
   });
 
   it('audit details carry IDs and scores only', async () => {
