@@ -47,9 +47,14 @@ const resolve = async (q: string) => {
   return { res, body: await res.json(), audit: vi.mocked(auditRequest).mock.calls[0]?.[1] };
 };
 
+/** `text` as a literal inside a RegExp: every metacharacter, the backslash included, escaped. */
+const literal = (text: string) => text.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
+
 /** Anything that would lead back to the site, the page or the file. */
 const leaks = (value: unknown) =>
-  JSON.stringify(value).match(new RegExp(`https?:|${SITE}|${DOMAIN.replace(/\./g, '\\.')}|${PATH_SEGMENT}|pagespace\\.site|example\\.test`, 'i'));
+  JSON.stringify(value).match(
+    new RegExp(['https?:', ...[SITE, DOMAIN, PATH_SEGMENT, 'pagespace.site', 'example.test'].map(literal)].join('|'), 'i'),
+  );
 
 describe('GET /api/admin/content/resolve — real resolver, real Postgres', () => {
   beforeAll(async () => {
