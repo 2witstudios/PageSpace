@@ -90,8 +90,9 @@ describe('sendContentSafetyAlert', () => {
     const html = await renderEmailToHtml(options.react);
     expect(html).toContain('case-9');
     expect(html).toContain('copyright');
-    // React may put tags or `<!-- -->` between the label and the number.
-    expect(html).toMatch(/Reports:(?:\s|<!-- -->|<[^>]*>)*3\b/);
+    // React may put tags or `<!-- -->` between the label and the number; `<[^>]*>` covers both, and the two
+    // alternatives never match the same text, so the pattern cannot backtrack.
+    expect(html).toMatch(/Reports:(?:\s|<[^>]*>)*3\b/);
     const links = [...html.matchAll(/href="([^"]+)"/g)].map((m) => m[1]);
     expect(links).toEqual(['https://admin.x.test/content?case=case-9']);
   });
