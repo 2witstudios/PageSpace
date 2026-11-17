@@ -90,7 +90,8 @@ describe('sendContentSafetyAlert', () => {
     const html = await renderEmailToHtml(options.react);
     expect(html).toContain('case-9');
     expect(html).toContain('copyright');
-    expect(html.replace(/<[^>]+>|<!-- -->/g, "")).toMatch(/Reports:\s*3/);
+    // React may put tags or `<!-- -->` between the label and the number.
+    expect(html).toMatch(/Reports:(?:\s|<!-- -->|<[^>]*>)*3\b/);
     const links = [...html.matchAll(/href="([^"]+)"/g)].map((m) => m[1]);
     expect(links).toEqual(['https://admin.x.test/content?case=case-9']);
   });

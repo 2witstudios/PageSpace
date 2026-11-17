@@ -136,6 +136,15 @@ describe('POST /api/user-reports', () => {
       expect(fileReport).not.toHaveBeenCalled();
     });
 
+    it('given an invalid target alongside user-report fields, should refuse rather than fall back to a user report', async () => {
+      const res = await call({ target: { type: 'page', pageId: 'p' }, category: 'spam', targetUserId: 'user_other', reason: 'abuse' });
+      expect(res.status).toBe(400);
+      expect((await res.json()).details).toHaveProperty('category');
+      expect(fileReport).not.toHaveBeenCalled();
+      expect(values).not.toHaveBeenCalled();
+      expect(sendEmail).not.toHaveBeenCalled();
+    });
+
     it('given too many reports, should refuse with 429 before filing', async () => {
       checkDistributedRateLimit.mockResolvedValue({ allowed: false, retryAfter: 60 });
       const res = await call({ target: { type: 'page', pageId: 'p' }, category: 'other' });

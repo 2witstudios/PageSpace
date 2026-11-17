@@ -36,6 +36,8 @@ const reportSchema = z.object({
   targetUserId: z.string().min(1).max(64),
   conversationId: z.string().min(1).max(64).optional(),
   reason: z.string().trim().min(1, 'Tell us what happened').max(2000),
+  // A body that names a `target` is a content report: if that one is invalid, it is refused, never read as this shape.
+  target: z.never().optional(),
 });
 
 export async function POST(request: Request) {
@@ -53,23 +55,23 @@ export async function POST(request: Request) {
     }
 
     const body: unknown = await request.json();
-    if (typeof body === 'object' && body !== null && 'target' in body) {
-      const parsed = signedInReportSchema.safeParse(body);
-      if (!parsed.success) {
-        return Response.json({ error: 'Validation failed', details: parsed.error.flatten().fieldErrors }, { status: 400 });
-      }
+    const contentReport = signedInReportSchema.safeParse(body);
+    if (contentReport.success) {
       const outcome = await fileReport(request, actorFromAuth(auth), {
         reporter: { kind: 'user', userId },
-        target: parsed.data.target,
-        category: parsed.data.category,
-        description: parsed.data.description,
+        target: contentReport.data.target,
+        category: contentReport.data.category,
+        description: contentReport.data.description,
       });
       return reportResponse(outcome);
     }
 
     const validation = reportSchema.safeParse(body);
     if (!validation.success) {
-      return Response.json({ error: 'Validation failed', details: validation.error.flatten().fieldErrors }, { status: 400 });
+      // Name the content-report problems when the body named a target; the user-report ones otherwise.
+      const namedTarget = validation.error.issues.some((issue) => issue.path[0] === 'target');
+      const details = (namedTarget ? contentReport.error : validation.error).flatten().fieldErrors;
+      return Response.json({ error: 'Validation failed', details }, { status: 400 });
     }
     const { targetUserId, conversationId, reason } = validation.data;
     if (targetUserId === userId) {
