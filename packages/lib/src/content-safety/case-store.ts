@@ -136,6 +136,11 @@ export interface OpenedCase {
  * category or a withdrawn skip lands before a run or after it, never between a
  * run's read of the case and a delete it decided on. A run that outlasts the
  * wait gets `CaseRunInProgressError`, and the case is left as it was.
+ *
+ * Opening itself is serialised per target and kind by a second advisory lock,
+ * so concurrent first requests continue ONE case rather than each inserting
+ * one. (A unique partial index would also do it, but a migration adding one
+ * fails on any duplicates already in the table.)
  */
 export async function openTakedownCase(
   input: OpenTakedownCaseInput,
@@ -153,6 +158,27 @@ export async function openTakedownCase(
     if (block?.category === 'csam') throw new CaseCategoryDowngradeError(block.caseId ?? 'unknown');
   }
 
+  // One opener per target and kind at a time. Without it, concurrent first requests each find no
+  // unfinished case and each insert one: two global takedowns of the same hash, running side by side.
+  const opening = await withBlockingAdvisoryLock(
+    getAdvisoryLockPool(),
+    caseOpenLockKey(input),
+    () => openOrReuseCase(input, lockTimeoutMs),
+    // Longer than the re-file's own wait inside, so a re-file that waits out a run is not cut short here.
+    { timeoutMs: lockTimeoutMs + OPEN_LOCK_SLACK_MS },
+  );
+  if (opening.outcome === 'lock_busy') throw new CaseRunInProgressError('pending');
+  if (opening.outcome === 'connection_error') throw opening.error;
+  return opening.result;
+}
+
+/** Serialises opening a case for one target and takedown kind. A run never takes it, so it cannot deadlock with the run lock. */
+const caseOpenLockKey = (input: OpenTakedownCaseInput) =>
+  `content_case_open:${input.targetType}:${input.targetId}:${input.takedown.kind}`;
+const OPEN_LOCK_SLACK_MS = 5_000;
+
+/** Find the unfinished case for the target and re-file it, or open one. Called holding the target's open lock. */
+async function openOrReuseCase(input: OpenTakedownCaseInput, lockTimeoutMs: number): Promise<OpenedCase> {
   const unfinished = and(
     eq(contentCases.targetType, input.targetType),
     eq(contentCases.targetId, input.targetId),

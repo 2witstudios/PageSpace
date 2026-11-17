@@ -7,7 +7,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createHash, randomUUID } from 'crypto';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { eq, inArray } from '@pagespace/db/operators';
+import { eq, inArray, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { contentBlocks, contentCases } from '@pagespace/db/schema/content-safety';
 import { drives } from '@pagespace/db/schema/core';
@@ -159,6 +159,23 @@ describe('takedown database edge — real Postgres', () => {
       expect(first.created).toBe(true);
       expect(second).toMatchObject({ created: false, case: { id: first.case.id } });
       expect(third.case.snapshot?.takedown?.suspendUploader).toBe(true);
+    });
+
+    it('opens ONE case for concurrent first requests for the same target: none is a duplicate global takedown', async () => {
+      const hash = freshHash();
+      // Warm the pool first, so the requests really do race rather than queue behind connection setup.
+      await Promise.all(Array.from({ length: 8 }, () => db.execute(sql`select pg_sleep(0.05)`)));
+      const opened = await Promise.all(
+        Array.from({ length: 6 }, () =>
+          openTakedownCase({ targetType: 'content_hash', targetId: hash, contentHash: hash, category: 'malware', reason: 'r', takedown: { kind: 'global' } }),
+        ),
+      );
+      ids.cases.push(...opened.map((o) => o.case.id));
+
+      expect(new Set(opened.map((o) => o.case.id)).size).toBe(1);
+      expect(opened.filter((o) => o.created)).toHaveLength(1);
+      const rows = await db.select({ id: contentCases.id }).from(contentCases).where(eq(contentCases.targetId, hash));
+      expect(rows).toHaveLength(1);
     });
 
     it('gives a reused case the new request\'s category, so re-filing as CSAM runs under the CSAM rule', async () => {
