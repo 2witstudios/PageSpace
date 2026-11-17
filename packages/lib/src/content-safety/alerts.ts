@@ -1,9 +1,12 @@
 /**
  * Alerts to the abuse inbox when a case opens, is actioned, stops at the
- * evidence step, or has a re-sweep fail.
+ * evidence step, or has a re-sweep fail — and for every report, whether it
+ * opened a case or joined one under review.
  *
- * The email carries a case ID, a category and an admin link — never a file URL,
- * filename, hash or content (see ContentSafetyAlertEmail). On-prem deployments
+ * The email carries a case ID, a category, a report count and an admin link —
+ * never a file URL, filename, hash, reported URL, the reporter's words or any
+ * content (see ContentSafetyAlertEmail). A CSAM report is marked urgent in the
+ * subject and sent as high priority. On-prem deployments
  * send no email at all (`sendEmail` is a no-op there), so the alert is also
  * logged; the case row remains the record in every mode.
  */
@@ -12,7 +15,16 @@ import * as React from 'react';
 import { ContentSafetyAlertEmail, contentSafetyAlertSubject } from '../email-templates/ContentSafetyAlertEmail';
 import { loggers } from '../logging/logger-config';
 import { sendEmail } from '../services/email-service';
+import type { ReportAlert } from './report-intake';
 import type { TakedownAlert } from './takedown';
+
+export type ContentSafetyAlert = TakedownAlert | ReportAlert;
+
+const isReportAlert = (alert: ContentSafetyAlert): alert is ReportAlert =>
+  alert.event === 'report_opened' || alert.event === 'report_added';
+
+/** Headers mail clients read as "high priority". Only for CSAM reports, which are acted on immediately. */
+const URGENT_HEADERS = { 'X-Priority': '1', Importance: 'high', Priority: 'urgent' } as const;
 
 const FALLBACK_ABUSE_EMAIL = 'hello@pagespace.ai';
 
@@ -37,24 +49,33 @@ export function contentCaseAdminUrl(caseId: string, env: Env = process.env): str
 }
 
 /** Send the alert. Throws on failure; takedown callers go through `TakedownDeps.alert`, which swallows it. */
-export async function sendContentSafetyAlert(alert: TakedownAlert): Promise<void> {
+export async function sendContentSafetyAlert(alert: ContentSafetyAlert): Promise<void> {
   const category = alert.category ?? 'uncategorised';
-  loggers.security.warn('Content safety case alert', { event: alert.event, caseId: alert.caseId, category });
+  const reportCount = isReportAlert(alert) ? alert.reportCount : undefined;
+  const urgent = isReportAlert(alert) && alert.category === 'csam';
+  loggers.security.warn('Content safety case alert', { event: alert.event, caseId: alert.caseId, category, reportCount });
+
+  // Each report is its own alert: the count keeps a later report from collapsing into the first.
+  const idempotencyKey = isReportAlert(alert)
+    ? `content-case:${alert.caseId}:report:${alert.reportCount}`
+    : `content-case:${alert.caseId}:${alert.event}${alert.attempt ? `:${alert.attempt}` : ''}`;
 
   try {
     await sendEmail({
       to: resolveAbuseEmail(),
-      subject: contentSafetyAlertSubject(alert),
+      subject: contentSafetyAlertSubject({ event: alert.event, caseId: alert.caseId, urgent }),
       react: React.createElement(ContentSafetyAlertEmail, {
         event: alert.event,
         caseId: alert.caseId,
         category,
+        reportCount,
         adminUrl: contentCaseAdminUrl(alert.caseId),
       }),
+      ...(urgent ? { headers: { ...URGENT_HEADERS } } : {}),
       // An abuse alert must not be dropped by the per-recipient cap shared with every other email.
       skipRateLimit: true,
-      // The attempt keeps each failed re-sweep's alert distinct; without it a retry's alert would collapse into the first.
-      idempotencyKey: `content-case:${alert.caseId}:${alert.event}${alert.attempt ? `:${alert.attempt}` : ''}`,
+      // The attempt (or report count) keeps each alert distinct; without it a retry's alert would collapse into the first.
+      idempotencyKey,
     });
   } catch (error) {
     loggers.security.error('Content safety alert email failed', error instanceof Error ? error : undefined, {

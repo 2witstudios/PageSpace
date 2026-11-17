@@ -7,7 +7,7 @@ import { withAdminAuth } from '@/lib/auth';
 import { toCaseSummary } from '@/lib/content/case-summary';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
-const STATUSES: readonly ContentCaseStatus[] = ['open', 'awaiting_evidence', 'actioned', 'dismissed'];
+const STATUSES: readonly ContentCaseStatus[] = ['reported', 'open', 'awaiting_evidence', 'actioned', 'dismissed'];
 
 /**
  * GET /api/admin/content/cases[?status=&limit=&offset=] — the case list, newest first, with step progress.

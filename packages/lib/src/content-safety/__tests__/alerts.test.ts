@@ -76,4 +76,32 @@ describe('sendContentSafetyAlert', () => {
     sendEmail.mockRejectedValue(new Error('resend down'));
     await expect(sendContentSafetyAlert({ event: 'opened', caseId: 'c', category: null })).rejects.toThrow('resend down');
   });
+
+  it.each(['report_opened', 'report_added'] as const)('emails a %s alert with the case ID, category, report count and admin link', async (event) => {
+    await sendContentSafetyAlert({ event, caseId: 'case-9', category: 'copyright', reportCount: 3 });
+
+    const options = sendEmail.mock.calls[0][0];
+    expect(options.to).toBe('abuse@x.test');
+    expect(options.subject).toContain('case-9');
+    expect(options.subject).not.toMatch(/URGENT/);
+    expect(options.headers).toBeUndefined();
+    expect(options.idempotencyKey).toBe('content-case:case-9:report:3');
+
+    const html = await renderEmailToHtml(options.react);
+    expect(html).toContain('case-9');
+    expect(html).toContain('copyright');
+    // React may put tags or `<!-- -->` between the label and the number; `<[^>]*>` covers both, and the two
+    // alternatives never match the same text, so the pattern cannot backtrack.
+    expect(html).toMatch(/Reports:(?:\s|<[^>]*>)*3\b/);
+    const links = [...html.matchAll(/href="([^"]+)"/g)].map((m) => m[1]);
+    expect(links).toEqual(['https://admin.x.test/content?case=case-9']);
+  });
+
+  it('marks a CSAM report urgent in the subject and as high priority', async () => {
+    await sendContentSafetyAlert({ event: 'report_opened', caseId: 'case-c', category: 'csam', reportCount: 1 });
+    const options = sendEmail.mock.calls[0][0];
+    expect(options.subject).toMatch(/^\[URGENT\]/);
+    expect(options.subject).toMatch(/CSAM/);
+    expect(options.headers).toEqual({ 'X-Priority': '1', Importance: 'high', Priority: 'urgent' });
+  });
 });

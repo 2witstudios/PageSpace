@@ -2,6 +2,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { Github } from "lucide-react";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { APP_URL } from "@/lib/metadata";
 
 const productLinks = [
   { label: "Pricing", href: "/pricing" },
@@ -24,6 +25,8 @@ const companyLinks = [
   { label: "Terms", href: "/terms" },
   { label: "Cookies", href: "/cookies" },
   { label: "Subprocessors", href: "/subprocessors" },
+  // The public content report page is served by the web app, so this one is absolute.
+  { label: "Report content", href: `${APP_URL}/report` },
 ];
 
 function FooterLinkGroup({ title, links }: { title: string; links: { label: string; href: string }[] }) {

@@ -10,6 +10,7 @@ import { ConfirmActionDialog } from '@/components/admin/users/confirm-action-dia
 import { describeTakedownResult, runTakedown } from './actions';
 
 const STATUS_LABELS: Record<CaseSummary['status'], string> = {
+  reported: 'Reported, needs review',
   open: 'Open',
   awaiting_evidence: 'Awaiting evidence storage',
   actioned: 'Actioned',

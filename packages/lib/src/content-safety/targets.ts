@@ -14,6 +14,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { contentBlocks, type ContentBlockCategory, type ContentCaseTargetType } from '@pagespace/db/schema/content-safety';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { publishedPages } from '@pagespace/db/schema/published-pages';
+import { customDomains } from '@pagespace/db/schema/custom-domains';
 import { files } from '@pagespace/db/schema/storage';
 import { PUBLISH_HOST } from '../canvas/primary-host';
 import { isDriveSiteHeld, resolvePrefixOwner } from '../organizations/published-visibility';
@@ -181,8 +182,18 @@ async function resolveUrl(url: URL): Promise<ResolvedTarget | null> {
   const path = publishedPathOf(url.pathname);
   let pageId: string | null = null;
   if (path === '') {
-    const [row] = await db.select({ homePageId: drives.homePageId }).from(drives).where(eq(drives.id, drive.id)).limit(1);
-    pageId = row?.homePageId ?? null;
+    // The root serves the drive's home page, unless a custom domain names its own landing page
+    // (custom_domains.publishLandingPageId), which that domain serves at its root instead.
+    const [landing] =
+      subdomain === null
+        ? await db.select({ pageId: customDomains.publishLandingPageId }).from(customDomains).where(eq(customDomains.hostname, host)).limit(1)
+        : [];
+    if (landing?.pageId) {
+      pageId = landing.pageId;
+    } else {
+      const [row] = await db.select({ homePageId: drives.homePageId }).from(drives).where(eq(drives.id, drive.id)).limit(1);
+      pageId = row?.homePageId ?? null;
+    }
   } else {
     const [row] = await db
       .select({ pageId: publishedPages.pageId })

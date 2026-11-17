@@ -41,6 +41,7 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['version', 'ADR 0001 D2 public handshake endpoint, no auth or user data, constant response'],
   ['compiled-css', 'Static CSS compilation, no user context'],
   ['contact', 'Public contact form, no authenticated user'],
+  ['report', 'Public content report form: every filed report is audited as content.report.created / content.report.attached by the shared intake wiring (lib/content-safety/report-service.ts), one hop from the route; a refused or honeypotted submission files nothing'],
   ['avatar/[userId]/[filename]', 'Public asset serving, no auth required'],
   ['orgs/[orgId]/avatar/[filename]', 'ORG-1 member-only avatar image bytes: the org gate (authorizeOrgRequest) audits every refusal as authz.access.denied; a data.read row per rendered avatar would swamp the log, as for user avatars above'],
   ['drives/[driveId]/avatar/[filename]', 'Drive avatar image bytes for whoever can reach the drive: the route audits every refusal as authz.access.denied; a data.read row per rendered drive tile would swamp the log, as for org and user avatars above'],

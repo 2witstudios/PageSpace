@@ -334,6 +334,9 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
     // no auth function at all — confirmed by reading each route.ts directly.
     // `/api/contact` is the public marketing contact form (ContactForm.tsx), unauthenticated
     // by design.
+    // `/api/report` is the public content report form (/report): visitors to a published site
+    // have no account. It is IP rate-limited and honeypotted inside the route, accepts only
+    // URLs on our published hosts, and never acts on content (it opens a case for review).
     // `/api/env-bridge/*` is the local-environment bridge: a MACHINE, which by design has
     // no session and never will (invariant 2 — machine-held identity). Each route carries its
     // own non-session credential and refuses without it: `enroll` presents the one-time
@@ -381,6 +384,7 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
       pathname === '/api/ai/models' ||
       pathname === '/api/compiled-css' ||
       pathname === '/api/contact' ||
+      pathname === '/api/report' ||
       pathname === '/api/health' ||
       pathname === '/api/version'
     ) {
