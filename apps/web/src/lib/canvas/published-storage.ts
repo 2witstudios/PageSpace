@@ -11,6 +11,8 @@ import {
   ListObjectsV2Command,
 } from '@aws-sdk/client-s3';
 import { getS3Client, getS3Bucket } from '@/lib/presigned-url';
+import { deleteS3Keys, headS3Object, isS3NotFound, listS3Prefix, type S3ObjectInfo } from '@/lib/storage/s3-objects';
+import { isHashBlocked } from '@pagespace/lib/content-safety/blocklist';
 import { assertPrefixWritable } from '@pagespace/lib/organizations/published-visibility';
 import { PARKED_PREFIX, PUBLISHED_PREFIX, parkedKeyOf, type PublishedObjectStore } from '@pagespace/lib/organizations/published-visibility-core';
 
@@ -99,6 +101,12 @@ function assertAssetKey(assetKey: string): string {
     throw new Error('Invalid public asset key');
   }
   return assetKey;
+}
+
+/** The content hash a private source key (`files/<hash>/original`, `cache/<hash>/thumbnail.webp`) belongs to. */
+function hashOfPrivateSourceKey(sourceKey: string): string | null {
+  const match = sourceKey.match(/^(?:files|cache)\/([0-9a-f]{64})\//i);
+  return match ? match[1].toLowerCase() : null;
 }
 
 function assertPrivateSourceKey(sourceKey: string): string {
@@ -244,12 +252,7 @@ export async function publishedArtifactExists(key: string): Promise<boolean> {
     );
     return true;
   } catch (err: unknown) {
-    const anyErr = err as { name?: string; $metadata?: { httpStatusCode?: number } };
-    const is404 =
-      anyErr?.name === 'NotFound' ||
-      anyErr?.name === 'NoSuchKey' ||
-      anyErr?.$metadata?.httpStatusCode === 404;
-    if (is404) return false;
+    if (isS3NotFound(err)) return false;
     throw err;
   }
 }
@@ -391,17 +394,21 @@ export async function copyObjectToPublishBucket(params: {
   const { contentType } = params;
   const publishBucket = getPublishBucket();
 
+  // A blocked hash is never promoted to the public bucket. This matters most
+  // while a takedown is waiting to delete (its bytes still exist privately):
+  // without it, republishing a page that embeds the file would put it back on
+  // the web. Checked before the dedup HEAD, which would otherwise return early.
+  const contentHash = hashOfPrivateSourceKey(sourceKey);
+  if (contentHash && (await isHashBlocked(contentHash))) {
+    throw new Error('This file is not available for publishing');
+  }
+
   // Dedup check — existence at the resolved public key means it was already promoted.
   try {
     await getPublishClient().send(new HeadObjectCommand({ Bucket: publishBucket, Key: assetKey }));
     return;
   } catch (err: unknown) {
-    const anyErr = err as { name?: string; $metadata?: { httpStatusCode?: number } };
-    const is404 =
-      anyErr?.name === 'NotFound' ||
-      anyErr?.name === 'NoSuchKey' ||
-      anyErr?.$metadata?.httpStatusCode === 404;
-    if (!is404) throw err;
+    if (!isS3NotFound(err)) throw err;
   }
 
   const getResult = await getS3Client().send(
@@ -420,6 +427,13 @@ export async function copyObjectToPublishBucket(params: {
       ContentType: contentType,
     }),
   );
+
+  // Asked again now the copy exists: a takedown may have blocked the hash between the check above and this
+  // PUT, and its one pass over the public bucket may already be behind us. Take the copy back down here.
+  if (contentHash && (await isHashBlocked(contentHash))) {
+    await getPublishClient().send(new DeleteObjectCommand({ Bucket: publishBucket, Key: assetKey }));
+    throw new Error('This file is not available for publishing');
+  }
 }
 
 /**
@@ -442,6 +456,64 @@ export async function copyAssetToPublishBucket(params: {
     assetKey: buildAssetKey(contentHash),
     contentType: mimeType,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Content takedown: the public objects of one content hash
+// ---------------------------------------------------------------------------
+
+/** Key prefix of the derived public objects for a hash (`assets/cache/<hash>/thumbnail.webp`). */
+function assetCachePrefix(contentHash: string): string {
+  return `assets/cache/${assertContentHash(contentHash)}/`;
+}
+
+/**
+ * The full-size public copy of a content hash (`assets/<hash>`), or null when
+ * there is none. Anything other than not-found throws: "couldn't check" must
+ * never read as "nothing public".
+ */
+export function headPublishedAsset(contentHash: string): Promise<S3ObjectInfo | null> {
+  return headS3Object(getPublishClient(), getPublishBucket(), buildAssetKey(contentHash));
+}
+
+/**
+ * The public asset for a content hash, opened but not read: its body as the SDK returns it (a stream in
+ * Node) and its length. Used to stream a private copy of it without holding the file in memory.
+ */
+export async function openPublishedAsset(
+  contentHash: string,
+): Promise<{ body: unknown; contentLength?: number; contentType?: string }> {
+  const result = await getPublishClient().send(
+    new GetObjectCommand({ Bucket: getPublishBucket(), Key: buildAssetKey(contentHash) }),
+  );
+  return { body: result.Body, contentLength: result.ContentLength, contentType: result.ContentType };
+}
+
+/**
+ * Delete every public object for a content hash: `assets/<hash>` and
+ * everything under `assets/cache/<hash>/` (the public thumbnail copy).
+ *
+ * This is the content-takedown delete. `clearPublishedPrefix` does not cover
+ * these keys: assets are content-addressed and shared by every site that embeds
+ * the file, so they live outside any site's `published/<prefix>/`.
+ *
+ * Idempotent; returns how many objects existed and were deleted.
+ */
+export async function deletePublishedAssetsForHash(contentHash: string): Promise<number> {
+  const client = getPublishClient();
+  const bucket = getPublishBucket();
+  const assetKey = buildAssetKey(contentHash);
+  const [asset, derived] = await Promise.all([
+    headPublishedAsset(contentHash),
+    listS3Prefix(client, bucket, assetCachePrefix(contentHash)),
+  ]);
+
+  await deleteS3Keys(client, bucket, derived.map((object) => object.key));
+  // Deleted unconditionally: a DELETE of a missing key is a no-op, and this
+  // closes the gap between the HEAD above and a publish that was already in flight.
+  await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: assetKey }));
+
+  return derived.length + (asset ? 1 : 0);
 }
 
 /**

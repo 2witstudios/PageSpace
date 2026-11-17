@@ -1,4 +1,6 @@
 import { canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth/principal-permissions';
+import { refuseRemovedContent } from '@/lib/content-safety/removed-response';
+import { toContentHash } from '@/lib/presigned-url';
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
@@ -87,6 +89,10 @@ export async function POST(
     if (!filePage.filePath) {
       return NextResponse.json({ error: 'File path not found' }, { status: 500 });
     }
+
+    // Taken down: answer "removed" instead of asking the processor for bytes that are gone or blocked.
+    const removed = await refuseRemovedContent(toContentHash(filePage.filePath));
+    if (removed) return removed;
 
     // Fetch file from processor service using content hash
     const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';

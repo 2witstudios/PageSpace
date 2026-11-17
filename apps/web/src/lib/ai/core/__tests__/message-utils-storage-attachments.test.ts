@@ -25,6 +25,11 @@ vi.mock('@pagespace/lib/content-safety/upload-gate', () => ({
   findBlockedUploads: (...args: unknown[]) => mockFindBlockedUploads(...args),
 }));
 
+const mockFindBlockedHashes = vi.fn();
+vi.mock('@pagespace/lib/content-safety/blocklist', () => ({
+  findBlockedHashes: (...args: unknown[]) => mockFindBlockedHashes(...args),
+}));
+
 import {
   extractStructuredContentFromParts,
   convertDbMessageToUIMessage,
@@ -41,6 +46,7 @@ beforeEach(() => {
   });
   mockGetChatAttachmentUrl.mockResolvedValue('https://signed.example.com/get/deadbeef');
   mockFindBlockedUploads.mockResolvedValue(new Set());
+  mockFindBlockedHashes.mockResolvedValue(new Set());
 });
 
 describe('extractStructuredContentFromParts — S3-backed file parts', () => {
@@ -182,6 +188,78 @@ describe('convertDbMessageToUIMessage — S3-backed file parts', () => {
 
     expect(result.parts).toEqual([{ type: 'text', text: 'my message' }]);
     expect(JSON.stringify(result)).not.toContain('storageKey');
+  });
+});
+
+describe('convertDbMessageToUIMessage — attachments that were taken down', () => {
+  const REMOVED = 'a'.repeat(64);
+  const KEPT = 'b'.repeat(64);
+  const baseMeta = {
+    id: 'msg-1',
+    pageId: 'page-1',
+    userId: 'user-1',
+    role: 'user' as const,
+    createdAt: new Date('2025-01-01'),
+    isActive: true,
+    editedAt: null,
+    toolCalls: null,
+    toolResults: null,
+  };
+  const content = (fileParts: unknown[], order: string[]) =>
+    JSON.stringify({
+      textParts: ['look at this'],
+      fileParts,
+      partsOrder: order.map((type, index) => ({ index, type })),
+      originalContent: 'look at this',
+    });
+
+  it('given an attachment whose hash is blocked, should drop that part and keep the rest of the message', async () => {
+    mockFindBlockedHashes.mockResolvedValue(new Set([REMOVED]));
+    mockGetChatAttachmentUrl.mockImplementation(async (key: string) => `https://signed.example.com/${key}`);
+
+    const result = await convertDbMessageToUIMessage({
+      ...baseMeta,
+      content: content(
+        [
+          { storageKey: `chat-attachments/${REMOVED}/original`, mediaType: 'image/png', filename: 'a.png' },
+          { storageKey: `chat-attachments/${KEPT}/original`, mediaType: 'image/png', filename: 'b.png' },
+        ],
+        ['text', 'file', 'file'],
+      ),
+    });
+
+    expect(mockFindBlockedHashes).toHaveBeenCalledTimes(1);
+    expect(mockFindBlockedHashes).toHaveBeenCalledWith([REMOVED, KEPT]);
+    expect(result.parts).toEqual([
+      { type: 'text', text: 'look at this' },
+      { type: 'file', url: `https://signed.example.com/chat-attachments/${KEPT}/original`, mediaType: 'image/png', filename: 'b.png' },
+    ]);
+    // No presigned URL is ever minted for the removed object.
+    expect(mockGetChatAttachmentUrl).toHaveBeenCalledTimes(1);
+    expect(mockGetChatAttachmentUrl).not.toHaveBeenCalledWith(`chat-attachments/${REMOVED}/original`);
+  });
+
+  it('given a legacy part that stored one of our own URLs for a blocked hash, should drop it too', async () => {
+    mockFindBlockedHashes.mockResolvedValue(new Set([REMOVED]));
+
+    const result = await convertDbMessageToUIMessage({
+      ...baseMeta,
+      content: content(
+        [{ url: `https://bucket.example.com/chat-attachments/${REMOVED}/original?X-Amz-Signature=x`, mediaType: 'image/png' }],
+        ['text', 'file'],
+      ),
+    });
+
+    expect(result.parts).toEqual([{ type: 'text', text: 'look at this' }]);
+  });
+
+  it('given a message with no stored attachment, should not query the blocklist', async () => {
+    await convertDbMessageToUIMessage({
+      ...baseMeta,
+      content: content([{ url: 'https://cdn.example.com/elsewhere.png', mediaType: 'image/png' }], ['text', 'file']),
+    });
+
+    expect(mockFindBlockedHashes).not.toHaveBeenCalled();
   });
 });
 

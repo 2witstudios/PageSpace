@@ -5,6 +5,7 @@ import {
   normalizeContentHash,
   normalizeContentHashes,
   requiresGlobalPurge,
+  allowsGlobalTakedown,
 } from '../policy';
 
 const HASH = 'a1'.repeat(32);
@@ -73,5 +74,17 @@ describe('ContentBlockedError', () => {
   it('never says why the upload was refused', () => {
     expect(CONTENT_BLOCKED_MESSAGE).toBe("This file can't be uploaded");
     expect(CONTENT_BLOCKED_MESSAGE).not.toMatch(/block|illegal|csam|malware|policy|safety|abuse/i);
+  });
+});
+
+describe('allowsGlobalTakedown', () => {
+  it('lets illegal content be purged for every tenant', () => {
+    expect(allowsGlobalTakedown('csam')).toBe(true);
+    expect(allowsGlobalTakedown('malware')).toBe(true);
+    expect(allowsGlobalTakedown('illegal_other')).toBe(true);
+  });
+
+  it('never lets a policy case purge a hash', () => {
+    expect(allowsGlobalTakedown('policy')).toBe(false);
   });
 });

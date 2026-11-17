@@ -596,6 +596,21 @@ describe('ContentStore', () => {
   });
 
   describe('deleteOriginalAndCache', () => {
+    // A content takedown deletes `files/<hash>/*` and `cache/<hash>/*` directly, leaving the
+    // `files` rows behind. When the orphan reaper later asks for the same hash, S3 answers a
+    // DELETE of a missing key with success and the cache listing is empty, so this reports
+    // both as deleted and the delete route answers 200 — the row is reaped, not stuck.
+    it('reports success when a takedown already deleted every object for the hash', async () => {
+      const { store, send } = createStore();
+      send.mockImplementation(async (command: { constructor: { name: string } }) =>
+        command.constructor.name === 'ListObjectsV2Command' ? { KeyCount: 0 } : {},
+      );
+
+      expect(await store.deleteOriginalAndCache(VALID_HASH)).toEqual({ originalDeleted: true, cacheDeleted: true });
+      // Nothing to batch-delete: the two original keys and one listing only.
+      expect(send).toHaveBeenCalledTimes(3);
+    });
+
     it('returns true for both when all S3 calls succeed', async () => {
       const { store, send } = createStore();
       send.mockResolvedValue({});

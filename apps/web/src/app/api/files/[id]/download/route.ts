@@ -12,6 +12,7 @@ import { sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { generatePresignedUrl, getPresignedUrlTtl } from '@/lib/presigned-url';
 import { actorFromVerifiedUser, deniedResponse } from '@/lib/auth/request-actor';
+import { refuseRemovedContent } from '@/lib/content-safety/removed-response';
 
 /** Extract a bare SHA-256 hash from legacy storagePath values like 'files/{hash}/original'. */
 function toContentHash(storagePath: string): string {
@@ -61,6 +62,8 @@ export async function GET(
       }
 
       const contentHash = toContentHash(page.filePath);
+      const removedPage = await refuseRemovedContent(contentHash);
+      if (removedPage) return removedPage;
       const mimeType = page.mimeType || 'application/octet-stream';
       const filename = sanitizeFilenameForHeader(page.originalFileName || page.title);
       const asciiFilename = filename.replace(/[^\x20-\x7E]/g, '_');
@@ -90,6 +93,8 @@ export async function GET(
     }
 
     const contentHash = toContentHash(file.storagePath || file.id);
+    const removedFile = await refuseRemovedContent(contentHash);
+    if (removedFile) return removedFile;
     const mimeType = file.mimeType || 'application/octet-stream';
     const filename = sanitizeFilenameForHeader(filenameParam || contentHash);
     const asciiFilename = filename.replace(/[^\x20-\x7E]/g, '_');

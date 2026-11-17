@@ -15,6 +15,7 @@ import {
   isChatAttachmentStorageKey,
 } from '@/lib/upload/chat-attachment-storage';
 import { findBlockedUploads } from '@pagespace/lib/content-safety/upload-gate';
+import { findBlockedHashes } from '@pagespace/lib/content-safety/blocklist';
 
 /** Parse a `data:<mediaType>;base64,<data>` URL into its raw bytes and media type. */
 function decodeDataUrl(dataUrl: string): { buffer: Buffer; mediaType: string } | null {
@@ -399,6 +400,23 @@ function parseStructuredContent(content: string | null | undefined): StructuredC
   }
 }
 
+/** The content hash a persisted attachment points at, from its storage key or a stored URL of ours. */
+function persistedAttachmentHash(part: PersistedFilePart): string | null {
+  const reference = part.storageKey ?? part.url;
+  return reference ? parseChatAttachmentContentHash(reference) : null;
+}
+
+/**
+ * Which of a message's persisted attachments have been taken down (their hash
+ * is on the content blocklist). One query per message, and none at all for a
+ * message with no stored attachment. A read is not an upload attempt, so
+ * nothing is audited here.
+ */
+async function findRemovedAttachmentHashes(fileParts: readonly PersistedFilePart[]): Promise<Set<string>> {
+  const hashes = fileParts.flatMap((part) => persistedAttachmentHash(part) ?? []);
+  return hashes.length === 0 ? new Set() : findBlockedHashes(hashes);
+}
+
 /**
  * Make text that will be stored RAW in a message `content` column safe from
  * being read back as an envelope: the reader recognises envelopes by shape
@@ -442,6 +460,7 @@ async function reconstructFromStructuredContent(
 
   const fileParts = structuredData.fileParts || [];
   const dataParts = structuredData.dataParts || [];
+  const removedAttachments = await findRemovedAttachmentHashes(fileParts);
 
   // Reconstruct parts in original order
   for (const partOrder of structuredData.partsOrder) {
@@ -470,6 +489,9 @@ async function reconstructFromStructuredContent(
           });
           continue;
         }
+        // Taken down: the bytes are gone, so the part is dropped rather than
+        // handed to the client (or the model) as a dead link.
+        if (removedAttachments.has(persistedAttachmentHash(fp) ?? '')) continue;
         const url = fp.storageKey ? await getChatAttachmentUrl(fp.storageKey) : fp.url;
         parts.push({
           type: 'file',

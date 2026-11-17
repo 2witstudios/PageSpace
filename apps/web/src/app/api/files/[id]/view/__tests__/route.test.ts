@@ -60,6 +60,11 @@ vi.mock('@/lib/presigned-url', () => ({
   getPresignedUrlTtl: vi.fn().mockReturnValue(3600),
 }));
 
+const mockIsHashBlocked = vi.fn().mockResolvedValue(false);
+vi.mock('@pagespace/lib/content-safety/blocklist', () => ({
+  isHashBlocked: (...args: unknown[]) => mockIsHashBlocked(...args),
+}));
+
 import { GET } from '../route';
 import { verifyAuth } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -73,6 +78,7 @@ const VALID_HASH = 'a'.repeat(64);
 describe('GET /api/files/[id]/view', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsHashBlocked.mockResolvedValue(false);
     vi.mocked(verifyAuth).mockResolvedValue({ id: mockUserId, email: 'test@test.com' } as unknown as Awaited<ReturnType<typeof verifyAuth>>);
     mockGeneratePresignedUrl.mockResolvedValue('https://fly.storage.tigris.dev/presigned-url');
     vi.mocked(db.query.pages.findFirst).mockResolvedValue({
@@ -216,5 +222,50 @@ describe('GET /api/files/[id]/view', () => {
     const response = await GET(request as never, { params: Promise.resolve({ id: mockFileId }) });
 
     expect(response.status).toBe(404);
+  });
+
+  describe('content that was taken down', () => {
+    it('answers a neutral 410 for a file page whose hash is blocked, and signs no URL', async () => {
+      mockIsHashBlocked.mockResolvedValue(true);
+      const request = new Request('http://localhost/api/files/file-1/view');
+
+      const response = await GET(request as never, { params: Promise.resolve({ id: mockFileId }) });
+
+      expect(response.status).toBe(410);
+      expect(await response.json()).toEqual({ error: 'This file has been removed' });
+      expect(mockIsHashBlocked).toHaveBeenCalledWith(VALID_HASH);
+      expect(mockGeneratePresignedUrl).not.toHaveBeenCalled();
+    });
+
+    it('answers 410 for a channel or DM attachment whose hash is blocked, resolving the legacy key form', async () => {
+      mockIsHashBlocked.mockResolvedValue(true);
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(null as never);
+      vi.mocked(db.query.files.findFirst).mockResolvedValue({
+        id: 'legacy-file',
+        driveId: 'drive-1',
+        mimeType: 'image/png',
+        storagePath: `files/${VALID_HASH}/original`,
+      } as never);
+      vi.mocked(canUserAccessFile).mockResolvedValue(true);
+      const request = new Request('http://localhost/api/files/legacy-file/view', { headers: { Accept: 'application/json' } });
+
+      const response = await GET(request as never, { params: Promise.resolve({ id: 'legacy-file' }) });
+
+      expect(response.status).toBe(410);
+      expect(mockIsHashBlocked).toHaveBeenCalledWith(VALID_HASH);
+      expect(mockGeneratePresignedUrl).not.toHaveBeenCalled();
+    });
+
+    it('still answers 403, not 410, to someone with no access to the file', async () => {
+      mockIsHashBlocked.mockResolvedValue(true);
+      const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
+      vi.mocked(canUserViewPage).mockResolvedValueOnce(false);
+      const request = new Request('http://localhost/api/files/file-1/view');
+
+      const response = await GET(request as never, { params: Promise.resolve({ id: mockFileId }) });
+
+      expect(response.status).toBe(403);
+      expect(mockIsHashBlocked).not.toHaveBeenCalled();
+    });
   });
 });

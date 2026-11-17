@@ -36,6 +36,11 @@ vi.mock('../../services/rbac', () => {
   };
 });
 
+const mockIsHeldForTakedown = vi.fn().mockResolvedValue(false);
+vi.mock('../../services/takedown-guard', () => ({
+  isHeldForTakedown: (...args: unknown[]) => mockIsHeldForTakedown(...args),
+}));
+
 import { deleteFileRouter } from '../delete-file';
 import { DeleteFileAuthorizationError, DeleteFileReferencedError } from '../../services/rbac';
 
@@ -151,5 +156,29 @@ describe('delete-file route', () => {
 
     expect(response.status).toBe(500);
     expect(response.body).toEqual({ error: 'disk failure' });
+  });
+
+  it('refuses to delete a hash held for a content takedown, even for an authorized orphan reap', async () => {
+    const app = createApp({ userId: 'user-1' });
+    mockAssertDeleteFileAccess.mockResolvedValue(undefined);
+    mockIsHeldForTakedown.mockResolvedValueOnce(true);
+
+    const response = await request(app).delete(`/files/${VALID_HASH}`);
+
+    expect(response.status).toBe(409);
+    expect(response.body).toEqual({ error: 'File is held and cannot be hard deleted', held: true });
+    expect(mockIsHeldForTakedown).toHaveBeenCalledWith(VALID_HASH);
+    expect(mockDeleteOriginalAndCache).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the blocklist cannot be read', async () => {
+    const app = createApp({ userId: 'user-1' });
+    mockAssertDeleteFileAccess.mockResolvedValue(undefined);
+    mockIsHeldForTakedown.mockRejectedValueOnce(new Error('db down'));
+
+    const response = await request(app).delete(`/files/${VALID_HASH}`);
+
+    expect(response.status).toBe(500);
+    expect(mockDeleteOriginalAndCache).not.toHaveBeenCalled();
   });
 });

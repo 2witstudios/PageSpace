@@ -223,3 +223,11 @@
 # that reappeared. It reads the live policy, so a tick with nothing to do lists and changes nothing. Inert with no
 # PUBLISH_BUCKET.
 */10 * * * * flock -n /run/reconcile-published-visibility.lock cron-curl GET __WEB_URL__/api/cron/reconcile-published-visibility >> /var/log/cron/reconcile-published-visibility.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/reconcile-published-visibility.log
+
+# Content-safety re-sweep - Every 15 minutes
+# A presigned PUT issued before a hash was blocked stays valid for its 15-minute TTL, so bytes can land at a
+# blocked key after a takedown deleted it. Nothing can serve them (the hash is blocked: readers answer 410 and
+# upload-complete refuses), but they would sit in the bucket. This gives each recently finished global takedown
+# a preserve-and-delete pass once that window has closed. A pass that fails alerts the abuse inbox and is retried on
+# later ticks, up to 3 attempts. A tick with nothing due reads one query and changes nothing.
+*/15 * * * * flock -n /run/content-safety-resweep.lock cron-curl GET __WEB_URL__/api/cron/content-safety-resweep >> /var/log/cron/content-safety-resweep.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/content-safety-resweep.log

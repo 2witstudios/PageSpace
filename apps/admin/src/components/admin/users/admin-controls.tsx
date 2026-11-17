@@ -151,9 +151,14 @@ export function AdminControls({ user, onActionComplete }: AdminControlsProps) {
         }
         confirmLabel="Suspend user"
         reasonPlaceholder="Why is this account being suspended?"
+        checkbox={{
+          label: "Also unpublish this user's published sites",
+          description:
+            'Parks the sites of drives they own, so they stop being served. Org drives with other members are left published and listed for you to decide. Lifting the suspension restores them.',
+        }}
         pending={pending}
         error={dialogError}
-        onConfirm={({ reason }) => void run(() => suspendUser(user.id, reason))}
+        onConfirm={({ reason, checked }) => void run(() => suspendUser(user.id, reason, checked))}
       />
 
       <ConfirmActionDialog

@@ -1,0 +1,169 @@
+/**
+ * An in-memory S3 for tests that need real object-store behaviour across more
+ * than one bucket (uploads, publish, evidence) without a network.
+ *
+ * Use it by replacing only the client class and keeping the real command
+ * classes, so the code under test builds exactly the commands it builds in
+ * production:
+ *
+ *   const fakeS3 = vi.hoisted(() => ({ current: null as null | FakeS3 }));
+ *   vi.mock('@aws-sdk/client-s3', async (importOriginal) => ({
+ *     ...(await importOriginal<typeof import('@aws-sdk/client-s3')>()),
+ *     S3Client: class { send(command: unknown) { return fakeS3.current!.send(command); } },
+ *   }));
+ */
+
+interface StoredObject {
+  body: Uint8Array;
+  contentType?: string;
+}
+
+interface CommandLike {
+  constructor: { name: string };
+  input: Record<string, unknown>;
+}
+
+function notFound(name: 'NotFound' | 'NoSuchKey'): Error {
+  const error = new Error(name) as Error & { $metadata: { httpStatusCode: number } };
+  error.name = name;
+  error.$metadata = { httpStatusCode: 404 };
+  return error;
+}
+
+function toBytes(body: unknown): Uint8Array {
+  // isView, not instanceof: under jsdom a Uint8Array can come from another realm.
+  if (ArrayBuffer.isView(body)) return new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
+  if (typeof body === 'string') return new TextEncoder().encode(body);
+  if (body === undefined || body === null) return new Uint8Array(0);
+  throw new Error('FakeS3: unsupported body type');
+}
+
+/** A streamed body (anything async-iterable that is not already bytes), drained the way the SDK would. */
+async function drain(body: unknown): Promise<Uint8Array> {
+  if (body && typeof body === 'object' && !ArrayBuffer.isView(body) && Symbol.asyncIterator in body) {
+    const chunks: Uint8Array[] = [];
+    for await (const chunk of body as AsyncIterable<Uint8Array | string>) chunks.push(toBytes(chunk));
+    const out = new Uint8Array(chunks.reduce((n, c) => n + c.byteLength, 0));
+    let offset = 0;
+    for (const chunk of chunks) {
+      out.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return out;
+  }
+  return toBytes(body);
+}
+
+export interface FakePut {
+  bucket: string;
+  key: string;
+  /** The body arrived as a stream, not as bytes held in memory. */
+  streamed: boolean;
+  contentLength?: number;
+}
+
+export class FakeS3 {
+  readonly buckets = new Map<string, Map<string, StoredObject>>();
+  /** How each PutObject was sent. */
+  readonly puts: FakePut[] = [];
+  /** Every command sent, in order, as `Name bucket key-or-prefix`. */
+  readonly log: string[] = [];
+  /** Throw this (once) from the next command whose log line contains the given text. */
+  failOn: { match: string; error: Error } | null = null;
+
+  bucket(name: string): Map<string, StoredObject> {
+    let bucket = this.buckets.get(name);
+    if (!bucket) {
+      bucket = new Map();
+      this.buckets.set(name, bucket);
+    }
+    return bucket;
+  }
+
+  put(bucket: string, key: string, body: string | Uint8Array, contentType?: string): void {
+    this.bucket(bucket).set(key, { body: toBytes(body), contentType });
+  }
+
+  keys(bucket: string): string[] {
+    return [...this.bucket(bucket).keys()].sort();
+  }
+
+  has(bucket: string, key: string): boolean {
+    return this.bucket(bucket).has(key);
+  }
+
+  async send(command: unknown): Promise<Record<string, unknown>> {
+    const { constructor, input } = command as CommandLike;
+    const bucketName = String(input.Bucket);
+    const bucket = this.bucket(bucketName);
+    const key = typeof input.Key === 'string' ? input.Key : undefined;
+    const line = `${constructor.name} ${bucketName} ${key ?? String(input.Prefix ?? '')}`;
+    this.log.push(line);
+
+    if (this.failOn && line.includes(this.failOn.match)) {
+      const { error } = this.failOn;
+      this.failOn = null;
+      throw error;
+    }
+
+    switch (constructor.name) {
+      case 'HeadObjectCommand': {
+        const object = bucket.get(key!);
+        if (!object) throw notFound('NotFound');
+        return { ContentLength: object.body.byteLength, ContentType: object.contentType };
+      }
+      case 'GetObjectCommand': {
+        const object = bucket.get(key!);
+        if (!object) throw notFound('NoSuchKey');
+        return {
+          ContentLength: object.body.byteLength,
+          ContentType: object.contentType,
+          // Both ways the SDK's Node body is read: whole, or streamed (in small chunks here, so a reader that
+          // assumes one chunk is caught).
+          Body: {
+            transformToByteArray: async () => object.body,
+            async *[Symbol.asyncIterator]() {
+              for (let i = 0; i < object.body.byteLength; i += 4) yield object.body.subarray(i, i + 4);
+            },
+          },
+        };
+      }
+      case 'PutObjectCommand': {
+        const streamed = !ArrayBuffer.isView(input.Body) && typeof input.Body === 'object' && input.Body !== null;
+        const body = await drain(input.Body);
+        // As S3 does: a streamed PUT with a declared length must deliver exactly that many bytes.
+        if (typeof input.ContentLength === 'number' && input.ContentLength !== body.byteLength) {
+          throw new Error(`FakeS3: ContentLength ${input.ContentLength} but ${body.byteLength} bytes sent`);
+        }
+        this.puts.push({ bucket: bucketName, key: key!, streamed, contentLength: input.ContentLength as number | undefined });
+        bucket.set(key!, { body, contentType: input.ContentType as string | undefined });
+        return {};
+      }
+      case 'CopyObjectCommand': {
+        const source = String(input.CopySource);
+        const slash = source.indexOf('/');
+        const object = this.bucket(source.slice(0, slash)).get(decodeURIComponent(source.slice(slash + 1)));
+        if (!object) throw notFound('NoSuchKey');
+        bucket.set(key!, { ...object });
+        return {};
+      }
+      case 'DeleteObjectCommand': {
+        bucket.delete(key!);
+        return {};
+      }
+      case 'DeleteObjectsCommand': {
+        const objects = (input.Delete as { Objects: Array<{ Key: string }> }).Objects;
+        for (const object of objects) bucket.delete(object.Key);
+        return { Deleted: objects };
+      }
+      case 'ListObjectsV2Command': {
+        const prefix = String(input.Prefix ?? '');
+        const matching = [...bucket.keys()].filter((k) => k.startsWith(prefix)).sort();
+        const limit = typeof input.MaxKeys === 'number' ? input.MaxKeys : 1000;
+        return { Contents: matching.slice(0, limit).map((Key) => ({ Key, Size: bucket.get(Key)!.body.byteLength })), IsTruncated: false };
+      }
+      default:
+        throw new Error(`FakeS3: unsupported command ${constructor.name}`);
+    }
+  }
+}

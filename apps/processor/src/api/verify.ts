@@ -1,3 +1,4 @@
+import { deleteOriginalUnlessHeld } from '../services/takedown-guard';
 import { Router } from 'express';
 import type { Router as ExpressRouter, Response } from 'express';
 import { contentStore } from '../server';
@@ -88,7 +89,7 @@ router.post('/', async (req, res) => {
     if (!verifyContentHash(bytes, contentHash)) {
       loggers.security.warn('Attachment verify: hash mismatch — deleting object', { contentHash });
       try {
-        await contentStore.deleteOriginal(contentHash);
+        await deleteOriginalUnlessHeld(contentHash);
       } catch (err) {
         loggers.processor.error('Failed to delete mismatched attachment object', err as Error, { contentHash });
       }
@@ -108,7 +109,7 @@ router.post('/', async (req, res) => {
     if (!isAllowedContentType(detected)) {
       loggers.security.warn('Attachment verify: disallowed content type — deleting object', { contentHash, label: detected.label });
       try {
-        await contentStore.deleteOriginal(contentHash);
+        await deleteOriginalUnlessHeld(contentHash);
       } catch (err) {
         loggers.processor.error('Failed to delete disallowed attachment object', err as Error, { contentHash });
       }

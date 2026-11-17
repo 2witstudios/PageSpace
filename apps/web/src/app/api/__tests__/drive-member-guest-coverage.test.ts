@@ -45,6 +45,10 @@ type Entry = { reads: number; decision: Decision; reason: string };
 
 const LEDGER = new Map<string, Entry>([
   // ── packages/lib/src ────────────────────────────────────────────────────
+  ['packages/lib/src/permissions/led-drives-sharing.ts', {
+    reads: 1, decision: 'excludes',
+    reason: "listLedDrivesWithSharing (for parkUserSites) asks whether an org drive has members other than the suspended owner, to decide whether its sites are the owner's alone to lose. A GUEST row is not a member (role <> 'GUEST', alongside the acceptedAt gate), so a drive whose only other row is a guest is still parked.",
+  }],
   ['packages/lib/src/permissions/permissions.ts', {
     reads: 5, decision: 'excludes',
     reason: 'resolveDriveIdsForUser (a GUEST row reaches the drive only through its page grants; the org-aware form reads the row through driveMembershipRow), both usersShareDrive reads, and the batch page-permission and page-viewer joins, which resolvePagePermissionRow decides (no custom role, no rule 4 for a GUEST) after withEffectiveMembership re-reads each row through driveMembershipRow. Every other door (rule 4, custom roles, drive-root access, isUserDriveMember, getUserDriveAccess, getUserDrivePermissions, both accessible-pages listings) goes through loadEffectiveDriveMembership, which reads a GUEST row as none.',

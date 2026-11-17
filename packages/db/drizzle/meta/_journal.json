@@ -2472,6 +2472,13 @@
       "when": 1794801928587,
       "tag": "0383_content_safety",
       "breakpoints": true
+    },
+    {
+      "idx": 353,
+      "version": "7",
+      "when": 1794801980039,
+      "tag": "0384_content_site_holds",
+      "breakpoints": true
     }
   ]
 }

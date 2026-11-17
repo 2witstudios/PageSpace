@@ -88,6 +88,15 @@ export type SecurityEventType =
   // content blocklist was refused. resourceId is the content hash. Its own type (not
   // `authz.access.denied`) so case tooling can find attempts without reading `details`.
   | 'content.upload.blocked'
+  // Content safety takedowns, one type per action so each can be queried on its own.
+  // resourceId is the case target (hash, page, drive or user ID); details.caseId links the case.
+  | 'content.takedown.global'
+  | 'content.takedown.page_unpublished'
+  | 'content.takedown.sites_parked'
+  | 'content.takedown.sites_restored'
+  | 'content.takedown.avatar'
+  // An admin looked up a takedown target or the case list (metadata only, never the file).
+  | 'content.case.read'
   // Agent-account credential brokering (L1·G1b, ADR 0004 §5). The `allowed`
   // row is written and durably accepted BEFORE the operation runs, and the
   // outcome row is keyed by the same grant id, so the chain carries both

@@ -1,10 +1,16 @@
 import { findOrphanedFileRecords, deleteFileRecords } from '@pagespace/lib/compliance/file-cleanup/orphan-detector';
 import { createSystemFileDeleteToken } from '@pagespace/lib/services/validated-service-token';
+import { findBlockedHashes } from '@pagespace/lib/content-safety/blocklist';
 import { updateStorageUsage, computeStorageCreditOnUnlink, findDriveBillingFactsMap } from '@pagespace/lib/services/storage-limits';
 
 type Database = typeof import('@pagespace/db/db').db;
 
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
+
+/** The content hash inside a storage path (a bare hash, or `files/<hash>/original`). */
+function hashOfStoragePath(storagePath: string | null): string | undefined {
+  return storagePath?.split('/').filter(Boolean).find((segment) => /^[a-f0-9]{64}$/i.test(segment));
+}
 
 export interface ReapResult {
   orphansFound: number;
@@ -59,6 +65,12 @@ export async function reapOrphanedFiles(database: Database, options?: ReapOption
   const reapedOrphans: typeof orphans = [];
   const dbOnlyOrphans: typeof orphans = [];
 
+  // A hash on the content blocklist belongs to its takedown: only the takedown
+  // deletes its objects, after preserving a copy (it may still be waiting to).
+  // The reaper never asks for those bytes to be deleted. The row itself is an
+  // ordinary orphan and is still reaped, so the uploader's quota is released.
+  const heldHashes = await findBlockedHashes(orphans.flatMap((orphan) => hashOfStoragePath(orphan.storagePath) ?? []));
+
   for (const orphan of orphans) {
     // No physical blob to delete — just hard-delete the DB row. Skip the
     // storage credit because the row claims sizeBytes but the bytes were
@@ -68,13 +80,16 @@ export async function reapOrphanedFiles(database: Database, options?: ReapOption
       continue;
     }
 
-    const contentHash = orphan.storagePath.split('/').filter(Boolean).find(segment =>
-      /^[a-f0-9]{64}$/i.test(segment),
-    );
+    const contentHash = hashOfStoragePath(orphan.storagePath);
 
     if (!contentHash) {
       console.warn(`[ReapOrphans] Orphan ${orphan.id} has malformed storagePath (no valid content hash): ${orphan.storagePath}`);
       failedPhysicalDeletes.push(orphan.id);
+      continue;
+    }
+
+    if (heldHashes.has(contentHash.toLowerCase())) {
+      reapedOrphans.push(orphan);
       continue;
     }
 

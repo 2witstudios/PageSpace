@@ -10,6 +10,7 @@ import { isDangerousMimeType, sanitizeFilenameForHeader } from '@pagespace/lib/u
 import { generatePresignedUrl, getPresignedUrlTtl } from '@/lib/presigned-url';
 import { verifyCanvasFileViewToken } from '@/lib/canvas/file-view-token';
 import { actorFromVerifiedUser, deniedResponse } from '@/lib/auth/request-actor';
+import { refuseRemovedContent } from '@/lib/content-safety/removed-response';
 
 interface RouteParams {
   params: Promise<{
@@ -69,6 +70,8 @@ export async function GET(request: Request, context: RouteParams) {
   if (!contentHash) {
     return NextResponse.json({ error: 'Invalid file path' }, { status: 500 });
   }
+  const removed = await refuseRemovedContent(contentHash);
+  if (removed) return removed;
   const mimeType = page.mimeType || 'application/octet-stream';
   const ttl = getPresignedUrlTtl(mimeType);
   const filename = sanitizeFilenameForHeader(page.originalFileName || page.title || contentHash);

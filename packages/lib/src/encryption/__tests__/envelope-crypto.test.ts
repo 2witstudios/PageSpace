@@ -11,6 +11,9 @@ import { describe, it, expect } from 'vitest';
 import {
   encryptBuffer,
   decryptBuffer,
+  ENVELOPE_HEADER_LENGTH,
+  createEnvelopeDecipher,
+  hasEnvelopeMagic,
   isEnvelope,
   maybeEncryptBuffer,
   maybeDecryptBuffer,
@@ -73,5 +76,41 @@ describe('maybeDecryptBuffer (policy)', () => {
   });
   it('given legacy plaintext (no envelope), should pass through unchanged', () => {
     expect(maybeDecryptBuffer(PLAIN, { masterKey: KEY }).equals(PLAIN)).toBe(true);
+  });
+});
+
+describe('hasEnvelopeMagic', () => {
+  it('recognises an envelope from its first four bytes alone', () => {
+    const env = encryptBuffer(PLAIN, KEY);
+    expect(hasEnvelopeMagic(env.subarray(0, 4))).toBe(true);
+    expect(hasEnvelopeMagic(PLAIN)).toBe(false);
+    expect(hasEnvelopeMagic(Buffer.from('PS'))).toBe(false);
+  });
+});
+
+describe('createEnvelopeDecipher', () => {
+  const stream = (env: Buffer, key: string, chunk = 7) => {
+    const decipher = createEnvelopeDecipher(env.subarray(0, ENVELOPE_HEADER_LENGTH), key);
+    const out: Buffer[] = [];
+    const body = env.subarray(ENVELOPE_HEADER_LENGTH);
+    for (let i = 0; i < body.length; i += chunk) out.push(decipher.update(body.subarray(i, i + chunk)));
+    out.push(decipher.final());
+    return Buffer.concat(out);
+  };
+
+  it('decrypts an envelope chunk by chunk to the same plaintext as decryptBuffer', () => {
+    expect(stream(encryptBuffer(PLAIN, KEY), KEY).equals(PLAIN)).toBe(true);
+  });
+
+  it('throws at the end when the ciphertext was tampered with or the key is wrong', () => {
+    const env = encryptBuffer(PLAIN, KEY);
+    const tampered = Buffer.from(env);
+    tampered[tampered.length - 1] ^= 0xff;
+    expect(() => stream(tampered, KEY)).toThrow();
+    expect(() => stream(env, 'another-master-key-at-least-32-characters')).toThrow();
+  });
+
+  it('refuses a header that is not an envelope header', () => {
+    expect(() => createEnvelopeDecipher(Buffer.alloc(ENVELOPE_HEADER_LENGTH), KEY)).toThrow();
   });
 });

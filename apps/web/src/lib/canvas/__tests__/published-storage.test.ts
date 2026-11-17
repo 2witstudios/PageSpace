@@ -30,6 +30,10 @@ vi.mock('server-only', () => ({}));
 const assertPrefixWritable = vi.hoisted(() => vi.fn(async (_prefix: string) => {}));
 vi.mock('@pagespace/lib/organizations/published-visibility', () => ({ assertPrefixWritable }));
 
+// Content safety: a blocked hash is never promoted to the public bucket. Default: nothing is blocked.
+const isHashBlocked = vi.hoisted(() => vi.fn(async (_hash: string) => false));
+vi.mock('@pagespace/lib/content-safety/blocklist', () => ({ isHashBlocked }));
+
 // Mock only the S3Client constructor (capture .send); keep the real command
 // classes so `instanceof` checks below still hold.
 vi.mock('@aws-sdk/client-s3', async (importOriginal) => {
@@ -408,8 +412,34 @@ describe('buildAssetUrlFromKey', () => {
 describe('copyAssetToPublishBucket', () => {
   beforeEach(() => {
     send.mockReset();
+    isHashBlocked.mockReset();
+    isHashBlocked.mockResolvedValue(false);
     process.env.PUBLISH_BUCKET = 'test-publish';
     process.env.BUCKET_NAME = 'test-files';
+  });
+
+  it('given a blocked hash, should refuse before touching either bucket — even when the public copy already exists', async () => {
+    isHashBlocked.mockResolvedValue(true);
+
+    await expect(copyAssetToPublishBucket({ contentHash: HASH, mimeType: 'image/png' })).rejects.toThrow(
+      'This file is not available for publishing',
+    );
+
+    expect(isHashBlocked).toHaveBeenCalledWith(HASH);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('given a blocked hash, should refuse to promote its thumbnail too', async () => {
+    isHashBlocked.mockResolvedValue(true);
+
+    await expect(
+      copyObjectToPublishBucket({
+        sourceKey: `cache/${HASH}/thumbnail.webp`,
+        assetKey: `assets/cache/${HASH}/thumbnail.webp`,
+        contentType: 'image/webp',
+      }),
+    ).rejects.toThrow('This file is not available for publishing');
+    expect(send).not.toHaveBeenCalled();
   });
 
   it('given the asset already exists in the publish bucket (HeadObject 200), should skip GetObject and PutObject', async () => {
@@ -453,6 +483,35 @@ describe('copyAssetToPublishBucket', () => {
       ContentType: 'image/png',
     });
     expect(putCmd.input.Body).toBeInstanceOf(Uint8Array);
+  });
+
+  it('given the hash is blocked between the check and the PUT, should take the copy it just wrote back down: nothing stays public', async () => {
+    // A public bucket in memory, so "nothing stays public" is checked on state, not on a call log.
+    const publicKeys = new Set<string>();
+    send.mockImplementation(async (command: unknown) => {
+      if (command instanceof HeadObjectCommand) {
+        if (publicKeys.has(command.input.Key!)) return {};
+        throw Object.assign(new Error('Not Found'), { name: 'NotFound' });
+      }
+      if (command instanceof GetObjectCommand) return { Body: { transformToByteArray: async () => new Uint8Array([1]) } };
+      if (command instanceof PutObjectCommand) {
+        publicKeys.add(command.input.Key!);
+        return {};
+      }
+      if (command instanceof DeleteObjectCommand) {
+        publicKeys.delete(command.input.Key!);
+        return {};
+      }
+      throw new Error(`unexpected ${String(command)}`);
+    });
+    // The takedown's block lands after this publish checked and before its PUT finished.
+    isHashBlocked.mockResolvedValueOnce(false).mockResolvedValue(true);
+
+    await expect(copyAssetToPublishBucket({ contentHash: HASH, mimeType: 'image/png' })).rejects.toThrow(
+      'This file is not available for publishing',
+    );
+    expect(publicKeys.size).toBe(0);
+    send.mockReset();
   });
 
   it('given HeadObject throws a non-404 error, should propagate the error without copying', async () => {
