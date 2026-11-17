@@ -201,7 +201,9 @@ const TEXT_TOKEN_SEPARATOR = /[\s"'`()<>[\]{},;=]+/;
  */
 function textReferenceIds(content: string): string[] {
   const html = decodeHTML(content);
-  const unescaped = [content, html, decodeJsEscapes(content), decodeJsEscapes(html)];
+  // A script string can carry a CSS value (`el.style.backgroundImage = '…'`):
+  // JavaScript decodes it once, then CSS decodes what is left.
+  const unescaped = [content, html].flatMap((text) => [text, decodeJsEscapes(text), decodeCssEscapes(decodeJsEscapes(text))]);
   const forms = new Set(unescaped.flatMap((text) => [text, decodePercentEscapes(text)]));
   const ids: string[] = [];
   for (const text of forms) {
@@ -242,13 +244,19 @@ function collapsePathSegments(text: string): string {
  */
 function backstopSkeletons({ outsideScripts, scripts }: ScriptRegions): string[] {
   // CSS and JavaScript read a backslash differently (`\70 ` is `p` in CSS, `8` in
-  // a script): script bodies are read with JavaScript rules, everything else
-  // with CSS rules.
-  const decodings: Array<[string, (text: string) => string]> = [
+  // a script). Everything outside script bodies is read with CSS rules. A
+  // script region is decoded by JavaScript exactly once, as the engine does,
+  // and then read two ways: as is, and with CSS rules, because a script string
+  // can hold a CSS value that CSS decodes again when it is assigned.
+  const identity = (text: string) => text;
+  const readings: Array<[string, (text: string) => string]> = [
     [outsideScripts, decodeCssEscapes],
-    ...scripts.map((script): [string, (text: string) => string] => [script, decodeJsEscapes]),
+    ...scripts.flatMap((script): Array<[string, (text: string) => string]> => {
+      const decoded = decodeJsEscapes(script);
+      return [[decoded, identity], [decoded, decodeCssEscapes]];
+    }),
   ];
-  const chains = decodings.map(([source, decodeEscapes]) => {
+  const chains = readings.map(([source, decodeEscapes]) => {
     let text = source;
     for (let round = 0; round < 4; round++) {
       const next = decodePercentEscapes(decodeHTML(decodeEscapes(text)));

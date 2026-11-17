@@ -259,6 +259,16 @@ describe('scanStoredFileReferences', () => {
     expect(scanStoredFileReferences('<p>x</p><script>s = "\\57api\\57files\\57 page-a\\57view"').complete).toBe(false);
   });
 
+  it('given CSS escapes inside a JavaScript string assigned to a style (JS decodes once, then CSS), should return the id', () => {
+    const content = '<script>\ndocument.body.style.backgroundImage = \'url("/api/fi\\\\6c es/page-a/view")\';\n</script>';
+    expect(scanStoredFileReferences(content)).toEqual({ ids: ['page-a'], complete: true });
+  });
+
+  it('given a JS-then-CSS mention the token scan cannot resolve, should report the scan incomplete', () => {
+    const content = '<script>el.style.cssText = "background: url(/api/fi\\\\6c es/ page-a/view)"</script>';
+    expect(scanStoredFileReferences(content).complete).toBe(false);
+  });
+
   it('given every occurrence accounted for, should report the scan complete', () => {
     const scan = scanStoredFileReferences('<img src="/api/files/page-a/view"> ![a](/api/files/page-a/view) <img src="/api/files/page-b/thumbnail">');
     expect(scan.complete).toBe(true);

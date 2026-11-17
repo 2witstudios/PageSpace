@@ -1032,6 +1032,7 @@ describe('POST /api/pages/bulk-copy — content blocklist', () => {
     it.each([
       ['braced Unicode escapes with leading zeros', '<script>new Image().src="\\u{000002f}api\\u{000002f}files\\u{000002f}file-page-1\\u{000002f}view"</script>'],
       ['legacy octal escapes', '<script>new Image().src="\\57api\\57files\\57file-page-1\\57view"</script>'],
+      ['CSS escapes inside a script-assigned style', '<script>document.body.style.backgroundImage = \'url("/api/fi\\\\6c es/file-page-1/view")\';</script>'],
     ])('refuses a CANVAS whose script spells a blocked reference with %s', async (_label, content) => {
       mockTree(
         [mockSourcePage({ type: 'CANVAS', content })],
