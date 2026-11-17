@@ -99,11 +99,13 @@ vi.mock('@/lib/upload/processor-effects', () => ({
 
 const mockDigestStoredObject = vi.fn();
 const mockDeleteStoredObject = vi.fn();
-const mockCopyVerifiedObject = vi.fn();
 vi.mock('@/lib/upload/s3-effects', () => ({
   digestStoredObject: (...args: unknown[]) => mockDigestStoredObject(...args),
   deleteStoredObject: (...args: unknown[]) => mockDeleteStoredObject(...args),
-  copyVerifiedObject: (...args: unknown[]) => mockCopyVerifiedObject(...args),
+}));
+const mockPromoteStagedUpload = vi.fn();
+vi.mock('@/lib/upload/promote-staged-upload', () => ({
+  promoteStagedUpload: (...args: unknown[]) => mockPromoteStagedUpload(...args),
 }));
 
 vi.mock('@pagespace/lib/services/upload-validation', () => ({
@@ -160,7 +162,6 @@ function makeTxImpl() {
 const VALID_HASH = 'b'.repeat(64);
 const FINAL_KEY = `files/${VALID_HASH}/original`;
 const MOCK_JOB_ID = 'user-1-slot-xyz';
-const STAGING_KEY = `uploads/staging/${MOCK_JOB_ID}`;
 
 function makeAuth(userId = 'user-1') {
   return { userId, tokenType: 'session' as const, tokenVersion: 0, sessionId: 's', role: 'user' as const, adminRoleVersion: 0 };
@@ -204,11 +205,10 @@ beforeEach(() => {
   // Default: the files-row insert succeeds (first physical store → fileWasInserted).
   filesInsertReturning = [{ id: VALID_HASH }];
   mockFilesFindFirst.mockResolvedValue(undefined);
-  // Default: the client PUT the declared bytes to its staging key.
-  mockDigestStoredObject.mockImplementation(async (key: string) =>
-    key === STAGING_KEY ? { status: 'ok', sha256: VALID_HASH, size: 2048, etag: '"etag-1"' } : { status: 'missing' });
+  // Default: the client PUT the declared bytes to its staging key, and they were published.
+  mockPromoteStagedUpload.mockResolvedValue({ status: 'promoted' });
+  mockDigestStoredObject.mockResolvedValue({ status: 'missing' });
   mockDeleteStoredObject.mockResolvedValue(undefined);
-  mockCopyVerifiedObject.mockResolvedValue('copied');
 
   mockTransaction.mockImplementation(makeTxImpl());
 });
@@ -266,6 +266,7 @@ describe('POST /api/upload/complete', () => {
 
   describe('object verification', () => {
     it('returns 409 and creates no page when the uploaded object is missing from storage', async () => {
+      mockPromoteStagedUpload.mockResolvedValue({ status: 'no_staging' });
       mockDigestStoredObject.mockResolvedValue({ status: 'missing' });
       const res = await POST(makeRequest(VALID_BODY));
       expect(res.status).toBe(409);
@@ -273,46 +274,40 @@ describe('POST /api/upload/complete', () => {
     });
 
     it('releases the slot when the object is missing', async () => {
+      mockPromoteStagedUpload.mockResolvedValue({ status: 'no_staging' });
       mockDigestStoredObject.mockResolvedValue({ status: 'missing' });
       await POST(makeRequest(VALID_BODY));
       expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_JOB_ID);
     });
 
-    it('hashes the staging object the client PUT, bounded by the size reserved at presign', async () => {
-      await POST(makeRequest(VALID_BODY));
-      expect(mockDigestStoredObject).toHaveBeenCalledWith(STAGING_KEY, SLOT_META.fileSize);
-    });
-
-    it('copies exactly the hashed version to the content-addressed key, then deletes the staging object, before committing', async () => {
+    it('publishes the staged upload through the verified promotion, bounded by the size reserved at presign, before committing', async () => {
       const order: string[] = [];
-      mockCopyVerifiedObject.mockImplementation(async () => { order.push('copy'); return 'copied'; });
-      mockDeleteStoredObject.mockImplementation(async (key: string) => { order.push(`delete:${key}`); });
+      mockPromoteStagedUpload.mockImplementation(async () => { order.push('promote'); return { status: 'promoted' }; });
       mockTransaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => { order.push('commit'); return makeTxImpl()(fn); });
 
       const res = await POST(makeRequest(VALID_BODY));
 
       expect(res.status).toBe(200);
-      expect(mockCopyVerifiedObject).toHaveBeenCalledWith(STAGING_KEY, FINAL_KEY, '"etag-1"');
-      expect(order).toEqual(['copy', `delete:${STAGING_KEY}`, 'commit']);
+      expect(mockPromoteStagedUpload).toHaveBeenCalledWith({ jobId: MOCK_JOB_ID, contentHash: VALID_HASH, maxBytes: SLOT_META.fileSize, servedKey: FINAL_KEY });
+      expect(order).toEqual(['promote', 'commit']);
     });
 
-    it('given no staging object (the dedup fast-path skipped the PUT), should verify the existing content-addressed object instead', async () => {
-      mockDigestStoredObject.mockImplementation(async (key: string) =>
-        key === FINAL_KEY ? { status: 'ok', sha256: VALID_HASH, size: 2048, etag: '"f"' } : { status: 'missing' });
+    it('given no staging object (the dedup fast-path skipped the PUT), should verify the existing served object instead', async () => {
+      mockPromoteStagedUpload.mockResolvedValue({ status: 'no_staging' });
+      mockDigestStoredObject.mockResolvedValue({ status: 'ok', sha256: VALID_HASH, size: 2048 });
 
       const res = await POST(makeRequest(VALID_BODY));
 
       expect(res.status).toBe(200);
-      expect(mockCopyVerifiedObject).not.toHaveBeenCalled();
+      expect(mockDigestStoredObject).toHaveBeenCalledWith(FINAL_KEY, SLOT_META.fileSize);
     });
   });
 
   describe('stored bytes verified before the page commits', () => {
     const BLOCKED_BYTES_HASH = 'e'.repeat(64);
 
-    it('given a clean declared hash but different (blocked) stored bytes, should refuse, delete the object and serve nothing', async () => {
-      mockDigestStoredObject.mockImplementation(async (key: string) =>
-        key === STAGING_KEY ? { status: 'ok', sha256: BLOCKED_BYTES_HASH, size: 2048, etag: '"x"' } : { status: 'missing' });
+    it('given a clean declared hash but different (blocked) staged bytes, should refuse and serve nothing', async () => {
+      mockPromoteStagedUpload.mockResolvedValue({ status: 'mismatch' });
 
       const res = await POST(makeRequest(VALID_BODY));
 
@@ -322,37 +317,16 @@ describe('POST /api/upload/complete', () => {
       expect(mockTransaction).not.toHaveBeenCalled();
       expect(enqueueProcessorJob).not.toHaveBeenCalled();
       expect(chargeStorageForStore).not.toHaveBeenCalled();
-      expect(mockCopyVerifiedObject).not.toHaveBeenCalled();
-      expect(mockDeleteStoredObject).toHaveBeenCalledWith(STAGING_KEY);
       expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_JOB_ID);
       expect(releasePendingUpload).toHaveBeenCalledWith(MOCK_JOB_ID);
     });
 
-    it('given stored bytes larger than the reserved size, should refuse and delete the object the same way', async () => {
-      mockDigestStoredObject.mockImplementation(async (key: string) => (key === STAGING_KEY ? { status: 'oversize' } : { status: 'missing' }));
-
-      const res = await POST(makeRequest(VALID_BODY));
-
-      expect(res.status).toBe(422);
-      expect(mockTransaction).not.toHaveBeenCalled();
-      expect(mockDeleteStoredObject).toHaveBeenCalledWith(STAGING_KEY);
-    });
-
-    it('given the staging object was overwritten after it was hashed, should copy nothing and commit nothing', async () => {
-      mockCopyVerifiedObject.mockResolvedValue('source_changed');
-
-      const res = await POST(makeRequest(VALID_BODY));
-
-      expect(res.status).toBe(409);
-      expect(mockTransaction).not.toHaveBeenCalled();
-      expect(mockDeleteStoredObject).toHaveBeenCalledWith(STAGING_KEY);
-      expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_JOB_ID);
-    });
-
-    it('given a mismatch on a content-addressed object an existing files row already owns, should refuse but leave it for the existing pages', async () => {
-      mockDigestStoredObject.mockImplementation(async (key: string) =>
-        key === FINAL_KEY ? { status: 'ok', sha256: BLOCKED_BYTES_HASH, size: 2048, etag: '"f"' } : { status: 'missing' });
-      mockFilesFindFirst.mockResolvedValue({ id: VALID_HASH });
+    it.each([
+      ['different bytes', { status: 'ok', sha256: BLOCKED_BYTES_HASH, size: 2048 }],
+      ['more bytes than reserved', { status: 'oversize' }],
+    ])('given an existing served object with %s, should refuse but never delete the shared served key', async (_label, digest) => {
+      mockPromoteStagedUpload.mockResolvedValue({ status: 'no_staging' });
+      mockDigestStoredObject.mockResolvedValue(digest);
 
       const res = await POST(makeRequest(VALID_BODY));
 
@@ -361,8 +335,8 @@ describe('POST /api/upload/complete', () => {
       expect(mockDeleteStoredObject).not.toHaveBeenCalled();
     });
 
-    it('given the stored-object read throws, should release both reservations and answer a retryable 503', async () => {
-      mockDigestStoredObject.mockRejectedValue(new Error('s3 timeout'));
+    it('given the promotion throws, should release both reservations and answer a retryable 503', async () => {
+      mockPromoteStagedUpload.mockRejectedValue(new Error('s3 timeout'));
 
       const res = await POST(makeRequest(VALID_BODY));
 
@@ -377,6 +351,7 @@ describe('POST /api/upload/complete', () => {
 
       await POST(makeRequest(VALID_BODY));
 
+      expect(mockPromoteStagedUpload).not.toHaveBeenCalled();
       expect(mockDigestStoredObject).not.toHaveBeenCalled();
     });
   });

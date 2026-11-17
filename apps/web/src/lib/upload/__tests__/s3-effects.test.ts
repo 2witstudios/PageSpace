@@ -53,7 +53,7 @@ vi.mock('@/lib/presigned-url', () => ({
 }));
 
 import { createHash } from 'crypto';
-import { issuePresignedPutUrl, checkObjectExists, putObject, digestStoredObject, deleteStoredObject, copyVerifiedObject } from '../s3-effects';
+import { issuePresignedPutUrl, checkObjectExists, putObject, digestStoredObject, deleteStoredObject, copyStoredObject } from '../s3-effects';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -136,11 +136,11 @@ describe('digestStoredObject', () => {
   }
 
   it('given a stored object, should stream it and return its sha256 and size, reading the key it was given', async () => {
-    mockSend.mockResolvedValue({ Body: stream(chunks), ETag: '"e1"' });
+    mockSend.mockResolvedValue({ Body: stream(chunks) });
 
     const result = await digestStoredObject('files/k/original', 1024);
 
-    expect(result).toEqual({ status: 'ok', sha256, size: 11, etag: '"e1"' });
+    expect(result).toEqual({ status: 'ok', sha256, size: 11 });
     expect(mockSend.mock.calls[0][0]).toMatchObject({ kind: 'get', input: { Bucket: 'test-bucket', Key: 'files/k/original' } });
   });
 
@@ -176,29 +176,24 @@ describe('deleteStoredObject', () => {
   });
 });
 
-describe('copyVerifiedObject', () => {
-  it('should copy only the exact version that was hashed (CopySourceIfMatch on its ETag)', async () => {
+describe('copyStoredObject', () => {
+  it('should copy the source key to the destination key server-side', async () => {
     mockSend.mockResolvedValue({});
 
-    expect(await copyVerifiedObject('uploads/staging/j1', 'files/h/original', '"e1"')).toBe('copied');
+    expect(await copyStoredObject('uploads/staging/j1', 'uploads/verifying/j1')).toBe('copied');
     expect(mockSend.mock.calls[0][0]).toMatchObject({
       kind: 'copy',
-      input: { Bucket: 'test-bucket', Key: 'files/h/original', CopySource: 'test-bucket/uploads/staging/j1', CopySourceIfMatch: '"e1"' },
+      input: { Bucket: 'test-bucket', Key: 'uploads/verifying/j1', CopySource: 'test-bucket/uploads/staging/j1' },
     });
   });
 
-  it('given the source changed since it was hashed (412), should report it and copy nothing', async () => {
-    mockSend.mockRejectedValue(Object.assign(new Error('PreconditionFailed'), { name: 'PreconditionFailed', $metadata: { httpStatusCode: 412 } }));
-    expect(await copyVerifiedObject('a', 'b', '"e1"')).toBe('source_changed');
-  });
-
-  it('given the source is gone, should report it as changed', async () => {
+  it('given no source object, should report missing', async () => {
     mockSend.mockRejectedValue(Object.assign(new Error('nope'), { name: 'NoSuchKey' }));
-    expect(await copyVerifiedObject('a', 'b', '"e1"')).toBe('source_changed');
+    expect(await copyStoredObject('a', 'b')).toBe('missing');
   });
 
   it('given any other storage error, should throw', async () => {
     mockSend.mockRejectedValue(new Error('timeout'));
-    await expect(copyVerifiedObject('a', 'b', '"e1"')).rejects.toThrow('timeout');
+    await expect(copyStoredObject('a', 'b')).rejects.toThrow('timeout');
   });
 });

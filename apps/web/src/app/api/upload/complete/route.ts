@@ -18,8 +18,8 @@ import { contentBlockedResponse } from '@/lib/upload/content-blocked-response';
 import { getActorInfo, logFileActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { enqueueProcessorJob } from '@/lib/upload/processor-effects';
-import { copyVerifiedObject, deleteStoredObject, digestStoredObject } from '@/lib/upload/s3-effects';
-import { buildUploadStagingKey } from '@/lib/upload/upload-staging';
+import { digestStoredObject } from '@/lib/upload/s3-effects';
+import { promoteStagedUpload } from '@/lib/upload/promote-staged-upload';
 import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -167,37 +167,6 @@ function buildPageRecord(params: {
   };
 }
 
-/**
- * Delete an object whose bytes don't match its key — but only while nothing
- * owns it. A `files` row means earlier completions committed pages on this key;
- * those are left alone (and logged), since deleting would break them, and the
- * processor's own re-hash of their pages deals with a corrupt object.
- */
-async function discardUnverifiedObject(
-  s3Key: string,
-  contentHash: string,
-  context: { userId: string; driveId: string; jobId: string },
-): Promise<void> {
-  try {
-    const owned = await db.query.files.findFirst({ where: eq(files.id, contentHash), columns: { id: true } });
-    if (owned) {
-      loggers.security.warn('Upload verify: stored bytes do not match an owned key; object left in place', { ...context, contentHash });
-      return;
-    }
-    await deleteStoredObject(s3Key);
-    loggers.security.warn('Upload verify: stored bytes do not match the declared hash; object deleted', { ...context, contentHash });
-  } catch (err) {
-    loggers.api.error('Failed to discard unverified upload object', err instanceof Error ? err : new Error(String(err)), { ...context, contentHash });
-  }
-}
-
-/** A staging object is never served; failing to delete it only leaves an orphan for the sweep. */
-async function deleteStagingObject(stagingKey: string, context: Record<string, string>): Promise<void> {
-  await deleteStoredObject(stagingKey).catch((err: unknown) => {
-    loggers.api.warn('Failed to delete upload staging object', { ...context, error: err instanceof Error ? err.message : String(err) });
-  });
-}
-
 export async function POST(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
   if (isAuthError(auth)) return auth.error;
@@ -282,56 +251,42 @@ export async function POST(request: Request) {
   }
 
   // The stored bytes are proven HERE, before any page or `files` row exists. A
-  // presigned PUT binds a key and a length, never the bytes, and it stays valid
-  // for its whole TTL, so presign signs it for a per-job staging key. This route
-  // hashes that staging object, then copies exactly the version it hashed
-  // (CopySourceIfMatch) to the content-addressed key pages are served from. Only
-  // verified bytes are ever written there, and a re-PUT after this point lands
-  // on a staging key nothing serves. With no staging object (the dedup
-  // fast-path skipped the PUT), the existing content-addressed object is hashed
-  // instead. The blocklist check above ran on the declared hash; equal hashes
-  // mean the same bytes, so it covered the verified bytes too.
+  // presigned PUT binds a key and a length, never the bytes, and stays valid
+  // for its whole TTL, so presign signs it for a per-job staging key the client
+  // can keep rewriting. promoteStagedUpload copies staging to a server-only
+  // holding key, hashes that copy, and publishes exactly it to the served key —
+  // so only bytes this server hashed are ever written there. With no staging
+  // object (the dedup fast-path skipped the PUT), the existing served object is
+  // hashed instead; a mismatch there is refused but never deleted, since other
+  // completions may own that shared key. The blocklist check above ran on the
+  // declared hash; equal hashes mean it covered the verified bytes too.
   const s3Key = buildS3Key(contentHash);
-  const stagingKey = buildUploadStagingKey(jobId);
   const refuse = async (body: { error: string }, status: number) => {
     uploadSemaphore.releaseUploadSlot(jobId);
     await releasePendingUpload(jobId).catch(() => undefined);
     return NextResponse.json(body, { status });
   };
-  const VERIFY_UNAVAILABLE = { error: 'File verification is temporarily unavailable. Please try again.' };
   const VERIFY_FAILED = { error: 'Uploaded file failed integrity verification' };
   const logContext = { userId, driveId, jobId, contentHash };
   try {
-    const staged = await digestStoredObject(stagingKey, fileSize);
-    if (staged.status !== 'missing') {
-      if (staged.status === 'oversize' || staged.sha256 !== contentHash) {
-        await deleteStagingObject(stagingKey, logContext);
-        loggers.security.warn('Upload verify: staged bytes do not match the declared hash', logContext);
-        return await refuse(VERIFY_FAILED, 422);
-      }
-      if (!staged.etag) {
-        await deleteStagingObject(stagingKey, logContext);
-        return await refuse(VERIFY_UNAVAILABLE, 503);
-      }
-      const copied = await copyVerifiedObject(stagingKey, s3Key, staged.etag);
-      await deleteStagingObject(stagingKey, logContext);
-      if (copied === 'source_changed') {
-        loggers.security.warn('Upload verify: staging object changed after it was hashed', logContext);
-        return await refuse({ error: 'The upload changed while it was being verified. Please upload it again.' }, 409);
-      }
-    } else {
+    const promoted = await promoteStagedUpload({ jobId, contentHash, maxBytes: fileSize, servedKey: s3Key });
+    if (promoted.status === 'mismatch') {
+      loggers.security.warn('Upload verify: staged bytes do not match the declared hash', logContext);
+      return await refuse(VERIFY_FAILED, 422);
+    }
+    if (promoted.status === 'no_staging') {
       const existing = await digestStoredObject(s3Key, fileSize);
       if (existing.status === 'missing') {
         return await refuse({ error: 'Uploaded object not found in storage' }, 409);
       }
       if (existing.status === 'oversize' || existing.sha256 !== contentHash) {
-        await discardUnverifiedObject(s3Key, contentHash, { userId, driveId, jobId });
+        loggers.security.warn('Upload verify: served object does not match its key; left in place', logContext);
         return await refuse(VERIFY_FAILED, 422);
       }
     }
   } catch (err) {
     loggers.api.error('Upload verify failed', err instanceof Error ? err : new Error(String(err)), logContext);
-    return await refuse(VERIFY_UNAVAILABLE, 503);
+    return await refuse({ error: 'File verification is temporarily unavailable. Please try again.' }, 503);
   }
 
   let newPage: typeof pages.$inferSelect;

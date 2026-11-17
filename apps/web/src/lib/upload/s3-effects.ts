@@ -26,7 +26,7 @@ function isNotFound(err: unknown): boolean {
 export type StoredObjectDigest =
   | { status: 'missing' }
   | { status: 'oversize' }
-  | { status: 'ok'; sha256: string; size: number; etag: string | undefined };
+  | { status: 'ok'; sha256: string; size: number };
 
 /**
  * SHA-256 of the object stored under `key`, streamed (constant memory) and
@@ -35,12 +35,10 @@ export type StoredObjectDigest =
  */
 export async function digestStoredObject(key: string, maxBytes: number): Promise<StoredObjectDigest> {
   let body: AsyncIterable<Uint8Array>;
-  let etag: string | undefined;
   try {
     const response = await getS3Client().send(new GetObjectCommand({ Bucket: getS3Bucket(), Key: key }));
     if (!response.Body) return { status: 'missing' };
     body = response.Body as AsyncIterable<Uint8Array>;
-    etag = response.ETag;
   } catch (err: unknown) {
     if (isNotFound(err)) return { status: 'missing' };
     throw err;
@@ -58,34 +56,20 @@ export async function digestStoredObject(key: string, maxBytes: number): Promise
     }
     hash.update(value);
   }
-  return { status: 'ok', sha256: hash.digest('hex'), size, etag };
+  return { status: 'ok', sha256: hash.digest('hex'), size };
 }
 
 /**
- * Server-side copy of `sourceKey` to `destKey`, but only of the exact version
- * whose ETag is `sourceEtag` (CopySourceIfMatch, evaluated by the store against
- * its latest state). A source overwritten or deleted since it was hashed copies
- * nothing and reports `source_changed`.
+ * Server-side copy of `sourceKey` to `destKey` (nothing passes through the app).
+ * `missing` when there is no source object.
  */
-export async function copyVerifiedObject(
-  sourceKey: string,
-  destKey: string,
-  sourceEtag: string,
-): Promise<'copied' | 'source_changed'> {
+export async function copyStoredObject(sourceKey: string, destKey: string): Promise<'copied' | 'missing'> {
   const bucket = getS3Bucket();
   try {
-    await getS3Client().send(new CopyObjectCommand({
-      Bucket: bucket,
-      Key: destKey,
-      CopySource: `${bucket}/${sourceKey}`,
-      CopySourceIfMatch: sourceEtag,
-    }));
+    await getS3Client().send(new CopyObjectCommand({ Bucket: bucket, Key: destKey, CopySource: `${bucket}/${sourceKey}` }));
     return 'copied';
   } catch (err: unknown) {
-    const status = (err as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
-    if (status === 412 || (err instanceof Error && err.name === 'PreconditionFailed') || isNotFound(err)) {
-      return 'source_changed';
-    }
+    if (isNotFound(err)) return 'missing';
     throw err;
   }
 }
