@@ -279,7 +279,7 @@ export async function resolveUploadedImageAssetUrl(params: {
   if (!asset) return null;
 
   // Held by the publish gate (blocked, flagged, unscanned under enforce, …): null, like any unavailable file.
-  if (!(await promoteAsset(asset, row, actor, 'uploaded_image'))) return null;
+  if (!(await promoteAsset(asset, [row], actor, 'uploaded_image'))) return null;
   return buildAssetUrlFromKey(asset.assetKey);
 }
 
@@ -298,24 +298,33 @@ const ASSET_SOURCE_HASH_RE = /^(?:files|cache)\/([a-f0-9]{64})\//i;
  * type): the derived image is never what is scanned. Returns whether the asset
  * is now public; a refusal or a failed copy is logged and returns false.
  */
+/**
+ * Gate, then copy. `rows` are the files that share this asset (identical bytes): the asset is copied only when
+ * the gate passes it under every one's declared type. The public object sits at one hash-based key, so a file
+ * held under its own declared type would otherwise be exposed through a sibling that was allowed.
+ */
 async function promoteAsset(
   asset: PublishAsset,
-  row: FilePageRow,
+  rows: FilePageRow[],
   actor: AccessActor,
   entryPoint: PublishGateEntryPoint,
 ): Promise<boolean> {
   const contentHash = ASSET_SOURCE_HASH_RE.exec(asset.sourceKey)?.[1]?.toLowerCase();
   if (!contentHash) return false;
 
-  const gate = await gateAssetForPublish({
-    contentHash,
-    originalKey: `files/${contentHash}/original`,
-    declaredContentType: row.mimeType,
-    fileId: asset.id,
-    userId: actor.userId,
-    entryPoint,
-  });
-  if (!gate.promote) return false;
+  // One gate per distinct declared type, in turn: a later one reuses the verdict the first recorded.
+  const byType = new Map(rows.map((row) => [row.mimeType, row]));
+  for (const row of byType.values()) {
+    const gate = await gateAssetForPublish({
+      contentHash,
+      originalKey: `files/${contentHash}/original`,
+      declaredContentType: row.mimeType,
+      fileId: row.id,
+      userId: actor.userId,
+      entryPoint,
+    });
+    if (!gate.promote) return false;
+  }
 
   try {
     await copyObjectToPublishBucket(asset);
@@ -382,7 +391,7 @@ export async function rewriteCanvasAssets(params: {
 
   const rowsById = new Map((await filterViewableRows(actor, rows)).map((row) => [row.id, row]));
   const resolved = new Map<string, PublishAsset>();
-  const uniqueAssets = new Map<string, { asset: PublishAsset; row: FilePageRow }>();
+  const uniqueAssets = new Map<string, { asset: PublishAsset; rows: FilePageRow[] }>();
 
   for (const ref of references) {
     const row = rowsById.get(ref.id);
@@ -391,7 +400,9 @@ export async function rewriteCanvasAssets(params: {
     const asset = resolvePublishAsset(row, ref.kind);
     if (!asset) continue;
     resolved.set(referenceKey(ref), asset);
-    uniqueAssets.set(asset.assetKey, { asset, row });
+    const shared = uniqueAssets.get(asset.assetKey);
+    if (shared) shared.rows.push(row);
+    else uniqueAssets.set(asset.assetKey, { asset, rows: [row] });
   }
 
   if (resolved.size === 0) return { html, heldAssets: [] };
@@ -404,8 +415,8 @@ export async function rewriteCanvasAssets(params: {
   await Promise.all(
     Array.from({ length: Math.min(PROMOTE_CONCURRENCY, queue.length) }, async () => {
       for (let next = queue.shift(); next; next = queue.shift()) {
-        const { asset, row } = next;
-        const promoted = await promoteAsset(asset, row, actor, asset.kind === 'thumbnail' ? 'canvas_thumbnail' : 'canvas_asset');
+        const { asset, rows } = next;
+        const promoted = await promoteAsset(asset, rows, actor, asset.kind === 'thumbnail' ? 'canvas_thumbnail' : 'canvas_asset');
         if (promoted) copiedAssetKeys.add(asset.assetKey);
       }
     }),

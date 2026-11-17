@@ -369,6 +369,27 @@ describe('rewriteCanvasAssets', () => {
     expect(result.html).toContain('/api/files/fileId2/view');
   });
 
+  it('files sharing one hash under different declared types: one held under its type keeps the shared bytes private, in either order', async () => {
+    const { copyObjectToPublishBucket } = await import('../published-storage');
+    // The gate holds these bytes declared as an image (text claiming to be a picture), and allows them as text.
+    gateAssetForPublish.mockImplementation(async ({ declaredContentType }: { declaredContentType: string | null }) =>
+      declaredContentType === 'image/png' ? { promote: false, reason: 'held' } : { promote: true },
+    );
+    const asText = { id: 'textFile', contentHash: HASH_A, mimeType: 'text/plain', extractionMetadata: null };
+    const asImage = { id: 'imageFile', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null };
+    for (const rows of [[asText, asImage], [asImage, asText]]) {
+      vi.mocked(copyObjectToPublishBucket).mockClear();
+      const html = rows.map((row) => `<img src="/api/files/${row.id}/view">`).join('');
+      mockDb.query.pages.findMany.mockResolvedValue(rows);
+
+      const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
+
+      expect(copyObjectToPublishBucket).not.toHaveBeenCalled();
+      expect(result.html).not.toContain('cdn.example.com');
+      expect(result.heldAssets.sort()).toEqual(['imageFile', 'textFile']);
+    }
+  });
+
   it('a blocked hash is refused even when its asset is already public (the copy, with its HEAD shortcut, never runs)', async () => {
     const html = '<img src="/api/files/fileId1/view">';
     mockDb.query.pages.findMany.mockResolvedValue([
