@@ -3,10 +3,11 @@
  * case in the review queue (or joins the one already there), and counts group
  * by mode and outcome.
  */
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { Client } from 'pg';
 import { createHash, randomUUID } from 'crypto';
 import { db } from '@pagespace/db/db';
-import { eq, inArray, sql } from '@pagespace/db/operators';
+import { eq, inArray } from '@pagespace/db/operators';
 import { contentCases, contentReports, contentScans } from '@pagespace/db/schema/content-safety';
 import { countScanVerdicts, findScanVerdict, openScanReviewCase, recordScanVerdict } from '../scan-store';
 import { closeReportedCase, fileContentReport, listReportedCases, ReportedCaseChangedError } from '../report-store';
@@ -21,7 +22,31 @@ const newHash = () => {
   return hash;
 };
 
+// Dedicated connections for the lock tests, outside the app pool: one holds a lock, one watches who waits on
+// it. Neither competes with the code under test for a pool connection.
+let holder: Client;
+let probe: Client;
+beforeAll(async () => {
+  holder = new Client({ connectionString: process.env.DATABASE_URL });
+  probe = new Client({ connectionString: process.env.DATABASE_URL });
+  await holder.connect();
+  await probe.connect();
+});
+
+/** Wait until some backend is blocked by `holder`'s locks. */
+async function waitUntilBlockedByHolder(): Promise<boolean> {
+  const pid = Number((await holder.query<{ pid: number }>('select pg_backend_pid() as pid')).rows[0].pid);
+  for (let i = 0; i < 250; i++) {
+    const waiting = await probe.query('select 1 from pg_stat_activity where $1 = any(pg_blocking_pids(pid))', [pid]);
+    if (waiting.rows.length > 0) return true;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  return false;
+}
+
 afterAll(async () => {
+  await holder?.end();
+  await probe?.end();
   if (hashes.length === 0) return;
   const cases = await db.select({ id: contentCases.id }).from(contentCases).where(inArray(contentCases.targetId, hashes));
   if (cases.length > 0) await db.delete(contentReports).where(inArray(contentReports.caseId, cases.map((c) => c.id)));
@@ -98,33 +123,24 @@ describe('scan store', () => {
 
     // The admin's close holds the case row lock. The flag's insert sees the committed open case and does nothing,
     // then waits on that lock; the close commits the case dismissed and the hash clean.
-    let release!: () => void;
-    const held = new Promise<void>((resolve) => { release = resolve; });
-    let locked!: () => void;
-    const isLocked = new Promise<void>((resolve) => { locked = resolve; });
-    let closePid = 0;
-    const close = db.transaction(async (tx) => {
-      const pid = await tx.execute(sql`select pg_backend_pid() as pid`);
-      closePid = Number((pid.rows[0] as { pid: number }).pid);
-      await tx.select({ id: contentCases.id }).from(contentCases).where(eq(contentCases.id, first.caseId)).for('update');
-      locked();
-      await held;
-      await tx.update(contentCases).set({ status: 'dismissed' }).where(eq(contentCases.id, first.caseId));
-      const clean = { verdict: 'clean' as const, outcome: 'clean' as const, provider: 'admin_review', mode: null, scores: {}, scannedAt: new Date() };
-      await tx.insert(contentScans).values({ contentHash: hash, ...clean }).onConflictDoUpdate({ target: contentScans.contentHash, set: clean });
-    });
-    await isLocked;
-    const late = openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.96, mode: 'enforce', scores: {} });
-    // Wait until the flag is blocked by THIS close's lock, so the close commits between its insert and its lock.
-    let blocked = false;
-    for (let i = 0; i < 250 && !blocked; i++) {
-      const waiting = await db.execute(sql`select 1 from pg_stat_activity where ${closePid} = any(pg_blocking_pids(pid))`);
-      blocked = waiting.rows.length > 0;
-      if (!blocked) await new Promise((resolve) => setTimeout(resolve, 20));
+    await holder.query('begin');
+    let late: ReturnType<typeof openScanReviewCase> | undefined;
+    try {
+      await holder.query('select id from content_cases where id = $1 for update', [first.caseId]);
+      late = openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.96, mode: 'enforce', scores: {} });
+      // The flag must be blocked by THIS close's lock, so the close commits between its insert and its lock.
+      expect(await waitUntilBlockedByHolder()).toBe(true);
+      await holder.query(`update content_cases set status = 'dismissed' where id = $1`, [first.caseId]);
+      await holder.query(
+        `insert into content_scans (content_hash, verdict, outcome, provider, scores, scanned_at) values ($1, 'clean', 'clean', 'admin_review', '{}', now())
+         on conflict (content_hash) do update set verdict = 'clean', outcome = 'clean', provider = 'admin_review', mode = null, scanned_at = now()`,
+        [hash],
+      );
+      await holder.query('commit');
+    } finally {
+      await holder.query('rollback'); // a no-op after the commit; releases the lock if anything above failed
+      await late?.catch(() => undefined);
     }
-    expect(blocked).toBe(true);
-    release();
-    await close;
 
     const flagged = await late;
     expect(flagged).toMatchObject({ created: true, firstFlag: true });
@@ -280,22 +296,6 @@ describe('scan store', () => {
     const hash = newHash();
     const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
     const config = resolveScanConfig({ CONTENT_SCAN_MODE: 'enforce', HIVE_API_KEY: 'k' }, { onPrem: false });
-    // The other publish's flag: its verdict row is written and locked, its transaction not yet committed.
-    let release!: () => void;
-    const held = new Promise<void>((resolve) => { release = resolve; });
-    let written!: () => void;
-    const isWritten = new Promise<void>((resolve) => { written = resolve; });
-    let flagPid = 0;
-    const flagTx = db.transaction(async (tx) => {
-      const pid = await tx.execute(sql`select pg_backend_pid() as pid`);
-      flagPid = Number((pid.rows[0] as { pid: number }).pid);
-      const values = { verdict: 'flagged' as const, outcome: 'classifier_flag' as const, provider: 'fake', mode: 'enforce' as const, scores: {}, scannedAt: new Date() };
-      await tx.insert(contentScans).values({ contentHash: hash, ...values }).onConflictDoUpdate({ target: contentScans.contentHash, set: values });
-      written();
-      await held;
-    });
-    await isWritten;
-
     const deps: PublishGateDeps = {
       config,
       scanner: createFakeScanner({ defaultResult: { kind: 'clean', provider: 'fake' } }),
@@ -311,21 +311,25 @@ describe('scan store', () => {
       logError: () => undefined,
       now: () => new Date(),
     };
-    const clean = gatePublishAsset(
-      { contentHash: hash, originalKey: `files/${hash}/original`, declaredContentType: 'image/png', fileId: 'f', userId: null, entryPoint: 'canvas_asset' },
-      deps,
-    );
-
-    // The clean publish's verdict write must be blocked by the flag's row lock before the flag commits.
-    let blocked = false;
-    for (let i = 0; i < 250 && !blocked; i++) {
-      const waiting = await db.execute(sql`select 1 from pg_stat_activity where ${flagPid} = any(pg_blocking_pids(pid))`);
-      blocked = waiting.rows.length > 0;
-      if (!blocked) await new Promise((resolve) => setTimeout(resolve, 20));
+    // The other publish's flag: its verdict row is written and locked, its transaction not yet committed.
+    await holder.query('begin');
+    let clean: ReturnType<typeof gatePublishAsset> | undefined;
+    try {
+      await holder.query(
+        `insert into content_scans (content_hash, verdict, outcome, provider, mode, scores, scanned_at) values ($1, 'flagged', 'classifier_flag', 'fake', 'enforce', '{}', now())`,
+        [hash],
+      );
+      clean = gatePublishAsset(
+        { contentHash: hash, originalKey: `files/${hash}/original`, declaredContentType: 'image/png', fileId: 'f', userId: null, entryPoint: 'canvas_asset' },
+        deps,
+      );
+      // The clean publish's verdict write must be blocked by the flag's row lock before the flag commits.
+      expect(await waitUntilBlockedByHolder()).toBe(true);
+      await holder.query('commit');
+    } finally {
+      await holder.query('rollback'); // a no-op after the commit; releases the lock if anything above failed
+      await clean?.catch(() => undefined);
     }
-    expect(blocked).toBe(true);
-    release();
-    await flagTx;
 
     await expect(clean).resolves.toEqual({ promote: false, reason: 'held' });
     expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'flagged', outcome: 'classifier_flag' });
