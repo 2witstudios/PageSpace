@@ -6,6 +6,7 @@
  * type (already a direct dependency) rather than imported by name from
  * `@ai-sdk/provider-utils`, which only reaches this package transitively.
  */
+import { isToolUIPart } from 'ai';
 import type { Tool, UIMessage, FileUIPart } from 'ai';
 
 type ToolModelOutputFn = NonNullable<Tool['toModelOutput']>;
@@ -136,7 +137,8 @@ const STRICT_BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]
 
 /**
  * The image bytes of every output-available `read_page` visual result in
- * `messages`, as `data:` file parts for the content blocklist screen. The
+ * `messages` (static or dynamic tool parts), as `data:` file parts for the
+ * content blocklist screen. The
  * client-supplied `mimeType` is deliberately ignored — the hash depends only on
  * the bytes, and a crafted type (`image/png;charset=utf-8`) must not stop the
  * screen from decoding them. `undecodable` is true when any `imageBase64` is
@@ -149,8 +151,10 @@ export function visualToolResultScreenParts(
   let undecodable = false;
   for (const message of messages) {
     for (const part of message.parts ?? []) {
-      if (!part.type.startsWith('tool-') || !('state' in part) || part.state !== 'output-available') continue;
-      const output: unknown = 'output' in part ? part.output : undefined;
+      // Static (`tool-read_page`) and dynamic (`dynamic-tool`) parts alike, whatever
+      // tool name they claim: any visual payload reaching the model is screened.
+      if (!isToolUIPart(part) || part.state !== 'output-available') continue;
+      const output: unknown = part.output;
       if (!isVisualContentDelivered(output)) continue;
       if (output.imageBase64.length === 0) continue;
       if (!STRICT_BASE64.test(output.imageBase64)) {

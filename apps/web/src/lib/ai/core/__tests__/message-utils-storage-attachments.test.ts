@@ -279,6 +279,20 @@ describe('read_page visual results through the real blocklist screen', () => {
     expect(result.blockedHashes).toEqual([sha256]);
   });
 
+  it('given the dynamic-tool representation of a read_page result, should screen its bytes too', async () => {
+    mockFindBlockedUploads.mockResolvedValue(new Set([sha256]));
+    const dynamic: UIMessage = {
+      id: 'a2',
+      role: 'assistant',
+      parts: [{ type: 'dynamic-tool', toolName: 'read_page', toolCallId: 'c2', state: 'output-available', input: {}, output: visual() } as unknown as UIMessage['parts'][number]],
+    };
+    const { parts } = visualToolResultScreenParts([dynamic]);
+
+    const result = await screenFilePartsAgainstBlocklist(parts, { userId: 'u1' });
+
+    expect(result.blockedHashes).toEqual([sha256]);
+  });
+
   it('given imageBase64 that is not valid base64, should report it undecodable (callers fail closed)', () => {
     expect(visualToolResultScreenParts([message(visual({ imageBase64: 'not base64!' }))]).undecodable).toBe(true);
   });

@@ -40,6 +40,16 @@ describe('extractStoredFileReferenceIds', () => {
     expect(extractStoredFileReferenceIds(content).sort()).toEqual(['page-a', 'page-b', 'page-c']);
   });
 
+  it('given percent-encoded ids or path segments (the router decodes them), should return the decoded id', () => {
+    const content = [
+      '<img src="/api/files/%70age-a/view">',
+      '<img src="/api/files/page-b/%76iew">',
+      '<img src="/api/files/page-c/view%2F">',
+      "url('/dashboard/drive-1/%70age-d/view')",
+    ].join('\n');
+    expect(extractStoredFileReferenceIds(content).sort()).toEqual(['page-a', 'page-b', 'page-c', 'page-d']);
+  });
+
   it('given a longer path that merely starts like a reference, should not match it', () => {
     expect(extractStoredFileReferenceIds('/api/files/page-a/viewer')).toEqual([]);
   });
