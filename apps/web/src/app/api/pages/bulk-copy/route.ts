@@ -24,7 +24,7 @@ import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 import { findBlockedUploads } from '@pagespace/lib/content-safety/upload-gate';
 import { contentCopyRefusedResponse } from '@/lib/upload/content-blocked-response';
 import { auditUnverifiableFileReference, loadFileStoragePaths, resolveStoredContentHash } from '@/lib/upload/stored-content-hash';
-import { extractStoredFileReferenceIds, pageContentCanReferenceFiles } from '@/lib/upload/stored-file-references';
+import { pageContentCanReferenceFiles, scanStoredFileReferences, type StoredFileReferenceScan } from '@/lib/upload/stored-file-references';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -333,9 +333,15 @@ interface CopyScreenRow {
   filePath: string | null;
 }
 
-/** The stored-file ids a copied page's content embeds; none for types that can't embed. */
-function embeddedFileIds(row: Pick<CopyScreenRow, 'type' | 'content'>): string[] {
-  return pageContentCanReferenceFiles(row.type) && row.content ? extractStoredFileReferenceIds(row.content) : [];
+/**
+ * The stored files a copied page's content embeds; none for types that can't
+ * embed. `complete` is false when the content mentions `api/files/` in a form
+ * the scan can't account for: the page is then unverifiable.
+ */
+function embeddedFiles(row: Pick<CopyScreenRow, 'type' | 'content'>): StoredFileReferenceScan {
+  return pageContentCanReferenceFiles(row.type) && row.content
+    ? scanStoredFileReferences(row.content)
+    : { ids: [], complete: true };
 }
 
 /** Page id → the file reference the blocklist screen checked for it. */
@@ -387,7 +393,8 @@ async function collectDescendants(rootIds: readonly string[]): Promise<CopyScree
  *     can't be checked at all (fail closed), or
  *   - is a DOCUMENT or CANVAS whose content embeds a stored file
  *     (`/api/files/{id}/view` and the like) that is blocked or whose bytes can't
- *     be resolved to a hash. An embedded id that matches no page and no `files`
+ *     be resolved to a hash, or that mentions `api/files/` in a form the
+ *     reference scan can't account for (fail closed). An embedded id that matches no page and no `files`
  *     row is skipped: nothing is stored under it, so nothing can be served.
  * One blocklist query for the whole tree. Blocked hashes are audited by the
  * gate; unverifiable references are audited here.
@@ -417,7 +424,9 @@ async function screenCopy(
   const embeddedBy = new Map<string, string>();
   for (const row of rows) {
     addFileRefHashes(row, hashes, () => auditUnverifiable('page', row.id));
-    for (const id of embeddedFileIds(row)) {
+    const embedded = embeddedFiles(row);
+    if (!embedded.complete) auditUnverifiable('page', row.id, { unaccountedReference: true });
+    for (const id of embedded.ids) {
       if (!embeddedBy.has(id)) embeddedBy.set(id, row.id);
     }
   }
@@ -509,7 +518,8 @@ async function copyChildrenRecursively(
     if (screenedRef === undefined) return false;
     if (screenedRef !== fileRefKey(child)) throw new CopyReferenceChangedError(child.id);
     // Text edits since the screen are fine; a stored file embedded since is not.
-    if (embeddedFileIds(child).some((id) => !screenedEmbeds.has(id))) throw new CopyReferenceChangedError(child.id);
+    const embedded = embeddedFiles(child);
+    if (!embedded.complete || embedded.ids.some((id) => !screenedEmbeds.has(id))) throw new CopyReferenceChangedError(child.id);
     return true;
   });
 

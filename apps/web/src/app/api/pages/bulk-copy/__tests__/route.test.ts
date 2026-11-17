@@ -969,6 +969,37 @@ describe('POST /api/pages/bulk-copy — content blocklist', () => {
       }));
     });
 
+    it('refuses an embedded reference split by a tab character reference (the URL parser strips it)', async () => {
+      mockTree(
+        [mockSourcePage({ content: '<img src="/api/files/file-&#9;page-1/vi&#10;ew">' })],
+        [],
+        [{ id: 'file-page-1', filePath: BLOCKED_HASH, contentHash: BLOCKED_HASH }],
+      );
+      mockFindBlockedUploads.mockResolvedValue(new Set([BLOCKED_HASH]));
+
+      const response = await POST(createRequest(validBody));
+
+      expect(response.status).toBe(422);
+      expect(mockFindBlockedUploads).toHaveBeenCalledWith([BLOCKED_HASH], expect.anything());
+      expect(mockTransaction).not.toHaveBeenCalled();
+    });
+
+    it('fails closed and audits when content mentions api/files/ in a form the scan cannot account for', async () => {
+      mockTree([mockSourcePage({ content: '<img src="/api/files/file-&#8203;page-1/view">' })], [], []);
+      const request = createRequest(validBody);
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(422);
+      expect(await response.json()).toEqual(COPY_REFUSED);
+      expect(mockTransaction).not.toHaveBeenCalled();
+      expect(auditRequest).toHaveBeenCalledWith(request, expect.objectContaining({
+        resourceType: 'page',
+        resourceId: 'page-1',
+        details: expect.objectContaining({ entryPoint: 'page.copy', reason: 'unverifiable_file_reference', unaccountedReference: true }),
+      }));
+    });
+
     it('copies a DOCUMENT whose embedded reference points at nothing stored (no bytes to serve)', async () => {
       mockTree([mockSourcePage({ content: '<img src="/api/files/gone-1/view">' })], [], []);
 
@@ -997,6 +1028,17 @@ describe('POST /api/pages/bulk-copy — content blocklist', () => {
 
       expect(response.status).toBe(409);
       expect(txInsertValues).toHaveBeenCalledTimes(1);
+    });
+
+    it("aborts with a 409 when a child document's content gained an unaccountable api/files/ mention after the screen", async () => {
+      mockTree([mockSourcePage()], [{ id: 'child-1', type: 'DOCUMENT', content: '<p>plain</p>', contentHash: null, filePath: null }]);
+      txQueryPagesFindMany
+        .mockResolvedValueOnce([mockSourcePage({ id: 'child-1', content: '<p>/api/ files/file-page-1/view</p>' })])
+        .mockResolvedValue([]);
+
+      const response = await POST(createRequest(validBody));
+
+      expect(response.status).toBe(409);
     });
 
     it('copies a child document whose embedded files are unchanged since the screen', async () => {

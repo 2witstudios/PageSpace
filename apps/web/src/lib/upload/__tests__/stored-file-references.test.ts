@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractStoredFileReferenceIds, pageContentCanReferenceFiles } from '../stored-file-references';
+import { extractStoredFileReferenceIds, pageContentCanReferenceFiles, scanStoredFileReferences } from '../stored-file-references';
 
 describe('extractStoredFileReferenceIds', () => {
   it('given /api/files/{id}/view, thumbnail and download references, should return each id once', () => {
@@ -64,6 +64,81 @@ describe('extractStoredFileReferenceIds', () => {
 
   it('given a longer path that merely starts like a reference, should not match it', () => {
     expect(extractStoredFileReferenceIds('/api/files/page-a/viewer')).toEqual([]);
+  });
+});
+
+describe('scanStoredFileReferences', () => {
+  it('given tab and newline character references inside an attribute URL (the URL parser strips them), should return the id', () => {
+    const content = [
+      '<img src="/api/files/pa&#9;ge-a/view">',
+      '<img src="/api/files/page-b/vi&#10;ew">',
+      '<img src="/api/fi&#13;les/page-c/view">',
+      '<img src="/api/files/page-d/&Tab;view">',
+      '<img src="/api/files/page-e/vi&NewLine;ew">',
+    ].join('\n');
+    const scan = scanStoredFileReferences(content);
+    expect(scan.ids.sort()).toEqual(['page-a', 'page-b', 'page-c', 'page-d', 'page-e']);
+    expect(scan.complete).toBe(true);
+  });
+
+  it('given literal tabs and newlines inside an attribute URL, should return the id', () => {
+    const scan = scanStoredFileReferences('<img src="/api/files/page-a\t/vi\new">');
+    expect(scan.ids).toEqual(['page-a']);
+    expect(scan.complete).toBe(true);
+  });
+
+  it('given mixed-case path segments, should return the id', () => {
+    const scan = scanStoredFileReferences('<img src="/API/Files/page-a/VIEW"><a href="/api/FILES/page-b/Download">x</a>');
+    expect(scan.ids.sort()).toEqual(['page-a', 'page-b']);
+    expect(scan.complete).toBe(true);
+  });
+
+  it('given percent-encoded segments mixed with character references, should return the id', () => {
+    const scan = scanStoredFileReferences('<img src="/api/%66iles/pa&#9;%67e-a/%76iew">');
+    expect(scan.ids).toEqual(['page-a']);
+    expect(scan.complete).toBe(true);
+  });
+
+  it('given protocol-relative, backslashed and dot-segment URLs (normalised as the browser does), should return the id', () => {
+    const content = [
+      '<img src="//cdn.example.com/api/files/page-a/view">',
+      '<img src="\\api\\files\\page-b\\view">',
+      '<img src="/api/x/../files/page-c/view">',
+    ].join('\n');
+    expect(scanStoredFileReferences(content).ids.sort()).toEqual(['page-a', 'page-b', 'page-c']);
+  });
+
+  it('given srcset candidates, data attributes and inline style url() with CSS escapes, should return every id', () => {
+    const content = [
+      '<img srcset="/api/files/page-a/view 1x, /api/files/page-b/thumbnail 2x">',
+      '<div data-src="/api/files/page-c/view"></div>',
+      '<div style="background-image: url(&quot;/api/files/page-d/view&quot;)"></div>',
+      '<div style="background: url(/api/files/\\70 age-e/view)"></div>',
+      '<style>.x { background: url("/api/files/page-f/view") } @import "/api/files/page-g/download";</style>',
+    ].join('\n');
+    const scan = scanStoredFileReferences(content);
+    expect(scan.ids.sort()).toEqual(['page-a', 'page-b', 'page-c', 'page-d', 'page-e', 'page-f', 'page-g']);
+    expect(scan.complete).toBe(true);
+  });
+
+  it('given content with no reference, should be complete and empty', () => {
+    expect(scanStoredFileReferences('<p>see /api/filesystem and https://example.com/a.png</p>')).toEqual({ ids: [], complete: true });
+    expect(scanStoredFileReferences('')).toEqual({ ids: [], complete: true });
+  });
+
+  it('given an api/files/ occurrence no extracted id accounts for, should report the scan incomplete (fail closed)', () => {
+    // A zero-width character the URL parser keeps: not served as written, but
+    // the backstop cannot tell, so the copy is refused as unverifiable.
+    expect(scanStoredFileReferences('<img src="/api/files/pa&#8203;ge-a/view">').complete).toBe(false);
+    // An encoding the parser path doesn't model (a reference inside script text).
+    expect(scanStoredFileReferences('<script>load("/api/fi" + "les/x")</script><p>api/files/</p>').complete).toBe(false);
+    // Whitespace inside the path outside any attribute.
+    expect(scanStoredFileReferences('<p>/api/ files/page-a/view</p>').complete).toBe(false);
+  });
+
+  it('given every occurrence accounted for, should report the scan complete', () => {
+    const scan = scanStoredFileReferences('<img src="/api/files/page-a/view"> ![a](/api/files/page-a/view) <img src="/api/files/page-b/thumbnail">');
+    expect(scan.complete).toBe(true);
   });
 });
 
