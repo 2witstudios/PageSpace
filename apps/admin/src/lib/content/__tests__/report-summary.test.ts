@@ -10,7 +10,7 @@ describe('mergeReportPages', () => {
     expect(mergeReportPages([report('a'), report('b')], [report('c')]).map((r) => r.id)).toEqual(['a', 'b', 'c']);
   });
 
-  it('drops a report the page repeats: new reports shift every offset, so a page can overlap the one before it', () => {
+  it('drops a report the page repeats, so none is shown twice', () => {
     expect(mergeReportPages([report('a'), report('b')], [report('b'), report('c')]).map((r) => r.id)).toEqual(['a', 'b', 'c']);
   });
 });

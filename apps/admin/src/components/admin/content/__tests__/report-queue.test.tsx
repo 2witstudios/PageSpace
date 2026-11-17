@@ -57,4 +57,17 @@ describe('ReportQueue', () => {
     expect(html).toContain('Mark actioned');
     expect(html).toContain('Dismiss');
   });
+
+  it('will not close a case until every report on it has been shown', () => {
+    const closeButtons = (markup: string) => [...markup.matchAll(/<button[^>]*>(Mark actioned|Dismiss)<\/button>/g)].map((m) => m[0]);
+    const partial = closeButtons(html);
+    expect(partial).toHaveLength(2);
+    for (const button of partial) expect(button).toMatch(/disabled=""/);
+    expect(html).toContain('Show every report before closing this case.');
+
+    const all = renderToStaticMarkup(<ReportQueue items={[item({ reportCount: 2 })]} onChanged={() => {}} onReview={() => {}} />);
+    const full = closeButtons(all);
+    expect(full).toHaveLength(2);
+    for (const button of full) expect(button).not.toMatch(/disabled=""/);
+  });
 });

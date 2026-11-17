@@ -175,15 +175,22 @@ export async function attachReports(rows: ContentCase[], perCase = 20): Promise<
   return rows.map((row) => ({ case: row, reportCount: totalByCase.get(row.id) ?? 0, reports: byCase.get(row.id) ?? [] }));
 }
 
-/** One page of a case's reports, newest first in the same order as `attachReports` — for reports past its first page. */
-export async function listCaseReports(caseId: string, options: { limit?: number; offset?: number } = {}): Promise<ContentReport[]> {
+/**
+ * The case's reports older than `beforeId` (the last report already shown), newest first in the same order as
+ * `attachReports`. Keyed on that report rather than an offset, so reports filed while an admin pages through shift
+ * nothing: no page repeats or skips one. A `beforeId` that is not a report on this case pages nothing.
+ */
+export async function listCaseReports(caseId: string, options: { beforeId: string; limit?: number }): Promise<ContentReport[]> {
+  const cursor = db
+    .select({ createdAt: contentReports.createdAt, id: contentReports.id })
+    .from(contentReports)
+    .where(and(eq(contentReports.id, options.beforeId), eq(contentReports.caseId, caseId)));
   return db
     .select()
     .from(contentReports)
-    .where(eq(contentReports.caseId, caseId))
+    .where(and(eq(contentReports.caseId, caseId), sql`(${contentReports.createdAt}, ${contentReports.id}) < (${cursor})`))
     .orderBy(desc(contentReports.createdAt), desc(contentReports.id))
-    .limit(Math.min(Math.max(options.limit ?? 20, 1), 100))
-    .offset(Math.max(options.offset ?? 0, 0));
+    .limit(Math.min(Math.max(options.limit ?? 20, 1), 100));
 }
 
 /**

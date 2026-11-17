@@ -18,7 +18,8 @@ const CATEGORY_LABELS: Record<ReportSummary['category'], string> = {
   other: 'Other',
 };
 
-type Pending = { caseId: string; outcome: 'dismissed' | 'actioned'; reportCount: number } | null;
+type CloseRequest = { caseId: string; outcome: 'dismissed' | 'actioned'; reportCount: number };
+type Pending = CloseRequest | null;
 
 const DIALOG_COPY: Record<NonNullable<Pending>['outcome'], { title: string; description: string; confirmLabel: string }> = {
   actioned: {
@@ -71,21 +72,34 @@ function ReportItem({ report }: { report: ReportSummary }) {
 }
 
 /**
- * A case's reports: the first page from the queue, then later pages on request, so a report past the first page
- * is never out of reach of the admin who closes the case.
+ * One case under review. Its first page of reports comes with the queue; later pages load on request, keyed on
+ * the last report shown. The case cannot be closed until every report on it is on screen, so a close never
+ * acknowledges a report nobody saw. The queue keys this card on its first page, so a refresh starts paging afresh.
  */
-function CaseReports({ caseId, reportCount, firstPage }: { caseId: string; reportCount: number; firstPage: ReportSummary[] }) {
+function ReportedCaseCard({
+  summary: { case: item, reportCount, reports: firstPage },
+  onClose,
+  onReview,
+}: {
+  summary: ReportedCaseSummary;
+  onClose: (request: CloseRequest) => void;
+  onReview: (targetId: string) => void;
+}) {
   const [later, setLater] = useState<ReportSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const reports = mergeReportPages(firstPage, later);
-  const remaining = reportCount - reports.length;
+  const remaining = Math.max(reportCount - reports.length, 0);
+  const nextPage = Math.min(remaining, 50);
 
   const loadMore = async () => {
+    const last = reports[reports.length - 1];
+    if (!last) return;
     setLoading(true);
     setError(null);
     try {
-      const page = await fetchCaseReports(caseId, reports.length);
+      const page = await fetchCaseReports(item.id, last.id);
+      if (page.length === 0) setError('No older reports were found. Refresh the queue.');
       setLater((current) => mergeReportPages(current, page));
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Request failed');
@@ -95,28 +109,64 @@ function CaseReports({ caseId, reportCount, firstPage }: { caseId: string; repor
   };
 
   return (
-    <>
-      <ul className="space-y-2">
-        {reports.map((report) => (
-          <ReportItem key={report.id} report={report} />
-        ))}
-      </ul>
-      {remaining > 0 && (
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <p className="text-xs text-muted-foreground">
-            Showing the latest {reports.length} of {reportCount}.
-          </p>
-          <Button size="sm" variant="outline" disabled={loading} onClick={() => void loadMore()}>
-            {loading ? 'Loading…' : `Show ${Math.min(remaining, 50)} more report${Math.min(remaining, 50) === 1 ? '' : 's'}`}
-          </Button>
-          {error && (
-            <p className="text-xs text-destructive" role="alert">
-              {error}
-            </p>
+    <Card data-testid="reported-case">
+      <CardHeader>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0 space-y-1">
+            <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+              {item.category === 'csam' && <Badge variant="destructive">CSAM</Badge>}
+              <span>
+                {reportCount} report{reportCount === 1 ? '' : 's'}
+              </span>
+            </CardTitle>
+            <CardDescription className="space-y-0.5">
+              <span className="block">
+                Case <Mono>{item.id}</Mono>, opened {new Date(item.createdAt).toLocaleString()}
+              </span>
+              <span className="block">
+                {item.targetType.replace('_', ' ')} <Mono>{item.targetId}</Mono>
+              </span>
+            </CardDescription>
+          </div>
+          {item.status === 'reported' && (
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" onClick={() => onReview(item.targetId)}>
+                Review and act
+              </Button>
+              <Button size="sm" variant="outline" disabled={remaining > 0} onClick={() => onClose({ caseId: item.id, outcome: 'actioned', reportCount })}>
+                Mark actioned
+              </Button>
+              <Button size="sm" variant="ghost" disabled={remaining > 0} onClick={() => onClose({ caseId: item.id, outcome: 'dismissed', reportCount })}>
+                Dismiss
+              </Button>
+            </div>
           )}
         </div>
-      )}
-    </>
+      </CardHeader>
+      <CardContent>
+        <ul className="space-y-2">
+          {reports.map((report) => (
+            <ReportItem key={report.id} report={report} />
+          ))}
+        </ul>
+        {remaining > 0 && (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <p className="text-xs text-muted-foreground">
+              Showing the latest {reports.length} of {reportCount}.
+              {item.status === 'reported' && ' Show every report before closing this case.'}
+            </p>
+            <Button size="sm" variant="outline" disabled={loading} onClick={() => void loadMore()}>
+              {loading ? 'Loading…' : `Show ${nextPage} more report${nextPage === 1 ? '' : 's'}`}
+            </Button>
+            {error && (
+              <p className="text-xs text-destructive" role="alert">
+                {error}
+              </p>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -165,45 +215,17 @@ export function ReportQueue({ items, onChanged, onReview }: ReportQueueProps) {
           {notice}
         </p>
       )}
-      {items.map(({ case: item, reportCount, reports }) => (
-        <Card key={item.id} data-testid="reported-case">
-          <CardHeader>
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="min-w-0 space-y-1">
-                <CardTitle className="flex flex-wrap items-center gap-2 text-base">
-                  {item.category === 'csam' && <Badge variant="destructive">CSAM</Badge>}
-                  <span>
-                    {reportCount} report{reportCount === 1 ? '' : 's'}
-                  </span>
-                </CardTitle>
-                <CardDescription className="space-y-0.5">
-                  <span className="block">
-                    Case <Mono>{item.id}</Mono>, opened {new Date(item.createdAt).toLocaleString()}
-                  </span>
-                  <span className="block">
-                    {item.targetType.replace('_', ' ')} <Mono>{item.targetId}</Mono>
-                  </span>
-                </CardDescription>
-              </div>
-              {item.status === 'reported' && (
-                <div className="flex flex-wrap gap-2">
-                  <Button size="sm" onClick={() => onReview(item.targetId)}>
-                    Review and act
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={() => { setDialogError(null); setDialog({ caseId: item.id, outcome: 'actioned', reportCount }); }}>
-                    Mark actioned
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => { setDialogError(null); setDialog({ caseId: item.id, outcome: 'dismissed', reportCount }); }}>
-                    Dismiss
-                  </Button>
-                </div>
-              )}
-            </div>
-          </CardHeader>
-          <CardContent>
-            <CaseReports caseId={item.id} reportCount={reportCount} firstPage={reports} />
-          </CardContent>
-        </Card>
+      {items.map((summary) => (
+        <ReportedCaseCard
+          // A refreshed first page (new reports, or a new count) remounts the card and drops pages loaded before it.
+          key={`${summary.case.id}:${summary.reportCount}:${summary.reports[0]?.id ?? ''}`}
+          summary={summary}
+          onReview={onReview}
+          onClose={(request) => {
+            setDialogError(null);
+            setDialog(request);
+          }}
+        />
       ))}
 
       <ConfirmActionDialog

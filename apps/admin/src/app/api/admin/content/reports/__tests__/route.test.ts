@@ -94,6 +94,12 @@ describe('GET /api/admin/content/reports', () => {
     expect(body.cases[0].reports).toHaveLength(1);
   });
 
+  it('refuses a malformed report cursor', async () => {
+    getMock.mockResolvedValue(caseRow());
+    expect((await get('?id=case-r&reportsBefore=%27%3B--')).status).toBe(400);
+    expect(pageMock).not.toHaveBeenCalled();
+  });
+
   it('answers 404 for an unknown case ID', async () => {
     getMock.mockResolvedValue(null);
     expect((await get('?id=nope')).status).toBe(404);
@@ -102,10 +108,10 @@ describe('GET /api/admin/content/reports', () => {
   it('returns a later page of one case\'s reports, so none past the first page is out of reach', async () => {
     getMock.mockResolvedValue(caseRow());
     pageMock.mockResolvedValue([reportRow({ id: 'rep-21' })]);
-    const body = await (await get('?id=case-r&reportsOffset=20&reportsLimit=50')).json();
-    expect(pageMock).toHaveBeenCalledWith('case-r', { offset: 20, limit: 50 });
+    const body = await (await get('?id=case-r&reportsBefore=rep-20&reportsLimit=50')).json();
+    expect(pageMock).toHaveBeenCalledWith('case-r', { beforeId: 'rep-20', limit: 50 });
     expect(attachMock).not.toHaveBeenCalled();
-    expect(body).toEqual({ reports: [expect.objectContaining({ id: 'rep-21', createdAt: '2026-11-12T00:00:30.000Z' })], offset: 20, limit: 50 });
+    expect(body).toEqual({ reports: [expect.objectContaining({ id: 'rep-21', createdAt: '2026-11-12T00:00:30.000Z' })], limit: 50 });
     expect(auditRequest).toHaveBeenCalledWith(
       expect.any(Request),
       expect.objectContaining({ eventType: 'content.case.read', resourceId: 'case-r', details: expect.objectContaining({ action: 'view_reports_page' }) }),
@@ -114,7 +120,7 @@ describe('GET /api/admin/content/reports', () => {
 
   it('answers 404 for a report page of an unknown case', async () => {
     getMock.mockResolvedValue(null);
-    expect((await get('?id=nope&reportsOffset=20')).status).toBe(404);
+    expect((await get('?id=nope&reportsBefore=rep-20')).status).toBe(404);
     expect(pageMock).not.toHaveBeenCalled();
   });
 });

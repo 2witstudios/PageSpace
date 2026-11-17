@@ -74,9 +74,9 @@ export async function closeReportedCase(input: {
   }
 }
 
-/** A later page of one case's reports, newest first; `offset` is how many the queue already shows. */
-export async function fetchCaseReports(caseId: string, offset: number): Promise<ReportSummary[]> {
-  const query = new URLSearchParams({ id: caseId, reportsOffset: String(offset), reportsLimit: '50' });
+/** One case's reports older than `beforeId`, the last one the queue shows; newest first. */
+export async function fetchCaseReports(caseId: string, beforeId: string): Promise<ReportSummary[]> {
+  const query = new URLSearchParams({ id: caseId, reportsBefore: beforeId, reportsLimit: '50' });
   const res = await fetchWithAuth(`/api/admin/content/reports?${query.toString()}`);
   const data = (await res.json().catch(() => null)) as { reports?: ReportSummary[]; error?: string } | null;
   if (!res.ok || !data?.reports) throw new Error(data?.error ?? `Request failed (${res.status})`);

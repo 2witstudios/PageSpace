@@ -112,9 +112,14 @@ describe('report store', () => {
     expect(firstPage.reportCount).toBe(25);
     expect(firstPage.reports.map((r) => r.description)).toEqual(Array.from({ length: 20 }, (_, i) => `report ${24 - i}`));
 
-    const rest = await listCaseReports(caseId, { offset: 20, limit: 20 });
+    const last = firstPage.reports[firstPage.reports.length - 1];
+    // A report filed while the admin is paging shifts nothing: the page is keyed on the last report shown.
+    await file(input(target, { description: 'filed meanwhile' }));
+    const rest = await listCaseReports(caseId, { beforeId: last.id, limit: 20 });
     expect(rest.map((r) => r.description)).toEqual(['report 4', 'report 3', 'report 2', 'report 1', 'report 0']);
-    expect(await listCaseReports(caseId, { offset: 25, limit: 20 })).toEqual([]);
+    expect(await listCaseReports(caseId, { beforeId: rest[rest.length - 1].id, limit: 20 })).toEqual([]);
+    // A report ID from another case pages nothing.
+    expect(await listCaseReports(`case_${createId()}`, { beforeId: last.id, limit: 20 })).toEqual([]);
   });
 
   it('lists CSAM cases first', async () => {

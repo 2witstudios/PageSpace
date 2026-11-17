@@ -42,8 +42,8 @@ export function toReportedCaseSummary(row: ReportedCase): ReportedCaseSummary {
 }
 
 /**
- * Append a later page of a case's reports. Pages are newest first by offset, so a report filed since the last page
- * shifts every offset by one and the next page repeats a report already shown; it is dropped, never shown twice.
+ * Append a later page of a case's reports. Pages are keyed on the last report shown, so they should not overlap;
+ * any report a page repeats anyway is dropped, never shown twice.
  */
 export function mergeReportPages(shown: ReportSummary[], page: ReportSummary[]): ReportSummary[] {
   const seen = new Set(shown.map((report) => report.id));
