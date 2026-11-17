@@ -236,11 +236,17 @@ describe('POST /api/upload/presign', () => {
       const res = await POST(makeRequest(VALID_BODY));
       expect(res.status).toBe(200);
       expect(issuePresignedPutUrl).toHaveBeenCalledWith(
-        `files/${VALID_HASH}/original`,
+        `uploads/staging/${MOCK_SLOT}`,
         'image/jpeg',
         1024,
         900,
       );
+    });
+
+    it('never signs a PUT for the content-addressed key itself (a re-PUT after /complete must not reach served bytes)', async () => {
+      await POST(makeRequest(VALID_BODY));
+      const signedKeys = vi.mocked(issuePresignedPutUrl).mock.calls.map((call) => call[0]);
+      expect(signedKeys).not.toContain(`files/${VALID_HASH}/original`);
     });
 
     it('returns url, jobId, key, and expiresAt in the response', async () => {

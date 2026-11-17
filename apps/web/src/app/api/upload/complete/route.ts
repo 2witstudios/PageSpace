@@ -18,7 +18,8 @@ import { contentBlockedResponse } from '@/lib/upload/content-blocked-response';
 import { getActorInfo, logFileActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { enqueueProcessorJob } from '@/lib/upload/processor-effects';
-import { deleteStoredObject, digestStoredObject } from '@/lib/upload/s3-effects';
+import { copyVerifiedObject, deleteStoredObject, digestStoredObject } from '@/lib/upload/s3-effects';
+import { buildUploadStagingKey } from '@/lib/upload/upload-staging';
 import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -190,6 +191,13 @@ async function discardUnverifiedObject(
   }
 }
 
+/** A staging object is never served; failing to delete it only leaves an orphan for the sweep. */
+async function deleteStagingObject(stagingKey: string, context: Record<string, string>): Promise<void> {
+  await deleteStoredObject(stagingKey).catch((err: unknown) => {
+    loggers.api.warn('Failed to delete upload staging object', { ...context, error: err instanceof Error ? err.message : String(err) });
+  });
+}
+
 export async function POST(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
   if (isAuthError(auth)) return auth.error;
@@ -273,33 +281,57 @@ export async function POST(request: Request) {
     }
   }
 
-  // The UI uploads straight to S3, so /complete can be reached without the PUT
-  // ever happening, and the PUT itself is bound only to a key and a length —
-  // never to the bytes. So the stored object is hashed HERE, before any page or
-  // `files` row exists: a client that declared a clean hash and PUT other bytes
-  // (blocked content included) is refused before anything can serve them. The
-  // blocklist check above ran on the declared hash; equal hashes mean the same
-  // bytes, so that check covered the verified bytes too.
+  // The stored bytes are proven HERE, before any page or `files` row exists. A
+  // presigned PUT binds a key and a length, never the bytes, and it stays valid
+  // for its whole TTL, so presign signs it for a per-job staging key. This route
+  // hashes that staging object, then copies exactly the version it hashed
+  // (CopySourceIfMatch) to the content-addressed key pages are served from. Only
+  // verified bytes are ever written there, and a re-PUT after this point lands
+  // on a staging key nothing serves. With no staging object (the dedup
+  // fast-path skipped the PUT), the existing content-addressed object is hashed
+  // instead. The blocklist check above ran on the declared hash; equal hashes
+  // mean the same bytes, so it covered the verified bytes too.
   const s3Key = buildS3Key(contentHash);
-  let digest: Awaited<ReturnType<typeof digestStoredObject>>;
+  const stagingKey = buildUploadStagingKey(jobId);
+  const refuse = async (body: { error: string }, status: number) => {
+    uploadSemaphore.releaseUploadSlot(jobId);
+    await releasePendingUpload(jobId).catch(() => undefined);
+    return NextResponse.json(body, { status });
+  };
+  const VERIFY_UNAVAILABLE = { error: 'File verification is temporarily unavailable. Please try again.' };
+  const VERIFY_FAILED = { error: 'Uploaded file failed integrity verification' };
+  const logContext = { userId, driveId, jobId, contentHash };
   try {
-    digest = await digestStoredObject(s3Key, fileSize);
+    const staged = await digestStoredObject(stagingKey, fileSize);
+    if (staged.status !== 'missing') {
+      if (staged.status === 'oversize' || staged.sha256 !== contentHash) {
+        await deleteStagingObject(stagingKey, logContext);
+        loggers.security.warn('Upload verify: staged bytes do not match the declared hash', logContext);
+        return await refuse(VERIFY_FAILED, 422);
+      }
+      if (!staged.etag) {
+        await deleteStagingObject(stagingKey, logContext);
+        return await refuse(VERIFY_UNAVAILABLE, 503);
+      }
+      const copied = await copyVerifiedObject(stagingKey, s3Key, staged.etag);
+      await deleteStagingObject(stagingKey, logContext);
+      if (copied === 'source_changed') {
+        loggers.security.warn('Upload verify: staging object changed after it was hashed', logContext);
+        return await refuse({ error: 'The upload changed while it was being verified. Please upload it again.' }, 409);
+      }
+    } else {
+      const existing = await digestStoredObject(s3Key, fileSize);
+      if (existing.status === 'missing') {
+        return await refuse({ error: 'Uploaded object not found in storage' }, 409);
+      }
+      if (existing.status === 'oversize' || existing.sha256 !== contentHash) {
+        await discardUnverifiedObject(s3Key, contentHash, { userId, driveId, jobId });
+        return await refuse(VERIFY_FAILED, 422);
+      }
+    }
   } catch (err) {
-    uploadSemaphore.releaseUploadSlot(jobId);
-    await releasePendingUpload(jobId).catch(() => undefined);
-    loggers.api.error('Upload verify read failed', err instanceof Error ? err : new Error(String(err)), { jobId });
-    return NextResponse.json({ error: 'File verification is temporarily unavailable. Please try again.' }, { status: 503 });
-  }
-  if (digest.status === 'missing') {
-    uploadSemaphore.releaseUploadSlot(jobId);
-    await releasePendingUpload(jobId).catch(() => undefined);
-    return NextResponse.json({ error: 'Uploaded object not found in storage' }, { status: 409 });
-  }
-  if (digest.status === 'oversize' || digest.sha256 !== contentHash) {
-    uploadSemaphore.releaseUploadSlot(jobId);
-    await releasePendingUpload(jobId).catch(() => undefined);
-    await discardUnverifiedObject(s3Key, contentHash, { userId, driveId, jobId });
-    return NextResponse.json({ error: 'Uploaded file failed integrity verification' }, { status: 422 });
+    loggers.api.error('Upload verify failed', err instanceof Error ? err : new Error(String(err)), logContext);
+    return await refuse(VERIFY_UNAVAILABLE, 503);
   }
 
   let newPage: typeof pages.$inferSelect;

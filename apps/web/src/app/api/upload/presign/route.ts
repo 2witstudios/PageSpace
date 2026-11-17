@@ -16,6 +16,7 @@ import { checkObjectExists, issuePresignedPutUrl } from '@/lib/upload/s3-effects
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isUploadBlocked } from '@pagespace/lib/content-safety/upload-gate';
 import { contentBlockedResponse } from '@/lib/upload/content-blocked-response';
+import { buildUploadStagingKey } from '@/lib/upload/upload-staging';
 import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -169,7 +170,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ alreadyExists: true, jobId, key });
     }
 
-    const url = await issuePresignedPutUrl(key, mimeType, fileSize, PRESIGN_TTL);
+    // The PUT goes to a per-job staging key, not `key`: /complete hashes it and
+    // copies that exact version to `key`, so a re-PUT later can't touch served bytes.
+    const url = await issuePresignedPutUrl(buildUploadStagingKey(jobId), mimeType, fileSize, PRESIGN_TTL);
     const expiresAt = new Date(Date.now() + PRESIGN_TTL * 1000).toISOString();
 
     auditRequest(request, {

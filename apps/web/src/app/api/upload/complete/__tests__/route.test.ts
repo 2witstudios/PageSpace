@@ -78,7 +78,10 @@ vi.mock('@pagespace/lib/services/upload-semaphore', () => ({
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-  loggers: { api: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } },
+  loggers: {
+    api: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    security: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  },
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
@@ -96,9 +99,11 @@ vi.mock('@/lib/upload/processor-effects', () => ({
 
 const mockDigestStoredObject = vi.fn();
 const mockDeleteStoredObject = vi.fn();
+const mockCopyVerifiedObject = vi.fn();
 vi.mock('@/lib/upload/s3-effects', () => ({
   digestStoredObject: (...args: unknown[]) => mockDigestStoredObject(...args),
   deleteStoredObject: (...args: unknown[]) => mockDeleteStoredObject(...args),
+  copyVerifiedObject: (...args: unknown[]) => mockCopyVerifiedObject(...args),
 }));
 
 vi.mock('@pagespace/lib/services/upload-validation', () => ({
@@ -153,7 +158,9 @@ function makeTxImpl() {
 }
 
 const VALID_HASH = 'b'.repeat(64);
+const FINAL_KEY = `files/${VALID_HASH}/original`;
 const MOCK_JOB_ID = 'user-1-slot-xyz';
+const STAGING_KEY = `uploads/staging/${MOCK_JOB_ID}`;
 
 function makeAuth(userId = 'user-1') {
   return { userId, tokenType: 'session' as const, tokenVersion: 0, sessionId: 's', role: 'user' as const, adminRoleVersion: 0 };
@@ -197,9 +204,11 @@ beforeEach(() => {
   // Default: the files-row insert succeeds (first physical store → fileWasInserted).
   filesInsertReturning = [{ id: VALID_HASH }];
   mockFilesFindFirst.mockResolvedValue(undefined);
-  // Default: the stored object is present and its bytes hash to the declared hash.
-  mockDigestStoredObject.mockResolvedValue({ status: 'ok', sha256: VALID_HASH, size: 2048 });
+  // Default: the client PUT the declared bytes to its staging key.
+  mockDigestStoredObject.mockImplementation(async (key: string) =>
+    key === STAGING_KEY ? { status: 'ok', sha256: VALID_HASH, size: 2048, etag: '"etag-1"' } : { status: 'missing' });
   mockDeleteStoredObject.mockResolvedValue(undefined);
+  mockCopyVerifiedObject.mockResolvedValue('copied');
 
   mockTransaction.mockImplementation(makeTxImpl());
 });
@@ -269,9 +278,32 @@ describe('POST /api/upload/complete', () => {
       expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_JOB_ID);
     });
 
-    it('hashes the stored object under the declared key, bounded by the size reserved at presign', async () => {
+    it('hashes the staging object the client PUT, bounded by the size reserved at presign', async () => {
       await POST(makeRequest(VALID_BODY));
-      expect(mockDigestStoredObject).toHaveBeenCalledWith(`files/${VALID_HASH}/original`, SLOT_META.fileSize);
+      expect(mockDigestStoredObject).toHaveBeenCalledWith(STAGING_KEY, SLOT_META.fileSize);
+    });
+
+    it('copies exactly the hashed version to the content-addressed key, then deletes the staging object, before committing', async () => {
+      const order: string[] = [];
+      mockCopyVerifiedObject.mockImplementation(async () => { order.push('copy'); return 'copied'; });
+      mockDeleteStoredObject.mockImplementation(async (key: string) => { order.push(`delete:${key}`); });
+      mockTransaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => { order.push('commit'); return makeTxImpl()(fn); });
+
+      const res = await POST(makeRequest(VALID_BODY));
+
+      expect(res.status).toBe(200);
+      expect(mockCopyVerifiedObject).toHaveBeenCalledWith(STAGING_KEY, FINAL_KEY, '"etag-1"');
+      expect(order).toEqual(['copy', `delete:${STAGING_KEY}`, 'commit']);
+    });
+
+    it('given no staging object (the dedup fast-path skipped the PUT), should verify the existing content-addressed object instead', async () => {
+      mockDigestStoredObject.mockImplementation(async (key: string) =>
+        key === FINAL_KEY ? { status: 'ok', sha256: VALID_HASH, size: 2048, etag: '"f"' } : { status: 'missing' });
+
+      const res = await POST(makeRequest(VALID_BODY));
+
+      expect(res.status).toBe(200);
+      expect(mockCopyVerifiedObject).not.toHaveBeenCalled();
     });
   });
 
@@ -279,7 +311,8 @@ describe('POST /api/upload/complete', () => {
     const BLOCKED_BYTES_HASH = 'e'.repeat(64);
 
     it('given a clean declared hash but different (blocked) stored bytes, should refuse, delete the object and serve nothing', async () => {
-      mockDigestStoredObject.mockResolvedValue({ status: 'ok', sha256: BLOCKED_BYTES_HASH, size: 2048 });
+      mockDigestStoredObject.mockImplementation(async (key: string) =>
+        key === STAGING_KEY ? { status: 'ok', sha256: BLOCKED_BYTES_HASH, size: 2048, etag: '"x"' } : { status: 'missing' });
 
       const res = await POST(makeRequest(VALID_BODY));
 
@@ -289,23 +322,36 @@ describe('POST /api/upload/complete', () => {
       expect(mockTransaction).not.toHaveBeenCalled();
       expect(enqueueProcessorJob).not.toHaveBeenCalled();
       expect(chargeStorageForStore).not.toHaveBeenCalled();
-      expect(mockDeleteStoredObject).toHaveBeenCalledWith(`files/${VALID_HASH}/original`);
+      expect(mockCopyVerifiedObject).not.toHaveBeenCalled();
+      expect(mockDeleteStoredObject).toHaveBeenCalledWith(STAGING_KEY);
       expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_JOB_ID);
       expect(releasePendingUpload).toHaveBeenCalledWith(MOCK_JOB_ID);
     });
 
     it('given stored bytes larger than the reserved size, should refuse and delete the object the same way', async () => {
-      mockDigestStoredObject.mockResolvedValue({ status: 'oversize' });
+      mockDigestStoredObject.mockImplementation(async (key: string) => (key === STAGING_KEY ? { status: 'oversize' } : { status: 'missing' }));
 
       const res = await POST(makeRequest(VALID_BODY));
 
       expect(res.status).toBe(422);
       expect(mockTransaction).not.toHaveBeenCalled();
-      expect(mockDeleteStoredObject).toHaveBeenCalledWith(`files/${VALID_HASH}/original`);
+      expect(mockDeleteStoredObject).toHaveBeenCalledWith(STAGING_KEY);
     });
 
-    it('given a mismatch on an object an existing files row already owns, should refuse but leave the object for the existing pages', async () => {
-      mockDigestStoredObject.mockResolvedValue({ status: 'ok', sha256: BLOCKED_BYTES_HASH, size: 2048 });
+    it('given the staging object was overwritten after it was hashed, should copy nothing and commit nothing', async () => {
+      mockCopyVerifiedObject.mockResolvedValue('source_changed');
+
+      const res = await POST(makeRequest(VALID_BODY));
+
+      expect(res.status).toBe(409);
+      expect(mockTransaction).not.toHaveBeenCalled();
+      expect(mockDeleteStoredObject).toHaveBeenCalledWith(STAGING_KEY);
+      expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_JOB_ID);
+    });
+
+    it('given a mismatch on a content-addressed object an existing files row already owns, should refuse but leave it for the existing pages', async () => {
+      mockDigestStoredObject.mockImplementation(async (key: string) =>
+        key === FINAL_KEY ? { status: 'ok', sha256: BLOCKED_BYTES_HASH, size: 2048, etag: '"f"' } : { status: 'missing' });
       mockFilesFindFirst.mockResolvedValue({ id: VALID_HASH });
 
       const res = await POST(makeRequest(VALID_BODY));
