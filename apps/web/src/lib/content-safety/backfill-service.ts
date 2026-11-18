@@ -1,16 +1,17 @@
 import 'server-only';
 
 import { createHash } from 'node:crypto';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
 import { audit } from '@pagespace/lib/audit/audit-log';
 import type { BackfillDeps, BackfillItemOutcome, BackfillTarget, DryRunDeps, ListedObject } from '@pagespace/lib/content-safety/backfill';
 import { claimBackfillCursor, saveBackfillCursor } from '@pagespace/lib/content-safety/backfill-store';
 import { errorLabel, evaluatePublishAsset, type PublishGateDeps, type PublishGateEvaluation } from '@pagespace/lib/content-safety/publish-gate';
 import type { ScanGateConfig } from '@pagespace/lib/content-safety/scan-mode';
 import { findBlockCaseId } from '@pagespace/lib/content-safety/blocklist';
-import { findScanVerdicts } from '@pagespace/lib/content-safety/scan-store';
+import { findOpenReviewCaseId, findScanVerdicts } from '@pagespace/lib/content-safety/scan-store';
+import { holdKeyFor } from '@pagespace/lib/content-safety/takedown';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
-  deletePublishedAssetsForHash,
   isPublishConfigured,
   listPublishedAssetsPage,
   readPublishedObjectBounded,
@@ -40,8 +41,10 @@ import { READ_TIMEOUT_MS, createPublishGateDeps, readPrivateSource, runHashMatch
  *   the global takedown, and the avatar is then removed through an `avatar`
  *   takedown case. (For an asset, the global takedown removes the public copy.)
  * - **classifier flag** under enforce: the public copy, or the avatar, is taken
- *   off the web (`content.backfill.unpublished`). Nothing is blocked; the review
- *   case decides. Under shadow it stays up.
+ *   off the web (`content.backfill.unpublished`), after a verified private copy
+ *   is kept under the review case (`content-hold/<case>/<hash>`): it may be the
+ *   only copy, and the case needs it. Nothing is blocked; the review case
+ *   decides. Under shadow it stays up.
  * - An avatar is re-read before any of that is done to it: the user may have
  *   uploaded a new one while the scan ran, and that one was gated at upload.
  *
@@ -58,12 +61,16 @@ const AVATAR_TYPES: Record<string, string> = { png: 'image/png', jpg: 'image/jpe
 export interface BackfillActions {
   /**
    * Take the public copies of a hash off the web, keeping a verified private copy first (the global
-   * takedown's own `takePublicOffline`), under the case's hold key. Never a bare delete: on a hash match or a
-   * block, the public copy can be the only one left.
+   * takedown's own `takePublicOffline`), under the case's hold key. Never a bare delete: whatever the finding,
+   * the public copy can be the only one left (its private original deleted since it was published).
    */
   takePublicOffline(contentHash: string, caseId: string): Promise<void>;
-  /** Delete the public copies of a hash: a classifier flag under enforce, where the private original stays. */
-  removePublicAsset(contentHash: string): Promise<number>;
+  /**
+   * Keep an avatar's bytes in the private bucket at the case's hold key (`content-hold/<case>/<hash>`) and verify
+   * the copy, before a classifier flag removes the avatar: the review case needs something to look at. Throws
+   * when the copy cannot be made or verified; nothing is removed then.
+   */
+  holdAvatarBytes(caseKey: string, contentHash: string, bytes: Uint8Array): Promise<void>;
   removeAvatar(userId: string): Promise<void>;
   /** Stop showing an avatar without deleting it (clear the profile image), for when its bytes can't be preserved yet. */
   hideAvatar(userId: string): Promise<void>;
@@ -74,6 +81,8 @@ export interface BackfillActions {
   takedownAvatar(userId: string, reason: string): Promise<boolean>;
   /** The case that blocked a hash, if any. */
   findBlockCaseId(contentHash: string): Promise<string | null>;
+  /** The case under review (`reported`) for a hash, if any: a flag decided from a stored verdict carries no case ID. */
+  findReviewCaseId(contentHash: string): Promise<string | null>;
 }
 
 async function defaultRemoveAvatar(userId: string): Promise<void> {
@@ -106,16 +115,26 @@ async function defaultTakePublicOffline(contentHash: string, caseId: string): Pr
   await createTakedownStorage().takePublicOffline(contentHash, caseId);
 }
 
-/** Hold key namespace for a public copy whose block has no case (an old or hand-made block). */
+async function defaultHoldAvatarBytes(caseKey: string, contentHash: string, bytes: Uint8Array): Promise<void> {
+  const key = holdKeyFor(caseKey, contentHash);
+  await getS3Client().send(new PutObjectCommand({ Bucket: getS3Bucket(), Key: key, Body: bytes, ContentType: 'application/octet-stream' }));
+  const copy = await readS3ObjectBounded(getS3Client(), getS3Bucket(), key, MAX_AVATAR_READ_BYTES, READ_TIMEOUT_MS);
+  if (!copy?.complete || createHash('sha256').update(copy.bytes).digest('hex') !== contentHash) {
+    throw new Error('The private hold copy of the avatar could not be verified; the avatar was left in place');
+  }
+}
+
+/** Hold key namespace for a public copy with no case to hold it under (an old or hand-made block, a lost case). */
 const UNCASED_HOLD = 'backfill-uncased';
 
 const defaultActions: BackfillActions = {
   takePublicOffline: defaultTakePublicOffline,
-  removePublicAsset: deletePublishedAssetsForHash,
+  holdAvatarBytes: defaultHoldAvatarBytes,
   removeAvatar: defaultRemoveAvatar,
   hideAvatar: defaultHideAvatar,
   takedownAvatar: defaultTakedownAvatar,
   findBlockCaseId,
+  findReviewCaseId: findOpenReviewCaseId,
 };
 
 function auditUnpublished(details: { kind: 'asset' | 'avatar'; contentHash: string; mode: string; finding: string; caseId: string | null; userId?: string }): void {
@@ -137,6 +156,14 @@ export function createBackfillDeps(
   options: { actions?: Partial<BackfillActions>; gateDeps?: (overrides: Partial<PublishGateDeps>) => PublishGateDeps } = {},
 ): BackfillDeps {
   const actions = { ...defaultActions, ...options.actions };
+
+  /** The review case a flagged copy is held under: the gate's, else the one open for the hash, else the uncased namespace. */
+  async function flaggedHoldKey(contentHash: string, caseId: string | null): Promise<string> {
+    const key = caseId ?? (await actions.findReviewCaseId(contentHash));
+    if (key) return key;
+    loggers.security.error('Backfill: a flagged copy has no review case; it is held under content-hold/backfill-uncased/', undefined, { contentHash });
+    return UNCASED_HOLD;
+  }
   const gateDeps = options.gateDeps ?? ((overrides: Partial<PublishGateDeps>) => createPublishGateDeps(config, overrides));
 
   async function processAsset(target: Extract<BackfillTarget, { kind: 'asset' }>): Promise<BackfillItemOutcome> {
@@ -182,8 +209,9 @@ export function createBackfillDeps(
       removed = true;
     }
     if (evaluation.finding === 'flagged' && config.mode === 'enforce') {
-      // Not a block: the private original stays, and the review case decides.
-      await actions.removePublicAsset(target.contentHash);
+      // Not a block, so nothing is deleted for good: the public copy is kept privately under the review case
+      // first (it can be the only copy left), then taken off the web. The review case decides.
+      await actions.takePublicOffline(target.contentHash, await flaggedHoldKey(target.contentHash, evaluation.caseId));
       removed = true;
       auditUnpublished({ kind: 'asset', contentHash: target.contentHash, mode: config.mode, finding: evaluation.finding, caseId: evaluation.caseId });
     }
@@ -296,6 +324,9 @@ export function createBackfillDeps(
     if (avatarHidden && !avatarTakenDown) throw new Error('Avatar hidden but not yet deleted: it could not be staged for preservation, or its takedown did not finish');
     let removed = avatarTakenDown;
     if (evaluation.finding === 'flagged' && config.mode === 'enforce' && (await stillCurrent())) {
+      // The removal deletes the only copy: keep the scanned bytes privately under the review case first. If that
+      // fails, this throws and the avatar stays until a later tick can keep them.
+      await actions.holdAvatarBytes(await flaggedHoldKey(contentHash, evaluation.caseId), contentHash, bytes);
       await actions.removeAvatar(target.userId);
       removed = true;
       auditUnpublished({ kind: 'avatar', contentHash, mode: config.mode, finding: evaluation.finding, caseId: evaluation.caseId, userId: target.userId });
