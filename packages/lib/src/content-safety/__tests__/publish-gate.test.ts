@@ -105,6 +105,16 @@ describe('gatePublishAsset', () => {
     await expect(gatePublishAsset(input, shadow.deps)).resolves.toEqual({ promote: true });
   });
 
+  it('reports the standing flag, not its own clean result, when its write lost to one', async () => {
+    const lost = setup();
+    lost.deps.recordVerdict.mockResolvedValueOnce({ keptFlag: true });
+    await expect(evaluatePublishAsset(input, lost.deps)).resolves.toMatchObject({ promote: false, finding: 'flagged' });
+
+    const failed = setup();
+    failed.deps.recordVerdict.mockRejectedValueOnce(new Error('db down'));
+    await expect(evaluatePublishAsset(input, failed.deps)).resolves.toMatchObject({ promote: false, finding: 'clean' });
+  });
+
   it('clean: records the verdict, audits and promotes', async () => {
     const { deps } = setup();
     await expect(gatePublishAsset(input, deps)).resolves.toEqual({ promote: true });

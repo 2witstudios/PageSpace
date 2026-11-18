@@ -11,6 +11,7 @@ import { db } from '@pagespace/db/db';
 import { and, count, eq, gte, inArray, lte, or, sql } from '@pagespace/db/operators';
 import { DEFAULT_VERDICT_TTL_DAYS } from './scan-mode';
 import {
+  contentBlocks,
   contentCases,
   contentScans,
   type ContentCase,
@@ -71,6 +72,16 @@ export async function countShadowOutcomesSince(since: Date): Promise<Array<{ out
   return rows.map((row) => ({ outcome: row.outcome, count: Number(row.count) }));
 }
 
+/** The case under review (`reported`) for a hash, if one is open. */
+export async function findOpenReviewCaseId(contentHash: string): Promise<string | null> {
+  const [row] = await db
+    .select({ id: contentCases.id })
+    .from(contentCases)
+    .where(and(eq(contentCases.targetType, 'content_hash'), eq(contentCases.targetId, contentHash), eq(contentCases.status, 'reported')))
+    .limit(1);
+  return row?.id ?? null;
+}
+
 /** Flagged-scan cases nobody has reviewed yet (still `reported`). */
 export async function countOpenScanFlaggedCases(): Promise<number> {
   const [row] = await db
@@ -92,27 +103,33 @@ async function upsertVerdict(executor: typeof db | Tx, record: VerdictRecord, no
     scores: record.scores,
     scannedAt: now,
   };
+  // A hash match stands while its hash is blocked: a scan that started before the block (a backfill tick that
+  // outlived its lease, a publish in flight) cannot erase the match. Once staff lift the block, the next scan is
+  // recorded. Only another hash match replaces one.
+  const keepHashMatch =
+    record.outcome === 'hash_match'
+      ? undefined
+      : or(
+          sql`${contentScans.outcome} is distinct from 'hash_match'`,
+          sql`not exists (select 1 from ${contentBlocks} where ${contentBlocks.contentHash} = ${contentScans.contentHash})`,
+        );
+  // A classifier flag stands while it is fresh, or while a case on its hash is under review. The freshness
+  // test runs on the locked row, so a concurrent flag that committed first is always seen; the case test
+  // covers a flag older than the TTL whose case nobody has closed.
+  const keepFlag = keepFlagSince
+    ? or(
+        sql`${contentScans.outcome} is distinct from 'classifier_flag'`,
+        and(
+          lte(contentScans.scannedAt, keepFlagSince),
+          sql`not exists (select 1 from ${contentCases} where ${contentCases.contentHash} = ${contentScans.contentHash} and ${contentCases.status} = 'reported')`,
+        ),
+      )
+    : undefined;
+  const setWhere = keepHashMatch && keepFlag ? and(keepHashMatch, keepFlag) : (keepHashMatch ?? keepFlag);
   const written = await executor
     .insert(contentScans)
     .values({ contentHash: record.contentHash, ...values })
-    .onConflictDoUpdate({
-      target: contentScans.contentHash,
-      set: values,
-      // A classifier flag stands while it is fresh, or while a case on its hash is under review. The freshness
-      // test runs on the locked row, so a concurrent flag that committed first is always seen; the case test
-      // covers a flag older than the TTL whose case nobody has closed.
-      ...(keepFlagSince
-        ? {
-            setWhere: or(
-              sql`${contentScans.outcome} is distinct from 'classifier_flag'`,
-              and(
-                lte(contentScans.scannedAt, keepFlagSince),
-                sql`not exists (select 1 from ${contentCases} where ${contentCases.contentHash} = ${contentScans.contentHash} and ${contentCases.status} = 'reported')`,
-              ),
-            ),
-          }
-        : {}),
-    })
+    .onConflictDoUpdate({ target: contentScans.contentHash, set: values, ...(setWhere ? { setWhere } : {}) })
     .returning({ contentHash: contentScans.contentHash });
   return written.length > 0;
 }

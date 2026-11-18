@@ -317,6 +317,8 @@ export async function evaluatePublishAsset(input: PublishGateInput, deps: Publis
   }
 
   let promote = decision.promote;
+  // Set when this result lost to a verdict that stands (a classifier flag, or a hash match on a blocked hash).
+  let keptFlag = false;
   if (record) {
     const written = await deps
       .recordVerdict({
@@ -335,6 +337,7 @@ export async function evaluatePublishAsset(input: PublishGateInput, deps: Publis
     // and holds too when the write failed: whether a flag stands could not be told, and couldn't-check is never
     // read as allowed.
     if ((written === null || written.keptFlag) && mode === 'enforce') promote = false;
+    keptFlag = written?.keptFlag === true;
   }
 
   if (decision.audit) {
@@ -346,7 +349,8 @@ export async function evaluatePublishAsset(input: PublishGateInput, deps: Publis
 
   // Only a call that reached the vendor counts: an unreadable or oversized source is an error with no call.
   const scanned = vendorCalled === true;
-  const finding = findingFor(outcome);
+  // A result that lost to a standing flag reports the flag: the backfill acts on the finding, not on `promote`.
+  const finding: GateFinding = keptFlag ? 'flagged' : findingFor(outcome);
   return promote
     ? { promote: true, finding, scanned, caseId }
     : { promote: false, reason: 'held', finding, scanned, caseId };

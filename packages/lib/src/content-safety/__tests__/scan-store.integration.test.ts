@@ -8,8 +8,8 @@ import { Client } from 'pg';
 import { createHash, randomUUID } from 'crypto';
 import { db } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
-import { contentCases, contentReports, contentScans } from '@pagespace/db/schema/content-safety';
-import { countScanVerdicts, findScanVerdict, findScanVerdicts, openScanReviewCase, recordScanVerdict } from '../scan-store';
+import { contentBlocks, contentCases, contentReports, contentScans } from '@pagespace/db/schema/content-safety';
+import { countScanVerdicts, findOpenReviewCaseId, findScanVerdict, findScanVerdicts, openScanReviewCase, recordScanVerdict } from '../scan-store';
 import { closeReportedCase, fileContentReport, listReportedCases, ReportedCaseChangedError } from '../report-store';
 import { gatePublishAsset, type PublishGateDeps } from '../publish-gate';
 import { resolveScanConfig } from '../scan-mode';
@@ -52,6 +52,7 @@ afterAll(async () => {
   if (cases.length > 0) await db.delete(contentReports).where(inArray(contentReports.caseId, cases.map((c) => c.id)));
   await db.delete(contentCases).where(inArray(contentCases.targetId, hashes));
   await db.delete(contentScans).where(inArray(contentScans.contentHash, hashes));
+  await db.delete(contentBlocks).where(inArray(contentBlocks.contentHash, hashes));
 });
 
 describe('scan store', () => {
@@ -202,6 +203,34 @@ describe('scan store', () => {
     const counts = await countScanVerdicts();
     expect(counts.find((c) => c.reviewed && c.verdict === 'clean')?.count).toBeGreaterThanOrEqual(1);
     expect(counts.every((c) => !c.reviewed || c.mode === null)).toBe(true);
+  });
+
+  it('finds the case under review for a hash, and none once it is closed', async () => {
+    const hash = newHash();
+    expect(await findOpenReviewCaseId(hash)).toBeNull();
+    const opened = await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.95, mode: 'enforce', scores: {} });
+    expect(await findOpenReviewCaseId(hash)).toBe(opened.caseId);
+    await db.update(contentCases).set({ status: 'actioned' }).where(eq(contentCases.id, opened.caseId));
+    expect(await findOpenReviewCaseId(hash)).toBeNull();
+  });
+
+  it('a hash match stands while its hash is blocked: a late scan of the same bytes cannot replace it', async () => {
+    const hash = newHash();
+    await recordScanVerdict({ contentHash: hash, verdict: 'flagged', outcome: 'hash_match', provider: 'hive', mode: 'enforce', scores: {} });
+    await db.insert(contentBlocks).values({ contentHash: hash, category: 'csam', source: 'hash_match' });
+    await expect(
+      recordScanVerdict({ contentHash: hash, verdict: 'clean', outcome: 'clean', provider: 'hive', mode: 'enforce', scores: {} }),
+    ).resolves.toEqual({ keptFlag: true });
+    await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.95, mode: 'enforce', scores: {} });
+    expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'flagged', outcome: 'hash_match' });
+
+    // Unblocked (a false match staff lifted): the next scan is recorded.
+    await db.delete(contentBlocks).where(eq(contentBlocks.contentHash, hash));
+    await db.delete(contentCases).where(eq(contentCases.targetId, hash));
+    await expect(
+      recordScanVerdict({ contentHash: hash, verdict: 'clean', outcome: 'clean', provider: 'hive', mode: 'enforce', scores: {} }),
+    ).resolves.toEqual({ keptFlag: false });
+    expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'clean' });
   });
 
   it('marks a clean video the classifier did not score, and nothing else', async () => {
