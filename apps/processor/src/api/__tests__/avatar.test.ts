@@ -194,17 +194,44 @@ describe('POST /avatar/upload', () => {
     expect(response.body.success).toBe(true);
   });
 
-  it('takes the stored avatar back down when its hash was blocked while it was being stored', async () => {
-    // Clear when the gate read the blocklist; blocked by the time the object is written.
+  it('refuses before touching the current avatar when the hash was blocked after the gate answered', async () => {
+    // Clear when the gate read the blocklist; blocked by the final read before anything is written.
     mockIsHashBlocked.mockResolvedValueOnce(false).mockResolvedValue(true);
     const app = createApp({ userId: 'user-1' }, createMockFile());
     const response = await request(app).post('/avatar/upload').send({ userId: 'user-1' });
     expect(response.status).toBe(422);
+    // The current avatar is neither listed for deletion nor replaced: nothing in storage changed.
+    expect(mockS3Send.mock.calls.map((call: unknown[]) => (call[0] as { _tag: string })._tag)).toEqual([]);
+  });
 
-    const tags = mockS3Send.mock.calls.map((call: unknown[]) => (call[0] as { _tag: string })._tag);
-    expect(tags.lastIndexOf('DeleteObjects')).toBeGreaterThan(tags.indexOf('PutObject'));
-    const removed = mockS3Send.mock.calls.filter((call: unknown[]) => (call[0] as { _tag: string })._tag === 'DeleteObjects').pop();
-    expect((removed![0] as { input: { Delete: { Objects: Array<{ Key: string }> } } }).input.Delete.Objects).toEqual([{ Key: 'avatars/user-1/avatar.jpg' }]);
+  it('a final blocklist read that fails refuses, and changes nothing in storage', async () => {
+    mockIsHashBlocked.mockResolvedValueOnce(false).mockRejectedValue(new Error('db down'));
+    const response = await request(createApp({ userId: 'user-1' }, createMockFile())).post('/avatar/upload').send({ userId: 'user-1' });
+    expect(response.status).toBe(422);
+    expect(mockS3Send).not.toHaveBeenCalled();
+  });
+
+  it('an upload refused at its final read while another upload of the same user completes leaves that avatar intact', async () => {
+    let releaseA: (blocked: boolean) => void = () => undefined;
+    const calls: number[] = [];
+    mockIsHashBlocked.mockImplementation(() => {
+      calls.push(calls.length + 1);
+      // Call 2 is upload A's final read: held until B has finished.
+      if (calls.length === 2) return new Promise<boolean>((resolve) => { releaseA = resolve; });
+      return Promise.resolve(false);
+    });
+    const app = createApp({ userId: 'user-1' }, createMockFile());
+    const a = request(app).post('/avatar/upload').send({ userId: 'user-1' }).then((r) => r);
+    await vi.waitFor(() => expect(calls.length).toBe(2));
+
+    const b = await request(app).post('/avatar/upload').send({ userId: 'user-1' });
+    expect(b.status).toBe(200);
+    const afterB = mockS3Send.mock.calls.length;
+
+    releaseA(true);
+    expect((await a).status).toBe(422);
+    // A's refusal wrote and deleted nothing: B's stored avatar is untouched.
+    expect(mockS3Send.mock.calls.length).toBe(afterB);
   });
 
   it('saves avatar successfully via S3 PutObjectCommand', async () => {

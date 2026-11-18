@@ -146,6 +146,15 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
         : res.status(422).json({ error: AVATAR_REJECTED_MESSAGE });
     }
 
+    // Asked once more, last thing before storage changes: a takedown can block the hash while the gate's answer was
+    // in flight, and no takedown step removes avatars by hash. A refusal here has written and deleted nothing, so
+    // the current avatar (or a concurrent upload's) is untouched. Couldn't-check refuses too.
+    const blockedSince = await isHashBlocked(decision.contentHash).catch(() => true);
+    if (blockedSince) {
+      processorLogger.warn('Avatar upload refused: its hash was blocked after the gate answered', { userId });
+      return res.status(422).json({ error: AVATAR_REJECTED_MESSAGE });
+    }
+
     // Replace old avatar before writing new one (best-effort — don't fail the upload if cleanup fails)
     try { await deleteUserAvatars(userId); } catch { /* non-fatal */ }
 
@@ -161,15 +170,6 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
       Body: file.buffer,
       ContentType: decision.contentType,
     }));
-
-    // Asked again now the avatar is stored, as a publish does after its copy: a takedown can block the hash while
-    // the gate's answer was in flight, and no takedown step removes avatars by hash. Couldn't-check refuses too.
-    const blockedSince = await isHashBlocked(decision.contentHash).catch(() => true);
-    if (blockedSince) {
-      await s3().send(new DeleteObjectsCommand({ Bucket: getS3Bucket(), Delete: { Objects: [{ Key: key }], Quiet: true } }));
-      processorLogger.warn('Avatar upload refused: its hash was blocked while it was stored', { userId });
-      return res.status(422).json({ error: AVATAR_REJECTED_MESSAGE });
-    }
 
     res.json({
       success: true,
