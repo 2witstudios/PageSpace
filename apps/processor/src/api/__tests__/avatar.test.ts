@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import request from 'supertest';
@@ -79,6 +79,13 @@ vi.mock('multer', () => {
 });
 
 import avatarRouter from '../avatar';
+
+// The processor suite runs every file in one fork: a stubbed global `fetch` (the web gate) or env left behind by
+// the last test here would answer the next file's real requests (the SIEM e2e's webhook delivery).
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
 
 /** A real JPEG header: the upload gate checks magic bytes, not the declared type. */
 const JPEG_BYTES = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01]);
