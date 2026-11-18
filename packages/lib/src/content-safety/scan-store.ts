@@ -146,9 +146,12 @@ const DEFAULT_FLAG_TTL_MS = DEFAULT_VERDICT_TTL_DAYS * 24 * 60 * 60 * 1000;
 export async function recordScanVerdict(
   record: VerdictRecord,
   { now = new Date(), flagTtlMs = DEFAULT_FLAG_TTL_MS }: { now?: Date; flagTtlMs?: number } = {},
-): Promise<{ keptFlag: boolean }> {
+): Promise<{ keptFlag: boolean; keptHashMatch?: boolean }> {
   const keepFlagSince = record.outcome === 'hash_match' ? undefined : new Date(now.getTime() - flagTtlMs);
-  return { keptFlag: !(await upsertVerdict(db, record, now, keepFlagSince)) };
+  if (await upsertVerdict(db, record, now, keepFlagSince)) return { keptFlag: false };
+  // Refused: say whether what stood was a hash match (its hash is blocked), which the gate refuses in every mode.
+  const [standing] = await db.select({ outcome: contentScans.outcome }).from(contentScans).where(eq(contentScans.contentHash, record.contentHash)).limit(1);
+  return standing?.outcome === 'hash_match' ? { keptFlag: true, keptHashMatch: true } : { keptFlag: true };
 }
 
 /**

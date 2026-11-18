@@ -42,7 +42,7 @@ function setup(options: {
     isBlocked: vi.fn(async () => options.blocked ?? false),
     findVerdict: vi.fn(async () => options.verdict ?? null),
     readSource: vi.fn(async () => ({ bytes: options.bytes ?? PNG, complete: options.complete ?? true })),
-    recordVerdict: vi.fn(async () => ({ keptFlag: false })),
+    recordVerdict: vi.fn(async (): Promise<{ keptFlag: boolean; keptHashMatch?: boolean }> => ({ keptFlag: false })),
     takedownHashMatch: vi.fn(async () => ({ caseId: 'case-td' })),
     openReviewCase: vi.fn(async () => ({ caseId: 'case-rv', created: true, firstFlag: true })),
     alert: vi.fn(async () => undefined),
@@ -103,6 +103,14 @@ describe('gatePublishAsset', () => {
     const shadow = setup({ mode: 'shadow' });
     shadow.deps.recordVerdict.mockResolvedValueOnce({ keptFlag: true });
     await expect(gatePublishAsset(input, shadow.deps)).resolves.toEqual({ promote: true });
+  });
+
+  it('a result that lost to a standing hash match is refused as blocked in every mode: the hash was blocked mid-scan', async () => {
+    for (const mode of ['shadow', 'enforce'] as const) {
+      const { deps } = setup({ mode });
+      deps.recordVerdict.mockResolvedValueOnce({ keptFlag: true, keptHashMatch: true });
+      await expect(evaluatePublishAsset(input, deps)).resolves.toMatchObject({ promote: false, reason: 'blocked', finding: 'blocked' });
+    }
   });
 
   it('reports the standing flag, not its own clean result, when its write lost to one', async () => {

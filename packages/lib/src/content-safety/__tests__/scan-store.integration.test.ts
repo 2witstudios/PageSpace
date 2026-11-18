@@ -220,7 +220,7 @@ describe('scan store', () => {
     await db.insert(contentBlocks).values({ contentHash: hash, category: 'csam', source: 'hash_match' });
     await expect(
       recordScanVerdict({ contentHash: hash, verdict: 'clean', outcome: 'clean', provider: 'hive', mode: 'enforce', scores: {} }),
-    ).resolves.toEqual({ keptFlag: true });
+    ).resolves.toEqual({ keptFlag: true, keptHashMatch: true });
     await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.95, mode: 'enforce', scores: {} });
     expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'flagged', outcome: 'hash_match' });
 

@@ -154,8 +154,12 @@ export interface PublishGateDeps {
   isBlocked(contentHash: string): Promise<boolean>;
   findVerdict(contentHash: string): Promise<StoredVerdict | null>;
   readSource(key: string, maxBytes: number): Promise<SourceRead | null>;
-  /** `keptFlag`: the write was skipped because a classifier flag on the hash still stands. */
-  recordVerdict(record: VerdictRecord): Promise<{ keptFlag: boolean }>;
+  /**
+   * `keptFlag`: the write was skipped because a verdict on the hash still stands (a classifier flag, or a hash
+   * match while the hash is blocked). `keptHashMatch`: what stood was a hash match: the hash was blocked while
+   * this scan ran.
+   */
+  recordVerdict(record: VerdictRecord): Promise<{ keptFlag: boolean; keptHashMatch?: boolean }>;
   /** PR 2's global takedown, category csam. Opens its own case and alerts. Returns the case ID. */
   takedownHashMatch(input: { contentHash: string; lists: string[] }): Promise<{ caseId?: string }>;
   /**
@@ -319,6 +323,7 @@ export async function evaluatePublishAsset(input: PublishGateInput, deps: Publis
   let promote = decision.promote;
   // Set when this result lost to a verdict that stands (a classifier flag, or a hash match on a blocked hash).
   let keptFlag = false;
+  let blockedMidScan = false;
   if (record) {
     const written = await deps
       .recordVerdict({
@@ -338,6 +343,12 @@ export async function evaluatePublishAsset(input: PublishGateInput, deps: Publis
     // read as allowed.
     if ((written === null || written.keptFlag) && mode === 'enforce') promote = false;
     keptFlag = written?.keptFlag === true;
+    // A hash match stood: the hash was blocked after the blocklist check above. Refused in every mode, as a
+    // blocked hash is: shadow's "publish anyway" never covers blocked bytes (an avatar has no later recheck).
+    if (written?.keptHashMatch) {
+      blockedMidScan = true;
+      promote = false;
+    }
   }
 
   if (decision.audit) {
@@ -350,6 +361,7 @@ export async function evaluatePublishAsset(input: PublishGateInput, deps: Publis
   // Only a call that reached the vendor counts: an unreadable or oversized source is an error with no call.
   const scanned = vendorCalled === true;
   // A result that lost to a standing flag reports the flag: the backfill acts on the finding, not on `promote`.
+  if (blockedMidScan) return { promote: false, reason: 'blocked', finding: 'blocked', scanned, caseId };
   const finding: GateFinding = keptFlag ? 'flagged' : findingFor(outcome);
   return promote
     ? { promote: true, finding, scanned, caseId }
