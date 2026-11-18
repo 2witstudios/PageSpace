@@ -31,9 +31,12 @@ describe('POST /api/internal/content-safety/avatar-gate', () => {
     expect(gateAvatarBytes).not.toHaveBeenCalled();
   });
 
-  it('refuses an unknown uploader', async () => {
+  it('refuses an unknown uploader with an answer, so the processor refuses rather than falling back', async () => {
     mockSelectRows.mockResolvedValue([]);
-    expect((await POST(request({ 'x-service-secret': SECRET, 'x-service-user-id': 'nobody' }))).status).toBe(404);
+    const response = await POST(request({ 'x-service-secret': SECRET, 'x-service-user-id': 'nobody' }));
+    // A 200 with accept:false is a decision; any non-OK status reads as "gate unavailable" on the processor side.
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ accept: false });
     expect(gateAvatarBytes).not.toHaveBeenCalled();
   });
 

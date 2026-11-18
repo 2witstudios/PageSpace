@@ -27,6 +27,22 @@ describe('readBytesWithCap', () => {
     expect(pulled()).toBeLessThan(4);
   });
 
+  it('answers past the cap without waiting on a cancellation that fails', async () => {
+    let pulled = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        controller.enqueue(new Uint8Array(4));
+      },
+      cancel() {
+        return Promise.reject(new Error('cancel failed'));
+      },
+    });
+    const request = new Request('http://x/', { method: 'POST', body, duplex: 'half' } as RequestInit);
+    await expect(readBytesWithCap(request, 6)).resolves.toBeNull();
+    expect(pulled).toBeGreaterThan(0);
+  });
+
   it('a request with no body reads as empty', async () => {
     await expect(readBytesWithCap(new Request('http://x/', { method: 'POST' }), 3)).resolves.toEqual(new Uint8Array(0));
   });

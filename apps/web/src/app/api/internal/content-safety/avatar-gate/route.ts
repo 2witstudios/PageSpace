@@ -32,7 +32,9 @@ export async function POST(request: Request): Promise<Response> {
   if (declared > MAX_AVATAR_BYTES) return Response.json({ error: 'Too large' }, { status: 413 });
 
   const [user] = await db.select({ id: users.id }).from(users).where(eq(users.id, auth.userId)).limit(1);
-  if (!user) return Response.json({ error: 'Unknown user' }, { status: 404 });
+  // A refusal, answered as one: the processor reads any non-OK status as "gate unavailable" and falls back to its
+  // own mode, which outside enforce would store the image unscanned.
+  if (!user) return Response.json({ accept: false });
 
   // Read under the cap: a chunked body has no Content-Length to refuse up front.
   const bytes = await readBytesWithCap(request, MAX_AVATAR_BYTES);

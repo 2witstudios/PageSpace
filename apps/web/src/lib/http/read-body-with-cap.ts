@@ -18,17 +18,20 @@ export async function readBytesWithCap(request: Request, maxBytes: number): Prom
     if (done) break;
     totalBytes += value.byteLength;
     if (totalBytes > maxBytes) {
-      await reader.cancel();
+      // Started, not awaited: the caller answers at once, whether or not the stream's cleanup succeeds.
+      reader.cancel().catch(() => undefined);
       return null;
     }
     chunks.push(value);
   }
 
-  return new Uint8Array(Buffer.concat(chunks));
+  // A view over the joined buffer, not a second copy of it.
+  const joined = Buffer.concat(chunks);
+  return new Uint8Array(joined.buffer, joined.byteOffset, joined.byteLength);
 }
 
 /** `readBytesWithCap`, decoded as UTF-8 text. */
 export async function readBodyWithCap(request: Request, maxBytes: number): Promise<string | null> {
   const bytes = await readBytesWithCap(request, maxBytes);
-  return bytes === null ? null : Buffer.from(bytes).toString('utf-8');
+  return bytes === null ? null : Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('utf-8');
 }
