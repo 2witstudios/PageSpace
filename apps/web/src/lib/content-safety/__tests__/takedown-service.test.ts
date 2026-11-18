@@ -108,7 +108,7 @@ vi.mock('@pagespace/db/db', () => ({
   },
 }));
 
-import { TakedownRequestError, executeTakedown, removeUserAvatar } from '../takedown-service';
+import { TakedownRequestError, executeTakedown } from '../takedown-service';
 
 const stepsOf = (id: string) => ((cases.get(id)?.steps as ContentCaseStep[]) ?? []).map((s) => `${s.step}:${s.status}`);
 const fetchMock = vi.fn();
@@ -389,20 +389,3 @@ describe('requests that cannot be acted on', () => {
   });
 });
 
-describe('removeUserAvatar (the backfill\'s removal of a flagged avatar)', () => {
-  it('clears the profile image before deleting the objects, so a failed delete is found and retried next tick', async () => {
-    const order: string[] = [];
-    mocks.clearImage.mockImplementation(async () => { order.push('clear'); return [{ id: 'user-1' }]; });
-    fetchMock.mockImplementation(async () => { order.push('delete'); return new Response('{}', { status: 200 }); });
-    mocks.listAvatars.mockResolvedValue({ Contents: [] });
-    await removeUserAvatar('user-1');
-    expect(order).toEqual(['clear', 'delete']);
-  });
-
-  it('a profile clear that fails deletes nothing: the stored avatar is still there for the retry to find', async () => {
-    mocks.clearImage.mockRejectedValueOnce(new Error('db down'));
-    fetchMock.mockClear();
-    await expect(removeUserAvatar('user-1')).rejects.toThrow('db down');
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-});

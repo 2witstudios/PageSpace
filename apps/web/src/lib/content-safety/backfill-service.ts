@@ -18,6 +18,7 @@ import {
 } from '@/lib/canvas/published-storage';
 import { getS3Bucket, getS3Client } from '@/lib/presigned-url';
 import { listS3Page, readS3ObjectBounded } from '@/lib/storage/s3-objects';
+import { hideScannedAvatar, removeScannedAvatar, type AvatarRemovalTarget } from './avatar-removal';
 import { READ_TIMEOUT_MS, createPublishGateDeps, readPrivateSource, runHashMatchTakedown, stageBytesForTakedown } from './publish-gate-service';
 
 /**
@@ -71,9 +72,13 @@ export interface BackfillActions {
    * when the copy cannot be made or verified; nothing is removed then.
    */
   holdAvatarBytes(caseKey: string, contentHash: string, bytes: Uint8Array): Promise<void>;
-  removeAvatar(userId: string): Promise<void>;
-  /** Stop showing an avatar without deleting it (clear the profile image), for when its bytes can't be preserved yet. */
-  hideAvatar(userId: string): Promise<void>;
+  /**
+   * Clear the profile image and delete the object of the SCANNED avatar only (`removeScannedAvatar`). False when the
+   * user's avatar is no longer the scanned one: a replacement, gated at upload, is left stored and visible.
+   */
+  removeAvatar(avatar: AvatarRemovalTarget): Promise<boolean>;
+  /** Stop showing the scanned avatar without deleting it, for when its bytes can't be preserved yet. False: replaced. */
+  hideAvatar(avatar: AvatarRemovalTarget): Promise<boolean>;
   /**
    * Run an avatar takedown case. True once the case is actioned (the avatar is gone); false when it stopped
    * without deleting it: CSAM waiting for evidence storage, or another run of the case under way.
@@ -87,9 +92,8 @@ export interface BackfillActions {
   currentVerdict(contentHash: string): Promise<StoredVerdict | null>;
 }
 
-async function defaultRemoveAvatar(userId: string): Promise<void> {
-  const { removeUserAvatar } = await import('./takedown-service');
-  await removeUserAvatar(userId);
+async function defaultRemoveAvatar(avatar: AvatarRemovalTarget): Promise<boolean> {
+  return (await removeScannedAvatar(avatar)) === 'removed';
 }
 
 async function defaultTakedownAvatar(userId: string, reason: string): Promise<boolean> {
@@ -107,9 +111,8 @@ async function defaultTakedownAvatar(userId: string, reason: string): Promise<bo
   return true;
 }
 
-async function defaultHideAvatar(userId: string): Promise<void> {
-  const { hideUserAvatar } = await import('./takedown-service');
-  await hideUserAvatar(userId);
+async function defaultHideAvatar(avatar: AvatarRemovalTarget): Promise<boolean> {
+  return (await hideScannedAvatar(avatar)) === 'hidden';
 }
 
 async function defaultTakePublicOffline(contentHash: string, caseId: string): Promise<void> {
@@ -167,10 +170,11 @@ export function createBackfillDeps(
   async function flaggedCase(contentHash: string, caseId: string | null): Promise<{ caseId: string | null; holdKey: string } | null> {
     const resolved = caseId ?? (await actions.findReviewCaseId(contentHash));
     if (resolved) return { caseId: resolved, holdKey: resolved };
-    // No case open: staff may have dismissed it since the gate read the cached flag. Act only on a flag that still
-    // stands (this narrows the window; a dismissal can still land between here and the takedown).
+    // No case open: staff may have dismissed it since the gate read the cached flag. Act only on a verdict that
+    // still flags the hash, a classifier flag or a hash match recorded meanwhile (whose takedown has not opened its
+    // case yet). This narrows the window; a dismissal can still land between here and the takedown.
     const now = await actions.currentVerdict(contentHash);
-    if (!(now?.verdict === 'flagged' && now.outcome === 'classifier_flag')) return null;
+    if (now?.verdict !== 'flagged') return null;
     loggers.security.error('Backfill: a flagged copy has no review case; it is held under content-hold/backfill-uncased/', undefined, { contentHash });
     return { caseId: null, holdKey: UNCASED_HOLD };
   }
@@ -240,6 +244,8 @@ export function createBackfillDeps(
     if (!read.complete) return { finding: 'error', scanned: false, removed: false };
     const { bytes } = read;
     const contentHash = createHash('sha256').update(bytes).digest('hex');
+    // Every removal or hide acts on these bytes at this key only, never on whatever the user has by then.
+    const scannedAvatar: AvatarRemovalTarget = { userId: target.userId, key: target.key, contentHash };
     let avatarTakenDown = false;
     let avatarHidden = false;
     // The scan awaits the vendor, and the user can upload a new avatar meanwhile; the processor replaces the
@@ -302,14 +308,12 @@ export function createBackfillDeps(
                   avatarTakenDown = true;
                 } else {
                   // Not deleted (CSAM waiting for evidence storage, or a run already under way): stop showing it.
-                  await actions.hideAvatar(target.userId);
-                  avatarHidden = true;
+                  avatarHidden = await actions.hideAvatar(scannedAvatar);
                 }
               } else {
                 // The avatar is the only copy: it stops being shown, and is deleted once a later pass can stage it
                 // (the hash is then blocked, and the blocked path below stages before it deletes).
-                await actions.hideAvatar(target.userId);
-                avatarHidden = true;
+                avatarHidden = await actions.hideAvatar(scannedAvatar);
               }
             } catch (error) {
               avatarStep.failure = { error };
@@ -326,11 +330,10 @@ export function createBackfillDeps(
         // Replaced since the read: nothing of the scanned avatar is left to take down.
         if (!staged) await stageLastCopy(contentHash);
       } else if (staged) {
-        await actions.removeAvatar(target.userId);
-        avatarTakenDown = true;
+        // False: replaced since the check, and the replacement is kept.
+        avatarTakenDown = await actions.removeAvatar(scannedAvatar);
       } else {
-        await actions.hideAvatar(target.userId);
-        avatarHidden = true;
+        avatarHidden = await actions.hideAvatar(scannedAvatar);
       }
     }
     // Hidden is not removed: the avatar's URL still answers from storage. Stop before this object so the next
@@ -343,9 +346,8 @@ export function createBackfillDeps(
       const held = await flaggedCase(contentHash, evaluation.caseId);
       if (held) {
         await actions.holdAvatarBytes(held.holdKey, contentHash, bytes);
-        await actions.removeAvatar(target.userId);
-        removed = true;
-        auditUnpublished({ kind: 'avatar', contentHash, mode: config.mode, finding: evaluation.finding, caseId: held.caseId, userId: target.userId });
+        removed = await actions.removeAvatar(scannedAvatar);
+        if (removed) auditUnpublished({ kind: 'avatar', contentHash, mode: config.mode, finding: evaluation.finding, caseId: held.caseId, userId: target.userId });
       }
     }
     return outcome(evaluation, removed);

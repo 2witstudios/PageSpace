@@ -8,7 +8,7 @@ import type { StoredVerdict } from '@pagespace/lib/content-safety/publish-gate';
 vi.mock('server-only', () => ({}));
 
 const executeTakedown = vi.fn();
-vi.mock('../takedown-service', () => ({ executeTakedown: (...args: unknown[]) => executeTakedown(...args), removeUserAvatar: vi.fn() }));
+vi.mock('../takedown-service', () => ({ executeTakedown: (...args: unknown[]) => executeTakedown(...args) }));
 
 const send = vi.fn();
 vi.mock('@/lib/presigned-url', () => ({
@@ -65,8 +65,8 @@ function build(mode: 'shadow' | 'enforce', result?: ScanResult) {
   const actions = {
     takePublicOffline: vi.fn(async () => undefined),
     holdAvatarBytes: vi.fn(async () => undefined),
-    removeAvatar: vi.fn(async () => undefined),
-    hideAvatar: vi.fn(async () => undefined),
+    removeAvatar: vi.fn(async () => true),
+    hideAvatar: vi.fn(async () => true),
     takedownAvatar: vi.fn(async () => true),
     findBlockCaseId: vi.fn(async () => 'case-block'),
     findReviewCaseId: vi.fn(async (): Promise<string | null> => 'case-open'),
@@ -169,6 +169,15 @@ describe('backfill service: public assets', () => {
     expect(actions.takePublicOffline).not.toHaveBeenCalled();
   });
 
+  it('enforce: with no case open, a hash match recorded meanwhile still takes the copy offline under the uncased hold', async () => {
+    findScanVerdict.mockResolvedValue({ verdict: 'flagged', outcome: 'classifier_flag', scannedAt: new Date() });
+    const { deps, actions } = build('enforce', flag);
+    actions.findReviewCaseId.mockResolvedValueOnce(null);
+    actions.currentVerdict.mockResolvedValueOnce({ verdict: 'flagged', outcome: 'hash_match', scannedAt: new Date() });
+    await expect(deps.process(asset, listed)).resolves.toMatchObject({ removed: true });
+    expect(actions.takePublicOffline).toHaveBeenCalledWith(HASH, 'backfill-uncased');
+  });
+
   it('a hash-match takedown another run is still carrying out takes the public copy down here too, with its hold', async () => {
     executeTakedown.mockResolvedValue({ action: 'global', caseId: 'case-td', inProgress: true });
     const { deps, actions } = build('enforce', match);
@@ -222,7 +231,7 @@ describe('backfill service: avatars', () => {
     // Hidden is not removed (its URL still answers): the walk stops before it and retries next tick.
     await expect(deps.process(avatar, listed)).rejects.toThrow('hidden but not yet deleted');
     expect(executeTakedown).toHaveBeenCalledWith(expect.objectContaining({ action: 'global', contentHash: PNG_HASH }), null);
-    expect(actions.hideAvatar).toHaveBeenCalledWith('user-1');
+    expect(actions.hideAvatar).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1', key: 'avatars/user-1/avatar.png', contentHash: PNG_HASH }));
     expect(actions.takedownAvatar).not.toHaveBeenCalled();
     expect(actions.removeAvatar).not.toHaveBeenCalled();
   });
@@ -238,7 +247,7 @@ describe('backfill service: avatars', () => {
     send.mockRejectedValueOnce(new Error('s3 down'));
     const unstaged = build('enforce');
     await expect(unstaged.deps.process(avatar, listed)).rejects.toThrow('hidden but not yet deleted');
-    expect(unstaged.actions.hideAvatar).toHaveBeenCalledWith('user-1');
+    expect(unstaged.actions.hideAvatar).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1', key: 'avatars/user-1/avatar.png', contentHash: PNG_HASH }));
     expect(unstaged.actions.removeAvatar).not.toHaveBeenCalled();
   });
 
@@ -267,7 +276,7 @@ describe('backfill service: avatars', () => {
     const { deps, actions } = build('enforce', match);
     actions.takedownAvatar.mockResolvedValueOnce(false);
     await expect(deps.process(avatar, listed)).rejects.toThrow('hidden but not yet deleted');
-    expect(actions.hideAvatar).toHaveBeenCalledWith('user-1');
+    expect(actions.hideAvatar).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1', key: 'avatars/user-1/avatar.png', contentHash: PNG_HASH }));
   });
 
   it('the avatar comes down even when the global takedown fails', async () => {
@@ -298,6 +307,21 @@ describe('backfill service: avatars', () => {
     actions.removeAvatar.mockClear();
     await expect(real.process(avatar, listed)).rejects.toThrow('could not be verified');
     expect(actions.removeAvatar).not.toHaveBeenCalled();
+  });
+
+  it('enforce: a flagged avatar replaced at the removal itself is not counted as removed, and is not audited', async () => {
+    const { deps, actions } = build('enforce', flag);
+    actions.removeAvatar.mockResolvedValueOnce(false);
+    await expect(deps.process(avatar, listed)).resolves.toMatchObject({ finding: 'flagged', removed: false });
+    expect(audit).not.toHaveBeenCalledWith(expect.objectContaining({ eventType: 'content.backfill.unpublished' }));
+  });
+
+  it('a blocked avatar that cannot be staged, replaced at the hide itself, is not retried as hidden', async () => {
+    isHashBlocked.mockResolvedValue(true);
+    send.mockRejectedValueOnce(new Error('s3 down'));
+    const { deps, actions } = build('enforce');
+    actions.hideAvatar.mockResolvedValueOnce(false);
+    await expect(deps.process(avatar, listed)).resolves.toMatchObject({ finding: 'blocked', removed: false });
   });
 
   it('enforce: a flagged avatar whose bytes cannot be held stays in place, and the walk retries it', async () => {
@@ -420,7 +444,7 @@ describe('backfill service: avatars', () => {
   it('enforce: a flagged avatar is removed and audited; shadow leaves it', async () => {
     const enforce = build('enforce', flag);
     await expect(enforce.deps.process(avatar, listed)).resolves.toMatchObject({ finding: 'flagged', removed: true });
-    expect(enforce.actions.removeAvatar).toHaveBeenCalledWith('user-1');
+    expect(enforce.actions.removeAvatar).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1', key: 'avatars/user-1/avatar.png', contentHash: PNG_HASH }));
     // The scanned bytes are kept under the review case before the only copy is deleted.
     expect(enforce.actions.holdAvatarBytes).toHaveBeenCalledWith('case-rv', PNG_HASH, PNG);
     expect(enforce.actions.holdAvatarBytes.mock.invocationCallOrder[0]).toBeLessThan(enforce.actions.removeAvatar.mock.invocationCallOrder[0]);
