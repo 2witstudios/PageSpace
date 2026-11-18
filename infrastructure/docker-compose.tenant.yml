@@ -220,6 +220,14 @@ services:
       STORAGE_MIN_FREE_MEMORY_MB: ${STORAGE_MIN_FREE_MEMORY_MB:-500}
       STORAGE_ENABLE_QUOTAS: ${STORAGE_ENABLE_QUOTAS:-true}
       NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB: ${NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB:-20}
+      # Content safety: the web app runs the scan gate (publishes, and avatars at the processor's request). The
+      # same SERVICE_API_SECRET and CONTENT_SCAN_MODE as the processor's, or every avatar gate call is refused.
+      CONTENT_SCAN_MODE: ${CONTENT_SCAN_MODE:-off}
+      CONTENT_SCAN_ALLOW_UNCLASSIFIED_VIDEO: ${CONTENT_SCAN_ALLOW_UNCLASSIFIED_VIDEO:-false}
+      SERVICE_API_SECRET: ${SERVICE_API_SECRET:-}
+      HIVE_API_KEY: ${HIVE_API_KEY:-}
+      EVIDENCE_BUCKET: ${EVIDENCE_BUCKET:-}
+      ABUSE_EMAIL: ${ABUSE_EMAIL:-}
     deploy:
       resources:
         limits:

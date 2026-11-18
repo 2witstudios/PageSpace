@@ -31,6 +31,8 @@ const STATUS: Record<ReadinessItemView['status'], { label: string; variant: 'def
 export function readinessHeadline(report: Pick<ReadinessView, 'ready' | 'mode' | 'items'>): string {
   if (report.mode === 'enforce') return 'Enforce mode is on.';
   const blocking = report.items.filter((item) => item.status === 'blocking').length;
+  // Not ready with nothing to fix: the on-prem report, where scanning is always off.
+  if (!report.ready && blocking === 0) return 'Content scanning is not available on this deployment: it is always off on-prem.';
   if (!report.ready) return `${blocking} check${blocking === 1 ? '' : 's'} still block${blocking === 1 ? 's' : ''} enforce mode.`;
   return 'No automated check blocks enforce mode. Confirm the manual items, then set CONTENT_SCAN_MODE=enforce.';
 }

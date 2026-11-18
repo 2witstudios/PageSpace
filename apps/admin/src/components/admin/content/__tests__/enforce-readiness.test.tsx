@@ -10,4 +10,10 @@ describe('readinessHeadline', () => {
     expect(readinessHeadline({ ready: true, mode: 'shadow', items: [item('manual')] })).toContain('Confirm the manual items');
     expect(readinessHeadline({ ready: true, mode: 'enforce', items: [] })).toBe('Enforce mode is on.');
   });
+
+  it('says scanning is unavailable on-prem instead of counting zero blockers', () => {
+    const headline = readinessHeadline({ ready: false, mode: 'off', items: [item('info')] });
+    expect(headline).toBe('Content scanning is not available on this deployment: it is always off on-prem.');
+    expect(headline).not.toContain('0 checks');
+  });
 });
