@@ -150,6 +150,8 @@ describe('POST /avatar/upload', () => {
       return value;
     });
     mockSanitizeExtension.mockReturnValue('.jpg');
+    // Reset, not just cleared: a once-value queued by an earlier test must not answer this one.
+    mockIsHashBlocked.mockReset();
     mockIsHashBlocked.mockResolvedValue(false);
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
@@ -234,6 +236,29 @@ describe('POST /avatar/upload', () => {
     expect((await a).status).toBe(422);
     // A's refusal wrote and deleted nothing: B's stored avatar is untouched.
     expect(mockS3Send.mock.calls.length).toBe(afterB);
+  });
+
+  it('an avatar stored as its hash is blocked (after the final read, during the PUT) is stored but never served', async () => {
+    let blocked = false;
+    let stored: Uint8Array | null = null;
+    mockIsHashBlocked.mockReset();
+    mockIsHashBlocked.mockImplementation(async () => blocked);
+    mockS3Send.mockImplementation(async (command: { _tag: string; input: { Body?: Uint8Array } }) => {
+      if (command._tag === 'PutObject') {
+        stored = new Uint8Array(command.input.Body as Uint8Array);
+        // The takedown's block lands while the object is being written: past every check the upload makes.
+        blocked = true;
+        return {};
+      }
+      if (command._tag === 'GetObject') return { Body: { transformToByteArray: async () => stored } };
+      return { Contents: [] };
+    });
+    const app = createApp({ userId: 'user-1' }, createMockFile());
+    expect((await request(app).post('/avatar/upload').send({ userId: 'user-1' })).status).toBe(200);
+
+    const served = await request(app).get('/avatar/user-1/avatar.jpg');
+    expect(served.status).toBe(404);
+    expect(served.headers['cache-control']).toBe('no-store');
   });
 
   it('saves avatar successfully via S3 PutObjectCommand', async () => {
@@ -324,11 +349,14 @@ describe('POST /avatar/upload content safety', () => {
     defaultS3Behavior();
     mockNormalizeIdentifier.mockImplementation((value: unknown) => (typeof value === 'string' && value ? value : null));
     mockSanitizeExtension.mockReturnValue('.jpg');
+    // Reset, not just cleared: a once-value queued by an earlier test must not answer this one.
+    mockIsHashBlocked.mockReset();
     mockIsHashBlocked.mockResolvedValue(false);
     vi.unstubAllEnvs();
     vi.stubEnv('CONTENT_SCAN_MODE', 'enforce');
     vi.stubEnv('WEB_APP_INTERNAL_URL', 'http://web:3000');
     vi.stubEnv('SERVICE_API_SECRET', 'secret');
+    webGate.mockReset();
     webGate.mockResolvedValue(new Response(JSON.stringify({ accept: true }), { status: 200 }));
     vi.stubGlobal('fetch', webGate);
   });
@@ -523,6 +551,8 @@ describe('GET /avatar/:userId/:filename', () => {
       return value;
     });
     mockSanitizeExtension.mockReturnValue('.jpg');
+    // Reset, not just cleared: a once-value queued by an earlier test must not answer this one.
+    mockIsHashBlocked.mockReset();
     mockIsHashBlocked.mockResolvedValue(false);
   });
 
@@ -553,7 +583,7 @@ describe('GET /avatar/:userId/:filename', () => {
     const response = await request(app).get('/avatar/user-1/avatar.jpg');
     expect(response.status).toBe(200);
     expect(response.headers['content-type']).toContain('image/jpeg');
-    expect(response.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+    expect(response.headers['cache-control']).toBe('public, max-age=3600');
   });
 
   it('returns 404 when avatar not found in S3', async () => {

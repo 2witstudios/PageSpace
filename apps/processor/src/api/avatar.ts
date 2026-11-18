@@ -102,7 +102,9 @@ router.get('/:userId/:filename', rateLimitRead, async (req: Request<{ userId: st
     const extension = ext.slice(1).toLowerCase();
     const contentType = CONTENT_TYPE_MAP[extension] || 'image/jpeg';
     res.setHeader('Content-Type', contentType);
-    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    // Bounded and not immutable, like the web app's avatar route: a cached copy of an avatar blocked later stops
+    // being served within the hour.
+    res.setHeader('Cache-Control', 'public, max-age=3600');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     return res.send(Buffer.from(bytes));
   } catch (err) {
