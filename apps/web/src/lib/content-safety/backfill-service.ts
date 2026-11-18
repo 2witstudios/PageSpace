@@ -281,6 +281,11 @@ export function createBackfillDeps(
               if (!(await stillCurrent())) {
                 // Replaced: these bytes are no longer served, and the block above keeps them from coming back.
                 if (!staged) await stageLastCopy(hash);
+              } else if (staged && !globalCaseId) {
+                // The global takedown left no case: no block, no alert, nothing the resweep can resume. Deleting the
+                // avatar now would take the only trace out of the listing; hide it, and the walk retries the item.
+                avatarHidden = await actions.hideAvatar(scannedAvatar);
+                if (!avatarHidden) await stageLastCopy(hash);
               } else if (staged) {
                 // The avatar comes down even if the global takedown stopped part-way (its case is resumable). Its bytes
                 // are staged at files/<hash>/original, which the global case preserves as evidence, so the avatar
@@ -289,8 +294,10 @@ export function createBackfillDeps(
                 avatarTakenDown = await actions.removeAvatar(scannedAvatar);
               } else {
                 // The avatar is the only copy: it stops being shown, and is deleted once a later pass can stage it
-                // (the hash is then blocked, and the blocked path below stages before it deletes).
+                // (the hash is then blocked, and the blocked path below stages before it deletes). Replaced at the hide:
+                // the stored copy is gone, so these bytes are the last one.
                 avatarHidden = await actions.hideAvatar(scannedAvatar);
+                if (!avatarHidden) await stageLastCopy(hash);
               }
             } catch (error) {
               avatarStep.failure = { error };
@@ -311,6 +318,7 @@ export function createBackfillDeps(
         avatarTakenDown = await actions.removeAvatar(scannedAvatar);
       } else {
         avatarHidden = await actions.hideAvatar(scannedAvatar);
+        if (!avatarHidden) await stageLastCopy(contentHash);
       }
     }
     // Hidden is not removed: the avatar's URL still answers from storage. Stop before this object so the next

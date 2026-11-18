@@ -11,7 +11,7 @@ const target = { userId: 'user-1', key: 'avatars/user-1/avatar.png', contentHash
  * An in-memory user row and avatar object, with the same conditional semantics as Postgres (`where image = $1`)
  * and S3 (`DeleteObject If-Match`). `between` runs a concurrent upload at a chosen point of the removal.
  */
-function world(options: { between?: 'read_image' | 'read_object' | 'clear'; etag?: boolean; image?: string } = {}) {
+function world(options: { between?: 'read_image' | 'read_object' | 'clear' | 'final_read'; etag?: boolean; image?: string } = {}) {
   const etags = options.etag === false ? [null, null] : ['"a"', '"b"'];
   const state = {
     image: (options.image ?? '/api/avatar/user-1/avatar.png?t=1') as string | null,
@@ -32,6 +32,8 @@ function world(options: { between?: 'read_image' | 'read_object' | 'clear'; etag
       const object = state.object;
       // Only the first read (the check) is followed by the upload; the re-read before the delete sees the result.
       if (options.between === 'read_object' && vi.mocked(store.readObject).mock.calls.length === 1) upload();
+      // After the re-read just before the delete: only the conditional delete itself can keep the replacement.
+      if (options.between === 'final_read' && vi.mocked(store.readObject).mock.calls.length === 2) upload();
       return object;
     }),
     clearProfileImageIf: vi.fn(async (_userId: string, expected: string) => {
@@ -78,10 +80,17 @@ describe('removeScannedAvatar', () => {
     expect(state.image).toContain('t=2');
   });
 
-  it('on storage with no ETag, a replacement stored after the profile was cleared is still kept', async () => {
-    const { state, store } = world({ between: 'clear', etag: false });
+  it('an upload between the final read and the delete is kept: the delete is conditional on the scanned ETag', async () => {
+    const { state, store } = world({ between: 'final_read' });
     await expect(removeScannedAvatar(target, store)).resolves.toBe('replaced');
     expect(state.object?.bytes).toEqual(REPLACEMENT);
+  });
+
+  it('on storage with no ETag nothing is deleted: there is no safe delete, so the item fails and stays for a retry', async () => {
+    const { state, store } = world({ etag: false });
+    await expect(removeScannedAvatar(target, store)).rejects.toThrow('ETag');
+    expect(store.deleteObjectIf).not.toHaveBeenCalled();
+    expect(state.object?.bytes).toEqual(SCANNED);
   });
 
   it('a profile image pointing at another file is left alone; the scanned leftover object is still deleted', async () => {

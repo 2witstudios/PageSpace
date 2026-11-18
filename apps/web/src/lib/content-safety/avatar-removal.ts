@@ -22,8 +22,9 @@ import { isS3NotFound, readS3ObjectBounded } from '@/lib/storage/s3-objects';
  *    ETag): that is what keeps a replacement on storage with no ETags or that ignores `If-Match`.
  * 5. The object is deleted only if its ETag is still the one read in 2 (S3 `If-Match`).
  *
- * A replacement at any point is left stored and visible. What remains, on storage with no conditional delete, is
- * an upload landing between step 4 and the delete.
+ * A replacement at any point is left stored and visible. Storage that returns no ETag gets no delete at all (the
+ * removal fails and is retried). What remains, on storage that returns ETags but ignores `If-Match`, is an upload
+ * landing between step 4 and the delete: AWS S3 honours `If-Match` on DeleteObject.
  */
 
 export interface AvatarRemovalTarget {
@@ -73,7 +74,10 @@ export async function removeScannedAvatar(target: AvatarRemovalTarget, store: Av
   const scanned = await clearIfScanned(target, store);
   if (!scanned) return 'replaced';
   // Deleted even if the profile moved on: the object, checked by its ETag, is still the scanned avatar.
-  // Step 4: still the scanned object? (Covers storage that has no ETags or ignores If-Match.)
+  // No ETag, no conditional delete: there is no way to delete this object and not a replacement stored this instant.
+  // Fail safe: delete nothing (the profile is already cleared) and throw, so the walk stops here and says why.
+  if (scanned.etag === null) throw new Error('Avatar storage returned no ETag: the scanned avatar was hidden but not deleted');
+  // Step 4: still the scanned object? (Also covers storage that ignores If-Match, up to the delete itself.)
   const again = await store.readObject(target.key);
   if (!again || sha256(again.bytes) !== target.contentHash || again.etag !== scanned.etag) return 'replaced';
   // A failed delete throws after the clear: the object is still listed, and the next tick retries the removal.

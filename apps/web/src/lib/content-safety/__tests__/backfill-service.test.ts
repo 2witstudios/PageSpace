@@ -282,11 +282,19 @@ describe('backfill service: avatars', () => {
     await expect(deps.process(avatar, listed)).resolves.toMatchObject({ finding: 'hash_match', removed: false });
   });
 
-  it('the avatar comes down even when the global takedown fails', async () => {
-    executeTakedown.mockRejectedValue(new Error('evidence bucket down'));
+  it('the avatar comes down when the global takedown stopped part-way: its case exists and is resumable', async () => {
+    executeTakedown.mockResolvedValue({ action: 'global', caseId: 'case-td', failedStep: 'preserve' });
     const { deps, actions } = build('enforce', match);
     await deps.process(avatar, listed);
     expect(actions.removeAvatar).toHaveBeenCalled();
+  });
+
+  it('a global takedown that left no case (no block, no alert) is not followed by a delete: the avatar is hidden and retried', async () => {
+    executeTakedown.mockRejectedValue(new Error('db down'));
+    const { deps, actions } = build('enforce', match);
+    await expect(deps.process(avatar, listed)).rejects.toThrow('hidden but not yet deleted');
+    expect(actions.removeAvatar).not.toHaveBeenCalled();
+    expect(actions.hideAvatar).toHaveBeenCalled();
   });
 
   it('the default hold writes the bytes to content-hold/<case>/<hash> and reads them back before the avatar goes', async () => {
@@ -406,6 +414,18 @@ describe('backfill service: avatars', () => {
       replacedAfterScan();
       await expect(build('enforce', match).deps.process(avatar, listed)).resolves.toMatchObject({ removed: false });
       expect(puts()).toBe(2);
+    });
+
+    it('an unstaged avatar whose hide finds it replaced still has its bytes staged again from memory', async () => {
+      for (const blocked of [false, true]) {
+        send.mockReset();
+        send.mockRejectedValueOnce(new Error('s3 blip')).mockResolvedValue({});
+        isHashBlocked.mockResolvedValue(blocked);
+        const { deps, actions } = build('enforce', blocked ? undefined : match);
+        actions.hideAvatar.mockResolvedValueOnce(false);
+        await expect(deps.process(avatar, listed)).resolves.toMatchObject({ removed: false });
+        expect(puts()).toBe(2);
+      }
     });
 
     it('a replaced avatar that cannot be staged at all is logged as lost evidence, naming the hash', async () => {
