@@ -331,6 +331,8 @@ export async function evaluatePublishAsset(input: PublishGateInput, deps: Publis
   }
   // Set when this result lost to a verdict that stands (a classifier flag, or a hash match on a blocked hash).
   let keptFlag = false;
+  // The verdict could not be recorded: the result is reported as an error, never as what was not stored.
+  let writeFailed = false;
   if (record) {
     const written = await deps
       .recordVerdict({
@@ -350,12 +352,20 @@ export async function evaluatePublishAsset(input: PublishGateInput, deps: Publis
     // read as allowed.
     if ((written === null || written.keptFlag) && mode === 'enforce') promote = false;
     keptFlag = written?.keptFlag === true;
+    writeFailed = written === null;
     // A hash match stood: the hash was blocked after the blocklist check above. Refused in every mode, as a
     // blocked hash is: shadow's "publish anyway" never covers blocked bytes (an avatar has no later recheck).
     if (written?.keptHashMatch) {
       blockedMidScan = true;
       promote = false;
     }
+  }
+
+  // Read the blocklist again once the vendor has answered: the scan can take seconds, and a takedown can block
+  // the hash meanwhile with no verdict row for the guard to keep. Refused in every mode, like the first read.
+  if (!blockedMidScan && vendorCalled === true && (await deps.isBlocked(input.contentHash))) {
+    blockedMidScan = true;
+    promote = false;
   }
 
   if (decision.audit) {
@@ -369,7 +379,7 @@ export async function evaluatePublishAsset(input: PublishGateInput, deps: Publis
   const scanned = vendorCalled === true;
   // A result that lost to a standing flag reports the flag: the backfill acts on the finding, not on `promote`.
   if (blockedMidScan) return { promote: false, reason: 'blocked', finding: 'blocked', scanned, caseId };
-  const finding: GateFinding = keptFlag ? 'flagged' : findingFor(outcome);
+  const finding: GateFinding = keptFlag ? 'flagged' : writeFailed ? 'error' : findingFor(outcome);
   return promote
     ? { promote: true, finding, scanned, caseId }
     : { promote: false, reason: 'held', finding, scanned, caseId };

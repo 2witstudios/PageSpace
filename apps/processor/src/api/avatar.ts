@@ -12,6 +12,7 @@ import { processorLogger } from '../logger';
 import { createS3Client, getS3Bucket } from '../s3-client';
 import { AVATAR_NOT_AN_IMAGE_MESSAGE, AVATAR_REJECTED_MESSAGE } from '@pagespace/lib/content-safety/avatar-gate';
 import { decideAvatarUpload, type AvatarUploadDecision } from '../services/avatar-gate-client';
+import { isHashBlocked } from '@pagespace/lib/content-safety/blocklist';
 import {
   DEFAULT_IMAGE_EXTENSION,
   normalizeIdentifier,
@@ -160,6 +161,15 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
       Body: file.buffer,
       ContentType: decision.contentType,
     }));
+
+    // Asked again now the avatar is stored, as a publish does after its copy: a takedown can block the hash while
+    // the gate's answer was in flight, and no takedown step removes avatars by hash. Couldn't-check refuses too.
+    const blockedSince = await isHashBlocked(decision.contentHash).catch(() => true);
+    if (blockedSince) {
+      await s3().send(new DeleteObjectsCommand({ Bucket: getS3Bucket(), Delete: { Objects: [{ Key: key }], Quiet: true } }));
+      processorLogger.warn('Avatar upload refused: its hash was blocked while it was stored', { userId });
+      return res.status(422).json({ error: AVATAR_REJECTED_MESSAGE });
+    }
 
     res.json({
       success: true,

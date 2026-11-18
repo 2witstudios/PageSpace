@@ -125,10 +125,27 @@ describe('gatePublishAsset', () => {
     const lost = setup();
     lost.deps.recordVerdict.mockResolvedValueOnce({ keptFlag: true });
     await expect(evaluatePublishAsset(input, lost.deps)).resolves.toMatchObject({ promote: false, finding: 'flagged' });
+  });
 
+  it('a result whose verdict could not be recorded is an error, never clean', async () => {
     const failed = setup();
     failed.deps.recordVerdict.mockRejectedValueOnce(new Error('db down'));
-    await expect(evaluatePublishAsset(input, failed.deps)).resolves.toMatchObject({ promote: false, finding: 'clean' });
+    await expect(evaluatePublishAsset(input, failed.deps)).resolves.toMatchObject({ promote: false, finding: 'error' });
+  });
+
+  it('a hash blocked while it was being scanned is refused in every mode, even when its clean verdict was written', async () => {
+    for (const mode of ['shadow', 'enforce'] as const) {
+      const { deps } = setup({ mode });
+      // Not blocked at the first read; blocked by the time the verdict is written.
+      deps.isBlocked.mockResolvedValueOnce(false).mockResolvedValue(true);
+      await expect(evaluatePublishAsset(input, deps)).resolves.toMatchObject({ promote: false, reason: 'blocked', finding: 'blocked' });
+    }
+  });
+
+  it('a verdict decided from the cache reads the blocklist once', async () => {
+    const { deps } = setup({ verdict: { verdict: 'clean', outcome: 'clean', scannedAt: new Date('2026-11-12T00:00:00Z') } });
+    await expect(gatePublishAsset(input, deps)).resolves.toEqual({ promote: true });
+    expect(deps.isBlocked).toHaveBeenCalledTimes(1);
   });
 
   it('clean: records the verdict, audits and promotes', async () => {

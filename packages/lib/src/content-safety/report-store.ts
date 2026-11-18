@@ -9,9 +9,9 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, count, desc, eq, inArray, lte, sql } from '@pagespace/db/operators';
+import { and, count, desc, eq, inArray, lte, or, sql } from '@pagespace/db/operators';
 import { getTableColumns } from 'drizzle-orm';
-import { contentCases, contentReports, contentScans, type ContentCase, type ContentReport } from '@pagespace/db/schema/content-safety';
+import { contentBlocks, contentCases, contentReports, contentScans, type ContentCase, type ContentReport } from '@pagespace/db/schema/content-safety';
 import type { FiledReport, FileReportInput } from './report-intake';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
 import { isServingStatus } from '../canvas/cert-action';
@@ -268,10 +268,19 @@ export async function closeReportedCase(input: {
         scores: { reviewedBy: input.actorUserId, caseId: input.caseId },
         scannedAt: new Date(),
       };
+      // Except over a hash match on a blocked hash: dismissing the classifier flag does not lift the block, and
+      // the match stays the record until staff lift the block itself.
       await tx
         .insert(contentScans)
         .values({ contentHash: locked.contentHash, ...clean })
-        .onConflictDoUpdate({ target: contentScans.contentHash, set: clean });
+        .onConflictDoUpdate({
+          target: contentScans.contentHash,
+          set: clean,
+          setWhere: or(
+            sql`${contentScans.outcome} is distinct from 'hash_match'`,
+            sql`not exists (select 1 from ${contentBlocks} where ${contentBlocks.contentHash} = ${contentScans.contentHash})`,
+          ),
+        });
     }
     const [row] = await tx
       .update(contentCases)

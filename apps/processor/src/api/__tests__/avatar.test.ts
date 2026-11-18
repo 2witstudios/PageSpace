@@ -187,6 +187,19 @@ describe('POST /avatar/upload', () => {
     expect(response.body.success).toBe(true);
   });
 
+  it('takes the stored avatar back down when its hash was blocked while it was being stored', async () => {
+    // Clear when the gate read the blocklist; blocked by the time the object is written.
+    mockIsHashBlocked.mockResolvedValueOnce(false).mockResolvedValue(true);
+    const app = createApp({ userId: 'user-1' }, createMockFile());
+    const response = await request(app).post('/avatar/upload').send({ userId: 'user-1' });
+    expect(response.status).toBe(422);
+
+    const tags = mockS3Send.mock.calls.map((call: unknown[]) => (call[0] as { _tag: string })._tag);
+    expect(tags.lastIndexOf('DeleteObjects')).toBeGreaterThan(tags.indexOf('PutObject'));
+    const removed = mockS3Send.mock.calls.filter((call: unknown[]) => (call[0] as { _tag: string })._tag === 'DeleteObjects').pop();
+    expect((removed![0] as { input: { Delete: { Objects: Array<{ Key: string }> } } }).input.Delete.Objects).toEqual([{ Key: 'avatars/user-1/avatar.jpg' }]);
+  });
+
   it('saves avatar successfully via S3 PutObjectCommand', async () => {
     const app = createApp({ userId: 'user-1' }, createMockFile());
     const response = await request(app).post('/avatar/upload').send({ userId: 'user-1' });

@@ -13,7 +13,9 @@ import { countScanVerdicts, findOpenReviewCaseId, findScanVerdict, findScanVerdi
 import { closeReportedCase, fileContentReport, listReportedCases, ReportedCaseChangedError } from '../report-store';
 import { gatePublishAsset, type PublishGateDeps } from '../publish-gate';
 import { resolveScanConfig } from '../scan-mode';
-import { createFakeScanner, type ScanResult } from '../scanner';
+import { createFakeScanner, type ContentScanner, type ScanResult } from '../scanner';
+import { gateAvatarUpload, type AvatarGateDeps } from '../avatar-gate';
+import { isHashBlocked } from '../blocklist';
 
 const hashes: string[] = [];
 const newHash = () => {
@@ -236,6 +238,18 @@ describe('scan store', () => {
     expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'clean' });
   });
 
+  it('dismissing a late flag on a blocked hash closes the case but leaves the hash match standing', async () => {
+    const hash = newHash();
+    await recordScanVerdict({ contentHash: hash, verdict: 'flagged', outcome: 'hash_match', provider: 'hive', mode: 'enforce', scores: {} });
+    await db.insert(contentBlocks).values({ contentHash: hash, category: 'csam', source: 'hash_match' });
+    const opened = await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.95, mode: 'enforce', scores: {} });
+    const [listed] = (await listReportedCases({ limit: 200 })).filter((c) => c.case.id === opened.caseId);
+    const closed = await closeReportedCase({ caseId: opened.caseId, outcome: 'dismissed', actorUserId: 'admin-1', expectedReportCount: 0, expectedScanFlaggedAt: listed.case.snapshot?.scan?.flaggedAt ?? null });
+    expect(closed).toMatchObject({ status: 'dismissed' });
+    // Dismissing the classifier flag is not lifting the block: the match is still the record.
+    expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'flagged', outcome: 'hash_match' });
+  });
+
   it('marks a clean video the classifier did not score, and nothing else', async () => {
     const video = newHash();
     await recordScanVerdict({ contentHash: video, verdict: 'clean', outcome: 'clean', provider: 'hive', mode: 'enforce', scores: { contentType: 'video/mp4', classifier: false } });
@@ -380,5 +394,78 @@ describe('scan store', () => {
 
     await expect(clean).resolves.toEqual({ promote: false, reason: 'held' });
     expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'flagged', outcome: 'classifier_flag' });
+  });
+});
+
+describe('an avatar scan that a takedown overtakes (real Postgres)', () => {
+  /** A scanner that stops mid-scan until the test releases it with a result. */
+  function pausedScanner(): { scanner: ContentScanner; started: Promise<void>; resume: (result: ScanResult) => void } {
+    let markStarted: () => void = () => undefined;
+    let release: (result: ScanResult) => void = () => undefined;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const result = new Promise<ScanResult>((resolve) => { release = resolve; });
+    return {
+      scanner: { provider: 'fake', scan: async () => { markStarted(); return result; } },
+      started,
+      resume: (r) => release(r),
+    };
+  }
+
+  function avatarDeps(scanner: ContentScanner): AvatarGateDeps {
+    const config = resolveScanConfig({ CONTENT_SCAN_MODE: 'shadow', HIVE_API_KEY: 'k' }, { onPrem: false });
+    return {
+      config,
+      scanner,
+      isBlocked: isHashBlocked,
+      findVerdict: findScanVerdict,
+      recordVerdict: (record) => recordScanVerdict(record, { flagTtlMs: config.verdictTtlMs }),
+      takedownHashMatch: async () => ({}),
+      openReviewCase: (input) => openScanReviewCase(input),
+      alert: async () => undefined,
+      audit: () => undefined,
+      auditRejected: () => undefined,
+      reportMisconfiguration: () => undefined,
+      logError: () => undefined,
+      now: () => new Date(),
+    };
+  }
+
+  /** A real PNG header with unique trailing bytes, so each test has its own hash. */
+  function uniqueAvatar(): { bytes: Uint8Array; hash: string } {
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...createHash('sha256').update(randomUUID()).digest()]);
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    hashes.push(hash);
+    return { bytes, hash };
+  }
+
+  /** What a global takedown writes first: the block, then the hash match. */
+  async function takedownBlocks(hash: string, withVerdict: boolean): Promise<void> {
+    await db.insert(contentBlocks).values({ contentHash: hash, category: 'csam', source: 'hash_match' });
+    if (withVerdict) {
+      await recordScanVerdict({ contentHash: hash, verdict: 'flagged', outcome: 'hash_match', provider: 'hive', mode: 'shadow', scores: {} });
+    }
+  }
+
+  it('shadow: a flagged scan resumed after the block and the match is refused, and the match stands', async () => {
+    const { bytes, hash } = uniqueAvatar();
+    const paused = pausedScanner();
+    const decision = gateAvatarUpload({ bytes, userId: 'user-1' }, avatarDeps(paused.scanner));
+    await paused.started;
+    await takedownBlocks(hash, true);
+    paused.resume({ kind: 'classifier_flag', provider: 'fake', category: 'csam', score: 0.95 });
+
+    await expect(decision).resolves.toMatchObject({ accept: false, finding: 'blocked' });
+    expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'flagged', outcome: 'hash_match' });
+  });
+
+  it('shadow: a clean scan resumed after the block alone (no verdict yet) is refused', async () => {
+    const { bytes, hash } = uniqueAvatar();
+    const paused = pausedScanner();
+    const decision = gateAvatarUpload({ bytes, userId: 'user-1' }, avatarDeps(paused.scanner));
+    await paused.started;
+    await takedownBlocks(hash, false);
+    paused.resume({ kind: 'clean', provider: 'fake', scores: { csam: 0.01 } });
+
+    await expect(decision).resolves.toMatchObject({ accept: false, finding: 'blocked' });
   });
 });
