@@ -142,6 +142,18 @@ describe('gatePublishAsset', () => {
     }
   });
 
+  it('a hash match this scan found stays a hash match, though its own takedown blocked the hash before the recheck', async () => {
+    const { deps } = setup({ result: match });
+    deps.isBlocked.mockResolvedValueOnce(false).mockResolvedValue(true);
+    await expect(evaluatePublishAsset(input, deps)).resolves.toMatchObject({ promote: false, finding: 'hash_match', caseId: 'case-td' });
+  });
+
+  it('a hash match whose verdict could not be recorded is still reported as a hash match', async () => {
+    const { deps } = setup({ result: match });
+    deps.recordVerdict.mockRejectedValueOnce(new Error('db down'));
+    await expect(evaluatePublishAsset(input, deps)).resolves.toMatchObject({ promote: false, finding: 'hash_match' });
+  });
+
   it('a verdict decided from the cache reads the blocklist once', async () => {
     const { deps } = setup({ verdict: { verdict: 'clean', outcome: 'clean', scannedAt: new Date('2026-11-12T00:00:00Z') } });
     await expect(gatePublishAsset(input, deps)).resolves.toEqual({ promote: true });

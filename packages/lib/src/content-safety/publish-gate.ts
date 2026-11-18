@@ -363,7 +363,9 @@ export async function evaluatePublishAsset(input: PublishGateInput, deps: Publis
 
   // Read the blocklist again once the vendor has answered: the scan can take seconds, and a takedown can block
   // the hash meanwhile with no verdict row for the guard to keep. Refused in every mode, like the first read.
-  if (!blockedMidScan && vendorCalled === true && (await deps.isBlocked(input.contentHash))) {
+  // Not for a hash match this scan found: its own takedown writes that block, and the finding must stay a match.
+  const foundMatch = outcome.kind === 'scanned' && outcome.result.kind === 'hash_match';
+  if (!blockedMidScan && !foundMatch && vendorCalled === true && (await deps.isBlocked(input.contentHash))) {
     blockedMidScan = true;
     promote = false;
   }
@@ -379,7 +381,8 @@ export async function evaluatePublishAsset(input: PublishGateInput, deps: Publis
   const scanned = vendorCalled === true;
   // A result that lost to a standing flag reports the flag: the backfill acts on the finding, not on `promote`.
   if (blockedMidScan) return { promote: false, reason: 'blocked', finding: 'blocked', scanned, caseId };
-  const finding: GateFinding = keptFlag ? 'flagged' : writeFailed ? 'error' : findingFor(outcome);
+  // A match found here is reported as one even if its verdict could not be stored: the backfill retries on it.
+  const finding: GateFinding = keptFlag ? 'flagged' : writeFailed && !foundMatch ? 'error' : findingFor(outcome);
   return promote
     ? { promote: true, finding, scanned, caseId }
     : { promote: false, reason: 'held', finding, scanned, caseId };
