@@ -214,6 +214,8 @@ describe('POST /avatar/upload', () => {
   it('an upload refused at its final read while another upload of the same user completes leaves that avatar intact', async () => {
     let releaseA: (blocked: boolean) => void = () => undefined;
     const calls: number[] = [];
+    // No once-values left over from another test: the call count below must be this test's alone.
+    mockIsHashBlocked.mockReset();
     mockIsHashBlocked.mockImplementation(() => {
       calls.push(calls.length + 1);
       // Call 2 is upload A's final read: held until B has finished.
@@ -521,6 +523,22 @@ describe('GET /avatar/:userId/:filename', () => {
       return value;
     });
     mockSanitizeExtension.mockReturnValue('.jpg');
+    mockIsHashBlocked.mockResolvedValue(false);
+  });
+
+  it('never serves an avatar whose bytes are blocked (one stored as its hash was being blocked)', async () => {
+    mockIsHashBlocked.mockResolvedValue(true);
+    const response = await request(createApp()).get('/avatar/user-1/avatar.jpg');
+    expect(response.status).toBe(404);
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(mockIsHashBlocked).toHaveBeenCalledWith(expect.stringMatching(/^[0-9a-f]{64}$/));
+  });
+
+  it('serves nothing when the blocklist cannot be read, and says not to cache that', async () => {
+    mockIsHashBlocked.mockRejectedValue(new Error('db down'));
+    const response = await request(createApp()).get('/avatar/user-1/avatar.jpg');
+    expect(response.status).toBe(503);
+    expect(response.headers['cache-control']).toBe('no-store');
   });
 
   it('returns 400 when userId is invalid', async () => {

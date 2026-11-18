@@ -10,7 +10,7 @@ import { hasAuthScope } from '../middleware/auth';
 import { rateLimitUpload, rateLimitRead } from '../middleware/rate-limit';
 import { processorLogger } from '../logger';
 import { createS3Client, getS3Bucket } from '../s3-client';
-import { AVATAR_NOT_AN_IMAGE_MESSAGE, AVATAR_REJECTED_MESSAGE } from '@pagespace/lib/content-safety/avatar-gate';
+import { AVATAR_NOT_AN_IMAGE_MESSAGE, AVATAR_REJECTED_MESSAGE, sha256Hex } from '@pagespace/lib/content-safety/avatar-gate';
 import { decideAvatarUpload, type AvatarUploadDecision } from '../services/avatar-gate-client';
 import { isHashBlocked } from '@pagespace/lib/content-safety/blocklist';
 import {
@@ -85,6 +85,20 @@ router.get('/:userId/:filename', rateLimitRead, async (req: Request<{ userId: st
     const response = await s3().send(new GetObjectCommand({ Bucket: getS3Bucket(), Key: key }));
     if (!response.Body) return res.status(404).end();
     const bytes = await response.Body.transformToByteArray();
+    // Blocked bytes are never served, whenever they were stored (an upload that raced the block, a takedown not
+    // yet run on this avatar). Couldn't-check serves nothing, and neither answer may be cached.
+    let blocked: boolean;
+    try {
+      blocked = await isHashBlocked(sha256Hex(bytes));
+    } catch (err) {
+      processorLogger.warn('Avatar not served: the blocklist could not be read', { key, err: String(err) });
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(503).end();
+    }
+    if (blocked) {
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(404).end();
+    }
     const extension = ext.slice(1).toLowerCase();
     const contentType = CONTENT_TYPE_MAP[extension] || 'image/jpeg';
     res.setHeader('Content-Type', contentType);
