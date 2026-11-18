@@ -18,6 +18,11 @@ export function isS3NotFound(err: unknown): boolean {
   return anyErr?.name === 'NotFound' || anyErr?.name === 'NoSuchKey' || anyErr?.$metadata?.httpStatusCode === 404;
 }
 
+function isS3InvalidRange(err: unknown): boolean {
+  const anyErr = err as { name?: string; $metadata?: { httpStatusCode?: number } };
+  return anyErr?.name === 'InvalidRange' || anyErr?.$metadata?.httpStatusCode === 416;
+}
+
 /**
  * An object's key and size, or null on a definite not-found. Any other failure
  * throws: "couldn't check" must never read as "nothing there".
@@ -107,9 +112,8 @@ export async function readS3ObjectBounded(
   const tooLarge = size > maxBytes;
   try {
     const result = await client.send(
-      // Ranged either way: an object that grew after the HEAD is never buffered past the bound.
-      // An empty object takes no Range: S3 answers a ranged GET of zero bytes with 416.
-      new GetObjectCommand({ Bucket: bucket, Key: key, ...(size === 0 ? {} : { Range: tooLarge ? `bytes=0-${SNIFF_BYTES - 1}` : `bytes=0-${maxBytes}` }) }),
+      // Always ranged, an empty object too: one that grew after the HEAD is never buffered past the bound.
+      new GetObjectCommand({ Bucket: bucket, Key: key, Range: tooLarge ? `bytes=0-${SNIFF_BYTES - 1}` : `bytes=0-${maxBytes}` }),
       { abortSignal: AbortSignal.timeout(timeoutMs) },
     );
     const bytes = await bodyBytes(result.Body);
@@ -118,6 +122,8 @@ export async function readS3ObjectBounded(
     return { bytes, complete: !tooLarge };
   } catch (err) {
     if (isS3NotFound(err)) return null;
+    // S3 answers a ranged GET of an empty object with 416: still empty, as the HEAD said.
+    if (size === 0 && isS3InvalidRange(err)) return { bytes: new Uint8Array(0), complete: true };
     throw err;
   }
 }

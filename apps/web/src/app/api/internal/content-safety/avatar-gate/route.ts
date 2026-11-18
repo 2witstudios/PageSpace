@@ -3,6 +3,7 @@ import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { authenticateServiceSecret } from '@/lib/auth/service-secret';
 import { gateAvatarBytes } from '@/lib/content-safety/avatar-gate-service';
+import { readBytesWithCap } from '@/lib/http/read-body-with-cap';
 
 /**
  * POST /api/internal/content-safety/avatar-gate
@@ -33,9 +34,10 @@ export async function POST(request: Request): Promise<Response> {
   const [user] = await db.select({ id: users.id }).from(users).where(eq(users.id, auth.userId)).limit(1);
   if (!user) return Response.json({ error: 'Unknown user' }, { status: 404 });
 
-  const bytes = new Uint8Array(await request.arrayBuffer());
+  // Read under the cap: a chunked body has no Content-Length to refuse up front.
+  const bytes = await readBytesWithCap(request, MAX_AVATAR_BYTES);
+  if (bytes === null) return Response.json({ error: 'Too large' }, { status: 413 });
   if (bytes.length === 0) return Response.json({ error: 'No bytes' }, { status: 400 });
-  if (bytes.length > MAX_AVATAR_BYTES) return Response.json({ error: 'Too large' }, { status: 413 });
 
   const result = await gateAvatarBytes(bytes, user.id);
   return Response.json({ accept: result.accept });

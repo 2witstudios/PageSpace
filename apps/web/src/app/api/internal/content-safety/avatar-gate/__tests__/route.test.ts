@@ -45,6 +45,30 @@ describe('POST /api/internal/content-safety/avatar-gate', () => {
     expect(gateAvatarBytes).toHaveBeenCalledWith(BYTES, 'user-1');
   });
 
+  it('refuses an oversized body sent without a Content-Length, reading no further than the cap', async () => {
+    let pulled = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulled >= 8) return controller.close();
+        pulled += 1;
+        controller.enqueue(new Uint8Array(1024 * 1024));
+      },
+    });
+    const chunked = new Request('http://web:3000/api/internal/content-safety/avatar-gate', {
+      method: 'POST',
+      headers: { 'x-service-secret': SECRET, 'x-service-user-id': 'user-1' },
+      body,
+      duplex: 'half',
+    } as RequestInit);
+    expect((await POST(chunked)).status).toBe(413);
+    expect(pulled).toBeLessThan(8);
+    expect(gateAvatarBytes).not.toHaveBeenCalled();
+  });
+
+  it('refuses an empty body', async () => {
+    expect((await POST(request({ 'x-service-secret': SECRET, 'x-service-user-id': 'user-1' }, new Uint8Array(0)))).status).toBe(400);
+  });
+
   it('refuses a body larger than an avatar', async () => {
     const big = new Uint8Array(5 * 1024 * 1024 + 1);
     expect((await POST(request({ 'x-service-secret': SECRET, 'x-service-user-id': 'user-1' }, big))).status).toBe(413);

@@ -18,10 +18,27 @@ describe('readS3ObjectBounded', () => {
     expect(getInput(send)).toEqual({ Bucket: 'b', Key: 'k', Range: 'bytes=0-100' });
   });
 
-  it('reads an empty object without a Range (S3 answers 416 to a ranged GET of nothing)', async () => {
-    const { client: c, send } = client(0, new Uint8Array(0));
-    await expect(readS3ObjectBounded(c, 'b', 'k', 100, 1000)).resolves.toEqual({ bytes: new Uint8Array(0), complete: true });
-    expect(getInput(send)).toEqual({ Bucket: 'b', Key: 'k' });
+  it('reads an empty object with a Range too, and takes the 416 a ranged GET of nothing gets as empty', async () => {
+    const send = vi.fn(async (command: { constructor: { name: string } }) => {
+      if (command.constructor.name === 'HeadObjectCommand') return { ContentLength: 0 };
+      throw Object.assign(new Error('InvalidRange'), { name: 'InvalidRange', $metadata: { httpStatusCode: 416 } });
+    });
+    await expect(readS3ObjectBounded({ send } as unknown as S3Client, 'b', 'k', 100, 1000)).resolves.toEqual({ bytes: new Uint8Array(0), complete: true });
+    expect(getInput(send)).toEqual({ Bucket: 'b', Key: 'k', Range: 'bytes=0-100' });
+  });
+
+  it('an object empty at the HEAD that grew is read only up to the bound', async () => {
+    const { client: c, send } = client(0, new Uint8Array(101));
+    await expect(readS3ObjectBounded(c, 'b', 'k', 100, 1000)).resolves.toMatchObject({ complete: false });
+    expect(getInput(send)).toEqual({ Bucket: 'b', Key: 'k', Range: 'bytes=0-100' });
+  });
+
+  it('a 416 for an object that was not empty at the HEAD is an error, not an empty read', async () => {
+    const send = vi.fn(async (command: { constructor: { name: string } }) => {
+      if (command.constructor.name === 'HeadObjectCommand') return { ContentLength: 5 };
+      throw Object.assign(new Error('InvalidRange'), { name: 'InvalidRange', $metadata: { httpStatusCode: 416 } });
+    });
+    await expect(readS3ObjectBounded({ send } as unknown as S3Client, 'b', 'k', 100, 1000)).rejects.toThrow('InvalidRange');
   });
 
   it('reads only the first bytes of an object over the bound, or of unknown size', async () => {
