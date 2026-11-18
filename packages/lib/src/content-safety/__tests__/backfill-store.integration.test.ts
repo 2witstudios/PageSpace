@@ -89,9 +89,9 @@ describe('backfill store', () => {
 
   it('finds many verdicts at once and counts shadow outcomes since a date', async () => {
     const [a, b, c] = [newHash(), newHash(), newHash()];
-    await recordScanVerdict({ contentHash: a, verdict: 'flagged', outcome: 'classifier_flag', provider: 'hive', mode: 'shadow', scores: {} }, new Date('2026-11-10T00:00:00Z'));
-    await recordScanVerdict({ contentHash: b, verdict: 'unverified', outcome: 'unverified', provider: 'hive', mode: 'shadow', scores: {} }, new Date('2026-11-10T00:00:00Z'));
-    await recordScanVerdict({ contentHash: c, verdict: 'clean', outcome: 'clean', provider: 'hive', mode: 'enforce', scores: {} }, new Date('2026-11-10T00:00:00Z'));
+    await recordScanVerdict({ contentHash: a, verdict: 'flagged', outcome: 'classifier_flag', provider: 'hive', mode: 'shadow', scores: {} }, { now: new Date('2026-11-10T00:00:00Z') });
+    await recordScanVerdict({ contentHash: b, verdict: 'unverified', outcome: 'unverified', provider: 'hive', mode: 'shadow', scores: {} }, { now: new Date('2026-11-10T00:00:00Z') });
+    await recordScanVerdict({ contentHash: c, verdict: 'clean', outcome: 'clean', provider: 'hive', mode: 'enforce', scores: {} }, { now: new Date('2026-11-10T00:00:00Z') });
 
     const found = await findScanVerdicts([a, b, c, newHash()]);
     expect([...found.keys()].sort()).toEqual([a, b, c].sort());

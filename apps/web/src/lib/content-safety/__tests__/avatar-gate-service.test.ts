@@ -41,7 +41,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   isHashBlocked.mockResolvedValue(false);
   send.mockResolvedValue({});
-  recordScanVerdict.mockResolvedValue(undefined);
+  recordScanVerdict.mockResolvedValue({ keptFlag: false });
   openScanReviewCase.mockResolvedValue({ caseId: 'case-rv', created: true, firstFlag: true });
   executeTakedown.mockResolvedValue({ action: 'global', caseId: 'case-td', status: 'actioned' });
 });

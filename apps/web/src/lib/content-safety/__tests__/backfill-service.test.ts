@@ -36,7 +36,7 @@ vi.mock('@pagespace/lib/content-safety/blocklist', () => ({ isHashBlocked: (...a
 vi.mock('@pagespace/lib/content-safety/scan-store', () => ({
   findScanVerdict: vi.fn(async () => null),
   findScanVerdicts: vi.fn(),
-  recordScanVerdict: vi.fn(async () => undefined),
+  recordScanVerdict: vi.fn(async () => ({ keptFlag: false })),
   openScanReviewCase: vi.fn(async () => ({ caseId: 'case-rv', created: true, firstFlag: true })),
 }));
 vi.mock('@pagespace/lib/content-safety/backfill-store', () => ({ claimBackfillCursor: vi.fn(), saveBackfillCursor: vi.fn() }));

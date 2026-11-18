@@ -23,7 +23,7 @@ function setup(options: { mode?: 'off' | 'shadow' | 'enforce'; result?: ScanResu
     scanner: config.scannerConfigured ? scanner : null,
     isBlocked: vi.fn(async () => options.blocked ?? false),
     findVerdict: vi.fn(async () => null),
-    recordVerdict: vi.fn(async () => undefined),
+    recordVerdict: vi.fn(async () => ({ keptFlag: false })),
     takedownHashMatch: vi.fn(async () => ({ caseId: 'case-td' })),
     openReviewCase: vi.fn(async () => ({ caseId: 'case-rv', created: true, firstFlag: true })),
     alert: vi.fn(async () => undefined),
