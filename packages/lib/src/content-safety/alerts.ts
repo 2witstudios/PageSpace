@@ -1,7 +1,7 @@
 /**
  * Alerts to the abuse inbox when a case opens, is actioned, stops at the
- * evidence step, or has a re-sweep fail — and for every report, whether it
- * opened a case or joined one under review.
+ * evidence step, or has a re-sweep fail — for every report, whether it
+ * opened a case or joined one under review — and when the publish scan flags a file.
  *
  * The email carries a case ID, a category, a report count and an admin link —
  * never a file URL, filename, hash, reported URL, the reporter's words or any
@@ -16,9 +16,10 @@ import { ContentSafetyAlertEmail, contentSafetyAlertSubject } from '../email-tem
 import { loggers } from '../logging/logger-config';
 import { sendEmail } from '../services/email-service';
 import type { ReportAlert } from './report-intake';
+import type { ScanAlert } from './publish-gate';
 import type { TakedownAlert } from './takedown';
 
-export type ContentSafetyAlert = TakedownAlert | ReportAlert;
+export type ContentSafetyAlert = TakedownAlert | ReportAlert | ScanAlert;
 
 const isReportAlert = (alert: ContentSafetyAlert): alert is ReportAlert =>
   alert.event === 'report_opened' || alert.event === 'report_added';
@@ -52,13 +53,18 @@ export function contentCaseAdminUrl(caseId: string, env: Env = process.env): str
 export async function sendContentSafetyAlert(alert: ContentSafetyAlert): Promise<void> {
   const category = alert.category ?? 'uncategorised';
   const reportCount = isReportAlert(alert) ? alert.reportCount : undefined;
-  const urgent = isReportAlert(alert) && alert.category === 'csam';
+  // Urgent: a CSAM report; suspected CSAM found by the publish scan (live on the web in shadow mode); and a CSAM
+  // case opening, which is how a confirmed known-hash match from the publish scan arrives (reporting deadlines apply).
+  const urgent =
+    (isReportAlert(alert) && alert.category === 'csam') ||
+    alert.event === 'scan_flagged' ||
+    (alert.event === 'opened' && alert.category === 'csam');
   loggers.security.warn('Content safety case alert', { event: alert.event, caseId: alert.caseId, category, reportCount });
 
   // Each report is its own alert: the count keeps a later report from collapsing into the first.
   const idempotencyKey = isReportAlert(alert)
     ? `content-case:${alert.caseId}:report:${alert.reportCount}`
-    : `content-case:${alert.caseId}:${alert.event}${alert.attempt ? `:${alert.attempt}` : ''}`;
+    : `content-case:${alert.caseId}:${alert.event}${'attempt' in alert && alert.attempt ? `:${alert.attempt}` : ''}`;
 
   try {
     await sendEmail({

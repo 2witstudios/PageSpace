@@ -446,6 +446,10 @@ export async function copyObjectToPublishBucket(params: {
  * Private key: `files/{contentHash}/original` (standard Tigris upload layout).
  * Public key:  `assets/{contentHash}` (via buildAssetKey).
  */
+/**
+ * NOT GATED: this does not run the publish gate (scan, verdicts, cases). Production code promotes assets
+ * through `promoteAsset` in asset-pipeline.ts; only tests call this directly.
+ */
 export async function copyAssetToPublishBucket(params: {
   contentHash: string;
   mimeType: string;

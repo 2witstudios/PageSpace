@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ConfirmActionDialog } from '@/components/admin/users/confirm-action-dialog';
-import { mergeReportPages, type ReportedCaseSummary, type ReportSummary } from '@/lib/content/report-summary';
+import { mergeReportPages, type ReportedCaseSummary, type ReportSummary, type ScanFlagSummary } from '@/lib/content/report-summary';
 import { closeReportedCase, fetchCaseReports, ReportedCaseChangedError } from './actions';
 import { Mono } from './case-list';
 
@@ -24,7 +24,7 @@ export interface ReviewTarget {
   reportedHash: string | null;
 }
 
-type CloseRequest = { caseId: string; outcome: 'dismissed' | 'actioned'; reportCount: number };
+type CloseRequest = { caseId: string; outcome: 'dismissed' | 'actioned'; reportCount: number; scanFlaggedAt: string | null };
 type Pending = CloseRequest | null;
 
 const DIALOG_COPY: Record<NonNullable<Pending>['outcome'], { title: string; description: string; confirmLabel: string }> = {
@@ -40,6 +40,31 @@ const DIALOG_COPY: Record<NonNullable<Pending>['outcome'], { title: string; desc
     confirmLabel: 'Dismiss',
   },
 };
+
+/** Dismissing a flagged scan clears the hash, so the dialog says so. */
+const SCAN_DISMISS_COPY = {
+  title: 'Dismiss this flag as a false positive?',
+  description:
+    'Closes the case and records the file as clean, so it can be published. It is scanned again when that clean verdict expires. Further reports on the same file open a new case.',
+  confirmLabel: 'Dismiss',
+};
+
+const dialogCopy = (pending: Pending) =>
+  pending?.scanFlaggedAt && pending.outcome === 'dismissed' ? SCAN_DISMISS_COPY : DIALOG_COPY[pending?.outcome ?? 'dismissed'];
+
+/** What the publish scan found: a classifier score, never the file. */
+function ScanFlag({ scan }: { scan: ScanFlagSummary }) {
+  return (
+    <p className="rounded-md border p-3 text-sm" data-testid="scan-flag">
+      The publish scan&apos;s classifier scored this file <strong>{scan.category}</strong> at{' '}
+      <Mono>{scan.score.toFixed(3)}</Mono> ({scan.provider}, {scan.mode} mode, {new Date(scan.flaggedAt).toLocaleString()}).{' '}
+      {scan.mode === 'enforce'
+        ? 'It was held back from the public bucket.'
+        : 'Shadow mode: it was published. Review and act if it needs to come down.'}{' '}
+      A classifier score is not a confirmed match; nothing has been blocked.
+    </p>
+  );
+}
 
 /**
  * One report. The reporter's text may be abusive or contain URLs: it is
@@ -83,7 +108,7 @@ function ReportItem({ report }: { report: ReportSummary }) {
  * acknowledges a report nobody saw. The queue keys this card on its first page, so a refresh starts paging afresh.
  */
 function ReportedCaseCard({
-  summary: { case: item, reportCount, reports: firstPage },
+  summary: { case: item, reportCount, reports: firstPage, scan },
   onClose,
   onReview,
 }: {
@@ -121,9 +146,12 @@ function ReportedCaseCard({
           <div className="min-w-0 space-y-1">
             <CardTitle className="flex flex-wrap items-center gap-2 text-base">
               {item.category === 'csam' && <Badge variant="destructive">CSAM</Badge>}
-              <span>
-                {reportCount} report{reportCount === 1 ? '' : 's'}
-              </span>
+              {scan && <Badge variant="outline">Flagged by publish scan</Badge>}
+              {(reportCount > 0 || !scan) && (
+                <span>
+                  {reportCount} report{reportCount === 1 ? '' : 's'}
+                </span>
+              )}
             </CardTitle>
             <CardDescription className="space-y-0.5">
               <span className="block">
@@ -139,17 +167,18 @@ function ReportedCaseCard({
               <Button size="sm" onClick={() => onReview({ targetId: item.targetId, reportedHash: item.contentHash })}>
                 Review and act
               </Button>
-              <Button size="sm" variant="outline" disabled={remaining > 0} onClick={() => onClose({ caseId: item.id, outcome: 'actioned', reportCount })}>
+              <Button size="sm" variant="outline" disabled={remaining > 0} onClick={() => onClose({ caseId: item.id, outcome: 'actioned', reportCount, scanFlaggedAt: scan?.flaggedAt ?? null })}>
                 Mark actioned
               </Button>
-              <Button size="sm" variant="ghost" disabled={remaining > 0} onClick={() => onClose({ caseId: item.id, outcome: 'dismissed', reportCount })}>
+              <Button size="sm" variant="ghost" disabled={remaining > 0} onClick={() => onClose({ caseId: item.id, outcome: 'dismissed', reportCount, scanFlaggedAt: scan?.flaggedAt ?? null })}>
                 Dismiss
               </Button>
             </div>
           )}
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-2">
+        {scan && <ScanFlag scan={scan} />}
         <ul className="space-y-2">
           {reports.map((report) => (
             <ReportItem key={report.id} report={report} />
@@ -183,7 +212,10 @@ interface ReportQueueProps {
   onReview: (target: ReviewTarget) => void;
 }
 
-/** Cases opened by reports and waiting for staff, CSAM first. Metadata and the reporters' words only. */
+/**
+ * Cases waiting for staff, CSAM first: opened by reports, or by the publish scan's classifier.
+ * Metadata, scores and the reporters' words only; never a preview.
+ */
 export function ReportQueue({ items, onChanged, onReview }: ReportQueueProps) {
   const [dialog, setDialog] = useState<Pending>(null);
   const [pending, setPending] = useState(false);
@@ -196,7 +228,13 @@ export function ReportQueue({ items, onChanged, onReview }: ReportQueueProps) {
     setDialogError(null);
     setNotice(null);
     try {
-      await closeReportedCase({ caseId: dialog.caseId, outcome: dialog.outcome, expectedReportCount: dialog.reportCount, note });
+      await closeReportedCase({
+        caseId: dialog.caseId,
+        outcome: dialog.outcome,
+        expectedReportCount: dialog.reportCount,
+        expectedScanFlaggedAt: dialog.scanFlaggedAt,
+        note,
+      });
       setDialog(null);
       onChanged();
     } catch (error) {
@@ -223,8 +261,8 @@ export function ReportQueue({ items, onChanged, onReview }: ReportQueueProps) {
       )}
       {items.map((summary) => (
         <ReportedCaseCard
-          // A refreshed first page (new reports, or a new count) remounts the card and drops pages loaded before it.
-          key={`${summary.case.id}:${summary.reportCount}:${summary.reports[0]?.id ?? ''}`}
+          // A refreshed first page (new reports, a new count or a new scan flag) remounts the card and drops pages loaded before it.
+          key={`${summary.case.id}:${summary.reportCount}:${summary.reports[0]?.id ?? ''}:${summary.scan?.flaggedAt ?? ''}`}
           summary={summary}
           onReview={onReview}
           onClose={(request) => {
@@ -237,9 +275,9 @@ export function ReportQueue({ items, onChanged, onReview }: ReportQueueProps) {
       <ConfirmActionDialog
         open={dialog !== null}
         onOpenChange={(open) => !open && setDialog(null)}
-        title={DIALOG_COPY[dialog?.outcome ?? 'dismissed'].title}
-        description={<span>{DIALOG_COPY[dialog?.outcome ?? 'dismissed'].description}</span>}
-        confirmLabel={DIALOG_COPY[dialog?.outcome ?? 'dismissed'].confirmLabel}
+        title={dialogCopy(dialog).title}
+        description={<span>{dialogCopy(dialog).description}</span>}
+        confirmLabel={dialogCopy(dialog).confirmLabel}
         destructive={false}
         reasonLabel="Note (kept on the case)"
         pending={pending}

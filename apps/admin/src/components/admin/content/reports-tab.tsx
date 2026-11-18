@@ -42,7 +42,7 @@ export function ReportsTab({ onReview }: { onReview: (target: ReviewTarget) => v
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <p className="text-sm text-muted-foreground">
-          A report never takes anything down by itself. Review the target, act from Take down, then close the report.
+          Reports and publish-scan flags. Neither takes anything down by itself. Review the target, act from Take down, then close the case.
         </p>
         <Button variant="outline" size="sm" onClick={refetch} disabled={isFetching}>
           <RefreshCw className={`mr-2 h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
@@ -56,7 +56,7 @@ export function ReportsTab({ onReview }: { onReview: (target: ReviewTarget) => v
         onRetry={refetch}
         hasData={!!current}
         isEmpty={!!current && items.length === 0}
-        emptyMessage={offset === 0 ? 'No reports waiting for review.' : 'No more reports waiting for review.'}
+        emptyMessage={offset === 0 ? 'Nothing waiting for review.' : 'Nothing more waiting for review.'}
       >
         <ReportQueue items={items} onChanged={refetch} onReview={onReview} />
       </DataState>
@@ -64,7 +64,7 @@ export function ReportsTab({ onReview }: { onReview: (target: ReviewTarget) => v
   );
 }
 
-/** The reports on one linked case, if it has any (an alert about a report links here). */
+/** The reports or publish-scan flag on one linked case, if it has either (an alert links here). */
 export function LinkedCaseReports({ caseId, onReview }: { caseId: string; onReview: (target: ReviewTarget) => void }) {
   const url = `/api/admin/content/reports?id=${encodeURIComponent(caseId)}`;
   const query = useAdminQuery<{ cases: ReportedCaseSummary[] }>(url);
@@ -79,7 +79,7 @@ export function LinkedCaseReports({ caseId, onReview }: { caseId: string; onRevi
     );
   }
   // Never the previous case's reports: the hook keeps them while this case loads.
-  const items = (dataForUrl(url, query)?.cases ?? []).filter((item) => item.reportCount > 0);
+  const items = (dataForUrl(url, query)?.cases ?? []).filter((item) => item.reportCount > 0 || item.scan !== null);
   if (items.length === 0) return null;
   return <ReportQueue items={items} onChanged={query.refetch} onReview={onReview} />;
 }

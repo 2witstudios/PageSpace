@@ -22,7 +22,18 @@ export type ContentBlockCategory = 'csam' | 'malware' | 'illegal_other' | 'polic
 /** What put the hash on the blocklist. */
 export type ContentBlockSource = 'admin' | 'hash_match' | 'report';
 
-export type ContentScanVerdict = 'clean' | 'flagged' | 'error';
+/**
+ * `clean`: scanned, nothing found (cached for a TTL). `flagged`: a hash match or a
+ * classifier hit. `error`: the scan failed or timed out (retried on the next
+ * publish). `unscanned`: a type the scanner cannot read (PDFs, archives, …).
+ */
+export type ContentScanVerdict = 'clean' | 'flagged' | 'error' | 'unscanned';
+
+/** The publish gate's mode when a verdict was recorded (PR 4). */
+export type ContentScanMode = 'shadow' | 'enforce';
+
+/** The scanner's own result kind, finer than the verdict (PR 4). */
+export type ContentScanOutcome = 'clean' | 'hash_match' | 'classifier_flag' | 'error' | 'unsupported_type';
 
 export type ContentCaseTargetType =
   | 'content_hash'
@@ -106,6 +117,18 @@ export type ContentCaseSnapshot = {
   avatarEvidenceKeys?: string[];
   /** How staff closed a `reported` case (PR 3). */
   review?: { outcome: 'dismissed' | 'actioned'; actorUserId: string; note?: string; at: string };
+  /**
+   * Set when the publish gate's classifier flagged the hash (PR 4): the case sits in the review
+   * queue (`reported`) like a report, with no report rows. Scores only, never the file.
+   */
+  scan?: {
+    source: 'scan_flagged';
+    provider: string;
+    category: string;
+    score: number;
+    mode: 'shadow' | 'enforce';
+    flaggedAt: string;
+  };
   /** Re-sweep bookkeeping for a global takedown: passes attempted, and whether the last one finished. */
   resweep?: { attempts: number; done: boolean };
   [key: string]: unknown;
@@ -145,6 +168,9 @@ export const contentScans = pgTable('content_scans', {
   provider: text('provider').notNull(),
   providerVersion: text('provider_version'),
   scores: jsonb('scores').$type<Record<string, unknown>>(),
+  // Null on rows written before the publish gate, or by an admin review.
+  mode: text('mode').$type<ContentScanMode>(),
+  outcome: text('outcome').$type<ContentScanOutcome>(),
   scannedAt: timestamp('scanned_at', { mode: 'date' }).notNull().defaultNow(),
 });
 

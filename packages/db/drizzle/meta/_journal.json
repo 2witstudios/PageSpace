@@ -2486,6 +2486,13 @@
       "when": 1794801993256,
       "tag": "0385_content_reports",
       "breakpoints": true
+    },
+    {
+      "idx": 355,
+      "version": "7",
+      "when": 1794802006440,
+      "tag": "0386_content_scan_mode",
+      "breakpoints": true
     }
   ]
 }

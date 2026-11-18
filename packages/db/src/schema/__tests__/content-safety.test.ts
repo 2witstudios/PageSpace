@@ -20,7 +20,7 @@ describe('content-safety schema', () => {
     expect(config.name).toBe('content_scans');
     expect(config.columns.find((c) => c.primary)?.name).toBe('content_hash');
     expect(columnNames(contentScans)).toEqual(
-      ['content_hash', 'provider', 'provider_version', 'scanned_at', 'scores', 'verdict'],
+      ['content_hash', 'mode', 'outcome', 'provider', 'provider_version', 'scanned_at', 'scores', 'verdict'],
     );
   });
 

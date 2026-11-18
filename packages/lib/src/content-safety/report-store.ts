@@ -11,20 +11,21 @@
 import { db } from '@pagespace/db/db';
 import { and, count, desc, eq, inArray, lte, sql } from '@pagespace/db/operators';
 import { getTableColumns } from 'drizzle-orm';
-import { contentCases, contentReports, type ContentCase, type ContentReport } from '@pagespace/db/schema/content-safety';
+import { contentCases, contentReports, contentScans, type ContentCase, type ContentReport } from '@pagespace/db/schema/content-safety';
 import type { FiledReport, FileReportInput } from './report-intake';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
 import { isServingStatus } from '../canvas/cert-action';
 import { isPrefixVisible, resolvePrefixOwner } from '../organizations/published-visibility';
 import { caseCategoryAfterReport, type ClassifiedReportUrl } from './reports';
+import { ADMIN_REVIEW_PROVIDER } from './scan-store';
 
 /** The singleton or a transaction: anything that can run a select. */
 type Executor = Pick<typeof db, 'select'>;
 
-/** More reports arrived on the case than the admin saw when they closed it. */
+/** The case changed after the admin opened it: more reports arrived, or the publish scan flagged it (again). */
 export class ReportedCaseChangedError extends Error {
   constructor(readonly caseId: string) {
-    super('New reports arrived on this case; review them before closing it');
+    super('This case changed (new reports or a new scan flag); review it before closing it');
     this.name = 'ReportedCaseChangedError';
   }
 }
@@ -233,13 +234,19 @@ export async function closeReportedCase(input: {
   actorUserId: string;
   /** How many reports the admin saw. The close is refused if more have arrived since. */
   expectedReportCount: number;
+  /**
+   * The publish-scan flag the admin saw (`snapshot.scan.flaggedAt`), or null for none. The close is refused if
+   * the case's flag differs: a flag that joined after the admin looked must not be dismissed unseen.
+   */
+  expectedScanFlaggedAt?: string | null;
   note?: string;
 }): Promise<ContentCase> {
   const review = { outcome: input.outcome, actorUserId: input.actorUserId, note: input.note, at: new Date().toISOString() };
   return db.transaction(async (tx) => {
     // The same row lock a report takes to attach, so a report lands either before the count check or on a new case.
+    // A scan flag joins under the same lock (scan-store `openScanReviewCase`), so it lands before this check or on a new case.
     const [locked] = await tx
-      .select({ id: contentCases.id })
+      .select({ id: contentCases.id, snapshot: contentCases.snapshot, contentHash: contentCases.contentHash })
       .from(contentCases)
       .where(and(eq(contentCases.id, input.caseId), eq(contentCases.status, 'reported')))
       .limit(1)
@@ -247,6 +254,25 @@ export async function closeReportedCase(input: {
     if (!locked) throw new ReportedCaseNotFoundError(input.caseId);
     const [{ total }] = await tx.select({ total: count() }).from(contentReports).where(eq(contentReports.caseId, input.caseId));
     if (Number(total) !== input.expectedReportCount) throw new ReportedCaseChangedError(input.caseId);
+    const scan = locked.snapshot?.scan?.source === 'scan_flagged' ? locked.snapshot.scan : null;
+    if ((scan?.flaggedAt ?? null) !== (input.expectedScanFlaggedAt ?? null)) throw new ReportedCaseChangedError(input.caseId);
+
+    // Dismissing a flagged scan is a reviewed false positive: the hash is recorded clean in the same
+    // transaction, so the gate stops holding it, and a dismissal never lands without it (or the reverse).
+    if (scan && input.outcome === 'dismissed' && locked.contentHash) {
+      const clean = {
+        verdict: 'clean' as const,
+        outcome: 'clean' as const,
+        provider: ADMIN_REVIEW_PROVIDER,
+        mode: null,
+        scores: { reviewedBy: input.actorUserId, caseId: input.caseId },
+        scannedAt: new Date(),
+      };
+      await tx
+        .insert(contentScans)
+        .values({ contentHash: locked.contentHash, ...clean })
+        .onConflictDoUpdate({ target: contentScans.contentHash, set: clean });
+    }
     const [row] = await tx
       .update(contentCases)
       .set({

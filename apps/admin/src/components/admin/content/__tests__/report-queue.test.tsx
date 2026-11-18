@@ -20,6 +20,7 @@ const item = (overrides: Partial<ReportedCaseSummary> = {}): ReportedCaseSummary
     references: null, skippedDrives: [],
   },
   reportCount: 3,
+  scan: null,
   reports: [
     { id: 'r1', category: 'csam', source: 'anonymous', reporterUserId: null, contactEmail: 'me@example.com', description: '<script>alert(1)</script><a href="https://evil.test">click</a> https://evil.test/x', createdAt: '2026-11-12T00:00:01.000Z' },
     { id: 'r2', category: 'harassment', source: 'signed_in', reporterUserId: 'user_r', contactEmail: null, description: null, createdAt: '2026-11-12T00:00:02.000Z' },
@@ -70,6 +71,23 @@ describe('ReportQueue', () => {
     const full = closeButtons(all);
     expect(full).toHaveLength(2);
     for (const button of full) expect(button).not.toMatch(/disabled=""/);
+  });
+
+  it('shows a flagged-scan case with no reports by its score and mode, never a file', () => {
+    const flagged = renderToStaticMarkup(
+      <ReportQueue
+        items={[item({ reportCount: 0, reports: [], scan: { provider: 'hive', category: 'csam', score: 0.97, mode: 'shadow', flaggedAt: '2026-11-12T00:00:00.000Z' } })]}
+        onChanged={() => {}}
+        onReview={() => {}}
+      />,
+    );
+    expect(flagged).toContain('Flagged by publish scan');
+    expect(flagged).toContain('0.970');
+    expect(flagged).toContain('shadow mode');
+    expect(flagged).toContain('it was published');
+    expect(flagged).not.toContain('0 reports');
+    expect(flagged).not.toMatch(/<(img|a|video)[\s>]/);
+    expect(flagged).toContain('Dismiss');
   });
 });
 

@@ -2959,6 +2959,41 @@
       "import": "./dist/content-safety/report-store.js",
       "require": "./dist/content-safety/report-store.js"
     },
+    "./content-safety/scanner": {
+      "types": "./dist/content-safety/scanner.d.ts",
+      "import": "./dist/content-safety/scanner.js",
+      "require": "./dist/content-safety/scanner.js"
+    },
+    "./content-safety/scanner-hive": {
+      "types": "./dist/content-safety/scanner-hive.d.ts",
+      "import": "./dist/content-safety/scanner-hive.js",
+      "require": "./dist/content-safety/scanner-hive.js"
+    },
+    "./content-safety/scan-mode": {
+      "types": "./dist/content-safety/scan-mode.d.ts",
+      "import": "./dist/content-safety/scan-mode.js",
+      "require": "./dist/content-safety/scan-mode.js"
+    },
+    "./content-safety/scan-policy": {
+      "types": "./dist/content-safety/scan-policy.d.ts",
+      "import": "./dist/content-safety/scan-policy.js",
+      "require": "./dist/content-safety/scan-policy.js"
+    },
+    "./content-safety/publish-gate": {
+      "types": "./dist/content-safety/publish-gate.d.ts",
+      "import": "./dist/content-safety/publish-gate.js",
+      "require": "./dist/content-safety/publish-gate.js"
+    },
+    "./content-safety/scan-store": {
+      "types": "./dist/content-safety/scan-store.d.ts",
+      "import": "./dist/content-safety/scan-store.js",
+      "require": "./dist/content-safety/scan-store.js"
+    },
+    "./content-safety/held-assets": {
+      "types": "./dist/content-safety/held-assets.d.ts",
+      "import": "./dist/content-safety/held-assets.js",
+      "require": "./dist/content-safety/held-assets.js"
+    },
     "./content-safety/alerts": {
       "types": "./dist/content-safety/alerts.d.ts",
       "import": "./dist/content-safety/alerts.js",

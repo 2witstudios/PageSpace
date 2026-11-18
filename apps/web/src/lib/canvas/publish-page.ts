@@ -151,6 +151,13 @@ export interface PublishCanvasPageResult {
   ogImageUrl: string | null;
   noindex: boolean;
   themeBridgeEnabled: boolean;
+  /**
+   * File (page) IDs referenced by the page that were NOT published: the publish
+   * gate held them, or their copy failed. Their references stay private, so they
+   * won't load for visitors. IDs only, never a URL or a reason; the UI shows a
+   * neutral "some files couldn't be published".
+   */
+  heldAssets: string[];
 }
 
 /** Final SEO/head fields threaded into whichever type-specific renderer `preparePublishContent` selects. */
@@ -177,6 +184,8 @@ interface PreparedPublishContent {
   body: string;
   /** Renders the final standalone document once SEO fields are resolved. */
   render: (args: PublishRenderArgs) => string;
+  /** File IDs the asset rewrite could not publish (see `PublishCanvasPageResult.heldAssets`). */
+  heldAssets: string[];
 }
 
 /**
@@ -208,22 +217,22 @@ async function preparePublishContent(params: {
 
   switch (type) {
     case PageType.CANVAS: {
-      const { html: assetHtml } = await rewriteCanvasAssets({ html: content ?? '', actor, db });
+      const { html: assetHtml, heldAssets } = await rewriteCanvasAssets({ html: content ?? '', actor, db });
       const { html: rewrittenHtml } = await rewriteInterPageLinksForDrive({
         html: assetHtml, driveId, subdomain, homePageId, currentPageId, currentPath, db,
       });
       const { meta, html: bodyHtml } = extractAndStripOgMeta(rewrittenHtml);
-      return { meta, body: bodyHtml, render: (args) => renderPublishedPage({ html: bodyHtml, siteMode, ...args }) };
+      return { meta, body: bodyHtml, heldAssets, render: (args) => renderPublishedPage({ html: bodyHtml, siteMode, ...args }) };
     }
     case PageType.DOCUMENT: {
       const rawHtml = contentMode === 'markdown' ? await marked.parse(content ?? '') : (content ?? '');
-      const { html: assetHtml } = await rewriteCanvasAssets({ html: rawHtml, actor, db });
+      const { html: assetHtml, heldAssets } = await rewriteCanvasAssets({ html: rawHtml, actor, db });
       const { html: rewrittenHtml } = await rewriteInterPageLinksForDrive({
         html: assetHtml, driveId, subdomain, homePageId, currentPageId, currentPath, db,
       });
       const neutralizedHtml = neutralizeDashboardLinks(rewrittenHtml);
       const { meta, html: bodyHtml } = extractAndStripOgMeta(neutralizedHtml);
-      return { meta, body: bodyHtml, render: (args) => renderPublishedDocument({ html: bodyHtml, ...args }) };
+      return { meta, body: bodyHtml, heldAssets, render: (args) => renderPublishedDocument({ html: bodyHtml, ...args }) };
     }
     case PageType.CODE:
       // `body` (not the rendered `code`) feeds deriveDescription's fallback
@@ -231,13 +240,13 @@ async function preparePublishContent(params: {
       // and deriveDescription's HTML-tag stripping (`/<[^>]+>/g`) would mangle
       // generics/comparisons in it, so leave it empty like SHEET's non-prose
       // content (an empty derived description, same accepted tradeoff).
-      return { meta: {}, body: '', render: (args) => renderPublishedCode({ code: content ?? '', ...args }) };
+      return { meta: {}, body: '', heldAssets: [], render: (args) => renderPublishedCode({ code: content ?? '', ...args }) };
     case PageType.SHEET: {
       // From rows, with the document column as the fallback for a sheet that
       // has not been materialised yet. Publishing `content` directly would
       // render a blank grid for every migrated sheet.
       const serialized = (await readSheetDocument(currentPageId)) ?? content ?? '';
-      return { meta: {}, body: '', render: (args) => renderPublishedSheet({ serializedContent: serialized, ...args }) };
+      return { meta: {}, body: '', heldAssets: [], render: (args) => renderPublishedSheet({ serializedContent: serialized, ...args }) };
     }
     default:
       throw new PublishError(`Cannot publish page type: ${type}`, 400);
@@ -546,6 +555,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
     ogImageUrl: effectiveOgImageUrl,
     noindex: effectiveNoindex,
     themeBridgeEnabled: effectiveThemeBridgeEnabled,
+    heldAssets: prepared.heldAssets,
   };
 }
 
