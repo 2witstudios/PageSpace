@@ -157,12 +157,15 @@ export function createBackfillDeps(
 ): BackfillDeps {
   const actions = { ...defaultActions, ...options.actions };
 
-  /** The review case a flagged copy is held under: the gate's, else the one open for the hash, else the uncased namespace. */
-  async function flaggedHoldKey(contentHash: string, caseId: string | null): Promise<string> {
-    const key = caseId ?? (await actions.findReviewCaseId(contentHash));
-    if (key) return key;
+  /**
+   * The review case a flagged copy is held under: the gate's, else the one open for the hash. `holdKey` falls back
+   * to the uncased namespace; `caseId` stays null then, for the audit.
+   */
+  async function flaggedCase(contentHash: string, caseId: string | null): Promise<{ caseId: string | null; holdKey: string }> {
+    const resolved = caseId ?? (await actions.findReviewCaseId(contentHash));
+    if (resolved) return { caseId: resolved, holdKey: resolved };
     loggers.security.error('Backfill: a flagged copy has no review case; it is held under content-hold/backfill-uncased/', undefined, { contentHash });
-    return UNCASED_HOLD;
+    return { caseId: null, holdKey: UNCASED_HOLD };
   }
   const gateDeps = options.gateDeps ?? ((overrides: Partial<PublishGateDeps>) => createPublishGateDeps(config, overrides));
 
@@ -211,9 +214,10 @@ export function createBackfillDeps(
     if (evaluation.finding === 'flagged' && config.mode === 'enforce') {
       // Not a block, so nothing is deleted for good: the public copy is kept privately under the review case
       // first (it can be the only copy left), then taken off the web. The review case decides.
-      await actions.takePublicOffline(target.contentHash, await flaggedHoldKey(target.contentHash, evaluation.caseId));
+      const held = await flaggedCase(target.contentHash, evaluation.caseId);
+      await actions.takePublicOffline(target.contentHash, held.holdKey);
       removed = true;
-      auditUnpublished({ kind: 'asset', contentHash: target.contentHash, mode: config.mode, finding: evaluation.finding, caseId: evaluation.caseId });
+      auditUnpublished({ kind: 'asset', contentHash: target.contentHash, mode: config.mode, finding: evaluation.finding, caseId: held.caseId });
     }
     return outcome(evaluation, removed);
   }
@@ -326,10 +330,11 @@ export function createBackfillDeps(
     if (evaluation.finding === 'flagged' && config.mode === 'enforce' && (await stillCurrent())) {
       // The removal deletes the only copy: keep the scanned bytes privately under the review case first. If that
       // fails, this throws and the avatar stays until a later tick can keep them.
-      await actions.holdAvatarBytes(await flaggedHoldKey(contentHash, evaluation.caseId), contentHash, bytes);
+      const held = await flaggedCase(contentHash, evaluation.caseId);
+      await actions.holdAvatarBytes(held.holdKey, contentHash, bytes);
       await actions.removeAvatar(target.userId);
       removed = true;
-      auditUnpublished({ kind: 'avatar', contentHash, mode: config.mode, finding: evaluation.finding, caseId: evaluation.caseId, userId: target.userId });
+      auditUnpublished({ kind: 'avatar', contentHash, mode: config.mode, finding: evaluation.finding, caseId: held.caseId, userId: target.userId });
     }
     return outcome(evaluation, removed);
   }

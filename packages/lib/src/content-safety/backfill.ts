@@ -290,16 +290,21 @@ export interface DryRunDeps {
 }
 
 export interface DryRunCounts {
-  assets: { objects: number; hashes: number; fresh: number; needScan: number; bytesToRead: number; ignored: number };
+  /**
+   * `bytesToRead`: the listed sizes of the public copies a scan reads. A hash listed only as a derived copy is
+   * scanned from its private original, whose size the listing does not give: counted in `unknownSizeReads`.
+   */
+  assets: { objects: number; hashes: number; fresh: number; needScan: number; bytesToRead: number; unknownSizeReads: number; ignored: number };
   avatars: { objects: number; bytesToRead: number; ignored: number };
 }
 
 export interface DryRunResult {
   counts: DryRunCounts;
   /**
-   * The most vendor calls a full pass from here would make: every asset hash with no fresh verdict, plus every
-   * avatar (an avatar's hash is only known once it is read). Types the vendor can't read (PDFs, fonts, …) are
-   * classified without a call, so the real number is lower.
+   * The vendor calls a full pass from here would make, as of the dry run: every listed asset object whose hash has
+   * no fresh verdict now (a derived copy is scanned again if its original's scan fails), plus every avatar (an
+   * avatar's hash is only known once it is read). An estimate, not a ceiling: a verdict fresh now can expire before
+   * the walk reaches it, and types the vendor can't read (PDFs, fonts, …) are classified without a call.
    */
   estimatedVendorCalls: number;
   /** Null when the whole walk was counted; else where to continue (pass it back as `phase` and `startAfter`). */
@@ -323,7 +328,7 @@ export async function runBackfillDryRun(
   options: { verdictTtlMs: number; allowUnclassifiedVideo?: boolean; maxPages: number; from?: { phase: BackfillWalkPhase; startAfter: string | null } },
 ): Promise<DryRunResult> {
   const counts: DryRunCounts = {
-    assets: { objects: 0, hashes: 0, fresh: 0, needScan: 0, bytesToRead: 0, ignored: 0 },
+    assets: { objects: 0, hashes: 0, fresh: 0, needScan: 0, bytesToRead: 0, unknownSizeReads: 0, ignored: 0 },
     avatars: { objects: 0, bytesToRead: 0, ignored: 0 },
   };
   const seen = new Set<string>();
@@ -331,8 +336,9 @@ export async function runBackfillDryRun(
   let phaseIndex = Math.max(0, BACKFILL_PHASES.indexOf(options.from?.phase ?? 'assets'));
   let startAfter = options.from?.startAfter ?? null;
   let pages = 0;
-  // An upper bound: one call per object of a hash with no reusable verdict. The walk reuses a hash's verdict for
-  // its other objects (a derived copy) only when the first scan stored one; after a scan error it scans again.
+  // One call per object of a hash with no reusable verdict as of now: the walk reuses a hash's verdict for its
+  // other objects (a derived copy) only when the first scan stored one, and scans again after an error. An estimate
+  // at the dry run's time, not a ceiling for a later pass: a verdict fresh now can expire before the walk gets there.
   const needsScan = new Set<string>();
   let assetCalls = 0;
 
@@ -345,7 +351,8 @@ export async function runBackfillDryRun(
     pages += 1;
 
     if (phase === 'assets') {
-      const fresh: Array<{ hash: string; size: number }> = [];
+      // `size` is null for a derived copy: its scan reads the private original, of unlisted size.
+      const fresh: Array<{ hash: string; size: number | null }> = [];
       // Further objects on this page of a hash first seen on this page.
       const pendingCopies = new Map<string, number>();
       for (const object of page.objects) {
@@ -362,7 +369,7 @@ export async function runBackfillDryRun(
           continue;
         }
         seen.add(target.contentHash);
-        fresh.push({ hash: target.contentHash, size: object.size });
+        fresh.push({ hash: target.contentHash, size: target.derived ? null : object.size });
       }
       const verdicts = fresh.length > 0 ? await deps.findVerdicts(fresh.map((entry) => entry.hash)) : new Map<string, StoredVerdict>();
       for (const { hash, size } of fresh) {
@@ -371,7 +378,8 @@ export async function runBackfillDryRun(
           counts.assets.fresh += 1;
         } else {
           counts.assets.needScan += 1;
-          counts.assets.bytesToRead += size;
+          if (size === null) counts.assets.unknownSizeReads += 1;
+          else counts.assets.bytesToRead += size;
           needsScan.add(hash);
           assetCalls += 1 + (pendingCopies.get(hash) ?? 0);
         }

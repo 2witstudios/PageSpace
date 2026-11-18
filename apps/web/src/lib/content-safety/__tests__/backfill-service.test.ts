@@ -147,11 +147,14 @@ describe('backfill service: public assets', () => {
     const open = build('enforce', flag);
     await expect(open.deps.process(asset, listed)).resolves.toMatchObject({ finding: 'flagged', removed: true });
     expect(open.actions.takePublicOffline).toHaveBeenCalledWith(HASH, 'case-open');
+    // The audit names the case the copy is held under, so staff can find it.
+    expect(audit).toHaveBeenLastCalledWith(expect.objectContaining({ eventType: 'content.backfill.unpublished', details: expect.objectContaining({ caseId: 'case-open' }) }));
 
     const none = build('enforce', flag);
     none.actions.findReviewCaseId.mockResolvedValueOnce(null);
     await none.deps.process(asset, listed);
     expect(none.actions.takePublicOffline).toHaveBeenCalledWith(HASH, 'backfill-uncased');
+    expect(audit).toHaveBeenLastCalledWith(expect.objectContaining({ details: expect.objectContaining({ caseId: null }) }));
   });
 
   it('enforce: a hold that fails leaves the public copy up and stops the walk before the item', async () => {

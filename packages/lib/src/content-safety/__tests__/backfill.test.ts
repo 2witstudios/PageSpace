@@ -212,7 +212,7 @@ describe('runBackfillDryRun', () => {
     const result = await runBackfillDryRun(deps, { verdictTtlMs: 30 * DAY, maxPages: 10 });
     expect(result).toEqual({
       counts: {
-        assets: { objects: 4, hashes: 3, fresh: 1, needScan: 2, bytesToRead: 200, ignored: 1 },
+        assets: { objects: 4, hashes: 3, fresh: 1, needScan: 2, bytesToRead: 200, unknownSizeReads: 0, ignored: 1 },
         avatars: { objects: 2, bytesToRead: 200, ignored: 0 },
       },
       estimatedVendorCalls: 4,
@@ -227,6 +227,35 @@ describe('runBackfillDryRun', () => {
     const result = await runBackfillDryRun(deps, { verdictTtlMs: 30 * DAY, maxPages: 10 });
     expect(result.counts.assets).toMatchObject({ objects: 5, hashes: 2, fresh: 1, needScan: 1 });
     expect(result.estimatedVendorCalls).toBe(3);
+  });
+
+  it('counts the derived copy of a hash on a later listing page as its own vendor call', async () => {
+    const pages: Record<string, ListedObject[]> = {
+      first: [{ key: `assets/${h(1)}`, size: 100 }],
+      second: [{ key: `assets/cache/${h(1)}/thumbnail.webp`, size: 4 }],
+    };
+    const result = await runBackfillDryRun(
+      {
+        list: async (phase, startAfter) =>
+          phase === 'avatars'
+            ? { objects: [], truncated: false }
+            : startAfter === null
+              ? { objects: pages.first, truncated: true }
+              : { objects: pages.second, truncated: false },
+        findVerdicts: async () => new Map(),
+        now: () => NOW,
+      },
+      { verdictTtlMs: 30 * DAY, maxPages: 10 },
+    );
+    expect(result.counts.assets).toMatchObject({ objects: 2, hashes: 1, needScan: 1, bytesToRead: 100 });
+    expect(result.estimatedVendorCalls).toBe(2);
+  });
+
+  it('a hash listed only as a derived copy reads its private original, whose size is not listed', async () => {
+    const deps = dryWorld([`assets/cache/${h(4)}/thumbnail.webp`], [], {});
+    const result = await runBackfillDryRun(deps, { verdictTtlMs: 30 * DAY, maxPages: 10 });
+    // The thumbnail's own size is not what the scan reads.
+    expect(result.counts.assets).toMatchObject({ needScan: 1, bytesToRead: 0, unknownSizeReads: 1 });
   });
 
   it('stops after maxPages and says where to continue', async () => {
