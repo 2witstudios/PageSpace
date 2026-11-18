@@ -27,20 +27,28 @@ describe('readBytesWithCap', () => {
     expect(pulled()).toBeLessThan(4);
   });
 
-  it('answers past the cap without waiting on a cancellation that fails', async () => {
-    let pulled = 0;
+  it('answers past the cap while the cancellation is still pending, and a cancellation that then fails is harmless', async () => {
+    let cancelled = false;
+    let failCancel: (error: Error) => void = () => undefined;
     const body = new ReadableStream<Uint8Array>({
       pull(controller) {
-        pulled += 1;
         controller.enqueue(new Uint8Array(4));
       },
       cancel() {
-        return Promise.reject(new Error('cancel failed'));
+        cancelled = true;
+        // Never settles until the test says so: an implementation that awaited it would hang here.
+        return new Promise<void>((_, reject) => { failCancel = reject; });
       },
     });
     const request = new Request('http://x/', { method: 'POST', body, duplex: 'half' } as RequestInit);
-    await expect(readBytesWithCap(request, 6)).resolves.toBeNull();
-    expect(pulled).toBeGreaterThan(0);
+    const outcome = await Promise.race([
+      readBytesWithCap(request, 6),
+      new Promise<'waited'>((resolve) => setTimeout(() => resolve('waited'), 200)),
+    ]);
+    expect(outcome).toBeNull();
+    expect(cancelled).toBe(true);
+    failCancel(new Error('cancel failed'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
   it('a request with no body reads as empty', async () => {

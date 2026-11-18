@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BackfillTarget } from '@pagespace/lib/content-safety/backfill';
 import { resolveScanConfig } from '@pagespace/lib/content-safety/scan-mode';
 import { createFakeScanner, type ScanResult } from '@pagespace/lib/content-safety/scanner';
+import type { StoredVerdict } from '@pagespace/lib/content-safety/publish-gate';
 
 vi.mock('server-only', () => ({}));
 
@@ -69,6 +70,7 @@ function build(mode: 'shadow' | 'enforce', result?: ScanResult) {
     takedownAvatar: vi.fn(async () => true),
     findBlockCaseId: vi.fn(async () => 'case-block'),
     findReviewCaseId: vi.fn(async (): Promise<string | null> => 'case-open'),
+    currentVerdict: vi.fn(async (): Promise<StoredVerdict | null> => ({ verdict: 'flagged', outcome: 'classifier_flag', scannedAt: new Date() })),
   };
   const deps = createBackfillDeps(config, { actions, gateDeps: (overrides) => ({ ...createPublishGateDeps(config, overrides), scanner }) });
   return { deps, actions, scanner };
@@ -155,6 +157,23 @@ describe('backfill service: public assets', () => {
     await none.deps.process(asset, listed);
     expect(none.actions.takePublicOffline).toHaveBeenCalledWith(HASH, 'backfill-uncased');
     expect(audit).toHaveBeenLastCalledWith(expect.objectContaining({ details: expect.objectContaining({ caseId: null }) }));
+  });
+
+  it('enforce: with no case open, a flag that was cleared meanwhile takes nothing offline', async () => {
+    findScanVerdict.mockResolvedValue({ verdict: 'flagged', outcome: 'classifier_flag', scannedAt: new Date() });
+    const { deps, actions } = build('enforce', flag);
+    actions.findReviewCaseId.mockResolvedValueOnce(null);
+    // Staff dismissed the case after the gate read the cached flag: the hash is clean now.
+    actions.currentVerdict.mockResolvedValueOnce({ verdict: 'clean', outcome: 'clean', scannedAt: new Date() });
+    await expect(deps.process(asset, listed)).resolves.toMatchObject({ finding: 'flagged', removed: false });
+    expect(actions.takePublicOffline).not.toHaveBeenCalled();
+  });
+
+  it('a hash-match takedown another run is still carrying out takes the public copy down here too, with its hold', async () => {
+    executeTakedown.mockResolvedValue({ action: 'global', caseId: 'case-td', inProgress: true });
+    const { deps, actions } = build('enforce', match);
+    await expect(deps.process(asset, listed)).resolves.toMatchObject({ finding: 'hash_match', removed: true });
+    expect(actions.takePublicOffline).toHaveBeenCalledWith(HASH, 'case-td');
   });
 
   it('enforce: a hold that fails leaves the public copy up and stops the walk before the item', async () => {

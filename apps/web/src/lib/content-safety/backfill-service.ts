@@ -5,10 +5,10 @@ import { PutObjectCommand } from '@aws-sdk/client-s3';
 import { audit } from '@pagespace/lib/audit/audit-log';
 import type { BackfillDeps, BackfillItemOutcome, BackfillTarget, DryRunDeps, ListedObject } from '@pagespace/lib/content-safety/backfill';
 import { claimBackfillCursor, saveBackfillCursor } from '@pagespace/lib/content-safety/backfill-store';
-import { errorLabel, evaluatePublishAsset, type PublishGateDeps, type PublishGateEvaluation } from '@pagespace/lib/content-safety/publish-gate';
+import { errorLabel, evaluatePublishAsset, type PublishGateDeps, type PublishGateEvaluation, type StoredVerdict } from '@pagespace/lib/content-safety/publish-gate';
 import type { ScanGateConfig } from '@pagespace/lib/content-safety/scan-mode';
 import { findBlockCaseId } from '@pagespace/lib/content-safety/blocklist';
-import { findOpenReviewCaseId, findScanVerdicts } from '@pagespace/lib/content-safety/scan-store';
+import { findOpenReviewCaseId, findScanVerdict, findScanVerdicts } from '@pagespace/lib/content-safety/scan-store';
 import { holdKeyFor } from '@pagespace/lib/content-safety/takedown';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
@@ -83,6 +83,8 @@ export interface BackfillActions {
   findBlockCaseId(contentHash: string): Promise<string | null>;
   /** The case under review (`reported`) for a hash, if any: a flag decided from a stored verdict carries no case ID. */
   findReviewCaseId(contentHash: string): Promise<string | null>;
+  /** The hash's stored verdict now: whether a flag with no open case still stands. */
+  currentVerdict(contentHash: string): Promise<StoredVerdict | null>;
 }
 
 async function defaultRemoveAvatar(userId: string): Promise<void> {
@@ -135,6 +137,7 @@ const defaultActions: BackfillActions = {
   takedownAvatar: defaultTakedownAvatar,
   findBlockCaseId,
   findReviewCaseId: findOpenReviewCaseId,
+  currentVerdict: findScanVerdict,
 };
 
 function auditUnpublished(details: { kind: 'asset' | 'avatar'; contentHash: string; mode: string; finding: string; caseId: string | null; userId?: string }): void {
@@ -161,9 +164,13 @@ export function createBackfillDeps(
    * The review case a flagged copy is held under: the gate's, else the one open for the hash. `holdKey` falls back
    * to the uncased namespace; `caseId` stays null then, for the audit.
    */
-  async function flaggedCase(contentHash: string, caseId: string | null): Promise<{ caseId: string | null; holdKey: string }> {
+  async function flaggedCase(contentHash: string, caseId: string | null): Promise<{ caseId: string | null; holdKey: string } | null> {
     const resolved = caseId ?? (await actions.findReviewCaseId(contentHash));
     if (resolved) return { caseId: resolved, holdKey: resolved };
+    // No case open: staff may have dismissed it since the gate read the cached flag. Act only on a flag that still
+    // stands (this narrows the window; a dismissal can still land between here and the takedown).
+    const now = await actions.currentVerdict(contentHash);
+    if (!(now?.verdict === 'flagged' && now.outcome === 'classifier_flag')) return null;
     loggers.security.error('Backfill: a flagged copy has no review case; it is held under content-hold/backfill-uncased/', undefined, { contentHash });
     return { caseId: null, holdKey: UNCASED_HOLD };
   }
@@ -181,7 +188,8 @@ export function createBackfillDeps(
           takedown = 'no_case';
           const result = await runHashMatchTakedown({ contentHash, lists, source: 'the backfill scan' });
           takedownCaseId = result.caseId ?? null;
-          takedown = !takedownCaseId ? 'no_case' : result.failedStep ? 'needs_public_hold' : 'done';
+          // Another run still carrying the case out has not necessarily unpublished yet: hold and unpublish here too.
+          takedown = !takedownCaseId ? 'no_case' : result.failedStep || result.inProgress ? 'needs_public_hold' : 'done';
           return { caseId: result.caseId };
         },
       }),
@@ -215,9 +223,11 @@ export function createBackfillDeps(
       // Not a block, so nothing is deleted for good: the public copy is kept privately under the review case
       // first (it can be the only copy left), then taken off the web. The review case decides.
       const held = await flaggedCase(target.contentHash, evaluation.caseId);
-      await actions.takePublicOffline(target.contentHash, held.holdKey);
-      removed = true;
-      auditUnpublished({ kind: 'asset', contentHash: target.contentHash, mode: config.mode, finding: evaluation.finding, caseId: held.caseId });
+      if (held) {
+        await actions.takePublicOffline(target.contentHash, held.holdKey);
+        removed = true;
+        auditUnpublished({ kind: 'asset', contentHash: target.contentHash, mode: config.mode, finding: evaluation.finding, caseId: held.caseId });
+      }
     }
     return outcome(evaluation, removed);
   }
@@ -331,10 +341,12 @@ export function createBackfillDeps(
       // The removal deletes the only copy: keep the scanned bytes privately under the review case first. If that
       // fails, this throws and the avatar stays until a later tick can keep them.
       const held = await flaggedCase(contentHash, evaluation.caseId);
-      await actions.holdAvatarBytes(held.holdKey, contentHash, bytes);
-      await actions.removeAvatar(target.userId);
-      removed = true;
-      auditUnpublished({ kind: 'avatar', contentHash, mode: config.mode, finding: evaluation.finding, caseId: held.caseId, userId: target.userId });
+      if (held) {
+        await actions.holdAvatarBytes(held.holdKey, contentHash, bytes);
+        await actions.removeAvatar(target.userId);
+        removed = true;
+        auditUnpublished({ kind: 'avatar', contentHash, mode: config.mode, finding: evaluation.finding, caseId: held.caseId, userId: target.userId });
+      }
     }
     return outcome(evaluation, removed);
   }

@@ -291,8 +291,10 @@ export interface DryRunDeps {
 
 export interface DryRunCounts {
   /**
-   * `bytesToRead`: the listed sizes of the public copies a scan reads. A hash listed only as a derived copy is
-   * scanned from its private original, whose size the listing does not give: counted in `unknownSizeReads`.
+   * First-attempt estimates, one scan candidate per hash: the object listed first. `bytesToRead` is its listed size
+   * when it is a public copy; when it is a derived copy the scan reads the private original, of unlisted size, and
+   * the hash is counted in `unknownSizeReads` (even if a direct copy is listed later, which a retry might read).
+   * Retries after an error are not counted.
    */
   assets: { objects: number; hashes: number; fresh: number; needScan: number; bytesToRead: number; unknownSizeReads: number; ignored: number };
   avatars: { objects: number; bytesToRead: number; ignored: number };

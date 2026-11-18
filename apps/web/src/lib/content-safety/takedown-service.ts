@@ -419,6 +419,9 @@ export async function hideUserAvatar(userId: string): Promise<void> {
  * the profile image.
  */
 export async function removeUserAvatar(userId: string): Promise<void> {
-  await deleteAvatarObjects(userId);
+  // The profile first: if the delete then fails, the stored avatar is still listed and the next tick retries the
+  // removal (the backfill re-checks it is the same avatar). The other order would leave a profile image pointing
+  // at deleted objects with nothing left to list.
   await clearProfileImage(userId);
+  await deleteAvatarObjects(userId);
 }
