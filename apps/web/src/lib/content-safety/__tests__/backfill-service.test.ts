@@ -289,10 +289,19 @@ describe('backfill service: avatars', () => {
     expect(actions.removeAvatar).toHaveBeenCalled();
   });
 
+  it('a global takedown that left no case stops the walk even when the hide finds the profile showing another image', async () => {
+    executeTakedown.mockRejectedValue(new Error('db down'));
+    const { deps, actions } = build('enforce', match);
+    actions.hideAvatar.mockResolvedValueOnce(false);
+    await expect(deps.process(avatar, listed)).rejects.toThrow('no case');
+    expect(actions.removeAvatar).not.toHaveBeenCalled();
+    expect(securityLog.error).toHaveBeenCalledWith(expect.stringContaining('no case'), undefined, expect.objectContaining({ contentHash: PNG_HASH }));
+  });
+
   it('a global takedown that left no case (no block, no alert) is not followed by a delete: the avatar is hidden and retried', async () => {
     executeTakedown.mockRejectedValue(new Error('db down'));
     const { deps, actions } = build('enforce', match);
-    await expect(deps.process(avatar, listed)).rejects.toThrow('hidden but not yet deleted');
+    await expect(deps.process(avatar, listed)).rejects.toThrow('no case');
     expect(actions.removeAvatar).not.toHaveBeenCalled();
     expect(actions.hideAvatar).toHaveBeenCalled();
   });

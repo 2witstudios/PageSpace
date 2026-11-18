@@ -283,9 +283,15 @@ export function createBackfillDeps(
                 if (!staged) await stageLastCopy(hash);
               } else if (staged && !globalCaseId) {
                 // The global takedown left no case: no block, no alert, nothing the resweep can resume. Deleting the
-                // avatar now would take the only trace out of the listing; hide it, and the walk retries the item.
-                avatarHidden = await actions.hideAvatar(scannedAvatar);
-                if (!avatarHidden) await stageLastCopy(hash);
+                // avatar now would take the only trace out of the listing. It is hidden (if the profile still shows
+                // it), and the item ALWAYS fails, whatever the hide found, so the walk stops here and retries the
+                // takedown next tick. The bytes are staged at files/<hash>/original either way.
+                await actions.hideAvatar(scannedAvatar);
+                loggers.security.error('Backfill: a hash-match takedown left no case; the avatar is kept and the item retried', undefined, {
+                  contentHash: hash,
+                  userId: target.userId,
+                });
+                throw new Error('Hash-match takedown left no case; the avatar was not deleted and the item is retried');
               } else if (staged) {
                 // The avatar comes down even if the global takedown stopped part-way (its case is resumable). Its bytes
                 // are staged at files/<hash>/original, which the global case preserves as evidence, so the avatar
