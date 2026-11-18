@@ -38,9 +38,10 @@ import { READ_TIMEOUT_MS, createPublishGateDeps, readPrivateSource, runHashMatch
  *
  * - **blocked** (a blocklisted hash still being served): its public copy is
  *   removed, in every mode.
- * - **hash_match** on an avatar: the bytes are staged for preservation before
- *   the global takedown, and the avatar is then removed through an `avatar`
- *   takedown case. (For an asset, the global takedown removes the public copy.)
+ * - **hash_match** on an avatar: the bytes are staged at `files/<hash>/original`
+ *   before the global takedown, which preserves them as evidence; the scanned
+ *   avatar object is then removed by hash and ETag (`avatar-removal.ts`), never
+ *   a replacement. (For an asset, the global takedown removes the public copy.)
  * - **classifier flag** under enforce: the public copy, or the avatar, is taken
  *   off the web (`content.backfill.unpublished`), after a verified private copy
  *   is kept under the review case (`content-hold/<case>/<hash>`): it may be the
@@ -79,11 +80,6 @@ export interface BackfillActions {
   removeAvatar(avatar: AvatarRemovalTarget): Promise<boolean>;
   /** Stop showing the scanned avatar without deleting it, for when its bytes can't be preserved yet. False: replaced. */
   hideAvatar(avatar: AvatarRemovalTarget): Promise<boolean>;
-  /**
-   * Run an avatar takedown case. True once the case is actioned (the avatar is gone); false when it stopped
-   * without deleting it: CSAM waiting for evidence storage, or another run of the case under way.
-   */
-  takedownAvatar(userId: string, reason: string): Promise<boolean>;
   /** The case that blocked a hash, if any. */
   findBlockCaseId(contentHash: string): Promise<string | null>;
   /** The case under review (`reported`) for a hash, if any: a flag decided from a stored verdict carries no case ID. */
@@ -94,21 +90,6 @@ export interface BackfillActions {
 
 async function defaultRemoveAvatar(avatar: AvatarRemovalTarget): Promise<boolean> {
   return (await removeScannedAvatar(avatar)) === 'removed';
-}
-
-async function defaultTakedownAvatar(userId: string, reason: string): Promise<boolean> {
-  const { executeTakedown } = await import('./takedown-service');
-  const response = await executeTakedown({ action: 'avatar', userId, category: 'csam', reason }, null);
-  if (response.failedStep) throw new Error(`Avatar takedown stopped at ${response.failedStep}`);
-  if (response.inProgress || response.status !== 'actioned') {
-    loggers.security.error('Backfill: the avatar takedown did not delete the avatar; it is hidden and retried', undefined, {
-      caseId: response.caseId ?? null,
-      status: response.status ?? null,
-      inProgress: response.inProgress ?? false,
-    });
-    return false;
-  }
-  return true;
 }
 
 async function defaultHideAvatar(avatar: AvatarRemovalTarget): Promise<boolean> {
@@ -137,7 +118,6 @@ const defaultActions: BackfillActions = {
   holdAvatarBytes: defaultHoldAvatarBytes,
   removeAvatar: defaultRemoveAvatar,
   hideAvatar: defaultHideAvatar,
-  takedownAvatar: defaultTakedownAvatar,
   findBlockCaseId,
   findReviewCaseId: findOpenReviewCaseId,
   currentVerdict: findScanVerdict,
@@ -293,23 +273,20 @@ export function createBackfillDeps(
             // The gate swallows a throw from here (it logs a failed takedown), so a failure to take the avatar
             // down is carried out and thrown below: the walk stops before the item and retries it.
             try {
+              // The global case is keyed by the hash and names no user: name the uploader beside it for staff.
+              loggers.security.error('Backfill: a hash-matched avatar; its uploader is not on the global case', undefined, {
+                caseId: globalCaseId,
+                userId: target.userId,
+              });
               if (!(await stillCurrent())) {
-                // Replaced: these bytes are no longer served, and the block above keeps them from coming back. No
-                // avatar case opens (there is nothing left to delete), so the global case is the only record: name
-                // the uploader beside it for staff.
-                loggers.security.error('Backfill: a hash-matched avatar was replaced before it could be taken down; its uploader is not on the case', undefined, {
-                  caseId: globalCaseId,
-                  userId: target.userId,
-                });
+                // Replaced: these bytes are no longer served, and the block above keeps them from coming back.
                 if (!staged) await stageLastCopy(hash);
               } else if (staged) {
-                // The avatar comes down even if the global takedown stopped part-way (its case is resumable).
-                if (await actions.takedownAvatar(target.userId, 'Hash match from the backfill scan of this avatar')) {
-                  avatarTakenDown = true;
-                } else {
-                  // Not deleted (CSAM waiting for evidence storage, or a run already under way): stop showing it.
-                  avatarHidden = await actions.hideAvatar(scannedAvatar);
-                }
+                // The avatar comes down even if the global takedown stopped part-way (its case is resumable). Its bytes
+                // are staged at files/<hash>/original, which the global case preserves as evidence, so the avatar
+                // object itself goes the way any scanned avatar does: that object only, by hash and ETag (never the
+                // user-wide avatar takedown, which deletes whatever the user has by then). False: replaced, kept.
+                avatarTakenDown = await actions.removeAvatar(scannedAvatar);
               } else {
                 // The avatar is the only copy: it stops being shown, and is deleted once a later pass can stage it
                 // (the hash is then blocked, and the blocked path below stages before it deletes).

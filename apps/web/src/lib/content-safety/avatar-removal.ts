@@ -16,12 +16,14 @@ import { isS3NotFound, readS3ObjectBounded } from '@/lib/storage/s3-objects';
  *
  * 1. The profile image is read first. It carries a per-upload `?t=` version.
  * 2. The stored object is read and must still hash to the scanned bytes; its ETag is kept.
- * 3. The profile image is cleared only if it is still the value read in 1: a replacement's own URL survives.
- * 4. The object is deleted only if its ETag is still the one read in 2 (S3 `If-Match`): a replacement stored
- *    meanwhile survives.
+ * 3. The profile image is cleared only if it points at the scanned key AND is still the value read in 1: a
+ *    replacement's own URL, or a profile showing another file (a newer avatar, an OAuth picture), survives.
+ * 4. Right before the delete, the object is read again and must still be the scanned one (same hash, same
+ *    ETag): that is what keeps a replacement on storage with no ETags or that ignores `If-Match`.
+ * 5. The object is deleted only if its ETag is still the one read in 2 (S3 `If-Match`).
  *
- * A replacement at any point is left stored and visible. Storage that ignores `If-Match` falls back to an
- * unconditional delete of that one key.
+ * A replacement at any point is left stored and visible. What remains, on storage with no conditional delete, is
+ * an upload landing between step 4 and the delete.
  */
 
 export interface AvatarRemovalTarget {
@@ -45,6 +47,13 @@ const READ_TIMEOUT_MS = 10_000;
 
 const sha256 = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 
+/** Whether a profile image is our URL for this avatar key (`/api/avatar/<user>/<file>[?t=…]` ↔ `avatars/<user>/<file>`). */
+export function imagePointsAt(image: string, key: string): boolean {
+  const path = image.split(/[?#]/)[0];
+  const match = /^\/api\/avatar\/([^/]+)\/([^/]+)$/.exec(path);
+  return match !== null && `avatars/${match[1]}/${match[2]}` === key;
+}
+
 /**
  * Steps 1-3. Null when the stored avatar is no longer the scanned one. `profileChanged`: the profile image moved on
  * since step 1 (a replacement's URL, or one the user set), so it was left as it is.
@@ -53,7 +62,9 @@ async function clearIfScanned(target: AvatarRemovalTarget, store: AvatarRemovalS
   const image = await store.readProfileImage(target.userId);
   const object = await store.readObject(target.key);
   if (!object || sha256(object.bytes) !== target.contentHash) return null;
-  const profileChanged = image !== null && !(await store.clearProfileImageIf(target.userId, image));
+  // Only our URL for this very key is cleared, and only if it has not moved on since step 1.
+  const pointsHere = image !== null && imagePointsAt(image, target.key);
+  const profileChanged = image !== null && (!pointsHere || !(await store.clearProfileImageIf(target.userId, image)));
   return { etag: object.etag, profileChanged };
 }
 
@@ -62,6 +73,9 @@ export async function removeScannedAvatar(target: AvatarRemovalTarget, store: Av
   const scanned = await clearIfScanned(target, store);
   if (!scanned) return 'replaced';
   // Deleted even if the profile moved on: the object, checked by its ETag, is still the scanned avatar.
+  // Step 4: still the scanned object? (Covers storage that has no ETags or ignores If-Match.)
+  const again = await store.readObject(target.key);
+  if (!again || sha256(again.bytes) !== target.contentHash || again.etag !== scanned.etag) return 'replaced';
   // A failed delete throws after the clear: the object is still listed, and the next tick retries the removal.
   const deleted = await store.deleteObjectIf(target.key, scanned.etag);
   return deleted === 'changed' ? 'replaced' : 'removed';

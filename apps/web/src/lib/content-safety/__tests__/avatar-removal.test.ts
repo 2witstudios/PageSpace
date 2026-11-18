@@ -11,11 +11,15 @@ const target = { userId: 'user-1', key: 'avatars/user-1/avatar.png', contentHash
  * An in-memory user row and avatar object, with the same conditional semantics as Postgres (`where image = $1`)
  * and S3 (`DeleteObject If-Match`). `between` runs a concurrent upload at a chosen point of the removal.
  */
-function world(options: { between?: 'read_image' | 'read_object' | 'clear' } = {}) {
-  const state = { image: '/api/avatar/user-1/avatar.png?t=1' as string | null, object: { bytes: SCANNED, etag: '"a"' } as { bytes: Uint8Array; etag: string } | null };
+function world(options: { between?: 'read_image' | 'read_object' | 'clear'; etag?: boolean; image?: string } = {}) {
+  const etags = options.etag === false ? [null, null] : ['"a"', '"b"'];
+  const state = {
+    image: (options.image ?? '/api/avatar/user-1/avatar.png?t=1') as string | null,
+    object: { bytes: SCANNED, etag: etags[0] } as { bytes: Uint8Array; etag: string | null } | null,
+  };
   const upload = () => {
     // The processor stores the new avatar at the same key, then the account route points the profile at it.
-    state.object = { bytes: REPLACEMENT, etag: '"b"' };
+    state.object = { bytes: REPLACEMENT, etag: etags[1] };
     state.image = '/api/avatar/user-1/avatar.png?t=2';
   };
   const store: AvatarRemovalStore = {
@@ -26,7 +30,8 @@ function world(options: { between?: 'read_image' | 'read_object' | 'clear' } = {
     }),
     readObject: vi.fn(async () => {
       const object = state.object;
-      if (options.between === 'read_object') upload();
+      // Only the first read (the check) is followed by the upload; the re-read before the delete sees the result.
+      if (options.between === 'read_object' && vi.mocked(store.readObject).mock.calls.length === 1) upload();
       return object;
     }),
     clearProfileImageIf: vi.fn(async (_userId: string, expected: string) => {
@@ -73,6 +78,21 @@ describe('removeScannedAvatar', () => {
     expect(state.image).toContain('t=2');
   });
 
+  it('on storage with no ETag, a replacement stored after the profile was cleared is still kept', async () => {
+    const { state, store } = world({ between: 'clear', etag: false });
+    await expect(removeScannedAvatar(target, store)).resolves.toBe('replaced');
+    expect(state.object?.bytes).toEqual(REPLACEMENT);
+  });
+
+  it('a profile image pointing at another file is left alone; the scanned leftover object is still deleted', async () => {
+    // A stale avatar.png left by a best-effort cleanup while the profile shows the current avatar.jpg.
+    const { state, store } = world({ image: '/api/avatar/user-1/avatar.jpg?t=5' });
+    await expect(removeScannedAvatar(target, store)).resolves.toBe('removed');
+    expect(state.image).toBe('/api/avatar/user-1/avatar.jpg?t=5');
+    expect(state.object).toBeNull();
+    expect(store.clearProfileImageIf).not.toHaveBeenCalled();
+  });
+
   it('a delete that fails throws after the profile was cleared, so the stored avatar is found and retried', async () => {
     const { state, store } = world();
     vi.mocked(store.deleteObjectIf).mockRejectedValueOnce(new Error('s3 down'));
@@ -88,6 +108,12 @@ describe('hideScannedAvatar', () => {
     await expect(hideScannedAvatar(target, store)).resolves.toBe('hidden');
     expect(state.image).toBeNull();
     expect(state.object?.bytes).toEqual(SCANNED);
+  });
+
+  it('never clears a profile image that points at another file', async () => {
+    const { state, store } = world({ image: 'https://lh3.googleusercontent.com/a/photo' });
+    await expect(hideScannedAvatar(target, store)).resolves.toBe('replaced');
+    expect(state.image).toBe('https://lh3.googleusercontent.com/a/photo');
   });
 
   it('never clears a replacement\'s profile image', async () => {
