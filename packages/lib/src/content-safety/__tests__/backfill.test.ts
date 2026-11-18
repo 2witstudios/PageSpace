@@ -222,6 +222,13 @@ describe('runBackfillDryRun', () => {
     expect(deps.claim).not.toHaveBeenCalled();
   });
 
+  it('counts a vendor call for every object of a hash that needs a scan: a failed scan is retried on its derived copy', async () => {
+    const deps = dryWorld([`assets/${h(1)}`, `assets/cache/${h(1)}/thumbnail.webp`, `assets/cache/${h(1)}/preview.webp`, `assets/${h(2)}`, `assets/cache/${h(2)}/thumbnail.webp`], [], { [h(2)]: fresh });
+    const result = await runBackfillDryRun(deps, { verdictTtlMs: 30 * DAY, maxPages: 10 });
+    expect(result.counts.assets).toMatchObject({ objects: 5, hashes: 2, fresh: 1, needScan: 1 });
+    expect(result.estimatedVendorCalls).toBe(3);
+  });
+
   it('stops after maxPages and says where to continue', async () => {
     const deps = dryWorld([`assets/${h(1)}`], ['avatars/u1/avatar.png'], {});
     const result = await runBackfillDryRun(deps, { verdictTtlMs: 30 * DAY, maxPages: 1 });

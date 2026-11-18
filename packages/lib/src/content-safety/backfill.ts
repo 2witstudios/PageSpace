@@ -331,17 +331,23 @@ export async function runBackfillDryRun(
   let phaseIndex = Math.max(0, BACKFILL_PHASES.indexOf(options.from?.phase ?? 'assets'));
   let startAfter = options.from?.startAfter ?? null;
   let pages = 0;
+  // An upper bound: one call per object of a hash with no reusable verdict. The walk reuses a hash's verdict for
+  // its other objects (a derived copy) only when the first scan stored one; after a scan error it scans again.
+  const needsScan = new Set<string>();
+  let assetCalls = 0;
 
   while (phaseIndex < BACKFILL_PHASES.length) {
     const phase = BACKFILL_PHASES[phaseIndex];
     if (pages >= options.maxPages) {
-      return { counts, estimatedVendorCalls: counts.assets.needScan + counts.avatars.objects, next: { phase, startAfter: startAfter ?? '' } };
+      return { counts, estimatedVendorCalls: assetCalls + counts.avatars.objects, next: { phase, startAfter: startAfter ?? '' } };
     }
     const page = await deps.list(phase, startAfter, DRY_RUN_PAGE);
     pages += 1;
 
     if (phase === 'assets') {
       const fresh: Array<{ hash: string; size: number }> = [];
+      // Further objects on this page of a hash first seen on this page.
+      const pendingCopies = new Map<string, number>();
       for (const object of page.objects) {
         const target = parseBackfillKey(phase, object.key);
         if (!target || target.kind !== 'asset') {
@@ -349,7 +355,12 @@ export async function runBackfillDryRun(
           continue;
         }
         counts.assets.objects += 1;
-        if (seen.has(target.contentHash)) continue;
+        if (seen.has(target.contentHash)) {
+          // Decided on an earlier page, or still to be decided on this one (counted below with its first object).
+          if (needsScan.has(target.contentHash)) assetCalls += 1;
+          else pendingCopies.set(target.contentHash, (pendingCopies.get(target.contentHash) ?? 0) + 1);
+          continue;
+        }
         seen.add(target.contentHash);
         fresh.push({ hash: target.contentHash, size: object.size });
       }
@@ -361,8 +372,11 @@ export async function runBackfillDryRun(
         } else {
           counts.assets.needScan += 1;
           counts.assets.bytesToRead += size;
+          needsScan.add(hash);
+          assetCalls += 1 + (pendingCopies.get(hash) ?? 0);
         }
       }
+      pendingCopies.clear();
     } else {
       for (const object of page.objects) {
         if (!parseBackfillKey(phase, object.key)) {
@@ -382,5 +396,5 @@ export async function runBackfillDryRun(
       startAfter = null;
     }
   }
-  return { counts, estimatedVendorCalls: counts.assets.needScan + counts.avatars.objects, next: null };
+  return { counts, estimatedVendorCalls: assetCalls + counts.avatars.objects, next: null };
 }
