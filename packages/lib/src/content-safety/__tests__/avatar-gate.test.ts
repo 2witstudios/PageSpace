@@ -25,7 +25,7 @@ function setup(options: { mode?: 'off' | 'shadow' | 'enforce'; result?: ScanResu
     findVerdict: vi.fn(async () => null),
     recordVerdict: vi.fn(async (): Promise<{ keptFlag: boolean; keptHashMatch?: boolean }> => ({ keptFlag: false })),
     takedownHashMatch: vi.fn(async () => ({ caseId: 'case-td' })),
-    openReviewCase: vi.fn(async () => ({ caseId: 'case-rv', created: true, firstFlag: true })),
+    openReviewCase: vi.fn(async (): Promise<{ caseId: string; created: boolean; firstFlag: boolean; keptHashMatch?: boolean }> => ({ caseId: 'case-rv', created: true, firstFlag: true })),
     alert: vi.fn(async () => undefined),
     audit: vi.fn(),
     auditRejected: vi.fn(),
@@ -129,6 +129,12 @@ describe('gateAvatarUpload', () => {
   it('shadow refuses an avatar whose hash was blocked while it was scanned (its clean result lost to the match)', async () => {
     const { deps } = setup({ mode: 'shadow' });
     deps.recordVerdict.mockResolvedValueOnce({ keptFlag: true, keptHashMatch: true });
+    await expect(gateAvatarUpload({ bytes: PNG, userId: 'user-1' }, deps)).resolves.toMatchObject({ accept: false, finding: 'blocked' });
+  });
+
+  it('shadow refuses a flagged avatar whose hash was blocked while it was scanned', async () => {
+    const { deps } = setup({ mode: 'shadow', result: flag });
+    deps.openReviewCase.mockResolvedValueOnce({ caseId: 'case-rv', created: true, firstFlag: true, keptHashMatch: true });
     await expect(gateAvatarUpload({ bytes: PNG, userId: 'user-1' }, deps)).resolves.toMatchObject({ accept: false, finding: 'blocked' });
   });
 

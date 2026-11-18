@@ -174,7 +174,7 @@ export interface PublishGateDeps {
     score: number;
     mode: 'shadow' | 'enforce';
     scores: Record<string, unknown>;
-  }): Promise<{ caseId: string; created: boolean; firstFlag: boolean }>;
+  }): Promise<{ caseId: string; created: boolean; firstFlag: boolean; keptHashMatch?: boolean }>;
   alert(alert: ScanAlert): Promise<void>;
   audit(event: ScanAuditEvent): void;
   /** Called with a configuration problem, every time; the caller logs it once. */
@@ -294,6 +294,8 @@ export async function evaluatePublishAsset(input: PublishGateInput, deps: Publis
   // with nobody reviewing it until the verdict expired: that is what a separate write after the case could do,
   // landing after an admin dismissed the case and recorded the hash clean. If the case cannot be opened, an error
   // verdict is recorded instead: the next publish scans again and retries the case.
+  let flagLostToHashMatch = false;
+  let blockedMidScan = false;
   let record = decision.record;
   let scores = scoresFor(outcome, contentType, sniffedText);
   if (decision.reviewCase && outcome.kind === 'scanned' && outcome.result.kind === 'classifier_flag') {
@@ -308,6 +310,8 @@ export async function evaluatePublishAsset(input: PublishGateInput, deps: Publis
       });
       caseId = opened.caseId;
       record = null;
+      // The flag's verdict lost to a standing hash match: the hash was blocked while this scan ran.
+      if (opened.keptHashMatch) flagLostToHashMatch = true;
       if (opened.created || opened.firstFlag) {
         await deps.alert({ event: 'scan_flagged', caseId: opened.caseId, category: 'csam' }).catch((error: unknown) =>
           deps.logError('Publish gate: the alert for a flagged scan failed', { ...context, caseId: opened.caseId, error: errorLabel(error) }),
@@ -321,9 +325,12 @@ export async function evaluatePublishAsset(input: PublishGateInput, deps: Publis
   }
 
   let promote = decision.promote;
+  if (flagLostToHashMatch) {
+    blockedMidScan = true;
+    promote = false;
+  }
   // Set when this result lost to a verdict that stands (a classifier flag, or a hash match on a blocked hash).
   let keptFlag = false;
-  let blockedMidScan = false;
   if (record) {
     const written = await deps
       .recordVerdict({

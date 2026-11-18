@@ -174,7 +174,7 @@ export async function openScanReviewCase(input: {
   mode: ContentScanMode;
   /** Stored on the verdict, with the case ID added. */
   scores: Record<string, unknown>;
-}, now: Date = new Date()): Promise<{ caseId: string; created: boolean; firstFlag: boolean }> {
+}, now: Date = new Date()): Promise<{ caseId: string; created: boolean; firstFlag: boolean; keptHashMatch?: boolean }> {
   const scan: NonNullable<ContentCaseSnapshot['scan']> = {
     source: 'scan_flagged',
     provider: input.provider,
@@ -183,6 +183,9 @@ export async function openScanReviewCase(input: {
     mode: input.mode,
     flaggedAt: now.toISOString(),
   };
+  // A flag's write is refused only by a standing hash match (its hash blocked while this scan ran): say so, so the
+  // gate refuses the file in every mode. The case still opens: staff see the flag.
+  const keptMatch = (written: boolean): { keptHashMatch?: true } => (written ? {} : { keptHashMatch: true });
   const recordFlag = (tx: Tx, caseId: string) =>
     upsertVerdict(
       tx,
@@ -219,8 +222,8 @@ export async function openScanReviewCase(input: {
         })
         .returning({ id: contentCases.id });
       if (opened) {
-        await recordFlag(tx, opened.id);
-        return { caseId: opened.id, created: true, firstFlag: true };
+        const written = await recordFlag(tx, opened.id);
+        return { caseId: opened.id, created: true, firstFlag: true, ...keptMatch(written) };
       }
 
       // Lock the case under review, as a report does, and see whether it was already flagged.
@@ -242,8 +245,8 @@ export async function openScanReviewCase(input: {
         })
         .where(eq(contentCases.id, current.id))
         .returning({ id: contentCases.id });
-      await recordFlag(tx, existing.id);
-      return { caseId: existing.id, created: false, firstFlag };
+      const written = await recordFlag(tx, existing.id);
+      return { caseId: existing.id, created: false, firstFlag, ...keptMatch(written) };
     }
     throw new Error('The case under review for this hash kept closing while a scan flag was being filed');
   });

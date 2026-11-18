@@ -44,7 +44,7 @@ function setup(options: {
     readSource: vi.fn(async () => ({ bytes: options.bytes ?? PNG, complete: options.complete ?? true })),
     recordVerdict: vi.fn(async (): Promise<{ keptFlag: boolean; keptHashMatch?: boolean }> => ({ keptFlag: false })),
     takedownHashMatch: vi.fn(async () => ({ caseId: 'case-td' })),
-    openReviewCase: vi.fn(async () => ({ caseId: 'case-rv', created: true, firstFlag: true })),
+    openReviewCase: vi.fn(async (): Promise<{ caseId: string; created: boolean; firstFlag: boolean; keptHashMatch?: boolean }> => ({ caseId: 'case-rv', created: true, firstFlag: true })),
     alert: vi.fn(async () => undefined),
     audit: vi.fn(),
     reportMisconfiguration: vi.fn(),
@@ -109,6 +109,14 @@ describe('gatePublishAsset', () => {
     for (const mode of ['shadow', 'enforce'] as const) {
       const { deps } = setup({ mode });
       deps.recordVerdict.mockResolvedValueOnce({ keptFlag: true, keptHashMatch: true });
+      await expect(evaluatePublishAsset(input, deps)).resolves.toMatchObject({ promote: false, reason: 'blocked', finding: 'blocked' });
+    }
+  });
+
+  it('a classifier flag whose verdict lost to a standing hash match is refused as blocked in every mode', async () => {
+    for (const mode of ['shadow', 'enforce'] as const) {
+      const { deps } = setup({ mode, result: flag });
+      deps.openReviewCase.mockResolvedValueOnce({ caseId: 'case-rv', created: true, firstFlag: true, keptHashMatch: true });
       await expect(evaluatePublishAsset(input, deps)).resolves.toMatchObject({ promote: false, reason: 'blocked', finding: 'blocked' });
     }
   });

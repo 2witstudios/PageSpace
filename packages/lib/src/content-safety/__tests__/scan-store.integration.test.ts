@@ -221,7 +221,10 @@ describe('scan store', () => {
     await expect(
       recordScanVerdict({ contentHash: hash, verdict: 'clean', outcome: 'clean', provider: 'hive', mode: 'enforce', scores: {} }),
     ).resolves.toEqual({ keptFlag: true, keptHashMatch: true });
-    await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.95, mode: 'enforce', scores: {} });
+    // A late classifier flag still opens its review case, but its verdict cannot replace the match, and it says so.
+    await expect(
+      openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.95, mode: 'shadow', scores: {} }),
+    ).resolves.toMatchObject({ keptHashMatch: true });
     expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'flagged', outcome: 'hash_match' });
 
     // Unblocked (a false match staff lifted): the next scan is recorded.
