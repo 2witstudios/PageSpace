@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { pgTable, text, timestamp, jsonb, index, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, index, uniqueIndex, integer } from 'drizzle-orm/pg-core';
 import { createId } from '@paralleldrive/cuid2';
 
 /**
@@ -26,14 +26,16 @@ export type ContentBlockSource = 'admin' | 'hash_match' | 'report';
  * `clean`: scanned, nothing found (cached for a TTL). `flagged`: a hash match or a
  * classifier hit. `error`: the scan failed or timed out (retried on the next
  * publish). `unscanned`: a type the scanner cannot read (PDFs, archives, …).
+ * `unverified` (PR 5): a video whose hash pass ran clean but for which the
+ * classifier returned nothing, so it was never actually classified.
  */
-export type ContentScanVerdict = 'clean' | 'flagged' | 'error' | 'unscanned';
+export type ContentScanVerdict = 'clean' | 'flagged' | 'error' | 'unscanned' | 'unverified';
 
 /** The publish gate's mode when a verdict was recorded (PR 4). */
 export type ContentScanMode = 'shadow' | 'enforce';
 
 /** The scanner's own result kind, finer than the verdict (PR 4). */
-export type ContentScanOutcome = 'clean' | 'hash_match' | 'classifier_flag' | 'error' | 'unsupported_type';
+export type ContentScanOutcome = 'clean' | 'hash_match' | 'classifier_flag' | 'error' | 'unsupported_type' | 'unverified';
 
 export type ContentCaseTargetType =
   | 'content_hash'
@@ -274,6 +276,49 @@ export const contentSiteHolds = pgTable(
   }),
 );
 
+/** Which public surface the backfill is walking. `done`: the pass finished. */
+export type ContentScanBackfillPhase = 'assets' | 'avatars' | 'done';
+
+/** What one backfill pass has done so far. Counts only. */
+export interface ContentScanBackfillCounts {
+  listed: number;
+  skippedFresh: number;
+  scanned: number;
+  clean: number;
+  flagged: number;
+  hashMatch: number;
+  errors: number;
+  unscanned: number;
+  unverified: number;
+  blocked: number;
+  removed: number;
+  /** Keys under the prefix that are not a public asset or avatar the walk knows (left alone). */
+  ignored: number;
+}
+
+/**
+ * The backfill-and-rescan cursor (PR 5): one row per walker. The walk lists the
+ * publish bucket's `assets/` and then the uploads bucket's `avatars/`, a page at
+ * a time, and records the last key it finished so the next tick resumes there.
+ * `leaseUntil` keeps two ticks (two cron containers, a manual run) from walking
+ * at once.
+ */
+export const contentScanBackfill = pgTable('content_scan_backfill', {
+  id: text('id').primaryKey(),
+  phase: text('phase').$type<ContentScanBackfillPhase>().notNull(),
+  // The last key finished in the current phase; null at the start of a phase.
+  startAfter: text('start_after'),
+  pass: integer('pass').notNull().default(1),
+  counts: jsonb('counts').$type<ContentScanBackfillCounts>().notNull(),
+  // The counts of the last pass that finished, kept when a new pass resets `counts`.
+  lastPassCounts: jsonb('last_pass_counts').$type<ContentScanBackfillCounts>(),
+  passStartedAt: timestamp('pass_started_at', { mode: 'date' }).notNull().defaultNow(),
+  // Set when a pass finishes; the first non-null value means existing public content has been checked once.
+  lastCompletedAt: timestamp('last_completed_at', { mode: 'date' }),
+  leaseUntil: timestamp('lease_until', { mode: 'date' }),
+  updatedAt: timestamp('updated_at', { mode: 'date' }).notNull().defaultNow(),
+});
+
 export type ContentBlock = typeof contentBlocks.$inferSelect;
 export type NewContentBlock = typeof contentBlocks.$inferInsert;
 export type ContentScan = typeof contentScans.$inferSelect;
@@ -282,3 +327,5 @@ export type ContentCase = typeof contentCases.$inferSelect;
 export type NewContentCase = typeof contentCases.$inferInsert;
 export type ContentSiteHold = typeof contentSiteHolds.$inferSelect;
 export type ContentReport = typeof contentReports.$inferSelect;
+
+export type ContentScanBackfillRow = typeof contentScanBackfill.$inferSelect;

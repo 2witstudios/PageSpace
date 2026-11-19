@@ -44,6 +44,14 @@ describe('resolveScanConfig', () => {
   });
 });
 
+describe('allowUnclassifiedVideo', () => {
+  it('is off by default and only an explicit true turns it on', () => {
+    expect(resolveScanConfig({ CONTENT_SCAN_MODE: 'enforce', HIVE_API_KEY: 'k' }, { onPrem: false }).allowUnclassifiedVideo).toBe(false);
+    expect(resolveScanConfig({ CONTENT_SCAN_ALLOW_UNCLASSIFIED_VIDEO: 'yes' }, { onPrem: false }).allowUnclassifiedVideo).toBe(false);
+    expect(resolveScanConfig({ CONTENT_SCAN_ALLOW_UNCLASSIFIED_VIDEO: 'TRUE' }, { onPrem: false }).allowUnclassifiedVideo).toBe(true);
+  });
+});
+
 describe('resolveScanConfigFromEnv', () => {
   afterEach(() => vi.unstubAllEnvs());
 

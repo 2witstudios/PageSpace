@@ -8,8 +8,8 @@ import { useAdminQuery } from '@/hooks/use-admin-query';
 
 export interface ScanVerdictCount {
   mode: 'shadow' | 'enforce' | null;
-  outcome: 'clean' | 'hash_match' | 'classifier_flag' | 'error' | 'unsupported_type' | null;
-  verdict: 'clean' | 'flagged' | 'error' | 'unscanned';
+  outcome: 'clean' | 'hash_match' | 'classifier_flag' | 'error' | 'unsupported_type' | 'unverified' | null;
+  verdict: 'clean' | 'flagged' | 'error' | 'unscanned' | 'unverified';
   /** Recorded by a staff review (a dismissed flag), not by the gate. */
   reviewed: boolean;
   /** Distinct contents: one verdict per content hash, so identical files count once. */
@@ -22,6 +22,7 @@ const OUTCOME_LABELS: Record<NonNullable<ScanVerdictCount['outcome']>, string> =
   classifier_flag: 'Classifier flag (review queue)',
   error: 'Scan error or timeout (retried on republish)',
   unsupported_type: 'Not scanned (unsupported type)',
+  unverified: 'Video not classified (held under enforce)',
 };
 
 const MODE_ORDER = ['shadow', 'enforce', 'review', 'none'] as const;

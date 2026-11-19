@@ -31,6 +31,12 @@ export interface ScanGateConfig {
   flagThreshold: number;
   /** Count matches against the vendor's test lists as real (staging only). */
   includeTestSets: boolean;
+  /**
+   * Accept a video whose hash pass ran clean but which the classifier never scored. Off by default: such a
+   * video is `unverified` (held under enforce, recorded in shadow). Turn on once the vendor confirms its
+   * classifier runs on video (`CONTENT_SCAN_ALLOW_UNCLASSIFIED_VIDEO=true`).
+   */
+  allowUnclassifiedVideo: boolean;
 }
 
 export const DEFAULT_VERDICT_TTL_DAYS = 30;
@@ -76,6 +82,7 @@ export function resolveScanConfig(env: Env, { onPrem }: { onPrem: boolean }): Sc
     maxBytes: positiveNumber(env.CONTENT_SCAN_MAX_BYTES, DEFAULT_SCAN_MAX_BYTES, 500 * 1024 * 1024),
     flagThreshold: threshold,
     includeTestSets: env.HIVE_INCLUDE_TEST_MATCHES === 'true',
+    allowUnclassifiedVideo: env.CONTENT_SCAN_ALLOW_UNCLASSIFIED_VIDEO?.trim().toLowerCase() === 'true',
   };
 }
 

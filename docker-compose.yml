@@ -281,6 +281,9 @@ services:
       - PROCESSOR_AUTH_REQUIRED=${PROCESSOR_AUTH_REQUIRED:-true}
       - PROCESSOR_UPLOAD_RATE_LIMIT=${PROCESSOR_UPLOAD_RATE_LIMIT:-100}
       - PROCESSOR_UPLOAD_RATE_WINDOW=${PROCESSOR_UPLOAD_RATE_WINDOW:-3600}
+      # Avatar uploads ask the web app to run the content-safety gate (CONTENT_SCAN_MODE
+      # and SERVICE_API_SECRET come from .env, the same values as the web app's).
+      - WEB_APP_INTERNAL_URL=http://web:3000
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_REGION=${AWS_REGION:-auto}

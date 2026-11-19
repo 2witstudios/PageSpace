@@ -8,12 +8,14 @@ import { Client } from 'pg';
 import { createHash, randomUUID } from 'crypto';
 import { db } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
-import { contentCases, contentReports, contentScans } from '@pagespace/db/schema/content-safety';
-import { countScanVerdicts, findScanVerdict, openScanReviewCase, recordScanVerdict } from '../scan-store';
+import { contentBlocks, contentCases, contentReports, contentScans } from '@pagespace/db/schema/content-safety';
+import { countScanVerdicts, findOpenReviewCaseId, findScanVerdict, findScanVerdicts, openScanReviewCase, recordScanVerdict } from '../scan-store';
 import { closeReportedCase, fileContentReport, listReportedCases, ReportedCaseChangedError } from '../report-store';
 import { gatePublishAsset, type PublishGateDeps } from '../publish-gate';
 import { resolveScanConfig } from '../scan-mode';
-import { createFakeScanner, type ScanResult } from '../scanner';
+import { createFakeScanner, type ContentScanner, type ScanResult } from '../scanner';
+import { gateAvatarUpload, type AvatarGateDeps } from '../avatar-gate';
+import { isHashBlocked } from '../blocklist';
 
 const hashes: string[] = [];
 const newHash = () => {
@@ -52,6 +54,7 @@ afterAll(async () => {
   if (cases.length > 0) await db.delete(contentReports).where(inArray(contentReports.caseId, cases.map((c) => c.id)));
   await db.delete(contentCases).where(inArray(contentCases.targetId, hashes));
   await db.delete(contentScans).where(inArray(contentScans.contentHash, hashes));
+  await db.delete(contentBlocks).where(inArray(contentBlocks.contentHash, hashes));
 });
 
 describe('scan store', () => {
@@ -204,6 +207,64 @@ describe('scan store', () => {
     expect(counts.every((c) => !c.reviewed || c.mode === null)).toBe(true);
   });
 
+  it('finds the case under review for a hash, and none once it is closed', async () => {
+    const hash = newHash();
+    expect(await findOpenReviewCaseId(hash)).toBeNull();
+    const opened = await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.95, mode: 'enforce', scores: {} });
+    expect(await findOpenReviewCaseId(hash)).toBe(opened.caseId);
+    await db.update(contentCases).set({ status: 'actioned' }).where(eq(contentCases.id, opened.caseId));
+    expect(await findOpenReviewCaseId(hash)).toBeNull();
+  });
+
+  it('a hash match stands while its hash is blocked: a late scan of the same bytes cannot replace it', async () => {
+    const hash = newHash();
+    await recordScanVerdict({ contentHash: hash, verdict: 'flagged', outcome: 'hash_match', provider: 'hive', mode: 'enforce', scores: {} });
+    await db.insert(contentBlocks).values({ contentHash: hash, category: 'csam', source: 'hash_match' });
+    await expect(
+      recordScanVerdict({ contentHash: hash, verdict: 'clean', outcome: 'clean', provider: 'hive', mode: 'enforce', scores: {} }),
+    ).resolves.toEqual({ keptFlag: true, keptHashMatch: true });
+    // A late classifier flag still opens its review case, but its verdict cannot replace the match, and it says so.
+    await expect(
+      openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.95, mode: 'shadow', scores: {} }),
+    ).resolves.toMatchObject({ keptHashMatch: true });
+    expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'flagged', outcome: 'hash_match' });
+
+    // Unblocked (a false match staff lifted): the next scan is recorded.
+    await db.delete(contentBlocks).where(eq(contentBlocks.contentHash, hash));
+    await db.delete(contentCases).where(eq(contentCases.targetId, hash));
+    await expect(
+      recordScanVerdict({ contentHash: hash, verdict: 'clean', outcome: 'clean', provider: 'hive', mode: 'enforce', scores: {} }),
+    ).resolves.toEqual({ keptFlag: false });
+    expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'clean' });
+  });
+
+  it('dismissing a late flag on a blocked hash closes the case but leaves the hash match standing', async () => {
+    const hash = newHash();
+    await recordScanVerdict({ contentHash: hash, verdict: 'flagged', outcome: 'hash_match', provider: 'hive', mode: 'enforce', scores: {} });
+    await db.insert(contentBlocks).values({ contentHash: hash, category: 'csam', source: 'hash_match' });
+    const opened = await openScanReviewCase({ contentHash: hash, provider: 'hive', category: 'csam', score: 0.95, mode: 'enforce', scores: {} });
+    const [listed] = (await listReportedCases({ limit: 200 })).filter((c) => c.case.id === opened.caseId);
+    const closed = await closeReportedCase({ caseId: opened.caseId, outcome: 'dismissed', actorUserId: 'admin-1', expectedReportCount: 0, expectedScanFlaggedAt: listed.case.snapshot?.scan?.flaggedAt ?? null });
+    expect(closed).toMatchObject({ status: 'dismissed' });
+    // Dismissing the classifier flag is not lifting the block: the match is still the record.
+    expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'flagged', outcome: 'hash_match' });
+  });
+
+  it('marks a clean video the classifier did not score, and nothing else', async () => {
+    const video = newHash();
+    await recordScanVerdict({ contentHash: video, verdict: 'clean', outcome: 'clean', provider: 'hive', mode: 'enforce', scores: { contentType: 'video/mp4', classifier: false } });
+    expect(await findScanVerdict(video)).toMatchObject({ verdict: 'clean', unclassifiedVideo: true });
+    expect((await findScanVerdicts([video])).get(video)).toMatchObject({ unclassifiedVideo: true });
+
+    const scored = newHash();
+    await recordScanVerdict({ contentHash: scored, verdict: 'clean', outcome: 'clean', provider: 'hive', mode: 'enforce', scores: { contentType: 'video/mp4', classifier: { csam: 0.01 } } });
+    expect(await findScanVerdict(scored)).not.toHaveProperty('unclassifiedVideo');
+
+    const image = newHash();
+    await recordScanVerdict({ contentHash: image, verdict: 'clean', outcome: 'clean', provider: 'hive', mode: 'enforce', scores: { contentType: 'image/png', classifier: false } });
+    expect(await findScanVerdict(image)).not.toHaveProperty('unclassifiedVideo');
+  });
+
   it('remembers whether an unscanned file was allowed', async () => {
     const hash = newHash();
     await recordScanVerdict({ contentHash: hash, verdict: 'unscanned', outcome: 'unsupported_type', provider: 'hive', mode: 'enforce', scores: { media: 'unscanned_allowed' } });
@@ -333,5 +394,78 @@ describe('scan store', () => {
 
     await expect(clean).resolves.toEqual({ promote: false, reason: 'held' });
     expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'flagged', outcome: 'classifier_flag' });
+  });
+});
+
+describe('an avatar scan that a takedown overtakes (real Postgres)', () => {
+  /** A scanner that stops mid-scan until the test releases it with a result. */
+  function pausedScanner(): { scanner: ContentScanner; started: Promise<void>; resume: (result: ScanResult) => void } {
+    let markStarted: () => void = () => undefined;
+    let release: (result: ScanResult) => void = () => undefined;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const result = new Promise<ScanResult>((resolve) => { release = resolve; });
+    return {
+      scanner: { provider: 'fake', scan: async () => { markStarted(); return result; } },
+      started,
+      resume: (r) => release(r),
+    };
+  }
+
+  function avatarDeps(scanner: ContentScanner): AvatarGateDeps {
+    const config = resolveScanConfig({ CONTENT_SCAN_MODE: 'shadow', HIVE_API_KEY: 'k' }, { onPrem: false });
+    return {
+      config,
+      scanner,
+      isBlocked: isHashBlocked,
+      findVerdict: findScanVerdict,
+      recordVerdict: (record) => recordScanVerdict(record, { flagTtlMs: config.verdictTtlMs }),
+      takedownHashMatch: async () => ({}),
+      openReviewCase: (input) => openScanReviewCase(input),
+      alert: async () => undefined,
+      audit: () => undefined,
+      auditRejected: () => undefined,
+      reportMisconfiguration: () => undefined,
+      logError: () => undefined,
+      now: () => new Date(),
+    };
+  }
+
+  /** A real PNG header with unique trailing bytes, so each test has its own hash. */
+  function uniqueAvatar(): { bytes: Uint8Array; hash: string } {
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...createHash('sha256').update(randomUUID()).digest()]);
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    hashes.push(hash);
+    return { bytes, hash };
+  }
+
+  /** What a global takedown writes first: the block, then the hash match. */
+  async function takedownBlocks(hash: string, withVerdict: boolean): Promise<void> {
+    await db.insert(contentBlocks).values({ contentHash: hash, category: 'csam', source: 'hash_match' });
+    if (withVerdict) {
+      await recordScanVerdict({ contentHash: hash, verdict: 'flagged', outcome: 'hash_match', provider: 'hive', mode: 'shadow', scores: {} });
+    }
+  }
+
+  it('shadow: a flagged scan resumed after the block and the match is refused, and the match stands', async () => {
+    const { bytes, hash } = uniqueAvatar();
+    const paused = pausedScanner();
+    const decision = gateAvatarUpload({ bytes, userId: 'user-1' }, avatarDeps(paused.scanner));
+    await paused.started;
+    await takedownBlocks(hash, true);
+    paused.resume({ kind: 'classifier_flag', provider: 'fake', category: 'csam', score: 0.95 });
+
+    await expect(decision).resolves.toMatchObject({ accept: false, finding: 'blocked' });
+    expect(await findScanVerdict(hash)).toMatchObject({ verdict: 'flagged', outcome: 'hash_match' });
+  });
+
+  it('shadow: a clean scan resumed after the block alone (no verdict yet) is refused', async () => {
+    const { bytes, hash } = uniqueAvatar();
+    const paused = pausedScanner();
+    const decision = gateAvatarUpload({ bytes, userId: 'user-1' }, avatarDeps(paused.scanner));
+    await paused.started;
+    await takedownBlocks(hash, false);
+    paused.resume({ kind: 'clean', provider: 'fake', scores: { csam: 0.01 } });
+
+    await expect(decision).resolves.toMatchObject({ accept: false, finding: 'blocked' });
   });
 });

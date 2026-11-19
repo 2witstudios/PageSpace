@@ -112,6 +112,14 @@ export type SecurityEventType =
   | 'content.scan.flagged'
   | 'content.scan.error'
   | 'content.scan.unscanned'
+  // PR 5. `unverified`: a video whose hash pass was clean but which the classifier never
+  // scored (held under enforce). `avatar.rejected`: a profile-picture upload was refused
+  // (not a real image, blocked, or held by the scan); the old avatar is left in place.
+  // `backfill.unpublished`: the backfill took a flagged, already-public file or avatar off
+  // the web under enforce (no block). resourceId is the content hash.
+  | 'content.scan.unverified'
+  | 'content.avatar.rejected'
+  | 'content.backfill.unpublished'
   // Agent-account credential brokering (L1·G1b, ADR 0004 §5). The `allowed`
   // row is written and durably accepted BEFORE the operation runs, and the
   // outcome row is keyed by the same grant id, so the chain carries both

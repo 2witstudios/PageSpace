@@ -10,6 +10,9 @@ import { hasAuthScope } from '../middleware/auth';
 import { rateLimitUpload, rateLimitRead } from '../middleware/rate-limit';
 import { processorLogger } from '../logger';
 import { createS3Client, getS3Bucket } from '../s3-client';
+import { AVATAR_NOT_AN_IMAGE_MESSAGE, AVATAR_REJECTED_MESSAGE, sha256Hex } from '@pagespace/lib/content-safety/avatar-gate';
+import { decideAvatarUpload, type AvatarUploadDecision } from '../services/avatar-gate-client';
+import { isHashBlocked } from '@pagespace/lib/content-safety/blocklist';
 import {
   DEFAULT_IMAGE_EXTENSION,
   normalizeIdentifier,
@@ -82,10 +85,26 @@ router.get('/:userId/:filename', rateLimitRead, async (req: Request<{ userId: st
     const response = await s3().send(new GetObjectCommand({ Bucket: getS3Bucket(), Key: key }));
     if (!response.Body) return res.status(404).end();
     const bytes = await response.Body.transformToByteArray();
+    // Blocked bytes are never served, whenever they were stored (an upload that raced the block, a takedown not
+    // yet run on this avatar). Couldn't-check serves nothing, and neither answer may be cached.
+    let blocked: boolean;
+    try {
+      blocked = await isHashBlocked(sha256Hex(bytes));
+    } catch (err) {
+      processorLogger.warn('Avatar not served: the blocklist could not be read', { key, err: String(err) });
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(503).end();
+    }
+    if (blocked) {
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(404).end();
+    }
     const extension = ext.slice(1).toLowerCase();
     const contentType = CONTENT_TYPE_MAP[extension] || 'image/jpeg';
     res.setHeader('Content-Type', contentType);
-    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    // Bounded and not immutable, like the web app's avatar route: a cached copy of an avatar blocked later stops
+    // being served within the hour.
+    res.setHeader('Cache-Control', 'public, max-age=3600');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     return res.send(Buffer.from(bytes));
   } catch (err) {
@@ -127,10 +146,37 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
       return res.status(403).json({ error: 'Cannot modify avatar for another user' });
     }
 
+    // Content safety: decided on the bytes BEFORE the old avatar is touched, so a refused upload never
+    // destroys the current one. The reason is never returned (see avatar-gate-client.ts).
+    let decision: AvatarUploadDecision;
+    try {
+      decision = await decideAvatarUpload(new Uint8Array(file.buffer), userId);
+    } catch (error) {
+      processorLogger.error('Avatar gate failed; the upload is refused', error instanceof Error ? error : null, { userId });
+      return res.status(422).json({ error: AVATAR_REJECTED_MESSAGE });
+    }
+    if (!decision.accept) {
+      processorLogger.warn('Avatar upload refused', { userId, reason: decision.reason });
+      return decision.reason === 'not_an_image'
+        ? res.status(400).json({ error: AVATAR_NOT_AN_IMAGE_MESSAGE, code: 'not_an_image' })
+        : res.status(422).json({ error: AVATAR_REJECTED_MESSAGE });
+    }
+
+    // Asked once more, last thing before storage changes: a takedown can block the hash while the gate's answer was
+    // in flight, and no takedown step removes avatars by hash. A refusal here has written and deleted nothing, so
+    // the current avatar (or a concurrent upload's) is untouched. Couldn't-check refuses too.
+    const blockedSince = await isHashBlocked(decision.contentHash).catch(() => true);
+    if (blockedSince) {
+      processorLogger.warn('Avatar upload refused: its hash was blocked after the gate answered', { userId });
+      return res.status(422).json({ error: AVATAR_REJECTED_MESSAGE });
+    }
+
     // Replace old avatar before writing new one (best-effort — don't fail the upload if cleanup fails)
     try { await deleteUserAvatars(userId); } catch { /* non-fatal */ }
 
-    const extension = sanitizeExtension(file.originalname, DEFAULT_IMAGE_EXTENSION);
+    // The extension (which sets the served Content-Type) and the stored type come from the bytes,
+    // never from the uploader's file name or declared type.
+    const extension = decision.extension;
     const filename = `avatar${extension}`;
     const key = avatarKey(userId, extension);
 
@@ -138,7 +184,7 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
       Bucket: getS3Bucket(),
       Key: key,
       Body: file.buffer,
-      ContentType: file.mimetype,
+      ContentType: decision.contentType,
     }));
 
     res.json({

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { gatePublishAsset, type PublishGateDeps, type PublishGateInput, type StoredVerdict } from '../publish-gate';
+import { evaluatePublishAsset, gatePublishAsset, type PublishGateDeps, type PublishGateInput, type StoredVerdict } from '../publish-gate';
 import { resolveScanConfig } from '../scan-mode';
 import { createFakeScanner, type ContentScanner, type ScanResult } from '../scanner';
 
@@ -27,10 +27,11 @@ function setup(options: {
   bytes?: Uint8Array;
   complete?: boolean;
   timeoutMs?: number;
+  env?: Record<string, string>;
 } = {}) {
   const config = {
     ...resolveScanConfig(
-      { CONTENT_SCAN_MODE: options.mode ?? 'enforce', HIVE_API_KEY: options.key === false ? '' : 'k', CONTENT_SCAN_TIMEOUT_MS: String(options.timeoutMs ?? 1000) },
+      { CONTENT_SCAN_MODE: options.mode ?? 'enforce', HIVE_API_KEY: options.key === false ? '' : 'k', CONTENT_SCAN_TIMEOUT_MS: String(options.timeoutMs ?? 1000), ...options.env },
       { onPrem: false },
     ),
   };
@@ -41,9 +42,9 @@ function setup(options: {
     isBlocked: vi.fn(async () => options.blocked ?? false),
     findVerdict: vi.fn(async () => options.verdict ?? null),
     readSource: vi.fn(async () => ({ bytes: options.bytes ?? PNG, complete: options.complete ?? true })),
-    recordVerdict: vi.fn(async () => ({ keptFlag: false })),
+    recordVerdict: vi.fn(async (): Promise<{ keptFlag: boolean; keptHashMatch?: boolean }> => ({ keptFlag: false })),
     takedownHashMatch: vi.fn(async () => ({ caseId: 'case-td' })),
-    openReviewCase: vi.fn(async () => ({ caseId: 'case-rv', created: true, firstFlag: true })),
+    openReviewCase: vi.fn(async (): Promise<{ caseId: string; created: boolean; firstFlag: boolean; keptHashMatch?: boolean }> => ({ caseId: 'case-rv', created: true, firstFlag: true })),
     alert: vi.fn(async () => undefined),
     audit: vi.fn(),
     reportMisconfiguration: vi.fn(),
@@ -102,6 +103,61 @@ describe('gatePublishAsset', () => {
     const shadow = setup({ mode: 'shadow' });
     shadow.deps.recordVerdict.mockResolvedValueOnce({ keptFlag: true });
     await expect(gatePublishAsset(input, shadow.deps)).resolves.toEqual({ promote: true });
+  });
+
+  it('a result that lost to a standing hash match is refused as blocked in every mode: the hash was blocked mid-scan', async () => {
+    for (const mode of ['shadow', 'enforce'] as const) {
+      const { deps } = setup({ mode });
+      deps.recordVerdict.mockResolvedValueOnce({ keptFlag: true, keptHashMatch: true });
+      await expect(evaluatePublishAsset(input, deps)).resolves.toMatchObject({ promote: false, reason: 'blocked', finding: 'blocked' });
+    }
+  });
+
+  it('a classifier flag whose verdict lost to a standing hash match is refused as blocked in every mode', async () => {
+    for (const mode of ['shadow', 'enforce'] as const) {
+      const { deps } = setup({ mode, result: flag });
+      deps.openReviewCase.mockResolvedValueOnce({ caseId: 'case-rv', created: true, firstFlag: true, keptHashMatch: true });
+      await expect(evaluatePublishAsset(input, deps)).resolves.toMatchObject({ promote: false, reason: 'blocked', finding: 'blocked' });
+    }
+  });
+
+  it('reports the standing flag, not its own clean result, when its write lost to one', async () => {
+    const lost = setup();
+    lost.deps.recordVerdict.mockResolvedValueOnce({ keptFlag: true });
+    await expect(evaluatePublishAsset(input, lost.deps)).resolves.toMatchObject({ promote: false, finding: 'flagged' });
+  });
+
+  it('a result whose verdict could not be recorded is an error, never clean', async () => {
+    const failed = setup();
+    failed.deps.recordVerdict.mockRejectedValueOnce(new Error('db down'));
+    await expect(evaluatePublishAsset(input, failed.deps)).resolves.toMatchObject({ promote: false, finding: 'error' });
+  });
+
+  it('a hash blocked while it was being scanned is refused in every mode, even when its clean verdict was written', async () => {
+    for (const mode of ['shadow', 'enforce'] as const) {
+      const { deps } = setup({ mode });
+      // Not blocked at the first read; blocked by the time the verdict is written.
+      deps.isBlocked.mockResolvedValueOnce(false).mockResolvedValue(true);
+      await expect(evaluatePublishAsset(input, deps)).resolves.toMatchObject({ promote: false, reason: 'blocked', finding: 'blocked' });
+    }
+  });
+
+  it('a hash match this scan found stays a hash match, though its own takedown blocked the hash before the recheck', async () => {
+    const { deps } = setup({ result: match });
+    deps.isBlocked.mockResolvedValueOnce(false).mockResolvedValue(true);
+    await expect(evaluatePublishAsset(input, deps)).resolves.toMatchObject({ promote: false, finding: 'hash_match', caseId: 'case-td' });
+  });
+
+  it('a hash match whose verdict could not be recorded is still reported as a hash match', async () => {
+    const { deps } = setup({ result: match });
+    deps.recordVerdict.mockRejectedValueOnce(new Error('db down'));
+    await expect(evaluatePublishAsset(input, deps)).resolves.toMatchObject({ promote: false, finding: 'hash_match' });
+  });
+
+  it('a verdict decided from the cache reads the blocklist once', async () => {
+    const { deps } = setup({ verdict: { verdict: 'clean', outcome: 'clean', scannedAt: new Date('2026-11-12T00:00:00Z') } });
+    await expect(gatePublishAsset(input, deps)).resolves.toEqual({ promote: true });
+    expect(deps.isBlocked).toHaveBeenCalledTimes(1);
   });
 
   it('clean: records the verdict, audits and promotes', async () => {
@@ -309,6 +365,81 @@ describe('gatePublishAsset', () => {
     await gatePublishAsset(input, deps);
     const [event] = deps.audit.mock.calls[0] as unknown as [{ details: Record<string, unknown> }];
     expect(Object.keys(event.details).sort()).toEqual(['caseId', 'contentType', 'entryPoint', 'fileId', 'mode', 'promoted', 'provider', 'score'].sort());
+  });
+});
+
+describe('video with no classifier output (PR 5)', () => {
+  const MP4 = Uint8Array.from('\0\0\0\x18ftypisom\0\0\0\0isommp41', (c) => c.charCodeAt(0));
+  const hashOnly: ScanResult = { kind: 'clean', provider: 'fake' };
+  const videoInput = { ...input, declaredContentType: 'video/mp4' };
+
+  it('enforce holds it as unverified, not clean, and records why', async () => {
+    const { deps } = setup({ bytes: MP4, result: hashOnly });
+    await expect(evaluatePublishAsset(videoInput, deps)).resolves.toMatchObject({ promote: false, reason: 'held', finding: 'unverified', scanned: true });
+    expect(deps.recordVerdict).toHaveBeenCalledWith(expect.objectContaining({ verdict: 'unverified', outcome: 'unverified', provider: 'fake', scores: expect.objectContaining({ classifier: false }) }));
+    expect(deps.audit).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'content.scan.unverified', details: expect.objectContaining({ promoted: false }) }));
+    expect(deps.openReviewCase).not.toHaveBeenCalled();
+  });
+
+  it('shadow promotes it but records it as unverified', async () => {
+    const { deps } = setup({ mode: 'shadow', bytes: MP4, result: hashOnly });
+    await expect(gatePublishAsset(videoInput, deps)).resolves.toEqual({ promote: true });
+    expect(deps.recordVerdict).toHaveBeenCalledWith(expect.objectContaining({ verdict: 'unverified', mode: 'shadow' }));
+  });
+
+  it('a video the classifier did score is clean', async () => {
+    const { deps } = setup({ bytes: MP4, result: { kind: 'clean', provider: 'fake', scores: { csam: 0.01 } } });
+    await expect(gatePublishAsset(videoInput, deps)).resolves.toEqual({ promote: true });
+    expect(deps.recordVerdict).toHaveBeenCalledWith(expect.objectContaining({ verdict: 'clean' }));
+  });
+
+  it('an image with no classifier output keeps the old reading (clean)', async () => {
+    const { deps } = setup({ result: hashOnly });
+    await expect(gatePublishAsset(input, deps)).resolves.toEqual({ promote: true });
+  });
+
+  it('CONTENT_SCAN_ALLOW_UNCLASSIFIED_VIDEO=true relaxes it to clean', async () => {
+    const { deps } = setup({ bytes: MP4, result: hashOnly, env: { CONTENT_SCAN_ALLOW_UNCLASSIFIED_VIDEO: 'true' } });
+    await expect(gatePublishAsset(videoInput, deps)).resolves.toEqual({ promote: true });
+    expect(deps.recordVerdict).toHaveBeenCalledWith(expect.objectContaining({ verdict: 'clean' }));
+  });
+
+  it('a video stored clean with no classifier output (before this policy, or while it was relaxed) is scanned again and held', async () => {
+    const verdict: StoredVerdict = { verdict: 'clean', outcome: 'clean', scannedAt: new Date('2026-11-10T00:00:00Z'), unclassifiedVideo: true };
+    const strict = setup({ bytes: MP4, result: hashOnly, verdict });
+    await expect(evaluatePublishAsset(videoInput, strict.deps)).resolves.toMatchObject({ promote: false, finding: 'unverified', scanned: true });
+    expect((strict.scanner as ReturnType<typeof createFakeScanner>).calls).toEqual([HASH]);
+
+    const relaxed = setup({ bytes: MP4, result: hashOnly, verdict, env: { CONTENT_SCAN_ALLOW_UNCLASSIFIED_VIDEO: 'true' } });
+    await expect(evaluatePublishAsset(videoInput, relaxed.deps)).resolves.toMatchObject({ promote: true, finding: 'clean', scanned: false });
+    expect(relaxed.deps.readSource).not.toHaveBeenCalled();
+  });
+
+  it('a fresh unverified verdict is held without a rescan; once relaxed, it is scanned again', async () => {
+    const verdict: StoredVerdict = { verdict: 'unverified', outcome: 'unverified', scannedAt: new Date('2026-11-10T00:00:00Z') };
+    const held = setup({ bytes: MP4, result: hashOnly, verdict });
+    await expect(evaluatePublishAsset(videoInput, held.deps)).resolves.toMatchObject({ promote: false, finding: 'unverified', scanned: false });
+    expect(held.deps.readSource).not.toHaveBeenCalled();
+
+    const relaxed = setup({ bytes: MP4, result: hashOnly, verdict, env: { CONTENT_SCAN_ALLOW_UNCLASSIFIED_VIDEO: 'true' } });
+    await expect(gatePublishAsset(videoInput, relaxed.deps)).resolves.toEqual({ promote: true });
+    expect((relaxed.scanner as ReturnType<typeof createFakeScanner>).calls).toEqual([HASH]);
+  });
+});
+
+describe('evaluatePublishAsset findings', () => {
+  it('reports what it found, whether it scanned, and the case', async () => {
+    await expect(evaluatePublishAsset(input, setup({ blocked: true }).deps)).resolves.toMatchObject({ finding: 'blocked', scanned: false });
+    await expect(evaluatePublishAsset(input, setup({ mode: 'off' }).deps)).resolves.toMatchObject({ promote: true, finding: 'off' });
+    await expect(evaluatePublishAsset(input, setup({ result: flag }).deps)).resolves.toMatchObject({ finding: 'flagged', scanned: true, caseId: 'case-rv' });
+    await expect(evaluatePublishAsset(input, setup({ result: match }).deps)).resolves.toMatchObject({ finding: 'hash_match', caseId: 'case-td' });
+    await expect(evaluatePublishAsset(input, setup({ key: false }).deps)).resolves.toMatchObject({ finding: 'unavailable', scanned: false });
+    const unreadable = setup();
+    unreadable.deps.readSource.mockResolvedValueOnce(null as never);
+    await expect(evaluatePublishAsset(input, unreadable.deps)).resolves.toMatchObject({ finding: 'error', scanned: false });
+    await expect(evaluatePublishAsset(input, setup({ complete: false }).deps)).resolves.toMatchObject({ finding: 'error', scanned: false });
+    const cached = setup({ verdict: { verdict: 'clean', outcome: 'clean', scannedAt: new Date('2026-11-01T00:00:00Z') } });
+    await expect(evaluatePublishAsset(input, cached.deps)).resolves.toMatchObject({ finding: 'clean', scanned: false });
   });
 });
 

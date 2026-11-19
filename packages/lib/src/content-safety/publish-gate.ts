@@ -17,11 +17,14 @@
 
 import type { ContentScanVerdict, ContentScanOutcome } from '@pagespace/db/schema/content-safety';
 import type { ScanGateConfig } from './scan-mode';
-import { classifyMedia, decideGate, isVerdictFresh, sniffContentType, type GateOutcome, type ScanAuditEventType } from './scan-policy';
+import { classifyMedia, decideGate, isVerdictFresh, refineScanOutcome, sniffContentType, type GateOutcome, type ScanAuditEventType } from './scan-policy';
 import { scanWithTimeout, type ContentScanner, type ScanResult } from './scanner';
 
-/** Where in the publish flow the asset is being promoted. Recorded on the audit event. */
-export type PublishGateEntryPoint = 'canvas_asset' | 'canvas_thumbnail' | 'uploaded_image';
+/**
+ * Where the asset is being made public. Recorded on the audit event. `user_avatar` is a profile picture
+ * upload (PR 5); `backfill` is the walk over content that was already public before the gate existed.
+ */
+export type PublishGateEntryPoint = 'canvas_asset' | 'canvas_thumbnail' | 'uploaded_image' | 'user_avatar' | 'backfill';
 
 export interface PublishGateInput {
   /** Canonical sha256 of the ORIGINAL bytes. A thumbnail is gated by its original's hash. */
@@ -29,13 +32,59 @@ export interface PublishGateInput {
   /** Private key of the original: `files/<hash>/original`. Never the derived image. */
   originalKey: string;
   declaredContentType: string | null;
-  /** The page ID of the file. Recorded; never shown to the publisher with a reason. */
-  fileId: string;
+  /** The page ID of the file, when there is one (an avatar or a backfilled object has none). Recorded; never shown with a reason. */
+  fileId: string | null;
   userId: string | null;
   entryPoint: PublishGateEntryPoint;
 }
 
 export type PublishGateResult = { promote: true } | { promote: false; reason: 'blocked' | 'held' };
+
+/**
+ * What the gate found, for callers that act on more than promote-or-not (the avatar upload, the backfill).
+ * `off`: scanning is off. `unavailable`: no vendor key. `fresh`: decided from a stored verdict, no new scan.
+ */
+export type GateFinding =
+  | 'off' | 'blocked' | 'unavailable'
+  | 'clean' | 'hash_match' | 'flagged' | 'error' | 'unscanned' | 'unverified';
+
+export type PublishGateEvaluation = PublishGateResult & {
+  finding: GateFinding;
+  /** The vendor was called for this decision. */
+  scanned: boolean;
+  /** The case opened for a flag or a hash match, when there is one. */
+  caseId: string | null;
+};
+
+function findingFor(outcome: GateOutcome): GateFinding {
+  switch (outcome.kind) {
+    case 'cached_clean':
+      return 'clean';
+    case 'cached_flagged':
+      return 'flagged';
+    case 'cached_unscanned':
+    case 'not_scanned':
+      return 'unscanned';
+    case 'cached_unverified':
+    case 'unverified':
+      return 'unverified';
+    case 'scanner_unavailable':
+      return 'unavailable';
+    case 'scanned':
+      switch (outcome.result.kind) {
+        case 'clean':
+          return 'clean';
+        case 'hash_match':
+          return 'hash_match';
+        case 'classifier_flag':
+          return 'flagged';
+        case 'error':
+          return 'error';
+        case 'unsupported_type':
+          return 'unscanned';
+      }
+  }
+}
 
 export interface StoredVerdict {
   verdict: ContentScanVerdict;
@@ -43,6 +92,30 @@ export interface StoredVerdict {
   scannedAt: Date;
   /** For an `unscanned` verdict: whether the file was a type published unscanned (PDF, text, …). */
   unscannedAllowed?: boolean;
+  /**
+   * For a `clean` verdict: a video the classifier returned no scores for (hash lists only). Recorded clean before
+   * unverified video existed, or while CONTENT_SCAN_ALLOW_UNCLASSIFIED_VIDEO was on; scanned again once it is off.
+   */
+  unclassifiedVideo?: true;
+}
+
+/**
+ * What a stored verdict decides without a new scan, or null when the gate must scan. The one rule for reusing a
+ * verdict: the gate and the backfill's dry run both use it.
+ */
+export function cachedOutcome(
+  stored: StoredVerdict | null | undefined,
+  config: Pick<ScanGateConfig, 'verdictTtlMs' | 'allowUnclassifiedVideo'>,
+  now: Date,
+): GateOutcome | null {
+  if (!stored || !isVerdictFresh(stored.scannedAt, config.verdictTtlMs, now)) return null;
+  // A clean video the classifier never scored is unverified under the strict policy: scan it again.
+  if (stored.verdict === 'clean') return stored.unclassifiedVideo && !config.allowUnclassifiedVideo ? null : { kind: 'cached_clean' };
+  if (stored.verdict === 'flagged' && stored.outcome === 'classifier_flag') return { kind: 'cached_flagged' };
+  if (stored.verdict === 'unscanned' && stored.unscannedAllowed !== undefined) return { kind: 'cached_unscanned', allowed: stored.unscannedAllowed };
+  // Once unclassified video is accepted, a stored `unverified` is scanned again (and comes back clean).
+  if (stored.verdict === 'unverified' && !config.allowUnclassifiedVideo) return { kind: 'cached_unverified' };
+  return null;
 }
 
 export interface VerdictRecord {
@@ -81,8 +154,12 @@ export interface PublishGateDeps {
   isBlocked(contentHash: string): Promise<boolean>;
   findVerdict(contentHash: string): Promise<StoredVerdict | null>;
   readSource(key: string, maxBytes: number): Promise<SourceRead | null>;
-  /** `keptFlag`: the write was skipped because a classifier flag on the hash still stands. */
-  recordVerdict(record: VerdictRecord): Promise<{ keptFlag: boolean }>;
+  /**
+   * `keptFlag`: the write was skipped because a verdict on the hash still stands (a classifier flag, or a hash
+   * match while the hash is blocked). `keptHashMatch`: what stood was a hash match: the hash was blocked while
+   * this scan ran.
+   */
+  recordVerdict(record: VerdictRecord): Promise<{ keptFlag: boolean; keptHashMatch?: boolean }>;
   /** PR 2's global takedown, category csam. Opens its own case and alerts. Returns the case ID. */
   takedownHashMatch(input: { contentHash: string; lists: string[] }): Promise<{ caseId?: string }>;
   /**
@@ -97,7 +174,7 @@ export interface PublishGateDeps {
     score: number;
     mode: 'shadow' | 'enforce';
     scores: Record<string, unknown>;
-  }): Promise<{ caseId: string; created: boolean; firstFlag: boolean }>;
+  }): Promise<{ caseId: string; created: boolean; firstFlag: boolean; keptHashMatch?: boolean }>;
   alert(alert: ScanAlert): Promise<void>;
   audit(event: ScanAuditEvent): void;
   /** Called with a configuration problem, every time; the caller logs it once. */
@@ -114,6 +191,7 @@ export interface PublishGateDeps {
 function scoresFor(outcome: GateOutcome, contentType: string | null, sniffedText = false): Record<string, unknown> {
   const base: Record<string, unknown> = contentType ? { contentType } : {};
   if (outcome.kind === 'not_scanned') return { ...base, media: sniffedText ? 'text' : outcome.media.class };
+  if (outcome.kind === 'unverified') return { ...base, classifier: false };
   if (outcome.kind !== 'scanned') return base;
   const { result } = outcome;
   switch (result.kind) {
@@ -144,18 +222,13 @@ export function errorLabel(error: unknown): string {
 async function learn(
   input: PublishGateInput,
   deps: PublishGateDeps,
-): Promise<{ outcome: GateOutcome; contentType: string | null; sniffedText?: boolean }> {
+): Promise<{ outcome: GateOutcome; contentType: string | null; sniffedText?: boolean; vendorCalled?: boolean }> {
   const { config } = deps;
   if (!deps.scanner) return { outcome: { kind: 'scanner_unavailable' }, contentType: null };
 
   const stored = await deps.findVerdict(input.contentHash).catch(() => null);
-  if (stored && isVerdictFresh(stored.scannedAt, config.verdictTtlMs, deps.now())) {
-    if (stored.verdict === 'clean') return { outcome: { kind: 'cached_clean' }, contentType: null };
-    if (stored.verdict === 'flagged' && stored.outcome === 'classifier_flag') return { outcome: { kind: 'cached_flagged' }, contentType: null };
-    if (stored.verdict === 'unscanned' && stored.unscannedAllowed !== undefined) {
-      return { outcome: { kind: 'cached_unscanned', allowed: stored.unscannedAllowed }, contentType: null };
-    }
-  }
+  const cached = cachedOutcome(stored, config, deps.now());
+  if (cached) return { outcome: cached, contentType: null };
 
   const provider = deps.scanner.provider;
   let source: SourceRead | null;
@@ -179,7 +252,7 @@ async function learn(
     { contentHash: input.contentHash, mediaKind: media.mediaKind, contentType: media.contentType, bytes: source.bytes },
     config.timeoutMs,
   );
-  return { outcome: { kind: 'scanned', result }, contentType: media.contentType };
+  return { outcome: refineScanOutcome(media.mediaKind, result, config), contentType: media.contentType, vendorCalled: true };
 }
 
 /**
@@ -187,14 +260,20 @@ async function learn(
  * must treat that as "not promoted", never as "not blocked".
  */
 export async function gatePublishAsset(input: PublishGateInput, deps: PublishGateDeps): Promise<PublishGateResult> {
-  if (await deps.isBlocked(input.contentHash)) return { promote: false, reason: 'blocked' };
+  const evaluation = await evaluatePublishAsset(input, deps);
+  return evaluation.promote ? { promote: true } : { promote: false, reason: evaluation.reason };
+}
+
+/** The gate, with what it found. Same order, effects and errors as `gatePublishAsset`. */
+export async function evaluatePublishAsset(input: PublishGateInput, deps: PublishGateDeps): Promise<PublishGateEvaluation> {
+  if (await deps.isBlocked(input.contentHash)) return { promote: false, reason: 'blocked', finding: 'blocked', scanned: false, caseId: null };
 
   const { config } = deps;
-  if (config.mode === 'off') return { promote: true };
+  if (config.mode === 'off') return { promote: true, finding: 'off', scanned: false, caseId: null };
   const mode = config.mode;
   for (const problem of config.problems) deps.reportMisconfiguration(problem);
 
-  const { outcome, contentType, sniffedText } = await learn(input, deps);
+  const { outcome, contentType, sniffedText, vendorCalled } = await learn(input, deps);
   const decision = decideGate(mode, outcome);
   const provider = deps.scanner?.provider ?? 'none';
   const context = { fileId: input.fileId, entryPoint: input.entryPoint, mode };
@@ -215,6 +294,8 @@ export async function gatePublishAsset(input: PublishGateInput, deps: PublishGat
   // with nobody reviewing it until the verdict expired: that is what a separate write after the case could do,
   // landing after an admin dismissed the case and recorded the hash clean. If the case cannot be opened, an error
   // verdict is recorded instead: the next publish scans again and retries the case.
+  let flagLostToHashMatch = false;
+  let blockedMidScan = false;
   let record = decision.record;
   let scores = scoresFor(outcome, contentType, sniffedText);
   if (decision.reviewCase && outcome.kind === 'scanned' && outcome.result.kind === 'classifier_flag') {
@@ -229,6 +310,8 @@ export async function gatePublishAsset(input: PublishGateInput, deps: PublishGat
       });
       caseId = opened.caseId;
       record = null;
+      // The flag's verdict lost to a standing hash match: the hash was blocked while this scan ran.
+      if (opened.keptHashMatch) flagLostToHashMatch = true;
       if (opened.created || opened.firstFlag) {
         await deps.alert({ event: 'scan_flagged', caseId: opened.caseId, category: 'csam' }).catch((error: unknown) =>
           deps.logError('Publish gate: the alert for a flagged scan failed', { ...context, caseId: opened.caseId, error: errorLabel(error) }),
@@ -242,13 +325,21 @@ export async function gatePublishAsset(input: PublishGateInput, deps: PublishGat
   }
 
   let promote = decision.promote;
+  if (flagLostToHashMatch) {
+    blockedMidScan = true;
+    promote = false;
+  }
+  // Set when this result lost to a verdict that stands (a classifier flag, or a hash match on a blocked hash).
+  let keptFlag = false;
+  // The verdict could not be recorded: the result is reported as an error, never as what was not stored.
+  let writeFailed = false;
   if (record) {
     const written = await deps
       .recordVerdict({
         contentHash: input.contentHash,
         verdict: record.verdict,
         outcome: record.outcome,
-        provider: outcome.kind === 'scanned' ? outcome.result.provider : provider,
+        provider: outcome.kind === 'scanned' || outcome.kind === 'unverified' ? (outcome.kind === 'scanned' ? outcome.result.provider : outcome.provider) : provider,
         mode,
         scores,
       })
@@ -260,6 +351,23 @@ export async function gatePublishAsset(input: PublishGateInput, deps: PublishGat
     // and holds too when the write failed: whether a flag stands could not be told, and couldn't-check is never
     // read as allowed.
     if ((written === null || written.keptFlag) && mode === 'enforce') promote = false;
+    keptFlag = written?.keptFlag === true;
+    writeFailed = written === null;
+    // A hash match stood: the hash was blocked after the blocklist check above. Refused in every mode, as a
+    // blocked hash is: shadow's "publish anyway" never covers blocked bytes (an avatar has no later recheck).
+    if (written?.keptHashMatch) {
+      blockedMidScan = true;
+      promote = false;
+    }
+  }
+
+  // Read the blocklist again once the vendor has answered: the scan can take seconds, and a takedown can block
+  // the hash meanwhile with no verdict row for the guard to keep. Refused in every mode, like the first read.
+  // Not for a hash match this scan found: its own takedown writes that block, and the finding must stay a match.
+  const foundMatch = outcome.kind === 'scanned' && outcome.result.kind === 'hash_match';
+  if (!blockedMidScan && !foundMatch && vendorCalled === true && (await deps.isBlocked(input.contentHash))) {
+    blockedMidScan = true;
+    promote = false;
   }
 
   if (decision.audit) {
@@ -269,5 +377,13 @@ export async function gatePublishAsset(input: PublishGateInput, deps: PublishGat
     deps.audit({ eventType: decision.audit, contentHash: input.contentHash, userId: input.userId, details });
   }
 
-  return promote ? { promote: true } : { promote: false, reason: 'held' };
+  // Only a call that reached the vendor counts: an unreadable or oversized source is an error with no call.
+  const scanned = vendorCalled === true;
+  // A result that lost to a standing flag reports the flag: the backfill acts on the finding, not on `promote`.
+  if (blockedMidScan) return { promote: false, reason: 'blocked', finding: 'blocked', scanned, caseId };
+  // A match found here is reported as one even if its verdict could not be stored: the backfill retries on it.
+  const finding: GateFinding = keptFlag ? 'flagged' : writeFailed && !foundMatch ? 'error' : findingFor(outcome);
+  return promote
+    ? { promote: true, finding, scanned, caseId }
+    : { promote: false, reason: 'held', finding, scanned, caseId };
 }

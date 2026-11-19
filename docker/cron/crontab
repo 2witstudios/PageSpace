@@ -231,3 +231,14 @@
 # a preserve-and-delete pass once that window has closed. A pass that fails alerts the abuse inbox and is retried on
 # later ticks, up to 3 attempts. A tick with nothing due reads one query and changes nothing.
 */15 * * * * flock -n /run/content-safety-resweep.lock cron-curl GET __WEB_URL__/api/cron/content-safety-resweep >> /var/log/cron/content-safety-resweep.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/content-safety-resweep.log
+
+# Content-safety backfill and rescan - Every 10 minutes
+# Scans content that was public before the publish gate existed (the publish bucket's assets/, then every
+# avatars/ object), and rescans it as clean verdicts expire. Each tick gates at most
+# CONTENT_SCAN_BACKFILL_ITEMS_PER_TICK objects (default 25, so at most 150 vendor calls an hour) from a persisted
+# cursor; objects with a fresh verdict cost a DB lookup, no vendor call. A finished pass restarts after
+# CONTENT_SCAN_BACKFILL_REPASS_HOURS. A no-op on-prem, with CONTENT_SCAN_MODE=off, or without HIVE_API_KEY.
+# The route also takes a lease on its cursor row, so a second container's tick does nothing.
+# Estimate the cost first (no vendor calls, no cursor change):
+#   cron-curl GET "__WEB_URL__/api/cron/content-safety-backfill?dryRun=1"
+*/10 * * * * flock -n /run/content-safety-backfill.lock cron-curl GET __WEB_URL__/api/cron/content-safety-backfill >> /var/log/cron/content-safety-backfill.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/content-safety-backfill.log

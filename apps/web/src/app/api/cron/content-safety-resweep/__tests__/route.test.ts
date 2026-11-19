@@ -40,15 +40,23 @@ describe('/api/cron/content-safety-resweep', () => {
     it('takes the public copies offline again for every unfinished case of the last day, every tick', async () => {
       mockUnfinished.mockResolvedValue([{ id: 'halt-1' }, { id: 'halt-2' }]);
       mockSweepPublic.mockResolvedValueOnce({ swept: true, deleted: 1 }).mockResolvedValueOnce({ swept: false });
-      const before = Date.now();
+      // The clock is frozen: the window is asserted exactly, not within a few milliseconds of a slow runner.
+      vi.useFakeTimers({ toFake: ['Date'] });
+      const now = new Date('2026-11-18T12:00:00Z');
+      vi.setSystemTime(now);
 
-      const response = await GET(request());
+      let response: Response;
+      try {
+        response = await GET(request());
+      } finally {
+        vi.useRealTimers();
+      }
 
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ success: true, due: 0, swept: 0, unfinished: 2, unfinishedPublicDeleted: 1 });
       expect(mockSweepPublic.mock.calls).toEqual([['halt-1'], ['halt-2']]);
       const { notOlderThan } = mockUnfinished.mock.calls[0][0] as { notOlderThan: Date };
-      expect(before - notOlderThan.getTime()).toBeGreaterThanOrEqual(24 * 60 * 60 * 1000 - 5);
+      expect(now.getTime() - notOlderThan.getTime()).toBe(24 * 60 * 60 * 1000);
     });
 
     it('answers 500 when an unfinished case\'s public copies could not be taken down', async () => {

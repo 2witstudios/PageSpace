@@ -8,9 +8,10 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, count, eq, lte, or, sql } from '@pagespace/db/operators';
+import { and, count, eq, gte, inArray, lte, or, sql } from '@pagespace/db/operators';
 import { DEFAULT_VERDICT_TTL_DAYS } from './scan-mode';
 import {
+  contentBlocks,
   contentCases,
   contentScans,
   type ContentCase,
@@ -20,14 +21,11 @@ import {
   type ContentScanVerdict,
 } from '@pagespace/db/schema/content-safety';
 import type { StoredVerdict, VerdictRecord } from './publish-gate';
+import { isVideoContentType } from './scan-policy';
 
-export async function findScanVerdict(contentHash: string): Promise<StoredVerdict | null> {
-  const [row] = await db
-    .select({ verdict: contentScans.verdict, outcome: contentScans.outcome, scannedAt: contentScans.scannedAt, scores: contentScans.scores })
-    .from(contentScans)
-    .where(eq(contentScans.contentHash, contentHash))
-    .limit(1);
-  if (!row) return null;
+type VerdictRow = Pick<typeof contentScans.$inferSelect, 'verdict' | 'outcome' | 'scannedAt' | 'scores'>;
+
+function toStoredVerdict(row: VerdictRow): StoredVerdict {
   const media = row.scores?.media;
   return {
     verdict: row.verdict,
@@ -36,7 +34,61 @@ export async function findScanVerdict(contentHash: string): Promise<StoredVerdic
     ...(row.verdict === 'unscanned' && (media === 'unscanned_allowed' || media === 'never_promote')
       ? { unscannedAllowed: media === 'unscanned_allowed' }
       : {}),
+    ...(row.verdict === 'clean' && row.scores?.classifier === false && isVideoContentType(row.scores.contentType)
+      ? { unclassifiedVideo: true as const }
+      : {}),
   };
+}
+
+export async function findScanVerdict(contentHash: string): Promise<StoredVerdict | null> {
+  const [row] = await db
+    .select({ verdict: contentScans.verdict, outcome: contentScans.outcome, scannedAt: contentScans.scannedAt, scores: contentScans.scores })
+    .from(contentScans)
+    .where(eq(contentScans.contentHash, contentHash))
+    .limit(1);
+  return row ? toStoredVerdict(row) : null;
+}
+
+/** The stored verdicts of many hashes at once (the backfill's dry run). */
+export async function findScanVerdicts(contentHashes: string[]): Promise<Map<string, StoredVerdict>> {
+  const found = new Map<string, StoredVerdict>();
+  for (let i = 0; i < contentHashes.length; i += 500) {
+    const rows = await db
+      .select({ contentHash: contentScans.contentHash, verdict: contentScans.verdict, outcome: contentScans.outcome, scannedAt: contentScans.scannedAt, scores: contentScans.scores })
+      .from(contentScans)
+      .where(inArray(contentScans.contentHash, contentHashes.slice(i, i + 500)));
+    for (const row of rows) found.set(row.contentHash, toStoredVerdict(row));
+  }
+  return found;
+}
+
+/** Shadow-mode verdicts recorded since `since`, by outcome: what enforce would have held. Counts only. */
+export async function countShadowOutcomesSince(since: Date): Promise<Array<{ outcome: ContentScanOutcome | null; count: number }>> {
+  const rows = await db
+    .select({ outcome: contentScans.outcome, count: count() })
+    .from(contentScans)
+    .where(and(eq(contentScans.mode, 'shadow'), gte(contentScans.scannedAt, since)))
+    .groupBy(contentScans.outcome);
+  return rows.map((row) => ({ outcome: row.outcome, count: Number(row.count) }));
+}
+
+/** The case under review (`reported`) for a hash, if one is open. */
+export async function findOpenReviewCaseId(contentHash: string): Promise<string | null> {
+  const [row] = await db
+    .select({ id: contentCases.id })
+    .from(contentCases)
+    .where(and(eq(contentCases.targetType, 'content_hash'), eq(contentCases.targetId, contentHash), eq(contentCases.status, 'reported')))
+    .limit(1);
+  return row?.id ?? null;
+}
+
+/** Flagged-scan cases nobody has reviewed yet (still `reported`). */
+export async function countOpenScanFlaggedCases(): Promise<number> {
+  const [row] = await db
+    .select({ count: count() })
+    .from(contentCases)
+    .where(and(eq(contentCases.status, 'reported'), sql`${contentCases.snapshot} -> 'scan' ->> 'source' = 'scan_flagged'`));
+  return Number(row?.count ?? 0);
 }
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -51,27 +103,33 @@ async function upsertVerdict(executor: typeof db | Tx, record: VerdictRecord, no
     scores: record.scores,
     scannedAt: now,
   };
+  // A hash match stands while its hash is blocked: a scan that started before the block (a backfill tick that
+  // outlived its lease, a publish in flight) cannot erase the match. Once staff lift the block, the next scan is
+  // recorded. Only another hash match replaces one.
+  const keepHashMatch =
+    record.outcome === 'hash_match'
+      ? undefined
+      : or(
+          sql`${contentScans.outcome} is distinct from 'hash_match'`,
+          sql`not exists (select 1 from ${contentBlocks} where ${contentBlocks.contentHash} = ${contentScans.contentHash})`,
+        );
+  // A classifier flag stands while it is fresh, or while a case on its hash is under review. The freshness
+  // test runs on the locked row, so a concurrent flag that committed first is always seen; the case test
+  // covers a flag older than the TTL whose case nobody has closed.
+  const keepFlag = keepFlagSince
+    ? or(
+        sql`${contentScans.outcome} is distinct from 'classifier_flag'`,
+        and(
+          lte(contentScans.scannedAt, keepFlagSince),
+          sql`not exists (select 1 from ${contentCases} where ${contentCases.contentHash} = ${contentScans.contentHash} and ${contentCases.status} = 'reported')`,
+        ),
+      )
+    : undefined;
+  const setWhere = keepHashMatch && keepFlag ? and(keepHashMatch, keepFlag) : (keepHashMatch ?? keepFlag);
   const written = await executor
     .insert(contentScans)
     .values({ contentHash: record.contentHash, ...values })
-    .onConflictDoUpdate({
-      target: contentScans.contentHash,
-      set: values,
-      // A classifier flag stands while it is fresh, or while a case on its hash is under review. The freshness
-      // test runs on the locked row, so a concurrent flag that committed first is always seen; the case test
-      // covers a flag older than the TTL whose case nobody has closed.
-      ...(keepFlagSince
-        ? {
-            setWhere: or(
-              sql`${contentScans.outcome} is distinct from 'classifier_flag'`,
-              and(
-                lte(contentScans.scannedAt, keepFlagSince),
-                sql`not exists (select 1 from ${contentCases} where ${contentCases.contentHash} = ${contentScans.contentHash} and ${contentCases.status} = 'reported')`,
-              ),
-            ),
-          }
-        : {}),
-    })
+    .onConflictDoUpdate({ target: contentScans.contentHash, set: values, ...(setWhere ? { setWhere } : {}) })
     .returning({ contentHash: contentScans.contentHash });
   return written.length > 0;
 }
@@ -88,9 +146,12 @@ const DEFAULT_FLAG_TTL_MS = DEFAULT_VERDICT_TTL_DAYS * 24 * 60 * 60 * 1000;
 export async function recordScanVerdict(
   record: VerdictRecord,
   { now = new Date(), flagTtlMs = DEFAULT_FLAG_TTL_MS }: { now?: Date; flagTtlMs?: number } = {},
-): Promise<{ keptFlag: boolean }> {
+): Promise<{ keptFlag: boolean; keptHashMatch?: boolean }> {
   const keepFlagSince = record.outcome === 'hash_match' ? undefined : new Date(now.getTime() - flagTtlMs);
-  return { keptFlag: !(await upsertVerdict(db, record, now, keepFlagSince)) };
+  if (await upsertVerdict(db, record, now, keepFlagSince)) return { keptFlag: false };
+  // Refused: say whether what stood was a hash match (its hash is blocked), which the gate refuses in every mode.
+  const [standing] = await db.select({ outcome: contentScans.outcome }).from(contentScans).where(eq(contentScans.contentHash, record.contentHash)).limit(1);
+  return standing?.outcome === 'hash_match' ? { keptFlag: true, keptHashMatch: true } : { keptFlag: true };
 }
 
 /**
@@ -113,7 +174,7 @@ export async function openScanReviewCase(input: {
   mode: ContentScanMode;
   /** Stored on the verdict, with the case ID added. */
   scores: Record<string, unknown>;
-}, now: Date = new Date()): Promise<{ caseId: string; created: boolean; firstFlag: boolean }> {
+}, now: Date = new Date()): Promise<{ caseId: string; created: boolean; firstFlag: boolean; keptHashMatch?: boolean }> {
   const scan: NonNullable<ContentCaseSnapshot['scan']> = {
     source: 'scan_flagged',
     provider: input.provider,
@@ -122,6 +183,9 @@ export async function openScanReviewCase(input: {
     mode: input.mode,
     flaggedAt: now.toISOString(),
   };
+  // A flag's write is refused only by a standing hash match (its hash blocked while this scan ran): say so, so the
+  // gate refuses the file in every mode. The case still opens: staff see the flag.
+  const keptMatch = (written: boolean): { keptHashMatch?: true } => (written ? {} : { keptHashMatch: true });
   const recordFlag = (tx: Tx, caseId: string) =>
     upsertVerdict(
       tx,
@@ -158,8 +222,8 @@ export async function openScanReviewCase(input: {
         })
         .returning({ id: contentCases.id });
       if (opened) {
-        await recordFlag(tx, opened.id);
-        return { caseId: opened.id, created: true, firstFlag: true };
+        const written = await recordFlag(tx, opened.id);
+        return { caseId: opened.id, created: true, firstFlag: true, ...keptMatch(written) };
       }
 
       // Lock the case under review, as a report does, and see whether it was already flagged.
@@ -181,8 +245,8 @@ export async function openScanReviewCase(input: {
         })
         .where(eq(contentCases.id, current.id))
         .returning({ id: contentCases.id });
-      await recordFlag(tx, existing.id);
-      return { caseId: existing.id, created: false, firstFlag };
+      const written = await recordFlag(tx, existing.id);
+      return { caseId: existing.id, created: false, firstFlag, ...keptMatch(written) };
     }
     throw new Error('The case under review for this hash kept closing while a scan flag was being filed');
   });

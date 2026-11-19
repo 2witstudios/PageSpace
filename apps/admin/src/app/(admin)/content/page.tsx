@@ -12,6 +12,7 @@ import { CaseList } from "@/components/admin/content/case-list";
 import type { ReviewTarget } from "@/components/admin/content/report-queue";
 import { LinkedCaseReports, ReportsTab } from "@/components/admin/content/reports-tab";
 import { ScanVerdicts } from "@/components/admin/content/scan-verdicts";
+import { EnforceReadiness } from "@/components/admin/content/enforce-readiness";
 import { TargetPanel } from "@/components/admin/content/target-panel";
 import { useAdminQuery } from "@/hooks/use-admin-query";
 import { useUrlTab } from "@/hooks/use-url-tab";
@@ -121,7 +122,10 @@ function ContentSafety() {
           <BlockedUploads />
         </TabsContent>
         <TabsContent value="scans" className="mt-4">
-          <ScanVerdicts />
+          <div className="space-y-8">
+            <EnforceReadiness />
+            <ScanVerdicts />
+          </div>
         </TabsContent>
       </Tabs>
     </div>

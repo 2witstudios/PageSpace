@@ -11,7 +11,7 @@ import {
   ListObjectsV2Command,
 } from '@aws-sdk/client-s3';
 import { getS3Client, getS3Bucket } from '@/lib/presigned-url';
-import { deleteS3Keys, headS3Object, isS3NotFound, listS3Prefix, type S3ObjectInfo } from '@/lib/storage/s3-objects';
+import { deleteS3Keys, headS3Object, isS3NotFound, listS3Page, listS3Prefix, readS3ObjectBounded, type S3ObjectInfo } from '@/lib/storage/s3-objects';
 import { isHashBlocked } from '@pagespace/lib/content-safety/blocklist';
 import { assertPrefixWritable } from '@pagespace/lib/organizations/published-visibility';
 import { PARKED_PREFIX, PUBLISHED_PREFIX, parkedKeyOf, type PublishedObjectStore } from '@pagespace/lib/organizations/published-visibility-core';
@@ -491,6 +491,17 @@ export async function openPublishedAsset(
     new GetObjectCommand({ Bucket: getPublishBucket(), Key: buildAssetKey(contentHash) }),
   );
   return { body: result.Body, contentLength: result.ContentLength, contentType: result.ContentType };
+}
+
+/** One page of the public `assets/` prefix, after `startAfter` (the content-safety backfill). */
+export function listPublishedAssetsPage(startAfter: string | null, maxKeys: number): Promise<{ objects: S3ObjectInfo[]; truncated: boolean }> {
+  return listS3Page(getPublishClient(), getPublishBucket(), 'assets/', startAfter, maxKeys);
+}
+
+/** A public object's bytes, bounded like `readS3ObjectBounded` (the content-safety backfill scans what is served). */
+export function readPublishedObjectBounded(key: string, maxBytes: number, timeoutMs: number): Promise<{ bytes: Uint8Array; complete: boolean } | null> {
+  if (!key.startsWith('assets/')) throw new Error('Only public assets are read for scanning');
+  return readS3ObjectBounded(getPublishClient(), getPublishBucket(), key, maxBytes, timeoutMs);
 }
 
 /**
