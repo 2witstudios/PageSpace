@@ -16,8 +16,8 @@ describe('GET /api/ai/models', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(Array.isArray(body.providers)).toBe(true);
-    expect(body.defaultProvider).toBe('openai');
-    expect(body.defaultModel).toBe('openai/gpt-6-luna');
+    expect(body.defaultProvider).toBe('anthropic');
+    expect(body.defaultModel).toBe('anthropic/claude-haiku-5.5');
   });
 
   it('includes a known model and never includes pricing', async () => {

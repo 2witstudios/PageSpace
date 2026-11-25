@@ -297,8 +297,8 @@ describe('AI settings route', () => {
       const response = await GET(makeRequest('GET'));
       const body = await response.json();
 
-      expect(body.currentProvider).toBe('openai');
-      expect(body.currentModel).toBe('openai/gpt-6-luna');
+      expect(body.currentProvider).toBe('anthropic');
+      expect(body.currentModel).toBe('anthropic/claude-haiku-5.5');
       expect(body.userSubscriptionTier).toBe('free');
     });
 
@@ -317,8 +317,8 @@ describe('AI settings route', () => {
       const response = await GET(makeRequest('GET'));
       const body = await response.json();
 
-      expect(body.currentProvider).toBe('openai');
-      expect(body.currentModel).toBe('openai/gpt-6-luna');
+      expect(body.currentProvider).toBe('anthropic');
+      expect(body.currentModel).toBe('anthropic/claude-haiku-5.5');
     });
 
     it('leaves a runtime-discovered local model untouched', async () => {
