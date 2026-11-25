@@ -197,7 +197,7 @@ export const AI_PRICING = {
   'bytedance-seed/seed-2.0-mini': { input: 0.1, output: 0.4 },
 
   // OpenRouter - DeepSeek (source: openrouter.ai/api/v1/models)
-  'deepseek/deepseek-v4-pro': { input: 0.7556, output: 1.5016 },
+  'deepseek/deepseek-v4-pro': { input: 0.73698, output: 1.5016 },
   'deepseek/deepseek-v4-flash': { input: 0.09, output: 0.18 },
   'deepseek/deepseek-v3.2': { input: 0.26, output: 0.38 },
   'deepseek/deepseek-v3.1-terminus': { input: 0.27, output: 1 },
