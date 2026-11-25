@@ -428,7 +428,7 @@ describe('getContextWindowSize', () => {
     });
 
     it('does not disturb the prefixed OpenRouter twin, which keeps its own catalog entry', () => {
-      expect(getContextWindowSize('z-ai/glm-5.3-flash', 'zai')).toBe(1_310_720);
+      expect(getContextWindowSize('z-ai/glm-5.3-flash', 'zai')).toBe(1_048_576);
     });
   });
 

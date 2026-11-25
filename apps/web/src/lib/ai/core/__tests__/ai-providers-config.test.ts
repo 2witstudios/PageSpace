@@ -88,6 +88,7 @@ describe('ai-providers-config', () => {
 
   describe('FREE_TIER_MODELS', () => {
     it('contains the curated free allowlist', () => {
+      expect(FREE_TIER_MODELS.has('anthropic/claude-haiku-5.5')).toBe(true);
       expect(FREE_TIER_MODELS.has('openai/gpt-6-luna')).toBe(true);
       expect(FREE_TIER_MODELS.has('openai/gpt-5.6-luna')).toBe(true);
       expect(FREE_TIER_MODELS.has('openai/gpt-5.4-nano')).toBe(true);
@@ -241,7 +242,12 @@ describe('ai-providers-config', () => {
 
   describe('getDefaultModel', () => {
     it('returns the first model of a vendor', () => {
-      expect(getDefaultModel('openai')).toBe('openai/gpt-6-luna');
+      expect(getDefaultModel('anthropic')).toBe('anthropic/claude-haiku-5.5');
+      expect(getDefaultModel('openai')).toBe('openai/gpt-6.2-sol');
+    });
+
+    it("lists the product default first in its vendor's catalog", () => {
+      expect(getDefaultModel(DEFAULT_PROVIDER)).toBe(DEFAULT_MODEL);
     });
 
     it('returns DEFAULT_MODEL for an unknown provider', () => {
@@ -251,11 +257,11 @@ describe('ai-providers-config', () => {
 
   describe('getDefaultModelForTier', () => {
     it('returns the first tier-accessible model for free users when the catalog default is paid', () => {
-      const defaultModel = getDefaultModel('anthropic');
+      const defaultModel = getDefaultModel('openai');
       expect(isModelAllowedForTier(defaultModel, 'free')).toBe(false);
-      const tierDefault = getDefaultModelForTier('anthropic', 'free');
+      const tierDefault = getDefaultModelForTier('openai', 'free');
       expect(isModelAllowedForTier(tierDefault, 'free')).toBe(true);
-      expect(AI_PROVIDERS.anthropic.models).toHaveProperty(tierDefault);
+      expect(AI_PROVIDERS.openai.models).toHaveProperty(tierDefault);
     });
 
     it('returns the catalog default for paid tiers', () => {

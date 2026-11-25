@@ -23,8 +23,8 @@ export const OPENROUTER_CACHE_TTL_SECONDS = 300;
 export const TIMESTAMP_BUCKET_MS = OPENROUTER_CACHE_TTL_SECONDS * 1000;
 
 /**
- * Default provider/model for new users and any unset fallback. OpenAI's GPT-6 Luna
- * (via OpenRouter) is the product default and a member of the free allowlist.
+ * Default provider/model for new users and any unset fallback. Anthropic's Claude
+ * Haiku 5.5 (via OpenRouter) is the product default and a member of the free allowlist.
  * Sourced from @pagespace/lib so apps (e.g. admin onboarding seed data) that can't
  * import this web module stay in lockstep with the web defaults.
  */
@@ -64,6 +64,7 @@ export const ADMIN_ONLY_PROVIDERS = new Set<string>(['glm']);
  * this curated set of cheaper models. `DEFAULT_MODEL` must be a member.
  */
 export const FREE_TIER_MODELS = new Set<string>([
+  'anthropic/claude-haiku-5.5',
   'openai/gpt-6-luna',
   'openai/gpt-5.6-luna',
   'openai/gpt-5.4-nano',
@@ -76,27 +77,17 @@ export const FREE_TIER_MODELS = new Set<string>([
   'google/gemini-3-flash-preview',
   'google/gemini-2.5-flash',
   'google/gemini-2.5-flash-lite',
-  'inclusionai/ling-3.0-flash-fin:free',
-  'z-ai/glm-5.2:free',
-  'dots-studio/dots-3-note-preview:free',
   'google/gemma-4-26b-a4b-it:free',
   'google/gemma-4-31b-it:free',
-  'liquid/lfm-2.5-2.6b:free',
+  'meta/muse-ember',
+  'tencent/hy4-flash',
+  'inclusionai/ling-3.2-flash:free',
+  'liquid/lfm-3-1.7b:free',
+  'nvidia/nemotron-3.5-super-vl:free',
   'nvidia/nemotron-3.5-lightning:free',
   'nvidia/nemotron-3-ultra-550b-a55b:free',
   'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
-  'nvidia/nemotron-3-super-120b-a12b:free',
-  'thinkingmachines/inkling-small:free',
-  'thinkingmachines/inkling:free',
-  'poolside/laguna-s-2.1:free',
-  'poolside/laguna-xs-2.1:free',
-  'cohere/north-mini-code:free',
-  'minimax/minimax-m3:free',
-  'minimax/minimax-m2.7:free',
   'z-ai/glm-5.3-flash',
-  'qwen/qwen3.8-27b:free',
-  'apodex/apodex-1.1-mini:free',
-  'inclusionai/ling-3.0-flash-sante:free',
 ]);
 
 /**
@@ -112,9 +103,12 @@ export const AI_PROVIDERS = {
   openai: {
     name: 'OpenAI',
     models: {
-      // GPT-6 Luna listed first: getDefaultModel(provider) returns the first entry,
-      // and it's the product default (DEFAULT_MODEL in model-defaults.ts) — keep the
-      // two in agreement.
+      'openai/gpt-6.2-sol': 'GPT-6.2 Sol',
+      'openai/gpt-6.2-sol-pro': 'GPT-6.2 Sol Pro',
+      'openai/gpt-6.2-astra': 'GPT-6.2 Astra',
+      'openai/gpt-6.2-astra-pro': 'GPT-6.2 Astra Pro',
+      'openai/gpt-6.1-terra': 'GPT-6.1 Terra',
+      'openai/gpt-6.1-terra-pro': 'GPT-6.1 Terra Pro',
       'openai/gpt-6-luna': 'GPT-6 Luna',
       'openai/gpt-6-luna-pro': 'GPT-6 Luna Pro',
       'openai/gpt-6-sol': 'GPT-6 Sol',
@@ -154,15 +148,11 @@ export const AI_PROVIDERS = {
       'openai/gpt-4.1-mini': 'GPT-4.1 Mini',
       'openai/o3': 'o3',
       'openai/o3-pro': 'o3 Pro',
-      'openai/o4-mini': 'o4 Mini',
       'openai/gpt-oss-120b': 'GPT OSS 120B',
       'openai/gpt-oss-20b': 'GPT OSS 20B',
-      'openai/gpt-3.5-turbo': 'GPT-3.5 Turbo',
       'openai/gpt-3.5-turbo-0613': 'GPT-3.5 Turbo (older v0613)',
       'openai/gpt-3.5-turbo-16k': 'GPT-3.5 Turbo 16k',
       'openai/gpt-4': 'GPT-4',
-      'openai/gpt-4-turbo': 'GPT-4 Turbo',
-      'openai/gpt-4-turbo-preview': 'GPT-4 Turbo Preview',
       'openai/gpt-4.1-nano': 'GPT-4.1 Nano',
       'openai/gpt-4o-2024-05-13': 'GPT-4o (2024-05-13)',
       'openai/gpt-4o-2024-08-06': 'GPT-4o (2024-08-06)',
@@ -172,40 +162,39 @@ export const AI_PROVIDERS = {
       'openai/gpt-audio-mini': 'GPT Audio Mini',
       'openai/gpt-chat-latest': 'GPT Chat Latest',
       'openai/gpt-oss-safeguard-20b': 'gpt-oss-safeguard-20b',
-      'openai/o1': 'o1',
-      'openai/o3-mini': 'o3 Mini',
-      'openai/o3-mini-high': 'o3 Mini High',
-      'openai/o4-mini-high': 'o4 Mini High',
     },
   },
   anthropic: {
     name: 'Anthropic',
     models: {
+      // Claude Haiku 5.5 listed first: getDefaultModel(provider) returns the first
+      // entry, and it's the product default (DEFAULT_MODEL in model-defaults.ts) —
+      // keep the two in agreement.
+      'anthropic/claude-haiku-5.5': 'Claude Haiku 5.5',
       'anthropic/claude-opus-5.5': 'Claude Opus 5.5',
+      'anthropic/claude-fable-5.2': 'Claude Fable 5.2',
       'anthropic/claude-sonnet-5.5': 'Claude Sonnet 5.5',
       'anthropic/claude-fable-5.1': 'Claude Fable 5.1',
       'anthropic/claude-opus-5': 'Claude Opus 5',
-      'anthropic/claude-opus-5-fast': 'Claude Opus 5 Fast',
       'anthropic/claude-sonnet-5': 'Claude Sonnet 5',
       'anthropic/claude-fable-5': 'Claude Fable 5',
       'anthropic/claude-opus-4.8': 'Claude Opus 4.8',
-      'anthropic/claude-opus-4.8-fast': 'Claude Opus 4.8 Fast',
       'anthropic/claude-opus-4.7': 'Claude Opus 4.7',
-      'anthropic/claude-opus-4.7-fast': 'Claude Opus 4.7 Fast',
       'anthropic/claude-opus-4.6': 'Claude Opus 4.6',
       'anthropic/claude-sonnet-4.6': 'Claude Sonnet 4.6',
       'anthropic/claude-opus-4.5': 'Claude Opus 4.5',
       'anthropic/claude-sonnet-4.5': 'Claude Sonnet 4.5',
       'anthropic/claude-haiku-4.5': 'Claude Haiku 4.5',
       'anthropic/claude-opus-4.1': 'Claude Opus 4.1',
-      'anthropic/claude-opus-4': 'Claude Opus 4',
-      'anthropic/claude-sonnet-4': 'Claude Sonnet 4',
-      'anthropic/claude-3-haiku': 'Claude 3 Haiku',
     },
   },
   google: {
     name: 'Google',
     models: {
+      'google/gemini-4-neon': 'Gemini 4 Neon',
+      'google/gemini-4-hydrogen': 'Gemini 4 Hydrogen',
+      'google/gemini-4-carbon': 'Gemini 4 Carbon',
+      'google/gemini-4-argon': 'Gemini 4 Argon',
       'google/gemini-3.8-flash': 'Gemini 3.8 Flash',
       'google/gemini-3.7-flash': 'Gemini 3.7 Flash',
       'google/gemini-3.6-flash': 'Gemini 3.6 Flash',
@@ -223,7 +212,6 @@ export const AI_PROVIDERS = {
       'google/gemma-4-31b-it': 'Gemma 4 31B',
       'google/gemma-4-26b-a4b-it': 'Gemma 4 26B A4B',
       'google/gemini-2.5-pro-preview': 'Gemini 2.5 Pro Preview 06-05',
-      'google/gemini-2.5-pro-preview-05-06': 'Gemini 2.5 Pro Preview 05-06',
       'google/gemma-3-12b-it': 'Gemma 3 12B',
       'google/gemma-3-27b-it': 'Gemma 3 27B',
       'google/gemma-4-26b-a4b-it:free': 'Gemma 4 26B A4B  (free)',
@@ -238,7 +226,6 @@ export const AI_PROVIDERS = {
       'x-ai/grok-4.3': 'Grok 4.3',
       'x-ai/grok-4.20': 'Grok 4.20',
       'x-ai/grok-4.20-multi-agent': 'Grok 4.20 Multi-Agent',
-      'x-ai/grok-build-0.1': 'Grok Build 0.1',
       'x-ai/grok-4.6': 'Grok 4.6',
     },
   },
@@ -246,6 +233,7 @@ export const AI_PROVIDERS = {
     name: 'DeepSeek',
     models: {
       'deepseek/deepseek-v4.1-flash': 'DeepSeek V4.1 Flash',
+      'deepseek/deepseek-v4.1-flash-1017': 'DeepSeek V4.1 Flash 1017',
       'deepseek/deepseek-v4-pro': 'DeepSeek V4 Pro',
       'deepseek/deepseek-v4-flash': 'DeepSeek V4 Flash',
       'deepseek/deepseek-v3.2': 'DeepSeek V3.2',
@@ -254,7 +242,6 @@ export const AI_PROVIDERS = {
       'deepseek/deepseek-chat': 'DeepSeek V3',
       'deepseek/deepseek-chat-v3-0324': 'DeepSeek V3 0324',
       'deepseek/deepseek-chat-v3.1': 'DeepSeek V3.1',
-      'deepseek/deepseek-r1': 'R1',
       'deepseek/deepseek-v3.2-exp': 'DeepSeek V3.2 Exp',
       'deepseek/deepseek-v4-flash-0731': 'DeepSeek V4 Flash 0731',
       'deepseek/deepseek-v4-flash-vision-exp': 'DeepSeek V4 Flash Vision Exp',
@@ -264,13 +251,12 @@ export const AI_PROVIDERS = {
   qwen: {
     name: 'Qwen',
     models: {
+      'qwen/qwen4-max': 'Qwen4 Max',
       'qwen/qwen3.8-max-prime': 'Qwen3.8 Max Prime',
       'qwen/qwen3.8-max-0902': 'Qwen3.8 Max (0902)',
       'qwen/qwen3.8-omni-flash': 'Qwen3.8 Omni Flash',
-      'qwen/qwen3.8-27b:free': 'Qwen3.8 27B (free)',
       'qwen/qwen3.7-plus': 'Qwen3.7 Plus',
       'qwen/qwen3.7-max': 'Qwen3.7 Max',
-      'qwen/qwen3.6-max-preview': 'Qwen3.6 Max (Preview)',
       'qwen/qwen3.6-plus': 'Qwen3.6 Plus',
       'qwen/qwen3.6-flash': 'Qwen3.6 Flash',
       'qwen/qwen3.6-35b-a3b': 'Qwen3.6 35B-A3B',
@@ -281,52 +267,37 @@ export const AI_PROVIDERS = {
       'qwen/qwen3.5-122b-a10b': 'Qwen3.5 122B-A10B',
       'qwen/qwen3.5-35b-a3b': 'Qwen3.5 35B-A3B',
       'qwen/qwen3.5-27b': 'Qwen3.5 27B',
-      'qwen/qwen3-max-thinking': 'Qwen3 Max Thinking',
-      'qwen/qwen3-max': 'Qwen3 Max',
       'qwen/qwen3-235b-a22b-thinking-2507': 'Qwen3 235B Thinking',
       'qwen/qwen3-235b-a22b-2507': 'Qwen3 235B 2507',
       'qwen/qwen3-coder': 'Qwen3 Coder',
       'qwen/qwen-2.5-72b-instruct': 'Qwen2.5 72B Instruct',
-      'qwen/qwen-2.5-7b-instruct': 'Qwen2.5 7B Instruct',
       'qwen/qwen-plus': 'Qwen-Plus',
-      'qwen/qwen-plus-2025-07-28': 'Qwen Plus 0728',
       'qwen/qwen3-14b': 'Qwen3 14B',
-      'qwen/qwen3-235b-a22b': 'Qwen3 235B A22B',
       'qwen/qwen3-30b-a3b': 'Qwen3 30B A3B',
       'qwen/qwen3-30b-a3b-instruct-2507': 'Qwen3 30B A3B Instruct 2507',
-      'qwen/qwen3-30b-a3b-thinking-2507': 'Qwen3 30B A3B Thinking 2507',
       'qwen/qwen3-32b': 'Qwen3 32B',
-      'qwen/qwen3-8b': 'Qwen3 8B',
       'qwen/qwen3-coder-30b-a3b-instruct': 'Qwen3 Coder 30B A3B Instruct',
       'qwen/qwen3-coder-flash': 'Qwen3 Coder Flash',
       'qwen/qwen3-coder-next': 'Qwen3 Coder Next',
-      'qwen/qwen3-coder-plus': 'Qwen3 Coder Plus',
       'qwen/qwen3-next-80b-a3b-instruct': 'Qwen3 Next 80B A3B Instruct',
-      'qwen/qwen3-next-80b-a3b-thinking': 'Qwen3 Next 80B A3B Thinking',
       'qwen/qwen3-vl-235b-a22b-instruct': 'Qwen3 VL 235B A22B Instruct',
-      'qwen/qwen3-vl-235b-a22b-thinking': 'Qwen3 VL 235B A22B Thinking',
       'qwen/qwen3-vl-30b-a3b-instruct': 'Qwen3 VL 30B A3B Instruct',
-      'qwen/qwen3-vl-30b-a3b-thinking': 'Qwen3 VL 30B A3B Thinking',
-      'qwen/qwen3-vl-32b-instruct': 'Qwen3 VL 32B Instruct',
       'qwen/qwen3-vl-8b-instruct': 'Qwen3 VL 8B Instruct',
-      'qwen/qwen3-vl-8b-thinking': 'Qwen3 VL 8B Thinking',
       'qwen/qwen3.5-9b': 'Qwen3.5-9B',
       'qwen/qwen3.5-plus-02-15': 'Qwen3.5 Plus 2026-02-15',
       'qwen/qwen3.7-flash': 'Qwen3.7 Flash',
       'qwen/qwen3.8-2.4t-a95b': 'Qwen3.8 2.4T A95B',
       'qwen/qwen3.8-27b': 'Qwen3.8 27B',
       'qwen/qwen3.8-flash': 'Qwen3.8 Flash',
-      'qwen/qwen3.8-max': 'Qwen3.8 Max',
     },
   },
   mistral: {
     name: 'Mistral',
     models: {
+      'mistralai/mistral-large-4-0': 'Mistral Large 4',
       'mistralai/mistral-large-2512': 'Mistral Large 3',
       'mistralai/mistral-medium-3-5': 'Mistral Medium 3.5',
       'mistralai/mistral-small-2603': 'Mistral Small (2603)',
-      'mistralai/mistral-medium-3.1': 'Mistral Medium 3.1',
-      'mistralai/mistral-medium-3': 'Mistral Medium 3',
       'mistralai/mistral-small-3.2-24b-instruct': 'Mistral Small 3.2 24B',
       'mistralai/codestral-2508': 'Codestral 2508',
       'mistralai/devstral-2512': 'Devstral 2',
@@ -344,31 +315,28 @@ export const AI_PROVIDERS = {
   moonshot: {
     name: 'Moonshot AI',
     models: {
+      'moonshotai/kimi-k3.1-pro': 'Kimi K3.1 Pro',
       'moonshotai/kimi-k3': 'Kimi K3',
       'moonshotai/kimi-k2.7-code': 'Kimi K2.7 Code',
       'moonshotai/kimi-k2.6': 'Kimi K2.6',
-      'moonshotai/kimi-k2-thinking': 'Kimi K2 Thinking',
-      'moonshotai/kimi-k2': 'Kimi K2',
-      'moonshotai/kimi-k2-0905': 'Kimi K2 0905',
       'moonshotai/kimi-k2.5': 'Kimi K2.5',
     },
   },
   minimax: {
     name: 'MiniMax',
     models: {
+      'minimax/minimax-m3.1-flash': 'MiniMax M3.1 Flash',
       'minimax/minimax-m3': 'MiniMax M3',
       'minimax/minimax-m2.7': 'MiniMax M2.7',
       'minimax/minimax-m2.5': 'MiniMax M2.5',
-      'minimax/minimax-m2.1': 'MiniMax M2.1',
-      'minimax/minimax-m1': 'MiniMax M1',
-      'minimax/minimax-m2': 'MiniMax M2',
-      'minimax/minimax-m2.7:free': 'MiniMax M2.7 (free)',
-      'minimax/minimax-m3:free': 'MiniMax M3 (free)',
     },
   },
   meta: {
     name: 'Meta',
     models: {
+      'meta/muse-wonder': 'Muse Wonder',
+      'meta/muse-spark-open': 'Muse Spark Open',
+      'meta/muse-ember': 'Muse Ember',
       'meta/muse-spark-1.3': 'Muse Spark 1.3',
       'meta/muse-spark-1.3-contributor': 'Muse Spark 1.3 Contributor',
       'meta/muse-spark-1.1': 'Muse Spark 1.1',
@@ -387,17 +355,7 @@ export const AI_PROVIDERS = {
     models: {
       'bytedance-seed/seed-2.0-lite': 'Seed 2.0 Lite',
       'bytedance-seed/seed-2.0-mini': 'Seed 2.0 Mini',
-      'bytedance-seed/seed-1.6': 'Seed 1.6',
-      'bytedance-seed/seed-1.6-flash': 'Seed 1.6 Flash',
       'bytedance-seed/seed-2-1-turbo': 'Seed 2.1 Turbo',
-      'bytedance-seed/seed-2.0-code': 'Seed-2.0-Code',
-    },
-  },
-  inception: {
-    name: 'Inception',
-    models: {
-      'inception/mercury-2.5': 'Mercury 2.5',
-      'inception/mercury-2': 'Mercury 2',
     },
   },
   writer: {
@@ -428,7 +386,6 @@ export const AI_PROVIDERS = {
       'z-ai/glm-4.5-air': 'GLM-4.5 Air',
       'z-ai/glm-4.5v': 'GLM-4.5V',
       'z-ai/glm-4.6v': 'GLM 4.6V',
-      'z-ai/glm-5.2:free': 'GLM 5.2 (free)',
       'z-ai/glm-5.3': 'GLM 5.3',
       'z-ai/glm-5v-turbo': 'GLM 5V Turbo',
     },
@@ -436,6 +393,8 @@ export const AI_PROVIDERS = {
   'aion-labs': {
     name: 'AionLabs',
     models: {
+      'aion-labs/aion-3.5': 'Aion 3.5',
+      'aion-labs/aion-3.5-mini': 'Aion 3.5 Mini',
       'aion-labs/aion-2.0': 'Aion-2.0',
       'aion-labs/aion-3.0': 'Aion-3.0',
       'aion-labs/aion-3.0-mini': 'Aion-3.0-Mini',
@@ -451,19 +410,6 @@ export const AI_PROVIDERS = {
       'amazon/nova-pro-v1': 'Nova Pro 1.0',
     },
   },
-  apodex: {
-    name: 'Apodex',
-    models: {
-      'apodex/apodex-1.1-mini:free': 'Apodex 1.1 Mini (free)',
-    },
-  },
-  'arcee-ai': {
-    name: 'Arcee AI',
-    models: {
-      'arcee-ai/trinity-large-thinking': 'Trinity Large Thinking',
-      'arcee-ai/virtuoso-large': 'Virtuoso Large',
-    },
-  },
   cohere: {
     name: 'Cohere',
     models: {
@@ -471,76 +417,48 @@ export const AI_PROVIDERS = {
       'cohere/command-a': 'Command A',
       'cohere/command-r-08-2024': 'Command R (08-2024)',
       'cohere/command-r-plus-08-2024': 'Command R+ (08-2024)',
-      'cohere/north-mini-code:free': 'North Mini Code (free)',
-    },
-  },
-  'dots-studio': {
-    name: 'Dots Studio',
-    models: {
-      'dots-studio/dots-3-note-preview:free': 'Dots3-Note Preview (free)',
     },
   },
   'ibm-granite': {
     name: 'IBM',
     models: {
-      'ibm-granite/granite-4.1-8b': 'Granite 4.1 8B',
+      'ibm-granite/granite-4.2-8b': 'Granite 4.2 8B',
     },
   },
   inclusionai: {
     name: 'InclusionAI',
     models: {
+      'inclusionai/ling-3.1-flash': 'Ling 3.1 Flash',
+      'inclusionai/ling-3.2-flash:free': 'Ling 3.2 Flash (free)',
       'inclusionai/ling-3.0-flash': 'Ling-3.0-flash',
-      'inclusionai/ling-3.0-flash-fin:free': 'Ling 3.0 Flash Fin (free)',
-      'inclusionai/ling-3.0-flash-sante:free': 'Ling 3.0 Flash Sante (free)',
-    },
-  },
-  kwaipilot: {
-    name: 'Kwaipilot',
-    models: {
-      'kwaipilot/kat-coder-air-v2.5': 'KAT-Coder-Air V2.5',
-      'kwaipilot/kat-coder-pro-v2': 'KAT-Coder-Pro V2',
-      'kwaipilot/kat-coder-pro-v2.5': 'KAT-Coder-Pro V2.5',
     },
   },
   liquid: {
     name: 'LiquidAI',
     models: {
-      'liquid/lfm-2.5-2.6b:free': 'LFM2.5-2.6B (free)',
-    },
-  },
-  meituan: {
-    name: 'Meituan',
-    models: {
-      'meituan/longcat-2.0': 'LongCat 2.0',
+      'liquid/lfm-3-1.7b': 'LFM3-1.7B',
+      'liquid/lfm-3-1.7b:free': 'LFM3-1.7B (free)',
     },
   },
   'nex-agi': {
     name: 'Nex AGI',
     models: {
-      'nex-agi/nex-n2-mini': 'Nex-N2-Mini',
-      'nex-agi/nex-n2-pro': 'Nex-N2-Pro',
+      'nex-agi/nex-n2.6': 'Nex-N2.6',
+      'nex-agi/nex-n2.5-pro': 'Nex-N2.5-Pro',
     },
   },
   nvidia: {
     name: 'NVIDIA',
     models: {
+      'nvidia/nemotron-3.5-super-vl': 'Nemotron 3.5 Super VL',
+      'nvidia/nemotron-3.5-super-vl:free': 'Nemotron 3.5 Super VL (free)',
       'nvidia/nemotron-3-nano-30b-a3b': 'Nemotron 3 Nano 30B A3B',
       'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free': 'Nemotron 3 Nano Omni (free)',
       'nvidia/nemotron-3-super-120b-a12b': 'Nemotron 3 Super',
-      'nvidia/nemotron-3-super-120b-a12b:free': 'Nemotron 3 Super (free)',
       'nvidia/nemotron-3-ultra-550b-a55b': 'Nemotron 3 Ultra',
       'nvidia/nemotron-3-ultra-550b-a55b:free': 'Nemotron 3 Ultra (free)',
       'nvidia/nemotron-3.5-lightning': 'Nemotron 3.5 Lightning',
       'nvidia/nemotron-3.5-lightning:free': 'Nemotron 3.5 Lightning (free)',
-    },
-  },
-  poolside: {
-    name: 'Poolside',
-    models: {
-      'poolside/laguna-s-2.1': 'Laguna S 2.1',
-      'poolside/laguna-s-2.1:free': 'Laguna S 2.1 (free)',
-      'poolside/laguna-xs-2.1': 'Laguna XS 2.1',
-      'poolside/laguna-xs-2.1:free': 'Laguna XS 2.1 (free)',
     },
   },
   rekaai: {
@@ -558,6 +476,8 @@ export const AI_PROVIDERS = {
   sakana: {
     name: 'Sakana',
     models: {
+      'sakana/fugu-ultra-v2': 'Fugu Ultra v2',
+      'sakana/fugu-max': 'Fugu Max',
       'sakana/fugu-ultra': 'Fugu Ultra',
       'sakana/sakana-namazu': 'Sakana Namazu',
     },
@@ -571,15 +491,16 @@ export const AI_PROVIDERS = {
   stepfun: {
     name: 'StepFun',
     models: {
-      'stepfun/step-3.5-flash': 'Step 3.5 Flash',
+      'stepfun/step-5-preview': 'Step 5 Preview',
       'stepfun/step-3.7-flash': 'Step 3.7 Flash',
     },
   },
   tencent: {
     name: 'Tencent',
     models: {
+      'tencent/hy4': 'Hy4',
+      'tencent/hy4-flash': 'Hy4 flash',
       'tencent/hy3': 'Hy3',
-      'tencent/hy3-preview': 'Hy3 preview',
     },
   },
   thedrummer: {
@@ -591,17 +512,17 @@ export const AI_PROVIDERS = {
   thinkingmachines: {
     name: 'Thinking Machines',
     models: {
+      'thinkingmachines/inkling-2-small': 'Inkling 2 Small',
+      'thinkingmachines/inkling-2-mini': 'Inkling 2 Mini',
       'thinkingmachines/inkling': 'Inkling',
       'thinkingmachines/inkling-small': 'Inkling Small',
-      'thinkingmachines/inkling-small:free': 'Inkling Small (free)',
-      'thinkingmachines/inkling:free': 'Inkling (free)',
     },
   },
   upstage: {
     name: 'Upstage',
     models: {
-      'upstage/solar-pro-3': 'Solar Pro 3',
       'upstage/solar-pro4': 'Solar Pro 4',
+      'upstage/solar-mini4': 'Solar Mini 4',
     },
   },
   xiaomi: {
@@ -609,8 +530,6 @@ export const AI_PROVIDERS = {
     models: {
       'xiaomi/mimo-v2.6-pro': 'MiMo-V2.6-Pro',
       'xiaomi/mimo-v2.6-flash': 'MiMo-V2.6-Flash',
-      'xiaomi/mimo-v2.5': 'MiMo-V2.5',
-      'xiaomi/mimo-v2.5-pro': 'MiMo-V2.5-Pro',
     },
   },
   glm: {
@@ -653,10 +572,10 @@ export const AI_PROVIDERS = {
  */
 const CLOUD_VENDOR_PROVIDERS = new Set<string>([
   'openai', 'anthropic', 'google', 'xai', 'deepseek', 'qwen', 'mistral',
-  'moonshot', 'minimax', 'meta', 'bytedance', 'inception', 'writer', 'zai',
-  'aion-labs', 'amazon', 'apodex', 'arcee-ai', 'cohere', 'dots-studio', 'ibm-granite',
-  'inclusionai', 'kwaipilot', 'liquid', 'meituan', 'nex-agi', 'nvidia',
-  'poolside', 'rekaai', 'relace', 'sakana', 'sao10k', 'stepfun', 'tencent',
+  'moonshot', 'minimax', 'meta', 'bytedance', 'writer', 'zai',
+  'aion-labs', 'amazon', 'cohere', 'ibm-granite',
+  'inclusionai', 'liquid', 'nex-agi', 'nvidia',
+  'rekaai', 'relace', 'sakana', 'sao10k', 'stepfun', 'tencent',
   'thedrummer', 'thinkingmachines', 'upstage', 'xiaomi',
 ]);
 

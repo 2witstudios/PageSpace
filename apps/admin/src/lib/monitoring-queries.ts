@@ -523,7 +523,10 @@ export function computeMarginPct(realCostCents: number, chargedCents: number): n
 // Hand-kept in sync with CLOUD_VENDOR_PROVIDERS in
 // apps/web/src/lib/ai/core/ai-providers-config.ts (admin can't import the web
 // app's module) — a vendor added there without updating here miscounts real
-// OpenRouter cost as 'estimate' in margin/revenue analytics.
+// OpenRouter cost as 'estimate' in margin/revenue analytics. Vendors retired from
+// the web catalog (inception, apodex, arcee-ai, dots-studio, kwaipilot, meituan,
+// poolside) stay listed here so their historical usage rows still classify as
+// OpenRouter-backed.
 const CLOUD_VENDOR_PROVIDERS = new Set<string>([
   'openai', 'anthropic', 'google', 'xai', 'deepseek', 'qwen', 'mistral',
   'moonshot', 'minimax', 'meta', 'bytedance', 'inception', 'writer', 'zai',

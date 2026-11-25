@@ -7,9 +7,9 @@ import {
 } from '../model-defaults';
 
 describe('model-defaults', () => {
-  it('defaults to the Z.ai GLM-5.3 Flash product default (OpenRouter-backed)', () => {
-    expect(DEFAULT_AI_PROVIDER).toBe('openai');
-    expect(DEFAULT_AI_MODEL).toBe('openai/gpt-6-luna');
+  it('defaults to the Claude Haiku 5.5 product default (OpenRouter-backed)', () => {
+    expect(DEFAULT_AI_PROVIDER).toBe('anthropic');
+    expect(DEFAULT_AI_MODEL).toBe('anthropic/claude-haiku-5.5');
   });
 
   it('uses a vendor-prefixed (OpenRouter) model id', () => {

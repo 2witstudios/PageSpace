@@ -1,11 +1,11 @@
 /**
  * Default AI provider/model, shared across apps so seed data (admin onboarding)
  * and the web model catalog never drift. Every cloud model is OpenRouter-backed;
- * the default is OpenAI's GPT-6 Luna (a member of the free-tier allowlist, cheap,
- * with a 1M+ context window, and not a Chinese-hosted model).
+ * the default is Anthropic's Claude Haiku 5.5 (a member of the free-tier allowlist,
+ * cheap, with a 1M context window, vision and tool support).
  */
-export const DEFAULT_AI_PROVIDER = 'openai';
-export const DEFAULT_AI_MODEL = 'openai/gpt-6-luna';
+export const DEFAULT_AI_PROVIDER = 'anthropic';
+export const DEFAULT_AI_MODEL = 'anthropic/claude-haiku-5.5';
 
 /**
  * Providers whose usage is logged for observability but never billed against the
