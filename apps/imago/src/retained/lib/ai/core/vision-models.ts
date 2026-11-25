@@ -61,6 +61,7 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'gpt-4': true,
 
   // Anthropic Claude 3+ (all have vision)
+  'claude-haiku-5.5': true,
   'claude-opus-5': true,
   'claude-opus-5-fast': true,
   'claude-sonnet-5': true,

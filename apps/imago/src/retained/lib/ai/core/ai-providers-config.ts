@@ -64,6 +64,7 @@ export const ADMIN_ONLY_PROVIDERS = new Set<string>(['glm']);
  * this curated set of cheaper models. `DEFAULT_MODEL` must be a member.
  */
 export const FREE_TIER_MODELS = new Set<string>([
+  'anthropic/claude-haiku-5.5',
   'openai/gpt-6-luna',
   'openai/gpt-5.6-luna',
   'openai/gpt-5.4-nano',
@@ -181,6 +182,7 @@ export const AI_PROVIDERS = {
   anthropic: {
     name: 'Anthropic',
     models: {
+      'anthropic/claude-haiku-5.5': 'Claude Haiku 5.5',
       'anthropic/claude-opus-5.5': 'Claude Opus 5.5',
       'anthropic/claude-sonnet-5.5': 'Claude Sonnet 5.5',
       'anthropic/claude-fable-5.1': 'Claude Fable 5.1',
