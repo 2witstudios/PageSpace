@@ -5,6 +5,14 @@
  */
 
 const VISION_CAPABLE_MODELS: Record<string, boolean> = {
+  // OpenAI GPT-6.2 / GPT-6.1 Terra Models
+  'gpt-6.2-sol': true,
+  'gpt-6.2-sol-pro': true,
+  'gpt-6.2-astra': true,
+  'gpt-6.2-astra-pro': true,
+  'gpt-6.1-terra': true,
+  'gpt-6.1-terra-pro': true,
+
   // OpenAI GPT-6 Models
   'gpt-6-luna': true,
   'gpt-6-luna-pro': true,
@@ -62,6 +70,7 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
 
   // Anthropic Claude 3+ (all have vision)
   'claude-haiku-5.5': true,
+  'claude-fable-5.2': true,
   'claude-opus-5': true,
   'claude-opus-5-fast': true,
   'claude-sonnet-5': true,
@@ -88,6 +97,12 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'claude-3-opus-20240229': true,
   'claude-3-sonnet-20240229': true,
   'claude-3-haiku-20240307': true,
+
+  // Google Gemini 4 Series
+  'gemini-4-neon': true,
+  'gemini-4-hydrogen': true,
+  'gemini-4-carbon': true,
+  'gemini-4-argon': true,
 
   // Google Gemini (all versions support vision)
   'gemini-3.6-flash': true,
@@ -126,7 +141,8 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'grok-2-vision-1212': true,
   'grok-vision-beta': true,
 
-  // Qwen3.5 Vision-Language Models
+  // Qwen4 / Qwen3.5 Vision-Language Models
+  'qwen4-max': true,
   'qwen3.8-omni-flash': true,
   'qwen3.7-plus': true,
   'qwen3.6-plus': true,
@@ -142,11 +158,30 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'qwen3-max-thinking': true,
 
   // MiniMax Vision Models
+  'minimax-m3.1-flash': true,
   'minimax-m3': true,
   'MiniMax-M2.5': true,
   'minimax-m2.5': true,
 
   // Other multimodal OpenRouter models
+  'kimi-k3.1-pro': true,
+  'muse-wonder': true,
+  'muse-spark-open': true,
+  'muse-ember': true,
+  'deepseek-v4.1-flash-1017': true,
+  'mistral-large-4-0': true,
+  'ling-3.2-flash:free': true,
+  'nex-n2.6': true,
+  'nex-n2.5-pro': true,
+  'nemotron-3.5-super-vl': true,
+  'nemotron-3.5-super-vl:free': true,
+  'fugu-ultra-v2': true,
+  'fugu-max': true,
+  'step-5-preview': true,
+  'hy4': true,
+  'hy4-flash': true,
+  'inkling-2-small': true,
+  'inkling-2-mini': true,
   'kimi-k3': true,
   'kimi-k2.7-code': true,
   'kimi-k2.6': true,
