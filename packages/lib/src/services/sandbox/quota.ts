@@ -44,8 +44,12 @@ function envInt(name: string, fallback: number): number {
 // operator can retune via `CODE_EXEC_CONCURRENCY_BUSINESS`, not an exemption.
 const CONCURRENCY_LIMITS: Record<SubscriptionTier, number> = {
   free: envInt('CODE_EXEC_CONCURRENCY_FREE', 1),
-  pro: envInt('CODE_EXEC_CONCURRENCY_PRO', 10),
-  business: envInt('CODE_EXEC_CONCURRENCY_BUSINESS', 50),
+  // This same ceiling bounds an owner's LIVE agent sessions
+  // (`checkAgentSessionConcurrency`), where a hibernated sandbox still counts.
+  // At 10, a Pro owner whose idle sessions had piled up was refused every new
+  // sandbox; the paid rows are sized for that, not only for concurrent runs.
+  pro: envInt('CODE_EXEC_CONCURRENCY_PRO', 50),
+  business: envInt('CODE_EXEC_CONCURRENCY_BUSINESS', 100),
 };
 
 const activeByUser = new Map<string, number>();
@@ -319,13 +323,13 @@ export function sessionActivityMapSize(): number {
  * moment the persistence is committed to, and an env that has never been
  * provisioned is still an env the payer holds.
  *
- * **Ceilings, and the fact that they are placeholders.** The numbers below are a
- * deliberate first cut pending the economics sign-off — free 0 (an env is a
- * paid-tier feature; `isSandboxAvailable` already says so, and this table
- * agrees rather than contradicting it), pro 2, business 10. Each is
- * overridable by env var (`DRIVE_ENV_LIMIT_FREE` and friends) precisely because
- * they will move: an operator can retune a tier without a deploy, and the
- * pricing work can land its real numbers as a one-line change.
+ * **Ceilings.** Free 0 (an env is a paid-tier feature; `isSandboxAvailable`
+ * already says so, and this table agrees rather than contradicting it). Pro and
+ * business sit at the listing cap: since org-wallet billing, an env's storage
+ * and compute are metered against the payer, so the old per-tier counts (pro 2,
+ * business 10) only refused work the wallet would have paid for. Each is still
+ * overridable by env var (`DRIVE_ENV_LIMIT_FREE` and friends), so an operator
+ * can retune a tier without a deploy.
  *
  * As with the concurrency table, the lookup is by EFFECTIVE tier
  * (`resolveEffectiveSandboxTier`), so a tenant deployment gets the business row —
@@ -361,8 +365,11 @@ function envLimit(name: string, fallback: number): number {
 /** The env ceiling for a tier — exported so a caller (or a test) can say WHAT the limit was, not just that it was hit. */
 const DRIVE_ENV_LIMITS: Record<SubscriptionTier, number> = {
   free: envLimit('DRIVE_ENV_LIMIT_FREE', 0),
-  pro: envLimit('DRIVE_ENV_LIMIT_PRO', 2),
-  business: envLimit('DRIVE_ENV_LIMIT_BUSINESS', 10),
+  // Paid tiers sit at the listing cap. An env's storage and compute are
+  // metered against the payer's wallet, so the row count is a visibility
+  // guard (see `envLimit`), not a pricing lever.
+  pro: envLimit('DRIVE_ENV_LIMIT_PRO', MAX_DRIVE_ENVS_LISTED),
+  business: envLimit('DRIVE_ENV_LIMIT_BUSINESS', MAX_DRIVE_ENVS_LISTED),
 };
 
 export function getDriveEnvLimit(tier: SubscriptionTier): number {

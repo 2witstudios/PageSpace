@@ -240,6 +240,32 @@ describe('runBashInSandbox', () => {
     expect(slots.released).toBe(1);
   });
 
+  it('given a provisioning failure with a stated cause, should log the cause so the failure is diagnosable', async () => {
+    const errors: Array<[string, unknown]> = [];
+    const { deps } = makeDeps({
+      acquireSandbox: async () => ({ ok: false as const, reason: 'provision_failed' as const, cause: 'spawn_failed' }),
+      logger: { error: (message, context) => { errors.push([message, context]); } },
+    });
+
+    await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0][0]).toBe('Sandbox acquisition failed');
+    expect(errors[0][1]).toMatchObject({ reason: 'provision_failed', cause: 'spawn_failed' });
+  });
+
+  it('given a provisioning failure whose cause is an Error, should log its message rather than the raw object', async () => {
+    const errors: Array<[string, unknown]> = [];
+    const { deps } = makeDeps({
+      acquireSandbox: async () => ({ ok: false as const, reason: 'provision_failed' as const, cause: new Error('sprite create timed out') }),
+      logger: { error: (message, context) => { errors.push([message, context]); } },
+    });
+
+    await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+
+    expect(errors[0][1]).toMatchObject({ cause: 'sprite create timed out' });
+  });
+
   it('given a provisioning failure with NO stated cause, should stay generic', async () => {
     const { deps } = makeDeps({
       acquireSandbox: async () => ({ ok: false as const, reason: 'provision_failed' as const }),
@@ -1522,6 +1548,23 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
     expect(acquireCalls).toBe(0);
     expect(gateCalls).toEqual([]);
     expect(trackUsageCalls).toEqual([]);
+  });
+
+  it('given resolveBillingSession denies with a cause, should log the denial and its cause — a fail-closed refusal must not be silent', async () => {
+    const errors: Array<[string, unknown]> = [];
+    const { billing } = makeBilling();
+    const { deps } = makeDeps({
+      billing,
+      resolveBillingSession: async () => ({ deny: 'provision_failed', cause: 'spawn_failed' }),
+      logger: { error: (message, context) => { errors.push([message, context]); } },
+    });
+
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+
+    expect(result).toMatchObject({ success: false, reason: 'provision_failed' });
+    expect(errors).toHaveLength(1);
+    expect(errors[0][0]).toBe('Sandbox billing session could not be resolved');
+    expect(errors[0][1]).toMatchObject({ reason: 'provision_failed', cause: 'spawn_failed' });
   });
 
   it('places a hold BEFORE the machine is acquired, keyed to the payer resolved from the SESSION', async () => {

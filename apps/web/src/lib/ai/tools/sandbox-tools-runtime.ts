@@ -414,7 +414,10 @@ export function buildRealSandboxRunDeps({
         return { workspaceId: row.id, driveId: row.driveId, ownerId: row.ownerId };
       }
       if (!resolved.attempted) return null;
-      return { deny: resolved.reason === 'session_limit_reached' ? 'session_limit_reached' : 'provision_failed' };
+      return {
+        deny: resolved.reason === 'session_limit_reached' ? 'session_limit_reached' : 'provision_failed',
+        cause: resolved.reason,
+      };
     },
     // Sprites Platform Alignment 5-2: checkpoint the sandbox filesystem before
     // an agent bash batch runs (fail-open, at most once per turn — see
