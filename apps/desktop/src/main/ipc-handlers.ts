@@ -9,6 +9,7 @@ import { getWSClient } from './ws-client';
 import { logger } from './logger';
 import { getErrorMessage } from './error-utils';
 import { saveAuthSession, clearAuthSession, type StoredAuthSession } from './auth-storage';
+import { setSessionCookie } from './session-cookie';
 import { getMachineIdentifier, getOrLoadSession } from './auth-session';
 import { getPowerState } from './power-monitor';
 import { triggerMCPStatusBroadcast } from './mcp-status';
@@ -120,21 +121,7 @@ export function registerIPCHandlers(): void {
 
     // Also set the session cookie on the BrowserWindow's session
     // so subsequent page loads/fetches include the cookie
-    const appOrigin = getAppOrigin();
-    try {
-      await session.defaultSession.cookies.set({
-        url: appOrigin,
-        name: 'session',
-        value: sessionData.sessionToken,
-        path: '/',
-        httpOnly: true,
-        secure: appOrigin.startsWith('https:'),
-        sameSite: 'strict' as const,
-        expirationDate: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60,
-      });
-    } catch (cookieError) {
-      console.warn('[Auth IPC] Failed to set session cookie:', cookieError);
-    }
+    await setSessionCookie(sessionData.sessionToken);
 
     return { success: true };
   });
