@@ -443,7 +443,7 @@ export class ContentStore {
     const metadata: OriginalFileMetadata = {
       originalName,
       contentHash: normalizedHash,
-      size: buffer.length,
+      size: buffer.byteLength,
       savedAt: new Date().toISOString(),
     };
 

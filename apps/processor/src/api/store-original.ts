@@ -18,6 +18,22 @@ export const MAX_STORE_ORIGINAL_BYTES = MAX_VERIFY_BYTES;
 const router: ExpressRouter = Router();
 
 /**
+ * The request body as the file's bytes, or null when it is anything else: not
+ * a Buffer (wrong content type, so `express.raw` left it unparsed), an array or
+ * a string (a tampered parser), or empty. Narrowed once, here, so everything
+ * after works on a definite non-empty Buffer.
+ */
+function originalBytesOf(body: unknown): Buffer | null {
+  if (Array.isArray(body) || typeof body === 'string' || !Buffer.isBuffer(body)) return null;
+  return body.byteLength > 0 ? body : null;
+}
+
+/** A single header value, or '' when absent or repeated (an array). */
+function singleHeader(value: string | string[] | undefined): string {
+  return typeof value === 'string' ? value : '';
+}
+
+/**
  * Store the original bytes of a FILE page the web service is about to create.
  *
  * Browser uploads PUT straight to storage, but a file the SERVER produces — an
@@ -62,16 +78,16 @@ router.post(
         return res.status(403).json({ error: 'Access denied: token is not bound to this page' });
       }
 
-      const declaredHeader = req.get('x-content-hash');
-      const declared = typeof declaredHeader === 'string' ? declaredHeader.toLowerCase() : '';
+      const declared = singleHeader(req.headers['x-content-hash']).toLowerCase();
       if (!isValidContentHash(declared)) {
         return res.status(400).json({ error: 'Invalid content hash' });
       }
 
-      const body: unknown = req.body;
-      if (!Buffer.isBuffer(body) || body.length === 0) {
+      const body = originalBytesOf(req.body);
+      if (body === null) {
         return res.status(400).json({ error: 'Request body must be the file bytes (application/octet-stream)' });
       }
+      const size = body.byteLength;
 
       if (!verifyContentHash(body, declared)) {
         loggers.security.warn('store-original: bytes do not match the declared hash', {
@@ -88,12 +104,12 @@ router.post(
 
       // Content-addressed: present bytes are these bytes, so a second store is a no-op.
       if (await contentStore.originalExists(declared)) {
-        return res.json({ ok: true, contentHash: declared, size: body.length, stored: false });
+        return res.json({ ok: true, contentHash: declared, size, stored: false });
       }
 
-      const rawName = req.get('x-original-name');
+      const rawName = singleHeader(req.headers['x-original-name']);
       let originalName = 'file';
-      if (typeof rawName === 'string' && rawName !== '') {
+      if (rawName !== '') {
         try {
           originalName = decodeURIComponent(rawName);
         } catch {
@@ -108,7 +124,7 @@ router.post(
         // Verified just above: the bytes hash to `declared`.
         declared,
       );
-      return res.json({ ok: true, contentHash: declared, size: body.length, stored: true });
+      return res.json({ ok: true, contentHash: declared, size, stored: true });
     } catch (error) {
       loggers.processor.error('store-original failed', error as Error);
       return res.status(500).json({ error: 'Failed to store original' });
