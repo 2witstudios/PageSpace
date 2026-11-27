@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import sharp from 'sharp';
 import {
+  withPdf,
   extractPdfContent,
   isLowTextPdf,
   rasterizePdfPages,
@@ -8,6 +9,7 @@ import {
   resolveMaxRasterizedPdfPages,
   LOW_TEXT_CHARS_PER_PAGE,
   DEFAULT_MAX_RASTERIZED_PDF_PAGES,
+  type RasterizedPdfPage,
 } from '../processing-pipeline';
 
 /**
@@ -47,7 +49,7 @@ describe('extractPdfContent', () => {
   it('returns the extracted text and the page count', async () => {
     const pdf = buildPdf([text('Exhibit one has real words'), BLUE_SQUARE, BLUE_SQUARE]);
 
-    const result = await extractPdfContent(pdf);
+    const result = await withPdf(pdf, extractPdfContent);
 
     expect(result.pageCount).toBe(3);
     expect(result.text).toContain('Exhibit one has real words');
@@ -73,13 +75,21 @@ describe('isLowTextPdf', () => {
   });
 });
 
+/** Render through the real loader, collecting what onPage receives. */
+async function render(pdf: Buffer, maxPages: number) {
+  const pages: RasterizedPdfPage[] = [];
+  const result = await withPdf(pdf, (doc) => rasterizePdfPages(doc, { maxPages, onPage: async (page) => { pages.push(page); } }));
+  return { pages, ...result };
+}
+
 describe('rasterizePdfPages', () => {
   it('renders each page as a JPEG within the 2048px ai-vision budget', async () => {
     const pdf = buildPdf([BLUE_SQUARE, BLUE_SQUARE]);
 
-    const { pages, attempted } = await rasterizePdfPages(pdf, { maxPages: 10 });
+    const { pages, attempted, rendered } = await render(pdf, 10);
 
     expect(attempted).toBe(2);
+    expect(rendered).toBe(2);
     expect(pages.map((p) => p.pageNumber)).toEqual([1, 2]);
     for (const page of pages) {
       expect(page.mimeType).toBe('image/jpeg');
@@ -94,7 +104,7 @@ describe('rasterizePdfPages', () => {
   it('keeps a very wide page within the budget on its long side', async () => {
     const pdf = buildPdf([BLUE_SQUARE], '0 0 3000 400');
 
-    const { pages } = await rasterizePdfPages(pdf, { maxPages: 1 });
+    const { pages } = await render(pdf, 1);
 
     const meta = await sharp(pages[0].buffer).metadata();
     expect(meta.width).toBeLessThanOrEqual(2048);
@@ -104,7 +114,7 @@ describe('rasterizePdfPages', () => {
   it('paints the page content onto a white background', async () => {
     const pdf = buildPdf([BLUE_SQUARE]);
 
-    const { pages } = await rasterizePdfPages(pdf, { maxPages: 1 });
+    const { pages } = await render(pdf, 1);
 
     const { data, info } = await sharp(pages[0].buffer).raw().toBuffer({ resolveWithObject: true });
     const pixel = (x: number, y: number) => {
@@ -125,7 +135,7 @@ describe('rasterizePdfPages', () => {
   it('renders text set in a standard font', async () => {
     const pdf = buildPdf(['BT /F1 48 Tf 72 600 Td (EXHIBIT 4) Tj ET']);
 
-    const { pages } = await rasterizePdfPages(pdf, { maxPages: 1 });
+    const { pages } = await render(pdf, 1);
 
     const { data, info } = await sharp(pages[0].buffer).greyscale().raw().toBuffer({ resolveWithObject: true });
     const dark = data.filter((v) => v < 100).length;
@@ -133,10 +143,18 @@ describe('rasterizePdfPages', () => {
     expect(dark / (info.width * info.height)).toBeGreaterThan(0.001);
   }, 30000);
 
+  it('stops when handing a page on fails', async () => {
+    const pdf = buildPdf([BLUE_SQUARE, BLUE_SQUARE]);
+    const onPage = vi.fn(async () => { throw new Error('S3 down'); });
+
+    await expect(withPdf(pdf, (doc) => rasterizePdfPages(doc, { maxPages: 2, onPage }))).rejects.toThrow('S3 down');
+    expect(onPage).toHaveBeenCalledTimes(1);
+  }, 30000);
+
   it('renders only the first maxPages pages', async () => {
     const pdf = buildPdf([BLUE_SQUARE, BLUE_SQUARE, BLUE_SQUARE, BLUE_SQUARE]);
 
-    const { pages, attempted } = await rasterizePdfPages(pdf, { maxPages: 2 });
+    const { pages, attempted } = await render(pdf, 2);
 
     expect(attempted).toBe(2);
     expect(pages.map((p) => p.pageNumber)).toEqual([1, 2]);

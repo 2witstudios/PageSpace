@@ -11,11 +11,10 @@
  * Every part has its own size cap, and the parts of one result share a total cap,
  * because a delivered result is re-sent with the conversation on later steps.
  */
-import { isHashBlocked } from '@pagespace/lib/content-safety/blocklist';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { validateMagicBytes } from '@/lib/validation/image-validation';
 import { MAX_IMAGE_SIZE_BYTES } from '@/lib/ai/shared/utils/image-resize';
-import type { FetchPresetBytes } from './processor-file-fetch';
+import { isContentRemoved } from '@/lib/ai/core/image-preset-fetch';
+import { fetchPresetOrNull, type FetchPresetBytes } from './processor-file-fetch';
 import {
   buildVisualContentMetadata,
   type DeliveredVisualPart,
@@ -37,6 +36,8 @@ export const PDF_VISUAL_LIMITS = {
   defaultPageBatch: 5,
   /** Most page images in one read_page result. */
   maxPagesPerRead: 20,
+  /** Page images fetched at once. Bounded so a read never holds many over-cap pages. */
+  fetchConcurrency: 4,
 };
 
 export type PdfVisualLimits = typeof PDF_VISUAL_LIMITS;
@@ -102,40 +103,28 @@ function describePages(pages: number[]): string {
   return runs.join(', ');
 }
 
-async function isRemoved(contentHash: string, isBlocked: (hash: string) => Promise<boolean>): Promise<boolean> {
-  try {
-    return await isBlocked(contentHash);
-  } catch (err) {
-    // A failed lookup counts as blocked: nothing is the safe answer when we cannot tell.
-    loggers.ai.warn('read_page PDF: blocklist lookup failed, treating the file as unavailable', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return true;
-  }
+/** A fetch that falls back to "not available" (null), logged. */
+function fetchPreset(fetchBytes: FetchPresetBytes, contentHash: string, preset: string, maxBytes: number): Promise<Buffer | null> {
+  return fetchPresetOrNull(fetchBytes, contentHash, preset, { maxBytes }, (failedPreset, error) =>
+    loggers.ai.warn('read_page PDF: preset fetch failed, skipping', { preset: failedPreset, error }));
 }
 
-async function tryFetch(fetchBytes: FetchPresetBytes, contentHash: string, preset: string, maxBytes: number): Promise<Buffer | null> {
-  try {
-    return await fetchBytes(contentHash, preset, { maxBytes });
-  } catch (err) {
-    // A fetch failure (denied, processor down) means "this part is not available",
-    // never a failed read_page call: the metadata fallback must stay reachable.
-    loggers.ai.warn('read_page PDF: preset fetch failed, skipping', {
-      preset,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return null;
-  }
+const isPdfBytes = (bytes: Buffer) => bytes.subarray(0, 5).toString('latin1') === '%PDF-';
+const isJpegBytes = (bytes: Buffer) => bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+
+/** The fields every PDF result carries, delivered or not. */
+function envelope(page: PdfFilePage) {
+  return {
+    pageId: page.id,
+    title: page.title,
+    sizeBytes: page.fileSize ?? 0,
+    metadata: { processingStatus: 'visual', originalFileName: page.originalFileName },
+  };
 }
 
 function fallback(page: PdfFilePage, hint: string): Record<string, unknown> {
-  return buildVisualContentMetadata({
-    pageId: page.id,
-    title: page.title,
-    mimeType: 'application/pdf',
-    sizeBytes: page.fileSize ?? 0,
-    metadata: { processingStatus: 'visual', originalFileName: page.originalFileName, hint },
-  });
+  const base = envelope(page);
+  return buildVisualContentMetadata({ ...base, mimeType: 'application/pdf', metadata: { ...base.metadata, hint } });
 }
 
 function delivered(
@@ -144,16 +133,15 @@ function delivered(
   parts: DeliveredVisualPart[],
   metadata: Record<string, unknown>,
 ): VisualPartsDeliveredOutput {
+  const base = envelope(page);
   return {
+    ...base,
     success: true,
     type: 'visual_parts_delivered',
-    pageId: page.id,
-    title: page.title,
     originalMimeType: 'application/pdf',
     message,
     parts,
-    sizeBytes: page.fileSize ?? 0,
-    metadata: { processingStatus: 'visual', originalFileName: page.originalFileName, ...metadata },
+    metadata: { ...base.metadata, ...metadata },
   };
 }
 
@@ -183,7 +171,7 @@ export async function deliverPdfPage(params: DeliverPdfPageParams): Promise<Visu
     requested = parsed;
   }
 
-  if (await isRemoved(page.contentHash, params.isBlocked ?? isHashBlocked)) {
+  if (await isContentRemoved(page.contentHash, params.isBlocked)) {
     return fallback(page, 'This file is not available.');
   }
 
@@ -195,8 +183,8 @@ export async function deliverPdfPage(params: DeliverPdfPageParams): Promise<Visu
     } else if (pageCount !== null && pageCount > limits.maxNativePdfPages) {
       notSentWhole = `The PDF has ${pageCount} pages, more than a model reads in one PDF (${limits.maxNativePdfPages}), so its pages are shown as images.`;
     } else {
-      const bytes = await tryFetch(fetchBytes, page.contentHash, 'original', limits.maxPdfBytes);
-      if (bytes && bytes.subarray(0, 5).toString('latin1') === '%PDF-' && bytes.length <= limits.maxTotalBytes) {
+      const bytes = await fetchPreset(fetchBytes, page.contentHash, 'original', limits.maxPdfBytes);
+      if (bytes && isPdfBytes(bytes) && bytes.length <= limits.maxTotalBytes) {
         const filename = page.originalFileName ?? `${page.title}.pdf`;
         return delivered(
           page,
@@ -211,8 +199,8 @@ export async function deliverPdfPage(params: DeliverPdfPageParams): Promise<Visu
 
   // 2. Rasterized page images.
   const batch = requested ?? Array.from({ length: limits.defaultPageBatch }, (_, i) => i + 1);
-  let wanted = rasterizedPages === null ? batch : batch.filter((n) => n <= rasterizedPages);
-  if (requested !== null && wanted.length === 0) {
+  const available = rasterizedPages === null ? batch : batch.filter((n) => n <= rasterizedPages);
+  if (requested !== null && available.length === 0) {
     const available = rasterizedPages ? `pages 1-${rasterizedPages}` : 'no pages';
     return {
       success: false,
@@ -221,32 +209,33 @@ export async function deliverPdfPage(params: DeliverPdfPageParams): Promise<Visu
       title: page.title,
     };
   }
-  let trimmedToPerRead = false;
-  if (wanted.length > limits.maxPagesPerRead) {
-    wanted = wanted.slice(0, limits.maxPagesPerRead);
-    trimmedToPerRead = true;
-  }
+  const wanted = available.slice(0, limits.maxPagesPerRead);
 
   const parts: DeliveredVisualPart[] = [];
   let total = 0;
+  // The first page not shown because this result hit its total size cap.
   let stoppedAt: number | null = null;
-  let hitTotalCap = false;
-  for (const n of wanted) {
-    const bytes = await tryFetch(fetchBytes, page.contentHash, `pdf-page-${n}`, limits.maxImageBytes);
-    if (!bytes) {
-      // With no rendered count, a missing page is the end of what was rendered.
-      if (rasterizedPages === null) break;
-      continue;
+  let reachedEnd = false;
+  // Fetched a few at a time, then taken strictly in page order.
+  for (let i = 0; i < wanted.length && stoppedAt === null && !reachedEnd; i += limits.fetchConcurrency) {
+    const chunk = wanted.slice(i, i + limits.fetchConcurrency);
+    const fetched = await Promise.all(chunk.map((n) => fetchPreset(fetchBytes, page.contentHash, `pdf-page-${n}`, limits.maxImageBytes)));
+    for (let j = 0; j < chunk.length; j++) {
+      const n = chunk[j];
+      const bytes = fetched[j];
+      if (!bytes) {
+        // With no rendered count, a missing page is the end of what was rendered.
+        if (rasterizedPages === null) { reachedEnd = true; break; }
+        continue;
+      }
+      if (!isJpegBytes(bytes)) continue;
+      if (total + bytes.length > limits.maxTotalBytes) {
+        stoppedAt = n;
+        break;
+      }
+      total += bytes.length;
+      parts.push({ kind: 'image', mediaType: 'image/jpeg', data: bytes.toString('base64'), pdfPage: n });
     }
-    const base64 = bytes.toString('base64');
-    if (!validateMagicBytes(base64, 'image/jpeg')) continue;
-    if (total + bytes.length > limits.maxTotalBytes) {
-      stoppedAt = n;
-      hitTotalCap = true;
-      break;
-    }
-    total += bytes.length;
-    parts.push({ kind: 'image', mediaType: 'image/jpeg', data: base64, pdfPage: n });
   }
 
   if (parts.length === 0) {
@@ -258,10 +247,11 @@ export async function deliverPdfPage(params: DeliverPdfPageParams): Promise<Visu
 
   const shown = parts.map((p) => p.pdfPage as number);
   const lastShown = shown[shown.length - 1];
+  const trimmedToPerRead = available.length > wanted.length;
   const resumeFrom = stoppedAt ?? (trimmedToPerRead ? wanted[wanted.length - 1] + 1 : lastShown + 1);
   // Point at the next batch when this read was cut short, or was the default
   // first batch of a longer document. An explicit range that fit is complete.
-  const cutShort = hitTotalCap || trimmedToPerRead || requested === null;
+  const cutShort = stoppedAt !== null || trimmedToPerRead || requested === null;
   const nextPages = cutShort && rasterizedPages !== null && resumeFrom <= rasterizedPages
     ? `${resumeFrom}-${Math.min(resumeFrom + limits.defaultPageBatch - 1, rasterizedPages)}`
     : null;
@@ -270,7 +260,7 @@ export async function deliverPdfPage(params: DeliverPdfPageParams): Promise<Visu
     `Showing page${shown.length === 1 ? '' : 's'} ${describePages(shown)}${pageCount ? ` of ${pageCount}` : ''} from "${page.title}" as images.`,
   ];
   if (notSentWhole) sentences.unshift(notSentWhole);
-  if (hitTotalCap) sentences.push('Stopped at the size limit for one result.');
+  if (stoppedAt !== null) sentences.push('Stopped at the size limit for one result.');
   if (nextPages) sentences.push(`Call read_page again with pages: "${nextPages}" to see more.`);
   if (rasterizedPages !== null && pageCount !== null && rasterizedPages < pageCount) {
     sentences.push(`Only the first ${rasterizedPages} pages are available as images.`);

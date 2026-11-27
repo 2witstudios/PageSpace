@@ -13,6 +13,7 @@ import {
   detectContentType,
   isAllowedContentType,
   extractTextContent,
+  withPdf,
   extractPdfContent,
   isLowTextPdf,
   rasterizePdfPages,
@@ -59,7 +60,7 @@ export async function fetchObjectFromS3(contentHash: string, opts: FetchOptions 
   throw new Error(`Object not found in S3 after ${maxAttempts} attempts: ${contentHash}`);
 }
 
-// PDFs are dispatched on their own (dispatchPdf): a scan is visual, not text.
+// PDFs are processed on their own (processPdfPage): a scan is visual, not text.
 const TEXT_EXTRACTABLE = new Set([
   // .docx only — mammoth cannot read legacy binary .doc (application/msword)
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -142,7 +143,7 @@ async function dispatch(pageId: string, contentHash: string, bytes: Buffer, mime
   }
 
   if (mimeType === 'application/pdf') {
-    await dispatchPdf(pageId, contentHash, bytes);
+    await processPdfPage(pageId, contentHash, bytes);
     return;
   }
 
@@ -162,33 +163,42 @@ async function dispatch(pageId: string, contentHash: string, bytes: Buffer, mime
  * models) and its leading pages are rendered to `pdf-page-{n}` JPEG presets, so a
  * vision model can look at it. Marking a scan `completed` with empty content left
  * agents nothing to read and never reached the visual path.
+ *
+ * Shared by the upload pipeline and the ingest-file worker (Reprocess), so a
+ * reprocessed scan gets the same status and page images as a new upload.
+ * Returns the status it recorded.
  */
-async function dispatchPdf(pageId: string, contentHash: string, bytes: Buffer): Promise<void> {
+export async function processPdfPage(pageId: string, contentHash: string, bytes: Buffer): Promise<'completed' | 'visual'> {
   const mimeType = 'application/pdf';
-  const { text, pageCount } = await extractPdfContent(bytes);
+  return withPdf(bytes, async (pdf) => {
+    const { text, pageCount } = await extractPdfContent(pdf);
 
-  if (!isLowTextPdf(text, pageCount)) {
-    await setPageCompleted(pageId, text, { mimeType, pageCount }, 'text');
-    return;
-  }
-
-  let rasterizedPages = 0;
-  try {
-    const { pages, attempted } = await rasterizePdfPages(bytes, { maxPages: resolveMaxRasterizedPdfPages() });
-    // One at a time: saveCache read-modify-writes the hash's cache metadata.
-    for (const page of pages) {
-      await contentStore.saveCache(contentHash, pdfPagePreset(page.pageNumber), page.buffer, page.mimeType);
+    if (!isLowTextPdf(text, pageCount)) {
+      await setPageCompleted(pageId, text, { mimeType, pageCount }, 'text');
+      return 'completed';
     }
-    rasterizedPages = pages.length > 0 ? attempted : 0;
-  } catch (err) {
-    // The page stays readable (as a PDF, or by its text) without page images.
-    loggers.processor.warn('PDF page rendering failed; marking visual without page images', {
-      pageId,
-      contentHash,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    rasterizedPages = 0;
-  }
 
-  await setPageVisualWithContent(pageId, text, { mimeType, pageCount, rasterizedPages, lowText: true });
+    let rasterizedPages = 0;
+    try {
+      const { rendered, attempted } = await rasterizePdfPages(pdf, {
+        maxPages: resolveMaxRasterizedPdfPages(),
+        // Each page is cached as soon as it is rendered, and one at a time:
+        // saveCache read-modify-writes the hash's cache metadata.
+        onPage: async (page) => {
+          await contentStore.saveCache(contentHash, pdfPagePreset(page.pageNumber), page.buffer, page.mimeType);
+        },
+      });
+      rasterizedPages = rendered > 0 ? attempted : 0;
+    } catch (err) {
+      // The page stays readable (as a PDF, or by its text) without page images.
+      loggers.processor.warn('PDF page rendering failed; marking visual without page images', {
+        pageId,
+        contentHash,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    await setPageVisualWithContent(pageId, text, { mimeType, pageCount, rasterizedPages });
+    return 'visual';
+  });
 }

@@ -69,8 +69,12 @@ vi.mock('../video-processor', () => ({
   isVideo: vi.fn().mockReturnValue(false),
 }));
 
+const mockFetchObjectFromS3 = vi.hoisted(() => vi.fn());
+const mockProcessPdfPage = vi.hoisted(() => vi.fn());
 vi.mock('../../api/s3-pull-adapter', () => ({
   runPullPipeline: vi.fn().mockResolvedValue(undefined),
+  fetchObjectFromS3: mockFetchObjectFromS3,
+  processPdfPage: mockProcessPdfPage,
 }));
 
 import { QueueManager, mapJobState } from '../queue-manager';
@@ -517,7 +521,7 @@ describe('QueueManager', () => {
 
       const job = {
         id: 'job-1',
-        data: { contentHash: VALID_HASH, fileId: 'page-1', mimeType: 'application/pdf', originalName: 'doc.pdf' },
+        data: { contentHash: VALID_HASH, fileId: 'page-1', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', originalName: 'doc.docx' },
       };
 
       const result = await ingestWorker([job]);
@@ -525,7 +529,7 @@ describe('QueueManager', () => {
       expect(result).toEqual({ success: true, status: 'completed', textLength: 23 });
     });
 
-    it('handles document with no text (scanned PDF)', async () => {
+    it('handles a document with no text', async () => {
       (needsTextExtraction as ReturnType<typeof vi.fn>).mockReturnValue(true);
       (extractText as ReturnType<typeof vi.fn>).mockResolvedValue({
         success: true,
@@ -538,7 +542,7 @@ describe('QueueManager', () => {
 
       const job = {
         id: 'job-1',
-        data: { contentHash: VALID_HASH, fileId: 'page-1', mimeType: 'application/pdf', originalName: 'scan.pdf' },
+        data: { contentHash: VALID_HASH, fileId: 'page-1', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', originalName: 'blank.docx' },
       };
 
       const result = await ingestWorker([job]);
@@ -546,10 +550,44 @@ describe('QueueManager', () => {
       expect(result).toEqual({ success: true, status: 'visual' });
     });
 
+    it('processes a PDF (a reprocess) through the same handler as an upload', async () => {
+      const bytes = Buffer.from('%PDF-1.4');
+      mockFetchObjectFromS3.mockResolvedValue(bytes);
+      mockProcessPdfPage.mockResolvedValue('visual');
+
+      const qm = new QueueManager();
+      await qm.initialize();
+
+      const job = {
+        id: 'job-1',
+        data: { contentHash: VALID_HASH, fileId: 'page-1', mimeType: 'application/pdf', originalName: 'scan.pdf' },
+      };
+
+      const result = await ingestWorker([job]);
+      expect(mockProcessPdfPage).toHaveBeenCalledWith('page-1', VALID_HASH, bytes);
+      expect(extractText).not.toHaveBeenCalled();
+      expect(setPageVisual).not.toHaveBeenCalled();
+      expect(result).toEqual({ success: true, status: 'visual' });
+    });
+
+    it('reports a PDF with real text as completed', async () => {
+      mockFetchObjectFromS3.mockResolvedValue(Buffer.from('%PDF-1.4'));
+      mockProcessPdfPage.mockResolvedValue('completed');
+
+      const qm = new QueueManager();
+      await qm.initialize();
+
+      const result = await ingestWorker([{
+        id: 'job-1',
+        data: { contentHash: VALID_HASH, fileId: 'page-1', mimeType: 'application/pdf', originalName: 'doc.pdf' },
+      }]);
+      expect(result).toEqual({ success: true, status: 'completed' });
+    });
+
     it('queues OCR for scanned PDFs when ENABLE_OCR=true', async () => {
       process.env.ENABLE_OCR = 'true';
-      (needsTextExtraction as ReturnType<typeof vi.fn>).mockReturnValue(true);
-      (extractText as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true, text: '', textLength: 0 });
+      mockFetchObjectFromS3.mockResolvedValue(Buffer.from('%PDF-1.4'));
+      mockProcessPdfPage.mockResolvedValue('visual');
 
       const qm = new QueueManager();
       await qm.initialize();

@@ -773,12 +773,17 @@ export async function executeAskAgent(
         // earlier turn when the target agent had a vision-capable model) being
         // re-embedded as an image when history is re-converted for a model that no
         // longer has vision (e.g. the agent's configured model changed since).
+        // The consulted agent's own model decides what its tools may show it,
+        // never the caller's.
+        const targetModelCapabilities = {
+          hasVision: hasVisionCapability(resolvedModelName),
+          hasPdfInput: hasPdfInputCapability(resolvedModelName, resolvedProvider),
+          hasTools: true,
+          model: resolvedModelName,
+          provider: resolvedProvider,
+        };
         if (allAgentTools.read_page) {
-          allAgentTools.read_page = guardReadPageToolForVision(
-            allAgentTools.read_page as Tool,
-            hasVisionCapability(resolvedModelName),
-            hasPdfInputCapability(resolvedModelName, resolvedProvider),
-          );
+          allAgentTools.read_page = guardReadPageToolForVision(allAgentTools.read_page as Tool, targetModelCapabilities);
         }
 
         // 10. Create enhanced execution context for nested calls
@@ -788,15 +793,8 @@ export async function executeAskAgent(
           ...executionContext,
           // POL-8: the consulted agent's tools run under the model IT resolved, never the caller's.
           ...toolModelContext(providerResult),
-          // So do its capabilities: read_page decides whether to show images and PDFs
-          // from these, and the caller's model may see differently.
-          modelCapabilities: {
-            hasVision: hasVisionCapability(resolvedModelName),
-            hasPdfInput: hasPdfInputCapability(resolvedModelName, resolvedProvider),
-            hasTools: true,
-            model: resolvedModelName,
-            provider: resolvedProvider,
-          },
+          // So do its capabilities: read_page decides whether to show images and PDFs from these.
+          modelCapabilities: targetModelCapabilities,
           // A caller's reserved hold is this call's alone: nothing nested inside it may reuse it.
           ...(executionContext?.creditSpend
             ? { creditSpend: { ...executionContext.creditSpend, reservedHoldId: undefined } }

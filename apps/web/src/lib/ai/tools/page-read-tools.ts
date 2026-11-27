@@ -471,9 +471,10 @@ export const pageReadTools = {
         // Handle FILE type pages
         if (page.type === 'FILE') {
           const isPdf = page.mimeType === 'application/pdf';
+          const extractedText = (page.content ?? '').trim();
           // A PDF processed before low-text PDFs were marked visual is "completed"
           // with no text: a scan. It is read the way a visual PDF is.
-          const isUnmarkedScan = isPdf && page.processingStatus === 'completed' && !(page.content ?? '').trim();
+          const isUnmarkedScan = isPdf && page.processingStatus === 'completed' && !extractedText;
           const fileStatus = isUnmarkedScan ? 'visual' : page.processingStatus;
           // Check processing status
           switch (fileStatus) {
@@ -492,7 +493,6 @@ export const pageReadTools = {
               // Visual content - check if current model supports vision
               const executionContext = context as ToolExecutionContext;
               const modelCapabilities = executionContext?.modelCapabilities;
-              const extractedText = (page.content ?? '').trim();
 
               if (!modelCapabilities?.hasVision) {
                 // Model doesn't support vision - say plainly what would let it see the file

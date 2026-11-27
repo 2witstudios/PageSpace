@@ -135,7 +135,25 @@ describe('deliverPdfPage — page images', () => {
     const result = await deliverPdfPage({ page: filePage(), hasPdfInput: false, pages: '2,4-5', fetchBytes, isBlocked: notBlocked }) as VisualPartsDeliveredOutput;
 
     expect(result.parts.map((p) => p.pdfPage)).toEqual([2, 4, 5]);
-    expect(fetchBytes.mock.calls.map((c) => c[1])).toEqual(['pdf-page-2', 'pdf-page-4', 'pdf-page-5']);
+    expect(fetchBytes.mock.calls.map((c) => c[1]).sort()).toEqual(['pdf-page-2', 'pdf-page-4', 'pdf-page-5']);
+  });
+
+  it('fetches page images a few at a time, never more than the concurrency limit at once', async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const presets = allPages(12);
+    const fetchBytes = vi.fn(async (_hash: string, preset: string) => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      inFlight--;
+      return presets[preset] ?? null;
+    });
+
+    const result = await deliverPdfPage({ page: filePage(), hasPdfInput: false, pages: '1-10', fetchBytes, isBlocked: notBlocked }) as VisualPartsDeliveredOutput;
+
+    expect(result.parts.map((p) => p.pdfPage)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(maxInFlight).toBe(PDF_VISUAL_LIMITS.fetchConcurrency);
   });
 
   it('caps each page image at the per-image size limit', async () => {
@@ -218,7 +236,7 @@ describe('deliverPdfPage — page images', () => {
     }) as VisualPartsDeliveredOutput;
 
     expect(result.parts.map((p) => p.pdfPage)).toEqual([1, 2]);
-    expect(fetchBytes).toHaveBeenCalledTimes(3);
+    expect(result.metadata.nextPages).toBeUndefined();
   });
 });
 

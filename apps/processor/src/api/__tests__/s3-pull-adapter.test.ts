@@ -43,10 +43,15 @@ vi.mock('../../db', () => ({
 
 // The pure PDF helpers (low-text rule, preset naming, page cap) run for real;
 // only the byte-processing functions are mocked.
-vi.mock('../../services/processing-pipeline', async (importOriginal) => ({
-  isLowTextPdf: (await importOriginal<typeof import('../../services/processing-pipeline')>()).isLowTextPdf,
-  pdfPagePreset: (await importOriginal<typeof import('../../services/processing-pipeline')>()).pdfPagePreset,
-  resolveMaxRasterizedPdfPages: (await importOriginal<typeof import('../../services/processing-pipeline')>()).resolveMaxRasterizedPdfPages,
+// The loaded document is a stand-in; extraction and rendering are mocked.
+const FAKE_PDF = vi.hoisted(() => ({ numPages: 3 }));
+vi.mock('../../services/processing-pipeline', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../services/processing-pipeline')>();
+  return {
+  isLowTextPdf: actual.isLowTextPdf,
+  pdfPagePreset: actual.pdfPagePreset,
+  resolveMaxRasterizedPdfPages: actual.resolveMaxRasterizedPdfPages,
+  withPdf: async (_bytes: Buffer, work: (pdf: unknown) => Promise<unknown>) => work(FAKE_PDF),
   extractPdfContent: mocks.extractPdfContent,
   rasterizePdfPages: mocks.rasterizePdfPages,
   verifyContentHash: mocks.verifyContentHash,
@@ -56,7 +61,8 @@ vi.mock('../../services/processing-pipeline', async (importOriginal) => ({
   generateImageVariants: mocks.generateImageVariants,
   extractVideoMetadata: mocks.extractVideoMetadata,
   extractVideoThumbnail: mocks.extractVideoThumbnail,
-}));
+  };
+});
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { processor: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } },
@@ -77,7 +83,7 @@ beforeEach(() => {
   mocks.detectContentType.mockResolvedValue({ label: 'pdf', mimeType: 'application/pdf', score: 0.9, source: 'magika' });
   mocks.extractTextContent.mockResolvedValue('extracted text');
   mocks.extractPdfContent.mockResolvedValue({ text: 'extracted text '.repeat(10), pageCount: 1 });
-  mocks.rasterizePdfPages.mockResolvedValue({ pages: [], attempted: 0 });
+  mocks.rasterizePdfPages.mockResolvedValue({ rendered: 0, attempted: 0 });
   mocks.generateImageVariants.mockResolvedValue({
     thumbnail: { buffer: Buffer.from('t'), mimeType: 'image/webp' },
     'ai-chat': { buffer: Buffer.from('j'), mimeType: 'image/jpeg' },
@@ -158,7 +164,7 @@ describe('runPullPipeline — dispatch by detected type', () => {
 
     await runPullPipeline({ pageId: 'page-1', contentHash: HASH }, NO_WAIT);
 
-    expect(mocks.extractPdfContent).toHaveBeenCalledWith(BYTES);
+    expect(mocks.extractPdfContent).toHaveBeenCalledWith(FAKE_PDF);
     expect(mocks.setPageCompleted).toHaveBeenCalledWith(
       'page-1', 'extracted text '.repeat(10), { mimeType: 'application/pdf', pageCount: 1 }, 'text',
     );
@@ -168,6 +174,12 @@ describe('runPullPipeline — dispatch by detected type', () => {
 
   describe('a low-text (scanned) PDF', () => {
     const page = (n: number) => ({ pageNumber: n, buffer: Buffer.from(`jpeg-${n}`), mimeType: 'image/jpeg' });
+    /** Stands in for rendering: hands each page to onPage in order, as the real one does. */
+    const renders = (pages: ReturnType<typeof page>[], attempted = pages.length) =>
+      async (_pdf: unknown, opts: { onPage: (p: ReturnType<typeof page>) => Promise<void> }) => {
+        for (const p of pages) await opts.onPage(p);
+        return { rendered: pages.length, attempted };
+      };
 
     beforeEach(() => {
       mocks.getOriginal.mockResolvedValue(BYTES);
@@ -176,7 +188,7 @@ describe('runPullPipeline — dispatch by detected type', () => {
     });
 
     it('marks it visual, keeping its text, instead of completed with nothing to read', async () => {
-      mocks.rasterizePdfPages.mockResolvedValue({ pages: [page(1), page(2), page(3)], attempted: 3 });
+      mocks.rasterizePdfPages.mockImplementation(renders([page(1), page(2), page(3)]));
 
       await runPullPipeline({ pageId: 'page-1', contentHash: HASH }, NO_WAIT);
 
@@ -185,12 +197,11 @@ describe('runPullPipeline — dispatch by detected type', () => {
         mimeType: 'application/pdf',
         pageCount: 3,
         rasterizedPages: 3,
-        lowText: true,
       });
     });
 
     it('caches each rendered page as a pdf-page-{n} JPEG preset, one at a time', async () => {
-      mocks.rasterizePdfPages.mockResolvedValue({ pages: [page(1), page(2), page(3)], attempted: 3 });
+      mocks.rasterizePdfPages.mockImplementation(renders([page(1), page(2), page(3)]));
       let inFlight = 0;
       let maxInFlight = 0;
       mocks.saveCache.mockImplementation(async () => {
@@ -222,7 +233,7 @@ describe('runPullPipeline — dispatch by detected type', () => {
         else process.env.PDF_RASTER_MAX_PAGES = previous;
       }
 
-      expect(mocks.rasterizePdfPages).toHaveBeenCalledWith(BYTES, { maxPages: 2 });
+      expect(mocks.rasterizePdfPages).toHaveBeenCalledWith(FAKE_PDF, expect.objectContaining({ maxPages: 2 }));
     });
 
     it('still marks it visual when rendering fails, recording that no pages were rendered', async () => {
@@ -235,7 +246,7 @@ describe('runPullPipeline — dispatch by detected type', () => {
     });
 
     it('records no rendered pages when caching them fails', async () => {
-      mocks.rasterizePdfPages.mockResolvedValue({ pages: [page(1)], attempted: 1 });
+      mocks.rasterizePdfPages.mockImplementation(renders([page(1)]));
       mocks.saveCache.mockRejectedValue(new Error('S3 down'));
 
       await runPullPipeline({ pageId: 'page-1', contentHash: HASH }, NO_WAIT);

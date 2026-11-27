@@ -466,11 +466,10 @@ export async function POST(request: Request): Promise<Response> {
     if (finalTools.read_page) {
       finalTools = {
         ...finalTools,
-        read_page: guardReadPageToolForVision(
-          finalTools.read_page,
-          hasVisionCapability(providerResult.modelName),
-          hasPdfInputCapability(providerResult.modelName, providerResult.provider),
-        ),
+        read_page: guardReadPageToolForVision(finalTools.read_page, {
+          hasVision: hasVisionCapability(providerResult.modelName),
+          hasPdfInput: hasPdfInputCapability(providerResult.modelName, providerResult.provider),
+        }),
       };
     }
 

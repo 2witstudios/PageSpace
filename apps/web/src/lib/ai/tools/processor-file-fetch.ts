@@ -13,7 +13,8 @@
  * processor-file-fetch-runtime.ts.
  */
 
-const CONTENT_HASH = /^[0-9a-f]{64}$/i;
+import { validateContentHash } from '@pagespace/lib/services/upload-validation';
+
 // Mirrors the processor's isValidPreset (apps/processor/src/cache/content-store.ts).
 const SAFE_PRESET = /^[a-zA-Z0-9_.-]{1,64}$/;
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -64,29 +65,31 @@ export function createProcessorCacheFetcher(deps: ProcessorCacheFetcherDeps): Fe
   };
 
   return async (contentHash, preset, options = {}) => {
-    if (!CONTENT_HASH.test(contentHash)) throw new Error('Invalid content hash');
+    const hash = validateContentHash(contentHash);
+    if (!hash.ok) throw new Error('Invalid content hash');
     if (!SAFE_PRESET.test(preset) || preset.includes('..')) throw new Error('Invalid preset name');
 
     const bearer = await token();
-    const response = await fetchImpl(`${processorUrl}/cache/${contentHash}/${preset}`, {
+    const response = await fetchImpl(`${processorUrl}/cache/${hash.value}/${preset}`, {
       headers: { Authorization: `Bearer ${bearer}` },
       signal: AbortSignal.timeout(timeoutMs),
     });
+    const discard = () => response.body?.cancel().catch(() => {});
 
     // 404: no such preset. 410: the file was taken down. Both mean "nothing to show".
     if (response.status === 404 || response.status === 410) {
-      await response.body?.cancel().catch(() => {});
+      await discard();
       return null;
     }
     if (!response.ok) {
-      await response.body?.cancel().catch(() => {});
+      await discard();
       throw new Error(`Processor returned ${response.status} for preset ${preset}`);
     }
 
     const { maxBytes } = options;
     const declared = Number(response.headers.get('Content-Length'));
     if (maxBytes !== undefined && Number.isFinite(declared) && declared > maxBytes) {
-      await response.body?.cancel().catch(() => {});
+      await discard();
       return null;
     }
 
@@ -94,4 +97,24 @@ export function createProcessorCacheFetcher(deps: ProcessorCacheFetcherDeps): Fe
     if (maxBytes !== undefined && bytes.length > maxBytes) return null;
     return bytes;
   };
+}
+
+/**
+ * A fetch that never fails the caller: a denial, an outage or a malformed key
+ * means "this preset isn't available" (null), logged with the given label. Used
+ * wherever read_page must still fall back to metadata rather than error.
+ */
+export async function fetchPresetOrNull(
+  fetchBytes: FetchPresetBytes,
+  contentHash: string,
+  preset: string,
+  options: FetchPresetOptions,
+  onError: (preset: string, error: string) => void,
+): Promise<Buffer | null> {
+  try {
+    return await fetchBytes(contentHash, preset, options);
+  } catch (err) {
+    onError(preset, err instanceof Error ? err.message : String(err));
+    return null;
+  }
 }

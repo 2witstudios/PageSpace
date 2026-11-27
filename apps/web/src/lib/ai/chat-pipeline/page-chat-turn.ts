@@ -1646,11 +1646,10 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     if (filteredTools.read_page) {
       filteredTools = {
         ...filteredTools,
-        read_page: guardReadPageToolForVision(
-          filteredTools.read_page,
-          hasVisionCapability(resolvedModelName ?? currentModel),
-          hasPdfInputCapability(resolvedModelName ?? currentModel, currentProvider),
-        ),
+        read_page: guardReadPageToolForVision(filteredTools.read_page, {
+          hasVision: hasVisionCapability(resolvedModelName ?? currentModel),
+          hasPdfInput: hasPdfInputCapability(resolvedModelName ?? currentModel, currentProvider),
+        }),
       };
     }
 

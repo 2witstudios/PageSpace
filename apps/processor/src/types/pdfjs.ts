@@ -21,9 +21,8 @@ export interface PDFPageViewport {
 
 /** A canvas from pdf.js's Node canvas factory (@napi-rs/canvas). */
 export interface PDFCanvas {
-  width: number;
-  height: number;
-  toBuffer(mimeType: 'image/png'): Buffer;
+  /** Raw RGBA pixels, row by row. */
+  data(): Buffer;
 }
 
 export interface PDFCanvasAndContext {

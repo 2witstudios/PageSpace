@@ -14,7 +14,7 @@ import { isAllowedImageType, validateMagicBytes, type AllowedImageType } from '@
 import { MAX_IMAGE_SIZE_BYTES } from '@/lib/ai/shared/utils/image-resize';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isHashBlocked } from '@pagespace/lib/content-safety/blocklist';
-import type { FetchPresetBytes } from '@/lib/ai/tools/processor-file-fetch';
+import { fetchPresetOrNull, type FetchPresetBytes } from '@/lib/ai/tools/processor-file-fetch';
 
 export interface FetchedImagePreset {
   base64: string;
@@ -31,16 +31,18 @@ export interface FetchCachedImagePresetDeps {
 /**
  * A taken-down file is never read or sent to a model provider — including while
  * its takedown is still waiting to delete the bytes. A failed lookup counts as
- * blocked: this function's contract is "an image, or nothing", and nothing is
- * the safe answer when we cannot tell.
+ * blocked: read_page's contract is "the file's bytes, or nothing", and nothing is
+ * the safe answer when we cannot tell. Shared by the image and PDF paths.
  */
-async function isRemoved(contentHash: string, isBlocked: (contentHash: string) => Promise<boolean>): Promise<boolean> {
+export async function isContentRemoved(
+  contentHash: string,
+  isBlocked: (contentHash: string) => Promise<boolean> = isHashBlocked,
+): Promise<boolean> {
   try {
     return await isBlocked(contentHash);
   } catch (err) {
-    // No content hash in the log: this function is given nothing else that
-    // identifies the file, and the hash of a possibly-blocked file stays out of logs.
-    loggers.ai.warn('fetchCachedImagePreset: blocklist lookup failed, treating the image as unavailable', {
+    // No content hash in the log: the hash of a possibly-blocked file stays out of logs.
+    loggers.ai.warn('read_page: blocklist lookup failed, treating the file as unavailable', {
       error: err instanceof Error ? err.message : String(err),
     });
     return true;
@@ -68,30 +70,19 @@ export async function fetchCachedImagePreset(
 ): Promise<FetchedImagePreset | null> {
   const { fetchBytes } = deps;
 
-  if (await isRemoved(contentHash, deps.isBlocked ?? isHashBlocked)) return null;
+  if (await isContentRemoved(contentHash, deps.isBlocked)) return null;
 
   for (const candidate of buildFallbackChain(mimeType)) {
     if (!isAllowedImageType(candidate.mediaType)) continue;
 
-    let bytes: Buffer | null;
-    try {
-      bytes = await fetchBytes(contentHash, candidate.preset, { maxBytes: MAX_IMAGE_SIZE_BYTES });
-    } catch (err) {
-      // A fetch failure (permissions, transient outage, malformed key) degrades to
-      // "this candidate isn't usable" rather than failing the whole read_page call —
-      // the pre-existing metadata-only behavior must remain a guaranteed-success
-      // fallback regardless of which fetchBytes implementation is in use.
-      loggers.ai.warn('fetchCachedImagePreset: candidate fetch failed, skipping', {
-        contentHash,
-        preset: candidate.preset,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      continue;
-    }
+    // A fetch failure (permissions, transient outage, malformed key) degrades to
+    // "this candidate isn't usable" rather than failing the whole read_page call:
+    // the metadata-only result must stay a guaranteed-success fallback.
+    const bytes = await fetchPresetOrNull(fetchBytes, contentHash, candidate.preset, { maxBytes: MAX_IMAGE_SIZE_BYTES }, (preset, error) =>
+      loggers.ai.warn('fetchCachedImagePreset: candidate fetch failed, skipping', { contentHash, preset, error }));
     if (!bytes) continue;
-    // The ai-vision/ai-chat presets are already resized well under this cap; this
-    // matters for the uncapped "original" fallback, which can otherwise be an
-    // arbitrarily large upload (up to the per-tier max file size).
+    // The fetcher caps at the same size; this holds the cap for the "original"
+    // fallback (up to the per-tier max file size) whatever fetcher is injected.
     if (bytes.length > MAX_IMAGE_SIZE_BYTES) continue;
 
     const base64 = bytes.toString('base64');

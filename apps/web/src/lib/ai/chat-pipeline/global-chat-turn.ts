@@ -935,11 +935,10 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     if (finalTools.read_page) {
       finalTools = {
         ...finalTools,
-        read_page: guardReadPageToolForVision(
-          finalTools.read_page,
-          hasVisionCapability(currentModel),
-          hasPdfInputCapability(currentModel, currentProvider),
-        ),
+        read_page: guardReadPageToolForVision(finalTools.read_page, {
+          hasVision: hasVisionCapability(currentModel),
+          hasPdfInput: hasPdfInputCapability(currentModel, currentProvider),
+        }),
       };
     }
 

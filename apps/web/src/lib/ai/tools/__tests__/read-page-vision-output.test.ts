@@ -157,7 +157,7 @@ describe('guardReadPageToolForVision', () => {
   });
 
   it('given hasVision: true, should leave the tool behavior unchanged for a stale image tool result', () => {
-    const guarded = guardReadPageToolForVision(makeReadPageTool(), true);
+    const guarded = guardReadPageToolForVision(makeReadPageTool(), { hasVision: true, hasPdfInput: false });
 
     const result = guarded.toModelOutput!({ toolCallId: '1', input: {}, output: staleVisualOutput });
 
@@ -171,7 +171,7 @@ describe('guardReadPageToolForVision', () => {
   });
 
   it('given hasVision: false, should degrade a stale image tool result to metadata-only instead of an image content part', () => {
-    const guarded = guardReadPageToolForVision(makeReadPageTool(), false);
+    const guarded = guardReadPageToolForVision(makeReadPageTool(), { hasVision: false, hasPdfInput: false });
 
     const result = guarded.toModelOutput!({ toolCallId: '1', input: {}, output: staleVisualOutput }) as {
       type: string;
@@ -252,14 +252,14 @@ describe('guardReadPageToolForVision — PDF parts', () => {
   });
 
   it('given a vision model with PDF input, should re-send a stale native PDF unchanged', () => {
-    const guarded = guardReadPageToolForVision(makeReadPageTool(), true, true);
+    const guarded = guardReadPageToolForVision(makeReadPageTool(), { hasVision: true, hasPdfInput: true });
     const result = guarded.toModelOutput!({ toolCallId: '1', input: {}, output: pdfPartsOutput }) as { type: string };
     expect(result.type).toBe('content');
     expect(JSON.stringify(result)).toContain('file-data');
   });
 
   it('given a vision model without PDF input, should not re-send a stale native PDF part', () => {
-    const guarded = guardReadPageToolForVision(makeReadPageTool(), true, false);
+    const guarded = guardReadPageToolForVision(makeReadPageTool(), { hasVision: true, hasPdfInput: false });
     const result = guarded.toModelOutput!({ toolCallId: '1', input: {}, output: pdfPartsOutput }) as {
       type: string;
       value: Record<string, unknown>;
@@ -271,14 +271,14 @@ describe('guardReadPageToolForVision — PDF parts', () => {
   });
 
   it('given a vision model without PDF input, should still re-send stale page images', () => {
-    const guarded = guardReadPageToolForVision(makeReadPageTool(), true, false);
+    const guarded = guardReadPageToolForVision(makeReadPageTool(), { hasVision: true, hasPdfInput: false });
     const result = guarded.toModelOutput!({ toolCallId: '1', input: {}, output: pageImagesOutput }) as { type: string };
     expect(result.type).toBe('content');
     expect(JSON.stringify(result)).toContain('/9j/AAAA');
   });
 
   it('given a model without vision, should degrade stale page images to metadata', () => {
-    const guarded = guardReadPageToolForVision(makeReadPageTool(), false, false);
+    const guarded = guardReadPageToolForVision(makeReadPageTool(), { hasVision: false, hasPdfInput: false });
     const result = guarded.toModelOutput!({ toolCallId: '1', input: {}, output: pageImagesOutput }) as { type: string };
     expect(result.type).toBe('json');
     expect(JSON.stringify(result)).not.toContain('/9j/AAAA');
@@ -304,6 +304,24 @@ describe('visualToolResultScreenParts — visual_parts_delivered', () => {
 
   it('given a part whose bytes are not strict base64, should report it undecodable', () => {
     const bad = { ...pageImagesOutput, parts: [{ kind: 'image', mediaType: 'image/jpeg', data: 'not base64!', pdfPage: 1 }] };
+    expect(visualToolResultScreenParts([asMessage(bad)]).undecodable).toBe(true);
+  });
+
+  it('given a whole-PDF part of ~13 MB base64, should screen it without overflowing the stack', () => {
+    const big = Buffer.alloc(10 * 1024 * 1024, 7).toString('base64');
+    const output = { ...pdfPartsOutput, parts: [{ kind: 'file', mediaType: 'application/pdf', data: big, filename: 'big.pdf' }] };
+    const { parts, undecodable } = visualToolResultScreenParts([asMessage(output)]);
+    expect(undecodable).toBe(false);
+    expect(parts).toHaveLength(1);
+  });
+
+  it.each([
+    ['a length that is not a multiple of 4', 'abcde'],
+    ['padding in the middle', 'ab==abcd'],
+    ['three padding characters', 'a==='],
+    ['a URL-safe character', 'ab-_'],
+  ])('given %s, should report it undecodable', (_label, data) => {
+    const bad = { ...pageImagesOutput, parts: [{ kind: 'image', mediaType: 'image/jpeg', data, pdfPage: 1 }] };
     expect(visualToolResultScreenParts([asMessage(bad)]).undecodable).toBe(true);
   });
 

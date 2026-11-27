@@ -79,14 +79,12 @@ const FFPROBE_TIMEOUT_MS = 30_000;
 const TEXT_DECODE_TYPES = new Set(['text/plain', 'text/markdown', 'text/csv']);
 
 /**
- * Extract searchable text from a document or image. Documents (PDF/DOCX/text/
- * JSON) are parsed in-process; images are run through OCR. Returns null for any
- * content type with no text to extract.
+ * Extract searchable text from a document or image. Documents (DOCX/text/JSON)
+ * are parsed in-process; images are run through OCR. Returns null for any
+ * content type with no text to extract. PDFs go through withPdf +
+ * extractPdfContent instead, since a scan is also rendered.
  */
 export async function extractTextContent(bytes: Buffer, contentType: string): Promise<string | null> {
-  if (contentType === 'application/pdf') {
-    return extractPdfText(bytes);
-  }
   // mammoth only reads OOXML .docx — not legacy binary .doc. .doc falls through
   // to null and is handled as a non-text (visual) file.
   if (contentType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
@@ -150,24 +148,29 @@ export interface PdfContent {
   pageCount: number;
 }
 
-/** The PDF's text layer and page count. Bytes in, plain result out. */
-export async function extractPdfContent(bytes: Buffer): Promise<PdfContent> {
+/**
+ * Open a PDF once for everything done with it (text, then maybe rendering) and
+ * release it after. Loading copies and parses the whole file, which for a large
+ * scan is the expensive part to repeat.
+ */
+export async function withPdf<T>(bytes: Buffer, work: (pdf: PDFDocumentProxy) => Promise<T>): Promise<T> {
   const pdf = await loadPdf(bytes);
   try {
-    const parts: string[] = [];
-    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-      const page = await pdf.getPage(pageNum);
-      const textContent = await page.getTextContent();
-      parts.push(composePageText(textContent.items));
-    }
-    return { text: cleanText(composeDocumentText(parts)), pageCount: pdf.numPages };
+    return await work(pdf);
   } finally {
     await pdf.destroy().catch(() => {});
   }
 }
 
-async function extractPdfText(bytes: Buffer): Promise<string> {
-  return (await extractPdfContent(bytes)).text;
+/** The PDF's text layer and page count. */
+export async function extractPdfContent(pdf: PDFDocumentProxy): Promise<PdfContent> {
+  const parts: string[] = [];
+  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+    const page = await pdf.getPage(pageNum);
+    const textContent = await page.getTextContent();
+    parts.push(composePageText(textContent.items));
+  }
+  return { text: cleanText(composeDocumentText(parts)), pageCount: pdf.numPages };
 }
 
 /**
@@ -205,54 +208,63 @@ export interface RasterizedPdfPage {
 }
 
 export interface RasterizePdfResult {
-  pages: RasterizedPdfPage[];
+  /** Pages rendered and handed to onPage. */
+  rendered: number;
   /** Leading pages rendering was tried on: min(maxPages, numPages). */
   attempted: number;
 }
 
 /**
  * Render the first `maxPages` pages to JPEG, each fitted inside the ai-vision
- * preset's 2048px budget on its long side and encoded at its quality. A page
- * that fails to render is skipped; the rest still come back. Bytes in, page
- * images out.
+ * preset's 2048px budget on its long side and encoded at its quality, and hand
+ * each to `onPage` as soon as it is ready, so only one page is held at a time.
+ * A page that fails to render is skipped; an `onPage` failure stops the run.
  */
-export async function rasterizePdfPages(bytes: Buffer, options: { maxPages: number }): Promise<RasterizePdfResult> {
+export async function rasterizePdfPages(
+  pdf: PDFDocumentProxy,
+  options: { maxPages: number; onPage: (page: RasterizedPdfPage) => Promise<void> },
+): Promise<RasterizePdfResult> {
   const budget = IMAGE_PRESETS['ai-vision'];
-  const pdf = await loadPdf(bytes);
-  try {
-    const attempted = Math.min(options.maxPages, pdf.numPages);
-    const pages: RasterizedPdfPage[] = [];
-    for (let pageNumber = 1; pageNumber <= attempted; pageNumber++) {
-      try {
-        const page = await pdf.getPage(pageNumber);
-        const base = page.getViewport({ scale: 1 });
-        const scale = Math.min(budget.maxWidth / base.width, budget.maxWidth / base.height);
-        const viewport = page.getViewport({ scale });
-        const width = Math.max(1, Math.floor(viewport.width));
-        const height = Math.max(1, Math.floor(viewport.height));
-        const target = pdf.canvasFactory.create(width, height);
-        try {
-          await page.render({ canvasContext: target.context, viewport }).promise;
-          const png = target.canvas.toBuffer('image/png');
-          const buffer = await sharp(png)
-            // The canvas starts transparent; a page is white paper.
-            .flatten({ background: '#ffffff' })
-            .resize(budget.maxWidth, budget.maxWidth, { fit: 'inside', withoutEnlargement: true })
-            .jpeg({ quality: budget.quality, progressive: true, mozjpeg: true })
-            .toBuffer();
-          pages.push({ pageNumber, buffer, mimeType: 'image/jpeg' });
-        } finally {
-          pdf.canvasFactory.destroy(target);
-          page.cleanup();
-        }
-      } catch {
-        // One unrenderable page (a broken image stream) must not cost the rest.
-        continue;
-      }
+  const attempted = Math.min(options.maxPages, pdf.numPages);
+  let rendered = 0;
+  for (let pageNumber = 1; pageNumber <= attempted; pageNumber++) {
+    let buffer: Buffer;
+    try {
+      buffer = await renderPdfPage(pdf, pageNumber, budget.maxWidth, budget.quality);
+    } catch {
+      // One unrenderable page (a broken image stream) must not cost the rest.
+      continue;
     }
-    return { pages, attempted };
+    await options.onPage({ pageNumber, buffer, mimeType: 'image/jpeg' });
+    rendered++;
+  }
+  return { rendered, attempted };
+}
+
+async function renderPdfPage(pdf: PDFDocumentProxy, pageNumber: number, maxSide: number, quality: number): Promise<Buffer> {
+  const page = await pdf.getPage(pageNumber);
+  try {
+    const base = page.getViewport({ scale: 1 });
+    // Fitting the viewport, not resizing afterwards, keeps the long side within budget.
+    const viewport = page.getViewport({ scale: Math.min(maxSide / base.width, maxSide / base.height) });
+    const width = Math.max(1, Math.floor(viewport.width));
+    const height = Math.max(1, Math.floor(viewport.height));
+    const target = pdf.canvasFactory.create(width, height);
+    try {
+      await page.render({ canvasContext: target.context, viewport }).promise;
+      // Raw pixels straight into sharp: no PNG encode and decode per page.
+      return await sharp(target.canvas.data(), { raw: { width, height, channels: 4 } })
+        // A page is white paper, whatever the canvas left transparent.
+        .flatten({ background: '#ffffff' })
+        // Plain progressive JPEG: mozjpeg is several times slower for ~20% smaller
+        // files, and these renders are cache presets, not user-facing images.
+        .jpeg({ quality, progressive: true })
+        .toBuffer();
+    } finally {
+      pdf.canvasFactory.destroy(target);
+    }
   } finally {
-    await pdf.destroy().catch(() => {});
+    page.cleanup();
   }
 }
 

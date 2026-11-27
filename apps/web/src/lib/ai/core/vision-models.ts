@@ -325,8 +325,6 @@ export function hasVisionCapability(model: string): boolean {
 
   if (lowerModel.includes('claude-3') || lowerModel.includes('claude-4') ||
       lowerModel.includes('claude-5') ||
-      lowerModel.includes('claude-opus-4') || lowerModel.includes('claude-sonnet-4') ||
-      lowerModel.includes('claude-haiku-4') ||
       /claude-(opus|sonnet|haiku|fable)-\d/.test(lowerModel)) {
     return true;
   }
