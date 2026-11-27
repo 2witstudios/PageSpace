@@ -147,8 +147,8 @@ async function loadPdf(bytes: Buffer): Promise<PDFDocumentProxy> {
 export interface PdfContent {
   text: string;
   pageCount: number;
-  /** Pages whose text layer is under LOW_TEXT_CHARS_PER_PAGE: scans, figures, blanks. */
-  lowTextPages: number;
+  /** 1-based pages whose text layer is under LOW_TEXT_CHARS_PER_PAGE: scans, figures, blanks. */
+  lowTextPageNumbers: number[];
 }
 
 /**
@@ -165,18 +165,18 @@ export async function withPdf<T>(bytes: Buffer, work: (pdf: PDFDocumentProxy) =>
   }
 }
 
-/** The PDF's text layer, its page count, and how many pages have almost no text. */
+/** The PDF's text layer, its page count, and which pages have almost no text. */
 export async function extractPdfContent(pdf: PDFDocumentProxy): Promise<PdfContent> {
   const parts: string[] = [];
-  let lowTextPages = 0;
+  const lowTextPageNumbers: number[] = [];
   for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
     const page = await pdf.getPage(pageNum);
     const textContent = await page.getTextContent();
     const pageText = composePageText(textContent.items);
-    if (isLowTextPage(pageText)) lowTextPages++;
+    if (nonWhitespaceLength(pageText) < LOW_TEXT_CHARS_PER_PAGE) lowTextPageNumbers.push(pageNum);
     parts.push(pageText);
   }
-  return { text: cleanText(composeDocumentText(parts)), pageCount: pdf.numPages, lowTextPages };
+  return { text: cleanText(composeDocumentText(parts)), pageCount: pdf.numPages, lowTextPageNumbers };
 }
 
 /**
@@ -185,21 +185,29 @@ export async function extractPdfContent(pdf: PDFDocumentProxy): Promise<PdfConte
  */
 export const LOW_TEXT_CHARS_PER_PAGE = 32;
 
-function isLowTextPage(pageText: string): boolean {
-  return pageText.replace(/\s+/g, '').length < LOW_TEXT_CHARS_PER_PAGE;
+const nonWhitespaceLength = (value: string): number => value.replace(/\s+/g, '').length;
+
+/**
+ * Whether a PDF has no real text layer — a scan — so it is marked `visual`.
+ * Averaged over the file on purpose: a document whose text layer stands for it
+ * (a report with blank separator pages, a bundle of typed index pages and
+ * scanned exhibits) stays a `completed` text document, and only its low-text
+ * pages are rendered (pdfPagesToRender), so text readers never lose its text.
+ */
+export function isScanLikePdf({ text, pageCount }: Pick<PdfContent, 'text' | 'pageCount'>): boolean {
+  return nonWhitespaceLength(text) < LOW_TEXT_CHARS_PER_PAGE * Math.max(pageCount, 1);
 }
 
 /**
- * The share of low-text pages at which a PDF is treated as a scan. Counted per
- * page, not averaged over the file: a bundle of 10 typed index pages and 190
- * scanned exhibits has plenty of text overall, but nearly all of it is images.
- * A text document with the odd figure or blank page stays below it.
+ * Which pages get page images, up to `maxPages`: a scan's leading pages, or a
+ * text document's low-text pages (its scans, figures and blanks).
  */
-export const LOW_TEXT_PAGE_SHARE = 0.2;
-
-/** Whether a PDF has enough image-only pages that it must be looked at, not just read. */
-export function isScanLikePdf({ pageCount, lowTextPages }: Pick<PdfContent, 'pageCount' | 'lowTextPages'>): boolean {
-  return pageCount > 0 && lowTextPages / pageCount >= LOW_TEXT_PAGE_SHARE;
+export function pdfPagesToRender(
+  { scan, pageCount, lowTextPageNumbers }: Pick<PdfContent, 'pageCount' | 'lowTextPageNumbers'> & { scan: boolean },
+  maxPages: number,
+): number[] {
+  if (scan) return Array.from({ length: Math.min(maxPages, pageCount) }, (_, i) => i + 1);
+  return lowTextPageNumbers.slice(0, maxPages);
 }
 
 /** Cache preset name for a rasterized PDF page (1-based). Served by /cache/:hash/:preset. */
@@ -208,8 +216,8 @@ export function pdfPagePreset(pageNumber: number): string {
 }
 
 /**
- * How many leading pages of a low-text PDF are rasterized. Rendering is the
- * slow part of processing a scan, and each page is one cache object.
+ * Most pages of one PDF that are rasterized. Rendering is the slow part of
+ * processing a scan, and each page is one cache object.
  */
 export const DEFAULT_MAX_RASTERIZED_PDF_PAGES = 50;
 
@@ -227,26 +235,25 @@ export interface RasterizedPdfPage {
 }
 
 export interface RasterizePdfResult {
-  /** Pages rendered and handed to onPage. */
-  rendered: number;
-  /** Leading pages rendering was tried on: min(maxPages, numPages). */
-  attempted: number;
+  /** Pages rendered and handed to onPage, in order. */
+  rendered: number[];
 }
 
 /**
- * Render the first `maxPages` pages to JPEG, each fitted inside the ai-vision
- * preset's 2048px budget on its long side and encoded at its quality, and hand
- * each to `onPage` as soon as it is ready, so only one page is held at a time.
- * A page that fails to render is skipped; an `onPage` failure stops the run.
+ * Render the listed pages to JPEG, each fitted inside the ai-vision preset's
+ * 2048px budget on its long side and encoded at its quality, and hand each to
+ * `onPage` as soon as it is ready, so only one page is held at a time. A page
+ * past the end or one that fails to render is skipped; an `onPage` failure
+ * stops the run.
  */
 export async function rasterizePdfPages(
   pdf: PDFDocumentProxy,
-  options: { maxPages: number; onPage: (page: RasterizedPdfPage) => Promise<void> },
+  options: { pages: number[]; onPage: (page: RasterizedPdfPage) => Promise<void> },
 ): Promise<RasterizePdfResult> {
   const budget = IMAGE_PRESETS['ai-vision'];
-  const attempted = Math.min(options.maxPages, pdf.numPages);
-  let rendered = 0;
-  for (let pageNumber = 1; pageNumber <= attempted; pageNumber++) {
+  const rendered: number[] = [];
+  for (const pageNumber of options.pages) {
+    if (pageNumber < 1 || pageNumber > pdf.numPages) continue;
     let buffer: Buffer;
     try {
       buffer = await renderPdfPage(pdf, pageNumber, budget.maxWidth, budget.quality);
@@ -255,10 +262,10 @@ export async function rasterizePdfPages(
       continue;
     }
     await options.onPage({ pageNumber, buffer, mimeType: 'image/jpeg' });
-    rendered++;
+    rendered.push(pageNumber);
     await yieldToEventLoop();
   }
-  return { rendered, attempted };
+  return { rendered };
 }
 
 async function renderPdfPage(pdf: PDFDocumentProxy, pageNumber: number, maxSide: number, quality: number): Promise<Buffer> {

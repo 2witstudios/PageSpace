@@ -4,7 +4,7 @@ import {
   withPdf,
   extractPdfContent,
   isScanLikePdf,
-  LOW_TEXT_PAGE_SHARE,
+  pdfPagesToRender,
   rasterizePdfPages,
   pdfPagePreset,
   resolveMaxRasterizedPdfPages,
@@ -44,6 +44,8 @@ function buildPdf(pageStreams: string[], mediaBox = '0 0 612 792'): Buffer {
 
 const BLUE_SQUARE = '0 0 1 rg 100 100 200 200 re f';
 const text = (s: string) => `BT /F1 12 Tf 72 700 Td (${s}) Tj ET`;
+/** A page of typed lines, one per 14pt, from the top margin down. */
+const textLines = (lines: string[]) => `BT /F1 11 Tf 14 TL 72 740 Td ${lines.map((l) => `(${l}) '`).join(' ')} ET`;
 
 describe('extractPdfContent', () => {
   it('returns the extracted text and the page count', async () => {
@@ -57,62 +59,90 @@ describe('extractPdfContent', () => {
 });
 
 describe('extractPdfContent — low-text pages', () => {
-  it('counts each page whose text layer is under the per-page threshold', async () => {
+  it('lists each page whose text layer is under the per-page threshold', async () => {
     const pdf = buildPdf([text('This index page lists every exhibit in the bundle.'), BLUE_SQUARE, text('p. 3')]);
 
-    const { lowTextPages, pageCount } = await withPdf(pdf, extractPdfContent);
+    const { lowTextPageNumbers, pageCount } = await withPdf(pdf, extractPdfContent);
 
     expect(pageCount).toBe(3);
-    expect(lowTextPages).toBe(2);
+    expect(lowTextPageNumbers).toEqual([2, 3]);
   });
 });
 
 describe('isScanLikePdf', () => {
   it('is true for a scan with no text at all', () => {
-    expect(isScanLikePdf({ pageCount: 12, lowTextPages: 12 })).toBe(true);
+    expect(isScanLikePdf({ text: '', pageCount: 12 })).toBe(true);
   });
 
-  it('is true for a bundle of 10 typed pages and 190 scanned ones', () => {
-    expect(isScanLikePdf({ pageCount: 200, lowTextPages: 190 })).toBe(true);
+  it('is true when the only text is page numbers or stamps', () => {
+    expect(isScanLikePdf({ text: '1 2 3 4 5 6 7 8 9 10', pageCount: 10 })).toBe(true);
   });
 
-  it(`is true once ${LOW_TEXT_PAGE_SHARE * 100}% of pages are low-text`, () => {
-    expect(isScanLikePdf({ pageCount: 10, lowTextPages: 2 })).toBe(true);
+  it('is false once the document has a real text layer, however many pages are images', () => {
+    const indexPages = 'x'.repeat(2_000).repeat(10);
+    expect(isScanLikePdf({ text: indexPages, pageCount: 200 })).toBe(false);
   });
 
-  it('is false for a text document with the odd figure or blank page', () => {
-    expect(isScanLikePdf({ pageCount: 10, lowTextPages: 1 })).toBe(false);
-    expect(isScanLikePdf({ pageCount: 40, lowTextPages: 0 })).toBe(false);
-  });
-
-  it('is false for an empty document', () => {
-    expect(isScanLikePdf({ pageCount: 0, lowTextPages: 0 })).toBe(false);
+  it('ignores whitespace when counting', () => {
+    expect(isScanLikePdf({ text: ' \n\t '.repeat(500), pageCount: 1 })).toBe(true);
   });
 });
 
-describe('a 200-page exhibit bundle (10 typed index pages, 190 scans)', () => {
-  it('is classified as a scan to render, with every typed page kept as text', async () => {
-    const typed = Array.from({ length: 10 }, (_, i) => text(`Index entry ${i + 1}: exhibit description and source details`));
+describe('pdfPagesToRender', () => {
+  it('renders the leading pages of a scan', () => {
+    expect(pdfPagesToRender({ scan: true, pageCount: 80, lowTextPageNumbers: [] }, 50)).toEqual(
+      Array.from({ length: 50 }, (_, i) => i + 1),
+    );
+  });
+
+  it("renders only a text document's low-text pages, up to the cap", () => {
+    const low = Array.from({ length: 190 }, (_, i) => i + 11);
+    expect(pdfPagesToRender({ scan: false, pageCount: 200, lowTextPageNumbers: low }, 50)).toEqual(low.slice(0, 50));
+  });
+
+  it('renders nothing for a text document with no low-text pages', () => {
+    expect(pdfPagesToRender({ scan: false, pageCount: 20, lowTextPageNumbers: [] }, 50)).toEqual([]);
+  });
+});
+
+describe('real PDFs', () => {
+  it('a 10-page report with 2 "intentionally left blank" pages is a text document', async () => {
+    const prose = (n: number) => text(`Section ${n}: the quarterly figures and the commentary that explains them.`);
+    const blank = text('This page intentionally left blank');
+    const pdf = buildPdf([prose(1), prose(2), prose(3), prose(4), blank, prose(5), prose(6), prose(7), prose(8), blank]);
+
+    const content = await withPdf(pdf, extractPdfContent);
+
+    expect(content.lowTextPageNumbers).toEqual([5, 10]);
+    expect(isScanLikePdf(content)).toBe(false);
+    expect(content.text).toContain('Section 8:');
+  }, 30000);
+
+  it('a 200-page bundle (10 typed index pages, 190 scans) is a text document whose scans get rendered', async () => {
+    // Typed index pages carry ~2,000 characters each, as in the incident's bundle.
+    const typed = Array.from({ length: 10 }, (_, i) => textLines(
+      Array.from({ length: 40 }, (_, line) => `Index entry ${i + 1}.${line + 1}: exhibit source and date received`),
+    ));
     const pdf = buildPdf([...typed, ...Array.from({ length: 190 }, () => BLUE_SQUARE)]);
 
     const content = await withPdf(pdf, extractPdfContent);
 
-    expect(content.lowTextPages).toBe(190);
-    expect(isScanLikePdf(content)).toBe(true);
-    expect(content.text).toContain('Index entry 1:');
-    expect(content.text).toContain('Index entry 10:');
+    expect(content.lowTextPageNumbers).toEqual(Array.from({ length: 190 }, (_, i) => i + 11));
+    expect(isScanLikePdf(content)).toBe(false);
+    expect(pdfPagesToRender({ ...content, scan: false }, 50)[0]).toBe(11);
+    expect(content.text).toContain('Index entry 10.40:');
   }, 60000);
 
-  it('a normal text PDF stays a text document', async () => {
-    const pdf = buildPdf(Array.from({ length: 20 }, (_, i) => text(`Chapter ${i + 1} has a full page of ordinary typed prose.`)));
-    expect(isScanLikePdf(await withPdf(pdf, extractPdfContent))).toBe(false);
+  it('a scan with no text is scan-like', async () => {
+    const pdf = buildPdf([BLUE_SQUARE, BLUE_SQUARE, text('3')]);
+    expect(isScanLikePdf(await withPdf(pdf, extractPdfContent))).toBe(true);
   }, 30000);
 });
 
 /** Render through the real loader, collecting what onPage receives. */
-async function render(pdf: Buffer, maxPages: number) {
+async function render(pdf: Buffer, pageNumbers: number[]) {
   const pages: RasterizedPdfPage[] = [];
-  const result = await withPdf(pdf, (doc) => rasterizePdfPages(doc, { maxPages, onPage: async (page) => { pages.push(page); } }));
+  const result = await withPdf(pdf, (doc) => rasterizePdfPages(doc, { pages: pageNumbers, onPage: async (page) => { pages.push(page); } }));
   return { pages, ...result };
 }
 
@@ -120,10 +150,9 @@ describe('rasterizePdfPages', () => {
   it('renders each page as a JPEG within the 2048px ai-vision budget', async () => {
     const pdf = buildPdf([BLUE_SQUARE, BLUE_SQUARE]);
 
-    const { pages, attempted, rendered } = await render(pdf, 10);
+    const { pages, rendered } = await render(pdf, [1, 2]);
 
-    expect(attempted).toBe(2);
-    expect(rendered).toBe(2);
+    expect(rendered).toEqual([1, 2]);
     expect(pages.map((p) => p.pageNumber)).toEqual([1, 2]);
     for (const page of pages) {
       expect(page.mimeType).toBe('image/jpeg');
@@ -138,7 +167,7 @@ describe('rasterizePdfPages', () => {
   it('keeps a very wide page within the budget on its long side', async () => {
     const pdf = buildPdf([BLUE_SQUARE], '0 0 3000 400');
 
-    const { pages } = await render(pdf, 1);
+    const { pages } = await render(pdf, [1]);
 
     const meta = await sharp(pages[0].buffer).metadata();
     expect(meta.width).toBeLessThanOrEqual(2048);
@@ -148,7 +177,7 @@ describe('rasterizePdfPages', () => {
   it('paints the page content onto a white background', async () => {
     const pdf = buildPdf([BLUE_SQUARE]);
 
-    const { pages } = await render(pdf, 1);
+    const { pages } = await render(pdf, [1]);
 
     const { data, info } = await sharp(pages[0].buffer).raw().toBuffer({ resolveWithObject: true });
     const pixel = (x: number, y: number) => {
@@ -169,7 +198,7 @@ describe('rasterizePdfPages', () => {
   it('renders text set in a standard font', async () => {
     const pdf = buildPdf(['BT /F1 48 Tf 72 600 Td (EXHIBIT 4) Tj ET']);
 
-    const { pages } = await render(pdf, 1);
+    const { pages } = await render(pdf, [1]);
 
     const { data, info } = await sharp(pages[0].buffer).greyscale().raw().toBuffer({ resolveWithObject: true });
     const dark = data.filter((v) => v < 100).length;
@@ -181,7 +210,7 @@ describe('rasterizePdfPages', () => {
     const pdf = buildPdf([BLUE_SQUARE, BLUE_SQUARE]);
     const onPage = vi.fn(async () => { throw new Error('S3 down'); });
 
-    await expect(withPdf(pdf, (doc) => rasterizePdfPages(doc, { maxPages: 2, onPage }))).rejects.toThrow('S3 down');
+    await expect(withPdf(pdf, (doc) => rasterizePdfPages(doc, { pages: [1, 2], onPage }))).rejects.toThrow('S3 down');
     expect(onPage).toHaveBeenCalledTimes(1);
   }, 30000);
 
@@ -199,7 +228,7 @@ describe('rasterizePdfPages', () => {
         return getPage(n);
       };
       await rasterizePdfPages(doc, {
-        maxPages: 2,
+        pages: [1, 2],
         onPage: async (page) => {
           if (page.pageNumber === 1) setImmediate(() => { ranBetweenPages = true; });
         },
@@ -209,13 +238,13 @@ describe('rasterizePdfPages', () => {
     expect(ranBeforePage2).toBe(true);
   }, 30000);
 
-  it('renders only the first maxPages pages', async () => {
+  it('renders only the listed pages, skipping any past the end', async () => {
     const pdf = buildPdf([BLUE_SQUARE, BLUE_SQUARE, BLUE_SQUARE, BLUE_SQUARE]);
 
-    const { pages, attempted } = await render(pdf, 2);
+    const { pages, rendered } = await render(pdf, [2, 4, 9]);
 
-    expect(attempted).toBe(2);
-    expect(pages.map((p) => p.pageNumber)).toEqual([1, 2]);
+    expect(rendered).toEqual([2, 4]);
+    expect(pages.map((p) => p.pageNumber)).toEqual([2, 4]);
   }, 30000);
 });
 

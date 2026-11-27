@@ -16,6 +16,7 @@ import {
   withPdf,
   extractPdfContent,
   isScanLikePdf,
+  pdfPagesToRender,
   rasterizePdfPages,
   pdfPagePreset,
   resolveMaxRasterizedPdfPages,
@@ -162,55 +163,62 @@ async function dispatch(pageId: string, contentHash: string, bytes: Buffer, mime
  * Rendering a scan is the heaviest thing the processor does (hundreds of MB off
  * heap, near-second event-loop stalls per page on a shared CPU), and both the
  * upload queue (pull-verify) and Reprocess (ingest-file) reach processPdfPage.
- * One process-wide limit keeps two scans from rendering at once.
+ * One process-wide limit covers the whole PDF pass, load and parse included, so
+ * a PDF waiting its turn holds no parsed document.
  */
-const pdfRendering = createSemaphore(positiveIntOr(process.env.PDF_RASTER_CONCURRENCY, 1));
+const pdfProcessing = createSemaphore(positiveIntOr(process.env.PDF_RASTER_CONCURRENCY, 1));
 
 /**
- * A PDF with a real text layer on (nearly) every page is read as text. A PDF
- * where at least a fifth of the pages have almost no text — a scan, or a bundle
- * of typed pages and scanned exhibits — is marked `visual`, keeping all of its
- * text (for search, for text-only models, and for read_page's lineStart/lineEnd),
- * and its leading pages are rendered to `pdf-page-{n}` JPEG presets, so a vision
- * model can look at it. Marking a scan `completed` with empty content left
- * agents nothing to read and never reached the visual path.
+ * A PDF with a real text layer stays a `completed` text document with all its
+ * text, so every text reader (read_page, MCP, search) keeps it. Its low-text
+ * pages — scans, figures, blanks — are still rendered to `pdf-page-{n}` JPEG
+ * presets, listed in extractionMetadata.renderedPages, so read_page can offer
+ * those pages to vision models.
+ *
+ * A PDF with no real text layer — a scan — is marked `visual`, keeping
+ * whatever text it had, and its leading pages are rendered.
  *
  * Shared by the upload pipeline and the ingest-file worker (Reprocess), so a
- * reprocessed scan gets the same status and page images as a new upload.
+ * reprocessed file gets the same status and page images as a new upload.
  * Returns the status it recorded.
  */
 export async function processPdfPage(pageId: string, contentHash: string, bytes: Buffer): Promise<'completed' | 'visual'> {
   const mimeType = 'application/pdf';
-  return withPdf(bytes, async (pdf) => {
+  return pdfProcessing.run(() => withPdf(bytes, async (pdf) => {
     const content = await extractPdfContent(pdf);
     const { text, pageCount } = content;
+    const scan = isScanLikePdf(content);
+    const toRender = pdfPagesToRender({ ...content, scan }, resolveMaxRasterizedPdfPages());
 
-    if (!isScanLikePdf(content)) {
-      await setPageCompleted(pageId, text, { mimeType, pageCount }, 'text');
+    let renderedPages: number[] = [];
+    if (toRender.length > 0) {
+      try {
+        ({ rendered: renderedPages } = await rasterizePdfPages(pdf, {
+          pages: toRender,
+          // Each page is cached as soon as it is rendered, and one at a time:
+          // saveCache read-modify-writes the hash's cache metadata.
+          onPage: async (page) => {
+            await contentStore.saveCache(contentHash, pdfPagePreset(page.pageNumber), page.buffer, page.mimeType);
+          },
+        }));
+      } catch (err) {
+        // The page stays readable (as a PDF, or by its text) without page images.
+        loggers.processor.warn('PDF page rendering failed; recording no page images', {
+          pageId,
+          contentHash,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        renderedPages = [];
+      }
+    }
+
+    if (!scan) {
+      await setPageCompleted(pageId, text, { mimeType, pageCount, ...(renderedPages.length > 0 ? { renderedPages } : {}) }, 'text');
       return 'completed';
     }
-
-    let rasterizedPages = 0;
-    try {
-      const { rendered, attempted } = await pdfRendering.run(() => rasterizePdfPages(pdf, {
-        maxPages: resolveMaxRasterizedPdfPages(),
-        // Each page is cached as soon as it is rendered, and one at a time:
-        // saveCache read-modify-writes the hash's cache metadata.
-        onPage: async (page) => {
-          await contentStore.saveCache(contentHash, pdfPagePreset(page.pageNumber), page.buffer, page.mimeType);
-        },
-      }));
-      rasterizedPages = rendered > 0 ? attempted : 0;
-    } catch (err) {
-      // The page stays readable (as a PDF, or by its text) without page images.
-      loggers.processor.warn('PDF page rendering failed; marking visual without page images', {
-        pageId,
-        contentHash,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-
-    await setPageVisualWithContent(pageId, text, { mimeType, pageCount, rasterizedPages });
+    // A scan always records its list, even empty: "processed, nothing rendered"
+    // is different from a PDF processed before page images existed.
+    await setPageVisualWithContent(pageId, text, { mimeType, pageCount, renderedPages });
     return 'visual';
-  });
+  }));
 }
