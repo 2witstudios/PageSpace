@@ -24,7 +24,6 @@
  * `resolveSandboxPath`, `truncateToBytes`) is called directly.
  */
 
-import { randomUUID } from 'node:crypto';
 import { envInt, type EnvSource } from '../../billing/env-parse';
 import type { SubscriptionTier } from '../subscription-utils';
 import {
@@ -49,7 +48,7 @@ import { getValidatedEnv } from '../../config/env-validation';
 import type { ExecutableSandbox, SandboxRunResult } from './sandbox-client/types';
 import { LocalEnvUnsupportedError } from './sandbox-host';
 import { LocalEnvGrantDeniedError } from './sandbox-client/local-env-sandbox-host';
-import { findSentinel } from './sandbox-client/sprites';
+import { findSentinel } from './sandbox-client/stdout-sentinel';
 import type { CodeExecutionAuditInput, CodeExecutionAnomaly } from './audit';
 import type { UsageTrackingOutcome } from '../../monitoring/ai-monitoring';
 import { ORG_COMPUTE_REFUSAL_MESSAGES, isOrgComputeRefusal, type ComputeCharge, type OrgComputeGateRefusal } from '../../billing/compute-charge';
@@ -1693,7 +1692,9 @@ async function removeTempFile(sandbox: ExecutableSandbox, tempPath: string): Pro
 
 /** A sibling temp path for `target` — same directory, so the rename is atomic. */
 function binaryCopyTempPath(target: string): string {
-  return `${target}.pagespace-copy-${randomUUID()}.tmp`;
+  // globalThis.crypto (Web Crypto), not `node:crypto`: this module is reachable
+  // from client bundles, where a `node:*` import breaks the build.
+  return `${target}.pagespace-copy-${globalThis.crypto.randomUUID()}.tmp`;
 }
 
 /**
@@ -1916,7 +1917,9 @@ export async function copySandboxFile({
  * a skipped check — because the fs API materializes the whole file in host
  * memory and a cap applied afterwards would already have paid for it. That size
  * is then offered to `admit` (the caller's process-wide byte budget), which may
- * refuse it. The read's own length is checked again, since the file can grow.
+ * refuse it — BETWEEN two short sessions, so a wait for budget holds no exec
+ * slot or billing hold. The read's own length is checked again: a file that grew
+ * past what was reserved is refused.
  */
 export async function readSandboxBinaryFileForCopy({
   path,
@@ -1950,20 +1953,20 @@ export async function readSandboxBinaryFileForCopy({
   const cap = Math.min(maxBytes, MAX_BINARY_COPY_BYTES);
   if (remainingMs(deps, deadlineAt) <= 0) return fail('copy_deadline_exceeded');
 
-  return withMachineBilling<Extract<BinaryReadForCopyResult, { success: true }>>(ctx, deps, async () => {
+  const auditRead = (startedAt: Date, exitCode: number | null, note: string, anomaly?: CodeExecutionAnomaly) =>
+    safeAudit(deps, ctx, {
+      code: `binaryRead ${path}${note}`,
+      exitCode,
+      durationMs: deps.now().getTime() - startedAt.getTime(),
+      ...(anomaly ? { anomaly } : {}),
+    });
+
+  // 1. Probe the size in a short session of its own.
+  const probed = await withMachineBilling<{ size: number }>(ctx, deps, async () => {
     const session = await openSession(ctx, deps);
     if (!session.ok) return fail(session.reason);
-
+    const startedAt = deps.now();
     try {
-      const startedAt = deps.now();
-      const audit = (exitCode: number | null, note: string, anomaly?: CodeExecutionAnomaly) =>
-        safeAudit(deps, ctx, {
-          code: `binaryRead ${path}${note}`,
-          exitCode,
-          durationMs: deps.now().getTime() - startedAt.getTime(),
-          ...(anomaly ? { anomaly } : {}),
-        });
-
       let probe: SandboxRunResult;
       try {
         probe = await beforeDeadline(
@@ -1977,27 +1980,44 @@ export async function readSandboxBinaryFileForCopy({
           deadlineAt,
         );
       } catch (error) {
-        await audit(null, '', 'nonzero_exit');
+        await auditRead(startedAt, null, '', 'nonzero_exit');
         return fail(error instanceof CopyDeadlineError ? 'copy_deadline_exceeded' : 'execution_failed');
       }
       if (probe.exitCode === EXIT_NOT_FOUND) {
-        await audit(probe.exitCode, '', 'nonzero_exit');
+        await auditRead(startedAt, probe.exitCode, '', 'nonzero_exit');
         return fail('not_found');
       }
       const size = probe.exitCode === 0 ? parseProbedSize(probe.stdout) : null;
       if (size === null) {
-        await audit(probe.exitCode, ' (size unreadable)', 'nonzero_exit');
+        await auditRead(startedAt, probe.exitCode, ' (size unreadable)', 'nonzero_exit');
         return fail('execution_failed');
       }
       if (size > cap) {
-        await audit(1, ` (${size} bytes, over cap)`);
+        await auditRead(startedAt, 1, ` (${size} bytes, over cap)`);
         return fail('content_too_large');
       }
-      if (admit && !(await admit(size))) {
-        await audit(1, ` (${size} bytes, copy budget exhausted)`);
-        return fail('copy_budget_exhausted');
-      }
+      return { success: true, size };
+    } finally {
+      session.release();
+    }
+  });
+  if (!probed.success) return probed;
+  const { size } = probed;
 
+  // 2. Reserve the bytes with NO session open: a copy waiting for room in the
+  //    caller's budget holds no code-exec slot and no billing hold, and is not
+  //    billed active time for the wait.
+  if (admit && !(await admit(size))) {
+    await auditRead(deps.now(), 1, ` (${size} bytes, copy budget exhausted)`);
+    return fail('copy_budget_exhausted');
+  }
+
+  // 3. Read, under exactly what was reserved.
+  return withMachineBilling<Extract<BinaryReadForCopyResult, { success: true }>>(ctx, deps, async () => {
+    const session = await openSession(ctx, deps);
+    if (!session.ok) return fail(session.reason);
+    const startedAt = deps.now();
+    try {
       let buffer: Buffer | null;
       try {
         buffer = await beforeDeadline(
@@ -2009,7 +2029,7 @@ export async function readSandboxBinaryFileForCopy({
           deadlineAt,
         );
       } catch (error) {
-        await audit(null, '', 'nonzero_exit');
+        await auditRead(startedAt, null, '', 'nonzero_exit');
         if (error instanceof CopyDeadlineError) return fail('copy_deadline_exceeded');
         // A local env's daemon refuses a file over its frame ceiling; that is a
         // size refusal, and the agent must be told so in those words.
@@ -2017,16 +2037,21 @@ export async function readSandboxBinaryFileForCopy({
         return fail('execution_failed');
       }
       if (buffer === null) {
-        await audit(1, '', 'nonzero_exit');
+        await auditRead(startedAt, 1, '', 'nonzero_exit');
         return fail('not_found');
       }
       const bytes = buffer.byteLength;
       if (bytes > cap) {
-        await audit(1, ` (${bytes} bytes, over cap)`);
+        await auditRead(startedAt, 1, ` (${bytes} bytes, over cap)`);
         return fail('content_too_large');
       }
+      if (bytes > size) {
+        // It grew between the probe and the read: more than was reserved.
+        await auditRead(startedAt, 1, ` (${bytes} bytes, grew past the ${size} probed)`);
+        return fail('execution_failed');
+      }
 
-      await audit(0, ` (${bytes} bytes)`);
+      await auditRead(startedAt, 0, ` (${bytes} bytes)`);
       return { success: true, path, content: buffer, bytes };
     } finally {
       session.release();

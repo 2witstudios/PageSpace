@@ -2388,7 +2388,9 @@ describe('readSandboxBinaryFileForCopy', () => {
     const { deps, audits, slots } = makeDeps({ reconnect: async () => sandbox });
     await readSandboxBinaryFileForCopy({ path: 'a.bin', maxBytes: 1024, ctx: makeCtx(), deps });
     expect(audits[audits.length - 1]).toMatchObject({ exitCode: 0, code: 'binaryRead a.bin (3 bytes)' });
-    expect(slots.released).toBe(1);
+    // Two short sessions (probe, then read) — every slot taken is given back.
+    expect(slots.acquired).toBe(2);
+    expect(slots.released).toBe(2);
   });
 });
 
@@ -2533,6 +2535,49 @@ describe('binary copies — review #3016', () => {
       expect(result).toMatchObject({ success: false, reason: 'copy_budget_exhausted' });
       expect(admitted).toEqual([300]);
       expect(reads).toHaveLength(0);
+    });
+  });
+
+  describe('review #3016 round 2 (E): the budget wait holds no exec slot and no billing hold', () => {
+    it('calls admit BETWEEN sessions — no slot held, no hold placed — and reads only after it grants', async () => {
+      const holds = { placed: 0, released: 0, settled: 0 };
+      const atAdmit: Array<{ slotsHeld: number; holdsOpen: number }> = [];
+      const sandbox = makeSandbox({
+        runCommand: async () => ({ exitCode: 0, stdout: '300\n', stderr: '' }),
+        readFileToBuffer: async () => Buffer.alloc(300),
+      });
+      const { deps, slots } = makeDeps({
+        reconnect: async () => sandbox,
+        resolveBillingSession: async () => ({ workspaceId: 'ws-1', driveId: 'd1', ownerId: 'u1' }),
+        billing: {
+          resolveCharge: async () => ({ kind: 'user', userId: 'u1' }) as unknown as ComputeCharge,
+          gate: async () => { holds.placed += 1; return { allowed: true, holdId: `h${holds.placed}` }; },
+          trackUsage: async () => { holds.settled += 1; return { persisted: true } as never; },
+          releaseHold: async () => { holds.released += 1; },
+        },
+      });
+      const result = await readSandboxBinaryFileForCopy({
+        path: 'a.pdf',
+        maxBytes: 1024,
+        admit: async () => {
+          atAdmit.push({ slotsHeld: slots.acquired - slots.released, holdsOpen: holds.placed - holds.settled - holds.released });
+          return true;
+        },
+        ctx: makeCtx(),
+        deps,
+      });
+      expect(result.success).toBe(true);
+      expect(atAdmit).toEqual([{ slotsHeld: 0, holdsOpen: 0 }]);
+    });
+
+    it('refuses a file that grew past the reserved (probed) size, even under the cap', async () => {
+      const sandbox = makeSandbox({
+        runCommand: async () => ({ exitCode: 0, stdout: '10\n', stderr: '' }),
+        readFileToBuffer: async () => Buffer.alloc(500),
+      });
+      const { deps } = makeDeps({ reconnect: async () => sandbox });
+      const result = await readSandboxBinaryFileForCopy({ path: 'a.pdf', maxBytes: 1024, admit: async () => true, ctx: makeCtx(), deps });
+      expect(result).toMatchObject({ success: false, reason: 'execution_failed' });
     });
   });
 

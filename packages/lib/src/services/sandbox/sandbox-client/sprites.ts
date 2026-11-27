@@ -77,6 +77,7 @@ import type {
 } from './types';
 import { SandboxProvisionError, type SandboxCreateOptions } from '../sandbox-options';
 import { loggers } from '../../../logging/logger-config';
+import { findSentinel } from './stdout-sentinel';
 import { MAX_LABEL_LENGTH } from '../../../validators/custom-domain';
 
 /** Thrown when a command exceeds the policy's per-run wall-clock cap. */
@@ -613,26 +614,8 @@ function toBuffer(chunk: Buffer | string): Buffer {
   return typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;
 }
 
-/**
- * Pure: locate a `<sentinel> <exit-code>` line in collected stdout. Returns the
- * stdout BEFORE that line and the parsed code, or null when the sentinel has not
- * arrived yet (or arrived without a numeric code — treated as not-yet, so a
- * partial chunk boundary cannot fake a result).
- */
-export function findSentinel(stdout: string, sentinel: string): { stdout: string; exitCode: number } | null {
-  const lines = stdout.split('\n');
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i];
-    if (!line.startsWith(sentinel)) continue;
-    const code = Number(line.slice(sentinel.length).trim());
-    if (!Number.isInteger(code)) return null;
-    // Only a COMPLETE line counts: a sentinel at the very end with no newline
-    // may still be mid-chunk (the code could be `12` of `127`).
-    if (i === lines.length - 1) return null;
-    return { stdout: lines.slice(0, i).join('\n'), exitCode: code };
-  }
-  return null;
-}
+// Re-exported: the protocol lives in a pure module so client-reachable code can share it.
+export { findSentinel };
 
 /**
  * Run a command through the SDK's `spawn` (structured `file` + `args[]`, never a
