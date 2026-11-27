@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   createDriveEnv,
+  ensureHomeDriveEnv,
   listDriveEnvs,
   renameDriveEnv,
   deleteDriveEnv,
@@ -8,6 +9,7 @@ import {
   deriveDriveEnvStatus,
   toDriveEnvDTO,
   type CreateDriveEnvDeps,
+  type EnsureHomeDriveEnvDeps,
   type DeleteDriveEnvDeps,
   type RebuildDriveEnvDeps,
 } from '../drive-envs';
@@ -791,5 +793,65 @@ describe('rebuildDriveEnv', () => {
     const store = makeDriveEnvStore();
     const result = await rebuildDriveEnv({ envId: 'nope', deps: makeRebuildDeps(store, makeSpriteHost()) });
     expect(result).toEqual({ ok: false, reason: 'not_found' });
+  });
+});
+
+describe('ensureHomeDriveEnv', () => {
+  const HOME_DRIVE = 'home-drive-1';
+  const OWNER = 'owner-1';
+  const deps = (store: ReturnType<typeof makeDriveEnvStore>, over: Partial<EnsureHomeDriveEnvDeps> = {}): EnsureHomeDriveEnvDeps => ({
+    store: store.store,
+    getDriveOrgPolicies: async () => null,
+    now: () => NOW,
+    ...over,
+  });
+
+  it('given an owner with no Home env, should mint one named "Home" in their Home drive without provisioning a Sprite', async () => {
+    const store = makeDriveEnvStore();
+    const result = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.env).toMatchObject({ driveId: HOME_DRIVE, name: 'Home', isHome: true, createdBy: OWNER, sandboxId: null });
+    expect(store.rows.size).toBe(1);
+  });
+
+  it('given the Home env already exists, should return it and mint nothing', async () => {
+    const store = makeDriveEnvStore();
+    const first = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    const second = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    expect(first.ok && second.ok && second.env.id === first.env.id).toBe(true);
+    expect(store.rows.size).toBe(1);
+  });
+
+  it('given two first uses at once, should end with exactly one Home env', async () => {
+    const store = makeDriveEnvStore();
+    const [a, b] = await Promise.all([
+      ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) }),
+      ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) }),
+    ]);
+    expect(a.ok && b.ok && a.env.id === b.env.id).toBe(true);
+    expect(store.rows.size).toBe(1);
+  });
+
+  it('given the payer is at their env ceiling (or on the free tier), should still provide Home — it is not metered by the env cap', async () => {
+    const store = makeDriveEnvStore();
+    store.ownedEnvs.set(OWNER, 1_000);
+    const result = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    expect(result.ok).toBe(true);
+  });
+
+  it('given the user already made an env called "Home" in that drive, should adopt it as Home rather than fail on the name', async () => {
+    const store = makeDriveEnvStore([makeEnvRecord({ id: 'mine', driveId: HOME_DRIVE, name: 'Home' })]);
+    const result = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    expect(result.ok && result.env.id === 'mine' && result.env.isHome).toBe(true);
+    expect(store.rows.size).toBe(1);
+  });
+
+  it('given an org policy that turns environments off, should refuse and mint nothing', async () => {
+    const store = makeDriveEnvStore();
+    const off = async () => ({ ...DEFAULT_ORG_POLICIES, persistentEnvironments: false });
+    const result = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store, { getDriveOrgPolicies: off }) });
+    expect(result).toMatchObject({ ok: false, reason: 'org_policy' });
+    expect(store.rows.size).toBe(0);
   });
 });

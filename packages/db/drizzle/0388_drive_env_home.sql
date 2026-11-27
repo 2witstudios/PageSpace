@@ -1,0 +1,2 @@
+ALTER TABLE "drive_envs" ADD COLUMN "isHome" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX "drive_envs_home_per_drive_idx" ON "drive_envs" USING btree ("driveId") WHERE "drive_envs"."isHome";
