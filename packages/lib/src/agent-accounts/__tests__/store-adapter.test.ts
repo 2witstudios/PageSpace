@@ -280,7 +280,7 @@ describe('web process holds no reading identity (ADR 0005 §10.11)', () => {
   // holds or reaches a store identity, nor read an Infisical variable.
   it('given the apps/web source tree, should import no plane-side module and read no INFISICAL_ variable', () => {
     const webSrc = path.join(__dirname, '../../../../../apps/web/src');
-    const forbiddenModules = ['store-adapter-infisical', 'infisical-client', 'infisical-tenant-provisioner-client', 'plane-metadata-repository', 'http-request-executor', 'plane-http-adapter', 'plane-worker', 'plane-main', 'plane-metadata-migrate', 'plane-metadata-migrate-main'];
+    const forbiddenModules = ['store-adapter-infisical', 'infisical-client', 'infisical-tenant-provisioner-client', 'plane-metadata-repository', 'http-request-executor', 'plane-http-adapter', 'plane-worker', 'plane-main', 'plane-metadata-migrate', 'plane-metadata-migrate-main', 'generate-plane-secrets-main'];
     const offenders: string[] = [];
     const walk = (dir: string) => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
