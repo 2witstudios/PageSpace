@@ -1,6 +1,7 @@
-import { app, session } from 'electron';
+import { app } from 'electron';
 import * as path from 'path';
 import { saveAuthSession, type StoredAuthSession } from './auth-storage';
+import { setSessionCookie } from './session-cookie';
 import { mainWindow } from './state';
 import { setCachedSession } from './state';
 import { getAppOrigin, getStartUrl } from './app-url';
@@ -134,21 +135,7 @@ async function handleAuthExchange(url: string): Promise<boolean> {
     await saveAuthSession(sessionData);
     setCachedSession(sessionData);
 
-    const appOrigin = getAppOrigin();
-    try {
-      await session.defaultSession.cookies.set({
-        url: appOrigin,
-        name: 'session',
-        value: tokens.sessionToken,
-        path: '/',
-        httpOnly: true,
-        secure: !appOrigin.includes('localhost') && !appOrigin.includes('127.0.0.1'),
-        sameSite: 'strict' as const,
-        expirationDate: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60,
-      });
-    } catch (cookieError) {
-      logger.warn('[Auth Exchange] Failed to set session cookie in BrowserWindow', { cookieError });
-    }
+    await setSessionCookie(tokens.sessionToken);
 
     logger.info('[Auth Exchange] OAuth exchange successful', { provider });
 
