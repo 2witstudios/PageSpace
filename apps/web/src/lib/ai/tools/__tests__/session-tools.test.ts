@@ -227,6 +227,7 @@ describe('spawn_session', () => {
       agentPageId: CALLER_AGENT,
       name: 'worker',
       workspace: undefined,
+      freshSandbox: false,
       // The calling credential's ceiling rides placement — empty here because
       // this caller is unscoped. Pinned in the scoped block below.
       allowedDriveIds: [],
@@ -1257,6 +1258,20 @@ describe('spawn_session: honouring the agent\'s configured tool surface', () => 
     const warnings = result.toolSurfaceWarnings as string[];
     expect(warnings.some((w) => w.includes('workspaceName was ignored'))).toBe(true);
     expect(warnings).toContain('no tool named read_file');
+  });
+
+  it('given sandbox: "new" with workspace: "new", should ask for a fresh machine; on any other placement it is ignored with a note', async () => {
+    const deps = makeDeps();
+    const tools = createSessionTools(deps);
+
+    await run(tools.spawn_session, { name: 'w', prompt: 'p', workspace: 'new', sandbox: 'new' }, contextOptions());
+    expect(deps.createWorkerSession).toHaveBeenLastCalledWith(expect.objectContaining({ workspace: 'new', freshSandbox: true }));
+
+    await run(tools.spawn_session, { name: 'w', prompt: 'p', workspace: 'new' }, contextOptions());
+    expect(deps.createWorkerSession).toHaveBeenLastCalledWith(expect.objectContaining({ workspace: 'new', freshSandbox: false }));
+
+    const ignored = await run(tools.spawn_session, { name: 'w', prompt: 'p', sandbox: 'new' }, contextOptions());
+    expect((ignored.toolSurfaceWarnings as string[]).some((w) => w.includes('sandbox was ignored'))).toBe(true);
   });
 
   it('given workspaceName on a non-new spawn AND an unreadable surface, should report BOTH', async () => {

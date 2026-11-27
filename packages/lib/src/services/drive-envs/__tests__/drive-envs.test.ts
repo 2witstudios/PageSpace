@@ -871,16 +871,28 @@ describe('ensureHomeDriveEnv', () => {
     expect(again.ok && again.env).toMatchObject({ id: first.env.id, name: 'my-box', isHome: true });
   });
 
-  it('given the user deleted Home, should allow it and mint a fresh, empty Home on next use', async () => {
+  it('given a delete of the Home env, should REFUSE it (even forced) and touch nothing — Rebuild is how Home is wiped, so its identity and createdAt stay stable', async () => {
     const store = makeDriveEnvStore();
     const host = makeSpriteHost();
     const first = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
     if (!first.ok) throw new Error('expected Home');
-    const deleted = await deleteDriveEnv({ envId: first.env.id, force: false, deps: makeDeleteDeps(store, host) });
-    expect(deleted.ok).toBe(true);
-    const again = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
-    expect(again.ok && again.env.id !== first.env.id && again.env.isHome && again.env.sandboxId === null).toBe(true);
-    expect(store.rows.size).toBe(1);
+    for (const force of [false, true]) {
+      const deleted = await deleteDriveEnv({ envId: first.env.id, force, deps: makeDeleteDeps(store, host) });
+      expect(deleted).toEqual({ ok: false, reason: 'is_home' });
+    }
+    expect(store.calls.deleteIfUnoccupied).toBe(0);
+    expect(store.rows.get(first.env.id)).toMatchObject({ isHome: true, createdAt: first.env.createdAt });
+  });
+
+  it('given a LOCAL "Home" AND envs already named "Home sandbox" and "Home sandbox 2", should mint Home under the first free name — never fail the drive forever', async () => {
+    const store = makeDriveEnvStore([
+      makeEnvRecord({ id: 'laptop', driveId: HOME_DRIVE, name: 'Home', substrate: 'local' }),
+      makeEnvRecord({ id: 'mine-1', driveId: HOME_DRIVE, name: 'Home sandbox' }),
+      makeEnvRecord({ id: 'mine-2', driveId: HOME_DRIVE, name: 'Home sandbox 2' }),
+    ]);
+    const result = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    expect(result.ok && result.env).toMatchObject({ name: 'Home sandbox 3', isHome: true, substrate: 'sprite' });
+    expect(store.rows.size).toBe(4);
   });
 
   it('given a LOCAL env already named "Home", should mint Home beside it rather than adopt somebody\'s computer', async () => {

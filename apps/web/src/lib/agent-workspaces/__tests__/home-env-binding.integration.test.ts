@@ -29,9 +29,13 @@ import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 import { resolveOrCreateConversation } from '@/lib/repositories/resolve-or-create-conversation';
 import { conversations } from '@pagespace/db/schema/conversations';
 import {
+  claimConversationInSession,
   ensureDriveSessionForConversation,
   ensureGlobalSandboxSession,
   ensureHomeEnvForOwner,
+  findSessionForConversation,
+  releaseAutoProvisionedConversations,
+  spawnSession,
 } from '../agent-workspaces-runtime';
 import { resolveCallerSessionForWorker } from '@/lib/ai/tools/session-tools-runtime';
 
@@ -76,7 +80,10 @@ async function pageConversation(ownerId: string, agentId: string): Promise<strin
   return id;
 }
 
-describe('auto-created sessions bind to an env (single-sandbox model)', () => {
+// DB-backed: every ensure is several real round trips (Home drive, Home env,
+// session insert, claim), so the default 5s is too tight — the same 20s the
+// sibling runtime integration suite gives each test.
+describe('auto-created sessions bind to an env (single-sandbox model)', { timeout: 20_000 }, () => {
   beforeAll(async () => {
     try {
       await db.select().from(pages).limit(1);
@@ -126,7 +133,7 @@ describe('auto-created sessions bind to an env (single-sandbox model)', () => {
       .from(agentWorkspaces)
       .where(and(eq(agentWorkspaces.ownerId, owner.id), isNotNull(agentWorkspaces.sandboxId)));
     expect(withSprites).toHaveLength(0);
-  });
+  }, 60_000);
 
   it('given the owner\'s Imago conversation, should bind its session to Home too', async () => {
     if (!dbAvailable) return;
@@ -210,5 +217,37 @@ describe('auto-created sessions bind to an env (single-sandbox model)', () => {
 
     if (!ensured.ok) throw new Error(`ensure failed: ${ensured.reason}`);
     expect(ensured.session).toMatchObject({ driveId: await homeDriveIdOf(owner.id), envId: null, name: 'Global Assistant' });
+  });
+
+  it('given "End all" on a pre-Home ephemeral session, should release its global threads so their next tool call lands in Home — while a team agent\'s thread stays bound', async () => {
+    if (!dbAvailable) return;
+    const owner = await factories.createUser();
+    const actor = credentialActor(owner.id, null);
+    // The pre-Home pile-up: an ephemeral global session holding a global thread
+    // and a team agent's thread (a global session hosts agents from any drive).
+    const legacy = await spawnSession({ actor, driveId: null, name: 'Global Assistant 7' });
+    if (!legacy.ok) throw new Error('expected a legacy session');
+    expect(legacy.session.envId).toBeNull();
+    const globalThread = await globalConversation(owner.id);
+    const teamDrive = await factories.createDrive(owner.id);
+    const teamAgent = await factories.createPage(teamDrive.id, { type: 'AI_CHAT', title: 'Team' });
+    const teamThread = await pageConversation(owner.id, teamAgent.id);
+    for (const conversationId of [globalThread, teamThread]) {
+      expect(await claimConversationInSession({ conversationId, actor, workspaceId: legacy.session.id })).toBe('claimed');
+    }
+
+    const released = await releaseAutoProvisionedConversations({ workspaceId: legacy.session.id, actor });
+    await db.update(agentWorkspaces).set({ endedAt: new Date() }).where(eq(agentWorkspaces.id, legacy.session.id));
+
+    expect(released).toBe(1);
+    expect(await findSessionForConversation(globalThread)).toBeNull();
+    expect((await findSessionForConversation(teamThread))?.id).toBe(legacy.session.id);
+    // The released thread's next tool call: Home, not the old session's own Sprite.
+    const ensured = await ensureGlobalSandboxSession(globalThread, actor);
+    if (!ensured.ok) throw new Error(`ensure failed: ${ensured.reason}`);
+    const home = await ensureHomeEnvForOwner(owner.id);
+    if (!home.ok) throw new Error('expected Home');
+    expect(ensured.session).toMatchObject({ envId: home.envId });
+    expect(ensured.session.id).not.toBe(legacy.session.id);
   });
 });

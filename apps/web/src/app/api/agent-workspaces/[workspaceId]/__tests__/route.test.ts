@@ -8,6 +8,7 @@ const {
   mockCheckSessionEndAccess,
   mockCountOpenConversationsForSession,
   mockEndSession,
+  mockReleaseAutoProvisionedConversations,
   mockFindSessionRecord,
   mockProvisionSessionSandbox,
   mockRenameSession,
@@ -19,6 +20,7 @@ const {
   mockCheckSessionEndAccess: vi.fn(),
   mockCountOpenConversationsForSession: vi.fn(),
   mockEndSession: vi.fn(),
+  mockReleaseAutoProvisionedConversations: vi.fn(),
   mockFindSessionRecord: vi.fn(),
   mockProvisionSessionSandbox: vi.fn(),
   mockRenameSession: vi.fn(),
@@ -40,6 +42,7 @@ vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   checkSessionEndAccess: (...args: unknown[]) => mockCheckSessionEndAccess(...args),
   countOpenConversationsForSession: (...args: unknown[]) => mockCountOpenConversationsForSession(...args),
   endSession: (...args: unknown[]) => mockEndSession(...args),
+  releaseAutoProvisionedConversations: (...args: unknown[]) => mockReleaseAutoProvisionedConversations(...args),
   findSessionRecord: (...args: unknown[]) => mockFindSessionRecord(...args),
   provisionSessionSandbox: (...args: unknown[]) => mockProvisionSessionSandbox(...args),
   renameSession: (...args: unknown[]) => mockRenameSession(...args),
@@ -58,7 +61,7 @@ const ROW = { id: SESSION_ID, ownerId: 'user-1', driveId: 'drive-1' };
 const params = { params: Promise.resolve({ workspaceId: SESSION_ID }) };
 const get = () => GET(new Request(`http://localhost/api/agent-workspaces/${SESSION_ID}`), params);
 const post = () => POST(new Request(`http://localhost/api/agent-workspaces/${SESSION_ID}`, { method: 'POST' }), params);
-const del = () => DELETE(new Request(`http://localhost/api/agent-workspaces/${SESSION_ID}`, { method: 'DELETE' }), params);
+const del = (query = '') => DELETE(new Request(`http://localhost/api/agent-workspaces/${SESSION_ID}${query}`, { method: 'DELETE' }), params);
 const patch = (body: unknown) =>
   PATCH(
     new Request(`http://localhost/api/agent-workspaces/${SESSION_ID}`, {
@@ -218,8 +221,10 @@ describe('DELETE /api/agent-workspaces/[workspaceId]', () => {
   it('should end the session (row retained) and report the teardown', async () => {
     const response = await del();
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ ok: true, spriteTornDown: true, hadOtherOpenConversations: false });
+    expect(await response.json()).toEqual({ ok: true, spriteTornDown: true, hadOtherOpenConversations: false, releasedConversations: 0 });
     expect(mockEndSession).toHaveBeenCalledWith(SESSION_ID);
+    // A plain end releases nothing — only End all opts in.
+    expect(mockReleaseAutoProvisionedConversations).not.toHaveBeenCalled();
   });
 
   it('reports hadOtherOpenConversations: true — informational only, still ends the session', async () => {
@@ -232,7 +237,7 @@ describe('DELETE /api/agent-workspaces/[workspaceId]', () => {
     mockCountOpenConversationsForSession.mockResolvedValue(3);
     const response = await del();
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ ok: true, spriteTornDown: true, hadOtherOpenConversations: true });
+    expect(await response.json()).toEqual({ ok: true, spriteTornDown: true, hadOtherOpenConversations: true, releasedConversations: 0 });
     expect(mockEndSession).toHaveBeenCalledWith(SESSION_ID);
   });
 
@@ -240,7 +245,26 @@ describe('DELETE /api/agent-workspaces/[workspaceId]', () => {
     mockCountOpenConversationsForSession.mockRejectedValue(new Error('db blip'));
     const response = await del();
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ ok: true, spriteTornDown: true, hadOtherOpenConversations: false });
+    expect(await response.json()).toEqual({ ok: true, spriteTornDown: true, hadOtherOpenConversations: false, releasedConversations: 0 });
+    expect(mockEndSession).toHaveBeenCalledWith(SESSION_ID);
+  });
+
+  it('given ?release=conversations, should release the auto-provisioned threads BEFORE ending, and report how many', async () => {
+    const order: string[] = [];
+    mockReleaseAutoProvisionedConversations.mockImplementation(async () => { order.push('release'); return 4; });
+    mockEndSession.mockImplementation(async () => { order.push('end'); return { ok: true, spriteTornDown: true }; });
+    const response = await del('?release=conversations');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ ok: true, releasedConversations: 4 });
+    expect(mockReleaseAutoProvisionedConversations).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: SESSION_ID }));
+    expect(order).toEqual(['release', 'end']);
+  });
+
+  it('given a release that fails, should still end the session — release is best-effort', async () => {
+    mockReleaseAutoProvisionedConversations.mockRejectedValue(new Error('db blip'));
+    const response = await del('?release=conversations');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ ok: true, releasedConversations: 0 });
     expect(mockEndSession).toHaveBeenCalledWith(SESSION_ID);
   });
 

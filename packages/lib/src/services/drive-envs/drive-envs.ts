@@ -891,7 +891,14 @@ export type DeleteDriveEnvResult =
   | { ok: true; spriteTornDown: boolean }
   | { ok: false; reason: 'not_found' }
   /** Sessions are still live in here and `force` was not given. Nothing was touched. */
-  | { ok: false; reason: 'live_sessions'; liveSessionCount: number };
+  | { ok: false; reason: 'live_sessions'; liveSessionCount: number }
+  /**
+   * The owner's Home env, which is never deleted (forced or not): every
+   * auto-created session runs in it, and its identity — `createdAt` included,
+   * which the sidebar's "Previous sessions" is keyed on — must stay stable.
+   * `rebuildDriveEnv` is how Home is wiped; a rename is still allowed.
+   */
+  | { ok: false; reason: 'is_home' };
 
 /**
  * Delete an environment — the destructive verb, and the only one that takes a
@@ -958,6 +965,7 @@ export async function deleteDriveEnv({
 }): Promise<DeleteDriveEnvResult> {
   const row = await deps.store.findById(envId);
   if (!row) return { ok: false, reason: 'not_found' };
+  if (row.isHome) return { ok: false, reason: 'is_home' };
 
   // Step 1. Cheap and non-authoritative — see the docblock. Its only job is to
   // refuse the common "you have sessions open in here" case without taking a

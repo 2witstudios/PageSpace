@@ -371,6 +371,29 @@ describe('createWorkerSession — placement', () => {
   });
 
   describe('workspace: "new"', () => {
+    test('with freshSandbox (sandbox: "new"), mints it EPHEMERAL — an isolated machine, even for the assistant whose default is Home', async () => {
+      mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+      mockSpawnAutoSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockCreateConversationInSession.mockResolvedValue(undefined);
+
+      const deps = buildSessionToolsDeps();
+      await deps.createWorkerSession({ ...baseInput, workspace: 'new', freshSandbox: true });
+
+      expect(mockSpawnAutoSession).toHaveBeenCalledWith(expect.objectContaining({ driveId: null, env: null }));
+    });
+
+    test('with freshSandbox for a page agent that HAS a default env, still mints it ephemeral — the explicit choice wins', async () => {
+      mockGetAiAgent.mockResolvedValue({ id: 'agent-1', driveId: 'drive-1', title: 'Builder', defaultEnvId: 'env-default', sandboxEnabled: true });
+      mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+      mockSpawnAutoSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockCreateConversationInSession.mockResolvedValue(undefined);
+
+      const deps = buildSessionToolsDeps();
+      await deps.createWorkerSession({ ...baseInput, agentPageId: 'agent-1', workspace: 'new', freshSandbox: true });
+
+      expect(mockSpawnAutoSession).toHaveBeenCalledWith(expect.objectContaining({ driveId: 'drive-1', env: null }));
+    });
+
     test('mints an isolated workspace and creates the worker in it', async () => {
       mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
       mockSpawnAutoSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });

@@ -36,6 +36,8 @@
 import type { SQL } from 'drizzle-orm';
 import type { SpriteHolderRowStamps } from '../../agent-workspaces/plan-workspace-lifecycle';
 import { MAX_DRIVE_ENVS_LISTED } from '../../drive-envs/env-contract';
+// Generic and pure despite its name: the length-aware "<base>", "<base> 2", … picker.
+import { nextUniqueSessionName } from '../../agent-workspaces/session-contract';
 
 /**
  * One `drive_envs` row.
@@ -894,10 +896,21 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
             return adopted as DriveEnvRecord;
           }
           // A LOCAL env holding the name is somebody's computer, never the
-          // cloud Home — leave it be and mint Home beside it.
+          // cloud Home — leave it be and mint Home beside it, under the first
+          // FREE fallback name ("Home sandbox", "Home sandbox 2", …), so a
+          // drive that already uses the fallback never fails forever.
+          let name = HOME_ENV_NAME;
+          if (named) {
+            const taken = await tx
+              .select({ name: driveEnvs.name })
+              .from(driveEnvs)
+              .where(and(eq(driveEnvs.driveId, driveId), sql`${driveEnvs.name} LIKE ${HOME_ENV_FALLBACK_NAME + '%'}`))
+              .limit(MAX_DRIVE_ENVS_LISTED);
+            name = nextUniqueSessionName(HOME_ENV_FALLBACK_NAME, taken.map((row) => row.name));
+          }
           const [row] = await tx
             .insert(driveEnvs)
-            .values({ driveId, name: named ? HOME_ENV_FALLBACK_NAME : HOME_ENV_NAME, isHome: true, createdBy, costOwnerId: createdBy, substrate: 'sprite', createdAt: at, updatedAt: at })
+            .values({ driveId, name, isHome: true, createdBy, costOwnerId: createdBy, substrate: 'sprite', createdAt: at, updatedAt: at })
             .returning();
           return row as DriveEnvRecord;
         });

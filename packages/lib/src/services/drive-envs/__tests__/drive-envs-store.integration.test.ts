@@ -672,6 +672,15 @@ describe('ensureHomeEnv — one Home per drive, for real', () => {
     expect(env).toMatchObject({ name: 'Home sandbox', isHome: true, substrate: 'sprite' });
   });
 
+  it('given a LOCAL "Home" and an env already named "Home sandbox", should mint Home as "Home sandbox 2" instead of throwing on the name', async () => {
+    await db.insert(driveEnvs).values({ id: createId(), driveId, name: 'Home', substrate: 'local', createdBy: payerId, updatedAt: new Date() });
+    await seedEnv({ driveId, name: 'Home sandbox' });
+
+    const env = await store.ensureHomeEnv({ driveId, createdBy: payerId, now: new Date() });
+
+    expect(env).toMatchObject({ name: 'Home sandbox 2', isHome: true, substrate: 'sprite' });
+  });
+
   it('given MANY concurrent first uses, should end with exactly one Home env and hand every caller the same one', async () => {
     const results = await Promise.all(
       Array.from({ length: 6 }, () => store.ensureHomeEnv({ driveId, createdBy: payerId, now: new Date() })),

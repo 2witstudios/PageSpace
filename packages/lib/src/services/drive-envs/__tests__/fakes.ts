@@ -14,6 +14,7 @@
 
 import type { DriveEnvRecord, DriveEnvStore, DriveEnvLocalRecord } from '../drive-envs-store';
 import { envStampColumns, HOME_ENV_FALLBACK_NAME, HOME_ENV_NAME } from '../drive-envs-store';
+import { nextUniqueSessionName } from '../../../agent-workspaces/session-contract';
 
 export { makeSpriteHost } from '../../agent-workspaces/__tests__/fakes';
 
@@ -242,7 +243,9 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
         const row = makeEnvRecord({
           id: `env-${minted}`,
           driveId,
-          name: named ? HOME_ENV_FALLBACK_NAME : HOME_ENV_NAME,
+          name: named
+            ? nextUniqueSessionName(HOME_ENV_FALLBACK_NAME, [...rows.values()].filter((row) => row.driveId === driveId).map((row) => row.name))
+            : HOME_ENV_NAME,
           isHome: true,
           createdBy,
           storageLastBilledAt: at,

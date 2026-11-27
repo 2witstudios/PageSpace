@@ -60,6 +60,7 @@ import {
   checkSessionEndAccess,
   countOpenConversationsForSession,
   endSession,
+  releaseAutoProvisionedConversations,
   findSessionRecord,
   provisionSessionSandbox,
   renameSession,
@@ -308,6 +309,23 @@ export async function DELETE(request: Request, context: RouteContext) {
     });
   }
 
+  // `?release=conversations` ("Previous sessions → End all"): first free the
+  // caller's threads that would auto-provision into Home, so their next tool
+  // call lands there instead of re-provisioning this session's own Sprite.
+  // Opt-in by exact value, like `?force=true` elsewhere. Best-effort: a release
+  // failure never blocks the end the caller asked for.
+  let releasedConversations = 0;
+  if (new URL(request.url).searchParams.get('release') === 'conversations') {
+    try {
+      releasedConversations = await releaseAutoProvisionedConversations({ workspaceId, actor: actorFromAuth(auth) });
+    } catch (error) {
+      loggers.api.warn('Could not release conversations before ending session', {
+        workspaceId,
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   const ended = await endSession(workspaceId);
   if (!ended.ok) {
     if (ended.reason === 'not_found') {
@@ -325,8 +343,8 @@ export async function DELETE(request: Request, context: RouteContext) {
     userId: auth.userId,
     resourceType: 'agent_session',
     resourceId: workspaceId,
-    details: { op: 'end_session', spriteTornDown: ended.spriteTornDown, hadOtherOpenConversations },
+    details: { op: 'end_session', spriteTornDown: ended.spriteTornDown, hadOtherOpenConversations, releasedConversations },
   });
 
-  return NextResponse.json({ ok: true, spriteTornDown: ended.spriteTornDown, hadOtherOpenConversations });
+  return NextResponse.json({ ok: true, spriteTornDown: ended.spriteTornDown, hadOtherOpenConversations, releasedConversations });
 }

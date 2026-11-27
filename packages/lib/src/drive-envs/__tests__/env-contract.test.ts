@@ -10,7 +10,7 @@ import {
   localEnvEnrollmentIssueSchema,
 } from '../env-contract';
 
-const BASE_DTO = { id: 'env_1', driveId: 'drive_1', name: 'dev', substrate: 'sprite', status: 'none', createdAt: '2026-09-04T00:00:00.000Z' };
+const BASE_DTO = { id: 'env_1', driveId: 'drive_1', name: 'dev', isHome: false, substrate: 'sprite', status: 'none', createdAt: '2026-09-04T00:00:00.000Z' };
 
 describe('drive-env contract — the substrate axis (Local Environments epic)', () => {
   it('exposes the closed substrate set and a schema for it', () => {

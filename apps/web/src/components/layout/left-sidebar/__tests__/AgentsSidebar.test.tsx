@@ -1964,8 +1964,10 @@ describe('AgentsSidebar', () => {
         await user.click(within(dialog).getByRole('button', { name: 'End all' }));
 
         await waitFor(() => expect(mockDel).toHaveBeenCalledTimes(2));
-        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-old-1');
-        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-old-2');
+        // With the release opt-in, so their global threads move to Home rather
+        // than re-provisioning these sessions' own Sprites when reopened.
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-old-1?release=conversations');
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-old-2?release=conversations');
         await waitFor(() => expect(mockFetchWithAuth.mock.calls.length).toBeGreaterThan(fetchesBefore));
       });
 
@@ -2407,6 +2409,18 @@ describe('AgentsSidebar', () => {
           name: '',
         }),
       );
+    });
+
+    test('the Home env offers Rename and Rebuild but never Delete — Home is wiped, not removed', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-1', name: 'Home', status: 'running', isHome: true }]);
+      renderSidebar();
+
+      const envRow = await screen.findByTestId('sidebar-env-env-1');
+      await user.click(within(envRow).getByLabelText('Environment actions'));
+      expect(await screen.findByText('Rebuild to blank')).toBeDefined();
+      expect(screen.getByText('Rename')).toBeDefined();
+      expect(screen.queryByText('Delete environment')).toBeNull();
     });
 
     test('deleting refuses first, then escalates to the forced delete only after the server says sessions are live', async () => {

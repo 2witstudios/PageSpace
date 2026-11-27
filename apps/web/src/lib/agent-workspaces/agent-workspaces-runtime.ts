@@ -82,7 +82,8 @@ import {
 import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 import { resolveDevPreviewHolder } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
 import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
-import { isHomeDrive } from '@pagespace/lib/services/drive-guards';
+import { getHomeDrive } from '@pagespace/lib/services/drive-service';
+import { findOwnImagoHomeDriveId } from '@/lib/ai/core/imago-agent-context';
 import { requestDevPreviewWatch } from '@/lib/dev-preview/detection-trigger';
 import { broadcastSessionUpdated } from '@/lib/websocket/agent-workspace-events';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
@@ -791,6 +792,47 @@ export async function expelAfterDelete(input: {
 }
 
 /**
+ * Release a workspace's threads that would AUTO-PROVISION into Home, ahead of
+ * ending it — what "Previous sessions → End all" does, so the pile-up does not
+ * come back: a thread left bound to an ended ephemeral session re-provisions
+ * that session's own Sprite on its next tool call, while a RELEASED (homeless)
+ * thread is claimed into a Home-bound session instead.
+ *
+ * Only the threads the auto-provision path would re-home: the owner's own
+ * GLOBAL conversations and their own Imago's (the same two
+ * `resolveOrProvisionSession` mints for). Anything else — a team agent's thread
+ * hosted in this session — stays bound, because releasing it would leave it
+ * with no sandbox at all until someone spawns one by hand.
+ *
+ * Expel is the membership `destroy` (the node is the membership), so the
+ * thread's history is untouched. Best-effort per thread: a refused or failed
+ * expel just leaves that thread bound, exactly as before. Returns how many
+ * were released.
+ */
+export async function releaseAutoProvisionedConversations(input: {
+  workspaceId: string;
+  actor: AccessActor;
+}): Promise<number> {
+  const { workspaceId, actor } = input;
+  const members = await db
+    .select({ id: conversations.id, type: conversations.type, userId: conversations.userId, contextId: conversations.contextId })
+    .from(agentWorkspaceNodes)
+    .innerJoin(conversations, eq(conversations.id, agentWorkspaceNodes.targetId))
+    .where(and(eq(agentWorkspaceNodes.rootId, workspaceId), eq(agentWorkspaceNodes.targetKind, 'chat')))
+    .limit(MAX_SESSION_CONVERSATIONS);
+  let released = 0;
+  for (const member of members) {
+    if (member.userId !== actor.userId) continue;
+    const rehomes =
+      member.type === 'global' ||
+      (member.type === 'page' && member.contextId !== null && (await findOwnImagoHomeDriveId(actor.userId, member.contextId)) !== null);
+    if (!rehomes) continue;
+    if ((await expelConversationFromSession({ conversationId: member.id, workspaceId, actor })) === 'expelled') released += 1;
+  }
+  return released;
+}
+
+/**
  * A plain, lock-free, INFORMATIONAL read — not a guard. Ending a session is a
  * genuinely unconditional act (the sidebar's own "End session" is reachable
  * with any number of conversations, by design), so this never blocks
@@ -930,12 +972,7 @@ export async function ensureHomeEnvForOwner(
  * sandbox ensure.
  */
 async function findOrProvisionHomeDriveId(ownerId: string): Promise<string> {
-  const [home] = await db
-    .select({ id: drives.id })
-    .from(drives)
-    .where(and(eq(drives.ownerId, ownerId), eq(drives.kind, 'HOME')))
-    .limit(1);
-  return home?.id ?? (await provisionHomeDriveIfNeeded(ownerId)).driveId;
+  return (await getHomeDrive(ownerId))?.id ?? (await provisionHomeDriveIfNeeded(ownerId)).driveId;
 }
 
 /**
@@ -944,12 +981,9 @@ async function findOrProvisionHomeDriveId(ownerId: string): Promise<string> {
  * there (or a driveless one) can default into it. A vanished drive is `false`.
  */
 export async function isOwnHomeDrive(ownerId: string, driveId: string): Promise<boolean> {
-  const [row] = await db
-    .select({ kind: drives.kind, ownerId: drives.ownerId })
-    .from(drives)
-    .where(eq(drives.id, driveId))
-    .limit(1);
-  return row !== undefined && isHomeDrive(row) && row.ownerId === ownerId;
+  // Decided by drive IDENTITY against the owner's resolved Home drive — no
+  // ownership comparison of our own (drive access lives in the permissions layer).
+  return (await getHomeDrive(ownerId))?.id === driveId;
 }
 
 /**

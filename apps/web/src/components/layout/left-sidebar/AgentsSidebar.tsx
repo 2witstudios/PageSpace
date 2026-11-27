@@ -788,11 +788,18 @@ function DriveGroupRows({
 async function endWorkspaceOptimistically(
   session: SessionListEntry,
   deps: { mutate: ScopedMutator; forgetWorkspace: (workspaceId: string) => void },
+  /**
+   * End all's opt-in: also free the threads that would auto-provision into
+   * Home, so reopening one lands in Home instead of re-provisioning this
+   * session's own Sprite (see the route's `?release=conversations`).
+   */
+  options: { releaseConversations?: boolean } = {},
 ): Promise<{ ok: true } | { ok: false; error: unknown }> {
   deps.forgetWorkspace(session.workspaceId);
   forgetWorkspaceInCache(deps.mutate, session.workspaceId);
   try {
-    await del(`/api/agent-workspaces/${encodeURIComponent(session.workspaceId)}`);
+    const query = options.releaseConversations ? '?release=conversations' : '';
+    await del(`/api/agent-workspaces/${encodeURIComponent(session.workspaceId)}${query}`);
     return { ok: true };
   } catch (error) {
     restoreWorkspaceInCache(deps.mutate, session);
@@ -828,7 +835,7 @@ function PreviousSessionsSection({
     setEnding(true);
     const selected = useAgentSurfaceStore.getState().selectedSessionId;
     if (sessions.some((session) => session.workspaceId === selected)) selectSession(null);
-    const results = await Promise.all(sessions.map((session) => endWorkspaceOptimistically(session, { mutate, forgetWorkspace })));
+    const results = await Promise.all(sessions.map((session) => endWorkspaceOptimistically(session, { mutate, forgetWorkspace }, { releaseConversations: true })));
     setEnding(false);
     void mutate(isWorkspaceListingKey);
     const failed = results.filter((result) => !result.ok).length;
@@ -1058,9 +1065,10 @@ function DriveEnvRow({
       ...(awaitingEnrollment ? [{ label: 'Show a new code', icon: KeyRound, onSelect: () => setShowingCode(true) }] : []),
       { label: 'Rename', icon: Pencil, onSelect: () => setRenaming(true) },
       ...(isLocal ? [] : [{ label: 'Rebuild to blank', icon: RefreshCw, onSelect: () => setRebuilding(true), destructive: true }]),
-      { label: 'Delete environment', icon: Trash2, onSelect: () => setDeleting(true), destructive: true },
+      // Home is never deleted (the server refuses it too): Rebuild wipes it.
+      ...(group.isHome ? [] : [{ label: 'Delete environment', icon: Trash2, onSelect: () => setDeleting(true), destructive: true }]),
     ],
-    [isLocal, awaitingEnrollment],
+    [isLocal, awaitingEnrollment, group.isHome],
   );
 
   const rowInner = (

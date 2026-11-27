@@ -816,11 +816,13 @@ async function resolveWorkerPlacement(input: {
   allowedDriveIds: string[];
   /** A label for a workspace this spawn MINTS (`workspace: 'new'`); ignored otherwise. */
   workspaceName?: string | undefined;
+  /** `workspace: 'new'` only: an isolated fresh (ephemeral) machine instead of the agent's environment. */
+  freshSandbox?: boolean;
 }): Promise<
   | { ok: true; workspaceId: string; unwind: (() => Promise<void>) | null }
   | CreateWorkerSessionFailure
 > {
-  const { workspace, callerConversationId, actor, agentPageId, allowedDriveIds, workspaceName } = input;
+  const { workspace, callerConversationId, actor, agentPageId, allowedDriveIds, workspaceName, freshSandbox = false } = input;
   const ownerId = actor.userId;
 
   if (workspace === undefined) {
@@ -845,13 +847,12 @@ async function resolveWorkerPlacement(input: {
     // the caller-thread minting path uses, gated by the same spawn-access
     // primitive.
     //
-    // Its MACHINE follows the single-sandbox model: new Sprites come only from
-    // new environments, so this runs in the agent's environment — the agent's
-    // own default (Sandbox on), or Home for the Global Assistant and the
-    // owner's Imago — and shares its filesystem. A page agent with no default
-    // env still gets an ephemeral one (Home lives in the Home drive; an env
-    // must belong to its session's drive). Same rule, and the same fail-open,
-    // as the caller-thread path (`spawnAutoSession`).
+    // Its MACHINE, by default, is the agent's environment's — the agent's own
+    // default env (Sandbox on), or Home for the Global Assistant and Imago — and
+    // it shares that filesystem. A page agent with no environment still gets an
+    // ephemeral one (an env must belong to its session's drive). `sandbox:
+    // "new"` (`freshSandbox`) is the explicit isolated-machine choice. Same rule
+    // and fail-open as the caller-thread path (`spawnAutoSession`).
     let driveId: string | null = null;
     let env: AutoSessionEnv = 'home';
     // The agent's own title is the workspace's default label, read here where
@@ -866,6 +867,9 @@ async function resolveWorkerPlacement(input: {
       agentTitleForLabel = agent.title;
       env = autoSessionEnvForAgent(agent);
     }
+    // The explicit isolated-machine choice (`sandbox: "new"`): ephemeral, its
+    // own Sprite — what "New sandbox" is in the palette.
+    if (freshSandbox) env = null;
     const access = await checkAccessForSubject(actor, { ownerId, driveId });
     if (!access.allowed) {
       return { ok: false, reason: 'not_permitted', detail: 'You are not permitted to start a workspace there.' };
@@ -1204,13 +1208,13 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       );
     },
 
-    createWorkerSession: async ({ conversationId, callerConversationId, actor, agentPageId, name, workspace, allowedDriveIds, workspaceName }) => {
+    createWorkerSession: async ({ conversationId, callerConversationId, actor, agentPageId, name, workspace, allowedDriveIds, workspaceName, freshSandbox }) => {
       const ownerId = actor.userId;
       // `workspaceName` must be forwarded, not just accepted: this destructure
       // is an explicit field list, so a new input silently vanishes here
       // otherwise — which is exactly what happened on the first cut, leaving
       // `spawn_session`'s workspaceName inert while every type still checked.
-      const placement = await resolveWorkerPlacement({ workspace, callerConversationId, actor, agentPageId, allowedDriveIds, workspaceName });
+      const placement = await resolveWorkerPlacement({ workspace, callerConversationId, actor, agentPageId, allowedDriveIds, workspaceName, freshSandbox });
       if (!placement.ok) return placement;
       const { workspaceId, unwind } = placement;
 
