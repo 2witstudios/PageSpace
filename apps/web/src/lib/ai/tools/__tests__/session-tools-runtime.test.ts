@@ -31,6 +31,7 @@ const {
   mockFindSessionRecord,
   mockRenameSession,
   mockSpawnAutoSession,
+  mockIsOwnHomeDrive,
 } = vi.hoisted(() => ({
   mockFindSessionForConversation: vi.fn(),
   mockEnsureGlobalSandboxSession: vi.fn(),
@@ -50,6 +51,7 @@ const {
   mockFindSessionRecord: vi.fn(),
   mockRenameSession: vi.fn(),
   mockSpawnAutoSession: vi.fn(),
+  mockIsOwnHomeDrive: vi.fn(),
 }));
 
 vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
@@ -61,6 +63,7 @@ vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   createConversationInSession: mockCreateConversationInSession,
   spawnSession: mockSpawnSession,
   spawnAutoSession: mockSpawnAutoSession,
+  isOwnHomeDrive: mockIsOwnHomeDrive,
   agentDefaultEnvId: (agent: { defaultEnvId: string | null; sandboxEnabled: boolean }) =>
     agent.sandboxEnabled && agent.defaultEnvId ? agent.defaultEnvId : null,
   endSession: mockEndSession,
@@ -127,6 +130,8 @@ beforeEach(() => {
   mockListSessions.mockResolvedValue([]);
   mockFindSessionRecord.mockResolvedValue({ id: 'ses-1', ownerId: 'user-1', driveId: 'drive-1' });
   mockRenameSession.mockResolvedValue({ workspaceId: 'ses-1', name: 'Renamed' });
+  // Agents live in team drives unless a test says otherwise.
+  mockIsOwnHomeDrive.mockResolvedValue(false);
 });
 
 describe('resolveCallerSessionForWorker', () => {
@@ -210,9 +215,11 @@ describe('resolveCallerSessionForWorker', () => {
     // with the agent rather than the generic fallback. This is the DEFAULT
     // placement — the most travelled minting path, and the one that went on
     // producing nameless "Session" rows after the other two were fixed.
-    // No default env: Home — which placement keeps only in the owner's Home
-    // drive, so this team-drive agent's session ends up ephemeral.
-    expect(mockEnsureDriveSessionForConversation).toHaveBeenCalledWith('conv-p', expect.objectContaining({ userId: 'user-1' }), 'drive-1', 'Agent', 'home');
+    // No default env and a TEAM drive: ephemeral, decided by a plain read of
+    // the owner's Home drive — the Home path (and any Home-drive provisioning
+    // it could trigger) is never taken.
+    expect(mockIsOwnHomeDrive).toHaveBeenCalledWith('user-1', 'drive-1');
+    expect(mockEnsureDriveSessionForConversation).toHaveBeenCalledWith('conv-p', expect.objectContaining({ userId: 'user-1' }), 'drive-1', 'Agent', null);
   });
 
   test("an unbound PAGE conversation whose agent has Sandbox on and a defaultEnvId mints its session IN that env", async () => {
@@ -238,13 +245,14 @@ describe('resolveCallerSessionForWorker', () => {
 
     await resolveCallerSessionForWorker('conv-p', USER_1);
 
-    expect(mockEnsureDriveSessionForConversation).toHaveBeenCalledWith('conv-p', expect.anything(), 'drive-1', 'Agent', 'home');
+    expect(mockEnsureDriveSessionForConversation).toHaveBeenCalledWith('conv-p', expect.anything(), 'drive-1', 'Agent', null);
   });
 
   test("the owner's own Imago conversation mints its session in Home, like the Global Assistant", async () => {
     mockFindSessionForConversation.mockResolvedValue(null);
     mockGetConversation.mockResolvedValue(pageConversation);
     mockGetAiAgent.mockResolvedValue({ id: 'agent-1', driveId: 'home-drive', title: 'Imago', type: 'AI_CHAT', defaultEnvId: null, sandboxEnabled: true });
+    mockIsOwnHomeDrive.mockResolvedValue(true);
     mockCanUserViewPage.mockResolvedValue(true);
     mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
     mockEnsureDriveSessionForConversation.mockResolvedValue({ ok: true, session: sessionRow });
@@ -540,7 +548,7 @@ describe('createWorkerSession — placement', () => {
       await deps.createWorkerSession({ ...baseInput, agentPageId: 'agent-1', workspace: 'new' });
 
       expect(mockSpawnAutoSession).toHaveBeenCalledWith(
-        expect.objectContaining({ actor: expect.objectContaining({ userId: 'user-1' }), driveId: 'drive-1', env: 'home' }),
+        expect.objectContaining({ actor: expect.objectContaining({ userId: 'user-1' }), driveId: 'drive-1', env: null }),
       );
     });
 

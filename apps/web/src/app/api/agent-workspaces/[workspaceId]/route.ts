@@ -314,6 +314,15 @@ export async function DELETE(request: Request, context: RouteContext) {
   // call lands there instead of re-provisioning this session's own Sprite.
   // Opt-in by exact value, like `?force=true` elsewhere. Best-effort: a release
   // failure never blocks the end the caller asked for.
+  //
+  // RELEASE BEFORE END, deliberately: a session that ends is then never left
+  // holding a thread End all meant to move. The cost of this order: if
+  // `endSession` below then fails (`teardown_failed` → 502, the UI restores
+  // the row), the released
+  // threads have already moved out and the ephemeral Sprite stays up holding
+  // none of them until End all is retried — which ends it cleanly. Nothing is
+  // lost (a released thread's next tool call lands in Home), so best-effort
+  // is the right trade for a cleanup action.
   let releasedConversations = 0;
   if (new URL(request.url).searchParams.get('release') === 'conversations') {
     try {

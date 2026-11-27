@@ -191,6 +191,20 @@ describe('auto-created sessions bind to an env (single-sandbox model)', { timeou
     expect(resolved.session).toMatchObject({ driveId: drive.id, envId: null });
   });
 
+  it('given a team-drive agent for an owner with NO Home drive yet, should spawn ephemeral without provisioning a Home drive as a side effect', async () => {
+    if (!dbAvailable) return;
+    const owner = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    const agent = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'Plain' });
+    expect(await homeDriveIdOf(owner.id)).toBeNull();
+
+    const resolved = await resolveCallerSessionForWorker(await pageConversation(owner.id, agent.id), credentialActor(owner.id, null));
+
+    if (!resolved.ok) throw new Error(`resolve failed: ${resolved.reason}`);
+    expect(resolved.session).toMatchObject({ driveId: drive.id, envId: null });
+    expect(await homeDriveIdOf(owner.id)).toBeNull();
+  });
+
   it('given a page agent whose default env was deleted, should fall back to an ephemeral session rather than fail', async () => {
     if (!dbAvailable) return;
     const owner = await factories.createUser();

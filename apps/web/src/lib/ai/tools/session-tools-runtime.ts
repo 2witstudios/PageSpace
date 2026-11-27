@@ -76,6 +76,7 @@ import {
   spawnAutoSession,
   getAgentSessionStore,
   agentDefaultEnvId,
+  isOwnHomeDrive,
   type AutoSessionEnv,
 } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { countOpenConversations } from '@/lib/agent-workspaces/conversation-cap';
@@ -766,7 +767,7 @@ export async function resolveCallerSessionForWorker(
         owner,
         agent.driveId,
         agent.title,
-        autoSessionEnvForAgent(agent),
+        await autoSessionEnvForAgent(ownerId, agent),
       ),
     );
   }
@@ -778,11 +779,18 @@ export async function resolveCallerSessionForWorker(
 
 /**
  * The env a page agent's auto-created session runs in: its own default env
- * (`agentDefaultEnvId`), else Home — which placement keeps only for an agent in
- * the owner's Home drive (Imago); a team-drive agent stays ephemeral.
+ * (`agentDefaultEnvId`), else Home only for an agent IN the owner's Home drive
+ * (Imago), else ephemeral. The Home-drive test is a plain read
+ * (`isOwnHomeDrive`), so a team-drive spawn never takes the Home path — and
+ * never provisions a Home drive for an owner who has none yet.
  */
-function autoSessionEnvForAgent(agent: { defaultEnvId: string | null; sandboxEnabled: boolean }): AutoSessionEnv {
-  return agentDefaultEnvId(agent) ?? 'home';
+async function autoSessionEnvForAgent(
+  ownerId: string,
+  agent: { driveId: string; defaultEnvId: string | null; sandboxEnabled: boolean },
+): Promise<AutoSessionEnv> {
+  const own = agentDefaultEnvId(agent);
+  if (own) return own;
+  return (await isOwnHomeDrive(ownerId, agent.driveId)) ? 'home' : null;
 }
 
 function mapEnsured(
@@ -865,7 +873,7 @@ async function resolveWorkerPlacement(input: {
       }
       driveId = agent.driveId;
       agentTitleForLabel = agent.title;
-      env = autoSessionEnvForAgent(agent);
+      env = await autoSessionEnvForAgent(ownerId, agent);
     }
     // The explicit isolated-machine choice (`sandbox: "new"`): ephemeral, its
     // own Sprite — what "New sandbox" is in the palette.

@@ -723,19 +723,34 @@ export async function expelConversationFromSession(input: {
   workspaceId: string;
   actor: AccessActor;
 }): Promise<ExpelConversationOutcome> {
+  const result = await expelChatMember(input);
+  if (result.ok) return 'expelled';
+  loggers.api.error('History delete could not remove the thread from its workspace', undefined, {
+    workspaceId: input.workspaceId,
+    conversationId: input.conversationId,
+    reason: result.reason,
+  });
+  return 'refused';
+}
+
+/**
+ * The membership `destroy` itself, with no logging — each caller says what it
+ * was doing when a refusal comes back (a history delete, an End all release).
+ * `not_a_member` is success: "not there" is the state every caller asked for.
+ */
+async function expelChatMember(input: {
+  conversationId: string;
+  workspaceId: string;
+  actor: AccessActor;
+}): Promise<{ ok: true } | { ok: false; reason: string }> {
   const result = await applyWorkspaceMembershipWrite({
     workspaceId: input.workspaceId,
     actor: input.actor,
     run: (nodes) => expel(nodes, { target: { kind: 'chat', id: input.conversationId } }),
   });
-  if (result.status === 'ok') return 'expelled';
-  if (result.status === 'refused' && result.code === 'not_a_member') return 'expelled';
-  loggers.api.error('History delete could not remove the thread from its workspace', undefined, {
-    workspaceId: input.workspaceId,
-    conversationId: input.conversationId,
-    reason: result.status === 'refused' ? result.code : result.status,
-  });
-  return 'refused';
+  if (result.status === 'ok') return { ok: true };
+  if (result.status === 'refused' && result.code === 'not_a_member') return { ok: true };
+  return { ok: false, reason: result.status === 'refused' ? result.code : result.status };
 }
 
 /**
@@ -827,7 +842,18 @@ export async function releaseAutoProvisionedConversations(input: {
       member.type === 'global' ||
       (member.type === 'page' && member.contextId !== null && (await findOwnImagoHomeDriveId(actor.userId, member.contextId)) !== null);
     if (!rehomes) continue;
-    if ((await expelConversationFromSession({ conversationId: member.id, workspaceId, actor })) === 'expelled') released += 1;
+    const expelled = await expelChatMember({ conversationId: member.id, workspaceId, actor });
+    if (expelled.ok) {
+      released += 1;
+      continue;
+    }
+    // Not fatal: the thread just stays bound to the session being ended, as
+    // it would have without End all's release.
+    loggers.api.warn('End all could not release a thread from the session it is ending; it stays bound there', {
+      workspaceId,
+      conversationId: member.id,
+      reason: expelled.reason,
+    });
   }
   return released;
 }
