@@ -439,6 +439,7 @@ async function handleGlobalPrompt(
       conversationId: '[generated per conversation]',
       modelCapabilities: {
         hasVision: false,
+        hasPdfInput: false,
         hasTools: true,
         model: '[varies by chat]',
         provider: '[varies by chat]',

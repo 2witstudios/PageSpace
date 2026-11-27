@@ -1,11 +1,11 @@
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { hasVisionCapability } from './vision-models';
+import { hasVisionCapability, hasPdfInputCapability } from './vision-models';
 import { getBackendProvider, AI_PROVIDERS } from './ai-providers-config';
 
 const capabilityLogger = loggers.ai.child({ module: 'model-capabilities' });
 
 // Re-export vision detection from client-safe module
-export { hasVisionCapability, getSuggestedVisionModels } from './vision-models';
+export { hasVisionCapability, hasPdfInputCapability, getSuggestedVisionModels } from './vision-models';
 
 /**
  * Known problematic models that don't support tools
@@ -282,6 +282,8 @@ export async function supportsTemperature(model: string, provider: string): Prom
  */
 export interface ModelCapabilities {
   hasVision: boolean;
+  /** Reads a PDF natively when read_page returns it as an `application/pdf` file part. */
+  hasPdfInput: boolean;
   hasTools: boolean;
   model: string;
   provider: string;
@@ -301,6 +303,7 @@ export async function getModelCapabilities(model: string, provider: string): Pro
 
   return {
     hasVision,
+    hasPdfInput: hasPdfInputCapability(model, provider),
     hasTools,
     model,
     provider,
