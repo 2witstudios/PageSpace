@@ -114,8 +114,8 @@ describe('browser tools', () => {
 
   it('delivers a screenshot as an image part, and refuses one to a model that cannot see', async () => {
     const { tools, recorder } = setup(() => ({ ok: true, result: { kind: 'screenshot', page: PAGE, image: { mediaType: 'image/jpeg', base64: 'AAAA' } } }));
-    const blind = await call(tools, 'browser_screenshot', {}, { userId: 'user-1', modelCapabilities: { hasVision: false, hasTools: true, model: 'm', provider: 'p' } });
-    const seen = await call(tools, 'browser_screenshot', {}, { userId: 'user-1', modelCapabilities: { hasVision: true, hasTools: true, model: 'm', provider: 'p' } });
+    const blind = await call(tools, 'browser_screenshot', {}, { userId: 'user-1', modelCapabilities: { hasVision: false, hasPdfInput: false, hasTools: true, model: 'm', provider: 'p' } });
+    const seen = await call(tools, 'browser_screenshot', {}, { userId: 'user-1', modelCapabilities: { hasVision: true, hasPdfInput: false, hasTools: true, model: 'm', provider: 'p' } });
     const modelOutput = toModelOutputForBrowserScreenshot(seen) as unknown as { type: string; value: { type: string }[] };
     assert({
       given: 'a screenshot for a model without vision and one with',

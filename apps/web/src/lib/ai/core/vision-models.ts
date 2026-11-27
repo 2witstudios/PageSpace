@@ -6,7 +6,7 @@
  * Map entries follow OpenRouter's /api/v1/models `architecture.input_modalities`
  * ("image" → vision). Check a model there before adding or changing its entry.
  */
-import { getBackendProvider } from './ai-providers-config';
+import { getBackendProvider } from './provider-backend';
 
 const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   // OpenAI GPT-6.2 / GPT-6.1 Terra Models

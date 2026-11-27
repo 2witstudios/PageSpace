@@ -93,7 +93,7 @@ import { makeOnStepFinishHandler } from '@/lib/ai/core/step-finish-handler';
 import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { userMessageSaveRefusal } from './user-message-save-refusal';
-import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
+import { hasVisionCapability, hasPdfInputCapability } from '@/lib/ai/core/model-capabilities';
 import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
 import { buildBuiltinSkillCatalog } from '@/lib/ai/core/skill-catalog';
 import {
@@ -935,7 +935,11 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     if (finalTools.read_page) {
       finalTools = {
         ...finalTools,
-        read_page: guardReadPageToolForVision(finalTools.read_page, hasVisionCapability(currentModel)),
+        read_page: guardReadPageToolForVision(
+          finalTools.read_page,
+          hasVisionCapability(currentModel),
+          hasPdfInputCapability(currentModel, currentProvider),
+        ),
       };
     }
 

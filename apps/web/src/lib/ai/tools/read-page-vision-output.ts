@@ -31,6 +31,50 @@ export interface VisualContentDeliveredOutput {
   metadata: Record<string, unknown>;
 }
 
+/**
+ * One piece of a multi-part visual delivery: a native PDF (`file`) or an image
+ * (`image`), such as one rasterized PDF page. `data` is base64.
+ */
+export interface DeliveredVisualPart {
+  kind: 'image' | 'file';
+  mediaType: string;
+  data: string;
+  filename?: string;
+  /** The 1-based PDF page a rasterized image shows. */
+  pdfPage?: number;
+}
+
+/**
+ * read_page's result when it hands a file to the model as more than one part,
+ * or as a non-image part: a whole PDF for a model that reads PDFs, or a run of
+ * rasterized PDF pages for a model that only reads images.
+ */
+export interface VisualPartsDeliveredOutput {
+  success: true;
+  type: 'visual_parts_delivered';
+  pageId: string;
+  title: string;
+  /** The page's true upload format (page.mimeType). */
+  originalMimeType: string;
+  message: string;
+  parts: DeliveredVisualPart[];
+  sizeBytes: number;
+  metadata: Record<string, unknown>;
+}
+
+function isVisualPartsDelivered(output: unknown): output is VisualPartsDeliveredOutput {
+  return (
+    typeof output === 'object' &&
+    output !== null &&
+    (output as Record<string, unknown>).type === 'visual_parts_delivered' &&
+    Array.isArray((output as Record<string, unknown>).parts)
+  );
+}
+
+function isPdfPart(part: DeliveredVisualPart): boolean {
+  return part.kind === 'file';
+}
+
 function isVisualContentDelivered(output: unknown): output is VisualContentDeliveredOutput {
   return (
     typeof output === 'object' &&
@@ -42,10 +86,24 @@ function isVisualContentDelivered(output: unknown): output is VisualContentDeliv
 
 /**
  * read_page's toModelOutput: delivers image bytes as a real image content part for
- * visual_content_delivered results; every other output shape passes through as JSON
+ * visual_content_delivered results, and a PDF as a `file-data` part (which the
+ * OpenRouter provider sends as a native `file`) or its pages as labelled images for
+ * visual_parts_delivered results. Every other output shape passes through as JSON
  * unchanged (today's behavior for text/TASK_LIST/CHANNEL/error results).
  */
 export function toModelOutputForReadPage(output: unknown): ToolResultOutput {
+  if (isVisualPartsDelivered(output)) {
+    const value: Array<Record<string, unknown>> = [{ type: 'text', text: output.message }];
+    for (const part of output.parts) {
+      if (isPdfPart(part)) {
+        value.push({ type: 'file-data', data: part.data, mediaType: part.mediaType, ...(part.filename ? { filename: part.filename } : {}) });
+        continue;
+      }
+      if (part.pdfPage !== undefined) value.push({ type: 'text', text: `Page ${part.pdfPage}:` });
+      value.push({ type: 'image-data', data: part.data, mediaType: part.mediaType });
+    }
+    return { type: 'content', value } as unknown as ToolResultOutput;
+  }
   if (isVisualContentDelivered(output)) {
     return {
       type: 'content',
@@ -101,6 +159,16 @@ export function buildVisualContentMetadata(params: {
  * from an earlier, vision-capable turn when the active model no longer has vision.
  */
 export function degradeVisualContentToMetadata(output: unknown): unknown {
+  if (isVisualPartsDelivered(output)) {
+    const { pageId, title, originalMimeType, sizeBytes, metadata } = output;
+    return buildVisualContentMetadata({
+      pageId,
+      title,
+      mimeType: originalMimeType,
+      sizeBytes,
+      metadata: { ...metadata, requiresVisionModel: true, imageOmitted: true },
+    });
+  }
   if (!isVisualContentDelivered(output)) return output;
 
   const { pageId, title, originalMimeType, sizeBytes, metadata } = output;
@@ -118,15 +186,44 @@ interface ToolWithModelOutput {
 }
 
 /**
- * Wraps a tool so its toModelOutput never re-embeds image bytes when the current
- * request's model lacks vision — guards against a STALE visual_content_delivered
- * tool-result (persisted from an earlier turn where the model did have vision) being
- * re-sent as an image when convertToModelMessages re-converts history for this turn.
+ * Drops native PDF parts from a delivered result for a model that reads images but
+ * not PDFs. Page images stay. With nothing left, the result degrades to metadata
+ * that tells the agent to read the file again for page images.
  */
-export function guardReadPageToolForVision<T extends ToolWithModelOutput>(tool: T, hasVision: boolean): T {
-  if (hasVision) return tool;
-  const toModelOutput: ToolModelOutputFn = ({ output }) =>
-    toModelOutputForReadPage(degradeVisualContentToMetadata(output));
+export function dropPdfParts(output: unknown): unknown {
+  if (!isVisualPartsDelivered(output) || !output.parts.some(isPdfPart)) return output;
+  const parts = output.parts.filter((part) => !isPdfPart(part));
+  if (parts.length > 0) return { ...output, parts };
+  const { pageId, title, originalMimeType, sizeBytes, metadata } = output;
+  return buildVisualContentMetadata({
+    pageId,
+    title,
+    mimeType: originalMimeType,
+    sizeBytes,
+    metadata: {
+      ...metadata,
+      pdfOmitted: true,
+      hint: 'This model cannot read PDFs directly. Call read_page again with `pages` (for example "1-5") to see the pages as images.',
+    },
+  });
+}
+
+/**
+ * Wraps a tool so its toModelOutput never re-embeds bytes the current request's
+ * model cannot take — guards against a STALE delivered tool-result (persisted from
+ * an earlier turn on a different model) being re-sent when convertToModelMessages
+ * re-converts history for this turn. No vision: every image and PDF degrades to
+ * metadata. Vision but no PDF input: native PDF parts are dropped, page images stay.
+ */
+export function guardReadPageToolForVision<T extends ToolWithModelOutput>(
+  tool: T,
+  hasVision: boolean,
+  hasPdfInput = false,
+): T {
+  if (hasVision && hasPdfInput) return tool;
+  const toModelOutput: ToolModelOutputFn = hasVision
+    ? ({ output }) => toModelOutputForReadPage(dropPdfParts(output))
+    : ({ output }) => toModelOutputForReadPage(degradeVisualContentToMetadata(output));
   return { ...tool, toModelOutput } as T;
 }
 
@@ -136,13 +233,14 @@ export function guardReadPageToolForVision<T extends ToolWithModelOutput>(tool: 
 const STRICT_BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
 /**
- * The image bytes of every output-available `read_page` visual result in
+ * The image and PDF bytes of every output-available `read_page` visual result in
  * `messages` (static or dynamic tool parts), as `data:` file parts for the
  * content blocklist screen. The
  * client-supplied `mimeType` is deliberately ignored — the hash depends only on
  * the bytes, and a crafted type (`image/png;charset=utf-8`) must not stop the
  * screen from decoding them. `undecodable` is true when any `imageBase64` is
- * not strict base64.
+ * not strict base64. Multi-part results (`visual_parts_delivered`) contribute every
+ * part.
  */
 export function visualToolResultScreenParts(
   messages: readonly UIMessage[],
@@ -155,13 +253,20 @@ export function visualToolResultScreenParts(
       // tool name they claim: any visual payload reaching the model is screened.
       if (!isToolUIPart(part) || part.state !== 'output-available') continue;
       const output: unknown = part.output;
-      if (!isVisualContentDelivered(output)) continue;
-      if (output.imageBase64.length === 0) continue;
-      if (!STRICT_BASE64.test(output.imageBase64)) {
-        undecodable = true;
-        continue;
+      // A part whose data is not even a string cannot be checked: undecodable.
+      const payloads: unknown[] = isVisualContentDelivered(output)
+        ? [output.imageBase64]
+        : isVisualPartsDelivered(output)
+          ? output.parts.map((p) => (p as Partial<DeliveredVisualPart> | null)?.data)
+          : [];
+      for (const base64 of payloads) {
+        if (base64 === '') continue;
+        if (typeof base64 !== 'string' || !STRICT_BASE64.test(base64)) {
+          undecodable = true;
+          continue;
+        }
+        parts.push({ type: 'file', mediaType: 'application/octet-stream', url: `data:application/octet-stream;base64,${base64}` });
       }
-      parts.push({ type: 'file', mediaType: 'application/octet-stream', url: `data:application/octet-stream;base64,${output.imageBase64}` });
     }
   }
   return { parts, undecodable };

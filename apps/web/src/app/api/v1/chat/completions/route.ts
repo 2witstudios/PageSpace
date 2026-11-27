@@ -28,7 +28,7 @@ import { messageRepository } from '@/lib/repositories/message-repository';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForReadOnly, filterToolsForMcpScope, filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibilityForConversation } from '@/lib/ai/core/sandbox-tool-eligibility';
-import { getModelCapabilities, hasVisionCapability } from '@/lib/ai/core/model-capabilities';
+import { getModelCapabilities, hasVisionCapability, hasPdfInputCapability } from '@/lib/ai/core/model-capabilities';
 import { hasFileParts, validateUserMessageFileParts } from '@/lib/ai/core/validate-image-parts';
 import { contentBlockedResponse, contentBlockedResponseFor } from '@/lib/upload/content-blocked-response';
 import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
@@ -460,13 +460,17 @@ export async function POST(request: Request): Promise<Response> {
       finalTools = { ...filteredTools, ...clientToolSet } as ToolSet;
     }
 
-    // Guard against a stale read_page tool-result (image bytes delivered on an
-    // earlier turn/request when the model had vision) being re-embedded as an
-    // image when history is re-converted for a model that no longer has vision.
+    // Guard against a stale read_page tool-result (image or PDF bytes delivered on
+    // an earlier turn/request) being re-embedded when history is re-converted for a
+    // model that cannot take them.
     if (finalTools.read_page) {
       finalTools = {
         ...finalTools,
-        read_page: guardReadPageToolForVision(finalTools.read_page, hasVisionCapability(providerResult.modelName)),
+        read_page: guardReadPageToolForVision(
+          finalTools.read_page,
+          hasVisionCapability(providerResult.modelName),
+          hasPdfInputCapability(providerResult.modelName, providerResult.provider),
+        ),
       };
     }
 

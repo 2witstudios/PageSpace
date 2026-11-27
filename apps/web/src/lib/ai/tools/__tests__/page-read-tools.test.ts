@@ -147,6 +147,14 @@ const mockReadRows = vi.hoisted(() => vi.fn());
 vi.mock('../../core/image-preset-fetch', () => ({
   fetchCachedImagePreset: vi.fn(),
 }));
+vi.mock('../read-page-pdf', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../read-page-pdf')>()),
+  deliverPdfPage: vi.fn(),
+}));
+const mockPageFetcher = vi.hoisted(() => vi.fn());
+vi.mock('../processor-file-fetch-runtime', () => ({
+  processorCacheFetcherForPage: vi.fn(() => mockPageFetcher),
+}));
 
 import { pageReadTools } from '../page-read-tools';
 import { SHEET_LIST_PREVIEW_ROWS } from '../sheet-view';
@@ -154,6 +162,8 @@ import { db } from '@pagespace/db/db';
 import { getUserAccessLevel, getUserAccessiblePagesInDriveWithDetails, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { fetchCachedImagePreset } from '../../core/image-preset-fetch';
+import { deliverPdfPage } from '../read-page-pdf';
+import { processorCacheFetcherForPage } from '../processor-file-fetch-runtime';
 import type { ToolExecutionContext } from '../../core/types';
 import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
@@ -163,6 +173,7 @@ const mockGetUserAccessiblePagesInDrive = vi.mocked(getUserAccessiblePagesInDriv
 const mockGetUserDriveAccess = vi.mocked(getUserDriveAccess);
 const mockCheckDriveAccess = vi.mocked(checkDriveAccess);
 const mockFetchCachedImagePreset = vi.mocked(fetchCachedImagePreset);
+const mockDeliverPdfPage = vi.mocked(deliverPdfPage);
 
 const createMockPage = (content: string, type = 'DOCUMENT') => ({
   id: 'page-1',
@@ -1831,6 +1842,111 @@ describe('page-read-tools', () => {
           should: 'fall back to the existing visual_content_metadata result',
           actual: result.type,
           expected: 'visual_content_metadata',
+        });
+      });
+
+      it('reads image presets through the processor-backed fetcher for the page', async () => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockVisualFilePage());
+        mockFetchCachedImagePreset.mockResolvedValue(null);
+        const context = createVisionAuthContext();
+
+        await pageReadTools.read_page.execute!({ title: 'diagram.png', pageId: 'page-1' }, context);
+
+        expect(processorCacheFetcherForPage).toHaveBeenCalledWith(context.experimental_context, 'page-1');
+        expect(mockFetchCachedImagePreset).toHaveBeenCalledWith('hash-abc', 'image/png', { fetchBytes: mockPageFetcher });
+      });
+
+      describe('PDF FILE pages', () => {
+        const createMockPdfPage = (overrides: Record<string, unknown> = {}) => ({
+          ...createMockVisualFilePage(),
+          title: 'Exhibits.pdf',
+          mimeType: 'application/pdf',
+          originalFileName: 'Exhibits.pdf',
+          extractionMetadata: { pageCount: 12, rasterizedPages: 12 },
+          content: '',
+          ...overrides,
+        });
+        const pdfContext = (hasVision: boolean, hasPdfInput: boolean) => ({
+          toolCallId: '1',
+          messages: [],
+          experimental_context: {
+            userId: 'user-123', accessActor: credentialActor('user-123', null),
+            modelCapabilities: { hasVision, hasPdfInput, hasTools: true, model: 'm', provider: 'p' },
+          } as ToolExecutionContext,
+        });
+        const deliveredParts = { success: true, type: 'visual_parts_delivered', parts: [] };
+
+        it('hands a visual PDF to the PDF delivery with the model capability and pages range', async () => {
+          mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPdfPage());
+          mockDeliverPdfPage.mockResolvedValue(deliveredParts as never);
+
+          const result = await pageReadTools.read_page.execute!(
+            { title: 'Exhibits.pdf', pageId: 'page-1', pages: '3-4' },
+            pdfContext(true, true),
+          );
+
+          assert({
+            given: 'a visual PDF on a model with native PDF input',
+            should: 'return what the PDF delivery produced',
+            actual: result,
+            expected: deliveredParts,
+          });
+          expect(mockDeliverPdfPage).toHaveBeenCalledWith(expect.objectContaining({
+            hasPdfInput: true,
+            pages: '3-4',
+            fetchBytes: mockPageFetcher,
+            page: expect.objectContaining({ id: 'page-1', contentHash: 'hash-abc', extractionMetadata: { pageCount: 12, rasterizedPages: 12 } }),
+          }));
+          expect(mockFetchCachedImagePreset).not.toHaveBeenCalled();
+        });
+
+        it('treats a completed PDF with no extracted text as a scan to look at', async () => {
+          mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPdfPage({ processingStatus: 'completed', content: '  \n ' }));
+          mockDeliverPdfPage.mockResolvedValue(deliveredParts as never);
+
+          const result = await pageReadTools.read_page.execute!(
+            { title: 'Exhibits.pdf', pageId: 'page-1' },
+            pdfContext(true, false),
+          );
+
+          assert({
+            given: 'a PDF processed before low-text detection existed (completed, empty text)',
+            should: 'deliver it visually instead of returning an empty document',
+            actual: result,
+            expected: deliveredParts,
+          });
+        });
+
+        it('reads a completed PDF with text as text, as before', async () => {
+          mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPdfPage({ processingStatus: 'completed', content: 'Exhibit A text' }));
+
+          const result = await pageReadTools.read_page.execute!(
+            { title: 'Exhibits.pdf', pageId: 'page-1' },
+            pdfContext(true, true),
+          ) as { content?: string };
+
+          expect(mockDeliverPdfPage).not.toHaveBeenCalled();
+          expect(result.content).toContain('Exhibit A text');
+        });
+
+        it('tells a model without vision to switch, and passes on any text the scan had', async () => {
+          mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPdfPage({ content: 'EXHIBIT 4' }));
+
+          const result = await pageReadTools.read_page.execute!(
+            { title: 'Exhibits.pdf', pageId: 'page-1' },
+            pdfContext(false, false),
+          ) as { type: string; message: string; extractedText?: string };
+
+          assert({
+            given: 'a visual PDF and a text-only model',
+            should: 'return the requires-vision result',
+            actual: result.type,
+            expected: 'visual_requires_vision_model',
+          });
+          expect(result.message).toMatch(/switch .*vision/i);
+          expect(result.message).toMatch(/images and PDFs/);
+          expect(result.extractedText).toBe('EXHIBIT 4');
+          expect(mockDeliverPdfPage).not.toHaveBeenCalled();
         });
       });
     });

@@ -228,6 +228,7 @@ vi.mock('@/lib/ai/core/validate-image-parts', () => ({
 
 vi.mock('@/lib/ai/core/model-capabilities', () => ({
   hasVisionCapability: vi.fn().mockReturnValue(true),
+  hasPdfInputCapability: vi.fn().mockReturnValue(false),
 }));
 
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';

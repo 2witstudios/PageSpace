@@ -29,7 +29,7 @@ import { buildSessionTools } from './session-tools-runtime';
 import { driveTools } from './drive-tools';
 import { pageReadTools } from './page-read-tools';
 import { guardReadPageToolForVision } from './read-page-vision-output';
-import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
+import { hasVisionCapability, hasPdfInputCapability } from '@/lib/ai/core/model-capabilities';
 import { pageWriteTools } from './page-write-tools';
 import { searchTools } from './search-tools';
 import { taskManagementTools } from './task-management-tools';
@@ -777,6 +777,7 @@ export async function executeAskAgent(
           allAgentTools.read_page = guardReadPageToolForVision(
             allAgentTools.read_page as Tool,
             hasVisionCapability(resolvedModelName),
+            hasPdfInputCapability(resolvedModelName, resolvedProvider),
           );
         }
 
@@ -787,6 +788,15 @@ export async function executeAskAgent(
           ...executionContext,
           // POL-8: the consulted agent's tools run under the model IT resolved, never the caller's.
           ...toolModelContext(providerResult),
+          // So do its capabilities: read_page decides whether to show images and PDFs
+          // from these, and the caller's model may see differently.
+          modelCapabilities: {
+            hasVision: hasVisionCapability(resolvedModelName),
+            hasPdfInput: hasPdfInputCapability(resolvedModelName, resolvedProvider),
+            hasTools: true,
+            model: resolvedModelName,
+            provider: resolvedProvider,
+          },
           // A caller's reserved hold is this call's alone: nothing nested inside it may reuse it.
           ...(executionContext?.creditSpend
             ? { creditSpend: { ...executionContext.creditSpend, reservedHoldId: undefined } }

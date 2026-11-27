@@ -32,6 +32,8 @@ import {
 } from './sheet-view';
 import { fetchCachedImagePreset } from '../core/image-preset-fetch';
 import { toModelOutputForReadPage, buildVisualContentMetadata } from './read-page-vision-output';
+import { deliverPdfPage, PDF_VISUAL_LIMITS } from './read-page-pdf';
+import { processorCacheFetcherForPage } from './processor-file-fetch-runtime';
 import { ensureTaskListForPage, seedInheritedTaskStatusConfigs } from '@/services/api/task-sync-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { resolveOrThrowPageId } from './page-context-defaults';
@@ -425,15 +427,16 @@ export const pageReadTools = {
    * Read existing documents to understand context and content
    */
   read_page: tool({
-    description: 'Read the content of any page (document, AI chat, channel, etc.) using its ID. Returns content with line numbers. For CHANNEL pages, returns a message transcript. For SHEET pages, returns the sheet\'s dimensions and its first ' + SHEET_PREVIEW_ROWS + ' rows as a table (lineStart/lineEnd select ROW numbers there) — use read_sheet to read a row range, filter rows by column value, or project columns. Use lineStart/lineEnd to read specific line ranges. Omit pageId to read the page currently in view.',
+    description: 'Read the content of any page (document, AI chat, channel, etc.) using its ID. Returns content with line numbers. For CHANNEL pages, returns a message transcript. For SHEET pages, returns the sheet\'s dimensions and its first ' + SHEET_PREVIEW_ROWS + ' rows as a table (lineStart/lineEnd select ROW numbers there) — use read_sheet to read a row range, filter rows by column value, or project columns. Use lineStart/lineEnd to read specific line ranges. Omit pageId to read the page currently in view. For FILE pages, read_page shows images and PDFs to you directly when your model has vision: an image arrives as an image, and a scanned or image-only PDF arrives as the PDF itself (models that read PDFs) or as page images — use `pages` to page through a long PDF. Text-only models get the file\'s details and any extracted text instead.',
     inputSchema: z.object({
       title: z.string().describe('The document title for display context'),
       pageId: z.string().optional().describe('The unique ID of the page to read. Defaults to the page currently in view if omitted.'),
       lineStart: z.number().int().optional().describe('Start line number (1-indexed, inclusive). Omit to start from beginning. On a SHEET this is a sheet ROW number.'),
       lineEnd: z.number().int().optional().describe('End line number (1-indexed, inclusive). Omit to read to end. On a SHEET this is a sheet ROW number.'),
+      pages: z.string().optional().describe(`PDF FILE pages only: which pages to see as images, 1-indexed, e.g. "3", "1-5" or "2,4,7-9". Omit to get the whole PDF when your model reads PDFs, otherwise the first ${PDF_VISUAL_LIMITS.defaultPageBatch} pages. At most ${PDF_VISUAL_LIMITS.maxPagesPerRead} pages per call; the result says which pages to ask for next.`),
     }),
     toModelOutput: ({ output }) => toModelOutputForReadPage(output),
-    execute: async ({ title, pageId: pageIdArg, lineStart, lineEnd }, { experimental_context: context }) => {
+    execute: async ({ title, pageId: pageIdArg, lineStart, lineEnd, pages: pdfPages }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -467,8 +470,13 @@ export const pageReadTools = {
 
         // Handle FILE type pages
         if (page.type === 'FILE') {
+          const isPdf = page.mimeType === 'application/pdf';
+          // A PDF processed before low-text PDFs were marked visual is "completed"
+          // with no text: a scan. It is read the way a visual PDF is.
+          const isUnmarkedScan = isPdf && page.processingStatus === 'completed' && !(page.content ?? '').trim();
+          const fileStatus = isUnmarkedScan ? 'visual' : page.processingStatus;
           // Check processing status
-          switch (page.processingStatus) {
+          switch (fileStatus) {
             case 'pending':
             case 'processing':
               return {
@@ -480,33 +488,56 @@ export const pageReadTools = {
                 suggestion: 'Please try again in a moment'
               };
             
-            case 'visual':
-              // Pure visual content - check if current model supports vision
-              const modelCapabilities = (context as ToolExecutionContext)?.modelCapabilities;
-              
+            case 'visual': {
+              // Visual content - check if current model supports vision
+              const executionContext = context as ToolExecutionContext;
+              const modelCapabilities = executionContext?.modelCapabilities;
+              const extractedText = (page.content ?? '').trim();
+
               if (!modelCapabilities?.hasVision) {
-                // Model doesn't support vision - provide helpful guidance
+                // Model doesn't support vision - say plainly what would let it see the file
                 return {
                   success: true,
                   type: 'visual_requires_vision_model',
                   title: page.title,
                   mimeType: page.mimeType,
-                  message: `This is a visual file (${page.mimeType || 'image'}). To view its content, please switch to a vision-capable model.`,
+                  message: `This is a visual file (${page.mimeType || 'image'}). read_page shows images and PDFs only to vision-capable models, and the current model has no vision. To see this file, switch this chat to a vision model (for example ${getSuggestedVisionModels().join(', ')}).`,
                   suggestedModels: getSuggestedVisionModels(),
+                  ...(extractedText ? { extractedText: extractedText.slice(0, MAX_CONTENT_CHARS_PER_PAGE) } : {}),
                   metadata: {
                     fileType: page.mimeType,
                     requiresVision: true
                   }
                 };
               }
-              
-              // Model supports vision - try to deliver actual image bytes from the
-              // processor's cached presets. Falls back to metadata-only (today's
-              // behavior) when no preset in the fallback chain is usable.
+
+              // Bytes are read through the processor, which decrypts them and
+              // re-checks access with a page-scoped service token.
               if (page.contentHash) {
+                const fetchBytes = processorCacheFetcherForPage(executionContext, page.id);
+
+                if (isPdf) {
+                  return deliverPdfPage({
+                    page: {
+                      id: page.id,
+                      title: page.title,
+                      contentHash: page.contentHash,
+                      fileSize: page.fileSize ?? null,
+                      originalFileName: page.originalFileName ?? null,
+                      extractionMetadata: page.extractionMetadata,
+                    },
+                    hasPdfInput: modelCapabilities.hasPdfInput === true,
+                    pages: pdfPages,
+                    fetchBytes,
+                  });
+                }
+
+                // Images: deliver the processor's cached presets. Falls back to
+                // metadata-only when no preset in the fallback chain is usable.
                 const deliveredImage = await fetchCachedImagePreset(
                   page.contentHash,
-                  page.mimeType || 'application/octet-stream'
+                  page.mimeType || 'application/octet-stream',
+                  { fetchBytes },
                 );
                 if (deliveredImage) {
                   return {
@@ -540,7 +571,8 @@ export const pageReadTools = {
                   originalFileName: page.originalFileName
                 }
               });
-            
+            }
+
             case 'failed':
               return {
                 success: false,
