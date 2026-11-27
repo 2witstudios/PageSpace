@@ -66,8 +66,10 @@ export async function setPageProcessing(pageId: string): Promise<void> {
   }
 }
 
+type ExtractionMethod = 'text' | 'ocr' | 'visual' | 'hybrid' | 'none';
+
 /**
- * Record a finished text extraction.
+ * Record a finished extraction.
  *
  * One statement, so the type test and the write cannot disagree: the UPDATE
  * takes the row lock itself and evaluates `type` against the same row version
@@ -76,11 +78,12 @@ export async function setPageProcessing(pageId: string): Promise<void> {
  * bookkeeping still lands, so it does not sit "processing" forever and get
  * marked failed by the stuck-page reconciler.
  */
-export async function setPageCompleted(
+async function writeExtraction(
   pageId: string,
   content: string,
   metadata: Record<string, unknown> | null,
-  extractionMethod: 'text' | 'ocr' | 'visual' | 'hybrid' | 'none' = 'text'
+  status: 'completed' | 'visual',
+  extractionMethod: ExtractionMethod,
 ): Promise<void> {
   const client = await getPool().connect();
   try {
@@ -96,7 +99,7 @@ export async function setPageCompleted(
       [
         EXTRACTABLE_PAGE_TYPE,
         content,
-        'completed',
+        status,
         extractionMethod,
         metadata ? JSON.stringify(metadata) : null,
         pageId,
@@ -119,6 +122,29 @@ export async function setPageCompleted(
   } finally {
     client.release();
   }
+}
+
+/** Record a finished text extraction. */
+export async function setPageCompleted(
+  pageId: string,
+  content: string,
+  metadata: Record<string, unknown> | null,
+  extractionMethod: ExtractionMethod = 'text'
+): Promise<void> {
+  return writeExtraction(pageId, content, metadata, 'completed', extractionMethod);
+}
+
+/**
+ * Mark a page visual while keeping the text it did yield (a scanned PDF's page
+ * numbers or stamps) and its extraction metadata (page count, rendered pages).
+ * The same FILE-fenced statement as setPageCompleted.
+ */
+export async function setPageVisualWithContent(
+  pageId: string,
+  content: string,
+  metadata: Record<string, unknown> | null,
+): Promise<void> {
+  return writeExtraction(pageId, content, metadata, 'visual', 'visual');
 }
 
 export async function setPageVisual(pageId: string): Promise<void> {

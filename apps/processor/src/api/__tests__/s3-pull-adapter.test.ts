@@ -10,12 +10,15 @@ const mocks = vi.hoisted(() => ({
   setPageProcessing: vi.fn().mockResolvedValue(undefined),
   setPageCompleted: vi.fn().mockResolvedValue(undefined),
   setPageVisual: vi.fn().mockResolvedValue(undefined),
+  setPageVisualWithContent: vi.fn().mockResolvedValue(undefined),
   setPageVideoProcessed: vi.fn().mockResolvedValue(undefined),
   setPageFailed: vi.fn().mockResolvedValue(undefined),
   verifyContentHash: vi.fn(),
   detectContentType: vi.fn(),
   isAllowedContentType: vi.fn(),
   extractTextContent: vi.fn(),
+  extractPdfContent: vi.fn(),
+  rasterizePdfPages: vi.fn(),
   generateImageVariants: vi.fn(),
   extractVideoMetadata: vi.fn(),
   extractVideoThumbnail: vi.fn(),
@@ -33,11 +36,19 @@ vi.mock('../../db', () => ({
   setPageProcessing: mocks.setPageProcessing,
   setPageCompleted: mocks.setPageCompleted,
   setPageVisual: mocks.setPageVisual,
+  setPageVisualWithContent: mocks.setPageVisualWithContent,
   setPageVideoProcessed: mocks.setPageVideoProcessed,
   setPageFailed: mocks.setPageFailed,
 }));
 
-vi.mock('../../services/processing-pipeline', () => ({
+// The pure PDF helpers (low-text rule, preset naming, page cap) run for real;
+// only the byte-processing functions are mocked.
+vi.mock('../../services/processing-pipeline', async (importOriginal) => ({
+  isLowTextPdf: (await importOriginal<typeof import('../../services/processing-pipeline')>()).isLowTextPdf,
+  pdfPagePreset: (await importOriginal<typeof import('../../services/processing-pipeline')>()).pdfPagePreset,
+  resolveMaxRasterizedPdfPages: (await importOriginal<typeof import('../../services/processing-pipeline')>()).resolveMaxRasterizedPdfPages,
+  extractPdfContent: mocks.extractPdfContent,
+  rasterizePdfPages: mocks.rasterizePdfPages,
   verifyContentHash: mocks.verifyContentHash,
   detectContentType: mocks.detectContentType,
   isAllowedContentType: mocks.isAllowedContentType,
@@ -60,10 +71,13 @@ const NO_WAIT = { delayMs: 0 };
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.deleteOriginal.mockResolvedValue(true);
+  mocks.saveCache.mockResolvedValue({});
   mocks.verifyContentHash.mockReturnValue(true);
   mocks.isAllowedContentType.mockReturnValue(true);
   mocks.detectContentType.mockResolvedValue({ label: 'pdf', mimeType: 'application/pdf', score: 0.9, source: 'magika' });
   mocks.extractTextContent.mockResolvedValue('extracted text');
+  mocks.extractPdfContent.mockResolvedValue({ text: 'extracted text '.repeat(10), pageCount: 1 });
+  mocks.rasterizePdfPages.mockResolvedValue({ pages: [], attempted: 0 });
   mocks.generateImageVariants.mockResolvedValue({
     thumbnail: { buffer: Buffer.from('t'), mimeType: 'image/webp' },
     'ai-chat': { buffer: Buffer.from('j'), mimeType: 'image/jpeg' },
@@ -138,14 +152,96 @@ describe('runPullPipeline — zero-trust gates', () => {
 });
 
 describe('runPullPipeline — dispatch by detected type', () => {
-  it('extracts text and marks the page completed for a PDF', async () => {
+  it('extracts text and marks the page completed for a PDF with real text', async () => {
     mocks.getOriginal.mockResolvedValue(BYTES);
     mocks.detectContentType.mockResolvedValue({ label: 'pdf', mimeType: 'application/pdf', score: 0.9, source: 'magika' });
 
     await runPullPipeline({ pageId: 'page-1', contentHash: HASH }, NO_WAIT);
 
-    expect(mocks.extractTextContent).toHaveBeenCalledWith(BYTES, 'application/pdf');
-    expect(mocks.setPageCompleted).toHaveBeenCalledWith('page-1', 'extracted text', expect.anything(), expect.any(String));
+    expect(mocks.extractPdfContent).toHaveBeenCalledWith(BYTES);
+    expect(mocks.setPageCompleted).toHaveBeenCalledWith(
+      'page-1', 'extracted text '.repeat(10), { mimeType: 'application/pdf', pageCount: 1 }, 'text',
+    );
+    expect(mocks.rasterizePdfPages).not.toHaveBeenCalled();
+    expect(mocks.setPageVisualWithContent).not.toHaveBeenCalled();
+  });
+
+  describe('a low-text (scanned) PDF', () => {
+    const page = (n: number) => ({ pageNumber: n, buffer: Buffer.from(`jpeg-${n}`), mimeType: 'image/jpeg' });
+
+    beforeEach(() => {
+      mocks.getOriginal.mockResolvedValue(BYTES);
+      mocks.detectContentType.mockResolvedValue({ label: 'pdf', mimeType: 'application/pdf', score: 0.9, source: 'magika' });
+      mocks.extractPdfContent.mockResolvedValue({ text: 'p. 1', pageCount: 3 });
+    });
+
+    it('marks it visual, keeping its text, instead of completed with nothing to read', async () => {
+      mocks.rasterizePdfPages.mockResolvedValue({ pages: [page(1), page(2), page(3)], attempted: 3 });
+
+      await runPullPipeline({ pageId: 'page-1', contentHash: HASH }, NO_WAIT);
+
+      expect(mocks.setPageCompleted).not.toHaveBeenCalled();
+      expect(mocks.setPageVisualWithContent).toHaveBeenCalledWith('page-1', 'p. 1', {
+        mimeType: 'application/pdf',
+        pageCount: 3,
+        rasterizedPages: 3,
+        lowText: true,
+      });
+    });
+
+    it('caches each rendered page as a pdf-page-{n} JPEG preset, one at a time', async () => {
+      mocks.rasterizePdfPages.mockResolvedValue({ pages: [page(1), page(2), page(3)], attempted: 3 });
+      let inFlight = 0;
+      let maxInFlight = 0;
+      mocks.saveCache.mockImplementation(async () => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        inFlight--;
+        return {};
+      });
+
+      await runPullPipeline({ pageId: 'page-1', contentHash: HASH }, NO_WAIT);
+
+      expect(mocks.saveCache.mock.calls.map((c) => [c[1], c[3]])).toEqual([
+        ['pdf-page-1', 'image/jpeg'],
+        ['pdf-page-2', 'image/jpeg'],
+        ['pdf-page-3', 'image/jpeg'],
+      ]);
+      // saveCache read-modify-writes the hash's cache metadata, so parallel saves would race.
+      expect(maxInFlight).toBe(1);
+    });
+
+    it('rasterizes only the configured number of leading pages', async () => {
+      const previous = process.env.PDF_RASTER_MAX_PAGES;
+      process.env.PDF_RASTER_MAX_PAGES = '2';
+      try {
+        await runPullPipeline({ pageId: 'page-1', contentHash: HASH }, NO_WAIT);
+      } finally {
+        if (previous === undefined) delete process.env.PDF_RASTER_MAX_PAGES;
+        else process.env.PDF_RASTER_MAX_PAGES = previous;
+      }
+
+      expect(mocks.rasterizePdfPages).toHaveBeenCalledWith(BYTES, { maxPages: 2 });
+    });
+
+    it('still marks it visual when rendering fails, recording that no pages were rendered', async () => {
+      mocks.rasterizePdfPages.mockRejectedValue(new Error('canvas unavailable'));
+
+      await runPullPipeline({ pageId: 'page-1', contentHash: HASH }, NO_WAIT);
+
+      expect(mocks.setPageFailed).not.toHaveBeenCalled();
+      expect(mocks.setPageVisualWithContent).toHaveBeenCalledWith('page-1', 'p. 1', expect.objectContaining({ rasterizedPages: 0 }));
+    });
+
+    it('records no rendered pages when caching them fails', async () => {
+      mocks.rasterizePdfPages.mockResolvedValue({ pages: [page(1)], attempted: 1 });
+      mocks.saveCache.mockRejectedValue(new Error('S3 down'));
+
+      await runPullPipeline({ pageId: 'page-1', contentHash: HASH }, NO_WAIT);
+
+      expect(mocks.setPageVisualWithContent).toHaveBeenCalledWith('page-1', 'p. 1', expect.objectContaining({ rasterizedPages: 0 }));
+    });
   });
 
   it('generates image variants and marks the page visual for an image', async () => {

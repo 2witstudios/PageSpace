@@ -4,6 +4,7 @@ import {
   setPageProcessing,
   setPageCompleted,
   setPageVisual,
+  setPageVisualWithContent,
   setPageVideoProcessed,
   setPageFailed,
 } from '../db';
@@ -12,6 +13,11 @@ import {
   detectContentType,
   isAllowedContentType,
   extractTextContent,
+  extractPdfContent,
+  isLowTextPdf,
+  rasterizePdfPages,
+  pdfPagePreset,
+  resolveMaxRasterizedPdfPages,
   generateImageVariants,
   extractVideoMetadata,
   extractVideoThumbnail,
@@ -53,8 +59,8 @@ export async function fetchObjectFromS3(contentHash: string, opts: FetchOptions 
   throw new Error(`Object not found in S3 after ${maxAttempts} attempts: ${contentHash}`);
 }
 
+// PDFs are dispatched on their own (dispatchPdf): a scan is visual, not text.
 const TEXT_EXTRACTABLE = new Set([
-  'application/pdf',
   // .docx only — mammoth cannot read legacy binary .doc (application/msword)
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'text/plain',
@@ -135,6 +141,11 @@ async function dispatch(pageId: string, contentHash: string, bytes: Buffer, mime
     return;
   }
 
+  if (mimeType === 'application/pdf') {
+    await dispatchPdf(pageId, contentHash, bytes);
+    return;
+  }
+
   if (TEXT_EXTRACTABLE.has(mimeType)) {
     const text = await extractTextContent(bytes, mimeType);
     await setPageCompleted(pageId, text ?? '', { mimeType }, 'text');
@@ -143,4 +154,41 @@ async function dispatch(pageId: string, contentHash: string, bytes: Buffer, mime
 
   // Allowed but not specifically processable — keep the file, mark visual.
   await setPageVisual(pageId);
+}
+
+/**
+ * A PDF with a real text layer is read as text. A PDF with almost none — a scan —
+ * is marked `visual` (keeping whatever text it had, for search and for text-only
+ * models) and its leading pages are rendered to `pdf-page-{n}` JPEG presets, so a
+ * vision model can look at it. Marking a scan `completed` with empty content left
+ * agents nothing to read and never reached the visual path.
+ */
+async function dispatchPdf(pageId: string, contentHash: string, bytes: Buffer): Promise<void> {
+  const mimeType = 'application/pdf';
+  const { text, pageCount } = await extractPdfContent(bytes);
+
+  if (!isLowTextPdf(text, pageCount)) {
+    await setPageCompleted(pageId, text, { mimeType, pageCount }, 'text');
+    return;
+  }
+
+  let rasterizedPages = 0;
+  try {
+    const { pages, attempted } = await rasterizePdfPages(bytes, { maxPages: resolveMaxRasterizedPdfPages() });
+    // One at a time: saveCache read-modify-writes the hash's cache metadata.
+    for (const page of pages) {
+      await contentStore.saveCache(contentHash, pdfPagePreset(page.pageNumber), page.buffer, page.mimeType);
+    }
+    rasterizedPages = pages.length > 0 ? attempted : 0;
+  } catch (err) {
+    // The page stays readable (as a PDF, or by its text) without page images.
+    loggers.processor.warn('PDF page rendering failed; marking visual without page images', {
+      pageId,
+      contentHash,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    rasterizedPages = 0;
+  }
+
+  await setPageVisualWithContent(pageId, text, { mimeType, pageCount, rasterizedPages, lowText: true });
 }

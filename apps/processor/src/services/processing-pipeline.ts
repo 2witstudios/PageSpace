@@ -12,7 +12,7 @@ import {
   type DetectedContentType,
 } from './content-detector';
 import { IMAGE_PRESETS } from '../types';
-import type { PDFLoadingTask } from '../types/pdfjs';
+import type { PDFDocumentProxy, PDFLoadingTask } from '../types/pdfjs';
 import { composePageText, composeDocumentText } from './pdf-text-layout';
 
 const execFileAsync = promisify(execFile);
@@ -110,19 +110,150 @@ function cleanText(text: string): string {
   return text.replace(/\0/g, '').trim();
 }
 
-async function extractPdfText(bytes: Buffer): Promise<string> {
-  const pdfjsLib = await import('pdfjs-dist');
-  const getDocument = pdfjsLib.getDocument as unknown as
-    (params: { data: Uint8Array; disableWorker: boolean }) => PDFLoadingTask;
-  const pdf = await getDocument({ data: new Uint8Array(bytes), disableWorker: true }).promise;
+interface PdfLoadParams {
+  data: Uint8Array;
+  disableWorker: boolean;
+  standardFontDataUrl?: string;
+  cMapUrl?: string;
+  cMapPacked?: boolean;
+}
 
-  const parts: string[] = [];
-  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-    const page = await pdf.getPage(pageNum);
-    const textContent = await page.getTextContent();
-    parts.push(composePageText(textContent.items));
+/**
+ * pdf.js's bundled font and CMap data, as directory paths (pdf.js reads them
+ * from disk in Node). Without them the standard 14 fonts and CJK text fail to
+ * load: rendering drops the text and extraction logs a warning per font.
+ */
+function pdfjsAssetPaths(): Pick<PdfLoadParams, 'standardFontDataUrl' | 'cMapUrl' | 'cMapPacked'> {
+  const root = path.dirname(require.resolve('pdfjs-dist/package.json'));
+  return {
+    standardFontDataUrl: `${path.join(root, 'standard_fonts')}${path.sep}`,
+    cMapUrl: `${path.join(root, 'cmaps')}${path.sep}`,
+    cMapPacked: true,
+  };
+}
+
+async function loadPdf(bytes: Buffer): Promise<PDFDocumentProxy> {
+  // The legacy build is pdf.js's Node build: it polyfills Path2D, DOMMatrix and
+  // ImageData from @napi-rs/canvas, which page rendering needs (text is drawn
+  // through Path2D). The modern build assumes a browser.
+  const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const getDocument = pdfjsLib.getDocument as unknown as (params: PdfLoadParams) => PDFLoadingTask;
+  return getDocument({
+    data: new Uint8Array(bytes),
+    disableWorker: true,
+    ...pdfjsAssetPaths(),
+  }).promise;
+}
+
+export interface PdfContent {
+  text: string;
+  pageCount: number;
+}
+
+/** The PDF's text layer and page count. Bytes in, plain result out. */
+export async function extractPdfContent(bytes: Buffer): Promise<PdfContent> {
+  const pdf = await loadPdf(bytes);
+  try {
+    const parts: string[] = [];
+    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+      const page = await pdf.getPage(pageNum);
+      const textContent = await page.getTextContent();
+      parts.push(composePageText(textContent.items));
+    }
+    return { text: cleanText(composeDocumentText(parts)), pageCount: pdf.numPages };
+  } finally {
+    await pdf.destroy().catch(() => {});
   }
-  return cleanText(composeDocumentText(parts));
+}
+
+async function extractPdfText(bytes: Buffer): Promise<string> {
+  return (await extractPdfContent(bytes)).text;
+}
+
+/**
+ * Below this many non-whitespace characters per page, a PDF's text layer is
+ * not its content: a scan with page numbers or a stamp, or no text at all.
+ */
+export const LOW_TEXT_CHARS_PER_PAGE = 32;
+
+/** Whether a PDF's extracted text is too thin to stand for it (a scan). */
+export function isLowTextPdf(text: string, pageCount: number): boolean {
+  const meaningful = text.replace(/\s+/g, '').length;
+  return meaningful < LOW_TEXT_CHARS_PER_PAGE * Math.max(pageCount, 1);
+}
+
+/** Cache preset name for a rasterized PDF page (1-based). Served by /cache/:hash/:preset. */
+export function pdfPagePreset(pageNumber: number): string {
+  return `pdf-page-${pageNumber}`;
+}
+
+/**
+ * How many leading pages of a low-text PDF are rasterized. Rendering is the
+ * slow part of processing a scan, and each page is one cache object.
+ */
+export const DEFAULT_MAX_RASTERIZED_PDF_PAGES = 50;
+
+export function resolveMaxRasterizedPdfPages(env: Record<string, string | undefined> = process.env): number {
+  const parsed = Number(env.PDF_RASTER_MAX_PAGES);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_RASTERIZED_PDF_PAGES;
+}
+
+export interface RasterizedPdfPage {
+  pageNumber: number;
+  buffer: Buffer;
+  mimeType: 'image/jpeg';
+}
+
+export interface RasterizePdfResult {
+  pages: RasterizedPdfPage[];
+  /** Leading pages rendering was tried on: min(maxPages, numPages). */
+  attempted: number;
+}
+
+/**
+ * Render the first `maxPages` pages to JPEG, each fitted inside the ai-vision
+ * preset's 2048px budget on its long side and encoded at its quality. A page
+ * that fails to render is skipped; the rest still come back. Bytes in, page
+ * images out.
+ */
+export async function rasterizePdfPages(bytes: Buffer, options: { maxPages: number }): Promise<RasterizePdfResult> {
+  const budget = IMAGE_PRESETS['ai-vision'];
+  const pdf = await loadPdf(bytes);
+  try {
+    const attempted = Math.min(options.maxPages, pdf.numPages);
+    const pages: RasterizedPdfPage[] = [];
+    for (let pageNumber = 1; pageNumber <= attempted; pageNumber++) {
+      try {
+        const page = await pdf.getPage(pageNumber);
+        const base = page.getViewport({ scale: 1 });
+        const scale = Math.min(budget.maxWidth / base.width, budget.maxWidth / base.height);
+        const viewport = page.getViewport({ scale });
+        const width = Math.max(1, Math.floor(viewport.width));
+        const height = Math.max(1, Math.floor(viewport.height));
+        const target = pdf.canvasFactory.create(width, height);
+        try {
+          await page.render({ canvasContext: target.context, viewport }).promise;
+          const png = target.canvas.toBuffer('image/png');
+          const buffer = await sharp(png)
+            // The canvas starts transparent; a page is white paper.
+            .flatten({ background: '#ffffff' })
+            .resize(budget.maxWidth, budget.maxWidth, { fit: 'inside', withoutEnlargement: true })
+            .jpeg({ quality: budget.quality, progressive: true, mozjpeg: true })
+            .toBuffer();
+          pages.push({ pageNumber, buffer, mimeType: 'image/jpeg' });
+        } finally {
+          pdf.canvasFactory.destroy(target);
+          page.cleanup();
+        }
+      } catch {
+        // One unrenderable page (a broken image stream) must not cost the rest.
+        continue;
+      }
+    }
+    return { pages, attempted };
+  } finally {
+    await pdf.destroy().catch(() => {});
+  }
 }
 
 /** Resize+re-encode the image into every standard preset. Bytes in, bytes per preset out. */
