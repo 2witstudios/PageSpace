@@ -48,7 +48,7 @@ export interface PdfFilePage {
   contentHash: string;
   fileSize: number | null;
   originalFileName: string | null;
-  /** pages.extractionMetadata; the processor records `pageCount` and `rasterizedPages` on PDFs. */
+  /** pages.extractionMetadata; the processor records `pageCount` and `renderedPages` on PDFs. */
   extractionMetadata: unknown;
 }
 
@@ -77,21 +77,28 @@ function positiveInt(value: unknown): number | null {
   return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null;
 }
 
-function readPdfLayout(extractionMetadata: unknown): { pageCount: number | null; rasterizedPages: number | null } {
-  if (typeof extractionMetadata !== 'object' || extractionMetadata === null) {
-    return { pageCount: null, rasterizedPages: null };
-  }
-  const meta = extractionMetadata as Record<string, unknown>;
-  const rasterized = meta.rasterizedPages;
-  return {
-    pageCount: positiveInt(meta.pageCount),
-    // 0 is meaningful: the processor ran and rendered nothing.
-    rasterizedPages: typeof rasterized === 'number' && Number.isInteger(rasterized) && rasterized >= 0 ? rasterized : null,
-  };
+/**
+ * The pages of a PDF that have `pdf-page-{n}` images, from its extractionMetadata,
+ * in order: a scan's leading pages, or a text document's low-text pages. Null
+ * when the processor recorded none (a PDF processed before page images existed).
+ * An empty list is meaningful: processed, nothing rendered.
+ */
+export function readRenderedPages(extractionMetadata: unknown): number[] | null {
+  if (typeof extractionMetadata !== 'object' || extractionMetadata === null) return null;
+  const listed = (extractionMetadata as Record<string, unknown>).renderedPages;
+  if (!Array.isArray(listed)) return null;
+  return listed.filter((n): n is number => positiveInt(n) !== null).sort((a, b) => a - b);
 }
 
-/** "1-3, 5, 7-8" for [1,2,3,5,7,8]. */
-function describePages(pages: number[]): string {
+function readPdfLayout(extractionMetadata: unknown): { pageCount: number | null; renderedPages: number[] | null } {
+  const meta = typeof extractionMetadata === 'object' && extractionMetadata !== null
+    ? extractionMetadata as Record<string, unknown>
+    : {};
+  return { pageCount: positiveInt(meta.pageCount), renderedPages: readRenderedPages(extractionMetadata) };
+}
+
+/** "1-3, 5, 7-8" for [1,2,3,5,7,8]; read back by parsePdfPageRange. */
+export function describePdfPages(pages: number[]): string {
   const runs: string[] = [];
   let i = 0;
   while (i < pages.length) {
@@ -164,7 +171,8 @@ export async function deliverPdfPage(params: DeliverPdfPageParams): Promise<Visu
   const textLayerNote = params.textLayerChars
     ? `This PDF also has a text layer (${params.textLayerChars} characters): call read_page with lineStart/lineEnd to read it as text.`
     : null;
-  const { pageCount, rasterizedPages } = readPdfLayout(page.extractionMetadata);
+  const { pageCount, renderedPages } = readPdfLayout(page.extractionMetadata);
+  const rendered = renderedPages === null ? null : new Set(renderedPages);
 
   // Validate the range before reading anything.
   let requested: number[] | null = null;
@@ -202,14 +210,15 @@ export async function deliverPdfPage(params: DeliverPdfPageParams): Promise<Visu
     }
   }
 
-  // 2. Rasterized page images.
-  const batch = requested ?? Array.from({ length: limits.defaultPageBatch }, (_, i) => i + 1);
-  const available = rasterizedPages === null ? batch : batch.filter((n) => n <= rasterizedPages);
+  // 2. Rendered page images.
+  const batch = requested
+    ?? (renderedPages ?? Array.from({ length: limits.defaultPageBatch }, (_, i) => i + 1)).slice(0, limits.defaultPageBatch);
+  const available = rendered === null ? batch : batch.filter((n) => rendered.has(n));
   if (requested !== null && available.length === 0) {
-    const available = rasterizedPages ? `pages 1-${rasterizedPages}` : 'no pages';
+    const which = renderedPages?.length ? `pages ${describePdfPages(renderedPages)}` : 'no pages';
     return {
       success: false,
-      error: `None of the requested pages are available as images: this PDF has ${available} rendered${pageCount ? ` of ${pageCount}` : ''}.`,
+      error: `None of the requested pages are available as images: this PDF has ${which} rendered${pageCount ? ` of ${pageCount}` : ''}.`,
       pageId: page.id,
       title: page.title,
     };
@@ -229,8 +238,8 @@ export async function deliverPdfPage(params: DeliverPdfPageParams): Promise<Visu
       const n = chunk[j];
       const bytes = fetched[j];
       if (!bytes) {
-        // With no rendered count, a missing page is the end of what was rendered.
-        if (rasterizedPages === null) { reachedEnd = true; break; }
+        // With no rendered list, a missing page is the end of what was rendered.
+        if (rendered === null) { reachedEnd = true; break; }
         continue;
       }
       if (!isJpegBytes(bytes)) continue;
@@ -244,7 +253,7 @@ export async function deliverPdfPage(params: DeliverPdfPageParams): Promise<Visu
   }
 
   if (parts.length === 0) {
-    const hint = rasterizedPages === null
+    const hint = renderedPages === null
       ? 'No page images exist for this PDF yet (it was processed before page images were rendered). Ask the user to reprocess the file, then read it again.'
       : 'No page images could be loaded for this PDF.';
     return fallback(page, notSentWhole ? `${notSentWhole} ${hint}` : hint);
@@ -257,25 +266,26 @@ export async function deliverPdfPage(params: DeliverPdfPageParams): Promise<Visu
   // Point at the next batch when this read was cut short, or was the default
   // first batch of a longer document. An explicit range that fit is complete.
   const cutShort = stoppedAt !== null || trimmedToPerRead || requested === null;
-  const nextPages = cutShort && rasterizedPages !== null && resumeFrom <= rasterizedPages
-    ? `${resumeFrom}-${Math.min(resumeFrom + limits.defaultPageBatch - 1, rasterizedPages)}`
-    : null;
+  const following = cutShort && renderedPages !== null
+    ? renderedPages.filter((n) => n >= resumeFrom).slice(0, limits.defaultPageBatch)
+    : [];
+  const nextPages = following.length > 0 ? describePdfPages(following) : null;
 
   const sentences = [
-    `Showing page${shown.length === 1 ? '' : 's'} ${describePages(shown)}${pageCount ? ` of ${pageCount}` : ''} from "${page.title}" as images.`,
+    `Showing page${shown.length === 1 ? '' : 's'} ${describePdfPages(shown)}${pageCount ? ` of ${pageCount}` : ''} from "${page.title}" as images.`,
   ];
   if (notSentWhole) sentences.unshift(notSentWhole);
   if (stoppedAt !== null) sentences.push('Stopped at the size limit for one result.');
   if (nextPages) sentences.push(`Call read_page again with pages: "${nextPages}" to see more.`);
-  if (rasterizedPages !== null && pageCount !== null && rasterizedPages < pageCount) {
-    sentences.push(`Only the first ${rasterizedPages} pages are available as images.`);
+  if (renderedPages !== null && pageCount !== null && renderedPages.length < pageCount) {
+    sentences.push(`Page images exist for pages ${describePdfPages(renderedPages)} of ${pageCount}.`);
   }
   if (textLayerNote) sentences.push(textLayerNote);
 
   return delivered(page, sentences.join(' '), parts, {
     delivery: 'page-images',
     pageCount,
-    rasterizedPages,
+    renderedPages,
     pagesShown: shown,
     ...(nextPages ? { nextPages } : {}),
   });

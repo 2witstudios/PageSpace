@@ -1950,64 +1950,153 @@ describe('page-read-tools', () => {
           expect(result.content).toContain('Exhibit A text');
         });
 
-        it('tells a vision model on a provider without tool-result media that it cannot be shown the file, without sending bytes', async () => {
+        type TextRead = { type?: string; content?: string; fileNote?: string; message?: string };
+
+        it('gives a vision model on a provider without tool-result media the scan\'s text, saying why it gets no images', async () => {
           mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPdfPage({ content: 'EXHIBIT 4' }));
 
           const result = await pageReadTools.read_page.execute!(
             { title: 'Exhibits.pdf', pageId: 'page-1' },
             pdfContext(true, false, false),
-          ) as { type: string; message: string; extractedText?: string };
+          ) as TextRead;
 
-          assert({
-            given: 'a visual PDF and a vision model whose provider sends tool-result media as text',
-            should: 'return the provider fallback, not media',
-            actual: result.type,
-            expected: 'visual_requires_media_provider',
-          });
-          expect(result.message).toMatch(/can't receive images or PDFs in tool results/);
-          expect(result.extractedText).toBe('EXHIBIT 4');
+          expect(result.content).toContain('EXHIBIT 4');
+          expect(result.fileNote).toMatch(/can't receive images or PDFs in tool results/);
           expect(fileBytesFetcherFor).not.toHaveBeenCalled();
           expect(mockDeliverPdfPage).not.toHaveBeenCalled();
         });
 
-        it('tells an agent the file is not available to it as an image when its user cannot view it', async () => {
+        it('returns the provider fallback, not media, for a scan with no text', async () => {
+          mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPdfPage({ content: '' }));
+
+          const result = await pageReadTools.read_page.execute!(
+            { title: 'Exhibits.pdf', pageId: 'page-1' },
+            pdfContext(true, false, false),
+          ) as TextRead;
+
+          expect(result.type).toBe('visual_requires_media_provider');
+          expect(fileBytesFetcherFor).not.toHaveBeenCalled();
+        });
+
+        it('gives an agent whose user cannot view the file the text, saying it is not available as an image', async () => {
           mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPdfPage({ content: 'EXHIBIT 4' }));
           vi.mocked(fileBytesFetcherFor).mockResolvedValueOnce(null);
 
           const result = await pageReadTools.read_page.execute!(
             { title: 'Exhibits.pdf', pageId: 'page-1' },
             pdfContext(true, true),
-          ) as { type: string; message: string; extractedText?: string };
+          ) as TextRead;
 
           assert({
             given: 'a page agent that can view the page while the person it runs for cannot',
-            should: 'say the file is not available as an image, keeping the text it may read',
-            actual: { type: result.type, text: result.extractedText },
-            expected: { type: 'visual_unavailable_to_actor', text: 'EXHIBIT 4' },
+            should: 'return the text it may read, noting the file is not available as an image',
+            actual: { hasText: result.content?.includes('EXHIBIT 4'), note: /isn't available to you as an image/.test(result.fileNote ?? '') },
+            expected: { hasText: true, note: true },
           });
-          expect(result.message).toMatch(/isn't available to you as an image/);
           expect(JSON.stringify(result)).not.toMatch(/reprocess|requires vision|switch/i);
           expect(mockDeliverPdfPage).not.toHaveBeenCalled();
         });
 
-        it('tells a model without vision to switch, and passes on any text the scan had', async () => {
-          mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPdfPage({ content: 'EXHIBIT 4' }));
+        it('says a textless scan is not available as an image when the agent\'s user cannot view it', async () => {
+          mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPdfPage({ content: '' }));
+          vi.mocked(fileBytesFetcherFor).mockResolvedValueOnce(null);
+
+          const result = await pageReadTools.read_page.execute!(
+            { title: 'Exhibits.pdf', pageId: 'page-1' },
+            pdfContext(true, true),
+          ) as TextRead;
+
+          expect(result.type).toBe('visual_unavailable_to_actor');
+        });
+
+        it('gives a model without vision the full numbered text of a scan that has a text layer', async () => {
+          mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPdfPage({ content: 'EXHIBIT 4\nline two' }));
 
           const result = await pageReadTools.read_page.execute!(
             { title: 'Exhibits.pdf', pageId: 'page-1' },
             pdfContext(false, false),
-          ) as { type: string; message: string; extractedText?: string };
+          ) as TextRead;
 
-          assert({
-            given: 'a visual PDF and a text-only model',
-            should: 'return the requires-vision result',
-            actual: result.type,
-            expected: 'visual_requires_vision_model',
-          });
+          expect(result.content).toContain('2→line two');
+          expect(result.fileNote).toMatch(/switch .*vision/i);
+          expect(mockDeliverPdfPage).not.toHaveBeenCalled();
+        });
+
+        it('tells a model without vision to switch for a scan with no text', async () => {
+          mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPdfPage({ content: '' }));
+
+          const result = await pageReadTools.read_page.execute!(
+            { title: 'Exhibits.pdf', pageId: 'page-1' },
+            pdfContext(false, false),
+          ) as TextRead;
+
+          expect(result.type).toBe('visual_requires_vision_model');
           expect(result.message).toMatch(/switch .*vision/i);
           expect(result.message).toMatch(/images and PDFs/);
-          expect(result.extractedText).toBe('EXHIBIT 4');
-          expect(mockDeliverPdfPage).not.toHaveBeenCalled();
+        });
+
+        describe('a text PDF with some rendered pages', () => {
+          // The blank-separator report: completed, full text, pages 5 and 10 rendered.
+          const report = () => createMockPdfPage({
+            processingStatus: 'completed',
+            content: 'Section 1: quarterly figures\nSection 2: commentary',
+            extractionMetadata: { pageCount: 10, renderedPages: [5, 10] },
+          });
+
+          it('reads as text and points a vision model at its page images', async () => {
+            mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(report());
+
+            const result = await pageReadTools.read_page.execute!(
+              { title: 'Report.pdf', pageId: 'page-1' },
+              pdfContext(true, false),
+            ) as TextRead;
+
+            expect(result.content).toContain('Section 2: commentary');
+            expect(result.fileNote).toMatch(/pages 5, 10.*pages: "5, 10"/);
+            expect(mockDeliverPdfPage).not.toHaveBeenCalled();
+          });
+
+          it('delivers the rendered pages a vision model asks for', async () => {
+            mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(report());
+            mockDeliverPdfPage.mockResolvedValue(deliveredParts as never);
+
+            const result = await pageReadTools.read_page.execute!(
+              { title: 'Report.pdf', pageId: 'page-1', pages: '5' },
+              pdfContext(true, false),
+            );
+
+            expect(result).toEqual(deliveredParts);
+            expect(mockDeliverPdfPage).toHaveBeenCalledWith(expect.objectContaining({ pages: '5' }));
+          });
+
+          it('reads as text for a model without vision, mentioning nothing it cannot use', async () => {
+            mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(report());
+
+            const result = await pageReadTools.read_page.execute!(
+              { title: 'Report.pdf', pageId: 'page-1', pages: '5' },
+              pdfContext(false, false),
+            ) as TextRead;
+
+            expect(result.content).toContain('Section 2: commentary');
+            expect(result.fileNote).toBeUndefined();
+            expect(mockDeliverPdfPage).not.toHaveBeenCalled();
+          });
+
+          it('lets a vision model page through the scans of a typed + scanned bundle', async () => {
+            mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPdfPage({
+              processingStatus: 'completed',
+              content: 'Index of exhibits',
+              extractionMetadata: { pageCount: 200, renderedPages: Array.from({ length: 50 }, (_, i) => i + 11) },
+            }));
+            mockDeliverPdfPage.mockResolvedValue(deliveredParts as never);
+
+            await pageReadTools.read_page.execute!(
+              { title: 'Exhibits.pdf', pageId: 'page-1', pages: '11-15' },
+              pdfContext(true, true),
+            );
+
+            expect(mockDeliverPdfPage).toHaveBeenCalledWith(expect.objectContaining({ pages: '11-15' }));
+          });
         });
       });
     });

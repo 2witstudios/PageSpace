@@ -13,7 +13,7 @@ const filePage = (overrides: Partial<PdfFilePage> = {}): PdfFilePage => ({
   contentHash: HASH,
   fileSize: PDF.length,
   originalFileName: 'Exhibits.pdf',
-  extractionMetadata: { pageCount: 12, rasterizedPages: 12 },
+  extractionMetadata: { pageCount: 12, renderedPages: range(12) },
   ...overrides,
 });
 
@@ -32,6 +32,8 @@ const allPages = (count: number) =>
   Object.fromEntries(Array.from({ length: count }, (_, i) => [`pdf-page-${i + 1}`, jpeg(`p${i + 1}`)]));
 
 const notBlocked = async () => false;
+/** Pages 1..n, as the processor lists a scan's rendered pages. */
+const range = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
 
 describe('parsePdfPageRange', () => {
   it('parses single pages, ranges and lists into sorted unique page numbers', () => {
@@ -90,7 +92,7 @@ describe('deliverPdfPage — native PDF', () => {
     const fetchBytes = fetcherFor({ original: PDF, ...allPages(12) });
 
     const result = await deliverPdfPage({
-      page: filePage({ extractionMetadata: { pageCount: 400, rasterizedPages: 12 } }), hasPdfInput: true, fetchBytes, isBlocked: notBlocked,
+      page: filePage({ extractionMetadata: { pageCount: 400, renderedPages: range(12) } }), hasPdfInput: true, fetchBytes, isBlocked: notBlocked,
     }) as VisualPartsDeliveredOutput;
 
     expect(result.parts.every((p) => p.kind === 'image')).toBe(true);
@@ -182,7 +184,7 @@ describe('deliverPdfPage — page images', () => {
     const fetchBytes = fetcherFor(allPages(40));
 
     const result = await deliverPdfPage({
-      page: filePage({ extractionMetadata: { pageCount: 40, rasterizedPages: 40 } }), hasPdfInput: false, pages: '1-40', fetchBytes, isBlocked: notBlocked,
+      page: filePage({ extractionMetadata: { pageCount: 40, renderedPages: range(40) } }), hasPdfInput: false, pages: '1-40', fetchBytes, isBlocked: notBlocked,
     }) as VisualPartsDeliveredOutput;
 
     expect(result.parts).toHaveLength(PDF_VISUAL_LIMITS.maxPagesPerRead);
@@ -193,18 +195,18 @@ describe('deliverPdfPage — page images', () => {
     const fetchBytes = fetcherFor(allPages(3));
 
     const result = await deliverPdfPage({
-      page: filePage({ extractionMetadata: { pageCount: 90, rasterizedPages: 3 } }), hasPdfInput: false, pages: '2-6', fetchBytes, isBlocked: notBlocked,
+      page: filePage({ extractionMetadata: { pageCount: 90, renderedPages: range(3) } }), hasPdfInput: false, pages: '2-6', fetchBytes, isBlocked: notBlocked,
     }) as VisualPartsDeliveredOutput;
 
     expect(result.parts.map((p) => p.pdfPage)).toEqual([2, 3]);
-    expect(result.message).toContain('first 3 pages');
+    expect(result.message).toContain('Page images exist for pages 1-3 of 90');
   });
 
   it('refuses a range that is entirely past the rendered pages', async () => {
     const fetchBytes = fetcherFor(allPages(3));
 
     const result = await deliverPdfPage({
-      page: filePage({ extractionMetadata: { pageCount: 90, rasterizedPages: 3 } }), hasPdfInput: false, pages: '10-12', fetchBytes, isBlocked: notBlocked,
+      page: filePage({ extractionMetadata: { pageCount: 90, renderedPages: range(3) } }), hasPdfInput: false, pages: '10-12', fetchBytes, isBlocked: notBlocked,
     }) as { success: boolean; error: string };
 
     expect(result.success).toBe(false);
@@ -237,6 +239,34 @@ describe('deliverPdfPage — page images', () => {
 
     expect(result.parts.map((p) => p.pdfPage)).toEqual([1, 2]);
     expect(result.metadata.nextPages).toBeUndefined();
+  });
+});
+
+describe('deliverPdfPage — a text PDF with some rendered pages', () => {
+  const textPdf = () => filePage({ extractionMetadata: { pageCount: 200, renderedPages: range(190).map((n) => n + 10) } });
+
+  it('shows the first rendered pages by default, not page 1', async () => {
+    const fetchBytes = fetcherFor(Object.fromEntries(range(200).map((n) => [`pdf-page-${n}`, jpeg(`p${n}`)])));
+
+    const result = await deliverPdfPage({ page: textPdf(), hasPdfInput: false, fetchBytes, isBlocked: notBlocked }) as VisualPartsDeliveredOutput;
+
+    expect(result.parts.map((p) => p.pdfPage)).toEqual([11, 12, 13, 14, 15]);
+    expect(result.metadata.nextPages).toBe('16-20');
+  });
+
+  it('only fetches requested pages that were rendered', async () => {
+    const fetchBytes = fetcherFor(Object.fromEntries(range(200).map((n) => [`pdf-page-${n}`, jpeg(`p${n}`)])));
+
+    const result = await deliverPdfPage({ page: textPdf(), hasPdfInput: false, pages: '8-12', fetchBytes, isBlocked: notBlocked }) as VisualPartsDeliveredOutput;
+
+    expect(result.parts.map((p) => p.pdfPage)).toEqual([11, 12]);
+    expect(fetchBytes.mock.calls.map((c) => c[1]).sort()).toEqual(['pdf-page-11', 'pdf-page-12']);
+  });
+
+  it('names the rendered pages when none of the requested ones are', async () => {
+    const result = await deliverPdfPage({ page: textPdf(), hasPdfInput: false, pages: '1-5', fetchBytes: fetcherFor({}), isBlocked: notBlocked }) as { success: boolean; error: string };
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('11-200');
   });
 });
 
