@@ -48,6 +48,8 @@ import {
 import { getValidatedEnv } from '../../config/env-validation';
 import type { ExecutableSandbox, SandboxRunResult } from './sandbox-client/types';
 import { LocalEnvUnsupportedError } from './sandbox-host';
+import { LocalEnvGrantDeniedError } from './sandbox-client/local-env-sandbox-host';
+import { findSentinel } from './sandbox-client/sprites';
 import type { CodeExecutionAuditInput, CodeExecutionAnomaly } from './audit';
 import type { UsageTrackingOutcome } from '../../monitoring/ai-monitoring';
 import { ORG_COMPUTE_REFUSAL_MESSAGES, isOrgComputeRefusal, type ComputeCharge, type OrgComputeGateRefusal } from '../../billing/compute-charge';
@@ -438,6 +440,12 @@ export type SandboxToolDenialReason =
   | 'binary_content'
   /** A copy whose source is a zero-byte file: copying it would empty the destination. */
   | 'empty_source'
+  /** A copy whose target path is an existing directory. */
+  | 'target_is_directory'
+  /** The server's in-flight budget for large copies is used up. Nothing was copied. */
+  | 'copy_budget_exhausted'
+  /** The copy did not finish inside its time budget. Nothing was written under the target name. */
+  | 'copy_deadline_exceeded'
   | 'edit_no_match'
   | 'edit_not_unique'
   | 'no_session'
@@ -544,6 +552,12 @@ export const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
     'This file is not valid UTF-8 text, so it cannot be copied into a page as text — decoding it would silently replace the undecodable bytes. '
     + 'To put the file itself in the drive, copy it to a new FILE page (copy_content with to.kind "new_file_page"); to move it inside the sandbox, copy it to another sandbox file or use bash (cp/mv).',
   empty_source: 'The source file is empty, so nothing was copied — copying it would empty the destination rather than fill it.',
+  target_is_directory:
+    'The destination path is an existing directory, so nothing was copied there. Name the file itself (e.g. "exhibits/scan.pdf").',
+  copy_budget_exhausted:
+    'The server is already moving as many large files as it safely can, so nothing was copied. Wait a moment and retry.',
+  copy_deadline_exceeded:
+    'The copy did not finish in time and was stopped; nothing was written under the destination name. Retry, or copy a smaller file.',
   edit_no_match:
     'The oldString was not found in the file. Read the file and copy the exact text to replace. '
     + 'If you read a windowed page of a long file, the text you are targeting may be in a part you have not read yet.',
@@ -1561,51 +1575,117 @@ export function resolveMaxBinaryCopyBytes(env: EnvSource): number {
 export const MAX_BINARY_COPY_BYTES = resolveMaxBinaryCopyBytes(process.env);
 
 /**
- * Per-attempt budget for a binary transfer through the sandbox filesystem API.
- *
- * The driver default (30 s) is sized for source files; 250 MB at a modest few
- * MB/s needs more. Kept so that a cold-start retry (two attempts) still fits
- * inside the AI route's own budget (`SANDBOX_MAX_TIMEOUT_MS` is 200 s, the
- * route ~285 s), since a tool call must leave room for the rest of the turn.
+ * Per-attempt ceiling for a binary transfer through the sandbox filesystem API
+ * (the driver default, 30 s, is sized for source files). A caller's `deadlineAt`
+ * clips it further: a step never gets more time than the copy has left.
  */
 export const BINARY_COPY_TIMEOUT_MS = 90_000;
 
 /**
  * Last-line marker the binary copy's helper commands print with their exit
- * code, so the driver answers at first byte instead of waiting out the exec
- * socket's 5-10 s close tail (see `RunCommandArgs.stdoutSentinel`).
+ * code. A Sprite driver answers at that line instead of waiting out the exec
+ * socket's 5-10 s close tail (see `RunCommandArgs.stdoutSentinel`); every
+ * substrate's answer is READ from it (see {@link runCopyHelper}).
  */
 export const BINARY_COPY_SENTINEL = '__PAGESPACE_COPY_END__';
 
-/** Bound on the small helper commands (stat, rename, cleanup) around a transfer. */
+/** Ceiling on the small helper commands (stat, rename, cleanup) around a transfer. */
 const BINARY_COPY_HELPER_TIMEOUT_MS = 30_000;
+
+/** Helper exit codes with a meaning of their own. */
+const EXIT_NOT_FOUND = 44;
+const EXIT_EMPTY = 45;
+const EXIT_IS_DIRECTORY = 21;
+
+/**
+ * Shell: print the size of the file named by positional arg `ref` ("$1"), on
+ * GNU (`stat -c %s`) and BSD/macOS (`stat -f %z`) alike. `-L` follows a symlink
+ * to the file it names, which is what a read returns.
+ */
+function sizeProbe(ref: string): string {
+  return `{ stat -L -c %s -- "${ref}" 2>/dev/null || stat -L -f %z -- "${ref}"; }`;
+}
+
+/** Pure: a probe's printed size, or null when the output is not one. */
+function parseProbedSize(stdout: string): number | null {
+  const text = stdout.trim();
+  return /^\d+$/.test(text) ? Number.parseInt(text, 10) : null;
+}
+
+/** Thrown when a step outlives the copy's deadline. */
+class CopyDeadlineError extends Error {
+  constructor() {
+    super('The copy ran out of time');
+    this.name = 'CopyDeadlineError';
+  }
+}
+
+/** Milliseconds left before `deadlineAt` (on the runner's clock); Infinity with no deadline. */
+function remainingMs(deps: SandboxRunDeps, deadlineAt: number | undefined): number {
+  return deadlineAt === undefined ? Number.POSITIVE_INFINITY : deadlineAt - deps.now().getTime();
+}
+
+/**
+ * Settle with `p`, or reject with {@link CopyDeadlineError} once `deadlineAt`
+ * passes — so a step that hangs past the copy's budget hands control back on
+ * time. The step itself is also given at most the remaining time (its driver
+ * timeout), so it does not run on for long after.
+ */
+function beforeDeadline<T>(p: Promise<T>, deps: SandboxRunDeps, deadlineAt: number | undefined): Promise<T> {
+  const left = remainingMs(deps, deadlineAt);
+  if (left === Number.POSITIVE_INFINITY) return p;
+  if (left <= 0) return Promise.reject(new CopyDeadlineError());
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new CopyDeadlineError()), left);
+    p.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
+/** A step's own timeout: its ceiling, clipped to the time the copy has left. */
+function stepTimeoutMs(ceiling: number, deps: SandboxRunDeps, deadlineAt: number | undefined): number {
+  return Math.max(1, Math.min(ceiling, remainingMs(deps, deadlineAt)));
+}
 
 export type BinaryReadForCopyResult =
   | { success: true; path: string; content: Buffer; bytes: number }
   | { success: false; error: string; reason: SandboxToolDenialReason };
 
-/** Run one helper script with positional data args, reporting through the sentinel. */
+/**
+ * Run one helper script with positional data args, and return its exit code AS
+ * THE SCRIPT REPORTED IT on the sentinel line.
+ *
+ * The script runs in a subshell so its own `exit N` still reaches the `echo`.
+ * A Sprite driver honours `stdoutSentinel` (parses the line, strips it, returns
+ * its code); a local env ignores it and returns the shell's own status — which,
+ * with `echo` last, is always 0. So the line is parsed HERE whenever it is still
+ * present, and the driver's code is used only when the driver already consumed it.
+ */
 async function runCopyHelper(
   sandbox: ExecutableSandbox,
   script: string,
   args: string[],
-  timeoutMs: number = BINARY_COPY_HELPER_TIMEOUT_MS,
+  timeoutMs: number,
 ): Promise<SandboxRunResult> {
-  return sandbox.runCommand({
+  const result = await sandbox.runCommand({
     cmd: 'sh',
     // Paths are positional DATA ("$1"...), never spliced into the script, so a
     // file name full of shell metacharacters cannot escape into the command.
-    args: ['-c', `${script}; echo "${BINARY_COPY_SENTINEL} $?"`, 'sh', ...args],
+    args: ['-c', `( ${script} ); echo "${BINARY_COPY_SENTINEL} $?"`, 'sh', ...args],
     timeoutMs,
     maxBytes: 4096,
     stdoutSentinel: BINARY_COPY_SENTINEL,
   });
+  const reported = findSentinel(result.stdout, BINARY_COPY_SENTINEL);
+  return reported ? { ...result, exitCode: reported.exitCode, stdout: reported.stdout } : result;
 }
 
 /** Best-effort removal of a temp file a failed copy left behind. Never throws. */
 async function removeTempFile(sandbox: ExecutableSandbox, tempPath: string): Promise<void> {
   try {
-    await runCopyHelper(sandbox, 'rm -f -- "$1"', [tempPath]);
+    await runCopyHelper(sandbox, 'rm -f -- "$1"', [tempPath], BINARY_COPY_HELPER_TIMEOUT_MS);
   } catch {
     // A stray temp file is untidy, not unsafe: it never carries the target's name.
   }
@@ -1621,23 +1701,28 @@ function binaryCopyTempPath(target: string): string {
  *
  * Same confinement (`resolveSandboxPath`), metering (`withMachineBilling`),
  * acquisition (`openSession`) and audit (`safeAudit`) as every other runner; it
- * differs in three ways, each for the size of what it moves:
+ * differs in what the size of what it moves demands:
  *
  *   - its own cap, {@link MAX_BINARY_COPY_BYTES}, instead of MAX_WRITE_BYTES;
- *   - its own per-attempt timeout, {@link BINARY_COPY_TIMEOUT_MS}, instead of
- *     the driver's 30 s fs default;
+ *   - its own per-attempt timeout, {@link BINARY_COPY_TIMEOUT_MS}, clipped to
+ *     `deadlineAt` (the whole copy's budget) when the caller has one;
  *   - it writes to a temp file beside the target and renames it into place, so
  *     a transfer that times out or drops midway never leaves a truncated file
- *     under the name the agent will open next. A failure removes the temp file.
+ *     under the name the agent will open next. A failure removes the temp file,
+ *     and a target that is a directory is refused (`mv` would otherwise move the
+ *     file INTO it and report success).
  */
 export async function writeSandboxBinaryFile({
   path,
   content,
+  deadlineAt,
   ctx,
   deps,
 }: {
   path: string;
   content: Uint8Array;
+  /** Epoch ms (on `deps.now`) by which the write must have answered. */
+  deadlineAt?: number;
   ctx: SandboxActorContext;
   deps: SandboxRunDeps;
 }): Promise<WriteFileToolResult> {
@@ -1655,6 +1740,7 @@ export async function writeSandboxBinaryFile({
   }
   const bytes = content.byteLength;
   if (bytes > MAX_BINARY_COPY_BYTES) return fail('content_too_large');
+  if (remainingMs(deps, deadlineAt) <= 0) return fail('copy_deadline_exceeded');
 
   return withMachineBilling<{ path: string; bytesWritten: number }>(ctx, deps, async () => {
     const session = await openSession(ctx, deps);
@@ -1663,7 +1749,7 @@ export async function writeSandboxBinaryFile({
     const tempPath = binaryCopyTempPath(resolved);
     try {
       const startedAt = deps.now();
-      const failWith = async (): Promise<{ success: false; error: string; reason: SandboxToolDenialReason }> => {
+      const failWith = async (reason: SandboxToolDenialReason): Promise<{ success: false; error: string; reason: SandboxToolDenialReason }> => {
         await removeTempFile(session.sandbox, tempPath);
         await safeAudit(deps, ctx, {
           code: `binaryWrite ${path} (${bytes} bytes)`,
@@ -1671,22 +1757,40 @@ export async function writeSandboxBinaryFile({
           durationMs: deps.now().getTime() - startedAt.getTime(),
           anomaly: 'nonzero_exit',
         });
-        return fail('execution_failed');
+        return fail(reason);
       };
+      const failureOf = (error: unknown): SandboxToolDenialReason =>
+        error instanceof CopyDeadlineError ? 'copy_deadline_exceeded' : 'execution_failed';
 
       try {
-        await session.sandbox.writeFiles([{ path: tempPath, content }], { timeoutMs: BINARY_COPY_TIMEOUT_MS });
-      } catch {
-        return await failWith();
+        await beforeDeadline(
+          session.sandbox.writeFiles([{ path: tempPath, content }], {
+            timeoutMs: stepTimeoutMs(BINARY_COPY_TIMEOUT_MS, deps, deadlineAt),
+          }),
+          deps,
+          deadlineAt,
+        );
+      } catch (error) {
+        return await failWith(failureOf(error));
       }
 
       let moved: SandboxRunResult;
       try {
-        moved = await runCopyHelper(session.sandbox, 'mv -f -- "$1" "$2"', [tempPath, resolved]);
-      } catch {
-        return await failWith();
+        moved = await beforeDeadline(
+          runCopyHelper(
+            session.sandbox,
+            `[ -d "$2" ] && exit ${EXIT_IS_DIRECTORY}; mv -f -- "$1" "$2"`,
+            [tempPath, resolved],
+            stepTimeoutMs(BINARY_COPY_HELPER_TIMEOUT_MS, deps, deadlineAt),
+          ),
+          deps,
+          deadlineAt,
+        );
+      } catch (error) {
+        return await failWith(failureOf(error));
       }
-      if (moved.exitCode !== 0) return await failWith();
+      if (moved.exitCode === EXIT_IS_DIRECTORY) return await failWith('target_is_directory');
+      if (moved.exitCode !== 0) return await failWith('execution_failed');
 
       await safeAudit(deps, ctx, {
         code: `binaryWrite ${path} (${bytes} bytes)`,
@@ -1706,17 +1810,21 @@ export async function writeSandboxBinaryFile({
  * Both ends live in the same machine, so moving them through the server (a
  * binary read out, a binary write back) would spend twice the file's size in
  * host memory and network for what one `cp` does. Same temp-then-rename shape
- * as {@link writeSandboxBinaryFile}, in a single exec; the destination's size is
- * echoed back as the byte count. No binary cap: nothing reaches the host.
+ * (and directory-target refusal) as {@link writeSandboxBinaryFile}, in a single
+ * exec; the destination's size is echoed back as the byte count. No binary cap:
+ * nothing reaches the host.
  */
 export async function copySandboxFile({
   fromPath,
   toPath,
+  deadlineAt,
   ctx,
   deps,
 }: {
   fromPath: string;
   toPath: string;
+  /** Epoch ms (on `deps.now`) by which the copy must have answered. */
+  deadlineAt?: number;
   ctx: SandboxActorContext;
   deps: SandboxRunDeps;
 }): Promise<WriteFileToolResult> {
@@ -1733,6 +1841,7 @@ export async function copySandboxFile({
     });
     return fail('path_escape');
   }
+  if (remainingMs(deps, deadlineAt) <= 0) return fail('copy_deadline_exceeded');
 
   return withMachineBilling<{ path: string; bytesWritten: number }>(ctx, deps, async () => {
     const session = await openSession(ctx, deps);
@@ -1748,28 +1857,45 @@ export async function copySandboxFile({
           ...(anomaly ? { anomaly } : {}),
         });
 
-      // A subshell, so its exit codes reach the sentinel `echo` after it:
-      // 44 = no such source, 45 = empty source; a cp/mv failure removes the temp file.
+      // A cp/mv/probe failure removes the temp file. The temp file is a sibling of
+      // the TARGET, so it is never left inside a directory the target turned out to be.
       const script =
-        '( [ -e "$1" ] || exit 44; [ -s "$1" ] || exit 45; ' +
-        'cp -f -- "$1" "$3" && mv -f -- "$3" "$2" && stat -L -c %s -- "$2" || { rm -f -- "$3"; exit 1; } )';
+        `[ -e "$1" ] || exit ${EXIT_NOT_FOUND}; [ -s "$1" ] || exit ${EXIT_EMPTY}; ` +
+        `[ -d "$2" ] && exit ${EXIT_IS_DIRECTORY}; ` +
+        `cp -f -- "$1" "$3" && mv -f -- "$3" "$2" && ${sizeProbe('$2')} || { rm -f -- "$3"; exit 1; }`;
       let copied: SandboxRunResult;
       try {
-        copied = await runCopyHelper(session.sandbox, script, [source, target, binaryCopyTempPath(target)], BINARY_COPY_TIMEOUT_MS);
-      } catch {
+        copied = await beforeDeadline(
+          runCopyHelper(
+            session.sandbox,
+            script,
+            [source, target, binaryCopyTempPath(target)],
+            stepTimeoutMs(BINARY_COPY_TIMEOUT_MS, deps, deadlineAt),
+          ),
+          deps,
+          deadlineAt,
+        );
+      } catch (error) {
         await audit(null, 'nonzero_exit');
-        return fail('execution_failed');
+        return fail(error instanceof CopyDeadlineError ? 'copy_deadline_exceeded' : 'execution_failed');
       }
-      if (copied.exitCode === 44 || copied.exitCode === 45) {
+      const refusal: Partial<Record<number, SandboxToolDenialReason>> = {
+        [EXIT_NOT_FOUND]: 'not_found',
+        [EXIT_EMPTY]: 'empty_source',
+        [EXIT_IS_DIRECTORY]: 'target_is_directory',
+      };
+      const refused = refusal[copied.exitCode];
+      if (refused) {
         await audit(copied.exitCode, 'nonzero_exit');
-        return fail(copied.exitCode === 44 ? 'not_found' : 'empty_source');
+        return fail(refused);
       }
-      if (copied.exitCode !== 0) {
+      const size = copied.exitCode === 0 ? parseProbedSize(copied.stdout) : null;
+      if (size === null) {
         await audit(copied.exitCode, 'nonzero_exit');
         return fail('execution_failed');
       }
       await audit(0);
-      return { success: true, path: toPath, bytesWritten: Number.parseInt(copied.stdout.trim(), 10) || 0 };
+      return { success: true, path: toPath, bytesWritten: size };
     } finally {
       session.release();
     }
@@ -1785,20 +1911,27 @@ export async function copySandboxFile({
  * model) and refuses rather than truncates.
  *
  * The cap is the SMALLER of the caller's `maxBytes` (the destination drive's
- * per-file limit) and {@link MAX_BINARY_COPY_BYTES}. The file's size is asked of
- * the sandbox (`stat`) before the read, because the fs API materializes the
- * whole file in host memory and a cap applied afterwards would already have
- * paid for it. The read's own length is checked again, since the file can grow
- * between the two.
+ * per-file limit) and {@link MAX_BINARY_COPY_BYTES}. The file's size is probed
+ * before the read — portably, and a size that cannot be read is an error, never
+ * a skipped check — because the fs API materializes the whole file in host
+ * memory and a cap applied afterwards would already have paid for it. That size
+ * is then offered to `admit` (the caller's process-wide byte budget), which may
+ * refuse it. The read's own length is checked again, since the file can grow.
  */
 export async function readSandboxBinaryFileForCopy({
   path,
   maxBytes,
+  admit,
+  deadlineAt,
   ctx,
   deps,
 }: {
   path: string;
   maxBytes: number;
+  /** Reserve `bytes` before they are read; false refuses the copy. */
+  admit?: (bytes: number) => Promise<boolean>;
+  /** Epoch ms (on `deps.now`) by which the read must have answered. */
+  deadlineAt?: number;
   ctx: SandboxActorContext;
   deps: SandboxRunDeps;
 }): Promise<BinaryReadForCopyResult> {
@@ -1815,6 +1948,7 @@ export async function readSandboxBinaryFileForCopy({
     return fail('path_escape');
   }
   const cap = Math.min(maxBytes, MAX_BINARY_COPY_BYTES);
+  if (remainingMs(deps, deadlineAt) <= 0) return fail('copy_deadline_exceeded');
 
   return withMachineBilling<Extract<BinaryReadForCopyResult, { success: true }>>(ctx, deps, async () => {
     const session = await openSession(ctx, deps);
@@ -1830,32 +1964,56 @@ export async function readSandboxBinaryFileForCopy({
           ...(anomaly ? { anomaly } : {}),
         });
 
-      // `stat -L` follows a symlink to the file it names, which is what the
-      // read below returns; `-c %s` prints the size alone.
       let probe: SandboxRunResult;
       try {
-        probe = await runCopyHelper(session.sandbox, 'stat -L -c %s -- "$1"', [resolved]);
-      } catch {
+        probe = await beforeDeadline(
+          runCopyHelper(
+            session.sandbox,
+            `[ -e "$1" ] || exit ${EXIT_NOT_FOUND}; ${sizeProbe('$1')}`,
+            [resolved],
+            stepTimeoutMs(BINARY_COPY_HELPER_TIMEOUT_MS, deps, deadlineAt),
+          ),
+          deps,
+          deadlineAt,
+        );
+      } catch (error) {
         await audit(null, '', 'nonzero_exit');
-        return fail('execution_failed');
+        return fail(error instanceof CopyDeadlineError ? 'copy_deadline_exceeded' : 'execution_failed');
       }
-      if (probe.exitCode !== 0) {
-        await audit(1, '', 'nonzero_exit');
+      if (probe.exitCode === EXIT_NOT_FOUND) {
+        await audit(probe.exitCode, '', 'nonzero_exit');
         return fail('not_found');
       }
-      const statSize = Number.parseInt(probe.stdout.trim(), 10);
-      // An unparsable answer is not a size: fall through to the post-read check
-      // rather than refuse a file that may be fine.
-      if (Number.isFinite(statSize) && statSize > cap) {
-        await audit(1, ` (${statSize} bytes, over cap)`);
+      const size = probe.exitCode === 0 ? parseProbedSize(probe.stdout) : null;
+      if (size === null) {
+        await audit(probe.exitCode, ' (size unreadable)', 'nonzero_exit');
+        return fail('execution_failed');
+      }
+      if (size > cap) {
+        await audit(1, ` (${size} bytes, over cap)`);
         return fail('content_too_large');
+      }
+      if (admit && !(await admit(size))) {
+        await audit(1, ` (${size} bytes, copy budget exhausted)`);
+        return fail('copy_budget_exhausted');
       }
 
       let buffer: Buffer | null;
       try {
-        buffer = await session.sandbox.readFileToBuffer({ path: resolved, timeoutMs: BINARY_COPY_TIMEOUT_MS });
-      } catch {
+        buffer = await beforeDeadline(
+          session.sandbox.readFileToBuffer({
+            path: resolved,
+            timeoutMs: stepTimeoutMs(BINARY_COPY_TIMEOUT_MS, deps, deadlineAt),
+          }),
+          deps,
+          deadlineAt,
+        );
+      } catch (error) {
         await audit(null, '', 'nonzero_exit');
+        if (error instanceof CopyDeadlineError) return fail('copy_deadline_exceeded');
+        // A local env's daemon refuses a file over its frame ceiling; that is a
+        // size refusal, and the agent must be told so in those words.
+        if (error instanceof LocalEnvGrantDeniedError && error.reason === 'too_large') return fail('content_too_large');
         return fail('execution_failed');
       }
       if (buffer === null) {
