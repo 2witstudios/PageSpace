@@ -3,16 +3,18 @@
  * FILE page's contentHash, preferring higher-quality vision-oriented presets and
  * falling back down to the original upload when no cache entry is usable.
  *
- * The byte fetch is injectable so callers (and tests) can swap the S3/Tigris boundary
- * without mocking the AWS SDK — the default reuses the same client/bucket/key scheme
- * already used for presigned thumbnail URLs (`@/lib/presigned-url`).
+ * The byte fetch is injected. read_page passes the processor-backed fetcher
+ * (`processorCacheFetcherForPage`), which reads through the processor's
+ * `/cache/:hash/:preset` route so encrypted-at-rest bytes come back decrypted
+ * and the file authorization is re-checked there. Reading S3 directly returned
+ * ciphertext whenever FILE_ENCRYPTION_ENABLED was on, and the image silently
+ * failed validation.
  */
-import { GetObjectCommand } from '@aws-sdk/client-s3';
-import { getS3Client, getS3Bucket } from '@/lib/presigned-url';
 import { isAllowedImageType, validateMagicBytes, type AllowedImageType } from '@/lib/validation/image-validation';
 import { MAX_IMAGE_SIZE_BYTES } from '@/lib/ai/shared/utils/image-resize';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isHashBlocked } from '@pagespace/lib/content-safety/blocklist';
+import type { FetchPresetBytes } from '@/lib/ai/tools/processor-file-fetch';
 
 export interface FetchedImagePreset {
   base64: string;
@@ -21,7 +23,7 @@ export interface FetchedImagePreset {
 }
 
 export interface FetchCachedImagePresetDeps {
-  fetchBytes?: (contentHash: string, preset: string) => Promise<Buffer | null>;
+  fetchBytes: FetchPresetBytes;
   /** Whether the hash is on the content blocklist. Injectable like `fetchBytes`. */
   isBlocked?: (contentHash: string) => Promise<boolean>;
 }
@@ -45,21 +47,6 @@ async function isRemoved(contentHash: string, isBlocked: (contentHash: string) =
   }
 }
 
-async function defaultFetchBytes(contentHash: string, preset: string): Promise<Buffer | null> {
-  const key = preset === 'original' ? `files/${contentHash}/original` : `cache/${contentHash}/${preset}`;
-  try {
-    const response = await getS3Client().send(new GetObjectCommand({ Bucket: getS3Bucket(), Key: key }));
-    if (!response.Body) return null;
-    return Buffer.from(await response.Body.transformToByteArray());
-  } catch (err) {
-    const isNotFound = err && typeof err === 'object' && ('$metadata' in err
-      ? (err as { $metadata: { httpStatusCode?: number } }).$metadata.httpStatusCode === 404
-      : (err as { name?: string }).name === 'NoSuchKey');
-    if (isNotFound) return null;
-    throw err;
-  }
-}
-
 /**
  * Preset fallback chain: the processor always re-encodes ai-vision/ai-chat presets as
  * jpeg (see apps/processor/src/types/index.ts IMAGE_PRESETS), regardless of the
@@ -77,9 +64,9 @@ function buildFallbackChain(mimeType: string): Array<{ preset: string; mediaType
 export async function fetchCachedImagePreset(
   contentHash: string,
   mimeType: string,
-  deps: FetchCachedImagePresetDeps = {},
+  deps: FetchCachedImagePresetDeps,
 ): Promise<FetchedImagePreset | null> {
-  const fetchBytes = deps.fetchBytes ?? defaultFetchBytes;
+  const { fetchBytes } = deps;
 
   if (await isRemoved(contentHash, deps.isBlocked ?? isHashBlocked)) return null;
 
@@ -88,7 +75,7 @@ export async function fetchCachedImagePreset(
 
     let bytes: Buffer | null;
     try {
-      bytes = await fetchBytes(contentHash, candidate.preset);
+      bytes = await fetchBytes(contentHash, candidate.preset, { maxBytes: MAX_IMAGE_SIZE_BYTES });
     } catch (err) {
       // A fetch failure (permissions, transient outage, malformed key) degrades to
       // "this candidate isn't usable" rather than failing the whole read_page call —
