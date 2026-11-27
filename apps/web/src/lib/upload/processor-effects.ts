@@ -1,4 +1,8 @@
-import { createUploadServiceToken, createPageServiceToken } from '@pagespace/lib/services/validated-service-token';
+import {
+  createUploadServiceToken,
+  createPageServiceToken,
+  createSystemFileDeleteToken,
+} from '@pagespace/lib/services/validated-service-token';
 import { toContentHash } from '@/lib/presigned-url';
 import { readBytesWithCap } from '@/lib/http/read-body-with-cap';
 import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
@@ -7,6 +11,21 @@ const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
 
 /** Wall-clock bound on moving one original to or from the processor (up to the 250 MB copy cap). */
 const ORIGINAL_TRANSFER_TIMEOUT_MS = 120_000;
+
+/**
+ * A transfer's timeout: its own bound, clipped to the caller's `deadlineAt` (the
+ * whole tool call's budget). Null when the deadline has already passed.
+ */
+function transferTimeoutMs(deadlineAt: number | undefined): number | null {
+  if (deadlineAt === undefined) return ORIGINAL_TRANSFER_TIMEOUT_MS;
+  const left = deadlineAt - Date.now();
+  return left > 0 ? Math.min(ORIGINAL_TRANSFER_TIMEOUT_MS, left) : null;
+}
+
+const isTimeout = (error: unknown): boolean =>
+  error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError');
+
+const TIMED_OUT = 'The transfer did not finish in time and was stopped.';
 
 export async function enqueueProcessorJob(
   actor: AccessActor,
@@ -45,6 +64,7 @@ export async function storeOriginalViaProcessor({
   contentHash,
   buffer,
   originalName,
+  deadlineAt,
 }: {
   actor: AccessActor;
   driveId: string;
@@ -53,7 +73,10 @@ export async function storeOriginalViaProcessor({
   contentHash: string;
   buffer: Buffer;
   originalName: string;
-}): Promise<void> {
+  deadlineAt?: number;
+}): Promise<{ stored: boolean }> {
+  const timeoutMs = transferTimeoutMs(deadlineAt);
+  if (timeoutMs === null) throw new Error(TIMED_OUT);
   const { token } = await createUploadServiceToken({
     actor,
     driveId,
@@ -70,12 +93,36 @@ export async function storeOriginalViaProcessor({
       'X-Original-Name': encodeURIComponent(originalName),
     },
     body: new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength),
-    signal: AbortSignal.timeout(ORIGINAL_TRANSFER_TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
+  }).catch((error: unknown) => {
+    throw isTimeout(error) ? new Error(TIMED_OUT) : error;
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({})) as { error?: string; reason?: string };
     throw new Error(err.reason || err.error || `Processor store failed with status ${res.status}`);
   }
+  // `stored: false` = the bytes were already there under this hash (someone's).
+  const body = await res.json().catch(() => ({})) as { stored?: boolean };
+  return { stored: body.stored === true };
+}
+
+/**
+ * Delete an original that was stored for a FILE page whose rows then failed to
+ * commit, so it is not left in storage with no row to reap or bill it.
+ *
+ * Through the processor's `DELETE /api/files/:hash` with a system file-bound
+ * token — the orphan reaper's own path — which refuses (409) while anything
+ * still references the hash or a takedown holds it. Throws on any refusal, for
+ * the caller to log; it never decides on its own that bytes are unowned.
+ */
+export async function reclaimOrphanedOriginal(contentHash: string): Promise<void> {
+  const { token } = await createSystemFileDeleteToken({ contentHash, expiresIn: '30s' });
+  const res = await fetch(`${PROCESSOR_URL}/api/files/${encodeURIComponent(contentHash)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) throw new Error(`Processor refused to reclaim ${contentHash} (status ${res.status})`);
 }
 
 /**
@@ -93,23 +140,27 @@ export async function fetchOriginalFromProcessor({
   pageId,
   filePath,
   maxBytes,
+  deadlineAt,
 }: {
   actor: AccessActor;
   pageId: string;
   /** The page's `filePath`: the content hash, or a legacy `files/{hash}/original`. */
   filePath: string;
   maxBytes: number;
+  deadlineAt?: number;
 }): Promise<{ success: true; bytes: Uint8Array } | { success: false; error: string }> {
   const contentHash = toContentHash(filePath);
   const tooLarge = (bytes?: number) => ({
     success: false as const,
     error: `The file is ${bytes === undefined ? 'larger than' : `${bytes} bytes, over`} the ${maxBytes}-byte limit for one copy. It was not copied partially.`,
   });
+  const timeoutMs = transferTimeoutMs(deadlineAt);
+  if (timeoutMs === null) return { success: false, error: `${TIMED_OUT} The file was not copied.` };
   try {
     const { token } = await createPageServiceToken(actor, pageId, ['files:read'], '5m');
     const res = await fetch(`${PROCESSOR_URL}/cache/${encodeURIComponent(contentHash)}/original`, {
       headers: { Authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(ORIGINAL_TRANSFER_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (res.status === 410) return { success: false, error: 'This file has been removed, so it cannot be copied.' };
     if (res.status === 403) return { success: false, error: 'Access to this file was denied.' };
@@ -127,6 +178,7 @@ export async function fetchOriginalFromProcessor({
     if (bytes === null) return tooLarge();
     return { success: true, bytes };
   } catch (error) {
+    if (isTimeout(error)) return { success: false, error: `Reading the file did not finish in time and was stopped. The file was not copied.` };
     return {
       success: false,
       error: `Reading the file failed (${error instanceof Error ? error.message : String(error)}).`,

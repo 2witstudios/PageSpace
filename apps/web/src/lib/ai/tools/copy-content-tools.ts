@@ -57,6 +57,16 @@ import type { ToolExecutionContext } from '../core/types';
  */
 export const MAX_COPY_BYTES = 1024 * 1024;
 
+/**
+ * One overall time budget for a copy_content call, split across its steps
+ * (fetch, sandbox write or read, processor store). Mirrors the sandbox runner's
+ * `SANDBOX_MAX_TIMEOUT_MS` — the ceiling `bash` uses, sized so a single tool
+ * call leaves room for the rest of the turn inside the chat route's 300 s — and
+ * is pinned equal to it by a test. Every step is handed the same `deadlineAt`,
+ * so the call always answers with a clean timeout before the route is killed.
+ */
+export const COPY_CONTENT_DEADLINE_MS = 200_000;
+
 /** Longest path this tool will accept, matching the sandbox tools. */
 export const MAX_COPY_PATH_LENGTH = 1024;
 
@@ -102,28 +112,36 @@ export interface CopyContentDeps {
 
   /**
    * The ORIGINAL bytes of an uploaded FILE page, from storage. Called only
-   * after `canViewPage` passed for that page.
+   * after `canViewPage` passed for that page. `release` frees the bytes'
+   * reservation in the server's in-flight copy budget; the tool calls it once
+   * they have been written onward.
+   *
+   * Every binary step below takes the call's one `deadlineAt` (epoch ms).
    */
   fetchFileOriginal: (args: {
     page: CopyPageRecord;
+    deadlineAt: number;
     context: ToolExecutionContext;
-  }) => Promise<{ success: true; bytes: Uint8Array } | DepFailure>;
+  }) => Promise<{ success: true; bytes: Uint8Array; release: () => void } | DepFailure>;
   /** Raw-byte sandbox write (temp file + rename), under the binary cap. */
   writeSandboxBinaryFile: (args: {
     path: string;
     content: Uint8Array;
+    deadlineAt: number;
     context: ToolExecutionContext;
   }) => Promise<{ success: true; bytesWritten: number } | DepFailure>;
-  /** Raw-byte sandbox read, refused above `maxBytes` (and the binary cap). */
+  /** Raw-byte sandbox read, refused above `maxBytes` (and the binary cap); `release` as above. */
   readSandboxBinaryFile: (args: {
     path: string;
     maxBytes: number;
+    deadlineAt: number;
     context: ToolExecutionContext;
-  }) => Promise<{ success: true; content: Uint8Array } | DepFailure>;
+  }) => Promise<{ success: true; content: Uint8Array; release: () => void } | DepFailure>;
   /** One sandbox file to another, inside the sandbox — no bytes through the server. */
   copySandboxFile: (args: {
     fromPath: string;
     toPath: string;
+    deadlineAt: number;
     context: ToolExecutionContext;
   }) => Promise<{ success: true; bytesWritten: number } | DepFailure>;
   /**
@@ -142,6 +160,7 @@ export interface CopyContentDeps {
     title: string;
     path: string;
     content: Uint8Array;
+    deadlineAt: number;
     context: ToolExecutionContext;
   }) => Promise<
     | { success: true; pageId: string; driveId: string; mimeType: string }
@@ -161,6 +180,9 @@ export interface CopyContentDeps {
    * So the check moves here, and applies to the file arms only.
    */
   isSandboxEnabledForContext: (context: ToolExecutionContext) => Promise<boolean>;
+
+  /** The clock the call's deadline is read on. Defaults to `Date.now`. */
+  now?: () => number;
 }
 
 const SIDE_KIND = z.enum(['page', 'file']);
@@ -354,6 +376,8 @@ interface ResolvedSource {
 interface BinarySource {
   binary: Uint8Array;
   label: string;
+  /** Frees the bytes' reservation in the in-flight copy budget. */
+  release: () => void;
 }
 
 type Refusal = { success: false; error: string; message: string; [key: string]: unknown };
@@ -457,6 +481,14 @@ function rejectNonTextPage(page: CopyPageRecord, side: 'source' | 'destination')
 export function createCopyContentTools(deps: CopyContentDeps) {
   const readContext = (options: unknown): ToolExecutionContext | undefined =>
     (options as { experimental_context?: ToolExecutionContext })?.experimental_context;
+  const now = deps.now ?? Date.now;
+
+  /** Refused between steps once the call's one deadline has passed. */
+  const timedOut = (): Refusal =>
+    refuse(
+      'Copy timed out',
+      `The copy did not finish within ${COPY_CONTENT_DEADLINE_MS / 1000} s and was stopped; nothing was written under the destination name. Retry, or copy a smaller file.`
+    );
 
   const sandboxOff = (what: 'reach' | 'write', instead: string): Refusal =>
     refuse(
@@ -476,6 +508,7 @@ export function createCopyContentTools(deps: CopyContentDeps) {
   async function resolveSource(
     from: CopyFrom,
     to: CopyTo,
+    deadlineAt: number,
     context: ToolExecutionContext
   ): Promise<ResolvedSource | BinarySource | Refusal> {
     if (from.kind === 'file') {
@@ -502,9 +535,9 @@ export function createCopyContentTools(deps: CopyContentDeps) {
           { pageId: page.id }
         );
       }
-      const fetched = await deps.fetchFileOriginal({ page, context });
+      const fetched = await deps.fetchFileOriginal({ page, deadlineAt, context });
       if (!fetched.success) return refuse('Could not read the source file', fetched.error, { pageId: page.id });
-      return { binary: fetched.bytes, label: `page:${page.id} (the original file)` };
+      return { binary: fetched.bytes, label: `page:${page.id} (the original file)`, release: fetched.release };
     }
 
     const rejected = rejectNonTextPage(page, 'source');
@@ -763,10 +796,15 @@ export function createCopyContentTools(deps: CopyContentDeps) {
   }
 
   /** A sandbox file to another sandbox file: one copy inside the sandbox. */
-  async function copyWithinSandbox(from: CopyFrom, to: CopyTo, context: ToolExecutionContext): Promise<CopyResult> {
+  async function copyWithinSandbox(
+    from: CopyFrom,
+    to: CopyTo,
+    deadlineAt: number,
+    context: ToolExecutionContext
+  ): Promise<CopyResult> {
     if (!(await deps.isSandboxEnabledForContext(context))) return sandboxOff('reach', 'copy between pages instead');
     const label = `file:${from.path}`;
-    const copied = await deps.copySandboxFile({ fromPath: from.path as string, toPath: to.path as string, context });
+    const copied = await deps.copySandboxFile({ fromPath: from.path as string, toPath: to.path as string, deadlineAt, context });
     if (!copied.success) {
       return copied.reason === 'empty_source' ? emptySource(label) : refuse('Could not copy the file', copied.error);
     }
@@ -782,9 +820,11 @@ export function createCopyContentTools(deps: CopyContentDeps) {
   async function writeBinaryToFile(
     to: CopyTo,
     source: BinarySource,
+    deadlineAt: number,
     context: ToolExecutionContext
   ): Promise<CopyResult> {
-    const written = await deps.writeSandboxBinaryFile({ path: to.path as string, content: source.binary, context });
+    if (now() >= deadlineAt) return timedOut();
+    const written = await deps.writeSandboxBinaryFile({ path: to.path as string, content: source.binary, deadlineAt, context });
     if (!written.success) return refuse('Could not write the destination file', written.error);
     return {
       success: true,
@@ -799,6 +839,7 @@ export function createCopyContentTools(deps: CopyContentDeps) {
   async function fileIntoDrive(
     from: CopyFrom,
     to: CopyTo,
+    deadlineAt: number,
     context: ToolExecutionContext
   ): Promise<CopyResult> {
     if (!(await deps.isSandboxEnabledForContext(context))) return sandboxOff('reach', 'copy between pages instead');
@@ -820,7 +861,7 @@ export function createCopyContentTools(deps: CopyContentDeps) {
     }
 
     const path = from.path as string;
-    const read = await deps.readSandboxBinaryFile({ path, maxBytes, context });
+    const read = await deps.readSandboxBinaryFile({ path, maxBytes, deadlineAt, context });
     if (!read.success) {
       return refuse(
         'Could not read the source file',
@@ -830,10 +871,25 @@ export function createCopyContentTools(deps: CopyContentDeps) {
         read.reason === 'content_too_large' ? { limit: maxBytes } : {}
       );
     }
-    if (read.content.byteLength === 0) return emptySource(`file:${path}`);
+    // The bytes are held from here until they are stored: free their budget either way.
+    try {
+      if (read.content.byteLength === 0) return emptySource(`file:${path}`);
+      if (now() >= deadlineAt) return timedOut();
+      return await fileReadBytes(parent, to.title as string, path, read.content, deadlineAt, context);
+    } finally {
+      read.release();
+    }
+  }
 
-    const title = to.title as string;
-    const created = await deps.createFilePage({ parent, title, path, content: read.content, context });
+  async function fileReadBytes(
+    parent: CopyPageRecord,
+    title: string,
+    path: string,
+    content: Uint8Array,
+    deadlineAt: number,
+    context: ToolExecutionContext
+  ): Promise<CopyResult> {
+    const created = await deps.createFilePage({ parent, title, path, content, deadlineAt, context });
     if (!created.success) return refuse(created.error, created.message);
     return {
       success: true,
@@ -845,9 +901,9 @@ export function createCopyContentTools(deps: CopyContentDeps) {
       title,
       mimeType: created.mimeType,
       sourceLabel: `file:${path}`,
-      bytesCopied: read.content.byteLength,
+      bytesCopied: content.byteLength,
       message:
-        `Filed ${path} into the drive as the FILE page "${title}" (${read.content.byteLength} bytes, byte-for-byte). ` +
+        `Filed ${path} into the drive as the FILE page "${title}" (${content.byteLength} bytes, byte-for-byte). ` +
         'It is now being processed (verification, preview, text extraction); read_page shows it once that finishes.',
     };
   }
@@ -882,17 +938,25 @@ export function createCopyContentTools(deps: CopyContentDeps) {
           );
         }
 
+        // One deadline for the whole call, handed to every step.
+        const deadlineAt = now() + COPY_CONTENT_DEADLINE_MS;
+
         // Real files: raw bytes, never decoded, never line-edited.
-        if (to.kind === 'new_file_page') return fileIntoDrive(from, to, context);
-        if (from.kind === 'file' && to.kind === 'file') return copyWithinSandbox(from, to, context);
+        if (to.kind === 'new_file_page') return fileIntoDrive(from, to, deadlineAt, context);
+        if (from.kind === 'file' && to.kind === 'file') return copyWithinSandbox(from, to, deadlineAt, context);
 
         // Source first, destination second, write last. Nothing is written
         // until BOTH sides have been authorized.
-        const source = await resolveSource(from, to, context);
+        const source = await resolveSource(from, to, deadlineAt, context);
         if ('success' in source) return source;
         if ('binary' in source) {
-          if (source.binary.byteLength === 0) return emptySource(source.label);
-          return writeBinaryToFile(to, source, context);
+          // Held from the fetch until written onward: free their budget either way.
+          try {
+            if (source.binary.byteLength === 0) return emptySource(source.label);
+            return await writeBinaryToFile(to, source, deadlineAt, context);
+          } finally {
+            source.release();
+          }
         }
 
         // Named for the field it is reported as, and so it does not read as a

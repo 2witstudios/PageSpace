@@ -340,7 +340,7 @@ describe('createFilePage — the generalized shell, sandbox-copy flavour', () =>
     const order: string[] = [];
     return {
       order,
-      storeOriginal: vi.fn(async (_args: { contentHash: string; pageId: string; driveId: string; parentId: string | null }) => { order.push('store'); }),
+      storeOriginal: vi.fn(async (_args: { contentHash: string; pageId: string; driveId: string; parentId: string | null }) => { order.push('store'); return { stored: true }; }),
       putObject: vi.fn(async () => { order.push('put'); }),
       getNextPosition: vi.fn(async () => 2),
       persist: vi.fn(async (_w: FilePageWrite) => { order.push('persist'); return { fileWasInserted: true }; }),
@@ -415,5 +415,99 @@ describe('createFilePage — the generalized shell, sandbox-copy flavour', () =>
     const d = { ...deps(), afterCommit: vi.fn(async () => { throw new Error('enqueue failed'); }) };
     const out = await createFilePage(input, d);
     expect(out.driveId).toBe('driveX');
+  });
+});
+
+describe('createFilePage — review #3016 #5: bytes stored before a failed commit are reclaimed', () => {
+  const input = {
+    userId: 'u1',
+    buffer: buf,
+    mimeType: 'application/pdf',
+    title: 'out.pdf',
+    source: 'sandbox-copy' as const,
+    targetDriveId: 'driveX',
+    targetParentId: 'folderY',
+  };
+  const base = () => ({
+    checkQuota: async () => ({ allowed: true }),
+    getNextPosition: async () => 0,
+    chargeStorage: vi.fn(async () => {}),
+    reclaimOriginal: vi.fn(async (_hash: string) => {}),
+    fileRowExists: vi.fn(async (_hash: string) => false),
+  });
+
+  it('given the row insert fails after the processor stored NEW bytes and no files row exists, should reclaim them and rethrow', async () => {
+    const d = {
+      ...base(),
+      storeOriginal: async () => ({ stored: true }),
+      persist: async () => { throw new Error('insert failed'); },
+    };
+    await expect(createFilePage(input, d)).rejects.toThrow('insert failed');
+    expect(d.fileRowExists).toHaveBeenCalledWith(HASH);
+    expect(d.reclaimOriginal).toHaveBeenCalledWith(HASH);
+    expect(d.chargeStorage).not.toHaveBeenCalled();
+  });
+
+  it('given a files row for the hash exists (someone else holds these bytes), should NOT reclaim', async () => {
+    const d = {
+      ...base(),
+      fileRowExists: vi.fn(async () => true),
+      storeOriginal: async () => ({ stored: true }),
+      persist: async () => { throw new Error('insert failed'); },
+    };
+    await expect(createFilePage(input, d)).rejects.toThrow('insert failed');
+    expect(d.reclaimOriginal).not.toHaveBeenCalled();
+  });
+
+  it('given the bytes were already stored before this call (stored:false), should NOT reclaim', async () => {
+    const d = {
+      ...base(),
+      storeOriginal: async () => ({ stored: false }),
+      persist: async () => { throw new Error('insert failed'); },
+    };
+    await expect(createFilePage(input, d)).rejects.toThrow('insert failed');
+    expect(d.reclaimOriginal).not.toHaveBeenCalled();
+  });
+
+  it('given the position lookup fails after the store, should reclaim too', async () => {
+    const d = {
+      ...base(),
+      storeOriginal: async () => ({ stored: true }),
+      getNextPosition: async () => { throw new Error('db down'); },
+      persist: vi.fn(async () => ({ fileWasInserted: true })),
+    };
+    await expect(createFilePage(input, d)).rejects.toThrow('db down');
+    expect(d.reclaimOriginal).toHaveBeenCalledWith(HASH);
+  });
+
+  it('given the reclaim itself fails, should still surface the ORIGINAL error', async () => {
+    const d = {
+      ...base(),
+      reclaimOriginal: vi.fn(async () => { throw new Error('processor down'); }),
+      storeOriginal: async () => ({ stored: true }),
+      persist: async () => { throw new Error('insert failed'); },
+    };
+    await expect(createFilePage(input, d)).rejects.toThrow('insert failed');
+  });
+
+  it('on success, reclaims nothing', async () => {
+    const d = {
+      ...base(),
+      storeOriginal: async () => ({ stored: true }),
+      persist: async () => ({ fileWasInserted: true }),
+    };
+    await createFilePage(input, d);
+    expect(d.reclaimOriginal).not.toHaveBeenCalled();
+  });
+
+  it('hands the caller deadline to the store', async () => {
+    const seen: Array<number | undefined> = [];
+    const d = {
+      ...base(),
+      storeOriginal: async (a: { deadlineAt?: number }) => { seen.push(a.deadlineAt); return { stored: true }; },
+      persist: async () => ({ fileWasInserted: true }),
+    };
+    await createFilePage({ ...input, deadlineAt: 123 }, d);
+    expect(seen).toEqual([123]);
   });
 });

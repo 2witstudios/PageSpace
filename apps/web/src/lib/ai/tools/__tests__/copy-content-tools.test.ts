@@ -6,11 +6,13 @@ import {
   createCopyContentTools,
   copyContentInputSchema,
   MAX_COPY_BYTES,
+  COPY_CONTENT_DEADLINE_MS,
   type CopyContentDeps,
   type CopyPageRecord,
 } from '../copy-content-tools';
 import { toModelOutputForCopyContent } from '../copy-content-model-output';
 import { MAX_WRITE_BYTES } from '@pagespace/lib/services/sandbox/tool-runners';
+import { SANDBOX_MAX_TIMEOUT_MS } from '@pagespace/lib/services/sandbox/execution-policy';
 
 const CONTEXT = { userId: 'u1', chatSource: { type: 'page', agentPageId: 'agent-1' } };
 
@@ -68,7 +70,7 @@ function harness(
     },
     fetchFileOriginal: async ({ page: p }) => {
       originalFetches.push(p.id);
-      return { success: true, bytes: ORIGINAL_BYTES };
+      return { success: true, bytes: ORIGINAL_BYTES, release: () => {} };
     },
     writeSandboxBinaryFile: async ({ path, content }) => {
       binaryWrites.push({ path, content });
@@ -76,7 +78,7 @@ function harness(
     },
     readSandboxBinaryFile: async ({ path, maxBytes }) => {
       binaryReads.push({ path, maxBytes });
-      return { success: true, content: over.binaryFile ?? ORIGINAL_BYTES };
+      return { success: true, content: over.binaryFile ?? ORIGINAL_BYTES, release: () => {} };
     },
     copySandboxFile: async ({ fromPath, toPath }) => {
       sandboxCopies.push({ fromPath, toPath });
@@ -969,7 +971,7 @@ describe('copy_content — real files (FILE pages <-> sandbox)', () => {
     const big = new Uint8Array(MAX_COPY_BYTES * 3);
     const h = harness({
       pages: [scannedPdf()],
-      fetchFileOriginal: async () => ({ success: true, bytes: big }),
+      fetchFileOriginal: async () => ({ success: true, bytes: big, release: () => {} }),
     });
     const result = await run(h.deps, { from: { kind: 'page', pageId: 'scan' }, to: { kind: 'file', path: 'x.pdf' } });
     expect(result.success).toBe(true);
@@ -1181,5 +1183,113 @@ describe('copy_content — the description says it copies the real file', () => 
     const description = (tools.copy_content as { description?: string }).description ?? '';
     expect(description).toMatch(/real file|original file/i);
     expect(description).toContain('new_file_page');
+  });
+});
+
+describe('copy_content — review #3016: byte budget and one deadline', () => {
+  const NOW = 1_800_000_000_000;
+  const folder = () => page({ id: 'folder1', title: 'Exhibits', type: 'FOLDER', content: '{"children":[]}', driveId: 'drive9' });
+
+  it('the per-call deadline is the sandbox tool ceiling (well inside the route maxDuration of 300 s)', () => {
+    expect(COPY_CONTENT_DEADLINE_MS).toBe(SANDBOX_MAX_TIMEOUT_MS);
+    expect(COPY_CONTENT_DEADLINE_MS).toBeLessThan(300_000);
+  });
+
+  it('hands every step of a FILE page -> sandbox copy the SAME deadline', async () => {
+    const seen: number[] = [];
+    const h = harness({
+      pages: [scannedPdf()],
+      now: () => NOW,
+      fetchFileOriginal: async ({ deadlineAt }) => {
+        seen.push(deadlineAt);
+        return { success: true, bytes: ORIGINAL_BYTES, release: () => {} };
+      },
+      writeSandboxBinaryFile: async ({ deadlineAt, content }) => {
+        seen.push(deadlineAt);
+        return { success: true, bytesWritten: content.byteLength };
+      },
+    });
+    await run(h.deps, { from: { kind: 'page', pageId: 'scan' }, to: { kind: 'file', path: 'x.pdf' } });
+    expect(seen).toEqual([NOW + COPY_CONTENT_DEADLINE_MS, NOW + COPY_CONTENT_DEADLINE_MS]);
+  });
+
+  it('hands every step of a filing the same deadline, including the processor store', async () => {
+    const seen: number[] = [];
+    const h = harness({
+      pages: [folder()],
+      now: () => NOW,
+      readSandboxBinaryFile: async ({ deadlineAt }) => {
+        seen.push(deadlineAt);
+        return { success: true, content: ORIGINAL_BYTES, release: () => {} };
+      },
+      createFilePage: async ({ deadlineAt, parent }) => {
+        seen.push(deadlineAt);
+        return { success: true, pageId: 'p', driveId: parent.driveId, mimeType: 'image/png' };
+      },
+    });
+    await run(h.deps, { from: { kind: 'file', path: 'a.png' }, to: { kind: 'new_file_page', parentId: 'folder1', title: 'a.png' } });
+    expect(seen).toEqual([NOW + COPY_CONTENT_DEADLINE_MS, NOW + COPY_CONTENT_DEADLINE_MS]);
+  });
+
+  it('given the deadline passes during the fetch, should stop with a clean timeout before writing — and free the reserved bytes', async () => {
+    let clock = NOW;
+    let released = 0;
+    const h = harness({
+      pages: [scannedPdf()],
+      now: () => clock,
+      fetchFileOriginal: async () => {
+        clock += COPY_CONTENT_DEADLINE_MS + 1;
+        return { success: true, bytes: ORIGINAL_BYTES, release: () => { released += 1; } };
+      },
+    });
+    const result = await run(h.deps, { from: { kind: 'page', pageId: 'scan' }, to: { kind: 'file', path: 'x.pdf' } });
+    expect(result).toMatchObject({ success: false, error: 'Copy timed out' });
+    expect(h.binaryWrites).toHaveLength(0);
+    expect(released).toBe(1);
+  });
+
+  it('frees the reserved bytes once the sandbox write is done — on success and on failure', async () => {
+    for (const ok of [true, false]) {
+      let released = 0;
+      const h = harness({
+        pages: [scannedPdf()],
+        fetchFileOriginal: async () => ({ success: true, bytes: ORIGINAL_BYTES, release: () => { released += 1; } }),
+        writeSandboxBinaryFile: async ({ content }) =>
+          ok ? { success: true, bytesWritten: content.byteLength } : { success: false, error: 'write failed' },
+      });
+      await run(h.deps, { from: { kind: 'page', pageId: 'scan' }, to: { kind: 'file', path: 'x.pdf' } });
+      expect(released, `ok=${ok}`).toBe(1);
+    }
+  });
+
+  it('frees the reserved bytes once a filing is done — on success and on failure', async () => {
+    for (const ok of [true, false]) {
+      let released = 0;
+      const h = harness({
+        pages: [folder()],
+        readSandboxBinaryFile: async () => ({ success: true, content: ORIGINAL_BYTES, release: () => { released += 1; } }),
+        createFilePage: async ({ parent }) =>
+          ok
+            ? { success: true, pageId: 'p', driveId: parent.driveId, mimeType: 'image/png' }
+            : { success: false, error: 'Storage limit reached', message: 'no room' },
+      });
+      await run(h.deps, { from: { kind: 'file', path: 'a.png' }, to: { kind: 'new_file_page', parentId: 'folder1', title: 'a.png' } });
+      expect(released, `ok=${ok}`).toBe(1);
+    }
+  });
+
+  it('given the byte budget is exhausted, should tell the agent to retry and copy nothing', async () => {
+    const h = harness({
+      pages: [scannedPdf()],
+      fetchFileOriginal: async () => ({
+        success: false,
+        error: 'The server is already moving as many large files as it safely can, so nothing was copied. Wait a moment and retry.',
+        reason: 'copy_budget_exhausted',
+      }),
+    });
+    const result = await run(h.deps, { from: { kind: 'page', pageId: 'scan' }, to: { kind: 'file', path: 'x.pdf' } });
+    expect(result.success).toBe(false);
+    expect(String(result.message)).toMatch(/retry/i);
+    expect(h.binaryWrites).toHaveLength(0);
   });
 });

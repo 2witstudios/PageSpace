@@ -16,6 +16,7 @@ function effects(over: Partial<FileIntoDriveEffects> = {}) {
     stored: [] as unknown[],
     enqueued: [] as Array<[AccessActor, string, string]>,
     broadcasts: [] as unknown[],
+    reclaimed: [] as string[],
   };
   const e: FileIntoDriveEffects = {
     createFilePage: async (input, deps) => {
@@ -29,12 +30,17 @@ function effects(over: Partial<FileIntoDriveEffects> = {}) {
         pageId: 'newpage',
         driveId: input.targetDriveId as string,
         parentId: input.targetParentId ?? null,
+        deadlineAt: input.deadlineAt,
       });
       await deps?.afterCommit?.({ pageId: 'newpage', driveId: input.targetDriveId as string });
       return { pageId: 'newpage', driveId: input.targetDriveId as string, parentId: input.targetParentId ?? null, contentHash: 'h'.repeat(64) };
     },
     storeOriginal: async (args) => {
       calls.stored.push(args);
+      return { stored: true };
+    },
+    reclaimOriginal: async (hash) => {
+      calls.reclaimed.push(hash);
     },
     enqueueProcessorJob: async (actor, driveId, pageId) => {
       calls.enqueued.push([actor, driveId, pageId]);
@@ -49,9 +55,16 @@ function effects(over: Partial<FileIntoDriveEffects> = {}) {
   return { e, calls };
 }
 
-const run = (e: FileIntoDriveEffects, over: { title?: string; path?: string } = {}) =>
+const run = (e: FileIntoDriveEffects, over: { title?: string; path?: string; deadlineAt?: number } = {}) =>
   fileSandboxBytesIntoDrive(
-    { actor: ACTOR, parent: PARENT, title: over.title ?? 'Exhibit A.png', path: over.path ?? 'out/a.png', content: BYTES },
+    {
+      actor: ACTOR,
+      parent: PARENT,
+      title: over.title ?? 'Exhibit A.png',
+      path: over.path ?? 'out/a.png',
+      content: BYTES,
+      deadlineAt: over.deadlineAt ?? 9_999_999_999_999,
+    },
     e,
   );
 
@@ -136,5 +149,22 @@ describe('fileSandboxBytesIntoDrive', () => {
     });
     const result = await run(e);
     expect(result).toMatchObject({ success: false, error: 'Could not file the page' });
+  });
+});
+
+describe('fileSandboxBytesIntoDrive — review #3016', () => {
+  it('hands the call deadline to the processor store', async () => {
+    const { e, calls } = effects();
+    await run(e, { deadlineAt: 42 });
+    expect(calls.created[0][0]).toMatchObject({ deadlineAt: 42 });
+    expect(calls.stored[0]).toMatchObject({ deadlineAt: 42 });
+  });
+
+  it('wires the processor reclaim into the filing, so bytes stored before a failed commit are deleted', async () => {
+    const { e, calls } = effects();
+    await run(e);
+    const [, deps] = calls.created[0];
+    await deps?.reclaimOriginal?.('h'.repeat(64));
+    expect(calls.reclaimed).toEqual(['h'.repeat(64)]);
   });
 });

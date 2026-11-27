@@ -30,12 +30,14 @@ import {
   mimeTypeForFileName,
   FileStorageQuotaError,
 } from '@/lib/upload/create-file-page';
-import { storeOriginalViaProcessor, enqueueProcessorJob } from '@/lib/upload/processor-effects';
+import { storeOriginalViaProcessor, enqueueProcessorJob, reclaimOrphanedOriginal } from '@/lib/upload/processor-effects';
 import type { CopyPageRecord } from './copy-content-tools';
 
 export interface FileIntoDriveEffects {
   createFilePage: typeof createFilePage;
   storeOriginal: typeof storeOriginalViaProcessor;
+  /** Deletes bytes this filing stored when its rows then failed to commit. */
+  reclaimOriginal: typeof reclaimOrphanedOriginal;
   enqueueProcessorJob: typeof enqueueProcessorJob;
   broadcast: (payload: {
     driveId: string;
@@ -75,12 +77,15 @@ export async function fileSandboxBytesIntoDrive(
     title,
     path,
     content,
+    deadlineAt,
   }: {
     actor: AccessActor;
     parent: CopyPageRecord;
     title: string;
     path: string;
     content: Uint8Array;
+    /** The copy_content call's one deadline (epoch ms). */
+    deadlineAt: number;
   },
   effects: FileIntoDriveEffects,
 ): Promise<FileIntoDriveResult> {
@@ -104,10 +109,22 @@ export async function fileSandboxBytesIntoDrive(
         source: 'sandbox-copy',
         targetDriveId: parent.driveId,
         targetParentId: parent.id,
+        deadlineAt,
       },
       {
-        storeOriginal: ({ contentHash, buffer: bytes, title: name, pageId, driveId, parentId }) =>
-          effects.storeOriginal({ actor, driveId, parentId, pageId, contentHash, buffer: bytes, originalName: name }),
+        storeOriginal: ({ contentHash, buffer: bytes, title: name, pageId, driveId, parentId, deadlineAt: until }) =>
+          effects.storeOriginal({ actor, driveId, parentId, pageId, contentHash, buffer: bytes, originalName: name, deadlineAt: until }),
+        reclaimOriginal: async (contentHash) => {
+          try {
+            await effects.reclaimOriginal(contentHash);
+          } catch (error) {
+            // Left for the operator: bytes with no row are neither reaped nor billed.
+            effects.logError('copy_content: could not reclaim an original after a failed filing', error instanceof Error ? error : new Error(String(error)), {
+              userId: actor.userId,
+              contentHash,
+            });
+          }
+        },
         afterCommit: async ({ pageId, driveId }) => {
           try {
             await effects.enqueueProcessorJob(actor, driveId, pageId);

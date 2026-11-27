@@ -2,12 +2,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const mockCreateUploadServiceToken = vi.fn();
 const mockCreatePageServiceToken = vi.fn();
+const mockCreateSystemFileDeleteToken = vi.fn();
 vi.mock('@pagespace/lib/services/validated-service-token', () => ({
   createUploadServiceToken: (...args: unknown[]) => mockCreateUploadServiceToken(...args),
   createPageServiceToken: (...args: unknown[]) => mockCreatePageServiceToken(...args),
+  createSystemFileDeleteToken: (...args: unknown[]) => mockCreateSystemFileDeleteToken(...args),
 }));
 
-import { storeOriginalViaProcessor, fetchOriginalFromProcessor } from '../processor-effects';
+import { storeOriginalViaProcessor, fetchOriginalFromProcessor, reclaimOrphanedOriginal } from '../processor-effects';
 import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 const ACTOR = { userId: 'u1' } as unknown as AccessActor;
@@ -132,5 +134,72 @@ describe('fetchOriginalFromProcessor', () => {
     fetchMock.mockRejectedValue(new Error('connect ECONNREFUSED'));
     const result = await call();
     expect(result).toMatchObject({ success: false });
+  });
+});
+
+describe('review #3016: stored flag, deadline, reclaim', () => {
+  const fetchMock = vi.fn();
+  beforeEach(() => {
+    mockCreateUploadServiceToken.mockReset();
+    mockCreateUploadServiceToken.mockResolvedValue({ token: 'tok' });
+    mockCreatePageServiceToken.mockReset();
+    mockCreatePageServiceToken.mockResolvedValue({ token: 'read-tok' });
+    mockCreateSystemFileDeleteToken.mockReset();
+    mockCreateSystemFileDeleteToken.mockResolvedValue({ token: 'del-tok' });
+    fetchMock.mockReset();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const store = (deadlineAt?: number) =>
+    storeOriginalViaProcessor({
+      actor: ACTOR,
+      driveId: 'd1',
+      parentId: 'folder1',
+      pageId: 'newpage',
+      contentHash: HASH,
+      buffer: BYTES,
+      originalName: 'a.pdf',
+      deadlineAt,
+    });
+
+  it('reports whether the processor wrote NEW bytes', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, stored: true }), { status: 200 }));
+    expect(await store()).toEqual({ stored: true });
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, stored: false }), { status: 200 }));
+    expect(await store()).toEqual({ stored: false });
+  });
+
+  it('given a deadline already past, should refuse without sending the bytes', async () => {
+    await expect(store(Date.now() - 1)).rejects.toThrow(/time/i);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('given a deadline already past, a fetch refuses without asking the processor', async () => {
+    const result = await fetchOriginalFromProcessor({ actor: ACTOR, pageId: 'scan', filePath: HASH, maxBytes: 1024, deadlineAt: Date.now() - 1 });
+    expect(result).toMatchObject({ success: false });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('a timed-out fetch says it timed out', async () => {
+    fetchMock.mockRejectedValue(Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' }));
+    const result = await fetchOriginalFromProcessor({ actor: ACTOR, pageId: 'scan', filePath: HASH, maxBytes: 1024, deadlineAt: Date.now() + 1_000 });
+    expect(result).toMatchObject({ success: false });
+    expect(String((result as { error: string }).error)).toMatch(/did not finish in time/);
+  });
+
+  it('reclaims an orphaned original through the processor delete, with a system file-bound token', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ success: true }), { status: 200 }));
+    await reclaimOrphanedOriginal(HASH);
+    expect(mockCreateSystemFileDeleteToken).toHaveBeenCalledWith({ contentHash: HASH, expiresIn: '30s' });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Record<string, string> }];
+    expect(url).toMatch(new RegExp(`/api/files/${HASH}$`));
+    expect(init.method).toBe('DELETE');
+    expect(init.headers).toMatchObject({ Authorization: 'Bearer del-tok' });
+  });
+
+  it('a reclaim the processor refuses (still referenced, held) throws, for the caller to log', async () => {
+    fetchMock.mockResolvedValue(new Response('{}', { status: 409 }));
+    await expect(reclaimOrphanedOriginal(HASH)).rejects.toThrow(/409/);
   });
 });

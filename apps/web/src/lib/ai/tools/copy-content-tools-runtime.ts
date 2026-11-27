@@ -36,8 +36,10 @@ import { createFilePage } from '@/lib/upload/create-file-page';
 import {
   enqueueProcessorJob,
   fetchOriginalFromProcessor,
+  reclaimOrphanedOriginal,
   storeOriginalViaProcessor,
 } from '@/lib/upload/processor-effects';
+import { copyByteBudget } from './copy-byte-budget';
 import { fileSandboxBytesIntoDrive, type FileIntoDriveEffects } from './copy-content-file-page';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -117,6 +119,7 @@ async function isSandboxEnabledForContext(context: ToolExecutionContext): Promis
 const fileIntoDriveEffects: FileIntoDriveEffects = {
   createFilePage,
   storeOriginal: storeOriginalViaProcessor,
+  reclaimOriginal: reclaimOrphanedOriginal,
   enqueueProcessorJob,
   broadcast: async ({ driveId, pageId, operation, parentId, title, type }) => {
     await broadcastPageEvent(createPageEventPayload(driveId, pageId, operation, { parentId, title, type }));
@@ -181,7 +184,7 @@ const productionDeps: CopyContentDeps = {
       : { success: false, error: result.error ?? DENIAL_MESSAGES[result.reason] };
   },
 
-  fetchFileOriginal: async ({ page, context }) => {
+  fetchFileOriginal: async ({ page, deadlineAt, context }) => {
     if (!page.filePath) return { success: false, error: 'This upload has no stored file.' };
     // Refused before any byte moves when the row already says it is too big.
     if (typeof page.fileSize === 'number' && page.fileSize > MAX_BINARY_COPY_BYTES) {
@@ -190,41 +193,79 @@ const productionDeps: CopyContentDeps = {
         error: `"${page.title}" is ${page.fileSize} bytes, over the ${MAX_BINARY_COPY_BYTES}-byte limit for copying a file into the sandbox.`,
       };
     }
-    return fetchOriginalFromProcessor({
+    // Reserve the bytes in the process-wide budget BEFORE they arrive. A row
+    // without a size reserves the most one copy can hold.
+    const release = await copyByteBudget.acquire(
+      typeof page.fileSize === 'number' && page.fileSize > 0 ? page.fileSize : MAX_BINARY_COPY_BYTES
+    );
+    if (!release) {
+      return { success: false, error: DENIAL_MESSAGES.copy_budget_exhausted, reason: 'copy_budget_exhausted' };
+    }
+    const fetched = await fetchOriginalFromProcessor({
       actor: toolActor(context),
       pageId: page.id,
       filePath: page.filePath,
       maxBytes: MAX_BINARY_COPY_BYTES,
+      deadlineAt,
     });
+    if (!fetched.success) {
+      release();
+      return fetched;
+    }
+    return { success: true, bytes: fetched.bytes, release };
   },
 
-  writeSandboxBinaryFile: async ({ path, content, context }) => {
+  writeSandboxBinaryFile: async ({ path, content, deadlineAt, context }) => {
     const opened = await openSandbox(context);
     if (!opened.ok) return { success: false, error: opened.error };
-    const result = await writeSandboxBinaryFile({ path, content, ctx: opened.ctx, deps: buildRealSandboxRunDeps({ actor: opened.actor }) });
+    const result = await writeSandboxBinaryFile({
+      path,
+      content,
+      deadlineAt,
+      ctx: opened.ctx,
+      deps: buildRealSandboxRunDeps({ actor: opened.actor }),
+    });
     return result.success
       ? { success: true, bytesWritten: result.bytesWritten }
       : { success: false, error: result.error ?? DENIAL_MESSAGES[result.reason], reason: result.reason };
   },
 
-  readSandboxBinaryFile: async ({ path, maxBytes, context }) => {
+  readSandboxBinaryFile: async ({ path, maxBytes, deadlineAt, context }) => {
     const opened = await openSandbox(context);
     if (!opened.ok) return { success: false, error: opened.error };
+    // The runner probes the file's size and offers it here BEFORE reading, so the
+    // bytes are reserved in the process-wide budget before they arrive.
+    const reservation: { release: (() => void) | null } = { release: null };
     const result = await readSandboxBinaryFileForCopy({
       path,
       maxBytes,
+      deadlineAt,
+      admit: async (bytes) => {
+        reservation.release = await copyByteBudget.acquire(bytes);
+        return reservation.release !== null;
+      },
       ctx: opened.ctx,
       deps: buildRealSandboxRunDeps({ actor: opened.actor }),
     });
-    return result.success
-      ? { success: true, content: result.content }
-      : { success: false, error: result.error ?? DENIAL_MESSAGES[result.reason], reason: result.reason };
+    const reserved = reservation.release;
+    if (!result.success) {
+      reserved?.();
+      return { success: false, error: result.error ?? DENIAL_MESSAGES[result.reason], reason: result.reason };
+    }
+    return { success: true, content: result.content, release: reserved ?? (() => {}) };
   },
 
-  copySandboxFile: async ({ fromPath, toPath, context }) => {
+  // Inside the sandbox: nothing reaches this server, so nothing is reserved.
+  copySandboxFile: async ({ fromPath, toPath, deadlineAt, context }) => {
     const opened = await openSandbox(context);
     if (!opened.ok) return { success: false, error: opened.error };
-    const result = await copySandboxFile({ fromPath, toPath, ctx: opened.ctx, deps: buildRealSandboxRunDeps({ actor: opened.actor }) });
+    const result = await copySandboxFile({
+      fromPath,
+      toPath,
+      deadlineAt,
+      ctx: opened.ctx,
+      deps: buildRealSandboxRunDeps({ actor: opened.actor }),
+    });
     return result.success
       ? { success: true, bytesWritten: result.bytesWritten }
       : { success: false, error: result.error ?? DENIAL_MESSAGES[result.reason], reason: result.reason };
@@ -237,8 +278,8 @@ const productionDeps: CopyContentDeps = {
     return target ? STORAGE_TIERS[target.quota.tier].maxFileSize : null;
   },
 
-  createFilePage: ({ parent, title, path, content, context }) =>
-    fileSandboxBytesIntoDrive({ actor: toolActor(context), parent, title, path, content }, fileIntoDriveEffects),
+  createFilePage: ({ parent, title, path, content, deadlineAt, context }) =>
+    fileSandboxBytesIntoDrive({ actor: toolActor(context), parent, title, path, content, deadlineAt }, fileIntoDriveEffects),
 
   isSandboxEnabledForContext,
 };

@@ -67,6 +67,8 @@ export interface CreateImageFilePageInput {
    */
   targetDriveId?: string;
   targetParentId?: string;
+  /** Epoch ms by which the original must be stored; handed to `storeOriginal`. */
+  deadlineAt?: number;
 }
 
 export interface FilePageWrite {
@@ -83,6 +85,7 @@ export interface CreateImageFilePageDeps {
    * Stores the original. Called BEFORE any row is written, with the id the page row
    * will carry so a page-bound service token can be minted for it. Defaults to a
    * bare S3 put of the plaintext bytes; `copy_content` stores through the processor.
+   * `stored` says whether THIS call wrote new bytes (false: they were already there).
    */
   storeOriginal?: (args: {
     contentHash: string;
@@ -92,7 +95,17 @@ export interface CreateImageFilePageDeps {
     pageId: string;
     driveId: string;
     parentId: string | null;
-  }) => Promise<void>;
+    deadlineAt?: number;
+  }) => Promise<{ stored: boolean }>;
+  /**
+   * Deletes an original this call stored when its rows then failed to commit.
+   * Without it those bytes would sit in storage with no `files` row, which is
+   * what the orphan reaper and the storage charge both key on — never reclaimed,
+   * never billed. Optional: a caller that cannot delete leaves them as before.
+   */
+  reclaimOriginal?: (contentHash: string) => Promise<void>;
+  /** Whether any `files` row already names `contentHash` (then the bytes are someone's). */
+  fileRowExists?: (contentHash: string) => Promise<boolean>;
   /**
    * Runs once the rows are committed (e.g. enqueue the processor job). Best-effort,
    * like the upload route's post-commit block: a failure is logged by the caller's
@@ -316,6 +329,11 @@ async function defaultResolveGalleryParent(
  * row is therefore safe (it is the same bytes, deduplicated) and storage is charged only on
  * first insert. If this helper ever accepts caller-supplied bytes/hashes, reinstate the guard.
  */
+async function defaultFileRowExists(contentHash: string): Promise<boolean> {
+  const row = await db.query.files.findFirst({ where: eq(files.id, contentHash), columns: { id: true } });
+  return row !== undefined;
+}
+
 async function defaultPersist(write: FilePageWrite): Promise<{ fileWasInserted: boolean }> {
   return db.transaction(async (tx) => {
     // Content-addressed store: only the FIRST insert of a given hash adds bytes, so
@@ -397,37 +415,70 @@ export async function createFilePage(
   const pageId = createId();
 
   const storeOriginal = deps.storeOriginal
-    ?? (({ contentHash, buffer, mimeType }) => (deps.putObject ?? putObject)(buildS3Key(contentHash), buffer, mimeType));
-  await storeOriginal({ contentHash: hash, buffer: input.buffer, mimeType: input.mimeType, title: input.title, pageId, driveId, parentId });
+    ?? (async ({ contentHash, buffer, mimeType }) => {
+      await (deps.putObject ?? putObject)(buildS3Key(contentHash), buffer, mimeType);
+      return { stored: true };
+    });
+  const { stored } = await storeOriginal({
+    contentHash: hash,
+    buffer: input.buffer,
+    mimeType: input.mimeType,
+    title: input.title,
+    pageId,
+    driveId,
+    parentId,
+    deadlineAt: input.deadlineAt,
+  });
 
-  const position = await (deps.getNextPosition ?? pageRepository.getNextPosition)(driveId, parentId);
+  let fileWasInserted: boolean;
+  try {
+    fileWasInserted = await commitFilePage();
+  } catch (error) {
+    // The bytes are in storage but no row says so. Reclaim them only when THIS
+    // call put them there and nothing else names the hash — otherwise they are
+    // someone else's. Best-effort: the commit's own error is what the caller sees.
+    if (stored && deps.reclaimOriginal) {
+      const reclaim = deps.reclaimOriginal;
+      const exists = deps.fileRowExists ?? defaultFileRowExists;
+      await exists(hash)
+        .then((taken) => (taken ? undefined : reclaim(hash)))
+        .catch(() => {});
+    }
+    throw error;
+  }
 
-  const write: FilePageWrite = {
-    fileRow: {
-      id: hash,
-      driveId,
-      sizeBytes: fileSize,
-      mimeType: input.mimeType,
-      storagePath: hash,
-      createdBy: input.userId,
-    },
-    pageValues: buildFilePageValues({
-      pageId,
-      contentHash: hash,
-      driveId,
-      parentId,
-      title: input.title,
-      mimeType: input.mimeType,
-      fileSize,
-      userId: input.userId,
-      position,
-      source: input.source,
-      prompt: input.prompt,
-    }),
-    junction: { fileId: hash, pageId, linkedBy: input.userId, linkSource: input.source },
-  };
+  /** Position, then the files/pages/filePages rows. Everything after the store that can fail. */
+  async function commitFilePage(): Promise<boolean> {
+    const position = await (deps.getNextPosition ?? pageRepository.getNextPosition)(driveId, parentId);
 
-  const { fileWasInserted } = await (deps.persist ?? defaultPersist)(write);
+    const write: FilePageWrite = {
+      fileRow: {
+        id: hash,
+        driveId,
+        sizeBytes: fileSize,
+        mimeType: input.mimeType,
+        storagePath: hash,
+        createdBy: input.userId,
+      },
+      pageValues: buildFilePageValues({
+        pageId,
+        contentHash: hash,
+        driveId,
+        parentId,
+        title: input.title,
+        mimeType: input.mimeType,
+        fileSize,
+        userId: input.userId,
+        position,
+        source: input.source,
+        prompt: input.prompt,
+      }),
+      junction: { fileId: hash, pageId, linkedBy: input.userId, linkSource: input.source },
+    };
+
+    const { fileWasInserted: inserted } = await (deps.persist ?? defaultPersist)(write);
+    return inserted;
+  }
 
   // Charge storage once, only on the first physical store of the blob (symmetric with
   // the credit issued at unlink) — dedup stores add no bytes. Best-effort: a bookkeeping
