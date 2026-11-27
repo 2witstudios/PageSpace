@@ -157,7 +157,7 @@ describe('guardReadPageToolForVision', () => {
   });
 
   it('given hasVision: true, should leave the tool behavior unchanged for a stale image tool result', () => {
-    const guarded = guardReadPageToolForVision(makeReadPageTool(), { hasVision: true, hasPdfInput: false });
+    const guarded = guardReadPageToolForVision(makeReadPageTool(), { hasVision: true, hasPdfInput: false, hasToolResultMedia: true });
 
     const result = guarded.toModelOutput!({ toolCallId: '1', input: {}, output: staleVisualOutput });
 
@@ -171,7 +171,7 @@ describe('guardReadPageToolForVision', () => {
   });
 
   it('given hasVision: false, should degrade a stale image tool result to metadata-only instead of an image content part', () => {
-    const guarded = guardReadPageToolForVision(makeReadPageTool(), { hasVision: false, hasPdfInput: false });
+    const guarded = guardReadPageToolForVision(makeReadPageTool(), { hasVision: false, hasPdfInput: false, hasToolResultMedia: true });
 
     const result = guarded.toModelOutput!({ toolCallId: '1', input: {}, output: staleVisualOutput }) as {
       type: string;
@@ -252,14 +252,14 @@ describe('guardReadPageToolForVision — PDF parts', () => {
   });
 
   it('given a vision model with PDF input, should re-send a stale native PDF unchanged', () => {
-    const guarded = guardReadPageToolForVision(makeReadPageTool(), { hasVision: true, hasPdfInput: true });
+    const guarded = guardReadPageToolForVision(makeReadPageTool(), { hasVision: true, hasPdfInput: true, hasToolResultMedia: true });
     const result = guarded.toModelOutput!({ toolCallId: '1', input: {}, output: pdfPartsOutput }) as { type: string };
     expect(result.type).toBe('content');
     expect(JSON.stringify(result)).toContain('file-data');
   });
 
   it('given a vision model without PDF input, should not re-send a stale native PDF part', () => {
-    const guarded = guardReadPageToolForVision(makeReadPageTool(), { hasVision: true, hasPdfInput: false });
+    const guarded = guardReadPageToolForVision(makeReadPageTool(), { hasVision: true, hasPdfInput: false, hasToolResultMedia: true });
     const result = guarded.toModelOutput!({ toolCallId: '1', input: {}, output: pdfPartsOutput }) as {
       type: string;
       value: Record<string, unknown>;
@@ -271,14 +271,21 @@ describe('guardReadPageToolForVision — PDF parts', () => {
   });
 
   it('given a vision model without PDF input, should still re-send stale page images', () => {
-    const guarded = guardReadPageToolForVision(makeReadPageTool(), { hasVision: true, hasPdfInput: false });
+    const guarded = guardReadPageToolForVision(makeReadPageTool(), { hasVision: true, hasPdfInput: false, hasToolResultMedia: true });
     const result = guarded.toModelOutput!({ toolCallId: '1', input: {}, output: pageImagesOutput }) as { type: string };
     expect(result.type).toBe('content');
     expect(JSON.stringify(result)).toContain('/9j/AAAA');
   });
 
+  it('given a vision model on a provider without tool-result media, should degrade stale page images to metadata', () => {
+    const guarded = guardReadPageToolForVision(makeReadPageTool(), { hasVision: true, hasPdfInput: false, hasToolResultMedia: false });
+    const result = guarded.toModelOutput!({ toolCallId: '1', input: {}, output: pageImagesOutput }) as { type: string };
+    expect(result.type).toBe('json');
+    expect(JSON.stringify(result)).not.toContain('/9j/AAAA');
+  });
+
   it('given a model without vision, should degrade stale page images to metadata', () => {
-    const guarded = guardReadPageToolForVision(makeReadPageTool(), { hasVision: false, hasPdfInput: false });
+    const guarded = guardReadPageToolForVision(makeReadPageTool(), { hasVision: false, hasPdfInput: false, hasToolResultMedia: true });
     const result = guarded.toModelOutput!({ toolCallId: '1', input: {}, output: pageImagesOutput }) as { type: string };
     expect(result.type).toBe('json');
     expect(JSON.stringify(result)).not.toContain('/9j/AAAA');

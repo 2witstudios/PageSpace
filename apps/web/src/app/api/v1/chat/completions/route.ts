@@ -28,7 +28,7 @@ import { messageRepository } from '@/lib/repositories/message-repository';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForReadOnly, filterToolsForMcpScope, filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibilityForConversation } from '@/lib/ai/core/sandbox-tool-eligibility';
-import { getModelCapabilities, hasVisionCapability, hasPdfInputCapability } from '@/lib/ai/core/model-capabilities';
+import { getModelCapabilities, hasVisionCapability, getToolMediaCapabilities } from '@/lib/ai/core/model-capabilities';
 import { hasFileParts, validateUserMessageFileParts } from '@/lib/ai/core/validate-image-parts';
 import { contentBlockedResponse, contentBlockedResponseFor } from '@/lib/upload/content-blocked-response';
 import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
@@ -466,10 +466,10 @@ export async function POST(request: Request): Promise<Response> {
     if (finalTools.read_page) {
       finalTools = {
         ...finalTools,
-        read_page: guardReadPageToolForVision(finalTools.read_page, {
-          hasVision: hasVisionCapability(providerResult.modelName),
-          hasPdfInput: hasPdfInputCapability(providerResult.modelName, providerResult.provider),
-        }),
+        read_page: guardReadPageToolForVision(
+          finalTools.read_page,
+          getToolMediaCapabilities(providerResult.modelName, providerResult.provider),
+        ),
       };
     }
 

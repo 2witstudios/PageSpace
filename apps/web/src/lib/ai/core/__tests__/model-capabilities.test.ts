@@ -33,6 +33,17 @@ describe('getModelCapabilities', () => {
     });
   });
 
+  it('reports that a local provider cannot receive tool-result media', async () => {
+    stubOpenRouter();
+    const caps = await getModelCapabilities('llama3.2-vision', 'ollama');
+    assert({
+      given: 'a vision model served by Ollama',
+      should: 'report no tool-result media, so read_page never sends it images',
+      actual: { hasToolResultMedia: caps.hasToolResultMedia, hasPdfInput: caps.hasPdfInput },
+      expected: { hasToolResultMedia: false, hasPdfInput: false },
+    });
+  });
+
   it('reports neither for a text-only model', async () => {
     stubOpenRouter();
     const caps = await getModelCapabilities('z-ai/glm-5.3', 'zai');

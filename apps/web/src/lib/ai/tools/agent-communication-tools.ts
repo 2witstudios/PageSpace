@@ -29,7 +29,7 @@ import { buildSessionTools } from './session-tools-runtime';
 import { driveTools } from './drive-tools';
 import { pageReadTools } from './page-read-tools';
 import { guardReadPageToolForVision } from './read-page-vision-output';
-import { hasVisionCapability, hasPdfInputCapability } from '@/lib/ai/core/model-capabilities';
+import { hasVisionCapability, getToolMediaCapabilities } from '@/lib/ai/core/model-capabilities';
 import { pageWriteTools } from './page-write-tools';
 import { searchTools } from './search-tools';
 import { taskManagementTools } from './task-management-tools';
@@ -776,8 +776,7 @@ export async function executeAskAgent(
         // The consulted agent's own model decides what its tools may show it,
         // never the caller's.
         const targetModelCapabilities = {
-          hasVision: hasVisionCapability(resolvedModelName),
-          hasPdfInput: hasPdfInputCapability(resolvedModelName, resolvedProvider),
+          ...getToolMediaCapabilities(resolvedModelName, resolvedProvider),
           hasTools: true,
           model: resolvedModelName,
           provider: resolvedProvider,

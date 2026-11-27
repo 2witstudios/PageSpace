@@ -165,7 +165,7 @@ import { locationContextToPageContext, pageContextToLocationContext } from '@/li
 import type { LocationContext } from '@/lib/ai/shared/chat-types';
 import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
-import { hasVisionCapability, hasPdfInputCapability } from '@/lib/ai/core/model-capabilities';
+import { hasVisionCapability, getToolMediaCapabilities } from '@/lib/ai/core/model-capabilities';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { deriveConversationTitle } from '@/lib/repositories/derive-conversation-title';
 
@@ -1646,10 +1646,10 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     if (filteredTools.read_page) {
       filteredTools = {
         ...filteredTools,
-        read_page: guardReadPageToolForVision(filteredTools.read_page, {
-          hasVision: hasVisionCapability(resolvedModelName ?? currentModel),
-          hasPdfInput: hasPdfInputCapability(resolvedModelName ?? currentModel, currentProvider),
-        }),
+        read_page: guardReadPageToolForVision(
+          filteredTools.read_page,
+          getToolMediaCapabilities(resolvedModelName ?? currentModel, currentProvider),
+        ),
       };
     }
 

@@ -33,7 +33,8 @@ import {
 import { fetchCachedImagePreset } from '../core/image-preset-fetch';
 import { toModelOutputForReadPage, buildVisualContentMetadata } from './read-page-vision-output';
 import { deliverPdfPage, PDF_VISUAL_LIMITS } from './read-page-pdf';
-import { processorCacheFetcherForPage } from './processor-file-fetch-runtime';
+import { fileBytesFetcherFor } from './processor-file-fetch-runtime';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { ensureTaskListForPage, seedInheritedTaskStatusConfigs } from '@/services/api/task-sync-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { resolveOrThrowPageId } from './page-context-defaults';
@@ -493,6 +494,7 @@ export const pageReadTools = {
               // Visual content - check if current model supports vision
               const executionContext = context as ToolExecutionContext;
               const modelCapabilities = executionContext?.modelCapabilities;
+              const textOnly = extractedText ? { extractedText: extractedText.slice(0, MAX_CONTENT_CHARS_PER_PAGE) } : {};
 
               if (!modelCapabilities?.hasVision) {
                 // Model doesn't support vision - say plainly what would let it see the file
@@ -503,7 +505,7 @@ export const pageReadTools = {
                   mimeType: page.mimeType,
                   message: `This is a visual file (${page.mimeType || 'image'}). read_page shows images and PDFs only to vision-capable models, and the current model has no vision. To see this file, switch this chat to a vision model (for example ${getSuggestedVisionModels().join(', ')}).`,
                   suggestedModels: getSuggestedVisionModels(),
-                  ...(extractedText ? { extractedText: extractedText.slice(0, MAX_CONTENT_CHARS_PER_PAGE) } : {}),
+                  ...textOnly,
                   metadata: {
                     fileType: page.mimeType,
                     requiresVision: true
@@ -511,10 +513,40 @@ export const pageReadTools = {
                 };
               }
 
+              if (!modelCapabilities.hasToolResultMedia) {
+                // The model has vision, but its provider's SDK would send tool-result
+                // media as base64 text (getToolMediaCapabilities), so nothing is sent.
+                return {
+                  success: true,
+                  type: 'visual_requires_media_provider',
+                  title: page.title,
+                  mimeType: page.mimeType,
+                  message: isOnPrem()
+                    ? `This is a visual file (${page.mimeType || 'image'}). This model can see images, but its provider can't receive images or PDFs in tool results, so read_page can't show this file in this deployment.`
+                    : `This is a visual file (${page.mimeType || 'image'}). This model can see images, but its provider can't receive images or PDFs in tool results, so read_page can't show this file here. To see it, switch this chat to a vision model from PageSpace's cloud models (for example ${getSuggestedVisionModels().join(', ')}).`,
+                  ...textOnly,
+                  metadata: { fileType: page.mimeType, requiresToolResultMedia: true },
+                };
+              }
+
               // Bytes are read through the processor, which decrypts them and
               // re-checks access with a page-scoped service token.
               if (page.contentHash) {
-                const fetchBytes = processorCacheFetcherForPage(executionContext, page.id);
+                const fetchBytes = await fileBytesFetcherFor(executionContext, page.id);
+                if (!fetchBytes) {
+                  // A page agent can reach a page through its own drive membership
+                  // that the person it runs for cannot; the processor only serves
+                  // that person's files. The text read above is still the agent's.
+                  return {
+                    success: true,
+                    type: 'visual_unavailable_to_actor',
+                    title: page.title,
+                    mimeType: page.mimeType,
+                    message: `"${page.title}" isn't available to you as an image: the person this chat runs for can't open this file, so its bytes can't be fetched.${extractedText ? ' Its extracted text is included.' : ''}`,
+                    ...textOnly,
+                    metadata: { fileType: page.mimeType, bytesUnavailable: true },
+                  };
+                }
 
                 if (isPdf) {
                   return deliverPdfPage({

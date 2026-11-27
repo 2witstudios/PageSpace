@@ -153,7 +153,7 @@ vi.mock('../read-page-pdf', async (importOriginal) => ({
 }));
 const mockPageFetcher = vi.hoisted(() => vi.fn());
 vi.mock('../processor-file-fetch-runtime', () => ({
-  processorCacheFetcherForPage: vi.fn(() => mockPageFetcher),
+  fileBytesFetcherFor: vi.fn(async () => mockPageFetcher),
 }));
 
 import { pageReadTools } from '../page-read-tools';
@@ -163,7 +163,7 @@ import { getUserAccessLevel, getUserAccessiblePagesInDriveWithDetails, getUserDr
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { fetchCachedImagePreset } from '../../core/image-preset-fetch';
 import { deliverPdfPage } from '../read-page-pdf';
-import { processorCacheFetcherForPage } from '../processor-file-fetch-runtime';
+import { fileBytesFetcherFor } from '../processor-file-fetch-runtime';
 import type { ToolExecutionContext } from '../../core/types';
 import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
@@ -1777,7 +1777,7 @@ describe('page-read-tools', () => {
         messages: [],
         experimental_context: {
           userId, accessActor: credentialActor(userId, null),
-          modelCapabilities: { hasVision: true, hasTools: true, model: 'gpt-5.4', provider: 'openai' },
+          modelCapabilities: { hasVision: true, hasPdfInput: true, hasToolResultMedia: true, hasTools: true, model: 'gpt-5.4', provider: 'openai' },
         } as ToolExecutionContext,
       });
 
@@ -1852,7 +1852,7 @@ describe('page-read-tools', () => {
 
         await pageReadTools.read_page.execute!({ title: 'diagram.png', pageId: 'page-1' }, context);
 
-        expect(processorCacheFetcherForPage).toHaveBeenCalledWith(context.experimental_context, 'page-1');
+        expect(fileBytesFetcherFor).toHaveBeenCalledWith(context.experimental_context, 'page-1');
         expect(mockFetchCachedImagePreset).toHaveBeenCalledWith('hash-abc', 'image/png', { fetchBytes: mockPageFetcher });
       });
 
@@ -1866,12 +1866,12 @@ describe('page-read-tools', () => {
           content: '',
           ...overrides,
         });
-        const pdfContext = (hasVision: boolean, hasPdfInput: boolean) => ({
+        const pdfContext = (hasVision: boolean, hasPdfInput: boolean, hasToolResultMedia = true) => ({
           toolCallId: '1',
           messages: [],
           experimental_context: {
             userId: 'user-123', accessActor: credentialActor('user-123', null),
-            modelCapabilities: { hasVision, hasPdfInput, hasTools: true, model: 'm', provider: 'p' },
+            modelCapabilities: { hasVision, hasPdfInput, hasToolResultMedia, hasTools: true, model: 'm', provider: 'p' },
           } as ToolExecutionContext,
         });
         const deliveredParts = { success: true, type: 'visual_parts_delivered', parts: [] };
@@ -1927,6 +1927,46 @@ describe('page-read-tools', () => {
 
           expect(mockDeliverPdfPage).not.toHaveBeenCalled();
           expect(result.content).toContain('Exhibit A text');
+        });
+
+        it('tells a vision model on a provider without tool-result media that it cannot be shown the file, without sending bytes', async () => {
+          mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPdfPage({ content: 'EXHIBIT 4' }));
+
+          const result = await pageReadTools.read_page.execute!(
+            { title: 'Exhibits.pdf', pageId: 'page-1' },
+            pdfContext(true, false, false),
+          ) as { type: string; message: string; extractedText?: string };
+
+          assert({
+            given: 'a visual PDF and a vision model whose provider sends tool-result media as text',
+            should: 'return the provider fallback, not media',
+            actual: result.type,
+            expected: 'visual_requires_media_provider',
+          });
+          expect(result.message).toMatch(/can't receive images or PDFs in tool results/);
+          expect(result.extractedText).toBe('EXHIBIT 4');
+          expect(fileBytesFetcherFor).not.toHaveBeenCalled();
+          expect(mockDeliverPdfPage).not.toHaveBeenCalled();
+        });
+
+        it('tells an agent the file is not available to it as an image when its user cannot view it', async () => {
+          mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPdfPage({ content: 'EXHIBIT 4' }));
+          vi.mocked(fileBytesFetcherFor).mockResolvedValueOnce(null);
+
+          const result = await pageReadTools.read_page.execute!(
+            { title: 'Exhibits.pdf', pageId: 'page-1' },
+            pdfContext(true, true),
+          ) as { type: string; message: string; extractedText?: string };
+
+          assert({
+            given: 'a page agent that can view the page while the person it runs for cannot',
+            should: 'say the file is not available as an image, keeping the text it may read',
+            actual: { type: result.type, text: result.extractedText },
+            expected: { type: 'visual_unavailable_to_actor', text: 'EXHIBIT 4' },
+          });
+          expect(result.message).toMatch(/isn't available to you as an image/);
+          expect(JSON.stringify(result)).not.toMatch(/reprocess|requires vision|switch/i);
+          expect(mockDeliverPdfPage).not.toHaveBeenCalled();
         });
 
         it('tells a model without vision to switch, and passes on any text the scan had', async () => {

@@ -4,7 +4,7 @@
  * falling back down to the original upload when no cache entry is usable.
  *
  * The byte fetch is injected. read_page passes the processor-backed fetcher
- * (`processorCacheFetcherForPage`), which reads through the processor's
+ * (`fileBytesFetcherFor`), which reads through the processor's
  * `/cache/:hash/:preset` route so encrypted-at-rest bytes come back decrypted
  * and the file authorization is re-checked there. Reading S3 directly returned
  * ciphertext whenever FILE_ENCRYPTION_ENABLED was on, and the image silently

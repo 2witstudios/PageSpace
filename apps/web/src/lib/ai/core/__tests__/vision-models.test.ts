@@ -1,6 +1,7 @@
 import { describe, it } from 'vitest';
 import { assert } from '@/test/riteway';
-import { hasVisionCapability, hasPdfInputCapability } from '../vision-models';
+import { hasVisionCapability, hasPdfInputCapability, getToolMediaCapabilities } from '../vision-models';
+import { supportsToolResultMedia } from '../provider-backend';
 
 /**
  * Labels are checked against OpenRouter's /api/v1/models `architecture.input_modalities`
@@ -182,6 +183,44 @@ describe('hasPdfInputCapability', () => {
       should: 'not accept a PDF file part (no OpenRouter file mapping)',
       actual: hasPdfInputCapability('gemini-lookalike', 'ollama'),
       expected: false,
+    });
+  });
+});
+
+/**
+ * Checked against the installed provider packages, not memory:
+ * - @openrouter/ai-sdk-provider 2.10.0 maps tool-result image-data/file-data parts to
+ *   image_url / file content (mapToolResultContentParts).
+ * - @ai-sdk/openai-compatible 2.0.52 (glm, lmstudio, azure_openai) and
+ *   ollama-ai-provider-v2 3.6.0 JSON.stringify a `content` tool output into the
+ *   tool message, so any image becomes base64 text.
+ */
+describe('supportsToolResultMedia', () => {
+  for (const provider of ['openrouter', 'openai', 'anthropic', 'google', 'zai']) {
+    it(`is true for ${provider}, served through OpenRouter`, () => {
+      expect(supportsToolResultMedia(provider)).toBe(true);
+    });
+  }
+  for (const provider of ['glm', 'ollama', 'lmstudio', 'azure_openai']) {
+    it(`is false for ${provider}, whose SDK sends tool-result media as JSON text`, () => {
+      expect(supportsToolResultMedia(provider)).toBe(false);
+    });
+  }
+});
+
+describe('getToolMediaCapabilities', () => {
+  it('reports a vision model on a provider that cannot receive tool-result media', () => {
+    assert({
+      given: 'GLM 5.3 Flash on the admin-only Z.ai (glm) provider',
+      should: 'keep its vision label but report no tool-result media and no PDF input',
+      actual: getToolMediaCapabilities('glm-5.3-flash', 'glm'),
+      expected: { hasVision: true, hasPdfInput: false, hasToolResultMedia: false },
+    });
+  });
+
+  it('reports full media for Gemini through OpenRouter', () => {
+    expect(getToolMediaCapabilities('google/gemini-4-neon', 'google')).toEqual({
+      hasVision: true, hasPdfInput: true, hasToolResultMedia: true,
     });
   });
 });

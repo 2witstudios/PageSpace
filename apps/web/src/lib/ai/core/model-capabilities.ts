@@ -1,11 +1,12 @@
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { hasVisionCapability, hasPdfInputCapability } from './vision-models';
+import { getToolMediaCapabilities, type ToolMediaCapabilities } from './vision-models';
 import { getBackendProvider, AI_PROVIDERS } from './ai-providers-config';
 
 const capabilityLogger = loggers.ai.child({ module: 'model-capabilities' });
 
 // Re-export vision detection from client-safe module
-export { hasVisionCapability, hasPdfInputCapability, getSuggestedVisionModels } from './vision-models';
+export { hasVisionCapability, hasPdfInputCapability, getToolMediaCapabilities, canReceiveToolResultImages, getSuggestedVisionModels } from './vision-models';
+export type { ToolMediaCapabilities } from './vision-models';
 
 /**
  * Known problematic models that don't support tools
@@ -280,10 +281,7 @@ export async function supportsTemperature(model: string, provider: string): Prom
 /**
  * Model capabilities interface
  */
-export interface ModelCapabilities {
-  hasVision: boolean;
-  /** Reads a PDF natively when read_page returns it as an `application/pdf` file part. */
-  hasPdfInput: boolean;
+export interface ModelCapabilities extends ToolMediaCapabilities {
   hasTools: boolean;
   model: string;
   provider: string;
@@ -296,14 +294,10 @@ export interface ModelCapabilities {
  * @returns Promise<ModelCapabilities> - Model capabilities object
  */
 export async function getModelCapabilities(model: string, provider: string): Promise<ModelCapabilities> {
-  const [hasVision, hasTools] = await Promise.all([
-    Promise.resolve(hasVisionCapability(model)),
-    hasToolCapability(model, provider)
-  ]);
+  const hasTools = await hasToolCapability(model, provider);
 
   return {
-    hasVision,
-    hasPdfInput: hasPdfInputCapability(model, provider),
+    ...getToolMediaCapabilities(model, provider),
     hasTools,
     model,
     provider,

@@ -183,8 +183,14 @@ export function createBrowserTools({ resolveContext, gate, operate }: BrowserToo
       description: 'Take a screenshot of the current browser tab. Prefer browser_read to find elements; use this when the layout or an image matters. Requires a model that can see images.',
       inputSchema: browserEmptyInputSchema,
       execute: async (_input, options) => {
-        if (options !== undefined && readContext(options)?.modelCapabilities?.hasVision === false) {
+        const capabilities = options !== undefined ? readContext(options)?.modelCapabilities : undefined;
+        if (capabilities?.hasVision === false) {
           return { success: false, error: 'This model cannot see images; use browser_read instead.' };
+        }
+        // A vision model on a provider whose SDK sends tool-result media as text
+        // would get the screenshot as megabytes of base64.
+        if (capabilities?.hasToolResultMedia === false) {
+          return { success: false, error: "This model's provider cannot receive images in tool results; use browser_read instead." };
         }
         const response = await run('browser_screenshot', { kind: 'screenshot' }, options);
         if (isFailure(response)) return response;

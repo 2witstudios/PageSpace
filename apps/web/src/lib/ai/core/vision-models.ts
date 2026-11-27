@@ -6,7 +6,7 @@
  * Map entries follow OpenRouter's /api/v1/models `architecture.input_modalities`
  * ("image" → vision). Check a model there before adding or changing its entry.
  */
-import { getBackendProvider } from './provider-backend';
+import { supportsToolResultMedia } from './provider-backend';
 
 const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   // OpenAI GPT-6.2 / GPT-6.1 Terra Models
@@ -350,13 +350,40 @@ export function hasVisionCapability(model: string): boolean {
  * input, so they are left out.
  */
 export function hasPdfInputCapability(model: string, provider: string): boolean {
-  if (getBackendProvider(provider) !== 'openrouter') return false;
+  if (!supportsToolResultMedia(provider)) return false;
   if (!hasVisionCapability(model)) return false;
   const bare = stripPrefix(model).toLowerCase();
   if (bare.includes('-codex') || /-image(\b|-)/.test(bare)) return false;
   return bare.startsWith('gemini-') ||
     bare.startsWith('claude-') ||
     /^gpt-(4o|4\.1|5|6)/.test(bare);
+}
+
+/** What a tool may show the model in its result, and what the history guard keeps. */
+export interface ToolMediaCapabilities {
+  /** The model reads images. */
+  hasVision: boolean;
+  /** The model reads a PDF given as an `application/pdf` file part. */
+  hasPdfInput: boolean;
+  /** The provider's backend delivers tool-result media as media, not as text. */
+  hasToolResultMedia: boolean;
+}
+
+/**
+ * The one source for read_page's tool context and for guardReadPageToolForVision,
+ * so the tool never delivers media the guard would strip, or the reverse.
+ */
+export function getToolMediaCapabilities(model: string, provider: string): ToolMediaCapabilities {
+  return {
+    hasVision: hasVisionCapability(model),
+    hasPdfInput: hasPdfInputCapability(model, provider),
+    hasToolResultMedia: supportsToolResultMedia(provider),
+  };
+}
+
+/** Whether a tool result's images actually reach this model as images. */
+export function canReceiveToolResultImages(capabilities: Pick<ToolMediaCapabilities, 'hasVision' | 'hasToolResultMedia'>): boolean {
+  return capabilities.hasVision && capabilities.hasToolResultMedia;
 }
 
 /**

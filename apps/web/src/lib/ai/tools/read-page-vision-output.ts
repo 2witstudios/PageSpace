@@ -8,7 +8,7 @@
  */
 import { isToolUIPart } from 'ai';
 import type { Tool, UIMessage, FileUIPart } from 'ai';
-import type { ModelCapabilities } from '../core/model-capabilities';
+import { canReceiveToolResultImages, type ToolMediaCapabilities } from '../core/vision-models';
 
 type ToolModelOutputFn = NonNullable<Tool['toModelOutput']>;
 type ToolResultOutput = Awaited<ReturnType<ToolModelOutputFn>>;
@@ -195,16 +195,19 @@ export function dropPdfParts(output: unknown): unknown {
  * Wraps a tool so its toModelOutput never re-embeds bytes the current request's
  * model cannot take — guards against a STALE delivered tool-result (persisted from
  * an earlier turn on a different model) being re-sent when convertToModelMessages
- * re-converts history for this turn. No vision: every image and PDF degrades to
- * metadata. Vision but no PDF input: native PDF parts are dropped, page images stay.
- * Pass the same capabilities the turn's tool context gets, so the two agree.
+ * re-converts history for this turn. No vision, or a provider whose SDK would send
+ * tool-result media as base64 text: every image and PDF degrades to metadata.
+ * Vision but no PDF input: native PDF parts are dropped, page images stay.
+ * Pass getToolMediaCapabilities for the turn's model and provider — the same
+ * source as the tool context — so the tool and the guard always agree.
  */
 export function guardReadPageToolForVision<T extends ToolWithModelOutput>(
   tool: T,
-  { hasVision, hasPdfInput }: Pick<ModelCapabilities, 'hasVision' | 'hasPdfInput'>,
+  capabilities: ToolMediaCapabilities,
 ): T {
-  if (hasVision && hasPdfInput) return tool;
-  const toModelOutput: ToolModelOutputFn = hasVision
+  const canSeeImages = canReceiveToolResultImages(capabilities);
+  if (canSeeImages && capabilities.hasPdfInput) return tool;
+  const toModelOutput: ToolModelOutputFn = canSeeImages
     ? ({ output }) => toModelOutputForReadPage(dropPdfParts(output))
     : ({ output }) => toModelOutputForReadPage(degradeVisualContentToMetadata(output));
   return { ...tool, toModelOutput } as T;
