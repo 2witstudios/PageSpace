@@ -216,7 +216,7 @@ import type { UIMessage } from 'ai';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
-import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
+import { hasVisionCapability, getToolMediaCapabilities } from '@/lib/ai/core/model-capabilities';
 import { hasFileParts, validateUserMessageFileParts } from '@/lib/ai/core/validate-image-parts';
 
 const mcpAuth = {
@@ -1412,7 +1412,8 @@ describe('POST /api/v1/chat/completions', () => {
   });
 
   test('cross-turn vision guard: read_page degrades a stale visual_content_delivered result when the requested model lacks vision', async () => {
-    vi.mocked(hasVisionCapability).mockReturnValueOnce(false);
+    // The guard reads the same capability source as the tool context.
+    vi.mocked(getToolMediaCapabilities).mockReturnValueOnce({ hasVision: false, hasPdfInput: false, hasToolResultMedia: true });
     vi.mocked(streamText).mockImplementationOnce((() => ({
       totalUsage: Promise.resolve({ inputTokens: 5, outputTokens: 10 }),
       steps: Promise.resolve([]),
