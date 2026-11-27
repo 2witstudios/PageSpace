@@ -44,8 +44,8 @@ describe('code execution concurrency semaphore', () => {
 
   it('should default each tier to its documented ceiling', () => {
     expect(getCodeExecutionConcurrencyLimit('free')).toBe(1);
-    expect(getCodeExecutionConcurrencyLimit('pro')).toBe(10);
-    expect(getCodeExecutionConcurrencyLimit('business')).toBe(50);
+    expect(getCodeExecutionConcurrencyLimit('pro')).toBe(50);
+    expect(getCodeExecutionConcurrencyLimit('business')).toBe(100);
   });
 
   it('should deny acquiring a slot once the per-tier limit is reached', () => {
@@ -127,7 +127,7 @@ describe('CONCURRENCY_LIMITS env overrides', () => {
   it('falls back to the default when the env value is invalid', async () => {
     process.env.CODE_EXEC_CONCURRENCY_PRO = 'not-a-number';
     const { getCodeExecutionConcurrencyLimit: getLimit } = await import('../quota');
-    expect(getLimit('pro')).toBe(10);
+    expect(getLimit('pro')).toBe(50);
   });
 });
 
@@ -449,14 +449,16 @@ describe('checkDriveEnvAllowance', () => {
     expect(countEnvsOwnedBy).toHaveBeenCalledWith('drive-owner');
   });
 
-  it('should carry the documented per-tier ceilings — free 0 / pro 2 / business 10', () => {
-    // The placeholder numbers pending the economics sign-off, pinned so a
-    // silent retune is a test change rather than a billing surprise.
+  it('should carry the documented per-tier ceilings — free 0 / pro 100 / business 100', () => {
+    // Paid tiers sit at the listing cap: under org-wallet billing an env's
+    // storage and compute are metered, so the row count is a visibility guard,
+    // not a pricing lever. Pinned so a silent retune is a test change rather
+    // than a billing surprise.
     expect([
       getDriveEnvLimit('free'),
       getDriveEnvLimit('pro'),
       getDriveEnvLimit('business'),
-    ]).toEqual([0, 2, 10]);
+    ]).toEqual([0, MAX_DRIVE_ENVS_LISTED, MAX_DRIVE_ENVS_LISTED]);
   });
 
   it('given an override ABOVE the listing cap, should clamp it — an env a listing cannot show must not be creatable', async () => {

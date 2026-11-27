@@ -333,7 +333,8 @@ export interface SandboxRunDeps {
    */
   resolveBillingSession?: (ctx: SandboxActorContext) => Promise<
     | { workspaceId: string; driveId: string | null; ownerId: string }
-    | { deny: SandboxToolDenialReason }
+    /** `cause` is logged, never shown to the agent: what actually went wrong underneath `deny`. */
+    | { deny: SandboxToolDenialReason; cause?: unknown }
     | null
   >;
   /**
@@ -362,6 +363,17 @@ function safeLogError(
   ...args: Parameters<NonNullable<SandboxRunDeps['logger']>['error']>
 ): void {
   try { logger?.error(...args); } catch { /* Logging must not alter tool control flow. */ }
+}
+
+/** An acquisition `cause` as a log-safe string: never the raw object, which may not serialize. */
+function describeCause(cause: unknown): string {
+  if (typeof cause === 'string') return cause;
+  if (cause instanceof Error) return cause.message;
+  try {
+    return JSON.stringify(cause) ?? String(cause);
+  } catch {
+    return String(cause);
+  }
 }
 
 function asError(value: unknown): Error | undefined {
@@ -715,7 +727,16 @@ export async function withMachineBilling<S>(
   // independent resolution might still succeed against a session a
   // concurrent sibling call bound in the interim.
   const billingSession = deps.resolveBillingSession ? await deps.resolveBillingSession(ctx) : null;
-  if (billingSession && 'deny' in billingSession) return fail(billingSession.deny);
+  if (billingSession && 'deny' in billingSession) {
+    safeLogError(deps.logger, 'Sandbox billing session could not be resolved', {
+      reason: billingSession.deny,
+      ...(billingSession.cause !== undefined ? { cause: describeCause(billingSession.cause) } : {}),
+      userId: ctx.userId,
+      driveId: ctx.driveId,
+      conversationId: ctx.conversationId,
+    });
+    return fail(billingSession.deny);
+  }
   if (!billingSession) return run();
 
   const charge = await billing.resolveCharge({
@@ -796,7 +817,16 @@ export async function openSession(
     const acquired = await deps.acquireSandbox(acquireRequest(ctx));
     if (!acquired.ok) {
       deps.quota.releaseSlot({ userId: ctx.userId });
-      const context = { reason: acquired.reason, userId: ctx.userId, driveId: ctx.driveId, conversationId: ctx.conversationId, requestOrigin: ctx.requestOrigin };
+      // `cause` is what turns a bare `provision_failed` into something an
+      // operator can act on (spawn fault vs. vanished sandbox vs. a ceiling).
+      const context = {
+        reason: acquired.reason,
+        ...(acquired.cause !== undefined ? { cause: describeCause(acquired.cause) } : {}),
+        userId: ctx.userId,
+        driveId: ctx.driveId,
+        conversationId: ctx.conversationId,
+        requestOrigin: ctx.requestOrigin,
+      };
       if (AUTHZ_DENY_REASONS.has(acquired.reason)) {
         safeLogWarn(deps.logger, 'Sandbox access denied', context);
       } else {
