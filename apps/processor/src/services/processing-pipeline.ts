@@ -131,11 +131,13 @@ function pdfjsAssetPaths(): Pick<PdfLoadParams, 'standardFontDataUrl' | 'cMapUrl
   };
 }
 
+// The legacy build is pdf.js's Node build: it polyfills Path2D, DOMMatrix and
+// ImageData from @napi-rs/canvas, which page rendering needs (text is drawn
+// through Path2D). The modern build assumes a browser.
+const pdfjs = () => import('pdfjs-dist/legacy/build/pdf.mjs');
+
 async function loadPdf(bytes: Buffer): Promise<PDFDocumentProxy> {
-  // The legacy build is pdf.js's Node build: it polyfills Path2D, DOMMatrix and
-  // ImageData from @napi-rs/canvas, which page rendering needs (text is drawn
-  // through Path2D). The modern build assumes a browser.
-  const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const pdfjsLib = await pdfjs();
   const getDocument = pdfjsLib.getDocument as unknown as (params: PdfLoadParams) => PDFLoadingTask;
   return getDocument({
     data: new Uint8Array(bytes),
@@ -192,22 +194,55 @@ const nonWhitespaceLength = (value: string): number => value.replace(/\s+/g, '')
  * Averaged over the file on purpose: a document whose text layer stands for it
  * (a report with blank separator pages, a bundle of typed index pages and
  * scanned exhibits) stays a `completed` text document, and only its low-text
- * pages are rendered (pdfPagesToRender), so text readers never lose its text.
+ * pages that paint an image are rendered (pdfPagesPaintingImages), so text
+ * readers never lose its text.
  */
 export function isScanLikePdf({ text, pageCount }: Pick<PdfContent, 'text' | 'pageCount'>): boolean {
   return nonWhitespaceLength(text) < LOW_TEXT_CHARS_PER_PAGE * Math.max(pageCount, 1);
 }
 
+/** A scan's pages to render: its leading pages, up to `maxPages`. */
+export function leadingPdfPages(pageCount: number, maxPages: number): number[] {
+  return Array.from({ length: Math.min(maxPages, pageCount) }, (_, i) => i + 1);
+}
+
+/** pdf.js operators that paint a raster image (a scan, a photo, a bitmap figure). */
+const IMAGE_PAINT_OPS = [
+  'paintImageXObject',
+  'paintInlineImageXObject',
+  'paintInlineImageXObjectGroup',
+  'paintImageXObjectRepeat',
+  'paintImageMaskXObject',
+  'paintImageMaskXObjectGroup',
+  'paintImageMaskXObjectRepeat',
+  'paintSolidColorImageMask',
+] as const;
+
 /**
- * Which pages get page images, up to `maxPages`: a scan's leading pages, or a
- * text document's low-text pages (its scans, figures and blanks).
+ * Of `candidates`, the pages whose content paints a raster image, in order, up
+ * to `limit`. Read from pdf.js's operator list, which parses the page's content
+ * stream without decoding the images. A text document's low-text pages are
+ * rendered only when they pass this: a blank separator, a text-only cover or an
+ * empty page has nothing a picture would add.
  */
-export function pdfPagesToRender(
-  { scan, pageCount, lowTextPageNumbers }: Pick<PdfContent, 'pageCount' | 'lowTextPageNumbers'> & { scan: boolean },
-  maxPages: number,
-): number[] {
-  if (scan) return Array.from({ length: Math.min(maxPages, pageCount) }, (_, i) => i + 1);
-  return lowTextPageNumbers.slice(0, maxPages);
+export async function pdfPagesPaintingImages(pdf: PDFDocumentProxy, candidates: number[], limit: number): Promise<number[]> {
+  const { OPS } = (await pdfjs()) as unknown as { OPS: Record<string, number> };
+  const imageOps = new Set(IMAGE_PAINT_OPS.map((name) => OPS[name]));
+  const found: number[] = [];
+  for (const pageNumber of candidates) {
+    if (found.length >= limit) break;
+    if (pageNumber < 1 || pageNumber > pdf.numPages) continue;
+    const page = await pdf.getPage(pageNumber);
+    try {
+      const { fnArray } = await page.getOperatorList();
+      if (fnArray.some((op) => imageOps.has(op))) found.push(pageNumber);
+    } catch {
+      // A page whose content can't be parsed is not offered as an image.
+    } finally {
+      page.cleanup();
+    }
+  }
+  return found;
 }
 
 /** Cache preset name for a rasterized PDF page (1-based). Served by /cache/:hash/:preset. */

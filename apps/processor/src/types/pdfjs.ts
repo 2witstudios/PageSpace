@@ -11,6 +11,8 @@ export interface PDFPageProxy {
   getTextContent(): Promise<PDFTextContent>;
   getViewport(params: { scale: number }): PDFPageViewport;
   render(params: { canvasContext: unknown; viewport: PDFPageViewport }): { promise: Promise<void> };
+  /** The page's drawing operators (pdf.js OPS codes), without decoding images. */
+  getOperatorList(): Promise<{ fnArray: number[] }>;
   cleanup(): boolean;
 }
 

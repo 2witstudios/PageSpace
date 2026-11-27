@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   extractPdfContent: vi.fn(),
   rasterizePdfPages: vi.fn(),
   withPdf: vi.fn(),
+  pdfPagesPaintingImages: vi.fn(),
   generateImageVariants: vi.fn(),
   extractVideoMetadata: vi.fn(),
   extractVideoThumbnail: vi.fn(),
@@ -50,7 +51,8 @@ vi.mock('../../services/processing-pipeline', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../services/processing-pipeline')>();
   return {
   isScanLikePdf: actual.isScanLikePdf,
-  pdfPagesToRender: actual.pdfPagesToRender,
+  leadingPdfPages: actual.leadingPdfPages,
+  pdfPagesPaintingImages: mocks.pdfPagesPaintingImages,
   pdfPagePreset: actual.pdfPagePreset,
   resolveMaxRasterizedPdfPages: actual.resolveMaxRasterizedPdfPages,
   withPdf: mocks.withPdf,
@@ -87,6 +89,8 @@ beforeEach(() => {
   mocks.withPdf.mockImplementation(async (_bytes: Buffer, work: (pdf: unknown) => Promise<unknown>) => work(FAKE_PDF));
   mocks.extractPdfContent.mockResolvedValue({ text: 'extracted text '.repeat(10), pageCount: 1, lowTextPageNumbers: [] });
   mocks.rasterizePdfPages.mockResolvedValue({ rendered: [] });
+  // Every low-text page paints an image unless a test says otherwise.
+  mocks.pdfPagesPaintingImages.mockImplementation(async (_pdf: unknown, candidates: number[], limit: number) => candidates.slice(0, limit));
   mocks.generateImageVariants.mockResolvedValue({
     thumbnail: { buffer: Buffer.from('t'), mimeType: 'image/webp' },
     'ai-chat': { buffer: Buffer.from('j'), mimeType: 'image/jpeg' },
@@ -188,17 +192,32 @@ describe('runPullPipeline — dispatch by detected type', () => {
       expect(mocks.setPageVisualWithContent).not.toHaveBeenCalled();
     });
 
-    it('keeps a report with blank separator pages completed with its full text, rendering just those pages', async () => {
+    it('keeps a report with blank separator pages completed with its full text, rendering zero pages', async () => {
       const text = typedText(8);
       mocks.extractPdfContent.mockResolvedValue({ text, pageCount: 10, lowTextPageNumbers: [5, 10] });
+      mocks.pdfPagesPaintingImages.mockResolvedValue([]);
 
       await runPullPipeline({ pageId: 'page-1', contentHash: HASH }, NO_WAIT);
 
       expect(mocks.setPageVisualWithContent).not.toHaveBeenCalled();
       expect(mocks.setPageCompleted).toHaveBeenCalledWith(
-        'page-1', text, { mimeType: 'application/pdf', pageCount: 10, renderedPages: [5, 10] }, 'text',
+        'page-1', text, { mimeType: 'application/pdf', pageCount: 10 }, 'text',
       );
-      expect(mocks.rasterizePdfPages).toHaveBeenCalledWith(FAKE_PDF, expect.objectContaining({ pages: [5, 10] }));
+      expect(mocks.pdfPagesPaintingImages).toHaveBeenCalledWith(FAKE_PDF, [5, 10], 50);
+      expect(mocks.rasterizePdfPages).not.toHaveBeenCalled();
+    });
+
+    it('renders the one low-text page of a text PDF that paints a full-page scanned figure', async () => {
+      const text = typedText(9);
+      mocks.extractPdfContent.mockResolvedValue({ text, pageCount: 10, lowTextPageNumbers: [3, 10] });
+      mocks.pdfPagesPaintingImages.mockResolvedValue([3]);
+
+      await runPullPipeline({ pageId: 'page-1', contentHash: HASH }, NO_WAIT);
+
+      expect(mocks.rasterizePdfPages).toHaveBeenCalledWith(FAKE_PDF, expect.objectContaining({ pages: [3] }));
+      expect(mocks.setPageCompleted).toHaveBeenCalledWith(
+        'page-1', text, { mimeType: 'application/pdf', pageCount: 10, renderedPages: [3] }, 'text',
+      );
     });
 
     it('keeps a bundle of 10 typed pages and 190 scans completed, rendering its first 50 scans', async () => {
@@ -221,6 +240,8 @@ describe('runPullPipeline — dispatch by detected type', () => {
       it('marks it visual, keeping its text, with its leading pages rendered', async () => {
         await runPullPipeline({ pageId: 'page-1', contentHash: HASH }, NO_WAIT);
 
+        // A scan renders as before, without an image check per page.
+        expect(mocks.pdfPagesPaintingImages).not.toHaveBeenCalled();
         expect(mocks.setPageCompleted).not.toHaveBeenCalled();
         expect(mocks.setPageVisualWithContent).toHaveBeenCalledWith('page-1', 'p. 1', {
           mimeType: 'application/pdf',

@@ -16,7 +16,8 @@ import {
   withPdf,
   extractPdfContent,
   isScanLikePdf,
-  pdfPagesToRender,
+  leadingPdfPages,
+  pdfPagesPaintingImages,
   rasterizePdfPages,
   pdfPagePreset,
   resolveMaxRasterizedPdfPages,
@@ -171,9 +172,9 @@ const pdfProcessing = createSemaphore(positiveIntOr(process.env.PDF_RASTER_CONCU
 /**
  * A PDF with a real text layer stays a `completed` text document with all its
  * text, so every text reader (read_page, MCP, search) keeps it. Its low-text
- * pages — scans, figures, blanks — are still rendered to `pdf-page-{n}` JPEG
- * presets, listed in extractionMetadata.renderedPages, so read_page can offer
- * those pages to vision models.
+ * pages that paint an image — scanned exhibits, photos — are still rendered to
+ * `pdf-page-{n}` JPEG presets, listed in extractionMetadata.renderedPages, so
+ * read_page can offer those pages to vision models.
  *
  * A PDF with no real text layer — a scan — is marked `visual`, keeping
  * whatever text it had, and its leading pages are rendered.
@@ -188,7 +189,13 @@ export async function processPdfPage(pageId: string, contentHash: string, bytes:
     const content = await extractPdfContent(pdf);
     const { text, pageCount } = content;
     const scan = isScanLikePdf(content);
-    const toRender = pdfPagesToRender({ ...content, scan }, resolveMaxRasterizedPdfPages());
+    const maxPages = resolveMaxRasterizedPdfPages();
+    // A scan renders its leading pages. A text document renders only low-text
+    // pages that paint an image (a scanned exhibit, a photo), not its blank
+    // separators or text-only covers.
+    const toRender = scan
+      ? leadingPdfPages(pageCount, maxPages)
+      : await pdfPagesPaintingImages(pdf, content.lowTextPageNumbers, maxPages);
 
     let renderedPages: number[] = [];
     if (toRender.length > 0) {
