@@ -88,6 +88,35 @@ export function createByteBudget({ capacityBytes, waitMs }: { capacityBytes: num
   };
 }
 
+/**
+ * Run `work`, letting it reserve bytes through `reserve`, and guarantee the
+ * reservation is given back unless the result is handed to the caller.
+ *
+ * A successful result comes back with its `release`, still held — the bytes are
+ * on their way onward and the caller frees them once written. A failure, or a
+ * REJECTION after the reservation was granted (a billing settle, a DB read, any
+ * throw), releases it here: a reservation that outlives its copy shrinks the
+ * budget for the life of the process.
+ */
+export async function holdUntilHandedOff<T extends { success: boolean }>(
+  budget: ByteBudget,
+  work: (reserve: (bytes: number) => Promise<boolean>) => Promise<T>,
+): Promise<{ result: T; release: () => void }> {
+  const held: { release: (() => void) | null } = { release: null };
+  let handedOff = false;
+  try {
+    const result = await work(async (bytes) => {
+      held.release = await budget.acquire(bytes);
+      return held.release !== null;
+    });
+    if (!result.success) return { result, release: () => {} };
+    handedOff = true;
+    return { result, release: held.release ?? (() => {}) };
+  } finally {
+    if (!handedOff) held.release?.();
+  }
+}
+
 /** The one budget this server process holds for `copy_content`. */
 export const copyByteBudget: ByteBudget = createByteBudget({
   capacityBytes: resolveCopyInflightBytes(process.env),

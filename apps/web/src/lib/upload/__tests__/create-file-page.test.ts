@@ -5,6 +5,7 @@ import {
   buildImageFilePageValues,
   createImageFilePage,
   createFilePage,
+  RECLAIM_RECHECK_DELAY_MS,
   buildFilePageValues,
   mimeTypeForFileName,
   FileStorageQuotaError,
@@ -434,6 +435,7 @@ describe('createFilePage — review #3016 #5: bytes stored before a failed commi
     chargeStorage: vi.fn(async () => {}),
     reclaimOriginal: vi.fn(async (_hash: string) => {}),
     fileRowExists: vi.fn(async (_hash: string) => false),
+    sleep: vi.fn(async (_ms: number) => {}),
   });
 
   it('given the row insert fails after the processor stored NEW bytes and no files row exists, should reclaim them and rethrow', async () => {
@@ -509,5 +511,58 @@ describe('createFilePage — review #3016 #5: bytes stored before a failed commi
     };
     await createFilePage({ ...input, deadlineAt: 123 }, d);
     expect(seen).toEqual([123]);
+  });
+});
+
+describe('createFilePage — review #3016 round 2 (D): a concurrent identical filing is not robbed', () => {
+  const input = {
+    userId: 'u1',
+    buffer: buf,
+    mimeType: 'application/pdf',
+    title: 'out.pdf',
+    source: 'sandbox-copy' as const,
+    targetDriveId: 'driveX',
+    targetParentId: 'folderY',
+  };
+
+  it('given a row appears during the re-check delay (a concurrent filing B committed onto the same bytes), should NOT reclaim', async () => {
+    const order: string[] = [];
+    const exists = vi
+      .fn<(hash: string) => Promise<boolean>>()
+      .mockImplementationOnce(async () => { order.push('check'); return false; })
+      .mockImplementationOnce(async () => { order.push('recheck'); return true; });
+    const d = {
+      checkQuota: async () => ({ allowed: true }),
+      getNextPosition: async () => 0,
+      storeOriginal: async () => ({ stored: true }),
+      persist: async () => { throw new Error('insert failed'); },
+      fileRowExists: exists,
+      sleep: vi.fn(async (ms: number) => { order.push(`sleep ${ms}`); }),
+      reclaimOriginal: vi.fn(async () => {}),
+    };
+    await expect(createFilePage(input, d)).rejects.toThrow('insert failed');
+    expect(order).toEqual(['check', `sleep ${RECLAIM_RECHECK_DELAY_MS}`, 'recheck']);
+    expect(d.reclaimOriginal).not.toHaveBeenCalled();
+  });
+
+  it('given no row on either check, should reclaim after the delay', async () => {
+    const d = {
+      checkQuota: async () => ({ allowed: true }),
+      getNextPosition: async () => 0,
+      storeOriginal: async () => ({ stored: true }),
+      persist: async () => { throw new Error('insert failed'); },
+      fileRowExists: vi.fn(async () => false),
+      sleep: vi.fn(async () => {}),
+      reclaimOriginal: vi.fn(async () => {}),
+    };
+    await expect(createFilePage(input, d)).rejects.toThrow('insert failed');
+    expect(d.fileRowExists).toHaveBeenCalledTimes(2);
+    expect(d.sleep).toHaveBeenCalledWith(RECLAIM_RECHECK_DELAY_MS);
+    expect(d.reclaimOriginal).toHaveBeenCalledWith(HASH);
+  });
+
+  it('the re-check delay is short — a few seconds, not long enough to matter against the call deadline', () => {
+    expect(RECLAIM_RECHECK_DELAY_MS).toBeGreaterThanOrEqual(1_000);
+    expect(RECLAIM_RECHECK_DELAY_MS).toBeLessThanOrEqual(10_000);
   });
 });

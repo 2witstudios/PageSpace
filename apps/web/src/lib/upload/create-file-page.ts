@@ -32,6 +32,12 @@ import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { checkStorageQuotaForDrive, chargeStorageForStore, shouldChargeForStore } from '@pagespace/lib/services/storage-limits';
 import { putObject } from './s3-effects';
 
+/**
+ * How long a failed filing waits before re-checking that no `files` row names
+ * its bytes, and only then reclaims them. See the reclaim in `createFilePage`.
+ */
+export const RECLAIM_RECHECK_DELAY_MS = 5_000;
+
 /** Folder (at the Home-drive root) that collects auto-filed generated images. */
 export const GENERATED_IMAGES_FOLDER = 'Generated Images';
 
@@ -106,6 +112,8 @@ export interface CreateImageFilePageDeps {
   reclaimOriginal?: (contentHash: string) => Promise<void>;
   /** Whether any `files` row already names `contentHash` (then the bytes are someone's). */
   fileRowExists?: (contentHash: string) => Promise<boolean>;
+  /** The wait before the reclaim's re-check; injectable for tests. */
+  sleep?: (ms: number) => Promise<void>;
   /**
    * Runs once the rows are committed (e.g. enqueue the processor job). Best-effort,
    * like the upload route's post-commit block: a failure is logged by the caller's
@@ -437,12 +445,28 @@ export async function createFilePage(
     // The bytes are in storage but no row says so. Reclaim them only when THIS
     // call put them there and nothing else names the hash — otherwise they are
     // someone else's. Best-effort: the commit's own error is what the caller sees.
+    //
+    // THE RACE: content addressing means a concurrent filing (or browser upload)
+    // of the SAME bytes can be past its own store — told `stored: false`, since
+    // ours landed first — but not yet committed when we look. Deleting then would
+    // leave its page pointing at bytes that are gone. So the check runs twice,
+    // RECLAIM_RECHECK_DELAY_MS apart, which outlasts a commit already under way.
+    // A commit slower than that can still lose; the processor's delete then still
+    // refuses anything already referenced (`isFileOrphaned`), and the window that
+    // remains — a commit that starts and stalls across the whole delay — is
+    // accepted rather than leaving every failed filing's bytes unreclaimable.
     if (stored && deps.reclaimOriginal) {
       const reclaim = deps.reclaimOriginal;
       const exists = deps.fileRowExists ?? defaultFileRowExists;
-      await exists(hash)
-        .then((taken) => (taken ? undefined : reclaim(hash)))
-        .catch(() => {});
+      const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+      try {
+        if (!(await exists(hash))) {
+          await sleep(RECLAIM_RECHECK_DELAY_MS);
+          if (!(await exists(hash))) await reclaim(hash);
+        }
+      } catch {
+        // Logged by the caller's reclaim seam; never hides the commit error.
+      }
     }
     throw error;
   }

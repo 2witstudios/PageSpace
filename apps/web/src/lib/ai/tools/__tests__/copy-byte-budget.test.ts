@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   createByteBudget,
+  holdUntilHandedOff,
   resolveCopyInflightBytes,
   DEFAULT_COPY_INFLIGHT_BYTES,
 } from '../copy-byte-budget';
@@ -90,5 +91,49 @@ describe('resolveCopyInflightBytes', () => {
     for (const raw of ['', '0', '-1', '1.5', 'lots']) {
       expect(resolveCopyInflightBytes({ COPY_CONTENT_MAX_INFLIGHT_BYTES: raw }), raw).toBe(512 * MB);
     }
+  });
+});
+
+describe('holdUntilHandedOff — a reservation is never leaked', () => {
+  const budget = () => createByteBudget({ capacityBytes: 100 * MB, waitMs: 1_000 });
+
+  it('given the work REJECTS after reserving (e.g. the billing settle throws), should release and rethrow', async () => {
+    const b = budget();
+    await expect(
+      holdUntilHandedOff(b, async (reserve) => {
+        await reserve(60 * MB);
+        throw new Error('settle failed');
+      }),
+    ).rejects.toThrow('settle failed');
+    expect(b.inFlightBytes()).toBe(0);
+  });
+
+  it('given the work FAILS after reserving, should release', async () => {
+    const b = budget();
+    const { result } = await holdUntilHandedOff(b, async (reserve) => {
+      await reserve(60 * MB);
+      return { success: false as const };
+    });
+    expect(result.success).toBe(false);
+    expect(b.inFlightBytes()).toBe(0);
+  });
+
+  it('given the work succeeds, should hand the reservation to the caller, held until it releases', async () => {
+    const b = budget();
+    const { result, release } = await holdUntilHandedOff(b, async (reserve) => {
+      await reserve(60 * MB);
+      return { success: true as const };
+    });
+    expect(result.success).toBe(true);
+    expect(b.inFlightBytes()).toBe(60 * MB);
+    release();
+    expect(b.inFlightBytes()).toBe(0);
+  });
+
+  it('given the reservation is refused, should leave nothing held', async () => {
+    const b = budget();
+    const { result } = await holdUntilHandedOff(b, async (reserve) => ({ success: await reserve(200 * MB) }));
+    expect(result.success).toBe(false);
+    expect(b.inFlightBytes()).toBe(0);
   });
 });

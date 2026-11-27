@@ -39,7 +39,8 @@ import {
   reclaimOrphanedOriginal,
   storeOriginalViaProcessor,
 } from '@/lib/upload/processor-effects';
-import { copyByteBudget } from './copy-byte-budget';
+import { copyByteBudget, holdUntilHandedOff } from './copy-byte-budget';
+import { fetchOriginalUnderBudget } from './copy-content-original-fetch';
 import { fileSandboxBytesIntoDrive, type FileIntoDriveEffects } from './copy-content-file-page';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -184,36 +185,17 @@ const productionDeps: CopyContentDeps = {
       : { success: false, error: result.error ?? DENIAL_MESSAGES[result.reason] };
   },
 
-  fetchFileOriginal: async ({ page, deadlineAt, context }) => {
-    if (!page.filePath) return { success: false, error: 'This upload has no stored file.' };
-    // Refused before any byte moves when the row already says it is too big.
-    if (typeof page.fileSize === 'number' && page.fileSize > MAX_BINARY_COPY_BYTES) {
-      return {
-        success: false,
-        error: `"${page.title}" is ${page.fileSize} bytes, over the ${MAX_BINARY_COPY_BYTES}-byte limit for copying a file into the sandbox.`,
-      };
-    }
-    // Reserve the bytes in the process-wide budget BEFORE they arrive. A row
-    // without a size reserves the most one copy can hold.
-    const release = await copyByteBudget.acquire(
-      typeof page.fileSize === 'number' && page.fileSize > 0 ? page.fileSize : MAX_BINARY_COPY_BYTES
-    );
-    if (!release) {
-      return { success: false, error: DENIAL_MESSAGES.copy_budget_exhausted, reason: 'copy_budget_exhausted' };
-    }
-    const fetched = await fetchOriginalFromProcessor({
-      actor: toolActor(context),
-      pageId: page.id,
-      filePath: page.filePath,
-      maxBytes: MAX_BINARY_COPY_BYTES,
-      deadlineAt,
-    });
-    if (!fetched.success) {
-      release();
-      return fetched;
-    }
-    return { success: true, bytes: fetched.bytes, release };
-  },
+  fetchFileOriginal: ({ page, deadlineAt, context }) =>
+    fetchOriginalUnderBudget(
+      { page, deadlineAt },
+      {
+        budget: copyByteBudget,
+        fetchOriginal: ({ pageId, filePath, maxBytes, deadlineAt: until }) =>
+          fetchOriginalFromProcessor({ actor: toolActor(context), pageId, filePath, maxBytes, deadlineAt: until }),
+        maxCopyBytes: MAX_BINARY_COPY_BYTES,
+        budgetExhaustedMessage: DENIAL_MESSAGES.copy_budget_exhausted,
+      }
+    ),
 
   writeSandboxBinaryFile: async ({ path, content, deadlineAt, context }) => {
     const opened = await openSandbox(context);
@@ -233,26 +215,22 @@ const productionDeps: CopyContentDeps = {
   readSandboxBinaryFile: async ({ path, maxBytes, deadlineAt, context }) => {
     const opened = await openSandbox(context);
     if (!opened.ok) return { success: false, error: opened.error };
-    // The runner probes the file's size and offers it here BEFORE reading, so the
-    // bytes are reserved in the process-wide budget before they arrive.
-    const reservation: { release: (() => void) | null } = { release: null };
-    const result = await readSandboxBinaryFileForCopy({
-      path,
-      maxBytes,
-      deadlineAt,
-      admit: async (bytes) => {
-        reservation.release = await copyByteBudget.acquire(bytes);
-        return reservation.release !== null;
-      },
-      ctx: opened.ctx,
-      deps: buildRealSandboxRunDeps({ actor: opened.actor }),
-    });
-    const reserved = reservation.release;
-    if (!result.success) {
-      reserved?.();
-      return { success: false, error: result.error ?? DENIAL_MESSAGES[result.reason], reason: result.reason };
-    }
-    return { success: true, content: result.content, release: reserved ?? (() => {}) };
+    // The runner probes the file's size and offers it here (between its two
+    // sessions) BEFORE reading, so the bytes are reserved before they arrive.
+    // holdUntilHandedOff gives the reservation back if the read fails OR throws.
+    const { result, release } = await holdUntilHandedOff(copyByteBudget, (reserve) =>
+      readSandboxBinaryFileForCopy({
+        path,
+        maxBytes,
+        deadlineAt,
+        admit: reserve,
+        ctx: opened.ctx,
+        deps: buildRealSandboxRunDeps({ actor: opened.actor }),
+      })
+    );
+    return result.success
+      ? { success: true, content: result.content, release }
+      : { success: false, error: result.error ?? DENIAL_MESSAGES[result.reason], reason: result.reason };
   },
 
   // Inside the sandbox: nothing reaches this server, so nothing is reserved.
