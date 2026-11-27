@@ -53,6 +53,8 @@
     "__tests__/org-wallet-export-coverage.test.ts",
     "backfill-imago-agents.ts",
     "__tests__/backfill-imago-agents*.test.ts",
+    "backfill-home-envs.ts",
+    "__tests__/backfill-home-envs.test.ts",
     "__tests__/setup.ts"
   ]
 }

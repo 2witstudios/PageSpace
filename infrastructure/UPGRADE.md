@@ -685,6 +685,31 @@ roll, so once it has succeeded the table is gone.
 
 ---
 
+## Home envs for existing Home drives (migration `0388_drive_env_home`)
+
+Every Home drive now has a default environment, **Home**: the one machine the
+owner's Global Assistant and Imago sessions run in, instead of a fresh sandbox
+per conversation. It is created lazily on first use, so this backfill is
+optional for correctness — it only makes Home appear in every user's env list
+up front. Run it after deploying the release that carries `0388` (additive: an
+`isHome` column and a partial unique index).
+
+```bash
+bun scripts/backfill-home-envs.ts --dry-run          # counts drives that would get Home, writes nothing
+bun scripts/backfill-home-envs.ts --batch-size 100   # the real run; --limit N caps the drives
+```
+
+Needs only `DATABASE_URL`. It calls `ensureHomeDriveEnv` (the lazy path's own
+service) for each HOME drive that has no Home env yet: it mints an env named
+"Home", or flags an existing Sprite env the user already named "Home". No
+sandbox is provisioned and the env cap is not charged. A drive whose org turns
+persistent environments off is counted as refused and left alone. Safe to
+re-run and safe beside live traffic (per-drive advisory lock, one Home per
+drive enforced by the index). Any failed drive makes the exit code 1 and is
+listed by id; output never names a user beyond their id.
+
+---
+
 ## Home drives and Imago agents for existing users (IMG-4.3)
 
 Every user now gets the built-in Imago agents (Imago, Imago Planner, Imago
