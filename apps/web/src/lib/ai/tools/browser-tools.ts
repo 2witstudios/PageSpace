@@ -107,6 +107,21 @@ export function toModelOutputForBrowserScreenshot(output: unknown): ToolResultOu
   return { type: 'json', value: output } as unknown as ToolResultOutput;
 }
 
+/**
+ * A saved screenshot with its bytes taken out, for a model that can't be shown
+ * them (no vision, or a provider that would send them as base64 text).
+ */
+export function degradeBrowserScreenshot(output: unknown): unknown {
+  const shot = output as { success?: unknown; imageBase64?: unknown; page?: unknown };
+  if (shot?.success !== true || typeof shot.imageBase64 !== 'string') return output;
+  return {
+    success: true,
+    page: shot.page,
+    imageOmitted: true,
+    note: 'An earlier screenshot was taken here; this model cannot be shown it. Use browser_read for the page content.',
+  };
+}
+
 export function createBrowserTools({ resolveContext, gate, operate }: BrowserToolsDeps): Record<BrowserToolName, Tool> {
   const run = async (name: BrowserToolName, operation: BrowserOperation, options: unknown): Promise<BrowserControlResponse | ToolFailure> => {
     const context = readContext(options);

@@ -1,7 +1,7 @@
 import { tool, stepCountIs, hasToolCall } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from './finish-tool';
 import { z } from 'zod';
-import { generateText, UIMessage, type ToolSet, type Tool } from 'ai';
+import { generateText, UIMessage, type ToolSet } from 'ai';
 import { db } from '@pagespace/db/db'
 import { eq, and, ne, sql } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
@@ -28,7 +28,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { buildSessionTools } from './session-tools-runtime';
 import { driveTools } from './drive-tools';
 import { pageReadTools } from './page-read-tools';
-import { guardReadPageToolForVision } from './read-page-vision-output';
+import { guardToolResultMedia } from './tool-media-guard';
 import { hasVisionCapability, getToolMediaCapabilities } from '@/lib/ai/core/model-capabilities';
 import { pageWriteTools } from './page-write-tools';
 import { searchTools } from './search-tools';
@@ -767,23 +767,18 @@ export async function executeAskAgent(
         // base map (stable insertion order) and the integration resolver returns
         // sorted keys — so the serialized tool bytes are prefix-cache-stable without
         // re-sorting here (same guarantee as the chat/global route merges).
-        const allAgentTools = { ...agentTools, ...integrationTools };
-
-        // Guard against a stale read_page tool-result (image bytes delivered on an
-        // earlier turn when the target agent had a vision-capable model) being
-        // re-embedded as an image when history is re-converted for a model that no
-        // longer has vision (e.g. the agent's configured model changed since).
-        // The consulted agent's own model decides what its tools may show it,
-        // never the caller's.
+        // Guard against stale tool-result media (read_page images/PDFs, browser
+        // screenshots delivered on an earlier turn) being re-embedded when history
+        // is re-converted for a model or provider that cannot take them (e.g. the
+        // agent's configured model changed since). The consulted agent's own model
+        // decides what its tools may show it, never the caller's.
         const targetModelCapabilities = {
           ...getToolMediaCapabilities(resolvedModelName, resolvedProvider),
           hasTools: true,
           model: resolvedModelName,
           provider: resolvedProvider,
         };
-        if (allAgentTools.read_page) {
-          allAgentTools.read_page = guardReadPageToolForVision(allAgentTools.read_page as Tool, targetModelCapabilities);
-        }
+        const allAgentTools = guardToolResultMedia({ ...agentTools, ...integrationTools }, targetModelCapabilities);
 
         // 10. Create enhanced execution context for nested calls
         // Preserve locationContext so nested agents know which drive/page they're operating in
