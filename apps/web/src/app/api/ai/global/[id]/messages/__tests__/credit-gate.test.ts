@@ -347,6 +347,8 @@ vi.mock('@/lib/ai/core/validate-image-parts', () => ({
 vi.mock('@/lib/ai/core/model-capabilities', () => ({
   getModelCapabilities: vi.fn().mockResolvedValue({}),
   hasVisionCapability: vi.fn().mockReturnValue(true),
+  hasPdfInputCapability: vi.fn().mockReturnValue(false),
+  getToolMediaCapabilities: vi.fn().mockReturnValue({ hasVision: true, hasPdfInput: false, hasToolResultMedia: true }),
   DEFAULT_IMAGE_MODEL: 'google/gemini-3.1-flash-image',
 }));
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({

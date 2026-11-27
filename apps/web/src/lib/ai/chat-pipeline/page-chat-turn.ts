@@ -118,7 +118,7 @@ import { shouldExposeImageGen } from '@/lib/ai/core/image-gen-access';
 import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/core/model-capabilities';
 import { getPageTreeContext } from '@/lib/ai/core/page-tree-context';
 import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
-import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
+import { guardToolResultMedia } from '@/lib/ai/tools/tool-media-guard';
 import { convertMCPToolsToAISDKSchemas, parseMCPToolName, sanitizeToolNamesForProvider } from '@/lib/ai/core/mcp-tool-converter';
 import { getUserPersonalization } from '@/lib/ai/core/personalization-utils';
 import { applyToolExposureMode, ALWAYS_UPFRONT_TOOLS } from '@/lib/ai/tools/tool-exposure';
@@ -165,7 +165,7 @@ import { locationContextToPageContext, pageContextToLocationContext } from '@/li
 import type { LocationContext } from '@/lib/ai/shared/chat-types';
 import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
-import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
+import { hasVisionCapability, getToolMediaCapabilities } from '@/lib/ai/core/model-capabilities';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { deriveConversationTitle } from '@/lib/repositories/derive-conversation-title';
 
@@ -1643,12 +1643,10 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // earlier turn when the model had vision) being re-embedded as an image when
     // convertToModelMessages re-converts history for a model that no longer has
     // vision. Must run before prepareHistoryForModel/finishModelRequest below.
-    if (filteredTools.read_page) {
-      filteredTools = {
-        ...filteredTools,
-        read_page: guardReadPageToolForVision(filteredTools.read_page, hasVisionCapability(resolvedModelName ?? currentModel)),
-      };
-    }
+    filteredTools = guardToolResultMedia(
+      filteredTools,
+      getToolMediaCapabilities(resolvedModelName ?? currentModel, currentProvider),
+    );
 
     // Build system prompt BEFORE history loading so its token estimate is
     // available for prepareConversationContext's context-window budget math.

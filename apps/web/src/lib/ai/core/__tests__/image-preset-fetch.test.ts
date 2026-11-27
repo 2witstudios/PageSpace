@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { fetchCachedImagePreset } from '../image-preset-fetch';
+import { MAX_IMAGE_SIZE_BYTES } from '@/lib/ai/shared/utils/image-resize';
 
 const JPEG_BYTES = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -113,6 +114,18 @@ describe('fetchCachedImagePreset', () => {
     const result = await fetchCachedImagePreset('hash-8', 'image/png', { fetchBytes });
 
     expect(result).toBeNull();
+  });
+
+  it('given any candidate, should ask the fetcher to cap it at the per-image size limit', async () => {
+    const caps: Array<number | undefined> = [];
+    const fetchBytes = async (_hash: string, _preset: string, options?: { maxBytes?: number }) => {
+      caps.push(options?.maxBytes);
+      return null;
+    };
+
+    await fetchCachedImagePreset('hash-9', 'image/png', { fetchBytes });
+
+    expect(caps).toEqual([MAX_IMAGE_SIZE_BYTES, MAX_IMAGE_SIZE_BYTES, MAX_IMAGE_SIZE_BYTES]);
   });
 
   describe('content that was taken down', () => {

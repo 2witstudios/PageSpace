@@ -292,6 +292,8 @@ vi.mock('@/lib/ai/core/validate-image-parts', () => ({
 vi.mock('@/lib/ai/core/model-capabilities', () => ({
   getModelCapabilities: vi.fn(),
   hasVisionCapability: vi.fn().mockReturnValue(true),
+  hasPdfInputCapability: vi.fn().mockReturnValue(false),
+  getToolMediaCapabilities: vi.fn().mockReturnValue({ hasVision: true, hasPdfInput: false, hasToolResultMedia: true }),
 }));
 vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
   resolvePageAgentIntegrationTools: vi.fn().mockResolvedValue({}),

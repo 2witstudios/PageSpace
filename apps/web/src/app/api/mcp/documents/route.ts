@@ -596,7 +596,10 @@ export async function POST(req: NextRequest) {
             });
           }
 
-          if (page.processingStatus === 'visual') {
+          // A visual file with a text layer (a scanned PDF with some text) is read
+          // as text like a completed one; MCP clients never get images, and never
+          // lose the text.
+          if (page.processingStatus === 'visual' && !(page.content ?? '').trim()) {
             return NextResponse.json({
               pageId,
               pageTitle: page.title,
@@ -650,6 +653,9 @@ export async function POST(req: NextRequest) {
           numberedLines,
           content: rangeContent,
           ...(fileMetadata && { fileMetadata }),
+          ...(page.type === PageType.FILE && page.processingStatus === 'visual' && {
+            note: 'This file is mostly images (a scan); this is its extracted text layer, which may be partial. The pages themselves can be seen with a vision model in PageSpace.',
+          }),
           ...(isRangeRequest && { rangeStart: effectiveStart, rangeEnd: effectiveEnd }),
           ...(contentModeWarning && { contentModeWarning }),
         });

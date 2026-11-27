@@ -109,7 +109,7 @@ export class QueueManager {
     const { extractText } = await import('./text-extractor');
     const { processOCR } = await import('./ocr-processor');
     const { processVideo } = await import('./video-processor');
-    const { runPullPipeline } = await import('../api/s3-pull-adapter');
+    const { runPullPipeline, fetchObjectFromS3, processPdfPage } = await import('../api/s3-pull-adapter');
 
     // Unified ingestion worker
     await this.boss.work('ingest-file',
@@ -147,6 +147,17 @@ export class QueueManager {
             }
 
             return { success: true, status: 'visual' } satisfies IngestResult;
+          }
+
+          // PDFs → the same handler uploads use, so a reprocessed scan is
+          // marked visual and gets page images rather than an empty text body.
+          if (mimeType === 'application/pdf') {
+            const bytes = await fetchObjectFromS3(contentHash);
+            const status = await processPdfPage(fileId, contentHash, bytes);
+            if (status === 'visual' && process.env.ENABLE_OCR === 'true') {
+              await this.addJob('ocr-process', { contentHash, fileId });
+            }
+            return { success: true, status } satisfies IngestResult;
           }
 
           // Documents → text extraction

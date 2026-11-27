@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { toModelOutputForReadPage, degradeVisualContentToMetadata, guardReadPageToolForVision } from '../read-page-vision-output';
+import type { UIMessage } from 'ai';
+import { toModelOutputForReadPage, degradeVisualContentToMetadata, guardReadPageToolForVision, visualToolResultScreenParts } from '../read-page-vision-output';
 
 describe('toModelOutputForReadPage', () => {
   it('given a visual_content_delivered output, should map it to a content ToolResultOutput with a text part and an image-data part', () => {
@@ -156,7 +157,7 @@ describe('guardReadPageToolForVision', () => {
   });
 
   it('given hasVision: true, should leave the tool behavior unchanged for a stale image tool result', () => {
-    const guarded = guardReadPageToolForVision(makeReadPageTool(), true);
+    const guarded = guardReadPageToolForVision(makeReadPageTool(), { hasVision: true, hasPdfInput: false, hasToolResultMedia: true });
 
     const result = guarded.toModelOutput!({ toolCallId: '1', input: {}, output: staleVisualOutput });
 
@@ -170,7 +171,7 @@ describe('guardReadPageToolForVision', () => {
   });
 
   it('given hasVision: false, should degrade a stale image tool result to metadata-only instead of an image content part', () => {
-    const guarded = guardReadPageToolForVision(makeReadPageTool(), false);
+    const guarded = guardReadPageToolForVision(makeReadPageTool(), { hasVision: false, hasPdfInput: false, hasToolResultMedia: true });
 
     const result = guarded.toModelOutput!({ toolCallId: '1', input: {}, output: staleVisualOutput }) as {
       type: string;
@@ -180,5 +181,159 @@ describe('guardReadPageToolForVision', () => {
     expect(result.type).toBe('json');
     expect(result.value.type).toBe('visual_content_metadata');
     expect(JSON.stringify(result)).not.toContain(staleVisualOutput.imageBase64);
+  });
+});
+
+const pdfPartsOutput = {
+  success: true,
+  type: 'visual_parts_delivered',
+  pageId: 'page-pdf',
+  title: 'Exhibits.pdf',
+  originalMimeType: 'application/pdf',
+  message: 'Delivered "Exhibits.pdf" as a PDF (12 pages).',
+  parts: [{ kind: 'file', mediaType: 'application/pdf', data: 'JVBERi0xLjQ=', filename: 'Exhibits.pdf' }],
+  sizeBytes: 9,
+  metadata: { processingStatus: 'visual', delivery: 'pdf' },
+};
+
+const pageImagesOutput = {
+  success: true,
+  type: 'visual_parts_delivered',
+  pageId: 'page-pdf',
+  title: 'Exhibits.pdf',
+  originalMimeType: 'application/pdf',
+  message: 'Showing pages 2-3 of 12 from "Exhibits.pdf" as images.',
+  parts: [
+    { kind: 'image', mediaType: 'image/jpeg', data: '/9j/AAAA', pdfPage: 2 },
+    { kind: 'image', mediaType: 'image/jpeg', data: '/9j/BBBB', pdfPage: 3 },
+  ],
+  sizeBytes: 9,
+  metadata: { processingStatus: 'visual', delivery: 'page-images' },
+};
+
+describe('toModelOutputForReadPage — visual_parts_delivered', () => {
+  it('given a native PDF part, should map it to a file-data content part', () => {
+    expect(toModelOutputForReadPage(pdfPartsOutput)).toEqual({
+      type: 'content',
+      value: [
+        { type: 'text', text: pdfPartsOutput.message },
+        { type: 'file-data', data: 'JVBERi0xLjQ=', mediaType: 'application/pdf', filename: 'Exhibits.pdf' },
+      ],
+    });
+  });
+
+  it('given rasterized PDF pages, should label each image with its page number', () => {
+    expect(toModelOutputForReadPage(pageImagesOutput)).toEqual({
+      type: 'content',
+      value: [
+        { type: 'text', text: pageImagesOutput.message },
+        { type: 'text', text: 'Page 2:' },
+        { type: 'image-data', data: '/9j/AAAA', mediaType: 'image/jpeg' },
+        { type: 'text', text: 'Page 3:' },
+        { type: 'image-data', data: '/9j/BBBB', mediaType: 'image/jpeg' },
+      ],
+    });
+  });
+});
+
+describe('degradeVisualContentToMetadata — visual_parts_delivered', () => {
+  it('given delivered parts, should strip every byte and return visual_content_metadata with the original type', () => {
+    const result = degradeVisualContentToMetadata(pageImagesOutput) as Record<string, unknown>;
+    expect(result.type).toBe('visual_content_metadata');
+    expect(result.mimeType).toBe('application/pdf');
+    expect(JSON.stringify(result)).not.toContain('/9j/AAAA');
+  });
+});
+
+describe('guardReadPageToolForVision — PDF parts', () => {
+  const makeReadPageTool = () => ({
+    toModelOutput: ({ output }: { toolCallId: string; input: unknown; output: unknown }) =>
+      toModelOutputForReadPage(output),
+  });
+
+  it('given a vision model with PDF input, should re-send a stale native PDF unchanged', () => {
+    const guarded = guardReadPageToolForVision(makeReadPageTool(), { hasVision: true, hasPdfInput: true, hasToolResultMedia: true });
+    const result = guarded.toModelOutput!({ toolCallId: '1', input: {}, output: pdfPartsOutput }) as { type: string };
+    expect(result.type).toBe('content');
+    expect(JSON.stringify(result)).toContain('file-data');
+  });
+
+  it('given a vision model without PDF input, should not re-send a stale native PDF part', () => {
+    const guarded = guardReadPageToolForVision(makeReadPageTool(), { hasVision: true, hasPdfInput: false, hasToolResultMedia: true });
+    const result = guarded.toModelOutput!({ toolCallId: '1', input: {}, output: pdfPartsOutput }) as {
+      type: string;
+      value: Record<string, unknown>;
+    };
+    expect(result.type).toBe('json');
+    expect(result.value.type).toBe('visual_content_metadata');
+    expect(JSON.stringify(result)).not.toContain('JVBERi0xLjQ=');
+    expect(JSON.stringify(result.value.metadata)).toContain('pages');
+  });
+
+  it('given a vision model without PDF input, should still re-send stale page images', () => {
+    const guarded = guardReadPageToolForVision(makeReadPageTool(), { hasVision: true, hasPdfInput: false, hasToolResultMedia: true });
+    const result = guarded.toModelOutput!({ toolCallId: '1', input: {}, output: pageImagesOutput }) as { type: string };
+    expect(result.type).toBe('content');
+    expect(JSON.stringify(result)).toContain('/9j/AAAA');
+  });
+
+  it('given a vision model on a provider without tool-result media, should degrade stale page images to metadata', () => {
+    const guarded = guardReadPageToolForVision(makeReadPageTool(), { hasVision: true, hasPdfInput: false, hasToolResultMedia: false });
+    const result = guarded.toModelOutput!({ toolCallId: '1', input: {}, output: pageImagesOutput }) as { type: string };
+    expect(result.type).toBe('json');
+    expect(JSON.stringify(result)).not.toContain('/9j/AAAA');
+  });
+
+  it('given a model without vision, should degrade stale page images to metadata', () => {
+    const guarded = guardReadPageToolForVision(makeReadPageTool(), { hasVision: false, hasPdfInput: false, hasToolResultMedia: true });
+    const result = guarded.toModelOutput!({ toolCallId: '1', input: {}, output: pageImagesOutput }) as { type: string };
+    expect(result.type).toBe('json');
+    expect(JSON.stringify(result)).not.toContain('/9j/AAAA');
+  });
+});
+
+describe('visualToolResultScreenParts — visual_parts_delivered', () => {
+  const asMessage = (output: unknown): UIMessage => ({
+    id: 'm1',
+    role: 'assistant',
+    parts: [{ type: 'tool-read_page', toolCallId: 'c1', state: 'output-available', input: {}, output } as unknown as UIMessage['parts'][number]],
+  });
+
+  it('given a client-supplied multi-part result, should screen the bytes of every part', () => {
+    const { parts, undecodable } = visualToolResultScreenParts([asMessage(pageImagesOutput), asMessage(pdfPartsOutput)]);
+    expect(undecodable).toBe(false);
+    expect(parts.map((p) => p.url)).toEqual([
+      'data:application/octet-stream;base64,/9j/AAAA',
+      'data:application/octet-stream;base64,/9j/BBBB',
+      'data:application/octet-stream;base64,JVBERi0xLjQ=',
+    ]);
+  });
+
+  it('given a part whose bytes are not strict base64, should report it undecodable', () => {
+    const bad = { ...pageImagesOutput, parts: [{ kind: 'image', mediaType: 'image/jpeg', data: 'not base64!', pdfPage: 1 }] };
+    expect(visualToolResultScreenParts([asMessage(bad)]).undecodable).toBe(true);
+  });
+
+  it('given a whole-PDF part of ~13 MB base64, should screen it without overflowing the stack', () => {
+    const big = Buffer.alloc(10 * 1024 * 1024, 7).toString('base64');
+    const output = { ...pdfPartsOutput, parts: [{ kind: 'file', mediaType: 'application/pdf', data: big, filename: 'big.pdf' }] };
+    const { parts, undecodable } = visualToolResultScreenParts([asMessage(output)]);
+    expect(undecodable).toBe(false);
+    expect(parts).toHaveLength(1);
+  });
+
+  it.each([
+    ['a length that is not a multiple of 4', 'abcde'],
+    ['padding in the middle', 'ab==abcd'],
+    ['three padding characters', 'a==='],
+    ['a URL-safe character', 'ab-_'],
+  ])('given %s, should report it undecodable', (_label, data) => {
+    const bad = { ...pageImagesOutput, parts: [{ kind: 'image', mediaType: 'image/jpeg', data, pdfPage: 1 }] };
+    expect(visualToolResultScreenParts([asMessage(bad)]).undecodable).toBe(true);
+  });
+
+  it('given a part whose data is not a string, should report it undecodable rather than skip it', () => {
+    const bad = { ...pageImagesOutput, parts: [{ kind: 'image', mediaType: 'image/jpeg', data: 42, pdfPage: 1 }] };
+    expect(visualToolResultScreenParts([asMessage(bad)]).undecodable).toBe(true);
   });
 });

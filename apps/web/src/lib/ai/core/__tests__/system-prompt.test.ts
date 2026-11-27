@@ -62,6 +62,27 @@ describe('buildSystemPrompt — general', () => {
   });
 });
 
+describe('buildSystemPrompt — seeing files', () => {
+  it('says plainly that read_page shows images and PDFs to vision models', () => {
+    const result = buildSystemPrompt();
+    expect(result).toContain('read_page shows you images and PDFs');
+    expect(result).toMatch(/vision/);
+    expect(result).toContain('pages');
+  });
+
+  it('tells the agent not to record that it cannot see files', () => {
+    expect(buildSystemPrompt()).toMatch(/never note .*can't see files/i);
+  });
+
+  it('is present when read_page is in the allowed tools', () => {
+    expect(buildSystemPrompt(false, undefined, false, ['read_page'])).toContain('read_page shows you images and PDFs');
+  });
+
+  it('is left out when the agent cannot call read_page', () => {
+    expect(buildSystemPrompt(false, undefined, false, ['list_pages'])).not.toContain('read_page shows you images and PDFs');
+  });
+});
+
 describe('buildSystemPrompt — sandbox guidance', () => {
   it('given codeExecutionEnabled true, should include the sandbox guidance section', () => {
     const result = buildSystemPrompt(false, undefined, true);

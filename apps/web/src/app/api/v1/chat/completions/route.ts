@@ -28,12 +28,13 @@ import { messageRepository } from '@/lib/repositories/message-repository';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForReadOnly, filterToolsForMcpScope, filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibilityForConversation } from '@/lib/ai/core/sandbox-tool-eligibility';
-import { getModelCapabilities, hasVisionCapability } from '@/lib/ai/core/model-capabilities';
+import { getModelCapabilities, hasVisionCapability, getToolMediaCapabilities } from '@/lib/ai/core/model-capabilities';
 import { hasFileParts, validateUserMessageFileParts } from '@/lib/ai/core/validate-image-parts';
 import { contentBlockedResponse, contentBlockedResponseFor } from '@/lib/upload/content-blocked-response';
 import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
-import { guardReadPageToolForVision, visualToolResultScreenParts } from '@/lib/ai/tools/read-page-vision-output';
+import { visualToolResultScreenParts } from '@/lib/ai/tools/read-page-vision-output';
+import { guardToolResultMedia } from '@/lib/ai/tools/tool-media-guard';
 import { validateInferenceRequest } from '@/lib/ai/openai-api/validate-inference-request';
 import { adaptToOpenAIChunk } from '@/lib/ai/openai-api/adapt-to-openai-chunk';
 import { buildToolSummaryEvent } from '@/lib/ai/openai-api/build-tool-summary-event';
@@ -460,15 +461,10 @@ export async function POST(request: Request): Promise<Response> {
       finalTools = { ...filteredTools, ...clientToolSet } as ToolSet;
     }
 
-    // Guard against a stale read_page tool-result (image bytes delivered on an
-    // earlier turn/request when the model had vision) being re-embedded as an
-    // image when history is re-converted for a model that no longer has vision.
-    if (finalTools.read_page) {
-      finalTools = {
-        ...finalTools,
-        read_page: guardReadPageToolForVision(finalTools.read_page, hasVisionCapability(providerResult.modelName)),
-      };
-    }
+    // Guard against stale tool-result media (read_page images/PDFs, browser
+    // screenshots from an earlier turn/request) being re-embedded when history is
+    // re-converted for a model or provider that cannot take them.
+    finalTools = guardToolResultMedia(finalTools, getToolMediaCapabilities(providerResult.modelName, providerResult.provider));
 
     // Load the caller's timezone so time-aware tools (calendar, task triggers)
     // resolve dates in the user's zone instead of defaulting to UTC, matching

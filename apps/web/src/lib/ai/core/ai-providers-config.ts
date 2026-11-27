@@ -566,27 +566,9 @@ export const AI_PROVIDERS = {
   },
 } as const;
 
-/**
- * Cloud vendor providers — every one is served through OpenRouter. The remainder
- * (Ollama, LM Studio, Azure OpenAI) keep their own backends for on-prem.
- */
-const CLOUD_VENDOR_PROVIDERS = new Set<string>([
-  'openai', 'anthropic', 'google', 'xai', 'deepseek', 'qwen', 'mistral',
-  'moonshot', 'minimax', 'meta', 'bytedance', 'writer', 'zai',
-  'aion-labs', 'amazon', 'cohere', 'ibm-granite',
-  'inclusionai', 'liquid', 'nex-agi', 'nvidia',
-  'rekaai', 'relace', 'sakana', 'sao10k', 'stepfun', 'tencent',
-  'thedrummer', 'thinkingmachines', 'upstage', 'xiaomi',
-]);
-
-/**
- * Map a UI provider to its backend. Every cloud vendor routes through OpenRouter;
- * local providers use their own backend.
- */
-export function getBackendProvider(uiProvider: string): string {
-  if (CLOUD_VENDOR_PROVIDERS.has(uiProvider)) return 'openrouter';
-  return uiProvider;
-}
+// The UI-provider → backend mapping lives in its own dependency-free module so
+// client-safe code (vision-models.ts) can use it without this whole config.
+export { getBackendProvider } from './provider-backend';
 
 /**
  * Get default model for a provider (first model in its catalog).

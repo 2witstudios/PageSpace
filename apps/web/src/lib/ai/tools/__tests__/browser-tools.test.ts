@@ -1,4 +1,4 @@
-import { describe, it } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { assert } from '@/test/riteway';
 import { createBrowserTools, toModelOutputForBrowserScreenshot, type OperateBrowser } from '../browser-tools';
 import type { BrowserControlResponse, BrowserOperation } from '@pagespace/browser-worker/browser-operation';
@@ -114,8 +114,8 @@ describe('browser tools', () => {
 
   it('delivers a screenshot as an image part, and refuses one to a model that cannot see', async () => {
     const { tools, recorder } = setup(() => ({ ok: true, result: { kind: 'screenshot', page: PAGE, image: { mediaType: 'image/jpeg', base64: 'AAAA' } } }));
-    const blind = await call(tools, 'browser_screenshot', {}, { userId: 'user-1', modelCapabilities: { hasVision: false, hasTools: true, model: 'm', provider: 'p' } });
-    const seen = await call(tools, 'browser_screenshot', {}, { userId: 'user-1', modelCapabilities: { hasVision: true, hasTools: true, model: 'm', provider: 'p' } });
+    const blind = await call(tools, 'browser_screenshot', {}, { userId: 'user-1', modelCapabilities: { hasVision: false, hasPdfInput: false, hasToolResultMedia: true, hasTools: true, model: 'm', provider: 'p' } });
+    const seen = await call(tools, 'browser_screenshot', {}, { userId: 'user-1', modelCapabilities: { hasVision: true, hasPdfInput: false, hasToolResultMedia: true, hasTools: true, model: 'm', provider: 'p' } });
     const modelOutput = toModelOutputForBrowserScreenshot(seen) as unknown as { type: string; value: { type: string }[] };
     assert({
       given: 'a screenshot for a model without vision and one with',
@@ -127,6 +127,13 @@ describe('browser tools', () => {
         modelOutput: ['content', ['text', 'image-data']],
       },
     });
+  });
+
+  it('refuses a screenshot to a vision model whose provider cannot receive tool-result images', async () => {
+    const { tools, recorder } = setup(() => ({ ok: true, result: { kind: 'screenshot', page: PAGE, image: { mediaType: 'image/jpeg', base64: 'AAAA' } } }));
+    const result = await call(tools, 'browser_screenshot', {}, { userId: 'user-1', modelCapabilities: { hasVision: true, hasPdfInput: false, hasToolResultMedia: false, hasTools: true, model: 'm', provider: 'ollama' } });
+    expect(result).toEqual({ success: false, error: "This model's provider cannot receive images in tool results; use browser_read instead." });
+    expect(recorder.operations).toHaveLength(0);
   });
 
   it('maps browser_tabs to typed tab actions and rejects incomplete ones', async () => {

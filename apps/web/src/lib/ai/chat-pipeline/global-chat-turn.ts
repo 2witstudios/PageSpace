@@ -93,8 +93,8 @@ import { makeOnStepFinishHandler } from '@/lib/ai/core/step-finish-handler';
 import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { userMessageSaveRefusal } from './user-message-save-refusal';
-import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
-import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
+import { hasVisionCapability, getToolMediaCapabilities } from '@/lib/ai/core/model-capabilities';
+import { guardToolResultMedia } from '@/lib/ai/tools/tool-media-guard';
 import { buildBuiltinSkillCatalog } from '@/lib/ai/core/skill-catalog';
 import {
   buildAgentSystemPrompt,
@@ -929,15 +929,10 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
 
     let finalTools: ToolSet = toolSelection.tools;
 
-    // Guard against a stale read_page tool-result (image bytes delivered on an
-    // earlier turn when the model had vision) being re-embedded as an image when
-    // history is re-converted for a model that no longer has vision.
-    if (finalTools.read_page) {
-      finalTools = {
-        ...finalTools,
-        read_page: guardReadPageToolForVision(finalTools.read_page, hasVisionCapability(currentModel)),
-      };
-    }
+    // Guard against stale tool-result media (read_page images/PDFs, browser
+    // screenshots from an earlier turn) being re-embedded when history is
+    // re-converted for a model or provider that cannot take them.
+    finalTools = guardToolResultMedia(finalTools, getToolMediaCapabilities(currentModel, currentProvider));
 
     loggers.api.debug('Global Assistant Chat API: Tool modes', {
       isReadOnly: readOnlyMode,

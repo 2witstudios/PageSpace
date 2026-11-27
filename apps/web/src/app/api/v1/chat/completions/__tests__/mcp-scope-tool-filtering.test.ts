@@ -132,6 +132,8 @@ vi.mock('@/lib/ai/core/tool-filtering', async (importOriginal) => {
 vi.mock('@/lib/ai/core/model-capabilities', () => ({
   getModelCapabilities: vi.fn().mockResolvedValue({}),
   hasVisionCapability: vi.fn().mockReturnValue(true),
+  hasPdfInputCapability: vi.fn().mockReturnValue(false),
+  getToolMediaCapabilities: vi.fn().mockReturnValue({ hasVision: true, hasPdfInput: false, hasToolResultMedia: true }),
 }));
 
 vi.mock('@/lib/ai/tools/tool-exposure', () => ({
