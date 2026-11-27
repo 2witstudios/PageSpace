@@ -72,3 +72,29 @@ describe('fetchOriginalUnderBudget (review #3016 round 2, E)', () => {
     expect(e.budget.inFlightBytes()).toBe(0);
   });
 });
+
+describe('fetchOriginalUnderBudget — a row that UNDERSTATES the file (round-3 nit)', () => {
+  it('tells the agent the file is larger than its RECORDED size, and names the real limit — not the recorded size as if it were a limit', async () => {
+    const e = effects();
+    e.fetchOriginal.mockResolvedValueOnce({
+      success: false,
+      error: `The file is larger than the ${72 * MB}-byte limit for one copy. It was not copied partially.`,
+      reason: 'over_limit',
+    } as never);
+    const result = await fetchOriginalUnderBudget({ page: page(), deadlineAt: 99 }, e);
+    expect(result.success).toBe(false);
+    const error = String((result as { error: string }).error);
+    expect(error).toContain(`larger than its recorded size of ${72 * MB} bytes`);
+    expect(error).toContain(`${250 * MB} bytes`);
+    expect(error).not.toContain(`${72 * MB}-byte limit`);
+    expect(e.budget.inFlightBytes()).toBe(0);
+  });
+
+  it('a row with NO size was capped at the real limit already, so the plain over-limit message stands', async () => {
+    const e = effects();
+    const plain = `The file is larger than the ${250 * MB}-byte limit for one copy. It was not copied partially.`;
+    e.fetchOriginal.mockResolvedValueOnce({ success: false, error: plain, reason: 'over_limit' } as never);
+    const result = await fetchOriginalUnderBudget({ page: page({ fileSize: null }), deadlineAt: 99 }, e);
+    expect(result).toMatchObject({ success: false, error: plain });
+  });
+});

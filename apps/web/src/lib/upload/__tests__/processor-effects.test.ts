@@ -115,6 +115,8 @@ describe('fetchOriginalFromProcessor', () => {
     expect(result).toMatchObject({ success: false });
     expect(String((result as { error: string }).error)).toContain('1024');
     expect(body.cancel).toHaveBeenCalled();
+    // Tagged, so a caller that capped below the real limit can say why.
+    expect((result as { reason?: string }).reason).toBe('over_limit');
   });
 
   it('given a body over the cap with no declared length, should still refuse', async () => {

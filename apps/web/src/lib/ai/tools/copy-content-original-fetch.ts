@@ -19,7 +19,7 @@ export interface OriginalFetchEffects {
     filePath: string;
     maxBytes: number;
     deadlineAt: number;
-  }) => Promise<{ success: true; bytes: Uint8Array } | { success: false; error: string }>;
+  }) => Promise<{ success: true; bytes: Uint8Array } | { success: false; error: string; reason?: string }>;
   /** Largest file one copy moves (`MAX_BINARY_COPY_BYTES`). */
   maxCopyBytes: number;
   /** The agent-facing refusal when the budget has no room (`DENIAL_MESSAGES.copy_budget_exhausted`). */
@@ -42,12 +42,27 @@ export async function fetchOriginalUnderBudget(
       error: `"${page.title}" is ${page.fileSize} bytes, over the ${effects.maxCopyBytes}-byte limit for copying a file into the sandbox.`,
     };
   }
-  const reserveBytes = typeof page.fileSize === 'number' && page.fileSize > 0 ? page.fileSize : effects.maxCopyBytes;
+  const recordedSize = typeof page.fileSize === 'number' && page.fileSize > 0 ? page.fileSize : null;
+  const reserveBytes = recordedSize ?? effects.maxCopyBytes;
   const { result, release } = await holdUntilHandedOff(effects.budget, async (reserve) => {
     if (!(await reserve(reserveBytes))) {
       return { success: false as const, error: effects.budgetExhaustedMessage, reason: 'copy_budget_exhausted' };
     }
     return effects.fetchOriginal({ pageId: page.id, filePath, maxBytes: reserveBytes, deadlineAt });
   });
-  return result.success ? { success: true, bytes: result.bytes, release } : result;
+  if (result.success) return { success: true, bytes: result.bytes, release };
+  // The fetch was cut off at the ROW'S size, not at a limit: the row understates
+  // the file. Say that, and name the limit that actually applies — reporting the
+  // recorded size as "the limit" would send the agent after a limit that is not one.
+  if (result.reason === 'over_limit' && recordedSize !== null) {
+    return {
+      success: false,
+      reason: 'over_limit',
+      error:
+        `"${page.title}" is larger than its recorded size of ${recordedSize} bytes, so it was not copied ` +
+        `(nothing was copied partially). One copy into the sandbox can move at most ${effects.maxCopyBytes} bytes; ` +
+        `if the file is under that, its record is out of date — re-upload it, or ask for it to be reprocessed.`,
+    };
+  }
+  return result;
 }

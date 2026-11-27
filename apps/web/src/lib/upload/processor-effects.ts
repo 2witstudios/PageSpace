@@ -148,10 +148,12 @@ export async function fetchOriginalFromProcessor({
   filePath: string;
   maxBytes: number;
   deadlineAt?: number;
-}): Promise<{ success: true; bytes: Uint8Array } | { success: false; error: string }> {
+}): Promise<{ success: true; bytes: Uint8Array } | { success: false; error: string; reason?: 'over_limit' }> {
   const contentHash = toContentHash(filePath);
+  // Tagged, so a caller that capped below the real limit can say what happened.
   const tooLarge = (bytes?: number) => ({
     success: false as const,
+    reason: 'over_limit' as const,
     error: `The file is ${bytes === undefined ? 'larger than' : `${bytes} bytes, over`} the ${maxBytes}-byte limit for one copy. It was not copied partially.`,
   });
   const timeoutMs = transferTimeoutMs(deadlineAt);
