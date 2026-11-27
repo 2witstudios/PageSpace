@@ -30,6 +30,8 @@ const {
   mockGetAiAgent,
   mockFindSessionRecord,
   mockRenameSession,
+  mockSpawnAutoSession,
+  mockIsOwnHomeDrive,
 } = vi.hoisted(() => ({
   mockFindSessionForConversation: vi.fn(),
   mockEnsureGlobalSandboxSession: vi.fn(),
@@ -48,6 +50,8 @@ const {
   mockGetAiAgent: vi.fn(),
   mockFindSessionRecord: vi.fn(),
   mockRenameSession: vi.fn(),
+  mockSpawnAutoSession: vi.fn(),
+  mockIsOwnHomeDrive: vi.fn(),
 }));
 
 vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
@@ -58,6 +62,10 @@ vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   checkSessionAccess: mockCheckSessionAccess,
   createConversationInSession: mockCreateConversationInSession,
   spawnSession: mockSpawnSession,
+  spawnAutoSession: mockSpawnAutoSession,
+  isOwnHomeDrive: mockIsOwnHomeDrive,
+  agentDefaultEnvId: (agent: { defaultEnvId: string | null; sandboxEnabled: boolean }) =>
+    agent.sandboxEnabled && agent.defaultEnvId ? agent.defaultEnvId : null,
   endSession: mockEndSession,
   listSessions: mockListSessions,
   listSessionConversationsBulk: mockListSessionConversationsBulk,
@@ -122,6 +130,8 @@ beforeEach(() => {
   mockListSessions.mockResolvedValue([]);
   mockFindSessionRecord.mockResolvedValue({ id: 'ses-1', ownerId: 'user-1', driveId: 'drive-1' });
   mockRenameSession.mockResolvedValue({ workspaceId: 'ses-1', name: 'Renamed' });
+  // Agents live in team drives unless a test says otherwise.
+  mockIsOwnHomeDrive.mockResolvedValue(false);
 });
 
 describe('resolveCallerSessionForWorker', () => {
@@ -205,7 +215,51 @@ describe('resolveCallerSessionForWorker', () => {
     // with the agent rather than the generic fallback. This is the DEFAULT
     // placement — the most travelled minting path, and the one that went on
     // producing nameless "Session" rows after the other two were fixed.
-    expect(mockEnsureDriveSessionForConversation).toHaveBeenCalledWith('conv-p', expect.objectContaining({ userId: 'user-1' }), 'drive-1', 'Agent');
+    // No default env and a TEAM drive: ephemeral, decided by a plain read of
+    // the owner's Home drive — the Home path (and any Home-drive provisioning
+    // it could trigger) is never taken.
+    expect(mockIsOwnHomeDrive).toHaveBeenCalledWith('user-1', 'drive-1');
+    expect(mockEnsureDriveSessionForConversation).toHaveBeenCalledWith('conv-p', expect.objectContaining({ userId: 'user-1' }), 'drive-1', 'Agent', null);
+  });
+
+  test("an unbound PAGE conversation whose agent has Sandbox on and a defaultEnvId mints its session IN that env", async () => {
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue(pageConversation);
+    mockGetAiAgent.mockResolvedValue({ id: 'agent-1', driveId: 'drive-1', title: 'Agent', type: 'AI_CHAT', defaultEnvId: 'env-dev', sandboxEnabled: true });
+    mockCanUserViewPage.mockResolvedValue(true);
+    mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+    mockEnsureDriveSessionForConversation.mockResolvedValue({ ok: true, session: sessionRow });
+
+    await resolveCallerSessionForWorker('conv-p', USER_1);
+
+    expect(mockEnsureDriveSessionForConversation).toHaveBeenCalledWith('conv-p', expect.anything(), 'drive-1', 'Agent', 'env-dev');
+  });
+
+  test("an unbound PAGE conversation whose agent's defaultEnvId is set but Sandbox is OFF ignores it — the stored default is inert", async () => {
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue(pageConversation);
+    mockGetAiAgent.mockResolvedValue({ id: 'agent-1', driveId: 'drive-1', title: 'Agent', type: 'AI_CHAT', defaultEnvId: 'env-dev', sandboxEnabled: false });
+    mockCanUserViewPage.mockResolvedValue(true);
+    mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+    mockEnsureDriveSessionForConversation.mockResolvedValue({ ok: true, session: sessionRow });
+
+    await resolveCallerSessionForWorker('conv-p', USER_1);
+
+    expect(mockEnsureDriveSessionForConversation).toHaveBeenCalledWith('conv-p', expect.anything(), 'drive-1', 'Agent', null);
+  });
+
+  test("the owner's own Imago conversation mints its session in Home, like the Global Assistant", async () => {
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue(pageConversation);
+    mockGetAiAgent.mockResolvedValue({ id: 'agent-1', driveId: 'home-drive', title: 'Imago', type: 'AI_CHAT', defaultEnvId: null, sandboxEnabled: true });
+    mockIsOwnHomeDrive.mockResolvedValue(true);
+    mockCanUserViewPage.mockResolvedValue(true);
+    mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+    mockEnsureDriveSessionForConversation.mockResolvedValue({ ok: true, session: sessionRow });
+
+    await resolveCallerSessionForWorker('conv-p', USER_1);
+
+    expect(mockEnsureDriveSessionForConversation).toHaveBeenCalledWith('conv-p', expect.anything(), 'home-drive', 'Imago', 'home');
   });
 
   test('a PAGE conversation whose agent the caller cannot view refuses with not_permitted — RBAC is the gate, not binding state', async () => {
@@ -325,17 +379,40 @@ describe('createWorkerSession — placement', () => {
   });
 
   describe('workspace: "new"', () => {
+    test('with freshSandbox (sandbox: "new"), mints it EPHEMERAL — an isolated machine, even for the assistant whose default is Home', async () => {
+      mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+      mockSpawnAutoSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockCreateConversationInSession.mockResolvedValue(undefined);
+
+      const deps = buildSessionToolsDeps();
+      await deps.createWorkerSession({ ...baseInput, workspace: 'new', freshSandbox: true });
+
+      expect(mockSpawnAutoSession).toHaveBeenCalledWith(expect.objectContaining({ driveId: null, env: null }));
+    });
+
+    test('with freshSandbox for a page agent that HAS a default env, still mints it ephemeral — the explicit choice wins', async () => {
+      mockGetAiAgent.mockResolvedValue({ id: 'agent-1', driveId: 'drive-1', title: 'Builder', defaultEnvId: 'env-default', sandboxEnabled: true });
+      mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+      mockSpawnAutoSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockCreateConversationInSession.mockResolvedValue(undefined);
+
+      const deps = buildSessionToolsDeps();
+      await deps.createWorkerSession({ ...baseInput, agentPageId: 'agent-1', workspace: 'new', freshSandbox: true });
+
+      expect(mockSpawnAutoSession).toHaveBeenCalledWith(expect.objectContaining({ driveId: 'drive-1', env: null }));
+    });
+
     test('mints an isolated workspace and creates the worker in it', async () => {
       mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
-      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockSpawnAutoSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
       mockCreateConversationInSession.mockResolvedValue(undefined);
 
       const deps = buildSessionToolsDeps();
       const result = await deps.createWorkerSession({ ...baseInput, workspace: 'new' });
 
       expect(result).toEqual({ ok: true, workspaceId: 'ses-fresh' });
-      expect(mockSpawnSession).toHaveBeenCalledWith(
-        expect.objectContaining({ actor: expect.objectContaining({ userId: 'user-1' }), driveId: null, envId: null }),
+      expect(mockSpawnAutoSession).toHaveBeenCalledWith(
+        expect.objectContaining({ actor: expect.objectContaining({ userId: 'user-1' }), driveId: null, env: 'home' }),
       );
       expect(mockCreateConversationInSession).toHaveBeenCalledWith(
         expect.objectContaining({ workspaceId: 'ses-fresh' }),
@@ -351,13 +428,13 @@ describe('createWorkerSession — placement', () => {
      */
     test('never mints a NAMELESS workspace: a global spawn is auto-labelled', async () => {
       mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
-      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockSpawnAutoSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
       mockCreateConversationInSession.mockResolvedValue(undefined);
 
       const deps = buildSessionToolsDeps();
       await deps.createWorkerSession({ ...baseInput, workspace: 'new' });
 
-      expect(mockSpawnSession).toHaveBeenCalledWith(
+      expect(mockSpawnAutoSession).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'Global Assistant' }),
       );
     });
@@ -365,13 +442,13 @@ describe('createWorkerSession — placement', () => {
     test('auto-labels from the AGENT when spawning for a page agent', async () => {
       mockGetAiAgent.mockResolvedValue({ id: 'agent-1', driveId: 'drive-1', title: 'Release Bot' });
       mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
-      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockSpawnAutoSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
       mockCreateConversationInSession.mockResolvedValue(undefined);
 
       const deps = buildSessionToolsDeps();
       await deps.createWorkerSession({ ...baseInput, agentPageId: 'agent-1', workspace: 'new' });
 
-      expect(mockSpawnSession).toHaveBeenCalledWith(expect.objectContaining({ name: 'Release Bot' }));
+      expect(mockSpawnAutoSession).toHaveBeenCalledWith(expect.objectContaining({ name: 'Release Bot' }));
     });
 
     test('scans past an existing label rather than colliding with it', async () => {
@@ -379,13 +456,13 @@ describe('createWorkerSession — placement', () => {
       // of five identical rows is unreadable.
       mockListSessions.mockResolvedValue([{ name: 'Global Assistant' }, { name: 'Global Assistant 2' }]);
       mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
-      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockSpawnAutoSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
       mockCreateConversationInSession.mockResolvedValue(undefined);
 
       const deps = buildSessionToolsDeps();
       await deps.createWorkerSession({ ...baseInput, workspace: 'new' });
 
-      expect(mockSpawnSession).toHaveBeenCalledWith(
+      expect(mockSpawnAutoSession).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'Global Assistant 3' }),
       );
     });
@@ -396,27 +473,27 @@ describe('createWorkerSession — placement', () => {
       // refusing would cost the whole workspace.
       mockListSessions.mockRejectedValue(new Error('database unavailable'));
       mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
-      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockSpawnAutoSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
       mockCreateConversationInSession.mockResolvedValue(undefined);
 
       const deps = buildSessionToolsDeps();
       const result = await deps.createWorkerSession({ ...baseInput, workspace: 'new' });
 
       expect(result).toEqual(expect.objectContaining({ ok: true }));
-      expect(mockSpawnSession).toHaveBeenCalledWith(
+      expect(mockSpawnAutoSession).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'Global Assistant' }),
       );
     });
 
     test("the model's own workspaceName wins, trimmed", async () => {
       mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
-      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockSpawnAutoSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
       mockCreateConversationInSession.mockResolvedValue(undefined);
 
       const deps = buildSessionToolsDeps();
       await deps.createWorkerSession({ ...baseInput, workspace: 'new', workspaceName: '  Migration run  ' });
 
-      expect(mockSpawnSession).toHaveBeenCalledWith(
+      expect(mockSpawnAutoSession).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'Migration run' }),
       );
       // The derivation is skipped entirely when the model supplied a label.
@@ -425,13 +502,13 @@ describe('createWorkerSession — placement', () => {
 
     test('bounds an over-long workspaceName rather than refusing the spawn', async () => {
       mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
-      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockSpawnAutoSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
       mockCreateConversationInSession.mockResolvedValue(undefined);
 
       const deps = buildSessionToolsDeps();
       await deps.createWorkerSession({ ...baseInput, workspace: 'new', workspaceName: 'x'.repeat(500) });
 
-      const name = mockSpawnSession.mock.calls[0][0].name as string;
+      const name = mockSpawnAutoSession.mock.calls[0][0].name as string;
       expect(name).toHaveLength(120);
     });
 
@@ -444,40 +521,40 @@ describe('createWorkerSession — placement', () => {
 
       expect(result).toEqual(expect.objectContaining({ ok: false, reason: 'not_permitted' }));
       expect(mockCheckAccessForSubject).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), expect.objectContaining({ driveId: 'drive-1' }));
-      expect(mockSpawnSession).not.toHaveBeenCalled();
+      expect(mockSpawnAutoSession).not.toHaveBeenCalled();
     });
 
     test("honors the target agent's own defaultEnvId when Sandbox is enabled (review — general-purpose self-review, PR #2513: this path fetched defaultEnvId/sandboxEnabled but never applied them)", async () => {
       mockGetAiAgent.mockResolvedValue({ id: 'agent-1', driveId: 'drive-1', defaultEnvId: 'env-default', sandboxEnabled: true });
       mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
-      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockSpawnAutoSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
       mockCreateConversationInSession.mockResolvedValue(undefined);
 
       const deps = buildSessionToolsDeps();
       await deps.createWorkerSession({ ...baseInput, agentPageId: 'agent-1', workspace: 'new' });
 
-      expect(mockSpawnSession).toHaveBeenCalledWith(
-        expect.objectContaining({ actor: expect.objectContaining({ userId: 'user-1' }), driveId: 'drive-1', envId: 'env-default' }),
+      expect(mockSpawnAutoSession).toHaveBeenCalledWith(
+        expect.objectContaining({ actor: expect.objectContaining({ userId: 'user-1' }), driveId: 'drive-1', env: 'env-default' }),
       );
     });
 
     test('does NOT apply defaultEnvId while the agent\'s Sandbox switch is off — the stored default stays inert', async () => {
       mockGetAiAgent.mockResolvedValue({ id: 'agent-1', driveId: 'drive-1', defaultEnvId: 'env-default', sandboxEnabled: false });
       mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
-      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockSpawnAutoSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
       mockCreateConversationInSession.mockResolvedValue(undefined);
 
       const deps = buildSessionToolsDeps();
       await deps.createWorkerSession({ ...baseInput, agentPageId: 'agent-1', workspace: 'new' });
 
-      expect(mockSpawnSession).toHaveBeenCalledWith(
-        expect.objectContaining({ actor: expect.objectContaining({ userId: 'user-1' }), driveId: 'drive-1', envId: null }),
+      expect(mockSpawnAutoSession).toHaveBeenCalledWith(
+        expect.objectContaining({ actor: expect.objectContaining({ userId: 'user-1' }), driveId: 'drive-1', env: null }),
       );
     });
 
     test('a spawnSession cap refusal propagates as session_limit_reached', async () => {
       mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
-      mockSpawnSession.mockResolvedValue({ ok: false, reason: 'session_limit_reached' });
+      mockSpawnAutoSession.mockResolvedValue({ ok: false, reason: 'session_limit_reached' });
 
       const deps = buildSessionToolsDeps();
       const result = await deps.createWorkerSession({ ...baseInput, workspace: 'new' });
@@ -488,7 +565,7 @@ describe('createWorkerSession — placement', () => {
 
     test('a create failure on a genuinely UNBOUND fresh worker unwinds the freshly minted workspace', async () => {
       mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
-      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockSpawnAutoSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
       mockCreateConversationInSession.mockRejectedValue(new Error('conversation_unavailable'));
       // Re-verification finds the worker genuinely never got bound.
       mockFindSessionForConversation.mockResolvedValue(null);
@@ -508,7 +585,7 @@ describe('createWorkerSession — placement', () => {
       // minted workspace. Unwinding blind here would orphan a live worker
       // on a session this call itself just killed, unreachable forever.
       mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
-      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockSpawnAutoSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
       mockCreateConversationInSession.mockRejectedValue(new Error('connection reset'));
       mockFindSessionForConversation.mockResolvedValue({ id: 'ses-fresh', ownerId: 'user-1', endedAt: null });
 
@@ -521,7 +598,7 @@ describe('createWorkerSession — placement', () => {
 
     test('re-verification itself fails: the workspace is left alone rather than gambled on, and the original failure is still reported', async () => {
       mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
-      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockSpawnAutoSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
       mockCreateConversationInSession.mockRejectedValue(new Error('connection reset'));
       mockFindSessionForConversation.mockRejectedValue(new Error('DB unreachable'));
 

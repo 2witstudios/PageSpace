@@ -13,7 +13,8 @@
  */
 
 import type { DriveEnvRecord, DriveEnvStore, DriveEnvLocalRecord } from '../drive-envs-store';
-import { envStampColumns } from '../drive-envs-store';
+import { envStampColumns, HOME_ENV_FALLBACK_NAME, HOME_ENV_NAME } from '../drive-envs-store';
+import { nextUniqueSessionName } from '../../../agent-workspaces/session-contract';
 
 export { makeSpriteHost } from '../../agent-workspaces/__tests__/fakes';
 
@@ -29,6 +30,7 @@ export function makeEnvRecord(over: Partial<DriveEnvRecord> = {}): DriveEnvRecor
     driveId: DRIVE_ID,
     name: 'staging',
     createdBy: 'user-1',
+    isHome: false,
     spriteKey: null,
     sandboxId: null,
     spriteInstanceId: null,
@@ -97,6 +99,14 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
   const ownedEnvs = new Map<string, number>();
   const calls = { deleteIfUnoccupied: 0, requestTeardown: 0, stampSpriteTornDown: 0 };
   let minted = 0;
+  /**
+   * The per-drive advisory lock `ensureHomeEnv` takes, modelled as a promise
+   * chain: each call waits for the previous one on the same drive to settle,
+   * and an `await` sits INSIDE the critical section, so a fake that dropped
+   * the lock would let two first uses interleave and both mint — the
+   * concurrency test is meaningful against it.
+   */
+  const homeLocks = new Map<string, Promise<unknown>>();
 
   /** The `(driveId, name)` unique index, modelled — a duplicate is an ANSWER, not a throw. */
   function nameTaken(driveId: string, name: string, exceptId?: string): boolean {
@@ -214,6 +224,39 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       if (!sibling || sibling.revokedAt !== null) return false;
       local.set(envId, { ...sibling, revokedAt: at, updatedAt: at });
       return true;
+    },
+
+    async ensureHomeEnv({ driveId, createdBy, now: at }) {
+      const previous = homeLocks.get(driveId) ?? Promise.resolve();
+      const run = previous.then(async () => {
+        const existing = [...rows.values()].find((row) => row.driveId === driveId && row.isHome);
+        // Yield inside the critical section — see `homeLocks`.
+        await Promise.resolve();
+        if (existing) return existing;
+        const named = [...rows.values()].find((row) => row.driveId === driveId && row.name === HOME_ENV_NAME);
+        if (named && named.substrate === 'sprite') {
+          const adopted = { ...named, isHome: true, updatedAt: at };
+          rows.set(named.id, adopted);
+          return adopted;
+        }
+        minted += 1;
+        const row = makeEnvRecord({
+          id: `env-${minted}`,
+          driveId,
+          name: named
+            ? nextUniqueSessionName(HOME_ENV_FALLBACK_NAME, [...rows.values()].filter((row) => row.driveId === driveId).map((row) => row.name))
+            : HOME_ENV_NAME,
+          isHome: true,
+          createdBy,
+          storageLastBilledAt: at,
+          createdAt: at,
+          updatedAt: at,
+        });
+        rows.set(row.id, row);
+        return row;
+      });
+      homeLocks.set(driveId, run.catch(() => undefined));
+      return run;
     },
 
     async rename({ envId, name, now: at }) {

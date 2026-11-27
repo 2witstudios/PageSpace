@@ -182,6 +182,7 @@ vi.mock('../api/optimize', () => ({ imageRouter: 'mock-image-router' }));
 vi.mock('../api/serve', () => ({ cacheRouter: 'mock-cache-router' }));
 vi.mock('../api/ingest', () => ({ ingestRouter: 'mock-ingest-router' }));
 vi.mock('../api/verify', () => ({ verifyRouter: 'mock-verify-router' }));
+vi.mock('../api/store-original', () => ({ storeOriginalRouter: 'mock-store-original-router' }));
 vi.mock('../api/avatar', () => ({ default: 'mock-avatar-router' }));
 vi.mock('../api/org-avatar', () => ({ default: 'mock-org-avatar-router' }));
 vi.mock('../api/drive-avatar', () => ({ default: 'mock-drive-avatar-router' }));
@@ -677,6 +678,23 @@ describe('Express middleware registration', () => {
     const mount = capturedUse.find((args) => args[0] === '/api/verify');
     expect(mount).toBeDefined();
     expect(mount).toContain('mock-verify-router');
+  });
+
+  it('should mount the store-original router at /api/originals behind service auth, files:write and a page binding', async () => {
+    const { authenticateService, requireScope } = await import('../middleware/auth');
+    const { requirePageBinding } = await import('../middleware/resource-binding');
+    const mount = capturedUse.find((args) => args[0] === '/api/originals');
+    expect(mount).toBeDefined();
+    expect(mount).toContain('mock-store-original-router');
+    expect(mount).toContain(authenticateService);
+    // The exact middleware instances requireScope('files:write') and requirePageBinding() returned.
+    const scopeMock = requireScope as ReturnType<typeof vi.fn>;
+    const filesWrite = scopeMock.mock.calls
+      .map((call, i) => (call[0] === 'files:write' ? scopeMock.mock.results[i]?.value : undefined))
+      .filter(Boolean);
+    expect(filesWrite.some((mw) => mount?.includes(mw))).toBe(true);
+    const bindingMock = requirePageBinding as ReturnType<typeof vi.fn>;
+    expect(bindingMock.mock.results.some((r) => mount?.includes(r.value))).toBe(true);
   });
 
   it('should mount optimize router at /api/optimize', () => {

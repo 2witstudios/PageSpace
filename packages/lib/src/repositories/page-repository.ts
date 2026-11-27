@@ -28,6 +28,9 @@ export interface PageRecord {
   revision: number;
   stateHash: string | null;
   mimeType?: string | null;
+  // FILE-page fields (the row carries them; `findById` returns the whole row)
+  filePath?: string | null;
+  fileSize?: number | null;
   // Agent-specific fields
   systemPrompt?: string | null;
   enabledTools?: string[] | null;

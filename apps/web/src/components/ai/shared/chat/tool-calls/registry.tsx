@@ -431,9 +431,10 @@ export const toolRenderers: Record<string, ToolRenderer> = {
         />
       );
     }
+    // A sandbox file filed into the drive (to.kind "new_file_page") CREATED a page, and says so.
     return (
       <ActionResultRenderer
-        actionType="update"
+        actionType={parsedOutput.created === true ? 'create' : 'update'}
         success={copied}
         title={(parsedOutput.title as string | undefined) ?? (parsedOutput.path as string | undefined)}
         pageId={parsedOutput.pageId as string | undefined}

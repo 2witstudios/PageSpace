@@ -73,8 +73,11 @@ import {
   listSessionConversationsBulk,
   provisionSessionSandbox,
   renameSession,
-  spawnSession,
+  spawnAutoSession,
   getAgentSessionStore,
+  agentDefaultEnvId,
+  isOwnHomeDrive,
+  type AutoSessionEnv,
 } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { countOpenConversations } from '@/lib/agent-workspaces/conversation-cap';
 import { applyLayoutCommandForWorkspace, layoutCommand } from '@/lib/agent-workspaces/workspace-node-placement';
@@ -759,13 +762,35 @@ export async function resolveCallerSessionForWorker(
     });
     if (!access.allowed) return { ok: false, reason: 'not_permitted' };
     return mapEnsured(
-      await ensureDriveSessionForConversation(callerConversationId, owner, agent.driveId, agent.title),
+      await ensureDriveSessionForConversation(
+        callerConversationId,
+        owner,
+        agent.driveId,
+        agent.title,
+        await autoSessionEnvForAgent(ownerId, agent),
+      ),
     );
   }
 
   // 'client' (API-managed) rows have no in-app viewer — same policy the
   // claim route applies.
   return { ok: false, reason: 'no_session' };
+}
+
+/**
+ * The env a page agent's auto-created session runs in: its own default env
+ * (`agentDefaultEnvId`), else Home only for an agent IN the owner's Home drive
+ * (Imago), else ephemeral. The Home-drive test is a plain read
+ * (`isOwnHomeDrive`), so a team-drive spawn never takes the Home path — and
+ * never provisions a Home drive for an owner who has none yet.
+ */
+async function autoSessionEnvForAgent(
+  ownerId: string,
+  agent: { driveId: string; defaultEnvId: string | null; sandboxEnabled: boolean },
+): Promise<AutoSessionEnv> {
+  const own = agentDefaultEnvId(agent);
+  if (own) return own;
+  return (await isOwnHomeDrive(ownerId, agent.driveId)) ? 'home' : null;
 }
 
 function mapEnsured(
@@ -799,11 +824,13 @@ async function resolveWorkerPlacement(input: {
   allowedDriveIds: string[];
   /** A label for a workspace this spawn MINTS (`workspace: 'new'`); ignored otherwise. */
   workspaceName?: string | undefined;
+  /** `workspace: 'new'` only: an isolated fresh (ephemeral) machine instead of the agent's environment. */
+  freshSandbox?: boolean;
 }): Promise<
   | { ok: true; workspaceId: string; unwind: (() => Promise<void>) | null }
   | CreateWorkerSessionFailure
 > {
-  const { workspace, callerConversationId, actor, agentPageId, allowedDriveIds, workspaceName } = input;
+  const { workspace, callerConversationId, actor, agentPageId, allowedDriveIds, workspaceName, freshSandbox = false } = input;
   const ownerId = actor.userId;
 
   if (workspace === undefined) {
@@ -822,19 +849,20 @@ async function resolveWorkerPlacement(input: {
   }
 
   if (workspace === 'new') {
-    // A fresh ISOLATED workspace — its own sandbox and filesystem, for
-    // fan-out that must not share the caller's working context. It lives
-    // where its AGENT lives: a page agent's drive, or nowhere (global) — the
-    // same derivation the caller-thread minting path uses, gated by the same
-    // spawn-access primitive.
+    // A fresh workspace — its own grid and conversations, for fan-out that
+    // must not share the caller's working context. It lives where its AGENT
+    // lives: a page agent's drive, or nowhere (global) — the same derivation
+    // the caller-thread minting path uses, gated by the same spawn-access
+    // primitive.
+    //
+    // Its MACHINE, by default, is the agent's environment's — the agent's own
+    // default env (Sandbox on), or Home for the Global Assistant and Imago — and
+    // it shares that filesystem. A page agent with no environment still gets an
+    // ephemeral one (an env must belong to its session's drive). `sandbox:
+    // "new"` (`freshSandbox`) is the explicit isolated-machine choice. Same rule
+    // and fail-open as the caller-thread path (`spawnAutoSession`).
     let driveId: string | null = null;
-    // This path has no `envId` of its own to offer — it's an internal tool
-    // call, not the spawn palette, so there is no explicit-vs-omitted
-    // question to ask. Honor the agent's own default the same way an
-    // ordinary (no-envId) spawn does when its Sandbox switch is live (review
-    // — general-purpose self-review, PR #2513: this third spawn path fetched
-    // the agent, defaultEnvId/sandboxEnabled included, but never applied it).
-    let envId: string | null = null;
+    let env: AutoSessionEnv = 'home';
     // The agent's own title is the workspace's default label, read here where
     // the agent row is already in hand rather than fetched a second time below.
     let agentTitleForLabel: string | null = null;
@@ -845,10 +873,11 @@ async function resolveWorkerPlacement(input: {
       }
       driveId = agent.driveId;
       agentTitleForLabel = agent.title;
-      if (agent.sandboxEnabled && agent.defaultEnvId) {
-        envId = agent.defaultEnvId;
-      }
+      env = await autoSessionEnvForAgent(ownerId, agent);
     }
+    // The explicit isolated-machine choice (`sandbox: "new"`): ephemeral, its
+    // own Sprite — what "New sandbox" is in the palette.
+    if (freshSandbox) env = null;
     const access = await checkAccessForSubject(actor, { ownerId, driveId });
     if (!access.allowed) {
       return { ok: false, reason: 'not_permitted', detail: 'You are not permitted to start a workspace there.' };
@@ -882,7 +911,7 @@ async function resolveWorkerPlacement(input: {
         });
       name = nextUniqueSessionName(baseLabel, existingNames);
     }
-    const spawned = await spawnSession({ actor, driveId, envId, name });
+    const spawned = await spawnAutoSession({ actor, driveId, env, name });
     if (!spawned.ok) {
       return spawned.reason === 'session_limit_reached'
         ? { ok: false, reason: 'session_limit_reached', detail: 'You are at your active-session limit — end an existing session first.' }
@@ -1187,13 +1216,13 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       );
     },
 
-    createWorkerSession: async ({ conversationId, callerConversationId, actor, agentPageId, name, workspace, allowedDriveIds, workspaceName }) => {
+    createWorkerSession: async ({ conversationId, callerConversationId, actor, agentPageId, name, workspace, allowedDriveIds, workspaceName, freshSandbox }) => {
       const ownerId = actor.userId;
       // `workspaceName` must be forwarded, not just accepted: this destructure
       // is an explicit field list, so a new input silently vanishes here
       // otherwise — which is exactly what happened on the first cut, leaving
       // `spawn_session`'s workspaceName inert while every type still checked.
-      const placement = await resolveWorkerPlacement({ workspace, callerConversationId, actor, agentPageId, allowedDriveIds, workspaceName });
+      const placement = await resolveWorkerPlacement({ workspace, callerConversationId, actor, agentPageId, allowedDriveIds, workspaceName, freshSandbox });
       if (!placement.ok) return placement;
       const { workspaceId, unwind } = placement;
 

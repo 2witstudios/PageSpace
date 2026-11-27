@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   createDriveEnv,
+  ensureHomeDriveEnv,
   listDriveEnvs,
   renameDriveEnv,
   deleteDriveEnv,
@@ -8,6 +9,7 @@ import {
   deriveDriveEnvStatus,
   toDriveEnvDTO,
   type CreateDriveEnvDeps,
+  type EnsureHomeDriveEnvDeps,
   type DeleteDriveEnvDeps,
   type RebuildDriveEnvDeps,
 } from '../drive-envs';
@@ -227,6 +229,13 @@ describe('listDriveEnvs / the DTO', () => {
     expect(dto.createdAt).toBe(NOW.toISOString());
   });
 
+  it('should project isHome, so a client can show Home as the default env — and the result must satisfy the wire schema', () => {
+    const home = toDriveEnvDTO(makeEnvRecord({ name: 'Home', isHome: true }));
+    expect(home.isHome).toBe(true);
+    expect(driveEnvDtoSchema.safeParse(home).success).toBe(true);
+    expect(toDriveEnvDTO(makeEnvRecord()).isHome).toBe(false);
+  });
+
   describe('substrate (Local Environments epic)', () => {
     it('should project a Sprite row with substrate sprite and a Sprite status, and the result must satisfy the wire schema', () => {
       const dto = toDriveEnvDTO(makeEnvRecord({ sandboxId: SANDBOX_ID }));
@@ -237,7 +246,7 @@ describe('listDriveEnvs / the DTO', () => {
 
     it('given a local row WITH its drive_env_local facts, should project substrate local, the machine label, and the CONNECTION status — never a Sprite status', () => {
       const dto = toDriveEnvDTO(makeEnvRecord({ substrate: 'local' }), { label: 'jono-macstudio', status: 'connected', enrolled: true });
-      expect(dto).toEqual({ id: ENV_ID, driveId: DRIVE_ID, name: 'staging', substrate: 'local', status: 'connected', label: 'jono-macstudio', enrolled: true, createdAt: NOW.toISOString() });
+      expect(dto).toEqual({ id: ENV_ID, driveId: DRIVE_ID, name: 'staging', isHome: false, substrate: 'local', status: 'connected', label: 'jono-macstudio', enrolled: true, createdAt: NOW.toISOString() });
       expect(driveEnvDtoSchema.safeParse(dto).success).toBe(true);
     });
 
@@ -791,5 +800,105 @@ describe('rebuildDriveEnv', () => {
     const store = makeDriveEnvStore();
     const result = await rebuildDriveEnv({ envId: 'nope', deps: makeRebuildDeps(store, makeSpriteHost()) });
     expect(result).toEqual({ ok: false, reason: 'not_found' });
+  });
+});
+
+describe('ensureHomeDriveEnv', () => {
+  const HOME_DRIVE = 'home-drive-1';
+  const OWNER = 'owner-1';
+  const deps = (store: ReturnType<typeof makeDriveEnvStore>, over: Partial<EnsureHomeDriveEnvDeps> = {}): EnsureHomeDriveEnvDeps => ({
+    store: store.store,
+    getDriveOrgPolicies: async () => null,
+    now: () => NOW,
+    ...over,
+  });
+
+  it('given an owner with no Home env, should mint one named "Home" in their Home drive without provisioning a Sprite', async () => {
+    const store = makeDriveEnvStore();
+    const result = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.env).toMatchObject({ driveId: HOME_DRIVE, name: 'Home', isHome: true, createdBy: OWNER, sandboxId: null });
+    expect(store.rows.size).toBe(1);
+  });
+
+  it('given the Home env already exists, should return it and mint nothing', async () => {
+    const store = makeDriveEnvStore();
+    const first = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    const second = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    expect(first.ok && second.ok && second.env.id === first.env.id).toBe(true);
+    expect(store.rows.size).toBe(1);
+  });
+
+  it('given two first uses at once, should end with exactly one Home env', async () => {
+    const store = makeDriveEnvStore();
+    const [a, b] = await Promise.all([
+      ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) }),
+      ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) }),
+    ]);
+    expect(a.ok && b.ok && a.env.id === b.env.id).toBe(true);
+    expect(store.rows.size).toBe(1);
+  });
+
+  it('given the payer is at their env ceiling (or on the free tier), should still provide Home — it is not metered by the env cap', async () => {
+    const store = makeDriveEnvStore();
+    store.ownedEnvs.set(OWNER, 1_000);
+    const result = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    expect(result.ok).toBe(true);
+  });
+
+  it('given the user already made an env called "Home" in that drive, should adopt it as Home rather than fail on the name', async () => {
+    const store = makeDriveEnvStore([makeEnvRecord({ id: 'mine', driveId: HOME_DRIVE, name: 'Home' })]);
+    const result = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    expect(result.ok && result.env.id === 'mine' && result.env.isHome).toBe(true);
+    expect(store.rows.size).toBe(1);
+  });
+
+  it('given an org policy that turns environments off, should refuse and mint nothing', async () => {
+    const store = makeDriveEnvStore();
+    const off = async () => ({ ...DEFAULT_ORG_POLICIES, persistentEnvironments: false });
+    const result = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store, { getDriveOrgPolicies: off }) });
+    expect(result).toMatchObject({ ok: false, reason: 'org_policy' });
+    expect(store.rows.size).toBe(0);
+  });
+
+  it('given the user renamed Home, should keep returning it — the flag, not the name, makes it Home', async () => {
+    const store = makeDriveEnvStore();
+    const first = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    if (!first.ok) throw new Error('expected Home');
+    await renameDriveEnv({ envId: first.env.id, name: 'my-box', deps: { store: store.store, now: () => NOW } });
+    const again = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    expect(again.ok && again.env).toMatchObject({ id: first.env.id, name: 'my-box', isHome: true });
+  });
+
+  it('given a delete of the Home env, should REFUSE it (even forced) and touch nothing — Rebuild is how Home is wiped, so its identity and createdAt stay stable', async () => {
+    const store = makeDriveEnvStore();
+    const host = makeSpriteHost();
+    const first = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    if (!first.ok) throw new Error('expected Home');
+    for (const force of [false, true]) {
+      const deleted = await deleteDriveEnv({ envId: first.env.id, force, deps: makeDeleteDeps(store, host) });
+      expect(deleted).toEqual({ ok: false, reason: 'is_home' });
+    }
+    expect(store.calls.deleteIfUnoccupied).toBe(0);
+    expect(store.rows.get(first.env.id)).toMatchObject({ isHome: true, createdAt: first.env.createdAt });
+  });
+
+  it('given a LOCAL "Home" AND envs already named "Home sandbox" and "Home sandbox 2", should mint Home under the first free name — never fail the drive forever', async () => {
+    const store = makeDriveEnvStore([
+      makeEnvRecord({ id: 'laptop', driveId: HOME_DRIVE, name: 'Home', substrate: 'local' }),
+      makeEnvRecord({ id: 'mine-1', driveId: HOME_DRIVE, name: 'Home sandbox' }),
+      makeEnvRecord({ id: 'mine-2', driveId: HOME_DRIVE, name: 'Home sandbox 2' }),
+    ]);
+    const result = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    expect(result.ok && result.env).toMatchObject({ name: 'Home sandbox 3', isHome: true, substrate: 'sprite' });
+    expect(store.rows.size).toBe(4);
+  });
+
+  it('given a LOCAL env already named "Home", should mint Home beside it rather than adopt somebody\'s computer', async () => {
+    const store = makeDriveEnvStore([makeEnvRecord({ id: 'laptop', driveId: HOME_DRIVE, name: 'Home', substrate: 'local' })]);
+    const result = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    expect(result.ok && result.env).toMatchObject({ name: 'Home sandbox', isHome: true, substrate: 'sprite' });
+    expect(store.rows.get('laptop')?.isHome).toBe(false);
   });
 });

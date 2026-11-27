@@ -943,9 +943,10 @@ function DriveEnvRow({
       ...(awaitingEnrollment ? [{ label: 'Show a new code', icon: KeyRound, onSelect: () => setShowingCode(true) }] : []),
       { label: 'Rename', icon: Pencil, onSelect: () => setRenaming(true) },
       ...(isLocal ? [] : [{ label: 'Rebuild to blank', icon: RefreshCw, onSelect: () => setRebuilding(true), destructive: true }]),
-      { label: 'Delete environment', icon: Trash2, onSelect: () => setDeleting(true), destructive: true },
+      // Home is never deleted (the server refuses it too): Rebuild wipes it.
+      ...(group.isHome ? [] : [{ label: 'Delete environment', icon: Trash2, onSelect: () => setDeleting(true), destructive: true }]),
     ],
-    [isLocal, awaitingEnrollment],
+    [isLocal, awaitingEnrollment, group.isHome],
   );
 
   const rowInner = (

@@ -17,7 +17,7 @@ import { DEFAULT_IMAGE_MODEL } from '../core/model-capabilities';
 import { generateImageBytes, ImageGenerationError } from '../core/image-generation';
 import { createImageProvider, isProviderError } from '../core/provider-factory';
 import { isImageGenerationAllowed } from '../core/image-gen-access';
-import { createImageFilePage, ImageStorageQuotaError } from '@/lib/upload/create-file-page';
+import { createImageFilePage, FileStorageQuotaError } from '@/lib/upload/create-file-page';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { canActorEditPage } from './actor-permissions';
 import { resolveDefaultDriveId } from './drive-context-defaults';
@@ -373,7 +373,7 @@ restricted to app administrators.`,
           userId: maskIdentifier(userId),
         });
         const message =
-          error instanceof ImageStorageQuotaError
+          error instanceof FileStorageQuotaError
             ? error.message
             : 'The image was generated but could not be saved to your drive.';
         return { success: false, error: message };

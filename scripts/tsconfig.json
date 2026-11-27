@@ -47,12 +47,15 @@
     "tenant-import.ts",
     "tenant-validate.ts",
     "lib/org-wallet-selection.ts",
+    "lib/backfill-cli.ts",
     "__tests__/org-wallet-selection.test.ts",
     "__tests__/tenant-org-wallet-roundtrip.test.ts",
     "__tests__/tenant-export-columns.test.ts",
     "__tests__/org-wallet-export-coverage.test.ts",
     "backfill-imago-agents.ts",
     "__tests__/backfill-imago-agents*.test.ts",
+    "backfill-home-envs.ts",
+    "__tests__/backfill-home-envs.test.ts",
     "__tests__/setup.ts"
   ]
 }

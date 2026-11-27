@@ -1,11 +1,19 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   runBashInSandbox,
   writeSandboxFile,
   readSandboxFile,
   readSandboxFileForCopy,
+  writeSandboxBinaryFile,
+  readSandboxBinaryFileForCopy,
+  copySandboxFile,
+  resolveMaxBinaryCopyBytes,
   editSandboxFile,
   MAX_WRITE_BYTES,
+  MAX_BINARY_COPY_BYTES,
+  DEFAULT_MAX_BINARY_COPY_BYTES,
+  BINARY_COPY_TIMEOUT_MS,
+  BINARY_COPY_SENTINEL,
   CHECKPOINT_TIMEOUT_MS,
   DENIAL_MESSAGES,
   localRefusalToToolDenial,
@@ -19,6 +27,7 @@ import { SANDBOX_ROOT } from '../sandbox-paths';
 import { DEFAULT_READ_LINES, SANDBOX_MAX_OUTPUT_BYTES, MAX_LINE_BYTES } from '../execution-policy';
 import { LINE_ELISION_MARKER } from '../output-limit';
 import { LocalEnvUnsupportedError } from '../sandbox-host';
+import { LocalEnvGrantDeniedError } from '../sandbox-client/local-env-sandbox-host';
 
 const NOW = new Date('2026-06-01T12:00:00.000Z');
 
@@ -1973,6 +1982,9 @@ describe('readSandboxFileForCopy', () => {
     });
     const result = await readSandboxFileForCopy({ path: 'logo.png', ctx: makeCtx(), deps });
     expect(result).toMatchObject({ success: false, reason: 'binary_content' });
+    // The TEXT copy refuses; the refusal must name the copy that does work, or
+    // the agent concludes binary files cannot reach the drive at all.
+    if (!result.success) expect(result.error).toContain('new_file_page');
   });
 
   it('given valid multi-byte UTF-8, should NOT mistake it for binary', async () => {
@@ -2015,6 +2027,631 @@ describe('readSandboxFileForCopy', () => {
     const result = await readSandboxFileForCopy({ path: 't.txt', ctx: makeCtx(), deps });
     if (!result.success) return;
     expect(result.content).toBe(tricky);
+  });
+});
+
+
+/** Bytes no UTF-8 decoder round-trips: the copy is only honest if these arrive as-is. */
+const PDF_BYTES = Uint8Array.from([0x25, 0x50, 0x44, 0x46, 0x2d, 0xff, 0xfe, 0x00, 0x01, 0x89, 0x0a]);
+
+describe('resolveMaxBinaryCopyBytes', () => {
+  it('given no override, should default to 250 MB', () => {
+    expect(resolveMaxBinaryCopyBytes({})).toBe(250 * 1024 * 1024);
+    expect(DEFAULT_MAX_BINARY_COPY_BYTES).toBe(250 * 1024 * 1024);
+  });
+
+  it('given a positive integer override, should use it', () => {
+    expect(resolveMaxBinaryCopyBytes({ SANDBOX_MAX_BINARY_COPY_BYTES: '1048576' })).toBe(1048576);
+  });
+
+  it('given a malformed or non-positive override, should keep the default rather than open or close the cap by accident', () => {
+    for (const raw of ['', 'abc', '-5', '0', '1.5', '10MB']) {
+      expect(resolveMaxBinaryCopyBytes({ SANDBOX_MAX_BINARY_COPY_BYTES: raw }), raw).toBe(DEFAULT_MAX_BINARY_COPY_BYTES);
+    }
+  });
+
+  it('the binary cap is far above the text cap, and the per-op timeout above the 30 s fs default', () => {
+    expect(MAX_BINARY_COPY_BYTES).toBeGreaterThan(MAX_WRITE_BYTES);
+    expect(BINARY_COPY_TIMEOUT_MS).toBeGreaterThan(30_000);
+  });
+});
+
+describe('writeSandboxBinaryFile', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  /** A sandbox that records every fs write and command, so ordering is observable. */
+  function recordingSandbox(over: Partial<ExecutableSandbox> = {}) {
+    const events: Array<
+      | { kind: 'write'; path: string; content: string | Uint8Array; timeoutMs?: number }
+      | { kind: 'cmd'; cmd: string; args: string[] }
+    > = [];
+    const sandbox = makeSandbox({
+      writeFiles: async (files, options) => {
+        for (const f of files) events.push({ kind: 'write', path: f.path, content: f.content, timeoutMs: options?.timeoutMs });
+      },
+      runCommand: async ({ cmd, args = [] }) => {
+        events.push({ kind: 'cmd', cmd, args });
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+      ...over,
+    });
+    return { sandbox, events };
+  }
+
+  it('given non-UTF-8 bytes, should hand the sandbox exactly those bytes', async () => {
+    const { sandbox, events } = recordingSandbox();
+    const { deps } = makeDeps({ reconnect: async () => sandbox });
+    const result = await writeSandboxBinaryFile({ path: 'in/x.pdf', content: PDF_BYTES, ctx: makeCtx(), deps });
+    expect(result).toEqual({ success: true, path: 'in/x.pdf', bytesWritten: PDF_BYTES.byteLength });
+    const write = events.find((e) => e.kind === 'write');
+    expect(write && write.kind === 'write' && Buffer.from(write.content as Uint8Array).equals(Buffer.from(PDF_BYTES))).toBe(true);
+  });
+
+  it('should write to a temp path in the same directory and rename it into place, never writing the target directly', async () => {
+    const { sandbox, events } = recordingSandbox();
+    const { deps } = makeDeps({ reconnect: async () => sandbox });
+    await writeSandboxBinaryFile({ path: 'in/x.pdf', content: PDF_BYTES, ctx: makeCtx(), deps });
+
+    const target = `${SANDBOX_ROOT}/in/x.pdf`;
+    const writes = events.filter((e) => e.kind === 'write');
+    expect(writes).toHaveLength(1);
+    const tempPath = (writes[0] as { path: string }).path;
+    expect(tempPath).not.toBe(target);
+    expect(tempPath.startsWith(`${SANDBOX_ROOT}/in/`)).toBe(true);
+    expect(tempPath.endsWith('.tmp')).toBe(true);
+
+    // The rename comes AFTER the write, moves exactly temp -> target, and the
+    // paths are positional data, never spliced into the script.
+    const cmdIndex = events.findIndex((e) => e.kind === 'cmd');
+    expect(cmdIndex).toBeGreaterThan(events.indexOf(writes[0]));
+    const cmd = events[cmdIndex] as { cmd: string; args: string[] };
+    expect(cmd.cmd).toBe('sh');
+    expect(cmd.args.slice(-2)).toEqual([tempPath, target]);
+    expect(cmd.args[1]).not.toContain(target);
+    expect(cmd.args[1]).toContain('mv -f');
+  });
+
+  it('should bound the transfer with its own timeout, above the 30 s fs default', async () => {
+    const { sandbox, events } = recordingSandbox();
+    const { deps } = makeDeps({ reconnect: async () => sandbox });
+    await writeSandboxBinaryFile({ path: 'x.pdf', content: PDF_BYTES, ctx: makeCtx(), deps });
+    const write = events.find((e) => e.kind === 'write') as { timeoutMs?: number };
+    expect(write.timeoutMs).toBe(BINARY_COPY_TIMEOUT_MS);
+  });
+
+  it('given a write that fails or times out, should never rename, should clean the temp file, and should report execution_failed', async () => {
+    const commands: string[][] = [];
+    const sandbox = makeSandbox({
+      writeFiles: async () => {
+        throw new Error('Sandbox filesystem write timed out after 90000ms');
+      },
+      runCommand: async ({ args = [] }) => {
+        commands.push(args);
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+    });
+    const { deps, audits, slots } = makeDeps({ reconnect: async () => sandbox });
+    const result = await writeSandboxBinaryFile({ path: 'x.pdf', content: PDF_BYTES, ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'execution_failed' });
+    expect(commands.some((a) => a[1]?.includes('mv'))).toBe(false);
+    expect(commands.some((a) => a[1]?.includes('rm -f'))).toBe(true);
+    expect(audits[audits.length - 1]?.anomaly).toBe('nonzero_exit');
+    expect(slots.released).toBe(1);
+  });
+
+  it('given a rename that fails, should clean the temp file and report execution_failed', async () => {
+    const commands: string[][] = [];
+    const sandbox = makeSandbox({
+      runCommand: async ({ args = [] }) => {
+        commands.push(args);
+        const isMove = args[1]?.includes('mv -f');
+        return { exitCode: isMove ? 1 : 0, stdout: '', stderr: isMove ? 'mv: cannot move' : '' };
+      },
+    });
+    const { deps } = makeDeps({ reconnect: async () => sandbox });
+    const result = await writeSandboxBinaryFile({ path: 'x.pdf', content: PDF_BYTES, ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'execution_failed' });
+    expect(commands.some((a) => a[1]?.includes('rm -f'))).toBe(true);
+  });
+
+  it('should ask the rename to report through the stdout sentinel, so it does not pay the exec socket tail', async () => {
+    const seen: Array<string | undefined> = [];
+    const sandbox = makeSandbox({
+      runCommand: async ({ stdoutSentinel }) => {
+        seen.push(stdoutSentinel);
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+    });
+    const { deps } = makeDeps({ reconnect: async () => sandbox });
+    await writeSandboxBinaryFile({ path: 'x.pdf', content: PDF_BYTES, ctx: makeCtx(), deps });
+    expect(seen[0]).toBe(BINARY_COPY_SENTINEL);
+  });
+
+  it('given a traversal path, should deny path_escape before provisioning and audit a blocked_command', async () => {
+    let acquired = false;
+    const { deps, audits } = makeDeps({
+      acquireSandbox: async () => {
+        acquired = true;
+        return { ok: true, sandboxId: 'sbx-1', resumed: false, workspaceId: 'ws-1' };
+      },
+    });
+    const result = await writeSandboxBinaryFile({ path: '../../etc/passwd', content: PDF_BYTES, ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'path_escape' });
+    expect(audits[0]?.anomaly).toBe('blocked_command');
+    expect(acquired).toBe(false);
+  });
+
+  it('given the kill switch off, should deny before touching a sandbox', async () => {
+    const { deps } = makeDeps({ isEnabled: () => false });
+    const result = await writeSandboxBinaryFile({ path: 'x.pdf', content: PDF_BYTES, ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'kill_switch_off' });
+  });
+
+  it('given a body over the (env-overridden) binary cap, should refuse before provisioning, and accept one at the cap', async () => {
+    vi.stubEnv('SANDBOX_MAX_BINARY_COPY_BYTES', '8');
+    vi.resetModules();
+    const runners = await import('../tool-runners');
+    expect(runners.MAX_BINARY_COPY_BYTES).toBe(8);
+
+    let acquired = 0;
+    const { deps } = makeDeps({
+      acquireSandbox: async () => {
+        acquired += 1;
+        return { ok: true, sandboxId: 'sbx-1', resumed: false, workspaceId: 'ws-1' };
+      },
+    });
+    const over = await runners.writeSandboxBinaryFile({ path: 'x.bin', content: new Uint8Array(9), ctx: makeCtx(), deps });
+    expect(over).toMatchObject({ success: false, reason: 'content_too_large' });
+    expect(acquired).toBe(0);
+
+    const at = await runners.writeSandboxBinaryFile({ path: 'x.bin', content: new Uint8Array(8), ctx: makeCtx(), deps });
+    expect(at.success).toBe(true);
+  });
+
+  it('given a successful write, should audit it with its size and release the slot', async () => {
+    const { deps, audits, slots } = makeDeps();
+    await writeSandboxBinaryFile({ path: 'x.pdf', content: PDF_BYTES, ctx: makeCtx(), deps });
+    expect(audits[audits.length - 1]).toMatchObject({ exitCode: 0, code: `binaryWrite x.pdf (${PDF_BYTES.byteLength} bytes)` });
+    expect(slots.released).toBe(1);
+  });
+});
+
+describe('copySandboxFile — a sandbox file to another sandbox file, without leaving the sandbox', () => {
+  function cmdSandbox(result: { exitCode: number; stdout?: string }) {
+    const calls: Array<{ cmd: string; args: string[]; stdoutSentinel?: string }> = [];
+    const reads: string[] = [];
+    const writes: string[] = [];
+    const sandbox = makeSandbox({
+      runCommand: async ({ cmd, args = [], stdoutSentinel }) => {
+        calls.push({ cmd, args, stdoutSentinel });
+        return { exitCode: result.exitCode, stdout: result.stdout ?? '', stderr: '' };
+      },
+      readFileToBuffer: async ({ path }) => {
+        reads.push(path);
+        return null;
+      },
+      writeFiles: async (files) => {
+        writes.push(...files.map((f) => f.path));
+      },
+    });
+    return { sandbox, calls, reads, writes };
+  }
+
+  it('copies in ONE exec — cp to a sibling temp file, then mv into place — with no bytes through the server', async () => {
+    const { sandbox, calls, reads, writes } = cmdSandbox({ exitCode: 0, stdout: '1234\n' });
+    const { deps } = makeDeps({ reconnect: async () => sandbox });
+    const result = await copySandboxFile({ fromPath: 'a.png', toPath: 'out/b.png', ctx: makeCtx(), deps });
+    expect(result).toEqual({ success: true, path: 'out/b.png', bytesWritten: 1234 });
+    expect(calls).toHaveLength(1);
+    expect(reads).toHaveLength(0);
+    expect(writes).toHaveLength(0);
+    const { args, stdoutSentinel } = calls[0];
+    expect(stdoutSentinel).toBe(BINARY_COPY_SENTINEL);
+    expect(args[1]).toContain('cp -f --');
+    expect(args[1]).toContain('mv -f --');
+    // Paths are positional data, never spliced into the script.
+    const [src, dst, tmp] = args.slice(-3);
+    expect([src, dst]).toEqual([`${SANDBOX_ROOT}/a.png`, `${SANDBOX_ROOT}/out/b.png`]);
+    expect(tmp.startsWith(`${dst}.pagespace-copy-`)).toBe(true);
+    expect(args[1]).not.toContain(dst);
+  });
+
+  it('given a missing source, should deny not_found', async () => {
+    const { sandbox } = cmdSandbox({ exitCode: 44 });
+    const { deps } = makeDeps({ reconnect: async () => sandbox });
+    const result = await copySandboxFile({ fromPath: 'nope', toPath: 'b', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'not_found' });
+  });
+
+  it('given an empty source, should refuse rather than empty the destination', async () => {
+    const { sandbox } = cmdSandbox({ exitCode: 45 });
+    const { deps } = makeDeps({ reconnect: async () => sandbox });
+    const result = await copySandboxFile({ fromPath: 'empty', toPath: 'b', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'empty_source' });
+  });
+
+  it('given a cp/mv failure, should report execution_failed and audit the anomaly', async () => {
+    const { sandbox } = cmdSandbox({ exitCode: 1 });
+    const { deps, audits, slots } = makeDeps({ reconnect: async () => sandbox });
+    const result = await copySandboxFile({ fromPath: 'a', toPath: 'b', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'execution_failed' });
+    expect(audits[audits.length - 1]?.anomaly).toBe('nonzero_exit');
+    expect(slots.released).toBe(1);
+  });
+
+  it('given a traversal on either side, should deny path_escape before provisioning', async () => {
+    let acquired = false;
+    const { deps } = makeDeps({
+      acquireSandbox: async () => {
+        acquired = true;
+        return { ok: true, sandboxId: 'sbx-1', resumed: false, workspaceId: 'ws-1' };
+      },
+    });
+    expect(await copySandboxFile({ fromPath: '../../etc/passwd', toPath: 'b', ctx: makeCtx(), deps })).toMatchObject({ reason: 'path_escape' });
+    expect(await copySandboxFile({ fromPath: 'a', toPath: '/etc/x', ctx: makeCtx(), deps })).toMatchObject({ reason: 'path_escape' });
+    expect(acquired).toBe(false);
+  });
+
+  it('given the kill switch off, should deny before touching a sandbox', async () => {
+    const { deps } = makeDeps({ isEnabled: () => false });
+    expect(await copySandboxFile({ fromPath: 'a', toPath: 'b', ctx: makeCtx(), deps })).toMatchObject({ reason: 'kill_switch_off' });
+  });
+});
+
+describe('readSandboxBinaryFileForCopy', () => {
+  /** A sandbox whose `stat` reports `size` and whose fs read returns `buffer`. */
+  function sizedSandbox({ size, buffer, statExit = 0 }: { size: number | string; buffer: Buffer | null; statExit?: number }) {
+    const reads: Array<{ path: string; timeoutMs?: number }> = [];
+    const sandbox = makeSandbox({
+      runCommand: async () => ({ exitCode: statExit, stdout: statExit === 0 ? `${size}\n` : '', stderr: '' }),
+      readFileToBuffer: async (args) => {
+        reads.push(args);
+        return buffer;
+      },
+    });
+    return { sandbox, reads };
+  }
+
+  it('given a binary file, should return its bytes exactly — no UTF-8 decode', async () => {
+    const buf = Buffer.from(PDF_BYTES);
+    const { sandbox } = sizedSandbox({ size: buf.byteLength, buffer: buf });
+    const { deps } = makeDeps({ reconnect: async () => sandbox });
+    const result = await readSandboxBinaryFileForCopy({ path: 'out/x.png', maxBytes: 1024, ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(Buffer.compare(result.content, buf)).toBe(0);
+    expect(result.bytes).toBe(buf.byteLength);
+  });
+
+  it('given a file over the caller cap by stat, should refuse WITHOUT reading it into memory', async () => {
+    const { sandbox, reads } = sizedSandbox({ size: 2048, buffer: Buffer.alloc(2048) });
+    const { deps, slots } = makeDeps({ reconnect: async () => sandbox });
+    const result = await readSandboxBinaryFileForCopy({ path: 'big.bin', maxBytes: 1024, ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'content_too_large' });
+    expect(reads).toHaveLength(0);
+    expect(slots.released).toBe(1);
+  });
+
+  it('given a caller cap above the binary cap, should still enforce the binary cap', async () => {
+    const { sandbox, reads } = sizedSandbox({ size: MAX_BINARY_COPY_BYTES + 1, buffer: null });
+    const { deps } = makeDeps({ reconnect: async () => sandbox });
+    const result = await readSandboxBinaryFileForCopy({
+      path: 'big.bin',
+      maxBytes: MAX_BINARY_COPY_BYTES * 4,
+      ctx: makeCtx(),
+      deps,
+    });
+    expect(result).toMatchObject({ success: false, reason: 'content_too_large' });
+    expect(reads).toHaveLength(0);
+  });
+
+  it('given a file that grew past the cap between stat and read, should still refuse', async () => {
+    const { sandbox } = sizedSandbox({ size: 10, buffer: Buffer.alloc(2048) });
+    const { deps } = makeDeps({ reconnect: async () => sandbox });
+    const result = await readSandboxBinaryFileForCopy({ path: 'grow.bin', maxBytes: 1024, ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'content_too_large' });
+  });
+
+  it('given a file stat cannot find, should deny not_found without a read', async () => {
+    const { sandbox, reads } = sizedSandbox({ size: 0, buffer: null, statExit: 44 });
+    const { deps } = makeDeps({ reconnect: async () => sandbox });
+    const result = await readSandboxBinaryFileForCopy({ path: 'nope.bin', maxBytes: 1024, ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'not_found' });
+    expect(reads).toHaveLength(0);
+  });
+
+  it('should read with the binary copy timeout, above the 30 s fs default', async () => {
+    const { sandbox, reads } = sizedSandbox({ size: 3, buffer: Buffer.from('abc') });
+    const { deps } = makeDeps({ reconnect: async () => sandbox });
+    await readSandboxBinaryFileForCopy({ path: 'a.bin', maxBytes: 1024, ctx: makeCtx(), deps });
+    expect(reads[0]).toEqual({ path: `${SANDBOX_ROOT}/a.bin`, timeoutMs: BINARY_COPY_TIMEOUT_MS });
+  });
+
+  it('given a traversal path, should deny path_escape before provisioning', async () => {
+    let acquired = false;
+    const { deps } = makeDeps({
+      acquireSandbox: async () => {
+        acquired = true;
+        return { ok: true, sandboxId: 'sbx-1', resumed: false, workspaceId: 'ws-1' };
+      },
+    });
+    const result = await readSandboxBinaryFileForCopy({ path: '/etc/shadow', maxBytes: 1024, ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'path_escape' });
+    expect(acquired).toBe(false);
+  });
+
+  it('given a successful read, should audit it and release the slot', async () => {
+    const { sandbox } = sizedSandbox({ size: 3, buffer: Buffer.from('abc') });
+    const { deps, audits, slots } = makeDeps({ reconnect: async () => sandbox });
+    await readSandboxBinaryFileForCopy({ path: 'a.bin', maxBytes: 1024, ctx: makeCtx(), deps });
+    expect(audits[audits.length - 1]).toMatchObject({ exitCode: 0, code: 'binaryRead a.bin (3 bytes)' });
+    // Two short sessions (probe, then read) — every slot taken is given back.
+    expect(slots.acquired).toBe(2);
+    expect(slots.released).toBe(2);
+  });
+});
+
+
+describe('binary copies — review #3016', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /**
+   * A LOCAL environment's exec: ignores `stdoutSentinel` and returns the shell's
+   * own exit code, which — the sentinel `echo` being the last command — is 0.
+   * The helper's real status is only on the sentinel line.
+   */
+  function localExec(helperExit: number, stdout = '') {
+    return async (): Promise<SandboxRunResult> => ({
+      exitCode: 0,
+      stdout: `${stdout}${BINARY_COPY_SENTINEL} ${helperExit}\n`,
+      stderr: '',
+    });
+  }
+
+  describe('#2: a target that is an existing directory', () => {
+    it('writeSandboxBinaryFile refuses target_is_directory instead of moving the file INTO it, and removes the temp file', async () => {
+      const scripts: string[] = [];
+      const sandbox = makeSandbox({
+        runCommand: async ({ args = [] }) => {
+          scripts.push(args[1] ?? '');
+          // The rename script answers 21 for a directory target.
+          return { exitCode: args[1]?.includes('mv -f') ? 21 : 0, stdout: '', stderr: '' };
+        },
+      });
+      const { deps } = makeDeps({ reconnect: async () => sandbox });
+      const result = await writeSandboxBinaryFile({ path: 'exhibits', content: PDF_BYTES, ctx: makeCtx(), deps });
+      expect(result).toMatchObject({ success: false, reason: 'target_is_directory' });
+      expect(scripts[0]).toContain('[ -d "$2" ]');
+      expect(scripts.some((sc) => sc.includes('rm -f'))).toBe(true);
+    });
+
+    it('copySandboxFile refuses a directory target the same way', async () => {
+      const sandbox = makeSandbox({ runCommand: async () => ({ exitCode: 21, stdout: '', stderr: '' }) });
+      const { deps } = makeDeps({ reconnect: async () => sandbox });
+      const result = await copySandboxFile({ fromPath: 'a.pdf', toPath: 'exhibits', ctx: makeCtx(), deps });
+      expect(result).toMatchObject({ success: false, reason: 'target_is_directory' });
+    });
+  });
+
+  describe('#3: the helper status comes from the sentinel line, on every substrate', () => {
+    it('a local env whose mv failed (sentinel 1, shell exit 0) is a FAILURE, not a success', async () => {
+      const sandbox = makeSandbox({ runCommand: localExec(1) });
+      const { deps } = makeDeps({ reconnect: async () => sandbox });
+      const result = await writeSandboxBinaryFile({ path: 'x.pdf', content: PDF_BYTES, ctx: makeCtx(), deps });
+      expect(result).toMatchObject({ success: false, reason: 'execution_failed' });
+    });
+
+    it('a local env whose rename succeeded (sentinel 0) is a success', async () => {
+      const sandbox = makeSandbox({ runCommand: localExec(0) });
+      const { deps } = makeDeps({ reconnect: async () => sandbox });
+      const result = await writeSandboxBinaryFile({ path: 'x.pdf', content: PDF_BYTES, ctx: makeCtx(), deps });
+      expect(result.success).toBe(true);
+    });
+
+    it('a local env reports a missing source through the sentinel (44) as not_found', async () => {
+      const sandbox = makeSandbox({ runCommand: localExec(44) });
+      const { deps } = makeDeps({ reconnect: async () => sandbox });
+      const result = await readSandboxBinaryFileForCopy({ path: 'nope.pdf', maxBytes: 1024, ctx: makeCtx(), deps });
+      expect(result).toMatchObject({ success: false, reason: 'not_found' });
+    });
+
+    it('a local env (macOS) gets its size through the portable probe, so the pre-read cap still applies', async () => {
+      const reads: string[] = [];
+      const scripts: string[] = [];
+      const sandbox = makeSandbox({
+        runCommand: async ({ args = [] }) => {
+          scripts.push(args[1] ?? '');
+          return { exitCode: 0, stdout: `4096\n${BINARY_COPY_SENTINEL} 0\n`, stderr: '' };
+        },
+        readFileToBuffer: async ({ path }) => {
+          reads.push(path);
+          return Buffer.alloc(4096);
+        },
+      });
+      const { deps } = makeDeps({ reconnect: async () => sandbox });
+      const result = await readSandboxBinaryFileForCopy({ path: 'big.pdf', maxBytes: 1024, ctx: makeCtx(), deps });
+      expect(result).toMatchObject({ success: false, reason: 'content_too_large' });
+      expect(reads).toHaveLength(0);
+      // GNU first, BSD (`stat -f %z`) when that fails.
+      expect(scripts[0]).toContain('stat -L -c %s');
+      expect(scripts[0]).toContain('stat -L -f %z');
+    });
+
+    it('an unparseable size is an ERROR, not a skipped check', async () => {
+      const reads: string[] = [];
+      const sandbox = makeSandbox({
+        runCommand: async () => ({ exitCode: 0, stdout: 'stat: illegal option -- c', stderr: '' }),
+        readFileToBuffer: async ({ path }) => {
+          reads.push(path);
+          return Buffer.alloc(8);
+        },
+      });
+      const { deps } = makeDeps({ reconnect: async () => sandbox });
+      const result = await readSandboxBinaryFileForCopy({ path: 'a.pdf', maxBytes: 1024, ctx: makeCtx(), deps });
+      expect(result).toMatchObject({ success: false, reason: 'execution_failed' });
+      expect(reads).toHaveLength(0);
+    });
+
+    it('a local env that refuses an oversize read (grant denied: too_large) surfaces as content_too_large', async () => {
+      const sandbox = makeSandbox({
+        runCommand: localExec(0, '100\n'),
+        readFileToBuffer: async () => {
+          throw new LocalEnvGrantDeniedError('env-1', 'too_large');
+        },
+      });
+      const { deps } = makeDeps({ reconnect: async () => sandbox });
+      const result = await readSandboxBinaryFileForCopy({ path: 'a.pdf', maxBytes: 1024, ctx: makeCtx(), deps });
+      expect(result).toMatchObject({ success: false, reason: 'content_too_large' });
+    });
+  });
+
+  describe('#1: the read admits its probed size to the caller\'s byte budget before reading', () => {
+    it('given a refusal from admit, should refuse copy_budget_exhausted WITHOUT reading', async () => {
+      const reads: string[] = [];
+      const admitted: number[] = [];
+      const sandbox = makeSandbox({
+        runCommand: async () => ({ exitCode: 0, stdout: '300\n', stderr: '' }),
+        readFileToBuffer: async ({ path }) => {
+          reads.push(path);
+          return Buffer.alloc(300);
+        },
+      });
+      const { deps } = makeDeps({ reconnect: async () => sandbox });
+      const result = await readSandboxBinaryFileForCopy({
+        path: 'a.pdf',
+        maxBytes: 1024,
+        admit: async (bytes) => {
+          admitted.push(bytes);
+          return false;
+        },
+        ctx: makeCtx(),
+        deps,
+      });
+      expect(result).toMatchObject({ success: false, reason: 'copy_budget_exhausted' });
+      expect(admitted).toEqual([300]);
+      expect(reads).toHaveLength(0);
+    });
+  });
+
+  describe('review #3016 round 2 (E): the budget wait holds no exec slot and no billing hold', () => {
+    it('calls admit BETWEEN sessions — no slot held, no hold placed — and reads only after it grants', async () => {
+      const holds = { placed: 0, released: 0, settled: 0 };
+      const atAdmit: Array<{ slotsHeld: number; holdsOpen: number }> = [];
+      const sandbox = makeSandbox({
+        runCommand: async () => ({ exitCode: 0, stdout: '300\n', stderr: '' }),
+        readFileToBuffer: async () => Buffer.alloc(300),
+      });
+      const { deps, slots } = makeDeps({
+        reconnect: async () => sandbox,
+        resolveBillingSession: async () => ({ workspaceId: 'ws-1', driveId: 'd1', ownerId: 'u1' }),
+        billing: {
+          resolveCharge: async () => ({ kind: 'user', userId: 'u1' }) as unknown as ComputeCharge,
+          gate: async () => { holds.placed += 1; return { allowed: true, holdId: `h${holds.placed}` }; },
+          trackUsage: async () => { holds.settled += 1; return { persisted: true } as never; },
+          releaseHold: async () => { holds.released += 1; },
+        },
+      });
+      const result = await readSandboxBinaryFileForCopy({
+        path: 'a.pdf',
+        maxBytes: 1024,
+        admit: async () => {
+          atAdmit.push({ slotsHeld: slots.acquired - slots.released, holdsOpen: holds.placed - holds.settled - holds.released });
+          return true;
+        },
+        ctx: makeCtx(),
+        deps,
+      });
+      expect(result.success).toBe(true);
+      expect(atAdmit).toEqual([{ slotsHeld: 0, holdsOpen: 0 }]);
+    });
+
+    it('refuses a file that grew past the reserved (probed) size, even under the cap', async () => {
+      const sandbox = makeSandbox({
+        runCommand: async () => ({ exitCode: 0, stdout: '10\n', stderr: '' }),
+        readFileToBuffer: async () => Buffer.alloc(500),
+      });
+      const { deps } = makeDeps({ reconnect: async () => sandbox });
+      const result = await readSandboxBinaryFileForCopy({ path: 'a.pdf', maxBytes: 1024, admit: async () => true, ctx: makeCtx(), deps });
+      expect(result).toMatchObject({ success: false, reason: 'execution_failed' });
+    });
+  });
+
+  describe('#4: one deadline across the steps', () => {
+    it('given a write that hangs, should return copy_deadline_exceeded AT the deadline, remove the temp file and never rename', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(NOW);
+      const scripts: string[] = [];
+      let writeTimeout: number | undefined;
+      const sandbox = makeSandbox({
+        writeFiles: (_files, options) => {
+          writeTimeout = options?.timeoutMs;
+          return new Promise<void>(() => {});
+        },
+        runCommand: async ({ args = [] }) => {
+          scripts.push(args[1] ?? '');
+          return { exitCode: 0, stdout: '', stderr: '' };
+        },
+      });
+      const { deps } = makeDeps({ reconnect: async () => sandbox, now: () => new Date() });
+      let result: Awaited<ReturnType<typeof writeSandboxBinaryFile>> | undefined;
+      void writeSandboxBinaryFile({
+        path: 'x.pdf',
+        content: PDF_BYTES,
+        deadlineAt: NOW.getTime() + 5_000,
+        ctx: makeCtx(),
+        deps,
+      }).then((r) => {
+        result = r;
+      });
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(result).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(result).toMatchObject({ success: false, reason: 'copy_deadline_exceeded' });
+      // The driver's own budget was clipped to what was left, not the 90 s default.
+      expect(writeTimeout).toBeLessThanOrEqual(5_000);
+      expect(scripts.some((sc) => sc.includes('mv -f'))).toBe(false);
+      expect(scripts.some((sc) => sc.includes('rm -f'))).toBe(true);
+    });
+
+    it('given a deadline already past, should refuse before provisioning', async () => {
+      let acquired = false;
+      const { deps } = makeDeps({
+        acquireSandbox: async () => {
+          acquired = true;
+          return { ok: true, sandboxId: 'sbx-1', resumed: false, workspaceId: 'ws-1' };
+        },
+      });
+      const result = await readSandboxBinaryFileForCopy({
+        path: 'a.pdf',
+        maxBytes: 1024,
+        deadlineAt: NOW.getTime() - 1,
+        ctx: makeCtx(),
+        deps,
+      });
+      expect(result).toMatchObject({ success: false, reason: 'copy_deadline_exceeded' });
+      expect(acquired).toBe(false);
+    });
+
+    it('given a read that hangs, should return copy_deadline_exceeded at the deadline', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(NOW);
+      const sandbox = makeSandbox({
+        runCommand: async () => ({ exitCode: 0, stdout: '10\n', stderr: '' }),
+        readFileToBuffer: () => new Promise<Buffer | null>(() => {}),
+      });
+      const { deps } = makeDeps({ reconnect: async () => sandbox, now: () => new Date() });
+      let result: Awaited<ReturnType<typeof readSandboxBinaryFileForCopy>> | undefined;
+      void readSandboxBinaryFileForCopy({ path: 'a.pdf', maxBytes: 1024, deadlineAt: NOW.getTime() + 3_000, ctx: makeCtx(), deps }).then((r) => {
+        result = r;
+      });
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(result).toMatchObject({ success: false, reason: 'copy_deadline_exceeded' });
+    });
   });
 });
 

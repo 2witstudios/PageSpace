@@ -369,7 +369,7 @@ function wrapSpriteHandle({
     spriteInstanceId: exec.spriteInstanceId ?? null,
     egressPolicyToken: exec.egressPolicyToken,
     exec: (args) => exec.runCommand(args),
-    writeFiles: (files) => exec.writeFiles(files),
+    writeFiles: (files, options) => exec.writeFiles(files, options),
     readFile: (args) => exec.readFileToBuffer(args),
     createCheckpoint: (comment) => exec.createCheckpoint(comment),
 

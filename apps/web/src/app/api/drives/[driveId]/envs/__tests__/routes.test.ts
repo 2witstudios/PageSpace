@@ -296,6 +296,15 @@ describe('DELETE /envs/[envId] — the destructive verb', () => {
     expect(await response.json()).toMatchObject({ reason: 'live_sessions', liveSessionCount: 3 });
   });
 
+  it('given the Home env, should answer 409 is_home and point at Rebuild — Home is never deleted', async () => {
+    vi.mocked(deleteEnv).mockResolvedValue({ ok: false, reason: 'is_home' } as never);
+    const response = await deleteEnvRoute(del('?force=true'), envParams);
+    expect(response.status).toBe(409);
+    const body = await response.json();
+    expect(body).toMatchObject({ reason: 'is_home' });
+    expect(body.error).toMatch(/Rebuild/);
+  });
+
   it('given a kill that could not be confirmed, should still answer 200 — the env IS deleted', async () => {
     // There is no `teardown_failed` arm any more, and that is a deliberate
     // consequence of killing the Sprite only AFTER the row is gone: by the time

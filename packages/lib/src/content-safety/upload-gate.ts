@@ -22,6 +22,8 @@ export type ContentUploadEntryPoint =
   | 'attachment.presign'
   | 'attachment.complete'
   | 'image-generation'
+  /** An agent filing a sandbox file into the drive as a FILE page (copy_content). */
+  | 'sandbox-copy'
   | 'chat-attachment'
   | 'page.copy'
   | 'attachment.send';

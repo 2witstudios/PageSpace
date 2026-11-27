@@ -131,6 +131,12 @@ const driveEnvDtoBase = {
   driveId: z.string().min(1),
   /** Unique within the drive — an address humans use, not a label. */
   name: z.string().min(1),
+  /**
+   * The owner's default env, "Home": where the Global Assistant's and Imago's
+   * sessions run, and the env a spawn picker preselects. Stays true across a
+   * rename — the flag, not the name, is what makes it Home.
+   */
+  isHome: z.boolean(),
   createdAt: isoTimestamp,
 };
 

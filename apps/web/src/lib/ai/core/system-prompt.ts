@@ -418,6 +418,12 @@ function buildSandboxInstructions(availableTools?: string[]): string {
         : null,
     ].filter(Boolean).join(' '),
     persistenceBullet,
+    // Drive files <-> sandbox. Said plainly because the failure it prevents is
+    // an agent concluding "I can't work with that upload" (and writing that
+    // into its memory) when copy_content would have put the file itself here.
+    has('copy_content')
+      ? '• Drive files: copy_content copies an uploaded FILE page (PDF, image, archive, …) into /workspace as the REAL FILE — its original bytes, not its extracted text — so you can work on it with tools (pdfimages, tesseract, python). To put a sandbox file into the drive as a real file, copy it with to.kind "new_file_page" (a parentId and a title with its extension).'
+      : null,
     hasBash ? '• Each tool call is a fresh process — cd does NOT persist between calls (the filesystem persists, the shell does not).' : null,
     hasBash && hasAnyGitFamily
       ? '• bash has NO GitHub credentials. For anything touching GitHub (clone/fetch/pull/push, PRs, issues) use the dedicated git_*/gh_* tools — they carry your connected GitHub auth.'

@@ -131,11 +131,13 @@ async function seedEnv(
     storageLastBilledAt: Date;
     storageMeasuredBytes: number | null;
     storageMeasuredAt: Date | null;
+    isHome: boolean;
   }> = {},
 ): Promise<string> {
   const id = createId();
   await db.insert(driveEnvs).values({
     id,
+    isHome: over.isHome ?? false,
     driveId: over.driveId ?? driveId,
     name: over.name ?? `env-${id.slice(0, 8)}`,
     createdBy: envCreatorId,
@@ -239,6 +241,21 @@ describe.skipIf(dbSkipExplicitlyAllowed())('environment persistence billing — 
     // `createdBy` is audit only: it must not be reachable as a payer.
     expect(charges.map((charge) => charge.charge.userId)).not.toContain(envCreatorId);
     // The window is closed in the table, so the next run bills from here.
+    expect(await readBilledAt(envId)).toEqual(NOW);
+  });
+
+  it('bills a live HOME env exactly like any env — Home is outside the env CAP, not outside storage billing', async () => {
+    const envId = await seedEnv({ name: 'Home', isHome: true });
+    const { deps, charges } = realDepsCapturingCharges();
+
+    const result = await reconcileSandboxStorage(deps);
+
+    assert({
+      given: "the owner's Home env holding a live, measured Sprite",
+      should: 'meter it as an ordinary env row: one charge to the drive owner, subject env, watermark advanced',
+      actual: { charged: result.charged, payerId: charges[0]?.charge.userId, subjectKind: charges[0]?.subjectKind, subjectId: charges[0]?.subjectId },
+      expected: { charged: 1, payerId: driveOwnerId, subjectKind: 'env', subjectId: envId },
+    });
     expect(await readBilledAt(envId)).toEqual(NOW);
   });
 

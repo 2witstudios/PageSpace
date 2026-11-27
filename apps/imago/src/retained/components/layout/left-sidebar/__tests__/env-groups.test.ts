@@ -12,6 +12,7 @@ type SpriteEnvDTO = Extract<DriveEnvDTO, { substrate: 'sprite' }>;
 /** A Sprite env DTO; the partition is substrate-agnostic, so Sprite is a fine default. */
 const env = (over: Partial<SpriteEnvDTO> & { id: string; name: string }): DriveEnvDTO => ({
   driveId: 'drive-1',
+  isHome: false,
   substrate: 'sprite',
   status: 'none',
   createdAt: '2026-08-01T00:00:00.000Z',
@@ -22,7 +23,7 @@ const session = (workspaceId: string, envId: string | null) => ({ workspaceId, e
 
 describe('partitionSessionsByEnv — the substrate rides along', () => {
   it('given a local env, should carry substrate local on its group so the row can withhold Sprite-only actions; an orphan carries null', () => {
-    const local: DriveEnvDTO = { id: 'env-l', driveId: 'drive-1', name: 'mac', substrate: 'local', status: 'disconnected', label: 'jono-macstudio', enrolled: false, createdAt: '2026-08-01T00:00:00.000Z' };
+    const local: DriveEnvDTO = { id: 'env-l', driveId: 'drive-1', name: 'mac', isHome: false, substrate: 'local', status: 'disconnected', label: 'jono-macstudio', enrolled: false, createdAt: '2026-08-01T00:00:00.000Z' };
     const r = partitionSessionsByEnv([session('x', 'env-ghost')], [env({ id: 'env-s', name: 'cloud' }), local]);
     expect(r.envGroups.map((g) => [g.envId, g.substrate])).toEqual([
       ['env-s', 'sprite'],
@@ -32,7 +33,7 @@ describe('partitionSessionsByEnv — the substrate rides along', () => {
   });
 
   it('given a local env, should carry its machine label and enrollment fact; a Sprite env and an orphan carry null for both', () => {
-    const local: DriveEnvDTO = { id: 'env-l', driveId: 'drive-1', name: 'mac', substrate: 'local', status: 'disconnected', label: 'jono-macstudio', enrolled: false, createdAt: '2026-08-01T00:00:00.000Z' };
+    const local: DriveEnvDTO = { id: 'env-l', driveId: 'drive-1', name: 'mac', isHome: false, substrate: 'local', status: 'disconnected', label: 'jono-macstudio', enrolled: false, createdAt: '2026-08-01T00:00:00.000Z' };
     const r = partitionSessionsByEnv([session('x', 'env-ghost')], [env({ id: 'env-s', name: 'cloud' }), local]);
     expect(r.envGroups.map((g) => [g.envId, g.machineLabel, g.enrolled])).toEqual([
       ['env-s', null, null],
