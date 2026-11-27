@@ -34,6 +34,16 @@ STYLE:
 • Be concise but conversational - like a knowledgeable colleague
 • Match user energy - conversational when exploring, efficient when executing`;
 
+/**
+ * How the agent sees drive files. Stated plainly because agents that were never
+ * told this concluded they "can't see files" and wrote that into memory pages.
+ * Copying a file's real bytes into the sandbox is covered by copy_content's own
+ * description.
+ */
+export const FILE_VISION_PROMPT = `FILES:
+• read_page shows you images and PDFs when your model has vision: an image FILE page arrives as the image, and a scanned or image-only PDF arrives as the PDF itself or as page images. Pass \`pages\` (e.g. "6-10") to page through a long PDF; the result says which pages to ask for next.
+• Look at a file with read_page before saying you cannot see it, and never note in memory that you can't see files. Without vision, read_page returns the file's details and any extracted text: tell the user that switching this chat to a vision model would let you see it.`;
+
 export const TOOL_DISCOVERY_PROMPT = `TOOLS:
 Core tools (list/read drives and pages, search, create, edit content) can be called directly.
 All other tools are listed below — call execute_tool({tool_name, parameters}) to run them. Use tool_search("select:tool_name") to get parameter schemas first. If a call IS rejected for bad parameters, the rejection carries the schema — correct it and call again, no tool_search needed. Note that unrecognised OPTIONAL keys are dropped rather than rejected, so a filter or limit you invented is silently ignored: look the schema up when the result has to be narrowed correctly.`;
@@ -510,6 +520,7 @@ export function buildSystemPrompt(
     personalizationPrompt,
     BEHAVIOR_PROMPT,
     isReadOnly ? READ_ONLY_CONSTRAINT : null,
+    allowedToolNames === undefined || allowedToolNames.includes('read_page') ? FILE_VISION_PROMPT : null,
     includeSandboxInstructions ? buildSandboxInstructions(allowedToolNames) : null,
   ].filter(Boolean);
 
