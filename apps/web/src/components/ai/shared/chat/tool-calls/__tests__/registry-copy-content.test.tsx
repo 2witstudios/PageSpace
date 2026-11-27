@@ -57,6 +57,19 @@ describe('copy_content renderer', () => {
     expect(isValidElement(result) && (result.props as { success?: boolean }).success).toBe(true);
   });
 
+  it('given a sandbox file filed as a new FILE page, should render it as a creation that links to the page', () => {
+    const result = render({
+      success: true,
+      pageId: 'new-file-1',
+      parentId: 'folder1',
+      title: 'Exhibit A.png',
+      message: 'Filed out/a.png into the drive.',
+    });
+    expect(isValidElement(result) && result.type).not.toBe(RichDiffRenderer);
+    const props = (isValidElement(result) ? result.props : {}) as { actionType?: string; pageId?: string; success?: boolean };
+    expect(props).toMatchObject({ actionType: 'create', pageId: 'new-file-1', success: true });
+  });
+
   it('given a refusal, should report it as unsuccessful', () => {
     const result = render({ success: false, error: 'Content mode mismatch' });
     expect(isValidElement(result) && (result.props as { success?: boolean }).success).toBe(false);

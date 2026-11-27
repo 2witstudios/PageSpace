@@ -9,6 +9,12 @@
  * `readSandboxFile` behind the `readFile` tool. That one windows by line, clips
  * long lines and runs the injection seam, all of which are right for text going
  * to a model and all of which would corrupt bytes going to storage.
+ *
+ * Real files (uploaded FILE pages into the sandbox, sandbox files into the
+ * drive) bind the binary runners instead — `writeSandboxBinaryFile` and
+ * `readSandboxBinaryFileForCopy` — and read originals through the processor
+ * (`fetchOriginalFromProcessor`), never raw storage, so decryption and the
+ * page-bound authorization happen in one place.
  */
 
 import type { Tool } from 'ai';
@@ -18,8 +24,20 @@ import { pages } from '@pagespace/db/schema/core';
 import {
   readSandboxFileForCopy,
   writeSandboxFile,
+  writeSandboxBinaryFile,
+  readSandboxBinaryFileForCopy,
+  MAX_BINARY_COPY_BYTES,
   DENIAL_MESSAGES,
 } from '@pagespace/lib/services/sandbox/tool-runners';
+import { resolveUploadQuotaTarget, STORAGE_TIERS } from '@pagespace/lib/services/storage-limits';
+import { getActorInfo, logFileActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { createFilePage } from '@/lib/upload/create-file-page';
+import {
+  enqueueProcessorJob,
+  fetchOriginalFromProcessor,
+  storeOriginalViaProcessor,
+} from '@/lib/upload/processor-effects';
+import { fileSandboxBytesIntoDrive, type FileIntoDriveEffects } from './copy-content-file-page';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
@@ -94,6 +112,21 @@ async function isSandboxEnabledForContext(context: ToolExecutionContext): Promis
   }
 }
 
+/** The production seams behind filing a sandbox file into the drive. */
+const fileIntoDriveEffects: FileIntoDriveEffects = {
+  createFilePage,
+  storeOriginal: storeOriginalViaProcessor,
+  enqueueProcessorJob,
+  broadcast: async ({ driveId, pageId, operation, parentId, title, type }) => {
+    await broadcastPageEvent(createPageEventPayload(driveId, pageId, operation, { parentId, title, type }));
+  },
+  logActivity: async ({ userId, pageId, driveId, title, mimeType, fileSize, contentHash }) => {
+    const actorInfo = await getActorInfo(userId);
+    logFileActivity(userId, 'upload', { fileId: contentHash, fileName: title, fileType: mimeType, fileSize, driveId, pageId }, actorInfo);
+  },
+  logError: (message, error, metadata) => copyLogger.error(message, error, metadata),
+};
+
 const productionDeps: CopyContentDeps = {
   findPage: async (pageId) => {
     const page = await pageRepository.findById(pageId);
@@ -106,6 +139,10 @@ const productionDeps: CopyContentDeps = {
       content: page.content ?? null,
       driveId: page.driveId,
       revision: typeof page.revision === 'number' ? page.revision : null,
+      filePath: page.filePath ?? null,
+      contentHash: page.contentHash ?? null,
+      mimeType: page.mimeType ?? null,
+      fileSize: typeof page.fileSize === 'number' ? page.fileSize : null,
     };
   },
 
@@ -144,6 +181,56 @@ const productionDeps: CopyContentDeps = {
       ? { success: true, bytesWritten: result.bytesWritten }
       : { success: false, error: result.error ?? DENIAL_MESSAGES[result.reason] };
   },
+
+  fetchFileOriginal: async ({ page, context }) => {
+    if (!page.filePath) return { success: false, error: 'This upload has no stored file.' };
+    // Refused before any byte moves when the row already says it is too big.
+    if (typeof page.fileSize === 'number' && page.fileSize > MAX_BINARY_COPY_BYTES) {
+      return {
+        success: false,
+        error: `"${page.title}" is ${page.fileSize} bytes, over the ${MAX_BINARY_COPY_BYTES}-byte limit for copying a file into the sandbox.`,
+      };
+    }
+    return fetchOriginalFromProcessor({
+      actor: toolActor(context),
+      pageId: page.id,
+      filePath: page.filePath,
+      maxBytes: MAX_BINARY_COPY_BYTES,
+    });
+  },
+
+  writeSandboxBinaryFile: async ({ path, content, context }) => {
+    const opened = await openSandbox(context);
+    if (!opened.ok) return { success: false, error: opened.error };
+    const result = await writeSandboxBinaryFile({ path, content, ctx: opened.ctx, deps: buildRealSandboxRunDeps({ actor: opened.actor }) });
+    return result.success
+      ? { success: true, bytesWritten: result.bytesWritten }
+      : { success: false, error: result.error ?? DENIAL_MESSAGES[result.reason], reason: result.reason };
+  },
+
+  readSandboxBinaryFile: async ({ path, maxBytes, context }) => {
+    const opened = await openSandbox(context);
+    if (!opened.ok) return { success: false, error: opened.error };
+    const result = await readSandboxBinaryFileForCopy({
+      path,
+      maxBytes,
+      ctx: opened.ctx,
+      deps: buildRealSandboxRunDeps({ actor: opened.actor }),
+    });
+    return result.success
+      ? { success: true, content: result.content, bytes: result.bytes }
+      : { success: false, error: result.error ?? DENIAL_MESSAGES[result.reason], reason: result.reason };
+  },
+
+  // The per-file limit of whoever PAYS for the drive's storage (the org for an
+  // org drive, the owner otherwise) — the same target the quota check uses.
+  resolveMaxFileSize: async ({ driveId, context }) => {
+    const target = await resolveUploadQuotaTarget(context.userId, driveId);
+    return target ? STORAGE_TIERS[target.quota.tier].maxFileSize : null;
+  },
+
+  createFilePage: ({ parent, title, path, content, context }) =>
+    fileSandboxBytesIntoDrive({ actor: toolActor(context), parent, title, path, content }, fileIntoDriveEffects),
 
   isSandboxEnabledForContext,
 };

@@ -1,11 +1,17 @@
 /**
  * create-file-page — reusable server-side path to persist raw bytes as a FILE page.
  *
- * Extracted from the inline logic in `api/upload/complete/route.ts` so the image
- * generator can file a generated image the same way an upload does: content-address
- * the bytes → put to S3 → insert `files` / `pages`(FILE) / `filePages` rows. The image
- * is viewable immediately via `/api/files/[id]/view` (which serves from `filePath`
- * with no `processingStatus` gate — no processor run required).
+ * Extracted from the inline logic in `api/upload/complete/route.ts` so the server can
+ * file bytes it holds the same way an upload does: content-address the bytes → store
+ * the original → insert `files` / `pages`(FILE) / `filePages` rows → charge storage.
+ *
+ * Two callers, one shell (`createFilePage`):
+ *   - `generate_image` (`createImageFilePage`): the bytes are the final artifact, so the
+ *     page is stamped `visual` and no processor job runs. Bytes go to S3 directly.
+ *   - `copy_content` → `new_file_page`: an agent's sandbox file. It is NOT known-final,
+ *     so the page starts `pending` and `afterCommit` enqueues the processor's
+ *     pull-verify pipeline (re-hash + Magika + extraction), exactly as an upload does.
+ *     Bytes go through the processor (`storeOriginal`), where at-rest encryption applies.
  *
  * Pure builders (hash, page values) + a thin shell whose I/O seams (putObject, home-drive
  * resolution, position, persist) are injectable so unit tests never touch S3 or the DB.
@@ -29,13 +35,19 @@ import { putObject } from './s3-effects';
 /** Folder (at the Home-drive root) that collects auto-filed generated images. */
 export const GENERATED_IMAGES_FOLDER = 'Generated Images';
 
-/** Thrown when persisting a generated image would exceed the user's storage quota. */
-export class ImageStorageQuotaError extends Error {
+/** Thrown when persisting the bytes would exceed the payer's storage quota or per-file limit. */
+export class FileStorageQuotaError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'ImageStorageQuotaError';
+    this.name = 'FileStorageQuotaError';
   }
 }
+
+/** The image generator's name for the same error — one class, so `instanceof` agrees. */
+export { FileStorageQuotaError as ImageStorageQuotaError };
+
+/** Where server-held bytes came from. Doubles as the `filePages.linkSource` and blocklist entry point. */
+export type FilePageSource = 'image-generation' | 'sandbox-copy';
 
 export interface CreateImageFilePageInput {
   userId: string;
@@ -68,7 +80,28 @@ export interface FilePageWrite {
 
 export interface CreateImageFilePageDeps {
   hash?: (buffer: Buffer) => string;
+  /** The default original store: a bare S3 put of the plaintext bytes. */
   putObject?: (key: string, body: Buffer, contentType: string) => Promise<void>;
+  /**
+   * Replaces the S3 put: store the original some other way (the processor, for
+   * at-rest encryption). Called BEFORE any row is written, with the id the page
+   * row will carry so a page-bound service token can be minted for it.
+   */
+  storeOriginal?: (args: {
+    contentHash: string;
+    buffer: Buffer;
+    mimeType: string;
+    title: string;
+    pageId: string;
+    driveId: string;
+    parentId: string | null;
+  }) => Promise<void>;
+  /**
+   * Runs once the rows are committed (e.g. enqueue the processor job). Best-effort,
+   * like the upload route's post-commit block: a failure is logged by the caller's
+   * seam and never un-creates a page that already exists.
+   */
+  afterCommit?: (args: { pageId: string; driveId: string }) => Promise<void>;
   resolveGalleryParent?: (userId: string, driveId?: string) => Promise<{ driveId: string; parentId: string }>;
   getNextPosition?: (driveId: string, parentId: string | null) => Promise<number>;
   /** Returns whether the content-addressed `files` row was newly inserted (charge once). */
@@ -107,6 +140,105 @@ export function extensionForMediaType(mediaType: string): string {
 export function imageFileName(title: string, mediaType: string): string {
   const ext = extensionForMediaType(mediaType);
   return title.toLowerCase().endsWith(ext) ? title : `${title}${ext}`;
+}
+
+/**
+ * Pure: the media type a file name declares, by extension. Only a DECLARATION —
+ * the processor's pull-verify pipeline runs Magika on the real bytes and refuses
+ * anything its denylist blocks regardless of what is declared here.
+ */
+export function mimeTypeForFileName(name: string): string {
+  const dot = name.lastIndexOf('.');
+  const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+  const map: Record<string, string> = {
+    pdf: 'application/pdf',
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    tif: 'image/tiff',
+    tiff: 'image/tiff',
+    bmp: 'image/bmp',
+    txt: 'text/plain',
+    md: 'text/markdown',
+    csv: 'text/csv',
+    tsv: 'text/tab-separated-values',
+    json: 'application/json',
+    zip: 'application/zip',
+    gz: 'application/gzip',
+    tar: 'application/x-tar',
+    doc: 'application/msword',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xls: 'application/vnd.ms-excel',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ppt: 'application/vnd.ms-powerpoint',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    mp3: 'audio/mpeg',
+    wav: 'audio/wav',
+    mp4: 'video/mp4',
+    mov: 'video/quicktime',
+    webm: 'video/webm',
+    // Listed so the declaration is HONEST: these are browser-executable, and
+    // `validateMimeTypeDeclaration` refuses them by name, as presign does.
+    html: 'text/html',
+    htm: 'text/html',
+    xhtml: 'application/xhtml+xml',
+    svg: 'image/svg+xml',
+    js: 'text/javascript',
+    mjs: 'text/javascript',
+    xml: 'application/xml',
+  };
+  return map[ext] ?? 'application/octet-stream';
+}
+
+/**
+ * Pure: build the FILE page row for server-held bytes. `filePath` = the content hash
+ * (the view route reads it). A generated image is final (`visual`); anything else
+ * starts `pending` for the processor to verify and extract.
+ */
+export function buildFilePageValues(params: {
+  pageId: string;
+  contentHash: string;
+  driveId: string;
+  parentId: string | null;
+  title: string;
+  mimeType: string;
+  fileSize: number;
+  userId: string;
+  position: number;
+  source: FilePageSource;
+  prompt?: string;
+  now?: Date;
+}): typeof pages.$inferInsert {
+  if (params.source === 'image-generation') return buildImageFilePageValues(params);
+  const now = params.now ?? new Date();
+  return {
+    id: params.pageId,
+    title: params.title,
+    type: PageType.FILE,
+    content: '',
+    // The same status an upload starts in: the pull-verify job sets the real one
+    // (visual / completed / failed) once it has looked at the bytes.
+    processingStatus: 'pending',
+    position: params.position,
+    driveId: params.driveId,
+    parentId: params.parentId,
+    fileSize: params.fileSize,
+    mimeType: params.mimeType,
+    originalFileName: params.title,
+    filePath: params.contentHash,
+    contentHash: params.contentHash,
+    fileMetadata: {
+      uploadedAt: now.toISOString(),
+      uploadedBy: params.userId,
+      originalName: params.title,
+      contentHash: params.contentHash,
+      source: params.source,
+    },
+    createdAt: now,
+    updatedAt: now,
+  };
 }
 
 /** Pure: build the FILE page row. `filePath` = the content hash (the view route reads it). */
@@ -206,9 +338,10 @@ async function defaultResolveGalleryParent(
  *
  * NOTE vs the upload path: `api/upload/complete` guards the content-addressed `files` row
  * with `canLinkExistingFileRow` (a cross-tenant claim check) because there the CONTENT HASH
- * is attacker-chosen — a client can claim a hash it doesn't own. Here the bytes are produced
- * server-side by the image model and hashed server-side, so a caller cannot steer the hash to
- * collide with another tenant's blob, and the guard has nothing to defend. Linking an existing
+ * is attacker-chosen — a client can claim a hash it doesn't own. Here the server HOLDS the bytes
+ * (an image model's output, or a sandbox file the server read itself) and hashes them itself, so
+ * a caller cannot name a hash without possessing exactly those bytes — which is what an upload of
+ * them would prove anyway — and the guard has nothing to defend. Linking an existing
  * row is therefore safe (it is the same bytes, deduplicated) and storage is charged only on
  * first insert. If this helper ever accepts caller-supplied bytes/hashes, reinstate the guard.
  */
@@ -227,44 +360,47 @@ async function defaultPersist(write: FilePageWrite): Promise<{ fileWasInserted: 
   });
 }
 
+/** Input for {@link createFilePage}: the image input plus where the bytes came from. */
+export interface CreateFilePageInput extends CreateImageFilePageInput {
+  source: FilePageSource;
+}
+
 /**
- * Persist `buffer` as a FILE page. Defaults to the user's Home-drive "Generated Images"
- * gallery; `targetDriveId` files it into that drive's gallery and `targetParentId` under
- * an exact page (caller MUST have verified edit permission — see the input type).
- * Enforces the storage quota before writing and
- * charges storage on first store. Returns the new page id (viewable at
- * `/api/files/${pageId}/view`).
+ * Persist `buffer` as a FILE page — the one shell behind every server-side filing.
+ *
+ * Defaults to the user's Home-drive "Generated Images" gallery; `targetDriveId` files
+ * it into that drive's gallery and `targetParentId` under an exact page (caller MUST
+ * have verified edit permission — see the input type). Enforces the storage quota
+ * (bytes and the tier's per-file limit) before writing, checks the content blocklist,
+ * stores the original, writes the rows, charges storage on first store, then runs
+ * `afterCommit`. Returns the new page id (viewable at `/api/files/${pageId}/view`).
  */
-export async function createImageFilePage(
-  input: CreateImageFilePageInput,
+export async function createFilePage(
+  input: CreateFilePageInput,
   deps: CreateImageFilePageDeps = {},
-): Promise<{ pageId: string; driveId: string; parentId: string | null }> {
+): Promise<{ pageId: string; driveId: string; parentId: string | null; contentHash: string }> {
   const fileSize = input.buffer.length;
 
-  // Enforce the storage quota BEFORE writing any bytes, mirroring the upload flow, so
-  // generated images can't let a user exceed their plan storage.
-  // WAL-9: an image filed into an org drive checks the org's quota, never the user's. With no
-  // target drive it lands in the user's Home drive, which is never an org drive.
+  // Enforce the storage quota BEFORE writing any bytes, mirroring the upload flow.
+  // WAL-9: bytes filed into an org drive check the org's quota, never the user's. With no
+  // target drive they land in the user's Home drive, which is never an org drive.
   const checkQuota = deps.checkQuota ?? ((u, b) => checkStorageQuotaForDrive(u, input.targetDriveId, b));
   const quota = await checkQuota(input.userId, fileSize);
   if (!quota.allowed) {
-    throw new ImageStorageQuotaError(quota.reason ?? 'Saving this image would exceed your storage quota.');
+    throw new FileStorageQuotaError(quota.reason ?? 'Saving this file would exceed your storage quota.');
   }
 
   const hash = (deps.hash ?? sha256Hex)(input.buffer);
 
-  // Content blocklist: these bytes are produced server-side, but a model can
-  // reproduce (or be handed) blocked content, so they get the same check as an
-  // upload — before anything is written. Throws ContentBlockedError; the gate
-  // audits the attempt.
+  // Content blocklist: these bytes are server-held, but a model can reproduce (or be
+  // handed) blocked content, so they get the same check as an upload — before
+  // anything is written. Throws ContentBlockedError; the gate audits the attempt.
   await assertUploadNotBlocked({
     contentHash: hash,
     userId: input.userId,
-    entryPoint: 'image-generation',
+    entryPoint: input.source,
     details: { driveId: input.targetDriveId },
   });
-
-  await (deps.putObject ?? putObject)(buildS3Key(hash), input.buffer, input.mimeType);
 
   // Branch on the PARENT, not the drive: a named parent is an exact placement the
   // caller already authorized, while a drive alone means "that drive's gallery".
@@ -285,8 +421,25 @@ export async function createImageFilePage(
     parentId = gallery.parentId;
   }
 
-  const position = await (deps.getNextPosition ?? pageRepository.getNextPosition)(driveId, parentId);
+  // Minted before the bytes are stored: a processor store authenticates with a token
+  // bound to THIS page id, so the id has to exist before the row does.
   const pageId = createId();
+
+  if (deps.storeOriginal) {
+    await deps.storeOriginal({
+      contentHash: hash,
+      buffer: input.buffer,
+      mimeType: input.mimeType,
+      title: input.title,
+      pageId,
+      driveId,
+      parentId,
+    });
+  } else {
+    await (deps.putObject ?? putObject)(buildS3Key(hash), input.buffer, input.mimeType);
+  }
+
+  const position = await (deps.getNextPosition ?? pageRepository.getNextPosition)(driveId, parentId);
 
   const write: FilePageWrite = {
     fileRow: {
@@ -297,7 +450,7 @@ export async function createImageFilePage(
       storagePath: hash,
       createdBy: input.userId,
     },
-    pageValues: buildImageFilePageValues({
+    pageValues: buildFilePageValues({
       pageId,
       contentHash: hash,
       driveId,
@@ -307,9 +460,10 @@ export async function createImageFilePage(
       fileSize,
       userId: input.userId,
       position,
+      source: input.source,
       prompt: input.prompt,
     }),
-    junction: { fileId: hash, pageId, linkedBy: input.userId, linkSource: 'image-generation' },
+    junction: { fileId: hash, pageId, linkedBy: input.userId, linkSource: input.source },
   };
 
   const { fileWasInserted } = await (deps.persist ?? defaultPersist)(write);
@@ -324,5 +478,21 @@ export async function createImageFilePage(
     await charge(input.userId, fileSize, { pageId, driveId, eventType: 'upload' }).catch(() => {});
   }
 
+  if (deps.afterCommit) {
+    await deps.afterCommit({ pageId, driveId }).catch(() => {});
+  }
+
+  return { pageId, driveId, parentId, contentHash: hash };
+}
+
+/**
+ * Persist a generated image as a FILE page — `createFilePage` with the
+ * image-generation source (final `visual` page, no processor run).
+ */
+export async function createImageFilePage(
+  input: CreateImageFilePageInput,
+  deps: CreateImageFilePageDeps = {},
+): Promise<{ pageId: string; driveId: string; parentId: string | null }> {
+  const { pageId, driveId, parentId } = await createFilePage({ ...input, source: 'image-generation' }, deps);
   return { pageId, driveId, parentId };
 }

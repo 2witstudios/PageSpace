@@ -28,7 +28,10 @@ vi.mock('../../core/provider-factory', () => ({
   createImageProvider: (...a: unknown[]) => createImageProvider(...a),
   isProviderError: (r: object) => 'error' in r,
 }));
-vi.mock('@/lib/upload/create-file-page', () => ({
+// Partial: the full tool registry this test imports also reaches copy_content,
+// which files sandbox files through this module's generalized `createFilePage`.
+vi.mock('@/lib/upload/create-file-page', async (orig) => ({
+  ...(await orig<typeof import('@/lib/upload/create-file-page')>()),
   createImageFilePage: (...a: unknown[]) => createImageFilePage(...a),
   ImageStorageQuotaError: class ImageStorageQuotaError extends Error {},
 }));

@@ -4,6 +4,10 @@ import {
   sha256Hex,
   buildImageFilePageValues,
   createImageFilePage,
+  createFilePage,
+  buildFilePageValues,
+  mimeTypeForFileName,
+  FileStorageQuotaError,
   imageFileName,
   GENERATED_IMAGES_FOLDER,
   ImageStorageQuotaError,
@@ -278,5 +282,143 @@ describe('createImageFilePage — content blocklist', () => {
 
     expect(out.driveId).toBe('d');
     expect(d.putObject).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('buildFilePageValues (pure) — a sandbox file filed into the drive', () => {
+  const now = new Date('2026-11-26T00:00:00.000Z');
+  const v = buildFilePageValues({
+    pageId: 'page2', contentHash: HASH, driveId: 'drive1', parentId: 'folder1',
+    title: 'exhibits-ocr.pdf', mimeType: 'application/pdf', fileSize: buf.length, userId: 'user1',
+    position: 0, source: 'sandbox-copy', now,
+  });
+
+  it('is PENDING, so the processor verifies and extracts it like any upload', () => {
+    // Unlike a generated image, an agent's file is not a known-final artifact:
+    // it needs the same Magika gate and text extraction an upload gets.
+    assert({
+      given: 'a sandbox-copy FILE page',
+      should: 'start pending with no extraction method claimed',
+      actual: { type: v.type, processingStatus: v.processingStatus, extractionMethod: v.extractionMethod ?? null },
+      expected: { type: 'FILE', processingStatus: 'pending', extractionMethod: null },
+    });
+  });
+
+  it('keeps the title as the download name and records where it came from', () => {
+    assert({
+      given: 'a sandbox file titled with its extension',
+      should: 'use the title as originalFileName and stamp the source',
+      actual: { name: v.originalFileName, source: (v.fileMetadata as Record<string, unknown>).source },
+      expected: { name: 'exhibits-ocr.pdf', source: 'sandbox-copy' },
+    });
+  });
+});
+
+describe('mimeTypeForFileName (pure)', () => {
+  it('maps common extensions, case-insensitively, and falls back to octet-stream', () => {
+    assert({
+      given: 'a set of names',
+      should: 'map each to its media type',
+      actual: ['a.pdf', 'b.PNG', 'c.jpeg', 'd.csv', 'e.docx', 'f.zip', 'g', 'h.unknownext'].map(mimeTypeForFileName),
+      expected: [
+        'application/pdf',
+        'image/png',
+        'image/jpeg',
+        'text/csv',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/zip',
+        'application/octet-stream',
+        'application/octet-stream',
+      ],
+    });
+  });
+});
+
+describe('createFilePage — the generalized shell, sandbox-copy flavour', () => {
+  const okQuota = vi.fn(async (_u: string, _b: number) => ({ allowed: true }));
+
+  function deps() {
+    const order: string[] = [];
+    return {
+      order,
+      storeOriginal: vi.fn(async (_args: { contentHash: string; pageId: string; driveId: string; parentId: string | null }) => { order.push('store'); }),
+      putObject: vi.fn(async () => { order.push('put'); }),
+      getNextPosition: vi.fn(async () => 2),
+      persist: vi.fn(async (_w: FilePageWrite) => { order.push('persist'); return { fileWasInserted: true }; }),
+      checkQuota: okQuota,
+      chargeStorage: vi.fn(async () => { order.push('charge'); }),
+      afterCommit: vi.fn(async (_a: { pageId: string; driveId: string }) => { order.push('afterCommit'); }),
+    };
+  }
+
+  const input = {
+    userId: 'u1',
+    buffer: buf,
+    mimeType: 'application/pdf',
+    title: 'out.pdf',
+    source: 'sandbox-copy' as const,
+    targetDriveId: 'driveX',
+    targetParentId: 'folderY',
+  };
+
+  it('stores the bytes through the injected store (the processor), never a bare S3 put, BEFORE any row exists', async () => {
+    const d = deps();
+    const out = await createFilePage(input, d);
+    expect(d.putObject).not.toHaveBeenCalled();
+    expect(d.storeOriginal).toHaveBeenCalledTimes(1);
+    const stored = d.storeOriginal.mock.calls[0][0];
+    // The store is told the page id the row will carry, so a page-bound token can be minted for it.
+    expect(stored).toMatchObject({ contentHash: HASH, pageId: out.pageId, driveId: 'driveX', parentId: 'folderY' });
+    expect(d.order.indexOf('store')).toBeLessThan(d.order.indexOf('persist'));
+  });
+
+  it('inserts files/pages/filePages with the sandbox-copy link source, pending, then runs afterCommit (the processor enqueue)', async () => {
+    const d = deps();
+    const out = await createFilePage(input, d);
+    const written = d.persist.mock.calls[0][0];
+    expect(written.fileRow).toMatchObject({ id: HASH, driveId: 'driveX', sizeBytes: buf.length, mimeType: 'application/pdf' });
+    expect(written.pageValues).toMatchObject({ id: out.pageId, processingStatus: 'pending', parentId: 'folderY', driveId: 'driveX' });
+    expect(written.junction).toMatchObject({ fileId: HASH, pageId: out.pageId, linkSource: 'sandbox-copy' });
+    expect(d.afterCommit).toHaveBeenCalledWith({ pageId: out.pageId, driveId: 'driveX' });
+    expect(d.order.indexOf('afterCommit')).toBeGreaterThan(d.order.indexOf('persist'));
+  });
+
+  it('charges storage on first store, against the target drive', async () => {
+    const d = deps();
+    const out = await createFilePage(input, d);
+    expect(d.chargeStorage).toHaveBeenCalledWith('u1', buf.length, { pageId: out.pageId, driveId: 'driveX', eventType: 'upload' });
+  });
+
+  it('checks the blocklist under the sandbox-copy entry point', async () => {
+    await createFilePage(input, deps());
+    expect(mockAssertUploadNotBlocked).toHaveBeenCalledWith({
+      contentHash: HASH,
+      userId: 'u1',
+      entryPoint: 'sandbox-copy',
+      details: { driveId: 'driveX' },
+    });
+  });
+
+  it('given a quota refusal, should throw FileStorageQuotaError and store nothing', async () => {
+    const d = { ...deps(), checkQuota: async () => ({ allowed: false, reason: 'File exceeds pro tier limit of 250 MB' }) };
+    await expect(createFilePage(input, d)).rejects.toBeInstanceOf(FileStorageQuotaError);
+    expect(d.storeOriginal).not.toHaveBeenCalled();
+    expect(d.persist).not.toHaveBeenCalled();
+  });
+
+  it('given a store failure, should write no rows', async () => {
+    const d = { ...deps(), storeOriginal: vi.fn(async () => { throw new Error('processor down'); }) };
+    await expect(createFilePage(input, d)).rejects.toThrow('processor down');
+    expect(d.persist).not.toHaveBeenCalled();
+  });
+
+  it('given an afterCommit failure, should still return the committed page (best-effort, like the upload route)', async () => {
+    const d = { ...deps(), afterCommit: vi.fn(async () => { throw new Error('enqueue failed'); }) };
+    const out = await createFilePage(input, d);
+    expect(out.driveId).toBe('driveX');
+  });
+
+  it('the image wrapper is the same shell and its quota error is the same class', () => {
+    expect(ImageStorageQuotaError).toBe(FileStorageQuotaError);
   });
 });
