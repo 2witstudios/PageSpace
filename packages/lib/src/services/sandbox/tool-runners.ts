@@ -24,6 +24,7 @@
  * `resolveSandboxPath`, `truncateToBytes`) is called directly.
  */
 
+import { randomUUID } from 'node:crypto';
 import type { SubscriptionTier } from '../subscription-utils';
 import {
   SANDBOX_TIMEOUT_MS,
@@ -537,7 +538,8 @@ export const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   path_escape: 'The path is invalid or escapes the sandbox root.',
   content_too_large: 'The file content is too large.',
   binary_content:
-    'This file is not valid UTF-8 text, so it cannot be copied byte-for-byte through this tool — decoding it would silently replace the undecodable bytes. Use bash (cp/mv) to move binary files inside the sandbox.',
+    'This file is not valid UTF-8 text, so it cannot be copied into a page as text — decoding it would silently replace the undecodable bytes. '
+    + 'To put the file itself in the drive, copy it to a new FILE page (copy_content with to.kind "new_file_page"); to move it inside the sandbox, copy it to another sandbox file or use bash (cp/mv).',
   edit_no_match:
     'The oldString was not found in the file. Read the file and copy the exact text to replace. '
     + 'If you read a windowed page of a long file, the text you are targeting may be in a part you have not read yet.',
@@ -1517,6 +1519,283 @@ export async function readSandboxFileForCopy({
         durationMs,
       });
       return { success: true, path, content, bytes };
+    } finally {
+      session.release();
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Binary copies: real files in and out of the sandbox.
+//
+// The text copy path above refuses anything that is not UTF-8 and stops at
+// MAX_WRITE_BYTES, which is right for text bound for a page and wrong for the
+// file itself. An agent asked to work on a 72 MB scanned PDF needs the PDF
+// (`pdfimages`, `tesseract`), not the 18 KB of text extraction found in it. The
+// sandbox cannot fetch the bytes itself (storage is on its egress deny list), so
+// the server pushes them in here, and pulls finished files back out the same way.
+// ---------------------------------------------------------------------------
+
+/** Default ceiling on one binary copy, in either direction. */
+export const DEFAULT_MAX_BINARY_COPY_BYTES = 250 * 1024 * 1024;
+
+/** Env var that overrides {@link DEFAULT_MAX_BINARY_COPY_BYTES}, in bytes. */
+export const MAX_BINARY_COPY_BYTES_ENV = 'SANDBOX_MAX_BINARY_COPY_BYTES';
+
+/**
+ * Pure: the binary copy cap for `env`. A malformed or non-positive override
+ * keeps the default — a typo must neither open the cap nor shut copies off.
+ */
+export function resolveMaxBinaryCopyBytes(env: Record<string, string | undefined>): number {
+  const raw = env[MAX_BINARY_COPY_BYTES_ENV]?.trim();
+  if (!raw || !/^\d+$/.test(raw)) return DEFAULT_MAX_BINARY_COPY_BYTES;
+  const value = Number.parseInt(raw, 10);
+  return value > 0 ? value : DEFAULT_MAX_BINARY_COPY_BYTES;
+}
+
+/**
+ * Largest file one binary copy moves, in bytes. Every byte is held in host
+ * memory on the way through (the Sprite fs API has no streamed write or ranged
+ * read), so this bounds the server, not only the sandbox.
+ */
+export const MAX_BINARY_COPY_BYTES = resolveMaxBinaryCopyBytes(process.env);
+
+/**
+ * Per-attempt budget for a binary transfer through the sandbox filesystem API.
+ *
+ * The driver default (30 s) is sized for source files; 250 MB at a modest few
+ * MB/s needs more. Kept so that a cold-start retry (two attempts) still fits
+ * inside the AI route's own budget (`SANDBOX_MAX_TIMEOUT_MS` is 200 s, the
+ * route ~285 s), since a tool call must leave room for the rest of the turn.
+ */
+export const BINARY_COPY_TIMEOUT_MS = 90_000;
+
+/**
+ * Last-line marker the binary copy's helper commands print with their exit
+ * code, so the driver answers at first byte instead of waiting out the exec
+ * socket's 5-10 s close tail (see `RunCommandArgs.stdoutSentinel`).
+ */
+export const BINARY_COPY_SENTINEL = '__PAGESPACE_COPY_END__';
+
+/** Bound on the small helper commands (stat, rename, cleanup) around a transfer. */
+const BINARY_COPY_HELPER_TIMEOUT_MS = 30_000;
+
+export type BinaryReadForCopyResult =
+  | { success: true; path: string; content: Buffer; bytes: number }
+  | { success: false; error: string; reason: SandboxToolDenialReason };
+
+/** Run one helper script with positional data args, reporting through the sentinel. */
+async function runCopyHelper(
+  sandbox: ExecutableSandbox,
+  script: string,
+  args: string[],
+): Promise<SandboxRunResult> {
+  return sandbox.runCommand({
+    cmd: 'sh',
+    // Paths are positional DATA ("$1"...), never spliced into the script, so a
+    // file name full of shell metacharacters cannot escape into the command.
+    args: ['-c', `${script}; echo "${BINARY_COPY_SENTINEL} $?"`, 'sh', ...args],
+    timeoutMs: BINARY_COPY_HELPER_TIMEOUT_MS,
+    maxBytes: 4096,
+    stdoutSentinel: BINARY_COPY_SENTINEL,
+  });
+}
+
+/** Best-effort removal of a temp file a failed copy left behind. Never throws. */
+async function removeTempFile(sandbox: ExecutableSandbox, tempPath: string): Promise<void> {
+  try {
+    await runCopyHelper(sandbox, 'rm -f -- "$1"', [tempPath]);
+  } catch {
+    // A stray temp file is untidy, not unsafe: it never carries the target's name.
+  }
+}
+
+/** Pure: a sibling temp path for `target` — same directory, so the rename is atomic. */
+export function binaryCopyTempPath(target: string, nonce: string): string {
+  return `${target}.pagespace-copy-${nonce}.tmp`;
+}
+
+/**
+ * Write real bytes into a sandbox file — the binary sibling of `writeSandboxFile`.
+ *
+ * Same confinement (`resolveSandboxPath`), metering (`withMachineBilling`),
+ * acquisition (`openSession`) and audit (`safeAudit`) as every other runner; it
+ * differs in three ways, each for the size of what it moves:
+ *
+ *   - its own cap, {@link MAX_BINARY_COPY_BYTES}, instead of MAX_WRITE_BYTES;
+ *   - its own per-attempt timeout, {@link BINARY_COPY_TIMEOUT_MS}, instead of
+ *     the driver's 30 s fs default;
+ *   - it writes to a temp file beside the target and renames it into place, so
+ *     a transfer that times out or drops midway never leaves a truncated file
+ *     under the name the agent will open next. A failure removes the temp file.
+ */
+export async function writeSandboxBinaryFile({
+  path,
+  content,
+  ctx,
+  deps,
+  nonce = () => randomUUID(),
+}: {
+  path: string;
+  content: Uint8Array;
+  ctx: SandboxActorContext;
+  deps: SandboxRunDeps;
+  /** Temp-name source; injectable so tests can pin the name. */
+  nonce?: () => string;
+}): Promise<WriteFileToolResult> {
+  if (!deps.isEnabled()) return fail('kill_switch_off');
+
+  const resolved = resolveSandboxPath(path);
+  if (!resolved) {
+    await safeAudit(deps, ctx, {
+      code: `binaryWrite ${path}`,
+      exitCode: null,
+      durationMs: 0,
+      anomaly: 'blocked_command',
+    });
+    return fail('path_escape');
+  }
+  const bytes = content.byteLength;
+  if (bytes > MAX_BINARY_COPY_BYTES) return fail('content_too_large');
+
+  return withMachineBilling<{ path: string; bytesWritten: number }>(ctx, deps, async () => {
+    const session = await openSession(ctx, deps);
+    if (!session.ok) return fail(session.reason);
+
+    const tempPath = binaryCopyTempPath(resolved, nonce());
+    try {
+      const startedAt = deps.now();
+      const failWith = async (): Promise<{ success: false; error: string; reason: SandboxToolDenialReason }> => {
+        await removeTempFile(session.sandbox, tempPath);
+        await safeAudit(deps, ctx, {
+          code: `binaryWrite ${path} (${bytes} bytes)`,
+          exitCode: null,
+          durationMs: deps.now().getTime() - startedAt.getTime(),
+          anomaly: 'nonzero_exit',
+        });
+        return fail('execution_failed');
+      };
+
+      try {
+        await session.sandbox.writeFiles([{ path: tempPath, content }], { timeoutMs: BINARY_COPY_TIMEOUT_MS });
+      } catch {
+        return await failWith();
+      }
+
+      let moved: SandboxRunResult;
+      try {
+        moved = await runCopyHelper(session.sandbox, 'mv -f -- "$1" "$2"', [tempPath, resolved]);
+      } catch {
+        return await failWith();
+      }
+      if (moved.exitCode !== 0) return await failWith();
+
+      await safeAudit(deps, ctx, {
+        code: `binaryWrite ${path} (${bytes} bytes)`,
+        exitCode: 0,
+        durationMs: deps.now().getTime() - startedAt.getTime(),
+      });
+      return { success: true, path, bytesWritten: bytes };
+    } finally {
+      session.release();
+    }
+  });
+}
+
+/**
+ * Read a sandbox file's real bytes, for filing them in the drive — the binary
+ * sibling of `readSandboxFileForCopy`.
+ *
+ * No UTF-8 decode and no `binary_content` refusal: the bytes are the point.
+ * Like the text copy read it skips the injection seam (the bytes never reach a
+ * model) and refuses rather than truncates.
+ *
+ * The cap is the SMALLER of the caller's `maxBytes` (the destination drive's
+ * per-file limit) and {@link MAX_BINARY_COPY_BYTES}. The file's size is asked of
+ * the sandbox (`stat`) before the read, because the fs API materializes the
+ * whole file in host memory and a cap applied afterwards would already have
+ * paid for it. The read's own length is checked again, since the file can grow
+ * between the two.
+ */
+export async function readSandboxBinaryFileForCopy({
+  path,
+  maxBytes,
+  ctx,
+  deps,
+}: {
+  path: string;
+  maxBytes: number;
+  ctx: SandboxActorContext;
+  deps: SandboxRunDeps;
+}): Promise<BinaryReadForCopyResult> {
+  if (!deps.isEnabled()) return fail('kill_switch_off');
+
+  const resolved = resolveSandboxPath(path);
+  if (!resolved) {
+    await safeAudit(deps, ctx, {
+      code: `binaryRead ${path}`,
+      exitCode: null,
+      durationMs: 0,
+      anomaly: 'blocked_command',
+    });
+    return fail('path_escape');
+  }
+  const cap = Math.min(maxBytes, MAX_BINARY_COPY_BYTES);
+
+  return withMachineBilling<Extract<BinaryReadForCopyResult, { success: true }>>(ctx, deps, async () => {
+    const session = await openSession(ctx, deps);
+    if (!session.ok) return fail(session.reason);
+
+    try {
+      const startedAt = deps.now();
+      const audit = (exitCode: number | null, note: string, anomaly?: CodeExecutionAnomaly) =>
+        safeAudit(deps, ctx, {
+          code: `binaryRead ${path}${note}`,
+          exitCode,
+          durationMs: deps.now().getTime() - startedAt.getTime(),
+          ...(anomaly ? { anomaly } : {}),
+        });
+
+      // `stat -L` follows a symlink to the file it names, which is what the
+      // read below returns; `-c %s` prints the size alone.
+      let probe: SandboxRunResult;
+      try {
+        probe = await runCopyHelper(session.sandbox, 'stat -L -c %s -- "$1"', [resolved]);
+      } catch {
+        await audit(null, '', 'nonzero_exit');
+        return fail('execution_failed');
+      }
+      if (probe.exitCode !== 0) {
+        await audit(1, '', 'nonzero_exit');
+        return fail('not_found');
+      }
+      const statSize = Number.parseInt(probe.stdout.trim(), 10);
+      // An unparsable answer is not a size: fall through to the post-read check
+      // rather than refuse a file that may be fine.
+      if (Number.isFinite(statSize) && statSize > cap) {
+        await audit(1, ` (${statSize} bytes, over cap)`);
+        return fail('content_too_large');
+      }
+
+      let buffer: Buffer | null;
+      try {
+        buffer = await session.sandbox.readFileToBuffer({ path: resolved, timeoutMs: BINARY_COPY_TIMEOUT_MS });
+      } catch {
+        await audit(null, '', 'nonzero_exit');
+        return fail('execution_failed');
+      }
+      if (buffer === null) {
+        await audit(1, '', 'nonzero_exit');
+        return fail('not_found');
+      }
+      const bytes = buffer.byteLength;
+      if (bytes > cap) {
+        await audit(1, ` (${bytes} bytes, over cap)`);
+        return fail('content_too_large');
+      }
+
+      await audit(0, ` (${bytes} bytes)`);
+      return { success: true, path, content: buffer, bytes };
     } finally {
       session.release();
     }

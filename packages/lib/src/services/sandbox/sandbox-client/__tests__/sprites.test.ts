@@ -1360,6 +1360,68 @@ describe('ExecutableSandbox file ops', () => {
     expect(written).toEqual([{ path: '/workspace/a.txt', data: 'hi' }]);
   });
 
+  describe('per-operation timeout (large binary copies)', () => {
+    // A 250 MB copy cannot land inside the 30 s default the fs API is bounded
+    // by, so a caller moving real files names its own budget. These pin that
+    // the budget is honoured in BOTH directions, and that the default is
+    // unchanged for everyone who does not ask.
+    it('given timeoutMs on writeFiles, should let a write run past the 30 s default', async () => {
+      vi.useFakeTimers();
+      try {
+        let finished = false;
+        const fs = fakeFs({
+          writeFile: () => new Promise<void>((resolve) => setTimeout(() => { finished = true; resolve(); }, 45_000)),
+        });
+        const { sdk } = makeSdk({ getSprite: async () => fakeSprite({ fs, spawn: () => fakeCommand({ exitCode: 0 }) }) });
+        const handle = await createSpritesSandboxClient({ sdk }).get({ sandboxId: 'k' });
+        let outcome: 'pending' | 'resolved' | 'rejected' = 'pending';
+        handle!
+          .writeFiles([{ path: '/workspace/big.pdf', content: new Uint8Array([1, 2, 3]) }], { timeoutMs: 60_000 })
+          .then(() => { outcome = 'resolved'; }, () => { outcome = 'rejected'; });
+        await vi.advanceTimersByTimeAsync(46_000);
+        expect(outcome).toBe('resolved');
+        expect(finished).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('given timeoutMs on writeFiles, should still time the write out at that budget', async () => {
+      vi.useFakeTimers();
+      try {
+        const fs = fakeFs({ writeFile: () => new Promise<void>(() => {}) });
+        const { sdk } = makeSdk({ getSprite: async () => fakeSprite({ fs, spawn: () => fakeCommand({ exitCode: 0 }) }) });
+        const handle = await createSpritesSandboxClient({ sdk }).get({ sandboxId: 'k' });
+        let error: unknown;
+        handle!
+          .writeFiles([{ path: '/workspace/big.pdf', content: 'x' }], { timeoutMs: 5_000 })
+          .catch((e: unknown) => { error = e; });
+        // Two attempts at the named budget, plus the recovery exec between them.
+        await vi.advanceTimersByTimeAsync(5_000 * 2 + 1_000);
+        expect(String(error)).toMatch(/timed out after 5000ms/);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('given timeoutMs on readFileToBuffer, should let a read run past the 30 s default', async () => {
+      vi.useFakeTimers();
+      try {
+        const fs = fakeFs({
+          readFile: () => new Promise<Buffer>((resolve) => setTimeout(() => resolve(Buffer.from('big')), 45_000)),
+        });
+        const { sdk } = makeSdk({ getSprite: async () => fakeSprite({ fs, spawn: () => fakeCommand({ exitCode: 0 }) }) });
+        const handle = await createSpritesSandboxClient({ sdk }).get({ sandboxId: 'k' });
+        let got: string | null | undefined;
+        void handle!.readFileToBuffer({ path: '/workspace/big.pdf', timeoutMs: 60_000 }).then((b) => { got = b === null ? null : b.toString(); });
+        await vi.advanceTimersByTimeAsync(46_000);
+        expect(got).toBe('big');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it('readFileToBuffer should return the buffer, or null when the read fails', async () => {
     const present = fakeFs({ readFile: async () => Buffer.from('data') });
     const { sdk: sdkOk } = makeSdk({ getSprite: async () => fakeSprite({ fs: present }) });

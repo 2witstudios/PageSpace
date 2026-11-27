@@ -73,6 +73,7 @@ import type {
   SandboxRunResult,
   RunCommandArgs,
   WriteFileEntry,
+  FsOpOptions,
 } from './types';
 import { SandboxProvisionError, type SandboxCreateOptions } from '../sandbox-options';
 import { loggers } from '../../../logging/logger-config';
@@ -1003,13 +1004,24 @@ async function fsWithWakeRetry<T>(
   label: string,
   op: () => Promise<T>,
   ensureDirs: readonly string[] = [],
+  timeoutMs: number = FS_OP_TIMEOUT_MS,
 ): Promise<T> {
+  // `timeoutMs` bounds each ATTEMPT, not the pair: a caller moving a large file
+  // names the budget one transfer needs, and the wake retry still gets a full
+  // one. The recovery exec between them keeps its own (default) bound — it is
+  // a wake, not a transfer.
   try {
-    return await withTimeout(op(), FS_OP_TIMEOUT_MS, label);
+    return await withTimeout(op(), timeoutMs, label);
   } catch {
     await recoverFsViaExec(sprite, ensureDirs);
-    return await withTimeout(op(), FS_OP_TIMEOUT_MS, label);
+    return await withTimeout(op(), timeoutMs, label);
   }
+}
+
+/** Pure: the per-attempt fs budget for a call — the caller's, when it named a usable one. */
+export function fsOpTimeoutMs(options?: FsOpOptions): number {
+  const requested = options?.timeoutMs;
+  return requested !== undefined && Number.isFinite(requested) && requested > 0 ? requested : FS_OP_TIMEOUT_MS;
 }
 
 /**
@@ -1281,8 +1293,9 @@ function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): Executabl
       return runSpawnedWithWakeRetry(spawnFn, maxBytes ?? 0, timeoutMs, stdoutSentinel);
     },
 
-    async writeFiles(files: WriteFileEntry[]): Promise<void> {
+    async writeFiles(files: WriteFileEntry[], options?: FsOpOptions): Promise<void> {
       const fs = sprite.filesystem('/');
+      const timeoutMs = fsOpTimeoutMs(options);
       for (const file of files) {
         const data = typeof file.content === 'string' ? file.content : Buffer.from(file.content);
         // Bounded + recover-on-failure: the fs API hangs on a hibernated VM, and
@@ -1294,13 +1307,20 @@ function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): Executabl
           'write',
           () => fs.writeFile(file.path, data, file.mode === undefined ? undefined : { mode: file.mode }),
           [parentDir(file.path)],
+          timeoutMs,
         );
       }
     },
 
-    async readFileToBuffer({ path }: { path: string }): Promise<Buffer | null> {
+    async readFileToBuffer({ path, timeoutMs }: { path: string } & FsOpOptions): Promise<Buffer | null> {
       try {
-        return await fsWithWakeRetry(sprite, 'read', () => sprite.filesystem('/').readFile(path, null));
+        return await fsWithWakeRetry(
+          sprite,
+          'read',
+          () => sprite.filesystem('/').readFile(path, null),
+          [],
+          fsOpTimeoutMs({ timeoutMs }),
+        );
       } catch {
         // A missing file (or any read failure after a wake retry) resolves to
         // null; the runner maps null to a handled not-found rather than throwing.
