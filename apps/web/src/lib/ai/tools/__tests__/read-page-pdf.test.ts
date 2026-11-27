@@ -240,6 +240,22 @@ describe('deliverPdfPage — page images', () => {
   });
 });
 
+describe('deliverPdfPage — text layer', () => {
+  it('says a mixed PDF also has text the agent can read with lineStart/lineEnd', async () => {
+    const result = await deliverPdfPage({
+      page: filePage(), hasPdfInput: false, fetchBytes: fetcherFor(allPages(12)), isBlocked: notBlocked, textLayerChars: 20_000,
+    }) as VisualPartsDeliveredOutput;
+    expect(result.message).toMatch(/text layer \(20000 characters\).*lineStart/);
+  });
+
+  it('says nothing about text when the PDF has none', async () => {
+    const result = await deliverPdfPage({
+      page: filePage(), hasPdfInput: false, fetchBytes: fetcherFor(allPages(12)), isBlocked: notBlocked,
+    }) as VisualPartsDeliveredOutput;
+    expect(result.message).not.toMatch(/text layer/);
+  });
+});
+
 describe('deliverPdfPage — nothing to show', () => {
   it('falls back to metadata that says to reprocess when no page images exist', async () => {
     const result = await deliverPdfPage({

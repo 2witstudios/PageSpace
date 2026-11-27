@@ -428,7 +428,7 @@ export const pageReadTools = {
    * Read existing documents to understand context and content
    */
   read_page: tool({
-    description: 'Read the content of any page (document, AI chat, channel, etc.) using its ID. Returns content with line numbers. For CHANNEL pages, returns a message transcript. For SHEET pages, returns the sheet\'s dimensions and its first ' + SHEET_PREVIEW_ROWS + ' rows as a table (lineStart/lineEnd select ROW numbers there) — use read_sheet to read a row range, filter rows by column value, or project columns. Use lineStart/lineEnd to read specific line ranges. Omit pageId to read the page currently in view. For FILE pages, read_page shows images and PDFs to you directly when your model has vision: an image arrives as an image, and a scanned or image-only PDF arrives as the PDF itself (models that read PDFs) or as page images — use `pages` to page through a long PDF. Text-only models get the file\'s details and any extracted text instead.',
+    description: 'Read the content of any page (document, AI chat, channel, etc.) using its ID. Returns content with line numbers. For CHANNEL pages, returns a message transcript. For SHEET pages, returns the sheet\'s dimensions and its first ' + SHEET_PREVIEW_ROWS + ' rows as a table (lineStart/lineEnd select ROW numbers there) — use read_sheet to read a row range, filter rows by column value, or project columns. Use lineStart/lineEnd to read specific line ranges. Omit pageId to read the page currently in view. For FILE pages, read_page shows images and PDFs to you directly when your model has vision: an image arrives as an image, and a scanned or image-only PDF arrives as the PDF itself (models that read PDFs) or as page images — use `pages` to page through a long PDF, and lineStart/lineEnd to read a PDF\'s text layer. Text-only models get the file\'s details and any extracted text instead.',
     inputSchema: z.object({
       title: z.string().describe('The document title for display context'),
       pageId: z.string().optional().describe('The unique ID of the page to read. Defaults to the page currently in view if omitted.'),
@@ -476,7 +476,11 @@ export const pageReadTools = {
           // A PDF processed before low-text PDFs were marked visual is "completed"
           // with no text: a scan. It is read the way a visual PDF is.
           const isUnmarkedScan = isPdf && page.processingStatus === 'completed' && !extractedText;
-          const fileStatus = isUnmarkedScan ? 'visual' : page.processingStatus;
+          // A visual PDF can still carry a real text layer (typed pages bundled with
+          // scans); asking for lines reads that text the way a text PDF is read.
+          const readsTextLayer = isPdf && page.processingStatus === 'visual' && !!extractedText &&
+            (lineStart !== undefined || lineEnd !== undefined);
+          const fileStatus = isUnmarkedScan ? 'visual' : readsTextLayer ? 'completed' : page.processingStatus;
           // Check processing status
           switch (fileStatus) {
             case 'pending':
@@ -561,6 +565,7 @@ export const pageReadTools = {
                     hasPdfInput: modelCapabilities.hasPdfInput === true,
                     pages: pdfPages,
                     fetchBytes,
+                    textLayerChars: extractedText.length,
                   });
                 }
 

@@ -1900,6 +1900,27 @@ describe('page-read-tools', () => {
           expect(mockFetchCachedImagePreset).not.toHaveBeenCalled();
         });
 
+        it('reads a visual PDF\'s text layer as text when lineStart/lineEnd are given', async () => {
+          mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPdfPage({ content: 'Index of exhibits\nExhibit 1: survey' }));
+
+          const result = await pageReadTools.read_page.execute!(
+            { title: 'Exhibits.pdf', pageId: 'page-1', lineStart: 1, lineEnd: 2 },
+            pdfContext(true, true),
+          ) as { content?: string };
+
+          expect(mockDeliverPdfPage).not.toHaveBeenCalled();
+          expect(result.content).toContain('Exhibit 1: survey');
+        });
+
+        it('tells the PDF delivery how much text the scan has, so it can point at lineStart', async () => {
+          mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPdfPage({ content: 'Index of exhibits' }));
+          mockDeliverPdfPage.mockResolvedValue(deliveredParts as never);
+
+          await pageReadTools.read_page.execute!({ title: 'Exhibits.pdf', pageId: 'page-1' }, pdfContext(true, false));
+
+          expect(mockDeliverPdfPage).toHaveBeenCalledWith(expect.objectContaining({ textLayerChars: 'Index of exhibits'.length }));
+        });
+
         it('treats a completed PDF with no extracted text as a scan to look at', async () => {
           mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPdfPage({ processingStatus: 'completed', content: '  \n ' }));
           mockDeliverPdfPage.mockResolvedValue(deliveredParts as never);

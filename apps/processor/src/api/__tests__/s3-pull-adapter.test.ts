@@ -48,7 +48,7 @@ const FAKE_PDF = vi.hoisted(() => ({ numPages: 3 }));
 vi.mock('../../services/processing-pipeline', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../services/processing-pipeline')>();
   return {
-  isLowTextPdf: actual.isLowTextPdf,
+  isScanLikePdf: actual.isScanLikePdf,
   pdfPagePreset: actual.pdfPagePreset,
   resolveMaxRasterizedPdfPages: actual.resolveMaxRasterizedPdfPages,
   withPdf: async (_bytes: Buffer, work: (pdf: unknown) => Promise<unknown>) => work(FAKE_PDF),
@@ -82,7 +82,7 @@ beforeEach(() => {
   mocks.isAllowedContentType.mockReturnValue(true);
   mocks.detectContentType.mockResolvedValue({ label: 'pdf', mimeType: 'application/pdf', score: 0.9, source: 'magika' });
   mocks.extractTextContent.mockResolvedValue('extracted text');
-  mocks.extractPdfContent.mockResolvedValue({ text: 'extracted text '.repeat(10), pageCount: 1 });
+  mocks.extractPdfContent.mockResolvedValue({ text: 'extracted text '.repeat(10), pageCount: 1, lowTextPages: 0 });
   mocks.rasterizePdfPages.mockResolvedValue({ rendered: 0, attempted: 0 });
   mocks.generateImageVariants.mockResolvedValue({
     thumbnail: { buffer: Buffer.from('t'), mimeType: 'image/webp' },
@@ -184,7 +184,31 @@ describe('runPullPipeline — dispatch by detected type', () => {
     beforeEach(() => {
       mocks.getOriginal.mockResolvedValue(BYTES);
       mocks.detectContentType.mockResolvedValue({ label: 'pdf', mimeType: 'application/pdf', score: 0.9, source: 'magika' });
-      mocks.extractPdfContent.mockResolvedValue({ text: 'p. 1', pageCount: 3 });
+      mocks.extractPdfContent.mockResolvedValue({ text: 'p. 1', pageCount: 3, lowTextPages: 3 });
+    });
+
+    it('marks a bundle of 10 typed pages and 190 scans visual, keeping every typed page', async () => {
+      const indexText = 'Index of exhibits. '.repeat(500);
+      mocks.extractPdfContent.mockResolvedValue({ text: indexText, pageCount: 200, lowTextPages: 190 });
+      mocks.rasterizePdfPages.mockImplementation(renders([page(1)], 50));
+
+      await runPullPipeline({ pageId: 'page-1', contentHash: HASH }, NO_WAIT);
+
+      expect(mocks.setPageCompleted).not.toHaveBeenCalled();
+      expect(mocks.setPageVisualWithContent).toHaveBeenCalledWith('page-1', indexText, {
+        mimeType: 'application/pdf',
+        pageCount: 200,
+        rasterizedPages: 50,
+      });
+    });
+
+    it('keeps a text PDF with one blank page a completed text document', async () => {
+      mocks.extractPdfContent.mockResolvedValue({ text: 'chapter text', pageCount: 10, lowTextPages: 1 });
+
+      await runPullPipeline({ pageId: 'page-1', contentHash: HASH }, NO_WAIT);
+
+      expect(mocks.setPageCompleted).toHaveBeenCalledWith('page-1', 'chapter text', { mimeType: 'application/pdf', pageCount: 10 }, 'text');
+      expect(mocks.rasterizePdfPages).not.toHaveBeenCalled();
     });
 
     it('marks it visual, keeping its text, instead of completed with nothing to read', async () => {

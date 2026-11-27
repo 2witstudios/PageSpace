@@ -3,11 +3,11 @@ import sharp from 'sharp';
 import {
   withPdf,
   extractPdfContent,
-  isLowTextPdf,
+  isScanLikePdf,
+  LOW_TEXT_PAGE_SHARE,
   rasterizePdfPages,
   pdfPagePreset,
   resolveMaxRasterizedPdfPages,
-  LOW_TEXT_CHARS_PER_PAGE,
   DEFAULT_MAX_RASTERIZED_PDF_PAGES,
   type RasterizedPdfPage,
 } from '../processing-pipeline';
@@ -56,23 +56,57 @@ describe('extractPdfContent', () => {
   });
 });
 
-describe('isLowTextPdf', () => {
-  it('is true for a scan with no text', () => {
-    expect(isLowTextPdf('', 12)).toBe(true);
+describe('extractPdfContent — low-text pages', () => {
+  it('counts each page whose text layer is under the per-page threshold', async () => {
+    const pdf = buildPdf([text('This index page lists every exhibit in the bundle.'), BLUE_SQUARE, text('p. 3')]);
+
+    const { lowTextPages, pageCount } = await withPdf(pdf, extractPdfContent);
+
+    expect(pageCount).toBe(3);
+    expect(lowTextPages).toBe(2);
+  });
+});
+
+describe('isScanLikePdf', () => {
+  it('is true for a scan with no text at all', () => {
+    expect(isScanLikePdf({ pageCount: 12, lowTextPages: 12 })).toBe(true);
   });
 
-  it('is true when only a few characters per page exist (page numbers, stamps)', () => {
-    expect(isLowTextPdf('1 2 3 4 5 6 7 8 9 10', 10)).toBe(true);
+  it('is true for a bundle of 10 typed pages and 190 scanned ones', () => {
+    expect(isScanLikePdf({ pageCount: 200, lowTextPages: 190 })).toBe(true);
   });
 
-  it('is false once the text reaches the per-page threshold', () => {
-    const perPage = 'x'.repeat(LOW_TEXT_CHARS_PER_PAGE);
-    expect(isLowTextPdf(`${perPage}\n${perPage}`, 2)).toBe(false);
+  it(`is true once ${LOW_TEXT_PAGE_SHARE * 100}% of pages are low-text`, () => {
+    expect(isScanLikePdf({ pageCount: 10, lowTextPages: 2 })).toBe(true);
   });
 
-  it('ignores whitespace when counting', () => {
-    expect(isLowTextPdf(' \n\t '.repeat(500), 1)).toBe(true);
+  it('is false for a text document with the odd figure or blank page', () => {
+    expect(isScanLikePdf({ pageCount: 10, lowTextPages: 1 })).toBe(false);
+    expect(isScanLikePdf({ pageCount: 40, lowTextPages: 0 })).toBe(false);
   });
+
+  it('is false for an empty document', () => {
+    expect(isScanLikePdf({ pageCount: 0, lowTextPages: 0 })).toBe(false);
+  });
+});
+
+describe('a 200-page exhibit bundle (10 typed index pages, 190 scans)', () => {
+  it('is classified as a scan to render, with every typed page kept as text', async () => {
+    const typed = Array.from({ length: 10 }, (_, i) => text(`Index entry ${i + 1}: exhibit description and source details`));
+    const pdf = buildPdf([...typed, ...Array.from({ length: 190 }, () => BLUE_SQUARE)]);
+
+    const content = await withPdf(pdf, extractPdfContent);
+
+    expect(content.lowTextPages).toBe(190);
+    expect(isScanLikePdf(content)).toBe(true);
+    expect(content.text).toContain('Index entry 1:');
+    expect(content.text).toContain('Index entry 10:');
+  }, 60000);
+
+  it('a normal text PDF stays a text document', async () => {
+    const pdf = buildPdf(Array.from({ length: 20 }, (_, i) => text(`Chapter ${i + 1} has a full page of ordinary typed prose.`)));
+    expect(isScanLikePdf(await withPdf(pdf, extractPdfContent))).toBe(false);
+  }, 30000);
 });
 
 /** Render through the real loader, collecting what onPage receives. */

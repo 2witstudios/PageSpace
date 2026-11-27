@@ -147,6 +147,8 @@ async function loadPdf(bytes: Buffer): Promise<PDFDocumentProxy> {
 export interface PdfContent {
   text: string;
   pageCount: number;
+  /** Pages whose text layer is under LOW_TEXT_CHARS_PER_PAGE: scans, figures, blanks. */
+  lowTextPages: number;
 }
 
 /**
@@ -163,27 +165,41 @@ export async function withPdf<T>(bytes: Buffer, work: (pdf: PDFDocumentProxy) =>
   }
 }
 
-/** The PDF's text layer and page count. */
+/** The PDF's text layer, its page count, and how many pages have almost no text. */
 export async function extractPdfContent(pdf: PDFDocumentProxy): Promise<PdfContent> {
   const parts: string[] = [];
+  let lowTextPages = 0;
   for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
     const page = await pdf.getPage(pageNum);
     const textContent = await page.getTextContent();
-    parts.push(composePageText(textContent.items));
+    const pageText = composePageText(textContent.items);
+    if (isLowTextPage(pageText)) lowTextPages++;
+    parts.push(pageText);
   }
-  return { text: cleanText(composeDocumentText(parts)), pageCount: pdf.numPages };
+  return { text: cleanText(composeDocumentText(parts)), pageCount: pdf.numPages, lowTextPages };
 }
 
 /**
- * Below this many non-whitespace characters per page, a PDF's text layer is
- * not its content: a scan with page numbers or a stamp, or no text at all.
+ * Below this many non-whitespace characters, a page's text layer is not its
+ * content: a scan with a page number or a stamp, or no text at all.
  */
 export const LOW_TEXT_CHARS_PER_PAGE = 32;
 
-/** Whether a PDF's extracted text is too thin to stand for it (a scan). */
-export function isLowTextPdf(text: string, pageCount: number): boolean {
-  const meaningful = text.replace(/\s+/g, '').length;
-  return meaningful < LOW_TEXT_CHARS_PER_PAGE * Math.max(pageCount, 1);
+function isLowTextPage(pageText: string): boolean {
+  return pageText.replace(/\s+/g, '').length < LOW_TEXT_CHARS_PER_PAGE;
+}
+
+/**
+ * The share of low-text pages at which a PDF is treated as a scan. Counted per
+ * page, not averaged over the file: a bundle of 10 typed index pages and 190
+ * scanned exhibits has plenty of text overall, but nearly all of it is images.
+ * A text document with the odd figure or blank page stays below it.
+ */
+export const LOW_TEXT_PAGE_SHARE = 0.2;
+
+/** Whether a PDF has enough image-only pages that it must be looked at, not just read. */
+export function isScanLikePdf({ pageCount, lowTextPages }: Pick<PdfContent, 'pageCount' | 'lowTextPages'>): boolean {
+  return pageCount > 0 && lowTextPages / pageCount >= LOW_TEXT_PAGE_SHARE;
 }
 
 /** Cache preset name for a rasterized PDF page (1-based). Served by /cache/:hash/:preset. */

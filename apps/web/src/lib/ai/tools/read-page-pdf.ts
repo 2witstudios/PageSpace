@@ -152,6 +152,8 @@ export interface DeliverPdfPageParams {
   /** The agent's `pages` selection, if any. */
   pages?: string;
   fetchBytes: FetchPresetBytes;
+  /** Characters in the PDF's extracted text layer; above 0, the result says how to read it. */
+  textLayerChars?: number;
   isBlocked?: (contentHash: string) => Promise<boolean>;
   limits?: Partial<PdfVisualLimits>;
 }
@@ -159,6 +161,9 @@ export interface DeliverPdfPageParams {
 export async function deliverPdfPage(params: DeliverPdfPageParams): Promise<VisualPartsDeliveredOutput | Record<string, unknown>> {
   const { page, hasPdfInput, pages, fetchBytes } = params;
   const limits: PdfVisualLimits = { ...PDF_VISUAL_LIMITS, ...params.limits };
+  const textLayerNote = params.textLayerChars
+    ? `This PDF also has a text layer (${params.textLayerChars} characters): call read_page with lineStart/lineEnd to read it as text.`
+    : null;
   const { pageCount, rasterizedPages } = readPdfLayout(page.extractionMetadata);
 
   // Validate the range before reading anything.
@@ -188,7 +193,7 @@ export async function deliverPdfPage(params: DeliverPdfPageParams): Promise<Visu
         const filename = page.originalFileName ?? `${page.title}.pdf`;
         return delivered(
           page,
-          `Delivered "${page.title}" as a PDF${pageCount ? ` (${pageCount} pages)` : ''}.`,
+          [`Delivered "${page.title}" as a PDF${pageCount ? ` (${pageCount} pages)` : ''}.`, textLayerNote].filter(Boolean).join(' '),
           [{ kind: 'file', mediaType: 'application/pdf', data: bytes.toString('base64'), filename }],
           { delivery: 'pdf', pageCount },
         );
@@ -265,6 +270,7 @@ export async function deliverPdfPage(params: DeliverPdfPageParams): Promise<Visu
   if (rasterizedPages !== null && pageCount !== null && rasterizedPages < pageCount) {
     sentences.push(`Only the first ${rasterizedPages} pages are available as images.`);
   }
+  if (textLayerNote) sentences.push(textLayerNote);
 
   return delivered(page, sentences.join(' '), parts, {
     delivery: 'page-images',

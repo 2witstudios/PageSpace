@@ -15,7 +15,7 @@ import {
   extractTextContent,
   withPdf,
   extractPdfContent,
-  isLowTextPdf,
+  isScanLikePdf,
   rasterizePdfPages,
   pdfPagePreset,
   resolveMaxRasterizedPdfPages,
@@ -167,10 +167,12 @@ async function dispatch(pageId: string, contentHash: string, bytes: Buffer, mime
 const pdfRendering = createSemaphore(positiveIntOr(process.env.PDF_RASTER_CONCURRENCY, 1));
 
 /**
- * A PDF with a real text layer is read as text. A PDF with almost none — a scan —
- * is marked `visual` (keeping whatever text it had, for search and for text-only
- * models) and its leading pages are rendered to `pdf-page-{n}` JPEG presets, so a
- * vision model can look at it. Marking a scan `completed` with empty content left
+ * A PDF with a real text layer on (nearly) every page is read as text. A PDF
+ * where at least a fifth of the pages have almost no text — a scan, or a bundle
+ * of typed pages and scanned exhibits — is marked `visual`, keeping all of its
+ * text (for search, for text-only models, and for read_page's lineStart/lineEnd),
+ * and its leading pages are rendered to `pdf-page-{n}` JPEG presets, so a vision
+ * model can look at it. Marking a scan `completed` with empty content left
  * agents nothing to read and never reached the visual path.
  *
  * Shared by the upload pipeline and the ingest-file worker (Reprocess), so a
@@ -180,9 +182,10 @@ const pdfRendering = createSemaphore(positiveIntOr(process.env.PDF_RASTER_CONCUR
 export async function processPdfPage(pageId: string, contentHash: string, bytes: Buffer): Promise<'completed' | 'visual'> {
   const mimeType = 'application/pdf';
   return withPdf(bytes, async (pdf) => {
-    const { text, pageCount } = await extractPdfContent(pdf);
+    const content = await extractPdfContent(pdf);
+    const { text, pageCount } = content;
 
-    if (!isLowTextPdf(text, pageCount)) {
+    if (!isScanLikePdf(content)) {
       await setPageCompleted(pageId, text, { mimeType, pageCount }, 'text');
       return 'completed';
     }
