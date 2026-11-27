@@ -5,6 +5,7 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- **AI agents can now work on your uploaded files themselves, not only on the text found in them.** When an agent copies an uploaded file (a PDF, an image, an archive) into its sandbox, it gets the real file, so it can run tools such as `pdfimages` or `tesseract` on a scanned PDF that has no text to extract. Before, it only got the extracted text, and none at all for a scan. Agents can also save a file they made in the sandbox to your drive as an uploaded file, in a folder you can edit. That file gets a preview and text extraction the same way an upload does. One copy can be up to 250 MB, and the drive plan's per-file limit and storage quota still apply.
 - **Imago now opens in the desktop app.** Choosing Try Imago in the desktop app no longer leaves the window blank. This happened when you had signed in more than a week ago. You need the updated desktop app for this fix, and you don't have to sign in again.
 - **Agent sandboxes now share one machine, called Home.**
   - Every account gets a default environment called "Home" in its Home drive. The Global Assistant and Imago now run in it, so all your assistant conversations share one sandbox and its files stay put between conversations.

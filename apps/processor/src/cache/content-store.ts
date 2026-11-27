@@ -420,11 +420,13 @@ export class ContentStore {
     buffer: Buffer,
     originalName: string,
     options: SaveOriginalOptions = {},
+    /** A hash the caller already verified against `buffer`, so it is not computed twice. */
+    precomputedHash?: string,
   ): Promise<{ contentHash: string; path: string }> {
     // Hash is always computed over the PLAINTEXT bytes so the content-address
     // (dedup key + integrity check) is stable whether or not the stored object
     // is encrypted at rest.
-    const rawHash = crypto.createHash('sha256').update(buffer).digest('hex');
+    const rawHash = precomputedHash ?? crypto.createHash('sha256').update(buffer).digest('hex');
     const normalizedHash = this.normalizeContentHash(rawHash);
     const key = this.originalKey(normalizedHash);
 
@@ -441,7 +443,7 @@ export class ContentStore {
     const metadata: OriginalFileMetadata = {
       originalName,
       contentHash: normalizedHash,
-      size: buffer.length,
+      size: buffer.byteLength,
       savedAt: new Date().toISOString(),
     };
 

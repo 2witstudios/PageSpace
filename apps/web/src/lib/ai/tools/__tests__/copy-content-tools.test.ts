@@ -6,11 +6,13 @@ import {
   createCopyContentTools,
   copyContentInputSchema,
   MAX_COPY_BYTES,
+  COPY_CONTENT_DEADLINE_MS,
   type CopyContentDeps,
   type CopyPageRecord,
 } from '../copy-content-tools';
 import { toModelOutputForCopyContent } from '../copy-content-model-output';
 import { MAX_WRITE_BYTES } from '@pagespace/lib/services/sandbox/tool-runners';
+import { SANDBOX_MAX_TIMEOUT_MS } from '@pagespace/lib/services/sandbox/execution-policy';
 
 const CONTEXT = { userId: 'u1', chatSource: { type: 'page', agentPageId: 'agent-1' } };
 
@@ -31,11 +33,27 @@ interface Harness {
   deps: CopyContentDeps;
   writes: Array<{ pageId: string; newContent: string; metadata: Record<string, unknown> }>;
   fileWrites: Array<{ path: string; content: string }>;
+  binaryWrites: Array<{ path: string; content: Uint8Array }>;
+  originalFetches: string[];
+  binaryReads: Array<{ path: string; maxBytes: number }>;
+  createdFiles: Array<{ parentId: string; title: string; path: string; content: Uint8Array }>;
+  sandboxCopies: Array<{ fromPath: string; toPath: string }>;
 }
 
-function harness(over: Partial<CopyContentDeps> & { pages?: CopyPageRecord[]; file?: string } = {}): Harness {
+/** A scanned PDF's first bytes: not UTF-8, so only a byte copy keeps them. */
+const ORIGINAL_BYTES = Uint8Array.from([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37, 0xff, 0xfe, 0x00, 0x89]);
+const TIER_MAX_FILE_SIZE = 250 * 1024 * 1024;
+
+function harness(
+  over: Partial<CopyContentDeps> & { pages?: CopyPageRecord[]; file?: string; binaryFile?: Uint8Array } = {}
+): Harness {
   const writes: Harness['writes'] = [];
   const fileWrites: Harness['fileWrites'] = [];
+  const binaryWrites: Harness['binaryWrites'] = [];
+  const originalFetches: Harness['originalFetches'] = [];
+  const binaryReads: Harness['binaryReads'] = [];
+  const createdFiles: Harness['createdFiles'] = [];
+  const sandboxCopies: Harness['sandboxCopies'] = [];
   const pages = over.pages ?? [page()];
 
   const deps: CopyContentDeps = {
@@ -50,11 +68,46 @@ function harness(over: Partial<CopyContentDeps> & { pages?: CopyPageRecord[]; fi
       fileWrites.push({ path, content });
       return { success: true, bytesWritten: Buffer.byteLength(content, 'utf8') };
     },
+    fetchFileOriginal: async ({ page: p }) => {
+      originalFetches.push(p.id);
+      return { success: true, bytes: ORIGINAL_BYTES, release: () => {} };
+    },
+    writeSandboxBinaryFile: async ({ path, content }) => {
+      binaryWrites.push({ path, content });
+      return { success: true, bytesWritten: content.byteLength };
+    },
+    readSandboxBinaryFile: async ({ path, maxBytes }) => {
+      binaryReads.push({ path, maxBytes });
+      return { success: true, content: over.binaryFile ?? ORIGINAL_BYTES, release: () => {} };
+    },
+    copySandboxFile: async ({ fromPath, toPath }) => {
+      sandboxCopies.push({ fromPath, toPath });
+      return { success: true, bytesWritten: ORIGINAL_BYTES.byteLength };
+    },
+    resolveMaxFileSize: async () => TIER_MAX_FILE_SIZE,
+    createFilePage: async ({ parent, title, path, content }) => {
+      createdFiles.push({ parentId: parent.id, title, path, content });
+      return { success: true, pageId: 'new-file-1', driveId: parent.driveId, mimeType: 'application/pdf' };
+    },
     isSandboxEnabledForContext: async () => true,
-    ...Object.fromEntries(Object.entries(over).filter(([k]) => !['pages', 'file'].includes(k))),
+    ...Object.fromEntries(Object.entries(over).filter(([k]) => !['pages', 'file', 'binaryFile'].includes(k))),
   } as CopyContentDeps;
 
-  return { deps, writes, fileWrites };
+  return { deps, writes, fileWrites, binaryWrites, originalFetches, binaryReads, createdFiles, sandboxCopies };
+}
+
+/** An uploaded scan: extraction found nothing, the file itself is all there is. */
+function scannedPdf(over: Partial<CopyPageRecord> = {}): CopyPageRecord {
+  return page({
+    id: 'scan',
+    title: 'Subaru Exhibits',
+    type: 'FILE',
+    contentMode: 'html',
+    content: '',
+    filePath: 'f'.repeat(64),
+    fileSize: 72 * 1024 * 1024,
+    ...over,
+  });
 }
 
 function run(deps: CopyContentDeps, args: unknown, context: unknown = CONTEXT) {
@@ -511,7 +564,9 @@ describe('copy_content — review round 2', () => {
   });
 
   it('an empty source should be refused, not used to wipe the destination', async () => {
-    // A FILE page whose text was never extracted is the realistic trigger.
+    // A FILE page whose text was never extracted is the realistic trigger. Into
+    // a PAGE that is still a refusal (a page takes text, and there is none);
+    // into a sandbox FILE the real bytes are copied instead — see "real files".
     const h = harness({
       pages: [
         page({ id: 'src', type: 'FILE', content: null }),
@@ -880,5 +935,361 @@ describe('copy_content — cap parity with the sandbox runner', () => {
     // not import the sandbox package at runtime). If they drift, the tool
     // accepts a source the runner then refuses, or refuses one it would take.
     expect(MAX_COPY_BYTES).toBe(MAX_WRITE_BYTES);
+  });
+});
+
+describe('copy_content — real files (FILE pages <-> sandbox)', () => {
+  it('a FILE page copied into a sandbox file copies the ORIGINAL bytes, not the extracted text', async () => {
+    const h = harness({ pages: [scannedPdf({ content: 'Exhibit A (18 KB of OCR text)' })] });
+    const result = await run(h.deps, {
+      from: { kind: 'page', pageId: 'scan' },
+      to: { kind: 'file', path: 'work/exhibits.pdf' },
+    });
+    expect(result.success).toBe(true);
+    expect(h.originalFetches).toEqual(['scan']);
+    expect(h.fileWrites).toHaveLength(0);
+    expect(h.binaryWrites).toHaveLength(1);
+    expect(h.binaryWrites[0].path).toBe('work/exhibits.pdf');
+    expect(Buffer.from(h.binaryWrites[0].content).equals(Buffer.from(ORIGINAL_BYTES))).toBe(true);
+    expect(result.bytesCopied).toBe(ORIGINAL_BYTES.byteLength);
+    expect(String(result.message)).toContain('original file');
+  });
+
+  it('a scanned PDF with NO extracted text still copies into the sandbox (this is the case that failed)', async () => {
+    // Before: "Source is empty" — the agent was told the file had no content,
+    // when the 72 MB of pages were right there.
+    const h = harness({ pages: [scannedPdf({ content: null })] });
+    const result = await run(h.deps, {
+      from: { kind: 'page', pageId: 'scan' },
+      to: { kind: 'file', path: 'x.pdf' },
+    });
+    expect(result.success).toBe(true);
+    expect(h.binaryWrites).toHaveLength(1);
+  });
+
+  it('is not bound by the 1 MiB text cap — that cap is for text bound for a page', async () => {
+    const big = new Uint8Array(MAX_COPY_BYTES * 3);
+    const h = harness({
+      pages: [scannedPdf()],
+      fetchFileOriginal: async () => ({ success: true, bytes: big, release: () => {} }),
+    });
+    const result = await run(h.deps, { from: { kind: 'page', pageId: 'scan' }, to: { kind: 'file', path: 'x.pdf' } });
+    expect(result.success).toBe(true);
+    expect(h.binaryWrites[0].content.byteLength).toBe(big.byteLength);
+  });
+
+  it('checks view permission on the FILE page BEFORE fetching any bytes', async () => {
+    const h = harness({ pages: [scannedPdf()], canViewPage: async () => false });
+    const result = await run(h.deps, { from: { kind: 'page', pageId: 'scan' }, to: { kind: 'file', path: 'x.pdf' } });
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Insufficient permissions');
+    expect(h.originalFetches).toHaveLength(0);
+    expect(h.binaryWrites).toHaveLength(0);
+  });
+
+  it('given the agent sandbox switch off, should refuse before fetching the original', async () => {
+    const h = harness({ pages: [scannedPdf()], isSandboxEnabledForContext: async () => false });
+    const result = await run(h.deps, { from: { kind: 'page', pageId: 'scan' }, to: { kind: 'file', path: 'x.pdf' } });
+    expect(result.success).toBe(false);
+    expect(h.originalFetches).toHaveLength(0);
+  });
+
+  it('given a fetch failure, should surface it and write nothing', async () => {
+    const h = harness({
+      pages: [scannedPdf()],
+      fetchFileOriginal: async () => ({ success: false, error: 'This file has been removed.' }),
+    });
+    const result = await run(h.deps, { from: { kind: 'page', pageId: 'scan' }, to: { kind: 'file', path: 'x.pdf' } });
+    expect(result.success).toBe(false);
+    expect(String(result.message)).toContain('removed');
+    expect(h.binaryWrites).toHaveLength(0);
+  });
+
+  it('given a sandbox write failure (over the binary cap, timeout), should surface it', async () => {
+    const h = harness({
+      pages: [scannedPdf()],
+      writeSandboxBinaryFile: async () => ({ success: false, error: 'The file content is too large.' }),
+    });
+    const result = await run(h.deps, { from: { kind: 'page', pageId: 'scan' }, to: { kind: 'file', path: 'x.pdf' } });
+    expect(result.success).toBe(false);
+    expect(String(result.message)).toContain('too large');
+  });
+
+  it('a FILE page copied into a text PAGE keeps today\'s extracted-text behaviour', async () => {
+    const h = harness({
+      pages: [scannedPdf({ content: 'Exhibit A\nExhibit B' }), page({ id: 'dst', content: 'old' })],
+    });
+    const result = await run(h.deps, {
+      from: { kind: 'page', pageId: 'scan' },
+      to: { kind: 'page', pageId: 'dst', mode: 'replace' },
+    });
+    expect(result.success).toBe(true);
+    expect(h.writes[0].newContent).toBe('Exhibit A\nExhibit B');
+    expect(h.originalFetches).toHaveLength(0);
+  });
+
+  it('a FILE page with a LINE RANGE into a sandbox file copies those lines of extracted text — a range is a text selection', async () => {
+    const h = harness({ pages: [scannedPdf({ content: 'one\ntwo\nthree' })] });
+    const result = await run(h.deps, {
+      from: { kind: 'page', pageId: 'scan', lineStart: 2, lineEnd: 2 },
+      to: { kind: 'file', path: 'line.txt' },
+    });
+    expect(result.success).toBe(true);
+    expect(h.fileWrites).toEqual([{ path: 'line.txt', content: 'two' }]);
+    expect(h.originalFetches).toHaveLength(0);
+  });
+
+  it('a FILE page with no stored file is refused with a reason, not copied as empty text', async () => {
+    const h = harness({ pages: [scannedPdf({ filePath: null })] });
+    const result = await run(h.deps, { from: { kind: 'page', pageId: 'scan' }, to: { kind: 'file', path: 'x.pdf' } });
+    expect(result.success).toBe(false);
+    expect(h.originalFetches).toHaveLength(0);
+  });
+
+  it('a sandbox file copied to another sandbox file is copied INSIDE the sandbox — no bytes through the server', async () => {
+    const h = harness();
+    const result = await run(h.deps, { from: { kind: 'file', path: 'a.png' }, to: { kind: 'file', path: 'b.png' } });
+    expect(result).toMatchObject({ success: true, path: 'b.png', bytesCopied: ORIGINAL_BYTES.byteLength });
+    expect(h.sandboxCopies).toEqual([{ fromPath: 'a.png', toPath: 'b.png' }]);
+    expect(h.binaryReads).toHaveLength(0);
+    expect(h.binaryWrites).toHaveLength(0);
+    expect(h.fileWrites).toHaveLength(0);
+  });
+
+  it('an EMPTY sandbox file copied to another is refused as an empty source', async () => {
+    const h = harness({
+      copySandboxFile: async () => ({ success: false, error: 'The source file is empty.', reason: 'empty_source' }),
+    });
+    const result = await run(h.deps, { from: { kind: 'file', path: 'e' }, to: { kind: 'file', path: 'b' } });
+    expect(result).toMatchObject({ success: false, error: 'Source is empty' });
+  });
+
+  it('a FILE page copied whole into the sandbox reads the page ONCE', async () => {
+    let reads = 0;
+    const scan = scannedPdf();
+    const h = harness({ findPage: async (id) => { reads += 1; return id === scan.id ? scan : null; } });
+    await run(h.deps, { from: { kind: 'page', pageId: 'scan' }, to: { kind: 'file', path: 'x.pdf' } });
+    expect(reads).toBe(1);
+  });
+});
+
+describe('copy_content — a sandbox file filed into the drive (to.kind "new_file_page")', () => {
+  const folder = () => page({ id: 'folder1', title: 'Exhibits', type: 'FOLDER', content: '{"children":[]}', driveId: 'drive9' });
+  const args = (over: Record<string, unknown> = {}) => ({
+    from: { kind: 'file', path: 'out/exhibit-a.png' },
+    to: { kind: 'new_file_page', parentId: 'folder1', title: 'Exhibit A.png', ...over },
+  });
+
+  it('reads the real bytes, capped by the drive tier per-file limit, and creates a FILE page under the parent', async () => {
+    const h = harness({ pages: [folder()] });
+    const result = await run(h.deps, args());
+    expect(result).toMatchObject({ success: true, created: true, pageId: 'new-file-1', parentId: 'folder1', title: 'Exhibit A.png', bytesCopied: ORIGINAL_BYTES.byteLength });
+    expect(h.binaryReads).toEqual([{ path: 'out/exhibit-a.png', maxBytes: TIER_MAX_FILE_SIZE }]);
+    expect(h.createdFiles).toHaveLength(1);
+    expect(h.createdFiles[0]).toMatchObject({ parentId: 'folder1', title: 'Exhibit A.png', path: 'out/exhibit-a.png' });
+    expect(Buffer.from(h.createdFiles[0].content).equals(Buffer.from(ORIGINAL_BYTES))).toBe(true);
+    // The agent is told the page is still being processed, so it does not read it back as empty.
+    expect(String(result.message)).toMatch(/process/i);
+  });
+
+  it('given no edit access to the parent, should refuse BEFORE reading the sandbox — and without naming the parent', async () => {
+    const h = harness({ pages: [folder()], canEditPage: async () => false });
+    const result = await run(h.deps, args());
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Insufficient permissions');
+    expect(JSON.stringify(result)).not.toContain('Exhibits');
+    expect(h.binaryReads).toHaveLength(0);
+    expect(h.createdFiles).toHaveLength(0);
+  });
+
+  it('given a parent that does not exist, should refuse', async () => {
+    const h = harness({ pages: [] });
+    const result = await run(h.deps, args());
+    expect(result.success).toBe(false);
+    expect(h.createdFiles).toHaveLength(0);
+  });
+
+  it('given a file over the drive tier limit, should refuse with the limit and create nothing', async () => {
+    const h = harness({
+      pages: [folder()],
+      resolveMaxFileSize: async () => 50 * 1024 * 1024,
+      readSandboxBinaryFile: async () => ({ success: false, error: 'The file content is too large.', reason: 'content_too_large' }),
+    });
+    const result = await run(h.deps, args());
+    expect(result.success).toBe(false);
+    expect(String(result.message)).toContain('52428800');
+    expect(h.createdFiles).toHaveLength(0);
+  });
+
+  it('given a drive whose plan cannot be resolved, should refuse rather than guess a limit', async () => {
+    const h = harness({ pages: [folder()], resolveMaxFileSize: async () => null });
+    const result = await run(h.deps, args());
+    expect(result.success).toBe(false);
+    expect(h.binaryReads).toHaveLength(0);
+  });
+
+  it('given an empty sandbox file, should refuse rather than file a zero-byte page', async () => {
+    const h = harness({ pages: [folder()], binaryFile: new Uint8Array(0) });
+    const result = await run(h.deps, args());
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Source is empty');
+    expect(h.createdFiles).toHaveLength(0);
+  });
+
+  it('given a storage refusal from the filing (quota, blocklist), should surface it', async () => {
+    const h = harness({
+      pages: [folder()],
+      createFilePage: async () => ({ success: false, error: 'Storage limit reached', message: 'Insufficient storage: need 12 B, have 0 B available' }),
+    });
+    const result = await run(h.deps, args());
+    expect(result.success).toBe(false);
+    expect(String(result.message)).toContain('Insufficient storage');
+  });
+
+  it('given the agent sandbox switch off, should refuse before reading', async () => {
+    const h = harness({ pages: [folder()], isSandboxEnabledForContext: async () => false });
+    const result = await run(h.deps, args());
+    expect(result.success).toBe(false);
+    expect(h.binaryReads).toHaveLength(0);
+  });
+
+  describe('schema', () => {
+    const parse = (v: unknown) => copyContentInputSchema.safeParse(v);
+    it('accepts a sandbox file source with a parent and a title', () => {
+      expect(parse(args()).success).toBe(true);
+    });
+    it('requires parentId and title', () => {
+      expect(parse({ from: { kind: 'file', path: 'a.png' }, to: { kind: 'new_file_page', title: 'a.png' } }).success).toBe(false);
+      expect(parse({ from: { kind: 'file', path: 'a.png' }, to: { kind: 'new_file_page', parentId: 'p' } }).success).toBe(false);
+    });
+    it('only takes a sandbox file as its source', () => {
+      expect(parse({ from: { kind: 'page', pageId: 'p1' }, to: { kind: 'new_file_page', parentId: 'p', title: 't' } }).success).toBe(false);
+    });
+    it('rejects path and every page-only field on it', () => {
+      for (const extra of [{ path: 'x' }, { mode: 'replace' }, { startLine: 1 }, { anchor: 'x' }, { pageId: 'p' }]) {
+        expect(parse(args(extra)).success, JSON.stringify(extra)).toBe(false);
+      }
+    });
+    it('rejects parentId/title on the other destinations, where they would be ignored', () => {
+      expect(parse({ from: { kind: 'page' }, to: { kind: 'file', path: 'a', title: 't' } }).success).toBe(false);
+      expect(parse({ from: { kind: 'page' }, to: { kind: 'page', mode: 'replace', parentId: 'p' } }).success).toBe(false);
+    });
+  });
+});
+
+describe('copy_content — the description says it copies the real file', () => {
+  it('names the original-bytes copy and the new_file_page destination', () => {
+    const tools = createCopyContentTools(harness().deps);
+    const description = (tools.copy_content as { description?: string }).description ?? '';
+    expect(description).toMatch(/real file|original file/i);
+    expect(description).toContain('new_file_page');
+  });
+});
+
+describe('copy_content — review #3016: byte budget and one deadline', () => {
+  const NOW = 1_800_000_000_000;
+  const folder = () => page({ id: 'folder1', title: 'Exhibits', type: 'FOLDER', content: '{"children":[]}', driveId: 'drive9' });
+
+  it('the per-call deadline is the sandbox tool ceiling (well inside the route maxDuration of 300 s)', () => {
+    expect(COPY_CONTENT_DEADLINE_MS).toBe(SANDBOX_MAX_TIMEOUT_MS);
+    expect(COPY_CONTENT_DEADLINE_MS).toBeLessThan(300_000);
+  });
+
+  it('hands every step of a FILE page -> sandbox copy the SAME deadline', async () => {
+    const seen: number[] = [];
+    const h = harness({
+      pages: [scannedPdf()],
+      now: () => NOW,
+      fetchFileOriginal: async ({ deadlineAt }) => {
+        seen.push(deadlineAt);
+        return { success: true, bytes: ORIGINAL_BYTES, release: () => {} };
+      },
+      writeSandboxBinaryFile: async ({ deadlineAt, content }) => {
+        seen.push(deadlineAt);
+        return { success: true, bytesWritten: content.byteLength };
+      },
+    });
+    await run(h.deps, { from: { kind: 'page', pageId: 'scan' }, to: { kind: 'file', path: 'x.pdf' } });
+    expect(seen).toEqual([NOW + COPY_CONTENT_DEADLINE_MS, NOW + COPY_CONTENT_DEADLINE_MS]);
+  });
+
+  it('hands every step of a filing the same deadline, including the processor store', async () => {
+    const seen: number[] = [];
+    const h = harness({
+      pages: [folder()],
+      now: () => NOW,
+      readSandboxBinaryFile: async ({ deadlineAt }) => {
+        seen.push(deadlineAt);
+        return { success: true, content: ORIGINAL_BYTES, release: () => {} };
+      },
+      createFilePage: async ({ deadlineAt, parent }) => {
+        seen.push(deadlineAt);
+        return { success: true, pageId: 'p', driveId: parent.driveId, mimeType: 'image/png' };
+      },
+    });
+    await run(h.deps, { from: { kind: 'file', path: 'a.png' }, to: { kind: 'new_file_page', parentId: 'folder1', title: 'a.png' } });
+    expect(seen).toEqual([NOW + COPY_CONTENT_DEADLINE_MS, NOW + COPY_CONTENT_DEADLINE_MS]);
+  });
+
+  it('given the deadline passes during the fetch, should stop with a clean timeout before writing — and free the reserved bytes', async () => {
+    let clock = NOW;
+    let released = 0;
+    const h = harness({
+      pages: [scannedPdf()],
+      now: () => clock,
+      fetchFileOriginal: async () => {
+        clock += COPY_CONTENT_DEADLINE_MS + 1;
+        return { success: true, bytes: ORIGINAL_BYTES, release: () => { released += 1; } };
+      },
+    });
+    const result = await run(h.deps, { from: { kind: 'page', pageId: 'scan' }, to: { kind: 'file', path: 'x.pdf' } });
+    expect(result).toMatchObject({ success: false, error: 'Copy timed out' });
+    expect(h.binaryWrites).toHaveLength(0);
+    expect(released).toBe(1);
+  });
+
+  it('frees the reserved bytes once the sandbox write is done — on success and on failure', async () => {
+    for (const ok of [true, false]) {
+      let released = 0;
+      const h = harness({
+        pages: [scannedPdf()],
+        fetchFileOriginal: async () => ({ success: true, bytes: ORIGINAL_BYTES, release: () => { released += 1; } }),
+        writeSandboxBinaryFile: async ({ content }) =>
+          ok ? { success: true, bytesWritten: content.byteLength } : { success: false, error: 'write failed' },
+      });
+      await run(h.deps, { from: { kind: 'page', pageId: 'scan' }, to: { kind: 'file', path: 'x.pdf' } });
+      expect(released, `ok=${ok}`).toBe(1);
+    }
+  });
+
+  it('frees the reserved bytes once a filing is done — on success and on failure', async () => {
+    for (const ok of [true, false]) {
+      let released = 0;
+      const h = harness({
+        pages: [folder()],
+        readSandboxBinaryFile: async () => ({ success: true, content: ORIGINAL_BYTES, release: () => { released += 1; } }),
+        createFilePage: async ({ parent }) =>
+          ok
+            ? { success: true, pageId: 'p', driveId: parent.driveId, mimeType: 'image/png' }
+            : { success: false, error: 'Storage limit reached', message: 'no room' },
+      });
+      await run(h.deps, { from: { kind: 'file', path: 'a.png' }, to: { kind: 'new_file_page', parentId: 'folder1', title: 'a.png' } });
+      expect(released, `ok=${ok}`).toBe(1);
+    }
+  });
+
+  it('given the byte budget is exhausted, should tell the agent to retry and copy nothing', async () => {
+    const h = harness({
+      pages: [scannedPdf()],
+      fetchFileOriginal: async () => ({
+        success: false,
+        error: 'The server is already moving as many large files as it safely can, so nothing was copied. Wait a moment and retry.',
+        reason: 'copy_budget_exhausted',
+      }),
+    });
+    const result = await run(h.deps, { from: { kind: 'page', pageId: 'scan' }, to: { kind: 'file', path: 'x.pdf' } });
+    expect(result.success).toBe(false);
+    expect(String(result.message)).toMatch(/retry/i);
+    expect(h.binaryWrites).toHaveLength(0);
   });
 });

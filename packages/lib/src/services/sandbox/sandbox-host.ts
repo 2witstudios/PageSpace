@@ -21,7 +21,7 @@
  * by both a caller and a driver without pulling either concrete backend in.
  */
 
-import type { RunCommandArgs, SandboxRunResult, WriteFileEntry } from './sandbox-client/types';
+import type { RunCommandArgs, SandboxRunResult, WriteFileEntry, FsOpOptions } from './sandbox-client/types';
 import type { SandboxCreateOptions } from './sandbox-options';
 
 /**
@@ -423,8 +423,8 @@ export interface SandboxHandle {
    */
   readonly egressPolicyToken?: string;
   exec(args: RunCommandArgs): Promise<SandboxRunResult>;
-  writeFiles(files: WriteFileEntry[]): Promise<void>;
-  readFile(args: { path: string }): Promise<Buffer | null>;
+  writeFiles(files: WriteFileEntry[], options?: FsOpOptions): Promise<void>;
+  readFile(args: { path: string } & FsOpOptions): Promise<Buffer | null>;
   stream(args: SandboxStreamOptions): Promise<SandboxStream>;
   listStreams(): Promise<SandboxStreamSessionInfo[]>;
   /**

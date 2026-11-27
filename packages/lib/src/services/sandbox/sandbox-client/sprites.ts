@@ -73,9 +73,11 @@ import type {
   SandboxRunResult,
   RunCommandArgs,
   WriteFileEntry,
+  FsOpOptions,
 } from './types';
 import { SandboxProvisionError, type SandboxCreateOptions } from '../sandbox-options';
 import { loggers } from '../../../logging/logger-config';
+import { findSentinel } from './stdout-sentinel';
 import { MAX_LABEL_LENGTH } from '../../../validators/custom-domain';
 
 /** Thrown when a command exceeds the policy's per-run wall-clock cap. */
@@ -612,26 +614,8 @@ function toBuffer(chunk: Buffer | string): Buffer {
   return typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;
 }
 
-/**
- * Pure: locate a `<sentinel> <exit-code>` line in collected stdout. Returns the
- * stdout BEFORE that line and the parsed code, or null when the sentinel has not
- * arrived yet (or arrived without a numeric code — treated as not-yet, so a
- * partial chunk boundary cannot fake a result).
- */
-export function findSentinel(stdout: string, sentinel: string): { stdout: string; exitCode: number } | null {
-  const lines = stdout.split('\n');
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i];
-    if (!line.startsWith(sentinel)) continue;
-    const code = Number(line.slice(sentinel.length).trim());
-    if (!Number.isInteger(code)) return null;
-    // Only a COMPLETE line counts: a sentinel at the very end with no newline
-    // may still be mid-chunk (the code could be `12` of `127`).
-    if (i === lines.length - 1) return null;
-    return { stdout: lines.slice(0, i).join('\n'), exitCode: code };
-  }
-  return null;
-}
+// Re-exported: the protocol lives in a pure module so client-reachable code can share it.
+export { findSentinel };
 
 /**
  * Run a command through the SDK's `spawn` (structured `file` + `args[]`, never a
@@ -1003,13 +987,24 @@ async function fsWithWakeRetry<T>(
   label: string,
   op: () => Promise<T>,
   ensureDirs: readonly string[] = [],
+  timeoutMs: number = FS_OP_TIMEOUT_MS,
 ): Promise<T> {
+  // `timeoutMs` bounds each ATTEMPT, not the pair: a caller moving a large file
+  // names the budget one transfer needs, and the wake retry still gets a full
+  // one. The recovery exec between them keeps its own (default) bound — it is
+  // a wake, not a transfer.
   try {
-    return await withTimeout(op(), FS_OP_TIMEOUT_MS, label);
+    return await withTimeout(op(), timeoutMs, label);
   } catch {
     await recoverFsViaExec(sprite, ensureDirs);
-    return await withTimeout(op(), FS_OP_TIMEOUT_MS, label);
+    return await withTimeout(op(), timeoutMs, label);
   }
+}
+
+/** Pure: the per-attempt fs budget for a call — the caller's, when it named a usable one. */
+function fsOpTimeoutMs(options?: FsOpOptions): number {
+  const requested = options?.timeoutMs;
+  return requested !== undefined && Number.isFinite(requested) && requested > 0 ? requested : FS_OP_TIMEOUT_MS;
 }
 
 /**
@@ -1281,10 +1276,15 @@ function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): Executabl
       return runSpawnedWithWakeRetry(spawnFn, maxBytes ?? 0, timeoutMs, stdoutSentinel);
     },
 
-    async writeFiles(files: WriteFileEntry[]): Promise<void> {
+    async writeFiles(files: WriteFileEntry[], options?: FsOpOptions): Promise<void> {
       const fs = sprite.filesystem('/');
+      const timeoutMs = fsOpTimeoutMs(options);
       for (const file of files) {
-        const data = typeof file.content === 'string' ? file.content : Buffer.from(file.content);
+        // A VIEW over binary content, not a copy: a binary copy can be 250 MB,
+        // and it stays alive across the wake retry.
+        const data = typeof file.content === 'string'
+          ? file.content
+          : Buffer.from(file.content.buffer, file.content.byteOffset, file.content.byteLength);
         // Bounded + recover-on-failure: the fs API hangs on a hibernated VM, and
         // it does not create parent directories — so the retry's exec both wakes
         // the VM and recreates this file's parent (self-healing SANDBOX_ROOT,
@@ -1294,13 +1294,20 @@ function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): Executabl
           'write',
           () => fs.writeFile(file.path, data, file.mode === undefined ? undefined : { mode: file.mode }),
           [parentDir(file.path)],
+          timeoutMs,
         );
       }
     },
 
-    async readFileToBuffer({ path }: { path: string }): Promise<Buffer | null> {
+    async readFileToBuffer({ path, timeoutMs }: { path: string } & FsOpOptions): Promise<Buffer | null> {
       try {
-        return await fsWithWakeRetry(sprite, 'read', () => sprite.filesystem('/').readFile(path, null));
+        return await fsWithWakeRetry(
+          sprite,
+          'read',
+          () => sprite.filesystem('/').readFile(path, null),
+          [],
+          fsOpTimeoutMs({ timeoutMs }),
+        );
       } catch {
         // A missing file (or any read failure after a wake retry) resolves to
         // null; the runner maps null to a handled not-found rather than throwing.
