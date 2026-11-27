@@ -78,6 +78,8 @@ describe('POST /originals/:pageId — store original bytes through the processor
     expect(Buffer.compare(buffer as Buffer, BYTES)).toBe(0);
     expect(originalName).toBe('scan résumé.pdf');
     expect(options).toMatchObject({ userId: 'u1', driveId: 'd1', service: 'web' });
+    // The hash it just verified is handed over, so the body is not hashed a second time.
+    expect(mockSaveOriginal.mock.calls[0][3]).toBe(HASH);
   });
 
   it('given bytes already stored under that hash, should not rewrite them', async () => {

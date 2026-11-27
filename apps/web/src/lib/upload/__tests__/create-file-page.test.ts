@@ -10,7 +10,6 @@ import {
   FileStorageQuotaError,
   imageFileName,
   GENERATED_IMAGES_FOLDER,
-  ImageStorageQuotaError,
   type FilePageWrite,
 } from '../create-file-page';
 import { ContentBlockedError } from '@pagespace/lib/content-safety/policy';
@@ -151,7 +150,7 @@ describe('createImageFilePage (shell, all seams injected)', () => {
     expect(chargeStorage).not.toHaveBeenCalled();
   });
 
-  it('throws ImageStorageQuotaError (and does not upload) when over quota', async () => {
+  it('throws FileStorageQuotaError (and does not upload) when over quota', async () => {
     const putObject = vi.fn(async () => undefined);
     await expect(
       createImageFilePage(
@@ -164,7 +163,7 @@ describe('createImageFilePage (shell, all seams injected)', () => {
           persist: async () => ({ fileWasInserted: true }),
         },
       ),
-    ).rejects.toBeInstanceOf(ImageStorageQuotaError);
+    ).rejects.toBeInstanceOf(FileStorageQuotaError);
     expect(putObject).not.toHaveBeenCalled();
   });
 
@@ -416,9 +415,5 @@ describe('createFilePage — the generalized shell, sandbox-copy flavour', () =>
     const d = { ...deps(), afterCommit: vi.fn(async () => { throw new Error('enqueue failed'); }) };
     const out = await createFilePage(input, d);
     expect(out.driveId).toBe('driveX');
-  });
-
-  it('the image wrapper is the same shell and its quota error is the same class', () => {
-    expect(ImageStorageQuotaError).toBe(FileStorageQuotaError);
   });
 });

@@ -142,12 +142,10 @@ export async function fileSandboxBytesIntoDrive(
     };
   }
 
-  // Post-commit visibility: never turns a filed page into a failure.
-  await effects
-    .broadcast({ driveId: created.driveId, pageId: created.pageId, operation: 'created', parentId: created.parentId, title, type: PageType.FILE })
-    .catch(() => {});
-  await effects
-    .logActivity({
+  // Post-commit visibility, independent of each other: never turns a filed page into a failure.
+  await Promise.allSettled([
+    effects.broadcast({ driveId: created.driveId, pageId: created.pageId, operation: 'created', parentId: created.parentId, title, type: PageType.FILE }),
+    effects.logActivity({
       userId: actor.userId,
       pageId: created.pageId,
       driveId: created.driveId,
@@ -155,8 +153,8 @@ export async function fileSandboxBytesIntoDrive(
       mimeType,
       fileSize: buffer.byteLength,
       contentHash: created.contentHash,
-    })
-    .catch(() => {});
+    }),
+  ]);
 
   return { success: true, pageId: created.pageId, driveId: created.driveId, mimeType };
 }

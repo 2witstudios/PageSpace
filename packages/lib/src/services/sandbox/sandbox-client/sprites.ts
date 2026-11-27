@@ -1019,7 +1019,7 @@ async function fsWithWakeRetry<T>(
 }
 
 /** Pure: the per-attempt fs budget for a call — the caller's, when it named a usable one. */
-export function fsOpTimeoutMs(options?: FsOpOptions): number {
+function fsOpTimeoutMs(options?: FsOpOptions): number {
   const requested = options?.timeoutMs;
   return requested !== undefined && Number.isFinite(requested) && requested > 0 ? requested : FS_OP_TIMEOUT_MS;
 }
@@ -1297,7 +1297,11 @@ function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): Executabl
       const fs = sprite.filesystem('/');
       const timeoutMs = fsOpTimeoutMs(options);
       for (const file of files) {
-        const data = typeof file.content === 'string' ? file.content : Buffer.from(file.content);
+        // A VIEW over binary content, not a copy: a binary copy can be 250 MB,
+        // and it stays alive across the wake retry.
+        const data = typeof file.content === 'string'
+          ? file.content
+          : Buffer.from(file.content.buffer, file.content.byteOffset, file.content.byteLength);
         // Bounded + recover-on-failure: the fs API hangs on a hibernated VM, and
         // it does not create parent directories — so the retry's exec both wakes
         // the VM and recreates this file's parent (self-healing SANDBOX_ROOT,

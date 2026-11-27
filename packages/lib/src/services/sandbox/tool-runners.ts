@@ -25,6 +25,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { envInt, type EnvSource } from '../../billing/env-parse';
 import type { SubscriptionTier } from '../subscription-utils';
 import {
   SANDBOX_TIMEOUT_MS,
@@ -435,6 +436,8 @@ export type SandboxToolDenialReason =
   | 'path_escape'
   | 'content_too_large'
   | 'binary_content'
+  /** A copy whose source is a zero-byte file: copying it would empty the destination. */
+  | 'empty_source'
   | 'edit_no_match'
   | 'edit_not_unique'
   | 'no_session'
@@ -540,6 +543,7 @@ export const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   binary_content:
     'This file is not valid UTF-8 text, so it cannot be copied into a page as text — decoding it would silently replace the undecodable bytes. '
     + 'To put the file itself in the drive, copy it to a new FILE page (copy_content with to.kind "new_file_page"); to move it inside the sandbox, copy it to another sandbox file or use bash (cp/mv).',
+  empty_source: 'The source file is empty, so nothing was copied — copying it would empty the destination rather than fill it.',
   edit_no_match:
     'The oldString was not found in the file. Read the file and copy the exact text to replace. '
     + 'If you read a windowed page of a long file, the text you are targeting may be in a part you have not read yet.',
@@ -1539,17 +1543,13 @@ export async function readSandboxFileForCopy({
 /** Default ceiling on one binary copy, in either direction. */
 export const DEFAULT_MAX_BINARY_COPY_BYTES = 250 * 1024 * 1024;
 
-/** Env var that overrides {@link DEFAULT_MAX_BINARY_COPY_BYTES}, in bytes. */
-export const MAX_BINARY_COPY_BYTES_ENV = 'SANDBOX_MAX_BINARY_COPY_BYTES';
-
 /**
- * Pure: the binary copy cap for `env`. A malformed or non-positive override
- * keeps the default — a typo must neither open the cap nor shut copies off.
+ * Pure: the binary copy cap for `env` (`SANDBOX_MAX_BINARY_COPY_BYTES`). A
+ * malformed or zero override keeps the default — a typo must neither open the
+ * cap nor shut copies off.
  */
-export function resolveMaxBinaryCopyBytes(env: Record<string, string | undefined>): number {
-  const raw = env[MAX_BINARY_COPY_BYTES_ENV]?.trim();
-  if (!raw || !/^\d+$/.test(raw)) return DEFAULT_MAX_BINARY_COPY_BYTES;
-  const value = Number.parseInt(raw, 10);
+export function resolveMaxBinaryCopyBytes(env: EnvSource): number {
+  const value = envInt('SANDBOX_MAX_BINARY_COPY_BYTES', DEFAULT_MAX_BINARY_COPY_BYTES, env);
   return value > 0 ? value : DEFAULT_MAX_BINARY_COPY_BYTES;
 }
 
@@ -1589,13 +1589,14 @@ async function runCopyHelper(
   sandbox: ExecutableSandbox,
   script: string,
   args: string[],
+  timeoutMs: number = BINARY_COPY_HELPER_TIMEOUT_MS,
 ): Promise<SandboxRunResult> {
   return sandbox.runCommand({
     cmd: 'sh',
     // Paths are positional DATA ("$1"...), never spliced into the script, so a
     // file name full of shell metacharacters cannot escape into the command.
     args: ['-c', `${script}; echo "${BINARY_COPY_SENTINEL} $?"`, 'sh', ...args],
-    timeoutMs: BINARY_COPY_HELPER_TIMEOUT_MS,
+    timeoutMs,
     maxBytes: 4096,
     stdoutSentinel: BINARY_COPY_SENTINEL,
   });
@@ -1610,9 +1611,9 @@ async function removeTempFile(sandbox: ExecutableSandbox, tempPath: string): Pro
   }
 }
 
-/** Pure: a sibling temp path for `target` — same directory, so the rename is atomic. */
-export function binaryCopyTempPath(target: string, nonce: string): string {
-  return `${target}.pagespace-copy-${nonce}.tmp`;
+/** A sibling temp path for `target` — same directory, so the rename is atomic. */
+function binaryCopyTempPath(target: string): string {
+  return `${target}.pagespace-copy-${randomUUID()}.tmp`;
 }
 
 /**
@@ -1634,14 +1635,11 @@ export async function writeSandboxBinaryFile({
   content,
   ctx,
   deps,
-  nonce = () => randomUUID(),
 }: {
   path: string;
   content: Uint8Array;
   ctx: SandboxActorContext;
   deps: SandboxRunDeps;
-  /** Temp-name source; injectable so tests can pin the name. */
-  nonce?: () => string;
 }): Promise<WriteFileToolResult> {
   if (!deps.isEnabled()) return fail('kill_switch_off');
 
@@ -1662,7 +1660,7 @@ export async function writeSandboxBinaryFile({
     const session = await openSession(ctx, deps);
     if (!session.ok) return fail(session.reason);
 
-    const tempPath = binaryCopyTempPath(resolved, nonce());
+    const tempPath = binaryCopyTempPath(resolved);
     try {
       const startedAt = deps.now();
       const failWith = async (): Promise<{ success: false; error: string; reason: SandboxToolDenialReason }> => {
@@ -1696,6 +1694,82 @@ export async function writeSandboxBinaryFile({
         durationMs: deps.now().getTime() - startedAt.getTime(),
       });
       return { success: true, path, bytesWritten: bytes };
+    } finally {
+      session.release();
+    }
+  });
+}
+
+/**
+ * Copy one sandbox file to another WITHOUT the bytes leaving the sandbox.
+ *
+ * Both ends live in the same machine, so moving them through the server (a
+ * binary read out, a binary write back) would spend twice the file's size in
+ * host memory and network for what one `cp` does. Same temp-then-rename shape
+ * as {@link writeSandboxBinaryFile}, in a single exec; the destination's size is
+ * echoed back as the byte count. No binary cap: nothing reaches the host.
+ */
+export async function copySandboxFile({
+  fromPath,
+  toPath,
+  ctx,
+  deps,
+}: {
+  fromPath: string;
+  toPath: string;
+  ctx: SandboxActorContext;
+  deps: SandboxRunDeps;
+}): Promise<WriteFileToolResult> {
+  if (!deps.isEnabled()) return fail('kill_switch_off');
+
+  const source = resolveSandboxPath(fromPath);
+  const target = resolveSandboxPath(toPath);
+  if (!source || !target) {
+    await safeAudit(deps, ctx, {
+      code: `sandboxCopy ${fromPath} -> ${toPath}`,
+      exitCode: null,
+      durationMs: 0,
+      anomaly: 'blocked_command',
+    });
+    return fail('path_escape');
+  }
+
+  return withMachineBilling<{ path: string; bytesWritten: number }>(ctx, deps, async () => {
+    const session = await openSession(ctx, deps);
+    if (!session.ok) return fail(session.reason);
+
+    try {
+      const startedAt = deps.now();
+      const audit = (exitCode: number | null, anomaly?: CodeExecutionAnomaly) =>
+        safeAudit(deps, ctx, {
+          code: `sandboxCopy ${fromPath} -> ${toPath}`,
+          exitCode,
+          durationMs: deps.now().getTime() - startedAt.getTime(),
+          ...(anomaly ? { anomaly } : {}),
+        });
+
+      // A subshell, so its exit codes reach the sentinel `echo` after it:
+      // 44 = no such source, 45 = empty source; a cp/mv failure removes the temp file.
+      const script =
+        '( [ -e "$1" ] || exit 44; [ -s "$1" ] || exit 45; ' +
+        'cp -f -- "$1" "$3" && mv -f -- "$3" "$2" && stat -L -c %s -- "$2" || { rm -f -- "$3"; exit 1; } )';
+      let copied: SandboxRunResult;
+      try {
+        copied = await runCopyHelper(session.sandbox, script, [source, target, binaryCopyTempPath(target)], BINARY_COPY_TIMEOUT_MS);
+      } catch {
+        await audit(null, 'nonzero_exit');
+        return fail('execution_failed');
+      }
+      if (copied.exitCode === 44 || copied.exitCode === 45) {
+        await audit(copied.exitCode, 'nonzero_exit');
+        return fail(copied.exitCode === 44 ? 'not_found' : 'empty_source');
+      }
+      if (copied.exitCode !== 0) {
+        await audit(copied.exitCode, 'nonzero_exit');
+        return fail('execution_failed');
+      }
+      await audit(0);
+      return { success: true, path: toPath, bytesWritten: Number.parseInt(copied.stdout.trim(), 10) || 0 };
     } finally {
       session.release();
     }

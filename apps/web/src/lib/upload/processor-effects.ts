@@ -1,8 +1,12 @@
 import { createUploadServiceToken, createPageServiceToken } from '@pagespace/lib/services/validated-service-token';
 import { toContentHash } from '@/lib/presigned-url';
+import { readBytesWithCap } from '@/lib/http/read-body-with-cap';
 import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
+
+/** Wall-clock bound on moving one original to or from the processor (up to the 250 MB copy cap). */
+const ORIGINAL_TRANSFER_TIMEOUT_MS = 120_000;
 
 export async function enqueueProcessorJob(
   actor: AccessActor,
@@ -41,7 +45,6 @@ export async function storeOriginalViaProcessor({
   contentHash,
   buffer,
   originalName,
-  timeoutMs = 120_000,
 }: {
   actor: AccessActor;
   driveId: string;
@@ -50,7 +53,6 @@ export async function storeOriginalViaProcessor({
   contentHash: string;
   buffer: Buffer;
   originalName: string;
-  timeoutMs?: number;
 }): Promise<void> {
   const { token } = await createUploadServiceToken({
     actor,
@@ -68,7 +70,7 @@ export async function storeOriginalViaProcessor({
       'X-Original-Name': encodeURIComponent(originalName),
     },
     body: new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength),
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: AbortSignal.timeout(ORIGINAL_TRANSFER_TIMEOUT_MS),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({})) as { error?: string; reason?: string };
@@ -91,25 +93,23 @@ export async function fetchOriginalFromProcessor({
   pageId,
   filePath,
   maxBytes,
-  timeoutMs = 120_000,
 }: {
   actor: AccessActor;
   pageId: string;
   /** The page's `filePath`: the content hash, or a legacy `files/{hash}/original`. */
   filePath: string;
   maxBytes: number;
-  timeoutMs?: number;
 }): Promise<{ success: true; bytes: Uint8Array } | { success: false; error: string }> {
   const contentHash = toContentHash(filePath);
-  const tooLarge = (bytes: number) => ({
+  const tooLarge = (bytes?: number) => ({
     success: false as const,
-    error: `The file is ${bytes} bytes, over the ${maxBytes}-byte limit for one copy. It was not copied partially.`,
+    error: `The file is ${bytes === undefined ? 'larger than' : `${bytes} bytes, over`} the ${maxBytes}-byte limit for one copy. It was not copied partially.`,
   });
   try {
     const { token } = await createPageServiceToken(actor, pageId, ['files:read'], '5m');
     const res = await fetch(`${PROCESSOR_URL}/cache/${encodeURIComponent(contentHash)}/original`, {
       headers: { Authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.timeout(ORIGINAL_TRANSFER_TIMEOUT_MS),
     });
     if (res.status === 410) return { success: false, error: 'This file has been removed, so it cannot be copied.' };
     if (res.status === 403) return { success: false, error: 'Access to this file was denied.' };
@@ -121,8 +121,10 @@ export async function fetchOriginalFromProcessor({
       await res.body?.cancel().catch(() => {});
       return tooLarge(declared);
     }
-    const bytes = new Uint8Array(await res.arrayBuffer());
-    if (bytes.byteLength > maxBytes) return tooLarge(bytes.byteLength);
+    // Stops reading the moment the cap is passed, so a body with no declared
+    // length is never buffered whole before the check.
+    const bytes = await readBytesWithCap(res, maxBytes);
+    if (bytes === null) return tooLarge();
     return { success: true, bytes };
   } catch (error) {
     return {

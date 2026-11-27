@@ -26,6 +26,7 @@ import {
   writeSandboxFile,
   writeSandboxBinaryFile,
   readSandboxBinaryFileForCopy,
+  copySandboxFile,
   MAX_BINARY_COPY_BYTES,
   DENIAL_MESSAGES,
 } from '@pagespace/lib/services/sandbox/tool-runners';
@@ -140,8 +141,6 @@ const productionDeps: CopyContentDeps = {
       driveId: page.driveId,
       revision: typeof page.revision === 'number' ? page.revision : null,
       filePath: page.filePath ?? null,
-      contentHash: page.contentHash ?? null,
-      mimeType: page.mimeType ?? null,
       fileSize: typeof page.fileSize === 'number' ? page.fileSize : null,
     };
   },
@@ -218,7 +217,16 @@ const productionDeps: CopyContentDeps = {
       deps: buildRealSandboxRunDeps({ actor: opened.actor }),
     });
     return result.success
-      ? { success: true, content: result.content, bytes: result.bytes }
+      ? { success: true, content: result.content }
+      : { success: false, error: result.error ?? DENIAL_MESSAGES[result.reason], reason: result.reason };
+  },
+
+  copySandboxFile: async ({ fromPath, toPath, context }) => {
+    const opened = await openSandbox(context);
+    if (!opened.ok) return { success: false, error: opened.error };
+    const result = await copySandboxFile({ fromPath, toPath, ctx: opened.ctx, deps: buildRealSandboxRunDeps({ actor: opened.actor }) });
+    return result.success
+      ? { success: true, bytesWritten: result.bytesWritten }
       : { success: false, error: result.error ?? DENIAL_MESSAGES[result.reason], reason: result.reason };
   },
 

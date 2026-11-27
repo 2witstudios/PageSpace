@@ -30,7 +30,6 @@ export interface PageRecord {
   mimeType?: string | null;
   // FILE-page fields (the row carries them; `findById` returns the whole row)
   filePath?: string | null;
-  contentHash?: string | null;
   fileSize?: number | null;
   // Agent-specific fields
   systemPrompt?: string | null;

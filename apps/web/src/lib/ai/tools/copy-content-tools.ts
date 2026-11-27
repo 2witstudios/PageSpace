@@ -69,10 +69,8 @@ export interface CopyPageRecord {
   content: string | null;
   driveId: string;
   revision?: number | null;
-  /** FILE pages: where the original bytes live (the content hash). */
+  /** FILE pages: where the original bytes live (the content hash), and their size. */
   filePath?: string | null;
-  contentHash?: string | null;
-  mimeType?: string | null;
   fileSize?: number | null;
 }
 
@@ -121,7 +119,13 @@ export interface CopyContentDeps {
     path: string;
     maxBytes: number;
     context: ToolExecutionContext;
-  }) => Promise<{ success: true; content: Uint8Array; bytes: number } | DepFailure>;
+  }) => Promise<{ success: true; content: Uint8Array } | DepFailure>;
+  /** One sandbox file to another, inside the sandbox — no bytes through the server. */
+  copySandboxFile: (args: {
+    fromPath: string;
+    toPath: string;
+    context: ToolExecutionContext;
+  }) => Promise<{ success: true; bytesWritten: number } | DepFailure>;
   /**
    * The per-file limit of the plan that pays for `driveId`'s storage, in bytes,
    * or null when it cannot be resolved (then nothing is filed).
@@ -454,17 +458,28 @@ export function createCopyContentTools(deps: CopyContentDeps) {
   const readContext = (options: unknown): ToolExecutionContext | undefined =>
     (options as { experimental_context?: ToolExecutionContext })?.experimental_context;
 
+  const sandboxOff = (what: 'reach' | 'write', instead: string): Refusal =>
+    refuse(
+      'Sandbox access is off for this agent',
+      `This agent cannot ${what} sandbox files. Enable sandbox access in the agent's settings, or ${instead}.`
+    );
+
+  /** Zero bytes is the limit case of the truncation this tool refuses to do: it would empty the destination. */
+  const emptySource = (label: string): Refusal =>
+    refuse('Source is empty', `${label} is empty, so there is nothing to copy.`, { sourceBytes: 0 });
+
+  /**
+   * The source, as text — or, for an uploaded FILE page copied WHOLE into a
+   * sandbox file, as the real file's bytes. A FILE page narrowed by a line
+   * range, or bound for a page, is a selection from its extracted text.
+   */
   async function resolveSource(
     from: CopyFrom,
+    to: CopyTo,
     context: ToolExecutionContext
-  ): Promise<ResolvedSource | Refusal> {
+  ): Promise<ResolvedSource | BinarySource | Refusal> {
     if (from.kind === 'file') {
-      if (!(await deps.isSandboxEnabledForContext(context))) {
-        return refuse(
-          'Sandbox access is off for this agent',
-          "This agent cannot reach sandbox files. Enable sandbox access in the agent's settings, or copy from a page instead."
-        );
-      }
+      if (!(await deps.isSandboxEnabledForContext(context))) return sandboxOff('reach', 'copy from a page instead');
       const read = await deps.readSandboxFile({ path: from.path as string, context });
       if (!read.success) return refuse('Could not read the source file', read.error);
       return { bytes: read.content, label: `file:${from.path}`, shape: 'raw' };
@@ -476,6 +491,22 @@ export function createCopyContentTools(deps: CopyContentDeps) {
     if (!(await deps.canViewPage(context, page.id))) {
       return refuse('Insufficient permissions', `You do not have access to read "${page.title}".`);
     }
+
+    const wholeFile = from.lineStart === undefined && from.lineEnd === undefined;
+    if (to.kind === 'file' && page.type === PageType.FILE && wholeFile) {
+      if (!(await deps.isSandboxEnabledForContext(context))) return sandboxOff('write', 'copy into a page instead');
+      if (!page.filePath) {
+        return refuse(
+          'No stored file',
+          `"${page.title}" has no stored file to copy — the upload may not have finished.`,
+          { pageId: page.id }
+        );
+      }
+      const fetched = await deps.fetchFileOriginal({ page, context });
+      if (!fetched.success) return refuse('Could not read the source file', fetched.error, { pageId: page.id });
+      return { binary: fetched.bytes, label: `page:${page.id} (the original file)` };
+    }
+
     const rejected = rejectNonTextPage(page, 'source');
     if (rejected) return rejected;
 
@@ -715,12 +746,7 @@ export function createCopyContentTools(deps: CopyContentDeps) {
     source: ResolvedSource,
     context: ToolExecutionContext
   ): Promise<CopyResult> {
-    if (!(await deps.isSandboxEnabledForContext(context))) {
-      return refuse(
-        'Sandbox access is off for this agent',
-        "This agent cannot write sandbox files. Enable sandbox access in the agent's settings, or copy into a page instead."
-      );
-    }
+    if (!(await deps.isSandboxEnabledForContext(context))) return sandboxOff('write', 'copy into a page instead');
     const written = await deps.writeSandboxFile({
       path: to.path as string,
       content: source.bytes,
@@ -736,55 +762,21 @@ export function createCopyContentTools(deps: CopyContentDeps) {
     };
   }
 
-  const sandboxOff = (what: string): Refusal =>
-    refuse(
-      'Sandbox access is off for this agent',
-      `This agent cannot ${what} sandbox files. Enable sandbox access in the agent's settings, or copy between pages instead.`
-    );
-
-  /**
-   * The source of a copy INTO a sandbox file, when that copy moves a real file:
-   * a sandbox file (to another sandbox file), or an uploaded FILE page copied
-   * whole. Returns null when the copy is text — a non-FILE page, or a FILE
-   * page narrowed by a line range, which is a selection from its extracted
-   * text — and the text path handles it.
-   */
-  async function resolveBinarySource(
-    from: CopyFrom,
-    context: ToolExecutionContext
-  ): Promise<BinarySource | Refusal | null> {
-    if (from.kind === 'file') {
-      if (!(await deps.isSandboxEnabledForContext(context))) return sandboxOff('reach');
-      const read = await deps.readSandboxBinaryFile({
-        path: from.path as string,
-        // No destination limit beyond the runner's own binary cap.
-        maxBytes: Number.POSITIVE_INFINITY,
-        context,
-      });
-      if (!read.success) return refuse('Could not read the source file', read.error);
-      return { binary: read.content, label: `file:${from.path}` };
+  /** A sandbox file to another sandbox file: one copy inside the sandbox. */
+  async function copyWithinSandbox(from: CopyFrom, to: CopyTo, context: ToolExecutionContext): Promise<CopyResult> {
+    if (!(await deps.isSandboxEnabledForContext(context))) return sandboxOff('reach', 'copy between pages instead');
+    const label = `file:${from.path}`;
+    const copied = await deps.copySandboxFile({ fromPath: from.path as string, toPath: to.path as string, context });
+    if (!copied.success) {
+      return copied.reason === 'empty_source' ? emptySource(label) : refuse('Could not copy the file', copied.error);
     }
-
-    if (from.lineStart !== undefined || from.lineEnd !== undefined) return null;
-    const pageId = resolveOrThrowPageId(from.pageId, context);
-    const page = await deps.findPage(pageId);
-    // Not found, or not a FILE: the text path owns both answers.
-    if (!page || page.type !== PageType.FILE) return null;
-    // Permission FIRST, before anything about the file is read or disclosed.
-    if (!(await deps.canViewPage(context, page.id))) {
-      return refuse('Insufficient permissions', `You do not have access to read "${page.title}".`);
-    }
-    if (!(await deps.isSandboxEnabledForContext(context))) return sandboxOff('write');
-    if (!page.filePath) {
-      return refuse(
-        'No stored file',
-        `"${page.title}" has no stored file to copy — the upload may not have finished.`,
-        { pageId: page.id }
-      );
-    }
-    const fetched = await deps.fetchFileOriginal({ page, context });
-    if (!fetched.success) return refuse('Could not read the source file', fetched.error, { pageId: page.id });
-    return { binary: fetched.bytes, label: `page:${page.id} (the original file)` };
+    return {
+      success: true,
+      path: to.path,
+      sourceLabel: label,
+      bytesCopied: copied.bytesWritten,
+      message: `Copied ${label} to ${to.path} byte-for-byte inside the sandbox (${copied.bytesWritten} bytes).`,
+    };
   }
 
   async function writeBinaryToFile(
@@ -809,7 +801,7 @@ export function createCopyContentTools(deps: CopyContentDeps) {
     to: CopyTo,
     context: ToolExecutionContext
   ): Promise<CopyResult> {
-    if (!(await deps.isSandboxEnabledForContext(context))) return sandboxOff('reach');
+    if (!(await deps.isSandboxEnabledForContext(context))) return sandboxOff('reach', 'copy between pages instead');
     const parentId = to.parentId as string;
     const parent = await deps.findPage(parentId);
     if (!parent) return refuse('Parent page not found', `No page with ID "${parentId}".`);
@@ -838,15 +830,15 @@ export function createCopyContentTools(deps: CopyContentDeps) {
         read.reason === 'content_too_large' ? { limit: maxBytes } : {}
       );
     }
-    if (read.content.byteLength === 0) {
-      return refuse('Source is empty', `file:${path} is empty, so there is nothing to file.`, { sourceBytes: 0 });
-    }
+    if (read.content.byteLength === 0) return emptySource(`file:${path}`);
 
     const title = to.title as string;
     const created = await deps.createFilePage({ parent, title, path, content: read.content, context });
     if (!created.success) return refuse(created.error, created.message);
     return {
       success: true,
+      // Says, in so many words, that this copy made a page (the renderer reads it).
+      created: true,
       pageId: created.pageId,
       parentId: parent.id,
       driveId: created.driveId,
@@ -890,26 +882,18 @@ export function createCopyContentTools(deps: CopyContentDeps) {
           );
         }
 
-        // Real files: a sandbox file filed into the drive, or a file copied
-        // into the sandbox whole. Raw bytes, never decoded, never line-edited.
+        // Real files: raw bytes, never decoded, never line-edited.
         if (to.kind === 'new_file_page') return fileIntoDrive(from, to, context);
-        if (to.kind === 'file') {
-          const binary = await resolveBinarySource(from, context);
-          if (binary !== null) {
-            if ('success' in binary) return binary;
-            // Zero bytes is the limit case of the truncation this tool refuses
-            // to do: it would replace the destination with nothing.
-            if (binary.binary.byteLength === 0) {
-              return refuse('Source is empty', `${binary.label} is empty, so there is nothing to copy.`, { sourceBytes: 0 });
-            }
-            return writeBinaryToFile(to, binary, context);
-          }
-        }
+        if (from.kind === 'file' && to.kind === 'file') return copyWithinSandbox(from, to, context);
 
         // Source first, destination second, write last. Nothing is written
         // until BOTH sides have been authorized.
-        const source = await resolveSource(from, context);
+        const source = await resolveSource(from, to, context);
         if ('success' in source) return source;
+        if ('binary' in source) {
+          if (source.binary.byteLength === 0) return emptySource(source.label);
+          return writeBinaryToFile(to, source, context);
+        }
 
         // Named for the field it is reported as, and so it does not read as a
         // sibling of `source.bytes` — which is the copied TEXT, not a count.

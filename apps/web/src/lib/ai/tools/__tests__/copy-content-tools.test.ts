@@ -35,6 +35,7 @@ interface Harness {
   originalFetches: string[];
   binaryReads: Array<{ path: string; maxBytes: number }>;
   createdFiles: Array<{ parentId: string; title: string; path: string; content: Uint8Array }>;
+  sandboxCopies: Array<{ fromPath: string; toPath: string }>;
 }
 
 /** A scanned PDF's first bytes: not UTF-8, so only a byte copy keeps them. */
@@ -50,6 +51,7 @@ function harness(
   const originalFetches: Harness['originalFetches'] = [];
   const binaryReads: Harness['binaryReads'] = [];
   const createdFiles: Harness['createdFiles'] = [];
+  const sandboxCopies: Harness['sandboxCopies'] = [];
   const pages = over.pages ?? [page()];
 
   const deps: CopyContentDeps = {
@@ -74,8 +76,11 @@ function harness(
     },
     readSandboxBinaryFile: async ({ path, maxBytes }) => {
       binaryReads.push({ path, maxBytes });
-      const content = over.binaryFile ?? ORIGINAL_BYTES;
-      return { success: true, content, bytes: content.byteLength };
+      return { success: true, content: over.binaryFile ?? ORIGINAL_BYTES };
+    },
+    copySandboxFile: async ({ fromPath, toPath }) => {
+      sandboxCopies.push({ fromPath, toPath });
+      return { success: true, bytesWritten: ORIGINAL_BYTES.byteLength };
     },
     resolveMaxFileSize: async () => TIER_MAX_FILE_SIZE,
     createFilePage: async ({ parent, title, path, content }) => {
@@ -86,7 +91,7 @@ function harness(
     ...Object.fromEntries(Object.entries(over).filter(([k]) => !['pages', 'file', 'binaryFile'].includes(k))),
   } as CopyContentDeps;
 
-  return { deps, writes, fileWrites, binaryWrites, originalFetches, binaryReads, createdFiles };
+  return { deps, writes, fileWrites, binaryWrites, originalFetches, binaryReads, createdFiles, sandboxCopies };
 }
 
 /** An uploaded scan: extraction found nothing, the file itself is all there is. */
@@ -98,8 +103,6 @@ function scannedPdf(over: Partial<CopyPageRecord> = {}): CopyPageRecord {
     contentMode: 'html',
     content: '',
     filePath: 'f'.repeat(64),
-    contentHash: 'f'.repeat(64),
-    mimeType: 'application/pdf',
     fileSize: 72 * 1024 * 1024,
     ...over,
   });
@@ -1035,19 +1038,36 @@ describe('copy_content — real files (FILE pages <-> sandbox)', () => {
   });
 
   it('a FILE page with no stored file is refused with a reason, not copied as empty text', async () => {
-    const h = harness({ pages: [scannedPdf({ filePath: null, contentHash: null })] });
+    const h = harness({ pages: [scannedPdf({ filePath: null })] });
     const result = await run(h.deps, { from: { kind: 'page', pageId: 'scan' }, to: { kind: 'file', path: 'x.pdf' } });
     expect(result.success).toBe(false);
     expect(h.originalFetches).toHaveLength(0);
   });
 
-  it('a sandbox file copied to another sandbox file moves the real bytes (binary-safe)', async () => {
+  it('a sandbox file copied to another sandbox file is copied INSIDE the sandbox — no bytes through the server', async () => {
     const h = harness();
     const result = await run(h.deps, { from: { kind: 'file', path: 'a.png' }, to: { kind: 'file', path: 'b.png' } });
-    expect(result.success).toBe(true);
-    expect(h.binaryReads[0].path).toBe('a.png');
-    expect(Buffer.from(h.binaryWrites[0].content).equals(Buffer.from(ORIGINAL_BYTES))).toBe(true);
+    expect(result).toMatchObject({ success: true, path: 'b.png', bytesCopied: ORIGINAL_BYTES.byteLength });
+    expect(h.sandboxCopies).toEqual([{ fromPath: 'a.png', toPath: 'b.png' }]);
+    expect(h.binaryReads).toHaveLength(0);
+    expect(h.binaryWrites).toHaveLength(0);
     expect(h.fileWrites).toHaveLength(0);
+  });
+
+  it('an EMPTY sandbox file copied to another is refused as an empty source', async () => {
+    const h = harness({
+      copySandboxFile: async () => ({ success: false, error: 'The source file is empty.', reason: 'empty_source' }),
+    });
+    const result = await run(h.deps, { from: { kind: 'file', path: 'e' }, to: { kind: 'file', path: 'b' } });
+    expect(result).toMatchObject({ success: false, error: 'Source is empty' });
+  });
+
+  it('a FILE page copied whole into the sandbox reads the page ONCE', async () => {
+    let reads = 0;
+    const scan = scannedPdf();
+    const h = harness({ findPage: async (id) => { reads += 1; return id === scan.id ? scan : null; } });
+    await run(h.deps, { from: { kind: 'page', pageId: 'scan' }, to: { kind: 'file', path: 'x.pdf' } });
+    expect(reads).toBe(1);
   });
 });
 
@@ -1061,7 +1081,7 @@ describe('copy_content — a sandbox file filed into the drive (to.kind "new_fil
   it('reads the real bytes, capped by the drive tier per-file limit, and creates a FILE page under the parent', async () => {
     const h = harness({ pages: [folder()] });
     const result = await run(h.deps, args());
-    expect(result).toMatchObject({ success: true, pageId: 'new-file-1', parentId: 'folder1', title: 'Exhibit A.png', bytesCopied: ORIGINAL_BYTES.byteLength });
+    expect(result).toMatchObject({ success: true, created: true, pageId: 'new-file-1', parentId: 'folder1', title: 'Exhibit A.png', bytesCopied: ORIGINAL_BYTES.byteLength });
     expect(h.binaryReads).toEqual([{ path: 'out/exhibit-a.png', maxBytes: TIER_MAX_FILE_SIZE }]);
     expect(h.createdFiles).toHaveLength(1);
     expect(h.createdFiles[0]).toMatchObject({ parentId: 'folder1', title: 'Exhibit A.png', path: 'out/exhibit-a.png' });

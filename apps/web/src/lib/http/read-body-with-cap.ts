@@ -4,7 +4,10 @@
  * Content-Length (or uses chunked transfer-encoding). Returns null if the cap
  * is exceeded; a request with no body reads as empty.
  */
-export async function readBytesWithCap(request: Request, maxBytes: number): Promise<Uint8Array | null> {
+export async function readBytesWithCap(
+  request: { body: ReadableStream<Uint8Array> | null },
+  maxBytes: number,
+): Promise<Uint8Array | null> {
   const reader = request.body?.getReader();
   if (!reader) {
     return new Uint8Array(0);

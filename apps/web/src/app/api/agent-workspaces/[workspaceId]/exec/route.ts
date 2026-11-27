@@ -62,6 +62,7 @@ const DENIAL_STATUS: Record<SandboxToolDenialReason, number> = {
   path_escape: 400,
   content_too_large: 400,
   binary_content: 400,
+  empty_source: 400,
   edit_no_match: 400,
   edit_not_unique: 400,
   not_found: 404,

@@ -6,6 +6,7 @@ import {
   readSandboxFileForCopy,
   writeSandboxBinaryFile,
   readSandboxBinaryFileForCopy,
+  copySandboxFile,
   resolveMaxBinaryCopyBytes,
   editSandboxFile,
   MAX_WRITE_BYTES,
@@ -2214,6 +2215,88 @@ describe('writeSandboxBinaryFile', () => {
     await writeSandboxBinaryFile({ path: 'x.pdf', content: PDF_BYTES, ctx: makeCtx(), deps });
     expect(audits[audits.length - 1]).toMatchObject({ exitCode: 0, code: `binaryWrite x.pdf (${PDF_BYTES.byteLength} bytes)` });
     expect(slots.released).toBe(1);
+  });
+});
+
+describe('copySandboxFile — a sandbox file to another sandbox file, without leaving the sandbox', () => {
+  function cmdSandbox(result: { exitCode: number; stdout?: string }) {
+    const calls: Array<{ cmd: string; args: string[]; stdoutSentinel?: string }> = [];
+    const reads: string[] = [];
+    const writes: string[] = [];
+    const sandbox = makeSandbox({
+      runCommand: async ({ cmd, args = [], stdoutSentinel }) => {
+        calls.push({ cmd, args, stdoutSentinel });
+        return { exitCode: result.exitCode, stdout: result.stdout ?? '', stderr: '' };
+      },
+      readFileToBuffer: async ({ path }) => {
+        reads.push(path);
+        return null;
+      },
+      writeFiles: async (files) => {
+        writes.push(...files.map((f) => f.path));
+      },
+    });
+    return { sandbox, calls, reads, writes };
+  }
+
+  it('copies in ONE exec — cp to a sibling temp file, then mv into place — with no bytes through the server', async () => {
+    const { sandbox, calls, reads, writes } = cmdSandbox({ exitCode: 0, stdout: '1234\n' });
+    const { deps } = makeDeps({ reconnect: async () => sandbox });
+    const result = await copySandboxFile({ fromPath: 'a.png', toPath: 'out/b.png', ctx: makeCtx(), deps });
+    expect(result).toEqual({ success: true, path: 'out/b.png', bytesWritten: 1234 });
+    expect(calls).toHaveLength(1);
+    expect(reads).toHaveLength(0);
+    expect(writes).toHaveLength(0);
+    const { args, stdoutSentinel } = calls[0];
+    expect(stdoutSentinel).toBe(BINARY_COPY_SENTINEL);
+    expect(args[1]).toContain('cp -f --');
+    expect(args[1]).toContain('mv -f --');
+    // Paths are positional data, never spliced into the script.
+    const [src, dst, tmp] = args.slice(-3);
+    expect([src, dst]).toEqual([`${SANDBOX_ROOT}/a.png`, `${SANDBOX_ROOT}/out/b.png`]);
+    expect(tmp.startsWith(`${dst}.pagespace-copy-`)).toBe(true);
+    expect(args[1]).not.toContain(dst);
+  });
+
+  it('given a missing source, should deny not_found', async () => {
+    const { sandbox } = cmdSandbox({ exitCode: 44 });
+    const { deps } = makeDeps({ reconnect: async () => sandbox });
+    const result = await copySandboxFile({ fromPath: 'nope', toPath: 'b', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'not_found' });
+  });
+
+  it('given an empty source, should refuse rather than empty the destination', async () => {
+    const { sandbox } = cmdSandbox({ exitCode: 45 });
+    const { deps } = makeDeps({ reconnect: async () => sandbox });
+    const result = await copySandboxFile({ fromPath: 'empty', toPath: 'b', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'empty_source' });
+  });
+
+  it('given a cp/mv failure, should report execution_failed and audit the anomaly', async () => {
+    const { sandbox } = cmdSandbox({ exitCode: 1 });
+    const { deps, audits, slots } = makeDeps({ reconnect: async () => sandbox });
+    const result = await copySandboxFile({ fromPath: 'a', toPath: 'b', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'execution_failed' });
+    expect(audits[audits.length - 1]?.anomaly).toBe('nonzero_exit');
+    expect(slots.released).toBe(1);
+  });
+
+  it('given a traversal on either side, should deny path_escape before provisioning', async () => {
+    let acquired = false;
+    const { deps } = makeDeps({
+      acquireSandbox: async () => {
+        acquired = true;
+        return { ok: true, sandboxId: 'sbx-1', resumed: false, workspaceId: 'ws-1' };
+      },
+    });
+    expect(await copySandboxFile({ fromPath: '../../etc/passwd', toPath: 'b', ctx: makeCtx(), deps })).toMatchObject({ reason: 'path_escape' });
+    expect(await copySandboxFile({ fromPath: 'a', toPath: '/etc/x', ctx: makeCtx(), deps })).toMatchObject({ reason: 'path_escape' });
+    expect(acquired).toBe(false);
+  });
+
+  it('given the kill switch off, should deny before touching a sandbox', async () => {
+    const { deps } = makeDeps({ isEnabled: () => false });
+    expect(await copySandboxFile({ fromPath: 'a', toPath: 'b', ctx: makeCtx(), deps })).toMatchObject({ reason: 'kill_switch_off' });
   });
 });
 

@@ -43,9 +43,6 @@ export class FileStorageQuotaError extends Error {
   }
 }
 
-/** The image generator's name for the same error — one class, so `instanceof` agrees. */
-export { FileStorageQuotaError as ImageStorageQuotaError };
-
 /** Where server-held bytes came from. Doubles as the `filePages.linkSource` and blocklist entry point. */
 export type FilePageSource = 'image-generation' | 'sandbox-copy';
 
@@ -80,12 +77,12 @@ export interface FilePageWrite {
 
 export interface CreateImageFilePageDeps {
   hash?: (buffer: Buffer) => string;
-  /** The default original store: a bare S3 put of the plaintext bytes. */
+  /** The S3 put behind the default `storeOriginal`. */
   putObject?: (key: string, body: Buffer, contentType: string) => Promise<void>;
   /**
-   * Replaces the S3 put: store the original some other way (the processor, for
-   * at-rest encryption). Called BEFORE any row is written, with the id the page
-   * row will carry so a page-bound service token can be minted for it.
+   * Stores the original. Called BEFORE any row is written, with the id the page row
+   * will carry so a page-bound service token can be minted for it. Defaults to a
+   * bare S3 put of the plaintext bytes; `copy_content` stores through the processor.
    */
   storeOriginal?: (args: {
     contentHash: string;
@@ -194,8 +191,8 @@ export function mimeTypeForFileName(name: string): string {
 
 /**
  * Pure: build the FILE page row for server-held bytes. `filePath` = the content hash
- * (the view route reads it). A generated image is final (`visual`); anything else
- * starts `pending` for the processor to verify and extract.
+ * (the view route reads it). A generated image is final; anything else starts
+ * `pending`, the status an upload starts in, for the processor to verify and extract.
  */
 export function buildFilePageValues(params: {
   pageId: string;
@@ -211,51 +208,8 @@ export function buildFilePageValues(params: {
   prompt?: string;
   now?: Date;
 }): typeof pages.$inferInsert {
-  if (params.source === 'image-generation') return buildImageFilePageValues(params);
   const now = params.now ?? new Date();
-  return {
-    id: params.pageId,
-    title: params.title,
-    type: PageType.FILE,
-    content: '',
-    // The same status an upload starts in: the pull-verify job sets the real one
-    // (visual / completed / failed) once it has looked at the bytes.
-    processingStatus: 'pending',
-    position: params.position,
-    driveId: params.driveId,
-    parentId: params.parentId,
-    fileSize: params.fileSize,
-    mimeType: params.mimeType,
-    originalFileName: params.title,
-    filePath: params.contentHash,
-    contentHash: params.contentHash,
-    fileMetadata: {
-      uploadedAt: now.toISOString(),
-      uploadedBy: params.userId,
-      originalName: params.title,
-      contentHash: params.contentHash,
-      source: params.source,
-    },
-    createdAt: now,
-    updatedAt: now,
-  };
-}
-
-/** Pure: build the FILE page row. `filePath` = the content hash (the view route reads it). */
-export function buildImageFilePageValues(params: {
-  pageId: string;
-  contentHash: string;
-  driveId: string;
-  parentId: string | null;
-  title: string;
-  mimeType: string;
-  fileSize: number;
-  userId: string;
-  position: number;
-  prompt?: string;
-  now?: Date;
-}): typeof pages.$inferInsert {
-  const now = params.now ?? new Date();
+  const generated = params.source === 'image-generation';
   return {
     id: params.pageId,
     title: params.title,
@@ -265,28 +219,45 @@ export function buildImageFilePageValues(params: {
     // processor job is enqueued for it. Stamp the terminal status the processor would
     // assign to an image ('visual'), NOT 'pending' — otherwise the page would sit in
     // "still being processed" forever and `read_page` could never show the assistant
-    // the image it just created.
-    processingStatus: 'visual',
-    extractionMethod: 'visual',
+    // the image it just created. Anything else gets the pull-verify job, which sets
+    // the real status (visual / completed / failed) once it has looked at the bytes.
+    ...(generated
+      ? { processingStatus: 'visual', extractionMethod: 'visual' }
+      : { processingStatus: 'pending' }),
     position: params.position,
     driveId: params.driveId,
     parentId: params.parentId,
     fileSize: params.fileSize,
     mimeType: params.mimeType,
-    originalFileName: imageFileName(params.title, params.mimeType),
+    originalFileName: generated ? imageFileName(params.title, params.mimeType) : params.title,
     filePath: params.contentHash,
     contentHash: params.contentHash,
-    fileMetadata: {
-      generatedAt: now.toISOString(),
-      generatedBy: params.userId,
-      originalName: params.title,
-      contentHash: params.contentHash,
-      ...(params.prompt ? { prompt: params.prompt } : {}),
-      source: 'image-generation',
-    },
+    fileMetadata: generated
+      ? {
+          generatedAt: now.toISOString(),
+          generatedBy: params.userId,
+          originalName: params.title,
+          contentHash: params.contentHash,
+          ...(params.prompt ? { prompt: params.prompt } : {}),
+          source: params.source,
+        }
+      : {
+          uploadedAt: now.toISOString(),
+          uploadedBy: params.userId,
+          originalName: params.title,
+          contentHash: params.contentHash,
+          source: params.source,
+        },
     createdAt: now,
     updatedAt: now,
   };
+}
+
+/** Pure: the generated-image row — {@link buildFilePageValues} with the image-generation source. */
+export function buildImageFilePageValues(
+  params: Omit<Parameters<typeof buildFilePageValues>[0], 'source'>,
+): typeof pages.$inferInsert {
+  return buildFilePageValues({ ...params, source: 'image-generation' });
 }
 
 /**
@@ -425,19 +396,9 @@ export async function createFilePage(
   // bound to THIS page id, so the id has to exist before the row does.
   const pageId = createId();
 
-  if (deps.storeOriginal) {
-    await deps.storeOriginal({
-      contentHash: hash,
-      buffer: input.buffer,
-      mimeType: input.mimeType,
-      title: input.title,
-      pageId,
-      driveId,
-      parentId,
-    });
-  } else {
-    await (deps.putObject ?? putObject)(buildS3Key(hash), input.buffer, input.mimeType);
-  }
+  const storeOriginal = deps.storeOriginal
+    ?? (({ contentHash, buffer, mimeType }) => (deps.putObject ?? putObject)(buildS3Key(contentHash), buffer, mimeType));
+  await storeOriginal({ contentHash: hash, buffer: input.buffer, mimeType: input.mimeType, title: input.title, pageId, driveId, parentId });
 
   const position = await (deps.getNextPosition ?? pageRepository.getNextPosition)(driveId, parentId);
 

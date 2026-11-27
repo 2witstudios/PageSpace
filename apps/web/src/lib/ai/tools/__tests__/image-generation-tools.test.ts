@@ -33,7 +33,7 @@ vi.mock('../../core/provider-factory', () => ({
 vi.mock('@/lib/upload/create-file-page', async (orig) => ({
   ...(await orig<typeof import('@/lib/upload/create-file-page')>()),
   createImageFilePage: (...a: unknown[]) => createImageFilePage(...a),
-  ImageStorageQuotaError: class ImageStorageQuotaError extends Error {},
+  FileStorageQuotaError: class FileStorageQuotaError extends Error {},
 }));
 
 // The tool falls back to a DB read of users.role when `isAdmin` isn't threaded via

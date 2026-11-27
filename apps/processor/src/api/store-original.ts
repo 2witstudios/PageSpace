@@ -1,19 +1,19 @@
-import crypto from 'crypto';
 import express, { Router } from 'express';
 import type { Router as ExpressRouter } from 'express';
 import { contentStore } from '../server';
 import { isValidContentHash } from '../cache/content-store';
 import { rateLimitUpload } from '../middleware/rate-limit';
+import { verifyContentHash } from '../services/processing-pipeline';
+import { MAX_VERIFY_BYTES } from './verify-core';
 import { isHashBlocked } from '@pagespace/lib/content-safety/blocklist';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 /**
- * Largest original this endpoint accepts: the business tier's per-file limit,
- * the largest file any drive may hold (matches `MAX_VERIFY_BYTES`). The web
- * caller has already applied the destination drive's own tier limit; this is
- * the backstop that bounds the request body.
+ * Largest original this endpoint accepts: the largest file any drive may hold,
+ * the same ceiling the verify endpoint uses. The web caller has already applied
+ * the destination drive's own tier limit; this is the backstop on the body.
  */
-export const MAX_STORE_ORIGINAL_BYTES = 1024 * 1024 * 1024;
+export const MAX_STORE_ORIGINAL_BYTES = MAX_VERIFY_BYTES;
 
 const router: ExpressRouter = Router();
 
@@ -73,8 +73,7 @@ router.post(
         return res.status(400).json({ error: 'Request body must be the file bytes (application/octet-stream)' });
       }
 
-      const actual = crypto.createHash('sha256').update(body).digest('hex');
-      if (actual !== declared) {
+      if (!verifyContentHash(body, declared)) {
         loggers.security.warn('store-original: bytes do not match the declared hash', {
           userId: auth.userId,
           pageId,
@@ -83,13 +82,13 @@ router.post(
         return res.status(422).json({ ok: false, reason: 'hash_mismatch' });
       }
 
-      if (await isHashBlocked(actual)) {
+      if (await isHashBlocked(declared)) {
         return res.status(410).json({ error: 'This file has been removed' });
       }
 
       // Content-addressed: present bytes are these bytes, so a second store is a no-op.
-      if (await contentStore.originalExists(actual)) {
-        return res.json({ ok: true, contentHash: actual, size: body.length, stored: false });
+      if (await contentStore.originalExists(declared)) {
+        return res.json({ ok: true, contentHash: declared, size: body.length, stored: false });
       }
 
       const rawName = req.get('x-original-name');
@@ -102,12 +101,14 @@ router.post(
         }
       }
 
-      await contentStore.saveOriginal(body, originalName, {
-        userId: auth.userId,
-        driveId: auth.driveId,
-        service: 'web',
-      });
-      return res.json({ ok: true, contentHash: actual, size: body.length, stored: true });
+      await contentStore.saveOriginal(
+        body,
+        originalName,
+        { userId: auth.userId, driveId: auth.driveId, service: 'web' },
+        // Verified just above: the bytes hash to `declared`.
+        declared,
+      );
+      return res.json({ ok: true, contentHash: declared, size: body.length, stored: true });
     } catch (error) {
       loggers.processor.error('store-original failed', error as Error);
       return res.status(500).json({ error: 'Failed to store original' });

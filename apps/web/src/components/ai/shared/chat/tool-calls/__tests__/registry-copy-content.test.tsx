@@ -60,6 +60,7 @@ describe('copy_content renderer', () => {
   it('given a sandbox file filed as a new FILE page, should render it as a creation that links to the page', () => {
     const result = render({
       success: true,
+      created: true,
       pageId: 'new-file-1',
       parentId: 'folder1',
       title: 'Exhibit A.png',
