@@ -133,9 +133,10 @@ export const spawnSessionInputSchema = z
     agent: z.string().min(1).optional(),
     /**
      * WHERE the worker runs. Omitted = this conversation's own workspace
-     * (started automatically if it has none). `'new'` = a fresh ISOLATED
-     * workspace (its own sandbox and filesystem). Any other value = a
-     * workspaceId from `list_sessions` — one of the caller's workspaces.
+     * (started automatically if it has none). `'new'` = a fresh workspace
+     * (its own conversations) running in the agent's environment — Home for
+     * the assistant — so it shares that environment's filesystem. Any other
+     * value = a workspaceId from `list_sessions` — one of the caller's workspaces.
      */
     workspace: z.string().min(1).optional(),
     /**
@@ -640,7 +641,7 @@ export interface SessionToolsDeps {
     name: string;
     /**
      * Placement: omitted = the caller's own workspace (minted if needed);
-     * `'new'` = a fresh isolated workspace; anything else = an existing
+     * `'new'` = a fresh workspace in the agent's environment; anything else = an existing
      * workspaceId the caller may use (`checkSessionAccess`).
      */
     workspace?: string;
@@ -1468,7 +1469,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
 
     spawn_session: tool({
       description:
-        'Spawn a WORKER: a new labeled conversation that starts working on your prompt immediately, visible live in the sidebar like any conversation. By default it runs in this conversation\'s workspace (same sandbox, same filesystem — started automatically if none exists yet, permission permitting). Pass workspace: "new" for a fresh ISOLATED workspace, or a workspaceId from list_sessions to place it in one of your other workspaces. With workspace: "new", workspaceName labels it. Returns its sessionId — the address for send_session/read_session/kill_session (the name is only a label). ' +
+        'Spawn a WORKER: a new labeled conversation that starts working on your prompt immediately, visible live in the sidebar like any conversation. By default it runs in this conversation\'s workspace (same sandbox, same filesystem — started automatically if none exists yet, permission permitting). Pass workspace: "new" for a new workspace (same machine), or a workspaceId from list_sessions to place it in one of your other workspaces. With workspace: "new", workspaceName labels it. Returns its sessionId — the address for send_session/read_session/kill_session (the name is only a label). ' +
         'Pass agent to run it under another agent (an agentId from list_agents); omit it to use this conversation\'s own agent. ' +
         'A spawn REFUSES rather than start a crippled worker when the agent\'s enabledTools name sandbox tools while its sandboxEnabled switch is off. ' +
         'Default is fire-and-forget: the reply lands in the worker\'s own transcript (read_session), NOT here. Pass wait: true to block for the first reply and get it back directly.',

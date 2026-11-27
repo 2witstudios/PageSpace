@@ -73,9 +73,11 @@ import {
   listSessionConversationsBulk,
   provisionSessionSandbox,
   renameSession,
-  spawnSession,
+  spawnAutoSession,
   getAgentSessionStore,
+  type AutoSessionEnv,
 } from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import { findOwnImagoHomeDriveId } from '@/lib/ai/core/imago-agent-context';
 import { countOpenConversations } from '@/lib/agent-workspaces/conversation-cap';
 import { applyLayoutCommandForWorkspace, layoutCommand } from '@/lib/agent-workspaces/workspace-node-placement';
 import { readWorkspaceNodes } from '@/lib/agent-workspaces/workspace-node-runtime';
@@ -759,13 +761,35 @@ export async function resolveCallerSessionForWorker(
     });
     if (!access.allowed) return { ok: false, reason: 'not_permitted' };
     return mapEnsured(
-      await ensureDriveSessionForConversation(callerConversationId, owner, agent.driveId, agent.title),
+      await ensureDriveSessionForConversation(
+        callerConversationId,
+        owner,
+        agent.driveId,
+        agent.title,
+        await autoSessionEnvForAgent(ownerId, agent),
+      ),
     );
   }
 
   // 'client' (API-managed) rows have no in-app viewer — same policy the
   // claim route applies.
   return { ok: false, reason: 'no_session' };
+}
+
+/**
+ * The env a page agent's auto-created session runs in — the same rule the
+ * spawn route applies (`applyAgentDefaultEnv`): the agent's own `defaultEnvId`,
+ * only while its Sandbox switch is on. The owner's own Imago (a Home-drive
+ * agent) runs in Home, like the Global Assistant. Anything else stays
+ * ephemeral: Home lives in the owner's Home drive, and an env must belong to
+ * its session's drive.
+ */
+async function autoSessionEnvForAgent(
+  ownerId: string,
+  agent: { id: string; defaultEnvId: string | null; sandboxEnabled: boolean },
+): Promise<AutoSessionEnv> {
+  if (agent.sandboxEnabled && agent.defaultEnvId) return agent.defaultEnvId;
+  return (await findOwnImagoHomeDriveId(ownerId, agent.id)) ? 'home' : null;
 }
 
 function mapEnsured(
@@ -822,19 +846,21 @@ async function resolveWorkerPlacement(input: {
   }
 
   if (workspace === 'new') {
-    // A fresh ISOLATED workspace — its own sandbox and filesystem, for
-    // fan-out that must not share the caller's working context. It lives
-    // where its AGENT lives: a page agent's drive, or nowhere (global) — the
-    // same derivation the caller-thread minting path uses, gated by the same
-    // spawn-access primitive.
+    // A fresh workspace — its own grid and conversations, for fan-out that
+    // must not share the caller's working context. It lives where its AGENT
+    // lives: a page agent's drive, or nowhere (global) — the same derivation
+    // the caller-thread minting path uses, gated by the same spawn-access
+    // primitive.
+    //
+    // Its MACHINE follows the single-sandbox model: new Sprites come only from
+    // new environments, so this runs in the agent's environment — the agent's
+    // own default (Sandbox on), or Home for the Global Assistant and the
+    // owner's Imago — and shares its filesystem. A page agent with no default
+    // env still gets an ephemeral one (Home lives in the Home drive; an env
+    // must belong to its session's drive). Same rule, and the same fail-open,
+    // as the caller-thread path (`spawnAutoSession`).
     let driveId: string | null = null;
-    // This path has no `envId` of its own to offer — it's an internal tool
-    // call, not the spawn palette, so there is no explicit-vs-omitted
-    // question to ask. Honor the agent's own default the same way an
-    // ordinary (no-envId) spawn does when its Sandbox switch is live (review
-    // — general-purpose self-review, PR #2513: this third spawn path fetched
-    // the agent, defaultEnvId/sandboxEnabled included, but never applied it).
-    let envId: string | null = null;
+    let env: AutoSessionEnv = 'home';
     // The agent's own title is the workspace's default label, read here where
     // the agent row is already in hand rather than fetched a second time below.
     let agentTitleForLabel: string | null = null;
@@ -845,9 +871,7 @@ async function resolveWorkerPlacement(input: {
       }
       driveId = agent.driveId;
       agentTitleForLabel = agent.title;
-      if (agent.sandboxEnabled && agent.defaultEnvId) {
-        envId = agent.defaultEnvId;
-      }
+      env = await autoSessionEnvForAgent(ownerId, agent);
     }
     const access = await checkAccessForSubject(actor, { ownerId, driveId });
     if (!access.allowed) {
@@ -882,7 +906,7 @@ async function resolveWorkerPlacement(input: {
         });
       name = nextUniqueSessionName(baseLabel, existingNames);
     }
-    const spawned = await spawnSession({ actor, driveId, envId, name });
+    const spawned = await spawnAutoSession({ actor, driveId, env, name });
     if (!spawned.ok) {
       return spawned.reason === 'session_limit_reached'
         ? { ok: false, reason: 'session_limit_reached', detail: 'You are at your active-session limit — end an existing session first.' }

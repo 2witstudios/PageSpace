@@ -52,7 +52,9 @@ import {
   listSessions,
   listSessionConversationsBulk,
   MAX_ACTIVE_SESSIONS_PER_OWNER,
+  isOwnHomeDrive,
   provisionSessionSandbox,
+  spawnAutoSession,
   spawnSession,
   toSessionDTOWithEnv,
   type AgentSessionListFilter,
@@ -544,7 +546,18 @@ export async function POST(request: Request) {
     name = nextUniqueSessionName(baseLabel, existingNames);
   }
 
-  const spawned = await spawnSession({ actor, driveId, envId, name });
+  // HOME IS THE DEFAULT. A caller that said nothing about where to run (`envId`
+  // OMITTED, and no agent default above) gets the owner's Home env when the
+  // spawn is driveless or in their own Home drive — the single-sandbox model:
+  // new Sprites come from new environments, not from every spawn. Explicit
+  // `envId: null` ("New sandbox") stays ephemeral. `spawnAutoSession` fails
+  // open to ephemeral if Home cannot be used, so this never makes a session
+  // less available than it was.
+  const defaultsToHome =
+    !envIdWasProvided && envId === null && (driveId === null || (await isOwnHomeDrive(auth.userId, driveId)));
+  const spawned = defaultsToHome
+    ? await spawnAutoSession({ actor, driveId, env: 'home', name })
+    : await spawnSession({ actor, driveId, envId, name });
   if (!spawned.ok) {
     if (spawned.reason === 'session_limit_reached') {
       // The atomic backstop caught what the pre-check above missed — a

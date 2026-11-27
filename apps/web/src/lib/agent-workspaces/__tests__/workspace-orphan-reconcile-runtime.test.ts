@@ -187,6 +187,7 @@ describe('isTeardownStillRequested', () => {
       substrate: 'sprite',
       name: 'staging',
       createdBy: null,
+      isHome: false,
       spriteKey: null,
       sandboxId: 'pgs-env-1',
       spriteInstanceId: 'i-1',
