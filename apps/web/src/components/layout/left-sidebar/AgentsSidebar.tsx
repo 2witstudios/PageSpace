@@ -789,17 +789,24 @@ async function endWorkspaceOptimistically(
   session: SessionListEntry,
   deps: { mutate: ScopedMutator; forgetWorkspace: (workspaceId: string) => void },
   /**
-   * End all's opt-in: also free the threads that would auto-provision into
-   * Home, so reopening one lands in Home instead of re-provisioning this
-   * session's own Sprite (see the route's `?release=conversations`).
+   * End all's opt-in: first free the threads that would auto-provision into
+   * Home (`POST …/release`), so reopening one lands in Home instead of
+   * re-provisioning this session's own Sprite.
    */
   options: { releaseConversations?: boolean } = {},
 ): Promise<{ ok: true } | { ok: false; error: unknown }> {
+  const sessionPath = `/api/agent-workspaces/${encodeURIComponent(session.workspaceId)}`;
   deps.forgetWorkspace(session.workspaceId);
   forgetWorkspaceInCache(deps.mutate, session.workspaceId);
+  if (options.releaseConversations) {
+    // Best-effort: a failed release only means those threads stay bound to
+    // the session being ended, as they were before End all existed.
+    await post(`${sessionPath}/release`).catch((error: unknown) => {
+      console.error('Failed to release a previous session\'s conversations:', error);
+    });
+  }
   try {
-    const query = options.releaseConversations ? '?release=conversations' : '';
-    await del(`/api/agent-workspaces/${encodeURIComponent(session.workspaceId)}${query}`);
+    await del(sessionPath);
     return { ok: true };
   } catch (error) {
     restoreWorkspaceInCache(deps.mutate, session);

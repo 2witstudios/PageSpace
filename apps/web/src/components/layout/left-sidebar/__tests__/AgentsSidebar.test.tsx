@@ -1964,10 +1964,17 @@ describe('AgentsSidebar', () => {
         await user.click(within(dialog).getByRole('button', { name: 'End all' }));
 
         await waitFor(() => expect(mockDel).toHaveBeenCalledTimes(2));
-        // With the release opt-in, so their global threads move to Home rather
-        // than re-provisioning these sessions' own Sprites when reopened.
-        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-old-1?release=conversations');
-        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-old-2?release=conversations');
+        // Each is RELEASED first (its global threads move to Home rather than
+        // re-provisioning the session's own Sprite when reopened), then ended.
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces/ses-old-1/release');
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces/ses-old-2/release');
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-old-1');
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-old-2');
+        for (const id of ['ses-old-1', 'ses-old-2']) {
+          const released = mockPost.mock.invocationCallOrder[mockPost.mock.calls.findIndex(([url]) => url === `/api/agent-workspaces/${id}/release`)];
+          const ended = mockDel.mock.invocationCallOrder[mockDel.mock.calls.findIndex(([url]) => url === `/api/agent-workspaces/${id}`)];
+          expect(released).toBeLessThan(ended);
+        }
         await waitFor(() => expect(mockFetchWithAuth.mock.calls.length).toBeGreaterThan(fetchesBefore));
       });
 
