@@ -1,9 +1,10 @@
 -- The plane's OWN metadata DB (ADR 0005 §2.3, §2.5 — "plane metadata DB, not
 -- the app DB"): the rows plane-metadata-repository.ts reads and writes. ONE
--- owner for this shape (Control Board §1): this file.
--- docker-compose.yml mounts it into the metadata service's
--- /docker-entrypoint-initdb.d/ so `docker compose up` creates it on a fresh
--- volume without a separate step; CI does not re-paste this DDL.
+-- owner for this shape (Control Board §1): the ordered files in this folder.
+-- Applied by `bun run --filter @pagespace/lib credential-plane:migrate`
+-- (plane-metadata-migrate.ts), in dev, CI and prod alike. Never edit an
+-- applied file: its checksum is recorded and a changed one refuses the run.
+-- Add the next change as 0002_<name>.sql.
 
 -- The secret's version facts. previous_version, rotated_at and revoked_at are
 -- the PLANE-ATTESTED facts the verifier consumes through describe (G1c R3), so

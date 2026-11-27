@@ -45,21 +45,23 @@ docker compose up -d
 
 Wait for the backend to report healthy (`docker logs infisical-dev-backend`
 should show "PostgreSQL - Connected successfully" / "Redis successfully
-connected" and start serving on :8080). The metadata table needs no separate
-step: `plane-metadata.sql` (the one owner of this DDL — Control Board §1;
-`plane-metadata-repository.ts` is the other side of the same contract) is
-mounted into the `metadata` service's `/docker-entrypoint-initdb.d/`, so
-postgres's own entrypoint creates it automatically the first time that
-service's volume is initialized. To confirm it landed:
+connected" and start serving on :8080). Then create the metadata schema with
+the same one-shot prod runs before a deploy (`../plane-metadata/*.sql` is the
+one owner of this DDL — Control Board §1; `plane-metadata-repository.ts` is
+the other side of the same contract):
+
+```bash
+PLANE_METADATA_DATABASE_URL=postgresql://plane_metadata:plane_metadata@127.0.0.1:55433/plane_metadata \
+  bun run --filter @pagespace/lib credential-plane:migrate
+```
+
+It records each applied file and its checksum in `plane_metadata_migrations`,
+so re-running is a no-op and a later `0002_*.sql` applies on an existing
+volume. Never edit an applied file; add the next one. To confirm:
 
 ```bash
 docker exec -i infisical-dev-metadata psql -U plane_metadata -d plane_metadata -c '\d agent_account_secret_versions'
 ```
-
-The DDL runs only when the metadata volume is first initialized, and it uses
-`CREATE TABLE IF NOT EXISTS`, so re-running it against an older volume does
-NOT add new columns or tables. After any change to `plane-metadata.sql`, reset
-the disposable dev volume: `docker compose down -v && docker compose up -d`.
 
 ## Admin bootstrap (once per fresh instance)
 
@@ -109,7 +111,7 @@ See `.github/workflows/ci.yml`'s "Bring up local Infisical OSS" /
 suite" / "Tear down local Infisical OSS" steps for the actual implementation
 (part of the `unit-tests` job). In outline:
 
-1. `docker compose -f packages/lib/src/agent-accounts/store/infisical-dev/docker-compose.yml up -d` and wait for the backend health check — `plane-metadata.sql`'s `/docker-entrypoint-initdb.d/` mount creates the metadata table automatically, no separate step.
+1. `docker compose -f packages/lib/src/agent-accounts/store/infisical-dev/docker-compose.yml up -d` and wait for the backend health check, then run `credential-plane:migrate` twice against the metadata DB (the second run must report `up to date`).
 2. Run the bootstrap curl above once per fresh run, capture `INFISICAL_DEV_ADMIN_TOKEN` / `INFISICAL_DEV_ORG_ID` as job env vars.
 3. Run the integration test as shown above — CI runs it with the default reporter (a failure names its tests in the log) plus `--reporter=json`, and fails the step if the suite didn't fully execute as well as if it failed, so a broken bring-up can't silently report as skipped.
 4. `docker compose down -v` to tear down (frees the CI runner's disk for the next job).

@@ -8,6 +8,7 @@
     "test": "vitest run",
     "test:db": "vitest run --config vitest.security.config.ts",
     "credential-plane": "bun src/agent-accounts/executor/plane-main.ts",
+    "credential-plane:migrate": "bun src/agent-accounts/store/plane-metadata/plane-metadata-migrate-main.ts",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:coverage": "vitest run --coverage",
     "email:dev": "email dev --dir emails",
