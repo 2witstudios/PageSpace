@@ -183,7 +183,9 @@ async function resolveOrProvisionSession(
   if (conversation?.type === 'page' && conversation.contextId && conversation.userId === actor.userId) {
     const homeDriveId = await findOwnImagoHomeDriveId(actor.userId, conversation.contextId);
     if (homeDriveId) {
-      const ensured = await ensureDriveSessionForConversation(conversationId, actor, homeDriveId, 'Imago');
+      // In the owner's Home env, like the Global Assistant it replaces: one
+      // machine for every Imago conversation, not a Sprite each.
+      const ensured = await ensureDriveSessionForConversation(conversationId, actor, homeDriveId, 'Imago', 'home');
       if (ensured.ok) return { ok: true, session: ensured.session };
       return { ok: false, attempted: true, reason: ensured.reason };
     }

@@ -133,9 +133,10 @@ export const spawnSessionInputSchema = z
     agent: z.string().min(1).optional(),
     /**
      * WHERE the worker runs. Omitted = this conversation's own workspace
-     * (started automatically if it has none). `'new'` = a fresh ISOLATED
-     * workspace (its own sandbox and filesystem). Any other value = a
-     * workspaceId from `list_sessions` — one of the caller's workspaces.
+     * (started automatically if it has none). `'new'` = a fresh workspace
+     * (its own conversations) running in the agent's environment — Home for
+     * the assistant — so it shares that environment's filesystem. Any other
+     * value = a workspaceId from `list_sessions` — one of the caller's workspaces.
      */
     workspace: z.string().min(1).optional(),
     /**
@@ -147,6 +148,15 @@ export const spawnSessionInputSchema = z
      * from the agent it runs under, the same way the spawn palette labels one.
      */
     workspaceName: z.string().trim().min(1).max(MAX_SESSION_NAME_LENGTH).optional(),
+    /**
+     * `'new'` = give a workspace this spawn CREATES (`workspace: 'new'`) an
+     * isolated fresh machine of its own — an ephemeral sandbox, the tool's
+     * twin of the palette's "New sandbox". Without it a new workspace runs on
+     * the agent's environment's machine (Home for the assistant) and shares
+     * its files, which parallel workers that each check out the same repo
+     * must not. Ignored (with a note) for any other placement.
+     */
+    sandbox: z.literal('new').optional(),
     /** Block until the worker's first reply and return it here. */
     wait: z.boolean().optional(),
   })
@@ -640,7 +650,7 @@ export interface SessionToolsDeps {
     name: string;
     /**
      * Placement: omitted = the caller's own workspace (minted if needed);
-     * `'new'` = a fresh isolated workspace; anything else = an existing
+     * `'new'` = a fresh workspace in the agent's environment; anything else = an existing
      * workspaceId the caller may use (`checkSessionAccess`).
      */
     workspace?: string;
@@ -656,6 +666,8 @@ export interface SessionToolsDeps {
      * absent the runtime derives one; it never mints a nameless workspace.
      */
     workspaceName?: string | undefined;
+    /** `workspace: 'new'` only: mint it on an isolated fresh (ephemeral) machine instead of the agent's environment. */
+    freshSandbox?: boolean;
   }) => Promise<
     | { ok: true; workspaceId: string }
     | { ok: false; reason: string; detail?: string }
@@ -1468,12 +1480,12 @@ export function createSessionTools(deps: SessionToolsDeps): {
 
     spawn_session: tool({
       description:
-        'Spawn a WORKER: a new labeled conversation that starts working on your prompt immediately, visible live in the sidebar like any conversation. By default it runs in this conversation\'s workspace (same sandbox, same filesystem — started automatically if none exists yet, permission permitting). Pass workspace: "new" for a fresh ISOLATED workspace, or a workspaceId from list_sessions to place it in one of your other workspaces. With workspace: "new", workspaceName labels it. Returns its sessionId — the address for send_session/read_session/kill_session (the name is only a label). ' +
-        'Pass agent to run it under another agent (an agentId from list_agents); omit it to use this conversation\'s own agent. ' +
+        'Spawn a WORKER: a new labeled conversation that starts on your prompt at once, visible live in the sidebar. By default it runs in this conversation\'s workspace (same sandbox and files; started if none exists, permission permitting). workspace: "new" makes a new workspace on your environment\'s machine (Home for the assistant; a page agent with no environment gets its own); add sandbox: "new" for an isolated fresh machine. Or pass a workspaceId from list_sessions. workspaceName labels a new workspace. Returns its sessionId, the address for send_session/read_session/kill_session (names are only labels). ' +
+        'Pass agent to run it under another agent (an agentId from list_agents); omit it for this conversation\'s own agent. ' +
         'A spawn REFUSES rather than start a crippled worker when the agent\'s enabledTools name sandbox tools while its sandboxEnabled switch is off. ' +
-        'Default is fire-and-forget: the reply lands in the worker\'s own transcript (read_session), NOT here. Pass wait: true to block for the first reply and get it back directly.',
+        'Default is fire-and-forget: the reply lands in the worker\'s own transcript (read_session), NOT here. Pass wait: true to block for the first reply.',
       inputSchema: spawnSessionInputSchema,
-      execute: async ({ name, prompt, agent, workspace: targetWorkspace, workspaceName, wait }, options) => {
+      execute: async ({ name, prompt, agent, workspace: targetWorkspace, workspaceName, sandbox, wait }, options) => {
         const context = readContext(options);
         const actor = readActor(context);
         if (!actor) return NEEDS_AUTH;
@@ -1549,6 +1561,13 @@ export function createSessionTools(deps: SessionToolsDeps): {
             'workspaceName was ignored: it only labels a workspace this spawn creates (workspace: "new"). Use rename_workspace to relabel an existing one.',
           ];
         }
+        // Same rule for the machine: an existing workspace already has one.
+        if (sandbox !== undefined && targetWorkspace !== 'new') {
+          toolSurfaceWarnings = [
+            ...toolSurfaceWarnings,
+            'sandbox was ignored: it only picks the machine for a workspace this spawn creates (workspace: "new").',
+          ];
+        }
         // What the agent's own config grants, carried to the post-creation
         // compute check below — which needs the workspace the worker landed in.
         // `null` = unrestricted: no allowlist, or a global worker.
@@ -1618,6 +1637,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
           workspace: targetWorkspace,
           allowedDriveIds: context?.mcpAllowedDriveIds ?? [],
           workspaceName,
+          freshSandbox: sandbox === 'new',
         });
         if (!created.ok) {
           return {

@@ -23,6 +23,8 @@ const {
   mockFindWorkspaceOfConversation,
   mockCheckSessionAccess,
   mockGetPrincipalDriveAccessLevel,
+  mockSpawnAutoSession,
+  mockIsOwnHomeDrive,
 } = vi.hoisted(() => ({
   mockAuthenticateRequest: vi.fn(),
   mockAuditRequest: vi.fn(),
@@ -45,6 +47,8 @@ const {
   mockFindWorkspaceOfConversation: vi.fn(),
   mockCheckSessionAccess: vi.fn(),
   mockGetPrincipalDriveAccessLevel: vi.fn(),
+  mockSpawnAutoSession: vi.fn(),
+  mockIsOwnHomeDrive: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -77,6 +81,10 @@ vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   createConversationInSession: (...args: unknown[]) => mockCreateConversationInSession(...args),
   endSession: (...args: unknown[]) => mockEndSession(...args),
   spawnSession: (...args: unknown[]) => mockSpawnSession(...args),
+  spawnAutoSession: (...args: unknown[]) => mockSpawnAutoSession(...args),
+  isOwnHomeDrive: (...args: unknown[]) => mockIsOwnHomeDrive(...args),
+  agentDefaultEnvId: (agent: { defaultEnvId: string | null; sandboxEnabled: boolean }) =>
+    agent.sandboxEnabled && agent.defaultEnvId ? agent.defaultEnvId : null,
   toSessionDTOWithEnv: async (row: { id: string }) => ({ workspaceId: row.id, dto: true }),
   provisionSessionSandbox: (...args: unknown[]) => mockProvisionSessionSandbox(...args),
   findSessionRecord: (...args: unknown[]) => mockFindSessionRecord(...args),
@@ -128,6 +136,9 @@ const CONVERSATION_ENTRY = {
 beforeEach(() => {
   vi.clearAllMocks();
   mockAuthenticateRequest.mockResolvedValue(AUTH_ADMIN);
+  // Home-default spawns go through `spawnAutoSession`; answer like a spawn.
+  mockSpawnAutoSession.mockResolvedValue({ ok: true, session: { id: 'ses-new' } });
+  mockIsOwnHomeDrive.mockResolvedValue(false);
   mockListSessions.mockResolvedValue([SESSION_DTO]);
   mockListShellsBulk.mockResolvedValue(new Map([['ses-1', [SHELL_DTO]]]));
   mockListSessionConversationsBulk.mockResolvedValue(new Map([['ses-1', [CONVERSATION_ENTRY]]]));
@@ -395,7 +406,9 @@ describe('POST /api/agent-workspaces — spawn', () => {
     expect(response.status).toBe(201);
     const body = await response.json();
     expect(typeof body.conversationId).toBe('string');
-    expect(mockSpawnSession).toHaveBeenCalledWith({ actor: expect.objectContaining({ userId: 'user-1' }), driveId: null, envId: null, name: 'Global Assistant' });
+    // No envId in the body: the session defaults into the owner's Home env.
+    expect(mockSpawnAutoSession).toHaveBeenCalledWith({ actor: expect.objectContaining({ userId: 'user-1' }), driveId: null, env: 'home', name: 'Global Assistant' });
+    expect(mockSpawnSession).not.toHaveBeenCalled();
     // The first conversation is an assistant thread: no agent page.
     expect(mockCreateConversationInSession).toHaveBeenCalledWith(
       expect.objectContaining({ agentPageId: null, workspaceId: 'ses-new' }),
@@ -676,7 +689,8 @@ describe("POST /api/agent-workspaces — firstThing: 'claim'", () => {
     mockGetConversation.mockResolvedValue(UNBOUND_GLOBAL_CONVERSATION);
     const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
     expect(response.status).toBe(201);
-    expect(mockSpawnSession).toHaveBeenCalledWith(expect.objectContaining({ driveId: null }));
+    // Driveless and no env named: the global session lands in Home.
+    expect(mockSpawnAutoSession).toHaveBeenCalledWith(expect.objectContaining({ driveId: null, env: 'home' }));
   });
 
   it('400s when conversationId is missing', async () => {
@@ -905,7 +919,7 @@ describe('POST /api/agent-workspaces — blank name auto-generates a unique one'
   it('given a blank name for the global-assistant shape, should derive the base label "Global Assistant"', async () => {
     const response = await spawn({});
     expect(response.status).toBe(201);
-    expect(mockSpawnSession).toHaveBeenCalledWith(
+    expect(mockSpawnAutoSession).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'Global Assistant' }),
     );
   });
@@ -1028,6 +1042,58 @@ describe('POST /api/agent-workspaces — spawn ceiling (review M6/F4)', () => {
     mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-new' } });
     await spawn({ driveId: 'drive-1', agentPageId: 'agent-1' });
     expect(mockSpawnSession).toHaveBeenCalledWith(expect.objectContaining({ envId: null }));
+  });
+
+  describe('Home is the default env (single-sandbox model)', () => {
+    beforeEach(() => {
+      mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+      mockCountActiveSessionsForOwner.mockResolvedValue(0);
+      mockListSessions.mockResolvedValue([]);
+      mockCreateConversationInSession.mockResolvedValue(undefined);
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-new' } });
+    });
+
+    it('given a driveless spawn that names no env, should spawn into Home through the fail-open auto path', async () => {
+      const response = await spawn({});
+      expect(response.status).toBe(201);
+      expect(mockSpawnAutoSession).toHaveBeenCalledWith(expect.objectContaining({ driveId: null, env: 'home' }));
+      expect(mockSpawnSession).not.toHaveBeenCalled();
+    });
+
+    it("given a spawn in the owner's own Home drive that names no env, should default to Home", async () => {
+      mockIsOwnHomeDrive.mockResolvedValue(true);
+      await spawn({ driveId: 'home-drive' });
+      expect(mockIsOwnHomeDrive).toHaveBeenCalledWith('user-1', 'home-drive');
+      expect(mockSpawnAutoSession).toHaveBeenCalledWith(expect.objectContaining({ driveId: 'home-drive', env: 'home' }));
+    });
+
+    it('given explicit envId: null ("New sandbox"), should stay ephemeral — Home is only the default', async () => {
+      await spawn({ envId: null });
+      expect(mockSpawnAutoSession).not.toHaveBeenCalled();
+      expect(mockSpawnSession).toHaveBeenCalledWith(expect.objectContaining({ driveId: null, envId: null }));
+    });
+
+    it('given an explicit envId, should pass it straight through and never consult Home', async () => {
+      mockIsOwnHomeDrive.mockResolvedValue(true);
+      await spawn({ driveId: 'home-drive', envId: 'env-mine' });
+      expect(mockSpawnAutoSession).not.toHaveBeenCalled();
+      expect(mockSpawnSession).toHaveBeenCalledWith(expect.objectContaining({ driveId: 'home-drive', envId: 'env-mine' }));
+    });
+
+    it("given a team-drive spawn with no env, should stay ephemeral — Home lives in the Home drive", async () => {
+      await spawn({ driveId: 'drive-1' });
+      expect(mockSpawnAutoSession).not.toHaveBeenCalled();
+      expect(mockSpawnSession).toHaveBeenCalledWith(expect.objectContaining({ driveId: 'drive-1', envId: null }));
+    });
+
+    it("given an agent whose own defaultEnvId applies, should use it rather than Home", async () => {
+      mockIsOwnHomeDrive.mockResolvedValue(true);
+      mockGetAiAgent.mockResolvedValue({ id: 'agent-1', title: 'Agent', type: 'AI_CHAT', driveId: 'home-drive', defaultEnvId: 'env-default', sandboxEnabled: true });
+      mockCanPrincipalViewPage.mockResolvedValue(true);
+      await spawn({ driveId: 'home-drive', agentPageId: 'agent-1' });
+      expect(mockSpawnAutoSession).not.toHaveBeenCalled();
+      expect(mockSpawnSession).toHaveBeenCalledWith(expect.objectContaining({ envId: 'env-default' }));
+    });
   });
 
   it('404s when the env does not exist, or belongs to another drive — one answer for both', async () => {

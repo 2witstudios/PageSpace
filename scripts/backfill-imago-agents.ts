@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { describeError, exitCodeFor, parseArgs as parseBackfillArgs, type CliArgs } from './lib/backfill-cli';
 import { getMigrationDb } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
@@ -303,55 +304,11 @@ function printSummary(summary: BackfillSummary): void {
   console.log(lines.join('\n'));
 }
 
-/**
- * Names the failure without any text that could carry a row value: Postgres
- * puts values in some messages (22P02: `invalid input syntax for type
- * integer: "<value>"`) and drizzle appends the query's params to its own. So
- * this prints only the error's class, the driver's SQLSTATE and, when the
- * driver reports them, the constraint and table names — schema identifiers,
- * never data. Re-run for the user id it is printed beside to see more.
- */
-function describeError(error: unknown): string {
-  const parts: string[] = [];
-  const seen = new Set<unknown>();
-  for (let current: unknown = error; current instanceof Error && !seen.has(current); current = current.cause) {
-    seen.add(current);
-    const detail = current as Error & { code?: unknown; constraint?: unknown; table?: unknown };
-    parts.push(current.constructor.name || 'Error');
-    if (typeof detail.code === 'string' && /^[0-9A-Z]{5}$/.test(detail.code)) parts.push(`SQLSTATE ${detail.code}`);
-    if (typeof detail.constraint === 'string') parts.push(`constraint ${detail.constraint}`);
-    if (typeof detail.table === 'string') parts.push(`table ${detail.table}`);
-  }
-  return parts.length > 0 ? parts.join(' ') : 'non-Error value thrown';
-}
-
-export function exitCodeFor(summary: Pick<BackfillSummary, 'failed'>): number {
-  return summary.failed > 0 ? 1 : 0;
-}
-
-export interface CliArgs {
-  dryRun: boolean;
-  batchSize: number;
-  limit: number | undefined;
-}
-
+// The CLI lives in `lib/backfill-cli.ts`; re-exported for this script's tests.
+export { exitCodeFor };
+export type { CliArgs };
 export function parseArgs(argv: readonly string[]): CliArgs {
-  const args: CliArgs = { dryRun: false, batchSize: DEFAULT_BATCH_SIZE, limit: undefined };
-  for (let i = 0; i < argv.length; i++) {
-    const [flag, inline] = argv[i].split('=', 2);
-    const value = () => {
-      const raw = inline ?? argv[++i];
-      if (raw === undefined || !/^[1-9]\d*$/.test(raw)) {
-        throw new Error(`${flag} needs a positive integer`);
-      }
-      return Number(raw);
-    };
-    if (flag === '--dry-run' && inline === undefined) args.dryRun = true;
-    else if (flag === '--batch-size') args.batchSize = value();
-    else if (flag === '--limit') args.limit = value();
-    else throw new Error(`Unknown argument: ${argv[i]}`);
-  }
-  return args;
+  return parseBackfillArgs(argv, DEFAULT_BATCH_SIZE);
 }
 
 // Only run when invoked directly (not when imported by tests). `main` is

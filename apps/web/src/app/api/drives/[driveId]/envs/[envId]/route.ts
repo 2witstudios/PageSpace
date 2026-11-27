@@ -182,12 +182,18 @@ export async function DELETE(request: Request, context: { params: Promise<{ driv
     const force = new URL(request.url).searchParams.get('force') === 'true';
     const result = await deleteEnv({ envId, force });
 
-    // Two refusals, both terminal. There is deliberately no `teardown_failed`
+    // Three refusals (not_found, is_home, live_sessions), all terminal. There is deliberately no `teardown_failed`
     // arm any more: the delete now kills the Sprite only AFTER the row is gone,
     // so a kill this request could not confirm is the reclaim outbox's problem
     // rather than a failure to report — the environment IS deleted either way.
     if (!result.ok) {
       if (result.reason === 'not_found') return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
+      if (result.reason === 'is_home') {
+        return NextResponse.json(
+          { error: 'Home can’t be deleted — your assistants run in it. Use Rebuild to start it fresh, or rename it.', reason: 'is_home' },
+          { status: 409 },
+        );
+      }
       return NextResponse.json(
         {
           error: 'Sessions are still running in this environment',

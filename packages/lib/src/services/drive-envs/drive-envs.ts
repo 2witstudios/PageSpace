@@ -105,6 +105,7 @@ export function toDriveEnvDTO(row: DriveEnvRecord, local?: LocalEnvFacts): Drive
     id: row.id,
     driveId: row.driveId,
     name: row.name,
+    isHome: row.isHome,
     createdAt: row.createdAt.toISOString(),
   };
   if (row.substrate === 'local') {
@@ -286,6 +287,61 @@ export async function createDriveEnv({
   }
   if (!issued) return { ok: true, env: created.env };
   return { ok: true, env: created.env, enrollment: { enrollmentId: issued.enrollmentId, code: issued.code, expiresAt: new Date(issued.exp) } };
+}
+
+// ---------------------------------------------------------------------------
+// Home: the owner's default env
+// ---------------------------------------------------------------------------
+
+export interface EnsureHomeDriveEnvDeps {
+  store: Pick<DriveEnvStore, 'ensureHomeEnv'>;
+  /** POL-10: the Home drive's org policies; null when it has no org. Required, never defaulted — same as `createDriveEnv`. */
+  getDriveOrgPolicies: (driveId: string) => Promise<OrgPolicies | null>;
+  now: () => Date;
+}
+
+export type EnsureHomeDriveEnvResult =
+  | { ok: true; env: DriveEnvRecord }
+  /** POL-10: the drive's organization does not allow persistent environments. Nothing was minted. */
+  | { ok: false; reason: 'org_policy'; message: string };
+
+/**
+ * The owner's Home env — the ONE machine their auto-created sessions (the
+ * Global Assistant's, Imago's) run in, so a user returns to one sandbox instead
+ * of minting a fresh Sprite per conversation. Minted on first use, in their
+ * Home drive, and returned as-is every time after.
+ *
+ * **What is deliberately NOT checked, and why.** `createDriveEnv` meters the
+ * payer's tier and env ceiling; this does not. Home is not an env anyone made
+ * on purpose — it REPLACES the ephemeral per-conversation Sprite every user
+ * already got — so the ceiling would either refuse a free-tier user the one
+ * sandbox they have today, or cost a paying user one of their deliberate envs.
+ * The store excludes Home from the ceiling's count for the same reason.
+ * Whether the payer may actually RUN code in it is still decided where it
+ * always is: at provision, by `canRunCode`'s tier gate.
+ *
+ * **What is kept.** The org's "persistent environments" switch: an org that
+ * turned envs off has said its members' work must not outlive a session, and
+ * a Home env is exactly such a machine. The caller falls back to an ephemeral
+ * session, as it would have before Home existed.
+ *
+ * No Sprite is touched — envs provision lazily, on the first session ensure.
+ */
+export async function ensureHomeDriveEnv({
+  homeDriveId,
+  ownerId,
+  deps,
+}: {
+  /** The owner's HOME drive (`provisionHomeDriveIfNeeded`). */
+  homeDriveId: string;
+  /** The Home drive's owner: recorded as creator and as the env's cost owner. */
+  ownerId: string;
+  deps: EnsureHomeDriveEnvDeps;
+}): Promise<EnsureHomeDriveEnvResult> {
+  const policy = environmentsDecision(await deps.getDriveOrgPolicies(homeDriveId));
+  if (!policy.ok) return { ok: false, reason: 'org_policy', message: policy.message };
+  const env = await deps.store.ensureHomeEnv({ driveId: homeDriveId, createdBy: ownerId, now: deps.now() });
+  return { ok: true, env };
 }
 
 // ---------------------------------------------------------------------------
@@ -835,7 +891,14 @@ export type DeleteDriveEnvResult =
   | { ok: true; spriteTornDown: boolean }
   | { ok: false; reason: 'not_found' }
   /** Sessions are still live in here and `force` was not given. Nothing was touched. */
-  | { ok: false; reason: 'live_sessions'; liveSessionCount: number };
+  | { ok: false; reason: 'live_sessions'; liveSessionCount: number }
+  /**
+   * The owner's Home env, which is never deleted (forced or not): every
+   * auto-created session runs in it, and its identity — `createdAt` included,
+   * which the sidebar's "Previous sessions" is keyed on — must stay stable.
+   * `rebuildDriveEnv` is how Home is wiped; a rename is still allowed.
+   */
+  | { ok: false; reason: 'is_home' };
 
 /**
  * Delete an environment — the destructive verb, and the only one that takes a
@@ -902,6 +965,7 @@ export async function deleteDriveEnv({
 }): Promise<DeleteDriveEnvResult> {
   const row = await deps.store.findById(envId);
   if (!row) return { ok: false, reason: 'not_found' };
+  if (row.isHome) return { ok: false, reason: 'is_home' };
 
   // Step 1. Cheap and non-authoritative — see the docblock. Its only job is to
   // refuse the common "you have sessions open in here" case without taking a

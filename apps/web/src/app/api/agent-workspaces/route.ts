@@ -52,7 +52,10 @@ import {
   listSessions,
   listSessionConversationsBulk,
   MAX_ACTIVE_SESSIONS_PER_OWNER,
+  agentDefaultEnvId,
+  isOwnHomeDrive,
   provisionSessionSandbox,
+  spawnAutoSession,
   spawnSession,
   toSessionDTOWithEnv,
   type AgentSessionListFilter,
@@ -292,9 +295,7 @@ function applyAgentDefaultEnv(
   envIdWasProvided: boolean,
   agent: Pick<AiAgent, 'sandboxEnabled' | 'defaultEnvId'>,
 ): string | null {
-  if (!envIdWasProvided && envId === null && agent.sandboxEnabled && agent.defaultEnvId) {
-    return agent.defaultEnvId;
-  }
+  if (!envIdWasProvided && envId === null) return agentDefaultEnvId(agent);
   return envId;
 }
 export async function POST(request: Request) {
@@ -544,7 +545,13 @@ export async function POST(request: Request) {
     name = nextUniqueSessionName(baseLabel, existingNames);
   }
 
-  const spawned = await spawnSession({ actor, driveId, envId, name });
+  // Home is the default for a caller that named no env (and got no agent
+  // default above) in a driveless or own-Home-drive spawn — see `spawnAutoSession`.
+  const defaultsToHome =
+    !envIdWasProvided && envId === null && (driveId === null || (await isOwnHomeDrive(auth.userId, driveId)));
+  const spawned = defaultsToHome
+    ? await spawnAutoSession({ actor, driveId, env: 'home', name })
+    : await spawnSession({ actor, driveId, envId, name });
   if (!spawned.ok) {
     if (spawned.reason === 'session_limit_reached') {
       // The atomic backstop caught what the pre-check above missed — a

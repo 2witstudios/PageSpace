@@ -560,7 +560,7 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     const deps = buildRealSandboxRunDeps({ actor: credentialActor('u1', null) });
     const result = await deps.acquireSandbox(baseInput({ agentPageId: 'imago-page' }));
     expect(mockFindOwnImagoHomeDriveId).toHaveBeenCalledWith('u1', 'imago-page');
-    expect(mockEnsureDriveSessionForConversation).toHaveBeenCalledWith('conv-1', credentialActor('u1', null), 'home-u1', 'Imago');
+    expect(mockEnsureDriveSessionForConversation).toHaveBeenCalledWith('conv-1', credentialActor('u1', null), 'home-u1', 'Imago', 'home');
     expect(mockProvisionSessionSandbox).toHaveBeenCalledWith(sessionRecord, credentialActor('u1', null));
     expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-1' });
   });

@@ -37,12 +37,14 @@ import {
 } from '@pagespace/lib/services/drive-envs/drive-envs-store';
 import {
   createDriveEnv,
+  ensureHomeDriveEnv,
   listDriveEnvs,
   renameDriveEnv,
   deleteDriveEnv,
   rebuildDriveEnv,
   toDriveEnvDTO,
   type CreateDriveEnvResult,
+  type EnsureHomeDriveEnvResult,
   type RenameDriveEnvResult,
   type DeleteDriveEnvResult,
   type RebuildDriveEnvResult,
@@ -236,6 +238,20 @@ export async function createEnvInDrive(input: {
       // [D-OW-28] A member at their cap of the org's credits cannot add a billable env.
       admitCreator: admitDriveComputeCreator,
     },
+  });
+}
+
+/**
+ * The owner's Home env in their Home drive, minted on first use (no Sprite —
+ * envs provision lazily). Outside the env cap and the tier allowance by design;
+ * the org's persistent-environments switch still applies. See `ensureHomeDriveEnv`.
+ */
+export async function ensureHomeEnvInDrive(input: { homeDriveId: string; ownerId: string }): Promise<EnsureHomeDriveEnvResult> {
+  const store = await getDriveEnvStore();
+  return ensureHomeDriveEnv({
+    homeDriveId: input.homeDriveId,
+    ownerId: input.ownerId,
+    deps: { store, getDriveOrgPolicies: driveOrgPolicies, now: () => new Date() },
   });
 }
 

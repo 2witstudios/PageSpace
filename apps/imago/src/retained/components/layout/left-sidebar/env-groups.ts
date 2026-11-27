@@ -45,6 +45,8 @@ export interface EnvGroup<T> {
    * orphan (the question does not apply).
    */
   enrolled: boolean | null;
+  /** The owner's Home env — never deletable (Rebuild wipes it). False for an orphan. */
+  isHome: boolean;
   sessions: T[];
 }
 
@@ -90,6 +92,7 @@ export function partitionSessionsByEnv<T extends { envId: string | null }>(
       substrate: env.substrate,
       machineLabel: env.substrate === 'local' ? env.label : null,
       enrolled: env.substrate === 'local' ? env.enrolled : null,
+      isHome: env.isHome,
       sessions: sessionsByEnv.get(env.id) ?? [],
     }))
     .sort(byEnvDisplayName);
@@ -103,6 +106,7 @@ export function partitionSessionsByEnv<T extends { envId: string | null }>(
       substrate: null,
       machineLabel: null,
       enrolled: null,
+      isHome: false,
       sessions: sessionsByEnv.get(envId) ?? [],
     }))
     .sort(byEnvDisplayName);
