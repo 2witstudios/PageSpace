@@ -109,3 +109,34 @@ export function partitionSessionsByEnv<T extends { envId: string | null }>(
 
   return { envGroups: [...listedGroups, ...orphanGroups], looseSessions };
 }
+
+/**
+ * Splits a drive's LOOSE (ephemeral) sessions into the ones still current and
+ * the "previous" ones — the per-conversation sandboxes that piled up before the
+ * drive had a Home env (single-sandbox model). Pure.
+ *
+ * Previous means "created before Home existed", not "ephemeral": once Home is
+ * there every auto-created session runs in it, so an ephemeral session made
+ * AFTER it is one somebody chose on purpose ("New sandbox") and stays where it
+ * was. The previous ones are not ended automatically — they may hold files —
+ * so the sidebar lists them apart with an explicit "End all".
+ *
+ * A session with no `createdAt` (an older listing) stays current: guessing it
+ * is stale would offer to destroy something on no evidence.
+ */
+export function splitPreviousSessions<T extends { createdAt?: string | null }>(
+  looseSessions: readonly T[],
+  envs: readonly DriveEnvDTO[],
+): { current: T[]; previous: T[] } {
+  const home = envs.find((env) => env.isHome);
+  if (!home) return { current: [...looseSessions], previous: [] };
+  const homeBorn = Date.parse(home.createdAt);
+  const current: T[] = [];
+  const previous: T[] = [];
+  for (const session of looseSessions) {
+    const born = session.createdAt ? Date.parse(session.createdAt) : Number.NaN;
+    if (Number.isFinite(born) && born < homeBorn) previous.push(session);
+    else current.push(session);
+  }
+  return { current, previous };
+}

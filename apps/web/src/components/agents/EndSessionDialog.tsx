@@ -44,3 +44,38 @@ export default function EndSessionDialog({ open, onOpenChange, sessionName, onCo
     </AlertDialog>
   );
 }
+
+export interface EndPreviousSessionsDialogProps {
+  open: boolean;
+  onOpenChange(open: boolean): void;
+  /** How many sessions "End all" will end. */
+  count: number;
+  onConfirm(): void;
+}
+
+/**
+ * The confirm for the sidebar's "Previous sessions → End all": the ephemeral
+ * sessions from before the drive had a Home env. Each owns its OWN sandbox, so
+ * ending them destroys whatever files they hold — said plainly, because that is
+ * the one reason they were not ended automatically.
+ */
+export function EndPreviousSessionsDialog({ open, onOpenChange, count, onConfirm }: EndPreviousSessionsDialogProps) {
+  const noun = count === 1 ? 'session' : 'sessions';
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>End {count} previous {noun}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Each has its own sandbox, and any files in those sandboxes will be lost. Move anything you want to keep into
+            Home first. Conversations stay in each agent&apos;s history.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction onClick={onConfirm}>End all</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}

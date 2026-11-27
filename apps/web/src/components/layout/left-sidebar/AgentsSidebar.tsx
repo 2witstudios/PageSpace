@@ -20,7 +20,7 @@ import {
 import { toast } from 'sonner';
 import useSWR, { useSWRConfig } from 'swr';
 
-import EndSessionDialog from '@/components/agents/EndSessionDialog';
+import EndSessionDialog, { EndPreviousSessionsDialog } from '@/components/agents/EndSessionDialog';
 import { RenameDialog } from '@/components/dialogs/RenameDialog';
 import { useSpawnSession } from '@/components/agents/useSpawnSession';
 import DrivePickerDialog from '@/components/agents/DrivePickerDialog';
@@ -60,7 +60,7 @@ import {
 } from '@/components/agents/panes/workspace-conversations';
 import { decideClosePane } from '@/components/agents/panes/close-pane';
 import { buildSessionGroups, ASSISTANT_GROUP_KEY } from './session-groups';
-import { partitionSessionsByEnv, type EnvGroup } from './env-groups';
+import { partitionSessionsByEnv, splitPreviousSessions, type EnvGroup } from './env-groups';
 import { RowMenu, type RowMenuItem } from './RowMenu';
 import { DeleteDriveEnvDialog, DriveEnvNameDialog, EnrollmentCodeDialog, RebuildDriveEnvDialog } from './DriveEnvDialogs';
 import type { LocalEnvEnrollmentIssue } from '@/components/agents/LocalEnvEnrollment';
@@ -230,6 +230,8 @@ interface SessionListEntry {
    * with every other session in it.
    */
   envId: string | null;
+  /** When the session was spawned (ISO). Optional: an older listing may not carry it. */
+  createdAt?: string;
   name: string;
   sandboxStatus: 'none' | 'starting' | 'running' | 'ended';
   conversations: SessionConversationEntry[];
@@ -720,6 +722,13 @@ function DriveGroupRows({
     () => (showEnvironments ? partitionSessionsByEnv(sessions, envs) : { envGroups: [], looseSessions: sessions }),
     [showEnvironments, sessions, envs],
   );
+  // Once the drive has a Home env, the ephemeral sessions from BEFORE it are
+  // the per-conversation pile-up the single-sandbox model replaced: kept (they
+  // may hold files), but listed apart with an explicit "End all".
+  const { current: currentLoose, previous: previousSessions } = useMemo(
+    () => splitPreviousSessions(looseSessions, showEnvironments ? envs : []),
+    [looseSessions, showEnvironments, envs],
+  );
 
   return (
     <>
@@ -758,10 +767,84 @@ function DriveGroupRows({
           onNewSession={() => onNewSessionInEnv(group.envId)}
         />
       ))}
-      {looseSessions.map((session) => (
+      {currentLoose.map((session) => (
         <SessionRow key={session.workspaceId} session={session} agentNamesById={agentNamesById} />
       ))}
+      {previousSessions.length > 0 && (
+        <PreviousSessionsSection driveId={driveId} sessions={previousSessions} agentNamesById={agentNamesById} />
+      )}
     </>
+  );
+}
+
+/**
+ * "Previous sessions": the drive's ephemeral sessions from before it had a Home
+ * env, with one "End all". Each is ended through the SAME DELETE the row's own
+ * "End session" sends, after a confirm that says their files go with them.
+ * Ends run one at a time so a failure is reported without abandoning the rest,
+ * and the listing is refetched either way so whatever survived comes back.
+ */
+function PreviousSessionsSection({
+  driveId,
+  sessions,
+  agentNamesById,
+}: {
+  driveId: string;
+  sessions: SessionListEntry[];
+  agentNamesById: Map<string, string>;
+}) {
+  const { mutate } = useSWRConfig();
+  const forgetWorkspace = useAgentWorkspaceStore((state) => state.forgetWorkspace);
+  const selectSession = useAgentSurfaceStore((state) => state.selectSession);
+  const [confirming, setConfirming] = useState(false);
+  const [ending, setEnding] = useState(false);
+
+  const endAll = useCallback(async () => {
+    setConfirming(false);
+    setEnding(true);
+    let failed = 0;
+    for (const session of sessions) {
+      if (useAgentSurfaceStore.getState().selectedSessionId === session.workspaceId) selectSession(null);
+      forgetWorkspace(session.workspaceId);
+      forgetWorkspaceInCache(mutate, session.workspaceId);
+      try {
+        await del(`/api/agent-workspaces/${encodeURIComponent(session.workspaceId)}`);
+      } catch (error) {
+        failed += 1;
+        console.error('Failed to end a previous session:', error);
+      }
+    }
+    setEnding(false);
+    void mutate(isWorkspaceListingKey);
+    if (failed > 0) {
+      toast.error(`Could not end ${failed} of ${sessions.length} previous sessions`, { description: 'Please try again.' });
+    }
+  }, [forgetWorkspace, mutate, selectSession, sessions]);
+
+  return (
+    <div data-testid={`sidebar-previous-sessions-${driveId}`}>
+      <div className="flex items-center justify-between gap-2 px-2 pb-0.5 pt-1.5 text-xs text-muted-foreground">
+        <span className="truncate font-medium">Previous sessions</span>
+        <button
+          type="button"
+          aria-label="End all previous sessions"
+          className="shrink-0 underline hover:text-foreground disabled:opacity-50"
+          disabled={ending}
+          onClick={() => setConfirming(true)}
+        >
+          {ending ? 'Ending…' : 'End all'}
+        </button>
+      </div>
+      {sessions.map((session) => (
+        <SessionRow key={session.workspaceId} session={session} agentNamesById={agentNamesById} />
+      ))}
+      <EndPreviousSessionsDialog
+        open={confirming}
+        onOpenChange={setConfirming}
+        count={sessions.length}
+        onConfirm={() => void endAll()}
+      />
+    </div>
   );
 }
 
