@@ -52,6 +52,7 @@ import {
   listSessions,
   listSessionConversationsBulk,
   MAX_ACTIVE_SESSIONS_PER_OWNER,
+  agentDefaultEnvId,
   isOwnHomeDrive,
   provisionSessionSandbox,
   spawnAutoSession,
@@ -294,9 +295,7 @@ function applyAgentDefaultEnv(
   envIdWasProvided: boolean,
   agent: Pick<AiAgent, 'sandboxEnabled' | 'defaultEnvId'>,
 ): string | null {
-  if (!envIdWasProvided && envId === null && agent.sandboxEnabled && agent.defaultEnvId) {
-    return agent.defaultEnvId;
-  }
+  if (!envIdWasProvided && envId === null) return agentDefaultEnvId(agent);
   return envId;
 }
 export async function POST(request: Request) {
@@ -546,13 +545,8 @@ export async function POST(request: Request) {
     name = nextUniqueSessionName(baseLabel, existingNames);
   }
 
-  // HOME IS THE DEFAULT. A caller that said nothing about where to run (`envId`
-  // OMITTED, and no agent default above) gets the owner's Home env when the
-  // spawn is driveless or in their own Home drive — the single-sandbox model:
-  // new Sprites come from new environments, not from every spawn. Explicit
-  // `envId: null` ("New sandbox") stays ephemeral. `spawnAutoSession` fails
-  // open to ephemeral if Home cannot be used, so this never makes a session
-  // less available than it was.
+  // Home is the default for a caller that named no env (and got no agent
+  // default above) in a driveless or own-Home-drive spawn — see `spawnAutoSession`.
   const defaultsToHome =
     !envIdWasProvided && envId === null && (driveId === null || (await isOwnHomeDrive(auth.userId, driveId)));
   const spawned = defaultsToHome

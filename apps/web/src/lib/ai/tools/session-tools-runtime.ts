@@ -75,9 +75,9 @@ import {
   renameSession,
   spawnAutoSession,
   getAgentSessionStore,
+  agentDefaultEnvId,
   type AutoSessionEnv,
 } from '@/lib/agent-workspaces/agent-workspaces-runtime';
-import { findOwnImagoHomeDriveId } from '@/lib/ai/core/imago-agent-context';
 import { countOpenConversations } from '@/lib/agent-workspaces/conversation-cap';
 import { applyLayoutCommandForWorkspace, layoutCommand } from '@/lib/agent-workspaces/workspace-node-placement';
 import { readWorkspaceNodes } from '@/lib/agent-workspaces/workspace-node-runtime';
@@ -766,7 +766,7 @@ export async function resolveCallerSessionForWorker(
         owner,
         agent.driveId,
         agent.title,
-        await autoSessionEnvForAgent(ownerId, agent),
+        autoSessionEnvForAgent(agent),
       ),
     );
   }
@@ -777,19 +777,12 @@ export async function resolveCallerSessionForWorker(
 }
 
 /**
- * The env a page agent's auto-created session runs in — the same rule the
- * spawn route applies (`applyAgentDefaultEnv`): the agent's own `defaultEnvId`,
- * only while its Sandbox switch is on. The owner's own Imago (a Home-drive
- * agent) runs in Home, like the Global Assistant. Anything else stays
- * ephemeral: Home lives in the owner's Home drive, and an env must belong to
- * its session's drive.
+ * The env a page agent's auto-created session runs in: its own default env
+ * (`agentDefaultEnvId`), else Home — which placement keeps only for an agent in
+ * the owner's Home drive (Imago); a team-drive agent stays ephemeral.
  */
-async function autoSessionEnvForAgent(
-  ownerId: string,
-  agent: { id: string; defaultEnvId: string | null; sandboxEnabled: boolean },
-): Promise<AutoSessionEnv> {
-  if (agent.sandboxEnabled && agent.defaultEnvId) return agent.defaultEnvId;
-  return (await findOwnImagoHomeDriveId(ownerId, agent.id)) ? 'home' : null;
+function autoSessionEnvForAgent(agent: { defaultEnvId: string | null; sandboxEnabled: boolean }): AutoSessionEnv {
+  return agentDefaultEnvId(agent) ?? 'home';
 }
 
 function mapEnsured(
@@ -871,7 +864,7 @@ async function resolveWorkerPlacement(input: {
       }
       driveId = agent.driveId;
       agentTitleForLabel = agent.title;
-      env = await autoSessionEnvForAgent(ownerId, agent);
+      env = autoSessionEnvForAgent(agent);
     }
     const access = await checkAccessForSubject(actor, { ownerId, driveId });
     if (!access.allowed) {

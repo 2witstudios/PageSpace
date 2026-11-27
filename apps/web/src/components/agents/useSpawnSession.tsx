@@ -251,10 +251,10 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
   const homeDriveId = useDriveStore(
     (state) => state.drives.find((drive) => isHomeDrive(drive) && !drive.isTrashed && drive.isOwned !== false)?.id ?? null,
   );
-  /** An Assistant spawn — no drive of its own — whose environments are Home's. */
-  const isAssistantInHome = spawnTarget !== null && spawnTarget.driveId === null && spawnPick?.kind === 'assistant';
+  /** An Assistant spawn — the one opening with no drive — whose environments are Home's. */
+  const isAssistantInHome = spawnTarget?.driveId === null;
   /** The drive whose environments the palette offers: the target's, or Home's for an Assistant spawn. */
-  const envsDriveId = spawnTarget ? (spawnTarget.driveId ?? (isAssistantInHome ? homeDriveId : null)) : null;
+  const envsDriveId = spawnTarget ? (spawnTarget.driveId ?? homeDriveId) : null;
 
   const handleSubmitName = useCallback(
     (name: string) => {

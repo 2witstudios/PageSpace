@@ -24,21 +24,25 @@ export interface EndSessionDialogProps {
   /** Display label, when the caller has one — "this session" otherwise (never an address). */
   sessionName?: string | null;
   onConfirm(): void;
+  /** Overrides for a confirm that ends something other than one session (see `EndPreviousSessionsDialog`). */
+  title?: string;
+  description?: string;
+  actionLabel?: string;
 }
 
-export default function EndSessionDialog({ open, onOpenChange, sessionName, onConfirm }: EndSessionDialogProps) {
+export default function EndSessionDialog({ open, onOpenChange, sessionName, onConfirm, title, description, actionLabel }: EndSessionDialogProps) {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>End {sessionName ? `“${sessionName}”` : 'this session'}?</AlertDialogTitle>
+          <AlertDialogTitle>{title ?? `End ${sessionName ? `“${sessionName}”` : 'this session'}?`}</AlertDialogTitle>
           <AlertDialogDescription>
-            Its sandbox is stopped and its shells close. Conversations stay in each agent&apos;s history.
+            {description ?? 'Its sandbox is stopped and its shells close. Conversations stay in each agent\'s history.'}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction onClick={onConfirm}>End session</AlertDialogAction>
+          <AlertDialogAction onClick={onConfirm}>{actionLabel ?? 'End session'}</AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
@@ -60,22 +64,14 @@ export interface EndPreviousSessionsDialogProps {
  * the one reason they were not ended automatically.
  */
 export function EndPreviousSessionsDialog({ open, onOpenChange, count, onConfirm }: EndPreviousSessionsDialogProps) {
-  const noun = count === 1 ? 'session' : 'sessions';
   return (
-    <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>End {count} previous {noun}?</AlertDialogTitle>
-          <AlertDialogDescription>
-            Each has its own sandbox, and any files in those sandboxes will be lost. Move anything you want to keep into
-            Home first. Conversations stay in each agent&apos;s history.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction onClick={onConfirm}>End all</AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+    <EndSessionDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      onConfirm={onConfirm}
+      title={`End ${count} previous ${count === 1 ? 'session' : 'sessions'}?`}
+      description="Each has its own sandbox, and any files in those sandboxes will be lost. Move anything you want to keep into Home first. Conversations stay in each agent's history."
+      actionLabel="End all"
+    />
   );
 }

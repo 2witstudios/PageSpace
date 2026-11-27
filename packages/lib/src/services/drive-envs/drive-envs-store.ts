@@ -869,6 +869,10 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
 
     async ensureHomeEnv({ driveId, createdBy, now: at }) {
       const isHomeOfDrive = and(eq(driveEnvs.driveId, driveId), eq(driveEnvs.isHome, true));
+      // Lock-free fast path: once Home exists (every call after the first, and
+      // every drive the backfill reached) there is nothing to serialize.
+      const [present] = await db.select().from(driveEnvs).where(isHomeOfDrive).limit(1);
+      if (present) return present as DriveEnvRecord;
       try {
         return await db.transaction(async (tx) => {
           // Per-DRIVE lock: two first uses of one owner's Home (two tool calls

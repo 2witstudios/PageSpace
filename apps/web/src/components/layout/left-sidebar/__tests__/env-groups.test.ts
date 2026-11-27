@@ -84,7 +84,7 @@ describe('partitionSessionsByEnv', () => {
 
 describe('splitPreviousSessions — the ephemeral sessions from before Home', () => {
   const home = env({ id: 'env-home', name: 'Home', isHome: true, createdAt: '2026-11-01T00:00:00.000Z' });
-  const loose = (workspaceId: string, createdAt?: string) => ({ workspaceId, envId: null, createdAt });
+  const loose = (workspaceId: string, createdAt: string) => ({ workspaceId, envId: null, createdAt });
 
   it('given a drive with no Home env, should leave every loose session current — "previous" only means something once Home exists', () => {
     const r = splitPreviousSessions([loose('a', '2026-10-01T00:00:00.000Z')], [env({ id: 'env-s', name: 'dev' })]);
@@ -97,10 +97,5 @@ describe('splitPreviousSessions — the ephemeral sessions from before Home', ()
     const r = splitPreviousSessions([old, fresh], [home]);
     expect(r.previous).toEqual([old]);
     expect(r.current).toEqual([fresh]);
-  });
-
-  it('given a session with no createdAt (an older listing), should keep it current rather than guess it is stale', () => {
-    const r = splitPreviousSessions([loose('unknown')], [home]);
-    expect(r).toEqual({ current: [loose('unknown')], previous: [] });
   });
 });

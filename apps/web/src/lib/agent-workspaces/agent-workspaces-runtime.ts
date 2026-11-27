@@ -82,6 +82,7 @@ import {
 import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 import { resolveDevPreviewHolder } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
 import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
+import { isHomeDrive } from '@pagespace/lib/services/drive-guards';
 import { requestDevPreviewWatch } from '@/lib/dev-preview/detection-trigger';
 import { broadcastSessionUpdated } from '@/lib/websocket/agent-workspace-events';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
@@ -902,17 +903,39 @@ export type EnsureGlobalSandboxSessionResult =
  */
 export type EnsureHomeEnvForOwnerResult =
   | { ok: true; homeDriveId: string; envId: string }
-  | { ok: false; reason: 'org_policy' | 'error'; detail: string };
+  | { ok: false; reason: 'org_policy' | 'drive_mismatch' | 'error'; detail: string };
 
-export async function ensureHomeEnvForOwner(ownerId: string): Promise<EnsureHomeEnvForOwnerResult> {
+export async function ensureHomeEnvForOwner(
+  ownerId: string,
+  /** When set, Home is only ensured if it lives in THIS drive — anything else is `drive_mismatch`, minting nothing. */
+  requireDriveId: string | null = null,
+): Promise<EnsureHomeEnvForOwnerResult> {
   try {
-    const { driveId: homeDriveId } = await provisionHomeDriveIfNeeded(ownerId);
+    const homeDriveId = await findOrProvisionHomeDriveId(ownerId);
+    if (requireDriveId !== null && requireDriveId !== homeDriveId) {
+      return { ok: false, reason: 'drive_mismatch', detail: 'the session drive is not the owner\'s Home drive' };
+    }
     const ensured = await ensureHomeEnvInDrive({ homeDriveId, ownerId });
     if (!ensured.ok) return { ok: false, reason: 'org_policy', detail: ensured.message };
     return { ok: true, homeDriveId, envId: ensured.env.id };
   } catch (error) {
     return { ok: false, reason: 'error', detail: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/**
+ * The owner's Home drive id: one lock-free indexed read in the common case,
+ * `provisionHomeDriveIfNeeded` (user-row lock, Imago re-provision) only for an
+ * owner who has none yet — that heavier path belongs to sign-in, not to every
+ * sandbox ensure.
+ */
+async function findOrProvisionHomeDriveId(ownerId: string): Promise<string> {
+  const [home] = await db
+    .select({ id: drives.id })
+    .from(drives)
+    .where(and(eq(drives.ownerId, ownerId), eq(drives.kind, 'HOME')))
+    .limit(1);
+  return home?.id ?? (await provisionHomeDriveIfNeeded(ownerId)).driveId;
 }
 
 /**
@@ -926,7 +949,7 @@ export async function isOwnHomeDrive(ownerId: string, driveId: string): Promise<
     .from(drives)
     .where(eq(drives.id, driveId))
     .limit(1);
-  return row !== undefined && row.kind === 'HOME' && row.ownerId === ownerId;
+  return row !== undefined && isHomeDrive(row) && row.ownerId === ownerId;
 }
 
 /**
@@ -936,11 +959,22 @@ export async function isOwnHomeDrive(ownerId: string, driveId: string): Promise<
  *  - an env id — that env (a page agent's own `defaultEnvId`, Sandbox on).
  *  - `null` — an ephemeral session with its own Sprite, as before envs.
  *
- * A page agent in a team drive with no default does NOT fall back to Home: an
- * env must belong to the session's drive (`agent_workspaces_env_needs_drive_check`),
- * and Home lives in the owner's Home drive.
+ * `'home'` asked for a session in any drive other than the owner's Home drive
+ * resolves to ephemeral: an env must belong to the session's drive
+ * (`agent_workspaces_env_needs_drive_check`). (`'home'` can never collide with
+ * an env id — those are cuid2.)
  */
 export type AutoSessionEnv = 'home' | string | null;
+
+/**
+ * The env a page agent's sessions default to: its own `defaultEnvId`, only
+ * while its Sandbox switch is on — a stored default is inert while Sandbox is
+ * off. ONE rule for the spawn route and the tool paths (PR #2513 had to fix
+ * the two drifting apart once).
+ */
+export function agentDefaultEnvId(agent: { defaultEnvId: string | null; sandboxEnabled: boolean }): string | null {
+  return agent.sandboxEnabled && agent.defaultEnvId ? agent.defaultEnvId : null;
+}
 
 /**
  * Auto-provision a workspace for a Global Assistant conversation that has
@@ -975,9 +1009,9 @@ export async function ensureDriveSessionForConversation(
   actor: AccessActor,
   driveId: string,
   /** Label to derive the workspace's name from — normally the agent's title. */
-  baseLabel?: string,
-  /** Which env the session runs in; see {@link AutoSessionEnv}. Defaults to ephemeral. */
-  env: AutoSessionEnv = null,
+  baseLabel: string | undefined,
+  /** Which env the session runs in; see {@link AutoSessionEnv}. */
+  env: AutoSessionEnv,
 ): Promise<EnsureGlobalSandboxSessionResult> {
   return ensureConversationSession(conversationId, actor, driveId, baseLabel, env);
 }
@@ -998,16 +1032,18 @@ async function resolveAutoSessionPlacement(
 ): Promise<{ driveId: string | null; envId: string | null }> {
   if (env === null) return { driveId, envId: null };
   if (env !== 'home') return { driveId, envId: env };
-  const home = await ensureHomeEnvForOwner(ownerId);
+  const home = await ensureHomeEnvForOwner(ownerId, driveId);
   if (!home.ok) {
-    loggers.api.warn('ensureConversationSession: Home env unavailable, falling back to an ephemeral session', {
-      ownerId,
-      reason: home.reason,
-      detail: home.detail,
-    });
+    // A team-drive session asking for Home is not a fault — it just has none.
+    if (home.reason !== 'drive_mismatch') {
+      loggers.api.warn('ensureConversationSession: Home env unavailable, falling back to an ephemeral session', {
+        ownerId,
+        reason: home.reason,
+        detail: home.detail,
+      });
+    }
     return { driveId, envId: null };
   }
-  if (driveId !== null && driveId !== home.homeDriveId) return { driveId, envId: null };
   return { driveId: home.homeDriveId, envId: home.envId };
 }
 

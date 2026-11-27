@@ -83,6 +83,8 @@ vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   spawnSession: (...args: unknown[]) => mockSpawnSession(...args),
   spawnAutoSession: (...args: unknown[]) => mockSpawnAutoSession(...args),
   isOwnHomeDrive: (...args: unknown[]) => mockIsOwnHomeDrive(...args),
+  agentDefaultEnvId: (agent: { defaultEnvId: string | null; sandboxEnabled: boolean }) =>
+    agent.sandboxEnabled && agent.defaultEnvId ? agent.defaultEnvId : null,
   toSessionDTOWithEnv: async (row: { id: string }) => ({ workspaceId: row.id, dto: true }),
   provisionSessionSandbox: (...args: unknown[]) => mockProvisionSessionSandbox(...args),
   findSessionRecord: (...args: unknown[]) => mockFindSessionRecord(...args),

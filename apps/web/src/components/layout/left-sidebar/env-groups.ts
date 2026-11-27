@@ -120,11 +120,8 @@ export function partitionSessionsByEnv<T extends { envId: string | null }>(
  * AFTER it is one somebody chose on purpose ("New sandbox") and stays where it
  * was. The previous ones are not ended automatically — they may hold files —
  * so the sidebar lists them apart with an explicit "End all".
- *
- * A session with no `createdAt` (an older listing) stays current: guessing it
- * is stale would offer to destroy something on no evidence.
  */
-export function splitPreviousSessions<T extends { createdAt?: string | null }>(
+export function splitPreviousSessions<T extends { createdAt: string }>(
   looseSessions: readonly T[],
   envs: readonly DriveEnvDTO[],
 ): { current: T[]; previous: T[] } {
@@ -134,9 +131,7 @@ export function splitPreviousSessions<T extends { createdAt?: string | null }>(
   const current: T[] = [];
   const previous: T[] = [];
   for (const session of looseSessions) {
-    const born = session.createdAt ? Date.parse(session.createdAt) : Number.NaN;
-    if (Number.isFinite(born) && born < homeBorn) previous.push(session);
-    else current.push(session);
+    (Date.parse(session.createdAt) < homeBorn ? previous : current).push(session);
   }
   return { current, previous };
 }

@@ -18,7 +18,7 @@ import {
   X,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import useSWR, { useSWRConfig } from 'swr';
+import useSWR, { useSWRConfig, type ScopedMutator } from 'swr';
 
 import EndSessionDialog, { EndPreviousSessionsDialog } from '@/components/agents/EndSessionDialog';
 import { RenameDialog } from '@/components/dialogs/RenameDialog';
@@ -230,8 +230,8 @@ interface SessionListEntry {
    * with every other session in it.
    */
   envId: string | null;
-  /** When the session was spawned (ISO). Optional: an older listing may not carry it. */
-  createdAt?: string;
+  /** When the session was spawned (ISO). */
+  createdAt: string;
   name: string;
   sandboxStatus: 'none' | 'starting' | 'running' | 'ended';
   conversations: SessionConversationEntry[];
@@ -778,6 +778,30 @@ function DriveGroupRows({
 }
 
 /**
+ * End one workspace OPTIMISTICALLY — the sidebar's single "end a session"
+ * mechanism, shared by a row's own "End session" and "Previous sessions → End
+ * all": drop it from the local tree and the cached listing, then DELETE it.
+ * On failure the row is restored LOCALLY (a revalidate alone rides the same
+ * network that just failed) and its tree re-read; returns whether it ended.
+ * Selection is the caller's: the two callers restore it differently.
+ */
+async function endWorkspaceOptimistically(
+  session: SessionListEntry,
+  deps: { mutate: ScopedMutator; forgetWorkspace: (workspaceId: string) => void },
+): Promise<{ ok: true } | { ok: false; error: unknown }> {
+  deps.forgetWorkspace(session.workspaceId);
+  forgetWorkspaceInCache(deps.mutate, session.workspaceId);
+  try {
+    await del(`/api/agent-workspaces/${encodeURIComponent(session.workspaceId)}`);
+    return { ok: true };
+  } catch (error) {
+    restoreWorkspaceInCache(deps.mutate, session);
+    void useAgentWorkspaceStore.getState().refreshWorkspaceSnapshot(session.workspaceId);
+    return { ok: false, error };
+  }
+}
+
+/**
  * "Previous sessions": the drive's ephemeral sessions from before it had a Home
  * env, with one "End all". Each is ended through the SAME DELETE the row's own
  * "End session" sends, after a confirm that says their files go with them.
@@ -802,20 +826,12 @@ function PreviousSessionsSection({
   const endAll = useCallback(async () => {
     setConfirming(false);
     setEnding(true);
-    let failed = 0;
-    for (const session of sessions) {
-      if (useAgentSurfaceStore.getState().selectedSessionId === session.workspaceId) selectSession(null);
-      forgetWorkspace(session.workspaceId);
-      forgetWorkspaceInCache(mutate, session.workspaceId);
-      try {
-        await del(`/api/agent-workspaces/${encodeURIComponent(session.workspaceId)}`);
-      } catch (error) {
-        failed += 1;
-        console.error('Failed to end a previous session:', error);
-      }
-    }
+    const selected = useAgentSurfaceStore.getState().selectedSessionId;
+    if (sessions.some((session) => session.workspaceId === selected)) selectSession(null);
+    const results = await Promise.all(sessions.map((session) => endWorkspaceOptimistically(session, { mutate, forgetWorkspace })));
     setEnding(false);
     void mutate(isWorkspaceListingKey);
+    const failed = results.filter((result) => !result.ok).length;
     if (failed > 0) {
       toast.error(`Could not end ${failed} of ${sessions.length} previous sessions`, { description: 'Please try again.' });
     }
@@ -1353,20 +1369,11 @@ function SessionRow({
     // The workspace leaves the sidebar; its conversations remain as history in
     // each agent's list. Drop the local tree too — its panes pointed at a
     // sandbox that no longer exists.
-    forgetWorkspace(session.workspaceId);
     if (wasSelected) selectSession(null);
     setConfirmingEnd(false);
-    forgetWorkspaceInCache(mutate, session.workspaceId);
-    try {
-      await del(`/api/agent-workspaces/${encodeURIComponent(session.workspaceId)}`);
-    } catch (error) {
-      // The optimistic assumption was wrong. Restore the row LOCALLY (a real
-      // revalidate alone isn't enough: it rides the same network whose failure is
-      // plausibly why the DELETE failed, so it could easily fail too and leave
-      // the row missing indefinitely) and re-read the tree, which the store no
-      // longer keeps a snapshot of — the server's copy is the only honest one.
-      restoreWorkspaceInCache(mutate, session);
-      void useAgentWorkspaceStore.getState().refreshWorkspaceSnapshot(session.workspaceId);
+    const ended = await endWorkspaceOptimistically(session, { mutate, forgetWorkspace });
+    if (!ended.ok) {
+      const { error } = ended;
       // Selection restore, and only if NOTHING has claimed it since:
       // `selectConversation`/`selectSession` also push a URL, so blindly
       // restoring would yank the user back here even if they have navigated

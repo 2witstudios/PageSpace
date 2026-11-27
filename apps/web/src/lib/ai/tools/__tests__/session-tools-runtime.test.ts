@@ -31,7 +31,6 @@ const {
   mockFindSessionRecord,
   mockRenameSession,
   mockSpawnAutoSession,
-  mockFindOwnImagoHomeDriveId,
 } = vi.hoisted(() => ({
   mockFindSessionForConversation: vi.fn(),
   mockEnsureGlobalSandboxSession: vi.fn(),
@@ -51,7 +50,6 @@ const {
   mockFindSessionRecord: vi.fn(),
   mockRenameSession: vi.fn(),
   mockSpawnAutoSession: vi.fn(),
-  mockFindOwnImagoHomeDriveId: vi.fn(),
 }));
 
 vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
@@ -63,6 +61,8 @@ vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   createConversationInSession: mockCreateConversationInSession,
   spawnSession: mockSpawnSession,
   spawnAutoSession: mockSpawnAutoSession,
+  agentDefaultEnvId: (agent: { defaultEnvId: string | null; sandboxEnabled: boolean }) =>
+    agent.sandboxEnabled && agent.defaultEnvId ? agent.defaultEnvId : null,
   endSession: mockEndSession,
   listSessions: mockListSessions,
   listSessionConversationsBulk: mockListSessionConversationsBulk,
@@ -86,9 +86,6 @@ vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: { getConversation: mockGetConversation, getAiAgent: mockGetAiAgent },
 }));
 vi.mock('@pagespace/db/db', () => ({ db: {} }));
-vi.mock('@/lib/ai/core/imago-agent-context', () => ({
-  findOwnImagoHomeDriveId: mockFindOwnImagoHomeDriveId,
-}));
 vi.mock('@/lib/agent-workspaces/workspace-shells-runtime', () => ({
   getSessionShellStore: vi.fn(),
   killShellById: vi.fn(),
@@ -130,7 +127,6 @@ beforeEach(() => {
   mockListSessions.mockResolvedValue([]);
   mockFindSessionRecord.mockResolvedValue({ id: 'ses-1', ownerId: 'user-1', driveId: 'drive-1' });
   mockRenameSession.mockResolvedValue({ workspaceId: 'ses-1', name: 'Renamed' });
-  mockFindOwnImagoHomeDriveId.mockResolvedValue(null);
 });
 
 describe('resolveCallerSessionForWorker', () => {
@@ -214,9 +210,9 @@ describe('resolveCallerSessionForWorker', () => {
     // with the agent rather than the generic fallback. This is the DEFAULT
     // placement — the most travelled minting path, and the one that went on
     // producing nameless "Session" rows after the other two were fixed.
-    // No default env and not the owner's Imago: ephemeral (null), as before —
-    // Home lives in the Home drive and an env must belong to its session's drive.
-    expect(mockEnsureDriveSessionForConversation).toHaveBeenCalledWith('conv-p', expect.objectContaining({ userId: 'user-1' }), 'drive-1', 'Agent', null);
+    // No default env: Home — which placement keeps only in the owner's Home
+    // drive, so this team-drive agent's session ends up ephemeral.
+    expect(mockEnsureDriveSessionForConversation).toHaveBeenCalledWith('conv-p', expect.objectContaining({ userId: 'user-1' }), 'drive-1', 'Agent', 'home');
   });
 
   test("an unbound PAGE conversation whose agent has Sandbox on and a defaultEnvId mints its session IN that env", async () => {
@@ -232,7 +228,7 @@ describe('resolveCallerSessionForWorker', () => {
     expect(mockEnsureDriveSessionForConversation).toHaveBeenCalledWith('conv-p', expect.anything(), 'drive-1', 'Agent', 'env-dev');
   });
 
-  test("an unbound PAGE conversation whose agent's defaultEnvId is set but Sandbox is OFF stays ephemeral — the stored default is inert", async () => {
+  test("an unbound PAGE conversation whose agent's defaultEnvId is set but Sandbox is OFF ignores it — the stored default is inert", async () => {
     mockFindSessionForConversation.mockResolvedValue(null);
     mockGetConversation.mockResolvedValue(pageConversation);
     mockGetAiAgent.mockResolvedValue({ id: 'agent-1', driveId: 'drive-1', title: 'Agent', type: 'AI_CHAT', defaultEnvId: 'env-dev', sandboxEnabled: false });
@@ -242,14 +238,13 @@ describe('resolveCallerSessionForWorker', () => {
 
     await resolveCallerSessionForWorker('conv-p', USER_1);
 
-    expect(mockEnsureDriveSessionForConversation).toHaveBeenCalledWith('conv-p', expect.anything(), 'drive-1', 'Agent', null);
+    expect(mockEnsureDriveSessionForConversation).toHaveBeenCalledWith('conv-p', expect.anything(), 'drive-1', 'Agent', 'home');
   });
 
   test("the owner's own Imago conversation mints its session in Home, like the Global Assistant", async () => {
     mockFindSessionForConversation.mockResolvedValue(null);
     mockGetConversation.mockResolvedValue(pageConversation);
     mockGetAiAgent.mockResolvedValue({ id: 'agent-1', driveId: 'home-drive', title: 'Imago', type: 'AI_CHAT', defaultEnvId: null, sandboxEnabled: true });
-    mockFindOwnImagoHomeDriveId.mockResolvedValue('home-drive');
     mockCanUserViewPage.mockResolvedValue(true);
     mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
     mockEnsureDriveSessionForConversation.mockResolvedValue({ ok: true, session: sessionRow });
@@ -522,7 +517,7 @@ describe('createWorkerSession — placement', () => {
       await deps.createWorkerSession({ ...baseInput, agentPageId: 'agent-1', workspace: 'new' });
 
       expect(mockSpawnAutoSession).toHaveBeenCalledWith(
-        expect.objectContaining({ actor: expect.objectContaining({ userId: 'user-1' }), driveId: 'drive-1', env: null }),
+        expect.objectContaining({ actor: expect.objectContaining({ userId: 'user-1' }), driveId: 'drive-1', env: 'home' }),
       );
     });
 
