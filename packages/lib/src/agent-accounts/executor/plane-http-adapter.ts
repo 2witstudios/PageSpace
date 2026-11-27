@@ -26,6 +26,8 @@ import { decidePlaneRequestSignature, PLANE_SIGNATURE_HEADER } from './plane-req
 import { PLANE_ROUTES, planeDeleteBody, planeExecuteBody, planePutBody, planeRevokeBody } from './plane-wire';
 
 const MAX_BODY_BYTES = 1_500_000;
+/** The liveness probe the image HEALTHCHECK and Fly's `[checks.health]` call. */
+export const PLANE_HEALTH_PATH = '/health';
 
 export type PlaneRequestHandlerDeps = {
   readonly secret: string;
@@ -72,7 +74,9 @@ function parseJson(bytes: Uint8Array): unknown {
 export function createPlaneRequestHandler(deps: PlaneRequestHandlerDeps): (req: IncomingMessage, res: ServerResponse) => void {
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const path = (req.url ?? '').split('?')[0] ?? '';
-    if (req.method !== 'POST' || !Object.values(PLANE_ROUTES).includes(path as never)) return send(res, 404, { error: 'not_found' });
+    // Liveness for the platform's probe: unauthenticated, GET-only, and it says nothing beyond "up".
+    if (req.method === 'GET' && path === PLANE_HEALTH_PATH) return send(res, 200, { ok: true });
+    if (req.method !== 'POST'|| !Object.values(PLANE_ROUTES).includes(path as never)) return send(res, 404, { error: 'not_found' });
     const body = await readBody(req);
     if (body === null) return send(res, 413, { error: 'too_large' });
     const header = req.headers[PLANE_SIGNATURE_HEADER];
