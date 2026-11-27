@@ -43,6 +43,7 @@
  */
 import type { ModelMessage, ToolCallPart, ToolResultPart } from 'ai';
 import { WRITE_TOOLS } from './tool-filtering';
+import { budgetToolResultMedia } from './tool-result-media-budget';
 
 /** Not exported by `ai`, but reachable from the part that carries it. */
 type ToolResultOutput = ToolResultPart['output'];
@@ -191,13 +192,12 @@ const cappedInput = (chars: number): Record<string, string> => ({
  *   screenshots flattens at the retention window (1.53 MB over 8 steps) instead
  *   of growing 0.51 MB per step to 3.56 MB.
  *
- *   The remaining top-level path is left alone deliberately. A stub is not a
+ *   The remaining top-level path is not stubbed by size here: a stub is not a
  *   substitute for an image the way it is for text the model can simply read
- *   again, and image delivery already has its own design in
- *   read-page-vision-output.ts (see guardReadPageToolForVision, which degrades
- *   stale image results only when the active model lacks vision). What a
- *   mid-comparison vision agent may lose is a product decision, not a mechanical
- *   extension of this one — so it is named here rather than made silently.
+ *   again. Media gets its own rule instead, budgetToolResultMedia (applied at
+ *   the top of capStepToolPayloads): only the newest few media-bearing results
+ *   keep their images and files, within a total budget, and older ones keep
+ *   their text plus a note to call the tool again.
  */
 function cappedOutput(
   output: ToolResultOutput,
@@ -250,9 +250,11 @@ function positionsOf(
  * and a far cheaper one than losing the turn.
  */
 export function capStepToolPayloads(
-  messages: ModelMessage[],
+  input: ModelMessage[],
   maxChars: number = TOOL_PAYLOAD_MAX_CHARS,
 ): ModelMessage[] {
+  // Media first: older images and files leave the transcript before sizes are judged.
+  const messages = budgetToolResultMedia(input);
   // Exempt the newest step's calls and the newest few results. Positions, not
   // identity: the same part object can legitimately appear more than once in a
   // history assembled from shared parts.
