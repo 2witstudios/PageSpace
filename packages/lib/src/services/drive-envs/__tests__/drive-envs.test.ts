@@ -229,6 +229,13 @@ describe('listDriveEnvs / the DTO', () => {
     expect(dto.createdAt).toBe(NOW.toISOString());
   });
 
+  it('should project isHome, so a client can show Home as the default env — and the result must satisfy the wire schema', () => {
+    const home = toDriveEnvDTO(makeEnvRecord({ name: 'Home', isHome: true }));
+    expect(home.isHome).toBe(true);
+    expect(driveEnvDtoSchema.safeParse(home).success).toBe(true);
+    expect(toDriveEnvDTO(makeEnvRecord()).isHome).toBe(false);
+  });
+
   describe('substrate (Local Environments epic)', () => {
     it('should project a Sprite row with substrate sprite and a Sprite status, and the result must satisfy the wire schema', () => {
       const dto = toDriveEnvDTO(makeEnvRecord({ sandboxId: SANDBOX_ID }));
@@ -239,7 +246,7 @@ describe('listDriveEnvs / the DTO', () => {
 
     it('given a local row WITH its drive_env_local facts, should project substrate local, the machine label, and the CONNECTION status — never a Sprite status', () => {
       const dto = toDriveEnvDTO(makeEnvRecord({ substrate: 'local' }), { label: 'jono-macstudio', status: 'connected', enrolled: true });
-      expect(dto).toEqual({ id: ENV_ID, driveId: DRIVE_ID, name: 'staging', substrate: 'local', status: 'connected', label: 'jono-macstudio', enrolled: true, createdAt: NOW.toISOString() });
+      expect(dto).toEqual({ id: ENV_ID, driveId: DRIVE_ID, name: 'staging', isHome: false, substrate: 'local', status: 'connected', label: 'jono-macstudio', enrolled: true, createdAt: NOW.toISOString() });
       expect(driveEnvDtoSchema.safeParse(dto).success).toBe(true);
     });
 
@@ -853,5 +860,33 @@ describe('ensureHomeDriveEnv', () => {
     const result = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store, { getDriveOrgPolicies: off }) });
     expect(result).toMatchObject({ ok: false, reason: 'org_policy' });
     expect(store.rows.size).toBe(0);
+  });
+
+  it('given the user renamed Home, should keep returning it — the flag, not the name, makes it Home', async () => {
+    const store = makeDriveEnvStore();
+    const first = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    if (!first.ok) throw new Error('expected Home');
+    await renameDriveEnv({ envId: first.env.id, name: 'my-box', deps: { store: store.store, now: () => NOW } });
+    const again = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    expect(again.ok && again.env).toMatchObject({ id: first.env.id, name: 'my-box', isHome: true });
+  });
+
+  it('given the user deleted Home, should allow it and mint a fresh, empty Home on next use', async () => {
+    const store = makeDriveEnvStore();
+    const host = makeSpriteHost();
+    const first = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    if (!first.ok) throw new Error('expected Home');
+    const deleted = await deleteDriveEnv({ envId: first.env.id, force: false, deps: makeDeleteDeps(store, host) });
+    expect(deleted.ok).toBe(true);
+    const again = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    expect(again.ok && again.env.id !== first.env.id && again.env.isHome && again.env.sandboxId === null).toBe(true);
+    expect(store.rows.size).toBe(1);
+  });
+
+  it('given a LOCAL env already named "Home", should mint Home beside it rather than adopt somebody\'s computer', async () => {
+    const store = makeDriveEnvStore([makeEnvRecord({ id: 'laptop', driveId: HOME_DRIVE, name: 'Home', substrate: 'local' })]);
+    const result = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    expect(result.ok && result.env).toMatchObject({ name: 'Home sandbox', isHome: true, substrate: 'sprite' });
+    expect(store.rows.get('laptop')?.isHome).toBe(false);
   });
 });
