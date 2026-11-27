@@ -24,6 +24,7 @@ import {
   extractVideoThumbnail,
 } from '../services/processing-pipeline';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { createSemaphore, positiveIntOr } from '../utils/semaphore';
 
 /**
  * S3 pull adapter — the only layer that performs I/O. It fetches the stored
@@ -158,6 +159,14 @@ async function dispatch(pageId: string, contentHash: string, bytes: Buffer, mime
 }
 
 /**
+ * Rendering a scan is the heaviest thing the processor does (hundreds of MB off
+ * heap, near-second event-loop stalls per page on a shared CPU), and both the
+ * upload queue (pull-verify) and Reprocess (ingest-file) reach processPdfPage.
+ * One process-wide limit keeps two scans from rendering at once.
+ */
+const pdfRendering = createSemaphore(positiveIntOr(process.env.PDF_RASTER_CONCURRENCY, 1));
+
+/**
  * A PDF with a real text layer is read as text. A PDF with almost none — a scan —
  * is marked `visual` (keeping whatever text it had, for search and for text-only
  * models) and its leading pages are rendered to `pdf-page-{n}` JPEG presets, so a
@@ -180,14 +189,14 @@ export async function processPdfPage(pageId: string, contentHash: string, bytes:
 
     let rasterizedPages = 0;
     try {
-      const { rendered, attempted } = await rasterizePdfPages(pdf, {
+      const { rendered, attempted } = await pdfRendering.run(() => rasterizePdfPages(pdf, {
         maxPages: resolveMaxRasterizedPdfPages(),
         // Each page is cached as soon as it is rendered, and one at a time:
         // saveCache read-modify-writes the hash's cache metadata.
         onPage: async (page) => {
           await contentStore.saveCache(contentHash, pdfPagePreset(page.pageNumber), page.buffer, page.mimeType);
         },
-      });
+      }));
       rasterizedPages = rendered > 0 ? attempted : 0;
     } catch (err) {
       // The page stays readable (as a PDF, or by its text) without page images.

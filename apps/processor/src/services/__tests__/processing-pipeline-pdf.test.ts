@@ -151,6 +151,30 @@ describe('rasterizePdfPages', () => {
     expect(onPage).toHaveBeenCalledTimes(1);
   }, 30000);
 
+  it('lets the event loop run between pages', async () => {
+    const pdf = buildPdf([BLUE_SQUARE, BLUE_SQUARE]);
+    let ranBetweenPages = false;
+    let ranBeforePage2 = false;
+
+    await withPdf(pdf, async (doc) => {
+      // Observe the moment page 2 is asked for: right after page 1 was handed on,
+      // before pdf.js does any work of its own for page 2.
+      const getPage = doc.getPage.bind(doc);
+      (doc as { getPage: typeof doc.getPage }).getPage = (n: number) => {
+        if (n === 2) ranBeforePage2 = ranBetweenPages;
+        return getPage(n);
+      };
+      await rasterizePdfPages(doc, {
+        maxPages: 2,
+        onPage: async (page) => {
+          if (page.pageNumber === 1) setImmediate(() => { ranBetweenPages = true; });
+        },
+      });
+    });
+
+    expect(ranBeforePage2).toBe(true);
+  }, 30000);
+
   it('renders only the first maxPages pages', async () => {
     const pdf = buildPdf([BLUE_SQUARE, BLUE_SQUARE, BLUE_SQUARE, BLUE_SQUARE]);
 

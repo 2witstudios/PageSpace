@@ -68,7 +68,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { processor: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } },
 }));
 
-import { fetchObjectFromS3, runPullPipeline } from '../s3-pull-adapter';
+import { fetchObjectFromS3, runPullPipeline, processPdfPage } from '../s3-pull-adapter';
 
 const HASH = 'c'.repeat(64);
 const BYTES = Buffer.from('stored-bytes');
@@ -234,6 +234,28 @@ describe('runPullPipeline — dispatch by detected type', () => {
       }
 
       expect(mocks.rasterizePdfPages).toHaveBeenCalledWith(FAKE_PDF, expect.objectContaining({ maxPages: 2 }));
+    });
+
+    it('renders one PDF at a time across the upload and reprocess queues', async () => {
+      let rendering = 0;
+      let peak = 0;
+      mocks.rasterizePdfPages.mockImplementation(async () => {
+        rendering++;
+        peak = Math.max(peak, rendering);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        rendering--;
+        return { rendered: 1, attempted: 1 };
+      });
+
+      // pull-verify (an upload) and ingest-file (a reprocess) both land here.
+      await Promise.all([
+        processPdfPage('page-1', HASH, BYTES),
+        processPdfPage('page-2', HASH, BYTES),
+        processPdfPage('page-3', HASH, BYTES),
+      ]);
+
+      expect(mocks.rasterizePdfPages).toHaveBeenCalledTimes(3);
+      expect(peak).toBe(1);
     });
 
     it('still marks it visual when rendering fails, recording that no pages were rendered', async () => {

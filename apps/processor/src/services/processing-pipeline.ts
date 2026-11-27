@@ -14,6 +14,7 @@ import {
 import { IMAGE_PRESETS } from '../types';
 import type { PDFDocumentProxy, PDFLoadingTask } from '../types/pdfjs';
 import { composePageText, composeDocumentText } from './pdf-text-layout';
+import { positiveIntOr } from '../utils/semaphore';
 
 const execFileAsync = promisify(execFile);
 
@@ -197,9 +198,11 @@ export function pdfPagePreset(pageNumber: number): string {
 export const DEFAULT_MAX_RASTERIZED_PDF_PAGES = 50;
 
 export function resolveMaxRasterizedPdfPages(env: Record<string, string | undefined> = process.env): number {
-  const parsed = Number(env.PDF_RASTER_MAX_PAGES);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_RASTERIZED_PDF_PAGES;
+  return positiveIntOr(env.PDF_RASTER_MAX_PAGES, DEFAULT_MAX_RASTERIZED_PDF_PAGES);
 }
+
+/** Lets queued timers and I/O run (the /cache route read_page uses) between pages. */
+const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 export interface RasterizedPdfPage {
   pageNumber: number;
@@ -237,6 +240,7 @@ export async function rasterizePdfPages(
     }
     await options.onPage({ pageNumber, buffer, mimeType: 'image/jpeg' });
     rendered++;
+    await yieldToEventLoop();
   }
   return { rendered, attempted };
 }
