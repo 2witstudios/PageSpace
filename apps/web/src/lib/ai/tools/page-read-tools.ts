@@ -522,6 +522,10 @@ export const pageReadTools = {
             ? readRenderedPages(page.extractionMetadata) ?? []
             : [];
           const showsTextPdfImages = textPdfImagePages.length > 0 && pdfPages !== undefined && refusal === null;
+          // `pages` names page images; a text PDF without any gets its text, and is told so.
+          if (isPdf && page.processingStatus === 'completed' && !!extractedText && pdfPages !== undefined && textPdfImagePages.length === 0) {
+            fileNote = 'This PDF has no page images, so `pages` was ignored; this is its text.';
+          }
           if (textPdfImagePages.length > 0 && !showsTextPdfImages && refusal === null) {
             const pages = describePdfPages(textPdfImagePages);
             const firstBatch = describePdfPages(textPdfImagePages.slice(0, PDF_VISUAL_LIMITS.defaultPageBatch));

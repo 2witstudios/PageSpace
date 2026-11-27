@@ -2082,6 +2082,38 @@ describe('page-read-tools', () => {
             expect(mockDeliverPdfPage).not.toHaveBeenCalled();
           });
 
+          it('says in one line that pages was ignored when the PDF has no page images', async () => {
+            mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPdfPage({
+              processingStatus: 'completed',
+              content: 'Section 1: quarterly figures',
+              extractionMetadata: { pageCount: 10 },
+            }));
+
+            const result = await pageReadTools.read_page.execute!(
+              { title: 'Report.pdf', pageId: 'page-1', pages: '3' },
+              pdfContext(true, true),
+            ) as TextRead;
+
+            expect(result.content).toContain('Section 1: quarterly figures');
+            expect(result.fileNote).toBe('This PDF has no page images, so `pages` was ignored; this is its text.');
+            expect(mockDeliverPdfPage).not.toHaveBeenCalled();
+          });
+
+          it('adds no note when pages is not given and the PDF has no page images', async () => {
+            mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPdfPage({
+              processingStatus: 'completed',
+              content: 'Section 1: quarterly figures',
+              extractionMetadata: { pageCount: 10 },
+            }));
+
+            const result = await pageReadTools.read_page.execute!(
+              { title: 'Report.pdf', pageId: 'page-1' },
+              pdfContext(true, true),
+            ) as TextRead;
+
+            expect(result.fileNote).toBeUndefined();
+          });
+
           it('lets a vision model page through the scans of a typed + scanned bundle', async () => {
             mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPdfPage({
               processingStatus: 'completed',
