@@ -484,12 +484,14 @@ jobs:
           docker push "registry.fly.io/pagespace-credential-plane:$RELEASE_IMAGE_TAG"
 
           # Same expected "desired start state" error as the other one-shots; verify via state below.
+          # `--` ends flyctl's own flag parsing: without it flyctl reads the command's
+          # `--filter` as its own flag and refuses ("unknown flag: --filter").
           flyctl machine run "registry.fly.io/pagespace-credential-plane:$RELEASE_IMAGE_TAG" \
             --app pagespace-credential-plane \
             --region iad \
             --restart no \
             --env PLANE_METADATA_DATABASE_URL_MIGRATE="$PLANE_METADATA_DATABASE_URL_MIGRATE" \
-            bun run --filter @pagespace/lib credential-plane:migrate \
+            -- bun run --filter @pagespace/lib credential-plane:migrate \
             2>&1 | tee /tmp/plane_machine_output.txt || true
 
           MACHINE_ID=$(grep -oP 'Machine ID: \K[0-9a-f]+' /tmp/plane_machine_output.txt | head -1)
