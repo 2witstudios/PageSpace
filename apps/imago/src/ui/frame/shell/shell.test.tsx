@@ -29,10 +29,13 @@ vi.mock('next/navigation', () => ({
   // The palette navigates through the router; its own suite proves where.
   useRouter: () => ({ push: () => {} }),
 }));
-// The avatar menu's theme switcher needs the root layout's theme provider;
-// its own suites prove it. Here it only has to be in the menu.
+// The avatar menu's theme and text-size switchers need the root layout's providers;
+// their own suites prove them. Here they only have to be in the menu.
 vi.mock('@/ui/components/theme-switcher/theme-switcher', () => ({
   ThemeSwitcher: () => h('div', { role: 'radiogroup', 'aria-label': 'Theme' }),
+}));
+vi.mock('@/ui/components/text-size-switcher/text-size-switcher', () => ({
+  TextSizeSwitcher: () => h('div', { role: 'group', 'aria-label': 'Text size' }),
 }));
 
 // The drive switcher is apps/web's dialog on the retained stores; its own suite
