@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { MarketingLink } from '@/components/ui/MarketingLink';
+import { AgentBadge } from '@/components/shared/AgentBadge';
 import {
   V3_ACCENT,
   V3_BUTTON_PRIMARY,
@@ -88,7 +89,8 @@ export function InviteCardV3({ resolution, token }: InviteCardV3Props) {
       <div>
         <span className={V3_TILE}>{ICON_PAGE}</span>
         <h1 className={V3_H1}>
-          <span className={V3_ACCENT}>{data.inviterName}</span> has shared a page with you
+          <span className={V3_ACCENT}>{data.inviterName}</span>
+          <AgentBadge accountType={data.inviterAccountType} className="ml-2 align-middle" /> has shared a page with you
         </h1>
         <p className={V3_LEAD}>
           <strong className={V3_STRONG}>&ldquo;{data.pageTitle}&rdquo;</strong> in{' '}
@@ -113,7 +115,8 @@ export function InviteCardV3({ resolution, token }: InviteCardV3Props) {
       <div>
         <span className={V3_TILE}>{ICON_CONNECTION}</span>
         <h1 className={V3_H1}>
-          <span className={V3_ACCENT}>{data.inviterName}</span> wants to connect with you
+          <span className={V3_ACCENT}>{data.inviterName}</span>
+          <AgentBadge accountType={data.inviterAccountType} className="ml-2 align-middle" /> wants to connect with you
         </h1>
         <p className={V3_LEAD}>
           This invitation was sent to <strong className={V3_STRONG}>{data.email}</strong>.
@@ -142,7 +145,8 @@ export function InviteCardV3({ resolution, token }: InviteCardV3Props) {
         You’re invited to <span className={V3_ACCENT}>{data.driveName}</span>
       </h1>
       <p className={V3_LEAD}>
-        <strong className={V3_STRONG}>{data.inviterName}</strong> invited{' '}
+        <strong className={V3_STRONG}>{data.inviterName}</strong>
+        <AgentBadge accountType={data.inviterAccountType} className="ml-1 align-middle" /> invited{' '}
         <strong className={V3_STRONG}>{data.email}</strong> to join as a{' '}
         <strong className={V3_STRONG}>{data.role.toLowerCase()}</strong>.
       </p>

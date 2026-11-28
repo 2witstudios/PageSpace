@@ -88,6 +88,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     "/docs/features/sharing",
     "/docs/features/search",
     "/docs/features/accounts",
+    "/docs/features/agent-signup",
     // Integrations
     "/docs/integrations",
     "/docs/integrations/google-calendar",

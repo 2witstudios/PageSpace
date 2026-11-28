@@ -27,6 +27,9 @@ const CEREMONY = new Set([
   'app/api/auth/apple/callback/route.ts',
   'app/api/auth/apple/native/route.ts',
   'app/api/auth/mobile/oauth/google/exchange/route.ts',
+  // Agent Signup Phase 3: the browser door's session chain records the agent-secret ceremony
+  // (verified by its two routes, auth/agent/signup and auth/agent/signin, before they call it).
+  'lib/agent-auth/browser-session.ts',
 ]);
 
 const DERIVED: Record<string, string> = {

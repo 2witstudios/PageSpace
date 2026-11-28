@@ -22,7 +22,8 @@
         "src/app/**/page.tsx",
         "src/app/**/layout.tsx",
         "src/app/**/route.ts",
-        "src/lib/agent-auth/auth-md.ts"
+        "src/lib/agent-auth/auth-md.ts",
+        "src/lib/agent-auth/pow/pow.worker.ts"
       ],
       "project": [
         "src/**/*.{ts,tsx}",
