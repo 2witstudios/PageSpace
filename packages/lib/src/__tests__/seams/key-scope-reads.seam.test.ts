@@ -235,13 +235,7 @@ const KEY_SCOPE_READ_LEDGER: Readonly<Record<string, Verdict>> = {
   'apps/web/src/lib/repositories/oauth-repository.ts#exchangeAgentAssertion': notAccess(
     "token issuance for an agent's OWN account: copies the allowlisted account / offline_access scopes onto the new token pair; no drive scope is ever granted",
   ),
-  // ── the agent claim grant (ADR 0008 Phase 4): the same allowlisted account grant, minted on an approved claim ─
-  'apps/web/src/app/api/oauth/token/route.ts#handleAgentClaimGrant': notAccess(
-    "token issuance for an agent's OWN account on an approved claim: the scopes come from resolveAgentAssertionScopes (account / offline_access only, every drive scope refused)",
-  ),
-  'apps/web/src/lib/repositories/agent-claim-repository.ts#pollAgentClaim': notAccess(
-    "token issuance for an agent's OWN account on an approved claim: copies the allowlisted account / offline_access scopes onto the new token pair; no drive scope is ever granted",
-  ),
+  // (The agent claim grant reads no scope: since the security review it mints no token — ADR 0008 §7.1.)
   'apps/web/src/lib/repositories/oauth-repository.ts#createAuthorizationCode': notAccess('stores the requested grant on an authorization code (the authorize route authority-checks it first: checkGrantAuthority)'),
   'apps/web/src/lib/repositories/oauth-repository.ts#createDeviceAuthorization': notAccess('stores the requested scope on a device code; approval is authority-checked later (device decision)'),
   'apps/web/src/lib/repositories/oauth-repository.ts#toDeviceCodeRecord': notAccess('shapes a device-code row for the lifecycle decisions below'),
