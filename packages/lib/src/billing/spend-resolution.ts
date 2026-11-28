@@ -322,6 +322,11 @@ async function resolveAutomationSpend(input: {
 /**
  * Decide the wallet for a call by `userId` (a person) against `target`, reserving
  * `reservationCents`. `consumerTier` is the caller's own tier (their own credits' tier).
+ *
+ * `ownCredits` names whose personal root "own credits" are (ADR 0008 Decision 8): absent, the
+ * caller's own; for a claimed agent, its owner's at the owner's tier (the credit gate resolves
+ * it with resolveOwnCreditsPayer). Only the own-credits leg moves — the drive wallet, the seat,
+ * the caps and the stored choices stay the caller's.
  */
 export async function resolveCallSpend(input: {
   userId: string;
@@ -331,8 +336,11 @@ export async function resolveCallSpend(input: {
   now?: Date;
   /** Log a refusal (SPEND-4). Off for a read-only question that is not the gate itself. */
   recordRefusal?: boolean;
+  ownCredits?: { payerId: string; tier: SubscriptionTier };
 }): Promise<CallSpendDecision & { preselectedWalletId?: string }> {
-  const { userId, consumerTier, target } = input;
+  const { userId, target } = input;
+  const ownCreditsUserId = input.ownCredits?.payerId ?? userId;
+  const consumerTier = input.ownCredits?.tier ?? input.consumerTier;
   if (target.kind === 'personal') {
     return personalRootDecision(consumerTier);
   }
@@ -363,7 +371,7 @@ export async function resolveCallSpend(input: {
   const driveWallet = standing && shared.driveWallet ? await driveWalletOf(standing.driveId) : null;
   // A seat is the per-consumer leg on the org pool (WAL-2): only an org member of the drive holds one (DRV-8).
   const pool = standing?.orgId && shared.seat ? await orgPoolOf(standing.orgId) : null;
-  const personal = await personalRootOf(userId);
+  const personal = await personalRootOf(ownCreditsUserId);
   // SEAT-9: while the org is lapsed its legs (drive wallet, seat) read as paused; own credits stay.
   const orgLapsed = await orgLapsedFor(standing?.orgId);
   const stored: StoredSpendChoice = {
@@ -427,7 +435,9 @@ export async function resolveCallSpend(input: {
     ? orgEntitlementTier(orgLapsed)
     : standing && !standing.isLead
       ? await tierOf(standing.ownerId)
-      : consumerTier;
+      // The caller leads this personal drive: its wallet is funded by the caller, never by an
+      // agent's owner, so the caller's OWN tier governs it (not the own-credits payer's).
+      : input.consumerTier;
 
   const callInput: CallSpendInput = {
     actor,
@@ -488,11 +498,17 @@ function preselectedWalletOf(callInput: CallSpendInput): string | null {
  * conversation row after the gate can pin it then.
  */
 /** @public Used by credit-gate through a lazy `await import()` that knip cannot follow. */
-export async function persistPreselectedSource(input: { userId: string; target: SpendTarget; preselectedWalletId: string | undefined }): Promise<string | undefined> {
+export async function persistPreselectedSource(input: {
+  userId: string;
+  target: SpendTarget;
+  preselectedWalletId: string | undefined;
+  /** Whose personal root "own credits" are (ADR 0008 Decision 8); defaults to `userId`. */
+  ownCreditsUserId?: string;
+}): Promise<string | undefined> {
   const { target } = input;
   if (target.kind !== 'drive' || typeof target.conversationId !== 'string' || target.conversationId.length === 0) return undefined;
   if (!input.preselectedWalletId) return undefined;
-  const walletId = input.preselectedWalletId === PERSONAL_ROOT_NOT_YET_CREATED ? await ensurePersonalRootWalletId(db, input.userId) : input.preselectedWalletId;
+  const walletId = input.preselectedWalletId === PERSONAL_ROOT_NOT_YET_CREATED ? await ensurePersonalRootWalletId(db, input.ownCreditsUserId ?? input.userId) : input.preselectedWalletId;
   await pinConversationSource({ userId: input.userId, conversationId: target.conversationId, driveId: target.driveId, walletId });
   return walletId;
 }

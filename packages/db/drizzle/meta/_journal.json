@@ -2514,6 +2514,13 @@
       "when": 1795835828627,
       "tag": "0389_agent_identities",
       "breakpoints": true
+    },
+    {
+      "idx": 359,
+      "version": "7",
+      "when": 1795836968355,
+      "tag": "0390_agent_claim_token_hash",
+      "breakpoints": true
     }
   ]
 }

@@ -159,6 +159,11 @@
       "import": "./dist/services/agent-identities.js",
       "require": "./dist/services/agent-identities.js"
     },
+    "./services/agent-ownership": {
+      "types": "./dist/services/agent-ownership.d.ts",
+      "import": "./dist/services/agent-ownership.js",
+      "require": "./dist/services/agent-ownership.js"
+    },
     "./services/agent-lifecycle": {
       "types": "./dist/services/agent-lifecycle.d.ts",
       "import": "./dist/services/agent-lifecycle.js",

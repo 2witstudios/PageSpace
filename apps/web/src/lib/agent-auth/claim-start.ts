@@ -11,13 +11,8 @@
  * stored as `hashToken(normalizeUserCode(code))`, the device flow's convention,
  * so `/claim` finds it the same way it finds an API-door claim.
  */
-import { randomBytes } from 'crypto';
-import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
-import { agentClaims, agentIdentities } from '@pagespace/db/schema/agent-identities';
-import { hashToken } from '@pagespace/lib/auth/token-utils';
-import { generateUserCode, normalizeUserCode } from '@pagespace/lib/auth/oauth/user-code';
-import { CLAIM_POLL_INTERVAL_SECONDS, CLAIM_TTL_SECONDS } from '@pagespace/lib/auth/agent/claim-decision';
+import { startAgentClaimForAgent } from '@/lib/repositories/agent-claim-repository';
+import { CLAIM_TTL_SECONDS } from '@pagespace/lib/auth/agent/claim-decision';
 import { AgentIdentityStoreError } from '@pagespace/lib/services/agent-identities';
 import { redactDbError } from '@pagespace/lib/logging/db-error-redaction';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -26,33 +21,21 @@ type StartSessionClaimResult =
   | { ok: true; userCode: string; expiresAt: Date }
   | { ok: false; error: 'already_claimed' | 'not_claimable' };
 
+/**
+ * Delegates to the claim repository's `startAgentClaimForAgent` (Phase 4) —
+ * the same core the API door uses: the identity row locked FOR UPDATE, any
+ * pending claim superseded, the claim row keyed by the identity's claim-token
+ * hash so the claim grant can poll it. One code path, so a session-started
+ * claim behaves exactly like a token-started one at `/claim`, approval and poll.
+ */
 export async function startAgentClaimForSession(input: { agentUserId: string; now: Date }): Promise<StartSessionClaimResult> {
   try {
-    const [identity] = await db
-      .select({
-        ownerUserId: agentIdentities.ownerUserId,
-        revokedAt: agentIdentities.revokedAt,
-        claimTokenHash: agentIdentities.claimTokenHash,
-      })
-      .from(agentIdentities)
-      .where(eq(agentIdentities.userId, input.agentUserId))
-      .limit(1);
-
-    if (!identity || identity.revokedAt !== null) return { ok: false, error: 'not_claimable' };
-    if (identity.ownerUserId !== null) return { ok: false, error: 'already_claimed' };
-    if (identity.claimTokenHash === null) return { ok: false, error: 'not_claimable' };
-
-    const userCode = generateUserCode(randomBytes);
-    const expiresAt = new Date(input.now.getTime() + CLAIM_TTL_SECONDS * 1000);
-    await db.insert(agentClaims).values({
-      agentUserId: input.agentUserId,
-      userCodeHash: hashToken(normalizeUserCode(userCode)),
-      expiresAt,
-      pollIntervalSeconds: CLAIM_POLL_INTERVAL_SECONDS,
-    });
-    return { ok: true, userCode, expiresAt };
+    const started = await startAgentClaimForAgent(input);
+    if (started.outcome === 'already_claimed') return { ok: false, error: 'already_claimed' };
+    if (started.outcome !== 'ok') return { ok: false, error: 'not_claimable' };
+    return { ok: true, userCode: started.userCode, expiresAt: new Date(input.now.getTime() + CLAIM_TTL_SECONDS * 1000) };
   } catch (error) {
-    // The insert binds a user-code hash: never let the raw query error out.
+    // The insert binds a user-code and claim-token hash: never let the raw query error out.
     const redacted = redactDbError(error);
     loggers.auth.error('Agent identity store failed', { operation: 'start_session_claim', ...redacted });
     throw new AgentIdentityStoreError('start_session_claim', redacted);

@@ -51,6 +51,12 @@ export const agentClaims = pgTable('agent_claims', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   agentUserId: text('agentUserId').notNull().references(() => users.id, { onDelete: 'cascade' }),
   ownerUserId: text('ownerUserId').references(() => users.id, { onDelete: 'cascade' }),
+  // SHA3-256 of the claim token that started this claim. The agent polls the
+  // claim grant with that token, and approval nulls
+  // `agent_identities.claimTokenHash` (assertion 22) — so the poll finds its
+  // claim here, never through the identity row. Not unique: a token may start
+  // a fresh claim after an earlier one expired or was denied (the newest wins).
+  claimTokenHash: text('claimTokenHash').notNull(),
   userCodeHash: text('userCodeHash').unique().notNull(),
   expiresAt: timestamp('expiresAt', { mode: 'date' }).notNull(),
   approvedAt: timestamp('approvedAt', { mode: 'date' }),
@@ -61,6 +67,7 @@ export const agentClaims = pgTable('agent_claims', {
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
 }, (table) => ({
   agentUserIdx: index('agent_claims_agent_user_id_idx').on(table.agentUserId),
+  claimTokenIdx: index('agent_claims_claim_token_hash_idx').on(table.claimTokenHash, table.createdAt),
   ownerUserIdx: index('agent_claims_owner_user_id_idx').on(table.ownerUserId),
   expiresIdx: index('agent_claims_expires_at_idx').on(table.expiresAt),
 }));

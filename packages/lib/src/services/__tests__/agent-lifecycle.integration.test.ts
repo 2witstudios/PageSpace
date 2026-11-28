@@ -76,8 +76,8 @@ describe('agentLifecycleStore (real Postgres)', () => {
     const expiredId = createId();
     const liveId = createId();
     await db.insert(agentClaims).values([
-      { id: expiredId, agentUserId: agentId, userCodeHash: hashToken(`u-${expiredId}`), expiresAt: new Date(NOW.getTime() - 1000) },
-      { id: liveId, agentUserId: agentId, userCodeHash: hashToken(`u-${liveId}`), expiresAt: new Date(NOW.getTime() + 60_000) },
+      { id: expiredId, agentUserId: agentId, claimTokenHash: hashToken(`c-${expiredId}`), userCodeHash: hashToken(`u-${expiredId}`), expiresAt: new Date(NOW.getTime() - 1000) },
+      { id: liveId, agentUserId: agentId, claimTokenHash: hashToken(`c-${liveId}`), userCodeHash: hashToken(`u-${liveId}`), expiresAt: new Date(NOW.getTime() + 60_000) },
     ]);
 
     expect(await agentLifecycleStore.pruneExpiredClaims(NOW)).toBeGreaterThanOrEqual(1);

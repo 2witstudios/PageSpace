@@ -64,7 +64,7 @@ const H = vi.hoisted(() => {
   // funding path's user resolution both project them, and a missing users row now
   // fails closed — so the fake must model the real account shape.
   const users = cols('users', ['id', 'stripeCustomerId', 'subscriptionTier', 'accountType']);
-  const agentIdentities = cols('agentIdentities', ['userId', 'ownerUserId']);
+  const agentIdentities = cols('agentIdentities', ['userId', 'ownerUserId', 'revokedAt']);
   const subscriptions = cols('subscriptions', ['id', 'userId', 'status', 'gifted', 'stripePriceId']);
   const aiUsageLogs = cols('aiUsageLogs', [
     'id', 'userId', 'cost', 'timestamp', 'success', 'provider', 'source', 'walletId', 'automationRef',

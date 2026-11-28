@@ -82,6 +82,9 @@ export const SIGNIN_NEXT_ALLOWED_PREFIXES = [
   '/s/',
   '/oauth/consent',
   '/activate',
+  // The agent claim screen (ADR 0008, Phase 4): a signed-out human following an
+  // agent's verification_uri_complete must land back on it after signing in.
+  '/claim',
   '/imago',
 ] as const;
 
