@@ -631,6 +631,7 @@ describe('middleware — agent API door exact-match carve-out', () => {
   it.each([
     ['GET', '/api/agent/challenge'],
     ['POST', '/api/agent/identity'],
+    ['POST', '/api/agent/claim'],
   ])('given %s %s with no session or token, should reach the route', async (method, pathname) => {
     const response = await middleware(buildRequest(pathname, {}, method));
     expect(response.status).not.toBe(401);
@@ -643,6 +644,9 @@ describe('middleware — agent API door exact-match carve-out', () => {
     '/api/agent/identity/x',
     '/api/agent/identities',
     '/api/agent',
+    '/api/agent/claim/verify',
+    '/api/agent/claim/decision',
+    '/api/agent/claims',
   ])('given %s with no credential, should still hit the session gate (no /api/agent/ prefix carve-out)', async (pathname) => {
     const response = await middleware(buildRequest(pathname, {}, 'POST'));
     expect(mockGetSessionFromCookies).toHaveBeenCalled();
