@@ -1,6 +1,6 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { countOf, creditsCardOf, grantDateLabel } from './avatar-menu-model';
+import { countOf, creditsCardOf } from './avatar-menu-model';
 
 const balance = (overrides: Record<string, unknown> = {}) => ({
   billingEnabled: true,
@@ -65,10 +65,19 @@ describe('creditsCardOf()', () => {
 
   test('a balance in debt', () => {
     assert({
-      given: 'a spendable total below zero (debt nets against the balance)',
-      should: 'show 0 credits rather than a negative figure',
-      actual: creditsCardOf(balance({ spendable: -2500, topup: { remaining: 0 }, debt: 2500 }))?.total,
-      expected: 0,
+      given: 'a 250-credit debt (spendable below zero) on a 900 allowance',
+      should: 'show 0 credits, and only the 650 the next refill adds once the debt is paid from it',
+      actual: creditsCardOf(balance({ spendable: -2500, topup: { remaining: 0 }, monthly: { remaining: 0, allowance: 9000, periodEnd: '2026-11-03T12:00:00.000Z' }, debt: 2500 })),
+      expected: { plan: 'Pro', total: 0, nextGrant: { amount: 650, on: 'Nov 3' } },
+    });
+  });
+
+  test('a free tier with a period end', () => {
+    assert({
+      given: 'a free balance that still carries a period end',
+      should: 'promise no next grant, as the Usage page does (a one-time grant never renews)',
+      actual: creditsCardOf(balance({ subscriptionTier: 'free' }))?.nextGrant,
+      expected: null,
     });
   });
 
@@ -82,13 +91,13 @@ describe('creditsCardOf()', () => {
   });
 });
 
-describe('countOf() and grantDateLabel()', () => {
-  test('whole credits with separators, and a short grant date', () => {
+describe('countOf()', () => {
+  test('whole credits with separators', () => {
     assert({
-      given: 'a large count and a period-end timestamp',
-      should: 'write the count with a thousands separator and the date as "Mon D" (UTC)',
-      actual: [countOf(1000), grantDateLabel('2026-11-03T12:00:00.000Z'), grantDateLabel('2026-12-03T23:30:00.000Z'), grantDateLabel('not a date'), grantDateLabel(null)],
-      expected: ['1,000', 'Nov 3', 'Dec 3', null, null],
+      given: 'a large count',
+      should: 'write it with a thousands separator',
+      actual: countOf(1000),
+      expected: '1,000',
     });
   });
 });

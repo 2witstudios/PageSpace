@@ -1,5 +1,6 @@
 import { creditsFromCents } from '@pagespace/lib/billing/money-model';
 import { planNameOf } from '../../settings/account-overview/account-overview-model';
+import { nextGrantOf } from '@/lib/credits/next-grant';
 
 const record = (value: unknown): Readonly<Record<string, unknown>> | null =>
   typeof value === 'object' && value !== null ? (value as Readonly<Record<string, unknown>>) : null;
@@ -17,13 +18,6 @@ const wholeCredits = (amount: number): number => {
 /** Whole credits with thousands separators, as the account menu writes them ("1,000"). */
 export const countOf = (amount: number): string => amount.toLocaleString('en-US');
 
-/** "Dec 3" (UTC, as the server rolls periods) for the period end, when the next allowance is added; null when there is none. */
-export const grantDateLabel = (periodEnd: unknown): string | null => {
-  if (typeof periodEnd !== 'string') return null;
-  const date = new Date(periodEnd);
-  return Number.isNaN(date.getTime()) ? null : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
-};
-
 /**
  * The credits card, in whole credits, from apps/web's GET /api/credits (which sends cents).
  * Credits roll over: each paid period ADDS the allowance to what is left (credit-core
@@ -35,7 +29,7 @@ export type CreditsCard = {
   readonly plan: string | null;
   /** Every credit the account can spend now: monthly carry plus top-ups, net of debt, never below 0. */
   readonly total: number;
-  /** The allowance the next paid period adds, and when; null for a one-time grant or no allowance. */
+  /** What the next paid period adds (the allowance less any debt), and when; null when nothing will arrive. */
   readonly nextGrant: { readonly amount: number; readonly on: string } | null;
 };
 
@@ -46,15 +40,13 @@ export type CreditsCard = {
 export const creditsCardOf = (body: unknown): CreditsCard | null => {
   const root = record(body);
   if (root === null || root.billingEnabled !== true) return null;
-  const monthly = record(root.monthly);
   const spendable = cents(root.spendable);
-  const allowance = cents(monthly?.allowance);
+  const allowance = cents(record(root.monthly)?.allowance);
   if (spendable === null || allowance === null) return null;
-  const on = grantDateLabel(monthly?.periodEnd);
-  const amount = wholeCredits(allowance);
+  const next = nextGrantOf(root);
   return {
     plan: planNameOf(root),
     total: wholeCredits(Math.max(0, spendable)),
-    nextGrant: on !== null && amount > 0 ? { amount, on } : null,
+    nextGrant: next === null ? null : { amount: wholeCredits(next.cents), on: next.on },
   };
 };

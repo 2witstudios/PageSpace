@@ -58,6 +58,17 @@ describe('CreditBalanceCard', () => {
     });
   });
 
+  test('debt is paid out of the next allowance', () => {
+    const shown = text(balance({ debt: 2500, spendable: -2500, topup: { remaining: 0 }, monthly: { remaining: 0, allowance: 9000, periodEnd: '2026-12-03T12:00:00.000Z' } }));
+
+    assert({
+      given: 'a 250-credit debt on a 900 allowance',
+      should: 'promise only the 650 that will arrive',
+      actual: [shown.includes('650 more on Dec 3'), shown.includes('900 more')],
+      expected: [true, false],
+    });
+  });
+
   test('a free one-time grant', () => {
     const shown = text(balance({ subscriptionTier: 'free', topup: { remaining: 0 }, spendable: 400, monthly: { remaining: 400, allowance: 1000, periodEnd: null } }));
 

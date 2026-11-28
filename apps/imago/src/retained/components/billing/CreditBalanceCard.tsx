@@ -7,7 +7,7 @@ import { useBillingVisibility } from '@/retained/hooks/useBillingVisibility';
 import { BuyCreditsButton } from '@/retained/components/billing/BuyCreditsButton';
 import { UpgradeTierButton } from '@/retained/components/billing/UpgradeTierButton';
 import { creditBalanceCopy, formatWholeCredits } from '@/retained/lib/subscription/credits';
-import { grantDateLabel } from '@/ui/frame/avatar-menu/avatar-menu-model';
+import { nextGrantOf } from '@/lib/credits/next-grant';
 
 /**
  * Settings card showing the user's AI-credit balance: every spendable credit as
@@ -26,8 +26,8 @@ export function CreditBalanceCard() {
   }
 
   const isFree = balance?.subscriptionTier === 'free';
-  const grantOn = isFree ? null : grantDateLabel(balance?.monthly.periodEnd);
-  const nextGrant = balance && grantOn !== null && balance.monthly.allowance > 0 ? { amount: balance.monthly.allowance, on: grantOn } : null;
+  // The allowance less any debt, paid tiers only: the same promise the account menu makes.
+  const nextGrant = nextGrantOf(balance);
   const copy = creditBalanceCopy({ isFree, showBilling });
 
   return (
@@ -67,7 +67,7 @@ export function CreditBalanceCard() {
           <div className="space-y-0.5 text-sm text-muted-foreground">
             {nextGrant && (
               <div>
-                {formatWholeCredits(nextGrant.amount)} more on {nextGrant.on}
+                {formatWholeCredits(nextGrant.cents)} more on {nextGrant.on}
               </div>
             )}
             {balance.debt > 0 && (
