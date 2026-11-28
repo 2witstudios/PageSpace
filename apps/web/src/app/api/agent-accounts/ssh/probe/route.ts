@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getAccountAuthority } from '@/lib/agent-accounts/account-authority-client';
 import { actorFromAuth } from '@/lib/auth/request-actor';
 
@@ -26,7 +27,11 @@ export async function POST(request: Request) {
   if (!parsed.success) return NextResponse.json({ error: 'invalid_request' }, { status: 400 });
   try {
     const probed = await authority.probeSshHost({ actor: actorFromAuth(auth), ...parsed.data });
-    if (!probed.ok) return NextResponse.json({ error: probed.reason }, { status: STATUS[probed.reason] ?? 502 });
+    if (!probed.ok) {
+      // A refused address is someone aiming the credential service at a private network: worth a record.
+      if (probed.reason === 'forbidden' || probed.reason === 'address_refused') auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'agent_account', details: { change: 'ssh_probe', reason: probed.reason } });
+      return NextResponse.json({ error: probed.reason }, { status: STATUS[probed.reason] ?? 502 });
+    }
     return NextResponse.json({ target: probed.target, fingerprint: probed.fingerprint, algorithm: probed.algorithm });
   } catch (error) {
     loggers.api.error('Error probing an SSH host', error as Error);
