@@ -23,7 +23,8 @@ function back(returnTo: string, outcome: string): NextResponse {
   const url = new URL(returnTo, baseUrl());
   url.searchParams.set('agentAccount', outcome);
   const response = NextResponse.redirect(url);
-  response.cookies.set(ENROLLMENT_COOKIE, '', { path: '/', maxAge: 0 });
+  // The binding cookie is single-use: cleared whatever the outcome.
+  response.headers.append('set-cookie', `${ENROLLMENT_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax`);
   return response;
 }
 

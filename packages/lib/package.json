@@ -3286,6 +3286,16 @@
       "import": "./dist/agent-accounts/account-change-lock.js",
       "require": "./dist/agent-accounts/account-change-lock.js"
     },
+    "./agent-accounts/oauth/google-enrollment": {
+      "types": "./dist/agent-accounts/oauth/google-enrollment.d.ts",
+      "import": "./dist/agent-accounts/oauth/google-enrollment.js",
+      "require": "./dist/agent-accounts/oauth/google-enrollment.js"
+    },
+    "./agent-accounts/registry/google-operations": {
+      "types": "./dist/agent-accounts/registry/google-operations.d.ts",
+      "import": "./dist/agent-accounts/registry/google-operations.js",
+      "require": "./dist/agent-accounts/registry/google-operations.js"
+    },
     "./agent-accounts/account-authority-executor": {
       "types": "./dist/agent-accounts/account-authority-executor.d.ts",
       "import": "./dist/agent-accounts/account-authority-executor.js",

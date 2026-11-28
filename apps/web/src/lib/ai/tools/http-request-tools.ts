@@ -47,13 +47,13 @@ export const httpRequestTools = {
         allowedDriveIds: context.mcpAllowedDriveIds ?? [],
       });
       return {
-        accounts: (listed ?? []).filter((account) => account.status === 'active').map((account) => ({ accountId: account.id, name: account.name, sites: account.allowedOrigins.map(siteOf), ready: account.ready })),
+        accounts: (listed ?? []).filter((account) => account.status === 'active').map((account) => ({ accountId: account.id, name: account.name, provider: account.providerSlug ?? undefined, sites: account.allowedOrigins.map(siteOf), ready: account.ready })),
       };
     },
   }),
 
   http_request: tool({
-    description: `Make an HTTPS request to an external API using one of this agent's accounts (added by a person in the agent's Accounts settings, or in their personal settings for the global assistant). Pass the account id (list_accounts shows them), never a key: the account supplies its own credential, so do not set Authorization, Cookie or Host. Only the account's allowed origins can be reached, redirects are not followed, and credential-like values are removed from what comes back. Requests may need a person's approval first; if the result says approval_required, ask the person to approve it, then repeat the identical request.`,
+    description: `Make an HTTPS request to an external API using one of this agent's accounts (added by a person in the agent's Accounts settings, or in their personal settings for the global assistant). Pass the account id (list_accounts shows them), never a key: the account supplies its own credential, so do not set Authorization, Cookie or Host. Only the account's allowed origins can be reached, redirects are not followed, and credential-like values are removed from what comes back. Requests may need a person's approval first; if the result says approval_required, ask the person to approve it, then repeat the identical request. A Google account (provider "google") calls Google's own APIs as that Google user: Gmail at https://gmail.googleapis.com/gmail/v1/users/me/... (to send, POST {"raw": "<base64url RFC 2822 message>"} to /gmail/v1/users/me/messages/send), Calendar at https://www.googleapis.com/calendar/v3/..., Drive at https://www.googleapis.com/drive/v3/... — only the services the person connected. Sending mail, deleting and sharing always need the person's approval.`,
     inputSchema: z.object({
       accountId: z.string().min(1).max(64).describe('The id of the account to use, as listed in the agent settings.'),
       method: z.enum(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']),

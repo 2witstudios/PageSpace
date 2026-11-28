@@ -19,6 +19,7 @@ import { createPlaneClient, PLANE_SERVICE_SECRET_VAR, PLANE_URL_VAR } from '@pag
 import { isAgentAccountsConfigured, PRESENTER_KEY_ID_ENV } from './agent-accounts-config';
 import { loadAccountAuthorityKeyring, loadAccountConsentSigningKey } from '@pagespace/lib/auth/account-authority-signing-key';
 import type { PresenterKeyId } from '@pagespace/lib/agent-accounts/grant';
+import { AGENT_ACCOUNT_OPERATIONS } from '@pagespace/lib/agent-accounts/registry/google-operations';
 import { db, getAdvisoryLockPool } from '@pagespace/db/db';
 import { createAccountChangeLock } from '@pagespace/lib/agent-accounts/account-change-lock';
 
@@ -38,7 +39,8 @@ export function getAccountAuthority(): AccountAuthority | null {
       plane: createPlaneClient({ baseUrl: process.env[PLANE_URL_VAR]!.trim(), secret: process.env[PLANE_SERVICE_SECRET_VAR]!.trim() }),
       authorityKey: keyring.current,
       presenterKeyId: process.env[PRESENTER_KEY_ID_ENV]!.trim() as PresenterKeyId,
-      registry: [],
+      // The SAME registry the plane loads: both canonicalize every request with it, or no digest matches.
+      registry: AGENT_ACCOUNT_OPERATIONS,
       consentKey: loadAccountConsentSigningKey(process.env),
       lockAccount: createAccountChangeLock(getAdvisoryLockPool()),
       hash: (bytes) => createHash('sha3-256').update(bytes).digest('hex'),
