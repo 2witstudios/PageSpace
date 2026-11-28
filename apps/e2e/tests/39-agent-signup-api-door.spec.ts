@@ -193,7 +193,7 @@ test.describe('agent signup: the API door on a running app', () => {
 
     // An unfunded agent's first AI call: 402 requires_funding with the claim endpoint (US4).
     const aiRes = await request.post(`${origin}/api/ai/chat`, {
-      headers: { ...keyAuth, 'content-type': 'application/json' },
+      headers: { ...keyAuth, 'content-type': 'application/json', 'X-Browser-Session-Id': 'e2e-agent-api-door' },
       data: JSON.stringify({ chatId, messages: [{ id: 'e2e-api-door', role: 'user', parts: [{ type: 'text', text: 'hello' }] }] }),
     });
     expect(aiRes.status(), await aiRes.text()).toBe(402);

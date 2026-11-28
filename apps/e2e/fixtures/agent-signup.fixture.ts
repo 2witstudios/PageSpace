@@ -48,7 +48,9 @@ export async function inPageFetch(
 ): Promise<InPageResponse> {
   return page.evaluate(
     async ({ target, method, body }) => {
-      const headers: Record<string, string> = {};
+      // The app's client tags every request with its tab's browser-session id; the chat routes
+      // refuse a request without one (400), so this page call carries one as the client would.
+      const headers: Record<string, string> = { 'X-Browser-Session-Id': 'e2e-agent-signup' };
       if (method !== 'GET') {
         const csrfRes = await fetch('/api/auth/csrf', { credentials: 'same-origin', cache: 'no-store' });
         const { csrfToken } = (await csrfRes.json()) as { csrfToken?: string };
