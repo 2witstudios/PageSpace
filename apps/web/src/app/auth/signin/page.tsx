@@ -26,6 +26,7 @@ import { useConsentStore } from "@/stores/useConsentStore";
 import { useInAppBrowserNotice } from "@/hooks/useInAppBrowserNotice";
 import { isV3AuthEnabled } from "@/lib/imago/v3-auth-enabled";
 import { AuthStatusPill } from "@/components/auth/AuthStatusPill";
+import { AgentAuthLink } from "@/components/agent-auth/AgentAuthLink";
 import { useSigninRecovery } from "./useSigninRecovery";
 import { signinErrorNotice, signinPillNotice } from "./signin-errors";
 
@@ -182,6 +183,7 @@ function SignInForm() {
         <p className="mt-6 text-center text-sm text-muted-foreground">
           No passkey yet? Ask your administrator for a one-time setup link.
         </p>
+        <AgentAuthLink mode="signin" imago={imago} {...(nextPath && { nextPath })} />
       </AuthLayout>
     );
   }
@@ -313,6 +315,8 @@ function SignInForm() {
           </button>
         )}
       </motion.div>
+
+      <AgentAuthLink mode="signin" imago={imago} {...(nextPath && { nextPath })} />
 
       {/* Footer */}
       <motion.div

@@ -22,6 +22,7 @@ import { AgentBadge } from '@/components/shared/AgentBadge';
 import { getPreferredBrowserName } from '@/lib/auth/browser-detection';
 import { useInAppBrowserNotice } from '@/hooks/useInAppBrowserNotice';
 import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
+import { AgentAuthLink } from '@/components/agent-auth/AgentAuthLink';
 
 interface SignUpClientProps {
   inviteToken?: string;
@@ -217,6 +218,8 @@ export function SignUpClient({ inviteToken, inviteContext, returnUrl }: SignUpCl
           </button>
         )}
       </motion.div>
+
+      <AgentAuthLink mode="signup" imago={v3} {...(returnUrl && { nextPath: returnUrl })} />
 
       <motion.div
         className="mt-8 text-center"
