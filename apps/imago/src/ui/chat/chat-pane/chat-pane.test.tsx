@@ -23,7 +23,7 @@ vi.mock('@/retained/components/ai/chat/input/ProviderModelSelector', () => ({ Pr
 // The drive's tree names an agent's folder in its picker row.
 vi.mock('@/retained/hooks/usePageTree', () => ({ usePageTree: () => ({ tree: [{ id: 'f-launch', title: 'Launch', children: [] }] }) }));
 const sourceRead = vi.hoisted(() => vi.fn());
-vi.mock('@/retained/hooks/useConversationSpend', () => ({ useConversationSpend: (conversationId: string | null, scope: unknown) => { sourceRead(conversationId, scope); return { spend: { options: [{ source: 'own_credits', walletId: 'own', label: 'Your credits', remainingCredits: '900' }], resolved: { kind: 'spend', source: 'own_credits', walletId: 'own', fallbackApplied: false, fallbackFrom: null } }, choose: vi.fn(), isPending: false }; }, useDriveSpend: () => ({ spend: null }) }));
+vi.mock('@/retained/hooks/useConversationSpend', () => ({ useConversationSpend: (conversationId: string | null, scope: unknown) => { sourceRead(conversationId, scope); return { spend: { options: [{ source: 'drive_wallet', walletId: 'drive', label: 'Other wallet', remainingCredits: '300' }, { source: 'own_credits', walletId: 'own', label: 'Your credits', remainingCredits: '900' }], resolved: { kind: 'spend', source: 'own_credits', walletId: 'own', fallbackApplied: false, fallbackFrom: null } }, choose: vi.fn(), isPending: false }; }, useDriveSpend: () => ({ spend: null }) }));
 import { useSpendContextStore } from '@/retained/stores/useSpendContextStore';
 const { ChatPane } = await import('./chat-pane');
 beforeEach(() => { useSpendContextStore.setState({ entries: [], active: null }); setUiState(createInitialState()); host.props = null; useRetainedChatSelection.getState().select(null); });

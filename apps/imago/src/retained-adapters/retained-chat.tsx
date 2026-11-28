@@ -157,7 +157,7 @@ function RetainedChatHost({ agentId, name, conversationId, resolving, placeholde
       : <ChatMessagesArea messages={[]} isLoading={false} isStreaming={false} />}</div>
     {home && <OnboardingGate />}
     {creationError && <p role="alert" className="px-2 text-sm text-destructive">Could not open this chat. Try sending again.</p>}
-    <div className="p-2">{aboveComposer}<SpendStrip conversationId={null} driveId={page.driveId} onChooseDraftSource={permissions?.canEdit === true && !preparing ? chooseDraftSource : undefined} /><ChatInput value={input}
+    <div className="p-2">{aboveComposer}<SpendStrip conversationId={null} driveId={page.driveId} hasMessages={false} onChooseDraftSource={permissions?.canEdit === true && !preparing ? chooseDraftSource : undefined} /><ChatInput value={input}
       onChange={value => dispatch(transactions.setChatDraft, value)} onSend={() => void prepareFirstSend()}
       disabled={preparing || permissions?.canEdit !== true}
       sendDisabled={firstSendPreviewResolved === false} isStreaming={false} onStop={() => undefined} hideModelSelector variant="sidebar" showMention

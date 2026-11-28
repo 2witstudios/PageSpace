@@ -1,38 +1,36 @@
 'use client';
 
-import { useEffect, useState, type ReactNode } from 'react';
-import useSWR from 'swr';
+import { useState, type ReactNode } from 'react';
 import { spendRefusalCopy } from '@pagespace/lib/billing/spend-refusal-copy';
 import { composerStripModel } from '@pagespace/lib/billing/spend-surface';
 import { useConversationSpend, useDriveSpend } from '@/retained/hooks/useConversationSpend';
 import { Popover, PopoverContent, PopoverTrigger } from '@/retained/components/ui/popover';
 import { SpendSourceOptionsPanel } from '@/retained/components/wallets/SpendSourcePopover';
-import { useSocketStore } from '@/retained/stores/useSocketStore';
 import { renderIcon } from '../../components/icon/icon.render';
-import { CREDITS, spendSourceOf } from './spend-strip-model';
 
 /** The strip above the composer (SPEC v3 "spend strip"). */
 export const spendStripClass = 'mx-2 flex min-h-spend-strip flex-none items-center gap-2 px-1 text-xs text-ink-muted';
 
-/** The server's resolved source for THIS conversation, including refusal and permitted fallback. */
-export function SpendStrip({ conversationId = null, driveId = null, isGlobal = false, onChooseDraftSource }: {
+/**
+ * Who pays, above the composer — only when there is a choice or a problem. It shows:
+ * (a) several sources to choose from, before the first message (composerStripModel);
+ * (b) a refused source, with its refusal copy (and Choose when there is another), even mid-thread;
+ * (c) a drive context whose source is still resolving or failed to resolve (JOURNEYS-2).
+ * Paying from your own credits with nothing to choose shows nothing: the balance lives in the
+ * account menu, and running out is OutOfCreditsAlert's to say.
+ */
+export function SpendStrip({ conversationId = null, driveId = null, isGlobal = false, hasMessages = false, onChooseDraftSource }: {
   readonly conversationId?: string | null;
   readonly driveId?: string | null;
   readonly isGlobal?: boolean;
+  /** The conversation already has messages: the source was chosen, so a choice no longer shows. */
+  readonly hasMessages?: boolean;
   /** Materialize a new agent conversation with its source atomically, without sending a turn. */
   readonly onChooseDraftSource?: (walletId: string) => Promise<void>;
 } = {}): ReactNode {
   const { spend: conversation, error: conversationError, choose, refresh: refreshConversation } = useConversationSpend(conversationId, { driveId, isGlobal });
   const { spend: drive, error: driveError, refresh: refreshDrive } = useDriveSpend(conversationId ? null : driveId);
   const scoped = conversationId !== null || driveId !== null;
-  const { data, mutate } = useSWR<unknown>(scoped ? null : CREDITS);
-  const socket = useSocketStore(state => state.socket);
-  useEffect(() => {
-    if (!socket || scoped) return;
-    const refresh = () => void mutate();
-    socket.on('credits:updated', refresh);
-    return () => { socket.off('credits:updated', refresh); };
-  }, [socket, scoped, mutate]);
   const [open, setOpen] = useState(false);
   const spend = conversationId ? conversation : drive;
   const resolved = spend?.resolved;
@@ -41,12 +39,9 @@ export function SpendStrip({ conversationId = null, driveId = null, isGlobal = f
     : null;
   const refusedChoice = resolved?.kind === 'refuse' ? spend?.options.find(option => option.source === resolved.source) ?? null : null;
   const refusedCopy = resolved?.kind === 'refuse' ? spendRefusalCopy({ reason: resolved.reason, source: refusedChoice, hasOptions: resolved.options.length > 0, now: new Date() }) : null;
-  const strip = spend ? composerStripModel({ ...spend, hasMessages: false }) ?? (selected ? {
-    label: selected.label,
-    detail: selected.remainingCredits === null ? 'No cap' : `${selected.remainingCredits} credits left`,
-    tone: 'normal' as const,
-  } : refusedCopy ? { label: refusedChoice?.label ?? null, detail: refusedCopy.body, tone: 'refused' as const } : null) : null;
-  const personal = scoped ? null : spendSourceOf(data);
+  const strip = spend
+    ? composerStripModel({ ...spend, hasMessages }) ?? (refusedCopy ? { label: refusedChoice?.label ?? null, detail: refusedCopy.body, tone: 'refused' as const } : null)
+    : null;
   // JOURNEYS-2: in a drive (multi-source) context an UNRESOLVED source is state the sender
   // must see, not silence — sending pauses (the composer's readiness gate reads the same
   // preview) until the source resolves, and a failed preview offers the retry.
@@ -63,10 +58,9 @@ export function SpendStrip({ conversationId = null, driveId = null, isGlobal = f
       </div>
     );
   }
-  if (strip === null && personal === null) return null;
-  const refused = strip?.tone === 'refused';
-  const label = strip?.label ?? personal?.label;
-  const detail = strip?.detail ?? personal?.left;
+  if (strip === null) return null;
+  const refused = strip.tone === 'refused';
+  const { label, detail } = strip;
   return (
     <div className={spendStripClass} role="status" aria-label={refused ? 'Credit source refused' : 'Spending from'}>
       {renderIcon({ name: 'wallet', size: 13 })}
