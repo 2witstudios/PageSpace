@@ -89,6 +89,35 @@ describe('buildAuthMd', () => {
     expect(md).toContain('shown once');
   });
 
+  it('names the browser door for agents that drive a browser: sign up and sign in at /auth/agent', () => {
+    expect(md).toContain(`${ISSUER}/auth/agent?mode=signup`);
+    expect(md).toContain(`${ISSUER}/auth/agent?mode=signin`);
+  });
+
+  it('names the CLI path, installed and without installing', () => {
+    expect(md).toContain('npm i -g @pagespace/cli && pagespace signup --agent');
+    expect(md).toContain('npx -y -p @pagespace/cli pagespace signup --agent');
+  });
+
+  it('given a self-hosted issuer, points the CLI at that deployment rather than the CLI default host', () => {
+    const selfHosted = buildAuthMd({ issuer: 'http://onprem.internal:3000/' });
+    expect(selfHosted).toContain('pagespace signup --agent --host=http://onprem.internal:3000');
+  });
+
+  it('documents the rotate response exactly as the rotate route returns it', () => {
+    const rotate = md.slice(md.indexOf(`## ${AUTH_MD_SECTIONS[6]}`));
+    expect(rotate).toContain('→ { "identity_assertion": "ps_agent_…", "agent_id": "…", "secret_version": 2, "revoked_existing_tokens": false }');
+  });
+
+  it('documents the claim grant success body exactly as the token endpoint returns it', () => {
+    expect(md).toContain('{ "claimed": true, "owner": { "id": "…", "name": "…" }, "access_token": "ps_at_…", "token_type": "Bearer", "expires_in": 900, "refresh_token": "ps_rt_…", "scope": "account offline_access" }');
+  });
+
+  it('tells a late poller what an expired claim answers, and when it stops answering that', () => {
+    expect(md).toContain('`expired_token` (the claim lived 15 minutes; start a new one with the same `claim_token`)');
+    expect(md).toContain('a claim that expired more than a day ago');
+  });
+
   it('is pure: identical input, identical output, and no markup outside markdown', () => {
     expect(buildAuthMd({ issuer: ISSUER })).toBe(md);
     expect(md.startsWith('# ')).toBe(true);

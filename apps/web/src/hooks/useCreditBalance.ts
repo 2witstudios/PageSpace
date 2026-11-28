@@ -26,6 +26,11 @@ export interface CreditBalance {
   spendable: number;
   reserved: number;
   subscriptionTier: SubscriptionTier;
+  /**
+   * Set for a claimed AI agent (ADR 0008 Decision 8): its AI usage bills this owner, and the
+   * balance above is the owner's. Null (or absent from an older server) for everyone else.
+   */
+  billedTo?: { userId: string; name: string } | null;
 }
 
 const fetcher = async (url: string): Promise<CreditBalance> => {
@@ -102,7 +107,8 @@ export function useCreditBalance() {
         // fields in this particular push are deferred rather than applied early,
         // but that's fine: the initial GET is already in flight in this window
         // and lands within moments regardless of what this handler does.
-        (prev) => (prev ? { ...applyCreditsPayload(payload), subscriptionTier: prev.subscriptionTier } : prev),
+        // billedTo, like the tier, changes only with a claim or unlink, never with a settle push.
+        (prev) => (prev ? { ...applyCreditsPayload(payload), subscriptionTier: prev.subscriptionTier, billedTo: prev.billedTo } : prev),
         CREDITS_PUSH_MUTATE_OPTIONS,
       );
     };

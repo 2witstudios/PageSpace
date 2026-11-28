@@ -46,6 +46,9 @@ export function CreditBalance() {
   }
 
   const { spendable, monthly, topup, reserved, debt, subscriptionTier } = balance;
+  // A claimed AI agent spends its owner's credits (ADR 0008 Decision 8): say so, and offer no
+  // purchase or upgrade — the agent cannot buy credits, its owner funds it.
+  const billedTo = balance.billedTo ?? null;
   const isFree = subscriptionTier === 'free';
   const copy = creditBalanceCopy({ isFree, canPurchase: showPurchases });
   const inDebt = spendable < 0;
@@ -126,13 +129,24 @@ export function CreditBalance() {
                 Renews {renewDate.toLocaleDateString()}
               </p>
             )}
+            {billedTo && (
+              <p className="text-xs text-primary-foreground/80">
+                Your AI usage is billed to {billedTo.name || "your owner"}.
+              </p>
+            )}
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>
 
-      <UpgradeTierButton isFree={isFree} />
+      {billedTo && (
+        <span data-testid="credit-billed-to" className="hidden md:inline text-xs text-muted-foreground">
+          {`Billed to ${billedTo.name || 'your owner'}`}
+        </span>
+      )}
 
-      {showPurchases && (
+      {!billedTo && <UpgradeTierButton isFree={isFree} />}
+
+      {!billedTo && showPurchases && (
         <div className="hidden sm:flex">
           <BuyCreditsButton variant={isLow ? 'default' : 'ghost'} size="sm" />
         </div>

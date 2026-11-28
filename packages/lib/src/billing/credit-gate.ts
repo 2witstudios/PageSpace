@@ -416,6 +416,15 @@ async function decideAndReserve(
     ? await resolution.persistPreselectedSource({ userId, target: opts.spend, preselectedWalletId: decision.preselectedWalletId, ownCreditsUserId: payer.payerId })
     : undefined;
   if (decision.kind !== 'spend') {
+    // An empty own-credits leg is, for the person, out of credits — and an UNCLAIMED agent's
+    // out of credits is requires_funding (refineGateReason, ADR 0008 Decision 9): the drive
+    // resolution must not turn the claim path into a generic "choose another source".
+    if (decision.kind === 'refuse' && decision.source === 'own_credits' && decision.reason === 'source_empty' && !payer.viaAgentOwner) {
+      const consumer = await readGateAccount(userId);
+      if (refineGateReason({ reason: 'out_of_credits', accountType: consumer.accountType, hasOwner: consumer.ownerUserId !== null }) === 'requires_funding') {
+        return { allowed: false, reason: 'requires_funding' };
+      }
+    }
     return {
       allowed: false,
       reason: 'source_refused',

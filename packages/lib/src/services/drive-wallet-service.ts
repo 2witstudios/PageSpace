@@ -46,6 +46,7 @@ import {
   type WalletWrite,
 } from '../permissions/wallet-access';
 import { ensurePersonalRootWalletId } from '../billing/personal-wallet';
+import { resolveOwnCreditsPayer } from '../billing/agent-billing-owner';
 import { listSpendChoices, resolveCallSpend, seatAllowanceFor, seatAllowancesFor, type SpendChoice } from '../billing/spend-resolution';
 import { conversationSpend, driveSpend, type CallSpendDecision } from '../billing/spend-target';
 import { formatCreditCount } from '../billing/money-model';
@@ -1510,12 +1511,15 @@ export async function getConversationSpend(actor: AccessActor, conversationId: s
   if (refusal) return refusal;
   const [user] = await db.select({ tier: users.subscriptionTier }).from(users).where(eq(users.id, userId)).limit(1);
   const options = await listSpendChoices(userId, sessionDriveId);
+  const consumerTier = toPersonalSubscriptionTier(user?.tier);
   const resolved = await resolveCallSpend({
     userId,
-    consumerTier: toPersonalSubscriptionTier(user?.tier),
+    consumerTier,
     target: conversationSpend(sessionDriveId, conversationId),
     reservationCents: 0,
     recordRefusal: false,
+    // The preview the gate would decide: a claimed agent's own credits are its owner's (ADR 0008 D8).
+    ownCredits: await resolveOwnCreditsPayer({ userId, tier: consumerTier }),
   });
   return { ok: true, conversationId, driveId: sessionDriveId, chosenWalletId: conversation.chosenWalletId, options, resolved };
 }
@@ -1541,12 +1545,15 @@ export async function getDriveSpend(actor: AccessActor, driveId: string): Promis
   if (!(await getUserDriveAccess(actor, driveId))) return notFound();
   const [user] = await db.select({ tier: users.subscriptionTier }).from(users).where(eq(users.id, userId)).limit(1);
   const options = await listSpendChoices(userId, driveId);
+  const consumerTier = toPersonalSubscriptionTier(user?.tier);
   const resolved = await resolveCallSpend({
     userId,
-    consumerTier: toPersonalSubscriptionTier(user?.tier),
+    consumerTier,
     target: driveSpend(driveId),
     reservationCents: 0,
     recordRefusal: false,
+    // The preview the gate would decide: a claimed agent's own credits are its owner's (ADR 0008 D8).
+    ownCredits: await resolveOwnCreditsPayer({ userId, tier: consumerTier }),
   });
   return { ok: true, driveId, options, resolved };
 }

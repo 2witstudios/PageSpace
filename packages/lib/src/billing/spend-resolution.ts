@@ -27,7 +27,7 @@ import { orgLegStatus } from '../organizations/status-core';
 import { automationCreatorRemains, loadDriveSpendStanding, sharedSpendLegsFor } from '../permissions/spend-standing';
 import { loggers } from '../logging/logger-config';
 import { notifyLeadOfAutomationSkip } from './automation-skip-notifier';
-import { spendableCentsFor } from './credit-balance';
+import { readSpendableCents, spendableCentsFor } from './credit-balance';
 import { effectiveSpendPolicy, walletChainStatus, type FallbackRule, type SpendLeg, type SpendSourceKind, type WalletStatus } from './wallet-core';
 import {
   orgEntitlementTier,
@@ -54,6 +54,8 @@ import {
 } from './spend-target';
 import { toPersonalSubscriptionTier, type SubscriptionTier } from './subscription-tiers';
 import { ensurePersonalRootWalletId } from './personal-wallet';
+import { resolveOwnCreditsPayer } from './agent-billing-owner';
+import { readUserDisplayName } from './own-credits-balance';
 import { loadSeatCapFacts, loadSeatCapFactsForUsers } from './seat-allowance';
 import { readOrgSpendPolicy } from '../organizations/policy-reader';
 import { findOrganizationNames } from '../organizations/repository';
@@ -541,13 +543,18 @@ export interface SpendChoice {
  * gate grants into a bare row exactly as it always has).
  */
 export async function listSpendChoices(userId: string, driveId: string | null): Promise<SpendChoice[]> {
-  const personalId = await ensurePersonalRootWalletId(db, userId);
-  const personal = await personalRootOf(userId);
-  const ownRemaining = Math.max(0, spendableCentsFor(personal, await tierOf(userId)));
+  // Own credits are the PAYER's (ADR 0008 Decision 8): a claimed agent's are its owner's, at the
+  // owner's tier — the wallet the gate charges, so the choice never shows an agent's empty wallet.
+  const payer = await resolveOwnCreditsPayer({ userId, tier: await tierOf(userId) });
+  const personalId = await ensurePersonalRootWalletId(db, payer.payerId);
+  // The account-aware read (the same one the credit balance shows): a starter grant the gate
+  // will never write — an agent's (ADR 0008 Decision 9) — is never displayed as spendable.
+  const ownRemaining = Math.max(0, await readSpendableCents(payer.payerId, payer.tier));
+  const billedToName = payer.viaAgentOwner ? await readUserDisplayName(payer.payerId) : null;
   const choice = (source: SpendSourceKind, walletId: string, names: { driveName: string | null; orgName: string | null }, remainingCents: number | null): SpendChoice => ({
     source,
     walletId,
-    label: spendChoiceLabel({ source, ...names }),
+    label: spendChoiceLabel({ source, ...names, ...(source === 'own_credits' && { billedToName }) }),
     ...names,
     remainingCents,
     remainingCredits: remainingCents === null ? null : formatCreditCount(remainingCents),

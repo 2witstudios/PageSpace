@@ -66,6 +66,13 @@ const lifecycleColumns = {
   createdAt: agentIdentities.createdAt,
 };
 
+/**
+ * How long an EXPIRED claim row is kept before the prune deletes it. While it exists, an agent
+ * polling the claim grant with that claim token is told `expired_token` (start a new claim)
+ * instead of the `invalid_grant` an unknown token gets. A day covers an agent that polls late.
+ */
+export const CLAIM_EXPIRED_GRACE_MS = 24 * 60 * 60 * 1000;
+
 export const agentLifecycleStore: AgentLifecycleStore = {
   async pruneExpiredChallenges(now) {
     const deleted = await guard('prune_challenges', () =>
@@ -76,7 +83,7 @@ export const agentLifecycleStore: AgentLifecycleStore = {
 
   async pruneExpiredClaims(now) {
     const deleted = await guard('prune_claims', () =>
-      db.delete(agentClaims).where(lt(agentClaims.expiresAt, now)).returning({ id: agentClaims.id }),
+      db.delete(agentClaims).where(lt(agentClaims.expiresAt, new Date(now.getTime() - CLAIM_EXPIRED_GRACE_MS))).returning({ id: agentClaims.id }),
     );
     return deleted.length;
   },

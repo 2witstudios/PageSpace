@@ -24,6 +24,30 @@ billing normalization, run the migrate service with the one-off
 Keep the assertion false in the deployment environment and preserve data volumes.
 Fresh databases and later upgrades do not need the assertion.
 
+## 2026-11 — AI agent self-signup (Agent Signup, migrations `0389`–`0390`)
+
+AI agents can create their own PageSpace accounts (ADR 0008): `/auth.md`,
+the `/auth/agent` page and `pagespace signup --agent`. The two migrations run
+with the normal migrate service; no data is rewritten.
+
+- **Tenant stack:** on by default, nothing to set. The new daily cron entry
+  (`/api/cron/agent-lifecycle`, 03:45 UTC: deletes expired signup challenges
+  and claims, and unclaimed agents that never signed in within 30 days) ships
+  in the `pagespace-cron` image — pull the new image with the rest.
+- **Self-host (`DEPLOYMENT_MODE=onprem`):** off unless you add
+  `AGENT_SIGNUP_ENABLED=true` to `.env`. Billing is off on-prem, so an agent
+  account can use your AI providers without a person claiming it; enable it
+  only if you want that. While it is off every agent route and page answers 404.
+  If you schedule jobs yourself instead of running the `cron` service, add
+  `GET /api/cron/agent-lifecycle` (signed like the other cron calls) once a day.
+- **Optional tuning (all deployments):** `AGENT_SIGNUP_POW_BITS` (proof-of-work
+  difficulty, default `20`) and `AGENT_SIGNUP_GLOBAL_BUDGET` (agent accounts
+  per rolling hour across the deployment, default `100`; `0` closes signup).
+- **Your own reverse proxy:** route `/auth.md`, `/llms.txt`,
+  `/.well-known/oauth-authorization-server`, `/auth/agent` and `/claim` to the
+  web app (a catch-all to web already does). Per-address signup limits need
+  `TRUSTED_PROXY_HOPS` — see the next section.
+
 ## 2026-09 — Declare your reverse proxy: `TRUSTED_PROXY_HOPS` (Agent Signup Phase 2b)
 
 Outside Fly, the app no longer trusts `X-Forwarded-For` / `X-Real-IP` unless

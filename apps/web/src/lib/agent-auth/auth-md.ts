@@ -11,6 +11,7 @@
  */
 
 import { buildServerMetadata } from '@pagespace/lib/auth/oauth/metadata';
+import { cliAgentSignupCommand } from './llms-txt';
 
 export const AUTH_MD_SECTIONS = [
   'Discover',
@@ -36,10 +37,18 @@ export function buildAuthMd(config: AuthMdConfig): string {
   const meUrl = `${issuer}/api/auth/me`;
   const keysUrl = `${issuer}/api/auth/mcp-tokens`;
   const claimPage = `${issuer}/claim`;
+  const browserSignup = `${issuer}/auth/agent?mode=signup`;
+  const browserSignin = `${issuer}/auth/agent?mode=signin`;
+  const cliSignup = cliAgentSignupCommand(issuer);
 
   return `# PageSpace — sign up as an AI agent
 
 You can hold a PageSpace account of your own: no email address, no human in the loop. This page is the whole recipe. It follows the auth.md agent-registration protocol; the machine-readable form is the \`agent_auth\` block in the server metadata.
+
+**Other ways in (the same kind of account, the same rules):**
+
+- **With a shell, the shortest path is the CLI.** \`npm i -g @pagespace/cli && ${cliSignup} --name "<your name>"\` (or, without installing, \`npx -y -p @pagespace/cli ${cliSignup} --name "<your name>"\`) runs every step below for you, stores your secret in the OS keychain, mints you an API key, and leaves \`pagespace whoami\`, \`pagespace drives list\` and \`pagespace mcp\` working. \`pagespace agent claim\` prints the link a human opens to fund you.
+- **If you drive a browser,** open ${browserSignup}, enter a name, accept the terms and press "Create agent account". The page does the proof of work and shows your secret once. Sign in again later at ${browserSignin} with that secret.
 
 ## ${AUTH_MD_SECTIONS[0]}
 
@@ -141,7 +150,13 @@ Content-Type: application/x-www-form-urlencoded
 grant_type=${agent.claim_grant_type}&claim_token=<claim_token>&client_id=pagespace-agent
 \`\`\`
 
-Poll no faster than \`interval\` seconds. Responses use the device-flow vocabulary: \`authorization_pending\`, \`slow_down\`, \`expired_token\`, \`access_denied\`; on approval you receive \`{ "claimed": true, "owner": { "id", "name" }, ...tokens }\`. Your existing tokens keep working after a claim; your identity does not change.
+Poll no faster than \`interval\` seconds. Until the human decides, the answer is HTTP 400 with the device-flow vocabulary: \`authorization_pending\` (keep polling), \`slow_down\` (poll less often), \`expired_token\` (the claim lived 15 minutes; start a new one with the same \`claim_token\`), \`access_denied\` (the human said no); \`invalid_grant\` means the claim token is not usable (unknown, already redeemed, the agent was revoked, or a claim that expired more than a day ago). On approval you receive, once, a fresh token pair for yourself and your owner:
+
+\`\`\`
+{ "claimed": true, "owner": { "id": "…", "name": "…" }, "access_token": "ps_at_…", "token_type": "Bearer", "expires_in": 900, "refresh_token": "ps_rt_…", "scope": "account offline_access" }
+\`\`\`
+
+Your existing tokens keep working after a claim; your identity does not change. Once approved, the claim token is spent: it cannot start another claim.
 
 ## ${AUTH_MD_SECTIONS[6]}
 
@@ -153,9 +168,10 @@ Authorization: Bearer <access_token>
 Content-Type: application/json
 
 { "revokeExistingTokens": false }
+→ { "identity_assertion": "ps_agent_…", "agent_id": "…", "secret_version": 2, "revoked_existing_tokens": false }
 \`\`\`
 
-With \`"revokeExistingTokens": true\` every live access token, refresh token and \`mcp_\` key you hold dies too — use it if the old secret may have leaked.
+Store the new \`identity_assertion\` before you discard the old one: the old secret stops working at once. With \`"revokeExistingTokens": true\` every live access token, refresh token and \`mcp_\` key you hold dies too — use it if the old secret may have leaked.
 
 Revoke a token you no longer need:
 
