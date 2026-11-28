@@ -27,10 +27,11 @@ const H = vi.hoisted(() => ({
     unknown
   >,
   usersTable: { __table: 'users', id: 'users.id' } as Record<string, unknown>,
+  agentIdentities: { __table: 'agent_identities', userId: 'ai.userId' } as Record<string, unknown>,
   state: { dbTransactionImpl: null as null | ((cb: (tx: unknown) => unknown) => unknown) },
 }));
 
-const { oauthRefreshTokens, oauthAccessTokens, usersTable } = H;
+const { oauthRefreshTokens, oauthAccessTokens, usersTable, agentIdentities } = H;
 
 vi.mock('@pagespace/db/schema/oauth', () => ({
   oauthRefreshTokens: H.oauthRefreshTokens,
@@ -38,8 +39,10 @@ vi.mock('@pagespace/db/schema/oauth', () => ({
   oauthClients: {},
   oauthAuthorizationCodes: {},
 }));
+vi.mock('@pagespace/db/schema/agent-identities', () => ({ agentIdentities: H.agentIdentities }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: H.usersTable,
+  mcpTokens: {},
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a: unknown, b: unknown) => ({ _eq: [a, b] })),
@@ -102,6 +105,8 @@ let accessRows: AccessRow[] = [];
 let userSuspendedAt: Date | null = null;
 let userTokenVersion = 0;
 let lockChain: Promise<unknown> = Promise.resolve();
+/** Every `UPDATE agent_identities` the grant ran: the lifecycle stamp. */
+let identityStamps: Array<{ patch: Record<string, unknown>; predicate: unknown }> = [];
 
 function makeTx() {
   return {
@@ -129,6 +134,8 @@ function makeTx() {
             accessRows
               .filter((r) => evalPredicate(predicate, r as unknown as Record<string, unknown>))
               .forEach((r) => Object.assign(r, patch));
+          } else if (table === agentIdentities) {
+            identityStamps.push({ patch, predicate });
           }
           return Promise.resolve();
         },
@@ -191,6 +198,30 @@ beforeEach(() => {
   userSuspendedAt = null;
   userTokenVersion = 0;
   lockChain = Promise.resolve();
+  identityStamps = [];
+});
+
+// Security review: an agent that keeps refreshing is in active use, so the
+// lifecycle sweep (which keys on lastAuthAt) must never see it as abandoned.
+describe('refreshTokenGrant — agent lifecycle stamp', () => {
+  it('given a successful rotation, should stamp lastAuthAt for the token principal (a no-op for a human: no identity row)', async () => {
+    seedRefreshRow();
+    const now = new Date();
+
+    const result = await refreshTokenGrant({ refreshToken: REFRESH_TOKEN, clientDbId: CLIENT_DB_ID, requestedScope: null, now });
+
+    expect(result.outcome).toBe('ok');
+    expect(identityStamps).toEqual([{ patch: { lastAuthAt: now }, predicate: { _eq: [agentIdentities.userId, USER_ID] } }]);
+  });
+
+  it('given a refused refresh (expired, revoked or reused), should stamp nothing', async () => {
+    seedRefreshRow({ revokedAt: new Date(Date.now() - 1000), revokedReason: 'logout' });
+
+    const result = await refreshTokenGrant({ refreshToken: REFRESH_TOKEN, clientDbId: CLIENT_DB_ID, requestedScope: null, now: new Date() });
+
+    expect(result.outcome).toBe('invalid_grant');
+    expect(identityStamps).toEqual([]);
+  });
 });
 
 describe('refreshTokenGrant — happy path', () => {

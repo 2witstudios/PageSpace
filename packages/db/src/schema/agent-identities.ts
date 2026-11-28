@@ -8,8 +8,10 @@ import { users } from './auth';
  * Not to be confused with `agent_accounts` (ADR 0004/0005, the credential
  * broker): those are credentials a PageSpace agent holds for OTHER sites.
  * An agent identity IS a `users` row (`accountType = 'agent'`); this table
- * holds what only an agent has — its opaque `ps_agent_*` secret (hash only),
- * its claim token (hash only) and its human owner once claimed.
+ * holds what only an agent has — its opaque `ps_agent_*` secret (hash only)
+ * and its human owner once claimed. There is no claim token (security review
+ * addendum to ADR 0008): a claim is started and polled with the agent's own
+ * credential, so no second secret exists to leak.
  *
  * Every secret-shaped value is SHA3-256 at rest (`hashToken`) with a short
  * prefix for support identification; the plaintext exists only in the
@@ -22,10 +24,6 @@ export const agentIdentities = pgTable('agent_identities', {
   // Bumped by every rotation; the jwt-bearer exchange and sign-in look up by
   // hash, so the version is audit/support metadata, not a lookup key.
   secretVersion: integer('secretVersion').default(1).notNull(),
-  // Nulled when a claim settles (ADR 0008 §5 assertion 22), so a claim token
-  // can start at most one successful claim.
-  claimTokenHash: text('claimTokenHash').unique(),
-  claimTokenPrefix: text('claimTokenPrefix'),
   // Self-reported client label ("claude-code", "codex", …). Display only —
   // no vendor-verifiable agent identity exists (ADR 0008 §1).
   source: varchar('source', { length: 120 }),
@@ -44,19 +42,15 @@ export const agentIdentities = pgTable('agent_identities', {
 /**
  * A human claiming an agent (ADR 0008 Decision 3). Mirrors the
  * `oauth_device_codes` lifecycle columns but is deliberately a separate table:
- * a device row mints for the APPROVING human, a claim mints for the AGENT.
- * `ownerUserId` is null until a human approves.
+ * a device row mints for the APPROVING human; a claim mints NOTHING — it only
+ * links an owner to the agent, which keeps its own tokens (Decision 7). The
+ * agent starts and polls it with its own credential and finds it by
+ * `agentUserId` (newest first). `ownerUserId` is null until a human approves.
  */
 export const agentClaims = pgTable('agent_claims', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   agentUserId: text('agentUserId').notNull().references(() => users.id, { onDelete: 'cascade' }),
   ownerUserId: text('ownerUserId').references(() => users.id, { onDelete: 'cascade' }),
-  // SHA3-256 of the claim token that started this claim. The agent polls the
-  // claim grant with that token, and approval nulls
-  // `agent_identities.claimTokenHash` (assertion 22) — so the poll finds its
-  // claim here, never through the identity row. Not unique: a token may start
-  // a fresh claim after an earlier one expired or was denied (the newest wins).
-  claimTokenHash: text('claimTokenHash').notNull(),
   userCodeHash: text('userCodeHash').unique().notNull(),
   expiresAt: timestamp('expiresAt', { mode: 'date' }).notNull(),
   approvedAt: timestamp('approvedAt', { mode: 'date' }),
@@ -66,8 +60,8 @@ export const agentClaims = pgTable('agent_claims', {
   pollIntervalSeconds: integer('pollIntervalSeconds').default(5).notNull(),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
 }, (table) => ({
-  agentUserIdx: index('agent_claims_agent_user_id_idx').on(table.agentUserId),
-  claimTokenIdx: index('agent_claims_claim_token_hash_idx').on(table.claimTokenHash, table.createdAt),
+  // The poll reads an agent's newest claim.
+  agentUserIdx: index('agent_claims_agent_user_id_idx').on(table.agentUserId, table.createdAt),
   ownerUserIdx: index('agent_claims_owner_user_id_idx').on(table.ownerUserId),
   expiresIdx: index('agent_claims_expires_at_idx').on(table.expiresAt),
 }));

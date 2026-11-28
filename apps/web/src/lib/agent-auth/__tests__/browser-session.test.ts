@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   csrf: vi.fn(),
   deviceToken: vi.fn(),
   appendCookie: vi.fn(),
+  recordAuth: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/auth/session-service', () => ({
@@ -20,6 +21,7 @@ vi.mock('@pagespace/lib/auth/csrf-utils', () => ({ generateCSRFToken: mocks.csrf
 vi.mock('@pagespace/lib/auth/constants', () => ({ SESSION_DURATION_MS: 1000 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { auth: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } } }));
 vi.mock('@/lib/auth', () => ({ createDeviceToken: mocks.deviceToken }));
+vi.mock('@pagespace/lib/services/agent-identities', () => ({ recordAgentAuthentication: mocks.recordAuth }));
 vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: (headers: Headers, token: string) => {
     mocks.appendCookie(token);
@@ -38,6 +40,27 @@ describe('startAgentBrowserSession', () => {
     mocks.validateSession.mockResolvedValue({ sessionId: 'sess-1', userId: 'agent-1' });
     mocks.csrf.mockReturnValue('csrf-1');
     mocks.deviceToken.mockResolvedValue('ps_dev_token');
+    mocks.recordAuth.mockResolvedValue(undefined);
+  });
+
+  // Security review: a browser-door agent that only ever used its session was
+  // never stamped, so the 30-day lifecycle sweep erased an agent in active use.
+  it('should stamp the agent as authenticated (lastAuthAt) — a session IS an authentication', async () => {
+    const result = await startAgentBrowserSession({ request: request(), userId: 'agent-1', tokenVersion: 3, clientIP: '203.0.113.9' });
+    expect(result.ok).toBe(true);
+    expect(mocks.recordAuth).toHaveBeenCalledWith({ userId: 'agent-1', now: expect.any(Date) });
+  });
+
+  it('given the stamp fails, should still hand over the session (the next sign-in or refresh stamps again)', async () => {
+    mocks.recordAuth.mockRejectedValue(new Error('store down'));
+    const result = await startAgentBrowserSession({ request: request(), userId: 'agent-1', tokenVersion: 3, clientIP: '203.0.113.9' });
+    expect(result.ok).toBe(true);
+  });
+
+  it('given the session could not be validated, should not stamp anything', async () => {
+    mocks.validateSession.mockResolvedValue(null);
+    await startAgentBrowserSession({ request: request(), userId: 'agent-1', tokenVersion: 3, clientIP: '203.0.113.9' });
+    expect(mocks.recordAuth).not.toHaveBeenCalled();
   });
 
   it('given an agent, should create a full user session recording the one-factor agent-secret ceremony', async () => {

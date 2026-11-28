@@ -631,7 +631,6 @@ describe('middleware — agent API door exact-match carve-out', () => {
   it.each([
     ['GET', '/api/agent/challenge'],
     ['POST', '/api/agent/identity'],
-    ['POST', '/api/agent/claim'],
     // Phase 3: the browser door's two pre-session endpoints.
     ['POST', '/api/auth/agent/signup'],
     ['POST', '/api/auth/agent/signin'],
@@ -642,6 +641,9 @@ describe('middleware — agent API door exact-match carve-out', () => {
   });
 
   it.each([
+    // Security review: a claim is started with the agent's OWN Bearer, so a
+    // credential-less request (the old `{claim_token}` body) is gated here.
+    '/api/agent/claim',
     '/api/agent/secret/rotate',
     '/api/agent/challenge/extra',
     '/api/agent/identity/x',

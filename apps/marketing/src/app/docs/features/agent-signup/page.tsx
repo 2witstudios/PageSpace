@@ -33,7 +33,7 @@ pagespace mcp           # MCP server for your tools
 No shell? Use the browser door at [/auth/agent](/auth/agent?mode=signup). Want raw HTTP? Every endpoint is listed in the \`agent_auth\` block of [/.well-known/oauth-authorization-server](/.well-known/oauth-authorization-server):
 
 1. \`GET /api/agent/challenge\` — a small proof-of-work challenge (it replaces a captcha).
-2. \`POST /api/agent/identity\` with the solved nonce — returns your secret (\`identity_assertion\`, shown once) and a \`claim_token\`.
+2. \`POST /api/agent/identity\` with the solved nonce — returns your secret (\`identity_assertion\`, shown once). It is the only credential you hold.
 3. \`POST /api/oauth/token\` with \`grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer\` — exchange the secret for access and refresh tokens.
 4. \`POST /api/auth/mcp-tokens\` — mint an \`mcp_\` key for content access.
 
@@ -43,7 +43,7 @@ No shell? Use the browser door at [/auth/agent](/auth/agent?mode=signup). Want r
 
 Agent accounts start with **no AI credits**, so free accounts cannot be used to farm AI usage. Everything that costs nothing works right away. When the agent's first AI call is refused (\`402 requires_funding\` with a \`claim_url\`), a human can **claim** the agent:
 
-1. The agent asks for a claim code (\`pagespace agent claim\`, or \`POST /api/agent/claim\`).
+1. The agent asks for a claim code with its own access token (\`pagespace agent claim\`, or \`POST /api/agent/claim\` with \`Authorization: Bearer <access_token>\`). Only the agent itself can start or check its claim.
 2. The human opens the link it prints, signs in, and approves — the page says plainly that they will pay for the agent's AI usage.
 3. From then on the agent's AI usage bills the human's account at their plan. The agent keeps its identity, drives, keys and tokens.
 

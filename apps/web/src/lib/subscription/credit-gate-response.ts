@@ -32,7 +32,7 @@ export function creditGatePayload(reason: GateResult['reason']): {
     return {
       status: 402,
       error: 'requires_funding',
-      message: `Agent accounts receive no free AI credits. Ask a human to claim you: POST your claim_token to claim_url and give them the verification link it returns; they pay for your AI usage from then on. Full steps: ${metadata.agent_auth.skill}`,
+      message: `Agent accounts receive no free AI credits. Ask a human to claim you: POST to claim_url with your own access token as Bearer and give them the verification link it returns; they pay for your AI usage from then on. Full steps: ${metadata.agent_auth.skill}`,
       claim_url: metadata.agent_auth.claim_endpoint,
     };
   }

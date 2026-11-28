@@ -15,7 +15,7 @@
  *   pagespace agent create-key       mint (another) access key for this agent
  *
  * Where things live: the agent credential (`kind: 'agent'`: the durable
- * secret, a refresh token, the claim token) under the login slot (`default`,
+ * secret and a refresh token — there is no claim token) under the login slot (`default`,
  * or `--key <name>`); the agent's `mcp_` key as a `static` credential under
  * `agent`, which is also set as the host's active key. The secret is printed
  * only with `--show-secret`, and only on the call that created it.
@@ -30,10 +30,11 @@
  */
 import {
   exchangeAgentAssertion,
+  isHttpError,
   isInvalidGrantError,
+  isNotFoundError,
   isPermissionDeniedError,
   isRateLimitError,
-  isValidationError,
   PAGESPACE_AGENT_CLIENT_ID,
 } from '@pagespace/sdk';
 import type { OAuthTokens } from '@pagespace/sdk';
@@ -254,7 +255,6 @@ export function createSignupHandler(deps: AgentCommandDeps): CommandHandler {
       secret: registered.identity_assertion,
       refreshToken: null,
       clientId: PAGESPACE_AGENT_CLIENT_ID,
-      claimToken: registered.claim_token,
       contentKeyName: null,
       scopes: [],
       createdAt,
@@ -391,8 +391,6 @@ export function createAgentLoginHandler(deps: AgentCommandDeps): CommandHandler 
         secret,
         refreshToken: null,
         clientId: PAGESPACE_AGENT_CLIENT_ID,
-        // A login does not learn the claim token; `agent claim` asks for it.
-        claimToken: null,
         contentKeyName: null,
         scopes: [],
         createdAt: new Date(deps.now()).toISOString(),
@@ -443,22 +441,27 @@ export function createAgentClaimHandler(deps: AgentCommandDeps): CommandHandler 
     const credential = await storedAgent(ctx, host, profile);
     if (credential === null) return EXIT_RUNTIME_ERROR;
 
-    const claimToken =
-      credential.claimToken ??
-      (await deps.readSecret({ isTTY: ctx.isTTY, prompt: ctx.prompt, label: 'Claim token (ps_claim_…, from your signup)' }));
-    if (claimToken === null) {
-      ctx.stderr.write('This machine has no claim token for the agent (it signed in with "login --agent"). Pipe it on stdin: printf %s "$CLAIM_TOKEN" | pagespace agent claim\n');
-      return EXIT_USAGE_ERROR;
+    // The poll authenticates with the agent's own access token, read from the
+    // same provider ctx.sdk uses. Without it the claim could start but never be
+    // watched, so refuse before starting anything.
+    const accessToken = ctx.accessToken;
+    if (accessToken === undefined) {
+      ctx.stderr.write('Could not read this agent\'s access token to start a claim. Sign in again with "pagespace login --agent".\n');
+      return EXIT_RUNTIME_ERROR;
     }
 
+    // Started with the agent's OWN credential (ctx.sdk rides the stored agent
+    // login): there is no claim token to read, prompt for or store.
     let started;
     try {
-      started = await ctx.sdk.agent.claim({ claim_token: claimToken });
+      started = await ctx.sdk.agent.claim({});
     } catch (error) {
       ctx.stderr.write(
-        isValidationError(error)
-          ? 'The claim token was refused: this agent may already be claimed, or the token is not this agent\'s.\n'
-          : `Could not start a claim on ${host}: ${describeFailure(error)}\n`,
+        isHttpError(error) && error.status === 409
+          ? 'This agent already has an owner. Run "pagespace whoami" to see who.\n'
+          : isNotFoundError(error)
+            ? `${host} did not accept this credential as the agent itself: the agent may be revoked or suspended.\n`
+            : `Could not start a claim on ${host}: ${describeFailure(error)}\n`,
       );
       return EXIT_RUNTIME_ERROR;
     }
@@ -503,7 +506,14 @@ export function createAgentClaimHandler(deps: AgentCommandDeps): CommandHandler 
         return EXIT_RUNTIME_ERROR;
       }
 
-      const result = await deps.pollClaim({ tokenEndpoint, claimToken, clientId: credential.clientId });
+      let token: string;
+      try {
+        token = await accessToken();
+      } catch (error) {
+        ctx.stderr.write(`Could not refresh this agent's access token to poll the claim: ${describeFailure(error)}\n`);
+        return EXIT_RUNTIME_ERROR;
+      }
+      const result = await deps.pollClaim({ tokenEndpoint, accessToken: token, clientId: credential.clientId });
       switch (result.kind) {
         case 'authorization_pending':
           continue;
@@ -517,19 +527,17 @@ export function createAgentClaimHandler(deps: AgentCommandDeps): CommandHandler 
           ctx.stderr.write('The human declined the claim. This agent stays unclaimed.\n');
           return EXIT_RUNTIME_ERROR;
         case 'invalid_grant':
-          ctx.stderr.write('The claim was already redeemed or is no longer valid. Run "pagespace whoami" to see whether this agent has an owner.\n');
+          ctx.stderr.write('The claim was already reported or is no longer valid. Run "pagespace whoami" to see whether this agent has an owner.\n');
+          return EXIT_RUNTIME_ERROR;
+        case 'invalid_token':
+          ctx.stderr.write('The agent\'s access token was refused while polling. Sign in again with "pagespace login --agent", then run "pagespace agent claim".\n');
           return EXIT_RUNTIME_ERROR;
         case 'request_failed':
           ctx.stderr.write(`Polling the claim failed: ${result.message}\n`);
           return EXIT_RUNTIME_ERROR;
         case 'claimed': {
-          // Persist before anything else: the claim token is spent, and the
-          // approval may carry a fresh pair (the old tokens keep working too).
-          const latest = await ctx.credentialStore.get(host, profile);
-          const base = latest !== null && latest.kind === 'agent' ? latest : credential;
-          const claimed = result.tokens ? agentCredentialWithTokens(base, result.tokens, deps.now()) : base;
-          await ctx.credentialStore.set(host, { ...claimed, claimToken: null }, profile);
-
+          // Nothing to persist: the claim mints no token (ADR 0008 Decision 7) —
+          // this agent's credential is exactly what it was.
           const owner = result.owner;
           if (intent.flags.json) {
             ctx.stdout.write(`${JSON.stringify({ event: 'claimed', owner })}\n`);

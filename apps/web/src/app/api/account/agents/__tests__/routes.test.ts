@@ -63,7 +63,7 @@ describe('Settings → Agents API', () => {
     mocks.doorOpen.mockReturnValue(true);
     mocks.summary.mockResolvedValue({ ownerUserId: 'human-1', claimedAt: new Date(), source: 'codex' });
     mocks.revoke.mockResolvedValue({ revoked: true });
-    mocks.unlink.mockResolvedValue({ ok: true, claimToken: 'ps_claim_fresh000000000000000000' });
+    mocks.unlink.mockResolvedValue({ ok: true });
     mocks.list.mockResolvedValue([
       { agentUserId: 'agent-1', name: 'Scratch', source: 'codex', createdAt: new Date('2026-10-01T00:00:00Z'), claimedAt: new Date('2026-10-02T00:00:00Z'), lastActiveAt: new Date('2026-11-20T00:00:00Z'), revokedAt: null },
     ]);
@@ -129,13 +129,14 @@ describe('Settings → Agents API', () => {
   });
 
   describe('POST /api/account/agents/[agentId]/unlink', () => {
-    it('given the owner, should release the agent and hand back a fresh claim token once', async () => {
+    // Security review: unlink used to hand the former owner a fresh claim
+    // token — a credential that could re-claim the agent and poll its tokens.
+    it('given the owner, should release the agent and hand back NOTHING secret', async () => {
       const res = await UNLINK(post('/api/account/agents/agent-1/unlink'), ctx('agent-1'));
       expect(res.status).toBe(200);
       expect(res.headers.get('cache-control')).toBe('no-store');
-      expect(await res.json()).toEqual({ unlinked: true, claim_token: 'ps_claim_fresh000000000000000000' });
+      expect(await res.json()).toEqual({ unlinked: true });
       expect(mocks.unlink).toHaveBeenCalledWith({ ownerUserId: 'human-1', agentUserId: 'agent-1', now: expect.any(Date) });
-      expect(JSON.stringify(mocks.audit.mock.calls)).not.toContain('ps_claim_fresh');
     });
 
     it('given not the owner, should 404 and change nothing', async () => {

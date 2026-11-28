@@ -219,8 +219,8 @@ describe('GDPR export table coverage', () => {
     }
   });
 
-  it('never carries the agent secret or claim-token hash/prefix columns', () => {
-    for (const column of ['secretHash', 'secretPrefix', 'claimTokenHash', 'claimTokenPrefix']) {
+  it('never carries the agent secret hash/prefix columns', () => {
+    for (const column of ['secretHash', 'secretPrefix']) {
       expect(AGENT_IDENTITY_EXPORTED_COLUMNS, column).not.toContain(column);
       expect(Object.keys(AGENT_IDENTITY_WITHHELD_COLUMNS), column).toContain(column);
     }

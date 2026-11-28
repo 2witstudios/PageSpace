@@ -178,14 +178,12 @@ export const AGENT_IDENTITY_EXPORTED_COLUMNS = [
 ] as const;
 
 const AGENT_CREDENTIAL_COLUMN =
-  'Credential material for the agent account (a SHA3-256 hash or the identifying prefix of a live secret or claim token) — disclosing it in a downloadable bundle would help an attacker who obtains the bundle, and it describes a credential, not the subject.';
+  'Credential material for the agent account (a SHA3-256 hash or the identifying prefix of its live secret) — disclosing it in a downloadable bundle would help an attacker who obtains the bundle, and it describes a credential, not the subject.';
 
 /** `agent_identities` columns deliberately NOT exported, each with its reason. */
 export const AGENT_IDENTITY_WITHHELD_COLUMNS: Readonly<Record<string, string>> = {
   secretHash: AGENT_CREDENTIAL_COLUMN,
   secretPrefix: AGENT_CREDENTIAL_COLUMN,
-  claimTokenHash: AGENT_CREDENTIAL_COLUMN,
-  claimTokenPrefix: AGENT_CREDENTIAL_COLUMN,
 };
 
 /**

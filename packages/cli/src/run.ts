@@ -248,6 +248,7 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
     credentialSourceEnvVarName,
     activeKeyStore,
     agentOwnKey: agentOwnKeyForMcp && activeKeyName !== null,
+    accessToken: () => auth.getAccessToken(),
     isTTY: deps.isTTY ?? false,
     prompt: deps.prompt ?? (async () => ''),
   };

@@ -8,7 +8,6 @@ const AGENT: AgentHostCredential = {
   secret: 'ps_agent_x',
   refreshToken: null,
   clientId: 'pagespace-agent',
-  claimToken: null,
   contentKeyName: 'agent',
   scopes: [],
   createdAt: '2026-01-01T00:00:00.000Z',

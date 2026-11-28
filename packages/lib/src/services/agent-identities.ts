@@ -38,7 +38,7 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /**
  * Thrown in place of any query error from this service. Every write here binds
- * a credential hash (`secretHash`, `claimTokenHash`, `challengeHash`), and
+ * a credential hash (`secretHash`, `challengeHash`), and
  * drizzle's `DrizzleQueryError` message is the query plus its bound params —
  * so the original error must never be logged or rethrown to a route (Next
  * logs an uncaught route error in full). This one's message is constant and
@@ -66,9 +66,6 @@ async function guardStore<T>(operation: string, run: () => Promise<T>): Promise<
     throw storeFailure(operation, error);
   }
 }
-
-/** Prefix of the claim token an agent hands a human (auth.md "Fund"). Hash-only at rest. */
-export const AGENT_CLAIM_TOKEN_PREFIX = 'ps_claim';
 
 /** Prefix of a proof-of-work challenge. Hash-only at rest. */
 export const AGENT_POW_CHALLENGE_PREFIX = 'ps_pow';
@@ -186,8 +183,6 @@ export type CreateAgentAccountResult =
         /** Plaintext `ps_agent_*` secret — return it to the agent ONCE, never log or store it. */
         secret: string;
         secretPrefix: string;
-        /** Plaintext claim token — returned once, hash-only at rest. */
-        claimToken: string;
       };
     }
   | { ok: false; error: 'challenge_invalid' }
@@ -226,7 +221,6 @@ export async function createAgentAccount(input: CreateAgentAccountInput): Promis
   const userId = createId();
   const email = agentSyntheticEmail(userId);
   const minted = mintAgentSecret();
-  const claim = generateToken(AGENT_CLAIM_TOKEN_PREFIX);
 
   try {
     await db.transaction(async (tx) => {
@@ -286,8 +280,6 @@ export async function createAgentAccount(input: CreateAgentAccountInput): Promis
         userId,
         secretHash: minted.hash,
         secretPrefix: minted.prefix,
-        claimTokenHash: claim.hash,
-        claimTokenPrefix: claim.tokenPrefix,
         source: input.source,
         createdByIp: input.createdByIp,
         // Set from the caller's clock, not the column default: the budget
@@ -315,7 +307,7 @@ export async function createAgentAccount(input: CreateAgentAccountInput): Promis
 
   return {
     ok: true,
-    data: { userId, email, secret: minted.secret, secretPrefix: minted.prefix, claimToken: claim.token },
+    data: { userId, email, secret: minted.secret, secretPrefix: minted.prefix },
   };
 }
 
@@ -358,10 +350,21 @@ export async function verifyAgentSecret(input: { secret: string; now: Date }): P
   });
 
   if (decision.status === 'ok') {
-    await guardStore('stamp_last_auth', () => db.update(agentIdentities).set({ lastAuthAt: input.now }).where(eq(agentIdentities.userId, row.userId)));
+    await recordAgentAuthentication({ userId: row.userId, now: input.now });
   }
 
   return { decision, userId: row.userId };
+}
+
+/**
+ * Stamp `lastAuthAt` — the fact the lifecycle sweep keys on (an agent that
+ * ever authenticated is never erased). Every authentication stamps it: the
+ * secret check above, the browser door's session start (signup and sign-in —
+ * a session is an authentication), the jwt-bearer exchange, and a refresh of
+ * the agent's tokens. A no-op for a user with no identity row.
+ */
+export async function recordAgentAuthentication(input: { userId: string; now: Date }): Promise<void> {
+  await guardStore('stamp_last_auth', () => db.update(agentIdentities).set({ lastAuthAt: input.now }).where(eq(agentIdentities.userId, input.userId)));
 }
 
 export type RotateAgentSecretResult =

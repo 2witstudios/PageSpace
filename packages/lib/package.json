@@ -3241,6 +3241,11 @@
       "import": "./dist/auth/agent/signin-decision.js",
       "require": "./dist/auth/agent/signin-decision.js"
     },
+    "./auth/agent/caller-policy": {
+      "types": "./dist/auth/agent/caller-policy.d.ts",
+      "import": "./dist/auth/agent/caller-policy.js",
+      "require": "./dist/auth/agent/caller-policy.js"
+    },
     "./auth/agent/claim-decision": {
       "types": "./dist/auth/agent/claim-decision.d.ts",
       "import": "./dist/auth/agent/claim-decision.js",
@@ -3439,6 +3444,9 @@
       ],
       "auth/agent/reserved-email": [
         "./dist/auth/agent/reserved-email.d.ts"
+      ],
+      "auth/agent/caller-policy": [
+        "./dist/auth/agent/caller-policy.d.ts"
       ],
       "services/agent-lifecycle": [
         "./dist/services/agent-lifecycle.d.ts"

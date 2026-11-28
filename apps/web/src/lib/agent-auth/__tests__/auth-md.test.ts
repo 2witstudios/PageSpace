@@ -109,13 +109,39 @@ describe('buildAuthMd', () => {
     expect(rotate).toContain('→ { "identity_assertion": "ps_agent_…", "agent_id": "…", "secret_version": 2, "revoked_existing_tokens": false }');
   });
 
-  it('documents the claim grant success body exactly as the token endpoint returns it', () => {
-    expect(md).toContain('{ "claimed": true, "owner": { "id": "…", "name": "…" }, "access_token": "ps_at_…", "token_type": "Bearer", "expires_in": 900, "refresh_token": "ps_rt_…", "scope": "account offline_access" }');
+  it('documents the claim grant success body exactly as the token endpoint returns it — the owner, and no tokens', () => {
+    expect(md).toContain('{ "claimed": true, "owner": { "id": "…", "name": "…" } }');
   });
 
-  it('tells a late poller what an expired claim answers, and when it stops answering that', () => {
-    expect(md).toContain('`expired_token` (the claim lived 15 minutes; start a new one with the same `claim_token`)');
-    expect(md).toContain('a claim that expired more than a day ago');
+  // Security review: the claim token was an agent-takeover credential. The
+  // documented flow starts and polls the claim with the agent's OWN access token.
+  describe('the Fund section (security review addendum)', () => {
+    const fund = md.slice(md.indexOf(`## ${AUTH_MD_SECTIONS[5]}`), md.indexOf(`## ${AUTH_MD_SECTIONS[6]}`));
+
+    it('starts AND polls the claim with the agent\'s own access token as Bearer', () => {
+      expect(fund).toContain(`POST ${metadata.agent_auth.claim_endpoint}\nAuthorization: Bearer <access_token>`);
+      expect(fund).toContain(`POST ${metadata.token_endpoint}\nAuthorization: Bearer <access_token>`);
+      expect(fund).toContain(`grant_type=${metadata.agent_auth.claim_grant_type}&client_id=pagespace-agent`);
+    });
+
+    it('never mentions a claim token anywhere in the document', () => {
+      expect(md).not.toContain('claim_token');
+      expect(md).not.toMatch(/claim token/i);
+    });
+
+    it('says the claim mints no tokens and only the agent can start or poll it', () => {
+      expect(fund).toContain('No token is issued on this grant');
+      expect(fund).toMatch(/only you can start or poll/i);
+    });
+
+    it('tells a late poller what an expired claim answers, and when it stops answering that', () => {
+      expect(fund).toContain('`expired_token` (the claim lived 15 minutes; start a new one)');
+      expect(fund).toContain('a claim that expired more than a day ago');
+    });
+
+    it('tells the agent what an unusable access token answers', () => {
+      expect(fund).toContain('HTTP 401 `invalid_token`');
+    });
   });
 
   it('is pure: identical input, identical output, and no markup outside markdown', () => {

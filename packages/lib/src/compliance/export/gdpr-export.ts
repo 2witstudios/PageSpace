@@ -1857,8 +1857,8 @@ export async function collectUserLocalEnvironments(database: DB, userId: string)
 
 /**
  * An agent account's own identity facts (ADR 0008). The column set is
- * `AGENT_IDENTITY_EXPORTED_COLUMNS` in gdpr-export-coverage.ts; the secret and
- * claim-token hashes and prefixes are never selected.
+ * `AGENT_IDENTITY_EXPORTED_COLUMNS` in gdpr-export-coverage.ts; the secret
+ * hash and prefix are never selected.
  */
 export interface UserAgentIdentityExport {
   userId: string;

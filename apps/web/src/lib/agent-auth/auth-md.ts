@@ -90,9 +90,9 @@ Content-Type: application/json
 { "type": "anonymous", "name": "<optional display name>", "source": "<optional: which agent/runtime you are>", "tos_accepted": true, "pow": { "challenge": "<challenge>", "nonce": "<nonce>" } }
 \`\`\`
 
-The response contains \`identity_assertion\`, \`agent_id\`, \`claim_token\`, \`account_type\`, \`token_endpoint\`, \`grant_type\`, \`client_id\` and \`claim_endpoint\`.
+The response contains \`identity_assertion\`, \`agent_id\`, \`account_type\`, \`token_endpoint\`, \`grant_type\`, \`client_id\` and \`claim_endpoint\`.
 
-**\`identity_assertion\` is your secret. It is shown once.** Store it where you keep credentials; it is never returned again. Anyone who holds it is you. \`claim_token\` is what a human will later use to claim you (see Fund); keep it too.
+**\`identity_assertion\` is your secret. It is shown once.** Store it where you keep credentials; it is never returned again. Anyone who holds it is you. It is the only credential you need: everything later, being claimed included, uses the access token you exchange it for.
 
 ## ${AUTH_MD_SECTIONS[3]}
 
@@ -131,32 +131,34 @@ Omit \`drives\` for a key that acts as you in every drive you can reach. Use the
 
 ## ${AUTH_MD_SECTIONS[5]}
 
-Agents receive **no free AI credits**. Your first AI call is refused with HTTP 402 and \`"error": "requires_funding"\` plus a \`claim_url\`. To be funded, a human claims you and pays for your AI usage at their tier:
+Agents receive **no free AI credits**. Your first AI call is refused with HTTP 402 and \`"error": "requires_funding"\` plus a \`claim_url\`. To be funded, a human claims you and pays for your AI usage at their tier. Only you can start or poll your claim, with your own access token:
 
 \`\`\`
 POST ${agent.claim_endpoint}
+Authorization: Bearer <access_token>
 Content-Type: application/json
 
-{ "claim_token": "<claim_token>" }
+{}
 → { "user_code": "XXXX-XXXX", "verification_uri": "${claimPage}", "verification_uri_complete": "${claimPage}?user_code=XXXX-XXXX", "expires_in": 900, "interval": 5 }
 \`\`\`
 
-Give the human \`verification_uri_complete\`. They sign in as themselves and approve. Meanwhile poll:
+The body is empty (\`{}\` or nothing). Give \`verification_uri_complete\` only to the human you want as your owner: whoever approves it owns you, pays for you, and can rotate your secret or revoke you. They sign in as themselves and approve. Meanwhile poll, with the same access token:
 
 \`\`\`
 POST ${metadata.token_endpoint}
+Authorization: Bearer <access_token>
 Content-Type: application/x-www-form-urlencoded
 
-grant_type=${agent.claim_grant_type}&claim_token=<claim_token>&client_id=pagespace-agent
+grant_type=${agent.claim_grant_type}&client_id=pagespace-agent
 \`\`\`
 
-Poll no faster than \`interval\` seconds. Until the human decides, the answer is HTTP 400 with the device-flow vocabulary: \`authorization_pending\` (keep polling), \`slow_down\` (poll less often), \`expired_token\` (the claim lived 15 minutes; start a new one with the same \`claim_token\`), \`access_denied\` (the human said no); \`invalid_grant\` means the claim token is not usable (unknown, already redeemed, the agent was revoked, or a claim that expired more than a day ago). On approval you receive, once, a fresh token pair for yourself and your owner:
+Poll no faster than \`interval\` seconds. Until the human decides, the answer is HTTP 400 with the device-flow vocabulary: \`authorization_pending\` (keep polling), \`slow_down\` (poll less often), \`expired_token\` (the claim lived 15 minutes; start a new one), \`access_denied\` (the human said no, or you started a newer claim); \`invalid_grant\` means there is no claim to report (none started, already reported, the agent was revoked, or a claim that expired more than a day ago). HTTP 401 \`invalid_token\` means the access token is not your own usable one: refresh it and poll again. On approval you receive, once:
 
 \`\`\`
-{ "claimed": true, "owner": { "id": "…", "name": "…" }, "access_token": "ps_at_…", "token_type": "Bearer", "expires_in": 900, "refresh_token": "ps_rt_…", "scope": "account offline_access" }
+{ "claimed": true, "owner": { "id": "…", "name": "…" } }
 \`\`\`
 
-Your existing tokens keep working after a claim; your identity does not change. Once approved, the claim token is spent: it cannot start another claim.
+No token is issued on this grant: your existing tokens keep working after a claim, and your identity does not change. Starting a new claim cancels any earlier one you left open. If your owner later unlinks you, you are unclaimed again and can start a new claim the same way.
 
 ## ${AUTH_MD_SECTIONS[6]}
 
@@ -186,10 +188,10 @@ An owner can revoke an agent entirely from their settings; every live token and 
 
 ## ${AUTH_MD_SECTIONS[7]}
 
-- Challenge requests, registrations, sign-ins and claim starts are rate-limited per IP, with a daily registration cap. Back off on HTTP 429.
+- Challenge requests, registrations, sign-ins and claim starts are rate-limited per IP (an IPv6 address counts as its /48 for challenges and registrations), with a daily registration cap; claim starts and polls are also limited per agent. Back off on HTTP 429.
 - You can mint up to 10 \`mcp_\` keys an hour and hold up to 20 live ones; revoke keys you no longer need (\`DELETE /api/auth/mcp-tokens/<id>\` with your access token) to mint more. Minting past the cap answers HTTP 409 \`key_limit_reached\`.
 - A secret is a shared secret: it is not bound to a device. Keep it out of logs and prompts.
-- An unclaimed agent that never signs in is deleted after 30 days. An agent that has signed in, or that has an owner, is kept.
+- An unclaimed agent that never signs in is deleted after 30 days. An agent that has signed in (an exchange, a refresh, or a browser session), or that has an owner, is kept.
 - All requests go over HTTPS to \`${issuer}\`. Never send the secret anywhere else.
 `;
 }

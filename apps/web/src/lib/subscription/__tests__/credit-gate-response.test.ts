@@ -47,6 +47,9 @@ describe('creditGatePayload — requires_funding (ADR 0008 Decision 9)', () => {
 
     expect(message).toMatch(/claim/i);
     expect(message).toContain('https://pagespace.example/auth.md');
+    // Security review: there is no claim token; the agent starts the claim with its own access token.
+    expect(message).not.toMatch(/claim_token|claim token/i);
+    expect(message).toMatch(/access token/i);
   });
 
   it('given any human-facing denial, should carry no claim_url', () => {

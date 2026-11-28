@@ -15,7 +15,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { db } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
-import { agentIdentities } from '@pagespace/db/schema/agent-identities';
+import { agentClaims, agentIdentities } from '@pagespace/db/schema/agent-identities';
 import { oauthAccessTokens, oauthClients } from '@pagespace/db/schema/oauth';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
@@ -98,27 +98,33 @@ describe('agent ownership — real Postgres', () => {
     expect(listed[0].lastActiveAt?.toISOString()).toBe(tokenAt.toISOString());
   });
 
-  it('unlinks only for the owner: no owner, emailVerified cleared, and a fresh claim token that starts a new claim', async () => {
+  it('unlinks only for the owner: no owner, emailVerified cleared, open claims denied, and NOTHING secret handed back', async () => {
     if (!dbAvailable) return;
     const owner = await seedHuman('Uma');
     const stranger = await seedHuman('Stan');
     const agent = await seedAgent('Leaving', owner);
+    // A claim the agent left open (say, a code it handed someone before it was claimed).
+    const [openClaim] = await db.insert(agentClaims).values({
+      agentUserId: agent,
+      userCodeHash: hashToken(`u-${agent}`),
+      expiresAt: new Date(Date.now() + 15 * 60_000),
+    }).returning({ id: agentClaims.id });
 
     expect(await unlinkAgent({ ownerUserId: stranger, agentUserId: agent, now: new Date() })).toEqual({ ok: false });
     const [still] = await db.select({ ownerUserId: agentIdentities.ownerUserId }).from(agentIdentities).where(eq(agentIdentities.userId, agent));
     expect(still.ownerUserId).toBe(owner);
 
-    const unlinked = await unlinkAgent({ ownerUserId: owner, agentUserId: agent, now: new Date() });
-    expect(unlinked.ok).toBe(true);
-    if (!unlinked.ok) return;
-    expect(unlinked.claimToken.startsWith('ps_claim_')).toBe(true);
+    // Security review: unlink used to hand the former owner a fresh claim token.
+    expect(await unlinkAgent({ ownerUserId: owner, agentUserId: agent, now: new Date() })).toEqual({ ok: true });
 
     const [row] = await db
-      .select({ ownerUserId: agentIdentities.ownerUserId, claimedAt: agentIdentities.claimedAt, claimTokenHash: agentIdentities.claimTokenHash, emailVerified: users.emailVerified })
+      .select({ ownerUserId: agentIdentities.ownerUserId, claimedAt: agentIdentities.claimedAt, emailVerified: users.emailVerified })
       .from(agentIdentities)
       .innerJoin(users, eq(users.id, agentIdentities.userId))
       .where(eq(agentIdentities.userId, agent));
-    expect(row).toEqual({ ownerUserId: null, claimedAt: null, claimTokenHash: hashToken(unlinked.claimToken), emailVerified: null });
+    expect(row).toEqual({ ownerUserId: null, claimedAt: null, emailVerified: null });
+    const [claimAfter] = await db.select({ deniedAt: agentClaims.deniedAt }).from(agentClaims).where(eq(agentClaims.id, openClaim?.id ?? ''));
+    expect(claimAfter?.deniedAt).toBeInstanceOf(Date);
     expect(await listOwnedAgents(owner)).toEqual([]);
 
     // A second unlink is not the owner's any more.

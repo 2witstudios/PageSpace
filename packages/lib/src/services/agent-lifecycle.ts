@@ -21,7 +21,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, asc, eq, isNull, lt, lte } from '@pagespace/db/operators';
+import { and, asc, eq, gt, isNull, lt, lte, or } from '@pagespace/db/operators';
 import { agentClaims, agentIdentities, agentSignupChallenges } from '@pagespace/db/schema/agent-identities';
 import {
   AGENT_UNAUTHENTICATED_TTL_MS,
@@ -31,17 +31,38 @@ import {
 import { loggers } from '../logging/logger-config';
 import { redactDbError } from '../logging/db-error-redaction';
 
-/** At most this many agents are erased per run; the rest wait for the next tick. Bounds the processor queue. */
+/** Candidates fetched per query; the sweep pages batch after batch (security review addendum). */
 export const AGENT_LIFECYCLE_BATCH_LIMIT = 50;
 
+/**
+ * At most this many agents are erased per run; the rest wait for the next
+ * (hourly) tick. Bounds the processor queue while still outrunning the signup
+ * budget: 500 an hour against at most `AGENT_SIGNUP_GLOBAL_BUDGET` (100) new
+ * agents an hour, so a backlog always drains.
+ */
+export const AGENT_LIFECYCLE_MAX_ERASURES_PER_RUN = 500;
+
+/** A run stops paging after this long, finishing the agent in hand. Well under the cron's HTTP timeout. */
+export const AGENT_LIFECYCLE_TIME_BUDGET_MS = 5 * 60 * 1000;
+
 export interface AgentLifecycleCandidate extends AgentLifecycleRow {
+  userId: string;
+}
+
+export interface AgentLifecycleCursor {
+  createdAt: Date;
   userId: string;
 }
 
 export interface AgentLifecycleStore {
   pruneExpiredChallenges(now: Date): Promise<number>;
   pruneExpiredClaims(now: Date): Promise<number>;
-  findCandidates(input: { createdAtOrBefore: Date; limit: number }): Promise<AgentLifecycleCandidate[]>;
+  /**
+   * One page of candidates in `(createdAt, userId)` order, strictly after the
+   * `after` cursor (`null`: from the start). Keyset paging, so an agent kept or
+   * failed in one batch is never fetched again in the same run.
+   */
+  findCandidates(input: { createdAtOrBefore: Date; limit: number; after: AgentLifecycleCursor | null }): Promise<AgentLifecycleCandidate[]>;
   /** A fresh read of one agent's lifecycle facts; `null` once it is gone. */
   getLifecycleRow(userId: string): Promise<AgentLifecycleCandidate | null>;
 }
@@ -68,8 +89,8 @@ const lifecycleColumns = {
 
 /**
  * How long an EXPIRED claim row is kept before the prune deletes it. While it exists, an agent
- * polling the claim grant with that claim token is told `expired_token` (start a new claim)
- * instead of the `invalid_grant` an unknown token gets. A day covers an agent that polls late.
+ * polling the claim grant is told `expired_token` (start a new claim) instead of the
+ * `invalid_grant` it gets when it has no claim at all. A day covers an agent that polls late.
  */
 export const CLAIM_EXPIRED_GRACE_MS = 24 * 60 * 60 * 1000;
 
@@ -88,7 +109,7 @@ export const agentLifecycleStore: AgentLifecycleStore = {
     return deleted.length;
   },
 
-  async findCandidates({ createdAtOrBefore, limit }) {
+  async findCandidates({ createdAtOrBefore, limit, after }) {
     return guard('find_candidates', () =>
       db
         .select(lifecycleColumns)
@@ -98,9 +119,15 @@ export const agentLifecycleStore: AgentLifecycleStore = {
             isNull(agentIdentities.ownerUserId),
             isNull(agentIdentities.lastAuthAt),
             lte(agentIdentities.createdAt, createdAtOrBefore),
+            after === null
+              ? undefined
+              : or(
+                  gt(agentIdentities.createdAt, after.createdAt),
+                  and(eq(agentIdentities.createdAt, after.createdAt), gt(agentIdentities.userId, after.userId)),
+                ),
           ),
         )
-        .orderBy(asc(agentIdentities.createdAt))
+        .orderBy(asc(agentIdentities.createdAt), asc(agentIdentities.userId))
         .limit(limit),
     );
   },
@@ -121,6 +148,10 @@ export interface AgentLifecycleSweepResult {
   erased: number;
   kept: number;
   failed: number;
+  /** Candidate pages fetched this run. */
+  batches: number;
+  /** Why the run ended: the backlog ran out, or a per-run budget did (the next tick resumes). */
+  stoppedBy: 'drained' | 'erasure_budget' | 'time_budget';
   /** `userId: null` for a prune failure. Messages are constant-shape — never a bound value. */
   failures: Array<{ userId: string | null; error: string }>;
 }
@@ -130,7 +161,14 @@ export interface SweepAgentLifecycleInput {
   /** Routes one agent through the account-erasure path. Throwing marks only that agent failed. */
   eraseAgent: (userId: string) => Promise<void>;
   store?: AgentLifecycleStore;
+  /** Batch size; defaults to `AGENT_LIFECYCLE_BATCH_LIMIT`. */
   limit?: number;
+  /** Defaults to `AGENT_LIFECYCLE_MAX_ERASURES_PER_RUN`. */
+  maxErasures?: number;
+  /** Defaults to `AGENT_LIFECYCLE_TIME_BUDGET_MS`. */
+  timeBudgetMs?: number;
+  /** Milliseconds since the run started; injected for tests, defaults to a wall clock. */
+  elapsedMs?: () => number;
 }
 
 function messageOf(error: unknown): string {
@@ -152,39 +190,74 @@ export async function sweepAgentLifecycle(input: SweepAgentLifecycleInput): Prom
   const challengesPruned = await prune('prune challenges', () => store.pruneExpiredChallenges(input.now));
   const claimsPruned = await prune('prune claims', () => store.pruneExpiredClaims(input.now));
 
-  let candidates: AgentLifecycleCandidate[] = [];
-  try {
-    candidates = await store.findCandidates({
-      createdAtOrBefore: new Date(input.now.getTime() - AGENT_UNAUTHENTICATED_TTL_MS),
-      limit: input.limit ?? AGENT_LIFECYCLE_BATCH_LIMIT,
-    });
-  } catch (error) {
-    failures.push({ userId: null, error: `find candidates: ${messageOf(error)}` });
-  }
+  const batchSize = input.limit ?? AGENT_LIFECYCLE_BATCH_LIMIT;
+  const maxErasures = input.maxErasures ?? AGENT_LIFECYCLE_MAX_ERASURES_PER_RUN;
+  const timeBudgetMs = input.timeBudgetMs ?? AGENT_LIFECYCLE_TIME_BUDGET_MS;
+  const startedAt = Date.now();
+  const elapsedMs = input.elapsedMs ?? (() => Date.now() - startedAt);
+  const createdAtOrBefore = new Date(input.now.getTime() - AGENT_UNAUTHENTICATED_TTL_MS);
 
+  let candidates = 0;
   let erased = 0;
   let kept = 0;
   let failed = 0;
-  for (const candidate of candidates) {
-    if (decideAgentLifecycle(candidate, input.now).action !== 'delete') {
-      kept += 1;
-      continue;
-    }
+  let batches = 0;
+  let after: AgentLifecycleCursor | null = null;
+  let stoppedBy: AgentLifecycleSweepResult['stoppedBy'] = 'drained';
+
+  const budgetSpent = (): AgentLifecycleSweepResult['stoppedBy'] | null => {
+    if (erased >= maxErasures) return 'erasure_budget';
+    if (elapsedMs() >= timeBudgetMs) return 'time_budget';
+    return null;
+  };
+
+  sweep: for (;;) {
+    let batch: AgentLifecycleCandidate[];
     try {
-      // The candidate list is a snapshot; the decision that authorizes an
-      // irreversible erasure is taken on the row as it is now.
-      const fresh = await store.getLifecycleRow(candidate.userId);
-      if (fresh === null || decideAgentLifecycle(fresh, input.now).action !== 'delete') {
+      batch = await store.findCandidates({ createdAtOrBefore, limit: batchSize, after });
+    } catch (error) {
+      failures.push({ userId: null, error: `find candidates: ${messageOf(error)}` });
+      break;
+    }
+    batches += 1;
+    candidates += batch.length;
+
+    for (const candidate of batch) {
+      const spent = budgetSpent();
+      if (spent !== null) {
+        stoppedBy = spent;
+        break sweep;
+      }
+      if (decideAgentLifecycle(candidate, input.now).action !== 'delete') {
         kept += 1;
         continue;
       }
-      await input.eraseAgent(candidate.userId);
-      erased += 1;
-    } catch (error) {
-      failed += 1;
-      failures.push({ userId: candidate.userId, error: messageOf(error) });
+      try {
+        // The candidate list is a snapshot; the decision that authorizes an
+        // irreversible erasure is taken on the row as it is now.
+        const fresh = await store.getLifecycleRow(candidate.userId);
+        if (fresh === null || decideAgentLifecycle(fresh, input.now).action !== 'delete') {
+          kept += 1;
+          continue;
+        }
+        await input.eraseAgent(candidate.userId);
+        erased += 1;
+      } catch (error) {
+        failed += 1;
+        failures.push({ userId: candidate.userId, error: messageOf(error) });
+      }
+    }
+
+    const last = batch[batch.length - 1];
+    if (batch.length < batchSize || last === undefined) break;
+    // Page past this batch, kept and failed rows included: none is fetched twice in one run.
+    after = { createdAt: last.createdAt, userId: last.userId };
+    const spent = budgetSpent();
+    if (spent !== null) {
+      stoppedBy = spent;
+      break;
     }
   }
 
-  return { challengesPruned, claimsPruned, candidates: candidates.length, erased, kept, failed, failures };
+  return { challengesPruned, claimsPruned, candidates, erased, kept, failed, batches, stoppedBy, failures };
 }

@@ -12,6 +12,7 @@ import {
   agentRefreshRateLimitKey,
   agentSecretRotateRateLimitKey,
   agentRateLimitAddress,
+  agentSignupRateLimitAddress,
 } from '../token-rate-limit-keys';
 
 const SECRET = 'ps_agent_abcdefghijklmnopqrstuvwxyz012345';
@@ -143,5 +144,45 @@ describe('agentRateLimitAddress', () => {
 
   it('should be what the token IP bucket keys on', () => {
     expect(agentTokenIpRateLimitKey('2001:db8:1:2::9')).toBe('agent-token:ip:2001:0db8:0001:0002::/64');
+  });
+});
+
+// Security review: one customer site is routinely handed a whole IPv6 /48
+// (RFC 6177), i.e. 65,536 /64s — so a /64 bucket lets one site open 65,536
+// signup buckets and drain the deployment-wide budget alone. The doors that
+// CREATE accounts (challenge, API identity, browser signup) bucket by /48.
+describe('agentSignupRateLimitAddress', () => {
+  it('given IPv4, should return it unchanged', () => {
+    expect(agentSignupRateLimitAddress('203.0.113.5')).toBe('203.0.113.5');
+    expect(agentSignupRateLimitAddress('203.0.113.5:8080')).toBe('203.0.113.5');
+  });
+
+  it('given two addresses in different /64s of one /48, should give them the SAME bucket', () => {
+    expect(agentSignupRateLimitAddress('2001:db8:1:2::1')).toBe('2001:0db8:0001::/48');
+    expect(agentSignupRateLimitAddress('2001:db8:1:ffff:a:b:c:d')).toBe('2001:0db8:0001::/48');
+    expect(agentSignupRateLimitAddress('[2001:DB8:1:3::9]:443')).toBe('2001:0db8:0001::/48');
+  });
+
+  it('given addresses in different /48s, should give them different buckets', () => {
+    expect(agentSignupRateLimitAddress('2001:db8:1::1')).not.toBe(agentSignupRateLimitAddress('2001:db8:2::1'));
+  });
+
+  it('given zero compression and zone ids, should expand correctly', () => {
+    expect(agentSignupRateLimitAddress('::1')).toBe('0000:0000:0000::/48');
+    expect(agentSignupRateLimitAddress('fe80::1%eth0')).toBe('fe80:0000:0000::/48');
+  });
+
+  it('given an IPv4-mapped IPv6 address, should key on the IPv4 address', () => {
+    expect(agentSignupRateLimitAddress('::ffff:203.0.113.5')).toBe('203.0.113.5');
+    expect(agentSignupRateLimitAddress('::ffff:cb00:7105')).toBe('203.0.113.5');
+  });
+
+  it('given something unparseable, should return it unchanged', () => {
+    expect(agentSignupRateLimitAddress('unknown')).toBe('unknown');
+    expect(agentSignupRateLimitAddress('1::2::3')).toBe('1::2::3');
+  });
+
+  it('should leave the /64 bucketing of the other agent doors unchanged', () => {
+    expect(agentRateLimitAddress('2001:db8:1:2::1')).toBe('2001:0db8:0001:0002::/64');
   });
 });

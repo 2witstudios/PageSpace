@@ -151,7 +151,7 @@ export function buildAuthMd({ issuer }): string; // Discover → Prove work → 
 19. The five inbound sites in §4 reject a reserved address with a constant-shape error; a test enumerates the five files and fails if one is missing the refinement. *(Phase 1, mutation-checked.)*
 20. `sendEmail({to: agentSyntheticEmail(id)})` is a no-op that sends nothing. *(Phase 1.)*
 21. `POST /api/stripe/customer` as an agent is refused. *(Phase 1.)*
-22. A claim approval sets `ownerUserId`, `claimedAt`, nulls `claimTokenHash` in one transaction, and the agent's pre-claim `ps_at_`/`ps_rt_` tokens still validate afterwards. *(Phase 4.)*
+22. A claim approval sets `ownerUserId` and `claimedAt` in one transaction, and the agent's pre-claim `ps_at_`/`ps_rt_` tokens still validate afterwards. *(Phase 4; amended by the security review addendum — there is no claim token to null.)*
 23. Revoking an agent bumps `tokenVersion`; a `ps_at_` issued before the revoke returns 401 afterwards. Because `mcp_` keys carry no `tokenVersion`, the same transaction also revokes every live `mcp_` key the agent holds — for `revokeAgent` and for secret rotation with `revokeExistingTokens` — and an `mcp_` key minted before either returns 401 afterwards. *(Phase 4; the `mcp_` half landed with the Phase 2 follow-up and is covered by the real-Postgres door-flow test.)*
 25. *(Decision 6 — how an agent mints keys.)* `POST /api/auth/mcp-tokens` mints an `mcp_` key for a bearer caller only when `classifyCallerCredential` says the caller is an agent (`users.accountType = 'agent'`) presenting an `account`-scoped access token minted for `pagespace-agent` (its own jwt-bearer grant). The key is scoped by the same `validateDriveScopeAccess` rules as the session path, for that agent only, and limited by `AGENT_KEY_MINT` (10/hour per agent) and a cap of 20 live keys per agent (409 `key_limit_reached`). Every other OAuth token (any human's, the agent's token held by another client, a narrow scope) keeps the route's 401 `OAuth tokens are not permitted for this endpoint`. *(Phase 2, mutation-checked; the key performs a content write in the real-Postgres door-flow test.)*
 24. `pagespace login`, `pagespace keys`, MCP tokens and both sign-in pages behave identically before and after this epic: `single-auth-path.test.ts`, SDK facade completeness, `hardening.test.ts` and `security-audit-coverage.test.ts` stay green. *(Every phase.)*
@@ -168,3 +168,51 @@ export function buildAuthMd({ issuer }): string; // Discover → Prove work → 
   - `activityLogs.actorDisplayName` and version history are marked at **render** from the actor's live `users.accountType`, joined on `actorId`. This covers rows written before the change while the actor's user row exists; an erased or deleted actor has no row and shows its stored name unmarked.
   - Text baked into a stored sentence and shown with no lookup (notification text: sharer, inviter, DM sender, mentioner, assigner, connection requests; the actor part of a channel AI message's `aiMeta.senderName`) gets `withAgentMarker` at **write** time going forward. Rows written earlier stay unmarked. The notification's "by <name>" line is badged at render from the joined account row.
   - Saved `@[label](id:user)` mention labels are left as written. The client has no directory of users by id that carries `accountType`, so a badge would cost a lookup per mention, and the label is text the sender typed, so it can say anything anyway.
+
+---
+
+## 7. Security review addendum (2026-11-28)
+
+An independent review of the epic before it shipped found four problems, each verified against the code. This addendum records what changed and why; where it contradicts an earlier section, this addendum wins.
+
+### 7.1 HIGH — the claim token was an agent-takeover credential
+
+**What was wrong.** Signup returned a second secret, the claim token `T` (`ps_claim_*`). `POST /api/agent/claim {claim_token}` was public, any signed-in human could approve the resulting code, and the claim-grant poll (`grant_type=urn:pagespace:agent-auth:grant-type:claim&claim_token=T`) minted a fresh `ps_at_`/`ps_rt_` pair **for the agent**. So anyone holding `T` could claim the agent to an account they controlled, poll for the agent's tokens, mint `mcp_` keys for every drive the agent could reach, then rotate the secret and lock the agent out. Unlink made it worse: it handed a fresh `T` to the former owner (and the Settings UI said "give this claim token to the agent (or to another person)"), so after the agent re-claimed, the former owner could poll and receive the agent's tokens while the new owner paid. Even without the token mint, ownership alone is a takeover: an owner may rotate the agent's secret from a session and is shown the new one (Decision 14). Whatever can make someone an owner must therefore be the agent's own choice.
+
+**Decision: the claim token is retired. A claim is started and polled only by the agent itself, with its own credential, and the claim grant never mints a token.**
+
+- **Start.** `POST /api/agent/claim` takes the agent's own `pagespace-agent` access token as `Authorization: Bearer` (`classifyCallerCredential` → `agent_grant_token`), with an empty body; `POST /api/agent/claim/session` takes its browser session (CSRF-checked). Both run one handler (`handleOwnClaimStart`) and one pure rule, `decideClaimCaller({ door, credential, accountType })` in `packages/lib/src/auth/agent/caller-policy.ts`: the caller must be an agent, on the credential its door accepts. A human's session or token (an approver, a former owner), the agent's token held by another client, a narrow token, or no credential get the same 404 / 401. A body carrying `claim_token` is refused 400. `/api/agent/claim` is no longer a middleware public route; the Bearer passes the bearer-prefix gate.
+- **Poll.** The claim grant authenticates the same Bearer; a missing, invalid or foreign one is 401 `invalid_token` (RFC 6750), a `claim_token` parameter is 400 `invalid_request`. The claim polled is the caller's newest, found by its own user id. The device-flow vocabulary is unchanged (`authorization_pending`, `slow_down`, `expired_token`, `access_denied`, `invalid_grant`). **On approval the answer is `{ "claimed": true, "owner": { "id", "name" } }` and nothing else** — no token is minted on this grant (Decision 7: the agent keeps the tokens it holds). Rate limits: per IP before authentication, per agent after.
+- **Unlink and supersede.** Unlink returns `{ "unlinked": true }` and nothing secret, and denies every claim the agent still has open, so a code handed out earlier cannot be approved later. Starting a claim supersedes (denies) every earlier open one. A human who unlinked or was superseded holds nothing that can start, poll or approve a claim for the agent.
+- **Schema.** Migration `0391_agent_claim_token_retired` drops `agent_identities.claimTokenHash` / `claimTokenPrefix` and `agent_claims.claimTokenHash`; `agent_claims_agent_user_id_idx` becomes `(agentUserId, createdAt)` for the poll. Signup (both doors) no longer returns a claim token; the browser reveal card shows none. The CLI (`pagespace agent claim`) starts the claim through the stored agent credential and polls with that credential's live access token; a `claimToken` an older CLI stored is dropped on read. The SDK's `agent.claim` is authenticated (`requiredScope: 'account'`, no input), and `pollAgentClaim(tokenEndpoint, accessToken, clientId)` is the poll helper.
+
+**Why retire `T` rather than keep it single-purpose.** Keeping `T` for auth.md compatibility, even unable to yield tokens, would still let whoever held it start a claim, approve it with a throwaway account and then rotate the secret as owner — so `T` would have to be guarded exactly like the secret, while living beside it as a second thing to leak. Retiring it is both simpler (one credential) and safer, and it does not break the documented flow: PageSpace's `agent_auth` block was already PageSpace-specific (a challenge endpoint, a custom claim grant URN), `/auth.md` now documents the Bearer form, and no client of the old shape had shipped. This is a deliberate deviation from the upstream auth.md `claim_token` field.
+
+**Residual, accepted.** The `verification_uri_complete` an agent hands a human is a 15-minute, single-use grant of ownership: whoever approves it becomes the owner, pays, and may rotate or revoke the agent. `/auth.md` says to hand it only to the intended owner, and the agent learns who approved from the poll and `/api/auth/me`. An owner who rotated the secret has seen it; unlinking does not change that (the agent should rotate after an unlink if its owner ever did).
+
+**Regression test.** `agent-claim-flow.integration.test.ts` › "the claim-token takeover chain": a claim-token holder, with or without a throwaway human, starts nothing and polls nothing; a throwaway approver cannot poll and the agent's poll yields no token field; a former owner after unlink can start nothing, poll nothing and approve nothing, while the agent re-claims with its own credential.
+
+### 7.2 MEDIUM — the lifecycle sweep erased browser-door agents in active use
+
+`lastAuthAt` (the fact `decideAgentLifecycle` keys on) was stamped only by `verifyAgentSecret`, the jwt-bearer exchange and the claim poll. An agent that signed up at the browser door and lived on its cookie, or an API agent that only refreshed, looked never-authenticated and was erased after 30 days. `recordAgentAuthentication` now stamps it on every browser session start (signup and sign-in — a session is an authentication) and on every refresh of an agent's tokens (`refreshTokenGrant`). The claim poll no longer stamps it: it is no longer an authentication. Test: `browser-door-flow.integration.test.ts` › "stamps a browser-signed-up agent as authenticated, so the lifecycle sweep keeps it".
+
+### 7.3 MEDIUM — signup budget starvation and a junk backlog
+
+A site is routinely delegated a whole IPv6 /48 (RFC 6177), i.e. 65,536 /64s, so per-/64 buckets let one site drain the deployment-wide budget (Decision 10 addendum) alone. The doors that create accounts — the PoW challenge, `/api/agent/identity` and `/api/auth/agent/signup` — now bucket IPv6 by /48 (`agentSignupRateLimitAddress`); sign-in, token and claim buckets stay per /64 so a neighbour cannot lock an existing agent out. And the sweep erased at most 50 agents a day against up to 100 signups an hour, so a backlog only grew: it now runs hourly and drains batch after batch, keyset-paged by `(createdAt, userId)` so a kept or failed row is never refetched, until the backlog, 500 erasures or 5 minutes run out (`stoppedBy` reports which).
+
+### 7.4 LOW — browser-door agents skipped the key-mint caps
+
+`POST /api/auth/mcp-tokens` applied `AGENT_KEY_MINT` and the 20-live-key cap only when `tokenType !== 'session'`, so an agent signed in by cookie minted uncapped. The caps now follow the caller: `decideAgentKeyMint({ credential, accountType })` caps every caller whose `users.accountType` is `agent` (an unreadable account type fails closed to the caps), whatever credential it presents; a human's session stays uncapped and every other bearer keeps the route's 401.
+
+### 7.5 Contracts added (pure, in lib)
+
+```ts
+// packages/lib/src/auth/agent/caller-policy.ts
+export function decideClaimCaller(input: { door: 'bearer' | 'session'; credential: 'session' | 'agent_grant_token' | 'other_token'; accountType: 'human' | 'agent' | null }): { status: 'ok' } | { status: 'refused' };
+export function decideAgentKeyMint(input: { credential: …; accountType: … | null }): { status: 'refused' } | { status: 'ok'; agentCaps: boolean };
+// packages/lib/src/auth/agent/token-rate-limit-keys.ts
+export function agentSignupRateLimitAddress(ip: string): string; // IPv6 → /48; agentRateLimitAddress stays /64
+// packages/lib/src/services/agent-identities.ts
+export async function recordAgentAuthentication(input: { userId: string; now: Date }): Promise<void>;
+```
+

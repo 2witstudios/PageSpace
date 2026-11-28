@@ -7,6 +7,8 @@ import { NextRequest } from 'next/server';
 vi.mock('@/lib/repositories/session-repository', () => ({
   sessionRepository: {
     createMcpTokenWithDriveScopes: vi.fn(),
+    // A human caller: the session mint stays uncapped (decideAgentKeyMint).
+    findAccountType: vi.fn().mockResolvedValue('human'),
     findDrivesByIds: vi.fn(),
     findUserMcpTokensWithDrives: vi.fn(),
     findMcpTokenByIdAndUser: vi.fn(),

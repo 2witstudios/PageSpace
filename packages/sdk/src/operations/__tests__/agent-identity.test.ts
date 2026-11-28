@@ -21,7 +21,6 @@ const CHALLENGE_RESPONSE = {
 const IDENTITY_RESPONSE = {
   identity_assertion: 'ps_agent_abcdefghijklmnopqrstuvwxyz012345',
   agent_id: 'agent_1',
-  claim_token: 'ps_claim_xyz',
   account_type: 'agent',
   token_endpoint: 'https://pagespace.ai/api/oauth/token',
   grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
@@ -91,14 +90,16 @@ describe('agent.signup', () => {
 });
 
 describe('agent.claim', () => {
-  it('is an unauthenticated POST carrying the claim token', () => {
+  // Security review: the claim token was an agent-takeover credential and is
+  // gone. A claim is started with the agent's OWN access token.
+  it("is an AUTHENTICATED POST that takes no input — the agent's own account token is the credential", () => {
     expect(claimAgent.name).toBe('agent.claim');
     expect(claimAgent.method).toBe('POST');
     expect(claimAgent.path).toBe('/api/agent/claim');
-    expect(claimAgent.unauthenticated).toBe(true);
-    expect(claimAgent.inputSchema.safeParse({ claim_token: 'ps_claim_xyz' }).success).toBe(true);
-    expect(claimAgent.inputSchema.safeParse({}).success).toBe(false);
-    expect(claimAgent.inputSchema.safeParse({ claim_token: '' }).success).toBe(false);
+    expect(claimAgent.unauthenticated).toBeUndefined();
+    expect(claimAgent.requiredScope).toBe('account');
+    expect(claimAgent.inputSchema.safeParse({}).success).toBe(true);
+    expect(claimAgent.inputSchema.safeParse({ claim_token: 'ps_claim_xyz' }).success).toBe(false);
   });
 
   it('parses the user code, both verification URIs, expiry and poll interval', () => {
@@ -179,6 +180,27 @@ describe('client.agent — through the facade', () => {
 
     await expect(client.agent.rotateSecret({})).rejects.toMatchObject({ code: 'AUTHENTICATION_ERROR' });
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('still authenticates claim: AnonymousAuthProvider refuses it before any request', async () => {
+    const fetchImpl = vi.fn(async () => versioned(CLAIM_RESPONSE));
+    const client = new PageSpaceClient({ baseUrl: 'https://pagespace.ai', auth: new AnonymousAuthProvider(), fetch: fetchImpl as unknown as typeof fetch });
+
+    await expect(client.agent.claim({})).rejects.toMatchObject({ code: 'AUTHENTICATION_ERROR' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("sends the agent's own bearer on claim, and no claim token", async () => {
+    const fetchImpl = vi.fn(async () => versioned(CLAIM_RESPONSE));
+    const auth: AuthProvider = { getAccessToken: async () => 'ps_at_agent', invalidate: () => {} };
+    const client = new PageSpaceClient({ baseUrl: 'https://pagespace.ai', auth, fetch: fetchImpl as unknown as typeof fetch });
+
+    await expect(client.agent.claim({})).resolves.toEqual(CLAIM_RESPONSE);
+
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://pagespace.ai/api/agent/claim');
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer ps_at_agent');
+    expect(String(init.body ?? '')).not.toContain('claim_token');
   });
 
   it('sends the bearer on rotateSecret', async () => {

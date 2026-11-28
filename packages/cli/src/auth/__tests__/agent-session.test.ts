@@ -80,7 +80,6 @@ describe('agentCredentialWithTokens', () => {
       secret: SECRET,
       refreshToken: 'ps_rt_old',
       clientId: 'pagespace-agent',
-      claimToken: 'ps_claim_1',
       contentKeyName: 'agent',
       scopes: ['account'],
       createdAt: '2026-01-01T00:00:00.000Z',

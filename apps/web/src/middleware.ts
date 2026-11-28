@@ -352,10 +352,9 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
     // deployment gate (`isAgentSignupEnabled`, 404 when closed), per-IP rate limits
     // (AGENT_CHALLENGE; AGENT_SIGNUP + AGENT_SIGNUP_DAILY), and on registration a
     // server-issued, single-use proof-of-work consumed atomically with the account insert.
-    // `/api/agent/claim` (Phase 4) is where that agent, still unclaimed and holding only
-    // the claim_token it was registered with, asks for a user code a human will approve:
-    // the token in the body is its credential, with the deployment gate and per-IP and
-    // per-token AGENT_CLAIM_INIT limits inside the route — the device-authorization shape.
+    // `/api/agent/claim` is NOT here (security review addendum): the agent starts its claim
+    // with its own `ps_at_` Bearer, which passes the bearer-prefix check above, so a request
+    // without a credential is refused at this gate like any other authenticated API route.
     // Exact matches only, NEVER an `/api/agent/` prefix: every other agent route (secret
     // rotation, the /claim screen's verify and decision) acts on an existing identity or a
     // human session and must keep this gate.
@@ -389,7 +388,6 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
       pathname === '/api/oauth/device_authorization' ||
       pathname === '/api/agent/challenge' ||
       pathname === '/api/agent/identity' ||
-      pathname === '/api/agent/claim' ||
       pathname === '/api/auth/agent/signup' ||
       pathname === '/api/auth/agent/signin' ||
       pathname === '/api/memory/cron' ||

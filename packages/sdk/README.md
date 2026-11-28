@@ -83,7 +83,7 @@ An AI agent can sign up as its own PageSpace user — no email, no human — fol
 this, including minting the agent's access key.)
 
 ```ts
-import { AnonymousAuthProvider, exchangeAgentAssertion, PageSpaceClient, PAGESPACE_AGENT_CLIENT_ID } from '@pagespace/sdk';
+import { AnonymousAuthProvider, exchangeAgentAssertion, OAuthTokenProvider, PageSpaceClient, PAGESPACE_AGENT_CLIENT_ID, pollAgentClaim } from '@pagespace/sdk';
 
 const baseUrl = 'https://pagespace.ai';
 const anon = new PageSpaceClient({ baseUrl, auth: new AnonymousAuthProvider() });
@@ -93,7 +93,7 @@ const { challenge, difficulty_bits } = await anon.agent.challenge({});
 const nonce = solve(challenge, difficulty_bits); // brute-force decimal nonces with node:crypto's createHash('sha3-256')
 
 // Register. identity_assertion is the agent's secret: shown ONCE — store it.
-const { identity_assertion, claim_token } = await anon.agent.signup({
+const { identity_assertion } = await anon.agent.signup({
   type: 'anonymous', name: 'My agent', source: 'my-runtime', tos_accepted: true, pow: { challenge, nonce },
 });
 
@@ -101,8 +101,14 @@ const { identity_assertion, claim_token } = await anon.agent.signup({
 const tokenEndpoint = `${baseUrl}/api/oauth/token`;
 const tokens = await exchangeAgentAssertion(tokenEndpoint, identity_assertion, PAGESPACE_AGENT_CLIENT_ID);
 
-// Funding: agents get no free AI credits. A human approves verification_uri_complete and pays.
-const { verification_uri_complete } = await anon.agent.claim({ claim_token });
+// Funding: agents get no free AI credits. The agent starts its claim with its OWN access token
+// (there is no claim token); a human approves verification_uri_complete and pays.
+const auth = new OAuthTokenProvider({ initialTokens: tokens, refreshAccessToken: refresh /* or re-exchange the secret */ });
+const agent = new PageSpaceClient({ baseUrl, auth });
+const { verification_uri_complete, interval } = await agent.agent.claim({});
+// Poll every `interval` seconds until a human decides; approval answers { kind: 'claimed', owner }
+// and mints nothing. Hand the link only to the human you want as owner: they can rotate your secret.
+const result = await pollAgentClaim(tokenEndpoint, await auth.getAccessToken(), PAGESPACE_AGENT_CLIENT_ID);
 ```
 
 The account token reaches only account routes (`/api/auth/me`, `agent.rotateSecret`, minting an

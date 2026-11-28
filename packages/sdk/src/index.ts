@@ -61,6 +61,9 @@ export {
   parseBearerTokenResponse,
 } from './auth/agent-assertion.js';
 export type { ExchangeAgentAssertionOptions } from './auth/agent-assertion.js';
+// The auth.md "Fund" poll: the agent's own access token reads its claim; no token is minted.
+export { pollAgentClaim } from './auth/agent-claim.js';
+export type { AgentClaimOwner, AgentClaimPollResult, PollAgentClaimOptions } from './auth/agent-claim.js';
 
 // PKCE (RFC 7636) — client-side math for the authorization-code + PKCE flow.
 // Consumed by `pagespace login` (packages/cli/src/auth/loopback-flow.ts) so

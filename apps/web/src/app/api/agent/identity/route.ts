@@ -27,7 +27,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit, refundDistributedRateLimitAttempt, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { verifyPowSolution, POW_NONCE_MAX_LENGTH } from '@pagespace/lib/auth/agent/pow';
 import { decideAgentSignup } from '@pagespace/lib/auth/agent/signup-decision';
-import { agentRateLimitAddress } from '@pagespace/lib/auth/agent/token-rate-limit-keys';
+import { agentSignupRateLimitAddress } from '@pagespace/lib/auth/agent/token-rate-limit-keys';
 import { buildServerMetadata, AGENT_ASSERTION_GRANT_TYPE } from '@pagespace/lib/auth/oauth/metadata';
 import { PAGESPACE_AGENT_CLIENT_ID } from '@pagespace/lib/auth/oauth/clients';
 import { AgentIdentityStoreError, createAgentAccount, findAgentSignupChallenge } from '@pagespace/lib/services/agent-identities';
@@ -70,8 +70,8 @@ async function register(request: Request) {
   }
 
   const ip = getClientIP(request);
-  // IPv6 callers are bucketed by /64: one host is routinely handed a whole /64.
-  const bucket = agentRateLimitAddress(ip);
+  // IPv6 callers are bucketed by /48: one site is routinely delegated a whole /48 (security review).
+  const bucket = agentSignupRateLimitAddress(ip);
   const hourlyKey = `agent-signup:ip:${bucket}`;
   const dailyKey = `agent-signup-daily:ip:${bucket}`;
   const hourly = await checkDistributedRateLimit(hourlyKey, DISTRIBUTED_RATE_LIMITS.AGENT_SIGNUP);
@@ -128,7 +128,7 @@ async function register(request: Request) {
   }
   if (!created.ok) return refuse('challenge_consumed_concurrently');
 
-  const { userId, secret, claimToken } = created.data;
+  const { userId, secret } = created.data;
   auditRequest(request, {
     eventType: 'auth.token.created',
     userId,
@@ -141,7 +141,6 @@ async function register(request: Request) {
   return agentNoStoreJson({
     identity_assertion: secret,
     agent_id: userId,
-    claim_token: claimToken,
     account_type: 'agent',
     token_endpoint: metadata.token_endpoint,
     grant_type: AGENT_ASSERTION_GRANT_TYPE,

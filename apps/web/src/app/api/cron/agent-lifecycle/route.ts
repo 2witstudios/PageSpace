@@ -14,6 +14,10 @@ import { eraseUnclaimedAgent } from '@/lib/agent-auth/lifecycle-erasure';
  * (`eraseUnclaimedAgent`). An agent that ever signed in, or has an owner, is
  * never touched.
  *
+ * Runs HOURLY and drains the backlog batch after batch, up to a per-run
+ * erasure and time budget (security review addendum: one 50-row batch a day
+ * could not keep up with the signup budget).
+ *
  * Runs whatever the deployment mode: a deployment that closed the agent door
  * still holds the rows its earlier signups left behind.
  *
@@ -38,6 +42,9 @@ export async function GET(request: Request) {
       erased: result.erased,
       kept: result.kept,
       failed: result.failed + result.failures.filter((failure) => failure.userId === null).length,
+      // A run drains batch after batch until the backlog or a per-run budget runs out.
+      batches: result.batches,
+      stoppedBy: result.stoppedBy,
     };
 
     for (const failure of result.failures) {

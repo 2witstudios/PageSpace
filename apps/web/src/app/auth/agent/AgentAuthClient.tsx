@@ -23,12 +23,11 @@ interface AgentAuthClientProps {
   nextPath?: string;
 }
 
-type Revealed = { agentId: string; secret: string; claimToken: string; redirectUrl: string; sessionStarted: boolean };
+type Revealed = { agentId: string; secret: string; redirectUrl: string; sessionStarted: boolean };
 
 type SignupResponse = {
   agentId: string;
   secret: string;
-  claimToken: string;
   redirectUrl: string;
   sessionStarted?: false;
   deviceToken?: string;
@@ -118,7 +117,7 @@ function SignupForm({ nextPath, onRevealed }: { nextPath?: string; onRevealed: (
       const data = await readJson<SignupResponse>(response);
       const sessionStarted = data.sessionStarted !== false;
       if (sessionStarted) rememberSession(data.deviceToken);
-      onRevealed({ agentId: data.agentId, secret: data.secret, claimToken: data.claimToken, redirectUrl: data.redirectUrl, sessionStarted });
+      onRevealed({ agentId: data.agentId, secret: data.secret, redirectUrl: data.redirectUrl, sessionStarted });
     } catch {
       setError('Could not finish the proof of work. Try again.');
     } finally {

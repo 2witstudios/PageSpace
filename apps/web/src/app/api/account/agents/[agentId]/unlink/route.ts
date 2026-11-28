@@ -1,11 +1,12 @@
 /**
  * POST /api/account/agents/[agentId]/unlink — an owner releases their agent
- * (Agent Signup Phase 4). The agent keeps its identity, drives, keys and
- * tokens; it loses its owner (its AI spend no longer bills them) and, per
- * D-31, `emailVerified`. The claim token it registered with was spent by the
- * claim, so a fresh one is returned ONCE — hand it to the agent (or another
- * human) if it should be claimed again. Session + CSRF; owner only; anyone
- * else and an unknown id are the same 404.
+ * (Agent Signup Phase 4; security review addendum). The agent keeps its
+ * identity, drives, keys and tokens; it loses its owner (its AI spend no
+ * longer bills them) and, per D-31, `emailVerified`; any claim it has open is
+ * denied. The answer carries NOTHING secret: the former owner leaves holding
+ * nothing that can start, poll or approve a claim for this agent. If the agent
+ * wants an owner again it starts a new claim itself, with its own credential.
+ * Session + CSRF; owner only; anyone else and an unknown id are the same 404.
  */
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { agentNoStoreJson, agentNotFound, agentRateLimited, isAgentDoorOpen } from '@/lib/agent-auth/door';
@@ -59,5 +60,5 @@ async function unlink(req: Request, agentId: string) {
     resourceId: agentId,
     details: { agentAuthEvent: 'agent_unlinked' },
   });
-  return agentNoStoreJson({ unlinked: true, claim_token: result.claimToken }, 200);
+  return agentNoStoreJson({ unlinked: true }, 200);
 }

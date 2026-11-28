@@ -27,19 +27,20 @@ Fresh databases and later upgrades do not need the assertion.
 ## 2026-11 — AI agent self-signup (Agent Signup, migrations `0389`–`0390`)
 
 AI agents can create their own PageSpace accounts (ADR 0008): `/auth.md`,
-the `/auth/agent` page and `pagespace signup --agent`. The two migrations run
+the `/auth/agent` page and `pagespace signup --agent`. The three migrations run
 with the normal migrate service; no data is rewritten.
 
-- **Tenant stack:** on by default, nothing to set. The new daily cron entry
-  (`/api/cron/agent-lifecycle`, 03:45 UTC: deletes expired signup challenges
-  and claims, and unclaimed agents that never signed in within 30 days) ships
+- **Tenant stack:** on by default, nothing to set. The new hourly cron entry
+  (`/api/cron/agent-lifecycle`, at :45 past each hour: deletes expired signup
+  challenges and claims, and unclaimed agents that never signed in within 30
+  days, up to 500 per run) ships
   in the `pagespace-cron` image — pull the new image with the rest.
 - **Self-host (`DEPLOYMENT_MODE=onprem`):** off unless you add
   `AGENT_SIGNUP_ENABLED=true` to `.env`. Billing is off on-prem, so an agent
   account can use your AI providers without a person claiming it; enable it
   only if you want that. While it is off every agent route and page answers 404.
   If you schedule jobs yourself instead of running the `cron` service, add
-  `GET /api/cron/agent-lifecycle` (signed like the other cron calls) once a day.
+  `GET /api/cron/agent-lifecycle` (signed like the other cron calls) once an hour.
 - **Optional tuning (all deployments):** `AGENT_SIGNUP_POW_BITS` (proof-of-work
   difficulty, default `20`) and `AGENT_SIGNUP_GLOBAL_BUDGET` (agent accounts
   per rolling hour across the deployment, default `100`; `0` closes signup).
