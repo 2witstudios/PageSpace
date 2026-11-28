@@ -41,6 +41,9 @@ export async function POST(request: Request, context: { params: Promise<{ orgId:
   } catch (error) {
     if (error instanceof OrgBillingError) {
       if (error.code === 'org_not_found') return NextResponse.json({ error: 'Organization not found', code: 'org_not_found' }, { status: 404 });
+      if (error.code === 'owner_not_human') {
+        return NextResponse.json({ error: 'Only a person can be billed for an organization', code: 'owner_not_human' }, { status: 403 });
+      }
       if (error.code === 'billing_requires_support') {
         // [D-OW-44]: changed outside PageSpace; never repaired in place, never reported as success.
         return NextResponse.json(
