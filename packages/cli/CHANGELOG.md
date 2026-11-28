@@ -2,6 +2,15 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.12.1] — 2026-11-28
+
+### Fixed
+
+- **`pagespace agent claim` keeps waiting through a network blip.** A dropped connection or a 5xx
+  from the server while waiting used to end the command with "Polling the claim failed", even
+  though the code was still valid. It now prints a one-line notice and keeps polling until the
+  human approves or the code expires. A refusal the server names still ends the wait.
+
 ## [1.12.0] — 2026-11-28
 
 ### Added

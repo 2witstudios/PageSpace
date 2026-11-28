@@ -432,6 +432,10 @@ async function storedAgent(ctx: HandlerContext, host: string, profile: string): 
 const CLAIM_SPEC: AgentArgsSpec = { booleans: ['--no-wait'], values: [] };
 const SLOW_DOWN_STEP_SECONDS = 5;
 
+/** A poll failure worth retrying: the request never reached the server, or the edge answered 5xx. */
+const isTransientPollFailure = (message: string): boolean =>
+  message.startsWith('network_error') || /^http_5\d\d$/.test(message);
+
 export function createAgentClaimHandler(deps: AgentCommandDeps): CommandHandler {
   return async (ctx, intent): Promise<ExitCode> => {
     const args = parseOrUsage(ctx, intent, CLAIM_SPEC);
@@ -533,6 +537,13 @@ export function createAgentClaimHandler(deps: AgentCommandDeps): CommandHandler 
           ctx.stderr.write('The agent\'s access token was refused while polling. Sign in again with "pagespace login --agent", then run "pagespace agent claim".\n');
           return EXIT_RUNTIME_ERROR;
         case 'request_failed':
+          // The code outlives a wifi blip or an edge 5xx: keep waiting until it
+          // expires, so a human's approval is still reported. Anything else
+          // (a 4xx the server named) is a real refusal and ends the wait.
+          if (isTransientPollFailure(result.message)) {
+            ctx.stderr.write(`Could not reach ${host} to check the claim (${result.message}); retrying…\n`);
+            continue;
+          }
           ctx.stderr.write(`Polling the claim failed: ${result.message}\n`);
           return EXIT_RUNTIME_ERROR;
         case 'claimed': {

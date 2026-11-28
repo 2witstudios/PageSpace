@@ -399,6 +399,39 @@ describe('pagespace agent claim', () => {
     expect(vi.mocked(d.pollClaim).mock.calls.map(([params]) => params.accessToken)).toEqual(['ps_at_first', 'ps_at_refreshed']);
   });
 
+  // A wifi blip or a 502 from the edge mid-wait must not end the wait: the code
+  // is still valid, so the human's approval would otherwise go unreported.
+  it.each([
+    ['network_error: fetch failed'],
+    ['http_502'],
+  ])('keeps waiting through a transient poll failure (%s) and reports the claim', async (message) => {
+    const stdout = createRecordingSink();
+    const stderr = createRecordingSink();
+    const results: AgentClaimPollResult[] = [
+      { kind: 'request_failed', message },
+      { kind: 'request_failed', message },
+      { kind: 'authorization_pending' },
+      { kind: 'claimed', owner: { id: 'user_h', name: 'Ada' } },
+    ];
+    const d = deps({ pollClaim: vi.fn(async (): Promise<AgentClaimPollResult> => results.shift() ?? { kind: 'request_failed', message: 'unexpected' }) });
+    const ctx = createFakeContext({ stdout, stderr, credentialStore: profileStore({ default: AGENT_CREDENTIAL }), accessToken, sdk: fakeSdk({ agent: { claim: async () => STARTED } }) });
+
+    expect(await createAgentClaimHandler(d)(ctx, routed(['agent', 'claim'], 2))).toBe(EXIT_SUCCESS);
+    expect(d.pollClaim).toHaveBeenCalledTimes(4);
+    expect(stdout.lines.join('')).toContain('Ada');
+    expect(stderr.lines.join('')).toContain('retrying');
+  });
+
+  it('still ends the wait on a non-transient poll failure', async () => {
+    const stderr = createRecordingSink();
+    const d = deps({ pollClaim: vi.fn(async (): Promise<AgentClaimPollResult> => ({ kind: 'request_failed', message: 'invalid_request' })) });
+    const ctx = createFakeContext({ stderr, credentialStore: profileStore({ default: AGENT_CREDENTIAL }), accessToken, sdk: fakeSdk({ agent: { claim: async () => STARTED } }) });
+
+    expect(await createAgentClaimHandler(d)(ctx, routed(['agent', 'claim'], 2))).toBe(EXIT_RUNTIME_ERROR);
+    expect(d.pollClaim).toHaveBeenCalledTimes(1);
+    expect(stderr.lines.join('')).toContain('Polling the claim failed: invalid_request');
+  });
+
   it('--no-wait prints the link and returns without polling', async () => {
     const d = deps();
     const ctx = createFakeContext({ credentialStore: profileStore({ default: AGENT_CREDENTIAL }), accessToken, sdk: fakeSdk({ agent: { claim: async () => STARTED } }) });
