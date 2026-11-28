@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Bot, KeyRound } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -10,7 +10,7 @@ import { CopyValueButton } from './CopyValueButton';
 import { AgentClaimLink } from './AgentClaimLink';
 import { RotateAgentSecretDialog } from './RotateAgentSecretDialog';
 
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
+function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 py-1.5">
       <span className="text-sm text-muted-foreground">{label}</span>

@@ -52,7 +52,7 @@ export function solvePowInBrowser(input: SolveInBrowserInput): Promise<string> {
         (message) => {
           if (!stopped && settle(message, input, resolve, reject)) stopped = true;
         },
-        () => (stopped ? Promise.reject(new PowSearchFailed('aborted')) : new Promise((next) => setTimeout(next, 0))),
+        () => (stopped ? Promise.reject(new PowSearchFailed('aborted')) : new Promise<void>((next) => setTimeout(next, 0))),
       ).catch(() => {});
       return;
     }
