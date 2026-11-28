@@ -44,7 +44,8 @@ describe('buildLlmsTxt', () => {
     expect(doc).not.toContain('pagespace.ai//');
     const urls = doc.match(/https?:\/\/[^\s)>\]`"]+/g) ?? [];
     expect(urls.length).toBeGreaterThan(0);
-    for (const url of urls) expect(url.startsWith(issuer) || url.startsWith(`${PUBLIC_DOCS_URL}/`) || url === PUBLIC_DOCS_URL).toBe(true);
+    const allowedOrigins = [new URL(issuer).origin, new URL(PUBLIC_DOCS_URL).origin];
+    for (const url of urls) expect(allowedOrigins).toContain(new URL(url).origin);
   });
 
   it('given a self-hosted issuer, should send documentation links to the public docs site, which the app itself does not serve', () => {
