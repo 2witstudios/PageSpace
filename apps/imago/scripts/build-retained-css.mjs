@@ -9,7 +9,8 @@ const source = path.join(appRoot, 'src/retained-adapters/retained.source.css');
 const imagoGlobals = await readFile(path.join(appRoot, 'src/app/globals.css'), 'utf8');
 /** One of imago's type tokens, read from its theme so retained text sizes never drift from it. */
 const imagoToken = (name) => {
-  const match = imagoGlobals.match(new RegExp(`--${name}:\\s*([^;]+);`));
+  // The @theme token itself (a plain rem), not the touch-screen floor's max(16px, …) override.
+  const match = imagoGlobals.match(new RegExp(`--${name}:\\s*([0-9.]+rem);`));
   if (match === null) throw new Error(`imago's globals.css has no --${name} token`);
   return match[1].trim();
 };
