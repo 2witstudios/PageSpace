@@ -135,6 +135,7 @@ function baseChatState(overrides: Record<string, unknown> = {}) {
     displayIsStreaming: false,
     isMessagesLoading: false,
     hasLoadError: false,
+    messagesLoadStatus: 'loaded',
     reloadConversation: vi.fn(async () => {}),
     handleSend: vi.fn(async () => true),
     handleStop: vi.fn(async () => {}),
@@ -257,14 +258,20 @@ describe('SessionChat', () => {
     expect(screen.queryByTestId('chat-messages-area')).not.toBeInTheDocument();
   });
 
-  it("tells Imago's strip the conversation has messages while they load, so a choice never flashes", () => {
+  it("counts an existing conversation as having messages until it has loaded empty, so a choice never flashes or sticks", () => {
     imagoStrip.props = [];
     const strip = (state: Parameters<typeof baseChatState>[0]) => {
       chatState.current = baseChatState(state);
       render(<SessionChat agent={agentFixture()} conversationId="conv-1" context="page" imagoComposer={{ placeholder: 'Ask anything…' }} />);
       return imagoStrip.props.at(-1)?.hasMessages;
     };
-    expect([strip({ isMessagesLoading: true }), strip({ isMessagesLoading: false })]).toEqual([true, false]);
+    expect([
+      strip({ messagesLoadStatus: 'idle' }),
+      strip({ messagesLoadStatus: 'loading', isMessagesLoading: true }),
+      strip({ messagesLoadStatus: 'error', hasLoadError: true }),
+      strip({ messagesLoadStatus: 'loaded' }),
+      strip({ messagesLoadStatus: 'loaded', messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'Hi' }] }] }),
+    ]).toEqual([true, true, true, false, true]);
   });
 
   it('shows the load-error banner with a retry action that calls reloadConversation', () => {

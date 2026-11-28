@@ -51,6 +51,7 @@ import {
   useConversationLoadState,
   useConversationOlderPageState,
 } from '@/retained/hooks/useRenderedMessages';
+import type { ConversationLoadStatus } from '@/retained/stores/conversationMessages/seedEmpty';
 import { useAgentChannelMultiplayer } from '@/retained/hooks/useAgentChannelMultiplayer';
 import { useActiveStream, useConversationActiveStream } from '@/retained/hooks/useActiveStream';
 import { useStopStream } from '@/retained/hooks/useStopStream';
@@ -73,6 +74,8 @@ export interface UseAgentSessionChatReturn {
   displayIsStreaming: boolean;
   isMessagesLoading: boolean;
   hasLoadError: boolean;
+  /** The conversation's cache load state: 'idle' before the load runs, then loading/loaded/error. */
+  messagesLoadStatus: ConversationLoadStatus;
   reloadConversation: () => Promise<void>;
   /** Resolves false when nothing was dispatched (empty text, refused handoff) — the composer restores its draft. */
   handleSend: (text: string, files?: FileUIPart[]) => Promise<boolean>;
@@ -337,6 +340,7 @@ export function useAgentSessionChat({
     displayIsStreaming,
     isMessagesLoading: loadState.isLoading,
     hasLoadError: loadState.hasError,
+    messagesLoadStatus: loadState.status,
     reloadConversation,
     handleSend,
     handleStop,
