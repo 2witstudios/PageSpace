@@ -11,6 +11,7 @@ import { post, fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
 import { DmHead } from '@/ui/messages/dm-head/dm-head';
 import { useDirectThreads } from '@/ui/messages/use-messages/use-messages';
 import { groupPeople, sourceLabelOf, type MessageablePerson } from '@/retained/lib/messages/dm-people';
+import { AgentBadge } from '@/retained/components/shared/AgentBadge';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -136,6 +137,7 @@ export default function NewConversationPage() {
                       <div className="flex min-w-0 flex-1 flex-col">
                         <div className="flex items-baseline gap-1.5">
                           <span className="truncate font-semibold">{displayName}</span>
+                          <AgentBadge accountType={person.accountType} />
                           {person.username && (
                             <span className="shrink-0 font-mono text-[12.5px] text-muted-foreground">@{person.username}</span>
                           )}
