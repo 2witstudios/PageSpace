@@ -4,9 +4,15 @@ import { useAuthStore } from '@/stores/useAuthStore';
 import { Button } from '@/components/ui/button';
 import { AlertCircle } from 'lucide-react';
 import Link from 'next/link';
+import { AgentUnfundedNotice } from '@/components/agent-auth/AgentUnfundedNotice';
 
 export default function VerifyEmailButton() {
   const user = useAuthStore((state) => state.user);
+
+  // An agent has no inbox to verify (ADR 0008): an UNCLAIMED one is told how to get funded instead.
+  if (user?.accountType === 'agent') {
+    return user.agent?.ownerUserId ? null : <AgentUnfundedNotice />;
+  }
 
   // Only show if user exists and email is not verified
   if (!user || user.emailVerified) {
