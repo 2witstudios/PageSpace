@@ -1,6 +1,6 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { countOf, creditsCardOf, resetLabel } from './avatar-menu-model';
+import { countOf, creditsCardOf, grantDateLabel } from './avatar-menu-model';
 
 const balance = (overrides: Record<string, unknown> = {}) => ({
   billingEnabled: true,
@@ -15,14 +15,21 @@ const balance = (overrides: Record<string, unknown> = {}) => ({
 });
 
 describe('creditsCardOf()', () => {
-  test('the monthly figures, the plan and the renewal date from /api/credits', () => {
-    const card = creditsCardOf(balance());
-
+  test('the total, the plan and the next grant from /api/credits', () => {
     assert({
-      given: 'a paid balance with 612 of 900 monthly credits, 1,000 top-up credits and 14 reserved',
-      should: 'show the monthly credits left against the allowance, the meter, the bonus and the reserve',
-      actual: card === null ? null : { plan: card.plan, resets: card.resets, left: card.left, allowance: card.allowance, percent: card.percent, bonus: card.bonus, reserved: card.reserved },
-      expected: { plan: 'Pro', resets: 'Nov 3', left: 612, allowance: 900, percent: 68, bonus: 1000, reserved: 14 },
+      given: 'a paid balance of 1,612 spendable credits (612 carried monthly, 1,000 top-up) on a 900 allowance',
+      should: 'show every spendable credit as one total, and 900 more arriving on the period end',
+      actual: creditsCardOf(balance()),
+      expected: { plan: 'Pro', total: 1612, nextGrant: { amount: 900, on: 'Nov 3' } },
+    });
+  });
+
+  test('credits roll over, so the total can pass the allowance', () => {
+    assert({
+      given: 'a carried balance above one month’s allowance',
+      should: 'show the whole balance, never capped at the allowance',
+      actual: creditsCardOf(balance({ spendable: 18000, topup: { remaining: 0 }, monthly: { remaining: 18000, allowance: 9000, periodEnd: '2026-12-03T00:00:00.000Z' } })),
+      expected: { plan: 'Pro', total: 1800, nextGrant: { amount: 900, on: 'Dec 3' } },
     });
   });
 
@@ -35,54 +42,53 @@ describe('creditsCardOf()', () => {
     });
   });
 
-  test('a one-time grant with no renewal date', () => {
+  test('a one-time grant with no period end', () => {
     assert({
       given: 'a free balance with no period end',
-      should: 'leave the renewal out',
-      actual: creditsCardOf(balance({ subscriptionTier: 'free', monthly: { remaining: 0, allowance: 1000, periodEnd: null } }))?.resets ?? 'none',
-      expected: 'none',
+      should: 'promise no next grant',
+      actual: creditsCardOf(balance({ subscriptionTier: 'free', spendable: 400, topup: { remaining: 0 }, monthly: { remaining: 400, allowance: 1000, periodEnd: null } })),
+      expected: { plan: 'Free', total: 40, nextGrant: null },
+    });
+  });
+
+  test('no allowance or an unreadable period end', () => {
+    assert({
+      given: 'a zero allowance with a date, then an allowance with a bad date',
+      should: 'promise no next grant either way',
+      actual: [
+        creditsCardOf(balance({ monthly: { remaining: 0, allowance: 0, periodEnd: '2026-11-03T12:00:00.000Z' } }))?.nextGrant,
+        creditsCardOf(balance({ monthly: { remaining: 0, allowance: 9000, periodEnd: 'soon' } }))?.nextGrant,
+      ],
+      expected: [null, null],
+    });
+  });
+
+  test('a balance in debt', () => {
+    assert({
+      given: 'a spendable total below zero (debt nets against the balance)',
+      should: 'show 0 credits rather than a negative figure',
+      actual: creditsCardOf(balance({ spendable: -2500, topup: { remaining: 0 }, debt: 2500 }))?.total,
+      expected: 0,
     });
   });
 
   test('a balance that is not a whole number of credits', () => {
-    const card = creditsCardOf(balance({ spendable: 16126.4, topup: { remaining: 10003 }, reserved: 7.5 }));
     assert({
       given: 'cents that leave a fraction of a credit',
-      should: 'round every figure to a whole credit',
-      actual: card === null ? null : [card.left, card.bonus, card.reserved],
-      expected: [612, 1000, 1],
-    });
-  });
-
-  test('a debt-free overdraw never shows a meter past full', () => {
-    assert({
-      given: 'monthly credits left above the allowance',
-      should: 'cap the meter at 100',
-      actual: creditsCardOf(balance({ spendable: 15000, topup: { remaining: 0 }, monthly: { remaining: 15000, allowance: 9000, periodEnd: null } }))?.percent,
-      expected: 100,
+      should: 'round the total and the grant to whole credits',
+      actual: creditsCardOf(balance({ spendable: 16126.4, monthly: { remaining: 6126.4, allowance: 9004, periodEnd: '2026-11-03T12:00:00.000Z' } })),
+      expected: { plan: 'Pro', total: 1613, nextGrant: { amount: 900, on: 'Nov 3' } },
     });
   });
 });
 
-describe('countOf() and resetLabel()', () => {
-  test('whole credits with separators, and a short renewal date', () => {
+describe('countOf() and grantDateLabel()', () => {
+  test('whole credits with separators, and a short grant date', () => {
     assert({
-      given: 'a large count and a renewal timestamp',
-      should: 'write the count with a thousands separator and the date as "Mon D"',
-      actual: [countOf(1000), resetLabel('2026-11-03T12:00:00.000Z'), resetLabel('not a date'), resetLabel(null)],
-      expected: ['1,000', 'Nov 3', null, null],
+      given: 'a large count and a period-end timestamp',
+      should: 'write the count with a thousands separator and the date as "Mon D" (UTC)',
+      actual: [countOf(1000), grantDateLabel('2026-11-03T12:00:00.000Z'), grantDateLabel('2026-12-03T23:30:00.000Z'), grantDateLabel('not a date'), grantDateLabel(null)],
+      expected: ['1,000', 'Nov 3', 'Dec 3', null, null],
     });
-  });
-});
-
-describe('creditsCardOf() with no monthly allowance', () => {
-  test('shows an empty meter rather than dividing by zero', () => {
-    const card = creditsCardOf(balance({ monthly: { remaining: 0, allowance: 0, periodEnd: null }, spendable: 0, topup: { remaining: 0 } }));
-    assert({ given: 'a zero allowance', should: 'report 0 percent', actual: card?.percent, expected: 0 });
-  });
-
-  test('clamps the meter to 0-100', () => {
-    const over = creditsCardOf(balance({ spendable: 50000, topup: { remaining: 0 } }));
-    assert({ given: 'more credits left than the allowance', should: 'cap at 100 percent', actual: over?.percent, expected: 100 });
   });
 });

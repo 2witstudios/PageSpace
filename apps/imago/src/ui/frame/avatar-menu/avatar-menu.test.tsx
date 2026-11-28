@@ -61,21 +61,22 @@ describe('AvatarMenu', () => {
       </ImagoSWRProvider>,
     );
     await settle(() => {
-      if (!container.textContent?.includes('Ada Lovelace') || !container.textContent?.includes('/ 900 credits')) throw new Error('not loaded');
+      if (!container.textContent?.includes('Ada Lovelace') || !container.textContent?.includes('612 credits')) throw new Error('not loaded');
     });
 
     assert({
       given: 'the profile from /api/auth/me and the balance from /api/credits',
-      should: 'load each once, draw the avatar from its same-origin picture, and list the account rows',
+      should: 'load each once, draw the avatar from its same-origin picture, show the total and the next grant, and list the account rows',
       actual: [
         fake.count(`GET ${ME}`),
         fake.count('GET /api/credits'),
         container.querySelector('summary img')?.getAttribute('src'),
         container.textContent?.includes('ada@example.com'),
+        container.textContent?.includes('612 credits900 more on Nov 3'),
         rowsOf(container).at(-1),
         container.querySelectorAll('a[href="/account/profile"]').length,
       ],
-      expected: [1, 1, '/api/avatar/user-1.png', true, 'Log out', 1],
+      expected: [1, 1, '/api/avatar/user-1.png', true, true, 'Log out', 1],
     });
   });
 

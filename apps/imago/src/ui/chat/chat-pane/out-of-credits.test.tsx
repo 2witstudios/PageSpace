@@ -51,12 +51,12 @@ describe('OutOfCreditsAlert (IMC-10.10)', () => {
     });
   });
 
-  test('the board copy is the one from the spec, not the web copy', () => {
+  test('the copy tells the rollover truth', () => {
     assert({
       given: 'the alert copy',
-      should: 'match the board wording exactly',
+      should: 'offer a top-up or the next allowance, since the balance rolls over',
       actual: OUT_OF_CREDITS_COPY,
-      expected: 'You have run out of credits. Add credits or wait for your monthly allowance to reset.',
+      expected: "You're out of credits. Add credits, or more arrive with your next monthly allowance.",
     });
   });
 

@@ -5,7 +5,7 @@ import { findElement } from '../../test-support/find-element';
 import { renderAvatarMenu, type AvatarMenuRenderProps } from './avatar-menu.render';
 import type { CreditsCard } from './avatar-menu-model';
 
-const card: CreditsCard = { plan: 'Pro', resets: 'Nov 3', left: 612, allowance: 900, percent: 68, bonus: 1000, reserved: 14 };
+const card: CreditsCard = { plan: 'Pro', total: 1240, nextGrant: { amount: 900, on: 'Dec 3' } };
 
 const props = (overrides: Partial<AvatarMenuRenderProps> = {}): AvatarMenuRenderProps => ({
   name: 'Ada Lovelace',
@@ -42,7 +42,7 @@ describe('renderAvatarMenu()', () => {
         'Buy credits → /account/usage',
         'Account → /account/profile',
         'Personalization → /account/personalization',
-        'Usage 612 / 900 → /account/usage',
+        'Usage → /account/usage',
         'Billing (Pro) → /account/billing',
         'Settings → /account',
         'Feedback',
@@ -59,19 +59,45 @@ describe('renderAvatarMenu()', () => {
 
     assert({
       given: 'the menu open for Ada Lovelace with a credit balance',
-      should: 'name the avatar control, show the name and email, and the card with the figures',
-      actual: [
-        /<summary[^>]*aria-label="Account menu"/.test(html),
-        html.includes('>Ada Lovelace<'),
-        html.includes('ada@example.com'),
-        html.includes('Pro · resets Nov 3'),
-        html.includes('612 <span'),
-        html.includes('/ 900 credits'),
-        html.includes('+1,000 bonus credits from top-ups'),
-        html.includes('~14 reserved on in-flight calls'),
-        /role="progressbar"[^>]*aria-valuenow="68"/.test(html),
-      ],
-      expected: [true, true, true, true, true, true, true, true, true],
+      should: 'name the avatar control and show the name and email',
+      actual: [/<summary[^>]*aria-label="Account menu"/.test(html), html.includes('>Ada Lovelace<'), html.includes('ada@example.com')],
+      expected: [true, true, true],
+    });
+  });
+
+  test('the credits card tells the rollover truth', () => {
+    const cardText = (credits: CreditsCard) =>
+      /<li[^>]*data-credits-card=""[^>]*>([\s\S]*?)<\/li>/
+        .exec(markup({ credits }))?.[1]
+        ?.replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    assert({
+      given: 'a Pro balance of 1,240 credits with 900 more arriving on Dec 3',
+      should: 'head it Credits · Pro, show the one total, the next grant and Buy credits, and nothing else',
+      actual: cardText(card),
+      expected: 'Credits Pro 1,240 credits 900 more on Dec 3 Buy credits',
+    });
+  });
+
+  test('no meter, no reset and no per-bucket lines', () => {
+    const html = markup();
+
+    assert({
+      given: 'the balance card',
+      should: 'draw no progress meter and no reset wording, nor split out bonus or reserved lines',
+      actual: [html.includes('progressbar'), /reset/i.test(html), html.includes('bonus'), html.includes('reserved')],
+      expected: [false, false, false, false],
+    });
+  });
+
+  test('a one-time grant', () => {
+    assert({
+      given: 'a free balance with no next grant',
+      should: 'show the total with no "more on" line',
+      actual: markup({ credits: { plan: 'Free', total: 40, nextGrant: null } }).includes('more on'),
+      expected: false,
     });
   });
 
@@ -81,8 +107,8 @@ describe('renderAvatarMenu()', () => {
     assert({
       given: 'billing off or the balance not loaded',
       should: 'leave out the card, the Billing row and the Usage figure',
-      actual: [html.includes('Your credits'), html.includes('Billing'), html.includes('612 / 900'), rows(html).includes('Usage → /account/usage')],
-      expected: [false, false, false, true],
+      actual: [html.includes('data-credits-card'), html.includes('Billing'), rows(html).includes('Usage → /account/usage')],
+      expected: [false, false, true],
     });
   });
 
@@ -173,18 +199,8 @@ describe('avatar menu without optional account details', () => {
     });
   });
 
-  test('a plan with no reset date shows just the plan', () => {
-    const html = markup({ credits: { ...card, resets: null } });
-    assert({
-      given: 'credits on a plan that does not reset',
-      should: 'name the plan without a resets note',
-      actual: [html.includes('Pro</span>'), html.includes('resets')],
-      expected: [true, false],
-    });
-  });
-
   test('credits with no plan show no plan line and a bare Billing row', () => {
-    const html = markup({ credits: { ...card, plan: null, resets: null } });
+    const html = markup({ credits: { ...card, plan: null } });
     assert({
       given: 'credits with no plan name',
       should: 'label the billing row "Billing" with no plan in brackets',
