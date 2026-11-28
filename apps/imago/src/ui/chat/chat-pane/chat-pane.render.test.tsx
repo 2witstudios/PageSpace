@@ -5,7 +5,6 @@ import { assert } from 'riteway/vitest';
 import { assistantWithTool, userMessage } from '../chat-model/fixtures';
 import { chatMessageClass } from '../chat-message/chat-message-class';
 import {
-  chatChipClass,
   chatEmptyClass,
   chatNoticeClass,
   chatPaneClass,
@@ -61,18 +60,17 @@ describe('renderChatPane()', () => {
   });
 
   test('dense beside an object', () => {
-    const view = dom({ density: 'dense', contextLabel: 'Roadmap in context', chip: 'Roadmap' });
-    const chip = view.querySelector('header > span:not(.flex-1)');
+    const view = dom({ density: 'dense', contextLabel: 'Roadmap in context' });
     assert({
       given: 'a page open beside the chat',
-      should: 'pack the thread densely and name the open object, bare, in the context chip',
+      should: 'pack the thread densely, with no context chip squeezed into the head',
       actual: [
         view.querySelector('aside')?.dataset.density,
         view.querySelector('aside')?.className,
         view.querySelector('ol')?.className,
-        [chip?.className, chip?.textContent],
+        view.querySelector('header > span:not(.flex-1)'),
       ],
-      expected: ['dense', chatPaneClass('dense'), chatThreadClass('dense'), [chatChipClass, 'Roadmap']],
+      expected: ['dense', chatPaneClass('dense'), chatThreadClass('dense'), null],
     });
   });
 
@@ -80,28 +78,23 @@ describe('renderChatPane()', () => {
     const view = dom({
       leading: <button type="button" aria-label="Show sidebar" />,
       trailing: <button type="button" aria-label="Collapse Imago" />,
-      chip: 'Pages',
     });
     const header = view.querySelector('aside > header');
     assert({
-      given: 'a leading Show sidebar, the context chip and a trailing Collapse Imago',
-      should: 'lay out Show sidebar · picker · chip · flex · History · New chat · Collapse Imago',
+      given: 'a leading Show sidebar and a trailing Collapse Imago',
+      should: 'lay out Show sidebar · picker · flex · History · New chat · Collapse Imago',
       actual: headLabels(header),
-      expected: ['Show sidebar', 'details', chatChipClass, 'flex-1', 'Chat history', 'New chat', 'Collapse Imago'],
+      expected: ['Show sidebar', 'details', 'flex-1', 'Chat history', 'New chat', 'Collapse Imago'],
     });
   });
 
   test('no head controls', () => {
-    const header = dom({ chip: null }).querySelector('aside > header');
-    const empty = dom({ chip: '' }).querySelector('aside > header');
+    const header = dom({}).querySelector('aside > header');
     assert({
-      given: 'neither a leading nor a trailing control, and no context (the chat home), null or empty',
-      should: 'render the picker, History and New chat alone, with no chip',
-      actual: [headLabels(header), headLabels(empty)],
-      expected: [
-        ['details', 'flex-1', 'Chat history', 'New chat'],
-        ['details', 'flex-1', 'Chat history', 'New chat'],
-      ],
+      given: 'neither a leading nor a trailing control',
+      should: 'render the picker, History and New chat alone',
+      actual: headLabels(header),
+      expected: ['details', 'flex-1', 'Chat history', 'New chat'],
     });
   });
 

@@ -6,7 +6,6 @@ import postcss from 'postcss';
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import {
-  chatChipClass,
   chatEmptyClass,
   chatNoticeClass,
   chatPaneClass,
@@ -170,7 +169,6 @@ describe('chat pane classes', () => {
         chatThreadClass('roomy'),
         chatThreadClass('dense'),
         chatScrollClass,
-        chatChipClass,
         chatEmptyClass,
         chatNoticeClass,
       ],
@@ -180,7 +178,6 @@ describe('chat pane classes', () => {
         'mx-auto flex w-full max-w-thread flex-col gap-4 px-6 py-8',
         'flex w-full flex-col gap-3 p-4',
         'min-h-0 flex-1 overflow-y-auto',
-        'inline-flex h-context-chip min-w-0 items-center truncate rounded-round bg-accent-soft px-2 text-xs font-medium whitespace-nowrap text-accent-deep',
         'my-auto text-center text-ink-faint',
         'text-sm text-warn',
       ],
@@ -211,7 +208,6 @@ const moduleClasses = [
   chatThreadClass('roomy'),
   chatThreadClass('dense'),
   chatScrollClass,
-  chatChipClass,
   chatEmptyClass,
   chatNoticeClass,
   pickerTriggerClass,

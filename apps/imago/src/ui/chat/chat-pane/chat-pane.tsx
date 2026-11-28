@@ -18,8 +18,7 @@ import { useUiState } from '@/ui/store/store';
 import type { UiState } from '@/ui/store/state';
 import { dispatch, transactions } from '@/ui/store/transactions';
 import { usePageTrail } from '@/ui/tasks/use-tasks/use-tasks';
-import { chatChipFor, chatContextFor, type Stage } from '../../frame/stage/stage';
-import { tabLabelFor } from '../../frame/tabs/tab-label';
+import { chatContextFor, type Stage } from '../../frame/stage/stage';
 import { AgentPicker } from '../agent-picker/agent-picker';
 import { OutOfCreditsAlert } from './out-of-credits';
 import { ChipsRow } from '../chips-row/chips-row';
@@ -27,7 +26,6 @@ import { SideChatEmpty } from '../side-chat-empty/side-chat-empty';
 import { ImagoHistory } from '../imago-history/imago-history';
 import { DmGround } from '@/ui/messages/dm-index/dm-index';
 import { groundFor } from './ground';
-import { usePathname } from 'next/navigation';
 import { RetainedSurface } from '@/retained-adapters/retained-provider';
 import { ProviderModelSelector } from '@/retained/components/ai/chat/input/ProviderModelSelector';
 import { useAssistantSettingsStore } from '@/retained/stores/useAssistantSettingsStore';
@@ -111,11 +109,9 @@ export function ChatPane({ stage, driveName, homeDriveId, leading = null, traili
   const conversationId = shownConversationId({ chatConversationId: chosen, chatNew }, conversations?.[0]?.id ?? null);
 
   const { trail } = usePageTrail(stage.object?.kind === 'page' ? stage.object.pageId : null);
-  const pathname = usePathname() ?? '/';
   const view = useUiState(selectView);
   const { tree } = usePageTree(stage.driveId ?? undefined);
   const folderTitle = (pageId: string) => findNodeAndParent(tree, pageId)?.node.title;
-  const screen = tabLabelFor(pathname);
   const resolving = !chatNew && chosen === null && conversations === undefined && conversationsError === undefined;
   const context = chatContextFor(stage, { drive: driveName, object: objectNameOf(stage, trail) });
   const headerAgent = retainedSelection ? {
@@ -148,7 +144,6 @@ export function ChatPane({ stage, driveName, homeDriveId, leading = null, traili
         onNewAgent={stage.driveId === null ? null : () => useUIStore.getState().openQuickCreate(null)}
       />
     ),
-    chip: chatChipFor(stage, { object: objectNameOf(stage, trail), screen: screen.kind === 'screen' ? screen.title : undefined }),
     onHistory: () => dispatch(transactions.toggleChatHistory, undefined),
     historyOpen: view === 'history',
     onNewChat: () => {

@@ -48,10 +48,9 @@ describe('persistent chat orchestration', () => {
   });
   it('keeps explicit history selection and the draft through object navigation', async () => {
     dispatch(transactions.openConversation, 'c2'); dispatch(transactions.setChatDraft, 'Unsent draft');
-    const { container } = show('/d1/files/p1'); await settle();
+    show('/d1/files/p1'); await settle();
     expect(host.props?.conversationId).toBe('c2');
     expect(getUiState().resources.chatDraft).toBe('Unsent draft');
-    expect(container.querySelector('aside > header > span')?.textContent).toBe('Brief');
     expect(host.props?.placeholder).toBe('Ask about Brief…');
   });
   it('passes a new thread to the host without displaying an older conversation', async () => {
@@ -144,11 +143,11 @@ describe('History and New chat in the head', () => {
     expect(host.props?.conversationId).toBeNull();
   });
 
-  it('names no context on the chat home and the section on a list', async () => {
+  it('puts no context chip in the head; the placeholder names the context', async () => {
     const home = show('/d1').container; await settle();
     const files = show('/d1/files').container; await settle();
     expect(home.querySelector('aside > header > span:not(.flex-1)')).toBeNull();
-    expect(files.querySelector('aside > header > span:not(.flex-1)')?.textContent).toBe('Pages');
+    expect(files.querySelector('aside > header > span:not(.flex-1)')).toBeNull();
   });
 });
 

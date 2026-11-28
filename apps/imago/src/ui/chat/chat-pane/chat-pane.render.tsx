@@ -6,7 +6,6 @@ import { Icon } from '../../components/icon/icon';
 import type { ChatMessage } from '../chat-model/chat';
 import { renderChatMessage } from '../chat-message/chat-message.render';
 import {
-  chatChipClass,
   chatEmptyClass,
   chatNoticeClass,
   chatPaneClass,
@@ -20,8 +19,6 @@ export type ChatPaneRenderProps = {
   readonly agentName: string;
   /** The agent picker (IMC-2.1). */
   readonly picker: ReactNode;
-  /** The context chip: the bare name of what Imago answers about; none on the chat home. */
-  readonly chip?: string | null;
   /** History in the head; pressed while the History view shows. */
   readonly onHistory: () => void;
   readonly historyOpen?: boolean;
@@ -48,19 +45,15 @@ export type ChatPaneRenderProps = {
   readonly onScroll?: UIEventHandler<HTMLDivElement>;
 };
 
-/** The context chip: what Imago answers about, the bare page or screen name (C-Files-Doc head). */
-const renderChip = (chip: string | null | undefined): ReactNode =>
-  chip === null || chip === undefined || chip === '' ? null : <span className={chatChipClass}>{chip}</span>;
-
 /**
  * Imago's head (SPEC v3 "Assistant column", v3.1, v3.2): [Show sidebar] · the agent picker ·
- * the context chip · History · New chat · Collapse Imago or Close Imago.
+ * History · New chat · Collapse Imago or Close Imago. What Imago answers about is named by the
+ * composer's placeholder ("Ask about {page}…"), in every view, not by a chip here.
  */
 const renderHead = (props: ChatPaneRenderProps): ReactNode => (
   <header className={paneHeaderClass}>
     {props.leading ?? null}
     {props.picker}
-    {renderChip(props.chip)}
     <span className="flex-1" />
     {props.source ?? null}
     <button
