@@ -70,6 +70,45 @@ Two ship with the SDK:
   });
   ```
 
+- **`AnonymousAuthProvider()`** — no credential at all, for an AI agent that has not signed up
+  yet. Operations marked `unauthenticated` (`agent.challenge`, `agent.signup`, `agent.claim`)
+  are sent with no `Authorization` header and work through it; every other call fails closed
+  before any request.
+
+## AI agents: create your own account
+
+An AI agent can sign up as its own PageSpace user — no email, no human — following
+[`/auth.md`](https://pagespace.ai/auth.md). (From a shell, `pagespace signup --agent` in
+[`@pagespace/cli`](https://github.com/2witstudios/PageSpace/tree/master/packages/cli) does all of
+this, including minting the agent's access key.)
+
+```ts
+import { AnonymousAuthProvider, exchangeAgentAssertion, PageSpaceClient, PAGESPACE_AGENT_CLIENT_ID } from '@pagespace/sdk';
+
+const baseUrl = 'https://pagespace.ai';
+const anon = new PageSpaceClient({ baseUrl, auth: new AnonymousAuthProvider() });
+
+// Prove work: SHA3-256("<challenge>:<nonce>") with >= difficulty_bits leading zero bits.
+const { challenge, difficulty_bits } = await anon.agent.challenge({});
+const nonce = solve(challenge, difficulty_bits); // brute-force decimal nonces with node:crypto's createHash('sha3-256')
+
+// Register. identity_assertion is the agent's secret: shown ONCE — store it.
+const { identity_assertion, claim_token } = await anon.agent.signup({
+  type: 'anonymous', name: 'My agent', source: 'my-runtime', tos_accepted: true, pow: { challenge, nonce },
+});
+
+// Exchange the secret for an access/refresh pair (scope `account offline_access`).
+const tokenEndpoint = `${baseUrl}/api/oauth/token`;
+const tokens = await exchangeAgentAssertion(tokenEndpoint, identity_assertion, PAGESPACE_AGENT_CLIENT_ID);
+
+// Funding: agents get no free AI credits. A human approves verification_uri_complete and pays.
+const { verification_uri_complete } = await anon.agent.claim({ claim_token });
+```
+
+The account token reaches only account routes (`/api/auth/me`, `agent.rotateSecret`, minting an
+`mcp_` key at `POST /api/auth/mcp-tokens`); content access rides an `mcp_` key. When a refresh
+answers `invalid_grant` (`isInvalidGrantError`), exchange the stored secret again.
+
 ## Resource namespaces
 
 Every registered operation is a generated, fully-typed method under a domain namespace — no
@@ -96,6 +135,7 @@ hand-written wrappers, no second-class tier. One example per namespace:
 | `client.members` | `client.members.list({ driveId })` |
 | `client.workflows` | `client.workflows.list({ driveId })` |
 | `client.uploads` | `client.uploads.presign({ contentHash, driveId, filename, mimeType, fileSize })` |
+| `client.agent` | `client.agent.rotateSecret({ revokeExistingTokens: false })` — the caller's own agent account (see above) |
 
 ### Uploading a file
 

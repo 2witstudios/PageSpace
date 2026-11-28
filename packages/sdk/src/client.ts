@@ -38,6 +38,7 @@ import {
 } from './errors.js';
 import type { AuthProvider } from './auth/provider.js';
 import { getActivity } from './operations/activity.js';
+import { claimAgent, getAgentChallenge, rotateAgentSecret, signUpAgent } from './operations/agent-identity.js';
 import { askAgent, listAgents, listModels, multiDriveListAgents, updateAgentConfig } from './operations/agents.js';
 import {
   createCalendarEvent,
@@ -249,6 +250,19 @@ const DEFAULT_OPERATIONS_MAP = {
     updateConfig: updateAgentConfig,
     ask: askAgent,
     listModels,
+  },
+  /**
+   * An AI agent's OWN PageSpace account (ADR 0008; `/auth.md`) — not the AI
+   * agent pages `agents.*` drives. `challenge`, `signup` and `claim` run before
+   * any credential exists and are sent unauthenticated; build the client with
+   * `AnonymousAuthProvider` for them. `rotateSecret` needs the agent's own
+   * access token (from `exchangeAgentAssertion`).
+   */
+  agent: {
+    challenge: getAgentChallenge,
+    signup: signUpAgent,
+    claim: claimAgent,
+    rotateSecret: rotateAgentSecret,
   },
   conversations: {
     list: listConversations,
@@ -572,10 +586,14 @@ export class PageSpaceClient {
     for (;;) {
       let raw;
       try {
-        const token = await this.#auth.getAccessToken();
+        // An operation called before any credential exists (`agent.challenge`,
+        // `agent.signup`, `agent.claim`) never asks the provider for a token
+        // and never sends one: a token the server does not need is a token
+        // that can leak.
+        const authorization = op.unauthenticated ? {} : { Authorization: `Bearer ${await this.#auth.getAccessToken()}` };
         const descriptor = buildRequest(op, input, this.#config);
         raw = await executeRequest(
-          { ...descriptor, headers: { ...descriptor.headers, Authorization: `Bearer ${token}` } },
+          { ...descriptor, headers: { ...descriptor.headers, ...authorization } },
           {
             fetch: this.#fetch,
             timeoutMs: resolveTimeoutMs(this.#timeoutMsExplicit, op.timeoutMsOverride, this.#timeoutMs),
@@ -615,7 +633,7 @@ export class PageSpaceClient {
       // which is how a route refusing a credential CLASS surfaced as a dead
       // key (#2464). Undeclared means `true`: providers written before this
       // flag existed all had a refresh path.
-      if (isAuthenticationError(parsed) && !usedAuthRetry && this.#auth.canRefresh !== false) {
+      if (isAuthenticationError(parsed) && !op.unauthenticated && !usedAuthRetry && this.#auth.canRefresh !== false) {
         usedAuthRetry = true;
         this.#auth.invalidate();
         continue;
