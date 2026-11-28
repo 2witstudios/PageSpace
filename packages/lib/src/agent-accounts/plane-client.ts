@@ -87,6 +87,9 @@ export function createPlaneClient({
     return { ok: false as const, reason };
   };
 
+  /** An SSH command may take the executor's whole 60 s, after DNS, describe and audit: give it room before calling it unknown. */
+  const timeoutFor = (route: PlaneRoute) => (route === 'sshExec' ? Math.max(timeoutMs, 90_000) : timeoutMs);
+
   async function call<T>(route: PlaneRoute, path: string, body: unknown): Promise<T | ReturnType<typeof failed>> {
     const bytes = new TextEncoder().encode(JSON.stringify(body));
     const header = signPlaneRequest({ method: 'POST', path, body: bytes, secret, now: now(), hmac, sha256 });
@@ -95,7 +98,7 @@ export function createPlaneClient({
         method: 'POST',
         headers: { 'content-type': 'application/json', [PLANE_SIGNATURE_HEADER]: header },
         body: bytes,
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: AbortSignal.timeout(timeoutFor(route)),
       });
       if (response.status !== 200) return failed(route, { kind: 'status', status: response.status });
       return (await response.json()) as T;

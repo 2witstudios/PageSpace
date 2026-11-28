@@ -26,6 +26,12 @@ export const MAX_SSH_STDIN_BYTES = 256 * 1024;
 const DNS_NAME_RE = /^(?=.{1,253}$)(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))*$/;
 const IPV4_RE = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
 const IPV6_RE = /^[0-9a-f:]+$/;
+/**
+ * What a person could not see on the approval card: Unicode format characters (bidi overrides, zero-width
+ * joiners — "Trojan Source") and control characters other than tab and newline (and carriage return in input).
+ */
+const COMMAND_INVISIBLE_RE = /[\p{Cf}\x00-\x08\x0B-\x1F\x7F]/u;
+const STDIN_INVISIBLE_RE = /[\p{Cf}\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u;
 
 export type SshTarget = { readonly target: CanonicalOrigin; readonly host: string; readonly port: number };
 
@@ -58,8 +64,9 @@ export function canonicalizeSshCommand({ target, command, stdin, sha256 }: { rea
   const pinned = sshTargetOf(target);
   if (pinned === null) return { ok: false, reason: 'target_invalid' };
   const encoder = new TextEncoder();
-  if (typeof command !== 'string' || command.trim().length === 0 || encoder.encode(command).byteLength > MAX_SSH_COMMAND_BYTES || command.includes('\u0000')) return { ok: false, reason: 'command_invalid' };
+  if (typeof command !== 'string' || command.trim().length === 0 || encoder.encode(command).byteLength > MAX_SSH_COMMAND_BYTES || COMMAND_INVISIBLE_RE.test(command)) return { ok: false, reason: 'command_invalid' };
   if (typeof stdin !== 'string' || encoder.encode(stdin).byteLength > MAX_SSH_STDIN_BYTES) return { ok: false, reason: 'stdin_too_large' };
+  if (STDIN_INVISIBLE_RE.test(stdin)) return { ok: false, reason: 'command_invalid' };
   return {
     ok: true,
     canonical: {

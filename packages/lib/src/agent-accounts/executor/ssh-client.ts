@@ -78,10 +78,14 @@ export function createSshClient({
         const done = (value: Awaited<ReturnType<SshClient['hostKey']>>) => {
           if (settled) return;
           settled = true;
+          clearTimeout(deadline);
           client.end();
           resolve(value);
         };
+        // A server that sends a banner and closes before key exchange emits no error: the deadline and `close` settle it.
+        const deadline = setTimeout(() => done({ ok: false, reason: 'timeout' }), limits.connectTimeoutMs + 1_000);
         client.on('error', () => done({ ok: false, reason: 'unreachable' }));
+        client.on('close', () => done({ ok: false, reason: 'unreachable' }));
         client.connect({
           host: resolved.address,
           port,
@@ -142,6 +146,7 @@ export function createSshClient({
               stream.end(stdin);
             });
           })
+          .on('close', () => done({ kind: 'failed', reason: keyMismatch ? 'host_key_mismatch' : 'unreachable', sent }))
           .on('error', (error: Error & { level?: string }) => {
             if (keyMismatch) return done({ kind: 'failed', reason: 'host_key_mismatch', sent: false });
             done({ kind: 'failed', reason: error.level === 'client-authentication' ? 'auth_failed' : 'unreachable', sent });

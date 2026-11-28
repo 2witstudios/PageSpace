@@ -583,8 +583,9 @@ export function createAccountAuthority(input: AccountAuthorityDeps): AccountAuth
         if (definite) await deps.accounts.remove(row.id);
         return { ok: false, reason: definite ? 'store_refused' : 'plane_unavailable' };
       }
-      await deps.accounts.setCredentialVersion({ id: row.id, version: enrolled.version });
+      // The public key first: the plane never hands it out again, so an account must not become ready without it.
       await deps.accounts.setPublicKey({ id: row.id, publicKey: enrolled.publicKey });
+      await deps.accounts.setCredentialVersion({ id: row.id, version: enrolled.version });
       const stored = await deps.accounts.find(row.id);
       return stored === null ? { ok: false, reason: 'store_refused' } : { ok: true, account: toSafeAccount({ row: stored }), publicKey: enrolled.publicKey };
     },
@@ -627,11 +628,12 @@ export function createAccountAuthority(input: AccountAuthorityDeps): AccountAuth
       });
       const subjectOf = (canonical: Parameters<typeof renderApprovalSubject>[0]['canonical']): ApprovalSubject => {
         const target = sshTargetOf(canonical.origin);
-        return { ...renderApprovalSubject({ canonical }), headline: `Run a command on ${target?.host ?? canonical.origin}${stdin.length > 0 ? ' (with input)' : ''}`, command };
+        return { ...renderApprovalSubject({ canonical }), headline: `Run a command on ${target?.host ?? canonical.origin}${stdin.length > 0 ? ' with the input below' : ''}`, command, stdin, bodyBytes: new TextEncoder().encode(stdin).byteLength };
       };
       if (!verdict.ok) {
         if (verdict.reason !== 'approval_required') return verdict;
-        return { ...verdict, subject: { ...verdict.subject, headline: `Run a command on ${sshTargetOf(verdict.subject.origin)?.host ?? verdict.subject.origin}`, command } };
+        const host = sshTargetOf(verdict.subject.origin)?.host ?? verdict.subject.origin;
+        return { ...verdict, subject: { ...verdict.subject, headline: `Run a command on ${host}${stdin.length > 0 ? ' with the input below' : ''}`, command, stdin, bodyBytes: new TextEncoder().encode(stdin).byteLength } };
       }
       if (verdict.approvalToConsume !== null) {
         const consumed = await deps.accounts.consumeApproval({ approvalId: verdict.approvalToConsume, grantId: verdict.grant.grantId, now });

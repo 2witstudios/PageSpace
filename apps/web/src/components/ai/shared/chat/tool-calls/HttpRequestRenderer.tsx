@@ -19,6 +19,8 @@ export type HttpRequestApprovalSubject = {
   readonly headerNames?: readonly string[];
   /** An SSH command, verbatim: what the person approves running. */
   readonly command?: string;
+  /** Its standard input, verbatim ('' = none): the approval covers it. */
+  readonly stdin?: string;
 };
 
 export type HttpRequestToolOutput = {
@@ -67,7 +69,15 @@ function ApprovalCard({ approval }: { readonly approval: NonNullable<HttpRequest
       </div>
       {subject.headline && <div className="text-xs">{subject.headline}</div>}
       {subject.command !== undefined ? (
-        <pre className="text-xs font-mono whitespace-pre-wrap break-all rounded bg-background/60 border p-2">{subject.command}</pre>
+        <>
+          <pre className="text-xs font-mono whitespace-pre-wrap break-all rounded bg-background/60 border p-2">{subject.command}</pre>
+          {subject.stdin ? (
+            <div className="space-y-1">
+              <div className="text-xs font-medium">With this input:</div>
+              <pre className="text-xs font-mono whitespace-pre-wrap break-all rounded bg-background/60 border p-2 max-h-60 overflow-auto">{subject.stdin}</pre>
+            </div>
+          ) : null}
+        </>
       ) : (
         <div className="text-xs font-mono break-all">
           {subject.origin}

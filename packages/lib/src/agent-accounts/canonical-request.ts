@@ -253,6 +253,8 @@ export type ApprovalSubject = {
   readonly bodyBytes: number;
   /** An SSH command, shown verbatim so the person approves exactly what will run (slice 5). */
   readonly command?: string;
+  /** Its standard input, verbatim — the digest covers it, so the person must see it too ('' = none). */
+  readonly stdin?: string;
 };
 
 /**

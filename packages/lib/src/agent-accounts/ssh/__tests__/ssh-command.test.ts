@@ -44,6 +44,14 @@ describe('canonicalizeSshCommand', () => {
   });
 });
 
+describe('canonicalizeSshCommand — what the approval card could not show', () => {
+  it('given bidi overrides, zero-width characters or control characters in the command or its input, should refuse; tabs and newlines are fine', () => {
+    const of = (command: string, stdin = '') => canonicalizeSshCommand({ target: 'ssh://h.example:22', command, stdin, sha256 });
+    const actual = [of('ls \u202E#txt.hs'), of('rm\u200B -rf ~'), of('echo \u0007'), of('cat', 'x\u2066y'), of('printf "a\tb\n"', 'line1\nline2\r\n')].map((verdict) => (verdict.ok ? 'ok' : verdict.reason));
+    expect(actual).toEqual(['command_invalid', 'command_invalid', 'command_invalid', 'command_invalid', 'ok']);
+  });
+});
+
 describe('sshFingerprintOf', () => {
   it('given a key blob, should print it as OpenSSH does (SHA256:, unpadded base64)', () => {
     const blob = new Uint8Array([1, 2, 3]);

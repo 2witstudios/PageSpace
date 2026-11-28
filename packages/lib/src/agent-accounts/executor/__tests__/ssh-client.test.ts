@@ -8,7 +8,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createHash, timingSafeEqual } from 'node:crypto';
-import type { AddressInfo } from 'node:net';
+import { createServer as createTcpServer, type AddressInfo } from 'node:net';
 import { Server, utils, type AuthContext, type Connection } from 'ssh2';
 import { createSshClient, generateSshKeyPair } from '../ssh-client';
 import { sshFingerprintOf } from '../../ssh/ssh-command';
@@ -105,5 +105,14 @@ describe('createSshClient', () => {
     const before = authAttempts.length;
     const probe = await client().hostKey({ host: 'build.example.com', port });
     expect({ probe, authAttempts: authAttempts.length - before }).toEqual({ probe: { ok: true, fingerprint: fingerprint(hostPair.publicKey), algorithm: 'ssh-ed25519' }, authAttempts: 0 });
+  }, 20_000);
+
+  it('given a server that sends its banner and hangs up before key exchange, should settle the probe instead of hanging', async () => {
+    const rude = createTcpServer((socket) => socket.end('SSH-2.0-rude\r\n'));
+    await new Promise<void>((resolve) => rude.listen(0, '127.0.0.1', () => resolve()));
+    const rudePort = (rude.address() as AddressInfo).port;
+    const probe = await client().hostKey({ host: 'rude.example.com', port: rudePort });
+    rude.close();
+    expect(probe.ok).toBe(false);
   }, 20_000);
 });
