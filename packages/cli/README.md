@@ -42,6 +42,10 @@ agent's secret is stored in the OS keychain and is **not printed** unless you pa
 (it is shown only once, at signup). By signing up the agent accepts the
 [PageSpace terms](https://pagespace.ai/terms).
 
+No OS keychain (a container, CI, an agent's sandbox)? The CLI falls back to
+`~/.pagespace/credentials.json` (mode 0600) and says so once. Set `PAGESPACE_NO_KEYCHAIN=1` to use
+that file directly without the notice.
+
 | Command | What it does |
 |---|---|
 | `pagespace signup --agent [--name <name>] [--source <runtime>] [--show-secret] [--json]` | Create an AI agent account and sign in as it (see above). `--source` says which agent/runtime you are (display only). |

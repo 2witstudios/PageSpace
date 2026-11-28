@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { CompositeCredentialStore, FileCredentialStore } from '@pagespace/cli';
+import { CompositeCredentialStore, FileCredentialStore, createCredentialStore } from '@pagespace/cli';
 import type { OAuthHostCredential, OutputSink } from '@pagespace/cli';
 import { createFakeKeychainAdapter, createUnavailableKeychainAdapter } from './fake-keychain.js';
 
@@ -219,6 +219,30 @@ describe('CompositeCredentialStore — keychain unavailable', () => {
     expect(stderr.lines[0]).toMatch(/keychain unavailable/i);
   });
 
+  it('keeps the notice on one line even when the native error spans several (agents in containers see it on every command)', async () => {
+    const keychain = createUnavailableKeychainAdapter("Couldn't access platform storage: PermissionDenied\n\nCaused by:\n    PermissionDenied");
+    const stderr = fakeSink();
+    const store = new CompositeCredentialStore(keychain, new FileCredentialStore({ path: credentialsPath }), stderr);
+
+    await store.set('pagespace.ai', CRED_A);
+
+    expect(stderr.lines).toHaveLength(1);
+    expect(stderr.lines[0].trimEnd().split('\n')).toHaveLength(1);
+    expect(stderr.lines[0]).toContain('PermissionDenied');
+  });
+
+  it('given several stores sharing one notice state (one CLI process), should print the notice once in total', async () => {
+    const notice = { shown: false };
+    const stderr = fakeSink();
+    const first = new CompositeCredentialStore(createUnavailableKeychainAdapter(), new FileCredentialStore({ path: credentialsPath }), stderr, notice);
+    const second = new CompositeCredentialStore(createUnavailableKeychainAdapter(), new FileCredentialStore({ path: credentialsPath }), stderr, notice);
+
+    await first.set('pagespace.ai', CRED_A);
+    await second.get('pagespace.ai');
+
+    expect(stderr.lines).toHaveLength(1);
+  });
+
   it('stops calling the keychain after the first failure (degrade is sticky)', async () => {
     const keychain = createUnavailableKeychainAdapter();
     const store = new CompositeCredentialStore(keychain, new FileCredentialStore({ path: credentialsPath }), fakeSink());
@@ -246,5 +270,28 @@ describe('CompositeCredentialStore — keychain unavailable', () => {
     await store.set('pagespace.ai', CRED_A);
 
     expect(stderr.lines.join('')).not.toContain(CRED_A.refreshToken);
+  });
+});
+
+describe('createCredentialStore — PAGESPACE_NO_KEYCHAIN', () => {
+  it('given PAGESPACE_NO_KEYCHAIN=1, should use the credentials file directly: no keychain call and no notice', async () => {
+    const keychain = createFakeKeychainAdapter();
+    const stderr = fakeSink();
+    const store = createCredentialStore({ credentialsPath, keychain, stderr, env: { PAGESPACE_NO_KEYCHAIN: '1' } });
+
+    await store.set('pagespace.ai', CRED_A);
+
+    expect(await new FileCredentialStore({ path: credentialsPath }).get('pagespace.ai')).toEqual(CRED_A);
+    expect(keychain.calls).toEqual([]);
+    expect(stderr.lines).toEqual([]);
+  });
+
+  it('given the variable unset or any other value, should keep using the keychain', async () => {
+    const keychain = createFakeKeychainAdapter();
+    const store = createCredentialStore({ credentialsPath, keychain, stderr: fakeSink(), env: { PAGESPACE_NO_KEYCHAIN: 'yes' } });
+
+    await store.set('pagespace.ai', CRED_A);
+
+    expect(keychain.calls).toContain('setSecret:pagespace.ai');
   });
 });

@@ -38,14 +38,22 @@ export interface CredentialStore {
 const KEYCHAIN_UNAVAILABLE_NOTICE =
   'pagespace: OS keychain unavailable, falling back to ~/.pagespace/credentials.json for credential storage';
 
+/** Whether the keychain-unavailable notice was already printed; shared so one process prints it once. */
+export interface KeychainNoticeState {
+  shown: boolean;
+}
+
+/** One CLI process builds several stores; they share this so the notice prints once per process. */
+const processNotice: KeychainNoticeState = { shown: false };
+
 export class CompositeCredentialStore implements CredentialStore {
   private degraded = false;
-  private noticeShown = false;
 
   constructor(
     private readonly keychain: KeychainAdapter,
     private readonly fileStore: CredentialStore,
     private readonly stderr: OutputSink,
+    private readonly notice: KeychainNoticeState = { shown: false },
   ) {}
 
   /**
@@ -187,10 +195,12 @@ export class CompositeCredentialStore implements CredentialStore {
 
   private degrade(error: unknown): void {
     this.degraded = true;
-    if (!this.noticeShown) {
-      this.noticeShown = true;
-      const reason = error instanceof Error ? error.message : String(error);
-      this.stderr.write(`${KEYCHAIN_UNAVAILABLE_NOTICE} (${reason})\n`);
+    if (!this.notice.shown) {
+      this.notice.shown = true;
+      // Native keychain errors span several lines ("…\n\nCaused by: …"); headless agents
+      // see this on every command, so keep it to the one line that names the cause.
+      const reason = (error instanceof Error ? error.message : String(error)).split('\n')[0].trim();
+      this.stderr.write(`${KEYCHAIN_UNAVAILABLE_NOTICE} (${reason}; set PAGESPACE_NO_KEYCHAIN=1 to use the file directly)\n`);
     }
   }
 }
@@ -199,15 +209,20 @@ export interface CreateCredentialStoreOptions {
   readonly credentialsPath?: string;
   readonly keychain?: KeychainAdapter;
   readonly stderr?: OutputSink;
+  /** Defaults to `process.env`; read for `PAGESPACE_NO_KEYCHAIN`. */
+  readonly env?: Readonly<Record<string, string | undefined>>;
 }
 
 export function createCredentialStore(options: CreateCredentialStoreOptions = {}): CredentialStore {
   const fileStore = new FileCredentialStore({ path: options.credentialsPath });
+  // Headless machines (containers, CI, an agent's sandbox) often have no keychain at all;
+  // `PAGESPACE_NO_KEYCHAIN=1` (exactly) skips it and its fallback notice entirely.
+  if ((options.env ?? process.env).PAGESPACE_NO_KEYCHAIN === '1') return fileStore;
   const keychain = options.keychain ?? createNativeKeychainAdapter();
   const stderr: OutputSink = options.stderr ?? {
     write(chunk: string) {
       process.stderr.write(chunk);
     },
   };
-  return new CompositeCredentialStore(keychain, fileStore, stderr);
+  return new CompositeCredentialStore(keychain, fileStore, stderr, processNotice);
 }
