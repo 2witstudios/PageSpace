@@ -1,4 +1,4 @@
-# ADR 0007 — Agent identities
+# ADR 0008 — Agent identities
 
 > **Naming:** *agent accounts* (ADR 0004/0005, the credential broker) are credentials a PageSpace agent holds for OTHER sites; *agent identities* (this ADR) are an agent's own PageSpace login.
 

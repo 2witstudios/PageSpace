@@ -1,6 +1,6 @@
 /**
  * stripe-customer-eligibility — an agent never holds its own Stripe customer
- * (ADR 0007 Decision 8). Its AI spend bills its owner once claimed, and its
+ * (ADR 0008 Decision 8). Its AI spend bills its owner once claimed, and its
  * synthetic reserved-domain address could never receive an invoice.
  *
  * Asserted inside BOTH `getOrCreateStripeCustomer` copies (web and admin) and

@@ -1,6 +1,6 @@
 /**
  * GET /api/well-known/auth-md — destination of the `/auth.md` rewrite (Agent
- * Signup Phase 2 leaf 5; ADR 0007 Decision 12, threat model T14).
+ * Signup Phase 2 leaf 5; ADR 0008 Decision 12, threat model T14).
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { buildAuthMd } from '@/lib/agent-auth/auth-md';

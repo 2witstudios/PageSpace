@@ -322,7 +322,7 @@ describe('Customer API', () => {
     });
 
     it('given an agent account, should refuse with 403 and never create or retrieve a Stripe customer', async () => {
-      // ADR 0007 Decision 8: an agent's AI spend bills its owner; a Stripe
+      // ADR 0008 Decision 8: an agent's AI spend bills its owner; a Stripe
       // customer needs an address that can receive invoices, and an agent's is
       // under the reserved .invalid domain.
       mockSelectWhere.mockResolvedValue([mockUser({ stripeCustomerId: null, accountType: 'agent', email: 'agent-user_123@agents.pagespace.invalid' })]);

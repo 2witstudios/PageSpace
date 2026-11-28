@@ -370,7 +370,7 @@ describe('exportData', () => {
   });
 
   /**
-   * Agent users (ADR 0007; D-32). An agent's only credential is its
+   * Agent users (ADR 0008; D-32). An agent's only credential is its
    * `agent_identities` row, and agent credentials do not cross deployments, so
    * a bundle containing an agent would import a principal that can never sign
    * in again. SKIPPING the agent would be worse: the drives and pages it owns

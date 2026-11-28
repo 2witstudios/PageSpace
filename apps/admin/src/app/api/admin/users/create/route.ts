@@ -14,7 +14,7 @@ import { notAgentReservedEmail } from '@pagespace/lib/auth/agent/reserved-email'
 
 const createUserSchema = z.object({
   name: z.string().min(1, 'Name is required'),
-  // An agent's synthetic address (ADR 0007 §4) fails exactly like a malformed one.
+  // An agent's synthetic address (ADR 0008 §4) fails exactly like a malformed one.
   email: z.email().refine(notAgentReservedEmail, { message: 'Invalid email address' }),
   role: z.enum(['user', 'admin']).default('user'),
 });

@@ -1,6 +1,6 @@
 /**
  * GET /api/agent/challenge — the proof-of-work challenge for the agent API door
- * (ADR 0007 Decision 10; auth.md "Prove work"). Public and unauthenticated: an
+ * (ADR 0008 Decision 10; auth.md "Prove work"). Public and unauthenticated: an
  * agent fetches this before it has any identity at all.
  *
  * The challenge is single-use, expires after POW_TTL_MS, and is stored only as

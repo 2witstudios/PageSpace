@@ -32,7 +32,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    // An agent never holds its own Stripe customer (ADR 0007 Decision 8), so a
+    // An agent never holds its own Stripe customer (ADR 0008 Decision 8), so a
     // stale customer id on an agent row is never read back from Stripe.
     if (user.accountType === 'agent') {
       return NextResponse.json({ error: AGENT_STRIPE_CUSTOMER_REFUSAL }, { status: 403 });
@@ -96,7 +96,7 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    // An agent never holds its own Stripe customer (ADR 0007 Decision 8) —
+    // An agent never holds its own Stripe customer (ADR 0008 Decision 8) —
     // refused before any Stripe call, whether or not a customer id exists.
     assertMayHoldStripeCustomer(user);
 

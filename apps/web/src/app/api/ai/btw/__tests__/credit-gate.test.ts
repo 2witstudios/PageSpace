@@ -191,7 +191,7 @@ describe('POST /api/ai/btw credit gate', () => {
     expect(mocks.trackUsage).not.toHaveBeenCalled();
   });
 
-  // Agent Signup (ADR 0007 Decision 9): an unclaimed agent has no credits and no
+  // Agent Signup (ADR 0008 Decision 9): an unclaimed agent has no credits and no
   // way to buy any, so the refusal points at the claim flow, never "add credits".
   it('refuses an unclaimed agent with 402 requires_funding + claim_url and never builds or calls the model', async () => {
     mocks.gate.mockResolvedValue({ allowed: false, reason: 'requires_funding' });

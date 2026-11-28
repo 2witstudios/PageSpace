@@ -498,7 +498,7 @@ async function handleDeviceCodeGrant(req: NextRequest, form: URLSearchParams): P
 }
 
 /**
- * The jwt-bearer grant (RFC 7523 URN; ADR 0007 Decisions 5-6, threat model
+ * The jwt-bearer grant (RFC 7523 URN; ADR 0008 Decisions 5-6, threat model
  * T3/T4): an AI agent exchanges its opaque `ps_agent_*` secret (the auth.md
  * `identity_assertion` — not a JWT) for a `ps_at_`/`ps_rt_` pair minted for
  * ITSELF, scoped `account` (+ `offline_access`).
@@ -512,7 +512,7 @@ async function handleDeviceCodeGrant(req: NextRequest, form: URLSearchParams): P
  * key-shaped scope, an unknown client — is the one `invalid_grant` body.
  */
 async function handleAgentAssertionGrant(req: NextRequest, form: URLSearchParams): Promise<NextResponse> {
-  // ADR 0007 Decision 11: a deployment with the agent door closed has no agent
+  // ADR 0008 Decision 11: a deployment with the agent door closed has no agent
   // grant at all — the same answer as any grant this endpoint does not speak.
   if (!isAgentDoorOpen()) {
     auditRequest(req, { eventType: 'authz.access.denied', details: { oauthEvent: 'agent_assertion_door_closed' } });

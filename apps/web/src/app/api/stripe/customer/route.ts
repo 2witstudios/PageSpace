@@ -28,7 +28,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    // An agent never holds its own Stripe customer (ADR 0007 Decision 8), so a
+    // An agent never holds its own Stripe customer (ADR 0008 Decision 8), so a
     // stale customer id on an agent row is never read back from Stripe.
     if (user.accountType === 'agent') {
       return NextResponse.json({ error: AGENT_STRIPE_CUSTOMER_REFUSAL }, { status: 403 });
@@ -87,7 +87,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    // An agent never gets its own Stripe customer (ADR 0007 Decision 8): its AI
+    // An agent never gets its own Stripe customer (ADR 0008 Decision 8): its AI
     // spend bills its owner once claimed, and its synthetic `.invalid` address
     // could never receive an invoice.
     if (user.accountType === 'agent') {

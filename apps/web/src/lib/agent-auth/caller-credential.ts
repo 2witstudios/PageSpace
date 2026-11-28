@@ -1,6 +1,6 @@
 /**
  * Which bearer credential speaks for an agent on a key-management action
- * (ADR 0007 Decision 6: agents mint mcp_ keys; Decision 14: agents rotate their
+ * (ADR 0008 Decision 6: agents mint mcp_ keys; Decision 14: agents rotate their
  * secret). One rule, shared by `/api/agent/secret/rotate` and
  * `POST /api/auth/mcp-tokens`, so the two doors cannot disagree.
  *

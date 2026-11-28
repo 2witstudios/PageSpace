@@ -1,5 +1,5 @@
 /**
- * An agent can never buy credits into its own Stripe customer (ADR 0007
+ * An agent can never buy credits into its own Stripe customer (ADR 0008
  * Decision 8). Runs the REAL getOrCreateStripeCustomer — only Stripe and the db
  * are faked — so removing the helper's refusal turns this red.
  */

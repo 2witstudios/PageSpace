@@ -20,7 +20,7 @@ export const WELL_KNOWN_REWRITES = [
     destination: '/api/well-known/oauth-authorization-server',
   },
   // Not under /.well-known/, but the same shape: a fixed, public discovery
-  // document an agent fetches before it has any identity (ADR 0007 Decision 12,
+  // document an agent fetches before it has any identity (ADR 0008 Decision 12,
   // the auth.md recipe). A `.md` path would otherwise be looked up as a static
   // file; the middleware rewrite reaches the handler first.
   {

@@ -1,6 +1,6 @@
 /**
  * Agent Signup — the Art 15 collector for an agent's own identity row, against
- * a real database (ADR 0007; Codex review on #2652).
+ * a real database (ADR 0008; Codex review on #2652).
  *
  * The non-secret facts about the subject's agent account (its owner link, claim
  * time, self-reported source, last sign-in, revocation, secret version, creating

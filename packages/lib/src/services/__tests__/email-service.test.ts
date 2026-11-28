@@ -42,7 +42,7 @@ describe('email-service', () => {
   });
 
   it('given a recipient under the agent reserved domain, should return a suppressed outcome before any rate-limit or provider call and warn', async () => {
-    // ADR 0007 §4 outbound choke point: an agent's synthetic address can never
+    // ADR 0008 §4 outbound choke point: an agent's synthetic address can never
     // receive mail. The caller must be able to tell this apart from a delivery
     // (Phase 1b) — a silent success let the member-invite undo never run.
     delete process.env.RESEND_API_KEY;

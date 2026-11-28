@@ -17,7 +17,7 @@ import { INVITE_TOKEN_MAX_LENGTH } from '@/lib/auth/oauth-state';
 import { notAgentReservedEmail } from '@pagespace/lib/auth/agent/reserved-email';
 
 const sendMagicLinkSchema = z.object({
-  // An agent's synthetic address (ADR 0007 §4) is refused with the SAME
+  // An agent's synthetic address (ADR 0008 §4) is refused with the SAME
   // message as a malformed one — no oracle.
   email: z
     .email({ message: 'Please enter a valid email address' })

@@ -48,7 +48,7 @@ export function resolveOAuthMatch({
   emailVerified,
   email,
 }: ResolveOAuthMatchInput): OAuthMatchDecision {
-  // An agent's synthetic address (ADR 0007 §4) can never enter a human OAuth
+  // An agent's synthetic address (ADR 0008 §4) can never enter a human OAuth
   // flow — not to sign in, link, or create a look-alike row. A provider cannot
   // legitimately assert a `.invalid` address, so this is always an attack or a
   // bug, and `reject` is the ordinary denial every route already maps.

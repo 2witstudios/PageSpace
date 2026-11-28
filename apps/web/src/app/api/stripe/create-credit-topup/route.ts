@@ -154,7 +154,7 @@ export async function POST(request: NextRequest) {
       { error },
     );
 
-    // An agent never holds its own Stripe customer (ADR 0007 Decision 8);
+    // An agent never holds its own Stripe customer (ADR 0008 Decision 8);
     // getOrCreateStripeCustomer refuses it before any Stripe call.
     if (error instanceof AgentStripeCustomerRefusedError) {
       return NextResponse.json({ error: error.message }, { status: 403 });

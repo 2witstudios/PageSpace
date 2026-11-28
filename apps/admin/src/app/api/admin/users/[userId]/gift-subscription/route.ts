@@ -182,7 +182,7 @@ export const POST = withAdminAuth<RouteContext>(async (adminUser, request, conte
   } catch (error) {
     loggers.api.error('Error gifting subscription', error instanceof Error ? error : undefined);
 
-    // An agent never holds its own Stripe customer (ADR 0007 Decision 8);
+    // An agent never holds its own Stripe customer (ADR 0008 Decision 8);
     // getOrCreateStripeCustomer refuses it before any Stripe call.
     if (error instanceof AgentStripeCustomerRefusedError) {
       return NextResponse.json({ error: error.message }, { status: 403 });

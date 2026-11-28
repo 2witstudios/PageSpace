@@ -615,7 +615,7 @@ describe('middleware — handoff-bridge OAuth callbacks skip the middleware CSP'
   });
 });
 
-// Agent Signup Phase 2 (ADR 0007): the API door's two pre-identity endpoints are
+// Agent Signup Phase 2 (ADR 0008): the API door's two pre-identity endpoints are
 // reached by an agent that has no session and no token yet — that is what they
 // create. They must skip the session gate, and ONLY they: the carve-out is two
 // exact matches, never an /api/agent/ prefix, so every other agent route

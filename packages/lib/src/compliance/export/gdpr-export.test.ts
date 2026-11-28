@@ -243,7 +243,7 @@ describe('collectUserProfile', () => {
     expect(result).toEqual(profile);
   });
 
-  it('given any account, should select accountType into the profile (ADR 0007 Decision 1)', async () => {
+  it('given any account, should select accountType into the profile (ADR 0008 Decision 1)', async () => {
     const db = createLimitDb([{ id: 'agent-1', accountType: 'agent' }]);
 
     await collectUserProfile(db as never, 'agent-1');
@@ -997,7 +997,7 @@ describe('collectAllUserData', () => {
     // Same rule again for the content-tags category: a collector that
     // `collectAllUserData` never calls reaches nobody's export.
     expect(Array.isArray(result!.contentTags)).toBe(true);
-    // An agent account's own identity row (ADR 0007), secrets withheld.
+    // An agent account's own identity row (ADR 0008), secrets withheld.
     expect(Array.isArray(result!.agentIdentity)).toBe(true);
     expect(result!.personalization).toBeNull();
   });

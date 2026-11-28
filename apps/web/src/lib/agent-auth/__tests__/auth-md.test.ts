@@ -1,5 +1,5 @@
 /**
- * ADR 0007 Decision 12 — `/auth.md` is pure markdown built from the issuer,
+ * ADR 0008 Decision 12 — `/auth.md` is pure markdown built from the issuer,
  * and it is pinned to the RFC 8414 metadata by iterating over the metadata
  * object itself: a new agent_auth endpoint that is not documented here fails
  * this test, so the two documents cannot drift.
@@ -32,7 +32,7 @@ describe('buildAuthMd', () => {
     }
   });
 
-  it('names the key-mint endpoint a headless agent uses with its own access token (ADR 0007 D6, assertion 25)', () => {
+  it('names the key-mint endpoint a headless agent uses with its own access token (ADR 0008 D6, assertion 25)', () => {
     expect(md).toContain(`POST ${ISSUER}/api/auth/mcp-tokens\nAuthorization: Bearer <access_token>`);
   });
 

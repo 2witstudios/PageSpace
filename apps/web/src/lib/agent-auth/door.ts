@@ -1,5 +1,5 @@
 /**
- * Shared edges of the agent API door (ADR 0007, Agent Signup Phase 2): whether
+ * Shared edges of the agent API door (ADR 0008, Agent Signup Phase 2): whether
  * the door is open on this deployment, the one issuer every URL derives from,
  * and the no-store JSON every door response uses.
  *
@@ -10,7 +10,7 @@ import { NextResponse } from 'next/server';
 import { isAgentSignupEnabled } from '@pagespace/lib/auth/agent/enabled';
 import { getDeploymentMode } from '@pagespace/lib/deployment-mode';
 
-/** ADR 0007 Decision 11: cloud + tenant always; onprem only with `AGENT_SIGNUP_ENABLED=true`. */
+/** ADR 0008 Decision 11: cloud + tenant always; onprem only with `AGENT_SIGNUP_ENABLED=true`. */
 export function isAgentDoorOpen(): boolean {
   return isAgentSignupEnabled({ deploymentMode: getDeploymentMode(), envFlag: process.env.AGENT_SIGNUP_ENABLED });
 }

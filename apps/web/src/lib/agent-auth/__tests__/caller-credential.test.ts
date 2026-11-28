@@ -1,6 +1,6 @@
 /**
  * The one rule for "is this caller an agent acting with the token its own
- * jwt-bearer grant minted?" (ADR 0007 Decision 6 + Decision 14). Shared by
+ * jwt-bearer grant minted?" (ADR 0008 Decision 6 + Decision 14). Shared by
  * secret rotation and key minting, so the two key-management doors can never
  * disagree about which bearer token speaks for an agent.
  */

@@ -1,5 +1,5 @@
 /**
- * The scope an agent may hold from the jwt-bearer grant (ADR 0007 Decision 6,
+ * The scope an agent may hold from the jwt-bearer grant (ADR 0008 Decision 6,
  * threat model T4). Pure.
  *
  * The exchange mints a `ps_at_`/`ps_rt_` pair for the agent's own account and

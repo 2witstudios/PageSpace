@@ -65,7 +65,7 @@ describe('OAuth hardening sweep', () => {
     expect(violations.map((v) => v.path)).toEqual([]);
   });
 
-  it('every route that mints from a client_id enforces allowedGrantTypes through the shared clientAllowsGrant guard (ADR 0007: pagespace-agent must be refused at device_authorization)', () => {
+  it('every route that mints from a client_id enforces allowedGrantTypes through the shared clientAllowsGrant guard (ADR 0008: pagespace-agent must be refused at device_authorization)', () => {
     // The registry now holds a client (pagespace-agent) whose allowedGrantTypes
     // exclude the device-code grant. A door that resolves a client but never
     // consults its grant list mints codes that can only ever fail at /token —
@@ -105,7 +105,7 @@ describe('OAuth hardening sweep', () => {
   });
 
   /**
-   * Agent Signup Phase 2 — the jwt-bearer grant (ADR 0007 Decisions 5-6,
+   * Agent Signup Phase 2 — the jwt-bearer grant (ADR 0008 Decisions 5-6,
    * threat model T3/T4). An agent secret is full control of an agent account,
    * so the grant must never become an oracle: every credential or scope
    * failure is the one invalid_grant body, and the client/scope refusals run

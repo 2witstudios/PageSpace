@@ -1,5 +1,5 @@
 /**
- * POST /api/auth/mcp-tokens by an AI agent (ADR 0007 Decision 6 — "agents mint
+ * POST /api/auth/mcp-tokens by an AI agent (ADR 0008 Decision 6 — "agents mint
  * mcp_ keys through the existing manage_keys paths"; Agent Signup Phase 2).
  *
  * The only bearer credential that may mint here is the agent's own

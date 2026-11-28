@@ -1,6 +1,6 @@
 /**
  * resolveBillingPayer — the ONE seam that names who pays for a user's AI
- * spend (ADR 0007 Decision 8, "owner pays").
+ * spend (ADR 0008 Decision 8, "owner pays").
  *
  * A claimed agent's spend lands on its owner's balance at the owner's tier;
  * everyone else (a human, an unclaimed agent) pays as themselves. Phase 4

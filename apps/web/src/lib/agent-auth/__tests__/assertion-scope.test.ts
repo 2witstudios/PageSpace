@@ -1,5 +1,5 @@
 /**
- * The scope an agent may hold from the jwt-bearer grant (ADR 0007 Decision 6,
+ * The scope an agent may hold from the jwt-bearer grant (ADR 0008 Decision 6,
  * threat model T4): `account` (+ optional `offline_access`) only. Content
  * (`drive:*`, `all_drives`) and key-shaped scopes are refused on this grant.
  */

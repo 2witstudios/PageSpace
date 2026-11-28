@@ -1,6 +1,6 @@
 /**
  * billingOffAgentGate — agents get no free AI where prepaid billing is off
- * (ADR 0007 Decision 9; tenant and onprem deployments).
+ * (ADR 0008 Decision 9; tenant and onprem deployments).
  *
  * With billing off, `canConsumeAI` answers `unlimited` for everyone: the
  * customer running the deployment pays the AI bill. Without this decision every

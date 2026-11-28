@@ -172,7 +172,7 @@ async function tierAllowances(): Promise<{ free: number; pro: number; business: 
   return { free: tierAllowanceCents('free'), pro: tierAllowanceCents('pro'), business: tierAllowanceCents('business') };
 }
 
-describe('starterGrantCents (ADR 0007 Decision 9 — no starter grant for agents)', () => {
+describe('starterGrantCents (ADR 0008 Decision 9 — no starter grant for agents)', () => {
   it('is 0 for an agent on the free tier', async () => {
     const { starterGrantCents } = await import('../credit-pricing');
     expect(starterGrantCents({ tier: 'free', accountType: 'agent' })).toBe(0);

@@ -39,7 +39,7 @@ export const validateEmail = (email: string): ValidationResult => {
     return { valid: false, error: 'Email is required' }
   }
 
-  // An agent's reserved address can never receive a Stripe invoice (ADR 0007
+  // An agent's reserved address can never receive a Stripe invoice (ADR 0008
   // Decision 8), so it is refused exactly like a malformed address.
   if (!isValidEmail(email) || !notAgentReservedEmail(email)) {
     return { valid: false, error: 'Invalid email format' }

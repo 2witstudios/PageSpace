@@ -1,6 +1,6 @@
 /**
  * POST /api/oauth/token — the jwt-bearer grant (Agent Signup Phase 2 leaf 4;
- * ADR 0007 Decisions 5-6, threat model T3/T4). The real static client
+ * ADR 0008 Decisions 5-6, threat model T3/T4). The real static client
  * registry and the real scope resolver are used, so a client or scope check
  * that is mis-wired fails here.
  */

@@ -3,7 +3,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
 
 /**
- * AGENT IDENTITIES — an AI agent's own PageSpace login (ADR 0007).
+ * AGENT IDENTITIES — an AI agent's own PageSpace login (ADR 0008).
  *
  * Not to be confused with `agent_accounts` (ADR 0004/0005, the credential
  * broker): those are credentials a PageSpace agent holds for OTHER sites.
@@ -22,12 +22,12 @@ export const agentIdentities = pgTable('agent_identities', {
   // Bumped by every rotation; the jwt-bearer exchange and sign-in look up by
   // hash, so the version is audit/support metadata, not a lookup key.
   secretVersion: integer('secretVersion').default(1).notNull(),
-  // Nulled when a claim settles (ADR 0007 §5 assertion 22), so a claim token
+  // Nulled when a claim settles (ADR 0008 §5 assertion 22), so a claim token
   // can start at most one successful claim.
   claimTokenHash: text('claimTokenHash').unique(),
   claimTokenPrefix: text('claimTokenPrefix'),
   // Self-reported client label ("claude-code", "codex", …). Display only —
-  // no vendor-verifiable agent identity exists (ADR 0007 §1).
+  // no vendor-verifiable agent identity exists (ADR 0008 §1).
   source: varchar('source', { length: 120 }),
   ownerUserId: text('ownerUserId').references(() => users.id, { onDelete: 'set null' }),
   claimedAt: timestamp('claimedAt', { mode: 'date' }),
@@ -42,7 +42,7 @@ export const agentIdentities = pgTable('agent_identities', {
 }));
 
 /**
- * A human claiming an agent (ADR 0007 Decision 3). Mirrors the
+ * A human claiming an agent (ADR 0008 Decision 3). Mirrors the
  * `oauth_device_codes` lifecycle columns but is deliberately a separate table:
  * a device row mints for the APPROVING human, a claim mints for the AGENT.
  * `ownerUserId` is null until a human approves.
@@ -66,7 +66,7 @@ export const agentClaims = pgTable('agent_claims', {
 }));
 
 /**
- * Server-issued proof-of-work challenges for the agent signup doors (ADR 0007
+ * Server-issued proof-of-work challenges for the agent signup doors (ADR 0008
  * Decision 10, threat model T2). Single use: consumed by
  * `UPDATE … SET consumedAt WHERE consumedAt IS NULL RETURNING` in the same
  * transaction that creates the agent, so a replayed challenge creates nothing.

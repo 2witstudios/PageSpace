@@ -1,5 +1,5 @@
 /**
- * POST /api/agent/secret/rotate — Agent Signup Phase 2 leaf 6 (ADR 0007
+ * POST /api/agent/secret/rotate — Agent Signup Phase 2 leaf 6 (ADR 0008
  * Decision 14; threat model §3, T11). The agent itself (session or its own
  * ps_at_) or its owner may rotate; anyone else gets the same 404 as a
  * non-agent. The new secret is returned once and never audited.

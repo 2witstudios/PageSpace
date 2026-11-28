@@ -106,7 +106,7 @@ type AllowanceGrantKind = 'starter' | 'refill';
  * (Agent Signup Phase 1b): the one-time starter grant (both lazy-init branches of
  * the gate, via starterGrantCents) and the period roll of a comped paid account
  * (kind 'refill'). Agents get 0 from every one of them — no free AI credits, ever
- * (ADR 0007 Decision 9). Humans get money-model's tierAllowanceCents (MON-2: paid
+ * (ADR 0008 Decision 9). Humans get money-model's tierAllowanceCents (MON-2: paid
  * tiers derive from the list price; free and any unknown/legacy value get the
  * starter grant). An invoice-sized grant (allowanceCentsForPaidCents) needs a
  * Stripe customer, which an agent is refused on every path.

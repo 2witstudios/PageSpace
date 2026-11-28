@@ -1,6 +1,6 @@
 /**
  * Agent Signup Phase 1 leaf 4 — no starter grant for agents, against a REAL
- * Postgres (ADR 0007 Decision 9, §5 assertion 12; threat model T10).
+ * Postgres (ADR 0008 Decision 9, §5 assertion 12; threat model T10).
  *
  * `starterGrantCents` is pure and unit tested; what only the real gate can show
  * is that BOTH lazy-init branches use it — the no-row branch (first AI call)

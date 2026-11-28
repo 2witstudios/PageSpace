@@ -255,7 +255,7 @@ describe('toPortableExport', () => {
 
     // profile.timezone and drive.slug have no schema.org equivalent but must survive
     expect(portable.timezone).toBe('UTC');
-    // …and so must profile.accountType (ADR 0007): the native profile.json carries it.
+    // …and so must profile.accountType (ADR 0008): the native profile.json carries it.
     expect(portable.accountType).toBe('human');
     const owns = portable.owns as Array<Record<string, unknown>>;
     expect(owns[0].slug).toBe('drive-one');

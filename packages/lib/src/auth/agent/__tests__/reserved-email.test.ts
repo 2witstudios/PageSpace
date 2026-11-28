@@ -1,5 +1,5 @@
 /**
- * ADR 0007 Decision 2 — the agent synthetic address and the reserved-domain
+ * ADR 0008 Decision 2 — the agent synthetic address and the reserved-domain
  * predicate every inbound auth path (five sites, Phase 1) and the outbound
  * email choke point key on. Pure: no env, no I/O.
  */

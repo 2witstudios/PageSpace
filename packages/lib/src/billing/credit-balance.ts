@@ -138,7 +138,7 @@ function pendingStarterGrant(row: FundedBalanceRow, tier: SubscriptionTier): boo
 
 /**
  * The grant the gate WILL apply to a no-row or pending bare row — the tier
- * allowance for a human, 0 for an agent (ADR 0007 Decision 9). Read only for
+ * allowance for a human, 0 for an agent (ADR 0008 Decision 9). Read only for
  * those two row states, so a funded row stays a single indexed read.
  */
 async function upcomingStarterGrantCents(userId: string, tier: SubscriptionTier): Promise<number> {
@@ -161,7 +161,7 @@ function needsStarterGrant(row: FundedBalanceRow | null, tier: SubscriptionTier)
  * `starterGrant` is the grant the gate will apply to a no-row or pending bare row. The two
  * reads here pass the account-aware figure (upcomingStarterGrantCents: 0 for an agent); a
  * caller that omits it (spend-resolution's leg read) pre-credits the human tier allowance,
- * and the gate still grants an agent nothing (ADR 0007 Decision 9).
+ * and the gate still grants an agent nothing (ADR 0008 Decision 9).
  */
 export function spendableCentsFor(
   row: FundedBalanceRow | null,

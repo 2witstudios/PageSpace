@@ -14,7 +14,7 @@
  * comped paid account no invoice will ever reach. One writer per reset, so a period can
  * never be reset twice. Free's allowance is a single starter grant and never refills.
  *
- * An agent's starter grant is 0 (ADR 0007 Decision 9, via starterGrantCents in both
+ * An agent's starter grant is 0 (ADR 0008 Decision 9, via starterGrantCents in both
  * lazy branches), and an unclaimed agent's out_of_credits is refined to requires_funding.
  */
 
@@ -322,7 +322,7 @@ async function decideAndReserve(
   opts: GateOptions,
 ): Promise<CreditGateResult> {
   if (!isBillingEnabled()) {
-    // Agents get no free AI here either (ADR 0007 Decision 9): with billing off
+    // Agents get no free AI here either (ADR 0008 Decision 9): with billing off
     // the deployment's customer pays for every call, so an unclaimed agent is
     // refused before the unlimited fast path. The account is read only on this
     // billing-off path; the billed path keeps its own lazy read below.
@@ -525,7 +525,7 @@ async function gatePersonalRoot(
   // judges the REAL persisted balance under a row lock, never our assumed allowance,
   // so we can't allow when a racing request already drew the row down.
   //
-  // An agent's starter grant is 0 (ADR 0007 Decision 9): the row is still
+  // An agent's starter grant is 0 (ADR 0008 Decision 9): the row is still
   // created — the hold transaction below locks it — but no ledger grant is
   // written, so no `free-init-<agentId>` row can ever exist.
   if (!row) {

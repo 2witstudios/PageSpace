@@ -95,7 +95,7 @@ describe('POST /api/admin/users/create', () => {
   });
 
   it('given an address under the agent reserved domain, should return the ordinary validation 400 without looking up or inserting', async () => {
-    // ADR 0007 §4 site 4: an admin cannot mint a human row squatting an agent's address.
+    // ADR 0008 §4 site 4: an admin cannot mint a human row squatting an agent's address.
     const malformed = await (await POST(makeRequest({ name: 'Jane Doe', email: 'not-an-email' }))).json();
     const res = await POST(makeRequest({ name: 'Jane Doe', email: 'agent-abc@agents.pagespace.invalid' }));
 

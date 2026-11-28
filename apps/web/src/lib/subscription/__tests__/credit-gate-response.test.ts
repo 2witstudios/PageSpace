@@ -25,7 +25,7 @@ describe('creditGatePayload', () => {
   });
 });
 
-describe('creditGatePayload — requires_funding (ADR 0007 Decision 9)', () => {
+describe('creditGatePayload — requires_funding (ADR 0008 Decision 9)', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });

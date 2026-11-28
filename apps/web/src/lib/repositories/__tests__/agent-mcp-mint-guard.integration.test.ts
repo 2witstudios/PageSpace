@@ -1,6 +1,6 @@
 /**
  * `createAgentMcpTokenGuarded` against a REAL Postgres — the two races only a
- * database can show (Agent Signup Phase 2 follow-up; ADR 0007 Decisions 6, 14):
+ * database can show (Agent Signup Phase 2 follow-up; ADR 0008 Decisions 6, 14):
  *
  *  - a key mint whose caller was authenticated BEFORE a concurrent revoke or
  *    rotation-with-revoke must not commit a live key AFTER it; and

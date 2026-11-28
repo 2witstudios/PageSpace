@@ -22,7 +22,7 @@ import { actorFromAuth } from '@/lib/auth/request-actor';
 // already-authenticated "Create Token" button; the CLI mints through the
 // OAuth authorize/consent flow (`/api/oauth/authorize`) with its own step-up
 // gate — plus ONE bearer: an AI agent's own account-scoped access token
-// minted by the pagespace-agent jwt-bearer grant (ADR 0007 Decision 6, agents
+// minted by the pagespace-agent jwt-bearer grant (ADR 0008 Decision 6, agents
 // mint mcp_ keys; `classifyCallerCredential`). A headless agent has no
 // session and no browser, so without this it could never obtain a content
 // credential. Every other OAuth token — every human's, a token the agent gave
@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
   }
   const userId = auth.userId;
 
-  // The agent path (ADR 0007 D6). Everything after this block is the session
+  // The agent path (ADR 0008 D6). Everything after this block is the session
   // path's own scoping, applied to the caller — no second scoping rule.
   const viaAgent = auth.tokenType !== 'session';
   const refuseAgent = (reason: string) => {

@@ -32,7 +32,7 @@ import type { AllUserData, ExportWithheld, ExportWithheldCategory } from './gdpr
  * the code that unlocks it. Additive like 1.1.0.
  *
  * 1.4.0 adds `profile.accountType` (native and portable) and
- * `agent-identity.json` with its `agentIdentity` portable property (ADR 0007).
+ * `agent-identity.json` with its `agentIdentity` portable property (ADR 0008).
  * Additive like 1.1.0: every 1.3.0 file and field is unchanged.
  */
 export const EXPORT_SCHEMA_VERSION = '1.4.0';
@@ -207,7 +207,7 @@ export function toPortableExport(data: AllUserData): Record<string, unknown> {
     // Native field kept (no schema.org equivalent) so the portable export is
     // field-for-field complete with the native export (GDPR Art 20).
     timezone: data.profile.timezone ?? null,
-    // `human` or `agent` (ADR 0007) — no schema.org slot, kept for the same reason.
+    // `human` or `agent` (ADR 0008) — no schema.org slot, kept for the same reason.
     accountType: data.profile.accountType,
     dateCreated: toIso(data.profile.createdAt),
     dateModified: toIso(data.profile.updatedAt),

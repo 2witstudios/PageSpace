@@ -298,7 +298,7 @@ describe('POST /api/connections/invite', () => {
     });
   });
 
-  describe('reserved agent domain (ADR 0007 §4)', () => {
+  describe('reserved agent domain (ADR 0008 §4)', () => {
     it('given an address under the agent reserved domain, should refuse with the ordinary 400 validation error and create nothing', async () => {
       const res = await POST(makeRequest({ email: 'agent-x@agents.pagespace.invalid' }));
 

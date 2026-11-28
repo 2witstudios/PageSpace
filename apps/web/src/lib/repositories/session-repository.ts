@@ -91,7 +91,7 @@ export const sessionRepository = {
   },
 
   /**
-   * Mint an MCP token for an AI agent's bearer caller (ADR 0007 Decision 6),
+   * Mint an MCP token for an AI agent's bearer caller (ADR 0008 Decision 6),
    * atomically with the two checks that must hold at commit time:
    *
    *  - the agent's credentials were not revoked since the caller authenticated

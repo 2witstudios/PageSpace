@@ -366,7 +366,7 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
     return;
   }
 
-  // No allowance for an agent, ever (ADR 0007 Decision 9, Phase 1b). An agent cannot
+  // No allowance for an agent, ever (ADR 0008 Decision 9, Phase 1b). An agent cannot
   // hold a Stripe customer (stripe-customer-eligibility), so this is defence in depth:
   // an agent's invoice writes nothing rather than a monthly_grant row.
   if (user.accountType === 'agent') {

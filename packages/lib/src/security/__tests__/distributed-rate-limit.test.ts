@@ -914,7 +914,7 @@ describe('distributed-rate-limit', () => {
       expect(DISTRIBUTED_RATE_LIMITS.TRACKING.progressiveDelay).toBe(false);
     });
 
-    // Agent signup doors (ADR 0007 Decision 10, threat model T1/T3). PoW shapes
+    // Agent signup doors (ADR 0008 Decision 10, threat model T1/T3). PoW shapes
     // rate; these per-IP ceilings are the real bound on bulk account creation.
     it('AGENT_CHALLENGE allows 30 challenges per 5 minutes', () => {
       expect(DISTRIBUTED_RATE_LIMITS.AGENT_CHALLENGE).toEqual({ maxAttempts: 30, windowMs: 5 * 60 * 1000, blockDurationMs: 5 * 60 * 1000, progressiveDelay: false });

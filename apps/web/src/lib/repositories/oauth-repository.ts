@@ -928,7 +928,7 @@ export type ExchangeAgentAssertionResult =
   | { outcome: Exclude<AgentSigninDecision['status'], 'ok'>; userId: string | null };
 
 /**
- * The jwt-bearer grant (RFC 7523 URN, ADR 0007 Decision 5): exchange an agent's
+ * The jwt-bearer grant (RFC 7523 URN, ADR 0008 Decision 5): exchange an agent's
  * opaque `ps_agent_*` secret for a `ps_at_`/`ps_rt_` pair minted for the AGENT.
  *
  * Mirrors `pollDeviceToken`'s token-pair inserts. The lookup, the frozen
@@ -971,7 +971,7 @@ export async function exchangeAgentAssertion(input: ExchangeAgentAssertionInput)
       return { outcome: decision.status === 'ok' ? 'not_found' : decision.status, userId: row?.userId ?? null };
     }
 
-    // The lifecycle decision (ADR 0007 Decision 13) keys on this: an agent that
+    // The lifecycle decision (ADR 0008 Decision 13) keys on this: an agent that
     // ever exchanged its secret is a real agent, never swept as abandoned.
     await tx.update(agentIdentities).set({ lastAuthAt: input.now }).where(eq(agentIdentities.userId, row.userId));
 

@@ -1,5 +1,5 @@
 /**
- * The account facts the credit gate needs beyond the balance row (ADR 0007
+ * The account facts the credit gate needs beyond the balance row (ADR 0008
  * Decision 9): is this principal an agent, and has a human claimed it. One
  * indexed read, taken only on the paths that need it — a lazy starter-grant
  * init, or an `out_of_credits` denial being refined — never on the hot allow

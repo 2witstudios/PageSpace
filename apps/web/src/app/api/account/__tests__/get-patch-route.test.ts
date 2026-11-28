@@ -321,7 +321,7 @@ describe('PATCH /api/account', () => {
   });
 
   it('given an agent account changing its email to a real address, should refuse with 403 and write nothing', async () => {
-    // D-31 option A (ADR 0007 Decision 2): an unclaimed agent must not reach
+    // D-31 option A (ADR 0008 Decision 2): an unclaimed agent must not reach
     // humans. Swapping the synthetic address for a real, verifiable one would
     // stamp emailVerified (lifting the isEmailVerified gates) and let a human
     // auth flow (magic link to that inbox) sign in AS the agent.
@@ -343,7 +343,7 @@ describe('PATCH /api/account', () => {
   });
 
   it('given a new email under the agent reserved domain, should return the ordinary invalid-email 400', async () => {
-    // ADR 0007 §4 site 5: an account can never move INTO an agent's address space.
+    // ADR 0008 §4 site 5: an account can never move INTO an agent's address space.
     const request = new Request('https://example.com/api/account', {
       method: 'PATCH',
       body: JSON.stringify({ name: 'Test User', email: 'agent-abc@agents.pagespace.invalid' }),

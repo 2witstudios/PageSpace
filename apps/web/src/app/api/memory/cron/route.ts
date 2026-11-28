@@ -108,7 +108,7 @@ export async function POST(request: Request) {
           gte(sessions.lastUsedAt, sevenDaysAgo),
           inArray(users.subscriptionTier, memoryEligiblePersonalTiers()),
           // Memory is a paying-human feature: an agent row given a paying tier
-          // out-of-band must still never reach it (ADR 0007).
+          // out-of-band must still never reach it (ADR 0008).
           eq(users.accountType, 'human')
         )
       )

@@ -659,7 +659,7 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
     // An org's customer is never linked to a person (SEAT-1, SEAT-7): the payer's email
     // would otherwise make the ORG's customer that person's, and the personal handlers
     // would then read the org's subscription as the person's plan.
-    // An agent never holds a Stripe customer either (ADR 0007 Decision 8): never link
+    // An agent never holds a Stripe customer either (ADR 0008 Decision 8): never link
     // one by a reserved agent address, and only ever to a human row.
     const customerOrgId = await orgForStripeCustomer(customerId);
     if (customerOrgId) {

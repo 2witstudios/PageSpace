@@ -1,6 +1,6 @@
 /**
  * `exchangeAgentAssertion` — the jwt-bearer grant's persistence (Agent Signup
- * Phase 2 leaf 4; ADR 0007 Decisions 4-6, threat model T3/T4). The pure
+ * Phase 2 leaf 4; ADR 0008 Decisions 4-6, threat model T3/T4). The pure
  * `decideAgentSignin` and `issueInitialTokenPair` are REAL; only the database
  * is faked, and the fake re-checks the WHERE so the hash lookup is exercised.
  * Real-Postgres coverage of the whole door is in

@@ -12,7 +12,7 @@ import type { SpendRefusal } from '@pagespace/lib/billing/credit-gate';
  *   - daily_cap_exceeded -> 429: the per-user/day exposure backstop; the user has hit
  *     their daily spend ceiling and should retry tomorrow, not buy credits.
  *   - requires_funding -> 402 + claim_url: an UNCLAIMED agent has no credits and no
- *     way to buy any (ADR 0007 Decision 9); only a human claiming it funds it, so the
+ *     way to buy any (ADR 0008 Decision 9); only a human claiming it funds it, so the
  *     body points at the claim endpoint and /auth.md instead of "add credits".
  *   - everything else (out_of_credits / needs_init) -> 402: the prepaid balance is
  *     exhausted; the user must add credits, upgrade, or (paid tiers) wait for the
@@ -76,7 +76,7 @@ const SEAT_CAP_REACHED_MESSAGE = "You've reached the limit of your seat allowanc
 /**
  * Convenience: the standard JSON response for a denied gate result. A refused source
  * (SPEND-4) also carries the refused source, why, and the sources the person may pick;
- * an unclaimed agent's requires_funding carries its claim_url (ADR 0007 Decision 9).
+ * an unclaimed agent's requires_funding carries its claim_url (ADR 0008 Decision 9).
  */
 export function creditGateErrorResponse(reason: GateResult['reason'], refusal?: SpendRefusal): NextResponse {
   const payload = creditGatePayload(reason);

@@ -1,5 +1,5 @@
 /**
- * ADR 0007 §4 — the reserved agent domain is sealed at exactly nine inbound
+ * ADR 0008 §4 — the reserved agent domain is sealed at exactly nine inbound
  * sites (the ADR's five, plus the four invite/admin sign-in sites Agent Signup
  * Phase 1b sealed) and one outbound choke point. The domain's safety is a convention
  * enforced in code (threat model §4.5), so this test enumerates the sites and
@@ -17,7 +17,7 @@ import { join } from 'path';
 
 const REPO_ROOT = join(__dirname, '../../../../../..');
 
-/** The inbound sites: ADR 0007 §4's five (numbered as there), then Phase 1b's four. */
+/** The inbound sites: ADR 0008 §4's five (numbered as there), then Phase 1b's four. */
 const INBOUND_SITES = [
   'apps/web/src/app/api/auth/magic-link/send/route.ts',
   'apps/web/src/app/api/auth/signup-passkey/options/route.ts',

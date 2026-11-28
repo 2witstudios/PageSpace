@@ -1,5 +1,5 @@
 /**
- * GET /api/agent/challenge — Agent Signup Phase 2 leaf 1 (ADR 0007 Decision 10,
+ * GET /api/agent/challenge — Agent Signup Phase 2 leaf 1 (ADR 0008 Decision 10,
  * threat model T1/T2/T13). Issues a single-use proof-of-work challenge.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';

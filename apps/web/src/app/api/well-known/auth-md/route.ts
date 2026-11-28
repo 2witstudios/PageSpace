@@ -5,7 +5,7 @@ import { agentIssuer, isAgentDoorOpen } from '@/lib/agent-auth/door';
 export const dynamic = 'force-dynamic';
 
 // Rewritten to from `/auth.md` (lib/well-known/rewrites.ts, applied in middleware
-// and next.config beforeFiles). The agent-registration recipe (ADR 0007 Decision
+// and next.config beforeFiles). The agent-registration recipe (ADR 0008 Decision
 // 12): public by design — it is what an agent reads before it has any identity —
 // and built purely from the configured issuer, never a request Host header
 // (threat model T14), which is why the handler takes no request at all. On a

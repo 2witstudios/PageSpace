@@ -50,7 +50,7 @@ export async function GET(req: Request) {
     // DB column) so every client consumer gets a value `isSandboxAvailable`
     // and friends can trust directly, same as every server-side tier read.
     subscriptionTier: toPersonalSubscriptionTier(user.subscriptionTier),
-    // ADR 0007 Decision 1 — additive: every existing field above is unchanged,
+    // ADR 0008 Decision 1 — additive: every existing field above is unchanged,
     // and the CLI's `confirm-identity` parser ignores keys it does not declare.
     accountType: user.accountType,
   };

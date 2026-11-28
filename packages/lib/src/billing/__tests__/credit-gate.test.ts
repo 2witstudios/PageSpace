@@ -618,7 +618,7 @@ describe('canConsumeAI', () => {
 
 });
 
-describe('canConsumeAI — agents get no starter grant (ADR 0007 Decision 9)', () => {
+describe('canConsumeAI — agents get no starter grant (ADR 0008 Decision 9)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockIsBillingEnabled.mockReturnValue(true);

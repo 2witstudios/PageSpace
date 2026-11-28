@@ -1,5 +1,5 @@
 /**
- * Who may rotate an agent's secret, and over which credential (ADR 0007
+ * Who may rotate an agent's secret, and over which credential (ADR 0008
  * Decision 14). Rotation is a key-management action: whoever holds the new
  * secret IS the agent. So the owner path is session-only (a narrowly
  * scoped OAuth grant an owner handed to some other client must not be able to

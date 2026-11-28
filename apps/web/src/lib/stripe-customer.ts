@@ -26,7 +26,7 @@ interface UserForCustomer {
  * this function will create a new customer and update the database.
  *
  * Throws AgentStripeCustomerRefusedError for an agent account before any Stripe
- * call (ADR 0007 Decision 8) — every subscription, top-up, dedicated-hosting and
+ * call (ADR 0008 Decision 8) — every subscription, top-up, dedicated-hosting and
  * gift path is built on this helper, so each one refuses an agent here.
  */
 export async function getOrCreateStripeCustomer(user: UserForCustomer): Promise<string> {

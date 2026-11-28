@@ -5,7 +5,7 @@ import { createId } from '@paralleldrive/cuid2';
 export const userRole = pgEnum('UserRole', ['user', 'admin']);
 export const authProvider = pgEnum('AuthProvider', ['email', 'google', 'apple']);
 export const platformType = pgEnum('PlatformType', ['web', 'desktop', 'ios', 'android']);
-// ADR 0007 Decision 1: the one discriminator between humans and agents. `human`
+// ADR 0008 Decision 1: the one discriminator between humans and agents. `human`
 // is the default so every existing row is a human without a backfill. Mirrors
 // ACCOUNT_TYPES in @pagespace/lib/auth/agent/account-type.
 export const accountType = pgEnum('AccountType', ['human', 'agent']);

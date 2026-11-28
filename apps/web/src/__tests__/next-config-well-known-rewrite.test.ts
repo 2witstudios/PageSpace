@@ -19,7 +19,7 @@ describe('next.config rewrites — RFC 8414 discovery URL', () => {
   });
 });
 
-describe('next.config rewrites — /auth.md (ADR 0007 Decision 12)', () => {
+describe('next.config rewrites — /auth.md (ADR 0008 Decision 12)', () => {
   it('rewrites /auth.md to the routable handler via beforeFiles, from the same list middleware uses', async () => {
     const { nextConfig } = await import('../../next.config');
     const rewrites = await nextConfig.rewrites?.();

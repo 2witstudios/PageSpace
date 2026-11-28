@@ -1,5 +1,5 @@
 /**
- * ADR 0007 Decision 9 in billing-off deployments (tenant, onprem): agents get
+ * ADR 0008 Decision 9 in billing-off deployments (tenant, onprem): agents get
  * no free AI. With prepaid billing off, `canConsumeAI` otherwise answers
  * `unlimited` for everyone, which would hand every signed-up agent unlimited AI
  * paid for by the customer. An unclaimed agent is refused; a claimed agent is

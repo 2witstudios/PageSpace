@@ -62,7 +62,7 @@ export interface UserProfileExport {
   email: string;
   image: string | null;
   timezone: string | null;
-  /** `human` or `agent` (ADR 0007 Decision 1) — which kind of account this export describes. */
+  /** `human` or `agent` (ADR 0008 Decision 1) — which kind of account this export describes. */
   accountType: 'human' | 'agent';
   createdAt: Date;
   updatedAt: Date;
@@ -569,7 +569,7 @@ export interface AllUserData {
   contentTags: UserContentTagExport[];
   /** Machines the subject enrolled as local environments — their own devices. */
   localEnvironments: UserLocalEnvironmentExport[];
-  /** The subject's own agent-account row (ADR 0007), secrets withheld; empty for a human. */
+  /** The subject's own agent-account row (ADR 0008), secrets withheld; empty for a human. */
   agentIdentity: UserAgentIdentityExport[];
   /** Orgs the subject OWNS (X-2). */
   organizations: UserOrganizationExport[];
@@ -1856,7 +1856,7 @@ export async function collectUserLocalEnvironments(database: DB, userId: string)
 }
 
 /**
- * An agent account's own identity facts (ADR 0007). The column set is
+ * An agent account's own identity facts (ADR 0008). The column set is
  * `AGENT_IDENTITY_EXPORTED_COLUMNS` in gdpr-export-coverage.ts; the secret and
  * claim-token hashes and prefixes are never selected.
  */

@@ -850,7 +850,7 @@ describe('credit-core purity', () => {
   });
 });
 
-describe('refineGateReason (ADR 0007 Decision 9 — requires_funding for an unclaimed agent)', () => {
+describe('refineGateReason (ADR 0008 Decision 9 — requires_funding for an unclaimed agent)', () => {
   it('maps out_of_credits to requires_funding for an agent with no owner', () => {
     expect(refineGateReason({ reason: 'out_of_credits', accountType: 'agent', hasOwner: false })).toBe(
       'requires_funding',

@@ -138,7 +138,7 @@ describe('GET /api/auth/me', () => {
     });
   });
 
-  describe('account type (ADR 0007)', () => {
+  describe('account type (ADR 0008)', () => {
     it('given a human session, should return exactly today\'s fields plus accountType human and no agent block', async () => {
       const response = await GET(createRequest());
       const body = await response.json();

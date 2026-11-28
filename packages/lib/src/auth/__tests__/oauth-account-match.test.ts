@@ -46,7 +46,7 @@ describe('resolveOAuthMatch', () => {
     expect(resolveOAuthMatch({ providerSubMatch: false, emailMatch: true, emailVerified: false, email: 'user@example.com' })).not.toBe('use-email');
   });
 
-  // ADR 0007 §4 site 3: an agent's synthetic address can never enter a human
+  // ADR 0008 §4 site 3: an agent's synthetic address can never enter a human
   // OAuth flow — not to link, not to sign in, not to create a look-alike row.
   // `reject` is the ordinary OAuth denial every route already maps.
   const bools = [true, false];

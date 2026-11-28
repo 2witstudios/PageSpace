@@ -1,5 +1,5 @@
 /**
- * An agent drive owner never holds its own Stripe customer (ADR 0007
+ * An agent drive owner never holds its own Stripe customer (ADR 0008
  * Decision 8): getOrCreateStripeCustomer refuses inside
  * startDedicatedSubscription, and the route answers 403, not a 500.
  */

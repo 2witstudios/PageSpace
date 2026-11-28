@@ -1,5 +1,5 @@
 /**
- * POST /api/agent/identity — Agent Signup Phase 2 leaf 3 (ADR 0007 Decisions 4,
+ * POST /api/agent/identity — Agent Signup Phase 2 leaf 3 (ADR 0008 Decisions 4,
  * 10, 11; threat model T1, T2, T13). The pure PoW verifier and signup decision
  * are REAL here (only I/O is mocked), so a mis-wired proof check fails a test.
  */

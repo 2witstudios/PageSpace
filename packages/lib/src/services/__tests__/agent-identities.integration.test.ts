@@ -1,6 +1,6 @@
 /**
  * Agent Signup Phase 1 leaf 3 — the agent-identity service against a REAL
- * Postgres (ADR 0007 Decisions 1, 2, 4, 14; threat model T2, T3).
+ * Postgres (ADR 0008 Decisions 1, 2, 4, 14; threat model T2, T3).
  *
  * The pure decisions (secret shape, sign-in precedence) are frozen and unit
  * tested in `src/auth/agent/__tests__`. What only a database can show is the

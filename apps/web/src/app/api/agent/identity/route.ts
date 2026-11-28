@@ -1,5 +1,5 @@
 /**
- * POST /api/agent/identity — the agent API door's registration endpoint (ADR 0007;
+ * POST /api/agent/identity — the agent API door's registration endpoint (ADR 0008;
  * auth.md "Register"). Public and unauthenticated: the caller is an AI agent
  * that holds no identity yet; this call creates one.
  *

@@ -90,7 +90,7 @@ describe('middleware — RFC 8414 discovery URL', () => {
   });
 });
 
-describe('middleware — /auth.md (ADR 0007 Decision 12)', () => {
+describe('middleware — /auth.md (ADR 0008 Decision 12)', () => {
   it('rewrites /auth.md to the routable handler with no session cookie', async () => {
     const response = await middleware(new NextRequest('https://pagespace.ai/auth.md'));
     expect(response.headers.get('x-middleware-rewrite')).toContain('/api/well-known/auth-md');

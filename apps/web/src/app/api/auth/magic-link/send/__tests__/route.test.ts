@@ -242,7 +242,7 @@ describe('POST /api/auth/magic-link/send', () => {
     });
 
     it('given an address under the agent reserved domain, should return the ordinary invalid-email 400 and never reach the pipe', async () => {
-      // ADR 0007 §4 site 1: no distinct oracle — byte-identical to a malformed address.
+      // ADR 0008 §4 site 1: no distinct oracle — byte-identical to a malformed address.
       const malformed = await (await POST(createMagicLinkRequest({ email: 'not-an-email' }))).json();
       const response = await POST(createMagicLinkRequest({ email: 'Agent-abc@AGENTS.pagespace.invalid' }));
       const body = await response.json();

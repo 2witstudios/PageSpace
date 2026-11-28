@@ -30,7 +30,7 @@ describe('whoamiOperation', () => {
   });
 });
 
-describe('whoamiOperation — /api/auth/me shapes (ADR 0007)', () => {
+describe('whoamiOperation — /api/auth/me shapes (ADR 0008)', () => {
   const clientReturning = (body: unknown) =>
     new PageSpaceClient({
       baseUrl: 'https://pagespace.ai',

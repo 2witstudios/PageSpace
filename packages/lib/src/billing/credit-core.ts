@@ -17,7 +17,7 @@
 // Type-only import (erased at compile time, zero runtime cost) — usage-source.ts
 // is itself a pure, zero-I/O module, so this doesn't break the invariant above.
 import type { AIUsageSource } from '../monitoring/usage-source';
-// Type-only import of the account discriminator (ADR 0007 Decision 1) — same
+// Type-only import of the account discriminator (ADR 0008 Decision 1) — same
 // zero-runtime-cost reasoning as above.
 import type { AccountType } from '../auth/agent/account-type';
 import type { SpendKind } from '@pagespace/db/schema/credits';
@@ -156,7 +156,7 @@ export interface RefineGateReasonInput {
 }
 
 /**
- * Pure post-step over evaluateGate's reason (ADR 0007 Decision 9). Only ONE
+ * Pure post-step over evaluateGate's reason (ADR 0008 Decision 9). Only ONE
  * transition exists: `out_of_credits` for an unclaimed agent becomes
  * `requires_funding`. A claimed agent is judged on its owner's balance, so its
  * denial is the ordinary one; every other reason passes through untouched.

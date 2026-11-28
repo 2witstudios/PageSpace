@@ -488,7 +488,7 @@ async function rollOneRoot(userId: string, now: Date): Promise<boolean> {
       .select({ tier: users.subscriptionTier, accountType: users.accountType })
       .from(users)
       .where(eq(users.id, userId));
-    // ADR 0007 Decision 9: an AI agent account is never granted an allowance
+    // ADR 0008 Decision 9: an AI agent account is never granted an allowance
     // (`allowanceGrantCents` is 0 for an agent), so an agent's root is never
     // rolled here — even one given a paid tier out of band.
     if (owner?.accountType === 'agent') return false;

@@ -1,5 +1,5 @@
 /**
- * ADR 0007 Decision 8: an agent never holds its own Stripe customer — its AI
+ * ADR 0008 Decision 8: an agent never holds its own Stripe customer — its AI
  * spend bills its owner once claimed, and its synthetic reserved-domain address
  * could never receive an invoice. Pure.
  */

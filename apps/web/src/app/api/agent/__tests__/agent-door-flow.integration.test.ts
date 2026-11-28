@@ -1,6 +1,6 @@
 /**
  * The agent API door end to end, against a REAL Postgres (Agent Signup Phase
- * 2; ADR 0007, threat model T2/T3/T4). Every route handler, repository, rate
+ * 2; ADR 0008, threat model T2/T3/T4). Every route handler, repository, rate
  * limiter and auth check here is the production code — only the audit writer
  * is stubbed (it has its own coverage and writes to a separate audit store).
  *
@@ -140,7 +140,7 @@ describe('agent API door — real Postgres', () => {
     expect(me.status).toBe(200);
     expect(await me.json()).toMatchObject({ id: identity.agent_id, accountType: 'agent', emailVerified: null, agent: { ownerUserId: null, source: 'integration-test' } });
 
-    // ADR 0007 D6: mint its own mcp_ key with its own grant's token, then use
+    // ADR 0008 D6: mint its own mcp_ key with its own grant's token, then use
     // that key for a content write the ps_at_ itself may not make.
     const minted = await mintPOST(bearer('/api/auth/mcp-tokens', pair.access_token, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'flow key' }) }));
     expect(minted.status).toBe(200);
@@ -180,7 +180,7 @@ describe('agent API door — real Postgres', () => {
     expect((await revoking.json() as { revoked_existing_tokens: boolean }).revoked_existing_tokens).toBe(true);
     expect((await meGET(bearer('/api/auth/me', pair3.access_token))).status).toBe(401);
     // ...and so does the mcp_ key it minted earlier: a key has no tokenVersion,
-    // so revocation must reach it explicitly (ADR 0007 D14).
+    // so revocation must reach it explicitly (ADR 0008 D14).
     const afterRevoke = await drivesPOST(bearer('/api/drives', mcpKey, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'After revoke' }) }));
     expect(afterRevoke.status).toBe(401);
   });

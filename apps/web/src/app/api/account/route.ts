@@ -81,7 +81,7 @@ export async function PATCH(req: Request) {
 
     const { name, email } = parsed.data;
 
-    // An agent's synthetic address (ADR 0007 §4) fails exactly like a malformed one.
+    // An agent's synthetic address (ADR 0008 §4) fails exactly like a malformed one.
     if (email !== undefined && (!isValidEmail(email) || !notAgentReservedEmail(email))) {
       return Response.json({ error: 'Invalid email format' }, { status: 400 });
     }
@@ -98,7 +98,7 @@ export async function PATCH(req: Request) {
         where: eq(users.id, userId),
         columns: { email: true, accountType: true },
       });
-      // An agent keeps its synthetic address (ADR 0007 Decision 2). A real,
+      // An agent keeps its synthetic address (ADR 0008 Decision 2). A real,
       // verifiable inbox would lift the isEmailVerified gates D-31 option A
       // relies on and let a magic link to that inbox sign in AS the agent.
       if (current?.accountType === 'agent') {

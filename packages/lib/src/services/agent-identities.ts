@@ -1,5 +1,5 @@
 /**
- * Agent identities — an AI agent's own PageSpace login (ADR 0007).
+ * Agent identities — an AI agent's own PageSpace login (ADR 0008).
  *
  * The adapter over Phase 0's frozen decisions: it persists what
  * `mintAgentSecret`, `agentSyntheticEmail` and `decideAgentSignin` imply and
@@ -83,7 +83,7 @@ export interface IssuedAgentSignupChallenge {
 const CHALLENGE_PRUNE_BATCH = 100;
 
 /**
- * Persist a single-use proof-of-work challenge (ADR 0007 Decision 10, threat
+ * Persist a single-use proof-of-work challenge (ADR 0008 Decision 10, threat
  * model T2). The difficulty is stored on the row so a later change to
  * `AGENT_SIGNUP_POW_BITS` never re-grades a challenge already handed out.
  *
@@ -391,7 +391,7 @@ async function killAgentCredentials(tx: Tx, userId: string, now: Date): Promise<
 }
 
 /**
- * Replace a live agent's secret (ADR 0007 Decision 14). The old secret stops
+ * Replace a live agent's secret (ADR 0008 Decision 14). The old secret stops
  * matching immediately. `revokeTokens` also kills every live credential the
  * agent holds — sessions, `ps_at_`/`ps_rt_` and its `mcp_` keys.
  */

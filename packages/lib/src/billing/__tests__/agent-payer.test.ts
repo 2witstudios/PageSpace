@@ -1,5 +1,5 @@
 /**
- * ADR 0007 Decision 8 — owner pays. The ONE seam that names who pays for an
+ * ADR 0008 Decision 8 — owner pays. The ONE seam that names who pays for an
  * agent's AI spend; Phase 4 wires it at canConsumeAI / consumeCredits /
  * releaseHold and injects the DB lookup. Pure here.
  */

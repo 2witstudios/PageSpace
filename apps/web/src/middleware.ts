@@ -345,7 +345,7 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
     // as `/api/mcp/` above. Without this the session gate answers 401 before any of them runs
     // and the entire bridge is unreachable — route tests never saw it because they invoke the
     // handlers directly, and the exit-gate run found it on the first real enrollment.
-    // `/api/agent/challenge` and `/api/agent/identity` are the agent API door (ADR 0007,
+    // `/api/agent/challenge` and `/api/agent/identity` are the agent API door (ADR 0008,
     // auth.md): an AI agent with a shell fetches a proof-of-work challenge and registers
     // itself, and by definition holds no session, token or key yet — those two calls are
     // what create its identity. Each route carries its own controls instead: the

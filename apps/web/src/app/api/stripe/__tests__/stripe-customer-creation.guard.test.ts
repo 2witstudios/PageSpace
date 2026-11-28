@@ -1,5 +1,5 @@
 /**
- * Source guard (ADR 0007 Decision 8, Agent Signup Phase 1b): an agent never
+ * Source guard (ADR 0008 Decision 8, Agent Signup Phase 1b): an agent never
  * holds its own Stripe customer. Every file in the monorepo that calls
  * `customers.create(` must be one of the enumerated sites, and each of those
  * must refuse an agent BEFORE the create call. A new customer-creation path

@@ -392,7 +392,7 @@ describe('readSpendableCents — the routing edge lean read', () => {
   });
 });
 
-describe('agents see no starter grant (ADR 0007 Decision 9 — display and routing agree with the gate)', () => {
+describe('agents see no starter grant (ADR 0008 Decision 9 — display and routing agree with the gate)', () => {
   const agent = () => mockReadGateAccount.mockResolvedValue({ accountType: 'agent', ownerUserId: null });
   /** A bare top-up row: no period stamped, so a human's starter grant would be pending. */
   const bare = (topup: number) => [{

@@ -168,7 +168,7 @@ function unbindOutOfBundleTargets(
 }
 
 /**
- * Agent users cannot travel (ADR 0007; D-32). An agent's only credential is its
+ * Agent users cannot travel (ADR 0008; D-32). An agent's only credential is its
  * `agent_identities` row, and agent credentials do not cross deployments — so a
  * migrated agent could never sign in again, and it has no inbox to recover
  * through. Skipping it instead would silently drop the drives and pages it owns,

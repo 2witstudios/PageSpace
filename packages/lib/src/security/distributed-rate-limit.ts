@@ -1100,7 +1100,7 @@ export const DISTRIBUTED_RATE_LIMITS = {
     blockDurationMs: 5 * 60 * 1000,
     progressiveDelay: false,
   },
-  // Agent signup doors (ADR 0007 Decision 10, threat model T1/T3). All keyed
+  // Agent signup doors (ADR 0008 Decision 10, threat model T1/T3). All keyed
   // per IP: the doors are unauthenticated by design, so IP is the only identity
   // available. Proof-of-work only makes each attempt cost CPU; these are the
   // real ceiling on bulk agent creation.
@@ -1170,7 +1170,7 @@ export const DISTRIBUTED_RATE_LIMITS = {
     blockDurationMs: 60 * 60 * 1000,
     progressiveDelay: false,
   },
-  // POST /api/auth/mcp-tokens by an AI agent's own bearer token (ADR 0007 D6),
+  // POST /api/auth/mcp-tokens by an AI agent's own bearer token (ADR 0008 D6),
   // keyed per agent. The session path is unchanged and unlimited here; a
   // bearer that can mint content credentials in a loop is not.
   AGENT_KEY_MINT: {
