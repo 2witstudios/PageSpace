@@ -27,4 +27,10 @@ export const WELL_KNOWN_REWRITES = [
     source: '/auth.md',
     destination: '/api/well-known/auth-md',
   },
+  // The llms.txt convention (llmstxt.org): what an AI agent reads first on a
+  // site. Points agents at `/auth.md` when they may create their own account.
+  {
+    source: '/llms.txt',
+    destination: '/api/well-known/llms-txt',
+  },
 ] as const;

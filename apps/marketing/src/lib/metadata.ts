@@ -136,6 +136,11 @@ export const siteMetadata: Metadata = {
     shortcut: "/favicon.ico",
   },
   manifest: "/manifest.json",
+  // Tells an AI agent reading any marketing page that it may create a PageSpace
+  // account of its own, and where the recipe is (served by the web app).
+  other: {
+    "pagespace-agent-auth": "/auth.md",
+  },
   openGraph: {
     type: "website",
     locale: "en_US",
