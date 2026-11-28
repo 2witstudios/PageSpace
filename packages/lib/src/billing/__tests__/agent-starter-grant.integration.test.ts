@@ -179,10 +179,39 @@ describe('canConsumeAI — billing-off deployment (DEPLOYMENT_MODE=tenant)', () 
 });
 
 describe('canConsumeAI — refined denial reason', () => {
-  it('given a CLAIMED agent with no balance, should deny with the ordinary out_of_credits (its funding path is its owner)', async () => {
+  it("given a CLAIMED agent with no balance of its own, should spend its OWNER's credits (Phase 4 owner pays) — never an agent starter grant", async () => {
     if (!dbAvailable) return;
     const owner = await seedUser('human');
     const agent = await seedUser('agent', owner.id);
+
+    const result = await canConsumeAI(agent.id, 'free', { spend: PERSONAL_SPEND });
+
+    // The owner's first own-credits call lazily seeds the OWNER's wallet with the
+    // human starter grant; the hold names that wallet.
+    const [ownerWallet] = await db.select({ id: wallets.id }).from(wallets).where(personalRootWalletOf(owner.id));
+    expect(result).toMatchObject({ allowed: true, walletId: ownerWallet?.id });
+    expect(await starterGrantRows(owner.id)).toHaveLength(1);
+    expect(await starterGrantRows(agent.id)).toHaveLength(0);
+    if (result.holdId) await db.delete(creditHolds).where(eq(creditHolds.id, result.holdId));
+  });
+
+  it('given a CLAIMED agent whose OWNER is out of credits, should deny with the ordinary out_of_credits (its funding path is its owner, not requires_funding)', async () => {
+    if (!dbAvailable) return;
+    const owner = await seedUser('human');
+    const agent = await seedUser('agent', owner.id);
+    // An owner wallet with nothing left and a period stamped: no starter grant applies.
+    const now = new Date();
+    await db.insert(wallets).values({
+      ownerType: 'user',
+      userId: owner.id,
+      monthlyRemainingCents: 0,
+      monthlyAllowanceCents: 0,
+      topupRemainingCents: 0,
+      debtCents: 0,
+      pendingMillicents: 0,
+      monthlyPeriodStart: now,
+      monthlyPeriodEnd: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
+    });
 
     const result = await canConsumeAI(agent.id, 'free', { spend: PERSONAL_SPEND });
 
