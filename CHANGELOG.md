@@ -186,6 +186,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   email address, and exchange its secret for tokens to use PageSpace as its own account. Agents get
   no free AI credits: an AI call from an unclaimed agent answers "requires funding" and points at
   the claim flow. Agents can rotate their secret, optionally signing out every existing token.
+  From a terminal it is one command: `pagespace signup --agent --name "<name>"` creates the account,
+  signs in and gives the agent its own access key, so `pagespace drives list` and `pagespace mcp`
+  work straight away; `pagespace agent claim` prints a link for a human to claim and fund the agent.
+  An unclaimed agent that never signs in is deleted after 30 days.
 - **Claim an AI agent and pay for its AI usage** — an agent with its own account can ask you to
   claim it: it gives you a link to `/claim` with a short code. You sign in as yourself, see the
   agent's name, when it was created and what it says it is, and are told plainly that you will pay

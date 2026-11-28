@@ -61,7 +61,35 @@ export interface MachineHostCredential {
   readonly createdAt: string;
 }
 
-export type HostCredential = OAuthHostCredential | StaticHostCredential | MachineHostCredential;
+/**
+ * An AI agent's OWN account (`pagespace signup --agent` / `login --agent`;
+ * ADR 0008). The durable credential is `secret` — the `ps_agent_*`
+ * identity assertion, the only thing that can mint this agent a session — and
+ * the refresh token is a cache of the last jwt-bearer exchange: `null` (or a
+ * refresh that answers `invalid_grant`) means "exchange the secret again"
+ * (`auth/agent-session.ts`). Unlike an `oauth` login, losing the refresh token
+ * loses nothing; losing `secret` loses the account, so nothing in this CLI
+ * deletes one without being asked to.
+ *
+ * `claimToken` is what a human uses to claim (and fund) the agent; it is
+ * cleared once a claim succeeds. `contentKeyName` names the stored `static`
+ * key this agent minted for itself (an `mcp_` key — content access never rides
+ * the account token), which is also what lets `pagespace mcp` use that key on
+ * a machine where the agent is the only identity (`auth/agent-machine.ts`).
+ */
+export interface AgentHostCredential {
+  readonly kind: 'agent';
+  readonly agentId: string;
+  readonly secret: string;
+  readonly refreshToken: string | null;
+  readonly clientId: string;
+  readonly claimToken: string | null;
+  readonly contentKeyName: string | null;
+  readonly scopes: readonly string[];
+  readonly createdAt: string;
+}
+
+export type HostCredential = OAuthHostCredential | StaticHostCredential | MachineHostCredential | AgentHostCredential;
 
 /**
  * The credentials that AUTHENTICATE API calls. A machine credential is not
@@ -69,7 +97,7 @@ export type HostCredential = OAuthHostCredential | StaticHostCredential | Machin
  * commands that read the store directly (`logout`, `keys use`) refuse it —
  * normalized at the door rather than as a third branch in every consumer.
  */
-export type LoginHostCredential = OAuthHostCredential | StaticHostCredential;
+export type LoginHostCredential = OAuthHostCredential | StaticHostCredential | AgentHostCredential;
 
 export function isLoginCredential(credential: HostCredential): credential is LoginHostCredential {
   return credential.kind !== 'machine';
@@ -156,6 +184,38 @@ function normalizeHostCredential(value: unknown): HostCredential | null {
     return { kind: 'static', token: candidate.token, scopes: [...candidate.scopes], createdAt: candidate.createdAt };
   }
 
+  if (kind === 'agent') {
+    const optional = (value: unknown): string | null | false =>
+      value === undefined || value === null ? null : typeof value === 'string' && value.length > 0 ? value : false;
+    const refreshToken = optional(candidate.refreshToken);
+    const claimToken = optional(candidate.claimToken);
+    const contentKeyName = optional(candidate.contentKeyName);
+    if (
+      typeof candidate.agentId !== 'string' ||
+      candidate.agentId.length === 0 ||
+      typeof candidate.secret !== 'string' ||
+      candidate.secret.length === 0 ||
+      typeof candidate.clientId !== 'string' ||
+      candidate.clientId.length === 0 ||
+      refreshToken === false ||
+      claimToken === false ||
+      contentKeyName === false
+    ) {
+      return null;
+    }
+    return {
+      kind: 'agent',
+      agentId: candidate.agentId,
+      secret: candidate.secret,
+      refreshToken,
+      clientId: candidate.clientId,
+      claimToken,
+      contentKeyName,
+      scopes: [...candidate.scopes],
+      createdAt: candidate.createdAt,
+    };
+  }
+
   if (kind === 'machine') {
     const fields = ['privateKey', 'enrollmentId', 'envId', 'serverPublicKey', 'serverKeyId'] as const;
     const strings = fields.map((field) => candidate[field]);
@@ -176,6 +236,18 @@ function toHostCredential(value: HostCredential): HostCredential {
       return { kind: 'oauth', refreshToken: value.refreshToken, clientId: value.clientId, scopes: [...value.scopes], createdAt: value.createdAt };
     case 'static':
       return { kind: 'static', token: value.token, scopes: [...value.scopes], createdAt: value.createdAt };
+    case 'agent':
+      return {
+        kind: 'agent',
+        agentId: value.agentId,
+        secret: value.secret,
+        refreshToken: value.refreshToken,
+        clientId: value.clientId,
+        claimToken: value.claimToken,
+        contentKeyName: value.contentKeyName,
+        scopes: [...value.scopes],
+        createdAt: value.createdAt,
+      };
     case 'machine':
       return {
         kind: 'machine',
@@ -190,13 +262,15 @@ function toHostCredential(value: HostCredential): HostCredential {
   }
 }
 
-/** The secret bytes this credential authenticates with — a refresh token (oauth), the raw bearer token itself (static), or the machine's private key (machine). Never the full value in a log/prefix context; callers should still only show `tokenPrefix(credentialSecret(c))`. */
+/** The secret bytes this credential authenticates with — a refresh token (oauth), the raw bearer token itself (static), the agent secret (agent), or the machine's private key (machine). Never the full value in a log/prefix context; callers should still only show `tokenPrefix(credentialSecret(c))`. */
 export function credentialSecret(credential: HostCredential): string {
   switch (credential.kind) {
     case 'oauth':
       return credential.refreshToken;
     case 'static':
       return credential.token;
+    case 'agent':
+      return credential.secret;
     case 'machine':
       return credential.privateKey;
   }

@@ -19,6 +19,12 @@
  * it to manage its own credentials, never leaks a credential.
  */
 import { activityHandler } from '../commands/activity.js';
+import {
+  agentClaimHandler,
+  agentCreateKeyHandler,
+  agentRotateSecretHandler,
+  signupHandler,
+} from '../commands/agent.js';
 import { agentsAskHandler, agentsConfigHandler, agentsListHandler, modelsListHandler } from '../commands/agents.js';
 import { channelsSendHandler } from '../commands/channels.js';
 import { conversationsListHandler, conversationsReadHandler } from '../commands/conversations.js';
@@ -149,7 +155,11 @@ export interface RouteEntry extends Route {
 }
 
 const OTHER_ROUTES: readonly RouteEntry[] = [
-  { path: ['login'], handler: loginHandler, summary: 'Log in via the browser, or --device for a headless machine' },
+  { path: ['signup'], handler: signupHandler, summary: 'AI agent? Create your own account: signup --agent [--name <n>] (no email, no human)' },
+  { path: ['login'], handler: loginHandler, summary: 'Log in via the browser, --device for a headless machine, or --agent with an agent secret on stdin' },
+  { path: ['agent', 'claim'], handler: agentClaimHandler, summary: 'Get a human to claim (and fund) this agent: prints a link, waits for approval' },
+  { path: ['agent', 'rotate-secret'], handler: agentRotateSecretHandler, summary: "Replace this agent's secret (--revoke-tokens also kills every token and key)" },
+  { path: ['agent', 'create-key'], handler: agentCreateKeyHandler, summary: "Mint this agent an access key and make it this machine's active key" },
   { path: ['logout'], handler: logoutHandler, summary: 'Revoke and remove a stored credential' },
   { path: ['whoami'], handler: whoamiHandler, summary: 'Show the currently authenticated identity' },
   // `keys` (Phase 9 task 5, consolidated Phase 9 follow-up) is the sole

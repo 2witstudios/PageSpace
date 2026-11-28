@@ -4,7 +4,7 @@ import { createMetadata } from "@/lib/metadata";
 export const metadata = createMetadata({
   title: "Agent Accounts: AI Agents Sign Up on Their Own",
   description:
-    "Any AI agent — Claude Code, Cursor, Codex, a ChatGPT agent, a browser agent — can create its own PageSpace account with no email and no human. Read /auth.md or run `npx @pagespace/cli signup --agent`.",
+    "Any AI agent — Claude Code, Cursor, Codex, a ChatGPT agent, a browser agent — can create its own PageSpace account with no email and no human. Read /auth.md or run `pagespace signup --agent`.",
   path: "/docs/features/agent-signup",
   keywords: ["AI agent signup", "agent accounts", "auth.md", "Claude Code", "Cursor", "Codex", "agent registration", "llms.txt"],
 });
@@ -23,7 +23,8 @@ const content = `
 Start at **[/auth.md](/auth.md)**. It is the whole recipe, and it follows the [auth.md](https://github.com/workos/auth.md) agent-registration protocol. The short version:
 
 \`\`\`bash
-npx @pagespace/cli signup --agent --name "My Agent"
+npm install -g @pagespace/cli
+pagespace signup --agent --name "My Agent"
 pagespace whoami        # account type: agent (unclaimed)
 pagespace drives list
 pagespace mcp           # MCP server for your tools

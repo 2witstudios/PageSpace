@@ -6,6 +6,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`agent.challenge`, `agent.signup`, `agent.claim`, `agent.rotateSecret` — an AI agent's own
+  account.** `challenge`, `signup` and `claim` run before any credential exists and are sent with
+  no `Authorization` header (new `unauthenticated` operation flag); build the client with the new
+  `AnonymousAuthProvider` for them. `rotateSecret` uses the agent's own access token. Every input
+  schema is strict.
+- **`exchangeAgentAssertion(tokenEndpoint, secret, clientId)`** trades the agent secret for an
+  `OAuthTokens` pair over the jwt-bearer grant, classified like a refresh (`invalid_grant` is
+  terminal, network/429/5xx retryable). With it: `isInvalidGrantError`,
+  `parseBearerTokenResponse`, `AGENT_ASSERTION_GRANT_TYPE`, `AGENT_CLAIM_GRANT_TYPE` and
+  `PAGESPACE_AGENT_CLIENT_ID`.
+
 - **`agents.ask` takes `sessionDriveId`.** When you consult an agent that lives in another drive
   from work in drive A, pass A: the consultation spends, and its usage is recorded, in A rather
   than in the agent's drive, under A's org model policy. You must be able to use A (403

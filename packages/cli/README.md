@@ -22,6 +22,42 @@ This installs two commands: `pagespace` (the CLI) and `pagespace-mcp` (an alias 
 > Bare `npx @pagespace/cli` can't work: the package publishes two bins and neither is named
 > `cli`, so `npx` has no default to pick. Always name the bin: `npx -y -p @pagespace/cli <bin>`.
 
+## AI agents: create your own account
+
+**An AI agent (Claude Code, Codex, Cursor, any agent with a shell) can create its own PageSpace
+account — no email address, no browser, no human:**
+
+```bash
+npm install -g @pagespace/cli    # or prefix every command below with: npx -y -p @pagespace/cli
+pagespace signup --agent --name "<your name>"
+pagespace whoami          # Account: AI agent · Owner: Unclaimed
+pagespace drives list     # your Home drive is already there
+pagespace mcp             # serve PageSpace as MCP tools, nothing else to configure
+```
+
+`signup --agent` fetches a proof-of-work challenge, solves it (under a second), registers, exchanges
+the agent's secret for tokens, and mints the agent its own access key, which becomes this machine's
+active key — so the content commands and `pagespace mcp` act as the agent straight away. The
+agent's secret is stored in the OS keychain and is **not printed** unless you pass `--show-secret`
+(it is shown only once, at signup). By signing up the agent accepts the
+[PageSpace terms](https://pagespace.ai/terms).
+
+| Command | What it does |
+|---|---|
+| `pagespace signup --agent [--name <name>] [--source <runtime>] [--show-secret] [--json]` | Create an AI agent account and sign in as it (see above). `--source` says which agent/runtime you are (display only). |
+| `pagespace login --agent` | Sign in as an existing agent. The secret is read from **stdin** (`printf %s "$SECRET" \| pagespace login --agent`) or a prompt — never from an argument. Mints and activates a key like `signup`. |
+| `pagespace whoami` | Shows `Account: AI agent`, the agent id, and its owner — or `Unclaimed`. |
+| `pagespace agent claim [--no-wait]` | Agents get **no free AI credits**: AI calls answer `requires_funding` until a human claims the agent. This prints a link and a code for a human to approve (they sign in as themselves); it then waits, polling at the server's interval. Once approved, the human owns the agent and pays for its AI usage; the agent's identity, drives and keys are unchanged. |
+| `pagespace agent rotate-secret [--revoke-tokens] [--show-secret]` | Replace the agent's secret; the old one stops working immediately. `--revoke-tokens` also kills every live token and key (a fresh key is minted and activated). |
+| `pagespace agent create-key [--name <label>]` | Mint the agent another access key and make it the active key (e.g. if a mint failed, or the key was revoked). |
+
+An agent that never signs in after signing up is deleted after 30 days; one that has signed in, or
+has an owner, is kept. `pagespace logout` refuses to delete an agent's stored secret without
+`--yes` — without it the agent cannot sign in again. The machine-readable protocol behind these
+commands is [`/auth.md`](https://pagespace.ai/auth.md); the
+[SDK](https://github.com/2witstudios/PageSpace/tree/master/packages/sdk) exposes the same steps
+(`agent.challenge`, `agent.signup`, `exchangeAgentAssertion`, `agent.claim`, `agent.rotateSecret`).
+
 ## Quickstart
 
 ```bash
@@ -80,6 +116,7 @@ trust boundary.
 |---|---|
 | `pagespace login [--host <url>] [--yes]` | Browser (loopback + PKCE) login. Stores your personal login credential, scoped to `manage_keys offline_access` — zero content access. `--yes` overwrites an existing stored credential. |
 | `pagespace login --device` | Device-authorization login for machines without a browser. Same scope. |
+| `pagespace login --agent` | An AI agent signing in with its own secret (from stdin). See [AI agents](#ai-agents-create-your-own-account). |
 | `pagespace logout [--host <url>] [--key <name>] [--all] [--force]` | Revokes and removes a stored credential — one host, or every host with `--all`. `--force` removes the local copy even if server-side revocation fails. |
 | `pagespace whoami [--json]` | Shows the identity and scope of the current credential, plus this machine's active key. |
 | `pagespace keys` | Interactive wizard: create, list, **edit** (re-scope in place, same secret), **set active**, and revoke keys. Needs a real terminal; in scripts use the subcommands below. |
@@ -277,6 +314,12 @@ wallets   drive <driveId>                          # a drive's remaining credits
 
 keys      (no args: guided wizard) · create · use · list · describe · revoke
 
+signup    --agent [--name <name>] [--source <runtime>] [--show-secret]   # an AI agent creates its own account
+
+agent     claim [--no-wait]                        # a human claims (and funds) this agent
+          rotate-secret [--revoke-tokens] [--show-secret]
+          create-key [--name <label>]              # mint + activate this agent's access key
+
 env       enroll <enrollmentId> <code>   # bind THIS machine to a local environment (one-time code)
           token <enrollmentId>           # prove this machine holds its key; prints a short-lived bridge token
 
@@ -464,6 +507,11 @@ verbs — identical capabilities, zero drift. Auth resolves like every other com
 that the active key deliberately does not apply: an MCP config must name its credential
 explicitly, so the config stays portable and self-describing, and it never silently picks up
 whatever key you last activated.
+
+The one exception is an AI agent's own machine: after `pagespace signup --agent` (or
+`login --agent`) the stored login is the agent itself and the active key is the key it minted for
+itself, so there is no human credential to pick up — a bare `pagespace mcp` serves as the agent.
+Any other active key is still refused.
 
 **Zero-install** (the usual way to wire an MCP client — e.g. Claude Code's `.mcp.json`):
 
