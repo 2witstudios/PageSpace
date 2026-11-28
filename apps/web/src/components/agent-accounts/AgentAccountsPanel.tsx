@@ -64,7 +64,8 @@ function useResumePendingAccountChange(onApplied: () => void) {
   }, [onApplied]);
 }
 
-const hostOf = (origin: string) => origin.replace(/^https:\/\//, '').replace(/:443$/, '');
+/** An account's site as a person reads it: the scheme's OWN default port is implied (443 for https, 22 for ssh). */
+const hostOf = (origin: string) => (origin.startsWith('ssh://') ? `ssh ${origin.slice('ssh://'.length).replace(/:22$/, '')}` : origin.replace(/^https:\/\//, '').replace(/:443$/, ''));
 
 /**
  * The Accounts settings for an agent page, or for the global assistant in personal settings (G2).
@@ -120,6 +121,7 @@ export function AgentAccountsPanel({ scope }: { readonly scope: AgentAccountScop
                 <Badge variant={account.status === 'active' ? 'secondary' : 'destructive'}>{account.status}</Badge>
                 {!account.ready && account.status === 'active' && <Badge variant="outline">Not ready — add it again</Badge>}
                 {account.providerSlug === 'google' && <Badge variant="outline">Google</Badge>}
+                {account.kind === 'ssh_key' && <Badge variant="outline">SSH</Badge>}
                 {account.status === 'needs_reauth' && <Badge variant="destructive">Google sign-in expired — connect it again</Badge>}
                 <Badge variant="outline">{account.acknowledgment === 'personal_login_acknowledged' ? 'Personal login (acknowledged)' : 'Dedicated account'}</Badge>
                 {scope.kind === 'agent_page' && account.ownerKind === 'user' && <Badge variant="outline">Yours, attached</Badge>}
@@ -131,6 +133,11 @@ export function AgentAccountsPanel({ scope }: { readonly scope: AgentAccountScop
             </div>
             {account.status === 'active' && (
               <div className="flex shrink-0 gap-2">
+                {account.publicKey && (
+                  <Button type="button" size="sm" variant="outline" onClick={() => void navigator.clipboard.writeText(account.publicKey ?? '').then(() => toast.success('Public key copied. Add it to ~/.ssh/authorized_keys on the server.'), () => toast.error(`Could not copy. The public key is: ${account.publicKey ?? ''}`))}>
+                    Copy public key
+                  </Button>
+                )}
                 {account.ready && (
                   <Button type="button" size="sm" variant="outline" onClick={() => setEditing(account.id)}>
                     Permissions

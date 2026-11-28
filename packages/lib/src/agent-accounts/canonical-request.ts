@@ -17,12 +17,15 @@ import type { ExecutorChannel, OperationRef, RequestDigest, HashBytes } from './
 export type HttpMethod = 'GET' | 'HEAD' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 export type RelayMethod = 'git-receive-pack' | 'git-upload-pack' | 'lfs-batch' | 'lfs-upload';
 export type BrowserMethod = 'navigate' | 'click' | 'type' | 'read' | 'wait' | 'fill';
+/** One SSH command on the account's pinned host (slice 5). */
+export type SshMethod = 'EXEC';
 
 /** The closed method set per channel; anything else is `malformed`. */
 export type MethodFor = {
   readonly 'http-executor': HttpMethod;
   readonly 'relay-runner': RelayMethod;
   readonly 'browser-worker': BrowserMethod;
+  readonly 'ssh-executor': SshMethod;
 };
 
 /**
@@ -248,6 +251,10 @@ export type ApprovalSubject = {
   readonly resources: readonly (readonly [string, string])[];
   readonly bodySha256: string;
   readonly bodyBytes: number;
+  /** An SSH command, shown verbatim so the person approves exactly what will run (slice 5). */
+  readonly command?: string;
+  /** Its standard input, verbatim — the digest covers it, so the person must see it too ('' = none). */
+  readonly stdin?: string;
 };
 
 /**

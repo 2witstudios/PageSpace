@@ -27,9 +27,9 @@ import { drives, pages } from './core';
 // ---------------------------------------------------------------------------
 
 /** D-20: passwords + TOTP ARE in v1, external store only. */
-export type AccountKind = 'api_key' | 'bearer' | 'oauth2' | 'session' | 'password';
+export type AccountKind = 'api_key' | 'bearer' | 'oauth2' | 'session' | 'password' | 'ssh_key';
 /** The same union as a value, for the pg enum. The ONLY other place the `kind` literals appear. */
-export const ACCOUNT_KIND_VALUES = ['api_key', 'bearer', 'oauth2', 'session', 'password'] as const satisfies readonly AccountKind[];
+export const ACCOUNT_KIND_VALUES = ['api_key', 'bearer', 'oauth2', 'session', 'password', 'ssh_key'] as const satisfies readonly AccountKind[];
 
 /** D-16: user-owned or agent-page-owned now; drive-shared later (same TenantId space). */
 export type AccountOwnerKind = 'user' | 'agent_page';
@@ -227,6 +227,8 @@ export const agentAccounts = pgTable(
     status: agentAccountStatus('status').notNull().default('active'),
     upstreamRevocation: agentAccountUpstreamRevocation('upstreamRevocation'),
     lastUsedAt: timestamp('lastUsedAt', { mode: 'date', withTimezone: true }),
+    /** An `ssh_key` account's PUBLIC key (OpenSSH line), for the person to install; never secret. Null for every other kind. */
+    publicKey: text('publicKey'),
     createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updatedAt', { mode: 'date', withTimezone: true }).notNull().defaultNow(),
     revokedAt: timestamp('revokedAt', { mode: 'date', withTimezone: true }),

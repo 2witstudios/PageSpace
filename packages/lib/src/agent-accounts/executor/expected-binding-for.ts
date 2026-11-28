@@ -44,7 +44,10 @@ export type PlaneAttestedFacts = {
   readonly revokedAt: number | null;
 };
 
-export function expectedBindingFor({
+/** The executors whose grants this binding is built for. */
+export type BoundExecutor = 'http-executor' | 'ssh-executor';
+
+export function expectedBindingFor<C extends BoundExecutor = 'http-executor'>({
   run,
   presenter,
   row,
@@ -53,16 +56,16 @@ export function expectedBindingFor({
   delegation,
 }: {
   readonly run: RunEnvelope;
-  readonly presenter: GrantPresenter & { readonly channel: 'http-executor' };
+  readonly presenter: GrantPresenter & { readonly channel: C };
   readonly row: Pick<AgentAccountRecord, 'id' | 'kind' | 'status' | 'ownerDriveId' | 'tenantId' | 'policyVersion'> | null;
   readonly plane: PlaneAttestedFacts | null;
   readonly allowedDriveIds: readonly string[];
   /** The delegation row the grant named, as a fact; `none` when it names none or the row is gone. */
   readonly delegation: DelegationFact;
-}): ExpectedBinding<'http-executor'> {
+}): ExpectedBinding<C> {
   const accountDriveId = (row?.ownerDriveId ?? null) as DriveId | null;
   const runBinding = {
-    aud: 'http-executor' as const,
+    aud: presenter.channel,
     presenter,
     human: run.human,
     agentPageId: run.agentPageId,

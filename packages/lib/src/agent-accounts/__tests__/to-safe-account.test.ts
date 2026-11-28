@@ -36,6 +36,7 @@ const row: AgentAccountRecord = {
   status: 'active',
   upstreamRevocation: null,
   lastUsedAt: new Date(1_800_000_100_000),
+  publicKey: null,
   createdAt: new Date(1_800_000_000_000),
   updatedAt: new Date(1_800_000_050_000),
   revokedAt: null,
@@ -58,6 +59,7 @@ describe('toSafeAccount', () => {
       createdAt: 1_800_000_000_000,
       revokedAt: null,
       ready: true,
+      publicKey: null,
     };
     expect(actual).toEqual(expected);
   });

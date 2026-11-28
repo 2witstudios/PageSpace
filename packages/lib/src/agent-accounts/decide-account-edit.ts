@@ -25,6 +25,7 @@ import type { CanonicalOrigin } from './canonical-request';
 import type { UserId } from './grant';
 import { normalizeOrigin, type NormalizeOriginVerdict } from './normalize-origin';
 import { GENERIC_REQUEST_LIMITS, GENERIC_REQUEST_OPERATION } from './decide-account-creation';
+import { sshPolicyFor } from './ssh/decide-ssh-account';
 
 export const MAX_USES_PER_HOUR = 1_000;
 /** An end date this soon is a mistake, not a policy. */
@@ -75,11 +76,14 @@ export function decideAccountEdit({
   keepApprover,
   providerSlug,
   providerOrigins = null,
+  sshTarget = null,
   now,
 }: {
   /** A provider account's possible origins (Google's APIs): its sites can only be narrowed within them. */
   readonly providerOrigins?: readonly string[] | null;
   readonly edit: AccountEdit;
+  /** An SSH account's one pinned target: it is never edited here, and the policy covers `ssh.exec` on it. */
+  readonly sshTarget?: CanonicalOrigin | null;
   /** The account's provider (`google`), or null for a generic account. */
   readonly providerSlug: string | null;
   readonly editor: UserId;
@@ -89,6 +93,7 @@ export function decideAccountEdit({
   readonly keepApprover: boolean;
   readonly now: number;
 }): AccountEditVerdict {
+  if (sshTarget !== null) return sshEdit({ edit, editor, storedApprover, keepApprover, sshTarget, now });
   if (!Array.isArray(edit.allowedOrigins) || edit.allowedOrigins.length === 0) return { ok: false, reason: 'origins_empty' };
   if (edit.allowedOrigins.length > MAX_ALLOWED_ORIGINS) return { ok: false, reason: 'origins_too_many' };
   const origins = new Set<CanonicalOrigin>();
@@ -124,4 +129,14 @@ export function decideAccountEdit({
       approver,
     },
   };
+}
+
+function sshEdit({ edit, editor, storedApprover, keepApprover, sshTarget, now }: { readonly edit: AccountEdit; readonly editor: UserId; readonly storedApprover: UserId | null; readonly keepApprover: boolean; readonly sshTarget: CanonicalOrigin; readonly now: number }): AccountEditVerdict {
+  const { autoApprove } = edit;
+  if (autoApprove.enabled !== true) return { ok: true, allowedOrigins: [sshTarget], approvalPolicy: null };
+  const limit = autoApprove.maxUsesPerHour;
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_USES_PER_HOUR) return { ok: false, reason: 'limit_invalid' };
+  const until = autoApprove.until;
+  if (until !== null && (!Number.isInteger(until) || until < now + MIN_POLICY_LIFETIME_MS)) return { ok: false, reason: 'until_invalid' };
+  return { ok: true, allowedOrigins: [sshTarget], approvalPolicy: sshPolicyFor({ target: sshTarget, maxUsesPerHour: limit, until, approver: keepApprover && storedApprover !== null ? storedApprover : editor }) };
 }

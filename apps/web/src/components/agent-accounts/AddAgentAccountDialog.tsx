@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useId, useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -14,7 +14,7 @@ import { useEditingStore } from '@/stores/useEditingStore';
 import { agentAccountsUrl, type AgentAccountScope } from '@/hooks/useAgentAccounts';
 
 type Placement = 'bearer' | 'authorization' | 'header' | 'query';
-type Mode = 'key' | 'google';
+type Mode = 'key' | 'google' | 'ssh';
 
 /** What a person can let the agent do with a Google account; each is one narrow Google permission. */
 const GOOGLE_SERVICE_OPTIONS: readonly { readonly id: string; readonly label: string }[] = [
@@ -35,6 +35,14 @@ const REFUSAL_COPY: Readonly<Record<string, string>> = {
   key_invalid: 'The key looks empty or contains line breaks.',
   name_invalid: 'Give the account a name (up to 100 characters).',
   forbidden: 'Only a drive owner or admin can add an account to this agent.',
+  host_invalid: 'Enter the server as a host name or IP address only, like build.example.com.',
+  port_invalid: 'The port must be a number from 1 to 65535.',
+  username_invalid: 'Enter the login name on the server, like deploy.',
+  address_refused: 'That server resolves to a private address, which the credential service never connects to.',
+  unresolvable: 'That server name could not be found.',
+  unreachable: 'The server could not be reached on that port.',
+  timeout: 'The server did not answer in time.',
+  host_key_invalid: 'Check the server first, then confirm its key.',
   services_empty: 'Choose at least one thing the agent may do.',
   not_configured: 'Agent accounts are not set up on this PageSpace deployment.',
   plane_unavailable: 'The credential service is unavailable. Try again later.',
@@ -59,8 +67,16 @@ export function AddAgentAccountDialog({ scope, open, onOpenChange, onCreated }: 
   const [mode, setMode] = useState<Mode>('key');
   const [services, setServices] = useState<string[]>(['gmail.read']);
   const [autoApproveReads, setAutoApproveReads] = useState(true);
+  const [sshHost, setSshHost] = useState('');
+  const [sshPort, setSshPort] = useState('22');
+  const [sshUser, setSshUser] = useState('');
+  const [probed, setProbed] = useState<{ readonly fingerprint: string; readonly algorithm: string; readonly host: string; readonly port: number | null } | null>(null);
+  /** The server the latest probe asked about; editing the server or port moves it, so a late answer is ignored. */
+  const probeTarget = useRef('');
+  const [fingerprintConfirmed, setFingerprintConfirmed] = useState(false);
+  const [createdPublicKey, setCreatedPublicKey] = useState<string | null>(null);
 
-  const dirty = open && (name !== '' || origin !== '' || apiKey !== '');
+  const dirty = open && (name !== '' || origin !== '' || apiKey !== '' || sshHost !== '');
   useEffect(() => {
     const componentId = `add-agent-account-${mountId}`;
     if (dirty) useEditingStore.getState().startEditing(componentId, 'form');
@@ -77,12 +93,65 @@ export function AddAgentAccountDialog({ scope, open, onOpenChange, onCreated }: 
     setOwnership('dedicated');
     setAcknowledged(false);
     setAllowGenericRequests(false);
+    setSshHost('');
+    setSshPort('22');
+    setSshUser('');
+    setProbed(null);
+    setFingerprintConfirmed(false);
+    setCreatedPublicKey(null);
   };
 
   const needsName = placement === 'header' || placement === 'query';
   const canSubmitKey = name.trim() !== '' && origin.trim() !== '' && apiKey !== '' && (!needsName || placementName.trim() !== '') && (ownership === 'dedicated' || acknowledged) && !submitting;
   const canSubmitGoogle = name.trim() !== '' && services.length > 0 && (ownership === 'dedicated' || acknowledged) && !submitting;
-  const canSubmit = mode === 'google' ? canSubmitGoogle : canSubmitKey;
+  const canSubmitSsh = name.trim() !== '' && sshHost.trim() !== '' && sshUser.trim() !== '' && probed !== null && fingerprintConfirmed && (ownership === 'dedicated' || acknowledged) && !submitting;
+  const canSubmit = mode === 'google' ? canSubmitGoogle : mode === 'ssh' ? canSubmitSsh : canSubmitKey;
+  const ownerBody = () => (scope.kind === 'user' ? { kind: 'user' } : { kind: 'agent_page', agentPageId: scope.pageId });
+  const refusalCopy = (error: unknown, fallback: string) => REFUSAL_COPY[error instanceof ApiRequestError ? error.message : ''] ?? fallback;
+
+  /** Ask the server for its host key, for the person to compare with the server's own. Never logs in. */
+  const checkServer = async () => {
+    setSubmitting(true);
+    setProbed(null);
+    setFingerprintConfirmed(false);
+    try {
+      const asked = { host: sshHost.trim(), port: Number(sshPort) || null };
+      probeTarget.current = `${asked.host}:${asked.port}`;
+      const result = await post<{ fingerprint: string; algorithm: string }>('/api/agent-accounts/ssh/probe', { owner: ownerBody(), ...asked });
+      // A probe for a server the person has since changed is someone else's key: dropped.
+      if (probeTarget.current !== `${asked.host}:${asked.port}`) return;
+      setProbed({ fingerprint: result.fingerprint, algorithm: result.algorithm, host: asked.host, port: asked.port });
+    } catch (error) {
+      toast.error(refusalCopy(error, 'The server could not be checked.'));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const createSsh = async () => {
+    if (probed === null) return;
+    setSubmitting(true);
+    try {
+      const result = await post<{ publicKey: string }>('/api/agent-accounts/ssh', {
+        owner: ownerBody(),
+        name: name.trim(),
+        // Exactly the server whose key the person confirmed.
+        host: probed.host,
+        port: probed.port,
+        username: sshUser.trim(),
+        hostKeySha256: probed.fingerprint,
+        ownership,
+        acknowledged: ownership === 'personal' && acknowledged,
+        runWithoutAsking: false,
+      });
+      setCreatedPublicKey(result.publicKey);
+      onCreated();
+    } catch (error) {
+      toast.error(refusalCopy(error, 'The SSH account could not be added.'));
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   /** Off to Google's consent screen; Google brings the browser back and the account appears in the list. */
   const connectGoogle = async () => {
@@ -142,14 +211,28 @@ export function AddAgentAccountDialog({ scope, open, onOpenChange, onCreated }: 
         </DialogHeader>
 
         <div className="space-y-4">
-          <RadioGroup value={mode} onValueChange={(value) => setMode(value as Mode)} className="grid grid-cols-2 gap-2">
+          <RadioGroup value={mode} onValueChange={(value) => setMode(value as Mode)} className="grid grid-cols-3 gap-2">
             <Label htmlFor={`${mountId}-mode-key`} className="flex items-center gap-2 rounded-md border p-3 font-normal cursor-pointer">
               <RadioGroupItem value="key" id={`${mountId}-mode-key`} /> An API key or token
             </Label>
             <Label htmlFor={`${mountId}-mode-google`} className="flex items-center gap-2 rounded-md border p-3 font-normal cursor-pointer">
               <RadioGroupItem value="google" id={`${mountId}-mode-google`} /> A Google account
             </Label>
+            <Label htmlFor={`${mountId}-mode-ssh`} className="flex items-center gap-2 rounded-md border p-3 font-normal cursor-pointer">
+              <RadioGroupItem value="ssh" id={`${mountId}-mode-ssh`} /> An SSH server
+            </Label>
           </RadioGroup>
+
+          {mode === 'ssh' && createdPublicKey !== null && (
+            <div className="space-y-2 rounded-md border border-green-300/60 bg-green-50/60 dark:bg-green-950/20 p-3">
+              <p className="text-sm font-medium">Account added. Install its key on the server:</p>
+              <p className="text-xs text-muted-foreground">As <span className="font-mono">{sshUser}</span> on the server, add this line to <span className="font-mono">~/.ssh/authorized_keys</span>. This is the public half only — the private key never leaves PageSpace&apos;s credential service. You can copy it again from the account later.</p>
+              <pre className="text-xs font-mono whitespace-pre-wrap break-all rounded bg-background p-2 border">{createdPublicKey}</pre>
+              <Button type="button" size="sm" variant="outline" onClick={() => void navigator.clipboard.writeText(createdPublicKey).then(() => toast.success('Copied'), () => toast.error('Could not copy. Select the key above and copy it yourself.'))}>
+                Copy public key
+              </Button>
+            </div>
+          )}
 
           <RadioGroup value={ownership} onValueChange={(value) => setOwnership(value as 'dedicated' | 'personal')} className="space-y-2">
             <div className="flex items-start gap-2">
@@ -177,8 +260,45 @@ export function AddAgentAccountDialog({ scope, open, onOpenChange, onCreated }: 
 
           <div className="space-y-1">
             <Label htmlFor={`${mountId}-name`}>Name</Label>
-            <Input id={`${mountId}-name`} value={name} onChange={(event) => setName(event.target.value)} placeholder={mode === 'google' ? 'Agent Google' : 'Weather API'} maxLength={100} />
+            <Input id={`${mountId}-name`} value={name} onChange={(event) => setName(event.target.value)} placeholder={mode === 'google' ? 'Agent Google' : mode === 'ssh' ? 'Build server' : 'Weather API'} maxLength={100} />
           </div>
+          {mode === 'ssh' && createdPublicKey === null && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-[1fr_6rem] gap-2">
+                <div className="space-y-1">
+                  <Label htmlFor={`${mountId}-ssh-host`}>Server</Label>
+                  <Input id={`${mountId}-ssh-host`} value={sshHost} onChange={(event) => { setSshHost(event.target.value); setProbed(null); probeTarget.current = ''; }} placeholder="build.example.com" />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor={`${mountId}-ssh-port`}>Port</Label>
+                  <Input id={`${mountId}-ssh-port`} inputMode="numeric" value={sshPort} onChange={(event) => { setSshPort(event.target.value); setProbed(null); probeTarget.current = ''; }} />
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor={`${mountId}-ssh-user`}>Log in as</Label>
+                <Input id={`${mountId}-ssh-user`} value={sshUser} onChange={(event) => setSshUser(event.target.value)} placeholder="deploy" />
+                <p className="text-xs text-muted-foreground">Use an account made for the agent, with only the access it needs.</p>
+              </div>
+              {probed === null ? (
+                <Button type="button" variant="outline" size="sm" disabled={sshHost.trim() === '' || submitting} onClick={checkServer}>
+                  Check server
+                </Button>
+              ) : (
+                <div className="space-y-2 rounded-md border p-3">
+                  <p className="text-xs">
+                    <span className="font-mono">{probed.host}{probed.port && probed.port !== 22 ? `:${probed.port}` : ''}</span> presented this {probed.algorithm} host key:
+                  </p>
+                  <pre className="text-xs font-mono break-all">{probed.fingerprint}</pre>
+                  <p className="text-xs text-muted-foreground">On the server, run <span className="font-mono">ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</span> and check it shows the same. PageSpace will refuse to connect if the server ever presents a different key.</p>
+                  <div className="flex items-start gap-2">
+                    <Checkbox id={`${mountId}-fp`} checked={fingerprintConfirmed} onCheckedChange={(value) => setFingerprintConfirmed(value === true)} className="mt-0.5" />
+                    <Label htmlFor={`${mountId}-fp`} className="font-normal text-sm">It matches my server</Label>
+                  </div>
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground">PageSpace creates a new key for this account and shows you its public half to install. Each command asks you first, unless you change that in Permissions.</p>
+            </div>
+          )}
           {mode === 'google' && (
             <div className="space-y-3">
               <div className="space-y-2">
@@ -246,9 +366,15 @@ export function AddAgentAccountDialog({ scope, open, onOpenChange, onCreated }: 
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button type="button" onClick={mode === 'google' ? connectGoogle : submit} disabled={!canSubmit}>
-            {mode === 'google' ? 'Continue to Google' : 'Add account'}
-          </Button>
+          {mode === 'ssh' && createdPublicKey !== null ? (
+            <Button type="button" onClick={() => { reset(); onOpenChange(false); }}>
+              Done
+            </Button>
+          ) : (
+            <Button type="button" onClick={mode === 'google' ? connectGoogle : mode === 'ssh' ? createSsh : submit} disabled={!canSubmit}>
+              {mode === 'google' ? 'Continue to Google' : 'Add account'}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -28,6 +28,8 @@ export type SafeAccount = {
   readonly revokedAt: number | null;
   /** False until the credential plane committed the material (credentialVersion 0): listed, but not usable yet. */
   readonly ready: boolean;
+  /** An SSH account's PUBLIC key, to install on the server (null for every other kind). */
+  readonly publicKey: string | null;
 };
 
 export function toSafeAccount({ row }: { readonly row: AgentAccountRecord }): SafeAccount {
@@ -45,5 +47,6 @@ export function toSafeAccount({ row }: { readonly row: AgentAccountRecord }): Sa
     createdAt: row.createdAt.getTime(),
     revokedAt: row.revokedAt?.getTime() ?? null,
     ready: row.credentialVersion > 0,
+    publicKey: row.kind === 'ssh_key' ? (row.publicKey ?? null) : null,
   };
 }

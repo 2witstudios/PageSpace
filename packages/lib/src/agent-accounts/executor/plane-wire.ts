@@ -9,9 +9,11 @@ import type { PlaneConsenters } from '../store/store-adapter';
 
 /** The kinds the plane holds and the HTTP executor presents (`api_key`, `bearer`, `oauth2`). */
 export const PLANE_HTTP_KINDS = ['api_key', 'bearer', 'oauth2'] as const;
+/** Every kind a plane ref may name on the wire. */
+const PLANE_REF_KINDS = [...PLANE_HTTP_KINDS, 'ssh_key'] as const;
 export type PlaneHttpKind = (typeof PLANE_HTTP_KINDS)[number];
 
-const ref = z.object({ tenantId: z.string().min(1), accountId: z.string().min(1), kind: z.enum(PLANE_HTTP_KINDS) }).strict();
+const ref = z.object({ tenantId: z.string().min(1), accountId: z.string().min(1), kind: z.enum(PLANE_REF_KINDS) }).strict();
 
 const material = z.discriminatedUnion('kind', [
   z
@@ -90,6 +92,42 @@ export const planeOAuthExchangeBody = z
   })
   .strict();
 
+/** The host key a server presents, so a person can confirm it before an SSH account is created. No authentication. */
+export const planeSshHostKeyBody = z.object({ host: z.string().min(1).max(253), port: z.number().int().min(1).max(65_535) }).strict();
+
+/**
+ * Create an SSH account's key: the PLANE generates an ed25519 pair, pins the host key the person confirmed,
+ * stores both (ingress `put`) and answers the PUBLIC key only — the private key never leaves the plane.
+ */
+export const planeSshEnrollBody = z
+  .object({
+    ref: z.object({ tenantId: z.string().min(1), accountId: z.string().min(1), kind: z.literal('ssh_key') }).strict(),
+    username: z.string().min(1).max(64).regex(/^[a-z_][a-z0-9_.-]*$/i),
+    hostKeySha256: z.string().regex(/^SHA256:[A-Za-z0-9+/]{43}$/),
+    bindings: z.record(z.string(), z.unknown()),
+    scope: z.record(z.string(), z.unknown()),
+    consenters,
+  })
+  .strict();
+
+/** Run ONE command under a signed `ssh-executor` grant (the SSH executor verifies it, as the HTTP one does). */
+export const planeSshExecBody = z
+  .object({
+    grant: z.unknown(),
+    signature: z.string().min(1).max(512),
+    command: z.string().min(1).max(8_192),
+    stdin: z.string().max(262_144),
+    run: z
+      .object({
+        human: z.object({ userId: z.string().min(1), sessionId: z.string().min(1).nullable() }).strict(),
+        agentPageId: z.string().min(1).nullable(),
+        conversationId: z.string().min(1),
+        runId: z.string().min(1),
+      })
+      .strict(),
+  })
+  .strict();
+
 /** The policy window's counters for a ref (the plane's own usage ledger). */
 export const planeUsageBody = z.object({ ref }).strict();
 
@@ -125,6 +163,13 @@ export type PlaneDescribeBody = z.infer<typeof planeDescribeBody>;
 export type PlaneRebindBody = z.infer<typeof planeRebindBody>;
 export type PlaneUsageBody = z.infer<typeof planeUsageBody>;
 export type PlaneOAuthExchangeBody = z.infer<typeof planeOAuthExchangeBody>;
+export type PlaneSshHostKeyBody = z.infer<typeof planeSshHostKeyBody>;
+export type PlaneSshEnrollBody = z.infer<typeof planeSshEnrollBody>;
+export type PlaneSshExecBody = z.infer<typeof planeSshExecBody>;
+export type PlaneSshHostKeyResult = { readonly ok: true; readonly fingerprint: string; readonly algorithm: string } | { readonly ok: false; readonly reason: 'unresolvable' | 'address_refused' | 'unreachable' | 'timeout' | 'host_key_mismatch' | 'auth_failed' };
+export type PlaneSshEnrollResult =
+  | { readonly ok: true; readonly version: number; readonly publicKey: string }
+  | { readonly ok: false; readonly reason: 'target_invalid' | 'store_unavailable' | 'kind_mismatch' | 'version_conflict' | 'write_unverified' | 'lock_unavailable' | 'consenters_invalid' | 'identity_refused' };
 export type PlaneOAuthExchangeResult =
   | { readonly ok: true; readonly version: number; readonly email: string; readonly scopes: readonly string[] }
   | {
@@ -161,5 +206,8 @@ export const PLANE_ROUTES = {
   rebind: '/v1/accounts/rebind',
   usage: '/v1/accounts/usage',
   oauthExchange: '/v1/oauth/exchange',
+  sshHostKey: '/v1/ssh/hostkey',
+  sshEnroll: '/v1/ssh/enroll',
+  sshExec: '/v1/ssh/exec',
   execute: '/v1/http/execute',
 } as const;

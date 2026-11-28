@@ -43,6 +43,11 @@ import type { OAuthClientCredentials } from '../refresh/build-refresh-request';
 import { buildTokenEndpointRequest } from '../refresh/build-refresh-request';
 import { interpretTokenResponse } from '../refresh/interpret-token-response';
 import { planEnrolledMaterial } from '../oauth/plan-enrolled-material';
+import type { SshClient } from './ssh-client';
+import { generateSshKeyPair } from './ssh-client';
+import type { SshCommandExecutor } from './ssh-command-executor';
+import { sshTargetOf } from '../ssh/ssh-command';
+import { planeSshEnrollBody, planeSshExecBody, planeSshHostKeyBody, type PlaneSshEnrollResult, type PlaneSshHostKeyResult } from './plane-wire';
 
 const MAX_BODY_BYTES = 1_500_000;
 /** The liveness probe the image HEALTHCHECK and Fly's `[checks.health]` call. */
@@ -56,6 +61,8 @@ export type PlaneRequestHandlerDeps = {
   readonly oauth: { readonly endpoints: OAuthEndpointRegistry; readonly clientFor: (providerSlug: string) => OAuthClientCredentials | null; readonly network: PinnedHttpsClient } | null;
   readonly provisioner: Pick<TenantProvisioner, 'ensureTenant' | 'identityOf'>;
   readonly executor: HttpRequestExecutor;
+  /** SSH accounts (slice 5): the transport for host-key probes and the command executor; null = SSH is off. */
+  readonly ssh: { readonly client: Pick<SshClient, 'hostKey'>; readonly executor: SshCommandExecutor } | null;
   readonly hmac: (key: string, text: string) => string;
   readonly sha256: (bytes: Uint8Array) => string;
   readonly now: () => number;
@@ -207,6 +214,57 @@ export function createPlaneRequestHandler(deps: PlaneRequestHandlerDeps): (req: 
         identity: { tenantId: ref.tenantId as TenantId, identityId: tenant.identityId, channel: 'ingress', blastRadius: 'tenant' },
       });
       return send(res, 200, (put.ok ? { ok: true, version: put.version, email: planned.email, scopes: planned.material.scopes } : { ok: false, reason: put.reason }) satisfies PlaneOAuthExchangeResult);
+    }
+
+    if (path === PLANE_ROUTES.sshHostKey) {
+      const parsed = planeSshHostKeyBody.safeParse(json);
+      if (!parsed.success) return send(res, 400, { error: 'malformed' });
+      if (deps.ssh === null) return send(res, 404, { error: 'not_found' });
+      const probed = await deps.ssh.client.hostKey(parsed.data);
+      return send(res, 200, probed satisfies PlaneSshHostKeyResult);
+    }
+
+    if (path === PLANE_ROUTES.sshEnroll) {
+      const parsed = planeSshEnrollBody.safeParse(json);
+      if (!parsed.success) return send(res, 400, { error: 'malformed' });
+      if (deps.ssh === null) return send(res, 404, { error: 'not_found' });
+      const { ref, username, hostKeySha256, bindings, scope, consenters } = parsed.data;
+      // Exactly one pinned ssh:// target in the bindings being stored, or nothing is created.
+      const origins = (bindings as { allowedOrigins?: unknown }).allowedOrigins;
+      if (!Array.isArray(origins) || origins.length !== 1 || typeof origins[0] !== 'string' || sshTargetOf(origins[0]) === null) return send(res, 200, { ok: false, reason: 'target_invalid' } satisfies PlaneSshEnrollResult);
+      const tenant = await deps.provisioner.ensureTenant(ref.tenantId as TenantId);
+      if (tenant === null) return send(res, 200, { ok: false, reason: 'store_unavailable' } satisfies PlaneSshEnrollResult);
+      const pair = generateSshKeyPair(`pagespace-agent-${ref.accountId}`);
+      const put = await deps.store.put({
+        ref: ref as SecretRef,
+        material: { kind: 'ssh_key', material: { privateKey: pair.privateKey, publicKey: pair.publicKey, username, hostKeySha256 } },
+        expectedVersion: null,
+        bindings: bindings as unknown as PlaneBindings,
+        scope: scope as unknown as PlaneScope,
+        consenters: consenters as PlaneConsenters,
+        identity: { tenantId: ref.tenantId as TenantId, identityId: tenant.identityId, channel: 'ingress', blastRadius: 'tenant' },
+      });
+      return send(res, 200, (put.ok ? { ok: true, version: put.version, publicKey: pair.publicKey } : { ok: false, reason: put.reason }) satisfies PlaneSshEnrollResult);
+    }
+
+    if (path === PLANE_ROUTES.sshExec) {
+      const parsed = planeSshExecBody.safeParse(json);
+      if (!parsed.success) return send(res, 400, { error: 'malformed' });
+      if (deps.ssh === null) return send(res, 404, { error: 'not_found' });
+      const { grant, signature: grantSignature, command, stdin, run } = parsed.data;
+      const result = await deps.ssh.executor.execute({
+        grant,
+        signature: grantSignature,
+        command,
+        stdin,
+        run: {
+          human: { userId: run.human.userId as UserId, sessionId: run.human.sessionId as SessionId | null },
+          agentPageId: run.agentPageId as AgentPageId | null,
+          conversationId: run.conversationId as ConversationId,
+          runId: run.runId as RunId,
+        },
+      });
+      return send(res, 200, result);
     }
 
     if (path === PLANE_ROUTES.usage) {

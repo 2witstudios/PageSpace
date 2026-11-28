@@ -58,10 +58,12 @@ const deny = (reason: GrantDenyReason): Extract<GrantVerdict, { readonly ok: fal
  * `session` over `http-executor` is the one gated exception (`sessionHttp`).
  */
 const RESOLVABLE: Readonly<Record<PresenterChannel, Readonly<Record<AccountKind, boolean>>>> = {
-  'http-executor': { api_key: true, bearer: true, oauth2: true, session: false, password: false },
-  'relay-runner': { api_key: true, bearer: true, oauth2: true, session: false, password: false },
-  'browser-worker': { api_key: false, bearer: false, oauth2: false, session: true, password: true },
-  'refresh-worker': { api_key: false, bearer: false, oauth2: true, session: false, password: false },
+  'http-executor': { api_key: true, bearer: true, oauth2: true, session: false, password: false, ssh_key: false },
+  'relay-runner': { api_key: true, bearer: true, oauth2: true, session: false, password: false, ssh_key: false },
+  'browser-worker': { api_key: false, bearer: false, oauth2: false, session: true, password: true, ssh_key: false },
+  'refresh-worker': { api_key: false, bearer: false, oauth2: true, session: false, password: false, ssh_key: false },
+  // An SSH key reaches the SSH executor and nothing else; the SSH executor reaches nothing else.
+  'ssh-executor': { api_key: false, bearer: false, oauth2: false, session: false, password: false, ssh_key: true },
 };
 
 function kindResolvable(grant: AgentAccountGrant): boolean {

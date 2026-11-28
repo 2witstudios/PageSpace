@@ -17,6 +17,10 @@ export type HttpRequestApprovalSubject = {
   readonly bodySha256?: string;
   readonly bodyBytes?: number;
   readonly headerNames?: readonly string[];
+  /** An SSH command, verbatim: what the person approves running. */
+  readonly command?: string;
+  /** Its standard input, verbatim ('' = none): the approval covers it. */
+  readonly stdin?: string;
 };
 
 export type HttpRequestToolOutput = {
@@ -61,13 +65,25 @@ function ApprovalCard({ approval }: { readonly approval: NonNullable<HttpRequest
     <div className="rounded-lg border border-amber-300/60 bg-amber-50/60 dark:bg-amber-950/20 p-3 my-2 space-y-2">
       <div className="flex items-center gap-2 text-sm font-medium">
         <ShieldAlert className="h-4 w-4 text-amber-600" />
-        Approve this request?
+        {subject.command !== undefined ? 'Approve this command?' : 'Approve this request?'}
       </div>
       {subject.headline && <div className="text-xs">{subject.headline}</div>}
-      <div className="text-xs font-mono break-all">
-        {subject.origin}
-        {subject.path}
-      </div>
+      {subject.command !== undefined ? (
+        <>
+          <pre className="text-xs font-mono whitespace-pre-wrap break-all rounded bg-background/60 border p-2">{subject.command}</pre>
+          {subject.stdin ? (
+            <div className="space-y-1">
+              <div className="text-xs font-medium">With this input:</div>
+              <pre className="text-xs font-mono whitespace-pre-wrap break-all rounded bg-background/60 border p-2 max-h-60 overflow-auto">{subject.stdin}</pre>
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <div className="text-xs font-mono break-all">
+          {subject.origin}
+          {subject.path}
+        </div>
+      )}
       {subject.query && subject.query.length > 0 && (
         <ul className="text-xs font-mono">
           {subject.query.map(([name, value], index) => (
@@ -79,7 +95,9 @@ function ApprovalCard({ approval }: { readonly approval: NonNullable<HttpRequest
       )}
       <div className="text-xs text-muted-foreground">
         {subject.bodyBytes ? `Body: ${subject.bodyBytes} bytes. ` : ''}
-        The account&apos;s key is added by PageSpace&apos;s credential service; the agent never sees it. Approving allows this one request once.
+        {subject.command !== undefined
+          ? 'PageSpace’s credential service runs it with the account’s key, on that server only; the agent never sees the key. Approving allows this exact command once.'
+          : 'The account’s key is added by PageSpace’s credential service; the agent never sees it. Approving allows this one request once.'}
       </div>
       {approval.stepUp && state !== 'approved' && <div className="text-xs text-muted-foreground">This one grants someone else access, so approving asks for your passkey.</div>}
       {state === 'approved' ? (
@@ -129,6 +147,49 @@ export const HttpRequestRenderer: React.FC<HttpRequestRendererProps> = memo(func
           {output.message ?? 'The request was not completed.'}
           {output.rule ? ` (${output.rule})` : ''}
         </div>
+      )}
+    </div>
+  );
+});
+
+export type SshCommandToolOutput = {
+  readonly ok?: boolean;
+  readonly exitCode?: number | null;
+  readonly signal?: string | null;
+  readonly stdout?: string;
+  readonly stderr?: string;
+  readonly truncated?: boolean;
+  readonly redacted?: boolean;
+  readonly error?: string;
+  readonly message?: string;
+  readonly approval?: HttpRequestToolOutput['approval'];
+};
+
+/** SshCommandRenderer — an `ssh_exec` call (slice 5): the approval card, the command's output and exit code, or the refusal's guidance. */
+export const SshCommandRenderer: React.FC<{ readonly command?: string; readonly output: SshCommandToolOutput }> = memo(function SshCommandRenderer({ command, output }) {
+  if (output.error === 'approval_required' && output.approval) return <ApprovalCard approval={output.approval} />;
+  const ok = output.ok === true;
+  return (
+    <div className="rounded-lg border bg-card overflow-hidden my-2 shadow-sm">
+      <div className="flex items-center gap-2 px-3 py-2 border-b text-xs">
+        <KeyRound className="h-3.5 w-3.5 text-muted-foreground" />
+        <span className="font-mono truncate">$ {command}</span>
+        {ok && <span className={cn('ml-auto rounded px-1.5 py-0.5', output.exitCode === 0 ? 'bg-green-100 dark:bg-green-900/40' : 'bg-red-100 dark:bg-red-900/40')}>exit {output.exitCode ?? output.signal ?? '?'}</span>}
+      </div>
+      {ok ? (
+        <div className="p-3 space-y-1">
+          {output.stdout ? <pre className="text-xs whitespace-pre-wrap break-all max-h-72 overflow-auto">{output.stdout}</pre> : null}
+          {output.stderr ? <pre className="text-xs whitespace-pre-wrap break-all max-h-40 overflow-auto text-amber-700 dark:text-amber-400">{output.stderr}</pre> : null}
+          {!output.stdout && !output.stderr && <div className="text-xs text-muted-foreground">No output.</div>}
+          {(output.truncated || output.redacted) && (
+            <div className="text-xs text-muted-foreground">
+              {output.truncated ? 'Output truncated. ' : ''}
+              {output.redacted ? 'Credential-like values were removed.' : ''}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="p-3 text-xs text-muted-foreground">{output.message ?? 'The command did not run.'}</div>
       )}
     </div>
   );

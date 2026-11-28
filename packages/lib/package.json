@@ -3296,6 +3296,16 @@
       "import": "./dist/agent-accounts/registry/google-operations.js",
       "require": "./dist/agent-accounts/registry/google-operations.js"
     },
+    "./agent-accounts/ssh/to-ssh-tool-result": {
+      "types": "./dist/agent-accounts/ssh/to-ssh-tool-result.d.ts",
+      "import": "./dist/agent-accounts/ssh/to-ssh-tool-result.js",
+      "require": "./dist/agent-accounts/ssh/to-ssh-tool-result.js"
+    },
+    "./agent-accounts/ssh/decide-ssh-account": {
+      "types": "./dist/agent-accounts/ssh/decide-ssh-account.d.ts",
+      "import": "./dist/agent-accounts/ssh/decide-ssh-account.js",
+      "require": "./dist/agent-accounts/ssh/decide-ssh-account.js"
+    },
     "./agent-accounts/account-authority-executor": {
       "types": "./dist/agent-accounts/account-authority-executor.d.ts",
       "import": "./dist/agent-accounts/account-authority-executor.js",
@@ -4424,6 +4434,7 @@
     "resend": "^6.1.2",
     "sanitize-html": "^2.17.6",
     "server-only": "^0.0.1",
+    "ssh2": "^1.16.0",
     "xlsx": "^0.18.5",
     "yaml": "^2.8.2",
     "zod": "^4.1.8"
@@ -4436,6 +4447,7 @@
     "@types/pg": "^8.15.4",
     "@types/react": "^19.1.13",
     "@types/sanitize-html": "^2.16.1",
+    "@types/ssh2": "^1.15.6",
     "@types/xlsx": "^0.0.36",
     "eslint": "^9.36.0",
     "typescript-eslint": "^8.59.0"

@@ -20,6 +20,7 @@
 import { createHash, createHmac } from 'node:crypto';
 import type { DeleteResult, PutResult, RebindResult, RevokeResult } from './store/store-adapter';
 import type { HttpExecutionResult } from './executor/decide-execution-result';
+import type { SshExecutionResult } from './executor/decide-ssh-result';
 import type {
   PlaneDeleteBody,
   PlaneDescribeBody,
@@ -27,6 +28,11 @@ import type {
   PlaneExecuteBody,
   PlaneOAuthExchangeBody,
   PlaneOAuthExchangeResult,
+  PlaneSshEnrollBody,
+  PlaneSshEnrollResult,
+  PlaneSshExecBody,
+  PlaneSshHostKeyBody,
+  PlaneSshHostKeyResult,
   PlanePutBody,
   PlaneRebindBody,
   PlaneRevokeBody,
@@ -53,6 +59,10 @@ export type PlaneClient = {
   readonly usage: (body: PlaneUsageBody) => Promise<PlaneUsageResult | PlaneUnavailable>;
   /** Connect an OAuth account: the plane exchanges the code and stores the tokens; only a version and the account's email come back. */
   readonly oauthExchange: (body: PlaneOAuthExchangeBody) => Promise<PlaneOAuthExchangeResult | PlaneUnavailable>;
+  readonly sshHostKey: (body: PlaneSshHostKeyBody) => Promise<PlaneSshHostKeyResult | PlaneUnavailable>;
+  /** The plane generates the key; only the public half comes back. */
+  readonly sshEnroll: (body: PlaneSshEnrollBody) => Promise<PlaneSshEnrollResult | PlaneUnavailable>;
+  readonly sshExec: (body: PlaneSshExecBody) => Promise<SshExecutionResult | PlaneUnavailable | { readonly ok: false; readonly reason: 'outcome_unknown' | 'refused' }>;
   readonly execute: (body: PlaneExecuteBody) => Promise<HttpExecutionResult | PlaneUnavailable>;
 };
 
@@ -77,6 +87,9 @@ export function createPlaneClient({
     return { ok: false as const, reason };
   };
 
+  /** An SSH command may take the executor's whole 60 s, after DNS, describe and audit: give it room before calling it unknown. */
+  const timeoutFor = (route: PlaneRoute) => (route === 'sshExec' ? Math.max(timeoutMs, 90_000) : timeoutMs);
+
   async function call<T>(route: PlaneRoute, path: string, body: unknown): Promise<T | ReturnType<typeof failed>> {
     const bytes = new TextEncoder().encode(JSON.stringify(body));
     const header = signPlaneRequest({ method: 'POST', path, body: bytes, secret, now: now(), hmac, sha256 });
@@ -85,7 +98,7 @@ export function createPlaneClient({
         method: 'POST',
         headers: { 'content-type': 'application/json', [PLANE_SIGNATURE_HEADER]: header },
         body: bytes,
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: AbortSignal.timeout(timeoutFor(route)),
       });
       if (response.status !== 200) return failed(route, { kind: 'status', status: response.status });
       return (await response.json()) as T;
@@ -103,6 +116,9 @@ export function createPlaneClient({
     describe: (body) => call<PlaneDescribeResult>('describe', PLANE_ROUTES.describe, body) as Promise<PlaneDescribeResult | PlaneUnavailable>,
     rebind: (body) => call<RebindResult>('rebind', PLANE_ROUTES.rebind, body) as Promise<RebindResult | PlaneUnavailable>,
     usage: (body) => call<PlaneUsageResult>('usage', PLANE_ROUTES.usage, body) as Promise<PlaneUsageResult | PlaneUnavailable>,
+    sshHostKey: (body) => call<PlaneSshHostKeyResult>('sshHostKey', PLANE_ROUTES.sshHostKey, body) as Promise<PlaneSshHostKeyResult | PlaneUnavailable>,
+    sshEnroll: (body) => call<PlaneSshEnrollResult>('sshEnroll', PLANE_ROUTES.sshEnroll, body) as Promise<PlaneSshEnrollResult | PlaneUnavailable>,
+    sshExec: (body) => call<SshExecutionResult>('sshExec', PLANE_ROUTES.sshExec, body) as Promise<SshExecutionResult | PlaneUnavailable | { readonly ok: false; readonly reason: 'outcome_unknown' | 'refused' }>,
     oauthExchange: (body) => call<PlaneOAuthExchangeResult>('oauthExchange', PLANE_ROUTES.oauthExchange, body) as Promise<PlaneOAuthExchangeResult | PlaneUnavailable>,
     execute: (body) => call<HttpExecutionResult>('execute', PLANE_ROUTES.execute, body) as Promise<HttpExecutionResult | PlaneUnavailable>,
   };

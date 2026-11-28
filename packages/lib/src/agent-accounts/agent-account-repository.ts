@@ -65,6 +65,8 @@ export type AgentAccountRepository = {
     readonly approvalPolicy: AccountApprovalPolicy | null;
   }) => Promise<AgentAccountRecord>;
   readonly setName: (input: { readonly id: string; readonly name: string }) => Promise<void>;
+  /** An SSH account's public key, as the plane generated it (not secret). */
+  readonly setPublicKey: (input: { readonly id: string; readonly publicKey: string }) => Promise<void>;
   /** The first committed put: 0 → version. `false` when the row is gone or already provisioned. */
   readonly setCredentialVersion: (input: { readonly id: string; readonly version: number }) => Promise<boolean>;
   readonly remove: (id: string) => Promise<void>;
@@ -159,6 +161,10 @@ export function createAgentAccountRepository({ db }: { readonly db: AgentAccount
 
     async setName({ id, name }) {
       await db.update(agentAccounts).set({ name, updatedAt: new Date() }).where(eq(agentAccounts.id, id));
+    },
+
+    async setPublicKey({ id, publicKey }) {
+      await db.update(agentAccounts).set({ publicKey, updatedAt: new Date() }).where(eq(agentAccounts.id, id));
     },
 
     async setCredentialVersion({ id, version }) {

@@ -91,6 +91,8 @@ const METHODS_BY_CHANNEL: { readonly [C in ExecutorChannel]: readonly MethodFor[
   'http-executor': ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'],
   'relay-runner': ['git-receive-pack', 'git-upload-pack', 'lfs-batch', 'lfs-upload'],
   'browser-worker': ['navigate', 'click', 'type', 'read', 'wait', 'fill'],
+  // SSH commands are never canonicalized as HTTP: `canonicalizeSshCommand` builds them, so this path refuses them.
+  'ssh-executor': [],
 };
 
 /** What every request without exactly one registry match is: never self-declared, never `read`. */

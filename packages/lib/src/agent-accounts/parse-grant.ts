@@ -25,6 +25,7 @@ import type {
   GrantId,
   Nonce,
   ParseGrant,
+  PresenterChannel,
   PresenterKeyId,
   RequestDigest,
   RunId,
@@ -35,11 +36,13 @@ import type {
   UserId,
 } from './grant';
 import type { AccountId, CredentialVersion, PolicyVersion, TenantId } from '@pagespace/db/schema/agent-accounts';
+import { ACCOUNT_KIND_VALUES } from '@pagespace/db/schema/agent-accounts';
 import { GRANT_ISSUER } from './grant-constants';
 import { decideSandboxBinding } from './decide-sandbox-binding';
 
-const PRESENTER_CHANNELS = ['http-executor', 'relay-runner', 'browser-worker', 'refresh-worker'] as const;
-const ACCOUNT_KINDS = ['api_key', 'bearer', 'oauth2', 'session', 'password'] as const;
+const PRESENTER_CHANNELS = ['http-executor', 'relay-runner', 'browser-worker', 'refresh-worker', 'ssh-executor'] as const satisfies readonly PresenterChannel[];
+/** The schema's own list: a kind added there is a kind a grant may name. */
+const ACCOUNT_KINDS = ACCOUNT_KIND_VALUES;
 const OPERATION_CLASSES = ['read', 'write', 'irreversible', 'privilege', 'unknown'] as const;
 
 const id = z.string().min(1);

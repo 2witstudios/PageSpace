@@ -12,7 +12,7 @@
  * `revoke` report every failure as `plane_unavailable`; their callers keep the
  * state that lets the operation be reconciled or repeated.
  */
-export type PlaneRoute = 'put' | 'revoke' | 'delete' | 'describe' | 'rebind' | 'usage' | 'oauthExchange' | 'execute';
+export type PlaneRoute = 'put' | 'revoke' | 'delete' | 'describe' | 'rebind' | 'usage' | 'oauthExchange' | 'sshHostKey' | 'sshEnroll' | 'sshExec' | 'execute';
 
 export type PlaneCallFailure =
   | { readonly kind: 'timeout' }
@@ -24,7 +24,8 @@ export type PlaneCallFailure =
 const NEVER_REACHED: ReadonlySet<string> = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ConnectionRefused']);
 
 export function classifyPlaneCallFailure({ route, failure }: { readonly route: PlaneRoute; readonly failure: PlaneCallFailure }): 'plane_unavailable' | 'outcome_unknown' | 'refused' {
-  if (route !== 'execute') return 'plane_unavailable';
+  // A command that may have reached the plane may have run: never "nothing happened".
+  if (route !== 'execute' && route !== 'sshExec') return 'plane_unavailable';
   if (failure.kind === 'network' && failure.code !== null && NEVER_REACHED.has(failure.code)) return 'plane_unavailable';
   if (failure.kind === 'status' && failure.status >= 400 && failure.status < 500) return 'refused';
   return 'outcome_unknown';

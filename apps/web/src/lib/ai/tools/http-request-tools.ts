@@ -19,6 +19,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import type { AgentPageId, ConversationId, RunId, SessionId, UserId } from '@pagespace/lib/agent-accounts/grant';
 import { toHttpRequestToolResult } from '@pagespace/lib/agent-accounts/to-http-request-tool-result';
+import { toSshToolResult } from '@pagespace/lib/agent-accounts/ssh/to-ssh-tool-result';
 import { getAccountAuthority } from '@/lib/agent-accounts/account-authority-client';
 import type { ToolExecutionContext } from '../core/types';
 import { toolActor } from './actor-permissions';
@@ -30,9 +31,25 @@ const PROJECTED_HEADERS = new Set(['accept', 'content-type', 'content-length']);
 /** An origin as a person reads it: the default port is implied. */
 const siteOf = (origin: string) => origin.replace(/:443$/, '');
 
+/** The run's caller, built the same way for every account tool. */
+function callerOf(context: ToolExecutionContext) {
+  context.turnId ??= crypto.randomUUID();
+  const agentPageId = context.chatSource?.type === 'page' ? (context.chatSource.agentPageId ?? null) : null;
+  return {
+    actorUserId: context.userId as UserId,
+    actingHumanUserId: context.userId as UserId,
+    // A live session only when a person is driving this run; an agent-to-agent or scheduled run is unattended.
+    sessionId: context.requestOrigin === 'agent' ? null : ((context.authSessionId ?? null) as SessionId | null),
+    agentPageId: agentPageId as AgentPageId | null,
+    conversationId: (context.conversationId ?? `conversation-${context.turnId}`) as ConversationId,
+    runId: context.turnId as RunId,
+    callerCeiling: { allowedDriveIds: context.mcpAllowedDriveIds ?? [], originatingMcpTokenId: context.mcpTokenId ?? null },
+  };
+}
+
 export const httpRequestTools = {
   list_accounts: tool({
-    description: `List the accounts you can use with http_request: each account's id, name and the sites it works with. Never returns a key. Use it to find the accountId for a site the person mentioned.`,
+    description: `List the accounts you can use with http_request (API keys, tokens, Google) and ssh_exec (SSH servers, sites shown as ssh://host:port): each account's id, name and the sites it works with. Never returns a key. Use it to find the accountId for a site the person mentioned.`,
     inputSchema: z.object({}),
     execute: async (_input, { experimental_context }) => {
       const context = experimental_context as ToolExecutionContext | undefined;
@@ -67,25 +84,30 @@ export const httpRequestTools = {
       if (context?.userId === undefined || authority === null) {
         return toHttpRequestToolResult({ accountId, result: { ok: false, reason: 'account_unavailable' } });
       }
-      context.turnId ??= crypto.randomUUID();
-      const agentPageId = context.chatSource?.type === 'page' ? (context.chatSource.agentPageId ?? null) : null;
       const result = await authority.requestOperation({
         actor: toolActor(context),
-        caller: {
-          actorUserId: context.userId as UserId,
-          actingHumanUserId: context.userId as UserId,
-          // A live session only when a person is driving this run; an agent-to-agent or scheduled run is unattended.
-          sessionId: context.requestOrigin === 'agent' ? null : ((context.authSessionId ?? null) as SessionId | null),
-          agentPageId: agentPageId as AgentPageId | null,
-          conversationId: (context.conversationId ?? `conversation-${context.turnId}`) as ConversationId,
-          runId: context.turnId as RunId,
-          callerCeiling: { allowedDriveIds: context.mcpAllowedDriveIds ?? [], originatingMcpTokenId: context.mcpTokenId ?? null },
-        },
+        caller: callerOf(context),
         accountId,
         request: { channel: 'http-executor', method, url, headers: headers ?? {}, body: new TextEncoder().encode(body ?? '') },
       });
       const droppedHeaders = Object.keys(headers ?? {}).filter((name) => !PROJECTED_HEADERS.has(name.trim().toLowerCase()));
       return toHttpRequestToolResult({ accountId, result, droppedHeaders });
+    },
+  }),
+
+  ssh_exec: tool({
+    description: `Run ONE shell command on a server, using one of this agent's SSH accounts (added by a person, who confirmed the server's host key and installed the account's public key). Pass the account id (list_accounts shows SSH accounts with an ssh:// site), never a key or password: the credential service holds the key, connects only to that one server and only if it presents the confirmed host key. The command runs non-interactively (no TTY) with a 60-second limit; output is capped and credential-like values are removed. Each command needs a person's approval unless they allowed commands without asking; if the result says approval_required, ask them to approve the exact command, then run the identical command again. Prefer read-only commands, and say what a command will change before running it.`,
+    inputSchema: z.object({
+      accountId: z.string().min(1).max(64).describe('The id of the SSH account to use.'),
+      command: z.string().min(1).max(8_192).describe('The exact shell command to run on the server.'),
+      stdin: z.string().max(262_144).optional().describe('Text to send to the command on standard input.'),
+    }),
+    execute: async ({ accountId, command, stdin }, { experimental_context }) => {
+      const context = experimental_context as ToolExecutionContext | undefined;
+      const authority = getAccountAuthority();
+      if (context?.userId === undefined || authority === null) return toSshToolResult({ accountId, result: { ok: false, reason: 'account_unavailable' } });
+      const result = await authority.requestSshCommand({ actor: toolActor(context), caller: callerOf(context), accountId, command, stdin: stdin ?? '' });
+      return toSshToolResult({ accountId, result });
     },
   }),
 };
