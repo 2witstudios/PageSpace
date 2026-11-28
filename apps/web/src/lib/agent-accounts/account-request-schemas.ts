@@ -64,8 +64,15 @@ export const approveAgentAccountRequestBody = z
   .object({
     accountId: z.string().min(1).max(64),
     requestDigest: z.string().regex(/^[0-9a-f]{64}$/),
+    /** A step-up grant bound to `agentAccountApprovalStepUpBinding(accountId, requestDigest)`; needed for a privileged operation. */
+    stepUpToken: z.string().min(1).max(512).optional(),
   })
   .strict();
+
+/** What a step-up approving ONE request is bound to: the account and that request's digest. */
+export function agentAccountApprovalStepUpBinding(accountId: string, requestDigest: string): Record<string, string> {
+  return { action: 'agent_account_approve', accountId, requestDigest };
+}
 
 /** HTTP status per authority refusal; a refusal body names the reason, never a value. */
 export const CREATE_REFUSAL_STATUS: Readonly<Record<string, number>> = {

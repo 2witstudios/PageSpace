@@ -4,6 +4,7 @@ import React, { memo, useState } from 'react';
 import { KeyRound, ShieldCheck, ShieldAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { post } from '@/lib/auth/auth-fetch';
+import { runWebauthnStepUp } from '@/lib/auth/step-up-ceremony';
 import { cn } from '@/lib/utils';
 
 /** The server-rendered approval subject (ADR 0004 §3.3) — derived from the canonical request, never model text. */
@@ -45,7 +46,12 @@ function ApprovalCard({ approval }: { readonly approval: NonNullable<HttpRequest
   const approve = async () => {
     setState('sending');
     try {
-      await post('/api/agent-accounts/approvals', { accountId: approval.accountId, requestDigest: approval.requestDigest });
+      const body: Record<string, string> = { accountId: approval.accountId, requestDigest: approval.requestDigest };
+      if (approval.stepUp) {
+        // Passkey only here: a magic link would leave this chat, and the request must be repeated anyway.
+        body.stepUpToken = await runWebauthnStepUp({ action: 'agent_account_approve', accountId: approval.accountId, requestDigest: approval.requestDigest });
+      }
+      await post('/api/agent-accounts/approvals', body);
       setState('approved');
     } catch {
       setState('failed');
@@ -75,9 +81,8 @@ function ApprovalCard({ approval }: { readonly approval: NonNullable<HttpRequest
         {subject.bodyBytes ? `Body: ${subject.bodyBytes} bytes. ` : ''}
         The account&apos;s key is added by PageSpace&apos;s credential service; the agent never sees it. Approving allows this one request once.
       </div>
-      {approval.stepUp ? (
-        <div className="text-xs text-muted-foreground">This operation needs a stronger confirmation that is not available here yet.</div>
-      ) : state === 'approved' ? (
+      {approval.stepUp && state !== 'approved' && <div className="text-xs text-muted-foreground">This one grants someone else access, so approving asks for your passkey.</div>}
+      {state === 'approved' ? (
         <div className="flex items-center gap-1 text-xs text-green-700 dark:text-green-400">
           <ShieldCheck className="h-3.5 w-3.5" /> Approved. Ask the agent to send the same request again.
         </div>
@@ -86,7 +91,7 @@ function ApprovalCard({ approval }: { readonly approval: NonNullable<HttpRequest
           <Button size="sm" onClick={approve} disabled={state === 'sending'}>
             Approve once
           </Button>
-          {state === 'failed' && <span className="text-xs text-destructive">Could not record the approval.</span>}
+          {state === 'failed' && <span className="text-xs text-destructive">{approval.stepUp ? 'Could not confirm it is you (a passkey is needed for this one).' : 'Could not record the approval.'}</span>}
         </div>
       )}
     </div>

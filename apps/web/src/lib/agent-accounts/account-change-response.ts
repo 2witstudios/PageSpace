@@ -21,9 +21,9 @@ import { agentAccountStepUpBinding, CHANGE_REFUSAL_STATUS } from './account-requ
 
 export type StepUpVerdict = { readonly ok: true; readonly proof: StepUpProof | null } | { readonly ok: false; readonly response: NextResponse };
 
-export async function stepUpProofFor({ userId, accountId, token }: { readonly userId: string; readonly accountId: string; readonly token: string | undefined }): Promise<StepUpVerdict> {
+export async function stepUpProofFor({ userId, accountId, token, actionBinding = agentAccountStepUpBinding(accountId) }: { readonly userId: string; readonly accountId: string; readonly token: string | undefined; readonly actionBinding?: Record<string, string> }): Promise<StepUpVerdict> {
   if (token === undefined) return { ok: true, proof: null };
-  const consumed = await consumeStepUpGrant({ userId, token, actionBinding: agentAccountStepUpBinding(accountId) });
+  const consumed = await consumeStepUpGrant({ userId, token, actionBinding });
   if (!consumed.ok) return { ok: false, response: NextResponse.json({ error: 'step_up_required' }, { status: 401 }) };
   // The consent names the step-up by a digest of its single-use grant, never the grant itself.
   return { ok: true, proof: { challengeId: `stepup:${createHash('sha256').update(token).digest('hex').slice(0, 32)}` } };

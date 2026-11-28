@@ -18,6 +18,8 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn(), auditRequest: vi.fn() }));
 vi.mock('@/lib/agent-accounts/account-authority-client', () => ({ getAccountAuthority: () => mockAuthority }));
+const mockConsumeStepUp = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/auth/step-up-service', () => ({ consumeStepUpGrant: mockConsumeStepUp }));
 
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
@@ -36,7 +38,7 @@ describe('POST /api/agent-accounts/approvals', () => {
     mockAuthority.approveRequest.mockResolvedValue({ ok: true, approvalId: 'appr_1', expiresAt: 5 });
     const response = await POST(request({ accountId: 'acct_1', requestDigest: DIGEST }));
     const actual = { status: response.status, call: mockAuthority.approveRequest.mock.calls[0]?.[0] };
-    const expected = { status: 201, call: { actor: credentialActor('user_1', null), sessionId: 'sess_live', accountId: 'acct_1', requestDigest: DIGEST } };
+    const expected = { status: 201, call: { actor: credentialActor('user_1', null), sessionId: 'sess_live', accountId: 'acct_1', requestDigest: DIGEST, stepUp: null } };
     expect(actual).toEqual(expected);
   });
 
@@ -61,5 +63,20 @@ describe('POST /api/agent-accounts/approvals', () => {
     const actual = response.status;
     const expected = 404;
     expect(actual).toEqual(expected);
+  });
+
+  it('given a step-up token for a privileged request, should bind it to this account AND digest, and refuse one that does not verify', async () => {
+    mockAuthority.approveRequest.mockResolvedValue({ ok: true, approvalId: 'appr_2', expiresAt: 5 });
+    mockConsumeStepUp.mockResolvedValueOnce({ ok: false, error: { code: 'STEP_UP_REQUIRED' } }).mockResolvedValueOnce({ ok: true, authentication: {} });
+    const refused = await POST(request({ accountId: 'acct_1', requestDigest: DIGEST, stepUpToken: 'bad' }));
+    const accepted = await POST(request({ accountId: 'acct_1', requestDigest: DIGEST, stepUpToken: 'good-token' }));
+    const actual = {
+      refused: refused.status,
+      accepted: accepted.status,
+      binding: mockConsumeStepUp.mock.calls[1]?.[0]?.actionBinding,
+      proof: /^stepup:[0-9a-f]{32}$/.test((mockAuthority.approveRequest.mock.calls[0]?.[0]?.stepUp as { challengeId: string }).challengeId),
+      calls: mockAuthority.approveRequest.mock.calls.length,
+    };
+    expect(actual).toEqual({ refused: 401, accepted: 201, binding: { action: 'agent_account_approve', accountId: 'acct_1', requestDigest: DIGEST }, proof: true, calls: 1 });
   });
 });

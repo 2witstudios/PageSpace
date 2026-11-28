@@ -162,6 +162,8 @@ export type AccountAuthority = {
     readonly sessionId: string;
     readonly accountId: string;
     readonly requestDigest: string;
+    /** A consumed step-up bound to this exact request — required for a `privilege` operation (e.g. sharing a Drive file). */
+    readonly stepUp?: StepUpProof | null;
   }) => Promise<{ readonly ok: true; readonly approvalId: ApprovalId; readonly expiresAt: number } | { readonly ok: false; readonly reason: 'account_unavailable' }>;
   /** The account's permissions as its manager sees them; `account_unavailable` for anyone without `manage`. */
   readonly describeAccount: (input: { readonly actor: AccessActor; readonly accountId: string }) => Promise<AccountChangeResult>;
@@ -504,12 +506,12 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
       return executed;
     },
 
-    async approveRequest({ actor, sessionId, accountId, requestDigest }) {
+    async approveRequest({ actor, sessionId, accountId, requestDigest, stepUp = null }) {
       const actorUserId = actor.userId as UserId;
       const row = await deps.accounts.find(accountId);
       if (row === null || !(await accessOf(row, actor)).use) return { ok: false, reason: 'account_unavailable' };
       const expiresAt = deps.now() + APPROVAL_TTL_MS;
-      const approvalId = await deps.accounts.insertApproval({ accountId: row.id, requestDigest: requestDigest as RequestDigest, approvedByUserId: actorUserId, approvedViaSessionId: sessionId, stepUpChallengeId: null, expiresAt });
+      const approvalId = await deps.accounts.insertApproval({ accountId: row.id, requestDigest: requestDigest as RequestDigest, approvedByUserId: actorUserId, approvedViaSessionId: sessionId, stepUpChallengeId: stepUp?.challengeId ?? null, expiresAt });
       return { ok: true, approvalId, expiresAt };
     },
 
