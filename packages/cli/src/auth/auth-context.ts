@@ -14,8 +14,9 @@
  * closed with an actionable, secret-free message — there is no interactive
  * fallback anywhere in this module, in a TTY or not.
  */
-import { AuthenticationError, isAuthenticationError, OAuthTokenProvider, StaticTokenProvider } from '@pagespace/sdk';
+import { AuthenticationError, exchangeAgentAssertion, isAuthenticationError, OAuthTokenProvider, StaticTokenProvider } from '@pagespace/sdk';
 import type { AuthProvider, OAuthTokens, RefreshAccessToken } from '@pagespace/sdk';
+import { agentCredentialWithTokens, createAgentRefreshAccessToken } from './agent-session.js';
 import { DEFAULT_PROFILE_NAME } from '../credentials/serialize.js';
 import type { CredentialStore } from '../credentials/store.js';
 import { EXIT_RUNTIME_ERROR, type ExitCode } from '../exit-codes.js';
@@ -45,9 +46,14 @@ export class FailingAuthProvider implements AuthProvider {
   }
 }
 
+/** The jwt-bearer exchange of an agent secret; the SDK's `exchangeAgentAssertion` by default. */
+export type ExchangeAgentSecret = (tokenEndpoint: string, secret: string, clientId: string) => Promise<OAuthTokens>;
+
 export interface BuildAuthProviderDeps {
   readonly discoverMetadata: DiscoverTokenEndpoint;
   readonly createRefreshAccessToken: (tokenEndpoint: string, clientId: string) => RefreshAccessToken;
+  /** Only an agent credential ever reaches this; omitted, the SDK's real exchange is used. */
+  readonly exchangeAgentAssertion?: ExchangeAgentSecret;
   readonly credentialStore: Pick<CredentialStore, 'set'>;
   readonly now: () => number;
 }
@@ -68,6 +74,36 @@ export function buildAuthProvider(source: AuthSource, deps: BuildAuthProviderDep
       // never refreshed or rewritten to the store.
       if (credential.kind === 'static') {
         return new StaticTokenProvider(credential.token);
+      }
+
+      // An agent's own account (ADR 0008): the refresh token is a cache of the
+      // last exchange of the durable secret, so invalid_grant re-exchanges
+      // (`agent-session.ts`) instead of failing. The persisted credential keeps
+      // the secret — `agentCredentialWithTokens` only swaps the refresh token.
+      if (credential.kind === 'agent') {
+        const exchange: ExchangeAgentSecret =
+          deps.exchangeAgentAssertion ?? ((endpoint: string, secret: string, clientId: string) => exchangeAgentAssertion(endpoint, secret, clientId));
+        const refreshAccessToken: RefreshAccessToken = async (refreshToken) => {
+          const { tokenEndpoint } = await deps.discoverMetadata(host);
+          return createAgentRefreshAccessToken({
+            secret: credential.secret,
+            refresh: (refreshToken) => deps.createRefreshAccessToken(tokenEndpoint, credential.clientId)(refreshToken),
+            exchange: (secret) => exchange(tokenEndpoint, secret, credential.clientId),
+          })(refreshToken);
+        };
+        return new OAuthTokenProvider({
+          initialTokens: {
+            accessToken: '',
+            accessExpiresAt: Number.NEGATIVE_INFINITY,
+            refreshToken: credential.refreshToken ?? '',
+            refreshExpiresAt: Number.POSITIVE_INFINITY,
+          },
+          refreshAccessToken,
+          now: deps.now,
+          onTokensUpdated: async (tokens: OAuthTokens) => {
+            await deps.credentialStore.set(host, agentCredentialWithTokens(credential, tokens, deps.now()), keyName);
+          },
+        });
       }
 
       const refreshAccessToken: RefreshAccessToken = async (refreshToken) => {
@@ -134,6 +170,17 @@ export async function enforceAuth(deps: EnforceAuthDeps): Promise<ExitCode | nul
     await deps.auth.getAccessToken();
     return null;
   } catch (error) {
+    // An agent secret is never deleted on a failure: `invalid_grant` is the
+    // same answer for a rotated secret and a temporarily locked agent, and the
+    // secret is the only way back into the account.
+    if (deps.source.kind === 'stored' && deps.source.credential.kind === 'agent' && isAuthenticationError(error)) {
+      deps.stderr.write(
+        `The agent credential stored for ${deps.source.host} could not be refreshed, and its secret was refused. ` +
+          'If the secret was rotated elsewhere, sign in with the new one: pipe it to "pagespace login --agent --yes".\n',
+      );
+      return EXIT_RUNTIME_ERROR;
+    }
+
     if (deps.source.kind === 'stored' && isAuthenticationError(error)) {
       await deps.credentialStore.delete(deps.source.host, deps.source.keyName ?? DEFAULT_PROFILE_NAME);
       // A static (mcp) credential has no refresh cycle to fail — this only
