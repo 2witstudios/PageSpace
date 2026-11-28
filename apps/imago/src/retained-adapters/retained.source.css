@@ -1232,8 +1232,8 @@ body.keyboard-open {
 
 @plugin "../../node_modules/@tailwindcss/typography";
 
-@source "/Users/jono/production/PageSpace/.pu/worktrees/wt-dkh7gog1/apps/imago/src/retained";
-@source "/Users/jono/production/PageSpace/.pu/worktrees/wt-dkh7gog1/apps/imago/src/retained-adapters";
+@source "/Users/jono/production/PageSpace/.pu/worktrees/wt-vfybo8l4/apps/imago/src/retained";
+@source "/Users/jono/production/PageSpace/.pu/worktrees/wt-vfybo8l4/apps/imago/src/retained-adapters";
 
 @theme inline { --color-destructive-foreground: #fff; }
 /* Imago C v3 palette (IMC-1.2): the same names imago's own utilities use, so a
@@ -1256,5 +1256,10 @@ body.keyboard-open {
 .find-highlight { background-color: #fef08a; }
 .find-highlight-current { background-color: #fbbf24; }
 .prose-xs { font-size: .75rem; }
+/* The chat's reading size, from imago's own scale (text-chat, text-2xs), so the chat reads larger
+   than the sidebar and scales with the text-size setting. The prose override is unlayered so it
+   wins over .prose's own 1rem; prose children are em-relative and follow it. */
+@theme { --text-2xs: 0.6875rem; --text-chat: 0.9375rem; }
+.prose-chat { font-size: var(--text-chat); }
 .prose-red { --tw-prose-body: var(--color-red-700); }
 .holographic-card { position: relative; }

@@ -15,6 +15,7 @@ const props = (overrides: Partial<AvatarMenuRenderProps> = {}): AvatarMenuRender
   onToggle: () => {},
   onPick: () => {},
   theme: <div role="radiogroup" aria-label="Theme" />,
+  textSize: <div role="group" aria-label="Text size" />,
   onSignOut: () => {},
   signingOut: false,
   credits: card,
@@ -25,9 +26,9 @@ const props = (overrides: Partial<AvatarMenuRenderProps> = {}): AvatarMenuRender
 
 const markup = (overrides: Partial<AvatarMenuRenderProps> = {}) => renderToStaticMarkup(renderAvatarMenu(props(overrides)));
 
-/** The menu's rows in order: links by href, the theme group and buttons by text. */
+/** The menu's rows in order: links by href, the theme and text-size groups and buttons by text. */
 const rows = (html: string) =>
-  [...html.matchAll(/<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>|<div role="radiogroup" aria-label="(Theme)"|<button\b[^>]*>([\s\S]*?)<\/button>/g)].map(
+  [...html.matchAll(/<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>|<div role="(?:radiogroup|group)" aria-label="(Theme|Text size)"|<button\b[^>]*>([\s\S]*?)<\/button>/g)].map(
     ([, href, anchor, theme, button]) => (theme ?? (button ? button.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : `${anchor.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()} → ${href}`)),
   );
 
@@ -35,7 +36,7 @@ describe('renderAvatarMenu()', () => {
   test('the account rows, in the board order', () => {
     assert({
       given: 'the menu open for Ada Lovelace with billing on',
-      should: 'offer Account, Personalization, Usage, Billing (Pro), Settings, Feedback, the theme, Classic PageSpace and Log out, in that order',
+      should: 'offer Account, Personalization, Usage, Billing (Pro), Settings, Feedback, the theme, the text size, Classic PageSpace and Log out, in that order',
       actual: rows(markup()),
       expected: [
         'Buy credits → /account/usage',
@@ -46,6 +47,7 @@ describe('renderAvatarMenu()', () => {
         'Settings → /account',
         'Feedback',
         'Theme',
+        'Text size',
         'Classic PageSpace → /dashboard',
         'Log out',
       ],
@@ -113,7 +115,7 @@ describe('renderAvatarMenu()', () => {
       given: 'no name yet',
       should: 'keep the menu and its rows, with no name line',
       actual: [html.includes('data-account-name'), rows(html).length],
-      expected: [false, 10],
+      expected: [false, 11],
     });
   });
 
@@ -140,6 +142,22 @@ describe('renderAvatarMenu()', () => {
       should: 'close the menu and open the feedback dialog once',
       actual: [opened, picked],
       expected: [1, 1],
+    });
+  });
+});
+
+describe('the text-size control', () => {
+  test('right after the theme, in the rail menu and the phone More menu alike', () => {
+    const after = (html: string) => {
+      const listed = rows(html);
+      return listed[listed.indexOf('Theme') + 1];
+    };
+
+    assert({
+      given: 'the menu behind the rail avatar and behind the phone bar’s More',
+      should: 'hold the text-size control in the row after the theme switcher in both',
+      actual: [after(markup()), after(markup({ more: { notifications: 0 } }))],
+      expected: ['Text size', 'Text size'],
     });
   });
 });

@@ -5,6 +5,7 @@ import useSWR from 'swr';
 import { signOut } from '@/lib/auth/sign-out';
 import { FeedbackDialog } from '@/retained/components/shared/FeedbackDialog';
 import { ThemeSwitcher } from '../../components/theme-switcher/theme-switcher';
+import { TextSizeSwitcher } from '../../components/text-size-switcher/text-size-switcher';
 import { CREDITS } from '../../chat/spend-strip/spend-strip-model';
 import { useDisclosure } from '../disclosure/use-disclosure';
 import { useVerifyEmail } from '../banners/verify-email-banner';
@@ -76,6 +77,7 @@ export function AvatarMenu({ active = false, more }: { readonly active?: boolean
         onToggle: setOpen,
         onPick: () => setOpen(false),
         theme: <ThemeSwitcher />,
+        textSize: <TextSizeSwitcher />,
         onSignOut,
         signingOut,
         credits: creditsCardOf(creditsBody),

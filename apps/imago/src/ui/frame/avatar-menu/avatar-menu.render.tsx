@@ -44,6 +44,8 @@ export type AvatarMenuRenderProps = {
   readonly onPick: () => void;
   /** The theme switcher, bound to the page's theme by the container. */
   readonly theme: ReactNode;
+  /** The text-size control, bound to the page's text size by the container. */
+  readonly textSize: ReactNode;
   /** Void action: revokes the session and leaves for sign-in. */
   readonly onSignOut: () => void;
   readonly signingOut: boolean;
@@ -65,7 +67,7 @@ export type AvatarMenuRenderProps = {
 
 /**
  * The avatar at the foot of the rail and its menu (C-Shell-AccountMenu): who is signed in, the
- * credits card, the account's pages, feedback, the theme and log out.
+ * credits card, the account's pages, feedback, the theme, the text size and log out.
  */
 export function renderAvatarMenu(props: AvatarMenuRenderProps): ReactNode {
   const {
@@ -76,6 +78,7 @@ export function renderAvatarMenu(props: AvatarMenuRenderProps): ReactNode {
     onToggle,
     onPick,
     theme,
+    textSize,
     onSignOut,
     signingOut,
     credits,
@@ -182,6 +185,7 @@ export function renderAvatarMenu(props: AvatarMenuRenderProps): ReactNode {
           </button>
         </li>
         <li>{theme}</li>
+        <li>{textSize}</li>
         <li>
           {/* Not on the board: kept during the rollout so classic PageSpace stays one click away (D5). */}
           <a href={CLASSIC_HOME} className={accountItemClass}>

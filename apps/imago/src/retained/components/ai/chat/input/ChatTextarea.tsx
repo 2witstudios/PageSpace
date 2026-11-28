@@ -20,7 +20,8 @@ import { commandResultsAnnouncement } from '@/retained/lib/commands/command-pick
 // Typography classes applied to both the textarea and the mention overlay.
 // They must stay in sync — mismatched line-height causes the overlay text to
 // drift relative to the caret with each newline.
-const CHAT_TYPOGRAPHY = 'text-base md:text-sm leading-relaxed';
+// text-chat is the chat's reading size at every width, so what you type matches what you read.
+const CHAT_TYPOGRAPHY = 'text-chat leading-relaxed';
 
 export interface ChatTextareaProps {
   /** Current input value (markdown format with @[label](id:type) mentions) */

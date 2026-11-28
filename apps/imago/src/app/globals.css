@@ -206,6 +206,8 @@
   --text-sm: 0.8125rem;
   /* 14px: the UI and chat size, as PageSpace sets it. */
   --text-base: 0.875rem;
+  /* 15px: chat messages and the composer, a step above the sidebar's 13px rows. */
+  --text-chat: 0.9375rem;
   --text-md: 1rem;
   --text-lg: 1.1875rem;
   --text-xl: 1.4375rem;
@@ -300,8 +302,24 @@
       --text-xs: 16px;
       --text-sm: 16px;
       --text-base: 16px;
+      --text-chat: 16px;
     }
   }
+}
+
+/* The text-size setting (lib/text-size): <html data-text-size> scales the root font size, and
+   every type token is rem, so all text follows while px spacing keeps the layout. The root
+   layout renders it from the imago-text-size cookie, so nothing flashes. Default sets nothing. */
+:root[data-text-size='small'] {
+  font-size: 87.5%;
+}
+
+:root[data-text-size='large'] {
+  font-size: 112.5%;
+}
+
+:root[data-text-size='larger'] {
+  font-size: 125%;
 }
 
 /* Reduced motion cuts every duration to 0.01ms and every delay to zero:

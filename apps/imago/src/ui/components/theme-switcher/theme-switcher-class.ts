@@ -4,11 +4,12 @@ export const switcherClass =
 const base =
   'inline-flex cursor-pointer items-center gap-2 rounded-md border px-4 py-2 text-sm font-medium transition-colors duration-120 ease-standard';
 
-const states = {
+/** An option's raised (checked) and quiet looks; the text-size control shares them. */
+export const optionStates = {
   checked: 'border-border bg-surface-raised text-ink shadow-1',
   unchecked: 'border-transparent bg-transparent text-ink-muted hover:text-ink',
 } as const;
 
 /** Classes for a theme option in its checked or unchecked state. */
 export const optionClass = (checked: boolean): string =>
-  `${base} ${checked ? states.checked : states.unchecked}`;
+  `${base} ${checked ? optionStates.checked : optionStates.unchecked}`;

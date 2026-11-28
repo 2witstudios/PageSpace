@@ -16,6 +16,9 @@ vi.mock('@/lib/auth/sign-out', () => ({ signOut }));
 vi.mock('@/ui/components/theme-switcher/theme-switcher', () => ({
   ThemeSwitcher: () => h('div', { role: 'radiogroup', 'aria-label': 'Theme' }),
 }));
+vi.mock('@/ui/components/text-size-switcher/text-size-switcher', () => ({
+  TextSizeSwitcher: () => h('div', { role: 'group', 'aria-label': 'Text size' }),
+}));
 
 const { AvatarMenu, ME, profileFrom } = await import('./avatar-menu');
 

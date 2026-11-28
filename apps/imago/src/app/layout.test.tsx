@@ -5,11 +5,12 @@ import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import { ImagoSWRProvider } from '@/api/swr-provider';
 import { RealtimeProvider } from '@/realtime/realtime-provider';
 import { ThemeProvider, useThemePreference } from '@/lib/theme/theme-provider';
+import { TextSizeProvider, useTextSize } from '@/lib/text-size/text-size-provider';
 import { findElement } from '@/ui/test-support/find-element';
 
 // Request-scoped Next APIs have no request outside a server; the layout's own
 // logic (cookie → data-theme) runs for real against these request stand-ins.
-const request = vi.hoisted(() => ({ cookie: undefined as string | undefined }));
+const request = vi.hoisted(() => ({ cookie: undefined as string | undefined, textSize: undefined as string | undefined }));
 
 vi.mock('server-only', () => ({}));
 vi.mock('next/server', () => ({ connection: async () => undefined }));
@@ -18,7 +19,9 @@ vi.mock('next/headers', () => ({
     get: (name: string) =>
       name === 'theme' && request.cookie !== undefined
         ? { name, value: request.cookie }
-        : undefined,
+        : name === 'imago-text-size' && request.textSize !== undefined
+          ? { name, value: request.textSize }
+          : undefined,
   }),
   headers: async () => new Headers({ 'x-nonce': 'test-nonce' }),
 }));
@@ -97,6 +100,66 @@ describe('RootLayout theme', () => {
   });
 });
 
+function TextSizeProbe() {
+  return <p>{useTextSize().size}</p>;
+}
+
+const dataTextSize = (html: string): string | undefined =>
+  html.match(/<html[^>]*\sdata-text-size="([^"]*)"/)?.[1];
+
+describe('RootLayout text size', () => {
+  beforeEach(() => {
+    request.cookie = undefined;
+    request.textSize = undefined;
+    vi.stubEnv('IMAGO_ENABLED', 'true');
+  });
+
+  afterEach(() => {
+    request.textSize = undefined;
+    vi.unstubAllEnvs();
+  });
+
+  const served = async (textSize: string | undefined, children: React.ReactNode = null) => {
+    request.textSize = textSize;
+    return renderHtml(undefined, children);
+  };
+
+  test('the imago-text-size cookie', async () => {
+    assert({
+      given: 'each text-size cookie',
+      should: 'render <html data-text-size> in the served HTML, so nothing flashes',
+      actual: [
+        dataTextSize(await served('small')),
+        dataTextSize(await served('default')),
+        dataTextSize(await served('large')),
+        dataTextSize(await served('larger')),
+      ],
+      expected: ['small', 'default', 'large', 'larger'],
+    });
+  });
+
+  test('no or an unknown cookie', async () => {
+    assert({
+      given: 'no text-size cookie and an unknown value',
+      should: 'render the default size',
+      actual: [dataTextSize(await served(undefined)), dataTextSize(await served('huge'))],
+      expected: ['default', 'default'],
+    });
+  });
+
+  test('the text-size control state', async () => {
+    assert({
+      given: 'a larger cookie and none',
+      should: "seed the page's text-size state with the same size as data-text-size",
+      actual: [
+        /<p>([^<]*)<\/p>/.exec(await served('larger', <TextSizeProbe />))?.[1],
+        /<p>([^<]*)<\/p>/.exec(await served(undefined, <TextSizeProbe />))?.[1],
+      ],
+      expected: ['larger', 'default'],
+    });
+  });
+});
+
 const NOT_FOUND_DIGEST = 'NEXT_HTTP_ERROR_FALLBACK;404';
 
 const renderOrDigest = async (): Promise<{ html: string | null; digest: string | null }> => {
@@ -164,12 +227,20 @@ describe('RootLayout providers', () => {
     const swr = findElement(tree, (element) => element.type === ImagoSWRProvider);
     const realtime = only(swr);
     const theme = only(realtime);
+    const textSize = only(theme);
 
     assert({
       given: 'the root layout',
-      should: 'nest ImagoSWRProvider > RealtimeProvider > ThemeProvider directly, with the page inside the theme provider',
-      actual: [swr !== undefined, realtime?.type === RealtimeProvider, theme?.type === ThemeProvider, only(theme) === page],
-      expected: [true, true, true, true],
+      should:
+        'nest ImagoSWRProvider > RealtimeProvider > ThemeProvider > TextSizeProvider directly, with the page inside the text-size provider',
+      actual: [
+        swr !== undefined,
+        realtime?.type === RealtimeProvider,
+        theme?.type === ThemeProvider,
+        textSize?.type === TextSizeProvider,
+        only(textSize) === page,
+      ],
+      expected: [true, true, true, true, true],
     });
   });
 });
