@@ -22,6 +22,7 @@ const deps: PlaneRequestHandlerDeps = {
   store: { put: untouched, revoke: untouched, delete: untouched, describe: untouched, rebind: untouched },
   usage: { window: untouched },
   oauth: null,
+  ssh: null,
   provisioner: { ensureTenant: untouched, identityOf: untouched },
   executor: { execute: untouched } as unknown as PlaneRequestHandlerDeps['executor'],
   hmac: (key, text) => createHmac('sha256', key).update(text).digest('hex'),

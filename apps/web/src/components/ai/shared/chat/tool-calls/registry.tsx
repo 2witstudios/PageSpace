@@ -18,7 +18,7 @@ import type { FormatOpInput, RegionInput, RuleInput } from '@/lib/ai/tools/sheet
 import { AgentConfigRenderer, type AgentConfigData } from './AgentConfigRenderer';
 import { ModelListRenderer, type ModelListProvider } from './ModelListRenderer';
 import { WebFetchRenderer } from './WebFetchRenderer';
-import { HttpRequestRenderer, type HttpRequestToolOutput } from './HttpRequestRenderer';
+import { HttpRequestRenderer, SshCommandRenderer, type HttpRequestToolOutput, type SshCommandToolOutput } from './HttpRequestRenderer';
 import { TaskStatusRenderer } from './TaskStatusRenderer';
 import { CalendarEventRenderer, type CalendarEventData } from './calendar/CalendarEventRenderer';
 import { CalendarEventListRenderer } from './calendar/CalendarEventListRenderer';
@@ -917,6 +917,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
   http_request: ({ parsedInput, parsedOutput }) => (
     <HttpRequestRenderer method={parsedInput?.method as string | undefined} url={parsedInput?.url as string | undefined} output={parsedOutput as HttpRequestToolOutput} />
   ),
+  ssh_exec: ({ parsedInput, parsedOutput }) => <SshCommandRenderer command={parsedInput?.command as string | undefined} output={parsedOutput as SshCommandToolOutput} />,
   web_fetch: ({ parsedInput, parsedOutput }) => {
     if (parsedOutput.success === false) return null;
     const url = (parsedOutput.url as string | undefined) ?? (parsedInput?.url as string | undefined);

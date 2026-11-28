@@ -62,6 +62,7 @@ import { decideApproval } from './decide-approval';
 import { decideDestination, type DestinationVerdict } from './decide-destination';
 import { planeBindingsFor } from './plane-bindings-for';
 import { digestBindings } from './store/digest-bindings';
+import { canonicalizeSshCommand } from './ssh/ssh-command';
 
 const GRANT_MAX_TTL_MS: GrantLimits['maxTtlMs'] = 900_000;
 
@@ -158,7 +159,12 @@ export function pagePermissionSuffices(account: Pick<AgentAccountRecord, 'ownerK
   return caller.agentPageId === null || facts.agentPagePermission !== 'none';
 }
 
-export function authorize(input: AuthorizeInput): AuthorizeVerdict {
+/** The kinds each request shape may use: HTTP presents keys and tokens; an SSH command presents an SSH key. */
+const HTTP_KINDS: readonly AgentAccountRecord['kind'][] = ['api_key', 'bearer', 'oauth2'];
+const SSH_KINDS: readonly AgentAccountRecord['kind'][] = ['ssh_key'];
+
+/** Steps 1–2: entitlement (one `account_unavailable` for every failure of it), then kind and provisioning. */
+function entitle(input: Pick<AuthorizeInput, 'caller' | 'account' | 'facts'>, kinds: readonly AgentAccountRecord['kind'][]): AuthorizeRefusal | null {
   const { caller, account, facts } = input;
   if (account === null) return UNAVAILABLE;
 
@@ -183,15 +189,43 @@ export function authorize(input: AuthorizeInput): AuthorizeVerdict {
   });
   if (!access.use || !pagePermissionSuffices(account, caller, facts)) return UNAVAILABLE;
 
-  if (account.kind !== 'api_key' && account.kind !== 'bearer' && account.kind !== 'oauth2') return { ok: false, reason: 'kind_not_supported' };
+  if (!kinds.includes(account.kind)) return { ok: false, reason: 'kind_not_supported' };
   if (account.credentialVersion < 1) return { ok: false, reason: 'not_provisioned' };
+  return null;
+}
 
+export function authorize(input: AuthorizeInput): AuthorizeVerdict {
+  const refused = entitle(input, HTTP_KINDS);
+  if (refused !== null) return refused;
+  const account = input.account!;
   const canonicalized = canonicalizeRequest({ request: input.request, providerSlug: account.providerSlug, registry: input.registry });
   if (!canonicalized.ok) return { ok: false, reason: 'request_refused', rule: canonicalized.reason };
   const canonical = canonicalized.canonical;
   const destination = decideDestination({ url: `${canonical.origin}${canonical.path}`, allowedOrigins: account.allowedOrigins as CanonicalRequest['origin'][], hop: 'initial' });
   if (!destination.allow) return { ok: false, reason: 'destination_denied', rule: destination.reason };
+  return issue(input, account, canonical);
+}
 
+/**
+ * `authorizeSsh` — the same intersection for ONE SSH command on the account's pinned host (slice 5). The
+ * account's only target is its single `ssh://` origin, so there is no destination to choose: the command is
+ * canonicalized against it, digested, approved and granted exactly as an HTTP request is (audience
+ * `ssh-executor`). Pure.
+ */
+export function authorizeSsh(input: Omit<AuthorizeInput, 'request' | 'registry'> & { readonly command: string; readonly stdin: string; readonly sha256: HashBytes }): AuthorizeVerdict {
+  const refused = entitle(input, SSH_KINDS);
+  if (refused !== null) return refused;
+  const account = input.account!;
+  const target = account.allowedOrigins.length === 1 ? account.allowedOrigins[0]! : '';
+  const canonicalized = canonicalizeSshCommand({ target, command: input.command, stdin: input.stdin, sha256: input.sha256 });
+  // A bad command or input is the caller's to fix; a bad target is a broken row. Both are malformed requests.
+  if (!canonicalized.ok) return { ok: false, reason: 'request_refused', rule: 'malformed' };
+  return issue(input, account, canonicalized.canonical);
+}
+
+/** Steps 4–5 for a canonical request the caller already admitted: digest, approval, and the unsigned grant. */
+function issue(input: Omit<AuthorizeInput, 'request' | 'registry'>, account: AgentAccountRecord, canonical: CanonicalRequest): AuthorizeVerdict {
+  const { caller, facts } = input;
   const requestDigest = digestRequest({ canonical, hash: input.hash });
   const delegationScope = caller.sessionId === null && facts.delegation.kind === 'delegation' ? facts.delegation.scope : null;
   const requirement = decideApproval({
@@ -229,7 +263,7 @@ export function authorize(input: AuthorizeInput): AuthorizeVerdict {
   const grant: AgentAccountGrant = {
     grantId: input.grantId,
     iss: 'pagespace-account-authority',
-    aud: 'http-executor',
+    aud: canonical.channel === 'ssh-executor' ? 'ssh-executor' : 'http-executor',
     tenantId: account.tenantId as TenantId,
     human: { userId: caller.actingHumanUserId, sessionId: caller.sessionId },
     delegationId: caller.sessionId === null && facts.delegation.kind === 'delegation' ? facts.delegation.delegationId : null,

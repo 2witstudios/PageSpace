@@ -112,6 +112,17 @@ export type SecretMaterialByKind = {
     readonly password: string;
     readonly totpSecret: string | null;
   };
+  /**
+   * An SSH key the PLANE generated (slice 5): the private key never left it. `hostKeySha256` is the
+   * server's host key the person confirmed at creation (OpenSSH `SHA256:` fingerprint, unpadded base64);
+   * a server presenting any other key is refused before authentication.
+   */
+  readonly ssh_key: {
+    readonly privateKey: string;
+    readonly publicKey: string;
+    readonly username: string;
+    readonly hostKeySha256: string;
+  };
 };
 
 export type SessionCookie = {
@@ -147,6 +158,7 @@ export type ResolvableBy<C extends PresenterChannel> = {
   readonly 'relay-runner': 'api_key' | 'bearer' | 'oauth2';
   readonly 'browser-worker': 'session' | 'password';
   readonly 'refresh-worker': 'oauth2';
+  readonly 'ssh-executor': 'ssh_key';
 }[C];
 
 /** `oauth2` as ordinary executors see it: the access token only, never the refresh token. */

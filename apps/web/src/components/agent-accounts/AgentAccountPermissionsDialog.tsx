@@ -145,6 +145,7 @@ export function AgentAccountPermissionsDialog({
 
   const isAgentAccount = settings?.account.ownerKind === 'agent_page';
   const isProviderAccount = (settings?.account.providerSlug ?? null) !== null;
+  const isSshAccount = settings?.account.kind === 'ssh_key';
   const { allAgents } = usePageAgents(undefined, { enabled: open && settings?.canBind === true, refreshInterval: 0 });
   const boundIds = useMemo(() => new Set(settings?.bindings.map((binding) => binding.agentPageId) ?? []), [settings]);
   const attachable = allAgents.filter((agent) => !boundIds.has(agent.id));
@@ -211,6 +212,13 @@ export function AgentAccountPermissionsDialog({
 
         {settings && (
           <div className="space-y-6">
+            {isSshAccount ? (
+            <section className="space-y-1">
+              <h3 className="text-sm font-medium">Server</h3>
+              <p className="text-sm font-mono">{settings.account.allowedOrigins[0]?.replace(/^ssh:\/\//, '')}</p>
+              <p className="text-xs text-muted-foreground">An SSH account connects to this one server only, and only while it presents the host key you confirmed. To use another server, add another account.</p>
+            </section>
+            ) : (
             <section className="space-y-2">
               <h3 className="text-sm font-medium">Sites</h3>
               <p className="text-xs text-muted-foreground">The account is sent only to these addresses — never other sites, other ports or redirects.</p>
@@ -226,6 +234,7 @@ export function AgentAccountPermissionsDialog({
                 <Plus className="h-4 w-4 mr-1" /> Add site
               </Button>
             </section>
+            )}
 
             <section className="space-y-2">
               <h3 className="text-sm font-medium">Approval</h3>
@@ -233,13 +242,13 @@ export function AgentAccountPermissionsDialog({
                 <div className="flex items-start gap-2">
                   <RadioGroupItem value="ask" id={`${mountId}-ask`} className="mt-0.5" />
                   <Label htmlFor={`${mountId}-ask`} className="font-normal leading-snug">
-                    <span className="font-medium">Ask me before every request.</span> You approve each one in the chat.
+                    <span className="font-medium">{isSshAccount ? 'Ask me before every command.' : 'Ask me before every request.'}</span> You approve each one in the chat.
                   </Label>
                 </div>
                 <div className="flex items-start gap-2">
                   <RadioGroupItem value="auto" id={`${mountId}-auto`} className="mt-0.5" />
                   <Label htmlFor={`${mountId}-auto`} className="font-normal leading-snug">
-                    <span className="font-medium">{isProviderAccount ? 'Allow reading without asking' : 'Allow requests to these sites without asking'}</span>, within the limits below.
+                    <span className="font-medium">{isSshAccount ? 'Run commands without asking' : isProviderAccount ? 'Allow reading without asking' : 'Allow requests to these sites without asking'}</span>, within the limits below.
                   </Label>
                 </div>
               </RadioGroup>

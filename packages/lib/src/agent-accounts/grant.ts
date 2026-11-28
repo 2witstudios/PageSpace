@@ -62,7 +62,7 @@ export type GrantIssuer = 'pagespace-account-authority';
  * Who may PRESENT a grant to the plane. Executors only; the sandbox guest is
  * never a channel (ADR 0006). `refresh-worker` may resolve `oauth2` only.
  */
-export type PresenterChannel = 'http-executor' | 'relay-runner' | 'browser-worker' | 'refresh-worker';
+export type PresenterChannel = 'http-executor' | 'relay-runner' | 'browser-worker' | 'refresh-worker' | 'ssh-executor';
 
 /** The channels that may call `resolve` for end-user operations (ADR 0005 §2.1). */
 export type ExecutorChannel = Exclude<PresenterChannel, 'refresh-worker'>;

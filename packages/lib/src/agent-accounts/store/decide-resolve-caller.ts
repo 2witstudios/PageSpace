@@ -34,6 +34,9 @@ export const decideResolveCaller: DecideResolveCaller = ({ aud, kind, sessionHtt
       return kind === 'api_key' || kind === 'bearer' || kind === 'oauth2' ? ALLOW : DENY;
     case 'relay-runner':
       return kind === 'api_key' || kind === 'bearer' || kind === 'oauth2' ? ALLOW : DENY;
+    case 'ssh-executor':
+      // An SSH key is the SSH executor's alone, and that is all it may read.
+      return kind === 'ssh_key' ? ALLOW : DENY;
     default:
       return DENY;
   }

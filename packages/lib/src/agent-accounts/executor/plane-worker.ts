@@ -40,6 +40,8 @@ import { hmacSha3_256 } from './plane-crypto';
 import { OAUTH_PROVIDER_ENDPOINTS } from '../refresh/oauth-provider-endpoints';
 import { AGENT_ACCOUNT_OPERATIONS } from '../registry/google-operations';
 import { createPlaneRefreshWorker } from './plane-refresh';
+import { createSshClient } from './ssh-client';
+import { createSshCommandExecutor } from './ssh-command-executor';
 
 const sha3: HashBytes = (bytes) => createHash('sha3-256').update(bytes).digest('hex');
 const sha256: HashBytes = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -122,6 +124,32 @@ export async function startCredentialPlane({ config }: { readonly config: PlaneC
     rotationGraceMs: 300_000,
     maxReleasedBodyBytes: MAX_RELEASED_BODY_BYTES,
   });
+  const resolveHost = async (hostname: string) => {
+    const answers = await Promise.race([
+      lookup(hostname, { all: true, verbatim: true }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('dns timeout')), DNS_TIMEOUT_MS)),
+    ]);
+    return answers.map((answer) => ({ address: answer.address, family: answer.family === 6 ? (6 as const) : (4 as const) }));
+  };
+  // SSH reaches public addresses only: the plane sits on Fly's private network.
+  const sshClient = createSshClient({ resolveHost, isPublic: isPublicIp });
+  const sshExecutor = createSshCommandExecutor({
+    store,
+    provisioner,
+    accounts: createAgentAccountRepository({ db }),
+    grantGate: createGrantGate({ replayStore: createReplayStoreRepository({ db }) }),
+    audited: createAuditedExecutor({ auditRepository: createAgentAccountAuditRepository({ appendPath: createSecurityAuditRepository({ db }) }), hash: sha3 }),
+    ssh: sshClient,
+    planeScope: (ref) => metadata.read(ref).then((facts) => facts?.scope ?? null),
+    usage,
+    issuerPublicKey: config.authorityPublicKey,
+    presenterKeyId: config.presenterKeyId,
+    verify: verifyEd25519,
+    hash: sha3,
+    sha256,
+    now: () => Date.now(),
+    rotationGraceMs: 300_000,
+  });
   const server = createServer(
     createPlaneRequestHandler({
       secret: config.serviceSecret,
@@ -130,6 +158,7 @@ export async function startCredentialPlane({ config }: { readonly config: PlaneC
       oauth: { endpoints: OAUTH_PROVIDER_ENDPOINTS, clientFor: (providerSlug) => config.oauthClients[providerSlug] ?? null, network },
       provisioner,
       executor,
+      ssh: { client: sshClient, executor: sshExecutor },
       hmac: (key, text) => createHmac('sha256', key).update(text).digest('hex'),
       sha256,
       now: () => Date.now(),

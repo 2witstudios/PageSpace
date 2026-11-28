@@ -28,7 +28,7 @@
  * main-DB rows the plane verifier reads by id; creating one is widening, so
  * it needs step-up too.
  */
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import type { AccountOwnerRef, AgentAccountRecord } from '@pagespace/db/schema/agent-accounts';
 import type { AccountId } from '@pagespace/db/schema/agent-accounts';
 import type { AgentPageId, ApprovalId, DriveId, GrantId, HashBytes, Nonce, PresenterKeyId, RequestDigest, UserId } from './grant';
@@ -49,7 +49,11 @@ import { mintOwnerConsent } from './mint-owner-consent';
 import { GENERIC_REQUEST_OPERATION, type CreatableAccountKind } from './decide-account-creation';
 import { GOOGLE_ORIGINS } from './registry/google-operations';
 import { decideGoogleEnrollment, type GoogleEnrollmentInput, type GoogleEnrollmentVerdict } from './oauth/google-enrollment';
-import type { PlaneOAuthExchangeResult } from './executor/plane-wire';
+import type { PlaneOAuthExchangeResult, PlaneSshHostKeyResult } from './executor/plane-wire';
+import type { SshExecutionResult } from './executor/decide-ssh-result';
+import { authorizeSsh } from './authorize';
+import { decideSshAccount, type SshAccountInput, type SshAccountVerdict } from './ssh/decide-ssh-account';
+import { normalizeSshTarget, sshTargetOf } from './ssh/ssh-command';
 import type { ReleasedResponse } from './filter-response';
 import type { LoginOwnership } from './decide-acknowledgment';
 import type { KeyPlacement, AccountCreationRefusal } from './decide-account-creation';
@@ -151,6 +155,12 @@ export type OAuthEnrollmentRefusal =
   | { readonly ok: false; readonly reason: 'forbidden' | 'owner_not_found' | 'plane_unavailable' | 'store_refused' }
   | { readonly ok: false; readonly reason: 'provider_refused'; readonly detail: Extract<PlaneOAuthExchangeResult, { readonly ok: false }>['reason'] };
 
+export type SshCommandResult =
+  | SshExecutionResult
+  | Exclude<AuthorizeRefusal, { readonly reason: 'approval_required' }>
+  | { readonly ok: false; readonly reason: 'approval_required'; readonly digest: RequestDigest; readonly subject: ApprovalSubject; readonly stepUp: boolean }
+  | { readonly ok: false; readonly reason: 'plane_unavailable' };
+
 export type AccountAuthority = {
   readonly createAccount: (input: { readonly actor: AccessActor; readonly owner: AccountOwnerTarget; readonly input: CreateAccountInput }) => Promise<CreateAccountResult>;
   /** `allowedDriveIds`: the caller's credential ceiling (`[]` = none); accounts outside it are not listed. */
@@ -175,6 +185,20 @@ export type AccountAuthority = {
   /** Let unattended runs (schedules, workflows) the actor starts on this agent page use the account, until `expiresAt`. */
   readonly createDelegation: (input: { readonly actor: AccessActor; readonly accountId: string; readonly agentPageId: string; readonly expiresAt: number; readonly stepUp: StepUpProof | null }) => Promise<AccountChangeResult>;
   readonly revokeDelegation: (input: { readonly actor: AccessActor; readonly accountId: string; readonly delegationId: string }) => Promise<AccountChangeResult>;
+  /** The host key a server presents, for the person to confirm before an SSH account is created. */
+  readonly probeSshHost: (input: { readonly actor: AccessActor; readonly owner: AccountOwnerTarget; readonly host: string; readonly port: number | null }) => Promise<
+    | { readonly ok: true; readonly target: string; readonly fingerprint: string; readonly algorithm: string }
+    | { readonly ok: false; readonly reason: 'forbidden' | 'owner_not_found' | 'host_invalid' | 'port_invalid' | 'plane_unavailable' }
+    | Extract<PlaneSshHostKeyResult, { readonly ok: false }>
+  >;
+  /** Create an SSH account: the plane generates the key and pins the confirmed host key; only the PUBLIC key comes back, to install on the server. */
+  readonly createSshAccount: (input: { readonly actor: AccessActor; readonly owner: AccountOwnerTarget; readonly input: SshAccountInput }) => Promise<
+    | { readonly ok: true; readonly account: SafeAccount; readonly publicKey: string }
+    | Extract<SshAccountVerdict, { readonly ok: false }>
+    | { readonly ok: false; readonly reason: 'forbidden' | 'owner_not_found' | 'plane_unavailable' | 'store_refused' }
+  >;
+  /** `actor`: the acting human's credential; it must be `caller.actingHumanUserId`. */
+  readonly requestSshCommand: (input: { readonly actor: AccessActor; readonly caller: AuthorizeCaller; readonly accountId: string; readonly command: string; readonly stdin: string }) => Promise<SshCommandResult>;
   /**
    * Before sending a person to Google: may they connect an account for this owner, and what to ask for.
    * Nothing is written. The same checks run again at `completeOAuthEnrollment`.
@@ -210,9 +234,14 @@ export type AccountAuthorityDeps = {
   readonly lockAccount: <T>(accountId: string, fn: () => Promise<T>) => Promise<{ readonly acquired: true; readonly result: T } | { readonly acquired: false }>;
   /** SHA3-256. */
   readonly hash: HashBytes;
+  /** SHA-256 (an SSH command's body digest); defaults to node:crypto. */
+  readonly sha256?: HashBytes;
   readonly now: () => number;
   readonly newId?: () => string;
 };
+
+/** An SSH account's pinned target, or null for any other account. */
+const sshTargetOfRow = (row: AgentAccountRecord) => (row.kind === 'ssh_key' && row.allowedOrigins.length === 1 ? (sshTargetOf(row.allowedOrigins[0]!)?.target ?? null) : null);
 
 const refused = (reason: Extract<AccountChangeRefusal, { readonly reason: string }>['reason']): AccountChangeRefusal => ({ ok: false, reason }) as AccountChangeRefusal;
 
@@ -222,7 +251,8 @@ function refOf(row: Pick<AgentAccountRecord, 'tenantId' | 'id' | 'kind'>): { ten
 
 const defaultId = () => randomBytes(18).toString('base64url');
 
-export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAuthority {
+export function createAccountAuthority(input: AccountAuthorityDeps): AccountAuthority {
+  const deps = { ...input, sha256: input.sha256 ?? ((bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')) };
   const newId = deps.newId ?? defaultId;
 
   /** `decideAccountAccess` for a human managing or approving from the account's own context (live session). */
@@ -521,6 +551,102 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
       return { ok: true, approvalId, expiresAt };
     },
 
+    async probeSshHost({ actor, owner, host, port }) {
+      const allowed = await creatableOwner(actor, owner);
+      if (!allowed.ok) return allowed;
+      const target = normalizeSshTarget({ host, port });
+      if (!target.ok) return target;
+      const probed = await deps.plane.sshHostKey({ host: target.host, port: target.port });
+      return probed.ok ? { ok: true, target: target.target, fingerprint: probed.fingerprint, algorithm: probed.algorithm } : probed;
+    },
+
+    async createSshAccount({ actor, owner, input }) {
+      const allowed = await creatableOwner(actor, owner);
+      if (!allowed.ok) return allowed;
+      const verdict = decideSshAccount({ input, approver: actor.userId as UserId });
+      if (!verdict.ok) return verdict;
+      const { ownerRef } = allowed;
+      const tenantId = deriveTenantId({ owner: ownerRef });
+      const row = await deps.accounts.insert({ draft: verdict.draft, owner: ownerRef, tenantId, approvalPolicy: verdict.draft.approvalPolicy });
+      const { scope, bindings } = planeBindingsFor({ row, boundAgentPageIds: [], hash: deps.hash });
+      const consenters: PlanePutBody['consenters'] = ownerRef.kind === 'user' ? { kind: 'owner' } : { kind: 'pinned', userIds: [...(await deps.facts.driveConsenters(ownerRef.driveId))] };
+      const enrolled = await deps.plane.sshEnroll({
+        ref: { tenantId, accountId: row.id, kind: 'ssh_key' },
+        username: verdict.draft.username,
+        hostKeySha256: verdict.draft.hostKeySha256,
+        bindings: bindings as unknown as Record<string, unknown>,
+        scope: scope as unknown as Record<string, unknown>,
+        consenters,
+      });
+      if (!enrolled.ok) {
+        const definite = enrolled.reason === 'target_invalid' || enrolled.reason === 'kind_mismatch' || enrolled.reason === 'consenters_invalid' || enrolled.reason === 'identity_refused' || enrolled.reason === 'version_conflict';
+        if (definite) await deps.accounts.remove(row.id);
+        return { ok: false, reason: definite ? 'store_refused' : 'plane_unavailable' };
+      }
+      await deps.accounts.setCredentialVersion({ id: row.id, version: enrolled.version });
+      await deps.accounts.setPublicKey({ id: row.id, publicKey: enrolled.publicKey });
+      const stored = await deps.accounts.find(row.id);
+      return stored === null ? { ok: false, reason: 'store_refused' } : { ok: true, account: toSafeAccount({ row: stored }), publicKey: enrolled.publicKey };
+    },
+
+    async requestSshCommand({ actor, caller, accountId, command, stdin }) {
+      if (actor.userId !== caller.actingHumanUserId) return { ok: false, reason: 'refused' };
+      const now = deps.now();
+      const row = await deps.accounts.find(accountId);
+      const humanDriveRole = row?.ownerDriveId ? await deps.facts.driveRole({ driveId: row.ownerDriveId, actor }) : null;
+      const agentPagePermission = caller.agentPageId === null ? 'none' : await deps.facts.pagePermission({ actor, pageId: caller.agentPageId });
+      const boundAgentPageIds = row === null ? [] : await deps.accounts.boundAgentPageIds(row.id);
+      const delegation: DelegationFact =
+        row === null || caller.sessionId !== null
+          ? { kind: 'none' }
+          : ((await deps.accounts.activeDelegation({ accountId: row.id, agentPageId: caller.agentPageId, delegatedByUserId: caller.actingHumanUserId, now })) ?? { kind: 'none' });
+      const counted = row === null || row.approvalPolicy === null ? null : await deps.plane.usage({ ref: refOf(row) });
+      const usage: UsageCounters = counted !== null && counted.ok ? { usesThisHour: counted.usesThisHour, bytesOutThisHour: counted.bytesOutThisHour, concurrent: counted.concurrent } : ZERO_USAGE;
+      const verdict = authorizeSsh({
+        caller,
+        account: row,
+        facts: {
+          humanDriveRole,
+          agentPagePermission,
+          agentBoundToAccount: caller.agentPageId !== null && boundAgentPageIds.includes(caller.agentPageId),
+          boundAgentPageIds,
+          delegation,
+          ceilingAdmitsAccount: isDriveWithinCredentialScope(caller.callerCeiling.allowedDriveIds, row?.ownerDriveId ?? null),
+        },
+        command,
+        stdin,
+        sha256: deps.sha256,
+        approvals: row === null ? [] : await deps.accounts.openApprovals({ accountId: row.id, now }),
+        usage,
+        presenter: { keyId: deps.presenterKeyId, channel: 'ssh-executor' },
+        now,
+        grantId: newId() as GrantId,
+        nonce: newId() as Nonce,
+        ttlMs: GRANT_TTL_MS,
+        hash: deps.hash,
+      });
+      const subjectOf = (canonical: Parameters<typeof renderApprovalSubject>[0]['canonical']): ApprovalSubject => {
+        const target = sshTargetOf(canonical.origin);
+        return { ...renderApprovalSubject({ canonical }), headline: `Run a command on ${target?.host ?? canonical.origin}${stdin.length > 0 ? ' (with input)' : ''}`, command };
+      };
+      if (!verdict.ok) {
+        if (verdict.reason !== 'approval_required') return verdict;
+        return { ...verdict, subject: { ...verdict.subject, headline: `Run a command on ${sshTargetOf(verdict.subject.origin)?.host ?? verdict.subject.origin}`, command } };
+      }
+      if (verdict.approvalToConsume !== null) {
+        const consumed = await deps.accounts.consumeApproval({ approvalId: verdict.approvalToConsume, grantId: verdict.grant.grantId, now });
+        if (!consumed) return { ok: false, reason: 'approval_required', digest: verdict.grant.requestDigest, subject: subjectOf(verdict.canonical), stepUp: verdict.approvalStepUp };
+      }
+      const signature = signGrant({ grant: verdict.grant, key: deps.authorityKey });
+      return deps.plane.sshExec({
+        grant: verdict.grant,
+        signature,
+        command,
+        stdin,
+        run: { human: verdict.grant.human, agentPageId: verdict.grant.agentPageId, conversationId: verdict.grant.conversationId, runId: verdict.grant.runId },
+      }) as Promise<SshCommandResult>;
+    },
+
     async prepareOAuthEnrollment({ actor, owner, input }) {
       const allowed = await creatableOwner(actor, owner);
       if (!allowed.ok) return allowed;
@@ -575,11 +701,11 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
       const stored = (row.approvalPolicy ?? null) as AccountApprovalPolicy | null;
       const bound = await deps.accounts.boundAgentPageIds(row.id);
       // First as the stored approver: if that cannot widen the policy, the approver stays (no consent needed).
-      const asStored = decideAccountEdit({ edit, editor: actor.userId as UserId, storedApprover: stored?.approver ?? null, keepApprover: true, providerSlug: row.providerSlug, providerOrigins: providerOriginsOf(row), now: deps.now() });
+      const asStored = decideAccountEdit({ edit, editor: actor.userId as UserId, storedApprover: stored?.approver ?? null, keepApprover: true, providerSlug: row.providerSlug, sshTarget: sshTargetOfRow(row), providerOrigins: providerOriginsOf(row), now: deps.now() });
       if (!asStored.ok) return asStored;
       const current = planeBindingsFor({ row, boundAgentPageIds: bound, hash: deps.hash }).scope;
       const narrowsAsStored = isScopeNarrowing({ stored: current, next: { ...current, allowedOrigins: [...asStored.allowedOrigins].sort(), approvalPolicy: asStored.approvalPolicy } as PlaneScope });
-      const verdict = narrowsAsStored ? asStored : decideAccountEdit({ edit, editor: actor.userId as UserId, storedApprover: null, keepApprover: false, providerSlug: row.providerSlug, providerOrigins: providerOriginsOf(row), now: deps.now() });
+      const verdict = narrowsAsStored ? asStored : decideAccountEdit({ edit, editor: actor.userId as UserId, storedApprover: null, keepApprover: false, providerSlug: row.providerSlug, sshTarget: sshTargetOfRow(row), providerOrigins: providerOriginsOf(row), now: deps.now() });
       if (!verdict.ok) return verdict;
       const next = { allowedOrigins: verdict.allowedOrigins, approvalPolicy: verdict.approvalPolicy };
       const rebound = await rebindTo({ row, next, boundAgentPageIds: bound, actor, stepUp });

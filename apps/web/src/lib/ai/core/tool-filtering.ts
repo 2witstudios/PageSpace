@@ -15,6 +15,7 @@ import { parseIntegrationToolName } from '@pagespace/lib/integrations/converter/
 export const WRITE_TOOLS = new Set([
   // Credentialed external requests can write at the provider (G2 agent accounts).
   'http_request',
+  'ssh_exec',
   // Page write operations
   'create_page',
   'rename_page',
@@ -448,7 +449,7 @@ export function filterToolsForAgentAllowlist<T>(
 }
 
 /** The agent-account tool, offered only when the deployment configured the credential plane (G2). */
-const AGENT_ACCOUNT_TOOLS = new Set(['http_request', 'list_accounts']);
+const AGENT_ACCOUNT_TOOLS = new Set(['http_request', 'list_accounts', 'ssh_exec']);
 
 export function filterToolsForAgentAccounts<T>(tools: Record<string, T>, configured: boolean = isAgentAccountsConfigured()): Record<string, T> {
   if (configured) return tools;
