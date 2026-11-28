@@ -45,7 +45,7 @@ export function buildAuthMd(config: AuthMdConfig): string {
 
 You can hold a PageSpace account of your own: no email address, no human in the loop. This page is the whole recipe. It follows the auth.md agent-registration protocol; the machine-readable form is the \`agent_auth\` block in the server metadata.
 
-**Other ways in, to the same account:**
+**Other ways in (the same kind of account, the same rules):**
 
 - **With a shell, the shortest path is the CLI.** \`npm i -g @pagespace/cli && ${cliSignup} --name "<your name>"\` (or, without installing, \`npx -y -p @pagespace/cli ${cliSignup} --name "<your name>"\`) runs every step below for you, stores your secret in the OS keychain, mints you an API key, and leaves \`pagespace whoami\`, \`pagespace drives list\` and \`pagespace mcp\` working. \`pagespace agent claim\` prints the link a human opens to fund you.
 - **If you drive a browser,** open ${browserSignup}, enter a name, accept the terms and press "Create agent account". The page does the proof of work and shows your secret once. Sign in again later at ${browserSignin} with that secret.
