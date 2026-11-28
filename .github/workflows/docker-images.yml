@@ -506,9 +506,11 @@ jobs:
             exit 1
           fi
 
+          # Real elapsed time (bash SECONDS), so slow API calls count against the deadline too.
           TIMEOUT=600
-          ELAPSED=0
-          while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
+          START=$SECONDS
+          DONE=0
+          while [ $((SECONDS - START)) -lt "$TIMEOUT" ]; do
             HTTP_CODE=$(curl --connect-timeout 10 --max-time 30 -s -o "$MACHINE_JSON" -w "%{http_code}" \
               -H "Authorization: Bearer $FLY_API_TOKEN" \
               "https://api.machines.dev/v1/apps/pagespace-credential-plane/machines/$MACHINE_ID" || true)
@@ -520,13 +522,14 @@ jobs:
             else
               STATE="unknown"
             fi
-            echo "  [${ELAPSED}s] state: $STATE"
+            echo "  [$((SECONDS - START))s] state: $STATE"
             if [ "$HTTP_CODE" = "200" ] && jq -e --arg mode failed -f scripts/fly-migration-succeeded.jq "$MACHINE_JSON" >/dev/null; then
               echo "ERROR: migration exit evidence indicates failure"
               exit 1
             fi
             if [ "$STATE" = "stopped" ]; then
               if jq -e -f scripts/fly-migration-succeeded.jq "$MACHINE_JSON" >/dev/null; then
+                DONE=1
                 break
               fi
               echo "Exit evidence pending; waiting within ${TIMEOUT}s deadline"
@@ -535,10 +538,9 @@ jobs:
               exit 1
             fi
             sleep 10
-            ELAPSED=$((ELAPSED + 10))
           done
 
-          if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
+          if [ "$DONE" != 1 ]; then
             echo "ERROR: timed out after ${TIMEOUT}s waiting for credential plane migration machine"
             exit 1
           fi
