@@ -69,6 +69,17 @@ describe('CreditBalanceCard', () => {
     });
   });
 
+  test('debt already netted from a top-up is not subtracted again', () => {
+    const shown = text(balance({ debt: 1000, spendable: 2000, topup: { remaining: 3000 }, monthly: { remaining: 0, allowance: 9000, periodEnd: '2026-12-03T12:00:00.000Z' } }));
+
+    assert({
+      given: 'a 100-credit debt against 300 top-up credits, nothing carried, a 900 allowance',
+      should: 'promise the 900 the total will actually rise by',
+      actual: shown.includes('900 more on Dec 3'),
+      expected: true,
+    });
+  });
+
   test('a free one-time grant', () => {
     const shown = text(balance({ subscriptionTier: 'free', topup: { remaining: 0 }, spendable: 400, monthly: { remaining: 400, allowance: 1000, periodEnd: null } }));
 
