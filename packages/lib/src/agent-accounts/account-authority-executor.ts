@@ -47,6 +47,9 @@ import { decideAccountEdit, autoApproveOf, type AccountEdit, type AccountEditRef
 import { isScopeNarrowing } from './store/is-scope-narrowing';
 import { mintOwnerConsent } from './mint-owner-consent';
 import { GENERIC_REQUEST_OPERATION, type CreatableAccountKind } from './decide-account-creation';
+import { GOOGLE_ORIGINS } from './registry/google-operations';
+import { decideGoogleEnrollment, type GoogleEnrollmentInput, type GoogleEnrollmentVerdict } from './oauth/google-enrollment';
+import type { PlaneOAuthExchangeResult } from './executor/plane-wire';
 import type { ReleasedResponse } from './filter-response';
 import type { LoginOwnership } from './decide-acknowledgment';
 import type { KeyPlacement, AccountCreationRefusal } from './decide-account-creation';
@@ -107,7 +110,7 @@ export type StepUpProof = { readonly challengeId: string };
 export type AccountSettings = {
   readonly account: SafeAccount;
   /** The standing "allow without asking" policy, or null when every request asks. */
-  readonly autoApprove: { readonly enabled: true; readonly maxUsesPerHour: number; readonly until: number | null } | null;
+  readonly autoApprove: { readonly enabled: true; readonly maxUsesPerHour: number; readonly until: number | null; readonly classes: readonly ('read' | 'write')[] } | null;
   /** Uses in the policy's rolling hour, from the plane's ledger; null when it could not be read. */
   readonly usesThisHour: number | null;
   readonly bindings: readonly AccountBindingSummary[];
@@ -143,6 +146,11 @@ export type AccountChangeRefusal =
 
 export type AccountChangeResult = { readonly ok: true; readonly settings: AccountSettings } | AccountChangeRefusal;
 
+export type OAuthEnrollmentRefusal =
+  | Extract<GoogleEnrollmentVerdict, { readonly ok: false }>
+  | { readonly ok: false; readonly reason: 'forbidden' | 'owner_not_found' | 'plane_unavailable' | 'store_refused' }
+  | { readonly ok: false; readonly reason: 'provider_refused'; readonly detail: Extract<PlaneOAuthExchangeResult, { readonly ok: false }>['reason'] };
+
 export type AccountAuthority = {
   readonly createAccount: (input: { readonly actor: AccessActor; readonly owner: AccountOwnerTarget; readonly input: CreateAccountInput }) => Promise<CreateAccountResult>;
   /** `allowedDriveIds`: the caller's credential ceiling (`[]` = none); accounts outside it are not listed. */
@@ -155,6 +163,8 @@ export type AccountAuthority = {
     readonly sessionId: string;
     readonly accountId: string;
     readonly requestDigest: string;
+    /** A consumed step-up bound to this exact request — required for a `privilege` operation (e.g. sharing a Drive file). */
+    readonly stepUp?: StepUpProof | null;
   }) => Promise<{ readonly ok: true; readonly approvalId: ApprovalId; readonly expiresAt: number } | { readonly ok: false; readonly reason: 'account_unavailable' }>;
   /** The account's permissions as its manager sees them; `account_unavailable` for anyone without `manage`. */
   readonly describeAccount: (input: { readonly actor: AccessActor; readonly accountId: string }) => Promise<AccountChangeResult>;
@@ -165,6 +175,20 @@ export type AccountAuthority = {
   /** Let unattended runs (schedules, workflows) the actor starts on this agent page use the account, until `expiresAt`. */
   readonly createDelegation: (input: { readonly actor: AccessActor; readonly accountId: string; readonly agentPageId: string; readonly expiresAt: number; readonly stepUp: StepUpProof | null }) => Promise<AccountChangeResult>;
   readonly revokeDelegation: (input: { readonly actor: AccessActor; readonly accountId: string; readonly delegationId: string }) => Promise<AccountChangeResult>;
+  /**
+   * Before sending a person to Google: may they connect an account for this owner, and what to ask for.
+   * Nothing is written. The same checks run again at `completeOAuthEnrollment`.
+   */
+  readonly prepareOAuthEnrollment: (input: { readonly actor: AccessActor; readonly owner: AccountOwnerTarget; readonly input: GoogleEnrollmentInput }) => Promise<{ readonly ok: true; readonly requestedScopes: readonly string[] } | OAuthEnrollmentRefusal>;
+  /** After Google redirected back: the plane exchanges the code and stores the tokens; the row records the version and the account's email. */
+  readonly completeOAuthEnrollment: (input: {
+    readonly actor: AccessActor;
+    readonly owner: AccountOwnerTarget;
+    readonly input: GoogleEnrollmentInput;
+    readonly code: string;
+    readonly codeVerifier: string;
+    readonly redirectUri: string;
+  }) => Promise<{ readonly ok: true; readonly account: SafeAccount; readonly email: string } | OAuthEnrollmentRefusal>;
 };
 
 export type AccountAuthorityDeps = {
@@ -181,6 +205,8 @@ export type AccountAuthorityDeps = {
    * rebind → record must not interleave, or the plane and the row end at different versions and every
    * grant fails. `busy` when another change holds it.
    */
+  /** The origins each provider's accounts may be pinned to (default: Google's APIs); an edit never adds another. */
+  readonly providerOrigins?: Readonly<Record<string, readonly string[]>>;
   readonly lockAccount: <T>(accountId: string, fn: () => Promise<T>) => Promise<{ readonly acquired: true; readonly result: T } | { readonly acquired: false }>;
   /** SHA3-256. */
   readonly hash: HashBytes;
@@ -339,6 +365,9 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
     return deps.accounts.updateScope({ id: row.id, expectedPolicyVersion: row.policyVersion, nextPolicyVersion: policyVersion, allowedOrigins: next.allowedOrigins, approvalPolicy: next.approvalPolicy, at: deps.now() });
   }
 
+  const providerOriginsMap: Readonly<Record<string, readonly string[]>> = deps.providerOrigins ?? { google: GOOGLE_ORIGINS };
+  const providerOriginsOf = (row: AgentAccountRecord) => (row.providerSlug === null ? null : (providerOriginsMap[row.providerSlug] ?? []));
+
   /** Run one account change under the account's lock, re-reading the row inside it. */
   async function serialized(accountId: string, actor: AccessActor, change: (row: AgentAccountRecord) => Promise<AccountChangeResult>): Promise<AccountChangeResult> {
     const locked = await deps.lockAccount(accountId, async () => {
@@ -349,6 +378,14 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
   }
 
   const unchangedScope = (row: AgentAccountRecord) => ({ allowedOrigins: row.allowedOrigins, approvalPolicy: (row.approvalPolicy ?? null) as AccountApprovalPolicy | null });
+
+  /** The owner reference, when the actor may create an account for it. */
+  async function creatableOwner(actor: AccessActor, owner: AccountOwnerTarget): Promise<{ readonly ok: true; readonly ownerRef: AccountOwnerRef } | { readonly ok: false; readonly reason: 'forbidden' | 'owner_not_found' }> {
+    const ownerRef = await ownerRefFor(owner, actor.userId as UserId);
+    if (ownerRef === null) return { ok: false, reason: 'owner_not_found' };
+    const role = ownerRef.kind === 'agent_page' ? await deps.facts.driveRole({ driveId: ownerRef.driveId, actor }) : null;
+    return decideAccountCreatePermission({ owner: ownerRef, actorUserId: actor.userId as UserId, humanDriveRole: role }) ? { ok: true, ownerRef } : { ok: false, reason: 'forbidden' };
+  }
 
   return {
     async createAccount({ actor, owner, input }) {
@@ -475,13 +512,56 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
       return executed;
     },
 
-    async approveRequest({ actor, sessionId, accountId, requestDigest }) {
+    async approveRequest({ actor, sessionId, accountId, requestDigest, stepUp = null }) {
       const actorUserId = actor.userId as UserId;
       const row = await deps.accounts.find(accountId);
       if (row === null || !(await accessOf(row, actor)).use) return { ok: false, reason: 'account_unavailable' };
       const expiresAt = deps.now() + APPROVAL_TTL_MS;
-      const approvalId = await deps.accounts.insertApproval({ accountId: row.id, requestDigest: requestDigest as RequestDigest, approvedByUserId: actorUserId, approvedViaSessionId: sessionId, stepUpChallengeId: null, expiresAt });
+      const approvalId = await deps.accounts.insertApproval({ accountId: row.id, requestDigest: requestDigest as RequestDigest, approvedByUserId: actorUserId, approvedViaSessionId: sessionId, stepUpChallengeId: stepUp?.challengeId ?? null, expiresAt });
       return { ok: true, approvalId, expiresAt };
+    },
+
+    async prepareOAuthEnrollment({ actor, owner, input }) {
+      const allowed = await creatableOwner(actor, owner);
+      if (!allowed.ok) return allowed;
+      const verdict = decideGoogleEnrollment({ input, approver: actor.userId as UserId });
+      return verdict.ok ? { ok: true, requestedScopes: verdict.draft.requestedScopes } : verdict;
+    },
+
+    async completeOAuthEnrollment({ actor, owner, input, code, codeVerifier, redirectUri }) {
+      const allowed = await creatableOwner(actor, owner);
+      if (!allowed.ok) return allowed;
+      const verdict = decideGoogleEnrollment({ input, approver: actor.userId as UserId });
+      if (!verdict.ok) return verdict;
+      const { ownerRef } = allowed;
+      const tenantId = deriveTenantId({ owner: ownerRef });
+      const row = await deps.accounts.insert({ draft: verdict.draft, owner: ownerRef, tenantId, approvalPolicy: verdict.draft.approvalPolicy });
+      const { scope, bindings } = planeBindingsFor({ row, boundAgentPageIds: [], hash: deps.hash });
+      const consenters: PlanePutBody['consenters'] = ownerRef.kind === 'user' ? { kind: 'owner' } : { kind: 'pinned', userIds: [...(await deps.facts.driveConsenters(ownerRef.driveId))] };
+      const exchanged = await deps.plane.oauthExchange({
+        ref: { tenantId, accountId: row.id, kind: 'oauth2' },
+        providerSlug: 'google',
+        code,
+        codeVerifier,
+        redirectUri,
+        requestedScopes: [...verdict.draft.requestedScopes],
+        bindings: bindings as unknown as Record<string, unknown>,
+        scope: scope as unknown as Record<string, unknown>,
+        consenters,
+      });
+      if (!exchanged.ok) {
+        // Refused before anything was stored (the code, the id token, the client): the row goes. A store
+        // failure after the exchange may have left material: the row stays not-ready and revocable.
+        const nothingStored = exchanged.reason !== 'store_unavailable' && exchanged.reason !== 'write_unverified' && exchanged.reason !== 'lock_unavailable' && exchanged.reason !== 'plane_unavailable';
+        if (nothingStored) await deps.accounts.remove(row.id);
+        if (exchanged.reason === 'plane_unavailable') return { ok: false, reason: 'plane_unavailable' };
+        return nothingStored ? { ok: false, reason: 'provider_refused', detail: exchanged.reason as Extract<PlaneOAuthExchangeResult, { readonly ok: false }>['reason'] } : { ok: false, reason: 'store_refused' };
+      }
+      await deps.accounts.setCredentialVersion({ id: row.id, version: exchanged.version });
+      // Which Google account it is, in the name the agent and the person see.
+      await deps.accounts.setName({ id: row.id, name: `${verdict.draft.name} (${exchanged.email})`.slice(0, 200) });
+      const stored = await deps.accounts.find(row.id);
+      return stored === null ? { ok: false, reason: 'store_refused' } : { ok: true, account: toSafeAccount({ row: stored }), email: exchanged.email };
     },
 
     async describeAccount({ actor, accountId }) {
@@ -495,11 +575,11 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
       const stored = (row.approvalPolicy ?? null) as AccountApprovalPolicy | null;
       const bound = await deps.accounts.boundAgentPageIds(row.id);
       // First as the stored approver: if that cannot widen the policy, the approver stays (no consent needed).
-      const asStored = decideAccountEdit({ edit, editor: actor.userId as UserId, storedApprover: stored?.approver ?? null, keepApprover: true, now: deps.now() });
+      const asStored = decideAccountEdit({ edit, editor: actor.userId as UserId, storedApprover: stored?.approver ?? null, keepApprover: true, providerSlug: row.providerSlug, providerOrigins: providerOriginsOf(row), now: deps.now() });
       if (!asStored.ok) return asStored;
       const current = planeBindingsFor({ row, boundAgentPageIds: bound, hash: deps.hash }).scope;
       const narrowsAsStored = isScopeNarrowing({ stored: current, next: { ...current, allowedOrigins: [...asStored.allowedOrigins].sort(), approvalPolicy: asStored.approvalPolicy } as PlaneScope });
-      const verdict = narrowsAsStored ? asStored : decideAccountEdit({ edit, editor: actor.userId as UserId, storedApprover: null, keepApprover: false, now: deps.now() });
+      const verdict = narrowsAsStored ? asStored : decideAccountEdit({ edit, editor: actor.userId as UserId, storedApprover: null, keepApprover: false, providerSlug: row.providerSlug, providerOrigins: providerOriginsOf(row), now: deps.now() });
       if (!verdict.ok) return verdict;
       const next = { allowedOrigins: verdict.allowedOrigins, approvalPolicy: verdict.approvalPolicy };
       const rebound = await rebindTo({ row, next, boundAgentPageIds: bound, actor, stepUp });
@@ -562,7 +642,7 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
         accountId: row.id,
         agentPageId,
         delegatedByUserId: actor.userId,
-        scope: { origins: [...policy.scope.origins], operations: [{ ...GENERIC_REQUEST_OPERATION }], resources: [] },
+        scope: { origins: [...policy.scope.origins], operations: policy.scope.operations.map((operation) => ({ ...operation })), resources: [] },
         expiresAt,
       });
       return { ok: true, settings: await settingsOf(row) };

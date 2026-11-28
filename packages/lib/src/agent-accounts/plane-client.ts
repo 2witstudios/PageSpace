@@ -25,6 +25,8 @@ import type {
   PlaneDescribeBody,
   PlaneDescribeResult,
   PlaneExecuteBody,
+  PlaneOAuthExchangeBody,
+  PlaneOAuthExchangeResult,
   PlanePutBody,
   PlaneRebindBody,
   PlaneRevokeBody,
@@ -49,6 +51,8 @@ export type PlaneClient = {
   /** An uncertain failure (`plane_unavailable`) may still have applied: re-`describe` before retrying. */
   readonly rebind: (body: PlaneRebindBody) => Promise<RebindResult | PlaneUnavailable>;
   readonly usage: (body: PlaneUsageBody) => Promise<PlaneUsageResult | PlaneUnavailable>;
+  /** Connect an OAuth account: the plane exchanges the code and stores the tokens; only a version and the account's email come back. */
+  readonly oauthExchange: (body: PlaneOAuthExchangeBody) => Promise<PlaneOAuthExchangeResult | PlaneUnavailable>;
   readonly execute: (body: PlaneExecuteBody) => Promise<HttpExecutionResult | PlaneUnavailable>;
 };
 
@@ -99,6 +103,7 @@ export function createPlaneClient({
     describe: (body) => call<PlaneDescribeResult>('describe', PLANE_ROUTES.describe, body) as Promise<PlaneDescribeResult | PlaneUnavailable>,
     rebind: (body) => call<RebindResult>('rebind', PLANE_ROUTES.rebind, body) as Promise<RebindResult | PlaneUnavailable>,
     usage: (body) => call<PlaneUsageResult>('usage', PLANE_ROUTES.usage, body) as Promise<PlaneUsageResult | PlaneUnavailable>,
+    oauthExchange: (body) => call<PlaneOAuthExchangeResult>('oauthExchange', PLANE_ROUTES.oauthExchange, body) as Promise<PlaneOAuthExchangeResult | PlaneUnavailable>,
     execute: (body) => call<HttpExecutionResult>('execute', PLANE_ROUTES.execute, body) as Promise<HttpExecutionResult | PlaneUnavailable>,
   };
 }

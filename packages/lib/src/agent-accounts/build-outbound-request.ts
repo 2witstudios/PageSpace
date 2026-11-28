@@ -13,7 +13,8 @@
  *   no caller header that was not digested.
  * - Body: the exact bytes, refused unless their SHA-256 is the canonical
  *   `bodySha256`.
- * - `bearer` material rides in `Authorization: Bearer <token>`; `api_key`
+ * - `bearer` material, and an `oauth2` account's access token, ride in
+ *   `Authorization: Bearer <token>`; `api_key`
  *   material in the header or query parameter its placement names.
  * - The key is formatted by `applyAuth` (the pure formatter the integrations
  *   saga already uses, ADR 0005 §6). A placement that collides with a header or
@@ -23,7 +24,7 @@
  */
 import type { HashBytes } from './grant';
 import type { CanonicalRequest } from './canonical-request';
-import type { SecretMaterialByKind } from './store/store-adapter';
+import type { OAuth2AccessMaterial, SecretMaterialByKind } from './store/store-adapter';
 import { applyAuth } from '../integrations/auth/apply-auth';
 
 export type OutboundRequest = {
@@ -37,10 +38,11 @@ export type OutboundRequest = {
   readonly body: Uint8Array;
 };
 
-/** What the executor resolved, by kind — the HTTP executor presents these two. */
+/** What the executor resolved, by kind — the HTTP executor presents these (an `oauth2` account as its access token, never its refresh token). */
 export type PresentedMaterial =
   | { readonly kind: 'api_key'; readonly material: SecretMaterialByKind['api_key'] }
-  | { readonly kind: 'bearer'; readonly material: SecretMaterialByKind['bearer'] };
+  | { readonly kind: 'bearer'; readonly material: SecretMaterialByKind['bearer'] }
+  | { readonly kind: 'oauth2'; readonly material: OAuth2AccessMaterial };
 
 /**
  * The literal values `filterResponse` scrubs from what is released: the secret itself and the exact
@@ -48,6 +50,7 @@ export type PresentedMaterial =
  */
 export function knownValuesOf(presented: PresentedMaterial): readonly string[] {
   if (presented.kind === 'bearer') return [presented.material.token, `Bearer ${presented.material.token}`];
+  if (presented.kind === 'oauth2') return [presented.material.accessToken, `Bearer ${presented.material.accessToken}`];
   const { value } = presented.material;
   const bare = /^bearer\s+(.+)$/i.exec(value)?.[1];
   return bare === undefined ? [value] : [value, bare];
@@ -91,7 +94,7 @@ export function buildOutboundRequest({
   readonly sha256: HashBytes;
 }): OutboundRequestVerdict {
   if (sha256(body) !== canonical.bodySha256) return { ok: false, reason: 'body_mismatch' };
-  const secret = material.kind === 'bearer' ? material.material.token : material.material.value;
+  const secret = material.kind === 'bearer' ? material.material.token : material.kind === 'oauth2' ? material.material.accessToken : material.material.value;
   if (typeof secret !== 'string' || secret.length === 0 || CONTROL_CHAR_RE.test(secret)) return { ok: false, reason: 'key_invalid' };
 
   const originMatch = /^https:\/\/([a-z0-9.-]+):(\d+)$/.exec(canonical.origin);
@@ -100,7 +103,7 @@ export function buildOutboundRequest({
   const port = Number(originMatch[2]);
 
   const auth =
-    material.kind === 'bearer'
+    material.kind === 'bearer' || material.kind === 'oauth2'
       ? applyAuth({ token: secret }, { type: 'bearer_token', config: { headerName: 'authorization', prefix: 'Bearer ' } })
       : applyAuth({ apiKey: secret }, { type: 'api_key', config: { placement: material.material.placement.in, paramName: material.material.placement.name } });
 

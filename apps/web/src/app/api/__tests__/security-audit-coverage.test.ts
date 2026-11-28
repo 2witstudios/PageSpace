@@ -36,6 +36,9 @@ const AUDIT_CALL_PATTERN =
  * To add a new exempt route, add it here with a clear reason.
  */
 const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
+  // Google redirects the browser here; the route is a one-line wrapper and the handler it calls
+  // (lib/agent-accounts/google-enrollment-callback.ts) audits every connected account.
+  ['agent-accounts/oauth/google/callback', 'Thin wrapper: handleAgentAccountGoogleCallback audits each connect (authz.permission.granted)'],
   // --- Public/unauthenticated endpoints (no user context to audit) ---
   ['health', 'Infrastructure health probe, no auth or user data'],
   ['version', 'ADR 0001 D2 public handshake endpoint, no auth or user data, constant response'],

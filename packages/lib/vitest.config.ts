@@ -74,6 +74,7 @@ export default defineConfig({
       'src/organizations/__tests__/org-lapse-loosening.integration.test.ts',
       // Runs only armed (vitest.integration.config.ts sets the wallet-leg invariant GUC).
       'src/test/__tests__/wallet-leg-invariant-armed.integration.test.ts',
+      'src/agent-accounts/refresh/__tests__/refresh-worker.integration.test.ts',
     ],
     // integration-db-teardown ends each file's `@pagespace/db` pool. This run is
     // ONE long-lived fork (singleFork below) that re-evaluates the module per
@@ -159,6 +160,7 @@ export default defineConfig({
       'src/agent-accounts/__tests__/plane-client.integration.test.ts',
       'src/agent-accounts/__tests__/adversarial/http-executor-end-to-end.integration.test.ts',
       'src/organizations/__tests__/org-lapse-loosening.integration.test.ts',
+      'src/agent-accounts/refresh/__tests__/refresh-worker.integration.test.ts',
       ],
       thresholds: {
         lines: 85,

@@ -179,7 +179,7 @@ describe('authorize — the intersection', () => {
   });
 
   it('given an entitled caller and an account kind this slice does not implement, should refuse kind_not_supported', () => {
-    const actual = authorize(input({ account: { ...agentAccount, kind: 'oauth2' } as AgentAccountRecord }));
+    const actual = authorize(input({ account: { ...agentAccount, kind: 'session', sessionFormat: 'cookie-jar-v1' } as AgentAccountRecord }));
     const expected = { ok: false, reason: 'kind_not_supported' };
     expect(actual).toEqual(expected);
   });

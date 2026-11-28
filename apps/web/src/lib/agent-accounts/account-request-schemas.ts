@@ -28,7 +28,9 @@ export const updateAgentAccountBody = z
     allowedOrigins: z.array(z.string().min(1).max(2_048)).min(1).max(20),
     autoApprove: z.discriminatedUnion('enabled', [
       z.object({ enabled: z.literal(false) }).strict(),
-      z.object({ enabled: z.literal(true), maxUsesPerHour: z.number().int().min(1).max(1_000), until: z.number().int().positive().nullable() }).strict(),
+      z
+        .object({ enabled: z.literal(true), maxUsesPerHour: z.number().int().min(1).max(1_000), until: z.number().int().positive().nullable(), classes: z.array(z.enum(['read', 'write'])).min(1).max(2).optional() })
+        .strict(),
     ]),
     stepUpToken,
   })
@@ -62,8 +64,15 @@ export const approveAgentAccountRequestBody = z
   .object({
     accountId: z.string().min(1).max(64),
     requestDigest: z.string().regex(/^[0-9a-f]{64}$/),
+    /** A step-up grant bound to `agentAccountApprovalStepUpBinding(accountId, requestDigest)`; needed for a privileged operation. */
+    stepUpToken: z.string().min(1).max(512).optional(),
   })
   .strict();
+
+/** What a step-up approving ONE request is bound to: the account and that request's digest. */
+export function agentAccountApprovalStepUpBinding(accountId: string, requestDigest: string): Record<string, string> {
+  return { action: 'agent_account_approve', accountId, requestDigest };
+}
 
 /** HTTP status per authority refusal; a refusal body names the reason, never a value. */
 export const CREATE_REFUSAL_STATUS: Readonly<Record<string, number>> = {
