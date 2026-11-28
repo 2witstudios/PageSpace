@@ -57,7 +57,7 @@ export interface MessageInputProps {
   placeholder?: string;
   /** Author + snippet for the quote-reply chip rendered above the input row.
       Parent owns the active quoted message id; this prop only drives the chip UI. */
-  quotedPreview?: { authorName: string; snippet: string } | null;
+  quotedPreview?: { authorName: string; snippet: string; authorAccountType?: string | null } | null;
   /** Dismiss the active quote — invoked when the user clicks the chip's X. */
   onClearQuote?: () => void;
 }

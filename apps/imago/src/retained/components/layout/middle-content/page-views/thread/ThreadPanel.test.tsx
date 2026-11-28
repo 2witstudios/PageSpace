@@ -282,3 +282,74 @@ describe('ThreadPanel', () => {
     });
   });
 });
+
+describe('ThreadPanel agent-account marker (Agent Signup)', () => {
+  beforeEach(() => {
+    spies.fetchWithAuth.mockReset();
+    spies.fetchWithAuth.mockResolvedValue(new Response(JSON.stringify({}), { status: 200 }));
+  });
+
+  afterEach(() => {
+    unmountAll();
+  });
+
+  const badges = (): Element[] => Array.from(document.querySelectorAll('[aria-label="AI agent account"]'));
+  const replyFor = (id: string): Element | undefined =>
+    Array.from(document.querySelectorAll('[data-testid="thread-reply"]')).find((row) =>
+      row.textContent?.includes(id),
+    );
+
+  test('marks a channel reply from an AI agent account, not the human or the AI-page persona', async () => {
+    renderPanel(
+      {},
+      listing({
+        messages: [
+          CHANNEL_REPLY,
+          AGENT_REPLY,
+          {
+            id: 'r3',
+            content: 'Agent account reply',
+            createdAt: '2026-10-12T09:20:00.000Z',
+            userId: 'u9',
+            user: { id: 'u9', name: 'PageSpace Support', image: null, accountType: 'agent' },
+            reactions: [],
+          },
+        ],
+      }),
+    );
+    await flush();
+
+    assert({
+      given: 'a human reply, an AI-page persona reply and an agent-account reply',
+      should: 'render exactly one AgentBadge, on the agent-account reply',
+      actual: { count: badges().length, onAgent: replyFor('Agent account reply')?.contains(badges()[0] ?? null) ?? false },
+      expected: { count: 1, onAgent: true },
+    });
+  });
+
+  test('marks a DM reply whose sender is an AI agent account', async () => {
+    renderPanel(
+      { source: 'dm', contextId: 'conv-1', contextLabel: 'Support · DM', alsoSendToParentLabel: 'Also send to Support' },
+      listing({
+        messages: [
+          {
+            id: 'd1',
+            content: 'DM agent reply',
+            createdAt: '2026-10-12T09:20:00.000Z',
+            senderId: 'u9',
+            sender: { id: 'u9', name: 'PageSpace Support', image: null, accountType: 'agent' },
+            reactions: [],
+          },
+        ],
+      }),
+    );
+    await flush();
+
+    assert({
+      given: 'a DM thread reply from an agent account',
+      should: 'render the AgentBadge beside the sender name',
+      actual: replyFor('DM agent reply')?.querySelector('[aria-label="AI agent account"]') !== null,
+      expected: true,
+    });
+  });
+});
