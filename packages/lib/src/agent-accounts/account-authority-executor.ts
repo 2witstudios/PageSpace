@@ -71,6 +71,8 @@ const GRANT_TTL_MS = 60_000;
 /** The longest an unattended-use delegation may run before a human renews it. */
 export const MAX_DELEGATION_MS = 90 * 24 * 60 * 60_000;
 const MIN_DELEGATION_MS = 5 * 60_000;
+/** An account attached to more agents than this would no longer fit the plane's bound-page read. */
+export const MAX_BOUND_AGENT_PAGES = 50;
 const ZERO_USAGE: UsageCounters = { usesThisHour: 0, bytesOutThisHour: 0, concurrent: 0 };
 
 export type AccountOwnerTarget = { readonly kind: 'user' } | { readonly kind: 'agent_page'; readonly agentPageId: string };
@@ -133,7 +135,10 @@ export type AccountChangeRefusal =
         | 'page_unavailable'
         /** Unattended runs cannot answer approval prompts: they need "allow without asking" on. */
         | 'auto_approve_required'
-        | 'expiry_invalid';
+        | 'expiry_invalid'
+        /** The account is attached to as many agents as it can be. */
+        | 'bindings_full'
+        | 'delegation_unavailable';
     };
 
 export type AccountChangeResult = { readonly ok: true; readonly settings: AccountSettings } | AccountChangeRefusal;
@@ -171,6 +176,12 @@ export type AccountAuthorityDeps = {
   readonly registry: OperationRegistry;
   /** The step-up consent key (its public half is the plane's `AGENT_ACCOUNTS_CONSENT_PUBLIC_KEY`); null = nothing can be widened. */
   readonly consentKey: { readonly sign: (message: Uint8Array) => Uint8Array } | null;
+  /**
+   * Serializes changes to ONE account across every web replica (a main-DB advisory lock): describe →
+   * rebind → record must not interleave, or the plane and the row end at different versions and every
+   * grant fails. `busy` when another change holds it.
+   */
+  readonly lockAccount: <T>(accountId: string, fn: () => Promise<T>) => Promise<{ readonly acquired: true; readonly result: T } | { readonly acquired: false }>;
   /** SHA3-256. */
   readonly hash: HashBytes;
   readonly now: () => number;
@@ -328,6 +339,15 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
     return deps.accounts.updateScope({ id: row.id, expectedPolicyVersion: row.policyVersion, nextPolicyVersion: policyVersion, allowedOrigins: next.allowedOrigins, approvalPolicy: next.approvalPolicy, at: deps.now() });
   }
 
+  /** Run one account change under the account's lock, re-reading the row inside it. */
+  async function serialized(accountId: string, actor: AccessActor, change: (row: AgentAccountRecord) => Promise<AccountChangeResult>): Promise<AccountChangeResult> {
+    const locked = await deps.lockAccount(accountId, async () => {
+      const row = await changeable(accountId, actor);
+      return row === null ? refused('account_unavailable') : change(row);
+    });
+    return locked.acquired ? locked.result : refused('conflict');
+  }
+
   const unchangedScope = (row: AgentAccountRecord) => ({ allowedOrigins: row.allowedOrigins, approvalPolicy: (row.approvalPolicy ?? null) as AccountApprovalPolicy | null });
 
   return {
@@ -471,8 +491,7 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
     },
 
     async updateAccount({ actor, accountId, edit, stepUp }) {
-      const row = await changeable(accountId, actor);
-      if (row === null) return refused('account_unavailable');
+      return serialized(accountId, actor, async (row) => {
       const stored = (row.approvalPolicy ?? null) as AccountApprovalPolicy | null;
       const bound = await deps.accounts.boundAgentPageIds(row.id);
       // First as the stored approver: if that cannot widen the policy, the approver stays (no consent needed).
@@ -487,32 +506,44 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
       if (!rebound.ok) return rebound;
       const updated = await recordScope(row, next, rebound.policyVersion);
       return updated === null ? refused('conflict') : { ok: true, settings: await settingsOf(updated) };
+      });
     },
 
     async bindAccount({ actor, accountId, agentPageId, stepUp }) {
-      const row = await changeable(accountId, actor);
-      if (row === null || row.ownerKind !== 'user') return refused('account_unavailable');
-      // ADR 0005 §4.3: only to an agent page the owner can edit; a binding never shares the account with other people.
-      if ((await deps.facts.pageDrive(agentPageId)) === null || (await deps.facts.pagePermission({ actor, pageId: agentPageId })) !== 'edit') return refused('page_unavailable');
+      return serialized(accountId, actor, async (row) => {
+      if (row.ownerKind !== 'user') return refused('account_unavailable');
+      // ADR 0005 §4.3: only to an AGENT page the owner can edit; a binding never shares the account with other people.
+      if (!(await deps.facts.isAgentPage(agentPageId)) || (await deps.facts.pagePermission({ actor, pageId: agentPageId })) !== 'edit') return refused('page_unavailable');
       const bound = await deps.accounts.boundAgentPageIds(row.id);
+      if (!bound.includes(agentPageId as AgentPageId) && bound.length >= MAX_BOUND_AGENT_PAGES) return refused('bindings_full');
       const nextBound = [...new Set([...bound, agentPageId as AgentPageId])];
+      // Plane first, then the row, then the binding: until all three land, the digest the authority
+      // signs disagrees with the plane, so the account fails closed — never wider than either side.
       const rebound = await rebindTo({ row, next: unchangedScope(row), boundAgentPageIds: nextBound, actor, stepUp });
       if (!rebound.ok) return rebound;
-      await deps.accounts.upsertBinding({ accountId: row.id, agentPageId, boundByUserId: actor.userId, at: deps.now() });
       const updated = await recordScope(row, unchangedScope(row), rebound.policyVersion);
-      return updated === null ? refused('conflict') : { ok: true, settings: await settingsOf(updated) };
+      if (updated === null) return refused('conflict');
+      await deps.accounts.upsertBinding({ accountId: row.id, agentPageId, boundByUserId: actor.userId, at: deps.now() });
+      return { ok: true, settings: await settingsOf(updated) };
+      });
     },
 
     async unbindAccount({ actor, accountId, agentPageId }) {
-      const row = await changeable(accountId, actor);
-      if (row === null || row.ownerKind !== 'user') return refused('account_unavailable');
-      // Fail closed: the page loses the account in the DB first; the plane follows (a narrowing, no consent).
-      await deps.accounts.revokeBinding({ accountId: row.id, agentPageId, at: deps.now() });
+      return serialized(accountId, actor, async (row) => {
+      if (row.ownerKind !== 'user') return refused('account_unavailable');
+      // Plane first (a narrowing: no consent). Until the row and binding follow, the account fails closed,
+      // and the binding stays listed so a failed detach can simply be retried.
       const nextBound = (await deps.accounts.boundAgentPageIds(row.id)).filter((id) => id !== agentPageId);
       const rebound = await rebindTo({ row, next: unchangedScope(row), boundAgentPageIds: nextBound, actor, stepUp: null });
       if (!rebound.ok) return rebound;
       const updated = await recordScope(row, unchangedScope(row), rebound.policyVersion);
-      return updated === null ? refused('conflict') : { ok: true, settings: await settingsOf(updated) };
+      if (updated === null) return refused('conflict');
+      const at = deps.now();
+      await deps.accounts.revokeBinding({ accountId: row.id, agentPageId, at });
+      // Unattended use on that agent ends with the attachment: re-attaching later never revives it.
+      await deps.accounts.revokeDelegationsForPage({ accountId: row.id, agentPageId, at });
+      return { ok: true, settings: await settingsOf(updated) };
+      });
     },
 
     async createDelegation({ actor, accountId, agentPageId, expiresAt, stepUp }) {
@@ -540,8 +571,8 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
     async revokeDelegation({ actor, accountId, delegationId }) {
       const row = await deps.accounts.find(accountId);
       if (row === null || !(await accessOf(row, actor)).manage) return refused('account_unavailable');
-      await deps.accounts.revokeDelegation({ id: delegationId as DelegationId, accountId: row.id, at: deps.now() });
-      return { ok: true, settings: await settingsOf(row) };
+      const revoked = await deps.accounts.revokeDelegation({ id: delegationId as DelegationId, accountId: row.id, at: deps.now() });
+      return revoked ? { ok: true, settings: await settingsOf(row) } : refused('delegation_unavailable');
     },
   };
 }

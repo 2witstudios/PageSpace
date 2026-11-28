@@ -27,6 +27,7 @@ export type AgentAccountDatabase = Pick<typeof defaultDb, 'insert' | 'select' | 
 /** An account list never needs more than this; the UI shows one agent's or one person's accounts. */
 export const MAX_LISTED_ACCOUNTS = 100;
 const MAX_OPEN_APPROVALS = 50;
+/** Above the authority's bind cap (`MAX_BOUND_AGENT_PAGES`), so a read never truncates a real binding set. */
 const MAX_BOUND_PAGES = 100;
 const MAX_DELEGATIONS = 50;
 
@@ -96,6 +97,8 @@ export type AgentAccountRepository = {
   /** Unexpired, unrevoked delegations of the account. */
   readonly listDelegations: (input: { readonly accountId: string; readonly now: number }) => Promise<readonly AccountDelegationSummary[]>;
   readonly insertDelegation: (input: { readonly accountId: string; readonly agentPageId: string | null; readonly delegatedByUserId: string; readonly scope: ApprovalScope; readonly expiresAt: number }) => Promise<DelegationId>;
+  /** Revoke every live delegation of the account for one agent page (it was detached). */
+  readonly revokeDelegationsForPage: (input: { readonly accountId: string; readonly agentPageId: string; readonly at: number }) => Promise<void>;
   /** `false` when no unrevoked delegation with that id belongs to the account. */
   readonly revokeDelegation: (input: { readonly id: string; readonly accountId: string; readonly at: number }) => Promise<boolean>;
   readonly openApprovals: (input: { readonly accountId: string; readonly now: number }) => Promise<readonly ApprovalCandidate[]>;
@@ -197,6 +200,7 @@ export function createAgentAccountRepository({ db }: { readonly db: AgentAccount
         .select({ agentPageId: agentAccountBindings.agentPageId })
         .from(agentAccountBindings)
         .where(and(eq(agentAccountBindings.accountId, accountId), isNull(agentAccountBindings.revokedAt)))
+        .orderBy(agentAccountBindings.agentPageId)
         .limit(MAX_BOUND_PAGES);
       return rows.map((row) => row.agentPageId as AgentPageId);
     },
@@ -291,6 +295,13 @@ export function createAgentAccountRepository({ db }: { readonly db: AgentAccount
         .values({ accountId, agentPageId, delegatedByUserId, scope, expiresAt: new Date(expiresAt) })
         .returning({ id: agentAccountDelegations.id });
       return row!.id as DelegationId;
+    },
+
+    async revokeDelegationsForPage({ accountId, agentPageId, at }) {
+      await db
+        .update(agentAccountDelegations)
+        .set({ revokedAt: new Date(at) })
+        .where(and(eq(agentAccountDelegations.accountId, accountId), eq(agentAccountDelegations.agentPageId, agentPageId), isNull(agentAccountDelegations.revokedAt)));
     },
 
     async revokeDelegation({ id, accountId, at }) {

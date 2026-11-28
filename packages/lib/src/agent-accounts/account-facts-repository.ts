@@ -22,6 +22,8 @@ const MAX_CONSENTERS = 100;
 export type AccountFactsRepository = {
   /** The drive of a live (untrashed) page; null when it does not exist. */
   readonly pageDrive: (pageId: string) => Promise<string | null>;
+  /** Whether the page exists, is not trashed, and is an agent (an AI chat page). */
+  readonly isAgentPage: (pageId: string) => Promise<boolean>;
   readonly driveRole: (input: { readonly driveId: string; readonly actor: AccessActor }) => Promise<DriveRoleOfHuman>;
   /** The drive owner and its effective ADMINs, sorted — the consenters an agent-page account pins. */
   readonly driveConsenters: (driveId: string) => Promise<readonly UserId[]>;
@@ -33,6 +35,11 @@ export function createAccountFactsRepository(): AccountFactsRepository {
     async pageDrive(pageId) {
       const rows = await db.select({ driveId: pages.driveId }).from(pages).where(and(eq(pages.id, pageId), eq(pages.isTrashed, false))).limit(1);
       return rows[0]?.driveId ?? null;
+    },
+
+    async isAgentPage(pageId) {
+      const rows = await db.select({ type: pages.type }).from(pages).where(and(eq(pages.id, pageId), eq(pages.isTrashed, false))).limit(1);
+      return rows[0]?.type === 'AI_CHAT';
     },
 
     async driveRole({ driveId, actor }) {

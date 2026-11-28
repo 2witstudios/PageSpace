@@ -36,7 +36,8 @@ export const updateAgentAccountBody = z
 
 export const bindAgentAccountBody = z.object({ agentPageId: z.string().min(1).max(64), stepUpToken }).strict();
 
-export const createDelegationBody = z.object({ agentPageId: z.string().min(1).max(64), expiresAt: z.number().int().positive(), stepUpToken }).strict();
+/** How long unattended use lasts, in days from now (the SERVER's clock — a skewed browser cannot make 90 days fail). */
+export const createDelegationBody = z.object({ agentPageId: z.string().min(1).max(64), days: z.number().int().min(1).max(90), stepUpToken }).strict();
 
 /** What a step-up for a change to this account is bound to — the client asks for exactly this. */
 export function agentAccountStepUpBinding(accountId: string): Record<string, string> {
@@ -53,6 +54,8 @@ export const CHANGE_REFUSAL_STATUS: Readonly<Record<string, number>> = {
   plane_unavailable: 503,
   store_refused: 502,
   conflict: 409,
+  bindings_full: 409,
+  delegation_unavailable: 404,
 };
 
 export const approveAgentAccountRequestBody = z

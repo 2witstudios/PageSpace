@@ -13,8 +13,7 @@ type RouteContext = { params: Promise<{ accountId: string }> };
 
 /**
  * POST /api/agent-accounts/[accountId]/delegations
- * Let scheduled runs and workflows that YOU start on this agent use the account until `expiresAt` (at most
- * 90 days), within its current "allow without asking" reach — they cannot answer an approval prompt. Needs
+ * Let scheduled runs and workflows that YOU start on this agent use the account for `days` (1–90), within its current "allow without asking" reach — they cannot answer an approval prompt. Needs
  * step-up (401 `step_up_required` until the request carries a grant bound to this account).
  */
 export async function POST(request: Request, context: RouteContext) {
@@ -29,8 +28,9 @@ export async function POST(request: Request, context: RouteContext) {
     const stepUp = await stepUpProofFor({ userId: auth.userId, accountId, token: parsed.data.stepUpToken });
     if (!stepUp.ok) return stepUp.response;
     const actor = actorFromAuth(auth);
-    const result = await authority.createDelegation({ actor, accountId, agentPageId: parsed.data.agentPageId, expiresAt: parsed.data.expiresAt, stepUp: stepUp.proof });
-    if (result.ok) auditRequest(request, { eventType: 'authz.permission.granted', userId: auth.userId, resourceType: 'agent_account', resourceId: accountId, details: { change: 'delegate', agentPageId: parsed.data.agentPageId, expiresAt: parsed.data.expiresAt } });
+    const expiresAt = Date.now() + parsed.data.days * 86_400_000;
+    const result = await authority.createDelegation({ actor, accountId, agentPageId: parsed.data.agentPageId, expiresAt, stepUp: stepUp.proof });
+    if (result.ok) auditRequest(request, { eventType: 'authz.permission.granted', userId: auth.userId, resourceType: 'agent_account', resourceId: accountId, details: { change: 'delegate', agentPageId: parsed.data.agentPageId, expiresAt } });
     return await changeResponse(actor, result);
   } catch (error) {
     loggers.api.error('Error delegating agent account', error as Error);

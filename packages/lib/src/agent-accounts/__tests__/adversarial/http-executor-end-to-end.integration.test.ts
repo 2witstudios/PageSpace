@@ -28,7 +28,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Pool } from 'pg';
 import { createId } from '@paralleldrive/cuid2';
-import { db } from '@pagespace/db/db';
+import { db, getAdvisoryLockPool } from '@pagespace/db/db';
+import { createAccountChangeLock } from '../../account-change-lock';
 import { eq, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
@@ -189,7 +190,7 @@ const CONSENT_PAIR = generateKeyPairSync('ed25519');
 const CONSENT_KEY = { sign: (message: Uint8Array) => new Uint8Array(nodeSign(null, message, CONSENT_PAIR.privateKey)) };
 
 const authorityOver = (plane: PlaneClient): AccountAuthority =>
-  createAccountAuthority({ accounts: createAgentAccountRepository({ db }), facts: createAccountFactsRepository(), plane, authorityKey: keyring.current, presenterKeyId: PRESENTER, registry: [], consentKey: CONSENT_KEY, hash: sha3, now: () => Date.now() });
+  createAccountAuthority({ accounts: createAgentAccountRepository({ db }), facts: createAccountFactsRepository(), plane, authorityKey: keyring.current, presenterKeyId: PRESENTER, registry: [], consentKey: CONSENT_KEY, lockAccount: createAccountChangeLock(getAdvisoryLockPool()), hash: sha3, now: () => Date.now() });
 
 const caller = (overrides: Partial<Parameters<AccountAuthority['requestOperation']>[0]['caller']> = {}) => ({
   actorUserId: OWNER,
@@ -712,9 +713,52 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
     if (!created.ok) throw new Error(created.reason);
     // An authority that wrongly believes VIEWER is a drive admin signs a real consent for them: the plane, which pinned
     // only the drive's consenters at creation, still refuses it.
-    const forged = createAccountAuthority({ accounts: createAgentAccountRepository({ db }), facts: { ...createAccountFactsRepository(), driveRole: async () => 'ADMIN' }, plane, authorityKey: keyring.current, presenterKeyId: PRESENTER, registry: [], consentKey: CONSENT_KEY, hash: sha3, now: () => Date.now() });
+    const forged = createAccountAuthority({ accounts: createAgentAccountRepository({ db }), facts: { ...createAccountFactsRepository(), driveRole: async () => 'ADMIN' }, plane, authorityKey: keyring.current, presenterKeyId: PRESENTER, registry: [], consentKey: CONSENT_KEY, lockAccount: createAccountChangeLock(getAdvisoryLockPool()), hash: sha3, now: () => Date.now() });
     const actual = await forged.updateAccount({ actor: credentialActor(VIEWER, null), accountId: created.account.id, edit: { allowedOrigins: [origin], autoApprove: on(10) }, stepUp: STEP_UP });
     expect(actual.ok ? 'widened' : actual.reason).toEqual('not_a_consenter');
+  }, 60_000);
+
+  it('given two permission edits racing on one account, should apply at most one and leave the account usable with the plane and the row agreeing', async () => {
+    const authority = authorityOver(await startPlane());
+    const owner = credentialActor(OWNER, null);
+    const created = await authority.createAccount({ actor: owner, owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) });
+    if (!created.ok) throw new Error(created.reason);
+    const id = created.account.id;
+    const outcomes = await Promise.all([
+      authority.updateAccount({ actor: owner, accountId: id, edit: { allowedOrigins: [origin], autoApprove: on(30) }, stepUp: null }),
+      authority.updateAccount({ actor: owner, accountId: id, edit: { allowedOrigins: [origin], autoApprove: on(20) }, stepUp: null }),
+    ]);
+    const after = await authority.requestOperation({ ...asHuman(caller()), accountId: id, request: get(`${origin}/v1/weather`) });
+    const actual = { applied: outcomes.filter((outcome) => outcome.ok).length >= 1, refusals: outcomes.filter((outcome) => !outcome.ok).map((outcome) => (outcome.ok ? null : outcome.reason)), after: after.ok ? after.response.status : after.reason };
+    expect({ ...actual, refusals: actual.refusals.every((reason) => reason === 'conflict') }).toEqual({ applied: true, refusals: true, after: 200 });
+  }, 90_000);
+
+  it('given a user-owned account detached from an agent and attached again, should not revive the unattended use it had', async () => {
+    const authority = authorityOver(await startPlane());
+    const owner = credentialActor(OWNER, null);
+    const created = await authority.createAccount({ actor: owner, owner: { kind: 'user' }, input: createInput(true) });
+    if (!created.ok) throw new Error(created.reason);
+    const id = created.account.id;
+    const run = () => authority.requestOperation({ ...asHuman(unattended()), accountId: id, request: get(`${origin}/v1/weather`) });
+    await authority.bindAccount({ actor: owner, accountId: id, agentPageId: PAGE_A, stepUp: STEP_UP });
+    await authority.createDelegation({ actor: owner, accountId: id, agentPageId: PAGE_A, expiresAt: Date.now() + 86_400_000, stepUp: STEP_UP });
+    const delegated = await run();
+    await authority.unbindAccount({ actor: owner, accountId: id, agentPageId: PAGE_A });
+    const rebound = await authority.bindAccount({ actor: owner, accountId: id, agentPageId: PAGE_A, stepUp: STEP_UP });
+    const afterRebind = await run();
+    const actual = { delegated: delegated.ok ? delegated.response.status : delegated.reason, delegationsAfter: rebound.ok ? rebound.settings.delegations.length : rebound.reason, afterRebind: afterRebind.ok ? 'ran' : afterRebind.reason };
+    expect(actual).toEqual({ delegated: 200, delegationsAfter: 0, afterRebind: 'account_unavailable' });
+  }, 90_000);
+
+  it('given a page that is not an agent, should refuse to attach an account to it', async () => {
+    const authority = authorityOver(await startPlane());
+    const owner = credentialActor(OWNER, null);
+    const created = await authority.createAccount({ actor: owner, owner: { kind: 'user' }, input: createInput(true) });
+    if (!created.ok) throw new Error(created.reason);
+    const notAgent = createId();
+    await db.insert(pages).values({ id: notAgent, title: 'notes', type: 'DOCUMENT', driveId: DRIVE, position: 9 });
+    const actual = await authority.bindAccount({ actor: owner, accountId: created.account.id, agentPageId: notAgent, stepUp: STEP_UP });
+    expect(actual.ok ? 'bound' : actual.reason).toEqual('page_unavailable');
   }, 60_000);
 
   it('given every model-visible value this slice produced above, should never contain the canary key', () => {

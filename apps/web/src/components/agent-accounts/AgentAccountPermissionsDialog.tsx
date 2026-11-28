@@ -17,7 +17,6 @@ import { agentAccountSettingsUrl, refusalOf, sendAccountChange, useAgentAccountS
 
 /** Canonical origins carry `:443`; people type them without it. */
 const displayOrigin = (origin: string) => origin.replace(/:443$/, '');
-const DAY_MS = 86_400_000;
 
 const REFUSAL_COPY: Readonly<Record<string, string>> = {
   origin_invalid: 'Each site must be an https:// address with no path, like https://api.example.com.',
@@ -34,6 +33,8 @@ const REFUSAL_COPY: Readonly<Record<string, string>> = {
   account_unavailable: 'This account is no longer available to change.',
   plane_unavailable: 'The credential service is unavailable. Try again later.',
   step_up_required: 'Confirm it is you to allow more.',
+  bindings_full: 'This account is already attached to as many agents as it can be. Detach one first.',
+  delegation_unavailable: 'That unattended use was already stopped.',
 };
 const refusalCopy = (error: unknown, fallback: string) => REFUSAL_COPY[refusalOf(error)] ?? fallback;
 
@@ -161,7 +162,7 @@ export function AgentAccountPermissionsDialog({
     run(async () => {
       if (accountId === null || delegateTarget === '') return;
       const url = `/api/agent-accounts/${accountId}/delegations`;
-      const body = { agentPageId: delegateTarget, expiresAt: Date.now() + Number(delegateDays) * DAY_MS };
+      const body = { agentPageId: delegateTarget, days: Number(delegateDays) };
       const result = await sendAccountChange({ accountId, method: 'POST', url, body }, (payload) => post<{ settings: AgentAccountSettings }>(url, payload));
       await applied(result, 'Scheduled runs and workflows you start can now use this account.');
     }, 'Unattended use could not be allowed.');

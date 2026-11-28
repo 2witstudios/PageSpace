@@ -116,9 +116,16 @@ describe('POST bindings / delegations', () => {
 
   it('given a delegation request, should pass the agent, expiry and stepUp through to the authority', async () => {
     mockAuthority.createDelegation.mockResolvedValue({ ok: true, settings });
-    const expiresAt = Date.now() + 86_400_000;
-    const response = await DELEGATE(request('POST', '/api/agent-accounts/acct_1/delegations', { agentPageId: 'page_a', expiresAt }), context);
+    const before = Date.now();
+    const response = await DELEGATE(request('POST', '/api/agent-accounts/acct_1/delegations', { agentPageId: 'page_a', days: 30 }), context);
     const call = mockAuthority.createDelegation.mock.calls[0]?.[0];
-    expect({ status: response.status, agentPageId: call?.agentPageId, expiresAt: call?.expiresAt, stepUp: call?.stepUp }).toEqual({ status: 200, agentPageId: 'page_a', expiresAt, stepUp: null });
+    const expiresAt = call?.expiresAt as number;
+    // Computed on the server's clock: 30 days from the request.
+    expect({ status: response.status, agentPageId: call?.agentPageId, inWindow: expiresAt >= before + 30 * 86_400_000 && expiresAt <= Date.now() + 30 * 86_400_000, stepUp: call?.stepUp }).toEqual({ status: 200, agentPageId: 'page_a', inWindow: true, stepUp: null });
+  });
+
+  it('given more than 90 days, should answer 400 without calling the authority', async () => {
+    const response = await DELEGATE(request('POST', '/api/agent-accounts/acct_1/delegations', { agentPageId: 'page_a', days: 91 }), context);
+    expect({ status: response.status, called: mockAuthority.createDelegation.mock.calls.length }).toEqual({ status: 400, called: 0 });
   });
 });
