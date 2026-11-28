@@ -85,12 +85,16 @@ const ISSUANCE = notAccess("token issuance: copies an approved, stored grant ont
 const CONSENT_DISPLAY = notAccess("consent / grant display: names the drives and roles a grant asks for or holds; grants nothing");
 const SCOPE_GRAMMAR = notAccess('the OAuth scope grammar (parse, format, shape tests); grants nothing itself');
 const CAPABILITY_SCOPES = notAccess("a session token's CAPABILITY scopes (e.g. mcp:*, env:bridge), not a key's drive scope: the type rule flags any scopes: string[] and fails closed");
+const OAUTH_ACCOUNT_SCOPES = notAccess("an agent account's OAuth scopes at a provider (Google), not a PageSpace key's drive scope: asked for, stored and kept from widening on refresh");
 const KEY_SETTINGS = notAccess("the owner's own key settings: shows the key's configured scope");
 const LEGACY_SCOPE_CHECKS = ceiling('the scope check helpers: refuse or narrow a drive/page/list the owner already reaches');
 const ORG_GATE = ceiling("copies the credential's drive ceiling onto the org gate (empty = unrestricted); every consumer refuses or narrows by it");
 
 /** Every function in the tree that reads a key's drive scope. Keyed `file#function`. */
 const KEY_SCOPE_READ_LEDGER: Readonly<Record<string, Verdict>> = {
+  'apps/web/src/lib/agent-accounts/google-enrollment-flow.ts#googleAuthorizeUrl': OAUTH_ACCOUNT_SCOPES,
+  'packages/lib/src/agent-accounts/executor/plane-http-adapter.ts#handle': OAUTH_ACCOUNT_SCOPES,
+  'packages/lib/src/agent-accounts/refresh/plan-refreshed-material.ts#planRefreshedMaterial': OAUTH_ACCOUNT_SCOPES,
   'apps/imago/src/retained/components/layout/middle-content/page-views/settings/mcp/MCPSettingsView.tsx#scopeLabelFor': KEY_SETTINGS,
   'apps/imago/src/retained/components/layout/middle-content/page-views/settings/mcp/MCPSettingsView.tsx#openEditDialog': KEY_SETTINGS,
   'apps/web/src/lib/ai/chat-pipeline/assistant-surface.ts#buildAssistantContext': ceiling('drops outside-scope legacy location hints before content reads; forwards the drive ceiling to Home hints, agent awareness, workspace summaries and trees, each still credential-aware'),

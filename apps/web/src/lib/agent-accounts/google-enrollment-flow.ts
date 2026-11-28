@@ -14,7 +14,7 @@
  * - PKCE (S256): the code verifier is derived from the nonce under the same
  *   secret, so a code intercepted on the way back is useless on its own.
  */
-import { createHash, createHmac, randomBytes } from 'node:crypto';
+import { createHash, createHmac, hkdfSync, randomBytes } from 'node:crypto';
 import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 import type { AccountOwnerTarget } from '@pagespace/lib/agent-accounts/account-authority-executor';
 import type { GoogleEnrollmentInput } from '@pagespace/lib/agent-accounts/oauth/google-enrollment';
@@ -34,7 +34,8 @@ export type EnrollmentState = {
   readonly expiresAt: number;
 };
 
-const keyOf = (secret: string, purpose: string) => createHmac('sha256', secret).update(`agent-account-oauth/v1/${purpose}`).digest();
+/** A 32-byte key per purpose, derived from the server's high-entropy state secret with HKDF (RFC 5869). */
+const keyOf = (secret: string, purpose: string) => Buffer.from(hkdfSync('sha256', secret, 'pagespace-agent-account-oauth', `v1/${purpose}`, 32));
 const sign = (secret: string, payload: string) => createHmac('sha256', keyOf(secret, 'state')).update(payload).digest('base64url');
 
 /** RFC 7636 §4.1: 43–128 unreserved characters. 32 bytes of HMAC → 43 base64url characters. */
