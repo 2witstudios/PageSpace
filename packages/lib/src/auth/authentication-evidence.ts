@@ -7,13 +7,14 @@ export interface VerifiedAuthentication {
 /**
  * A server-verified sign-in ceremony. D-OW-45: PageSpace has no TOTP, so "two-step" (strong) sign-in is a passkey the
  * authenticator user-verified; every other ceremony (an emailed link, Google, Apple, a passkey without user
- * verification) is one factor.
+ * verification, an AI agent presenting its opaque `ps_agent_*` secret at the browser door) is one factor.
  */
 export type SignInCeremony =
   | { readonly method: 'magic_link' }
   | { readonly method: 'google' }
   | { readonly method: 'apple' }
-  | { readonly method: 'passkey'; readonly userVerified: boolean };
+  | { readonly method: 'passkey'; readonly userVerified: boolean }
+  | { readonly method: 'agent_secret' };
 
 /** The evidence a ceremony that the server just verified records on the credential it mints. */
 export function ceremonyAuthentication(ceremony: SignInCeremony, nowMs: number): VerifiedAuthentication {

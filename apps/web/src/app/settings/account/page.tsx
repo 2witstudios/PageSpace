@@ -26,6 +26,7 @@ import { RevokeAllDevicesDialog } from "@/components/devices/RevokeAllDevicesDia
 import { ConnectedAppsList } from "@/components/oauth-grants/ConnectedAppsList";
 import { useDevices } from "@/hooks/useDevices";
 import { PasskeyManager } from "@/components/settings/PasskeyManager";
+import { AgentIdentityCard } from "@/components/agent-auth/AgentIdentityCard";
 
 
 const fetcher = async (url: string) => {
@@ -409,6 +410,9 @@ export default function AccountPage() {
           Manage your account information and security settings
         </p>
       </div>
+
+      {/* AI agent sessions only (ADR 0008): identity, owner, rotate secret, claim link */}
+      <AgentIdentityCard />
 
       {/* Profile Section */}
       <Card className="mb-6">

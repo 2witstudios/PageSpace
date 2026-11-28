@@ -29,6 +29,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@fly/sprites": "0.0.1-rc37",
     "@monaco-editor/react": "^4.7.0",
+    "@noble/hashes": "1.8.0",
     "@openrouter/ai-sdk-provider": "^2.10.0",
     "@pagespace/browser-worker": "workspace:*",
     "@pagespace/db": "workspace:*",

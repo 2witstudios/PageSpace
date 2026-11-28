@@ -354,6 +354,12 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
     // server-issued, single-use proof-of-work consumed atomically with the account insert.
     // Exact matches only, NEVER an `/api/agent/` prefix: every other agent route (secret
     // rotation, claim management) acts on an existing identity and must keep this gate.
+    // `/api/auth/agent/signup` and `/api/auth/agent/signin` are the agent BROWSER door
+    // (Agent Signup Phase 3): the `/auth/agent` page posts here before any session exists —
+    // that is what they create. Like passkey signup they carry a login-CSRF token, plus the
+    // deployment gate (404 when closed), per-IP limits (AGENT_SIGNUP + AGENT_SIGNUP_DAILY;
+    // AGENT_SIGNIN with account lockout), and on signup the single-use proof of work.
+    // Exact matches only, never an `/api/auth/agent/` prefix.
     if (
       pathname.startsWith('/api/auth/csrf') ||
       pathname.startsWith('/api/auth/login-csrf') ||
@@ -378,6 +384,8 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
       pathname === '/api/oauth/device_authorization' ||
       pathname === '/api/agent/challenge' ||
       pathname === '/api/agent/identity' ||
+      pathname === '/api/auth/agent/signup' ||
+      pathname === '/api/auth/agent/signin' ||
       pathname === '/api/memory/cron' ||
       pathname === '/api/pulse/cron' ||
       pathname === '/api/integrations/zoom/webhook' ||
