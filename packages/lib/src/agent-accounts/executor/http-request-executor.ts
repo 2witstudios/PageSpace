@@ -30,7 +30,9 @@ import type { ReleasedResponse } from '../filter-response';
 import { parseGrant } from '../parse-grant';
 import { canonicalizeRequest } from '../canonicalize-request';
 import { digestRequest } from '../digest-request';
-import { buildOutboundRequest } from '../build-outbound-request';
+import { buildOutboundRequest, knownValuesOf, type PresentedMaterial } from '../build-outbound-request';
+import { PLANE_HTTP_KINDS, type PlaneHttpKind } from './plane-wire';
+import type { DelegationFact } from '../grant';
 import { filterResponse } from '../filter-response';
 import { decideDestination } from '../decide-destination';
 import { expectedBindingFor, type PlaneAttestedFacts, type RunEnvelope } from './expected-binding-for';
@@ -41,7 +43,7 @@ import { decideExecutionResult, type HttpExecutionResult } from './decide-execut
 export type HttpRequestExecutorDeps = {
   readonly store: Pick<StoreAdapter, 'resolve' | 'describe'>;
   readonly provisioner: Pick<TenantProvisioner, 'identityOf'>;
-  readonly accounts: Pick<AgentAccountRepository, 'find' | 'findApproval' | 'touchLastUsed'>;
+  readonly accounts: Pick<AgentAccountRepository, 'find' | 'findApproval' | 'findDelegation' | 'touchLastUsed'>;
   readonly grantGate: GrantGate;
   readonly audited: AuditedExecutor;
   readonly network: PinnedHttpsClient;
@@ -106,7 +108,9 @@ export function createHttpRequestExecutor(deps: HttpRequestExecutorDeps): HttpRe
       const approvalRow = parsed.grant.approvalId === 'policy' ? null : await deps.accounts.findApproval(parsed.grant.approvalId).catch(() => null);
       // A standing policy's caps come from the PLANE's stored scope and its own usage ledger; anything the
       // plane cannot read counts as exhausted, never as unlimited (Codex P1).
-      const usageRef: SecretRef | null = row === null ? null : { tenantId: row.tenantId as never, accountId: row.id as never, kind: 'api_key' };
+      const usageRef: SecretRef | null = row === null ? null : { tenantId: row.tenantId as never, accountId: row.id as never, kind: row.kind };
+      const delegation: DelegationFact =
+        parsed.grant.delegationId === null ? { kind: 'none' } : ((await deps.accounts.findDelegation({ delegationId: parsed.grant.delegationId, now }).catch(() => null)) ?? { kind: 'none' });
       const requestBytes = request.body.byteLength;
       const policyUsage =
         parsed.grant.approvalId !== 'policy' || usageRef === null
@@ -120,7 +124,7 @@ export function createHttpRequestExecutor(deps: HttpRequestExecutorDeps): HttpRe
         signature,
         issuerPublicKey: deps.issuerPublicKey,
         now,
-        expected: expectedBindingFor({ run, presenter, row, plane, allowedDriveIds: parsed.grant.callerCeiling.allowedDriveIds }),
+        expected: expectedBindingFor({ run, presenter, row, plane, allowedDriveIds: parsed.grant.callerCeiling.allowedDriveIds, delegation }),
         requestDigest: digestRequest({ canonical, hash: deps.hash }),
         requestOperation: canonical.operation,
         approval: approvalFactFor({ approvalId: parsed.grant.approvalId, approval: approvalRow, policyVersion: row?.policyVersion ?? 0, policyUsage }),
@@ -131,6 +135,9 @@ export function createHttpRequestExecutor(deps: HttpRequestExecutorDeps): HttpRe
       if (!verdict.ok) return deny(claim, verdict.reason, now);
       if (row === null || identityBase === null || plane === null) return deny(claim, 'version_mismatch', now);
       const grant: VerifiedGrant<'http-executor'> = verdict.grant;
+      // Only the kinds this executor presents; the verifier already bound `accountKind` to the row's.
+      const presentedKind = (PLANE_HTTP_KINDS as readonly string[]).includes(grant.accountKind) ? (grant.accountKind as PlaneHttpKind) : null;
+      if (presentedKind === null) return deny(claim, 'kind_not_resolvable', now);
       // The pin is the PLANE's stored origins, checked before the key is even resolved (review HIGH-1).
       const pinnedOrigins = plane.allowedOrigins as never;
       // Reserve the use atomically: a request racing another at the cap is refused here, after the verifier.
@@ -166,14 +173,15 @@ export function createHttpRequestExecutor(deps: HttpRequestExecutorDeps): HttpRe
             caller = outcome.caller;
             return outcome.audit;
           }
-          const resolved = await deps.store.resolve({
-            ref: { tenantId: identityBase.tenantId, accountId: grant.accountId, kind: 'api_key' },
+          const resolved = await deps.store.resolve<'http-executor', PlaneHttpKind>({
+            ref: { tenantId: identityBase.tenantId, accountId: grant.accountId, kind: presentedKind },
             version: grant.credentialVersion,
             grant,
             identity: { ...identityBase, channel: 'http-executor' },
           });
           if (resolved.ok) {
-            const outbound = buildOutboundRequest({ canonical, body: request.body, material: resolved.material, sha256: deps.sha256 });
+            const presented = { kind: resolved.kind, material: resolved.material } as PresentedMaterial;
+            const outbound = buildOutboundRequest({ canonical, body: request.body, material: presented, sha256: deps.sha256 });
             if (!outbound.ok) {
               stage = { kind: 'not_built' };
             } else {
@@ -182,7 +190,7 @@ export function createHttpRequestExecutor(deps: HttpRequestExecutorDeps): HttpRe
               const send = await deps.network.send(outbound.request);
               stage = { kind: 'sent', send };
               if (send.kind === 'response') {
-                released = filterResponse({ status: send.status, headers: send.headers, body: send.body, knownValues: [resolved.material.value], maxBodyBytes: deps.maxReleasedBodyBytes });
+                released = filterResponse({ status: send.status, headers: send.headers, body: send.body, knownValues: knownValuesOf(presented), maxBodyBytes: deps.maxReleasedBodyBytes });
                 if (send.truncated) released = { ...released, truncated: true };
               }
             }

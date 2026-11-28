@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { generateKeyPairSync, randomBytes } from 'node:crypto';
 import { generatePlaneSecrets, type PlaneSecretPrimitives } from '../generate-plane-secrets';
 import { parsePlaneEnv } from '../parse-plane-env';
-import { loadAccountAuthorityKeyring } from '../../../auth/account-authority-signing-key';
+import { loadAccountAuthorityKeyring, loadAccountConsentSigningKey } from '../../../auth/account-authority-signing-key';
 
 const primitives: PlaneSecretPrimitives = {
   randomBytes: (size) => new Uint8Array(randomBytes(size)),
@@ -41,11 +41,13 @@ describe('generatePlaneSecrets', () => {
   });
 
   // The four variables apps/web/src/lib/agent-accounts/agent-accounts-config.ts requires before it
-  // offers the tools (packages/lib must not import apps/web, so the names are stated here).
+  // offers the tools (packages/lib must not import apps/web, so the names are stated here), plus the
+  // consent-signing key that lets a person widen an account's permissions (slice 2).
   it('given the web side, should carry exactly the variables that switch agent accounts on, each non-empty', () => {
     const actual = Object.entries(web).map(([name, value]) => [name, value.length > 0]).sort();
     const expected = [
       ['ACCOUNT_AUTHORITY_SIGNING_KEY', true],
+      ['AGENT_ACCOUNTS_CONSENT_SIGNING_KEY', true],
       ['AGENT_ACCOUNTS_PLANE_SERVICE_SECRET', true],
       ['AGENT_ACCOUNTS_PLANE_URL', true],
       ['AGENT_ACCOUNTS_PRESENTER_KEY_ID', true],
@@ -58,14 +60,20 @@ describe('generatePlaneSecrets', () => {
     expect(Buffer.from(keyring.current.publicKey).toString('base64')).toBe(plane.ACCOUNT_AUTHORITY_PUBLIC_KEY);
   });
 
+  it('given the web consent key, should derive exactly the consent public key the plane verifies with — and differ from the grant key', () => {
+    const consent = loadAccountConsentSigningKey(web);
+    const actual = [Buffer.from(consent?.publicKey ?? []).toString('base64') === plane.AGENT_ACCOUNTS_CONSENT_PUBLIC_KEY, plane.AGENT_ACCOUNTS_CONSENT_PUBLIC_KEY === plane.ACCOUNT_AUTHORITY_PUBLIC_KEY];
+    expect(actual).toEqual([true, false]);
+  });
+
   it('given both sides, should share the service secret and presenter key id', () => {
     const actual = [web.AGENT_ACCOUNTS_PLANE_SERVICE_SECRET === plane.AGENT_ACCOUNTS_PLANE_SERVICE_SECRET, web.AGENT_ACCOUNTS_PRESENTER_KEY_ID === plane.AGENT_ACCOUNTS_PRESENTER_KEY_ID];
     expect(actual).toEqual([true, true]);
   });
 
   it('given the split, should never hand the web side a plane-only value or the plane the signing key', () => {
-    const actual = { webHasDigestKey: 'AGENT_ACCOUNTS_WRITE_DIGEST_KEY' in web, planeHasSigningKey: 'ACCOUNT_AUTHORITY_SIGNING_KEY' in plane };
-    expect(actual).toEqual({ webHasDigestKey: false, planeHasSigningKey: false });
+    const actual = { webHasDigestKey: 'AGENT_ACCOUNTS_WRITE_DIGEST_KEY' in web, planeHasSigningKey: 'ACCOUNT_AUTHORITY_SIGNING_KEY' in plane, planeHasConsentKey: 'AGENT_ACCOUNTS_CONSENT_SIGNING_KEY' in plane };
+    expect(actual).toEqual({ webHasDigestKey: false, planeHasSigningKey: false, planeHasConsentKey: false });
   });
 
   it('given two runs, should never repeat a secret', () => {

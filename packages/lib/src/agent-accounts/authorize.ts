@@ -16,7 +16,7 @@
  *    (its instructions steer the credential; view-only chatters cannot), and a
  *    user-owned account bound to a page needs at least view on it. A caller
  *    cannot tell "exists but not yours" from "does not exist".
- * 2. Only then kind (`api_key` only in this slice) and provisioning
+ * 2. Only then kind (`api_key` and `bearer`, the HTTP executor's) and provisioning
  *    (`credentialVersion` 0 = the plane never committed material).
  * 3. The request: `canonicalizeRequest` (userinfo, wildcards, IP literals,
  *    reserved headers, traversal refused; the operation comes from the
@@ -183,7 +183,7 @@ export function authorize(input: AuthorizeInput): AuthorizeVerdict {
   });
   if (!access.use || !pagePermissionSuffices(account, caller, facts)) return UNAVAILABLE;
 
-  if (account.kind !== 'api_key') return { ok: false, reason: 'kind_not_supported' };
+  if (account.kind !== 'api_key' && account.kind !== 'bearer') return { ok: false, reason: 'kind_not_supported' };
   if (account.credentialVersion < 1) return { ok: false, reason: 'not_provisioned' };
 
   const canonicalized = canonicalizeRequest({ request: input.request, providerSlug: account.providerSlug, registry: input.registry });

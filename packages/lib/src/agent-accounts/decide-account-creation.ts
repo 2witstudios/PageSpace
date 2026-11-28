@@ -2,9 +2,11 @@
  * `decideAccountCreation` — what a human asked to store, as a verdict, before
  * anything touches the database or the credential plane (L2·G2).
  *
- * Order: the kind first — this slice implements `api_key` only, and every
- * other member of the frozen union (D-20 keeps `session` and `password` in it)
- * is refused with a typed reason, so a later gate adds behaviour, not a
+ * Order: the kind first — `api_key` (a key in the header or query parameter
+ * its placement names) and `bearer` (a token always sent as
+ * `Authorization: Bearer <token>`; its placement is fixed, never chosen).
+ * Every other member of the frozen union (D-20 keeps `session` and `password`
+ * in it) is refused with a typed reason, so a later gate adds behaviour, not a
  * variant. Then the name, the pinned origins (the one origin rule,
  * `normalizeOrigin`; each canonical origin once, sorted), the acknowledgment
  * (`decideAcknowledgment`) and the key's placement.
@@ -27,11 +29,18 @@ import { normalizeOrigin, type NormalizeOriginVerdict } from './normalize-origin
 
 export type KeyPlacement = SecretMaterialByKind['api_key']['placement'];
 
+/** The kinds a human can create today: both are presented by the HTTP executor. */
+export type CreatableAccountKind = 'api_key' | 'bearer';
+const CREATABLE_KINDS: readonly AccountKind[] = ['api_key', 'bearer'];
+/** Where a bearer token always rides. */
+export const BEARER_PLACEMENT: KeyPlacement = { in: 'header', name: 'authorization' };
+
 export type AccountDraft = {
-  readonly kind: 'api_key';
+  readonly kind: CreatableAccountKind;
   readonly name: string;
   readonly allowedOrigins: readonly CanonicalOrigin[];
   readonly acknowledgment: AccountAcknowledgment;
+  /** For `bearer`, always `BEARER_PLACEMENT`. */
   readonly placement: KeyPlacement;
   /** null = every request asks a human; otherwise the bounded generic-request policy the human chose. */
   readonly approvalPolicy: AccountApprovalPolicy | null;
@@ -54,7 +63,9 @@ const CONTROL_CHAR_RE = /[\x00-\x1F\x7F]/;
  * origins, a use and byte ceiling, and the trigger still asks for every
  * irreversible or privileged operation.
  */
-const GENERIC_REQUEST_LIMITS = { maxUsesPerHour: 60, maxBytesOut: 10 * 1024 * 1024, maxConcurrent: 4 } as const;
+export const GENERIC_REQUEST_LIMITS = { maxUsesPerHour: 60, maxBytesOut: 10 * 1024 * 1024, maxConcurrent: 4 } as const;
+/** The one operation a request to an origin with no registry entry canonicalizes to. */
+export const GENERIC_REQUEST_OPERATION = { class: 'unknown', name: 'generic_request' } as const;
 
 const HEADER_TOKEN_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const QUERY_NAME_RE = /^[A-Za-z0-9._~-]{1,64}$/;
@@ -91,15 +102,17 @@ export function decideAccountCreation(input: {
   readonly allowedOrigins: readonly string[];
   readonly ownership: LoginOwnership;
   readonly acknowledged: boolean;
+  /** Ignored for `bearer`. */
   readonly placement: KeyPlacement;
-  /** The key itself — validated here, never part of the draft. */
+  /** The key (or bearer token) itself — validated here, never part of the draft. */
   readonly apiKey: string;
   /** Exactly `true` = the human ticked "allow without asking each time". */
   readonly allowGenericRequests: boolean;
   /** The human creating the account; recorded as the policy's approver. */
   readonly approver: UserId;
 }): AccountCreationVerdict {
-  if (input.kind !== 'api_key') return { ok: false, reason: 'kind_not_supported' };
+  if (!CREATABLE_KINDS.includes(input.kind)) return { ok: false, reason: 'kind_not_supported' };
+  const kind = input.kind as CreatableAccountKind;
 
   const name = typeof input.name === 'string' ? input.name.trim() : '';
   if (name.length === 0 || name.length > MAX_ACCOUNT_NAME_LENGTH) return { ok: false, reason: 'name_invalid' };
@@ -115,19 +128,21 @@ export function decideAccountCreation(input: {
   const acknowledgment = decideAcknowledgment({ kind: input.kind, ownership: input.ownership, acknowledged: input.acknowledged });
   if (!acknowledgment.ok) return { ok: false, reason: 'acknowledgment_required' };
 
-  const placement = placementOf(input.placement);
+  const placement = kind === 'bearer' ? BEARER_PLACEMENT : placementOf(input.placement);
   if (placement === null) return { ok: false, reason: 'placement_invalid' };
 
   if (typeof input.apiKey !== 'string' || input.apiKey.length === 0 || input.apiKey.length > MAX_KEY_LENGTH || CONTROL_CHAR_RE.test(input.apiKey)) return { ok: false, reason: 'key_invalid' };
+  // A bearer token is the token alone: the executor adds the scheme.
+  if (kind === 'bearer' && /^bearer\s/i.test(input.apiKey)) return { ok: false, reason: 'key_invalid' };
 
   const allowedOrigins = [...origins].sort();
   const approvalPolicy: AccountApprovalPolicy | null =
     input.allowGenericRequests === true
-      ? { scope: { origins: allowedOrigins, operations: [{ class: 'unknown', name: 'generic_request' }], resources: [] }, trigger: 'irreversible_only', duration: null, limits: { ...GENERIC_REQUEST_LIMITS }, approver: input.approver }
+      ? { scope: { origins: allowedOrigins, operations: [{ ...GENERIC_REQUEST_OPERATION }], resources: [] }, trigger: 'irreversible_only', duration: null, limits: { ...GENERIC_REQUEST_LIMITS }, approver: input.approver }
       : null;
 
   return {
     ok: true,
-    draft: { kind: 'api_key', name, allowedOrigins, acknowledgment: acknowledgment.acknowledgment, placement, approvalPolicy },
+    draft: { kind, name, allowedOrigins, acknowledgment: acknowledgment.acknowledgment, placement, approvalPolicy },
   };
 }

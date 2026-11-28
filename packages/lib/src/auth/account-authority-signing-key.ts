@@ -59,3 +59,22 @@ export function loadAccountAuthorityKeyring(env: Record<string, string | undefin
 export function loadAccountAuthoritySigningKey(env: Record<string, string | undefined> = process.env): AuthorityKey {
   return loadAccountAuthorityKeyring(env).current;
 }
+
+/**
+ * The step-up CONSENT key (slice 2; ADR 0005 §2.6): signs the `OwnerConsent`
+ * a widening rebind carries. Its own variable and its own key, never the grant
+ * key — a grant signer must not be able to widen a scope. The plane holds the
+ * public half as `AGENT_ACCOUNTS_CONSENT_PUBLIC_KEY`.
+ *
+ * Unset is `null`: the authority then refuses every widening
+ * (`consent_unavailable`) while narrowing still works. A value that is set but
+ * unusable throws, like the grant key — never a silent "no consent".
+ */
+export const ACCOUNT_CONSENT_SIGNING_KEY_VAR = 'AGENT_ACCOUNTS_CONSENT_SIGNING_KEY';
+
+export function loadAccountConsentSigningKey(env: Record<string, string | undefined> = process.env): AuthorityKey | null {
+  const verdict = parseAccountAuthorityKeyring({ single: env[ACCOUNT_CONSENT_SIGNING_KEY_VAR], multi: undefined }, primitives);
+  if (verdict.ok) return verdict.keyring.current;
+  if (verdict.reason === 'unset') return null;
+  throw new Error(`${ACCOUNT_CONSENT_SIGNING_KEY_VAR} must be a base64-encoded PKCS#8 Ed25519 private key`);
+}

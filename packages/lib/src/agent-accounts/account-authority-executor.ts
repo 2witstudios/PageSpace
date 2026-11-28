@@ -15,6 +15,18 @@
  * Every refusal toward a model is a typed reason carrying no account facts;
  * an account the caller may not use is `account_unavailable`, exactly as a
  * missing one.
+ *
+ * Changing what an account may do (slice 2: its sites and standing policy, the
+ * agent pages a user-owned account is attached to) is a `rebind` of the
+ * plane's bindings, then the main-DB row. The plane is the judge of
+ * narrowing: an edit that only narrows needs the `grant` permission alone; one
+ * that widens also needs a fresh step-up, which this authority turns into an
+ * `OwnerConsent` signed under the consent key — and the plane accepts it only
+ * from a consenter it pinned. Every rebind starts from the plane's own stored
+ * policy version (`describe`), so a rebind that landed while its response was
+ * lost is never re-applied over itself. Delegations (unattended use) are
+ * main-DB rows the plane verifier reads by id; creating one is widening, so
+ * it needs step-up too.
  */
 import { randomBytes } from 'node:crypto';
 import type { AccountOwnerRef, AgentAccountRecord } from '@pagespace/db/schema/agent-accounts';
@@ -26,7 +38,15 @@ import type { AuthorityKey } from './account-authority-key';
 import type { AgentAccountRepository } from './agent-account-repository';
 import type { AccountFactsRepository } from './account-facts-repository';
 import type { PlaneClient } from './plane-client';
-import type { PlanePutBody } from './executor/plane-wire';
+import type { PlaneHttpKind, PlanePutBody } from './executor/plane-wire';
+import type { AccountBindingSummary, AccountDelegationSummary } from './agent-account-repository';
+import type { ConsentId, DelegationFact, DelegationId } from './grant';
+import type { AccountApprovalPolicy, UsageCounters } from './approval';
+import type { PlaneScope } from './store/store-adapter';
+import { decideAccountEdit, autoApproveOf, type AccountEdit, type AccountEditRefusal } from './decide-account-edit';
+import { isScopeNarrowing } from './store/is-scope-narrowing';
+import { mintOwnerConsent } from './mint-owner-consent';
+import { GENERIC_REQUEST_OPERATION, type CreatableAccountKind } from './decide-account-creation';
 import type { ReleasedResponse } from './filter-response';
 import type { LoginOwnership } from './decide-acknowledgment';
 import type { KeyPlacement, AccountCreationRefusal } from './decide-account-creation';
@@ -48,10 +68,16 @@ import { renderApprovalSubject } from './render-approval-subject';
 const APPROVAL_TTL_MS = 10 * 60_000;
 /** A grant is minted for one immediate request. */
 const GRANT_TTL_MS = 60_000;
+/** The longest an unattended-use delegation may run before a human renews it. */
+export const MAX_DELEGATION_MS = 90 * 24 * 60 * 60_000;
+const MIN_DELEGATION_MS = 5 * 60_000;
+const ZERO_USAGE: UsageCounters = { usesThisHour: 0, bytesOutThisHour: 0, concurrent: 0 };
 
 export type AccountOwnerTarget = { readonly kind: 'user' } | { readonly kind: 'agent_page'; readonly agentPageId: string };
 
 export type CreateAccountInput = {
+  /** Defaults to `api_key`. A `bearer` token is always sent as `Authorization: Bearer <token>`. */
+  readonly kind?: CreatableAccountKind;
   readonly name: string;
   readonly allowedOrigins: readonly string[];
   readonly ownership: LoginOwnership;
@@ -72,6 +98,46 @@ export type AccountOperationResult =
   | { readonly ok: false; readonly reason: 'approval_required'; readonly digest: RequestDigest; readonly subject: ApprovalSubject; readonly stepUp: boolean }
   | { readonly ok: false; readonly reason: 'refused' | 'upstream_unreachable' | 'outcome_unknown' | 'outcome_unrecorded' | 'audit_unavailable' | 'plane_unavailable' };
 
+/** A step-up the route consumed for this account change; its id is signed into the consent. */
+export type StepUpProof = { readonly challengeId: string };
+
+/** What the person who manages an account sees and edits (never material, never versions). */
+export type AccountSettings = {
+  readonly account: SafeAccount;
+  /** The standing "allow without asking" policy, or null when every request asks. */
+  readonly autoApprove: { readonly enabled: true; readonly maxUsesPerHour: number; readonly until: number | null } | null;
+  /** Uses in the policy's rolling hour, from the plane's ledger; null when it could not be read. */
+  readonly usesThisHour: number | null;
+  readonly bindings: readonly AccountBindingSummary[];
+  readonly delegations: readonly AccountDelegationSummary[];
+  /** Only the owner of a user-owned account can attach it to agents. */
+  readonly canBind: boolean;
+};
+
+export type AccountChangeRefusal =
+  | AccountEditRefusal
+  | {
+      readonly ok: false;
+      readonly reason:
+        | 'account_unavailable'
+        /** The change widens what the account may do: retry with a fresh step-up. */
+        | 'step_up_required'
+        /** No consent key is configured: nothing can be widened. */
+        | 'consent_unavailable'
+        /** The plane did not pin this human as a consenter for the account. */
+        | 'not_a_consenter'
+        /** Someone else changed the account meanwhile: reload and retry. */
+        | 'conflict'
+        | 'plane_unavailable'
+        | 'store_refused'
+        | 'page_unavailable'
+        /** Unattended runs cannot answer approval prompts: they need "allow without asking" on. */
+        | 'auto_approve_required'
+        | 'expiry_invalid';
+    };
+
+export type AccountChangeResult = { readonly ok: true; readonly settings: AccountSettings } | AccountChangeRefusal;
+
 export type AccountAuthority = {
   readonly createAccount: (input: { readonly actor: AccessActor; readonly owner: AccountOwnerTarget; readonly input: CreateAccountInput }) => Promise<CreateAccountResult>;
   /** `allowedDriveIds`: the caller's credential ceiling (`[]` = none); accounts outside it are not listed. */
@@ -85,6 +151,15 @@ export type AccountAuthority = {
     readonly accountId: string;
     readonly requestDigest: string;
   }) => Promise<{ readonly ok: true; readonly approvalId: ApprovalId; readonly expiresAt: number } | { readonly ok: false; readonly reason: 'account_unavailable' }>;
+  /** The account's permissions as its manager sees them; `account_unavailable` for anyone without `manage`. */
+  readonly describeAccount: (input: { readonly actor: AccessActor; readonly accountId: string }) => Promise<AccountChangeResult>;
+  readonly updateAccount: (input: { readonly actor: AccessActor; readonly accountId: string; readonly edit: AccountEdit; readonly stepUp: StepUpProof | null }) => Promise<AccountChangeResult>;
+  /** Attach a user-owned account to an agent page the owner can edit. Always widening: needs step-up. */
+  readonly bindAccount: (input: { readonly actor: AccessActor; readonly accountId: string; readonly agentPageId: string; readonly stepUp: StepUpProof | null }) => Promise<AccountChangeResult>;
+  readonly unbindAccount: (input: { readonly actor: AccessActor; readonly accountId: string; readonly agentPageId: string }) => Promise<AccountChangeResult>;
+  /** Let unattended runs (schedules, workflows) the actor starts on this agent page use the account, until `expiresAt`. */
+  readonly createDelegation: (input: { readonly actor: AccessActor; readonly accountId: string; readonly agentPageId: string; readonly expiresAt: number; readonly stepUp: StepUpProof | null }) => Promise<AccountChangeResult>;
+  readonly revokeDelegation: (input: { readonly actor: AccessActor; readonly accountId: string; readonly delegationId: string }) => Promise<AccountChangeResult>;
 };
 
 export type AccountAuthorityDeps = {
@@ -94,11 +169,19 @@ export type AccountAuthorityDeps = {
   readonly authorityKey: AuthorityKey;
   readonly presenterKeyId: PresenterKeyId;
   readonly registry: OperationRegistry;
+  /** The step-up consent key (its public half is the plane's `AGENT_ACCOUNTS_CONSENT_PUBLIC_KEY`); null = nothing can be widened. */
+  readonly consentKey: { readonly sign: (message: Uint8Array) => Uint8Array } | null;
   /** SHA3-256. */
   readonly hash: HashBytes;
   readonly now: () => number;
   readonly newId?: () => string;
 };
+
+const refused = (reason: Extract<AccountChangeRefusal, { readonly reason: string }>['reason']): AccountChangeRefusal => ({ ok: false, reason }) as AccountChangeRefusal;
+
+function refOf(row: Pick<AgentAccountRecord, 'tenantId' | 'id' | 'kind'>): { tenantId: string; accountId: string; kind: PlaneHttpKind } {
+  return { tenantId: row.tenantId, accountId: row.id, kind: row.kind as PlaneHttpKind };
+}
 
 const defaultId = () => randomBytes(18).toString('base64url');
 
@@ -140,6 +223,113 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
     return driveId === null ? null : { kind: 'agent_page', agentPageId: owner.agentPageId, driveId };
   }
 
+  async function settingsOf(row: AgentAccountRecord): Promise<AccountSettings> {
+    const now = deps.now();
+    const [bindings, delegations, usage] = await Promise.all([
+      deps.accounts.listBindings(row.id),
+      deps.accounts.listDelegations({ accountId: row.id, now }),
+      row.approvalPolicy === null || row.status !== 'active' ? Promise.resolve(null) : deps.plane.usage({ ref: refOf(row) }),
+    ]);
+    return {
+      account: toSafeAccount({ row }),
+      autoApprove: autoApproveOf(row.approvalPolicy),
+      usesThisHour: usage !== null && usage.ok ? usage.usesThisHour : null,
+      bindings,
+      delegations,
+      canBind: row.ownerKind === 'user',
+    };
+  }
+
+  /** The row, when the actor may change it (`grant`) and it is live; null otherwise. */
+  async function changeable(accountId: string, actor: AccessActor): Promise<AgentAccountRecord | null> {
+    const row = await deps.accounts.find(accountId);
+    if (row === null || row.status !== 'active' || row.credentialVersion < 1) return null;
+    return (await accessOf(row, actor)).grant ? row : null;
+  }
+
+  /**
+   * Push the account's next scope to the plane, then report what the DB must record. `next` is what
+   * changes on the row; `boundAgentPageIds` the unrevoked bindings the plane must hold.
+   */
+  async function rebindTo({
+    row,
+    next,
+    boundAgentPageIds,
+    actor,
+    stepUp,
+  }: {
+    readonly row: AgentAccountRecord;
+    readonly next: { readonly allowedOrigins: readonly string[]; readonly approvalPolicy: AccountApprovalPolicy | null };
+    readonly boundAgentPageIds: readonly AgentPageId[];
+    readonly actor: AccessActor;
+    readonly stepUp: StepUpProof | null;
+  }): Promise<{ readonly ok: true; readonly policyVersion: number } | AccountChangeRefusal> {
+    const currentBound = await deps.accounts.boundAgentPageIds(row.id);
+    const current = planeBindingsFor({ row, boundAgentPageIds: currentBound, hash: deps.hash }).scope;
+    const candidate = planeBindingsFor({ row: { ...row, ...next, allowedOrigins: [...next.allowedOrigins] }, boundAgentPageIds, hash: deps.hash }).scope;
+    const widens = !isScopeNarrowing({ stored: current, next: candidate });
+    if (widens && stepUp === null) return refused('step_up_required');
+    if (stepUp !== null && deps.consentKey === null) return refused('consent_unavailable');
+
+    const ref = refOf(row);
+    const described = await deps.plane.describe({ ref });
+    if (!described.ok) return refused(described.reason === 'plane_unavailable' || described.reason === 'store_unavailable' ? 'plane_unavailable' : 'account_unavailable');
+    if (described.revoked) return refused('account_unavailable');
+    // Past both sides' versions: a rebind whose response was lost is never re-applied over itself.
+    const policyVersion = Math.max(row.policyVersion, described.policyVersion) + 1;
+    const { scope, bindings } = planeBindingsFor({
+      row: { ...row, allowedOrigins: [...next.allowedOrigins], approvalPolicy: next.approvalPolicy, policyVersion },
+      boundAgentPageIds,
+      hash: deps.hash,
+    });
+    const consent =
+      stepUp === null || deps.consentKey === null
+        ? null
+        : mintOwnerConsent({
+            consentId: newId() as ConsentId,
+            consentingUserId: actor.userId as UserId,
+            stepUpChallengeId: stepUp.challengeId,
+            ref: ref as never,
+            bindings,
+            consenters: described.consenters,
+            issuedAt: deps.now(),
+            sign: deps.consentKey.sign,
+            hash: deps.hash,
+          });
+    const rebound = await deps.plane.rebind({
+      ref,
+      expectedVersion: described.policyVersion,
+      bindings: bindings as unknown as Record<string, unknown>,
+      scope: scope as unknown as Record<string, unknown>,
+      consenters: described.consenters as PlanePutBody['consenters'],
+      consent: consent as never,
+    });
+    if (rebound.ok) return { ok: true, policyVersion };
+    switch (rebound.reason) {
+      case 'consent_required':
+        return refused(stepUp === null ? 'step_up_required' : 'not_a_consenter');
+      case 'consent_invalid':
+        return refused('not_a_consenter');
+      case 'version_conflict':
+        return refused('conflict');
+      case 'revoked':
+      case 'not_found':
+        return refused('account_unavailable');
+      case 'immutable_binding_changed':
+      case 'identity_refused':
+        return refused('store_refused');
+      default:
+        return refused('plane_unavailable');
+    }
+  }
+
+  /** Record a landed rebind on the row (CAS from the version the edit started at). */
+  async function recordScope(row: AgentAccountRecord, next: { readonly allowedOrigins: readonly string[]; readonly approvalPolicy: AccountApprovalPolicy | null }, policyVersion: number): Promise<AgentAccountRecord | null> {
+    return deps.accounts.updateScope({ id: row.id, expectedPolicyVersion: row.policyVersion, nextPolicyVersion: policyVersion, allowedOrigins: next.allowedOrigins, approvalPolicy: next.approvalPolicy, at: deps.now() });
+  }
+
+  const unchangedScope = (row: AgentAccountRecord) => ({ allowedOrigins: row.allowedOrigins, approvalPolicy: (row.approvalPolicy ?? null) as AccountApprovalPolicy | null });
+
   return {
     async createAccount({ actor, owner, input }) {
       const actorUserId = actor.userId as UserId;
@@ -148,7 +338,7 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
       const role = ownerRef.kind === 'agent_page' ? await deps.facts.driveRole({ driveId: ownerRef.driveId, actor }) : null;
       if (!decideAccountCreatePermission({ owner: ownerRef, actorUserId, humanDriveRole: role })) return { ok: false, reason: 'forbidden' };
 
-      const verdict = decideAccountCreation({ kind: 'api_key', ...input, approver: actorUserId });
+      const verdict = decideAccountCreation({ ...input, kind: input.kind ?? 'api_key', approver: actorUserId });
       if (!verdict.ok) return verdict;
 
       const tenantId = deriveTenantId({ owner: ownerRef });
@@ -157,8 +347,11 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
       const consenters: PlanePutBody['consenters'] = ownerRef.kind === 'user' ? { kind: 'owner' } : { kind: 'pinned', userIds: [...(await deps.facts.driveConsenters(ownerRef.driveId))] };
 
       const put = await deps.plane.put({
-        ref: { tenantId, accountId: row.id, kind: 'api_key' },
-        material: { kind: 'api_key', material: { value: input.apiKey, placement: verdict.draft.placement } },
+        ref: { tenantId, accountId: row.id, kind: verdict.draft.kind },
+        material:
+          verdict.draft.kind === 'bearer'
+            ? { kind: 'bearer', material: { token: input.apiKey, expiresAt: null } }
+            : { kind: 'api_key', material: { value: input.apiKey, placement: verdict.draft.placement } },
         bindings: bindings as unknown as Record<string, unknown>,
         scope: scope as unknown as Record<string, unknown>,
         consenters,
@@ -188,13 +381,16 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
       const pagePermission = await deps.facts.pagePermission({ actor, pageId: owner.agentPageId });
       if (!decideAccountListView({ humanDriveRole, pagePermission })) return null;
       // An account minted in the page's previous drive stays bound to that drive (its tenant is immutable): not listed here.
-      return (await deps.accounts.listForAgentPage(owner.agentPageId)).filter((row) => row.ownerDriveId === driveId && withinCeiling(row)).map((row) => toSafeAccount({ row }));
+      const owned = (await deps.accounts.listForAgentPage(owner.agentPageId)).filter((row) => row.ownerDriveId === driveId && withinCeiling(row));
+      // The viewer's OWN accounts attached to this agent — never anyone else's (a binding does not share an account).
+      const attached = (await deps.accounts.listBoundForUserOnPage({ agentPageId: owner.agentPageId, userId: actorUserId })).filter(withinCeiling);
+      return [...owned, ...attached].map((row) => toSafeAccount({ row }));
     },
 
     async revokeAccount({ actor, accountId }) {
       const row = await deps.accounts.find(accountId);
       if (row === null || !(await accessOf(row, actor)).manage) return { ok: false, reason: 'account_unavailable' };
-      const ref = { tenantId: row.tenantId, accountId: row.id, kind: 'api_key' as const };
+      const ref = refOf(row);
       // A not-ready account (its first put never committed) may still have left material in the vault with no
       // plane record to revoke: erase it outright instead (second review MED-1).
       const done = row.credentialVersion === 0 ? await deps.plane.delete({ ref }) : await deps.plane.revoke({ ref });
@@ -211,6 +407,14 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
       const humanDriveRole = row?.ownerDriveId ? await deps.facts.driveRole({ driveId: row.ownerDriveId, actor }) : null;
       const agentPagePermission = caller.agentPageId === null ? 'none' : await deps.facts.pagePermission({ actor, pageId: caller.agentPageId });
       const boundAgentPageIds = row === null ? [] : await deps.accounts.boundAgentPageIds(row.id);
+      // An unattended run is admitted only by a delegation from THIS human for THIS account on THIS agent page.
+      const delegation: DelegationFact =
+        row === null || caller.sessionId !== null
+          ? { kind: 'none' }
+          : ((await deps.accounts.activeDelegation({ accountId: row.id, agentPageId: caller.agentPageId, delegatedByUserId: caller.actingHumanUserId, now })) ?? { kind: 'none' });
+      // The policy window's real counters, so a cap refuses here with its reason; the plane re-checks and reserves.
+      const counted = row === null || row.approvalPolicy === null ? null : await deps.plane.usage({ ref: refOf(row) });
+      const usage: UsageCounters = counted !== null && counted.ok ? { usesThisHour: counted.usesThisHour, bytesOutThisHour: counted.bytesOutThisHour, concurrent: counted.concurrent } : ZERO_USAGE;
       const verdict = authorize({
         caller,
         account: row,
@@ -219,13 +423,13 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
           agentPagePermission,
           agentBoundToAccount: caller.agentPageId !== null && boundAgentPageIds.includes(caller.agentPageId),
           boundAgentPageIds,
-          delegation: { kind: 'none' },
+          delegation,
           ceilingAdmitsAccount: isDriveWithinCredentialScope(caller.callerCeiling.allowedDriveIds, row?.ownerDriveId ?? null),
         },
         request,
         registry: deps.registry,
         approvals: row === null ? [] : await deps.accounts.openApprovals({ accountId: row.id, now }),
-        usage: { usesThisHour: 0, bytesOutThisHour: 0, concurrent: 0 },
+        usage,
         presenter: { keyId: deps.presenterKeyId, channel: 'http-executor' },
         now,
         grantId: newId() as GrantId,
@@ -258,6 +462,86 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
       const expiresAt = deps.now() + APPROVAL_TTL_MS;
       const approvalId = await deps.accounts.insertApproval({ accountId: row.id, requestDigest: requestDigest as RequestDigest, approvedByUserId: actorUserId, approvedViaSessionId: sessionId, stepUpChallengeId: null, expiresAt });
       return { ok: true, approvalId, expiresAt };
+    },
+
+    async describeAccount({ actor, accountId }) {
+      const row = await deps.accounts.find(accountId);
+      if (row === null || !(await accessOf(row, actor)).manage) return refused('account_unavailable');
+      return { ok: true, settings: await settingsOf(row) };
+    },
+
+    async updateAccount({ actor, accountId, edit, stepUp }) {
+      const row = await changeable(accountId, actor);
+      if (row === null) return refused('account_unavailable');
+      const stored = (row.approvalPolicy ?? null) as AccountApprovalPolicy | null;
+      const bound = await deps.accounts.boundAgentPageIds(row.id);
+      // First as the stored approver: if that cannot widen the policy, the approver stays (no consent needed).
+      const asStored = decideAccountEdit({ edit, editor: actor.userId as UserId, storedApprover: stored?.approver ?? null, keepApprover: true, now: deps.now() });
+      if (!asStored.ok) return asStored;
+      const current = planeBindingsFor({ row, boundAgentPageIds: bound, hash: deps.hash }).scope;
+      const narrowsAsStored = isScopeNarrowing({ stored: current, next: { ...current, allowedOrigins: [...asStored.allowedOrigins].sort(), approvalPolicy: asStored.approvalPolicy } as PlaneScope });
+      const verdict = narrowsAsStored ? asStored : decideAccountEdit({ edit, editor: actor.userId as UserId, storedApprover: null, keepApprover: false, now: deps.now() });
+      if (!verdict.ok) return verdict;
+      const next = { allowedOrigins: verdict.allowedOrigins, approvalPolicy: verdict.approvalPolicy };
+      const rebound = await rebindTo({ row, next, boundAgentPageIds: bound, actor, stepUp });
+      if (!rebound.ok) return rebound;
+      const updated = await recordScope(row, next, rebound.policyVersion);
+      return updated === null ? refused('conflict') : { ok: true, settings: await settingsOf(updated) };
+    },
+
+    async bindAccount({ actor, accountId, agentPageId, stepUp }) {
+      const row = await changeable(accountId, actor);
+      if (row === null || row.ownerKind !== 'user') return refused('account_unavailable');
+      // ADR 0005 §4.3: only to an agent page the owner can edit; a binding never shares the account with other people.
+      if ((await deps.facts.pageDrive(agentPageId)) === null || (await deps.facts.pagePermission({ actor, pageId: agentPageId })) !== 'edit') return refused('page_unavailable');
+      const bound = await deps.accounts.boundAgentPageIds(row.id);
+      const nextBound = [...new Set([...bound, agentPageId as AgentPageId])];
+      const rebound = await rebindTo({ row, next: unchangedScope(row), boundAgentPageIds: nextBound, actor, stepUp });
+      if (!rebound.ok) return rebound;
+      await deps.accounts.upsertBinding({ accountId: row.id, agentPageId, boundByUserId: actor.userId, at: deps.now() });
+      const updated = await recordScope(row, unchangedScope(row), rebound.policyVersion);
+      return updated === null ? refused('conflict') : { ok: true, settings: await settingsOf(updated) };
+    },
+
+    async unbindAccount({ actor, accountId, agentPageId }) {
+      const row = await changeable(accountId, actor);
+      if (row === null || row.ownerKind !== 'user') return refused('account_unavailable');
+      // Fail closed: the page loses the account in the DB first; the plane follows (a narrowing, no consent).
+      await deps.accounts.revokeBinding({ accountId: row.id, agentPageId, at: deps.now() });
+      const nextBound = (await deps.accounts.boundAgentPageIds(row.id)).filter((id) => id !== agentPageId);
+      const rebound = await rebindTo({ row, next: unchangedScope(row), boundAgentPageIds: nextBound, actor, stepUp: null });
+      if (!rebound.ok) return rebound;
+      const updated = await recordScope(row, unchangedScope(row), rebound.policyVersion);
+      return updated === null ? refused('conflict') : { ok: true, settings: await settingsOf(updated) };
+    },
+
+    async createDelegation({ actor, accountId, agentPageId, expiresAt, stepUp }) {
+      const row = await changeable(accountId, actor);
+      if (row === null) return refused('account_unavailable');
+      if (stepUp === null) return refused('step_up_required');
+      const now = deps.now();
+      if (!Number.isInteger(expiresAt) || expiresAt < now + MIN_DELEGATION_MS || expiresAt > now + MAX_DELEGATION_MS) return refused('expiry_invalid');
+      // The page the unattended runs drive: the owner page, or a page a user-owned account is attached to.
+      const pageAdmits = row.ownerKind === 'agent_page' ? row.ownerAgentPageId === agentPageId : (await deps.accounts.boundAgentPageIds(row.id)).includes(agentPageId as AgentPageId);
+      if (!pageAdmits) return refused('page_unavailable');
+      const policy = (row.approvalPolicy ?? null) as AccountApprovalPolicy | null;
+      if (autoApproveOf(policy) === null || policy === null) return refused('auto_approve_required');
+      // What is delegated is the policy's reach at this moment: widening the account later widens no delegation.
+      await deps.accounts.insertDelegation({
+        accountId: row.id,
+        agentPageId,
+        delegatedByUserId: actor.userId,
+        scope: { origins: [...policy.scope.origins], operations: [{ ...GENERIC_REQUEST_OPERATION }], resources: [] },
+        expiresAt,
+      });
+      return { ok: true, settings: await settingsOf(row) };
+    },
+
+    async revokeDelegation({ actor, accountId, delegationId }) {
+      const row = await deps.accounts.find(accountId);
+      if (row === null || !(await accessOf(row, actor)).manage) return refused('account_unavailable');
+      await deps.accounts.revokeDelegation({ id: delegationId as DelegationId, accountId: row.id, at: deps.now() });
+      return { ok: true, settings: await settingsOf(row) };
     },
   };
 }

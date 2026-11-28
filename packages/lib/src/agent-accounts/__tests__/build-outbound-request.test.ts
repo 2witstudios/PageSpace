@@ -15,7 +15,7 @@ import { createHash } from 'node:crypto';
 import type { HashBytes } from '../grant';
 import type { CanonicalRequest } from '../canonical-request';
 import { canonicalizeRequest } from '../canonicalize-request';
-import { buildOutboundRequest } from '../build-outbound-request';
+import { buildOutboundRequest, knownValuesOf } from '../build-outbound-request';
 
 const sha256: HashBytes = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const KEY = 'sk_live_4f9a2c7e1b3d5f7a9c1e';
@@ -30,7 +30,7 @@ function canonicalOf(url: string, method = 'GET', body = new Uint8Array(0), head
 describe('buildOutboundRequest', () => {
   it('given a GET and a header placement, should send the canonical URL with host and the key header and nothing else', () => {
     const canonical = canonicalOf('https://API.example.com/v1/forecast?city=Oslo&units=metric', 'GET', new Uint8Array(0), { Accept: 'application/json' });
-    const actual = buildOutboundRequest({ canonical, body: new Uint8Array(0), material: { value: KEY, placement: { in: 'header', name: 'authorization' } }, sha256 });
+    const actual = buildOutboundRequest({ canonical, body: new Uint8Array(0), material: { kind: 'api_key', material: { value: KEY, placement: { in: 'header', name: 'authorization' } } }, sha256 });
     const expected = {
       ok: true,
       request: {
@@ -52,7 +52,7 @@ describe('buildOutboundRequest', () => {
 
   it('given a query placement and a non-default port, should append the encoded key parameter and keep the port in host', () => {
     const canonical = canonicalOf('https://api.example.com:8443/v1/x?a=1');
-    const verdict = buildOutboundRequest({ canonical, body: new Uint8Array(0), material: { value: 'k y&z', placement: { in: 'query', name: 'api_key' } }, sha256 });
+    const verdict = buildOutboundRequest({ canonical, body: new Uint8Array(0), material: { kind: 'api_key', material: { value: 'k y&z', placement: { in: 'query', name: 'api_key' } } }, sha256 });
     const actual = verdict.ok ? { url: verdict.request.url, host: verdict.request.headers.find(([name]) => name === 'host'), port: verdict.request.port } : verdict;
     const expected = { url: 'https://api.example.com:8443/v1/x?a=1&api_key=k%20y%26z', host: ['host', 'api.example.com:8443'], port: 8443 };
     expect(actual).toEqual(expected);
@@ -61,7 +61,7 @@ describe('buildOutboundRequest', () => {
   it('given a POST, should carry the exact body bytes with the derived content-length', () => {
     const body = enc('{"q":"x"}');
     const canonical = canonicalOf('https://api.example.com/v1/q', 'POST', body, { 'Content-Type': 'application/json' });
-    const verdict = buildOutboundRequest({ canonical, body, material: { value: KEY, placement: { in: 'header', name: 'x-api-key' } }, sha256 });
+    const verdict = buildOutboundRequest({ canonical, body, material: { kind: 'api_key', material: { value: KEY, placement: { in: 'header', name: 'x-api-key' } } }, sha256 });
     const actual = verdict.ok ? { body: verdict.request.body, length: verdict.request.headers.find(([name]) => name === 'content-length') } : verdict;
     const expected = { body, length: ['content-length', '9'] };
     expect(actual).toEqual(expected);
@@ -69,15 +69,15 @@ describe('buildOutboundRequest', () => {
 
   it('given body bytes that are not the ones the canonical request digested, should refuse body_mismatch', () => {
     const canonical = canonicalOf('https://api.example.com/v1/q', 'POST', enc('{"q":"x"}'), { 'Content-Type': 'application/json' });
-    const actual = buildOutboundRequest({ canonical, body: enc('{"q":"y"}'), material: { value: KEY, placement: { in: 'header', name: 'x-api-key' } }, sha256 });
+    const actual = buildOutboundRequest({ canonical, body: enc('{"q":"y"}'), material: { kind: 'api_key', material: { value: KEY, placement: { in: 'header', name: 'x-api-key' } } }, sha256 });
     const expected = { ok: false, reason: 'body_mismatch' };
     expect(actual).toEqual(expected);
   });
 
   it('given a placement that collides with a query parameter or a header the request already carries, should refuse placement_collision', () => {
     const actual = [
-      buildOutboundRequest({ canonical: canonicalOf('https://api.example.com/v1/x?api_key=attacker'), body: new Uint8Array(0), material: { value: KEY, placement: { in: 'query', name: 'api_key' } }, sha256 }),
-      buildOutboundRequest({ canonical: canonicalOf('https://api.example.com/v1/x', 'GET', new Uint8Array(0), { Accept: '*/*' }), body: new Uint8Array(0), material: { value: KEY, placement: { in: 'header', name: 'accept' } }, sha256 }),
+      buildOutboundRequest({ canonical: canonicalOf('https://api.example.com/v1/x?api_key=attacker'), body: new Uint8Array(0), material: { kind: 'api_key', material: { value: KEY, placement: { in: 'query', name: 'api_key' } } }, sha256 }),
+      buildOutboundRequest({ canonical: canonicalOf('https://api.example.com/v1/x', 'GET', new Uint8Array(0), { Accept: '*/*' }), body: new Uint8Array(0), material: { kind: 'api_key', material: { value: KEY, placement: { in: 'header', name: 'accept' } } }, sha256 }),
     ];
     const expected = [
       { ok: false, reason: 'placement_collision' },
@@ -87,21 +87,47 @@ describe('buildOutboundRequest', () => {
   });
 
   it('given a key value carrying CR or LF, should refuse key_invalid rather than split a header', () => {
-    const actual = buildOutboundRequest({ canonical: canonicalOf('https://api.example.com/v1/x'), body: new Uint8Array(0), material: { value: 'k\r\nx-evil: 1', placement: { in: 'header', name: 'authorization' } }, sha256 });
+    const actual = buildOutboundRequest({ canonical: canonicalOf('https://api.example.com/v1/x'), body: new Uint8Array(0), material: { kind: 'api_key', material: { value: 'k\r\nx-evil: 1', placement: { in: 'header', name: 'authorization' } } }, sha256 });
     const expected = { ok: false, reason: 'key_invalid' };
     expect(actual).toEqual(expected);
   });
 
   it('given a caller query parameter whose name differs from the key placement only by case, dots, spaces or brackets, should refuse placement_collision — servers that fold names would read the attacker\'s value', () => {
     const urls = ['https://api.example.com/v1/x?API_KEY=attacker', 'https://api.example.com/v1/x?api.key=attacker', 'https://api.example.com/v1/x?api%20key=attacker', 'https://api.example.com/v1/x?api%5Bkey=attacker'];
-    const actual = urls.map((url) => buildOutboundRequest({ canonical: canonicalOf(url), body: new Uint8Array(0), material: { value: KEY, placement: { in: 'query', name: 'api_key' } }, sha256 }));
+    const actual = urls.map((url) => buildOutboundRequest({ canonical: canonicalOf(url), body: new Uint8Array(0), material: { kind: 'api_key', material: { value: KEY, placement: { in: 'query', name: 'api_key' } } }, sha256 }));
     const expected = urls.map(() => ({ ok: false, reason: 'placement_collision' }));
     expect(actual).toEqual(expected);
   });
 
   it('given a caller query parameter spelled with + for the space (api+key), should refuse placement_collision — form decoders read + as a space', () => {
-    const actual = buildOutboundRequest({ canonical: canonicalOf('https://api.example.com/v1/x?api+key=attacker'), body: new Uint8Array(0), material: { value: KEY, placement: { in: 'query', name: 'api_key' } }, sha256 });
+    const actual = buildOutboundRequest({ canonical: canonicalOf('https://api.example.com/v1/x?api+key=attacker'), body: new Uint8Array(0), material: { kind: 'api_key', material: { value: KEY, placement: { in: 'query', name: 'api_key' } } }, sha256 });
     const expected = { ok: false, reason: 'placement_collision' };
     expect(actual).toEqual(expected);
+  });
+});
+
+describe('buildOutboundRequest — bearer (slice 2)', () => {
+  it('given bearer material, should send it as Authorization: Bearer <token> and nothing else', () => {
+    const canonical = canonicalOf('https://api.example.com/v1/me');
+    const verdict = buildOutboundRequest({ canonical, body: new Uint8Array(0), material: { kind: 'bearer', material: { token: KEY, expiresAt: null } }, sha256 });
+    const actual = verdict.ok ? verdict.request.headers.filter(([name]) => name === 'authorization') : verdict;
+    expect(actual).toEqual([['authorization', `Bearer ${KEY}`]]);
+  });
+
+  it('given bearer material carrying a newline, should refuse key_invalid', () => {
+    const canonical = canonicalOf('https://api.example.com/v1/me');
+    const actual = buildOutboundRequest({ canonical, body: new Uint8Array(0), material: { kind: 'bearer', material: { token: `${KEY}\r\nx: y`, expiresAt: null } }, sha256 });
+    expect(actual).toEqual({ ok: false, reason: 'key_invalid' });
+  });
+});
+
+describe('knownValuesOf', () => {
+  it('given each kind, should scrub the secret and the exact value it rode as — and the bare token of an api_key stored as "Bearer …"', () => {
+    const actual = [
+      knownValuesOf({ kind: 'bearer', material: { token: 'tok', expiresAt: null } }),
+      knownValuesOf({ kind: 'api_key', material: { value: 'sk_1', placement: { in: 'header', name: 'x-api-key' } } }),
+      knownValuesOf({ kind: 'api_key', material: { value: 'Bearer tok2', placement: { in: 'header', name: 'authorization' } } }),
+    ];
+    expect(actual).toEqual([['tok', 'Bearer tok'], ['sk_1'], ['Bearer tok2', 'tok2']]);
   });
 });

@@ -71,6 +71,7 @@ export async function startCredentialPlane({ config }: { readonly config: PlaneC
     verify: verifyEd25519,
     consentLedger: createConsentLedgerRepository({ pool: metadataPool }),
   });
+  const usage = createUsageLedgerRepository({ pool: metadataPool });
   const executor = createHttpRequestExecutor({
     store,
     provisioner,
@@ -78,7 +79,7 @@ export async function startCredentialPlane({ config }: { readonly config: PlaneC
     grantGate: createGrantGate({ replayStore: createReplayStoreRepository({ db }) }),
     audited: createAuditedExecutor({ auditRepository: createAgentAccountAuditRepository({ appendPath: createSecurityAuditRepository({ db }) }), hash: sha3 }),
     planeScope: (ref) => metadata.read(ref).then((facts) => facts?.scope ?? null),
-    usage: createUsageLedgerRepository({ pool: metadataPool }),
+    usage,
     network: createPinnedHttpsClient({
       // DNS gets its own deadline: the pinned client's timer starts only at connect (review HIGH-2).
       resolveHost: async (hostname) => {
@@ -105,6 +106,7 @@ export async function startCredentialPlane({ config }: { readonly config: PlaneC
     createPlaneRequestHandler({
       secret: config.serviceSecret,
       store,
+      usage,
       provisioner,
       executor,
       hmac: (key, text) => createHmac('sha256', key).update(text).digest('hex'),

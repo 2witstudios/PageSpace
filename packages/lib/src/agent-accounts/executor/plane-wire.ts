@@ -5,27 +5,73 @@
  * over the plane's own listener, and is never echoed.
  */
 import { z } from 'zod';
+import type { PlaneConsenters } from '../store/store-adapter';
 
-const ref = z.object({ tenantId: z.string().min(1), accountId: z.string().min(1), kind: z.literal('api_key') }).strict();
+/** The kinds the plane holds and the HTTP executor presents (`api_key`, `bearer`). */
+export const PLANE_HTTP_KINDS = ['api_key', 'bearer'] as const;
+export type PlaneHttpKind = (typeof PLANE_HTTP_KINDS)[number];
+
+const ref = z.object({ tenantId: z.string().min(1), accountId: z.string().min(1), kind: z.enum(PLANE_HTTP_KINDS) }).strict();
+
+const material = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.literal('api_key'),
+      material: z.object({ value: z.string().min(1).max(8_192), placement: z.object({ in: z.enum(['header', 'query']), name: z.string().min(1).max(64) }).strict() }).strict(),
+    })
+    .strict(),
+  z.object({ kind: z.literal('bearer'), material: z.object({ token: z.string().min(1).max(8_192), expiresAt: z.number().int().positive().nullable() }).strict() }).strict(),
+]);
+
+const consenters = z.union([z.object({ kind: z.literal('owner') }).strict(), z.object({ kind: z.literal('pinned'), userIds: z.array(z.string().min(1)).min(1) }).strict()]);
 
 export const planePutBody = z
   .object({
     ref,
-    material: z
-      .object({
-        kind: z.literal('api_key'),
-        material: z.object({ value: z.string().min(1).max(8_192), placement: z.object({ in: z.enum(['header', 'query']), name: z.string().min(1).max(64) }).strict() }).strict(),
-      })
-      .strict(),
+    material,
     bindings: z.record(z.string(), z.unknown()),
     scope: z.record(z.string(), z.unknown()),
-    consenters: z.union([z.object({ kind: z.literal('owner') }).strict(), z.object({ kind: z.literal('pinned'), userIds: z.array(z.string().min(1)).min(1) }).strict()]),
+    consenters,
   })
   .strict();
 
 export const planeRevokeBody = z.object({ ref }).strict();
 /** Erase material wherever it is (Infisical is searched even without a plane metadata row). */
 export const planeDeleteBody = z.object({ ref }).strict();
+
+/** Metadata only: the plane's stored policy version and consenters for a ref — never material. */
+export const planeDescribeBody = z.object({ ref }).strict();
+
+/**
+ * Rewrite the plane's bindings for a ref (ADR 0005 §2.2 `rebind`). The plane decides,
+ * against ITS stored scope, whether this narrows (no consent) or widens (an
+ * `OwnerConsent` signed under the consent key, from a consenter the plane pinned).
+ */
+export const planeRebindBody = z
+  .object({
+    ref,
+    expectedVersion: z.number().int().min(1),
+    bindings: z.record(z.string(), z.unknown()),
+    scope: z.record(z.string(), z.unknown()),
+    consenters,
+    consent: z
+      .object({
+        consentId: z.string().min(1).max(128),
+        consentingUserId: z.string().min(1).max(128),
+        stepUpChallengeId: z.string().min(1).max(256),
+        ref,
+        bindingsDigest: z.string().min(1).max(256),
+        consenters,
+        issuedAt: z.number().int().positive(),
+        signature: z.string().min(1).max(512),
+      })
+      .strict()
+      .nullable(),
+  })
+  .strict();
+
+/** The policy window's counters for a ref (the plane's own usage ledger). */
+export const planeUsageBody = z.object({ ref }).strict();
 
 export const planeExecuteBody = z
   .object({
@@ -55,5 +101,21 @@ export type PlanePutBody = z.infer<typeof planePutBody>;
 export type PlaneRevokeBody = z.infer<typeof planeRevokeBody>;
 export type PlaneDeleteBody = z.infer<typeof planeDeleteBody>;
 export type PlaneExecuteBody = z.infer<typeof planeExecuteBody>;
+export type PlaneDescribeBody = z.infer<typeof planeDescribeBody>;
+export type PlaneRebindBody = z.infer<typeof planeRebindBody>;
+export type PlaneUsageBody = z.infer<typeof planeUsageBody>;
 
-export const PLANE_ROUTES = { put: '/v1/accounts/put', revoke: '/v1/accounts/revoke', delete: '/v1/accounts/delete', execute: '/v1/http/execute' } as const;
+export type PlaneDescribeResult =
+  | { readonly ok: true; readonly policyVersion: number; readonly consenters: PlaneConsenters; readonly revoked: boolean }
+  | { readonly ok: false; readonly reason: 'not_found' | 'identity_refused' | 'store_unavailable' };
+export type PlaneUsageResult = { readonly ok: true; readonly usesThisHour: number; readonly bytesOutThisHour: number; readonly concurrent: number } | { readonly ok: false; readonly reason: 'store_unavailable' };
+
+export const PLANE_ROUTES = {
+  put: '/v1/accounts/put',
+  revoke: '/v1/accounts/revoke',
+  delete: '/v1/accounts/delete',
+  describe: '/v1/accounts/describe',
+  rebind: '/v1/accounts/rebind',
+  usage: '/v1/accounts/usage',
+  execute: '/v1/http/execute',
+} as const;

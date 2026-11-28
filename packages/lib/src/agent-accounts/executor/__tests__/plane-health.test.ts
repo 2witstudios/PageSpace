@@ -19,7 +19,8 @@ const untouched = (): never => {
 
 const deps: PlaneRequestHandlerDeps = {
   secret: 'plane-service-secret-0123456789abcdef',
-  store: { put: untouched, revoke: untouched, delete: untouched },
+  store: { put: untouched, revoke: untouched, delete: untouched, describe: untouched, rebind: untouched },
+  usage: { window: untouched },
   provisioner: { ensureTenant: untouched, identityOf: untouched },
   executor: { execute: untouched } as unknown as PlaneRequestHandlerDeps['executor'],
   hmac: (key, text) => createHmac('sha256', key).update(text).digest('hex'),

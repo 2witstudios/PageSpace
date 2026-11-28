@@ -71,11 +71,21 @@ describe('decideAccountCreation', () => {
     expect(actual).toEqual(expected);
   });
 
-  it('given any kind but api_key, should refuse kind_not_supported before anything else', () => {
-    const kinds: readonly AccountKind[] = ['bearer', 'oauth2', 'session', 'password'];
+  it('given any kind but api_key or bearer, should refuse kind_not_supported before anything else', () => {
+    const kinds: readonly AccountKind[] = ['oauth2', 'session', 'password'];
     const actual = kinds.map((kind) => decideAccountCreation({ ...base, kind, allowedOrigins: [] }));
     const expected = kinds.map(() => ({ ok: false, reason: 'kind_not_supported' }));
     expect(actual).toEqual(expected);
+  });
+
+  it('given a bearer token, should fix its placement to the Authorization header whatever placement was asked', () => {
+    const actual = decideAccountCreation({ ...base, kind: 'bearer', placement: { in: 'query', name: 'k' } });
+    expect(actual.ok && [actual.draft.kind, actual.draft.placement]).toEqual(['bearer', { in: 'header', name: 'authorization' }]);
+  });
+
+  it('given a bearer token that already carries the Bearer scheme, should refuse key_invalid (the executor adds it)', () => {
+    const actual = decideAccountCreation({ ...base, kind: 'bearer', apiKey: 'Bearer abc123' });
+    expect(actual).toEqual({ ok: false, reason: 'key_invalid' });
   });
 
   it('given a personal login without the acknowledgment, should refuse; with it, should record personal_login_acknowledged', () => {

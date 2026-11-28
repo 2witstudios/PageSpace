@@ -9,6 +9,13 @@
  *   that carries plaintext, inbound; the response carries a version, never
  *   material.
  * - `revoke` (manage): broker-denies the ref; nothing at the provider changes.
+ * - `describe` (manage): the stored bindings' policy version, consenters and
+ *   revocation — metadata the authority needs to CAS a rebind; never material.
+ * - `rebind` (manage): rewrites the bindings. The STORE decides, against its
+ *   own stored scope, whether the change narrows (no consent) or widens (an
+ *   `OwnerConsent` from a pinned consenter, signed under the consent key and
+ *   consumed single-use) — the service signature authorizes nothing here.
+ * - `usage` (manage): the policy window's counters from the plane's ledger.
  * - `execute` (http-executor): hands the signed grant and the request to the
  *   HTTP executor, which verifies the grant itself — the service signature
  *   authenticates the caller, it grants nothing.
@@ -18,12 +25,14 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { TenantId } from '@pagespace/db/schema/agent-accounts';
-import type { PlaneBindings, PlaneConsenters, PlaneScope, SecretRef, StoreAdapter } from '../store/store-adapter';
+import type { OwnerConsent, PlaneBindings, PlaneConsenters, PlaneScope, SecretRef, StoreAdapter } from '../store/store-adapter';
+import type { UsageLedger } from '../store/usage-ledger-repository';
+import type { PolicyVersion } from '@pagespace/db/schema/agent-accounts';
 import type { TenantProvisioner } from '../store/infisical-tenant-provisioner-client';
 import type { AgentPageId, ConversationId, RunId, SessionId, UserId } from '../grant';
 import type { HttpRequestExecutor } from './http-request-executor';
 import { decidePlaneRequestSignature, PLANE_SIGNATURE_HEADER } from './plane-request-signature';
-import { PLANE_ROUTES, planeDeleteBody, planeExecuteBody, planePutBody, planeRevokeBody } from './plane-wire';
+import { PLANE_ROUTES, planeDeleteBody, planeDescribeBody, planeExecuteBody, planePutBody, planeRebindBody, planeRevokeBody, planeUsageBody, type PlaneDescribeResult, type PlaneUsageResult } from './plane-wire';
 
 const MAX_BODY_BYTES = 1_500_000;
 /** The liveness probe the image HEALTHCHECK and Fly's `[checks.health]` call. */
@@ -31,7 +40,8 @@ export const PLANE_HEALTH_PATH = '/health';
 
 export type PlaneRequestHandlerDeps = {
   readonly secret: string;
-  readonly store: Pick<StoreAdapter, 'put' | 'revoke' | 'delete'>;
+  readonly store: Pick<StoreAdapter, 'put' | 'revoke' | 'delete' | 'describe' | 'rebind'>;
+  readonly usage: Pick<UsageLedger, 'window'>;
   readonly provisioner: Pick<TenantProvisioner, 'ensureTenant' | 'identityOf'>;
   readonly executor: HttpRequestExecutor;
   readonly hmac: (key: string, text: string) => string;
@@ -121,6 +131,45 @@ export function createPlaneRequestHandler(deps: PlaneRequestHandlerDeps): (req: 
       if (tenant === null) return send(res, 200, { ok: true, removed: true, upstream: 'not_attempted' });
       const result = await deps.store.delete({ ref: ref as SecretRef, upstream: 'not_attempted', identity: { tenantId: ref.tenantId as TenantId, identityId: tenant.identityId, channel: 'manage', blastRadius: 'tenant' } });
       return send(res, 200, result.ok || result.reason === 'not_found' ? { ok: true, removed: true, upstream: 'not_attempted' } : result);
+    }
+
+    if (path === PLANE_ROUTES.describe) {
+      const parsed = planeDescribeBody.safeParse(json);
+      if (!parsed.success) return send(res, 400, { error: 'malformed' });
+      const { ref } = parsed.data;
+      const tenant = await deps.provisioner.identityOf(ref.tenantId as TenantId);
+      if (tenant === null) return send(res, 200, { ok: false, reason: 'not_found' } satisfies PlaneDescribeResult);
+      const described = await deps.store.describe({ ref: ref as SecretRef, identity: { tenantId: ref.tenantId as TenantId, identityId: tenant.identityId, channel: 'manage', blastRadius: 'tenant' } });
+      const result: PlaneDescribeResult = described.ok
+        ? { ok: true, policyVersion: described.bindings.policyVersion, consenters: described.consenters, revoked: described.revokedAt !== null }
+        : { ok: false, reason: described.reason };
+      return send(res, 200, result);
+    }
+
+    if (path === PLANE_ROUTES.rebind) {
+      const parsed = planeRebindBody.safeParse(json);
+      if (!parsed.success) return send(res, 400, { error: 'malformed' });
+      const { ref, expectedVersion, bindings, scope, consenters, consent } = parsed.data;
+      const tenant = await deps.provisioner.identityOf(ref.tenantId as TenantId);
+      if (tenant === null) return send(res, 200, { ok: false, reason: 'not_found' });
+      const result = await deps.store.rebind({
+        ref: ref as SecretRef,
+        expectedVersion: expectedVersion as PolicyVersion,
+        bindings: bindings as unknown as PlaneBindings,
+        scope: scope as unknown as PlaneScope,
+        consenters: consenters as PlaneConsenters,
+        consent: consent as OwnerConsent | null,
+        identity: { tenantId: ref.tenantId as TenantId, identityId: tenant.identityId, channel: 'manage', blastRadius: 'tenant' },
+      });
+      return send(res, 200, result);
+    }
+
+    if (path === PLANE_ROUTES.usage) {
+      const parsed = planeUsageBody.safeParse(json);
+      if (!parsed.success) return send(res, 400, { error: 'malformed' });
+      const window = await deps.usage.window({ ref: parsed.data.ref as SecretRef, now: deps.now() }).catch(() => null);
+      const result: PlaneUsageResult = window === null ? { ok: false, reason: 'store_unavailable' } : { ok: true, ...window };
+      return send(res, 200, result);
     }
 
     const parsed = planeExecuteBody.safeParse(json);

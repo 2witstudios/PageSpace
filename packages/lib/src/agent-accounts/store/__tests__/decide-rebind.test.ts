@@ -15,6 +15,7 @@ import { canonicalJson } from '../../canonical-json';
 import { digestBindings } from '../digest-bindings';
 import { digestPlaneScope } from '../digest-plane-scope';
 import { decideRebind } from '../decide-rebind';
+import { mintOwnerConsent } from '../../mint-owner-consent';
 
 const NOW = 1_800_000_000_000;
 const MAX_AGE_MS = 300_000;
@@ -268,5 +269,30 @@ describe('decideRebind — a revoked account (G1c review LOW)', () => {
   it('given a revoked ref, should refuse revoked before verifying or naming any consent to consume, with or without one', () => {
     const actual = [decide({ storedRevoked: true }), decide({ storedRevoked: true, next: SAME_SCOPE_BUMP, consent: null })];
     expect(actual).toEqual([refuse('revoked'), refuse('revoked')]);
+  });
+});
+
+describe('decideRebind — a consent the authority minted (slice 2)', () => {
+  const minted = (next: PlaneBindingsRecord, consentingUserId = 'owner') =>
+    mintOwnerConsent({
+      consentId: 'consent_1' as ConsentId,
+      consentingUserId: consentingUserId as UserId,
+      stepUpChallengeId: 'challenge_1',
+      ref: REF,
+      bindings: next.bindings,
+      consenters: next.consenters,
+      issuedAt: NOW - 1_000,
+      sign: (message) => new Uint8Array(nodeSign(null, message, consentKey.privateKey)),
+      hash: sha3,
+    });
+
+  it('given a widening consented by mintOwnerConsent under the pinned key, should rebind and name the consent to consume', () => {
+    const actual = decide({ consent: minted(WIDER) });
+    expect(actual).toEqual(REBIND_WITH_CONSENT);
+  });
+
+  it('given mintOwnerConsent signing for a human the plane did not pin, should refuse consent_invalid', () => {
+    const actual = decide({ consent: minted(WIDER, 'drive-admin-not-pinned') });
+    expect(actual).toEqual(refuse('consent_invalid'));
   });
 });
