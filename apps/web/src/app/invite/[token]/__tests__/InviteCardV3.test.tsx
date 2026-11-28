@@ -17,7 +17,7 @@ const driveOk = (isExistingUser: boolean): InviteResolution => ({
   data: {
     kind: 'drive',
     driveName: 'Studio',
-    inviterName: 'Jono',
+    inviterName: 'Jono', inviterAccountType: 'human',
     role: 'MEMBER',
     email: EMAIL,
     isExistingUser,
@@ -63,7 +63,7 @@ describe('InviteCardV3', () => {
         kind: 'page',
         pageTitle: 'Q4 Launch Plan',
         driveName: 'Studio',
-        inviterName: 'Jono',
+        inviterName: 'Jono', inviterAccountType: 'human',
         permissions: [],
         email: 'marcus@kimdesign.example',
         isExistingUser,
@@ -83,7 +83,7 @@ describe('InviteCardV3', () => {
   it('Given a connection invite, should show the connect heading and switch the CTA on isExistingUser', () => {
     const conn = (isExistingUser: boolean): InviteResolution => ({
       ok: true,
-      data: { kind: 'connection', inviterName: 'Dana', email: 'marcus@kimdesign.example', isExistingUser, message: null },
+      data: { kind: 'connection', inviterName: 'Dana', inviterAccountType: 'human', email: 'marcus@kimdesign.example', isExistingUser, message: null },
     });
 
     const { unmount } = render(<InviteCardV3 resolution={conn(true)} token="tok" />);
