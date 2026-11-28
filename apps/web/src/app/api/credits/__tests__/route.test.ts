@@ -18,8 +18,15 @@ vi.mock('@pagespace/db/schema/auth', () => ({ users: {} }));
 
 vi.mock('@/lib/auth/auth-helpers', () => ({ requireAuth: vi.fn(), isAuthError: vi.fn() }));
 
+// The route reads "own credits" through the owner-pays seam (getOwnCreditsBalance), which for a
+// human is exactly getCreditBalance at their tier; the mock mirrors that so these cases read as before.
 const { mockGetCreditBalance } = vi.hoisted(() => ({ mockGetCreditBalance: vi.fn() }));
-vi.mock('@/lib/subscription/credit-balance', () => ({ getCreditBalance: mockGetCreditBalance }));
+vi.mock('@pagespace/lib/billing/own-credits-balance', () => ({
+  getOwnCreditsBalance: vi.fn(async (userId: string, tier: string) => {
+    if (userId === 'agent-1') return { ...(await mockGetCreditBalance('owner-1', 'pro')), subscriptionTier: 'pro', billedTo: { userId: 'owner-1', name: 'Dana Owner' } };
+    return { ...(await mockGetCreditBalance(userId, tier)), subscriptionTier: tier, billedTo: null };
+  }),
+}));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 
@@ -48,19 +55,27 @@ describe('GET /api/credits', () => {
   it.each(['business', 'founder'])('A-9 reports retired personal %s as Free', async (subscriptionTier) => {
     mockSelectWhere.mockResolvedValue([{ subscriptionTier }]);
     const res = await GET(createMockRequest('https://example.com/api/credits'));
-    expect(await res.json()).toEqual({ ...summary, subscriptionTier: 'free' });
+    expect(await res.json()).toEqual({ ...summary, subscriptionTier: 'free', billedTo: null });
     expect(mockGetCreditBalance).toHaveBeenCalledWith('u1', 'free');
   });
 
   it('returns the user balance summary', async () => {
     const res = await GET(createMockRequest('https://example.com/api/credits'));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ...summary, subscriptionTier: 'pro' });
+    expect(await res.json()).toEqual({ ...summary, subscriptionTier: 'pro', billedTo: null });
   });
 
   it("resolves the user's tier and passes it to getCreditBalance", async () => {
     await GET(createMockRequest('https://example.com/api/credits'));
     expect(mockGetCreditBalance).toHaveBeenCalledWith('u1', 'pro');
+  });
+
+  it("given a claimed agent, returns its OWNER's balance (what its AI calls spend) and says whom it is billed to", async () => {
+    vi.mocked(requireAuth).mockResolvedValue({ userId: 'agent-1' } as never);
+    mockSelectWhere.mockResolvedValue([{ subscriptionTier: 'free' }]);
+    const res = await GET(createMockRequest('https://example.com/api/credits'));
+    expect(await res.json()).toEqual({ ...summary, subscriptionTier: 'pro', billedTo: { userId: 'owner-1', name: 'Dana Owner' } });
+    expect(mockGetCreditBalance).toHaveBeenCalledWith('owner-1', 'pro');
   });
 
   it('defaults the tier to free when the user row is missing', async () => {

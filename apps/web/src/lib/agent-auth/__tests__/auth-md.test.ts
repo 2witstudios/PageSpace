@@ -113,6 +113,11 @@ describe('buildAuthMd', () => {
     expect(md).toContain('{ "claimed": true, "owner": { "id": "…", "name": "…" }, "access_token": "ps_at_…", "token_type": "Bearer", "expires_in": 900, "refresh_token": "ps_rt_…", "scope": "account offline_access" }');
   });
 
+  it('tells a late poller what an expired claim answers, and when it stops answering that', () => {
+    expect(md).toContain('`expired_token` (the claim lived 15 minutes; start a new one with the same `claim_token`)');
+    expect(md).toContain('a claim that expired more than a day ago');
+  });
+
   it('is pure: identical input, identical output, and no markup outside markdown', () => {
     expect(buildAuthMd({ issuer: ISSUER })).toBe(md);
     expect(md.startsWith('# ')).toBe(true);

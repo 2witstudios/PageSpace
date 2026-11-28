@@ -190,8 +190,22 @@ test.describe('agent signup: browser door to owner pays', () => {
     expect(await personalWalletLedger(agentId, 'usage'), 'nothing is charged to the agent itself').toHaveLength(0);
     expect(await starterGrantRows(agentId)).toHaveLength(0);
 
-    // Claimed, the agent's header no longer asks for funding.
+    // What the agent is SHOWN agrees with who pays: its credit balance is its owner's, billed to
+    // the owner by name, and its own-credits spend choice names the owner's wallet.
+    const credits = await inPageFetch(agent, '/api/credits');
+    expect(credits.status).toBe(200);
+    expect(credits.json?.billedTo).toEqual({ userId: owner.userId, name: 'E2E Agent Owner' });
+    // The agent's own wallet is empty; a positive balance here can only be the owner's.
+    expect(Number(credits.json?.spendable)).toBeGreaterThan(0);
+    const driveSpend = await inPageFetch(agent, `/api/wallets/drives/${encodeURIComponent(driveId)}`);
+    expect(driveSpend.status, driveSpend.text).toBe(200);
+    const ownChoice = (driveSpend.json?.options as Array<{ source: string; label: string; walletId: string }>).find((o) => o.source === 'own_credits');
+    expect(ownChoice?.label).toBe('Billed to E2E Agent Owner');
+    expect(ownChoice?.walletId).toBe((await getBalance(owner.userId))?.id);
+
+    // Claimed, the agent's header no longer asks for funding and says whom it bills.
     await agent.reload();
     await expect(agent.getByTestId('agent-unfunded-notice')).toBeHidden();
+    await expect(agent.getByTestId('credit-billed-to')).toHaveText('Billed to E2E Agent Owner');
   });
 });

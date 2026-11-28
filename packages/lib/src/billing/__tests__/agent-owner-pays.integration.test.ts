@@ -29,6 +29,9 @@ import { requireDb } from '@pagespace/db/test/require-db';
 import { canConsumeAI, resolveEntitlementTier } from '../credit-gate';
 import { consumeCredits, releaseHold } from '../credit-consume';
 import { PERSONAL_SPEND } from '../spend-target';
+import { listSpendChoices } from '../spend-resolution';
+import { getOwnCreditsBalance } from '../own-credits-balance';
+import { getCreditBalance } from '../credit-balance';
 
 let dbAvailable = false;
 const originalMode = process.env.DEPLOYMENT_MODE;
@@ -215,5 +218,39 @@ describe('owner pays — a claimed agent spends its owner\'s own credits (real P
     const gate = await canConsumeAI(ownerId, 'pro', { spend: PERSONAL_SPEND });
     expect(gate).toMatchObject({ allowed: true, walletId: ownerWalletId });
     await releaseHold(gate.holdId ?? '');
+  });
+});
+
+describe("owner pays — what a claimed agent is SHOWN is its owner's own credits (real Postgres)", () => {
+  it("lists own credits as the OWNER's wallet, with the owner's remaining credits, labelled as billed to the owner", async () => {
+    if (!dbAvailable) return;
+    const { ownerId, ownerWalletId } = await seedOwner();
+    await db.update(users).set({ name: 'Dana Owner' }).where(eq(users.id, ownerId));
+    const agentId = await seedAgent(ownerId);
+    await seedAgentBareWallet(agentId);
+
+    const [own] = await listSpendChoices(agentId, null);
+    expect(own).toMatchObject({ source: 'own_credits', walletId: ownerWalletId, remainingCents: OWNER_TOPUP_CENTS, label: 'Billed to Dana Owner' });
+  });
+
+  it("shows a claimed agent its owner's balance and names the owner; an unclaimed agent sees its own empty wallet", async () => {
+    if (!dbAvailable) return;
+    const { ownerId } = await seedOwner();
+    await db.update(users).set({ name: 'Dana Owner' }).where(eq(users.id, ownerId));
+    const claimed = await seedAgent(ownerId);
+    await seedAgentBareWallet(claimed);
+    const unclaimed = await seedAgent(null);
+    await seedAgentBareWallet(unclaimed);
+
+    const claimedBalance = await getOwnCreditsBalance(claimed, 'free');
+    // Exactly what the owner sees of their own wallet (same read, same tier), plus whom it bills.
+    expect(claimedBalance).toEqual({ ...(await getCreditBalance(ownerId, 'pro')), subscriptionTier: 'pro', billedTo: { userId: ownerId, name: 'Dana Owner' } });
+    expect(claimedBalance.spendable).toBeGreaterThanOrEqual(OWNER_TOPUP_CENTS);
+
+    const unclaimedBalance = await getOwnCreditsBalance(unclaimed, 'free');
+    expect(unclaimedBalance.spendable).toBe(0);
+    expect(unclaimedBalance.billedTo).toBeNull();
+    const [own] = await listSpendChoices(unclaimed, null);
+    expect(own).toMatchObject({ source: 'own_credits', remainingCents: 0, label: 'Your credits' });
   });
 });

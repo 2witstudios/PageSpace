@@ -150,7 +150,7 @@ Content-Type: application/x-www-form-urlencoded
 grant_type=${agent.claim_grant_type}&claim_token=<claim_token>&client_id=pagespace-agent
 \`\`\`
 
-Poll no faster than \`interval\` seconds. Until the human decides, the answer is HTTP 400 with the device-flow vocabulary: \`authorization_pending\` (keep polling), \`slow_down\` (poll less often), \`expired_token\` (start a new claim), \`access_denied\` (the human said no); \`invalid_grant\` means the claim token is not usable (unknown, already redeemed, or the agent was revoked). On approval you receive, once, a fresh token pair for yourself and your owner:
+Poll no faster than \`interval\` seconds. Until the human decides, the answer is HTTP 400 with the device-flow vocabulary: \`authorization_pending\` (keep polling), \`slow_down\` (poll less often), \`expired_token\` (the claim lived 15 minutes; start a new one with the same \`claim_token\`), \`access_denied\` (the human said no); \`invalid_grant\` means the claim token is not usable (unknown, already redeemed, the agent was revoked, or a claim that expired more than a day ago). On approval you receive, once, a fresh token pair for yourself and your owner:
 
 \`\`\`
 { "claimed": true, "owner": { "id": "…", "name": "…" }, "access_token": "ps_at_…", "token_type": "Bearer", "expires_in": 900, "refresh_token": "ps_rt_…", "scope": "account offline_access" }
