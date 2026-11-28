@@ -681,9 +681,16 @@ export function sourceToPin(input: CallSpendInput): SpendSourceKind | null {
  * What the spending-from chip and popover call a source (UI-8), so the client never resolves a
  * wallet id: the drive's wallet by the drive's name, a seat by the org's name, and own credits.
  */
-export function spendChoiceLabel(input: { source: SpendSourceKind; driveName: string | null; orgName: string | null }): string {
+export function spendChoiceLabel(input: {
+  source: SpendSourceKind;
+  driveName: string | null;
+  orgName: string | null;
+  /** Set for a claimed agent (ADR 0008 Decision 8): its own credits are this owner's. */
+  billedToName?: string | null;
+}): string {
   if (input.source === 'drive_wallet') return input.driveName ? `${input.driveName} wallet` : 'Drive wallet';
   if (input.source === 'seat_allowance') return input.orgName ? `${input.orgName} seat` : 'Organization seat';
+  if (typeof input.billedToName === 'string') return input.billedToName ? `Billed to ${input.billedToName}` : "Billed to the agent's owner";
   return 'Your credits';
 }
 

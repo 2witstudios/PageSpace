@@ -28,7 +28,10 @@ import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { canConsumeAI, resolveEntitlementTier } from '../credit-gate';
 import { consumeCredits, releaseHold } from '../credit-consume';
-import { PERSONAL_SPEND } from '../spend-target';
+import { PERSONAL_SPEND, driveSpend } from '../spend-target';
+import { listSpendChoices } from '../spend-resolution';
+import { getOwnCreditsBalance } from '../own-credits-balance';
+import { getCreditBalance } from '../credit-balance';
 
 let dbAvailable = false;
 const originalMode = process.env.DEPLOYMENT_MODE;
@@ -196,6 +199,19 @@ describe('owner pays — a claimed agent spends its owner\'s own credits (real P
     expect(holds).toEqual([]);
   });
 
+  it('given an UNCLAIMED agent calling in its own drive, should refuse with requires_funding whatever the reservation (never source_refused)', async () => {
+    if (!dbAvailable) return;
+    const agentId = await seedAgent(null);
+    const drive = await factories.createDrive(agentId);
+    // A reservation above the free tier's would-be starter grant is the case that used to
+    // surface as source_refused: the drive resolution refused own credits as empty first.
+    for (const estCostCents of [25, 5_000]) {
+      expect(await canConsumeAI(agentId, 'free', { spend: driveSpend(drive.id), estCostCents })).toMatchObject({ allowed: false, reason: 'requires_funding' });
+    }
+    const holds = await db.select({ id: creditHolds.id }).from(creditHolds).where(eq(creditHolds.userId, agentId));
+    expect(holds).toEqual([]);
+  });
+
   it("given a REVOKED agent that still names an owner, should never reach the owner's wallet", async () => {
     if (!dbAvailable) return;
     const { ownerId, ownerWalletId } = await seedOwner('pro');
@@ -215,5 +231,39 @@ describe('owner pays — a claimed agent spends its owner\'s own credits (real P
     const gate = await canConsumeAI(ownerId, 'pro', { spend: PERSONAL_SPEND });
     expect(gate).toMatchObject({ allowed: true, walletId: ownerWalletId });
     await releaseHold(gate.holdId ?? '');
+  });
+});
+
+describe("owner pays — what a claimed agent is SHOWN is its owner's own credits (real Postgres)", () => {
+  it("lists own credits as the OWNER's wallet, with the owner's remaining credits, labelled as billed to the owner", async () => {
+    if (!dbAvailable) return;
+    const { ownerId, ownerWalletId } = await seedOwner();
+    await db.update(users).set({ name: 'Dana Owner' }).where(eq(users.id, ownerId));
+    const agentId = await seedAgent(ownerId);
+    await seedAgentBareWallet(agentId);
+
+    const [own] = await listSpendChoices(agentId, null);
+    expect(own).toMatchObject({ source: 'own_credits', walletId: ownerWalletId, remainingCents: OWNER_TOPUP_CENTS, label: 'Billed to Dana Owner' });
+  });
+
+  it("shows a claimed agent its owner's balance and names the owner; an unclaimed agent sees its own empty wallet", async () => {
+    if (!dbAvailable) return;
+    const { ownerId } = await seedOwner();
+    await db.update(users).set({ name: 'Dana Owner' }).where(eq(users.id, ownerId));
+    const claimed = await seedAgent(ownerId);
+    await seedAgentBareWallet(claimed);
+    const unclaimed = await seedAgent(null);
+    await seedAgentBareWallet(unclaimed);
+
+    const claimedBalance = await getOwnCreditsBalance(claimed, 'free');
+    // Exactly what the owner sees of their own wallet (same read, same tier), plus whom it bills.
+    expect(claimedBalance).toEqual({ ...(await getCreditBalance(ownerId, 'pro')), subscriptionTier: 'pro', billedTo: { userId: ownerId, name: 'Dana Owner' } });
+    expect(claimedBalance.spendable).toBeGreaterThanOrEqual(OWNER_TOPUP_CENTS);
+
+    const unclaimedBalance = await getOwnCreditsBalance(unclaimed, 'free');
+    expect(unclaimedBalance.spendable).toBe(0);
+    expect(unclaimedBalance.billedTo).toBeNull();
+    const [own] = await listSpendChoices(unclaimed, null);
+    expect(own).toMatchObject({ source: 'own_credits', remainingCents: 0, label: 'Your credits' });
   });
 });

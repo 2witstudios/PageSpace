@@ -17,7 +17,7 @@ import { agentClaims, agentIdentities, agentSignupChallenges } from '@pagespace/
 import { hashToken } from '../../auth/token-utils';
 import { agentSyntheticEmail } from '../../auth/agent/reserved-email';
 import { AGENT_UNAUTHENTICATED_TTL_MS } from '../../auth/agent/lifecycle-decision';
-import { agentLifecycleStore } from '../agent-lifecycle';
+import { agentLifecycleStore, CLAIM_EXPIRED_GRACE_MS } from '../agent-lifecycle';
 
 const userIds: string[] = [];
 const challengeIds: string[] = [];
@@ -71,19 +71,21 @@ describe('agentLifecycleStore (real Postgres)', () => {
     expect(left.map((row) => row.id)).toEqual([liveId]);
   });
 
-  it('prunes only expired claims', async () => {
+  it('prunes only claims expired for longer than the grace period, so a poll just after expiry still answers expired_token', async () => {
     const agentId = await insertAgent({ createdAt: NOW, lastAuthAt: NOW });
-    const expiredId = createId();
+    const staleId = createId();
+    const justExpiredId = createId();
     const liveId = createId();
     await db.insert(agentClaims).values([
-      { id: expiredId, agentUserId: agentId, claimTokenHash: hashToken(`c-${expiredId}`), userCodeHash: hashToken(`u-${expiredId}`), expiresAt: new Date(NOW.getTime() - 1000) },
+      { id: staleId, agentUserId: agentId, claimTokenHash: hashToken(`c-${staleId}`), userCodeHash: hashToken(`u-${staleId}`), expiresAt: new Date(NOW.getTime() - CLAIM_EXPIRED_GRACE_MS - 1000) },
+      { id: justExpiredId, agentUserId: agentId, claimTokenHash: hashToken(`c-${justExpiredId}`), userCodeHash: hashToken(`u-${justExpiredId}`), expiresAt: new Date(NOW.getTime() - 1000) },
       { id: liveId, agentUserId: agentId, claimTokenHash: hashToken(`c-${liveId}`), userCodeHash: hashToken(`u-${liveId}`), expiresAt: new Date(NOW.getTime() + 60_000) },
     ]);
 
     expect(await agentLifecycleStore.pruneExpiredClaims(NOW)).toBeGreaterThanOrEqual(1);
 
-    const left = await db.select({ id: agentClaims.id }).from(agentClaims).where(inArray(agentClaims.id, [expiredId, liveId]));
-    expect(left.map((row) => row.id)).toEqual([liveId]);
+    const left = await db.select({ id: agentClaims.id }).from(agentClaims).where(inArray(agentClaims.id, [staleId, justExpiredId, liveId]));
+    expect(left.map((row) => row.id).sort()).toEqual([justExpiredId, liveId].sort());
   });
 
   it('finds unclaimed, never-authenticated agents created at or before the cutoff — and nothing else', async () => {

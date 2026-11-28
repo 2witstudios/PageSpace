@@ -896,6 +896,11 @@
       "import": "./dist/billing/credit-balance.js",
       "require": "./dist/billing/credit-balance.js"
     },
+    "./billing/own-credits-balance": {
+      "types": "./dist/billing/own-credits-balance.d.ts",
+      "import": "./dist/billing/own-credits-balance.js",
+      "require": "./dist/billing/own-credits-balance.js"
+    },
     "./billing/credit-emit": {
       "types": "./dist/billing/credit-emit.d.ts",
       "import": "./dist/billing/credit-emit.js",
@@ -3494,6 +3499,9 @@
       ],
       "billing/credit-balance": [
         "./dist/billing/credit-balance.d.ts"
+      ],
+      "billing/own-credits-balance": [
+        "./dist/billing/own-credits-balance.d.ts"
       ],
       "billing/credit-emit": [
         "./dist/billing/credit-emit.d.ts"

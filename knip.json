@@ -368,6 +368,7 @@
         "src/billing/credit-copy.ts",
         "src/billing/credit-core.ts",
         "src/billing/credit-emit.ts",
+        "src/billing/own-credits-balance.ts",
         "src/billing/credit-funding.ts",
         "src/billing/credit-gate.ts",
         "src/billing/credit-pricing.ts",
