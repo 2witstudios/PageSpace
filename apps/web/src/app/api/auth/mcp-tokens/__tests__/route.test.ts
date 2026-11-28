@@ -26,6 +26,7 @@ import { DrizzleQueryError } from 'drizzle-orm/errors';
 vi.mock('@/lib/repositories/session-repository', () => ({
   sessionRepository: {
     createMcpTokenWithDriveScopes: vi.fn(),
+    findAccountType: vi.fn(),
     findDrivesByIds: vi.fn(),
     findUserMcpTokensWithDrives: vi.fn(),
     findMcpTokenByIdAndUser: vi.fn(),
@@ -146,6 +147,7 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
     } as never);
     vi.mocked(sessionRepository.findDrivesByIds).mockResolvedValue([]);
     vi.mocked(sessionRepository.findUserMcpTokensWithDrives).mockResolvedValue([]);
+    vi.mocked(sessionRepository.findAccountType).mockResolvedValue('human');
 
     // Default: drive scope validation succeeds
     vi.mocked(validateDriveScopeAccess).mockResolvedValue({

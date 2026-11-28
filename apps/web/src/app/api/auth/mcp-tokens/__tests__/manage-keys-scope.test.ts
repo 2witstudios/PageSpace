@@ -26,6 +26,8 @@ import { manageKeysScopedAuthResult, driveScopedOAuthAuthResult } from '@/lib/au
 vi.mock('@/lib/repositories/session-repository', () => ({
   sessionRepository: {
     createMcpTokenWithDriveScopes: vi.fn(),
+    // A human caller: the session path stays uncapped (decideAgentKeyMint).
+    findAccountType: vi.fn().mockResolvedValue('human'),
     findDrivesByIds: vi.fn(),
     findUserMcpTokensWithDrives: vi.fn(),
   },

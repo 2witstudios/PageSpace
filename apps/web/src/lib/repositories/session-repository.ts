@@ -135,6 +135,15 @@ export const sessionRepository = {
   },
 
   /**
+   * The caller's `users.accountType` — the key-mint caps follow it, whatever
+   * credential the caller presented (`decideAgentKeyMint`). Null when no row.
+   */
+  async findAccountType(userId: string): Promise<'human' | 'agent' | null> {
+    const [row] = await db.select({ accountType: users.accountType }).from(users).where(eq(users.id, userId)).limit(1);
+    return row?.accountType ?? null;
+  },
+
+  /**
    * Fetch drive names by IDs (for MCP token response formatting).
    */
   async findDrivesByIds(

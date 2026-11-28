@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { OAUTH_ACCESS_TOKEN_PREFIX } from '@/lib/auth/token-prefixes';
 import { resolveCallerCredential } from '@/lib/agent-auth/caller-credential-resolver';
+import { decideAgentKeyMint } from '@pagespace/lib/auth/agent/caller-policy';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { sessionRepository, type McpToken } from '@/lib/repositories/session-repository';
 import { z } from 'zod/v4';
@@ -34,7 +35,7 @@ const AUTH_OPTIONS_MINT = { allow: ['session', 'oauth'] as const, requireCSRF: t
 // An agent's live mcp_ keys are capped: AGENT_KEY_MINT bounds the RATE, this
 // bounds how many a leaked agent secret could stockpile before the owner
 // revokes (revocation kills them all, but fewer live keys is less exposure).
-// The session path is uncapped, as before.
+// A human's session is uncapped, as before; an agent's session is capped too.
 const AGENT_MAX_LIVE_KEYS = 20;
 
 /** The response a bearer token has always received from POST here (it was `allow: ['session']`). */
@@ -67,16 +68,24 @@ export async function POST(req: NextRequest) {
   const userId = auth.userId;
 
   // The agent path (ADR 0008 D6). Everything after this block is the session
-  // path's own scoping, applied to the caller — no second scoping rule.
-  const viaAgent = auth.tokenType !== 'session';
+  // path's own scoping, applied to the caller — no second scoping rule. The
+  // caps follow the CALLER (security review addendum): an agent signed in by
+  // cookie at the browser door is capped exactly like one presenting its bearer.
+  const credential = await resolveCallerCredential(auth);
+  const policy = decideAgentKeyMint({
+    credential,
+    // Only a session needs the lookup: an agent_grant_token's principal is an agent by construction.
+    accountType: credential === 'session' ? await sessionRepository.findAccountType(userId) : null,
+  });
+  const viaAgent = policy.status === 'refused' || policy.agentCaps;
   const refuseAgent = (reason: string) => {
     if (viaAgent) auditRequest(req, { eventType: 'authz.access.denied', userId, resourceType: 'mcp_token', details: { method: 'agent', reason } });
   };
-  if (viaAgent) {
-    if ((await resolveCallerCredential(auth)) !== 'agent_grant_token') {
-      refuseAgent('not_agent_grant_credential');
-      return oauthNotPermitted();
-    }
+  if (policy.status === 'refused') {
+    refuseAgent('not_agent_grant_credential');
+    return oauthNotPermitted();
+  }
+  if (policy.agentCaps) {
     const limit = await checkDistributedRateLimit(`agent-key-mint:user:${userId}`, DISTRIBUTED_RATE_LIMITS.AGENT_KEY_MINT);
     if (!limit.allowed) {
       auditRequest(req, { eventType: 'security.rate.limited', userId, resourceType: 'mcp_token', details: { method: 'agent' } });

@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
 
 const mocks = vi.hoisted(() => ({
-  auth: vi.fn(), issuance: vi.fn(), validate: vi.fn(), create: vi.fn(), rateLimit: vi.fn(), audit: vi.fn(), guarded: vi.fn(),
+  auth: vi.fn(), issuance: vi.fn(), validate: vi.fn(), create: vi.fn(), rateLimit: vi.fn(), audit: vi.fn(), guarded: vi.fn(), accountType: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -24,7 +24,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 vi.mock('@/lib/repositories/oauth-repository', () => ({ findAccessTokenIssuance: mocks.issuance }));
 vi.mock('@/lib/repositories/session-repository', () => ({
-  sessionRepository: { createMcpTokenWithDriveScopes: mocks.create, createAgentMcpTokenGuarded: mocks.guarded, findDrivesByIds: vi.fn().mockResolvedValue([]) },
+  sessionRepository: { createMcpTokenWithDriveScopes: mocks.create, createAgentMcpTokenGuarded: mocks.guarded, findDrivesByIds: vi.fn().mockResolvedValue([]), findAccountType: mocks.accountType },
 }));
 vi.mock('@pagespace/lib/services/drive-service', () => ({ validateDriveScopeAccess: mocks.validate }));
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
@@ -58,6 +58,7 @@ describe('POST /api/auth/mcp-tokens — agent bearer path', () => {
     mocks.rateLimit.mockResolvedValue({ allowed: true });
     mocks.create.mockResolvedValue({ id: 'k1', name: 'agent key', createdAt: new Date() });
     mocks.guarded.mockImplementation(async (row: Record<string, unknown>) => ({ ok: true, token: await mocks.create(row) }));
+    mocks.accountType.mockResolvedValue('human');
   });
 
   it('should authenticate session (CSRF-checked) or oauth — CSRF applies to sessions only', async () => {
@@ -143,6 +144,45 @@ describe('POST /api/auth/mcp-tokens — agent bearer path', () => {
       expect(mocks.guarded).not.toHaveBeenCalled();
       expect(mocks.rateLimit).not.toHaveBeenCalled();
       expect(mocks.issuance).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('an AGENT signed in by session (the browser door) gets the same caps as its bearer (security review LOW)', () => {
+    const sessionMint = () => POST(new NextRequest('http://localhost/api/auth/mcp-tokens', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'k' }),
+    }));
+    beforeEach(() => {
+      mocks.auth.mockResolvedValue({ userId: 'agent-1', tokenType: 'session', tokenVersion: 4, role: 'user' });
+      mocks.accountType.mockResolvedValue('agent');
+    });
+
+    it('should apply AGENT_KEY_MINT per agent — the same bucket as the bearer path', async () => {
+      mocks.rateLimit.mockResolvedValue({ allowed: false, retryAfter: 120 });
+      const response = await sessionMint();
+      expect(response.status).toBe(429);
+      expect(mocks.accountType).toHaveBeenCalledWith('agent-1');
+      expect(mocks.rateLimit).toHaveBeenCalledWith('agent-key-mint:user:agent-1', { maxAttempts: 10, windowMs: 3_600_000 });
+      expect(mocks.create).not.toHaveBeenCalled();
+    });
+
+    it('should mint through the guarded path with the live-key cap of 20', async () => {
+      const response = await sessionMint();
+      expect(response.status).toBe(200);
+      expect(mocks.guarded).toHaveBeenCalledWith(expect.objectContaining({ userId: 'agent-1' }), { expectedTokenVersion: 4, maxLiveKeys: 20 });
+    });
+
+    it('given 20 live keys already, should refuse 409 key_limit_reached', async () => {
+      mocks.guarded.mockResolvedValue({ ok: false, reason: 'key_limit_reached' });
+      const response = await sessionMint();
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ error: 'key_limit_reached', limit: 20 });
+    });
+
+    it('given its account type cannot be read, should fail closed to the caps', async () => {
+      mocks.accountType.mockResolvedValue(null);
+      await sessionMint();
+      expect(mocks.rateLimit).toHaveBeenCalledWith('agent-key-mint:user:agent-1', expect.anything());
+      expect(mocks.guarded).toHaveBeenCalled();
     });
   });
 
