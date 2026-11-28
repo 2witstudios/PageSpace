@@ -5,10 +5,17 @@
  */
 import { parsePlaneEnv } from './parse-plane-env';
 import { startCredentialPlane } from './plane-worker';
+import { planeCryptoSelfCheck } from './plane-crypto';
 
 const verdict = parsePlaneEnv({ env: process.env });
 if (!verdict.ok) {
   process.stderr.write(`credential-plane: refusing to start; missing: ${verdict.missing.join(', ') || 'none'}; malformed: ${verdict.malformed.join(', ') || 'none'}\n`);
+  process.exit(1);
+}
+// A runtime missing a primitive would fail every write; refuse to start instead.
+const cryptoFailures = planeCryptoSelfCheck();
+if (cryptoFailures.length > 0) {
+  process.stderr.write(`credential-plane: refusing to start; crypto self-check failed: ${cryptoFailures.join(', ')}\n`);
   process.exit(1);
 }
 startCredentialPlane({ config: verdict.config }).then(

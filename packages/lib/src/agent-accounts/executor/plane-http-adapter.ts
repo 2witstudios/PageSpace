@@ -141,7 +141,10 @@ export function createPlaneRequestHandler(deps: PlaneRequestHandlerDeps): (req: 
   }
 
   return (req, res) => {
-    handle(req, res).catch(() => {
+    handle(req, res).catch((error: unknown) => {
+      // Route and error class only: a message can carry request bytes, and this process holds plaintext.
+      const route = (req.url ?? '').split('?')[0] ?? '';
+      process.stderr.write(`credential-plane: internal error on ${route.slice(0, 64)}: ${error instanceof Error ? error.name : 'unknown'}\n`);
       if (!res.headersSent) send(res, 500, { error: 'internal' });
       else res.end();
     });
