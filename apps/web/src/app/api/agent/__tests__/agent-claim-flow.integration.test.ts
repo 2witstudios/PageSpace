@@ -274,6 +274,34 @@ describe('agent claim ceremony — real Postgres', () => {
     expect(await poll(agent.claimToken)).toEqual({ status: 400, body: { error: 'access_denied' } });
   });
 
+  it('given a claim started from the agent\'s SESSION (browser door), should flow through /claim, approval and the poll exactly like a token-started one', async () => {
+    if (!dbAvailable) return;
+    const agent = await registerAgent('Session Agent');
+    const ownerId = await human('Sol Owner');
+    const { startAgentClaimForSession } = await import('@/lib/agent-auth/claim-start');
+
+    // A token-started code is superseded by the session start: one live claim per agent.
+    const tokenCode = String((await startClaim(agent.claimToken)).body.user_code);
+    const started = await startAgentClaimForSession({ agentUserId: agent.agentId, now: new Date() });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    expect((await repo.verifyAgentClaimUserCode({ userCode: tokenCode, claimerUserId: ownerId, now: new Date() })).outcome).toBe('not_found');
+
+    // The session claim is keyed by the agent's claim token, so the claim grant polls it.
+    const [row] = await db.select({ claimTokenHash: agentClaims.claimTokenHash }).from(agentClaims).where(eq(agentClaims.userCodeHash, hashToken(normalizeUserCode(started.userCode))));
+    expect(row.claimTokenHash).toBe(hashToken(agent.claimToken));
+    expect(await poll(agent.claimToken)).toEqual({ status: 400, body: { error: 'authorization_pending' } });
+
+    expect(await repo.verifyAgentClaimUserCode({ userCode: started.userCode, claimerUserId: ownerId, now: new Date() })).toMatchObject({ outcome: 'ok', agent: { agentUserId: agent.agentId } });
+    expect(await repo.recordAgentClaimDecision({ userCode: started.userCode, action: 'approve', claimerUserId: ownerId, now: new Date() })).toEqual({ outcome: 'approved', agentUserId: agent.agentId });
+    expect((await identityOf(agent.agentId)).ownerUserId).toBe(ownerId);
+    expect((await poll(agent.claimToken)).body).toMatchObject({ claimed: true, owner: { id: ownerId } });
+
+    // Once claimed, neither door starts another claim.
+    expect(await startAgentClaimForSession({ agentUserId: agent.agentId, now: new Date() })).toEqual({ ok: false, error: 'already_claimed' });
+    expect((await startClaim(agent.claimToken)).status).toBe(400);
+  });
+
   it('given an unknown claim token, should answer the one 400 at init and invalid_grant on poll', async () => {
     if (!dbAvailable) return;
     expect(await startClaim('ps_claim_doesnotexist000000000000000')).toEqual({ status: 400, body: { error: 'invalid_request' } });

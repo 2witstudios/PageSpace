@@ -16,6 +16,7 @@ const resourceLinks = [
   { label: "Getting Started", href: "/docs/getting-started" },
   { label: "Page Types", href: "/docs/page-types" },
   { label: "Integrations", href: "/docs/integrations" },
+  { label: "For AI agents", href: "/docs/features/agent-signup" },
 ];
 
 const companyLinks = [

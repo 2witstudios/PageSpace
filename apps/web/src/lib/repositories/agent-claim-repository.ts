@@ -3,6 +3,7 @@
  * auth.md "Fund"; Agent Signup Phase 4).
  *
  *   agent:  POST /api/agent/claim {claim_token}      → startAgentClaim   (a user code)
+ *   agent:  POST /api/agent/claim/session (cookie)   → startAgentClaimForAgent (same core)
  *   human:  /claim → verify                           → verifyAgentClaimUserCode
  *   human:  /claim → approve / deny                   → recordAgentClaimDecision
  *   agent:  /api/oauth/token grant_type=…:claim       → pollAgentClaim    (tokens for the AGENT)
@@ -132,11 +133,70 @@ export type StartAgentClaimResult =
   | { outcome: 'invalid' };
 
 /**
- * Start a claim: mint a user code for the agent holding `claimToken`. Refused
- * (one `invalid`) unless the token names a live, unclaimed agent. Any claim
- * the agent left pending is superseded (denied) first, so exactly ONE claim per
- * agent can ever be approved — an older code a human approves later is
- * `already_settled`, never an approval the agent's poll cannot see.
+ * The ONE way a claim starts, whichever door the agent came through: given the
+ * agent's identity row (locked FOR UPDATE by the caller, in the same
+ * transaction) with an unspent claim token, supersede (deny) any claim it left
+ * pending — so exactly ONE claim per agent can ever be approved, and an older
+ * code a human approves later is `already_settled`, never an approval the
+ * agent's poll cannot see — then insert the new claim under a fresh user code.
+ * The claim carries the identity's claim-token hash: that is what the claim
+ * grant polls by, after approval nulls it on the identity (assertion 22).
+ */
+async function insertClaim(
+  tx: Tx,
+  identity: { userId: string; claimTokenHash: string },
+  now: Date,
+): Promise<Extract<StartAgentClaimResult, { outcome: 'ok' }>> {
+  await tx
+    .update(agentClaims)
+    .set({ deniedAt: now })
+    .where(and(
+      eq(agentClaims.agentUserId, identity.userId),
+      isNull(agentClaims.approvedAt),
+      isNull(agentClaims.deniedAt),
+      isNull(agentClaims.redeemedAt),
+    ));
+
+  const expiresAt = new Date(now.getTime() + CLAIM_TTL_SECONDS * 1000);
+  for (let attempt = 0; attempt < USER_CODE_ATTEMPTS; attempt += 1) {
+    const userCode = generateUserCode(randomBytes);
+    const inserted = await tx
+      .insert(agentClaims)
+      .values({
+        agentUserId: identity.userId,
+        claimTokenHash: identity.claimTokenHash,
+        userCodeHash: hashToken(normalizeUserCode(userCode)),
+        expiresAt,
+        pollIntervalSeconds: CLAIM_POLL_INTERVAL_SECONDS,
+        createdAt: now,
+      })
+      .onConflictDoNothing({ target: agentClaims.userCodeHash })
+      .returning({ id: agentClaims.id });
+    if (inserted.length === 1) {
+      return {
+        outcome: 'ok',
+        agentUserId: identity.userId,
+        userCode,
+        expiresInSeconds: CLAIM_TTL_SECONDS,
+        intervalSeconds: CLAIM_POLL_INTERVAL_SECONDS,
+      };
+    }
+  }
+  throw new Error('Agent claim user code space exhausted');
+}
+
+const IDENTITY_FOR_START = {
+  userId: agentIdentities.userId,
+  ownerUserId: agentIdentities.ownerUserId,
+  revokedAt: agentIdentities.revokedAt,
+  claimTokenHash: agentIdentities.claimTokenHash,
+  suspendedAt: users.suspendedAt,
+};
+
+/**
+ * API door (`POST /api/agent/claim`): the agent proves itself with its claim
+ * token. Refused (one `invalid`) unless the token names a live, unclaimed,
+ * unsuspended agent.
  */
 export async function startAgentClaim(input: { claimToken: string; now: Date }): Promise<StartAgentClaimResult> {
   if (!isClaimTokenShape(input.claimToken)) return { outcome: 'invalid' };
@@ -144,12 +204,7 @@ export async function startAgentClaim(input: { claimToken: string; now: Date }):
 
   return db.transaction(async (tx) => {
     const [identity] = await tx
-      .select({
-        userId: agentIdentities.userId,
-        ownerUserId: agentIdentities.ownerUserId,
-        revokedAt: agentIdentities.revokedAt,
-        suspendedAt: users.suspendedAt,
-      })
+      .select(IDENTITY_FOR_START)
       .from(agentIdentities)
       .innerJoin(users, eq(users.id, agentIdentities.userId))
       .where(eq(agentIdentities.claimTokenHash, claimTokenHash))
@@ -158,43 +213,37 @@ export async function startAgentClaim(input: { claimToken: string; now: Date }):
     if (!identity || identity.revokedAt !== null || identity.ownerUserId !== null || identity.suspendedAt !== null) {
       return { outcome: 'invalid' } as const;
     }
+    return insertClaim(tx, { userId: identity.userId, claimTokenHash }, input.now);
+  });
+}
 
-    await tx
-      .update(agentClaims)
-      .set({ deniedAt: input.now })
-      .where(and(
-        eq(agentClaims.agentUserId, identity.userId),
-        isNull(agentClaims.approvedAt),
-        isNull(agentClaims.deniedAt),
-        isNull(agentClaims.redeemedAt),
-      ));
+export type StartAgentClaimForAgentResult =
+  | Extract<StartAgentClaimResult, { outcome: 'ok' }>
+  /** The agent asking about ITSELF already has an owner (it can read that from /api/auth/me). */
+  | { outcome: 'already_claimed' }
+  | { outcome: 'invalid' };
 
-    const expiresAt = new Date(input.now.getTime() + CLAIM_TTL_SECONDS * 1000);
-    for (let attempt = 0; attempt < USER_CODE_ATTEMPTS; attempt += 1) {
-      const userCode = generateUserCode(randomBytes);
-      const inserted = await tx
-        .insert(agentClaims)
-        .values({
-          agentUserId: identity.userId,
-          claimTokenHash,
-          userCodeHash: hashToken(normalizeUserCode(userCode)),
-          expiresAt,
-          pollIntervalSeconds: CLAIM_POLL_INTERVAL_SECONDS,
-          createdAt: input.now,
-        })
-        .onConflictDoNothing({ target: agentClaims.userCodeHash })
-        .returning({ id: agentClaims.id });
-      if (inserted.length === 1) {
-        return {
-          outcome: 'ok',
-          agentUserId: identity.userId,
-          userCode,
-          expiresInSeconds: CLAIM_TTL_SECONDS,
-          intervalSeconds: CLAIM_POLL_INTERVAL_SECONDS,
-        } as const;
-      }
-    }
-    throw new Error('Agent claim user code space exhausted');
+/**
+ * Browser door (`POST /api/agent/claim/session`, Phase 3): the agent is signed
+ * in by session and holds a cookie, not its claim token, so its own user id is
+ * the proof. Same core as the API door — the same supersede, the same claim row
+ * keyed by the identity's (unspent) claim-token hash — so the claim it starts
+ * flows through `/claim`, the approval and the claim-grant poll exactly like a
+ * token-started one.
+ */
+export async function startAgentClaimForAgent(input: { agentUserId: string; now: Date }): Promise<StartAgentClaimForAgentResult> {
+  return db.transaction(async (tx) => {
+    const [identity] = await tx
+      .select(IDENTITY_FOR_START)
+      .from(agentIdentities)
+      .innerJoin(users, eq(users.id, agentIdentities.userId))
+      .where(eq(agentIdentities.userId, input.agentUserId))
+      .limit(1)
+      .for('update');
+    if (!identity || identity.revokedAt !== null || identity.suspendedAt !== null) return { outcome: 'invalid' } as const;
+    if (identity.ownerUserId !== null) return { outcome: 'already_claimed' } as const;
+    if (identity.claimTokenHash === null) return { outcome: 'invalid' } as const;
+    return insertClaim(tx, { userId: identity.userId, claimTokenHash: identity.claimTokenHash }, input.now);
   });
 }
 

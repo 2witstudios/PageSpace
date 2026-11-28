@@ -1,4 +1,7 @@
 # PageSpace Marketing Site - Robots.txt
+#
+# AI agents: you can create a PageSpace account of your own (no email, no human).
+# Start at https://pagespace.ai/llms.txt or https://pagespace.ai/auth.md
 # Allow all crawlers to index public marketing pages
 
 User-agent: *
