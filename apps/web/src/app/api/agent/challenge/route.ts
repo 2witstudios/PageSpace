@@ -16,7 +16,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { POW_DIFFICULTY_BITS, POW_TTL_MS, isPowDifficultyInRange } from '@pagespace/lib/auth/agent/pow';
 import { AgentIdentityStoreError, issueAgentSignupChallenge } from '@pagespace/lib/services/agent-identities';
-import { agentRateLimitAddress } from '@pagespace/lib/auth/agent/token-rate-limit-keys';
+import { agentSignupRateLimitAddress } from '@pagespace/lib/auth/agent/token-rate-limit-keys';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 export const dynamic = 'force-dynamic';
@@ -29,7 +29,7 @@ export async function GET(request: Request) {
   }
 
   const ip = getClientIP(request);
-  const limit = await checkDistributedRateLimit(`agent-challenge:ip:${agentRateLimitAddress(ip)}`, DISTRIBUTED_RATE_LIMITS.AGENT_CHALLENGE);
+  const limit = await checkDistributedRateLimit(`agent-challenge:ip:${agentSignupRateLimitAddress(ip)}`, DISTRIBUTED_RATE_LIMITS.AGENT_CHALLENGE);
   if (!limit.allowed) {
     auditRequest(request, { eventType: 'security.rate.limited', resourceType: 'agent_signup_challenge', details: { agentAuthEvent: 'challenge_rate_limited' }, riskScore: 0.4 });
     return agentRateLimited(limit.retryAfter);

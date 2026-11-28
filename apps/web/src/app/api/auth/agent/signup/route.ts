@@ -27,7 +27,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit, refundDistributedRateLimitAttempt, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { verifyPowSolution, POW_NONCE_MAX_LENGTH } from '@pagespace/lib/auth/agent/pow';
 import { decideAgentSignup } from '@pagespace/lib/auth/agent/signup-decision';
-import { agentRateLimitAddress } from '@pagespace/lib/auth/agent/token-rate-limit-keys';
+import { agentSignupRateLimitAddress } from '@pagespace/lib/auth/agent/token-rate-limit-keys';
 import { AgentIdentityStoreError, createAgentAccount, findAgentSignupChallenge } from '@pagespace/lib/services/agent-identities';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
@@ -89,7 +89,7 @@ async function signup(request: Request) {
   }
 
   const ip = getClientIP(request);
-  const bucket = agentRateLimitAddress(ip);
+  const bucket = agentSignupRateLimitAddress(ip);
   const hourlyKey = `agent-signup:ip:${bucket}`;
   const dailyKey = `agent-signup-daily:ip:${bucket}`;
   const hourly = await checkDistributedRateLimit(hourlyKey, DISTRIBUTED_RATE_LIMITS.AGENT_SIGNUP);

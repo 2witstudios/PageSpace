@@ -21,7 +21,7 @@ vi.mock('@/lib/agent-auth/lifecycle-erasure', () => ({ eraseUnclaimedAgent: mock
 
 import { GET, POST } from '../route';
 
-const RESULT = { challengesPruned: 4, claimsPruned: 1, candidates: 3, erased: 2, kept: 1, failed: 0, failures: [] };
+const RESULT = { challengesPruned: 4, claimsPruned: 1, candidates: 3, erased: 2, kept: 1, failed: 0, batches: 1, stoppedBy: 'drained' as const, failures: [] };
 
 function request(method = 'GET') {
   return new Request('http://web:3000/api/cron/agent-lifecycle', { method });
@@ -48,7 +48,7 @@ describe('/api/cron/agent-lifecycle', () => {
     const body = await response.json();
 
     expect(mocks.sweepAgentLifecycle).toHaveBeenCalledWith({ now: expect.any(Date), eraseAgent: mocks.eraseUnclaimedAgent });
-    expect(body).toMatchObject({ success: true, challengesPruned: 4, claimsPruned: 1, candidates: 3, erased: 2, kept: 1, failed: 0 });
+    expect(body).toMatchObject({ success: true, challengesPruned: 4, claimsPruned: 1, candidates: 3, erased: 2, kept: 1, failed: 0, batches: 1, stoppedBy: 'drained' });
     expect(mocks.audit).toHaveBeenCalledWith(
       expect.objectContaining({ eventType: 'data.delete', resourceType: 'cron_job', resourceId: 'agent_lifecycle' }),
     );

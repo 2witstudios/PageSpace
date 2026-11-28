@@ -281,6 +281,16 @@ describe('POST /api/agent/identity', () => {
       expect(mocks.rateLimit).toHaveBeenCalledWith('agent-signup-daily:ip:203.0.113.9', { maxAttempts: 10, windowMs: 86_400_000 });
     });
 
+    it('given IPv6 callers in different /64s of one /48, should put them in ONE bucket (security review: /48 for account-creating doors)', async () => {
+      mocks.ip.mockReturnValue('2001:db8:1:2::1');
+      await register(validBody());
+      mocks.ip.mockReturnValue('2001:db8:1:ffff::1');
+      await register(validBody());
+      const hourlyKeys = mocks.rateLimit.mock.calls.map(([key]) => key).filter((key: string) => key.startsWith('agent-signup:ip:'));
+      expect(hourlyKeys).toEqual(['agent-signup:ip:2001:0db8:0001::/48', 'agent-signup:ip:2001:0db8:0001::/48']);
+      expect(mocks.rateLimit).toHaveBeenCalledWith('agent-signup-daily:ip:2001:0db8:0001::/48', expect.anything());
+    });
+
     it.each([
       ['the hourly limit', 'agent-signup:ip:'],
       ['the daily limit', 'agent-signup-daily:ip:'],

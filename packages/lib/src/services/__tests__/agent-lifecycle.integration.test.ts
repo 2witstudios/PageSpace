@@ -95,13 +95,30 @@ describe('agentLifecycleStore (real Postgres)', () => {
     const signedIn = await insertAgent({ createdAt: CUTOFF, lastAuthAt: NOW });
     const claimed = await insertAgent({ createdAt: CUTOFF, ownerUserId: owner });
 
-    const candidates = await agentLifecycleStore.findCandidates({ createdAtOrBefore: CUTOFF, limit: 1000 });
+    const candidates = await agentLifecycleStore.findCandidates({ createdAtOrBefore: CUTOFF, limit: 1000, after: null });
     const ids = candidates.map((row) => row.userId);
 
     expect(ids).toContain(abandoned);
     expect(ids).not.toContain(young);
     expect(ids).not.toContain(signedIn);
     expect(ids).not.toContain(claimed);
+  });
+
+  it('pages by (createdAt, userId) strictly after the cursor, so a drained batch is never fetched again', async () => {
+    const base = new Date(CUTOFF.getTime() - 10 * 24 * 60 * 60 * 1000);
+    const first = await insertAgent({ createdAt: base });
+    const second = await insertAgent({ createdAt: base });
+    const third = await insertAgent({ createdAt: new Date(base.getTime() + 1000) });
+    const ours = new Set([first, second, third]);
+    const [tieLow, tieHigh] = [first, second].sort();
+
+    const page = async (after: { createdAt: Date; userId: string } | null) =>
+      (await agentLifecycleStore.findCandidates({ createdAtOrBefore: CUTOFF, limit: 1000, after })).map((row) => row.userId).filter((id) => ours.has(id));
+
+    expect(await page(null)).toEqual([tieLow, tieHigh, third]);
+    expect(await page({ createdAt: base, userId: tieLow as string })).toEqual([tieHigh, third]);
+    expect(await page({ createdAt: base, userId: tieHigh as string })).toEqual([third]);
+    expect(await page({ createdAt: new Date(base.getTime() + 1000), userId: third })).toEqual([]);
   });
 
   it('reads one lifecycle row fresh, and null for someone without an identity', async () => {

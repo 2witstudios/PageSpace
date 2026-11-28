@@ -201,6 +201,13 @@ describe('POST /api/auth/agent/signup', () => {
       expect(mocks.rateLimit).toHaveBeenCalledWith('agent-signup-daily:ip:203.0.113.9', expect.objectContaining({ maxAttempts: 10 }));
     });
 
+    it('given an IPv6 caller, should bucket it by /48 like the API door (security review)', async () => {
+      mocks.ip.mockReturnValue('2001:db8:1:2::1');
+      await signup(validBody());
+      expect(mocks.rateLimit).toHaveBeenCalledWith('agent-signup:ip:2001:0db8:0001::/48', expect.objectContaining({ maxAttempts: 5 }));
+      expect(mocks.rateLimit).toHaveBeenCalledWith('agent-signup-daily:ip:2001:0db8:0001::/48', expect.objectContaining({ maxAttempts: 10 }));
+    });
+
     it('given the hourly limit is hit, should 429 with Retry-After and create nothing', async () => {
       mocks.rateLimit.mockResolvedValueOnce({ allowed: false, retryAfter: 120 });
       const response = await signup(validBody());

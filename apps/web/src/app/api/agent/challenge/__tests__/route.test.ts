@@ -21,7 +21,8 @@ vi.mock('@/lib/agent-auth/door', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/agent-auth/door')>()),
   isAgentDoorOpen: () => mocks.enabled(),
 }));
-vi.mock('@/lib/auth', () => ({ getClientIP: () => '203.0.113.7' }));
+const clientIp = vi.hoisted(() => ({ value: '203.0.113.7' }));
+vi.mock('@/lib/auth', () => ({ getClientIP: () => clientIp.value }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: mocks.audit }));
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: mocks.rateLimit,
@@ -99,6 +100,16 @@ describe('GET /api/agent/challenge', () => {
     expect(mocks.rateLimit).toHaveBeenCalledWith('agent-challenge:ip:203.0.113.7', { maxAttempts: 30, windowMs: 300_000 });
     expect(mocks.issue).not.toHaveBeenCalled();
     expect(mocks.audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'security.rate.limited' }));
+  });
+
+  it('given an IPv6 caller, should bucket AGENT_CHALLENGE by /48 (security review)', async () => {
+    clientIp.value = '2001:db8:1:2::1';
+    try {
+      await GET(challengeRequest());
+      expect(mocks.rateLimit).toHaveBeenCalledWith('agent-challenge:ip:2001:0db8:0001::/48', { maxAttempts: 30, windowMs: 300_000 });
+    } finally {
+      clientIp.value = '203.0.113.7';
+    }
   });
 
   it('given a disabled deployment, should answer 404 before rate limiting or issuing anything', async () => {

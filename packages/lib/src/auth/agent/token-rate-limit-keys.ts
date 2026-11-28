@@ -28,13 +28,10 @@
 
 import { hashToken } from '../token-utils';
 
-/**
- * The address a per-IP agent-door bucket is keyed on. An IPv4 address (or an
- * IPv4-mapped IPv6 one) is itself; an IPv6 address is its /64, because one
- * host is routinely handed a whole /64 and could otherwise mint a fresh bucket
- * per address. Anything unparseable is returned unchanged (e.g. `unknown`).
- */
-export function agentRateLimitAddress(ip: string): string {
+/** How many leading 16-bit groups of an IPv6 address a bucket keeps. */
+type Ipv6BucketGroups = 3 | 4;
+
+function bucketAddress(ip: string, groupsKept: Ipv6BucketGroups): string {
   const trimmed = ip.trim().toLowerCase();
   // A proxy may write `[v6]:port` or `v4:port`; the port must not mint a bucket.
   const bracketed = /^\[([^\]]+)\](?::\d+)?$/.exec(trimmed);
@@ -60,7 +57,31 @@ export function agentRateLimitAddress(ip: string): string {
     const low = words[7] ?? 0;
     return [high >> 8, high & 0xff, low >> 8, low & 0xff].join('.');
   }
-  return `${groups.slice(0, 4).map((group) => group.padStart(4, '0')).join(':')}::/64`;
+  return `${groups.slice(0, groupsKept).map((group) => group.padStart(4, '0')).join(':')}::/${groupsKept * 16}`;
+}
+
+/**
+ * The address a per-IP agent-door bucket is keyed on. An IPv4 address (or an
+ * IPv4-mapped IPv6 one) is itself; an IPv6 address is its /64, because one
+ * host is routinely handed a whole /64 and could otherwise mint a fresh bucket
+ * per address. Anything unparseable is returned unchanged (e.g. `unknown`).
+ */
+export function agentRateLimitAddress(ip: string): string {
+  return bucketAddress(ip, 4);
+}
+
+/**
+ * The address the doors that CREATE agent accounts (the PoW challenge, the API
+ * identity endpoint, the browser signup) bucket on: as `agentRateLimitAddress`,
+ * but an IPv6 address is its /48 (security review addendum). One site is
+ * routinely delegated a whole /48 (RFC 6177) — 65,536 /64s — so a /64 bucket
+ * would let a single site open enough per-IP buckets to drain the
+ * deployment-wide signup budget by itself. Sign-in, token and claim buckets
+ * stay per /64: they act on an existing identity and must not let a neighbour
+ * in the same /48 lock an agent out.
+ */
+export function agentSignupRateLimitAddress(ip: string): string {
+  return bucketAddress(ip, 3);
 }
 
 export function agentTokenIpRateLimitKey(ip: string): string {
