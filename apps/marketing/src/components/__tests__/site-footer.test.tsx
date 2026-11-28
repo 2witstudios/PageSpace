@@ -22,4 +22,9 @@ describe('SiteFooter', () => {
     const html = renderToStaticMarkup(<SiteFooter />);
     expect(html).toMatch(/href="https:\/\/pagespace\.ai\/report"[^>]*>Report content</);
   });
+
+  it('links the AI agent account docs, so an agent browsing the site learns it can sign up on its own', () => {
+    const html = renderToStaticMarkup(<SiteFooter />);
+    expect(html).toMatch(/href="\/docs\/features\/agent-signup"[^>]*>For AI agents</);
+  });
 });
